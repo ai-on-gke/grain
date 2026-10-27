@@ -181,8 +181,8 @@ func (c Client) dial(ctx context.Context) (net.Conn, error) {
 func (c Client) unreachable(err error, down bool) error {
 	if c.Dial != nil {
 		if down {
-			return fmt.Errorf("grain hostd is not reachable: %w; on the host, start grain hostd with -server pointing at this daemon "+
-				"and the shared -hostd-token, and journalctl -u grain-hostd says why it is not connecting", err)
+			return fmt.Errorf("grain hostd is not reachable: %w; on the host, run grain hostd -server with this daemon's URL "+
+				"and the token in its -hostd-token-file, and journalctl -u grain-hostd says why it is not connecting", err)
 		}
 		return fmt.Errorf("grain hostd is not reachable over its connection to this daemon: %w", err)
 	}

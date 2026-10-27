@@ -149,18 +149,34 @@ export function HostExecutorNotice({ executor }) {
       </Alert>
     );
   }
-  if (executor.remote) {
+  if (executor.remote && !hostd?.remote?.connected) {
     // A hostd on another machine dials in (hostd -server); none has, or
     // the one that did has dropped and not yet reconnected.
     return (
       <Alert severity="warning" data-testid="cli-run-hostd-status">
         This daemon takes a grain hostd that dials in to it, but none is
-        connected{hostd?.error ? ` (${hostd.error})` : ""}. On the host, run{" "}
+        connected. On the host, run{" "}
         <code>
           grain hostd -server &lt;this daemon&apos;s URL&gt; -token-file &lt;the
           hostd token&gt;
         </code>
         . A CLI set to host fails its runs until it connects.
+      </Alert>
+    );
+  }
+  if (executor.remote) {
+    const host = hostd.remote.host;
+    return (
+      <Alert severity="warning" data-testid="cli-run-hostd-status">
+        grain hostd is connected
+        {host ? (
+          <>
+            {" "}
+            from <code>{host}</code>
+          </>
+        ) : null}{" "}
+        but is not answering{hostd.error ? ` (${hostd.error})` : ""}. A CLI set
+        to host fails its runs until it does.
       </Alert>
     );
   }

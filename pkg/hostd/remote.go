@@ -33,7 +33,7 @@ import (
 // ErrRemoteNotConnected is Remote.Dial's error while no hostd has dialed
 // in: Client.dial waits it out for a moment, as it does a restarting
 // hostd's missing socket.
-var ErrRemoteNotConnected = errors.New("no grain hostd is connected to this controller")
+var ErrRemoteNotConnected = errors.New("no grain hostd is connected to this daemon")
 
 // Remote is the controller's end of a hostd that dials out to it (hostd
 // -server): the daemon serves RemotePath, hands each upgraded connection

@@ -314,15 +314,15 @@ describe("a grain hostd that dials in", () => {
     api.mockResolvedValue(
       remoteHostd({
         reachable: true,
-        offers: ["cli agy", "capability grain-citc"],
+        offers: ["cli agy", "capability corp-search"],
         protocol: 3,
-        remote: { connected: true, host: "cloudtop", sessions: 1 },
+        remote: { connected: true, host: "workstation", sessions: 1 },
       }),
     );
     render(<CLIRunLocations showError={vi.fn()} />);
     const status = await screen.findByTestId("cli-run-hostd-status");
     expect(status).toHaveTextContent(
-      "grain hostd is up on cloudtop, connected to this daemon, offering cli agy, capability grain-citc. Host runs go through it.",
+      "grain hostd is up on workstation, connected to this daemon, offering cli agy, capability corp-search. Host runs go through it.",
     );
     expect(status).not.toHaveTextContent("at undefined");
   });
@@ -332,14 +332,15 @@ describe("a grain hostd that dials in", () => {
     api.mockResolvedValue(
       remoteHostd({
         reachable: false,
-        error: "no grain hostd is connected to this controller",
+        error:
+          "grain hostd is not reachable: no grain hostd is connected to this daemon",
         remote: { connected: false, sessions: 0 },
       }),
     );
     render(<CLIRunLocations showError={vi.fn()} />);
     const status = await screen.findByTestId("cli-run-hostd-status");
     expect(status).toHaveTextContent(
-      "This daemon takes a grain hostd that dials in to it, but none is connected (no grain hostd is connected to this controller)",
+      "This daemon takes a grain hostd that dials in to it, but none is connected. On the host, run",
     );
     expect(status).toHaveTextContent("grain hostd -server");
   });
