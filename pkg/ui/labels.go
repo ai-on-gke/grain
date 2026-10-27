@@ -37,6 +37,7 @@ package ui
 import (
 	"context"
 	"database/sql"
+	"net/http"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
@@ -545,6 +546,10 @@ type Config struct {
 	// ExecutorServer, when set, is what the UI calls to disconnect active
 	// sessions when an executor token is revoked.
 	ExecutorServer ExecutorServer
+	// HostdRemote, when set, takes the upgrades of a grain hostd on
+	// another machine dialing in to /api/hostd/connect (hostd.Remote,
+	// which checks the hostd token itself); nil refuses them.
+	HostdRemote http.Handler
 	// ExecutorAddr is the address this deployment's remote executor
 	// listener bound (grain daemon -executor-addr), and ExecutorTLS
 	// whether it serves TLS there. /api/config reports both so the

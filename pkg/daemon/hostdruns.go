@@ -19,7 +19,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/runhost"
@@ -39,7 +38,7 @@ func newHostdRuns(cfg Config, store *model.Store) *runhost.Hostd {
 		return nil
 	}
 	return &runhost.Hostd{
-		Client: hostd.Client{Socket: exec.Socket, Build: daemonBuild()},
+		Client: exec.hostdClient(),
 		Detach: orchestrator.StoppedByDaemon,
 		OnCursor: func(ctx context.Context, run string, cursor int64) {
 			if err := store.SetHostdCursor(ctx, run, cursor, time.Now().UTC()); err != nil {
