@@ -152,7 +152,11 @@ type Options struct {
 //     configured but not answering, with agy set to run through it;
 //   - "hostd": the one install shape, a daemon in the release container
 //     with a real grain hostd beside it (startDemoHostd) offering agy and
-//     one capability server, and agy set to run through it.
+//     one capability server, and agy set to run through it;
+//   - "hostd-remote": a Kubernetes daemon taking a grain hostd that dials
+//     in to it (grain hostd -server), with a real one dialing in over
+//     loopback (startDemoRemoteHostd), offering what "hostd"'s does;
+//   - "hostd-remote-down": the same daemon with no hostd dialed in.
 func demoCLIRunConfig(executor string) (daemon.Config, error) {
 	inContainer := whererun.Detection{Host: false, Signal: whererun.InContainerEnv + "=1, which grain's deployment image sets"}
 	noSocketDir := func(string) bool { return false }
@@ -174,8 +178,16 @@ func demoCLIRunConfig(executor string) (daemon.Config, error) {
 			return daemon.Config{}, err
 		}
 		c = daemon.Config{AgyRun: model.CLIRunHost, HostdSocket: socket}
+	case "hostd-remote", "hostd-remote-down":
+		remote := &hostd.Remote{Token: "grain-demo-hostd-token"}
+		if executor == "hostd-remote" {
+			if err := startDemoRemoteHostd(remote); err != nil {
+				return daemon.Config{}, err
+			}
+		}
+		c = daemon.Config{K8sSandboxes: true, AgyRun: model.CLIRunHost, HostdRemote: remote}
 	default:
-		return daemon.Config{}, fmt.Errorf("grain demo: -host-executor=%q: want kubernetes, none, hostd-down or hostd", executor)
+		return daemon.Config{}, fmt.Errorf("grain demo: -host-executor=%q: want kubernetes, none, hostd-down, hostd, hostd-remote or hostd-remote-down", executor)
 	}
 	exec := daemon.DetectHostExecutor(c, inContainer, noSocketDir)
 	c.HostExec = &exec
@@ -1835,24 +1847,11 @@ func IsLoopbackHostPort(hostPort string) bool {
 // and Settings only lists what it offers. hostd refuses to run as root
 // and runs on Linux only; either way the demo shows hostd not answering.
 func startDemoHostd() (string, error) {
-	dir, err := os.MkdirTemp("", "grain-demo-hostd-")
+	srv, err := demoHostdServer("hostd")
 	if err != nil {
-		return "", fmt.Errorf("grain demo: -host-executor=hostd: %v", err)
+		return "", err
 	}
-	allow := filepath.Join(dir, "hostd.yaml")
-	body := "clis:\n  agy:\n    path: /opt/agy/bin/agy\n    cwd_under: [" + dir + "]\n" +
-		"capabilities:\n  corp-search:\n    command: /usr/local/bin/corp-search-mcp\n"
-	if err := os.WriteFile(allow, []byte(body), 0o644); err != nil {
-		return "", fmt.Errorf("grain demo: -host-executor=hostd: %v", err)
-	}
-	srv := &hostd.Server{
-		Socket:          filepath.Join(dir, "hostd.sock"),
-		Allowlist:       allow,
-		AllowlistOwners: []uint32{uint32(os.Getuid())},
-		StateDir:        filepath.Join(dir, "state"),
-		Logf:            func(string, ...any) {},
-		Build:           version.Get().Release,
-	}
+	srv.Socket = filepath.Join(filepath.Dir(srv.Allowlist), "hostd.sock")
 	go func() {
 		if err := srv.Serve(context.Background()); err != nil {
 			log.Printf("grain demo: the demo's grain hostd is not running, so Settings shows it not answering: %v", err)
@@ -1866,6 +1865,57 @@ func startDemoHostd() (string, error) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return srv.Socket, nil
+}
+
+// demoHostdServer is the demo's grain hostd, serving nothing yet: an
+// allowlist offering agy and one capability server, in a directory of
+// its own.
+func demoHostdServer(executor string) (*hostd.Server, error) {
+	dir, err := os.MkdirTemp("", "grain-demo-hostd-")
+	if err != nil {
+		return nil, fmt.Errorf("grain demo: -host-executor=%s: %v", executor, err)
+	}
+	allow := filepath.Join(dir, "hostd.yaml")
+	body := "clis:\n  agy:\n    path: /opt/agy/bin/agy\n    cwd_under: [" + dir + "]\n" +
+		"capabilities:\n  corp-search:\n    command: /usr/local/bin/corp-search-mcp\n"
+	if err := os.WriteFile(allow, []byte(body), 0o644); err != nil {
+		return nil, fmt.Errorf("grain demo: -host-executor=%s: %v", executor, err)
+	}
+	return &hostd.Server{
+		Allowlist:       allow,
+		AllowlistOwners: []uint32{uint32(os.Getuid())},
+		StateDir:        filepath.Join(dir, "state"),
+		Logf:            func(string, ...any) {},
+		Build:           version.Get().Release,
+	}, nil
+}
+
+// startDemoRemoteHostd serves a real grain hostd for
+// -host-executor=hostd-remote with no socket, dialing in to remote over
+// a loopback listener of its own as one on an operator's machine dials
+// in to a daemon in a cluster. It is connected before it returns, so
+// Settings never catches it connecting, or it is left to Settings to say
+// it is not.
+func startDemoRemoteHostd(remote *hostd.Remote) error {
+	srv, err := demoHostdServer("hostd-remote")
+	if err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("grain demo: -host-executor=hostd-remote: %v", err)
+	}
+	go func() { _ = http.Serve(ln, remote) }()
+	srv.Remote = hostd.Dialer{Server: "http://" + ln.Addr().String(), Token: remote.Token, Host: "cloudtop", Build: srv.Build}.Dial
+	go func() {
+		if err := srv.Serve(context.Background()); err != nil {
+			log.Printf("grain demo: the demo's grain hostd is not running, so Settings shows none connected: %v", err)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = remote.WaitConnected(ctx)
+	return nil
 }
 
 // demoGitHubCalls is ui.GitHubCallStats for a demo: an hour two-thirds
