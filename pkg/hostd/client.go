@@ -32,6 +32,11 @@ type Client struct {
 	// Socket is the path of hostd's socket inside the daemon's container,
 	// which is the same path it has on the host.
 	Socket string
+	// Dial, when set, connects to hostd in place of dialing Socket: a
+	// stream over the session of a hostd that dialed out to this daemon
+	// (Remote.Dial). It is retried for a moment on ErrRemoteNotConnected,
+	// the way a missing socket is, for a hostd reconnecting.
+	Dial func(ctx context.Context) (net.Conn, error)
 	// Detach, for a detached start or an attach, reports whether a
 	// cancelled ctx is the daemon stopping rather than the run being
 	// cancelled: the connection is then dropped with the process left
@@ -150,11 +155,17 @@ func (c Client) dial(ctx context.Context) (net.Conn, error) {
 	var d net.Dialer
 	give := time.Now().Add(dialRetry)
 	for wait := 100 * time.Millisecond; ; wait *= 2 {
-		conn, err := d.DialContext(ctx, "unix", c.Socket)
+		var conn net.Conn
+		var err error
+		if c.Dial != nil {
+			conn, err = c.Dial(ctx)
+		} else {
+			conn, err = d.DialContext(ctx, "unix", c.Socket)
+		}
 		if err == nil {
 			return conn, nil
 		}
-		down := errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
+		down := errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, ErrRemoteNotConnected)
 		if !down || time.Now().Add(wait).After(give) || ctx.Err() != nil {
 			return nil, c.unreachable(err, down)
 		}
@@ -168,6 +179,13 @@ func (c Client) dial(ctx context.Context) (net.Conn, error) {
 
 // unreachable says why hostd did not answer, and what to do about it.
 func (c Client) unreachable(err error, down bool) error {
+	if c.Dial != nil {
+		if down {
+			return fmt.Errorf("grain hostd is not reachable: %w; on the host, start grain hostd with -server pointing at this daemon "+
+				"and the shared -hostd-token, and journalctl -u grain-hostd says why it is not connecting", err)
+		}
+		return fmt.Errorf("grain hostd is not reachable over its connection to this daemon: %w", err)
+	}
 	if !down {
 		return fmt.Errorf("grain hostd is not reachable at %s: %w", c.Socket, err)
 	}
