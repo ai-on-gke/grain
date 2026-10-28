@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ci
+package engine
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // MaxJobRetries is the maximum number of automatic retry attempts allowed
@@ -64,11 +66,11 @@ func IsTransientOrInfrastructureError(text string) bool {
 
 // IsJobRetryEligible determines whether a failed job should be automatically
 // re-attempted in a fresh sandbox.
-func IsJobRetryEligible(job Job, result JobRun, attempt int) bool {
+func IsJobRetryEligible(job workflows.Job, result workflows.JobRun, attempt int) bool {
 	if attempt >= MaxJobRetries {
 		return false
 	}
-	if result.Conclusion == ConclusionSuccess || result.Conclusion == ConclusionCancelled || result.Conclusion == ConclusionSkipped {
+	if result.Conclusion == workflows.ConclusionSuccess || result.Conclusion == workflows.ConclusionCancelled || result.Conclusion == workflows.ConclusionSkipped {
 		return false
 	}
 	// Designated retry policy on the job
@@ -76,14 +78,14 @@ func IsJobRetryEligible(job Job, result JobRun, attempt int) bool {
 		return true
 	}
 	// Infrastructure-classified failures
-	if result.Conclusion == ConclusionErrored {
+	if result.Conclusion == workflows.ConclusionErrored {
 		return true
 	}
 	if IsTransientOrInfrastructureError(result.Error) {
 		return true
 	}
 	for _, step := range result.Steps {
-		if step.Conclusion != ConclusionSuccess {
+		if step.Conclusion != workflows.ConclusionSuccess {
 			if IsTransientOrInfrastructureError(step.Error) || IsTransientOrInfrastructureError(step.Output) {
 				return true
 			}
@@ -93,7 +95,7 @@ func IsJobRetryEligible(job Job, result JobRun, attempt int) bool {
 	for _, step := range job.Steps {
 		if step.Infrastructure {
 			for _, stepRun := range result.Steps {
-				if stepRun.Name == step.DisplayName() && stepRun.Conclusion != ConclusionSuccess {
+				if stepRun.Name == step.DisplayName() && stepRun.Conclusion != workflows.ConclusionSuccess {
 					return true
 				}
 			}
@@ -103,9 +105,9 @@ func IsJobRetryEligible(job Job, result JobRun, attempt int) bool {
 }
 
 // SummarizeFailure produces a short description of the failure for logging and flake warnings.
-func SummarizeFailure(result JobRun) string {
+func SummarizeFailure(result workflows.JobRun) string {
 	for _, step := range result.Steps {
-		if step.Conclusion != ConclusionSuccess && step.Conclusion != ConclusionSkipped {
+		if step.Conclusion != workflows.ConclusionSuccess && step.Conclusion != workflows.ConclusionSkipped {
 			if step.Error != "" {
 				return fmt.Sprintf("step %q: %s", step.Name, step.Error)
 			}

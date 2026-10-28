@@ -180,39 +180,6 @@ func TestFetchingTheEnvironmentIsNotChargedToTheJobsTimeout(t *testing.T) {
 	}
 }
 
-// The clock itself, at the granularity the engine cannot show: an
-// infrastructure step spends its own time and gives it back, so the steps
-// after it are where they would have been had the cache been warm.
-func TestTheJobsClockDoesNotChargeItForFetchingItsEnvironment(t *testing.T) {
-	job := Job{TimeoutMinutes: 30}
-	clock := &jobClock{deadline: time.Now().Add(30 * time.Minute)}
-	before := clock.deadline
-
-	ctx, spent := clock.bound(context.Background(), job, Step{Infrastructure: true, TimeoutMinutes: 120})
-	deadline, ok := ctx.Deadline()
-	if !ok || deadline.Sub(before) < 80*time.Minute {
-		t.Fatalf("an infrastructure step's deadline is %v (job's is %v), want its own 2h", deadline, before)
-	}
-	time.Sleep(2 * time.Millisecond)
-	spent()
-	if !clock.deadline.After(before) {
-		t.Errorf("the job's deadline is still %v: the time spent fetching its environment was charged to it", clock.deadline)
-	}
-
-	// An ordinary step is bounded by the job's own deadline and spends it,
-	// which is what the key changes nothing about.
-	ordinary := clock.deadline
-	ctx, spent = clock.bound(context.Background(), job, Step{})
-	deadline, ok = ctx.Deadline()
-	if !ok || !deadline.Equal(ordinary) {
-		t.Errorf("an ordinary step's deadline is %v, want the job's own %v", deadline, ordinary)
-	}
-	spent()
-	if !clock.deadline.Equal(ordinary) {
-		t.Errorf("the job's deadline moved to %v: only an infrastructure step gives time back", clock.deadline)
-	}
-}
-
 // An infrastructure step that never finishes is errored too, rather than
 // cancelled or failed: the bound expiring is still "we did not get an
 // environment", and a bound is there so that a hung fetch cannot hold a

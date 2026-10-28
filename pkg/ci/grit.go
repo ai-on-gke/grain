@@ -17,6 +17,7 @@ package ci
 import (
 	gritartifacts "github.com/ai-on-gke/grain/pkg/grit/artifacts"
 	gritcache "github.com/ai-on-gke/grain/pkg/grit/cache"
+	gritengine "github.com/ai-on-gke/grain/pkg/grit/engine"
 	gritsteps "github.com/ai-on-gke/grain/pkg/grit/steps"
 	"github.com/ai-on-gke/grain/pkg/workflows"
 )
@@ -74,3 +75,51 @@ var (
 	NewLiveOutput = gritsteps.NewLiveOutput
 	StepIDFor     = gritsteps.StepIDFor
 )
+
+type (
+	AdoptedJob         = gritengine.AdoptedJob
+	Engine             = gritengine.Engine
+	Gate               = gritengine.Gate
+	GateRequest        = gritengine.GateRequest
+	OOMReporter        = gritengine.OOMReporter
+	PreemptionReporter = gritengine.PreemptionReporter
+)
+
+const (
+	DefaultAgeBoost            = gritengine.DefaultAgeBoost
+	DefaultConcurrency         = gritengine.DefaultConcurrency
+	DefaultGatePoll            = gritengine.DefaultGatePoll
+	DefaultReserveAfter        = gritengine.DefaultReserveAfter
+	GoTestLogBeginMarker       = gritengine.GoTestLogBeginMarker
+	GoTestLogEndMarker         = gritengine.GoTestLogEndMarker
+	GoTestLogStatusMarker      = gritengine.GoTestLogStatusMarker
+	MaxJobRetries              = gritengine.MaxJobRetries
+	MaxSandboxName             = gritengine.MaxSandboxName
+	OOMRetryReasonPrefix       = gritengine.OOMRetryReasonPrefix
+	PreemptedRetryReasonPrefix = gritengine.PreemptedRetryReasonPrefix
+
+	goTestLogBeginMarker  = gritengine.GoTestLogBeginMarker
+	goTestLogEndMarker    = gritengine.GoTestLogEndMarker
+	goTestLogStatusMarker = gritengine.GoTestLogStatusMarker
+)
+
+var (
+	ConcludeRun                      = gritengine.ConcludeRun
+	IsDetaching                      = gritengine.IsDetaching
+	IsJobRetryEligible               = gritengine.IsJobRetryEligible
+	IsTransientOrInfrastructureError = gritengine.IsTransientOrInfrastructureError
+	NewJobRun                        = gritengine.NewJobRun
+	SandboxName                      = gritengine.SandboxName
+	SortJobRuns                      = gritengine.SortJobRuns
+	SummarizeFailure                 = gritengine.SummarizeFailure
+	WithDetach                       = gritengine.WithDetach
+
+	concludeRun = gritengine.ConcludeRun
+	isDetaching = gritengine.IsDetaching
+	newJobRun   = gritengine.NewJobRun
+	sandboxName = gritengine.SandboxName
+)
+
+func init() {
+	gritengine.ExtractFailureSummary = ExtractFailureSummary
+}
