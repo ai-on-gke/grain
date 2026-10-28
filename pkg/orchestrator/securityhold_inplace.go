@@ -189,7 +189,7 @@ func reviewerFixesTouchBoundary(ctx context.Context, store *model.Store, client 
 		}
 	}
 	matches := trustboundary.Classify(files)
-	_, guarded := repoGuard(ctx, store, *task.Target, files, true)
+	_, guarded := repoGuard(ctx, store, client, *task.Target, files, true)
 	return len(matches)+len(guarded) > 0, true
 }
 

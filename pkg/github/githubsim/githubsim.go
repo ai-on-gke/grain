@@ -151,6 +151,7 @@ var (
 	pullCommentReactionsRe   = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/pulls/comments/(\d+)/reactions$`)
 	createCheckRunsRe        = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs$`)
 	updateCheckRunRe         = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs/(\d+)$`)
+	contentsRe               = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/contents/(.+)$`)
 )
 
 // Issue is one seeded or created fake issue -- Sim's own bookkeeping, not
@@ -815,6 +816,34 @@ func (s *Sim) diffBetween(base, head string) (string, bool) {
 		return "", false
 	}
 	return string(out), true
+}
+
+func (s *Sim) readFileAt(ref, filePath string) ([]byte, bool) {
+	if s.BareRepo == "" {
+		return nil, false
+	}
+	clean := strings.TrimPrefix(strings.TrimSpace(filePath), "/")
+	if clean == "" {
+		return nil, false
+	}
+	rev, ok := s.compareRev(ref)
+	if !ok {
+		return nil, false
+	}
+	spec := rev + ":" + clean
+	typeCmd := exec.Command("git", "--git-dir", s.BareRepo, "cat-file", "-t", "--end-of-options", spec)
+	typeCmd.Env = os.Environ()
+	typeOut, err := typeCmd.Output()
+	if err != nil || strings.TrimSpace(string(typeOut)) != "blob" {
+		return nil, false
+	}
+	cmd := exec.Command("git", "--git-dir", s.BareRepo, "cat-file", "blob", "--end-of-options", spec)
+	cmd.Env = os.Environ()
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // filesChangedIn is the real `git diff --name-status -M base...head`
@@ -1504,6 +1533,26 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 					"sha":    sha,
 					"commit": map[string]string{"message": message},
 				},
+			}), nil
+		}
+		if m := contentsRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			filePath := unescapeRef(m[3])
+			ref := qs.Get("ref")
+			if ref == "" {
+				ref = s.defaultBranch()
+			}
+			data, ok := s.readFileAt(ref, filePath)
+			if !ok {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			if strings.Contains(headers["Accept"], "raw") {
+				return github.ApiResponse{Status: 200, Body: data}, nil
+			}
+			return jsonResponse(200, map[string]any{
+				"type":     "file",
+				"encoding": "base64",
+				"content":  base64.StdEncoding.EncodeToString(data),
 			}), nil
 		}
 	}

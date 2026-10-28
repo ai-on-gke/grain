@@ -20,12 +20,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/trustboundary"
 )
 
 type StateRepoPullRequestClient struct {
@@ -39,6 +41,7 @@ var (
 	_ github.MergeQueuer        = (*StateRepoPullRequestClient)(nil)
 	_ github.MergeRulesReader   = (*StateRepoPullRequestClient)(nil)
 	_ github.DiffReader         = (*StateRepoPullRequestClient)(nil)
+	_ github.FileReader         = (*StateRepoPullRequestClient)(nil)
 	_ github.ReviewSubmitter    = (*StateRepoPullRequestClient)(nil)
 	_ github.CollaboratorReader = (*StateRepoPullRequestClient)(nil)
 	_ github.ReactionPoster     = (*StateRepoPullRequestClient)(nil)
@@ -897,6 +900,82 @@ func localDiff(dir, base, head string) (string, error) {
 		return "", fmt.Errorf("git diff %s...%s: %w: %s", base, head, err, detail)
 	}
 	return string(out), nil
+}
+
+// ReadFile implements github.FileReader. For the local config repository
+// (grain/config), settings/config-policy.yml is always loaded from the base
+// branch (main / defaultBase), never from an unmerged pull request head, so a
+// pull request cannot relax the auto-merge policy for itself before merging.
+func (c *StateRepoPullRequestClient) ReadFile(owner, name, ref, filePath string) ([]byte, bool, error) {
+	if c.isDisabledConfigRepo(owner, name) {
+		return nil, false, errExternalConfigRepoNoNativePR
+	}
+	clean := strings.TrimPrefix(strings.TrimPrefix(path.Clean("/"+strings.TrimSpace(filePath)), "/"), "./")
+	if clean == "" || clean == "." {
+		return nil, false, nil
+	}
+	if !c.isLocal(owner, name) {
+		reader, ok := c.Client.(github.FileReader)
+		if !ok {
+			return nil, false, fmt.Errorf("%s/%s has no forge client that serves file contents", owner, name)
+		}
+		if clean == trustboundary.ConfigPolicyPath && c.Store != nil && c.Store.SettingsRepo != nil {
+			settings := c.Store.SettingsRepo()
+			if strings.EqualFold(settings.Owner, owner) && strings.EqualFold(settings.Name, name) {
+				if def, err := c.Client.DefaultBranch(owner, name); err == nil && strings.TrimSpace(def) != "" {
+					ref = def
+				} else {
+					ref = "main"
+				}
+			}
+		}
+		return reader.ReadFile(owner, name, ref, clean)
+	}
+	var (
+		data   []byte
+		exists bool
+	)
+	err := c.withRepo(owner, name, func(dir, defaultBase string) error {
+		targetRef := strings.TrimSpace(ref)
+		if targetRef == "" || clean == trustboundary.ConfigPolicyPath {
+			targetRef = defaultBase
+		}
+		commitSHA, err := localResolveRef(dir, targetRef)
+		if err != nil {
+			var ghErr *github.Error
+			if errors.As(err, &ghErr) && ghErr.Status == 404 {
+				return nil
+			}
+			return err
+		}
+		blob, ok, err := localReadBlob(dir, commitSHA, clean)
+		if err != nil {
+			return err
+		}
+		data, exists = blob, ok
+		return nil
+	})
+	return data, exists, err
+}
+
+func localReadBlob(dir, commitSHA, cleanPath string) ([]byte, bool, error) {
+	spec := commitSHA + ":" + cleanPath
+	kind, err := localGit(dir, "cat-file", "-t", "--end-of-options", spec)
+	if err != nil || kind != "blob" {
+		return nil, false, nil
+	}
+	cmd := exec.Command("git", "-C", dir, "cat-file", "blob", "--end-of-options", spec)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
+	out, err := cmd.Output()
+	if err != nil {
+		var exit *exec.ExitError
+		detail := ""
+		if errors.As(err, &exit) {
+			detail = strings.TrimSpace(string(exit.Stderr))
+		}
+		return nil, false, fmt.Errorf("git cat-file blob %s: %w: %s", spec, err, detail)
+	}
+	return out, true, nil
 }
 
 func (c *StateRepoPullRequestClient) ListReviewComments(owner, name string, number int) ([]github.ReviewComment, error) {
