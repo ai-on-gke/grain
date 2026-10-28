@@ -90,12 +90,96 @@ func PollChangesOnce(ctx context.Context, store ChangePollStore) int {
 	if len(live) == 0 {
 		return 0
 	}
+	byTarget := map[string]model.Task{}
+	for _, task := range live {
+		for _, l := range change.Changes(task) {
+			byTarget[l.Target] = task
+		}
+	}
+	writer, _ := store.(ChangeOutcomeStore)
 	n := 0
 	for _, poller := range pollers {
 		for _, obs := range poller.PollTick(ctx, live) {
 			change.Remember(obs)
 			n++
+			if task, ok := byTarget[obs.Target]; ok && writer != nil {
+				if err := applyChangeObservation(ctx, writer, poller.(change.Provider), task, obs, time.Now().UTC()); err != nil {
+					log.Printf("grain: polling changes: %s on task %s: %v", obs.Target, task.ID, err)
+				}
+			}
 		}
 	}
 	return n
+}
+
+// ChangeOutcomeStore is the daemon's store as a poll that acts on what it
+// saw needs it: a CL submitted or abandoned outside grain, and the syncs
+// a CL's health calls for (google3-cls.md §6-§7).
+type ChangeOutcomeStore interface {
+	ChangePollStore
+	change.Store
+	State(ctx context.Context, id string) (model.State, error)
+}
+
+// applyChangeObservation acts on one polled observation of task's CL: a
+// CL found submitted closes the task the way Submit does, saying it was
+// submitted outside grain; one found abandoned is marked so; and a live
+// one whose health or age calls for a sync is synced, once per snapshot
+// and never during a run (change.SyncPlanner).
+func applyChangeObservation(ctx context.Context, st ChangeOutcomeStore, p change.Provider, task model.Task,
+	obs change.Observation, now time.Time) error {
+
+	if change.Settled(task, obs.Target) {
+		return nil
+	}
+	switch obs.Status {
+	case change.StatusSubmitted:
+		return change.RecordSubmitted(ctx, st, task, obs.Target, obs.Target, "", true, now)
+	case change.StatusAbandoned:
+		return change.RecordAbandoned(ctx, st, task, obs.Target, now)
+	}
+	state, err := st.State(ctx, task.ID)
+	if err != nil {
+		return err
+	}
+	return AutoSync(ctx, st, p, change.Planner, task, obs, state, now)
+}
+
+// AutoSync makes the automatic sync obs calls for, if planner says one is
+// due: a conflicted result wakes the task to resolve it, any other
+// failure is left for the person's Sync button.
+func AutoSync(ctx context.Context, st change.Store, p change.Provider, planner *change.SyncPlanner, task model.Task,
+	obs change.Observation, state model.State, now time.Time) error {
+
+	trigger := planner.Due(obs, state == model.StateRunning, state == model.StateAwaitingSubmit, change.SyncAfterOf(p), now)
+	if trigger == "" {
+		return nil
+	}
+	res, err := p.Sync(ctx, task, "")
+	planner.Synced(obs.Target, obs.Snapshot, err != nil)
+	if err != nil {
+		change.NoteError(ctx, p, err, nil, now)
+		if f := change.FailureOf(err); f.Outcome == change.OutcomeConflicts {
+			return change.Wake(ctx, st, task, syncNote(trigger, res)+"\n\n"+change.ConflictNote(obs.Target, f.Files), now)
+		}
+		log.Printf("grain: automatic sync (%s) of %s failed; not retrying until it is uploaded again: %v", trigger, obs.Target, err)
+		return nil
+	}
+	_, err = st.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: change.SubmitPrincipal},
+		Body: syncNote(trigger, res), CreatedAt: now})
+	return err
+}
+
+func syncNote(trigger string, res change.SyncResult) string {
+	why := map[string]string{
+		change.SyncNeedsSync:  "Submit said it needs a sync",
+		change.SyncBehind:     "it was behind head",
+		change.SyncConflicted: "it conflicted with head",
+		change.SyncStale:      "its snapshot had waited on Submit too long",
+	}[trigger]
+	msg := res.Message
+	if msg == "" {
+		msg = "synced to head"
+	}
+	return "grain synced this task's CL because " + why + ": " + msg + "."
 }

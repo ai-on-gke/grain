@@ -240,6 +240,8 @@ func (c *Client) openTargetChange(ctx context.Context, task model.Task, req Open
 		}
 		return PullRequestStatus{}, apierror.Expose(err)
 	}
+	// A new upload is something a failed automatic sync may try again on.
+	change.Planner.NoteUpload(res.Target)
 	link := model.Link{Kind: model.LinkChangelist, Target: res.Target}
 	if err := c.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		if !slices.Contains(t.Links, link) {

@@ -112,6 +112,7 @@ var routeScopes = map[string]APIScope{
 	"POST /api/tasks/{id}/change-review":                                   "internal",
 	"POST /api/tasks/{id}/change-publish":                                  "tasks:write",
 	"POST /api/tasks/{id}/change-mail":                                     "tasks:write",
+	"POST /api/tasks/{id}/change-sync":                                     "tasks:write",
 	"POST /api/tasks/{id}/wait-on":                                         "tasks:write",
 	"POST /api/tasks/{id}/local-script-approvals":                          "internal",
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/wait":          "internal",

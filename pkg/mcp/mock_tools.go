@@ -1051,13 +1051,13 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					"description": "A goal grain checks for the task, so that it ends when the goal is met " +
 						"rather than when its agent stops: {kind, spec, on_met, on_limit}. kind is base-green " +
 						"(spec {repo, branch, publishing}), pr-merged ({task} or {repo, number}), tasks-closed " +
-						"({tasks: [...], until: closed|merged}), person-closes ({}) or pipeline-healthy " +
+						"({tasks: [...], until: closed|merged}), person-closes ({}), cl-submitted ({task} or {cl}) or pipeline-healthy " +
 						"({repos?}). on_met is close (the default) or rest; on_limit is hold (the default) or " +
 						"notify -- what grain does when the task stops making progress towards it. An agent " +
 						"ending a goal task's run never completes it: the task rests until the goal is met, " +
 						"somebody posts to it, or a person closes it.",
 					"properties": map[string]any{
-						"kind":     map[string]any{"type": "string", "enum": []string{"base-green", "pr-merged", "tasks-closed", "person-closes", "pipeline-healthy"}},
+						"kind":     map[string]any{"type": "string", "enum": []string{"base-green", "pr-merged", "tasks-closed", "person-closes", "pipeline-healthy", "cl-submitted"}},
 						"spec":     map[string]any{"type": "object"},
 						"on_met":   map[string]any{"type": "string", "enum": []string{"close", "rest"}},
 						"on_limit": map[string]any{"type": "string", "enum": []string{"hold", "notify"}},
