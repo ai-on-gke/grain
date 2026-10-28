@@ -1,0 +1,14 @@
+# docs/granulefile.md 4.1 and 8: stage name before conversion refers to the
+# pre-pack container rootfs; converter AS name refers to the converted VM stage.
+ARG ROOTFS=ghcr.io/gke-labs/granule-guest-rootfs:debian12
+
+FROM ${ROOTFS} AS builder_rootfs
+RUN echo "built in pre-pack stage" > /etc/prepack-artifact.txt
+VM PACK AS intermediate_vm
+VM SET memory-mb=1024 cpus=2
+
+FROM ${ROOTFS}
+COPY --from=builder_rootfs /etc/prepack-artifact.txt /etc/from-container.txt
+COPY --from=intermediate_vm /etc/prepack-artifact.txt /etc/from-vm.txt
+VM PACK AS final_vm
+VM SET memory-mb=2048 cpus=4

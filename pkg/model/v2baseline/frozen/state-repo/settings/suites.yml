@@ -1,0 +1,9 @@
+# grain's suites, in the format a repository writes one in
+# (.grain/suites/<name>.yml, docs/declarations.md), with the keys a
+# repository is not allowed to write as well. Edit it in a pull request:
+# a merged change is live on the next tick.
+
+# `id` is the identity and is grain's to allocate -- it is what history
+# and the other settings refer this suite by, so changing one is a
+# delete and a create rather than a rename. Everything else is yours.
+suites: []

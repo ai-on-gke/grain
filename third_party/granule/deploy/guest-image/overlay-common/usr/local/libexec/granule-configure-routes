@@ -1,0 +1,219 @@
+#!/bin/sh
+# Give this guest the routes the container runtime installed on the
+# sandbox's interface, rather than the ones its netmask implies.
+#
+# The guest's first NIC is spliced onto the container's own segment and
+# takes over the address the runtime assigned, which the kernel's "ip="
+# boot parameter configures. That parameter carries an address, a netmask
+# and a gateway and nothing else, so a guest booted from it believes its
+# whole subnet is on-link and ARPs for every peer in it directly. On a
+# bridge CNI (docker's own network, say) that is exactly right, because
+# the subnet really is one L2 segment. On a
+# point-to-point one -- kind's default, and GKE's -- it is not: the pod
+# gets a /24 address *plus* an explicit "10.244.0.0/24 via <gateway>"
+# route precisely so that nothing is treated as on-link, and the host end
+# of the veth answers no ARP for anyone (proxy_arp is 0). A guest that
+# ARPs there reaches its gateway, the node and ClusterIPs perfectly well
+# and no other pod at all, in either direction.
+#
+# So "granule run" reads that table off the interface it discovers the
+# rest of the identity from and passes it down the kernel command line,
+# as
+#
+#   granule.routes=10.244.0.1/32,10.244.0.0/24@10.244.0.1,0.0.0.0/0@10.244.0.1
+#
+# -- comma-separated "<destination>[@<gateway>]" entries, on-link ones
+# first -- and this reinstalls them here. See pkg/netshim's
+# GuestConfig for the deriving end.
+#
+# The IPv6 half travels separately, as granule.routes6= in the same
+# grammar (the "@" survives IPv6's colons), and goes through the same two
+# passes and the same prune with "ip -6". It is a parameter of its own so
+# that a guest image predating it ignores it, rather than handing "::/0"
+# to the IPv4 pass, failing, and skipping the IPv4 prune. Each family
+# keeps its own failures for the same reason: a route of one that would
+# not install never stops the other's prune.
+#
+# A guest booted without that parameter -- with no netshim in front of
+# it, or with an "ip=" of an operator's own, which netshim leaves alone
+# together with the routes that describe the same interface -- has
+# nothing to do and exits successfully. That is what makes this safe to
+# run unconditionally on every boot.
+set -eu
+
+CMDLINE="${GRANULE_CMDLINE_FILE:-/proc/cmdline}"
+
+# One parameter per line, so a value can be matched at the start of a
+# field rather than anywhere in the line: word boundaries (\b) are a GNU
+# extension, and this script runs on both guest variants -- Alpine's sed
+# is busybox's.
+param() {
+	tr ' ' '\n' < "${CMDLINE}" | sed -n "s/^$1=//p" | tail -1
+}
+
+spec=$(param 'granule\.routes')
+spec6=$(param 'granule\.routes6')
+mtu_spec=$(param 'granule\.mtu')
+[ -n "${spec}" ] || [ -n "${spec6}" ] || [ -n "${mtu_spec}" ] || exit 0
+
+# Field 6 of ip=<client>:<server>:<gw>:<netmask>:<hostname>:<device>:<autoconf>,
+# the interface the same command line addresses -- read back out rather
+# than assumed, so this stays correct for a caller that writes its own
+# "ip=" naming something other than eth0.
+ipparam=$(param 'ip')
+dev=$(printf '%s' "${ipparam}" | cut -d: -f6)
+dev="${GRANULE_NET_IFACE:-${dev:-eth0}}"
+
+# Wait for the interface rather than concluding from its absence that
+# this guest has no networking. A command line carrying "granule.routes=",
+# "granule.routes6=" or "granule.mtu=" is one netshim built, which means there *is* a NIC coming:
+# on a loaded host it has simply not been probed yet, and the difference between
+# waiting a second for it and not is a guest with no default route for
+# the rest of its life. Nothing retries this unit.
+timeout="${GRANULE_NET_DEVICE_TIMEOUT:-60}"
+waited=0
+until ip link show dev "${dev}" >/dev/null 2>&1; do
+	if [ "${waited}" -ge "${timeout}" ]; then
+		echo "granule-configure-routes: no ${dev} to route over after ${timeout}s; this guest has the routes its netmask implies and no others" >&2
+		exit 1
+	fi
+	sleep 1
+	waited=$((waited + 1))
+done
+
+if [ -n "${mtu_spec}" ]; then
+	ip link set dev "${dev}" mtu "${mtu_spec}"
+fi
+
+# The preferred source is deliberately not carried. The CNI sets one on
+# the routes it installs, but this interface holds exactly one address of
+# each family -- the one it took over -- so the kernel picks that same
+# address anyway.
+
+# apply_routes installs one family's routes and prunes that family's
+# table down to them, returning non-zero if any would not install. $1 is
+# the family as ip(8) takes it ("4" or "6") and $2 the comma-separated
+# list. The IPv4 pass runs "ip route" bare, as it always has.
+apply_routes() {
+	family=$1
+	list=$2
+	if [ "${family}" = 4 ]; then
+		set -- ip
+	else
+		set -- ip -6
+	fi
+	ipcmd=$*
+
+	old_ifs=$IFS
+	IFS=,
+	# Splitting and nothing else: with globbing on, an entry that happened to
+	# be a pattern ("*", say) would be replaced by whatever files matched it
+	# in this script's working directory before ip ever saw it.
+	set -f
+	# shellcheck disable=SC2086 # splitting on commas is the point
+	set -- ${list}
+	IFS=$old_ifs
+
+	failed=0
+
+	# Two passes, on-link routes before gatewayed ones, because the second
+	# depends on the first: "10.244.0.0/24 via 10.244.0.1" can only be
+	# installed once 10.244.0.1 is itself reachable, and on a point-to-point
+	# CNI the only thing that makes it reachable is the "10.244.0.1/32 dev
+	# eth0" route in the same list. The deriving end orders the parameter
+	# this way too; this does not depend on that.
+	#
+	# "replace" rather than "add" so that each of these converges rather than
+	# failing on what is already there -- which is the whole mechanism in the
+	# bridge case, where the CNI's routes and the ones "ip=" installed are
+	# the same routes, and in the point-to-point case, where the subnet's
+	# on-link route is replaced in place by the same prefix via the gateway.
+	for entry in "$@"; do
+		case "${entry}" in
+		*@*) continue ;;
+		esac
+		# shellcheck disable=SC2086 # ${ipcmd} is "ip" or "ip -6"
+		if ! ${ipcmd} route replace "${entry}" dev "${dev}" scope link; then
+			echo "granule-configure-routes: could not install ${entry} dev ${dev}" >&2
+			failed=1
+		fi
+	done
+
+	for entry in "$@"; do
+		case "${entry}" in
+		*@*) ;;
+		*) continue ;;
+		esac
+		dst="${entry%%@*}"
+		gw="${entry#*@}"
+		# shellcheck disable=SC2086
+		if ! ${ipcmd} route replace "${dst}" via "${gw}" dev "${dev}"; then
+			echo "granule-configure-routes: could not install ${dst} via ${gw} dev ${dev}" >&2
+			failed=1
+		fi
+	done
+
+	# Whatever is left on the interface that the runtime does not have is
+	# removed, so the guest ends up with the container's table rather than a
+	# superset of it. In practice that is the on-link route for the whole
+	# subnet, on a CNI whose own table has no entry for that prefix to
+	# replace -- a route the guest would otherwise prefer over the correct,
+	# less specific one and ARP into the void for.
+	#
+	# Best effort: a route that cannot be deleted is worth saying so about,
+	# but it is not worth failing a boot whose routes are otherwise already
+	# installed.
+	#
+	# Not attempted at all when an install failed, though. This pass deletes
+	# every prefix on the interface that is not in the list above, and if the
+	# list did not go in, that is every prefix the container network *does*
+	# have -- the default route included. A guest with the routes its netmask
+	# implies is reachable on its own segment; one that has had them pruned
+	# against a table that was never installed is reachable from nowhere.
+	if [ "${failed}" -ne 0 ]; then
+		echo "granule-configure-routes: not pruning ${dev}'s IPv${family} table, since the routes that say what belongs on it did not all install" >&2
+		return "${failed}"
+	fi
+
+	# fe80::/64 is always kept: the kernel installs it beside the
+	# link-local address, the deriving end never carries it, and every
+	# link-local gateway is reached over it.
+	wanted=""
+	[ "${family}" = 4 ] || wanted=" fe80::/64"
+	for entry in "$@"; do
+		dst="${entry%%@*}"
+		case "${dst}" in
+		0.0.0.0/0 | ::/0) dst="default" ;;
+		# A host route is printed by "ip route show" without its prefix
+		# length, so it has to be compared without one.
+		*/32) [ "${family}" = 6 ] || dst="${dst%/32}" ;;
+		*/128) [ "${family}" = 4 ] || dst="${dst%/128}" ;;
+		esac
+		wanted="${wanted} ${dst}"
+	done
+
+	# A route of any type but unicast is printed with the type first
+	# ("multicast ff00::/8 ... proto kernel", which every IPv6 interface
+	# has), and none of them is the runtime's to carry or the prune's to
+	# take: without ff00::/8 the guest cannot send the neighbour
+	# solicitations that find its gateway. Those lines are skipped.
+	for prefix in $(ip "-${family}" route show dev "${dev}" 2>/dev/null |
+		awk '$1 !~ /^(unicast|local|broadcast|multicast|anycast|unreachable|blackhole|prohibit|throw|nat)$/ {print $1}'); do
+		case " ${wanted} " in
+		*" ${prefix} "*) continue ;;
+		esac
+		echo "granule-configure-routes: dropping ${prefix} dev ${dev}, which the container network does not have" >&2
+		# shellcheck disable=SC2086
+		${ipcmd} route del "${prefix}" dev "${dev}" || true
+	done
+	return 0
+}
+
+status=0
+if [ -n "${spec}" ]; then
+	apply_routes 4 "${spec}" || status=1
+fi
+if [ -n "${spec6}" ]; then
+	apply_routes 6 "${spec6}" || status=1
+fi
+exit "${status}"

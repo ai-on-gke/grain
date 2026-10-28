@@ -1,0 +1,8 @@
+# Ratchet baseline for tests/security's path-containment rule.
+# strings.HasPrefix containment checks on filesystem paths, which are
+# lexical and so walked past by a symlink under the root (#2410, #2393).
+# Ask safepath.Within instead.
+#
+# "<path> <count>": violations each file still has. The count may only
+# go down -- tests/security fails when it rises and when it falls without
+# this file being lowered to match. Raising a count needs a human's review.

@@ -1,0 +1,41 @@
+name: base images
+
+# Reports base images whose tag has moved off the digest this tree pins.
+#
+# Every FROM in the Dockerfile, and guestpack.DefaultPackerImage, names
+# its image as tag@sha256:<digest> (see deploy/base-images.sh for why).
+# The price of pinning is that a pin does not move by itself: a Debian or
+# Alpine security rebuild of bookworm-slim or 3.20 reaches granule only
+# when somebody bumps the digest. This job is how that somebody hears
+# about it. It fails, naming each moved tag and its new digest, when one
+# has moved; the fix is `deploy/base-images.sh update` in a pull request,
+# reviewed like any other change -- a digest bump changes the toolchain
+# or the guest userland, and moves the guest rootfs key.
+#
+# It reports rather than opening that pull request itself: a scheduled
+# run gets no write access to the repository, and the bump is the one
+# step of this that should have a human reading the diff.
+#
+# A schedule rather than part of ci.yml for the same reason as
+# guest-suites.yml: upstream moving happens on nobody's commit, and
+# should not redden a pull request that did nothing wrong. ci.yml's own
+# check (`deploy/base-images.sh lint`) is the offline half: that every
+# FROM is pinned at all.
+on:
+  schedule:
+    # Mondays, after Docker Hub's weekend official-image rebuilds.
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  base-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: check pinned base images against their tags
+        run: deploy/base-images.sh check

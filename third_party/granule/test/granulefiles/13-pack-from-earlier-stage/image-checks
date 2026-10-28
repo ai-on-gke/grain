@@ -1,0 +1,17 @@
+# VOLUME and VM SET are in the VM stage here rather than above the
+# converter, and both have to reach the image somebody runs: the mount
+# point as the machine's own declaration, the settings as the runtime
+# variables the VMM reads.
+volumes=$(docker image inspect -f '{{json .Config.Volumes}}' "$IMAGE")
+case "$volumes" in
+  *"/var/lib/redis"*) ;;
+  *) echo "the machine declares no /var/lib/redis volume: $volumes" >&2; exit 1 ;;
+esac
+
+env=$(docker image inspect -f '{{json .Config.Env}}' "$IMAGE")
+for want in 'CHV_MEMORY_MB=2048' 'CHV_CPUS=2'; do
+  case "$env" in
+    *"$want"*) ;;
+    *) echo "the machine does not record $want: $env" >&2; exit 1 ;;
+  esac
+done

@@ -1,0 +1,7 @@
+# docs/granulefile.md 14.1: a Dockerfile is a Granule. No VM
+# instruction, so no machine -- granule builds the container image
+# docker would build.
+FROM alpine:latest
+
+# This runs in a container and I get a container.
+RUN apk add --no-cache redis

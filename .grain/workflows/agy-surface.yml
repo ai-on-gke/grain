@@ -1,0 +1,116 @@
+# Regenerate docs/agy-surface.md against the agy binary an image would
+# carry, and push the diff to the agy-surface branch if it differs from
+# what is committed.
+#
+# It is manual (workflow_dispatch) rather than scheduled or push-triggered,
+# because the version an image carries moves only when Dockerfile's
+# ARG AGY_CLI_VERSION / ARG AGY_CLI_BUILD is bumped -- a commit that
+# bumps them should run this afterwards to record what the new release
+# changed, and there is no reason to re-measure a frozen binary on the
+# clock.
+name: agy-surface
+
+on:
+  workflow_dispatch:
+
+jobs:
+  capture:
+    capabilities: []
+    name: read agy's surface
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 20
+    timeout-minutes: 20
+    artifacts:
+      - name: agy-surface
+        path: docs/agy-surface.md
+    steps:
+      - name: Install the agy CLI
+        run: |
+          set -euo pipefail
+          cli_version="$(sed -n 's/^ARG AGY_CLI_VERSION=//p' Dockerfile | head -n1)"
+          cli_build="$(sed -n 's/^ARG AGY_CLI_BUILD=//p' Dockerfile | head -n1)"
+          cli_sha="$(sed -n 's/^ARG AGY_CLI_SHA256_AMD64=//p' Dockerfile | head -n1)"
+          test -n "$cli_version" && test -n "$cli_build" && test -n "$cli_sha"
+          curl -4 -fsSL --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors \
+            "https://storage.googleapis.com/antigravity-public/antigravity-cli/${cli_version}-${cli_build}/linux-x64/cli_linux_x64.tar.gz" \
+            -o /tmp/agy.tar.gz
+          echo "$cli_sha  /tmp/agy.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/antigravity
+          sudo tar -xzf /tmp/agy.tar.gz -C /opt/antigravity
+          rm -f /tmp/agy.tar.gz
+          agy="$(find /opt/antigravity -type f -name antigravity -perm -u+x 2>/dev/null | head -n1 || true)"
+          test -n "$agy"
+          sudo ln -sf "$agy" /usr/local/bin/agy
+          test "$(agy --version | head -n1)" = "$cli_version"
+
+      - name: Read agy's surface
+        run: ./scripts/agy-surface.sh -o docs/agy-surface.md
+
+      - name: The capture has to have captured something
+        run: |
+          set -euo pipefail
+          bytes=$(wc -c < docs/agy-surface.md)
+          echo "docs/agy-surface.md is $bytes bytes"
+          if [ "$bytes" -lt 8192 ]; then
+            echo "the capture is $bytes bytes: agy answered almost nothing, and publishing this would replace a real capture with an empty one" >&2
+            exit 1
+          fi
+          for heading in '## The binary' '## Commands and flags' '## Where each flag lives' \
+                         '## The flags pkg/agent/antigravity passes' \
+                         '## Print mode and the introspection subcommands' \
+                         '## What a live agy loads from HOME' \
+                         '## What a live agy does with its native tools'; do
+            if ! grep -qF -- "$heading" docs/agy-surface.md; then
+              echo "the capture has no \"$heading\" section; scripts/agy-surface.sh did not run to the end" >&2
+              exit 1
+            fi
+          done
+          missing=""
+          grep -q '^### .agy auth.$' docs/agy-surface.md || missing="$missing no-subcommand-help"
+          grep -q '^agy -p /tools' docs/agy-surface.md || missing="$missing no-tools-probe"
+          grep -q '^agy -p /hooks' docs/agy-surface.md || missing="$missing no-hooks-probe"
+          grep -q '^agy -p /permissions' docs/agy-surface.md || missing="$missing no-permissions-probe"
+          grep -q '^custom: `denied`' docs/agy-surface.md || missing="$missing no-denial-probe"
+          grep -q '^native: `denied`' docs/agy-surface.md || missing="$missing no-native-denial-probe"
+          grep -q '^captured here' docs/agy-surface.md || missing="$missing no-version"
+          if [ -n "$missing" ]; then
+            echo "the capture ran to the end but answered nothing for:$missing -- agy's shape has moved under scripts/agy-surface.sh, and publishing this would replace measurements with silence" >&2
+            exit 1
+          fi
+
+  publish:
+    capabilities: []
+    name: publish the capture
+    needs: [capture]
+    sandbox:
+      cpus: 2
+      memory-mb: 4096
+      disk-gb: 10
+    timeout-minutes: 10
+    cache: false
+    steps:
+      - name: Push the capture, if it differs from what is committed
+        run: |
+          set -euo pipefail
+          git config user.name "grain-ci[bot]"
+          git config user.email "grain-ci[bot]@users.noreply.github.com"
+          git add docs/agy-surface.md
+          if git diff --cached --quiet -- docs/agy-surface.md; then
+            echo "no drift: docs/agy-surface.md already matches"
+            exit 0
+          fi
+          git commit -F - <<EOF
+          Regenerate docs/agy-surface.md
+
+          Captured by scripts/agy-surface.sh, run by
+          .grain/workflows/agy-surface.yml: every subcommand
+          and flag the installed agy will admit to, whether the flags
+          pkg/agent/antigravity passes are flags it parses, what its
+          introspection subcommands return, and what it does with grain's
+          tool configuration. The diff against the committed capture is
+          what agy changed -- the script writes nothing run-specific, so a
+          diff is drift and nothing else.
+          EOF
+          git push origin HEAD:refs/heads/agy-surface --force

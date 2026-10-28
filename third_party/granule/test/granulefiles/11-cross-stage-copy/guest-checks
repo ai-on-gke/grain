@@ -1,0 +1,6 @@
+[the binary built in the container stage runs in the guest]
+/usr/local/bin/hello
+/usr/local/bin/hello | grep -q "running in a machine"
+
+[the toolchain did not come with it]
+! command -v gcc

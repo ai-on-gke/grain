@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+# granule-runlevel: boot
+
+description="Grow the root filesystem onto its disk"
+
+# In the boot runlevel rather than default: the extra space has to be
+# there before anything that writes into it starts, and the sysinit
+# runlevel's devfs/mdev is what makes /dev/vda exist to be grown.
+depend() {
+	after root
+	before localmount bootmisc
+}
+
+start() {
+	ebegin "Growing the root filesystem onto its disk"
+	/usr/local/libexec/granule-growfs
+	eend $?
+}

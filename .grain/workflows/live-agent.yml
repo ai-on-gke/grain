@@ -1,0 +1,101 @@
+# live-agent.yml runs tests/e2e's broad live agy suite nightly and on demand.
+name: live-agent
+
+on:
+  schedule:
+    - cron: "37 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  live-agy:
+    name: live agy run
+    # A requirement, not a grant (pkg/ci/requirements.go). Every step
+    # below drives the real agy CLI against the real provider, so a run
+    # this deployment placed no `gemini-key` into cannot answer the
+    # question this workflow exists to ask -- it can only fail somewhere
+    # further in, which is what the "Require a credential" step below was
+    # written to turn into a legible message after four minutes of CLI
+    # install. The key says it before the sandbox is built.
+    capabilities: [gemini-key]
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 20
+    timeout-minutes: 60
+    cache: false
+    steps:
+      - name: Install the agy CLI
+        run: |
+          set -euo pipefail
+          cli_version="$(sed -n 's/^ARG AGY_CLI_VERSION=//p' Dockerfile | head -n1)"
+          cli_build="$(sed -n 's/^ARG AGY_CLI_BUILD=//p' Dockerfile | head -n1)"
+          cli_sha="$(sed -n 's/^ARG AGY_CLI_SHA256_AMD64=//p' Dockerfile | head -n1)"
+          test -n "$cli_version" && test -n "$cli_build" && test -n "$cli_sha"
+          curl -4 -fsSL --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors \
+            "https://storage.googleapis.com/antigravity-public/antigravity-cli/${cli_version}-${cli_build}/linux-x64/cli_linux_x64.tar.gz" \
+            -o /tmp/agy.tar.gz
+          echo "$cli_sha  /tmp/agy.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/antigravity
+          sudo tar -xzf /tmp/agy.tar.gz -C /opt/antigravity
+          rm -f /tmp/agy.tar.gz
+          agy="$(find /opt/antigravity -type f -name antigravity -perm -u+x 2>/dev/null | head -n1 || true)"
+          test -n "$agy"
+          sudo ln -sf "$agy" /usr/local/bin/agy
+          test "$(agy --version | head -n1)" = "$cli_version"
+
+      - name: Measure agy's own API retry
+        env:
+          GRAIN_LIVE_AGENT_TEST: "1"
+        run: |
+          set -euo pipefail
+          go test ./pkg/agent/antigravity/ \
+            -run 'TestLiveAgy(RetriesARefusedTurnItself|LosesTheProvidersRefusalText|BoundsARefusedTurn)' \
+            -count=1 -v -timeout 12m
+
+      - name: Measure agy's cross-dispatch resume
+        env:
+          GRAIN_LIVE_AGENT_TEST: "1"
+        run: |
+          set -euo pipefail
+          go test ./pkg/agent/antigravity/ \
+            -run 'TestLiveAgy(Resumes|OpensANewConversation)' \
+            -count=1 -v -timeout 10m
+
+      - name: Check agy still honours the auto-update switch
+        env:
+          GRAIN_LIVE_AGENT_TEST: "1"
+        run: |
+          set -euo pipefail
+          go test ./pkg/agent/antigravity/ \
+            -run TestLiveAgyDoesNotReplaceItsOwnBinary \
+            -count=1 -v -timeout 12m
+
+      - name: Require a credential
+        run: |
+          if [ -z "${GEMINI_API_KEY:-}" ] && [ -f /home/debian/.gemini-api-key ]; then
+            export GEMINI_API_KEY="$(cat /home/debian/.gemini-api-key)"
+          fi
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "No GEMINI_API_KEY reached this job." >&2
+            exit 1
+          fi
+          echo "a credential is present (${#GEMINI_API_KEY} characters)"
+
+      - name: Live agy run
+        env:
+          GRAIN_LIVE_AGENT_TEST: "1"
+        run: |
+          set -uo pipefail
+          if [ -z "${GEMINI_API_KEY:-}" ] && [ -f /home/debian/.gemini-api-key ]; then
+            export GEMINI_API_KEY="$(cat /home/debian/.gemini-api-key)"
+          fi
+          for attempt in 1 2; do
+            echo "live agy run, attempt $attempt of 2"
+            if go test ./tests/e2e/ -run 'TestLive' \
+                 -count=1 -v -timeout 15m; then
+              exit 0
+            fi
+            echo "attempt $attempt failed"
+          done
+          echo "the live agy test failed twice" >&2
+          exit 1

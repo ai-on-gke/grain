@@ -1,0 +1,66 @@
+# The pod used for the "within GKE" side of the benchmark: same VM
+# configuration as benchmarks/standalone/run.sh (1 vCPU, 256Mi, the
+# marker kernel/initramfs), run through granule's "run" mode as a real
+# container instead of a bare process. /dev/kvm is bind-mounted with
+# privileged: true here for simplicity; a production deployment should
+# prefer a device plugin instead (see the main README's "Running on
+# Kubernetes" section). Substitute NAME, IMAGE and HOSTPATH before
+# applying.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: NAME_PLACEHOLDER
+  labels:
+    app: granule-bench
+spec:
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 30
+  containers:
+    - name: granule
+      image: IMAGE_PLACEHOLDER
+      args: ["run"]
+      env:
+        - name: CHV_NET_MODE
+          value: "none"
+        - name: CHV_DISK_IMAGE
+          value: /images/disk.img
+        - name: CHV_DISK_READONLY
+          value: "true"
+        - name: CHV_KERNEL
+          value: /images/vmlinux
+        - name: CHV_INITRAMFS
+          value: /images/initramfs.img
+        # No "console=": granule adds the one for the node's architecture
+        # (ttyS0 on x86_64, ttyAMA0 on arm64), and BOOT_COMPLETE only
+        # reaches the log if the guest's console is the device it has.
+        - name: CHV_CMDLINE
+          value: "reboot=t panic=1 quiet loglevel=3"
+        - name: CHV_CPUS
+          value: "1"
+        - name: CHV_MEMORY_MB
+          value: "256"
+        - name: CHV_SHUTDOWN_TIMEOUT
+          value: "5s"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: images
+          mountPath: /images
+          readOnly: true
+        - name: dev-kvm
+          mountPath: /dev/kvm
+      resources:
+        requests:
+          cpu: "1"
+          memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+  volumes:
+    - name: images
+      hostPath:
+        path: HOSTPATH_PLACEHOLDER
+        type: Directory
+    - name: dev-kvm
+      hostPath:
+        path: /dev/kvm

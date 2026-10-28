@@ -1,0 +1,97 @@
+# Keep the `latest` image tag on the last promoted release.
+#
+# `latest` -- on ghcr.io/bwsalmon/grain/{grain,guest,k8s-sandbox} alike --
+# means the last promoted release and nothing else: the commit the git
+# tag `latest` names. main's head is `main`, the current candidate is
+# `candidate`, and an operator who upgrades to `latest` gets the release.
+#
+# The git tag is moved only when a person approves a pending release:
+# .grain/workflows/promote-release.yml runs `scripts/release-from-trunk.sh
+# approve vM.X.0`, which tags `vM.X.0` and `latest` together (the release
+# train, release-train.yml, stops at vM.X.0-pending and never moves it).
+# It was first moved by an agent task (the retired legacy candidate cut),
+# and a task cannot hold `package-publish` -- it is CI-only
+# (docs/ci-capabilities.md) -- so the cut could not retag an image
+# itself. This job is the half that can, whoever moved the tag:
+# `scripts/release-images.sh promote` reads the remote's tags, finds the
+# release `latest` names, and publishes that commit's images as `vM.X.0`
+# and `latest`.
+#
+# The guest and k8s-sandbox images are a registry retag of the
+# `sha-<short>` images .grain/workflows/release.yml built, tested and
+# published when the commit merged. The grain image is rebuilt, and only
+# to stamp the release into it: the one built when the commit was the
+# candidate could only carry the rc tag Go read off the commit, which is
+# what the UI's sidebar footer and /api/config's version.release showed
+# on a deployment running `latest` (grain/task-3064). The rebuild is from
+# the same commit, naming the same pinned sandbox images and image
+# reference, with RELEASE=vM.X.0, so the version string is all that
+# differs; it is signed like any release image (`image-signing`, optional
+# as in release.yml). If any of the three `sha-` images is missing it
+# fails, naming them, and moves nothing.
+#
+# The orchestrator also starts it, as a trusted `release` of main, once a
+# scheduled .grain/workflows/release-train.yml run finishes
+# (orchestrator.startPromotion, docs/design/release-from-trunk.md RFT-3).
+# The train no longer moves `latest` (RFT-8), so that run republishes the
+# release `latest` already names; promote-release.yml's own `promote` job
+# is what follows an approval.
+#
+# It answers `release` on main and candidate -- every merge, which lands
+# many times a day -- so the image tag follows a promotion within one
+# merge of it, and an operator never has to remember to do it. Running
+# when nothing changed rebuilds nothing: `grain:vM.X.0` already carries
+# its release as a label, read off the registry, so the tick costs two
+# manifest copies per tag onto the tags they already hold and `latest`'s
+# digest stays put. The first tick after a promotion is the one that
+# builds, which is what the sandbox and the timeout below are sized for.
+# It is a workflow of its own rather than a second job in
+# release.yml because that one is two hours of build and tests, and a
+# promotion should not wait for either; and it is not part of release.yml's
+# job because a red suite there must not stop `latest` following the
+# git tag.
+#
+# By hand -- the first time after this lands (v1.8.0's `latest` was a
+# retag of its rc build until grain/task-3064), or after a promotion that
+# landed no merge behind it:
+#
+#     grain ci run -repo bwsalmon/grain -branch main -event workflow_dispatch \
+#       -job .grain/workflows/promote.yml:latest -watch
+#
+# or, as the deployment's own release run (an admin of the repository):
+#
+#     POST /api/repos/bwsalmon/grain/release-runs
+#     {"branch":"main","jobs":[".grain/workflows/promote.yml:latest"]}
+#
+# Both publish whatever the git `latest` tag names. To publish a named
+# release on a machine with a GHCR login that can write these packages,
+# `bash scripts/release-images.sh promote v1.5.0`; `latest` moves with it
+# only if the git `latest` tag is at the same commit, so the two tags
+# cannot disagree. Rolling `latest` back is moving the git tag back first.
+name: promote
+
+on:
+  release:
+    branches: [main, candidate]
+  workflow_dispatch:
+
+jobs:
+  latest:
+    name: promote release images
+    # A replayed green tick is not a promotion: the job's whole point is
+    # the registry write, and the tag it reads moves without the tree
+    # moving.
+    cache: false
+    capabilities: [package-publish]
+    optional-capabilities: [image-signing]
+    # Sized for the one tick per release that rebuilds the grain image
+    # (the UI's npm build, the Go build and the agent CLIs); every other
+    # tick is a few manifest copies.
+    timeout-minutes: 60
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    steps:
+      - name: Publish the last promoted release as latest
+        run: bash ./scripts/release-images.sh promote

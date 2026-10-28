@@ -1,0 +1,10 @@
+2026-08-27T11:58:01.1049281Z ##[group]Run go test ./...
+2026-08-27T11:58:01.1050012Z go test -race ./pkg/auth/...
+2026-08-27T11:58:01.1051120Z ##[endgroup]
+2026-08-27T11:58:02.4182910Z ##[warning]using temporary keyring at /home/runner/work/_temp/keyring-a1b2c3d4
+2026-08-27T11:58:02.8819201Z --- FAIL: TestVerifyToken (0.14s)
+2026-08-27T11:58:02.8820114Z     /home/runner/work/widgets/widgets/pkg/auth/verify_test.go:42: token signature rejected: upstream JWKS endpoint returned HTTP 503
+2026-08-27T11:58:02.8821990Z     /home/runner/work/widgets/widgets/pkg/auth/verify.go:88: verifier failed in /home/runner/work/widgets/widgets
+2026-08-27T11:58:02.8823102Z     /opt/hostedtoolcache/go/1.23.1/x64/src/testing/testing.go:1689: test Runner exited
+2026-08-27T11:58:02.8825009Z FAIL	github.com/acme/widgets/pkg/auth	0.412s
+2026-08-27T11:58:02.8829100Z ##[error]Process completed with exit code 1.

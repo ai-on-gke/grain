@@ -1,0 +1,14 @@
+# docs/granulefile.md 5.4, 8, and 14.5: multi-stage build combining a container
+# builder stage, offline VM extraction (VM UNPACK FROM), cross-stage copy
+# of the built artifact into the unpacked rootfs, offline modification, and repacking.
+ARG VM_IMAGE=ghcr.io/example/my-vm:latest
+
+FROM alpine:latest AS builder
+RUN echo '#!/bin/sh' > /app-helper.sh && \
+    echo 'echo "helper executed in guest"' >> /app-helper.sh
+
+VM UNPACK FROM ${VM_IMAGE} AS guest_rootfs
+COPY --from=builder /app-helper.sh /usr/local/bin/app-helper.sh
+RUN chmod 0755 /usr/local/bin/app-helper.sh
+VM PACK AS repacked_vm
+VM SET memory-mb=1024 cpus=2

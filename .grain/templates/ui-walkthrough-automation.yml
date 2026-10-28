@@ -1,0 +1,93 @@
+name: UI walkthrough - processes, schedules, templates, suites
+title: Walk through Processes -- schedules, templates, suites, suite runs and triggers
+base: main
+auto-merge: true
+body: |
+  Thoroughly exercise Grain's recurring and composed-work automation UI
+  -- the Processes page and the schedules, templates, suites, suite runs
+  and triggers it lists -- end to end, in a real browser against a real
+  server.
+
+  ## Coverage
+
+  - Processes: open it from the rail (`/processes`) and check its count.
+    Use the kind chips (All, Schedules, Workflow schedules, Templates,
+    Suites, Triggers) with their counts, search, the toolbar's narrowing
+    and the sort (Next run, Last run, Name, Kind, Custom order, with
+    reorder through pointer and keyboard/tap). Confirm the narrowing
+    rides in the query (`?kind=`, `?q=`) through reload and Back/Forward,
+    that templates and suites show the last and next runs derived from
+    the schedules that fire them ("on demand" when none does), and that
+    the old `/schedules`, `/templates` and `/suites[/<id>]` links land on
+    the matching Processes view or item.
+  - New: open the header's New menu (Schedule, Template, Suite, and the
+    hint that workflow schedules and triggers are declared in a
+    repository), and confirm that with the kind chips narrowed to one
+    creatable kind New opens that kind directly.
+  - Schedules: create both task-filing and suite-running schedules;
+    exercise recurrence variants (every N minutes and its ten-minute
+    floor included), overlap policy, template/raw task composition,
+    repo/base/writes/reads, capabilities (the Grain API group included),
+    network/custom fields, the agent and model picker (only models the
+    deployment's enabled connections advertise, and what a model no
+    connection serves looks like), validation and preview. Edit, pause,
+    resume, run now, and delete throwaway schedules, verifying
+    confirmations, persisted next/last-run presentation, and that the
+    row and its template's and suite's rows follow without a reload.
+  - Templates: create a fully populated template (its model picker and
+    the interactive switch included), use it from Use… (and read the
+    note an interactive template shows there); edit and reopen it; use
+    it from a schedule and from a suite; test dependency-aware delete
+    behaviour and then remove only throwaway data.
+  - Suites: create and edit a suite, create a template inline, exercise
+    run modes/pass limits/approval/auto-merge, and delete a throwaway
+    suite with confirmation.
+  - Start a suite run from both the suite row and the generic Run
+    action. Inspect the Suite runs list under Processes,
+    scheduled/running/finished/failure presentations, direct URLs
+    (`/processes/suites/runs/<id>`), pass grouping, spawned tasks and
+    proposed follow-ups, and task-detail navigation.
+  - Repository-declared templates, suites, schedules, workflow schedules
+    and triggers (`docs/declarations.md`): confirm that a declared row is
+    shown as declared, names the repository and file it came from, and
+    that the UI refuses to edit or delete it with an explanation rather
+    than failing silently; a trigger row opens its file on the
+    repository's Advanced tab.
+  - The demo may not run real agents. Stub only the agent/execution
+    boundary, or seed through the real server's supported store/demo
+    path, to obtain realistic run states; every create/edit/run gesture
+    and all rendering must still pass through the real browser UI and
+    the real Grain server.
+
+  ## Walkthrough protocol
+
+  - Build and start this repository's real `grain demo` server over a
+    throwaway embedded store, open its built frontend in an actual
+    Playwright browser, and interact through visible UI controls. Do not
+    substitute a source review, a jsdom-only test, or an API-only
+    exercise for the walkthrough.
+  - Prefer the Gemini-backed model and tooling when this sandbox carries
+    a key at `/home/debian/.gemini-api-key`; never print, log or commit
+    it. A repository-declared template carries no capabilities of its
+    own, so what the sandbox holds is whatever this deployment already
+    gives tasks in this repository.
+  - Explore beyond the scripted cases in `ui/e2e`. Check browser console
+    errors, failed network requests, loading/empty/error states,
+    keyboard reachability, and destructive-action confirmations relevant
+    to this area.
+  - Confirm mutations by returning to the screen, reloading and
+    deep-linking where applicable, and observing the persisted result.
+    Stub only an unavailable external or system boundary; keep the real
+    server, frontend, browser and user gestures in the loop, and
+    document every stub.
+  - Record the commit tested, the environment, the exact steps, the
+    outcomes and every stub in a dated report under `docs/test-runs/`,
+    named `YYYY-MM-DD-recurring-composed-ui.md`. Do not commit
+    screenshots or generated browser artifacts.
+  - For each bug found: capture a deterministic reproduction; fix it in
+    this task when the correction is safe and scoped; add regression
+    coverage at the strongest practical level; and run the relevant
+    tests. If the fix is unsafe, materially separate, or needs
+    infrastructure this sandbox does not have, propose a focused
+    follow-up task with `branch: "main"` carrying the reproduction,
+    the evidence and the expected behaviour.

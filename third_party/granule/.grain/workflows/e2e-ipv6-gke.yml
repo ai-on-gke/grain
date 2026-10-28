@@ -1,0 +1,37 @@
+name: IPv6 end to end on GKE
+
+# test/e2e-ipv6.sh gke: a dual-stack (--stack-type=ipv4-ipv6) GKE cluster
+# with Dataplane V2, in a VPC of its own, with the same checks as kind.
+# The script creates everything and deletes it again, cluster first,
+# whether the checks pass or not. GKE has no IPv6-only stack type
+# (`gcloud container clusters create --stack-type` takes ipv4 or
+# ipv4-ipv6), so there is nothing v6-only to run here.
+#
+# By hand only. It needs the GCP key (a scheduled run is given no live
+# provider secret), it runs a two-node n2-standard-4 cluster for about
+# half an hour, and what it adds over the nightly kind run (e2e-ipv6.yml)
+# is Dataplane V2's routes, which change with GKE rather than with this
+# tree. Run it when the IPv6 path changes, or when GKE's networking does.
+on:
+  workflow_dispatch:
+
+
+jobs:
+  e2e-ipv6-gke:
+    name: IPv6 on dual-stack GKE
+    # Natively in a grain sandbox, which is what can hold the key (see
+    # gce-build.yml).
+    capabilities:
+      - gcp-key
+    timeout-minutes: 90
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 50
+    steps:
+      - name: test/e2e-ipv6.sh gke
+        run: |
+          set -euo pipefail
+          gcloud auth activate-service-account --key-file=/home/debian/.gcp-service-account.json
+          gcloud config set project "${GKE_PROJECT:-grain-sandbox-dev}"
+          test/e2e-ipv6.sh gke

@@ -1,0 +1,10 @@
+# docs/granulefile.md 5.1 and 12: VM FROM inherits an existing machine
+# and applies offline instructions (COPY, LABEL, VM SET) without /dev/kvm,
+# rebasing onto this build's own VMM half.
+ARG SOURCE_VM=ghcr.io/example/my-vm:latest
+
+VM FROM ${SOURCE_VM} AS derived_vm
+
+COPY banner.txt /etc/motd
+LABEL org.opencontainers.image.vendor="GranuleProject"
+VM SET memory-mb=1536 cpus=2

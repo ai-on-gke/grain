@@ -1,0 +1,32 @@
+[
+  {
+    "id": "board-1",
+    "name": "Payments",
+    "folder": "Reports",
+    "kind": "kanban",
+    "description": "What the payments team has in flight",
+    "query": "f=repo:any:owner/payments-api",
+    "order_key": 1,
+    "team": "default"
+  },
+  {
+    "id": "board-2",
+    "name": "Monday morning",
+    "folder": "",
+    "kind": "panels",
+    "description": "",
+    "query": "",
+    "order_key": 2,
+    "team": "default"
+  },
+  {
+    "id": "board-3",
+    "name": "How payments is going",
+    "folder": "Reports",
+    "kind": "report",
+    "description": "Throughput and latency for the payments team",
+    "query": "f=repo:any:owner/payments-api\u0026f=created:within:30",
+    "order_key": 3,
+    "team": "default"
+  }
+]

@@ -1,0 +1,27 @@
+# One-off Job that copies the built kernel/initramfs/disk onto a node's
+# local filesystem, standing in for a pre-populated node-local image cache
+# (a real deployment would use a hostPath-backed cache or PVC instead;
+# see the main README). Run once before the benchmark pods, against the
+# same hostPath the pod template below mounts. Substitute IMAGE and
+# HOSTPATH before applying.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: granule-bench-stage-assets
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: stage
+          image: IMAGE_PLACEHOLDER
+          command: ["sh", "-c", "cp -v /assets/* /images/ && ls -la /images/"]
+          volumeMounts:
+            - name: images
+              mountPath: /images
+      volumes:
+        - name: images
+          hostPath:
+            path: HOSTPATH_PLACEHOLDER
+            type: DirectoryOrCreate

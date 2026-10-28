@@ -1,0 +1,4 @@
+# SHELL decides what a shell-form RUN is handed to inside the guest, and
+# this file sets one: the enable runs under bash with pipefail, not sh.
+snapshot: false
+argv=/bin/bash -o pipefail -c systemctl enable runner.service

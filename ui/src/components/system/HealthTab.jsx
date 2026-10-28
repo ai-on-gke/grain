@@ -1,0 +1,129 @@
+import { useEffect, useState } from "react";
+import { Alert, Box, Button, Link } from "@mui/material";
+import api from "../../api.js";
+import { AlertsPanel } from "../AlertsButton.jsx";
+import { InstallNoticeAlert } from "../InstallNotice.jsx";
+import { SandboxOvercommitStatus } from "../SandboxHealthPage.jsx";
+import UnbackedStateDot, { stateDot } from "../UnbackedStateDot.jsx";
+import GitHubBudgetPanel from "./GitHubBudgetPanel.jsx";
+import { HostdHealthNote } from "../HostdMissingNote.jsx";
+import { settingLabel } from "../../settingsPlan.js";
+
+// HealthTab is System → Health, System's default tab
+// (docs/design/settings-panel.md §2.1): is anything wrong? It is the
+// alerts the bell already lists, each with the link it already carries,
+// and the two settings states that used to sit at the top of every
+// settings tab -- saved but not applied until a restart, and stored but
+// not runnable. No new API: GET /api/config (the alerts) and GET
+// /api/settings.
+export default function HealthTab({
+  config,
+  alerts,
+  showError,
+  onChanged,
+  onOpenSettings,
+  onOpenSetup,
+  onOpenPower,
+  onOpenTask,
+  onAct,
+}) {
+  const [settings, setSettings] = useState(null);
+  // grain hostd's state (daemon.HostExecutorStatus), for a deployment
+  // beside it: unreachable, or missing some of grain's own entries.
+  const [hostExecutor, setHostExecutor] = useState(null);
+  useEffect(() => {
+    let live = true;
+    api("/api/settings")
+      .then((s) => live && setSettings(s))
+      .catch(() => {});
+    api("/api/settings/cli-run")
+      .then((r) => live && setHostExecutor(r?.hostExecutor || null))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  const pending = (settings?.pendingRestart || []).map(settingLabel);
+  const unrunnable = (settings?.unrunnable || []).map(
+    (u) => `${settingLabel(u.key)} (stored ${u.stored}, running ${u.running})`,
+  );
+  return (
+    <Box data-testid="system-health">
+      <InstallNoticeAlert
+        notice={config?.installNotice}
+        testId="health-install-notice"
+      />
+      <HostdHealthNote hostExecutor={hostExecutor} />
+      {stateDot(config) && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 1 }}
+          data-testid="health-config-repo"
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => onOpenSettings?.("config-repo")}
+            >
+              Config repo
+            </Button>
+          }
+        >
+          <UnbackedStateDot config={config} /> A merged change reset settings on
+          this deployment.
+        </Alert>
+      )}
+      {pending.length > 0 && (
+        <Alert
+          severity="info"
+          sx={{ mb: 1 }}
+          data-testid="health-pending-restart"
+          action={
+            <Button color="inherit" size="small" onClick={onOpenPower}>
+              Power
+            </Button>
+          }
+        >
+          Saved, not applied until restart: {pending.join(", ")}.
+        </Alert>
+      )}
+      {unrunnable.length > 0 && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 1 }}
+          data-testid="health-unrunnable"
+        >
+          Stored, but not runnable: {unrunnable.join(", ")}. grain is running
+          with a value it can use instead; save it in{" "}
+          <Link
+            component="button"
+            type="button"
+            onClick={() => onOpenSettings?.("engine")}
+          >
+            Settings → Engine
+          </Link>{" "}
+          to store it.
+        </Alert>
+      )}
+      <SandboxOvercommitStatus
+        budget={settings?.sandboxCommitment?.budget}
+        overcommit={
+          settings?.sandboxCommitment?.budget?.overcommit ||
+          settings?.overcommit
+        }
+        sx={{ mb: 1.5 }}
+      />
+      <GitHubBudgetPanel sx={{ mb: 1.5 }} />
+      <AlertsPanel
+        alerts={alerts}
+        onChanged={onChanged}
+        showError={showError}
+        onOpenConnection={() => onOpenSettings?.("models")}
+        onOpenSetup={onOpenSetup}
+        onOpenConfigRepo={() => onOpenSettings?.("config-repo")}
+        onOpenTask={onOpenTask}
+        onAct={onAct}
+      />
+    </Box>
+  );
+}

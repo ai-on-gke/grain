@@ -1,0 +1,5 @@
+{
+  "workload": "tcp_4_parallel_streams",
+  "environment": "granule_spliced_tap",
+  "throughput_mbps": 35400.0
+}

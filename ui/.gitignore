@@ -1,0 +1,7 @@
+node_modules/
+# playwright test:e2e output (playwright.config.js)
+/test-results/
+/playwright-report/
+
+# ui/e2e/screenshot.mjs and `make ui-screenshots` output
+/screenshots/

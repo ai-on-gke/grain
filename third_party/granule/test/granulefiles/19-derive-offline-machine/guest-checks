@@ -1,0 +1,6 @@
+[the file copied offline into the inherited machine exists]
+cat /etc/motd
+grep -q "welcome to derived vm" /etc/motd
+
+[the inherited machine has granule runtime agents]
+test -x /usr/local/bin/granule-agent

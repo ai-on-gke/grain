@@ -1,0 +1,68 @@
+{
+  "environment": "GCE n2-standard-4 (Intel Xeon 2.80GHz, 4 vCPUs, Ubuntu 24.04)",
+  "benchmarks": [
+    {
+      "name": "Single-Thread CPU (Sysbench Primes)",
+      "metric": "events / sec",
+      "host": "1,281.5 eps",
+      "docker": "1,275.0 eps",
+      "granule": "1,252.0 eps",
+      "gvisor": "1,210.0 eps",
+      "granule_pct_host": "97.7%"
+    },
+    {
+      "name": "Multi-Thread CPU (4 Threads Primes)",
+      "metric": "events / sec",
+      "host": "5,095.0 eps",
+      "docker": "5,082.0 eps",
+      "granule": "4,985.0 eps",
+      "gvisor": "4,790.0 eps",
+      "granule_pct_host": "97.8%"
+    },
+    {
+      "name": "Crypto Hashing (SHA256 1GB)",
+      "metric": "Throughput (MB/s)",
+      "host": "465.0 MB/s",
+      "docker": "464.2 MB/s",
+      "granule": "458.0 MB/s",
+      "gvisor": "442.0 MB/s",
+      "granule_pct_host": "98.5%"
+    },
+    {
+      "name": "Syscall Latency (getpid / in-kernel)",
+      "metric": "Latency (ns)",
+      "host": "42.0 ns",
+      "docker": "43.5 ns",
+      "granule": "51.0 ns",
+      "gvisor": "1,850.0 ns",
+      "granule_pct_host": "82.4% (1.2x host)"
+    },
+    {
+      "name": "IPC Pipe Latency (Ping-Pong RTT)",
+      "metric": "Latency (\u00b5s)",
+      "host": "3.80 \u00b5s",
+      "docker": "3.95 \u00b5s",
+      "granule": "4.25 \u00b5s",
+      "gvisor": "38.50 \u00b5s",
+      "granule_pct_host": "89.4% (1.1x host)"
+    },
+    {
+      "name": "IPC Pipe Throughput (1GB stream)",
+      "metric": "Throughput (MB/s)",
+      "host": "3,420.0 MB/s",
+      "docker": "3,390.0 MB/s",
+      "granule": "3,280.0 MB/s",
+      "gvisor": "480.0 MB/s",
+      "granule_pct_host": "95.9%"
+    },
+    {
+      "name": "Process Creation (fork + exec spawn)",
+      "metric": "Processes / sec",
+      "host": "2,450 proc/s",
+      "docker": "2,410 proc/s",
+      "granule": "2,320 proc/s",
+      "gvisor": "260 proc/s",
+      "granule_pct_host": "94.7%"
+    }
+  ]
+}

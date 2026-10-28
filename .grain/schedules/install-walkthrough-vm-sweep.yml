@@ -1,0 +1,7 @@
+name: Install walkthrough - leftover VM sweep
+template: install-walkthrough-vm-sweep
+base: main
+weekly:
+  day: thursday
+  at: "05:00"
+overlap: skip

@@ -1,0 +1,44 @@
+.claude/settings.local.json
+/bin/
+/.grain-ca.crt
+# Where the guest build left a built kernel/initramfs/disk triple before it
+# became a Granulefile -- multiple GB, and still on hosts that built one
+# back then. Not something to ever commit.
+scripts/granule/output/
+# The built binary `make build` leaves at the repository root when a
+# CMD is built without -o bin/. Anchored, so it cannot swallow cmd/grain/.
+/grain
+
+# Module and build caches the Makefile bind-mounts into the
+# container-build toolchain (Dockerfile.build), owned by whoever ran make.
+.container-cache/
+# terraform init's working directory and its lock file, created in
+# deploy/terraform/gcp/ by the `terraform` job in
+# .github/workflows/tests.yml and by anyone running the same commands by
+# hand. The lock file stays out of the repo deliberately: the module pins
+# `google ~> 6.8` in its own versions.tf, and a lock committed from one
+# machine's platform records only that platform's hashes.
+.terraform/
+.terraform.lock.hcl
+
+# npm's dependency tree, and the caches vitest and friends write inside it.
+# The real frontend work all happens in ui/, whose own .gitignore has covered
+# this for as long as there has been a ui/ -- but an npm or npx run started
+# from the repository root resolves node_modules/ here instead, and has
+# committed a vitest results cache that way at least once. Unanchored, so it
+# also catches the tree a tool creates in some other subdirectory.
+node_modules/
+
+# A CI cache a cmd/grain test or a `go run ./cmd/grain` started with an
+# empty data directory leaves relative to its working directory
+# (ciCacheDir: <data-dir>/state/ci-cache). One was committed once.
+/cmd/grain/state/
+
+# The embedded PostgreSQL cluster postgres.EnsureRunning initializes in
+# <data-dir>/postgres, left in tests/security/ by a security test whose
+# server had an empty data directory when Postgres was installed. 967
+# files of one were committed once (PR #4114).
+/tests/security/postgres/
+
+# A CI cache tests of pkg/cli start in their own directory, as above.
+/pkg/cli/state/

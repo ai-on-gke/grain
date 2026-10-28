@@ -1,0 +1,6 @@
+[the file copied out of the other machine is in this one]
+cat /etc/runner/source-os-release
+grep -q "^ID=" /etc/runner/source-os-release
+
+[this machine is still a machine: the VMM half is granule's own]
+test -x /usr/local/bin/granule-agent

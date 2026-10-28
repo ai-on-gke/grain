@@ -1,0 +1,3 @@
+[the artifact from the multi-stage builder is present and executable]
+test -x /usr/local/bin/app-helper.sh
+/usr/local/bin/app-helper.sh | grep -q "helper executed in guest"

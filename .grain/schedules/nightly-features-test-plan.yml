@@ -1,0 +1,7 @@
+name: Nightly new features test plan
+template: nightly-features-test-plan
+base: main
+daily:
+  at: "03:00"
+overlap: skip
+auto-approve-proposals: true

@@ -1,0 +1,7 @@
+[the extra config file copied offline is present]
+cat /etc/service-config.json
+grep -q '"mode": "persistent"' /etc/service-config.json
+
+[the workload configuration is recorded]
+cat /etc/granule/container.json
+grep -q 'service running on persistent disk' /etc/granule/container.json

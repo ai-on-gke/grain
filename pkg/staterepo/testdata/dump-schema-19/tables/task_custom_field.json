@@ -1,0 +1,12 @@
+[
+  {
+    "task_id": "golden-1",
+    "name": "customer",
+    "value": "acme"
+  },
+  {
+    "task_id": "golden-1",
+    "name": "customer",
+    "value": "globex"
+  }
+]

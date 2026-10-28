@@ -1,0 +1,2 @@
+COPY --from=source_vm /etc/os-release /etc/runner/source-os-release
+ENV CHV_MEMORY_MB="1024"

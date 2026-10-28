@@ -1,0 +1,9 @@
+# docs/granulefile.md 1.2 and 5.4: a stage starting with VM UNPACK FROM
+# that is never converted produces an OCI container image.
+ARG VM_IMAGE=ghcr.io/example/my-vm:latest
+
+VM UNPACK FROM ${VM_IMAGE} AS extracted_container
+
+RUN rm -f /etc/machine-id
+ENV CONTAINER_EXTRACTED="true"
+CMD ["/bin/sh", "-c", "echo rootfs extracted"]

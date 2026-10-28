@@ -1,0 +1,108 @@
+#!/bin/sh
+# Configure this guest's primary NIC from the kernel's own "ip=" boot
+# parameter, for a guest whose kernel does not do that itself.
+#
+# granule's own bundled kernel (the build-kernel stage's
+# cloud-hypervisor/linux build) sets CONFIG_IP_PNP, so the kernel
+# acts on "ip=" before userspace starts, and this script finds the
+# interface already configured and exits. A guest built with
+# GUEST_KERNEL_PACKAGE boots a distro kernel instead, and Debian's does
+# NOT set CONFIG_IP_PNP -- nothing acts on "ip=" at all there, so such a
+# guest would otherwise come up with no address and simply never be
+# reachable.
+#
+# klibc's ipconfig(8) implements the same static-addressing syntax the
+# in-kernel code would, but (unlike that code) does not read /proc/cmdline
+# itself -- it only accepts the spec as an argument, which is what this
+# wrapper exists to pass. It arrives via klibc-utils (e.g. alongside a
+# distro kernel); if an ip= parameter is present, its absence is fatal.
+#
+# This runs once, and nothing retries it: for a guest reached over the
+# network it is the only chance the guest gets to address itself, so it
+# waits for its NIC and retries rather than treating a device that is not
+# there *yet* as a guest with no networking. granule-net-cmdline.service
+# orders it early and before sshd; the waiting is here, because a unit
+# ordering is not a guarantee that a device has been probed.
+set -eu
+
+CMDLINE="${GRANULE_CMDLINE_FILE:-/proc/cmdline}"
+SYSFS_NET="${GRANULE_SYSFS_NET:-/sys/class/net}"
+
+# How long to wait for the NIC to be probed, and how many times to ask
+# ipconfig for an address once it has been. Both are overridable for the
+# tests in pkg/netshim, which have no real device to wait for.
+timeout="${GRANULE_NET_DEVICE_TIMEOUT:-60}"
+attempts="${GRANULE_NET_ATTEMPTS:-3}"
+retry_delay="${GRANULE_NET_RETRY_DELAY:-1}"
+
+ipparam=$(sed -n 's/.*\bip=\([^ ]*\).*/\1/p' "${CMDLINE}")
+[ -n "$ipparam" ] || exit 0
+
+ipconfig="${GRANULE_IPCONFIG:-/usr/lib/klibc/bin/ipconfig}"
+if [ ! -x "$ipconfig" ]; then
+	echo "granule-configure-net: ${ipconfig} (klibc-utils) is missing or not executable; cannot configure network from ip=${ipparam}" >&2
+	exit 1
+fi
+
+# Field 6 of ip=<client>:<server>:<gw>:<netmask>:<hostname>:<device>:<autoconf>
+# -- granule derives that spec itself (pkg/vmspec/spec.go) and
+# names "eth0", but reading the device back out of the spec keeps this
+# correct for a caller that sets CHV_CMDLINE by hand.
+dev=$(printf '%s' "$ipparam" | cut -d: -f6)
+dev=${dev:-eth0}
+
+# Nothing auto-loads virtio_net early enough on a distro kernel, where it
+# is a module rather than built in. A no-op when it is built in (or
+# already loaded), which is the bundled kernel's case.
+modprobe -q virtio_net 2>/dev/null || true
+
+# Wait for the device itself using a 25ms tight poll loop. ipconfig gives a
+# device that has not been probed yet no time at all -- "SIOCGIFINDEX: No such
+# device", exit 1, within the millisecond. We poll sysfs every 25ms rather than
+# using coarse 1s delays or relying on udevadm settle.
+poll_interval="${GRANULE_NET_POLL_INTERVAL:-0.025}"
+iters=0
+max_iters=$(( timeout * 40 ))
+while [ ! -e "${SYSFS_NET}/${dev}" ]; do
+	if [ "${iters}" -ge "${max_iters}" ]; then
+		echo "granule-configure-net: ${dev} did not appear within ${timeout}s; this guest has no address" >&2
+		exit 1
+	fi
+	sleep "${poll_interval}"
+	iters=$((iters + 1))
+done
+
+# Already addressed: either the kernel's own IP_PNP did it, or this ran
+# before. Either way there is nothing to do, and re-running ipconfig
+# against a configured interface risks disturbing it for no gain.
+addressed() {
+	addr=$(ip -4 -o addr show dev "$dev" 2>/dev/null || true)
+	[ -n "$addr" ]
+}
+
+if addressed; then
+	exit 0
+fi
+
+# Whether an address landed is the question, not what ipconfig's exit
+# status was: it fails for transient reasons (a device that came up
+# between the check above and the call, a link that has not finished
+# carrier detection) and this is the only thing that will ever address
+# this guest, so a failure is worth another go rather than a boot spent
+# unreachable.
+attempt=1
+while : ; do
+	if ! "$ipconfig" "$ipparam"; then
+		echo "granule-configure-net: ipconfig ${ipparam} failed (attempt ${attempt}/${attempts})" >&2
+	fi
+	if addressed; then
+		exit 0
+	fi
+	echo "granule-configure-net: ${dev} still has no address after attempt ${attempt}/${attempts}" >&2
+	attempt=$((attempt + 1))
+	[ "${attempt}" -le "${attempts}" ] || break
+	sleep "${retry_delay}"
+done
+
+echo "granule-configure-net: giving up; ${dev} has no address and this guest is not reachable over the network" >&2
+exit 1

@@ -1,0 +1,13 @@
+# docs/granulefile.md 4.3, 5.3, and 14.6: VM PACK FROM starts a VM stage
+# directly by packing the rootfs produced by an earlier container stage.
+ARG ROOTFS=ghcr.io/gke-labs/granule-guest-rootfs:debian12
+
+FROM ${ROOTFS} AS rootfs_builder
+RUN echo "configured by builder" > /etc/builder-note.txt
+WORKDIR /srv
+
+# Start a VM stage directly by packing the builder stage.
+VM PACK FROM rootfs_builder AS packed_vm
+COPY greeting.txt /etc/greeting.txt
+LABEL org.opencontainers.image.title="PackedFromStage"
+VM SET memory-mb=1024 cpus=2

@@ -1,0 +1,6 @@
+[the offline copy was written into the guest root filesystem]
+cat /etc/motd
+grep -q "Welcome to the wrapped guest with offline modifications!" /etc/motd
+
+[the wrapped service is active]
+systemctl is-active granule-wrap@app_svc.service >/dev/null

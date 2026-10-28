@@ -1,0 +1,11 @@
+[Unit]
+Description=Granule Guest Ready Target
+Documentation=file:///usr/local/libexec/granule-declare-ready
+DefaultDependencies=no
+Conflicts=shutdown.target
+After=sysinit.target granule-agent.service
+Wants=granule-agent.service
+Before=shutdown.target
+
+[Install]
+WantedBy=sysinit.target

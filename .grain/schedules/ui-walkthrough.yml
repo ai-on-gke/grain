@@ -1,0 +1,6 @@
+name: UI walkthrough
+suite: release-ui-walkthrough
+base: main
+daily:
+  at: "03:00"
+overlap: skip

@@ -1,0 +1,7 @@
+# Must produce a container image, not a VM image.
+docker run --rm "$IMAGE" /bin/sh -c 'test "$CONTAINER_TARGET" = "true"'
+docker run --rm "$IMAGE" /bin/sh -c 'test -s /extracted-guest-os-release'
+if docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'test -e /var/lib/granule/guest/disk.img'; then
+  echo "a build targeting a container stage produced a VM image" >&2
+  exit 1
+fi

@@ -1,0 +1,14 @@
+# docs/granulefile.md 5.2 and 6: instructions after VM WRAP run in the
+# guest, not in the wrapped workload. Offline instructions (COPY, LABEL,
+# VM SET) modify the guest root filesystem directly without running
+# in the workload container.
+FROM alpine:latest
+
+RUN echo "workload output" > /run/app.txt
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["cat /run/app.txt > /run/wrapped-app-done && sleep 3600"]
+
+VM WRAP --name=app_svc AS wrapped_vm
+COPY guest-motd.txt /etc/motd
+LABEL org.opencontainers.image.title="WrappedGuestModified"
+VM SET memory-mb=1024 cpus=2

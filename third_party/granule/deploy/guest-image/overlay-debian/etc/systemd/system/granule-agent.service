@@ -1,0 +1,33 @@
+[Unit]
+Description=Answer "granule exec" over this VM's vsock device
+Documentation=file:///usr/local/bin/granule-agent
+# Started as early as a service can be, and deliberately not ordered
+# after the network. The whole reason exec moved off SSH is that a guest
+# whose networking had not come up was a guest granule could not get into
+# to find out why -- so this must be answering before anything that could
+# go wrong with the network has had the chance to. It needs nothing but
+# the root filesystem and the vsock driver.
+DefaultDependencies=no
+Conflicts=shutdown.target
+After=systemd-remount-fs.service
+Before=shutdown.target sysinit.target
+
+[Service]
+Type=simple
+# The Debian kernel builds virtio-vsock as a module, so something has to
+# load it; the guest's own kernel (granule's bundled one) has it built in
+# and the modprobe fails harmlessly there, hence the "-".
+ExecStartPre=-/sbin/modprobe vmw_vsock_virtio_transport
+ExecStart=/usr/local/bin/granule-agent
+Restart=always
+RestartSec=1
+# Belt and braces against this unit ever holding up a poweroff. The agent
+# exits immediately on SIGTERM, but it is the last thing standing between
+# a shutdown request and the VM actually stopping, and systemd's default
+# here is 90 seconds -- longer than `granule guest build` waits for the
+# guest to power off, so a wedged agent would fail a build rather than
+# just be slow.
+TimeoutStopSec=5
+
+[Install]
+WantedBy=sysinit.target

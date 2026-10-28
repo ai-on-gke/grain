@@ -1,0 +1,1 @@
+This example's build boots a guest under KVM: it has a RUN in a VM stage (and, for 15, a VM SNAPSHOT), which granule builds by packing the machine, booting it and running the stage inside it. There is no offline half to run without /dev/kvm.

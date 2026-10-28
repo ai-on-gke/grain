@@ -1,0 +1,146 @@
+name: Design-doc planner
+title: "Plan design doc changes: {{group}}"
+body: |
+  A change to the design doc at `{{group}}` merged to `{{branch}}`. Turn what
+  is new or changed in it into implementation and test tasks.
+  `docs/design-docs.md` in this repository describes the conventions. This
+  prompt is the procedure.
+
+  - Doc: `{{group}}`. For a folder, the doc is its `README.md`. For a single
+    file, the doc is the file itself. Below, `<doc>` is that path.
+  - Range: `{{from_sha}}..{{to_sha}}` on `{{branch}}`.
+
+  The files this merge changed in it:
+
+  ```
+  {{paths}}
+  ```
+
+  You plan; you do not implement. Change no code. The only file a pull
+  request of yours may touch is the doc itself, and only to assign IDs
+  (step 2).
+
+  The pull request that merged this change is this task's origin. Every task
+  you file inherits it, and grain keeps one progress comment on that pull
+  request listing them all, so nothing you file needs recording anywhere
+  else.
+
+  ## 1. Read
+
+  - The doc as of `{{to_sha}}` (`git show {{to_sha}}:<doc>`).
+  - What changed: `git diff {{from_sha}}..{{to_sha}} -- {{group}}`.
+  - What is built. Every implementing commit on `{{branch}}` carries
+    `Design-Item: <doc>#<ID>` and `Design-Rev: <sha of the doc revision it
+    implemented>`; a commit that took an item back out carries
+    `Design-Removed: <doc>#<ID>`. List them with
+
+    ```
+    git log {{to_sha}} --format='%H%n%B%n--' \
+      --grep='Design-Item: <doc>#' --grep='Design-Removed: <doc>#'
+    ```
+
+    For each ID, the newest such commit decides: a `Design-Removed:` newer
+    than every `Design-Item:` means the item was taken out; otherwise the
+    newest `Design-Item:` commit's `Design-Rev:` is the revision it was
+    built from.
+  - The open tasks for this doc. If you hold `self-debug`, use
+    `list_grain_tasks` (and read the tasks) to find open tasks whose title
+    or body names `<doc>#<ID>`, and read the `Design-Rev:` line in each
+    body: the revision it was filed against. If you cannot search, say so
+    in your closing note and plan from the history alone.
+
+  `pkg/designdoc` (`designdoc.History` and `designdoc.Classify`) implements
+  this reading in grain itself, and its tests are a worked example.
+
+  ## 2. Requirement IDs
+
+  Each requirement heading carries a stable ID at the end of its text:
+  `### Retag latest on promotion {#D-7}`. IDs are a prefix, a dash and a
+  number. They are never reused: an ID that any `Design-Item:` or
+  `Design-Removed:` trailer has named stays taken even after it leaves the
+  doc.
+
+  If the doc has requirement headings without IDs, give each the next free
+  ID (one more than the highest used with that prefix in the doc or any
+  trailer, `D` if there is none yet), and write them into the doc in your
+  pull request. A heading is a requirement if it states something to build
+  or a behaviour to hold. Introductions, background, non-goals, open
+  questions and the like are not, and get no ID. Those IDs are new items.
+
+  ## 3. Classify every ID
+
+  A section is an item's heading through the next heading of the same or a
+  higher level. It is **changed** when its text differs between
+  `git show <rev>:<doc>` and `{{to_sha}}`, ignoring whitespace and the
+  `{#ID}` marker, where `<rev>` is the `Design-Rev:` of the newest
+  implementing commit (for a built item) or of the open task (for an open
+  one).
+
+  | Doc at `{{to_sha}}` | History / open tasks          | Class            |
+  |---------------------|-------------------------------|------------------|
+  | present             | nothing built, nothing open   | new              |
+  | present             | open, same section            | open (nothing)   |
+  | present, changed    | open                          | changed, open    |
+  | present             | built, same section           | done (nothing)   |
+  | present, changed    | built                         | changed, done    |
+  | absent              | open                          | removed, open    |
+  | absent              | built, not removed            | removed, done    |
+  | absent              | removed, or nothing           | nothing          |
+
+  ## 4. Act
+
+  File every task with `propose_task`. Give each one an `id` so that later
+  proposals in this run can name it in `depends_on`, and get the
+  `depends_on` chains right: a test task waits on its implementation, and a
+  task that replaces or extends earlier work waits on whatever of that work
+  is still open.
+
+  - **New:** an implementation task, and a test task that `depends_on` it.
+  - **Changed, open:** a replacement implementation task with `supersedes`
+    set to the open implementation task, and a replacement test task
+    superseding the open test task. grain refuses to supersede a task that
+    has already been dispatched, and says so in what `propose_task` returns.
+    When that happens, file the replacement as a delta task that
+    `depends_on` the running one, and describe the change between the two
+    revisions of the section.
+  - **Changed, done:** a delta task covering only what changed since the
+    built revision (quote the diff of the section), naming the commits that
+    built it.
+  - **Removed, open:** file nothing. In your closing note, list the open
+    tasks a human should close and why (the item was removed from the doc
+    at `{{to_sha}}`).
+  - **Removed, done:** a removal task that takes the item's behaviour out
+    again, naming the commits that added it.
+  - **Open, done, nothing:** nothing.
+
+  If you filed anything, finish with one **verify** task: "Verify
+  `<doc>` against its implementation". It `depends_on` every task filed in
+  this run. Its job is to read the doc at the commit it runs on and the code
+  it describes, and to report (or file) any requirement that the
+  implementation does not meet.
+
+  Every task body you write says:
+
+  - the doc path, the item's ID and its title, and quotes the section's text
+    as of `{{to_sha}}` (for a delta, both revisions);
+  - a line `Design-Rev: {{to_sha}}` (in full), so the next planner can tell
+    whether the section has changed since the task was filed;
+  - for implementation, delta and test tasks, word for word: "Add the
+    trailers `Design-Item: <doc>#<ID>` and `Design-Rev: {{to_sha}}` to the
+    commit that implements it." Fill in `<doc>`, `<ID>` and the sha. A
+    removal task says `Design-Removed: <doc>#<ID>` instead of
+    `Design-Item:`. The item is built when its implementation lands;
+  - that the task does not edit the design doc.
+
+  If you assigned IDs, commit the doc with a message naming the doc and
+  `{{to_sha}}`, and open one pull request. If nothing was new, changed or
+  removed and you assigned no IDs (for example, the merge only edited
+  wording outside any requirement, or it was your own previous pull request
+  adding IDs), file nothing, open no pull request and end with
+  `nothing_needed`, saying so.
+
+  ## Closing note
+
+  End with a table of every ID: its class, what you filed (task ids), and
+  anything a human has to do (tasks to close, IDs you assigned). Name any
+  tool you lacked.

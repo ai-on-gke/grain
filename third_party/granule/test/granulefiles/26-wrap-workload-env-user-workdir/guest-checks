@@ -1,0 +1,12 @@
+[the wrap service unit is enabled]
+test -L /etc/systemd/system/multi-user.target.wants/granule-wrap@web_service.service
+
+[the workload configuration recorded USER, WORKDIR, ENV, and VOLUMES]
+cat /etc/granule/container.json
+grep -q '"user": *"appuser"' /etc/granule/container.json
+grep -q '"working_dir": *"/home/appuser/app"' /etc/granule/container.json
+grep -q 'APP_ENV=production' /etc/granule/container.json
+grep -q '/home/appuser/app/data' /etc/granule/container.json
+
+[the wrapped service is active]
+systemctl is-active granule-wrap@web_service.service >/dev/null

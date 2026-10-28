@@ -1,0 +1,59 @@
+name: Release watchdog
+title: Verify latest base branch release status and health
+base: main
+auto-merge: true
+body: |
+  Inspect the release pipeline status for base branches (particularly `main`), verifying that
+  the latest base-branch release succeeded and is not lagging behind `main` or stalled.
+
+  ## 1. Check release status
+
+  - Check recent CI runs for release workflows (e.g. `.grain/workflows/release.yml`) using `list_ci_runs`.
+  - Check the latest commits on `main` against the latest successful release commit.
+  - Check whether any release run has failed, errored, timed out, or stalled.
+
+  ## 2. Check release-candidate progress on `main`
+
+  Releases are cut from `main` (`docs/design/release-from-trunk.md`): there is no
+  daily agent cut, no `candidate -> main` back-merge and no port tasks between the
+  two branches any more, and `candidate` is never the base of a pull request.
+  `.grain/workflows/release.yml` runs on every merge to `main`, so a green, current
+  release run there says nothing about whether a release candidate is advancing.
+  Check that from git:
+
+  - `git fetch origin --tags`, then find the newest `v*.*.0-rc.*` tag and its date
+    (`git for-each-ref --sort=-creatordate --count=1 --format='%(refname:short) %(creatordate:iso)' 'refs/tags/v*.*.0-rc.*'`)
+    and the commit `latest` points at.
+  - Report the newest rc tag, its age, and how far `origin/main` is ahead of it
+    (`git rev-list --count <tag>..origin/main`). An rc tag more than 30 hours old
+    while `main` has moved means release candidates are not advancing: say so, and
+    propose a task (`branch: "main"`) to find out why, unless one is already open.
+
+  ## 2b. Check `main`'s nightly and live suites
+
+  A release candidate is only picked from a `main` commit whose suites are green.
+  For each of `nightly`, `gcp-smoke`, `live-agent`, `live-frameworks` and
+  `live-secrets-repo`, find the newest concluded grain CI run on `main`
+  (`list_ci_runs` with `ref: main`, `since: 36h` and a job only that workflow has:
+  `go-long`, `smoke`, `live-agy`, `live-claude`, `live-secrets-repo`), and report
+  each verdict. A workflow with no run on `main` for more than 30 hours means its
+  schedule is not firing; that is a fault to report.
+
+  - Do not repair a red suite here unless it is a release pipeline fault: its own
+    review task owns it. Propose a task (`branch: "main"`) only for a `regression`
+    that neither the review task nor anything else has filed.
+
+  ## 3. Diagnose and repair if stalled or failed
+
+  - If a release run has failed or errored:
+    - Inspect the job and step logs using `get_ci_log`.
+    - Identify the root cause (workflow definition, build script, test failure, or configuration).
+    - Repair the issue on a fix branch or propose repair tasks with `branch: "main"`.
+  - If the release pipeline is lagging significantly behind `main` or has stalled:
+    - Determine why the release run did not trigger or complete.
+    - Propose or perform corrective action.
+
+  ## 4. Verify and report
+
+  - If everything is healthy and releases are up-to-date, leave a closing note confirming the pipeline health.
+  - If fixes were applied, commit with descriptive messages, push the branch, and wait for CI checks to pass.

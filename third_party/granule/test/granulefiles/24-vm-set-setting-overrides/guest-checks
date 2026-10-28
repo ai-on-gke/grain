@@ -1,0 +1,5 @@
+[the directory created in rootfs exists]
+test -d /srv/configured
+
+[granule agent is executable]
+test -x /usr/local/bin/granule-agent

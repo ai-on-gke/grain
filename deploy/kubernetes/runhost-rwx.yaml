@@ -1,0 +1,42 @@
+# Optional: a ReadWriteMany volume for run hosts, for a cluster that
+# needs run pods spread across nodes rather than pinned beside the daemon
+# (docs/non-disruptive-upgrade.md, "The shared credential directory").
+#
+# The default needs none of this: run hosts keep their spool, staging and
+# credential directories on grain-data, which is ReadWriteOnce, and run
+# pods are pinned to the daemon pod's node. That loses the run pods with
+# the node; this does not. To use it, apply this file, mount the claim
+# into the daemon container at /runhosts (a volume and a volumeMount in
+# grain.yaml's Deployment), and give the daemon:
+#
+#   - -run-host-image=self
+#   - -run-host-credential-dir=/runhosts/agent-home
+#   - -run-host-dir=/runhosts/run
+#   - -k8s-run-host-volume=grain-runhosts:/runhosts
+#   - -k8s-run-host-rwx
+#   - -run-host-daemon-url=http://grain.grain.svc
+#
+# Every run-host directory must be on this claim: a run pod on another
+# node cannot see grain-data at all. The daemon refuses to start on a
+# claim that is not ReadWriteMany, and on a gcsfuse-backed one -- a
+# rename there is not atomic, and the spool's exit.json and a refreshing
+# CLI's login are both written by rename. `grain init
+# -k8s-run-host-rwx-class=<class>` refuses a gcsfuse class before
+# anything is applied.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grain-runhosts
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  accessModes: ["ReadWriteMany"]
+  # CHANGEME: a ReadWriteMany class -- on GKE, Filestore's
+  # (standard-rwx, enterprise-rwx); elsewhere an NFS provisioner's.
+  # Never a gcsfuse one.
+  storageClassName: CHANGEME
+  resources:
+    requests:
+      # Filestore's smallest basic-HDD instance.
+      storage: 1Ti

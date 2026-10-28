@@ -1,0 +1,34 @@
+{
+  "initial": "MemTotal:        1001428 kB",
+  "step1": "MemTotal:        1525716 kB",
+  "step2": "MemTotal:        2050004 kB",
+  "step3": "MemTotal:        2574292 kB",
+  "logs": [
+    "memagent: listening on 169.254.100.1:30090",
+    "memagent: received pressure signal: 22.40",
+    "memagent: expanding memory by 512MB (current: 1024MB, target: 1536MB)",
+    "memagent: received pressure signal: 35.80",
+    "memagent: expanding memory by 512MB (current: 1536MB, target: 2048MB)",
+    "memagent: received pressure signal: 40.10",
+    "memagent: expanding memory by 512MB (current: 2048MB, target: 2560MB)"
+  ],
+  "metrics": {
+    "events_total": {
+      "success": 3,
+      "skipped": 0,
+      "failed": 0
+    },
+    "hotplug_latency_seconds": 0.08448,
+    "latency_count": 3,
+    "latency_sum_seconds": 0.23264,
+    "latency_avg_seconds": 0.07755,
+    "latency_min_seconds": 0.06752,
+    "latency_max_seconds": 0.08448,
+    "latency_p50_seconds": 0.08064,
+    "latency_p90_seconds": 0.08448,
+    "latency_p99_seconds": 0.08448,
+    "allocated_bytes": 2684354560,
+    "ceiling_bytes": 4294967296,
+    "ceiling_saturation_ratio": 0.625
+  }
+}

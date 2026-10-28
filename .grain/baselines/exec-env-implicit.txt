@@ -1,0 +1,33 @@
+# Ratchet baseline for tests/security's exec-env-implicit rule.
+# exec.Command / exec.CommandContext calls in a function that never sets Env,
+# so the child inherits the daemon's environment (#2404).
+#
+# "<path> <count>": violations each file still has. The count may only
+# go down -- tests/security fails when it rises and when it falls without
+# this file being lowered to match. Raising a count needs a human's review.
+pkg/backup/backup.go 3
+pkg/capability/selfrepair/selfrepair.go 1
+pkg/cli/export.go 1
+pkg/daemon/host.go 4
+pkg/daemon/statemanager.go 5
+pkg/daemon/statepullrequests.go 6
+pkg/github/githubsim/githubsim.go 10
+pkg/granule/granule.go 3
+pkg/grit/actions/run.go 3
+pkg/hosttop/hosttop.go 1
+pkg/k8s/k8s.go 1
+pkg/lifecycle/images.go 1
+pkg/mcp/container_exec_runner.go 1
+pkg/mcp/docker_exec_runner.go 1
+pkg/mcp/exec_conn.go 1
+pkg/mcp/git_reverter.go 1
+pkg/mcp/kubectl_exec_runner.go 1
+pkg/mcp/managed_http.go 1
+pkg/modelexec/client.go 1
+pkg/orchestrator/container_sandboxes.go 1
+pkg/orchestrator/granule_firewall.go 2
+pkg/sandboximage/sandboximage.go 1
+pkg/staterepo/postcheck.go 1
+pkg/systemlog/systemlog.go 1
+pkg/ui/httpclient.go 1
+pkg/upgrade/upgrade.go 1

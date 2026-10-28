@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+# granule-runlevel: default
+
+description="Declare this guest ready"
+
+# "after *" is OpenRC's own idiom for last in the runlevel (its "local"
+# service uses it for the same reason), and it is this variant's
+# equivalent of the systemd unit's After=multi-user.target: what a
+# reference guest has to declare is that its boot finished. A guest with
+# a workload in it should say something stronger -- "after <workload>"
+# here, or a start_post on the service that knows first.
+depend() {
+	after *
+}
+
+start() {
+	ebegin "Declaring this guest ready"
+	/usr/local/libexec/granule-declare-ready
+	eend $?
+}

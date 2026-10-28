@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+# granule-runlevel: default
+
+description="Configure the granule flat-mode control link"
+
+depend() {
+	before granule-mem-agent
+}
+
+start() {
+	ebegin "Configuring the granule control link"
+	/usr/local/libexec/granule-control-net
+	eend $?
+}

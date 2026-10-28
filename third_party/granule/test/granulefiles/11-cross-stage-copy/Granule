@@ -1,0 +1,14 @@
+# docs/granulefile.md 8: a cross-stage copy. The toolchain stays in the
+# container stage; only the binary reaches the machine's root
+# filesystem.
+ARG ROOTFS=ghcr.io/gke-labs/granule-guest-rootfs:debian12
+
+FROM debian:bookworm-slim AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev
+COPY hello.c /src/hello.c
+RUN gcc -static -o /src/hello /src/hello.c
+
+FROM ${ROOTFS}
+COPY --from=builder /src/hello /usr/local/bin/hello
+
+VM PACK AS hello_vm

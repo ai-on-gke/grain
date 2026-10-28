@@ -1,0 +1,91 @@
+name: GCE build
+
+# Every image build CI otherwise does happens inside a grain sandbox, whose
+# DNS, registry mirror, CA and docker daemon are grain's own. This workflow
+# builds the same images on a stock Debian VM on Google Compute Engine,
+# with docker installed from Docker's own repository, so that a build which
+# has quietly come to depend on the sandbox fails here rather than in front
+# of the first person to run deploy/publish-images.sh on their own machine.
+# test/gce-build.sh is the whole of it and runs the same by hand.
+#
+# On every push, like ci.yml: the build is the test, and a build that only
+# breaks off-sandbox is broken by a commit. It costs one VM for the length
+# of three guest builds (about ten minutes on the default e2-standard-8),
+# and grain reuses a job's result for a tree it has already built.
+#
+# Not on pull_request, unlike ci.yml. This job holds a capability -- the
+# GCP service-account key test/gce-build.sh creates its VM with -- and
+# runs scripts out of the tree under test, so whatever triggers it can
+# run code of its choosing beside that key. A push needs write access to
+# this repository; a pull request needs none, and one from a fork must
+# not be able to reach the key by editing test/gce-build.sh. Branches
+# pushed here are built by the push trigger, which is every change grain
+# makes, so dropping pull_request loses only the merge-result build.
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  gce-build:
+    name: images build on a GCE VM
+    # No runs-on and no actions/checkout, like release.yml's publish job:
+    # that is the shape grain runs natively in the checkout, which is what
+    # lets it hand the job a capability. act, which runs a job that names a
+    # runner, rejects "capabilities" as an unknown key.
+    # The key test/gce-build.sh creates and deletes its VM with, placed at
+    # /home/debian/.gcp-service-account.json.
+    capabilities:
+      - gcp-key
+    # A cold build of all three guests measured under ten minutes on the
+    # VM, plus about a minute to create it and install docker. The rest is
+    # for a slow mirror. The VM deletes itself after GCE_MAX_RUN even if
+    # this job is cancelled before the script's own cleanup runs.
+    timeout-minutes: 45
+    steps:
+      - name: install gcloud if the runner has none
+        run: |
+          set -euo pipefail
+          if command -v gcloud >/dev/null; then
+            gcloud --version | head -n 1
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-transport-https ca-certificates curl gnupg openssh-client
+          curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg |
+            sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" |
+            sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq google-cloud-cli
+          gcloud --version | head -n 1
+
+      # publish-images.sh applies its grain-sandbox host setup (grain's
+      # nameserver, CA and registry mirror) only where it detects a grain
+      # sandbox, and test/gce-build.sh below fails if it does so on the VM.
+      # This is the other half: this job runs natively in a grain sandbox,
+      # the same shape as release.yml's publish job, so the script has to
+      # still recognize it here or the release publish loses that setup --
+      # and the GITHUB_PROXY build arg that sends the Dockerfile's
+      # fetch-chv and fetch-kernel-source downloads through grain's proxy.
+      - name: publish-images.sh recognizes a grain sandbox
+        run: |
+          set -euo pipefail
+          out=$(deploy/publish-images.sh --dry-run --no-login guests)
+          grep -q "^+ grain sandbox setup:" <<<"$out" || {
+            echo "$out"
+            echo "::error::deploy/publish-images.sh did not detect this grain sandbox, so release.yml's publish would run without grain's nameserver, CA and registry mirror" >&2
+            exit 1
+          }
+          grep "^+ grain sandbox setup:" <<<"$out"
+          # The Dockerfile fetches github release assets through grain's
+          # proxy only when GITHUB_PROXY says where it is; it no longer
+          # guesses from resolv.conf.
+          grep -q -- "--build-arg GITHUB_PROXY=[^ ]" <<<"$out" || {
+            echo "$out"
+            echo "::error::deploy/publish-images.sh detected this grain sandbox but passed the Dockerfile no GITHUB_PROXY, so release.yml's publish would fetch from github.com directly" >&2
+            exit 1
+          }
+
+      - name: build granule's images on a stock GCE VM
+        run: test/gce-build.sh guests

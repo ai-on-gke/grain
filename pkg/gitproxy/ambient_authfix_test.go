@@ -1,0 +1,45 @@
+package gitproxy
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/bwsalmon/grain/pkg/authfix"
+	"github.com/bwsalmon/grain/pkg/authfix/authfixtest"
+)
+
+// A command-backed token source on a host whose credentials have lapsed:
+// the tool cannot run at all. That is said as the fix the registered
+// classifier names, not as a login the tool's own login command would
+// repair.
+func TestCommandTokenSaysExpiredHostCredentialsAsTheirFix(t *testing.T) {
+	authfixtest.Register(t)
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not installed")
+	}
+	bin := t.TempDir()
+	script := "#!" + sh + "\necho \"$0: host credential lapsed\" >&2\nexit 126\n"
+	if err := os.WriteFile(filepath.Join(bin, "mint"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("GRAIN_IN_CONTAINER", "0")
+
+	_, err = commandToken(AmbientCommandSource{
+		Command: "mint", Args: []string{"auth", "token"}, LoginFix: "mint auth login",
+	}, "forge.example.test")
+	expired, ok := authfix.As(err)
+	if !ok {
+		t.Fatalf("commandToken err = %v, want an authfix.Error", err)
+	}
+	if !strings.Contains(err.Error(), authfixtest.Action) || strings.Contains(err.Error(), "mint auth login") {
+		t.Errorf("err = %q, want the registered fix and not the tool's own login", err)
+	}
+	if !strings.HasSuffix(expired.Path, "/mint") {
+		t.Errorf("Path = %q, want the tool that could not run", expired.Path)
+	}
+}

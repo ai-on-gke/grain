@@ -1,0 +1,52 @@
+# The toolchain the Makefile's `container-build` target links in, so that
+# what produces bin/grain is Debian 12 -- the release every machine this
+# project deploys to runs (the bookworm guest the Granulefile builds,
+# deploy/terraform/gcp/variables.tf's debian-cloud/debian-12) -- whatever
+# the machine driving the build happens to be. grain is pure Go (the
+# Makefile's own "Containerised build" comment), so there is no C
+# toolchain or system library here to pin a version of -- this image
+# exists purely to pin the Go toolchain itself, so `container-build`
+# reproduces the same compiler CI and a release both use regardless of
+# what is or isn't installed on whichever machine invokes it.
+#
+# Nothing is COPYed in: this image is the toolchain, not the build. The
+# working tree is bind-mounted and `make build` runs inside it, so the
+# container path and the host path produce their binary from one copy of
+# the build rules rather than from two that can drift.
+
+ARG GO_VERSION=1.26.10
+# Separate from the tag so a mirror can be substituted whole
+# (GO_IMAGE=mirror.gcr.io/library/golang) on a network that does not
+# reach Docker Hub, without restating the version.
+ARG GO_IMAGE=golang
+# Pinned by digest as well as by tag, for the reason the main Dockerfile
+# gives above its own ARGs: a tag is a name its registry can repoint, and
+# pinning the toolchain is this image's whole job. The same value as
+# Dockerfile's GO_IMAGE_DIGEST --
+# TestEveryBaseImageIsPinnedByDigest keeps the two equal.
+ARG GO_IMAGE_DIGEST=sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af
+
+FROM ${GO_IMAGE}:${GO_VERSION}-bookworm@${GO_IMAGE_DIGEST}
+
+# The pinned tag above is the whole point of building in here, and a
+# go.mod toolchain line newer than it would quietly undo it by fetching a
+# different Go at build time. `local` makes that an error naming both
+# versions instead -- the signal to bump go.mod and this image together
+# (the Makefile reads GO_VERSION back out of go.mod, so they cannot be
+# bumped apart).
+ENV GOTOOLCHAIN=local
+
+# ui/ (bwsalmon/agents#356) needs a JS toolchain of its own now: `make
+# build` runs `npm ci && npm run build` there before `go build`, so this
+# image carries one too rather than leaving container-build unable to
+# reproduce it. Debian 12's own nodejs/npm packages are recent enough
+# for the pinned Vite version ui/ builds with -- no NodeSource repo to
+# add just for this.
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+	&& rm -rf /var/lib/apt/lists/*
+
+# The bind-mounted tree's root, which is the Go module root since v1's
+# removal promoted it there. The Makefile's container-build passes -w
+# explicitly anyway, so this is what someone running the builder image by
+# hand lands in.
+WORKDIR /src

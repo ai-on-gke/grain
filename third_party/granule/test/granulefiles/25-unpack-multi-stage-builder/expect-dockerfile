@@ -1,0 +1,7 @@
+granule_unpack_1
+COPY --from=builder /app-helper.sh /usr/local/bin/app-helper.sh
+RUN chmod 0755 /usr/local/bin/app-helper.sh
+granule_pack_1
+dev.granule.granulefile.kind="pack"
+dev.granule.granulefile.stage="repacked_vm"
+ENV CHV_MEMORY_MB="1024"

@@ -1,0 +1,603 @@
+#!/bin/sh
+# pack-guest assembles a granule guest and packs it into a raw ext4 disk
+# image, working entirely from a directory tree.
+#
+#   usage: pack-guest <rootfs-dir> <parts-dir> <out-dir>
+#          pack-guest -lay-only <rootfs-dir> <parts-dir>
+#
+# -lay-only stops after laying granule's own guest-side pieces over
+# <rootfs-dir> and enabling them, producing no disk and needing no
+# mke2fs. That is what
+# `granule guest rebase -boot` runs *inside* a booted guest, where the
+# rootfs is already a mounted filesystem and the only thing that needs
+# refreshing is what granule put in it -- so a rebase and a pack lay the
+# same files down, in the same order, with the same checks, rather than
+# being two implementations that have to be kept saying the same thing.
+#
+# This is the mechanism behind `granule guest pack` (pkg/guestpack)
+# and it is the same mechanism the Dockerfile's own "guest-image" stage
+# uses: `mke2fs -d` populates a filesystem straight from a directory tree,
+# so packing needs no loop mount and no privileges beyond an ordinary
+# docker build. That property is why the whole path can run on a machine
+# whose isolation is the point, so keep it: nothing here mounts anything,
+# and nothing here runs a program out of <rootfs-dir>.
+#
+# That second half is the one to be careful about. <rootfs-dir> is a
+# filesystem somebody else authored -- pack's whole reason to exist is
+# packing an image a consumer published -- and every binary in it is
+# theirs. This script reads that tree and writes to it; it never executes
+# out of it, does not chroot into it, and runs no hook, postinst or
+# entrypoint it carries. `granule guest pack` arranges the same thing
+# one level up, with a docker build whose only contact with the image
+# being packed is `COPY --from`.
+#
+# What it writes into <out-dir> is the guest half of a granule image as
+# pkg/guestimage names it: disk.img always, plus vmlinuz and
+# initrd.img when the rootfs brought a kernel of its own. The caller
+# chooses the directory (granule passes guestimage.Dir under a staging
+# root); the file names are guestimage's own constants and are not
+# negotiable -- the ".img" suffix in particular is functional, since
+# hypervisor.BuildArgs decides image_type from it.
+#
+# <parts-dir> holds granule's own guest-side pieces -- the overlay trees
+# and the two agent binaries -- and they are laid over <rootfs-dir>,
+# and the services among them enabled, before the filesystem is measured
+# or packed. That ordering is the point of packing late rather than at
+# rootfs-build time: the agents and the units that start them come from
+# whoever is packing, so a guest published months ago boots with the
+# current ones in it. <rootfs-dir> is an operating system and nothing
+# more -- granule's own Dockerfile builds one that way and packs it
+# through this same script, so there is one statement of what granule
+# puts inside a guest and not two. Replacing a file the consumer also
+# placed there is correct -- granule's copy wins -- but it is announced
+# rather than done quietly.
+#
+# One of those files is /etc/granule/guest-contract: the version of the
+# guest-side contract the pieces being laid down implement (see
+# pkg/guestimage). It goes *inside* the guest, where it survives a
+# repack by somebody else's tooling and a commit out of a running VM,
+# and the same number goes on the packed image as a label, where a cheap
+# `granule guest rebase` can read it without opening the disk.
+#
+# Environment:
+#   GUEST_DISK_EXTRA_MB   headroom in MiB on top of the 20% below, the
+#                         same knob (and the same name) as the
+#                         Dockerfile's build arg.
+#   GRANULE_GUEST_VARIANT  "debian", "alpine" or "auto" (the default):
+#                         which overlay to lay down, i.e. which init
+#                         system the rootfs runs.
+#   GRANULE_PACK_VERBOSE   set to anything to list every file granule's
+#                         own half displaced, rather than the one-line
+#                         summary a pack normally prints.
+
+set -eu
+
+die() {
+	printf 'pack-guest: %s\n' "$1" >&2
+	exit 1
+}
+
+say() {
+	printf 'pack-guest: %s\n' "$1"
+}
+
+# exists is "is there something at this path", symlinks included and
+# without asking whether it can be run: every test here is about a
+# rootfs somebody else built, and a file whose executable bit a build
+# context or a tarball dropped is still a file that says which kind of
+# guest this is.
+exists() {
+	[ -e "$1" ] || [ -L "$1" ]
+}
+
+lay_only=0
+if [ "${1:-}" = "-lay-only" ]; then
+	lay_only=1
+	shift
+fi
+
+usage() {
+	echo "usage: pack-guest <rootfs-dir> <parts-dir> <out-dir>" >&2
+	echo "       pack-guest -lay-only <rootfs-dir> <parts-dir>" >&2
+	exit 2
+}
+
+if [ "$lay_only" = 1 ]; then
+	[ $# -eq 2 ] || usage
+else
+	[ $# -eq 3 ] || usage
+fi
+
+rootfs=$1
+parts=$2
+out=${3:-}
+extra_mb=${GUEST_DISK_EXTRA_MB:-0}
+variant=${GRANULE_GUEST_VARIANT:-auto}
+
+[ -d "$rootfs" ] || die "$rootfs is not a directory"
+[ -d "$parts/overlay-common" ] || die "$parts holds no overlay-common: it is not a granule guest-parts directory"
+if [ "$lay_only" = 0 ]; then
+	command -v mke2fs >/dev/null 2>&1 || die "mke2fs is not on PATH; packing a disk needs e2fsprogs"
+
+	case "$extra_mb" in
+	'' | *[!0-9]*) die "GUEST_DISK_EXTRA_MB must be a whole number of MiB, got '$extra_mb'" ;;
+	esac
+
+	# Which of three kinds of image this is decides whether it can be a
+	# guest at all, and only a filesystem can say which: `granule guest
+	# build` lets a Dockerfile name any FROM, because a reference is a
+	# string and this is the layer that gets to look inside.
+	#
+	#   a granule guest rootfs  Packs. Whatever it carries of granule's
+	#                          own half is thrown away and re-laid below
+	#                          from the granule image being packed onto.
+	#   a plain OS image       Refused here: it has an OS, but has never
+	#                          been through the customisation that makes
+	#                          one bootable as a guest (no init granule
+	#                          knows, or granule's units installed and
+	#                          nothing enabling them). Build FROM a guest
+	#                          rootfs image.
+	#   not an OS at all       Refused here: scratch, a binary-only
+	#                          image, a language toolchain's artifact.
+	#                          There is no machine in it to boot.
+	#
+	# Each of the three says which it is rather than failing with the
+	# same sentence, because the fix differs: rebuild on a guest rootfs,
+	# install an init, or start again from an image that is a machine.
+	#
+	# Inside the packing guard on purpose. Under -lay-only the caller has
+	# already booted this filesystem (`guest rebase -boot`), so the
+	# question these answer -- could this image be a guest at all -- has
+	# been settled by the guest coming up, and the disk.img test below
+	# would be a false refusal for a guest that happens to run granule
+	# inside it.
+	if ! exists "$rootfs/etc" && ! exists "$rootfs/usr" && ! exists "$rootfs/bin"; then
+		die "the image being packed has no operating system in it at all (no /etc, no /usr, no /bin): it is scratch, or a binary-only image, and there is no machine in it to boot. A guest base has to be granule's own guest rootfs image (docker build --target guest-rootfs-image) or one built FROM it."
+	fi
+
+	# The near miss of the three, and the one a rebase walks into: a
+	# granule image that has *already* been packed. Its filesystem is the
+	# VMM half, with the guest sealed inside a disk image rather than
+	# laid out as a tree -- so there is nothing here to lay parts over,
+	# and the error it would otherwise get ("runs no init system")
+	# describes the wrong problem. The path is pkg/guestimage's
+	# DiskImage; `granule guest rebase` is the verb that wants it, and
+	# -rootfs is how it repacks one.
+	if exists "$rootfs/var/lib/granule/guest/disk.img"; then
+		die "the image being packed is a packed granule image, not a guest rootfs: its filesystem is granule's own half with the guest sealed inside /var/lib/granule/guest/disk.img, and packing lays parts over a filesystem rather than into a disk. To make an already-packed image current use \`granule guest rebase\`, which replaces the VMM half of one -- and give it -rootfs <the rootfs image this was packed from> to repack the guest inside it too."
+	fi
+fi
+
+# Which overlay the rootfs wants is a question about its init system, so
+# ask about the init system rather than about the distribution: a
+# consumer's guest may be built FROM either of granule's rootfs images and
+# be unrecognizable as Debian or Alpine by the time it is packed.
+if [ "$variant" = auto ]; then
+	if exists "$rootfs/lib/systemd/systemd" || exists "$rootfs/usr/lib/systemd/systemd"; then
+		variant=debian
+	elif exists "$rootfs/sbin/openrc" || [ -d "$rootfs/etc/runlevels" ]; then
+		variant=alpine
+	else
+		die "this image has an OS in it but runs no init system granule can use (no systemd, no openrc), so it is not a guest base: a plain OS image such as debian:13 has never been through the customisation that makes one bootable as a guest. Build FROM granule's own guest rootfs image (docker build --target guest-rootfs-image), or name the variant with -variant if this guest really does run one of them."
+	fi
+	say "detected the $variant variant from this rootfs's init system"
+fi
+case "$variant" in
+debian | alpine) ;;
+*) die "unknown guest variant '$variant': expected debian or alpine" ;;
+esac
+[ -d "$parts/overlay-$variant" ] || die "$parts holds no overlay-$variant"
+
+# announce records that granule's copy of a file is displacing a
+# different one, which is the thing about laying these parts down that a
+# caller should not have to discover.
+#
+# "Different" rather than "present": a rootfs built FROM granule's own
+# guest-rootfs image already carries every file below, and saying so for
+# each of them would bury the case that matters in twenty lines of the
+# case that does not. What is left, once identical copies are quiet, is
+# exactly the interesting set -- a file the consumer edited, and a file
+# whose content has moved on since their base was built. Either way
+# granule's copy wins, because that is the whole point of packing late;
+# this is here so it is never a surprise.
+#
+# Recorded rather than printed, and summarized once by report_replaced
+# below. A rootfs built FROM an older *guest image* differs in every file
+# granule owns rather than in one or two, and that case stopped being
+# exceptional when `guest build` began accepting a FROM of its own: loud
+# has to mean one line nobody can miss, not twenty lines every build
+# prints and nobody reads.
+#
+# The list goes to a file because the loop in lay_down is the right-hand
+# side of a pipe, and in POSIX sh that is a subshell whose variables the
+# rest of the script never sees.
+#
+# The variable names are prefixed because this is POSIX sh, where a
+# function's variables are the caller's: an unprefixed "src" here would
+# reach back into lay_down's loop below and quietly repoint it.
+replaced=$(mktemp)
+trap 'rm -f "$replaced"' EXIT
+
+announce() {
+	announce_src=$1
+	announce_dest=$2
+	announce_rel=$3
+	exists "$announce_dest" || return 0
+	cmp -s "$announce_src" "$announce_dest" && return 0
+	echo "/$announce_rel" >>"$replaced"
+}
+
+# report_replaced says what was displaced, in one line: how many, a few
+# by name, and how to see the rest.
+report_replaced() {
+	count=$(wc -l <"$replaced")
+	count=$((count + 0))
+	if [ "$count" -eq 0 ]; then
+		return 0
+	fi
+	if [ "${GRANULE_PACK_VERBOSE:-}" != "" ]; then
+		while IFS= read -r path; do
+			say "replacing $path, which the image being packed carried a different copy of"
+		done <"$replaced"
+		return 0
+	fi
+	if [ "$count" -eq 1 ]; then
+		say "replacing $(cat "$replaced"), which the image being packed carried a different copy of"
+		return 0
+	fi
+	names=$(sort "$replaced" | head -5 | tr '\n' ' ')
+	more=""
+	if [ "$count" -gt 5 ]; then
+		more=" and $((count - 5)) more (GRANULE_PACK_VERBOSE=1 lists them)"
+	fi
+	say "replacing $count files of granule's own guest half, which the image being packed carried different copies of: ${names%% }${more}"
+}
+
+# lay_down copies one overlay tree over the rootfs.
+#
+# The modes are decided here rather than carried in the tree because a
+# build context is not a reliable carrier of an executable bit: git
+# records one, a tarball may not, and `docker build` from a context
+# somebody else assembled is not somewhere to find out. The rule: the
+# libexec helpers, the OpenRC init scripts and the ACPI handler are
+# programs something execs by path; unit files and event files are read,
+# not run. packscript_test.go asserts it marks exactly the files that
+# carry a #! line, which is the same statement made independently.
+lay_down() {
+	src=$1
+	(cd "$src" && find . -mindepth 1 ! -type d -print) | while IFS= read -r rel; do
+		rel=${rel#./}
+		dest="$rootfs/$rel"
+		mode=0644
+		case "$rel" in
+		usr/local/libexec/* | usr/local/bin/* | etc/init.d/* | *.sh) mode=0755 ;;
+		esac
+		announce "$src/$rel" "$dest" "$rel"
+		place "$src/$rel" "$dest" "$mode"
+	done
+}
+
+# place writes one file into the rootfs, and writes it by rename.
+#
+# install(1) straight onto the destination would do for a pack, where the
+# tree being written to is inert. -lay-only lays these same files over a
+# *running* guest, where /usr/local/bin/granule-agent is a running program
+# and opening it for writing is ETXTBSY. Writing under a temporary name
+# and renaming replaces the directory entry and leaves the running
+# program on the inode it started from -- which is what a package manager
+# does about the same problem, and is atomic for every other reader
+# besides.
+place() {
+	place_src=$1
+	place_dest=$2
+	place_mode=$3
+	install -D -m "$place_mode" "$place_src" "$place_dest.granule-new"
+	mv -f "$place_dest.granule-new" "$place_dest"
+}
+
+# The guest-side contract version, before and after. It is an ordinary
+# overlay file (etc/granule/guest-contract), so lay_down places it like
+# any other; what is worth saying out loud is the *move*, because a
+# rootfs that has just been carried forward several versions is exactly
+# the one whose agents were too old to have been left alone. The same
+# number goes on the packed image as a label, where `granule guest
+# rebase` can read it without opening the disk -- see pkg/guestimage.
+contract_rel=etc/granule/guest-contract
+[ -f "$parts/overlay-common/$contract_rel" ] ||
+	die "$parts/overlay-common holds no $contract_rel, so this pack cannot say which guest-side contract it is laying down"
+contract_new=$(cat "$parts/overlay-common/$contract_rel")
+contract_old=none
+if [ -f "$rootfs/$contract_rel" ]; then
+	contract_old=$(cat "$rootfs/$contract_rel")
+fi
+
+lay_down "$parts/overlay-common"
+lay_down "$parts/overlay-$variant"
+
+for agent in granule-agent granule-mem-agent granule-container; do
+	if [ -f "$parts/$agent" ]; then
+		announce "$parts/$agent" "$rootfs/usr/local/bin/$agent" "usr/local/bin/$agent"
+		place "$parts/$agent" "$rootfs/usr/local/bin/$agent" 0755
+	elif [ "$agent" != granule-container ]; then
+		die "$parts holds no $agent"
+	fi
+done
+
+report_replaced
+
+if [ "$contract_old" = "$contract_new" ]; then
+	say "guest-side contract version $contract_new"
+elif [ "$contract_old" = none ]; then
+	say "guest-side contract version $contract_new (this rootfs declared none: it was built before granule wrote one down)"
+else
+	say "guest-side contract version $contract_old -> $contract_new"
+fi
+
+# What granule's guest-side half needs from the operating system it was
+# just laid over. None of these comes from granule, all of them are run
+# by the units it just installed, and this is the only place the
+# requirement is stated: the rootfs is somebody else's OS, whether it is
+# a consumer's or the one granule's own Dockerfile builds, and whether it
+# can carry granule's half is a question about that OS asked once, here.
+#
+# It is also what tells a guest base from a plain OS image. An image with
+# an init in it and none of this has never been through the packaging
+# that makes an OS bootable as a granule guest; it would pack, boot, and
+# then behave as if granule were broken -- no address, no routes, no
+# clean shutdown -- which is a worse answer than a refusal naming the
+# package that is missing.
+have() {
+	for p in "$rootfs/sbin/$1" "$rootfs/usr/sbin/$1" "$rootfs/bin/$1" "$rootfs/usr/bin/$1"; do
+		if exists "$p"; then return 0; fi
+	done
+	return 1
+}
+needs() {
+	have "$1" && return 0
+	die "$2, and this rootfs has no $1 ($3). Either the image being packed is a plain OS image, which has an OS in it but has never been through granule's guest customisation, or a package granule's guest side needs has been removed from it. A guest base has to be granule's own guest rootfs image (docker build --target guest-rootfs-image) or one built FROM it."
+}
+needs resize2fs "granule-growfs runs resize2fs to grow the root filesystem onto its disk" "e2fsprogs on Debian; e2fsprogs plus e2fsprogs-extra on Alpine"
+needs modprobe "granule-agent modprobes the vsock driver before it can answer \`granule exec\`" "kmod on Debian; busybox provides one on Alpine"
+needs ip "granule's network helpers give this guest its address and routes with ip" "iproute2 on both variants"
+needs acpid "acpid is what turns cloud-hypervisor's power button into a clean shutdown, through the handler granule just laid into /etc/acpi" "acpid on both variants"
+
+# A service that is installed and not enabled is a file: the guest boots,
+# looks healthy and never answers. So enabling granule's own services is
+# part of laying them down, and it happens here for the same reason the
+# files do -- the rootfs underneath is an operating system somebody else
+# built, and nothing in it knows that granule-agent has to be reached
+# before sysinit.target or that granule-growfs belongs in OpenRC's "boot"
+# runlevel. Neither systemd nor OpenRC is running to be asked, so both
+# are enabled the way a package's postinst does it, by writing the
+# symlink they would have written.
+#
+# Where each one goes is read out of the service itself rather than
+# listed here, so the fact lives beside the unit that explains it:
+#
+#   debian  the unit's own [Install] WantedBy=, which is what
+#           `systemctl enable` would act on.
+#   alpine  a "# granule-runlevel:" line in the init script, OpenRC
+#           having no [Install] of its own.
+#
+# A service granule ships and does not always want started declares the
+# file that turns it on instead -- see conditional_on below.
+
+# wanted_by prints the targets a systemd unit asks to be enabled into.
+# Only the [Install] section counts: WantedBy= in [Unit] is a different
+# statement (it adds a dependency, not an enablement) and `systemctl
+# enable` ignores it too.
+wanted_by() {
+	awk '/^\[/ { install = ($0 == "[Install]"); next }
+	     install && sub(/^WantedBy=/, "") { print }' "$1"
+}
+
+# runlevel_of prints the OpenRC runlevel an init script declares.
+runlevel_of() {
+	sed -n 's/^#[[:space:]]*granule-runlevel:[[:space:]]*//p' "$1" | head -1
+}
+
+# conditional_on prints the file inside the guest that has to exist
+# before a service is enabled, for the two that ship everywhere and run
+# only where something asked for them: granule-ready where
+# GUEST_READY_FILE (or a setup script) named a path for it to create, and
+# granule-container where a workload specification was placed. Every
+# other service is enabled unconditionally.
+conditional_on() {
+	case "${1%.service}" in
+	granule-ready) echo /etc/granule/ready-file ;;
+	granule-container) echo /etc/granule/container.json ;;
+	esac
+}
+
+enable_service() {
+	name=$1
+	case "$variant" in
+	debian)
+		targets=$(wanted_by "$parts/overlay-debian/etc/systemd/system/$name")
+		[ -n "$targets" ] ||
+			die "$name has no [Install] WantedBy=, so this pack cannot tell which target to enable it into: granule's own overlay is what states that, and a unit without it would ship into every guest and never be started"
+		for target in $targets; do
+			mkdir -p "$rootfs/etc/systemd/system/$target.wants"
+			ln -sf "/etc/systemd/system/$name" "$rootfs/etc/systemd/system/$target.wants/$name"
+		done
+		;;
+	alpine)
+		runlevel=$(runlevel_of "$parts/overlay-alpine/etc/init.d/$name")
+		[ -n "$runlevel" ] ||
+			die "$name declares no '# granule-runlevel:' line, so this pack cannot tell which OpenRC runlevel to enable it into: granule's own overlay is what states that, and a service without it would ship into every guest and never be started"
+		mkdir -p "$rootfs/etc/runlevels/$runlevel"
+		ln -sf "/etc/init.d/$name" "$rootfs/etc/runlevels/$runlevel/$name"
+		;;
+	esac
+}
+
+# enabled_somewhere is the check after the fact: whatever target or
+# runlevel each service asked for, something now points at it. It is
+# cheap, and it is the one thing that would notice an enable_service that
+# wrote its symlink into a directory no init reads.
+enabled_somewhere() {
+	name=$1
+	case "$variant" in
+	debian)
+		for dir in "$rootfs"/etc/systemd/system/*.wants "$rootfs"/lib/systemd/system/*.wants "$rootfs"/usr/lib/systemd/system/*.wants; do
+			if exists "$dir/$name"; then return 0; fi
+		done
+		;;
+	alpine)
+		for dir in "$rootfs"/etc/runlevels/*; do
+			if exists "$dir/$name"; then return 0; fi
+		done
+		;;
+	esac
+	return 1
+}
+
+# wrap_service_enabled reports whether this rootfs already starts the
+# workload under a service its author named. `granule guest wrap` and a
+# Granule's VM WRAP both enable granule-wrap@<name>, with the restart
+# policy the file asked for, and that service runs the same
+# /etc/granule/container.json granule-container does -- so enabling
+# granule-container beside it would start two copies of one workload,
+# racing for whatever the first one bound. Left in the rootfs unenabled,
+# for anything that refers to it by name.
+wrap_service_enabled() {
+	case "$variant" in
+	debian)
+		for dir in "$rootfs"/etc/systemd/system/*.wants "$rootfs"/lib/systemd/system/*.wants "$rootfs"/usr/lib/systemd/system/*.wants; do
+			for link in "$dir"/granule-wrap@*.service; do
+				if exists "$link"; then return 0; fi
+			done
+		done
+		;;
+	alpine)
+		for dir in "$rootfs"/etc/runlevels/*; do
+			if exists "$dir/granule-wrap"; then return 0; fi
+		done
+		;;
+	esac
+	return 1
+}
+
+case "$variant" in
+debian)
+	services=$(cd "$parts/overlay-debian" && find . -path './etc/systemd/system/*.service' -print | sed 's|.*/||')
+	# Mask unnecessary default Debian units to streamline guest boot and avoid distribution startup overhead
+	for unit in \
+		systemd-logind.service \
+		getty.target \
+		systemd-timesyncd.service \
+		apt-daily.timer \
+		apt-daily-upgrade.timer \
+		dpkg-db-backup.timer \
+		e2scrub_all.timer \
+		fstrim.timer; do
+		if ! exists "$rootfs/etc/systemd/system/$unit"; then
+			mkdir -p "$rootfs/etc/systemd/system"
+			ln -sf /dev/null "$rootfs/etc/systemd/system/$unit"
+		fi
+	done
+	;;
+alpine) services=$(cd "$parts/overlay-alpine" && find . -path './etc/init.d/*' ! -type d -print | sed 's|.*/||') ;;
+esac
+enabled=0
+missing=""
+for service in $services; do
+	gate=$(conditional_on "$service")
+	if [ -n "$gate" ] && [ ! -f "$rootfs$gate" ]; then
+		continue
+	fi
+	case "${service%.service}" in
+	granule-container)
+		if wrap_service_enabled; then
+			say "granule-container left unenabled: this rootfs already starts its workload under a wrap service of its own"
+			continue
+		fi
+		;;
+	esac
+	enable_service "$service"
+	enabled=$((enabled + 1))
+	enabled_somewhere "$service" || missing="$missing $service"
+done
+if [ -n "$missing" ]; then
+	die "enabled$missing into a place this guest's init does not read: granule's own overlay says where each service goes, and that answer was not one of them"
+fi
+say "enabled $enabled of granule's services for the $variant init system"
+
+# -lay-only stops here: there is no disk to make, because the rootfs this
+# was laid over is already one -- a guest booted by `granule guest
+# rebase -boot`, whose filesystem is committed by the build around it.
+# Everything above this line is the half of a pack that a rebase needs;
+# everything below it is the packing.
+if [ "$lay_only" = 1 ]; then
+	say "laid granule's guest-side parts over $rootfs; no disk was packed"
+	exit 0
+fi
+
+mkdir -p "$out"
+
+# The same declaration a third time, beside the disk rather than only
+# inside it. The VMM half has to read it before cloud-hypervisor starts
+# -- a VM killed after boot has already been handed to a caller as
+# running -- and reading it out of the disk at that point would mean
+# mounting a filesystem an untrusted consumer authored. The label cannot
+# serve either: at boot there is no image to inspect, only the files
+# inside the container that already is one. See pkg/guestimage's
+# ContractSidecar.
+#
+# Copied out of the rootfs, not from <parts-dir>, even though this pack
+# just wrote it there from exactly those bytes: the sidecar's whole job
+# is describing what is in the disk, so it is taken from the tree the
+# disk is packed from, and the two cannot come to disagree if some later
+# step changes what goes into the rootfs.
+cp "$rootfs/etc/granule/guest-contract" "$out/guest-contract"
+
+# The guest's own kernel, when it brought one -- a distro kernel package
+# installed into the rootfs, for a workload the bundled
+# cloud-hypervisor/linux build cannot serve. Published beside the disk so
+# a caller booting this guest has everything it needs from one artifact;
+# a guest without one boots the granule image's own vmlinux, which is the
+# ordinary case and not an error.
+#
+# The initramfs is required with it rather than looked for separately:
+# the two are one unit (guestimage.Check refuses the same pairing), and a
+# vmlinuz booted without the modules and udev rules its initramfs carries
+# produces a guest that never becomes reachable rather than a boot
+# failure. The version has to match too -- the newest vmlinuz with some
+# older initrd.img is the same broken pair with a better disguise.
+#
+# The vmlinuz is copied as it is, which on arm64 matters: cloud-hypervisor's
+# aarch64 direct kernel boot takes an uncompressed arm64 Image and does
+# not decompress one. Debian's arm64 /boot/vmlinuz-* is already that
+# (checked on bookworm's 6.1 and trixie's 6.12: "Linux kernel ARM64 boot
+# executable Image", CONFIG_EFI_ZBOOT unset), so a Debian guest's kernel
+# boots as packed. Ubuntu's arm64 vmlinuz is gzip-compressed and would
+# need gunzipping first; that is not done here because nothing has been
+# booted that way yet.
+kernel=$(ls -1 "$rootfs"/boot/vmlinuz-* 2>/dev/null | sort -V | tail -1 || true)
+if [ -n "$kernel" ]; then
+	version=${kernel##*/vmlinuz-}
+	initrd="$rootfs/boot/initrd.img-$version"
+	[ -f "$initrd" ] || die "the rootfs has /boot/vmlinuz-$version but no /boot/initrd.img-$version: a guest that brings its own kernel needs both, or it boots without the modules and udev rules the initramfs carries and never becomes reachable"
+	cp "$kernel" "$out/vmlinuz"
+	cp "$initrd" "$out/initrd.img"
+	say "staged the guest's own kernel $version"
+fi
+
+# Sized to the rootfs plus 20% for logs and runtime growth, rounded up,
+# plus a fixed 64MiB floor so ext4's own overhead never starves a small
+# guest -- the same arithmetic as the Dockerfile's guest-image stage,
+# measured after the parts above went on so they are inside the 20%
+# rather than eating it.
+#
+# GUEST_DISK_EXTRA_MB is space to install *into* later, and it is not
+# free: truncate leaves it as a hole, but a docker layer is a tar and
+# extracting one materializes the hole, so every MiB here is a MiB on
+# every host that pulls the packed image. CHV_DISK_SIZE_MB grows the
+# overlay at boot instead and costs the image nothing.
+size_kb=$(du -sk "$rootfs" | cut -f1)
+img_kb=$((size_kb * 12 / 10 + 65536 + extra_mb * 1024))
+rm -f "$out/disk.img"
+truncate -s "${img_kb}K" "$out/disk.img"
+mke2fs -F -t ext4 -L granule-root -d "$rootfs" "$out/disk.img" >/dev/null
+[ -f "$out/disk.img" ] || die "mke2fs left no $out/disk.img"
+say "packed ${size_kb}K of rootfs into a ${img_kb}K ext4 disk at $out/disk.img"

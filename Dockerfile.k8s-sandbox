@@ -1,0 +1,265 @@
+# Multi-stage build for Grain's container and Kubernetes sandbox images:
+#   - Stage `k8s-sandbox-base` (ghcr.io/bwsalmon/grain/k8s-sandbox-base):
+#     minimal base container carrying ONLY what Grain requires to drive a
+#     container/pod sandbox (debian:bookworm-slim, bash, ca-certificates, curl,
+#     findutils, git, tar, python3-minimal for GuestForwarder, user debian
+#     uid 1000, /home/agent -> /home/debian, and /etc/grain/sandbox-contract).
+#   - Stage `k8s-sandbox` (ghcr.io/bwsalmon/grain/k8s-sandbox):
+#     the default full Kubernetes/container sandbox image, layering OCR and
+#     attachment tools plus the three pinned agent CLIs (claude, agy, codex) on
+#     top of k8s-sandbox-base. Docker and kind are omitted: the published
+#     default must not require privileged pods or expose the node's runtime.
+#
+# The base is pinned by digest as well as by tag, for the reason the main
+# Dockerfile gives above its own ARGs: a tag is a name its registry can
+# repoint, and the digest is what is fetched. This is the same value as
+# that file's RUNTIME_IMAGE -- bump both together.
+ARG BASE_IMAGE=debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+
+# ==============================================================================
+# Stage 1: Minimal base sandbox container (k8s-sandbox-base)
+# ==============================================================================
+FROM ${BASE_IMAGE} AS k8s-sandbox-base
+
+# python3-minimal is not a convenience: grain's own guest port forwarder
+# (pkg/capability/portforward.GuestForwarder) is a python3 script, started in
+# the sandbox before the agent is, for every capability grant that forwards a
+# port (docs/capabilities-spec.md §5.3). Without it that grant fails at
+# dispatch, and an apt-get the run could make comes too late. The minimal
+# package carries every module the forwarder imports, which the build checks
+# below; it is about 5MB where python3 with its standard library is about 25MB.
+RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "3";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\n' > /etc/apt/apt.conf.d/99-grain-build \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        bash ca-certificates curl findutils git tar \
+        python3-minimal \
+    && python3 -c 'import os, socket, sys, threading' \
+    && rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/99-grain-build
+
+COPY Dockerfile.k8s-sandbox .grain-ca.cr[t] /tmp/
+RUN if [ -f /tmp/.grain-ca.crt ]; then \
+        cp /tmp/.grain-ca.crt /usr/local/share/ca-certificates/grain-ca.crt \
+        && update-ca-certificates; \
+    fi && rm -f /tmp/.grain-ca.crt /tmp/Dockerfile.k8s-sandbox
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+
+# Stamp the Grain sandbox contract version (pkg/sandboximage.Contract).
+RUN install -d -m0755 /etc/grain \
+    && printf '1\n' > /etc/grain/sandbox-contract
+
+# The sandbox user is debian, uid 1000, in /home/debian: the user and home
+# capability materialization writes into (docs/capabilities-spec.md §5.1,
+# pkg/orchestrator/capability_materialize.go) and the granule guest
+# already has. It was agent in /home/agent, and every capability grant
+# with a port or a placement then failed before the agent started --
+# "mkdir: cannot create directory '/home/debian': Permission denied".
+# /home/agent stays, as a link to the same directory, because it is the
+# workspace -container-sandboxes and -k8s-sandboxes default to and what
+# deployments name in -k8s-workspace: a run cloning into /home/agent/work
+# and a placement at /home/debian/.netrc land in one home.
+RUN useradd --create-home --uid 1000 --shell /bin/bash debian \
+    && ln -s /home/debian /home/agent
+USER debian
+WORKDIR /home/debian
+
+LABEL dev.grain.sandbox.contract="1"
+
+# ==============================================================================
+# Stage 2: Full default Kubernetes/container sandbox image (k8s-sandbox)
+# ==============================================================================
+FROM k8s-sandbox-base AS k8s-sandbox
+USER root
+
+# The package line is short on purpose -- this image carries no jq, no
+# ripgrep and no full python, because a run that wants one can install it
+# and the published default should not decide that for every deployment.
+#
+# OCR is the exception, and it is one because it is not a convenience: a
+# task's attachments are placed in the sandbox as files
+# (pkg/orchestrator/attachments.go), and every tool that reaches them --
+# read_file, `cat` -- hands back the bytes. For a screenshot of the
+# failing page, the commonest thing anyone attaches, that is a wall of
+# binary, and the run does not fail loudly the way a missing `jq` does:
+# it answers from the task's prose and never mentions the picture. No
+# `apt-get install` inside the sandbox fixes that either, because by then
+# the agent has already read the file and moved on. `tesseract shot.png -`
+# prints the text in it; tesseract-ocr-eng is the English data it reads
+# with (a dependency of tesseract-ocr today, named anyway because
+# --no-install-recommends is one packaging decision away from dropping
+# it). imagemagick and poppler-utils are what get a file *to* tesseract:
+# leptonica reads png, jpeg, tiff and webp on its own, `convert` is for
+# every other format and for the rescale to ~300dpi that decides whether
+# a small screenshot OCRs into text or into noise, and
+# `pdftotext`/`pdftoppm` take a PDF apart -- Debian ships ImageMagick with
+# a policy that refuses PDF outright, so poppler is not a duplicate of it.
+# 130MB installed between the four, measured on bookworm-slim, against an
+# image whose three agent CLIs already make it 1.3GB.
+#
+# The two font packages are the same decision one crash further on, in
+# the other direction: not reading an image but drawing one. Without
+# them, `convert -size 640x120 xc:white -pointsize 56 -annotate +20+80
+# text out.png` raises SIGABRT -- a core dump, exit 134, and not one byte
+# on stderr. Nothing the OCR direction needs is affected (a rescale, a
+# format conversion and pdftoppm never open a font), but a run annotating
+# a screenshot before it attaches it back, rendering a caption or making
+# a test fixture gets a crash where "no such font" would have told it
+# what to do next.
+#
+# It is not that the image has no font. fontconfig-config depends on
+# fonts-dejavu-core (first in an alternatives list), so DejaVu is on disk
+# here already and the abort happens anyway: Debian's ImageMagick
+# resolves its *default* font through /etc/ImageMagick-6/type.xml, which
+# imagemagick-6-common ships listing the URW base-35 faces whether or not
+# any of them is installed, and those arrive by a Recommends chain
+# --no-install-recommends cuts (imagemagick recommends ghostscript, which
+# depends via libgs10-common on fonts-urw-base35). So the default font
+# name resolves to a path with no file at it, and freetype's failure to
+# open it is an abort rather than an error. fonts-urw-base35 is what
+# fixes that, and ~17MB with x11-common and the xfonts-* tooling behind
+# it.
+#
+# fonts-dejavu-core is named because naming URW alone would take it away:
+# apt satisfies fontconfig-config's alternative with whichever font it is
+# already installing, so the one-package version of this change silently
+# swaps the image's DejaVu for Nimbus -- and DejaVu is what `fc-match
+# sans` answers, what `convert -list font` advertises, and what anything
+# naming a font by path (/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf)
+# means. Naming both keeps today's font and adds the one the default
+# needs.
+#
+# The Granulefile installs the same six into the granule guest for the
+# same reason. Which sandbox a task is dispatched into is a deployment's
+# choice and nothing the run is told about, so the two images answering
+# `tesseract` differently is a difference no prompt can account for.
+RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "3";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\n' > /etc/apt/apt.conf.d/99-grain-build \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        tesseract-ocr tesseract-ocr-eng imagemagick poppler-utils \
+        fonts-urw-base35 fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/99-grain-build
+
+# The three CLI versions below are the main Dockerfile's, spelled the
+# same way and holding the same values, and
+# TestBothImagesPinTheSameAgentCLIs keeps them equal. They are copied
+# rather than passed in as --build-arg because nothing passes any: every
+# build of this image is a bare `docker build -f Dockerfile.k8s-sandbox
+# -t <tag> .` (build-artifacts.yml, scripts/publish-images.sh,
+# tests.yml), so a default that disagrees with the daemon's image is what
+# ships.
+#
+# Why they have to agree at all: the daemon and the sandbox are two
+# copies of the same agent in one deployment. pkg/agent/* builds argv for
+# the CLI it knows -- which flags exist, which a session takes, what
+# `--resume` means -- against the version the main image pins and
+# docs/{agy,claude,codex}-surface.md captures, and then that argv is run
+# by whichever binary the *sandbox* has. Skew there does not fail at
+# build time or at dispatch; it fails as a rejected flag in the middle of
+# somebody's run, on a version nothing in this tree recorded.
+#
+# So: bump the main Dockerfile and bump these, in the same commit.
+#
+# Claude comes from the pinned release's own binary with its digest
+# checked, not through claude.ai/install.sh -- which always runs the
+# *latest* release before installing the one asked for -- for the reason
+# the main Dockerfile's block gives at length.
+ARG CLAUDE_CLI_VERSION=2.1.286
+ARG CLAUDE_CLI_SHA256_AMD64=fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f
+ARG CLAUDE_CLI_SHA256_ARM64=0292fa22ac2fd43e16be9d0e511ddd8347280d6e0ebaca744ef5b27e05d8d0f8
+ARG INSTALL_CLAUDE_CLI=1
+RUN if [ "$INSTALL_CLAUDE_CLI" = "1" ]; then \
+        set -eu; mkdir -p /opt/claude; arch="$(uname -m)"; \
+        case "$arch" in \
+            x86_64|amd64) platform=linux-x64; sha256="$CLAUDE_CLI_SHA256_AMD64" ;; \
+            aarch64|arm64) platform=linux-arm64; sha256="$CLAUDE_CLI_SHA256_ARM64" ;; \
+            *) echo "unsupported architecture for the Claude CLI: $arch" >&2; exit 1 ;; \
+        esac; \
+        curl -4 -fsSL --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors "https://downloads.claude.ai/claude-code-releases/${CLAUDE_CLI_VERSION}/${platform}/claude" -o /tmp/claude; \
+        echo "$sha256  /tmp/claude" | sha256sum -c -; chmod +x /tmp/claude; \
+        HOME=/opt/claude /tmp/claude install "$CLAUDE_CLI_VERSION"; rm -f /tmp/claude; \
+        echo "$sha256  /opt/claude/.local/share/claude/versions/$CLAUDE_CLI_VERSION" | sha256sum -c -; \
+        test -x /opt/claude/.local/bin/claude; ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude; chmod -R a+rX /opt/claude; \
+        test "$(claude --version | awk '{print $1}')" = "$CLAUDE_CLI_VERSION"; \
+    fi
+
+# agy updates itself in place during an ordinary run ("The Antigravity
+# CLI automatically self-updates in the background during regular runs",
+# says its own installer; docs/hand-runs/2026-09-17-agy-self-update.md is
+# the measurement). Here that cannot succeed -- the install below is
+# root-owned and a+rX and this image's USER is unprivileged -- so what
+# the variable buys is an image that carries the agy it says it carries
+# for a task that runs it, and a run that does not spend an attempt on an
+# update it cannot apply. The value has to be exactly "true"; a bare 1
+# was measured not to work. pkg/agent/antigravity/selfupdate.go is where
+# the reasoning lives, and it sets this for every agy grain itself
+# starts.
+ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
+# ...and the version comes from the immutable release artifact, for the
+# reason the main Dockerfile's block gives at length:
+# antigravity.google/cli/install.sh follows a mutable per-platform
+# manifest, so installing through it put whatever agy was current on
+# build day into this image -- two builds of the same grain commit
+# carrying two different agys, with nothing in the tree saying which.
+# That was the half task 185 left open (docs/hand-runs/2026-09-17-agy-self-update.md,
+# "Still owed"): disabling the updater stopped the binary changing under
+# a running task, and settled nothing about which binary the image
+# started with.
+#
+# Both architectures are fetched by digest here, not just the one this
+# build happens to run on: install.sh served amd64 and arm64 users alike,
+# and the published default image is built for both.
+ARG INSTALL_AGY_CLI=1
+ARG AGY_CLI_VERSION=1.2.2
+ARG AGY_CLI_BUILD=6061403484848128
+ARG AGY_CLI_SHA256_AMD64=2cfa5c9a4a1edd96db6d4058f34970be60d3bcacda866e2bdce6aefb2451b48e
+ARG AGY_CLI_SHA256_ARM64=00fc5cb50cd714b81cdf1298fcc90e63a59e3e564a4f8076454ab8457d36e6eb
+RUN if [ "$INSTALL_AGY_CLI" = "1" ]; then \
+        set -eu; mkdir -p /opt/antigravity; arch="$(uname -m)"; \
+        case "$arch" in \
+            x86_64|amd64) platform=linux-x64; archive=cli_linux_x64.tar.gz; sha256="$AGY_CLI_SHA256_AMD64" ;; \
+            aarch64|arm64) platform=linux-arm; archive=cli_linux_arm64.tar.gz; sha256="$AGY_CLI_SHA256_ARM64" ;; \
+            *) echo "unsupported architecture for the Antigravity CLI: $arch" >&2; exit 1 ;; \
+        esac; \
+        curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+            "https://storage.googleapis.com/antigravity-public/antigravity-cli/${AGY_CLI_VERSION}-${AGY_CLI_BUILD}/${platform}/${archive}" \
+            -o /tmp/agy.tar.gz; \
+        echo "$sha256  /tmp/agy.tar.gz" | sha256sum -c -; \
+        tar -xzf /tmp/agy.tar.gz -C /opt/antigravity; rm -f /tmp/agy.tar.gz; \
+        agy="$(find /opt/antigravity -type f -name agy -perm -u+x | head -n1)"; \
+        if [ -z "$agy" ]; then agy="$(find /opt/antigravity -type f -name antigravity -perm -u+x | head -n1)"; fi; \
+        test -n "$agy"; \
+        ln -sf "$agy" /usr/local/bin/agy; chmod -R a+rX /opt/antigravity; \
+        test "$(agy --version | head -n1)" = "$AGY_CLI_VERSION"; \
+    fi
+
+# Codex's two archives are checked against their release digests before
+# either is unpacked, as in the main Dockerfile.
+ARG INSTALL_CODEX_CLI=1
+ARG CODEX_CLI_VERSION=rust-v0.153.0
+ARG CODEX_CLI_SHA256_AMD64=35a82c153d83959de09c2cb84ac70ba69d05788aeeb08d4a95ca68e39f86680e
+ARG CODEX_CLI_SHA256_ARM64=cc2c0c365d4d51c18163bba93cce5b922836900ca867f5bcf89b0e714a952a53
+ARG CODEX_CODE_MODE_HOST_SHA256_AMD64=2b817a495e35a53333e94b35af9ed879e180f9b28fd57ef15ace9a857ba86f2c
+ARG CODEX_CODE_MODE_HOST_SHA256_ARM64=269d6006fb55c95f876454fc03ed3755c367c1c376b77a985d0029395a5a7736
+RUN if [ "$INSTALL_CODEX_CLI" = "1" ]; then \
+        set -eu; mkdir -p /opt/codex; arch="$(uname -m)"; \
+        case "$arch" in \
+            x86_64|amd64) target=x86_64-unknown-linux-musl; sha256="$CODEX_CLI_SHA256_AMD64"; host_sha256="$CODEX_CODE_MODE_HOST_SHA256_AMD64" ;; \
+            aarch64|arm64) target=aarch64-unknown-linux-musl; sha256="$CODEX_CLI_SHA256_ARM64"; host_sha256="$CODEX_CODE_MODE_HOST_SHA256_ARM64" ;; \
+            *) echo "unsupported architecture for the codex CLI: $arch" >&2; exit 1 ;; \
+        esac; \
+        curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors "https://github.com/openai/codex/releases/download/${CODEX_CLI_VERSION}/codex-${target}.tar.gz" -o /tmp/codex.tar.gz; \
+        echo "$sha256  /tmp/codex.tar.gz" | sha256sum -c -; \
+        tar -xzf /tmp/codex.tar.gz -C /opt/codex; rm -f /tmp/codex.tar.gz; \
+        codex="$(find /opt/codex -type f -name 'codex*' -perm -u+x | head -n1)"; test -n "$codex"; ln -sf "$codex" /usr/local/bin/codex; \
+        curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors "https://github.com/openai/codex/releases/download/${CODEX_CLI_VERSION}/codex-code-mode-host-${target}.tar.gz" -o /tmp/codex-code-mode-host.tar.gz; \
+        echo "$host_sha256  /tmp/codex-code-mode-host.tar.gz" | sha256sum -c -; \
+        tar -xzf /tmp/codex-code-mode-host.tar.gz -C /opt/codex; rm -f /tmp/codex-code-mode-host.tar.gz; \
+        code_mode_host="$(find /opt/codex -type f -name 'codex-code-mode-host*' -perm -u+x | head -n1)"; test -n "$code_mode_host"; \
+        ln -sf "$code_mode_host" /opt/codex/codex-code-mode-host; ln -sf /opt/codex/codex-code-mode-host /usr/local/bin/codex-code-mode-host; \
+        chmod -R a+rX /opt/codex; codex --version >/dev/null; \
+    fi
+
+USER debian
+WORKDIR /home/debian
+
+LABEL dev.grain.sandbox.contract="1" \
+      org.opencontainers.image.source="https://github.com/bwsalmon/grain" \
+      org.opencontainers.image.title="grain Kubernetes sandbox" \
+      org.opencontainers.image.description="Unprivileged task environment with claude, agy, codex, git, bash, curl, python3-minimal for grain's capability port forwarder, and OCR (tesseract, imagemagick, poppler-utils) for reading attached images, plus fonts (fonts-urw-base35, fonts-dejavu-core) so ImageMagick can draw text as well as read it"

@@ -1,0 +1,86 @@
+# Optional warm headroom for a cluster that autoscales its sandbox nodes
+# (GKE Cluster Autoscaler, or any autoscaler that scales on Pending pods).
+#
+# Each replica is a pause container that requests roughly one sandbox's
+# worth of the sandbox node pool's allocatable CPU and memory, at a
+# priority below every grain sandbox pod (which run at the default 0):
+#
+#   - The headroom pods keep spare nodes Ready ahead of demand. When the
+#     pool is full they go Pending themselves, and that is what makes the
+#     autoscaler add a node before any sandbox is waiting for one.
+#   - A sandbox pod that arrives preempts a headroom pod at once rather
+#     than waiting minutes for a node to boot. The displaced headroom pod
+#     goes Pending, and the autoscaler brings up a node for it.
+#   - grain sums the allocatable capacity of Ready, schedulable sandbox
+#     nodes on every reconcile tick and does not subtract headroom pods'
+#     requests, so a node added this way grows the deployment's sandbox
+#     budget on the next tick, without a restart.
+#
+# Size it with:
+#
+#   kubectl -n grain scale deployment/grain-headroom --replicas=N
+#
+# where N is how many sandboxes' worth of room to keep warm. Zero turns
+# it off without deleting anything.
+#
+# Before applying, match two things below to this cluster: the
+# nodeSelector must name the same node pool
+# -k8s-node-selector pins sandbox pods to (grain.dev/kvm=true here), and
+# the requests should be the deployment's sandbox shape (sandboxCpus,
+# sandboxMemoryMb), scaled by its overcommit ratios if it sets any.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: grain-headroom
+value: -10
+globalDefault: false
+preemptionPolicy: Never
+description: >-
+  Placeholder pods that hold warm capacity for grain sandboxes and yield
+  it to any of them by preemption.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grain-headroom
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: headroom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grain
+      app.kubernetes.io/component: headroom
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grain
+        app.kubernetes.io/component: headroom
+    spec:
+      priorityClassName: grain-headroom
+      terminationGracePeriodSeconds: 0
+      automountServiceAccountToken: false
+      nodeSelector:
+        grain.dev/kvm: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65535
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.9
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "2"
+              memory: 8Gi
+            limits:
+              cpu: "2"
+              memory: 8Gi

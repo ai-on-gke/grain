@@ -1,0 +1,67 @@
+name: rootless VM container
+
+# Its own file rather than a job in ci.yml: grain reads ci.yml as a
+# GitHub Actions workflow, whose jobs must each name ubuntu-latest, and a
+# job given a runner gets a container with no /dev/kvm in it. This one
+# needs KVM, so like e2e-ipv6.yml it names no runner and grain runs it
+# natively in a sandbox of its own.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # The VM container with no root on the host: test/rootless-vm.sh boots a
+  # real guest in a user namespace twice over -- `unshare --user
+  # --map-root-user`, and a rootless crun container whose root is a
+  # subuid, on a subuid-owned rootfs, with /dev/kvm reached through the
+  # kvm group kept as a supplementary group and no CAP_SYS_ADMIN -- and
+  # checks the network splice, the overlay, a restart, virtio-fs through
+  # an unprivileged virtiofsd, and the shim's refusal when the group is
+  # missing. docs/rootless.md is what it verifies, and what Silo's local
+  # backend runs its "vm class" containers as.
+  #
+  # The shim is this tree's; cloud-hypervisor, the kernel and the alpine
+  # guest come from the published ghcr.io/gke-labs/granule/alpine image,
+  # since building a guest here is the 20-40 minutes the "image" job was
+  # cut for. So a red here after a publish, with no shim change, points
+  # at the image.
+  #
+  # Do not write the runner key's name followed by a colon anywhere in
+  # this file, comments included -- see e2e-ipv6.yml for what that does.
+  rootless-vm:
+    name: rootless VM container
+    timeout-minutes: 30
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 30
+    steps:
+      - name: install uidmap, jq and busybox-static
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq uidmap jq busybox-static >/dev/null
+          grep "^$(id -un):" /etc/subuid /etc/subgid
+
+      # virtiofsd is not in bookworm; trixie's, run in place from its
+      # own root filesystem, is the one the test starts inside the
+      # container.
+      - name: a root filesystem holding virtiofsd
+        run: |
+          set -euo pipefail
+          docker rm -f rootless-virtiofsd >/dev/null 2>&1 || true
+          docker run --name rootless-virtiofsd debian:trixie sh -c \
+            'apt-get update -qq && apt-get install -y -qq --no-install-recommends virtiofsd >/dev/null'
+          mkdir -p "${RUNNER_TEMP:-/tmp}/virtiofsd-rootfs"
+          docker export rootless-virtiofsd | tar -C "${RUNNER_TEMP:-/tmp}/virtiofsd-rootfs" -xf - 2>/dev/null || true
+          docker rm rootless-virtiofsd >/dev/null
+          test -x "${RUNNER_TEMP:-/tmp}/virtiofsd-rootfs/usr/libexec/virtiofsd"
+
+      # REQUIRE_KVM: this sandbox is meant to have KVM, so a missing one
+      # is a failure here rather than the script's quiet skip.
+      # GITHUB_PROXY: crun is fetched from github, which a grain sandbox
+      # reaches through the proxy at its nameserver.
+      - name: test/rootless-vm.sh
+        run: |
+          export GITHUB_PROXY=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf)
+          REQUIRE_KVM=1 VIRTIOFSD_ROOTFS="${RUNNER_TEMP:-/tmp}/virtiofsd-rootfs" test/rootless-vm.sh

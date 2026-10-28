@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <!-- Added to an iOS home screen, grain opens as its own window with
+     no browser chrome around it. Which is what makes the height of that
+     window the whole of what the UI has: there is no address bar to
+     scroll away and reveal another line, so anything the layout spends
+     past it is simply not on the screen (grain/task-24). .app-shell
+     (src/style.css) is sized to that window exactly, and reserves
+     env(safe-area-inset-top/bottom) for the parts of it -- the status
+     bar, the home indicator -- that viewport-fit=cover above hands us
+     and a person cannot read through.
+
+     Status bar "default" rather than "black-translucent": the clock is
+     drawn over a band iOS colours from the page rather than over the
+     first line of the UI, which is legible in both themes without this
+     having to know which one is on. Both tags are no-ops in a browser
+     tab and on every other platform. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!-- The static logo, the 2.3 (-) rosette, as a solid fill -- what
+     scripts/export-brand-assets.mjs writes. The SVG is the real icon:
+     one scale-free file for the 16px tab slot and every larger one a
+     browser asks for alike. The PNG is the fallback for browsers with
+     no SVG-favicon support (Safari before 16.4), and is declared first
+     because a browser that understands both should land on the SVG.
+     Both are the same geometry, so which one a browser picks is not
+     visible. The light files are what a browser gets before any script
+     runs; AppThemeProvider swaps both hrefs for the dark ones once it
+     has resolved which theme the app is actually in. -->
+    <link
+      id="favicon-png"
+      rel="icon"
+      type="image/png"
+      sizes="128x128"
+      href="/grain-mark-light.png"
+    />
+    <link
+      id="favicon"
+      rel="icon"
+      type="image/svg+xml"
+      href="/grain-mark-light.svg"
+    />
+    <!-- Add to Home Screen. iOS reads neither icon tag above for the
+     shortcut's icon: only this one, and failing that a bare request for
+     /apple-touch-icon.png at the site root, and failing that a
+     screenshot of the page. So the file is named here *and* sits at that
+     root path (public/ is copied verbatim into the build, and the server
+     serves it from /), which covers the no-tag fallback too. Nor is
+     there a web app manifest to carry it instead -- and if one is ever
+     added, note that Safari reads its `icons` only when this tag is
+     absent, so this is still what an iPhone would use.
+
+     It is a 180px raster on an opaque ground with square corners,
+     because iOS takes no SVG here, discards the alpha channel, and
+     rounds the tile itself -- see renderTouchIconPNG in the export
+     script. One file, in the dark treatment: unlike the favicon it
+     cannot follow the theme, since iOS bakes it into the shortcut when
+     it is added. Changing it later needs the shortcut deleted and
+     re-added to be seen; iOS caches the icon past a reload and past a
+     new deploy. -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <title>grain</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

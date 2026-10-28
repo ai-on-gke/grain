@@ -1,0 +1,2 @@
+granule-wrap@oneshot.service
+LABEL dev.granule.granulefile.kind="wrap"

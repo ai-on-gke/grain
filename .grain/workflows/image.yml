@@ -1,0 +1,297 @@
+# The full image rebuild, and the suite that asks what a rebuilt image
+# contains.
+#
+# This is where tests.yml's "container and installer" job went
+# (grain/task-157). It builds both images from source --
+# Dockerfile.k8s-sandbox and Dockerfile -- and drives tests/container
+# against what comes out, and it took about forty minutes of every push's
+# CI. Almost none of that was the tests: the build is apt twice, three
+# agent CLI downloads, kubectl, granulectl, `npm ci`, a Vite build and `go
+# build`, with nothing cached between runs, because a `docker build` in a
+# fresh sandbox starts from nothing every time.
+#
+# What a push actually needed from that job was the installer verdict,
+# and that one no longer needs a rebuild. tests.yml's `installer` job
+# assembles an image instead -- the published runtime with this commit's
+# own `grain` and source laid over it
+# (scripts/installer-test-image.sh) -- and drives the same three
+# tests/installer packages against it in a fraction of the time. What is
+# left here is the half of the old job that genuinely asks what a freshly
+# built image *is*: which binaries are in it, what its labels say, that a
+# non-root process in it can bind :80 through a file capability, and that
+# a real upgrade can pull a real tag and cut a real deployment over to it.
+#
+# So this runs on `workflow_dispatch`, which is how a branch that touches
+# the Dockerfiles, the Makefile's image targets or the installer's
+# container arguments asks for that answer before merging rather than
+# after:
+#
+#     grain ci run -repo bwsalmon/grain -branch <branch> -watch
+#
+# The trade is deliberate and worth saying out loud: a commit that breaks
+# the image build, or breaks what the image contains, is now found when
+# it merges rather than while it is a branch, unless its branch asks. It
+# is the same trade .github/workflows/build-artifacts.yml already makes
+# for publishing, and the thing it buys is that every other commit's CI
+# is half an hour shorter.
+#
+# It ran on `release` as well until grain/task-180, and that is the one
+# thing here that has changed rather than moved. The release path
+# (.grain/workflows/release.yml) builds the images it publishes, so
+# running this beside it meant building the shipped image twice per
+# merge, in two workflows that cannot see each other -- and because
+# `needs:` does not cross workflows, the publish did not wait for this
+# file's verdict. Both suites now run in the release job itself, before
+# the push: tests/container and tests/installer both gate publishing.
+# That file's header says why.
+# What is left here is the same pair of suites on demand, on a branch,
+# against a build of this branch's own.
+#
+# The second job here is the other thing a branch can only ask for
+# before it merges: `guest-cache` fills the content-addressed sandbox
+# guest cache for this branch's guest inputs, so that the jobs which
+# resolve a guest stop building one inline. Nothing it publishes is a
+# name a deployment resolves -- see its own comment -- which is what
+# keeps "dispatching this" and "dispatching a publish" different things
+# to ask for even though one job here does push.
+name: image
+
+on:
+  workflow_dispatch:
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  # tests/container, against an image built here by `make image` -- the
+  # same target build-artifacts.yml and a laptop run, so what is driven is
+  # built by the same rules as what gets published.
+  #
+  # The tests/installer suites run here too, after tests/container, which
+  # is how .github/workflows/tests.yml runs them and for the two reasons
+  # that file gives. One job, because what dominates both is the image
+  # build above and building it twice would buy nothing; the installer
+  # half last, because it takes over /usr/local/bin/grain and the daemon
+  # unit and nothing after it on this machine should expect either to be
+  # untouched. They are here as well as in tests.yml on purpose: what is
+  # driven here is an image built the whole way, which is the difference
+  # between them and the assembled one -- the same difference release.yml
+  # gets per merge, and this is where a branch gets it on demand.
+  #
+  # grain/task-109 tried them in a grain sandbox and they failed, which is
+  # why this job ran only the container half until grain/task-118.
+  # Nothing about a sandbox was the reason. What the failures were:
+  #
+  #   - a grain sandbox's PATH carries no /usr/sbin, and this suite hands
+  #     its own PATH to the root script it runs, so setup.sh stopped at
+  #     "required command not found: useradd" (tests/installer's own
+  #     pathOrDefault settles that now).
+  #   - `systemctl is-system-running` as an unprivileged user needs a
+  #     system bus, and this guest image carries no dbus, so the suite's
+  #     gate skipped everything on a machine that can run all of it. It
+  #     asks as root now, which is how it drives systemd anyway.
+  #   - and three real failures of the thing under test, which is what a
+  #     suite with no verdict anywhere collects: host mode installed a
+  #     daemon with no git and a state repository owned by root, a custom
+  #     backend needed a credential the suite never set, and three tests
+  #     still deployed the host executor #1395 removed.
+  #
+  # Everything a grain sandbox has to have for this is there and was
+  # measured rather than assumed: systemd as PID 1 (`sudo systemctl
+  # is-system-running` answers "degraded", which the suite accepts), a
+  # docker that starts a privileged --cgroupns=host container with a
+  # systemd of its own inside this one -- which is what both the Trixie
+  # and the host-mode packages boot -- and root through passwordless
+  # sudo.
+  #
+  # Every test in both suites skips itself when GRAIN_TEST_IMAGE names
+  # nothing or docker does not answer, and the installer ones skip on
+  # three more gates besides, and `go test` says "ok" for a package whose
+  # tests all skipped -- so both logs are read rather than trusted: a skip
+  # here is this commit's verdict quietly not existing.
+  container-e2e:
+    capabilities: []
+    name: container and installer
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 60
+    steps:
+      - name: Build the image pair
+        run: |
+          set -euo pipefail
+          docker build -f Dockerfile.k8s-sandbox -t grain-k8s-sandbox:e2e-test .
+          make image IMAGE=grain-e2e:test K8S_SANDBOX_IMAGE=grain-k8s-sandbox:e2e-test
+
+      - name: Run the container e2e suite
+        env:
+          GRAIN_TEST_IMAGE: grain-e2e:test
+        run: |
+          set -euo pipefail
+          go test ./tests/container/... -count=1 -v -timeout 30m 2>&1 | tee /tmp/container.log
+          if grep -q -- "--- SKIP" /tmp/container.log; then
+            grep -- "--- SKIP" /tmp/container.log >&2
+            echo "tests/container skipped a test in a sandbox that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this job is for." >&2
+            exit 1
+          fi
+          if ! grep -q -- "--- PASS" /tmp/container.log; then
+            echo "tests/container passed no test at all, so its green tick would mean nothing." >&2
+            exit 1
+          fi
+
+      # Last, for the reason .github/workflows/tests.yml's own copy gives:
+      # it takes over /usr/local/bin/grain and the daemon unit for the
+      # length of the run.
+      #
+      # -p 1 because all three packages own real system state while they
+      # run: the root one deploys onto this machine, and the Trixie and
+      # host-mode ones each own the fixed grain-daemon container name and
+      # boot a privileged systemd container of their own.
+      - name: Run the installer e2e suite
+        env:
+          GRAIN_TEST_IMAGE: grain-e2e:test
+          GRAIN_INSTALLER_E2E: "1"
+          GRAIN_INSTALLER_TRIXIE_E2E: "1"
+          GRAIN_INSTALLER_HOSTMODE_E2E: "1"
+        run: |
+          set -euo pipefail
+          go test -p 1 ./tests/installer/... -count=1 -v -timeout 30m 2>&1 | tee /tmp/installer.log
+          if grep -q -- "--- SKIP" /tmp/installer.log; then
+            grep -- "--- SKIP" /tmp/installer.log >&2
+            echo "tests/installer skipped a test in a sandbox that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this job is for." >&2
+            exit 1
+          fi
+          if ! grep -q -- "--- PASS" /tmp/installer.log; then
+            echo "tests/installer passed no test at all, so its green tick would mean nothing." >&2
+            exit 1
+          fi
+
+  # The sandbox guest for this branch's guest inputs, published to the
+  # content-addressed cache every job that resolves a guest reads.
+  #
+  # Three things ask for this job, and two of them are grain itself.
+  #
+  # An operator, or an agent on a branch, dispatches it with the command
+  # below -- which is what this job was written for (grain/task-222) and
+  # what the rest of this comment is about. And grain dispatches it on
+  # the base branch whenever that branch moves, with nobody having asked:
+  # that is what makes the cache follow main with release workflows
+  # switched off, since a release run is what used to fill it and the
+  # switch that stops one is named for publishing rather than for the
+  # build input it also stops.
+  #
+  # A repository can ask for that by naming this job in
+  # model.RepoConfig.PostMergeDispatchJobs (grain/task-409), and grain
+  # does it unasked for the one repository it can establish the coupling
+  # for by itself -- the one publishing the sandbox guest grain's own
+  # sandboxes are built from, while that repository's releases are off
+  # and its CI still holds `package-publish`
+  # (model.GuestCacheFollowsBaseBranch, grain/task-457). Named as well as
+  # inferred, it is still dispatched once.
+  #
+  # Everything below about what this job publishes, and about the trust
+  # that places, holds for all three callers -- a dispatch grain makes on
+  # a standing instruction in operator-owned configuration, or on the one
+  # coupling it can read off its own sandbox image, is the same act as an
+  # operator making it, which is why it can be the same event.
+  #
+  # The third caller is grain again, and it is the one that dispatches
+  # this on a *branch* (grain/task-410). When grain plans a job that
+  # resolves a sandbox guest whose content-addressed key nothing has
+  # published -- which is exactly what a branch that changed one of the
+  # paths guest-inputs.sh names has -- it dispatches this job once on
+  # that branch's own commit, and every job on every branch that needs
+  # the same guest waits for that one run rather than building a ~1GB
+  # image apiece. That is the case the paragraph after next is about, and
+  # it used to need an operator to notice it and type the command below.
+  # It is also the one place where the tree being vouched for is a
+  # branch's rather than one already merged, so read "the trust that is
+  # still being placed" further down with that in mind;
+  # pkg/grit/cache/guestcache.go's "What this trusts" is the argument in full.
+  #
+  # `.grain/workflows/release.yml` fills that cache on every merge into
+  # main, which covers main and every branch that changes none of the
+  # paths scripts/granule/guest-inputs.sh names -- nearly all of them, in
+  # a Go and TypeScript repository. What it cannot cover is the branch
+  # that changes one: its key does not exist until it lands, so until
+  # then every job resolving a guest on it builds one inline. That is
+  # `granulectl guest build` booting a VM inside a CI sandbox and pulling
+  # ~1GB into it over a doubly-NATed link -- ~25 minutes when it works,
+  # and the only thing that has ever made tests.yml's "real KVM
+  # sandboxes" job red (grain/task-116: a guest that did not answer
+  # inside the ready timeout, and a guest that lost nodejs.org and
+  # proxy.golang.org part-way through provisioning). Dispatching this
+  # once, on the commit that changed the input, turns every later run on
+  # that branch back into one `docker pull`:
+  #
+  #     grain ci run -repo bwsalmon/grain -branch <branch> \
+  #       -job .grain/workflows/image.yml:guest-cache -watch
+  #
+  # What it publishes is `guest:inputs-<key>` and, on a base miss,
+  # `guest-base:<key>`: names derived from the content of the inputs,
+  # which nothing resolves except the jobs that derive the same key from
+  # the same tree. No `guest:sha-<commit>`, no `guest:<branch>`, no
+  # `guest:latest` -- cmd/grain/sandboximage.go's default is that last
+  # one, and a deployment does resolve it, which is why filling this
+  # cache from a branch is a different act from publishing a release and
+  # why the release job keeps the moving tags to itself.
+  #
+  # The trust that is still being placed, said plainly rather than left
+  # to be discovered: an operator dispatching this vouches for the
+  # branch's guest inputs, because the image it publishes under that key
+  # is the image main will pull once the branch merges, instead of
+  # building one. Grain is what enforces that it takes an operator --
+  # `package-publish` material is placed only for a post-merge release or
+  # an operator-triggered workflow_dispatch, and an agent's task-scoped
+  # CI request remains an ordinary push (docs/ci-capabilities.md) -- so a
+  # dispatch that was granted no credential stops on its first step
+  # saying which grant it is missing, rather than building a guest for
+  # twenty-five minutes and being refused at the push.
+  #
+  # The one grain starts unasked, after a merge, vouches for less than
+  # any of that: the tree is already on the base branch, so the image it
+  # publishes under that key is the image main would have built for
+  # itself. It is also why grain will not start one where
+  # `package-publish` was never granted -- not because the push would be
+  # refused, which it would be, but because an operator who withheld the
+  # credential has said what they think of this job running at all.
+  #
+  # `cache: false` for the reason that doc gives about every publishing
+  # job: a green tick here is evidence that a publish happened once, not
+  # permission to skip the next one. A cache tag can be deleted from the
+  # registry, and a replayed verdict for this commit would then report a
+  # warm cache that is not there.
+  guest-cache:
+    name: sandbox guest cache
+    cache: false
+    # A requirement, not a grant (pkg/ci/requirements.go): every step
+    # below is a build whose only point is the push at the end of it, so
+    # a dispatch that reaches this job without `package-publish` should
+    # cost nothing rather than twenty-five minutes of nested-VM build
+    # followed by a refusal from ghcr.io. The comment above already says
+    # this is what grain enforces; the key is where the job says it, so
+    # the refusal names the missing grant.
+    capabilities: [package-publish]
+    # A miss puts the base image, the VM's container and the commit's own
+    # layer on one disk -- the GitHub job doing the same work asks for a
+    # runner with ~80GB free -- and the build inside it is a VM that
+    # wants real cores and real memory. On a hit none of this is touched:
+    # the job is a `docker pull` of a manifest it already has blobs for,
+    # and finishes in a minute.
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 80
+    # The base build and the guest build back to back, both inside a
+    # nested VM on a host that is routinely running a dozen other
+    # sandboxes. release.yml allows 120 minutes for these two plus two
+    # e2e suites and a push.
+    timeout-minutes: 90
+    steps:
+      # One phase of the release publisher rather than a copy of it: the
+      # key a consumer misses on is the key this fills, so there is one
+      # derivation of it and tests/deploy holds every other file that
+      # derives one to the same expression.
+      - name: Publish the sandbox guest for this commit's inputs
+        run: bash ./scripts/release-images.sh guest-cache

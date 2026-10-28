@@ -1,0 +1,143 @@
+# One VM in one container. "granule run" sets up the pod network and boots
+# cloud-hypervisor itself; there is no netshim init container.
+# This example uses node-local guest assets. For a self-contained image
+# without an images mount, see gke-pod-exec-example.yaml.
+# The node must expose KVM, and /dev/kvm and /dev/net/tun must be handed
+# to the pod by a device plugin: apply kvm-device-plugin.yaml first. The
+# container is not privileged; it holds exactly one capability, NET_ADMIN,
+# which inline networking uses inside the pod's own network namespace.
+# See gke.md's "Privileges" for what each setting here is for and what
+# privileged: true would have given away instead.
+# pod-split-example.yaml retains the optional split-privilege layout.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: chv-vm-example
+  labels:
+    app: chv-vm-example
+spec:
+  restartPolicy: Never
+  # Must comfortably exceed CHV_SHUTDOWN_TIMEOUT below so granule's own
+  # graceful-shutdown sequence can run to completion before the kubelet
+  # SIGKILLs the container itself.
+  terminationGracePeriodSeconds: 40
+  containers:
+    - name: web
+      image: ghcr.io/gke-labs/granule:latest
+      args: ["run"]
+      env:
+        - name: CHV_NET_MODE
+          value: "inline"
+        - name: CHV_DISK_IMAGE
+          value: /images/disk.img
+        - name: CHV_DISK_READONLY
+          value: "true"
+        - name: CHV_KERNEL
+          value: /images/vmlinux
+        # No "ip=" here, and no CHV_NET: both are derived at boot from
+        # the address, MAC and MTU the CNI put on the pod's interface,
+        # using the NETSHIM_* settings below. The CNI's own routes come across on a
+        # "granule.routes=" parameter beside that derived "ip=", since a
+        # netmask alone describes a bridge CNI's world and not a
+        # point-to-point one's -- which is what stands between this
+        # guest and the other pods on GKE-style nodes. See the main
+        # README's "Container networking".
+        # No "console=" either: granule puts the one for the node's
+        # architecture in (ttyS0 on x86_64, ttyAMA0 on arm64, where a
+        # guest told ttyS0 has no console and never becomes reachable).
+        # Naming one here would replace it on every node.
+        - name: CHV_CMDLINE
+          value: "root=/dev/vda ro"
+        - name: NETSHIM_VM
+          value: "web"
+        - name: NETSHIM_CONTROL_CIDR
+          value: "169.254.100.1/24"
+        - name: CHV_CPUS
+          value: "2"
+        - name: CHV_MEMORY_MB
+          value: "2048"
+        # Any other cloud-hypervisor setting without a dedicated flag of
+        # its own, passed straight through (e.g. extra disks or raw CLI
+        # arguments). This is the same passthrough `granule vm create
+        # -e CHV_EXTRA_ARGS="--api-socket /tmp/chv.sock"` gives on docker.
+        # - name: CHV_EXTRA_ARGS
+        #   value: "--api-socket /tmp/chv.sock"
+        - name: CHV_SHUTDOWN_TIMEOUT
+          value: "20s"
+      # Without this the pod's Ready condition reports on the container,
+      # which is up well before the guest inside it has booted. "granule
+      # ready" dials the guest's own agent over the VM's vsock device and
+      # exits zero once the guest answers a command, so "kubectl wait
+      # --for=condition=Ready" waits for the guest rather than for the
+      # container wrapping it. "-timeout 0" is a single attempt; the
+      # kubelet does the retrying, on periodSeconds. See the top-level
+      # README's "Readiness".
+      #
+      # A guest answers seconds before whatever it boots into is
+      # serving. To make this condition report the second instant
+      # instead, have the guest create a file when its workload is up
+      # and name that file in the container's environment above:
+      #
+      #   - name: GRANULE_READY_FILE
+      #     value: "/run/granule/ready"
+      #
+      # The probe below is unchanged either way -- what "ready" means is
+      # configured on the container, not written into the probe.
+      readinessProbe:
+        exec:
+          command: ["/usr/local/bin/granule", "ready", "-timeout", "0"]
+        periodSeconds: 5
+        timeoutSeconds: 5
+      resources:
+        # devic.es/kvm and devic.es/tun are the device nodes, published by
+        # kvm-device-plugin.yaml. Requesting them is what puts /dev/kvm
+        # and /dev/net/tun in this container *and* in its device cgroup;
+        # a /dev/kvm hostPath alone gets the first without the second,
+        # and cloud-hypervisor then fails with EPERM.
+        requests:
+          cpu: "2"
+          memory: 3Gi
+        limits:
+          cpu: "2"
+          memory: 3Gi
+          devic.es/kvm: "1"
+          devic.es/tun: "1"
+      securityContext:
+        # NET_ADMIN creates the tap, splices it onto eth0 and lets
+        # cloud-hypervisor set the tap's MTU. Nothing else is needed:
+        # not NET_RAW, not SYS_ADMIN, not the runtime's default set.
+        # It applies to the pod's own network namespace only.
+        capabilities:
+          drop: ["ALL"]
+          add: ["NET_ADMIN"]
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        # With a read-only root filesystem these are the only places
+        # granule run writes: its sockets under /run, and the copy-on-
+        # write layer of the default CHV_DISK_MODE=overlay. A disk mode
+        # that writes the guest disk in place (persistent) needs
+        # readOnlyRootFilesystem dropped instead.
+        - name: run
+          mountPath: /run
+        - name: tmp
+          mountPath: /tmp
+        - name: overlay
+          mountPath: /var/lib/granule/overlay
+        - name: images
+          mountPath: /images
+          readOnly: true
+  volumes:
+    - name: run
+      emptyDir:
+        medium: Memory
+    - name: tmp
+      emptyDir: {}
+    - name: overlay
+      emptyDir: {}
+    - name: images
+      hostPath:
+        path: /var/lib/vm-images
+        type: Directory

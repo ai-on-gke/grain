@@ -1,0 +1,603 @@
+# The long suite: everything worth running against this repository that
+# is too slow, too repetitive or too noisy to put in front of a pull
+# request.
+#
+# Said in grain's own workflow format (.grain/workflows), run by grain
+# (pkg/ci) rather than by GitHub Actions.
+#
+# The `cron:` below is what schedules the review as well as the run.
+# grain reads a cron in this directory as a task schedule of its own
+# (pkg/repodecl's workflows.go): at 02:11 it starts this workflow and
+# files a task to read the run it started, with the prompt that ships in
+# grain's code (model.workflowReviewTemplate). That prompt names no job
+# on purpose and sends the agent to this file instead, so adding or
+# removing a job here needs nothing else changed anywhere.
+#
+# docs/nightly-test-review.md is the judgement that prompt condenses --
+# which failure is a bug, which is this suite finding its own flake --
+# and is worth reading beside a red run.
+name: nightly
+
+on:
+  schedule:
+    - cron: "11 2 * * *"
+  workflow_dispatch:
+
+env:
+  GOFLAGS: -mod=readonly
+  PLAYWRIGHT_BROWSERS_PATH: /var/cache/playwright
+
+jobs:
+  go-long:
+    capabilities: []
+    name: go, shuffled and repeated
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    # 60, down from 85 (grain/task-980) to make room for
+    # `installer-variants` inside the 720m the jobs here may total
+    # (TestThisRepositoryScheduledWorkflowsFitInsideTheirOwnCadence): the
+    # last green run took 25m13s, so this is still more than twice that.
+    timeout-minutes: 60
+    steps:
+      - name: Long Go suite
+        run: make test-long
+
+  staterepo-soak:
+    capabilities: []
+    name: state repository soak
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    # Two thousand rounds is about twelve minutes; this was 150, which
+    # was sized when the target still built the frontend first and the
+    # test still drove the whole dump. Sized to 35m (down from 50m on main)
+    # to keep the cumulative serialized timeout of nightly jobs within the
+    # 12-hour scheduled workflow deadline (720m) while accommodating
+    # ui-e2e-long's increase from 30m to 50m. 35m provides nearly 3x
+    # headroom over real duration (docs/nightly-test-review.md).
+    timeout-minutes: 35
+    steps:
+      - name: Require git
+        run: git --version
+      - name: Soak
+        run: make soak
+
+  loadtest:
+    capabilities: []
+    name: sustained load
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 35
+    steps:
+      - name: Load test
+        run: make loadtest
+
+  scalability:
+    capabilities: []
+    name: metadata and model scalability
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 35
+    steps:
+      - name: Scalability limits test
+        run: make scalability
+
+  merge-stress:
+    capabilities: []
+    name: merge liveness stress
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 60
+    steps:
+      - name: Require git
+        run: git --version
+      - name: Merge liveness stress
+        run: make merge-stress
+
+  long-term-test:
+    capabilities: []
+    name: end-to-end long term tests
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 60
+
+    steps:
+      - name: Require git
+        run: git --version
+      - name: End-to-end long term test
+        run: make long-term-test
+
+  long-sim:
+    capabilities: []
+    name: long randomized cluster simulation
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    # Twenty minutes of simulation against make long-sim's 40m go test
+    # -timeout, which is under this bound so a hang is killed by go test
+    # with every goroutine's stack rather than by the job with nothing.
+    timeout-minutes: 45
+    steps:
+      - name: Require git
+        run: git --version
+      - name: Long randomized cluster simulation
+        run: make long-sim
+
+  postgres-stress:
+    capabilities: []
+    name: postgres concurrency and stress
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 20
+    steps:
+      # The sandbox image carries no PostgreSQL, and without it every
+      # TestPostgres* skips and this job is green over nothing. Same step
+      # as tests.yml's `go` job, which says why it is written this way.
+      - name: Install PostgreSQL
+        infrastructure: true
+        run: |
+          if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
+            if [ ! -e /usr/sbin/policy-rc.d ]; then
+              printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+              sudo chmod +x /usr/sbin/policy-rc.d
+            fi
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql >/dev/null
+          fi
+          ls /usr/lib/postgresql/*/bin/initdb
+      - name: Postgres stress
+        env:
+          GRAIN_REQUIRE_POSTGRES: "1"
+        run: make postgres-stress
+
+  tunnel-stress:
+    capabilities: []
+    name: reverse tunnel multiplexer stress
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 45
+    steps:
+      - name: Tunnel stress test
+        run: make tunnel-stress
+
+  ui-e2e-long:
+    capabilities: []
+    name: ui e2e, repeated
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 40
+    # make test-e2e-long runs the whole Playwright suite three times, both
+    # projects. That makes this the only place the WebKit project runs
+    # since grain/task-980 took tests.yml's `ui-e2e-webkit` off the pull
+    # request (the gate runs Chromium alone), so a WebKit-only failure
+    # here is a regression a day late rather than this suite's flake until
+    # the log says otherwise. With
+    # suite growth to ~554 tests per pass (1,662 test executions across 4
+    # workers), 3 passes need ~50-60m. 70m provides enough headroom for the
+    # suite to complete cleanly.
+    timeout-minutes: 70
+    artifacts:
+      - name: playwright-report
+        path: ui/playwright-report
+      - name: playwright-test-results
+        path: ui/test-results
+    steps:
+      - name: Repeated e2e
+        run: make test-e2e-long
+
+  # tests/installer's two variants, which ran per pull request as
+  # tests.yml's `installer-trixie` and `installer-hostmode` until
+  # grain/task-980 moved them here (tests.yml's `installer-e2e` header
+  # says why). Same steps, same assembled image, same refusal to read a
+  # skip as a pass -- one sandbox and one after the other rather than two
+  # side by side, because each owns the fixed grain-daemon container name
+  # and nothing here is waiting on the wall clock. Each took 4-13 minutes
+  # per PR; 40 is both of them at their slowest plus the image assembly.
+  #
+  # release.yml's `images` job also runs both on every merge into main, so
+  # a red run here that release did not see is the assembled image (last
+  # published main's layers under this commit's binary) disagreeing with
+  # the built one -- worth saying which in the review.
+  installer-variants:
+    capabilities: []
+    name: installer trixie and hostmode
+    sandbox:
+      cpus: 8
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 40
+    env:
+      GRAIN_INSTALLER_SANDBOX_IMAGE: debian:trixie
+      GRAIN_TEST_IMAGE: grain-installer:test
+    steps:
+      - name: Assemble the image to install
+        run: ./scripts/installer-test-image.sh grain-installer:test
+
+      - name: Configure package cache
+        run: |
+          if /usr/bin/timeout 1 bash -c 'echo > /dev/tcp/172.17.0.1/53' 2>/dev/null; then
+            if [ ! -f /usr/local/share/ca-certificates/grain-ca.crt ]; then
+              openssl s_client -connect 172.17.0.1:443 -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERTIFICATE/{flag=1; buf=""} flag{buf = buf $0 RS} /END CERTIFICATE/{flag=0; last=buf} END{printf "%s", last}' | sudo -n tee /usr/local/share/ca-certificates/grain-ca.crt >/dev/null 2>&1 || true
+              sudo -n update-ca-certificates 2>/dev/null || true
+            fi
+            if [ -f /etc/resolv.conf ] && ! grep -q "172.17.0.1" /etc/resolv.conf; then
+              sudo -n sh -c 'echo "nameserver 172.17.0.1" > /etc/resolv.conf' 2>/dev/null || true
+            fi
+          fi
+
+      - name: Run the installer trixie e2e suite
+        env:
+          GRAIN_INSTALLER_TRIXIE_E2E: "1"
+        run: |
+          set -euo pipefail
+          GRAIN_GOTEST_LOG=/tmp/installer-trixie.log ./scripts/run-go-tests.sh \
+            go test ./tests/installer/trixie -count=1 -v -timeout 15m
+          if grep -q -- "--- SKIP" /tmp/installer-trixie.log; then
+            grep -- "--- SKIP" /tmp/installer-trixie.log >&2
+            echo "tests/installer/trixie skipped a test in a sandbox that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this job is for." >&2
+            exit 1
+          fi
+          if ! grep -q -- "--- PASS" /tmp/installer-trixie.log; then
+            echo "tests/installer/trixie passed no test at all, so its green tick would mean nothing." >&2
+            exit 1
+          fi
+
+      # No `if:` in this format, so a red trixie step leaves this one
+      # unrun; the review reads that as one finding, not two.
+      - name: Run the installer hostmode e2e suite
+        env:
+          GRAIN_INSTALLER_HOSTMODE_E2E: "1"
+        run: |
+          set -euo pipefail
+          GRAIN_GOTEST_LOG=/tmp/installer-hostmode.log ./scripts/run-go-tests.sh \
+            go test ./tests/installer/hostmode -count=1 -v -timeout 15m
+          if grep -q -- "--- SKIP" /tmp/installer-hostmode.log; then
+            grep -- "--- SKIP" /tmp/installer-hostmode.log >&2
+            echo "tests/installer/hostmode skipped a test in a sandbox that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this job is for." >&2
+            exit 1
+          fi
+          if ! grep -q -- "--- PASS" /tmp/installer-hostmode.log; then
+            echo "tests/installer/hostmode passed no test at all, so its green tick would mean nothing." >&2
+            exit 1
+          fi
+
+  security-audit:
+    capabilities: []
+    name: Security suite and audit
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 20
+    steps:
+      - name: Security suite
+        run: make security
+
+  vulns:
+    capabilities: []
+    name: govulncheck
+    timeout-minutes: 10
+    steps:
+      - name: govulncheck
+        run: make vuln
+
+  cmd-grain-stress:
+    capabilities: []
+    name: pkg/cli stress under load
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    # The loop below spends a 1800s budget and only starts a round it
+    # expects to finish inside it: once the time already spent plus one
+    # and a half times the longest round so far would pass the budget, it
+    # stops. Rounds run three to six minutes depending on how busy the
+    # host is (371s for a first round, which also builds the race binary,
+    # on 2026-10-03), so no round starts after about 30m - 1.5 x 3m.
+    #
+    # A round that hangs is still bounded: each sample runs under
+    # `timeout -k 30s` for 16m, or for whatever is left before a 32m
+    # deadline if that is less, with go test's own -timeout a minute
+    # under it so a test that hangs is dumped by go test first. A sample
+    # stuck in the build, or past its own timeout, is killed, and its log
+    # tail, free -m and dmesg are printed -- all inside the 35m bound,
+    # which then never cuts off a round with nothing to show. The start
+    # rule above leaves any round at least 2m plus 1.5x the longest round
+    # before the deadline, so the cap only bites a round that was going
+    # to overrun anyway. A heartbeat prints memory and load every minute
+    # of a round, so if the VM itself stops answering the log still shows
+    # where it was heading -- that is infrastructure, not this test.
+    timeout-minutes: 35
+    steps:
+      - name: Stress pkg/cli under load
+        run: |
+          set -euo pipefail
+          budget=1800
+          deadline=1920
+          started=$(date +%s)
+          round=0
+          longest=0
+          diagnose() {
+            echo "===== nproc / free -m / df -h / ====="
+            nproc; free -m; df -h /
+            echo "===== dmesg tail ====="
+            (sudo dmesg 2>/dev/null || dmesg 2>/dev/null || echo "no dmesg here") | tail -80
+          }
+          while :; do
+            elapsed=$(( $(date +%s) - started ))
+            if [ "$round" -gt 0 ] && [ $(( elapsed + longest * 3 / 2 )) -gt "$budget" ]; then
+              echo "=== stopping after $round rounds: ${elapsed}s spent, longest round ${longest}s, budget ${budget}s ==="
+              break
+            fi
+            round=$((round + 1))
+            round_started=$(date +%s)
+            cap=$(( deadline - elapsed ))
+            if [ "$cap" -gt 960 ]; then
+              cap=960
+            fi
+            echo "=== pkg/cli stress round $round (at ${elapsed}s, samples capped at ${cap}s) ==="
+            (
+              while sleep 60; do
+                echo "--- round $round +$(( $(date +%s) - round_started ))s: $(free -m | awk '/^Mem:/ {print "mem used " $3 "M, available " $7 "M"}'), load $(cut -d' ' -f1-3 /proc/loadavg) ---"
+              done
+            ) &
+            heartbeat=$!
+            pids=()
+            for i in 1 2 3 4; do
+              timeout -k 30s "$cap" go test -race -timeout "$(( cap - 60 ))s" -count=1 ./pkg/cli > /tmp/sample-$round-$i.log 2>&1 &
+              pids+=($!)
+            done
+            failed=0
+            for i in 1 2 3 4; do
+              rc=0
+              wait "${pids[$((i - 1))]}" || rc=$?
+              if [ "$rc" -ne 0 ] || ! grep -qE '^ok[[:space:]]+github.com/bwsalmon/grain/pkg/cli' /tmp/sample-$round-$i.log; then
+                if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+                  echo "=== round $round sample $i outlived its ${cap}s cap and was killed (exit $rc) ==="
+                else
+                  echo "=== failure in round $round sample $i (exit $rc) ==="
+                fi
+                # A failing test's own log can run past the tail below
+                # and take its "--- FAIL" header with it, so name the
+                # failure first, whatever the log's length.
+                echo "--- failure headers in round $round sample $i ---"
+                grep -n -A40 -E -- '^[[:space:]]*--- FAIL|^=== NAME|WARNING: DATA RACE|^panic:|test timed out' /tmp/sample-$round-$i.log | head -400 || true
+                echo "--- last 300 lines of round $round sample $i ---"
+                tail -300 /tmp/sample-$round-$i.log
+                failed=1
+              fi
+            done
+            pkill -P "$heartbeat" 2>/dev/null || true
+            kill "$heartbeat" 2>/dev/null || true
+            wait "$heartbeat" 2>/dev/null || true
+            if [ "$failed" -ne 0 ]; then
+              diagnose
+              echo "pkg/cli stress testing failed in round $round"
+              exit 1
+            fi
+            took=$(( $(date +%s) - round_started ))
+            echo "=== round $round took ${took}s ==="
+            if [ "$took" -gt "$longest" ]; then
+              longest=$took
+            fi
+          done
+          echo "pkg/cli stress test completed successfully ($round rounds)"
+
+  kvm-sandboxes:
+    capabilities: []
+    name: real KVM sandboxes
+    guest-cache:
+      - Granulefile*
+      - scripts/granule/build-granule-image.sh
+      - third_party/granule/**
+      - cmd/grain-connect/main.go
+      - cmd/grain-sandbox/**
+      - pkg/hostscriptcli/**
+      - go.mod
+      - go.sum
+      - ui/package.json
+      - ui/package-lock.json
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 50
+    steps:
+      - name: Require KVM
+        run: |
+          set -euo pipefail
+          if [ ! -e /dev/kvm ]; then
+            echo "/dev/kvm is not in this sandbox, so the suite below would skip rather than run. A green tick here would mean nothing." >&2
+            exit 1
+          fi
+          ls -l /dev/kvm
+          docker version
+          command -v ssh-keygen
+          df -h /
+      - name: Resolve the sandbox guest
+        infrastructure: true
+        timeout-minutes: 120
+        env:
+          IMAGE: grain-guest:e2e-test
+        run: |
+          set -euo pipefail
+          ./scripts/granule-guest-resolve.sh
+      - name: Real KVM sandbox suite
+        env:
+          GRAIN_REAL_VM_TESTS: "1"
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/consoles
+          (
+            while true; do
+              for c in $(docker ps -aq --filter 'name=granule-vm-' 2>/dev/null); do
+                if [ ! -e "/tmp/consoles/$c.started" ]; then
+                  touch "/tmp/consoles/$c.started"
+                  name="$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | tr -d /)"
+                  (docker logs -f "$c" > "/tmp/consoles/${name:-$c}.log" 2>&1 &)
+                fi
+              done
+              sleep 2
+            done
+          ) &
+          sampler=$!
+          failed=""
+          go test ./pkg/orchestrator/ \
+            -run 'TestGranuleSandboxesAgainstARealDockerBackedVM|TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently|TestTheModelProxiesAreReachableFromInsideARealGuest|TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM|TestHostScriptGrantInARealGranuleVM' \
+            -count=1 -v -timeout 40m 2>&1 | tee /tmp/granule-vm.log || failed="the suite"
+          kill "$sampler" 2>/dev/null || true
+          for t in TestGranuleSandboxesAgainstARealDockerBackedVM \
+                   TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently \
+                   TestTheModelProxiesAreReachableFromInsideARealGuest \
+                   TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM \
+                   TestHostScriptGrantInARealGranuleVM; do
+            if ! grep -q -- "--- PASS: $t" /tmp/granule-vm.log; then
+              echo "$t did not run and pass; this job only means something when all of them do" >&2
+              failed="${failed:-a test that did not run}"
+            fi
+          done
+          if [ -n "$failed" ]; then
+            echo "===== nproc / free -m / df -h / ====="
+            nproc; free -m; df -h /
+            echo "===== docker ps -a ====="
+            docker ps -a
+            echo "===== dmesg tail ====="
+            (sudo dmesg 2>/dev/null || dmesg 2>/dev/null || echo "no dmesg here") | tail -80
+            for f in /tmp/consoles/*.log; do
+              [ -e "$f" ] || continue
+              echo "===== guest console $f ====="
+              tail -200 "$f"
+            done
+            exit 1
+          fi
+
+  kvm-route-stress:
+    capabilities: []
+    name: twenty two-VM boots
+    guest-cache:
+      - Granulefile*
+      - scripts/granule/build-granule-image.sh
+      - third_party/granule/**
+      - cmd/grain-connect/main.go
+      - cmd/grain-sandbox/**
+      - pkg/hostscriptcli/**
+      - go.mod
+      - go.sum
+      - ui/package.json
+      - ui/package-lock.json
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    # 70 with go test's own -timeout at 65m, down from 85 and 80
+    # (grain/task-980), for the same 720m as `go-long`: twenty boots took
+    # 31m32s on the last green night, so a hang is still named by go test
+    # with every goroutine's stack well before this bound.
+    timeout-minutes: 70
+    steps:
+      - name: Require KVM
+        run: |
+          set -euo pipefail
+          if [ ! -e /dev/kvm ]; then
+            echo "/dev/kvm is not in this sandbox, so the suite below would skip rather than run. A green tick here would mean nothing." >&2
+            exit 1
+          fi
+          ls -l /dev/kvm
+          docker version
+          command -v ssh-keygen
+          df -h /
+      - name: Resolve the sandbox guest
+        infrastructure: true
+        timeout-minutes: 120
+        env:
+          IMAGE: grain-guest:e2e-test
+        run: |
+          set -euo pipefail
+          ./scripts/granule-guest-resolve.sh
+      - name: Twenty consecutive two-VM boots
+        env:
+          GRAIN_REAL_VM_TESTS: "1"
+        run: |
+          set -uo pipefail
+          runs=20
+          mkdir -p /tmp/consoles
+          (
+            while true; do
+              for c in $(docker ps -aq --filter 'name=granule-vm-' 2>/dev/null); do
+                if [ ! -e "/tmp/consoles/$c.started" ]; then
+                  touch "/tmp/consoles/$c.started"
+                  name="$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | tr -d /)"
+                  (docker logs -f "$c" > "/tmp/consoles/${name:-$c}.log" 2>&1 &)
+                fi
+              done
+              sleep 2
+            done
+          ) &
+          sampler=$!
+          failed=""
+          go test ./pkg/orchestrator/ \
+            -run 'TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently' \
+            -count="$runs" -v -timeout 65m 2>&1 | tee /tmp/granule-stress.log || failed="the stress run"
+          kill "$sampler" 2>/dev/null || true
+
+          passes="$(grep -c -- '--- PASS: TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently' /tmp/granule-stress.log || true)"
+          echo "TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently: ${passes}/${runs} boots passed"
+          if [ "$passes" != "$runs" ]; then
+            echo "expected ${runs} passing boots and got ${passes}; this job only means something when every one of them runs and passes" >&2
+            failed="${failed:-a boot that did not run}"
+          fi
+
+          if [ -n "$failed" ]; then
+            echo "===== the failing iterations ====="
+            grep -n -- '--- FAIL\|no default route\|FAIL\b' /tmp/granule-stress.log | head -60
+            echo "===== nproc / free -m / df -h / ====="
+            nproc; free -m; df -h /
+            echo "===== docker ps -a ====="
+            docker ps -a
+            echo "===== dmesg tail ====="
+            (sudo dmesg 2>/dev/null || dmesg 2>/dev/null || echo "no dmesg here") | tail -80
+            for f in /tmp/consoles/*.log; do
+              [ -e "$f" ] || continue
+              echo "===== guest console $f ====="
+              tail -200 "$f"
+            done
+            exit 1
+          fi
+
+  upgrade-test:
+    capabilities: []
+    name: upgrade from previous version
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 30
+    steps:
+      # The same host the release build gets (scripts/grain-ci-host.sh):
+      # Grain's CA staged as .grain-ca.crt, or npm ci fails with
+      # SELF_SIGNED_CERT_IN_CHAIN, and the sandbox's MTU clamped, or the
+      # kubectl download from dl.k8s.io stalls in its TLS handshake.
+      - name: Build deployment image to test upgrade into
+        run: bash scripts/ci-docker-build.sh -t grain-e2e:test .
+
+      - name: Run upgrade tests
+        run: make test-upgrade
+
+

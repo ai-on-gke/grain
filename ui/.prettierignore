@@ -1,0 +1,14 @@
+# node_modules is ignored by prettier itself; everything here is not.
+
+# npm's own file, written by npm, in npm's own format -- reformatting it
+# would put this gate at odds with every `npm install`.
+package-lock.json
+
+# Generated brand assets (npm run brand). Nothing here is hand-edited,
+# and the mark SVGs are exported, not written.
+public/
+
+# Playwright's output directories (playwright.config.js), .gitignore'd
+# and only present after a local `npm run test:e2e`.
+test-results/
+playwright-report/

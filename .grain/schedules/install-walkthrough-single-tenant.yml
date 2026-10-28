@@ -1,0 +1,7 @@
+name: Install walkthrough - fresh single-tenant install
+template: install-walkthrough-single-tenant
+base: main
+weekly:
+  day: monday
+  at: "05:00"
+overlap: skip

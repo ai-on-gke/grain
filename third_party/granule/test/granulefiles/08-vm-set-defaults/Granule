@@ -1,0 +1,13 @@
+# docs/granulefile.md 5.5: VM SET records the machine's defaults, and an
+# implementation MUST record them as the runtime variables in the
+# produced image's OCI config, so that nothing has to read a Granule to
+# boot the result.
+ARG ROOTFS=ghcr.io/gke-labs/granule-guest-rootfs:debian12
+
+FROM ${ROOTFS}
+
+VM PACK AS configured_vm
+VM SET cpus=2 cpus-max=4
+VM SET memory-mb=1024 memory-max-mb=2048 memory-hotplug=on
+VM SET kernel-cmdline=quiet disk-mode=overlay disk-size-mb=2048
+VM SET shutdown-timeout=45s

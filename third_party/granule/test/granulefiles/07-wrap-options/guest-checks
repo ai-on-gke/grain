@@ -1,0 +1,51 @@
+[the wrap named the service after the option it was given]
+test -L /etc/systemd/system/multi-user.target.wants/granule-wrap@oneshot.service
+grep -q '^Restart=on-failure$' /etc/systemd/system/granule-wrap@.service
+
+[the workload configuration is the one the container stage declared]
+cat /etc/granule/container.json
+grep -q 'hello from the wrapped workload' /etc/granule/container.json
+grep -q '/srv' /etc/granule/container.json
+# --exit-action=poweroff, which is the one option here that cannot be
+# checked by watching the machine: the workload sleeps rather than
+# exiting, and a check that made it exit would take the machine the
+# rest of these run in down with it. What the option produces is this
+# line, which is what the guest acts on when the workload does exit.
+grep -q '"haltOnExit": true' /etc/granule/container.json
+
+[the wrapped workload ran, with the environment and directory it was given]
+# It runs in the root filesystem the wrap embedded, so what it wrote is
+# not in the guest's own /run -- it is under the root of the process the
+# guest started, which is where this reads it. Its command line is no
+# help: the shell execs into the "sleep" that ends the CMD, so by the
+# time anything can look, the command line is that sleep and says
+# nothing about what started it.
+for i in $(seq 1 60); do
+  for p in /proc/[0-9]*; do
+    ran="$p/root/run/wrapped-ran"
+    [ -r "$ran" ] || continue
+    grep -q '^hello from the wrapped workload$' "$ran" || continue
+    grep -q '^/srv$' "$ran" && exit 0
+  done
+  sleep 1
+done
+echo "the wrapped workload did not write what it was configured to write" >&2
+systemctl status granule-wrap@oneshot.service >&2 2>/dev/null
+exit 1
+
+[the workload runs once, under the service the wrap named]
+# granule-container and granule-wrap@oneshot run the same
+# /etc/granule/container.json: a guest that enabled both would start the
+# workload twice, and for a workload that binds a port the second copy
+# is the one that fails.
+running=0
+for p in /proc/[0-9]*; do
+  [ "$(readlink "$p/exe" 2>/dev/null)" = /usr/local/bin/granule-container ] || continue
+  running=$((running + 1))
+done
+if [ "$running" != 1 ]; then
+  echo "$running copies of the wrapped workload are running, want 1" >&2
+  systemctl status granule-container.service granule-wrap@oneshot.service >&2 2>/dev/null
+  exit 1
+fi
+systemctl is-active granule-wrap@oneshot.service >/dev/null

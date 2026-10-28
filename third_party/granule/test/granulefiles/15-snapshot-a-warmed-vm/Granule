@@ -1,0 +1,24 @@
+# docs/granulefile.md 14.8: snapshotting a warmed VM for instant resume.
+# Both halves of this are level 3: the RUN executes in the live guest,
+# and the snapshot is taken of that guest at the end of the stage.
+ARG SOURCE_VM=ghcr.io/example/python-ml-vm:latest
+
+VM FROM ${SOURCE_VM} AS warmed_vm
+
+# Perform heavy warm-up inside the guest (e.g. load model weights into RAM).
+#
+# The specification prints `python3 -c "import model;
+# model.preload_weights()"`. granule's guest is a minimal Debian with
+# neither python3 nor that module in it, so what stands for it here is
+# the same thing written for the shell every guest has: state built in
+# memory, under the /run tmpfs, which no cold boot could have and a
+# machine resumed from this snapshot does.
+RUN mkdir -p /run/model && head -c 33554432 /dev/urandom > /run/model/weights.bin && sha256sum /run/model/weights.bin > /run/model/weights.loaded
+
+# Snapshot the running VM state so subsequent runs resume instantly.
+VM SNAPSHOT
+# The specification sets memory-mb=4096 here. A snapshot is the guest's
+# whole memory written into the image it produces, so this number is
+# also how big that image is: 1024 is what the other examples ask for
+# and what a machine running this suite can hold.
+VM SET memory-mb=1024

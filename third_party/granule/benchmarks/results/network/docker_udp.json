@@ -1,0 +1,6 @@
+{
+  "workload": "udp_1gbps_target",
+  "environment": "docker_native_bridge",
+  "throughput_mbps": 978.0,
+  "loss_percent": 0.05
+}

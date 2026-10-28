@@ -1,0 +1,6 @@
+COPY --from=builder_rootfs /etc/prepack-artifact.txt /etc/from-container.txt
+COPY --from=intermediate_vm /etc/prepack-artifact.txt /etc/from-vm.txt
+dev.granule.granulefile.kind="pack"
+dev.granule.granulefile.stage="final_vm"
+ENV CHV_MEMORY_MB="2048"
+ENV CHV_CPUS="4"

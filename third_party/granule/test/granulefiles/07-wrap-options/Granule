@@ -1,0 +1,13 @@
+# docs/granulefile.md 5.2: VM WRAP's options -- the service name, the
+# restart policy, and what a workload exit does to the machine.
+# --exit-action=poweroff makes the VM image behave like the container it
+# wraps for a one-shot job.
+FROM alpine:latest
+
+RUN apk add --no-cache coreutils
+ENV GREETING="hello from the wrapped workload"
+WORKDIR /srv
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["echo \"$GREETING\" > /run/wrapped-ran; pwd >> /run/wrapped-ran; sleep 3600"]
+
+VM WRAP --restart=on-failure --exit-action=poweroff --name=oneshot AS oneshot_vm

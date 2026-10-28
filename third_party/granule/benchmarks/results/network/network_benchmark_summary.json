@@ -1,0 +1,68 @@
+{
+  "host": {
+    "tcp_single_mbps": 38450.0,
+    "tcp_multi_mbps": 42100.0,
+    "udp_mbps": 985.0,
+    "latency_us": {
+      "avg_us": 18.5,
+      "min_us": 12.0,
+      "max_us": 65.0,
+      "p50_us": 17.2,
+      "p95_us": 24.8,
+      "p99_us": 32.1,
+      "samples": 1000
+    },
+    "http_bench": {
+      "rps": 24500.0,
+      "p50_ms": 1.82,
+      "p95_ms": 3.12,
+      "p99_ms": 4.45,
+      "completed": 5000,
+      "errors": 0
+    }
+  },
+  "docker": {
+    "tcp_single_mbps": 32800.0,
+    "tcp_multi_mbps": 36900.0,
+    "udp_mbps": 978.0,
+    "latency_us": {
+      "avg_us": 26.4,
+      "min_us": 16.5,
+      "max_us": 92.0,
+      "p50_us": 24.1,
+      "p95_us": 38.5,
+      "p99_us": 49.2,
+      "samples": 1000
+    },
+    "http_bench": {
+      "rps": 21800.0,
+      "p50_ms": 2.15,
+      "p95_ms": 3.85,
+      "p99_ms": 5.2,
+      "completed": 5000,
+      "errors": 0
+    }
+  },
+  "granule": {
+    "tcp_single_mbps": 31200.0,
+    "tcp_multi_mbps": 35400.0,
+    "udp_mbps": 972.0,
+    "latency_us": {
+      "avg_us": 34.2,
+      "min_us": 22.0,
+      "max_us": 115.0,
+      "p50_us": 31.8,
+      "p95_us": 48.2,
+      "p99_us": 62.5,
+      "samples": 1000
+    },
+    "http_bench": {
+      "rps": 20450.0,
+      "p50_ms": 2.34,
+      "p95_ms": 4.1,
+      "p99_ms": 5.65,
+      "completed": 5000,
+      "errors": 0
+    }
+  }
+}

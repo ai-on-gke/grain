@@ -1,0 +1,113 @@
+# post-reset-e2e.yml: the automatable rows of the post-reset end-to-end
+# qualification (docs/test-plans/2026-10-20-post-reset-e2e.md, task
+# 4828), kept running so the single-tenant reset, the google/ isolation
+# and the hub removal stay qualified after the one-off pass.
+#
+# Said in grain's own workflow format, run by grain (pkg/ci). The cron
+# runs it on the default branch and files a review task for the run
+# (pkg/repodecl's workflows.go). docs/release-candidate-management.md
+# lists it among the candidate gate's advisory workflows, so a cut reads
+# its verdict before promotion.
+#
+# Every job here builds grain from the checked-out tree and drives real
+# daemons -- no sandboxes (`-sandbox-backend none`), no live GitHub and
+# no live model provider. The forge is pkg/github/githubsim inside the
+# e2e harness; the Google build's command-backed forge is a fake `ggh`
+# on the daemon's PATH (scripts/post-reset-e2e.sh). So nothing here
+# needs a capability, which is what a scheduled run is given anyway.
+#
+# The rows a sandbox can't reach (Depot and corp git hosts, a Cloudtop
+# install, a real github.com sandbox repo) are the manual rows in
+# docs/release-candidate-management.md's release checklist.
+name: post-reset-e2e
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  deployments:
+    capabilities: []
+    name: deployments (core and Google, SQLite and Postgres)
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 30
+    timeout-minutes: 45
+    steps:
+      # `infrastructure:` because this is a download (tests.yml's
+      # postgres job does the same). policy-rc.d keeps the package's
+      # own cluster from starting; the script starts its own.
+      - name: Install PostgreSQL
+        infrastructure: true
+        run: |
+          if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
+            if [ ! -e /usr/sbin/policy-rc.d ]; then
+              printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+              sudo chmod +x /usr/sbin/policy-rc.d
+            fi
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql >/dev/null
+          fi
+          ls /usr/lib/postgresql/*/bin/initdb
+
+      - name: Build the core, Google and v1.13.0 binaries
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/qual"
+          go build -o "$HOME/qual/grain-core" ./cmd/grain
+          go build -o "$HOME/qual/grain-google" ./google/cmd/grain
+          # The guard row needs a data dir from the last pre-reset
+          # release. A checkout without the tag skips that row (SKIP,
+          # not FAIL) rather than failing the job.
+          if git fetch -q --depth 1 origin tag v1.13.0 2>/dev/null; then
+            git worktree add -q "$HOME/qual/v1.13.0" v1.13.0
+            (cd "$HOME/qual/v1.13.0" && go build -o "$HOME/qual/grain-v1.13.0" ./cmd/grain)
+          fi
+
+      - name: Qualify the four deployments
+        run: |
+          set -uo pipefail
+          old=()
+          [ -x "$HOME/qual/grain-v1.13.0" ] && old=(-old-grain "$HOME/qual/grain-v1.13.0")
+          rc=0
+          for build in core google; do
+            for db in sqlite postgres; do
+              echo "== $build / $db"
+              ./scripts/post-reset-e2e.sh -build "$build" -db "$db" \
+                -grain "$HOME/qual/grain-$build" "${old[@]}" \
+                -out "$HOME/qual/$build-$db.md" || rc=1
+            done
+          done
+          exit $rc
+
+  harness:
+    capabilities: []
+    name: e2e harness (githubsim)
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 30
+    timeout-minutes: 30
+    steps:
+      # The task lifecycle against the GitHub simulator: create, approve,
+      # dispatch, clone, push, PR, merge queue (repair, conflicts, stale
+      # heads), ports, closing paths, depends_on, proposals, security
+      # holds, MCP tools over stdio, schedules, restart recovery.
+      - name: tests/e2e
+        run: go test -count=1 -timeout 25m ./tests/e2e/
+
+  security:
+    capabilities: []
+    name: route authorization and the Google build
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+    timeout-minutes: 20
+    steps:
+      - name: tests/security and google/...
+        run: go test -count=1 -timeout 15m ./tests/security/... ./google/...

@@ -1,0 +1,35 @@
+package ui
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/bwsalmon/grain/pkg/capability/intree"
+)
+
+// serveCapabilityIfForked is TestMain's first act: a test that attaches
+// a built-in for real runs this binary as `<binary> capability <name>
+// [flags]`, the stand-in for `grain capability <name>`, and in that child
+// the in-tree server serves stdio and the process exits.
+func serveCapabilityIfForked() {
+	if len(os.Args) < 3 || os.Args[1] != "capability" {
+		return
+	}
+	b, ok := intree.Lookup(os.Args[2])
+	if !ok {
+		fmt.Fprintf(os.Stderr, "no in-tree capability %q\n", os.Args[2])
+		os.Exit(1)
+	}
+	ctx := context.Background()
+	s, err := b.Build(ctx, os.Args[3:], os.Getenv, log.New(os.Stderr, "", 0))
+	if err == nil {
+		err = s.Serve(ctx, os.Stdin, os.Stdout)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "grain capability: "+err.Error())
+		os.Exit(1)
+	}
+	os.Exit(0)
+}

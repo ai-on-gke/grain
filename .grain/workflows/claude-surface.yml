@@ -1,0 +1,124 @@
+# Regenerate docs/claude-surface.md against the claude binary an image
+# would carry, and push the diff to the claude-surface branch if it
+# differs from what is committed.
+#
+# It is manual (workflow_dispatch) rather than scheduled or push-triggered,
+# because the version an image carries moves only when Dockerfile's
+# ARG CLAUDE_CLI_VERSION is bumped -- a commit that bumps it should run
+# this afterwards to record what the new release changed, and there is
+# no reason to re-measure a frozen binary on the clock.
+name: claude-surface
+
+on:
+  workflow_dispatch:
+
+jobs:
+  capture:
+    capabilities: []
+    name: read claude's surface
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 20
+    timeout-minutes: 20
+    artifacts:
+      - name: claude-surface
+        path: docs/claude-surface.md
+    steps:
+      - name: Install the Claude Code CLI
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^ARG CLAUDE_CLI_VERSION=//p' Dockerfile | head -n1)"
+          test -n "$version"
+          sudo mkdir -p /opt/claude
+          sudo chown "$(id -u):$(id -g)" /opt/claude
+          curl -4 -fsSL --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors https://claude.ai/install.sh -o /tmp/claude-install.sh
+          test -s /tmp/claude-install.sh
+          HOME=/opt/claude bash /tmp/claude-install.sh "$version"
+          rm -f /tmp/claude-install.sh
+          test -x /opt/claude/.local/bin/claude
+          sudo ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude
+          sudo chmod -R a+rX /opt/claude
+          test "$(claude --version | awk '{print $1}')" = "$version"
+
+      - name: Require python3, git and strings
+        run: |
+          set -euo pipefail
+          for tool in python3 git strings; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              echo "$tool is not in this sandbox, and scripts/claude-surface.sh needs it: the probes that depend on it would record their own absence and this capture would publish that as a finding about claude." >&2
+              exit 1
+            fi
+          done
+          python3 --version
+          git --version
+
+      - name: Read claude's surface
+        run: ./scripts/claude-surface.sh -o docs/claude-surface.md
+
+      - name: The capture has to have captured something
+        run: |
+          set -euo pipefail
+          bytes=$(wc -c < docs/claude-surface.md)
+          echo "docs/claude-surface.md is $bytes bytes"
+          if [ "$bytes" -lt 8192 ]; then
+            echo "the capture is $bytes bytes: claude answered almost nothing, and publishing this would replace a real capture with an empty one" >&2
+            exit 1
+          fi
+          for heading in '## The binary' '## Commands and flags' '## Where each flag lives' \
+                         '## The argv grain builds' '## Interactive mode' \
+                         '## The keys, out of the string table'; do
+            if ! grep -qF -- "$heading" docs/claude-surface.md; then
+              echo "the capture has no \"$heading\" section; scripts/claude-surface.sh did not run to the end" >&2
+              exit 1
+            fi
+          done
+          missing=""
+          grep -q '^### .claude mcp.$' docs/claude-surface.md || missing="$missing no-subcommand-help"
+          grep -qE '^(accepted|rejected) +print +--strict-mcp-config' docs/claude-surface.md || missing="$missing no-print-verdicts"
+          grep -qE '^(accepted|rejected) +session +--strict-mcp-config' docs/claude-surface.md || missing="$missing no-session-verdicts"
+          grep -qE '^(accepted|rejected) +claude -p --tools' docs/claude-surface.md || missing="$missing no-argv-verdicts"
+          grep -q '^captured here' docs/claude-surface.md || missing="$missing no-version"
+          grep -qE '^(present|not in the string table) +MCP_TOOL_TIMEOUT' docs/claude-surface.md || missing="$missing no-string-table"
+          grep -q '^trust' docs/claude-surface.md || missing="$missing no-pty-probe"
+          if [ -n "$missing" ]; then
+            echo "the capture ran to the end but answered nothing for:$missing -- claude's shape has moved under scripts/claude-surface.sh, and publishing this would replace measurements with silence" >&2
+            exit 1
+          fi
+
+  publish:
+    capabilities: []
+    name: publish the capture
+    needs: [capture]
+    sandbox:
+      cpus: 2
+      memory-mb: 4096
+      disk-gb: 10
+    timeout-minutes: 10
+    cache: false
+    steps:
+      - name: Push the capture, if it differs from what is committed
+        run: |
+          set -euo pipefail
+          git config user.name "grain-ci[bot]"
+          git config user.email "grain-ci[bot]@users.noreply.github.com"
+          git add docs/claude-surface.md
+          if git diff --cached --quiet -- docs/claude-surface.md; then
+            echo "no drift: docs/claude-surface.md already matches"
+            exit 0
+          fi
+          claude_version="$(NO_COLOR=1 claude --version 2>&1 | sed -e 's/\x1b\[[0-9;]*[a-zA-Z]//g' -e 's/\r//g' | grep -m1 . || echo "unknown")"
+          git commit -F - <<EOF
+          Regenerate docs/claude-surface.md against ${claude_version}
+
+          Captured by scripts/claude-surface.sh, run by
+          .grain/workflows/claude-surface.yml: every
+          subcommand and flag the installed claude will admit to, whether
+          the two argv pkg/agent/claude builds -- the unattended run's and
+          the interactive session's -- are argv it parses, and what its
+          terminal interface does when started the way a session starts it.
+          The diff against the committed capture is what claude changed --
+          the script writes nothing run-specific, so a diff is drift and
+          nothing else.
+          EOF
+          git push origin HEAD:refs/heads/claude-surface --force

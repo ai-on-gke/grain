@@ -1,0 +1,85 @@
+name: GitHub runner images
+
+on:
+  schedule:
+    # GitHub refreshes the hosted images weekly. Build after that cadence
+    # rather than putting three multi-hour, 75 GB Packer jobs on every
+    # Granule commit.
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Image to build
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - ubuntu-26.04
+          - ubuntu-slim
+      runner_images_ref:
+        description: actions/runner-images commit, tag, or branch
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: github-runner-images-${{ github.event_name }}-${{ inputs.image || 'all' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+jobs:
+  build:
+    # These builds need roughly 250 GB of scratch space. The label keeps
+    # them off GitHub's small hosted runners and makes the requirement an
+    # explicit part of the image builder contract.
+    runs-on: [self-hosted, linux, x64, kontur-image-builder]
+    timeout-minutes: 720
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.image != 'all' && format('[\"{0}\"]', inputs.image) || '[\"ubuntu-22.04\",\"ubuntu-24.04\",\"ubuntu-26.04\",\"ubuntu-slim\"]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        if: matrix.image != 'ubuntu-slim'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish ${{ matrix.image }}
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RUNNER_IMAGE_RESOURCE_GROUP }}
+          AZURE_LOCATION: ${{ vars.AZURE_RUNNER_IMAGE_LOCATION }}
+          # The scheduled build follows actions/runner-images' main on
+          # purpose, unlike the Dockerfile's digest-pinned bases. These
+          # images exist to be what GitHub's hosted runners are, and that
+          # repository is the definition GitHub builds those from: the
+          # party who can move its main is the party whose runners this
+          # mirrors, so a pin would put no one new out of reach -- it
+          # would only make the mirror lag. What is pinned is the record:
+          # build.sh resolves the ref to a commit, labels the image with
+          # it (RUNNER_IMAGES_REVISION) and pushes an immutable tag
+          # ending in that commit, so any published image names exactly
+          # what it was built from. Dispatch with runner_images_ref set to
+          # a commit or release tag to rebuild a known state.
+          RUNNER_IMAGES_REF: ${{ inputs.runner_images_ref || 'main' }}
+          OUTPUT_IMAGE: ghcr.io/${{ github.repository }}/github-${{ matrix.image }}:latest
+          PUSH: "true"
+        run: deploy/github-runner-images/build.sh "${{ matrix.image }}"

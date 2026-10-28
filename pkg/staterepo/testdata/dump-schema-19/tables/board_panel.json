@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "board_id": "board-2",
+    "kind": "list",
+    "title": "Running now",
+    "query": "f=state:any:running",
+    "range": "",
+    "width": "half",
+    "order_key": 0
+  },
+  {
+    "id": 2,
+    "board_id": "board-2",
+    "kind": "gantt",
+    "title": "",
+    "query": "",
+    "range": "7d",
+    "width": "full",
+    "order_key": 1
+  }
+]

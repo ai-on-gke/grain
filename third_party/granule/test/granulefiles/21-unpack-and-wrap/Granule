@@ -1,0 +1,11 @@
+# docs/granulefile.md 5.4: an unpacked VM stage can be converted
+# into a new VM image using VM WRAP as well as VM PACK.
+ARG VM_IMAGE=ghcr.io/example/my-vm:latest
+
+VM UNPACK FROM ${VM_IMAGE} AS unpacked
+
+COPY service.sh /usr/local/bin/service.sh
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/service.sh"]
+
+VM WRAP --name=unpacked_svc AS wrapped_from_unpacked
+VM SET memory-mb=1024 cpus=2

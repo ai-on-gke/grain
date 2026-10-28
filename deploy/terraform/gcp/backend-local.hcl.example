@@ -1,0 +1,21 @@
+# Copy to backend-local.hcl and fill in the path.
+#
+# An alternative to backend.hcl.example's GCS backend, for a deployment
+# where a hand-created VM's own data disk already exists and Terraform
+# is applied from that VM itself, targeted at a subset of this module's
+# resources -- bwsalmon/agents#620's bootstrap playbooks
+# (pkg/capability/bootstrap/playbooks/) use exactly this, never the
+# GCS backend, since state is meant to live alongside the rest of this
+# deployment's own state on the data volume rather than in a bucket a
+# hand-created VM may have no standing credential to reach.
+#
+#   terraform init -backend-config=backend-local.hcl
+#
+# path should sit under $GRAIN_DATA_DIR (scripts/setup.sh's own
+# default, /var/lib/grain/data, mounted from the data disk -- see that
+# script's own doc comment and instance.tf's
+# google_compute_disk.data) so a VM redeploy never loses it, the same
+# "state a wipe or redeploy must not lose" reasoning this module's own
+# README gives that disk.
+
+path = "/var/lib/grain/data/terraform-state/gcp.tfstate"

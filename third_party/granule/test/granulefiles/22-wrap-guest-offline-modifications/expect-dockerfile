@@ -1,0 +1,4 @@
+COPY guest-motd.txt /etc/motd
+LABEL org.opencontainers.image.title="WrappedGuestModified"
+ENV CHV_MEMORY_MB="1024"
+LABEL dev.granule.granulefile.kind="wrap"

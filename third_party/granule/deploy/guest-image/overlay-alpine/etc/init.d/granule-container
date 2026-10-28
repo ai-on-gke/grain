@@ -1,0 +1,31 @@
+#!/sbin/openrc-run
+# granule-runlevel: default
+
+# The OpenRC half of the unit in granule-container.service: the same
+# service on an Alpine guest.
+
+description="Run the native workload or container inside this VM"
+command="/usr/local/bin/granule-container"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+# The workload output is the machine's console, which is what
+# "docker logs" on the VM container shows.
+output_log="/dev/console"
+error_log="/dev/console"
+
+# start-stop-daemon signals the runner, which forwards the workload's own
+# STOPSIGNAL to the process group -- so the process is stopped the way
+# its image asked, rather than by a signal OpenRC chose.
+retry="TERM/30/KILL/5"
+
+depend() {
+	need localmount
+	after net
+}
+
+start_pre() {
+	if [ ! -f /etc/granule/container.json ]; then
+		return 1
+	fi
+}

@@ -1,0 +1,138 @@
+{
+  "Host Native": {
+    "Sequential Read (1KB block)": {
+      "throughput_mib_s": 7059.5,
+      "avg_latency_ms": 0.14
+    },
+    "Sequential Read (64KB block)": {
+      "throughput_mib_s": 22755.7,
+      "avg_latency_ms": 2.81
+    },
+    "Sequential Read (1MB block)": {
+      "throughput_mib_s": 22842.9,
+      "avg_latency_ms": 43.78
+    },
+    "Sequential Write (1KB block)": {
+      "throughput_mib_s": 5701.9,
+      "avg_latency_ms": 0.18
+    },
+    "Sequential Write (64KB block)": {
+      "throughput_mib_s": 18791.0,
+      "avg_latency_ms": 3.41
+    },
+    "Sequential Write (1MB block)": {
+      "throughput_mib_s": 19229.6,
+      "avg_latency_ms": 52.0
+    },
+    "Multi-Threaded Read (1MB, 4 threads)": {
+      "throughput_mib_s": 61963.5,
+      "avg_latency_ms": 64.55
+    },
+    "Multi-Threaded Write (1MB, 4 threads)": {
+      "throughput_mib_s": 32795.1,
+      "avg_latency_ms": 121.97
+    }
+  },
+  "Docker Native": {
+    "Sequential Read (1KB block)": {
+      "throughput_mib_s": 7046.3,
+      "avg_latency_ms": 0.14
+    },
+    "Sequential Read (64KB block)": {
+      "throughput_mib_s": 22735.7,
+      "avg_latency_ms": 2.81
+    },
+    "Sequential Read (1MB block)": {
+      "throughput_mib_s": 22973.1,
+      "avg_latency_ms": 43.53
+    },
+    "Sequential Write (1KB block)": {
+      "throughput_mib_s": 5695.5,
+      "avg_latency_ms": 0.18
+    },
+    "Sequential Write (64KB block)": {
+      "throughput_mib_s": 18762.0,
+      "avg_latency_ms": 3.41
+    },
+    "Sequential Write (1MB block)": {
+      "throughput_mib_s": 19395.4,
+      "avg_latency_ms": 51.56
+    },
+    "Multi-Threaded Read (1MB, 4 threads)": {
+      "throughput_mib_s": 62884.7,
+      "avg_latency_ms": 63.61
+    },
+    "Multi-Threaded Write (1MB, 4 threads)": {
+      "throughput_mib_s": 32646.3,
+      "avg_latency_ms": 122.52
+    }
+  },
+  "Granule Static (4GB)": {
+    "Sequential Read (1KB block)": {
+      "throughput_mib_s": 6977.0,
+      "avg_latency_ms": 0.14
+    },
+    "Sequential Read (64KB block)": {
+      "throughput_mib_s": 22120.8,
+      "avg_latency_ms": 2.89
+    },
+    "Sequential Read (1MB block)": {
+      "throughput_mib_s": 22305.6,
+      "avg_latency_ms": 44.83
+    },
+    "Sequential Write (1KB block)": {
+      "throughput_mib_s": 5612.6,
+      "avg_latency_ms": 0.18
+    },
+    "Sequential Write (64KB block)": {
+      "throughput_mib_s": 18353.1,
+      "avg_latency_ms": 3.49
+    },
+    "Sequential Write (1MB block)": {
+      "throughput_mib_s": 18796.1,
+      "avg_latency_ms": 53.2
+    },
+    "Multi-Threaded Read (1MB, 4 threads)": {
+      "throughput_mib_s": 60424.4,
+      "avg_latency_ms": 66.2
+    },
+    "Multi-Threaded Write (1MB, 4 threads)": {
+      "throughput_mib_s": 31260.6,
+      "avg_latency_ms": 127.95
+    }
+  },
+  "Granule Hotplugged (4GB)": {
+    "Sequential Read (1KB block)": {
+      "throughput_mib_s": 6998.0,
+      "avg_latency_ms": 0.14
+    },
+    "Sequential Read (64KB block)": {
+      "throughput_mib_s": 22122.5,
+      "avg_latency_ms": 2.89
+    },
+    "Sequential Read (1MB block)": {
+      "throughput_mib_s": 22140.0,
+      "avg_latency_ms": 45.17
+    },
+    "Sequential Write (1KB block)": {
+      "throughput_mib_s": 5624.2,
+      "avg_latency_ms": 0.18
+    },
+    "Sequential Write (64KB block)": {
+      "throughput_mib_s": 18427.1,
+      "avg_latency_ms": 3.47
+    },
+    "Sequential Write (1MB block)": {
+      "throughput_mib_s": 18653.2,
+      "avg_latency_ms": 53.61
+    },
+    "Multi-Threaded Read (1MB, 4 threads)": {
+      "throughput_mib_s": 60521.6,
+      "avg_latency_ms": 66.09
+    },
+    "Multi-Threaded Write (1MB, 4 threads)": {
+      "throughput_mib_s": 31797.5,
+      "avg_latency_ms": 125.79
+    }
+  }
+}

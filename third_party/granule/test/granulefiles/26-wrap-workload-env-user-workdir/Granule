@@ -1,0 +1,21 @@
+# docs/granulefile.md 5.2, 7, and 9.2: container stage above VM WRAP with
+# USER, WORKDIR, ENV, VOLUME, EXPOSE, and workload command. The container spec
+# records all metadata into /etc/granule/container.json, and the final VM image
+# exposes the workload port.
+FROM alpine:latest
+
+RUN adduser -D -u 1001 appuser && \
+    mkdir -p /home/appuser/app && \
+    chown -R appuser:appuser /home/appuser
+
+ENV APP_ENV="production" APP_PORT="8080"
+USER appuser
+WORKDIR /home/appuser/app
+VOLUME ["/home/appuser/app/data"]
+EXPOSE 8080
+
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["echo \"env=$APP_ENV user=$(whoami) pwd=$(pwd)\" > /home/appuser/app/data/app.log && sleep 3600"]
+
+VM WRAP web_service AS web_vm
+VM SET memory-mb=1024 cpus=2

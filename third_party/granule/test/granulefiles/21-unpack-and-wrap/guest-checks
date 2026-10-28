@@ -1,0 +1,6 @@
+[the wrap created the systemd unit for unpacked_svc]
+test -L /etc/systemd/system/multi-user.target.wants/granule-wrap@unpacked_svc.service
+
+[the container config contains the entrypoint]
+cat /etc/granule/container.json
+grep -q "service.sh" /etc/granule/container.json

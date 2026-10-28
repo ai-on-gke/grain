@@ -1,0 +1,45 @@
+name: Release qualification - Full system multi-team & upgrade smoke
+title: Execute multi-team UI walkthroughs, state repository sync soak, and deployment health checks
+base: main
+auto-merge: true
+body: |
+  Execute full-system end-to-end multi-team UI walkthroughs, state repository
+  synchronization soak tests, and deployment health validations against the
+  current release candidate before a person approves it.
+
+  Grain releases from trunk (`docs/release-candidate-management.md`): the release
+  candidate is the `vX.Y.0-rc.N` tag on `main` that `refs/heads/candidate` points
+  at, and staging (`grain-candidate`) runs it. Build and run `grain demo` from
+  that commit (`git fetch origin candidate && git checkout --detach FETCH_HEAD`),
+  and say in the report which rc tag and commit you tested. Pull requests to
+  `candidate` are refused: anything this run fixes lands on `main` through this
+  task's own branch.
+
+  ## 1. Multi-Team UI Walkthroughs
+
+  - Launch the real `grain demo` server and execute multi-team user journeys using Playwright:
+    - Exercise Repositories, Merge Queue, Releases, Tasks, and Settings views.
+    - Test permission boundaries, team attribution, and custom field visibility across teams.
+    - Validate interactive forms, real-time status updates, and deep links across UI surfaces.
+
+  ## 2. State Repository Sync Soak
+
+  - Subject the synchronized state repository to continuous multi-table read/write operations:
+    - Exercise bidirectional reconciliation across `tables/*.json` (`repo_config`, `task`,
+      `qualification_config`, `qualification_item`, etc.).
+    - Verify data consistency, absence of sync divergence or race conditions, and clean git state.
+
+  ## 3. Deployment Health & Resource Checks
+
+  - Execute `read_deployment_health` and inspect systemd journal logs using `read_grain_log`:
+    - Confirm zero unhandled panics, error loops, or reconciler crashes.
+    - Validate host RAM, swap, disk utilisation, and standing microVM sandbox counts.
+    - Verify that reconciler cycle times remain well within latency thresholds (<1ms).
+
+  ## 4. Final RC Validation Gate
+
+  - Confirm that all preceding qualification items (`qualification-mergequeue`,
+    `qualification-ci-diagnostics`, and `qualification-base-triage`) have passed.
+  - Deliver a comprehensive final RC qualification report in the task closing note,
+    naming the rc tag it qualifies, for the person deciding whether to approve the
+    pending release.

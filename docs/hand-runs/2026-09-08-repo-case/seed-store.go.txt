@@ -1,0 +1,538 @@
+// Command handrun seeds -- and then censuses -- a grain store of the
+// shape and size a year-old deployment has, for the hand run written up
+// in docs/hand-runs/2026-09-08-repo-case.md.
+//
+// Everything is written through pkg/model's own API rather than by
+// INSERTing rows, so every row is one grain itself wrote. What it cannot
+// go through is ui.Client: canonicalRepo there is exactly the code that
+// stops a divergent spelling from being stored today, and divergent rows
+// are the whole point of the exercise.
+//
+// Modes:
+//
+//	seed             build the store
+//	census           count every repo-keyed table by spelling
+//	conflict-release a second release named the same under both spellings
+//	conflict-prefix  a second release train with one prefix under both
+//	conflict-base    one write target under both spellings, two bases
+//	conflict-memory  a repo memory under both spellings, two texts
+package main
+
+import (
+	"context"
+	"database/sql"
+	"flag"
+	"fmt"
+	"log"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/bwsalmon/grain/pkg/model/sqlite"
+)
+
+// The five repositories are this deployment's own, and the two divergent
+// spellings are the ones the 2026-09-07 run used, so the numbers below
+// are comparable with that one's.
+var (
+	canonical = []string{
+		"bwsalmon/grain",
+		"bwsalmon/kontur",
+		"bwsalmon/bazzite",
+		"bwsalmon/kubernetes",
+		"bwsalmon/grain-home",
+	}
+	grain     = model.RepoRef{Owner: "bwsalmon", Name: "grain"}
+	divGrain  = model.RepoRef{Owner: "bwsalmon", Name: "Grain"}
+	kontur    = model.RepoRef{Owner: "bwsalmon", Name: "kontur"}
+	divKontur = model.RepoRef{Owner: "BWSalmon", Name: "kontur"}
+	// Named nowhere in the allowlist: grain has no spelling to impose on
+	// it, and every count of it below should come out unchanged.
+	unrelated = model.RepoRef{Owner: "Someone-Else", Name: "Unrelated"}
+)
+
+func main() {
+	mode := flag.String("mode", "seed", "seed, census, conflict-release, conflict-prefix, conflict-base, conflict-memory")
+	dir := flag.String("dir", "", "data directory")
+	tasks := flag.Int("tasks", 6000, "tasks to seed")
+	runs := flag.Int("runs", 7500, "runs to seed")
+	transcriptKB := flag.Int("transcript-kb", 38, "average transcript size per run")
+	pinned := flag.Float64("pinned", 0.45, "fraction of runs with a pinned write target (the rest are NULL, as every run recorded before task_run gained those columns is)")
+	flag.Parse()
+	if *dir == "" {
+		log.Fatal("-dir is required")
+	}
+	ctx := context.Background()
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(*dir, "store")))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		log.Fatal(err)
+	}
+	switch *mode {
+	case "seed":
+		seed(ctx, store, *tasks, *runs, *transcriptKB, *pinned)
+	case "census":
+		census(ctx, db)
+	case "conflict-release":
+		conflictRelease(ctx, store)
+	case "conflict-prefix":
+		conflictPrefix(ctx, store)
+	case "conflict-base":
+		conflictBase(ctx, store)
+	case "conflict-memory":
+		conflictMemory(ctx, store)
+	case "one-run":
+		oneRun(ctx, store, db)
+	default:
+		log.Fatalf("unknown -mode %q", *mode)
+	}
+}
+
+func must(err error) {
+	if err != nil {
+		log.Output(2, err.Error())
+		os.Exit(1)
+	}
+}
+
+// ---------------------------------------------------------------- seed
+
+func seed(ctx context.Context, store *model.Store, nTasks, nRuns, transcriptKB int, pinnedFrac float64) {
+	rnd := rand.New(rand.NewSource(20260908))
+	start := time.Now()
+
+	// A settings row with real numbers on it: PollInterval and MaxWorkers
+	// left at zero panic the reconcile loop five minutes into a start,
+	// which the 2026-09-07 run found the hard way.
+	must(store.PutConfig(ctx, model.Config{
+		PollInterval:        30 * time.Second,
+		MaxWorkers:          4,
+		MaxMergers:          1,
+		MaxAgentTurns:       200,
+		AgentFramework:      "claude",
+		ClaudeModel:         "claude-opus-5",
+		TargetRepos:         canonical,
+		SandboxCPUs:         3,
+		SandboxMemoryMB:     3072,
+		SandboxDiskGB:       30,
+		EnvironmentName:     "home",
+		TimeZone:            "UTC",
+		DefaultCapabilities: []string{"github"},
+		AgentGitName:        "Brandon Agent",
+		AgentGitEmail:       "brandon.w.salmon@gmail.com",
+	}))
+
+	year := time.Date(2025, 9, 8, 9, 0, 0, 0, time.UTC)
+
+	// ---- tasks. 240 under bwsalmon/Grain and 68 under BWSalmon/kontur,
+	// the shape an early era leaves behind: the divergent rows are older
+	// than the canonical ones rather than mixed through them.
+	targets := make([]model.RepoRef, 0, nTasks)
+	for i := 0; i < nTasks; i++ {
+		switch {
+		case i < 240:
+			targets = append(targets, divGrain)
+		case i < 308:
+			targets = append(targets, divKontur)
+		case i%53 == 0:
+			targets = append(targets, unrelated)
+		default:
+			targets = append(targets, model.RepoRef{
+				Owner: "bwsalmon",
+				Name:  []string{"grain", "grain", "grain", "kontur", "bazzite", "kubernetes", "grain-home"}[i%7],
+			})
+		}
+	}
+	ids := make([]string, nTasks)
+	for i := 0; i < nTasks; i++ {
+		id := fmt.Sprintf("t%05d", i)
+		ids[i] = id
+		target := targets[i]
+		created := year.Add(time.Duration(i) * time.Hour * 8760 / time.Duration(nTasks))
+		t := model.Task{
+			ID:         id,
+			Title:      fmt.Sprintf("Task %d: %s", i, subjects[i%len(subjects)]),
+			Body:       strings.Repeat(fmt.Sprintf("What this task is about, in the words whoever filed it used (%d). ", i), 6),
+			Target:     &target,
+			Base:       "main",
+			CreatedAt:  &created,
+			AutoMerge:  i%3 == 0,
+			ApprovedAt: &created,
+			Approval:   &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "brandon"}},
+			Tags:       []string{"hand-run", fmt.Sprintf("wave-%d", i%12)},
+			OrderKey:   float64(i),
+		}
+		// task_read: 144 tasks read bwsalmon/grain under *both*
+		// spellings, which is the merge case; another 120 read only the
+		// divergent one, which is the rewrite case; 66 read the
+		// repository this deployment names no spelling for.
+		switch {
+		case i < 144:
+			t.Reads = []model.RepoRef{grain, divGrain}
+		case i < 264:
+			t.Reads = []model.RepoRef{divGrain}
+		case i < 330:
+			t.Reads = []model.RepoRef{unrelated}
+		case i%9 == 0:
+			t.Reads = []model.RepoRef{kontur}
+		}
+		// task_write (grain/task-314's table). 15 tasks write
+		// bwsalmon/Grain *and* bwsalmon/grain with one base, which merges;
+		// 20 write only the divergent spelling, which is a plain rewrite;
+		// 5 write BWSalmon/kontur.
+		switch {
+		case i >= 400 && i < 415:
+			t.Writes = []model.WriteTarget{{Repo: grain, Base: "main"}, {Repo: divGrain, Base: "main"}}
+		case i >= 415 && i < 435:
+			t.Writes = []model.WriteTarget{{Repo: divGrain, Base: "main"}}
+		case i >= 435 && i < 440:
+			t.Writes = []model.WriteTarget{{Repo: divKontur, Base: "main"}}
+		case i%40 == 0:
+			t.Writes = []model.WriteTarget{{Repo: kontur, Base: "main"}}
+		}
+		must(store.PutTask(ctx, t))
+		if i%1000 == 0 {
+			log.Printf("tasks: %d/%d", i, nTasks)
+		}
+	}
+	log.Printf("tasks: %d in %s", nTasks, time.Since(start).Round(time.Second))
+
+	// ---- runs, with the transcript column that makes a store 286 MB.
+	// task_run.target_owner/target_name are NULL for every run recorded
+	// before those columns existed, so a real store has a *minority* of
+	// pinned rows and the rest NULL: -pinned is that fraction.
+	transcript := transcriptOf(transcriptKB)
+	runStart := time.Now()
+	for i := 0; i < nRuns; i++ {
+		taskIdx := i % nTasks
+		id := fmt.Sprintf("r%06d", i)
+		started := year.Add(time.Duration(i) * time.Hour * 8760 / time.Duration(nRuns))
+		must(store.StartRun(ctx, model.Run{
+			ID:        id,
+			TaskID:    ids[taskIdx],
+			Sandbox:   fmt.Sprintf("sbx-%06d", i),
+			Attempt:   1,
+			StartedAt: started,
+		}, model.Limits{}))
+		if rnd.Float64() < pinnedFrac {
+			target := targets[taskIdx]
+			must(store.SetRunSandbox(ctx, id, fmt.Sprintf("sbx-%06d", i), &target))
+		}
+		finished := started.Add(37 * time.Minute)
+		must(store.FinishRun(ctx, id, finished, "succeeded", "pushed 3 commits"))
+		must(store.SetRunTranscript(ctx, id, fmt.Sprintf("run %s\n", id)+transcript))
+		must(store.SetRunPrompt(ctx, id, strings.Repeat("the prompt this run was given. ", 40)))
+		if i%1000 == 0 {
+			log.Printf("runs: %d/%d", i, nRuns)
+		}
+	}
+	log.Printf("runs: %d in %s", nRuns, time.Since(runStart).Round(time.Second))
+
+	// ---- comments and observations, for size rather than for repo keys.
+	for i := 0; i < 1000; i++ {
+		_, err := store.AddComment(ctx, model.Comment{
+			TaskID: ids[i*3%nTasks],
+			Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "brandon"}},
+			Body:   strings.Repeat("a comment somebody left on this task. ", 12),
+			CreatedAt: year.Add(time.Duration(i) * time.Hour),
+		})
+		must(err)
+	}
+
+	// ---- branches: 30 under bwsalmon/Grain, 10 under BWSalmon/kontur,
+	// 220 under the canonical spellings.
+	for i := 0; i < 260; i++ {
+		repo := grain
+		switch {
+		case i < 30:
+			repo = divGrain
+		case i < 40:
+			repo = divKontur
+		case i%5 == 0:
+			repo = kontur
+		}
+		_, err := store.CreateBranch(ctx, repo, fmt.Sprintf("grain/task-%d", i), year.Add(time.Duration(i)*time.Hour))
+		must(err)
+	}
+
+	// ---- releases and candidates: 6 of the 40 releases are stored
+	// divergently, with their candidates.
+	for i := 0; i < 40; i++ {
+		repo := grain
+		if i < 6 {
+			repo = divGrain
+		}
+		rel, err := store.CreateRelease(ctx, repo, fmt.Sprintf("v1.%d", i), year.Add(time.Duration(i)*24*time.Hour))
+		must(err)
+		_ = rel
+	}
+
+	// ---- release trains and their iterations (grain/task-314's tables).
+	// One train under bwsalmon/Grain, one under bwsalmon/kontur, one
+	// under the canonical bwsalmon/grain with a prefix of its own.
+	trains := []struct {
+		repo   model.RepoRef
+		prefix string
+	}{
+		{divGrain, "rel"},
+		{grain, "hotfix"},
+		{kontur, "rel"},
+	}
+	for _, tr := range trains {
+		sched, err := store.CreateReleaseSchedule(ctx, model.ReleaseSchedule{
+			Repo:       tr.repo,
+			Prefix:     tr.prefix,
+			Source:     "main",
+			Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 168},
+			Enabled:    true,
+			NextRunAt:  year.Add(300 * 24 * time.Hour),
+		}, year)
+		must(err)
+		for n := 1; n <= 4; n++ {
+			must(addIteration(ctx, store, sched, n, year.Add(time.Duration(n)*7*24*time.Hour)))
+		}
+	}
+
+	// ---- schedules and templates, with their read and write scopes.
+	for i := 0; i < 12; i++ {
+		target := grain
+		if i < 2 {
+			target = divGrain
+		}
+		s := model.Schedule{
+			ID:         fmt.Sprintf("s%03d", i),
+			Title:      fmt.Sprintf("Nightly %d", i),
+			Body:       "what this schedule files, every night",
+			Target:     target,
+			Base:       "main",
+			Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 24},
+			Enabled:    true,
+			NextRunAt:  year.Add(300 * 24 * time.Hour),
+			CreatedAt:  year,
+			Reads:      []model.RepoRef{kontur},
+		}
+		if i == 0 {
+			// schedule_write under both spellings with one base: a merge.
+			s.Writes = []model.WriteTarget{{Repo: grain, Base: "main"}, {Repo: divGrain, Base: "main"}}
+			s.Reads = []model.RepoRef{divGrain, grain}
+		}
+		if i == 1 {
+			s.Writes = []model.WriteTarget{{Repo: divGrain, Base: "main"}}
+		}
+		must(store.PutSchedule(ctx, s))
+	}
+	for i := 0; i < 6; i++ {
+		target := grain
+		if i == 0 {
+			target = divGrain
+		}
+		tpl := model.Template{
+			ID:        fmt.Sprintf("tmpl-%d", i),
+			Name:      []string{"tmpl-smoke", "tmpl-soak", "tmpl-e2e", "tmpl-lint", "tmpl-perf", "tmpl-docs"}[i],
+			Title:     "Qualify this candidate",
+			Body:      "run the suite against the candidate and report",
+			Target:    &target,
+			Base:      "main",
+			CreatedAt: year,
+		}
+		if i == 0 {
+			tpl.Writes = []model.WriteTarget{{Repo: divGrain, Base: "main"}}
+		}
+		must(store.PutTemplate(ctx, tpl))
+	}
+
+	// ---- per-repo configuration, the half of this the operator sees.
+	// The divergent row is the one carrying a prompt extension and a
+	// setup command; the canonical row carries capabilities. The merge is
+	// the union, canonical first.
+	must(store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                divGrain,
+		DefaultCapabilities: []string{"gcp-key", "kontur-ssh"},
+		PromptExtension:     "Read docs/design.md before changing anything under pkg/orchestrator.",
+		SetupCommand:        "make deps",
+	}))
+	must(store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                grain,
+		DefaultCapabilities: []string{"grain-ci", "gcp-key"},
+	}))
+	must(store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                unrelated,
+		DefaultCapabilities: []string{"github"},
+	}))
+
+	// ---- a repo memory under both spellings, identical text, which is
+	// the only shape mergeMemoryRow can fold; plus one document each.
+	memoryText := "The deploy script is scripts/setup.sh and it is idempotent.\n"
+	for _, repo := range []model.RepoRef{grain, divGrain} {
+		r := repo
+		must(store.PutMemory(ctx, model.Memory{
+			Repo: &r, Text: memoryText, UpdatedAt: year.Add(200 * 24 * time.Hour),
+			UpdatedBy: model.Principal{Kind: model.PrincipalAgent, ID: "memory"},
+		}))
+		must(store.PutMemoryDocument(ctx, model.MemoryDocument{
+			Repo: &r, Name: "deploys", Summary: "how this deployment is deployed",
+			Text: strings.Repeat("A paragraph of what the memory agent learned. ", 20),
+			UpdatedAt: year.Add(200 * 24 * time.Hour),
+			UpdatedBy: model.Principal{Kind: model.PrincipalAgent, ID: "memory"},
+		}))
+	}
+	// A memory under the divergent spelling of kontur with no canonical
+	// twin at all: a plain rewrite rather than a merge.
+	must(store.PutMemory(ctx, model.Memory{
+		Repo: &divKontur, Text: "kontur's own memory, written under the other spelling.\n",
+		UpdatedAt: year.Add(100 * 24 * time.Hour),
+		UpdatedBy: model.Principal{Kind: model.PrincipalAgent, ID: "memory"},
+	}))
+	// And one for the repository this deployment names no spelling for.
+	must(store.PutMemory(ctx, model.Memory{
+		Repo: &unrelated, Text: "not this deployment's business.\n",
+		UpdatedAt: year, UpdatedBy: model.Principal{Kind: model.PrincipalAgent, ID: "memory"},
+	}))
+
+	// ---- the qualification plan, split across the two spellings the way
+	// an operator who configured it twice leaves it.
+	must(store.PutQualificationPlan(ctx, model.QualificationPlan{
+		Repo:            divGrain,
+		RequireApproval: false,
+		Items: []model.QualificationItem{
+			{TemplateID: "tmpl-0", Repeat: 1},
+			{TemplateID: "tmpl-1", Repeat: 2},
+		},
+	}))
+	must(store.PutQualificationPlan(ctx, model.QualificationPlan{
+		Repo:            grain,
+		RequireApproval: true,
+		Items: []model.QualificationItem{
+			{TemplateID: "tmpl-0", Repeat: 1},
+			{TemplateID: "tmpl-2", Repeat: 2},
+		},
+	}))
+
+	log.Printf("seeded in %s", time.Since(start).Round(time.Second))
+}
+
+func addIteration(ctx context.Context, store *model.Store, sched model.ReleaseSchedule, n int, at time.Time) error {
+	_, err := store.CutReleaseIteration(ctx, sched.ID, at)
+	return err
+}
+
+var subjects = []string{
+	"make the reconciler stop re-reading the whole task table",
+	"a panel that shows what every sandbox is doing",
+	"the merge queue drops a branch when CI is red twice",
+	"upgrade the sandbox guest image",
+	"stop the settings import from undoing a repo-case rewrite",
+	"write the release train's own page",
+}
+
+func transcriptOf(kb int) string {
+	line := "assistant: I read pkg/model/repo_case.go and the table list is data, not code.\n" +
+		"tool: run_command {\"command\":\"go test ./pkg/model/...\"}\n" +
+		"tool result: ok  github.com/bwsalmon/grain/pkg/model 12.418s\n"
+	var b strings.Builder
+	for b.Len() < kb*1024 {
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// ------------------------------------------------------------ conflicts
+
+func conflictRelease(ctx context.Context, store *model.Store) {
+	_, err := store.CreateRelease(ctx, grain, "v1.3", time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))
+	must(err)
+	log.Print("added bwsalmon/grain v1.3 beside the bwsalmon/Grain one")
+}
+
+func conflictPrefix(ctx context.Context, store *model.Store) {
+	_, err := store.CreateReleaseSchedule(ctx, model.ReleaseSchedule{
+		Repo:       grain,
+		Prefix:     "rel",
+		Source:     "main",
+		Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 168},
+		Enabled:    true,
+		NextRunAt:  time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+	}, time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))
+	must(err)
+	log.Print("added a second `rel` train under bwsalmon/grain")
+}
+
+func conflictBase(ctx context.Context, store *model.Store) {
+	must(store.UpdateTask(ctx, "t00400", func(t *model.Task) error {
+		t.Writes = []model.WriteTarget{
+			{Repo: grain, Base: "main"},
+			{Repo: divGrain, Base: "release-1.4"},
+		}
+		return nil
+	}))
+	log.Print("t00400 now writes both spellings with different bases")
+}
+
+func conflictMemory(ctx context.Context, store *model.Store) {
+	r := divGrain
+	must(store.PutMemory(ctx, model.Memory{
+		Repo: &r,
+		Text: "The deploy script is scripts/setup.sh, and the staging host is behind the VPN.\n",
+		UpdatedAt: time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC),
+		UpdatedBy: model.Principal{Kind: model.PrincipalAgent, ID: "memory"},
+	}))
+	log.Print("bwsalmon/Grain's memory now says something bwsalmon/grain's does not")
+}
+
+// oneRun makes exactly one row in the whole store divergent, and it is a
+// task_run row: the question that asks is what the export costs when the
+// reconciliation touches nothing but the largest file in the dump.
+func oneRun(ctx context.Context, store *model.Store, db *sql.DB) {
+	var id string
+	must(db.QueryRowContext(ctx,
+		"SELECT `id` FROM `task_run` WHERE `target_owner` IS NOT NULL ORDER BY `id` LIMIT 1").Scan(&id))
+	r := divGrain
+	must(store.SetRunSandbox(ctx, id, "sbx-one", &r))
+	log.Printf("run %s is now pinned to bwsalmon/Grain", id)
+}
+
+// -------------------------------------------------------------- census
+
+// census counts every repo-keyed table by spelling, from
+// model.RepoCaseTables -- the same list the reconciliation walks, so a
+// table it gains is a table this counts without being edited.
+func census(ctx context.Context, db *sql.DB) {
+	total := 0
+	for _, t := range model.RepoCaseTables() {
+		rows, err := db.QueryContext(ctx,
+			"SELECT `"+t.Owner+"`,`"+t.Repo+"`,count(*) FROM `"+t.Name+"` "+
+				"GROUP BY `"+t.Owner+"`,`"+t.Repo+"` ORDER BY 1,2")
+		must(err)
+		var lines []string
+		for rows.Next() {
+			var owner, repo sql.NullString
+			var n int
+			must(rows.Scan(&owner, &repo, &n))
+			spelling := "NULL"
+			if owner.Valid && repo.Valid {
+				spelling = owner.String + "/" + repo.String
+				if spelling == "/" {
+					spelling = "(deployment-wide)"
+				}
+			}
+			lines = append(lines, fmt.Sprintf("%-24s %6d", spelling, n))
+			total += n
+		}
+		must(rows.Err())
+		rows.Close()
+		sort.Strings(lines)
+		fmt.Printf("%s\n", t.Name)
+		for _, l := range lines {
+			fmt.Printf("    %s\n", l)
+		}
+	}
+	fmt.Printf("\n%d rows in the repo-keyed tables\n", total)
+}

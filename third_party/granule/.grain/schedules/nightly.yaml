@@ -1,0 +1,6 @@
+name: Granule Nightly Suite
+suite: nightly
+enabled: true
+overlap: skip
+daily:
+  at: "02:00"

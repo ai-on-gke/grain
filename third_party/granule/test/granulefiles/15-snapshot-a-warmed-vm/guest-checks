@@ -1,0 +1,8 @@
+[the machine resumed from the snapshot rather than cold-booting]
+# /run is a tmpfs: nothing written there survives a boot. The warm-up
+# wrote this during the build, and it is here now only because the VMM
+# found the snapshot in the image and restored the guest's memory from
+# it instead of starting one (5.6).
+test -f /run/model/weights.loaded
+cat /run/model/weights.loaded
+cd /run/model && sha256sum -c weights.loaded

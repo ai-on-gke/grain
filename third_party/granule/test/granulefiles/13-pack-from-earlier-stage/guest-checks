@@ -1,0 +1,24 @@
+[the RUN ran inside the guest, as the account USER named]
+# The config test wrote its log into the guest's own filesystem, as the
+# redis account. Neither half of that is something the container build
+# above the pack could have done: the file is only there because a guest
+# was booted and a command run in it, and it is only owned by redis
+# because USER decided who ran it (6).
+test -f /var/lib/redis/config-test.log
+owner=$(stat -c '%U' /var/lib/redis/config-test.log)
+if [ "$owner" != "redis" ]; then
+  echo "the config test ran as $owner, not as the redis account USER named" >&2
+  ls -l /var/lib/redis >&2
+  exit 1
+fi
+grep -q "Configuration loaded" /var/lib/redis/config-test.log
+
+[redis is enabled and serving]
+systemctl is-enabled redis-server
+for i in $(seq 1 60); do
+  ss -ltn 2>/dev/null | grep -q ':6379' && exit 0
+  sleep 1
+done
+echo "nothing is listening on 6379" >&2
+systemctl status redis-server >&2
+exit 1

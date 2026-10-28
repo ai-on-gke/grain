@@ -1,0 +1,6 @@
+# Must produce a container image, not a VM image (no guest disk).
+docker run --rm "$IMAGE" /bin/sh -c 'test "$CONTAINER_EXTRACTED" = "true"'
+if docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'test -e /var/lib/granule/guest/disk.img'; then
+  echo "a stage with unconverted VM UNPACK FROM produced a VM image" >&2
+  exit 1
+fi

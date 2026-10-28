@@ -1,0 +1,292 @@
+# Twenty consecutive boots of the two-VM test, on demand.
+#
+# This exists because of one symptom and three investigations of it. A
+# sandbox guest would boot, answer `granule exec` over vsock, and never
+# acquire a default route; the orchestrator would wait out the whole of
+# GranuleConfig.ReadyTimeout and fail with "the guest in granule-vm-...
+# answers but has no default route yet". It landed on
+# TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently more often than
+# anywhere else -- that test is the only one in the suite that boots two
+# guests at once, so it had twice the chances -- and it was read as a
+# concurrency bug in that test twice (grain tasks 109, 116) before
+# grain/task-137 found what it actually was: on a guest whose kernel does
+# not act on `ip=` (Debian's does not set CONFIG_IP_PNP, and
+# scripts/granule builds the Debian-kernel variant), one early-boot unit
+# is the only thing that ever addresses the guest, and it was racing udev
+# and failing silently. b8503b73d fixed it in the vendored guest.
+#
+# The reason it took three tries is that nobody could ask the question
+# cheaply. "Is it fixed?" is a question about a failure rate, and the
+# only instrument for it was `real KVM sandboxes` in tests.yml, which
+# boots two guests exactly once per push: reading a flake off that means
+# waiting for other people's commits and counting. So this is the
+# instrument -- one run of it is twenty consecutive two-guest boots, and
+# an answer in about twenty minutes rather than a week of watching.
+#
+# `workflow_dispatch` rather than `push`, deliberately. It is ~20 minutes
+# of nested-VM time that says nothing new on an ordinary commit; what
+# this is for is the day somebody sees that symptom again and needs to
+# know whether they are looking at a regression or at one unlucky boot.
+# Run it on the branch in question and it says which, with the guest's
+# own consoles attached either way.
+#
+# It can say "and tests.yml boots these guests on every push anyway"
+# again: `real KVM sandboxes` was out of that file for a fortnight
+# (grain/task-427) and is back (grain/task-497), so an ordinary push
+# boots two guests once and a dispatch of this workflow is still the
+# only way to boot forty. That is the distinction worth keeping in mind
+# when choosing between them -- one green `real KVM sandboxes` is a
+# sample of one, and this symptom hid behind exactly that for three
+# tasks.
+#
+# What this shares with that job while the cache is cold is the
+# resolution step below, which builds a guest inline on a miss -- the
+# thing that took the other job out of grain CI. What the miss costs
+# now is wall clock and not a verdict: that step says
+# `infrastructure: true`, so a guest this sandbox cannot get leaves the
+# job errored rather than claiming the twenty boots regressed
+# (ci.Step.Infrastructure, grain/task-464).
+#
+# The other time to run it is a re-vendor. The guest-side fix is no
+# longer a patch this repo carries: granule has it in its own tree
+# (deploy/guest-image/overlay-debian/usr/local/libexec/granule-configure-net
+# waits for the NIC and retries; overlay-common/.../granule-configure-routes
+# refuses to prune a table whose routes did not install; both units are
+# ordered Before=sysinit.target and log journal+console), re-verified
+# against third_party/granule by grain task 517. So the thing to watch
+# for at a re-vendor is that tree losing it again, and if upstream ever
+# solves it differently, twenty boots is what says whether the new way
+# holds on a loaded host -- one green `real KVM sandboxes` is not, and
+# that is the sample size this symptom hid behind for three tasks.
+#
+# What a run of this costs is worth knowing before dispatching one. The
+# guest's content-addressed cache key is a tree hash over
+# scripts/granule/guest-inputs.sh's list, so a commit that touches one of
+# those paths makes the resolution step below build a ~1GB guest inline
+# instead of pulling one -- and third_party/granule is on that list, so a
+# re-vendor is exactly such a commit. That build used not to survive a CI
+# sandbox: it lost DNS for nodejs.org partway through, because netshim
+# gives a guest 8.8.8.8 unless told otherwise (netshim.DefaultDNS) and
+# `guest build` had no -dns to tell it with -- and still has none. It no
+# longer matters: the build is `granule granulefile build`, which is a
+# docker build on the CI host with no VM and no netshim in it, so it
+# resolves the way the rest of the job does.
+#
+# The two steps before the stress are `real KVM sandboxes`'s own, kept
+# deliberately identical -- the same /dev/kvm precondition, so a sandbox
+# that would make the suite skip reddens here instead of reporting twenty
+# passes it never ran, and the same content-addressed guest resolution,
+# so this measures the same guest that job measures rather than one built
+# some other way. "Identical" is a script rather than a copy now
+# (scripts/granule-guest-resolve.sh), which is the only version of it
+# nobody has to maintain; what still has to be kept by hand is the
+# `guest-cache:` list below and the `infrastructure: true` on the resolve
+# step, both of which that job declares too. tests/deploy's
+# TestEveryGuestResolvingStepIsInfrastructure is what holds the second.
+name: kvm route stress
+
+on:
+  workflow_dispatch:
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  kvm-route-stress:
+    capabilities: []
+    name: twenty two-VM boots
+    # This job resolves a sandbox guest, so it declares the files that
+    # guest is built from: grain warms the content-addressed cache once
+    # for a branch that changed one of them, before this job takes a
+    # machine, rather than leaving it to build a ~1GB image inline
+    # (pkg/grit/cache/guestcache.go, grain/task-410).
+    #
+    # The list is scripts/granule/guest-inputs.sh's -- the same paths the
+    # publisher and every consumer derive the registry tag from -- said
+    # in globs, because a declaration selects files and that script names
+    # two directories meaning everything under them. tests/deploy's
+    # TestTheGuestCacheDeclarationCoversEveryGuestInput holds these
+    # patterns to exactly what the script prints, and it is coverage it
+    # checks rather than equality: a pattern selecting more than the
+    # build reads costs a warm run that pulls a tag already in the
+    # registry, while one selecting less makes two trees that build
+    # different guests derive one key, and the second would be told its
+    # guest was already warm.
+    #
+    # It could not be written here until now, and the reason was
+    # deployment order rather than doubt. A run's workflows are parsed by
+    # the *running* controller, before any of a branch's own code exists
+    # anywhere (cmd/grain's ciWorkflowSource), so the branch that added
+    # this key and the parser for it together failed its own CI at
+    # planning time with "field guest-cache not found in type ci.rawJob".
+    # That cuts both ways for whoever edits this next: a key this file
+    # gains is refused until the deployment parsing it has been upgraded.
+    guest-cache:
+      - Granulefile*
+      - scripts/granule/build-granule-image.sh
+      - third_party/granule/**
+      - cmd/grain-connect/main.go
+      - cmd/grain-sandbox/**
+      - pkg/hostscriptcli/**
+      - go.mod
+      - go.sum
+      - ui/package.json
+      - ui/package-lock.json
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 80
+    timeout-minutes: 110
+    steps:
+      # granuleDockerRealTestPrereqs skips on any of these, so without this
+      # step a sandbox missing one would leave the stress quietly doing
+      # nothing behind a green tick -- which for a job whose entire output
+      # is "twenty out of twenty" would be the worst possible lie.
+      - name: Require KVM
+        run: |
+          set -euo pipefail
+          if [ ! -e /dev/kvm ]; then
+            echo "/dev/kvm is not in this sandbox, so the suite below would skip rather than run. A green tick here would mean nothing." >&2
+            exit 1
+          fi
+          ls -l /dev/kvm
+          docker version
+          command -v ssh-keygen
+          df -h /
+
+      # What tests.yml's "real KVM sandboxes" job resolved its guest
+      # with, and it has to stay that way: a stress run against a
+      # differently-built guest is not evidence about the guest that job
+      # boots. The two files used to hold the same forty lines of shell,
+      # identical by hand; they are one script now
+      # (scripts/granule-guest-resolve.sh), which is the only version of
+      # "identical" nobody has to maintain -- and which is why putting
+      # that job back was three lines rather than a copy
+      # (grain/task-497).
+      #
+      # The third thing is in the script's own header: why a build's tens
+      # of MB of output go to a file rather than into this step's log.
+      # Short version -- a step keeps 64KB of what it printed, head and
+      # tail with the middle elided, so a build that printed into it put
+      # its own failure in the part that goes. That is how the failure
+      # task-427 acted on was finally read (grain/task-385).
+      #
+      # The pull is preferred because the build is not what this workflow
+      # is asking about: on a commit that changes nothing
+      # guest-inputs.sh names, `guest:inputs-<key>` already holds a guest
+      # built from exactly these inputs, and one `docker pull` is the
+      # difference between twenty minutes and most of an hour. GRAIN_CI_REPO
+      # rather than GITHUB_REPOSITORY because a grain sandbox sets no
+      # GITHUB_* variable, and that spelling would resolve to
+      # ghcr.io//guest:inputs-... and miss on every commit.
+      #
+      # The build is retried twice because a failed download is not one of
+      # the flakes this workflow exists to measure -- it is ~1GB fetched
+      # over this sandbox's own egress, and its weather is somebody
+      # else's. Two attempts is also where the retrying stops:
+      # a branch that has changed a guest input and does not want to pay
+      # for the miss on every dispatch can publish its own key once with
+      # `grain ci run -job .grain/workflows/image.yml:guest-cache`.
+      #
+      # `infrastructure:` is what says that none of the above is a
+      # statement about the commit (ci.Step.Infrastructure,
+      # grain/task-464). This step fetches the environment the stress runs
+      # in: a registry that does not hold the key, or a guest build that
+      # cannot reach what it installs, is this deployment's weather, and
+      # a job that stops here has measured no boots at all. Declared, it
+      # concludes the job errored rather than failed -- no repair task
+      # against the branch, no Broken base branch, and nothing written to
+      # the job cache, so the next run asks again instead of replaying a
+      # verdict a cold cache invented. The twenty boots after it are the
+      # measurement, and they still fail as failures.
+      #
+      # `timeout-minutes: 120` on the step because an infrastructure step
+      # is bounded by its own clock rather than by the job's, and the
+      # honest number for an inline `granulectl guest build` here is two
+      # hours: the builds that have been measured took 50-110 minutes,
+      # and this step may make two attempts at one. The job's own 110
+      # minutes below now bound the stress alone, which is what a job's
+      # bound is for.
+      - name: Resolve the sandbox guest
+        infrastructure: true
+        timeout-minutes: 120
+        env:
+          IMAGE: grain-guest:e2e-test
+        run: |
+          set -euo pipefail
+          # No arguments: the build is a docker build with no VM in it,
+          # so there is no boot to time out. The script refuses any.
+          ./scripts/granule-guest-resolve.sh
+
+      # -count=20 rather than a shell loop, because `go test` keeps going
+      # after a failing iteration: a run where the third boot fails still
+      # reports the other nineteen, which is the difference between "it
+      # regressed" and "it is one boot in twenty" -- the exact question
+      # this job exists to answer. A loop around `go test` would stop at
+      # the first failure and answer neither.
+      #
+      # The console follower and the failure dump are tests.yml's, for
+      # the same reason they are there: the suite deletes its VMs in
+      # t.Cleanup, so a `docker logs` after the fact finds nothing, and a
+      # guest that fails to route itself is unreadable from outside
+      # without its own boot log. Following each container into a file as
+      # it appears is what leaves that behind.
+      #
+      # A step carries no `if:` (cmd/grain/ci.go), so the dump folds into
+      # this step, and `set +e`'s job is done by `|| failed=` on the one
+      # command whose failure has to survive the `set -e` that ci.go
+      # prepends.
+      - name: Twenty consecutive two-VM boots
+        env:
+          GRAIN_REAL_VM_TESTS: "1"
+        run: |
+          set -uo pipefail
+          runs=20
+          mkdir -p /tmp/consoles
+          (
+            while true; do
+              for c in $(docker ps -aq --filter 'name=granule-vm-' 2>/dev/null); do
+                if [ ! -e "/tmp/consoles/$c.started" ]; then
+                  touch "/tmp/consoles/$c.started"
+                  name="$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | tr -d /)"
+                  (docker logs -f "$c" > "/tmp/consoles/${name:-$c}.log" 2>&1 &)
+                fi
+              done
+              sleep 2
+            done
+          ) &
+          sampler=$!
+          failed=""
+          go test ./pkg/orchestrator/ \
+            -run 'TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently' \
+            -count="$runs" -v -timeout 100m 2>&1 | tee /tmp/granule-stress.log || failed="the stress run"
+          kill "$sampler" 2>/dev/null || true
+
+          # The count is the result. `go test` says "ok" for a package
+          # whose selected tests all skipped and for one where -run
+          # matched nothing, so neither the exit status nor a single PASS
+          # line is enough: what this job claims is twenty of them, so
+          # twenty is what it counts.
+          passes="$(grep -c -- '--- PASS: TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently' /tmp/granule-stress.log || true)"
+          echo "TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently: ${passes}/${runs} boots passed"
+          if [ "$passes" != "$runs" ]; then
+            echo "expected ${runs} passing boots and got ${passes}; this job only means something when every one of them runs and passes" >&2
+            failed="${failed:-a boot that did not run}"
+          fi
+
+          if [ -n "$failed" ]; then
+            echo "===== the failing iterations ====="
+            grep -n -- '--- FAIL\|no default route\|FAIL\b' /tmp/granule-stress.log | head -60
+            echo "===== nproc / free -m / df -h / ====="
+            nproc; free -m; df -h /
+            echo "===== docker ps -a ====="
+            docker ps -a
+            echo "===== dmesg tail ====="
+            (sudo dmesg 2>/dev/null || dmesg 2>/dev/null || echo "no dmesg here") | tail -80
+            for f in /tmp/consoles/*.log; do
+              [ -e "$f" ] || continue
+              echo "===== guest console $f ====="
+              tail -200 "$f"
+            done
+            exit 1
+          fi

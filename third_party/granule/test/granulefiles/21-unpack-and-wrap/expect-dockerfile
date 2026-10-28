@@ -1,0 +1,10 @@
+debugfs -R 'rdump / /rootfs' /disk.img
+FROM scratch AS unpacked
+COPY --from=granule_unpack_0 /rootfs/ /
+COPY service.sh /usr/local/bin/service.sh
+granule-wrap@unpacked_svc.service
+dev.granule.wrapped-image="unpacked"
+dev.granule.granulefile.kind="wrap"
+dev.granule.granulefile.stage="wrapped_from_unpacked"
+ENV CHV_MEMORY_MB="1024"
+ENV CHV_CPUS="2"

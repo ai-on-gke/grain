@@ -1,0 +1,31 @@
+[Unit]
+Description=Apply the container network's own routes to this guest
+Documentation=file:///usr/local/libexec/granule-configure-routes
+# After the address exists and before anything uses it. The address comes
+# either from the kernel itself (the bundled kernel acts on "ip=" before
+# userspace starts) or from granule-net-cmdline.service (a distro kernel,
+# which does not) -- ordering after that unit covers both, since it runs
+# either way and no-ops in the first case. DefaultDependencies=no for the
+# same reason it has it: this is part of sysinit.target, and ordinary
+# dependencies against that target would be a cycle.
+DefaultDependencies=no
+After=granule-net-cmdline.service granule-net-ip6.service
+Wants=granule-net-cmdline.service
+# Ordered before sysinit.target, not just wanted by it, for the reason
+# granule-net-cmdline.service is: a unit that is only wanted by a target
+# runs whenever the manager gets to it, which can be after that target
+# has been reached.
+Before=network-pre.target sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/granule-configure-routes
+# On the console as well as in the journal: a guest whose routes did not
+# install is one nobody can reach to read the journal of. See
+# granule-net-cmdline.service.
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=sysinit.target

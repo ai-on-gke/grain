@@ -1,0 +1,26 @@
+run start: deadline 2026-10-03T03:38:44Z
+ledger before: {"blocked":"0s","credited":"0s","deadline":"2026-10-03T03:38:44.314993633Z","reports":null}
+
+### call 1: wait_for_checks map[timeout_seconds:120] (blocked 15.077s)
+Grain CI run bbb507ad7e93ce23 for walk/wait at 6ba39ee is success (acme/widgets) after waiting 15s. Produced by grain build 5a63bb2, committed 2026-10-02T23:21:43Z, built from a modified tree.
+
+Job cache: success in 0s
+
+Job slow: success in 12s
+ledger after: {"blocked":"15.014s","credited":"15.014s","deadline":"2026-10-03T03:38:59.328993633Z","reports":["0s","15.014s"]}
+
+### call 2: wait_for_checks map[timeout_seconds:120] (blocked 15.093s)
+Grain CI run 4f2fdb688bb5ce45 for walk/wait at 0342410 is success (acme/widgets) after waiting 15s. Produced by grain build 5a63bb2, committed 2026-10-02T23:21:43Z, built from a modified tree.
+
+Job cache: success in 0s
+
+Job slow: success in 12s
+ledger after: {"blocked":"30.032s","credited":"30.032s","deadline":"2026-10-03T03:39:14.346993633Z","reports":["0s","15.014s","15.015s","30.032s"]}
+
+### call 3: wait_for_checks map[timeout_seconds:120] (blocked 15.085s)
+Grain CI run be7bb1a65cb0389c for walk/wait at d884d36 is success (acme/widgets) after waiting 15s. Produced by grain build 5a63bb2, committed 2026-10-02T23:21:43Z, built from a modified tree.
+
+Job cache: success in 0s
+
+Job slow: success in 12s
+ledger after: {"blocked":"45.05s","credited":"45.05s","deadline":"2026-10-03T03:39:29.364993633Z","reports":["0s","15.014s","15.015s","30.032s","30.032s","45.05s"]}

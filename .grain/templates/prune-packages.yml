@@ -1,0 +1,37 @@
+name: Prune GHCR packages
+title: Prune superseded GHCR package versions with package-publish capability
+base: main
+auto-merge: true
+body: |
+  Run `cmd/ghcr-prune` using the `package-publish` capability to clean up old,
+  superseded container package versions in GitHub Container Registry (GHCR) that
+  deployments and CI workflows have stopped needing.
+
+  ## 1. Verify credentials and capability environment
+
+  - Ensure the `package-publish` capability (or valid GitHub package management token)
+    is available:
+    - Check for credentials placed at `/home/debian/.package-publish-token`,
+      `/home/debian/.github-sandbox-token`, or in `PACKAGE_PUBLISH_TOKEN` / `GITHUB_TOKEN`
+      environment variables.
+    - If required credentials are missing, note that `package-publish` capability
+      must be granted to this repository/task in deployment settings.
+
+  ## 2. Execute GHCR package pruning
+
+  - First run `go run ./cmd/ghcr-prune` in dry-run mode to inspect the deletion plan:
+    - Review the count of package versions to be kept, deleted, and deferred.
+    - Confirm that active branch tags, latest tags, recent rollback commits, and
+      pinned guest caches will be preserved according to policy.
+  - Execute the pruning operation with `-apply`:
+    ```bash
+    go run ./cmd/ghcr-prune -apply=true
+    ```
+  - Monitor the output for any deletion errors, rate limits, or warnings.
+
+  ## 3. Review and report results
+
+  - Review the summary of deleted, refused, kept, and deferred package versions.
+  - If any unexpected refusals or high deferred counts remain across consecutive runs,
+    document findings in the task report.
+  - Conclude the run with a clear summary of pruned packages and current registry status.

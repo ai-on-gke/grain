@@ -1,0 +1,11 @@
+# Recorded in the image config, which is the whole point of VM SET: the
+# runtime reads these and nothing has to read the Granule.
+env=$(docker image inspect -f '{{json .Config.Env}}' "$IMAGE")
+for want in 'CHV_CPUS=2' 'CHV_CPUS_MAX=4' 'CHV_MEMORY_MB=1024' 'CHV_MEMORY_MAX_MB=2048' \
+            'CHV_MEMORY_HOTPLUG=on' 'CHV_CMDLINE=quiet' 'CHV_DISK_MODE=overlay' \
+            'CHV_DISK_SIZE_MB=2048' 'CHV_SHUTDOWN_TIMEOUT=45s'; do
+  case "$env" in
+    *"$want"*) ;;
+    *) echo "the image does not record $want: $env" >&2; exit 1 ;;
+  esac
+done

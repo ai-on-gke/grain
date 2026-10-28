@@ -1,0 +1,21 @@
+# Ratchet baseline for tests/security's route-authorization rule
+# (routes_test.go, #2425 Layer 1b): routes pkg/ui serves that answer a
+# caller routeAuthorization says they must refuse, or refuse the one it
+# says they must answer.
+#
+# "<METHOD>:<path> <count>": one count per failed check -- a request
+# from a caller the single-tenant daemon does not trust (loopback without
+# the access code, claiming to be the system admin) was not refused with
+# 401/403, or the trusted caller (the access code's session) was. A
+# route over its count is reported with the status and reply it gave.
+#
+# There are no role gaps to count: grain is single-tenant
+# (docs/single-tenant-reset.md, stage 3), and whoever holds the access
+# code is its owner (docs/access-code.md). There is no member, team admin
+# or system admin for a route to tell apart -- admin_accounts went with
+# task 4880 -- and every gap the multi-tenant sweep counted was one of
+# those. The file is empty, and stays empty.
+#
+# The count may only go down -- tests/security fails when it rises and
+# when it falls without this file being lowered to match. Raising a count
+# needs a human's review.

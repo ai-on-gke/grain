@@ -1,0 +1,118 @@
+import {
+  Box,
+  Chip,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  Typography,
+} from "@mui/material";
+import { argumentRows } from "../capabilityArgs.js";
+
+// CapabilityMethodTable is one attached server's methods as Settings →
+// Capability servers lists them (servers.Status.methodDetails): each
+// method's description, whether it is stateful (advertises
+// release_<method>), and its with: arguments -- name, type, whether
+// required, default, and the values or pattern it allows.
+export default function CapabilityMethodTable({ details }) {
+  return (
+    <Box sx={{ mt: 1, display: "flex", flexDirection: "column", gap: 1.5 }}>
+      {details.map((m) => {
+        const rows = argumentRows(m.args);
+        return (
+          <Box key={m.name} data-method-detail={m.name}>
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1,
+                flexWrap: "wrap",
+              }}
+            >
+              <Typography
+                variant="body2"
+                sx={{ fontFamily: "monospace", fontWeight: 600 }}
+              >
+                {m.name}
+              </Typography>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={m.releasable ? "stateful" : "stateless"}
+                title={
+                  m.releasable
+                    ? `Advertises release_${m.name}: what it mints is released when the run ends.`
+                    : "Advertises no release_ tool: nothing is held between mint and teardown."
+                }
+              />
+            </Box>
+            {m.description && (
+              <Typography variant="body2" color="text.secondary">
+                {m.description}
+              </Typography>
+            )}
+            {rows.length === 0 ? (
+              <Typography variant="caption" color="text.secondary">
+                Takes no arguments.
+              </Typography>
+            ) : (
+              <Box sx={{ overflowX: "auto" }}>
+                <Table
+                  size="small"
+                  aria-label={`${m.name} arguments`}
+                  sx={{
+                    minWidth: 560,
+                    "& td, & th": { px: 1, py: 0.5 },
+                    "& th": { whiteSpace: "nowrap" },
+                  }}
+                >
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Argument</TableCell>
+                      <TableCell>Type</TableCell>
+                      <TableCell>Required</TableCell>
+                      <TableCell>Default</TableCell>
+                      <TableCell>Allowed</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {rows.map((r) => (
+                      <TableRow key={r.name} title={r.description || undefined}>
+                        <TableCell
+                          sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }}
+                        >
+                          {r.name}
+                        </TableCell>
+                        <TableCell sx={{ fontFamily: "monospace" }}>
+                          {r.type}
+                        </TableCell>
+                        <TableCell>{r.required ? "yes" : "no"}</TableCell>
+                        <TableCell
+                          sx={{
+                            fontFamily: "monospace",
+                            overflowWrap: "anywhere",
+                          }}
+                        >
+                          {r.default}
+                        </TableCell>
+                        <TableCell
+                          sx={{
+                            fontFamily: "monospace",
+                            overflowWrap: "anywhere",
+                          }}
+                        >
+                          {r.allowed}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
+            )}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}

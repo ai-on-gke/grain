@@ -1,0 +1,177 @@
+{
+  "metadata": {
+    "node_type": "c4-standard equivalent (KVM enabled)",
+    "kernel": "Linux 6.16.9 (Cloud-Hypervisor v53.0)",
+    "kubernetes_version": "v1.36",
+    "iterations": 3,
+    "guest_memory_mb": 384,
+    "guest_vcpus": 1
+  },
+  "snapshot_resume": {
+    "runs": [
+      {
+        "container_running_s": 0.6133,
+        "guest_ready_s": 3.8246,
+        "total_ready_s": 4.4379,
+        "exec_s": 0.3998,
+        "total_e2e_s": 4.8377,
+        "guest_uptime_s": 29.57,
+        "output": "hello world"
+      },
+      {
+        "container_running_s": 1.0754,
+        "guest_ready_s": 2.9367,
+        "total_ready_s": 4.0121,
+        "exec_s": 0.2829,
+        "total_e2e_s": 4.295,
+        "guest_uptime_s": 28.45,
+        "output": "hello world"
+      },
+      {
+        "container_running_s": 0.661,
+        "guest_ready_s": 3.3713,
+        "total_ready_s": 4.0324,
+        "exec_s": 0.3201,
+        "total_e2e_s": 4.3525,
+        "guest_uptime_s": 29.1,
+        "output": "hello world"
+      }
+    ],
+    "container_start": {
+      "mean": 0.783,
+      "median": 0.661,
+      "min": 0.613,
+      "max": 1.075,
+      "stdev": 0.254
+    },
+    "guest_ready": {
+      "mean": 3.378,
+      "median": 3.371,
+      "min": 2.937,
+      "max": 3.825,
+      "stdev": 0.444
+    },
+    "total_ready": {
+      "mean": 4.161,
+      "median": 4.032,
+      "min": 4.012,
+      "max": 4.438,
+      "stdev": 0.24
+    },
+    "e2e_exec": {
+      "mean": 4.495,
+      "median": 4.353,
+      "min": 4.295,
+      "max": 4.838,
+      "stdev": 0.298
+    }
+  },
+  "cold_boot": {
+    "runs": [
+      {
+        "container_running_s": 0.8113,
+        "guest_ready_s": 37.9609,
+        "total_ready_s": 38.7722,
+        "exec_s": 0.454,
+        "total_e2e_s": 39.2262,
+        "guest_uptime_s": 20.23,
+        "output": "hello world"
+      },
+      {
+        "container_running_s": 0.7268,
+        "guest_ready_s": 38.2954,
+        "total_ready_s": 39.0222,
+        "exec_s": 0.3757,
+        "total_e2e_s": 39.398,
+        "guest_uptime_s": 19.19,
+        "output": "hello world"
+      },
+      {
+        "container_running_s": 0.4806,
+        "guest_ready_s": 36.1833,
+        "total_ready_s": 36.6639,
+        "exec_s": 0.3384,
+        "total_e2e_s": 37.0023,
+        "guest_uptime_s": 18.63,
+        "output": "hello world"
+      }
+    ],
+    "container_start": {
+      "mean": 0.673,
+      "median": 0.727,
+      "min": 0.481,
+      "max": 0.811,
+      "stdev": 0.172
+    },
+    "guest_ready": {
+      "mean": 37.48,
+      "median": 37.961,
+      "min": 36.183,
+      "max": 38.295,
+      "stdev": 1.135
+    },
+    "total_ready": {
+      "mean": 38.153,
+      "median": 38.772,
+      "min": 36.664,
+      "max": 39.022,
+      "stdev": 1.295
+    },
+    "e2e_exec": {
+      "mean": 38.542,
+      "median": 39.226,
+      "min": 37.002,
+      "max": 39.398,
+      "stdev": 1.336
+    }
+  },
+  "multi_vm_scaling": {
+    "runs": [
+      {
+        "container_running_s": 1.5586,
+        "guest_ready_s": 2.6669,
+        "total_ready_s": 4.2254,
+        "exec_s": 0.2832,
+        "total_e2e_s": 4.5086,
+        "guest_uptime_s": 28.18,
+        "output": "hello world"
+      },
+      {
+        "container_running_s": 0.4071,
+        "guest_ready_s": 2.9486,
+        "total_ready_s": 3.3557,
+        "exec_s": 0.2181,
+        "total_e2e_s": 3.5737,
+        "guest_uptime_s": 28.39,
+        "output": "hello world"
+      },
+      {
+        "container_running_s": 0.4694,
+        "guest_ready_s": 2.6276,
+        "total_ready_s": 3.097,
+        "exec_s": 0.3044,
+        "total_e2e_s": 3.4014,
+        "guest_uptime_s": 28.28,
+        "output": "hello world"
+      },
+      {
+        "container_running_s": 0.4822,
+        "guest_ready_s": 3.8692,
+        "total_ready_s": 4.3513,
+        "exec_s": 0.2869,
+        "total_e2e_s": 4.6382,
+        "guest_uptime_s": 29.37,
+        "output": "hello world"
+      },
+      {
+        "container_running_s": 0.3868,
+        "guest_ready_s": 2.9503,
+        "total_ready_s": 3.3371,
+        "exec_s": 0.2931,
+        "total_e2e_s": 3.6303,
+        "guest_uptime_s": 28.41,
+        "output": "hello world"
+      }
+    ]
+  }
+}

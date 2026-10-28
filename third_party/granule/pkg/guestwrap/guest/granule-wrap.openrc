@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+# The OpenRC half of the unit in granule-wrap@.service: the same
+# service on an Alpine guest. Installed as /etc/init.d/granule-wrap
+# by `granule wrap` and Granulefile `VM WRAP`; see pkg/guestwrap.
+
+description="Run the container this image wraps"
+command="/usr/local/bin/granule-container"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+# The container's output is the machine's console, which is what
+# "docker logs" on the VM container shows.
+output_log="/dev/console"
+error_log="/dev/console"
+
+# start-stop-daemon signals the runner, which forwards the image's own
+# STOPSIGNAL to the container's process group -- so the container is
+# stopped the way its image asked, rather than by a signal OpenRC chose.
+retry="TERM/30/KILL/5"
+
+depend() {
+	need localmount
+	after net
+}

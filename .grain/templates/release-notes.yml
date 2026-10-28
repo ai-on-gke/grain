@@ -1,0 +1,74 @@
+name: Release notes
+title: "docs(releases): write the release notes for {{version}}"
+base: main
+auto-merge: true
+# Filed by scripts/release-from-trunk.sh (.grain/workflows/release-train.yml)
+# through POST /api/tasks/from-template when a release candidate passes its
+# staging soak and is staged as vX.Y.0-pending -- before a person approves it,
+# so the notes are on main by the time anybody decides
+# (docs/design/release-from-trunk.md, RFT-6 and RFT-8).
+fields:
+  - name: version
+    label: Release (vX.Y.0)
+    required: true
+  - name: previous_version
+    label: Previous release the notes start from (empty for the start of history)
+body: |
+  `{{version}}` has passed its staging soak and is staged for a person's
+  approval as the git tag `{{version}}-pending`. Write its release notes,
+  `docs/releases/{{version}}.md`, and get them merged into `main` before
+  anybody approves it (`docs/releases/README.md`,
+  `docs/release-candidate-management.md`).
+
+  Do not tag, push or move any release tag, `latest` or `candidate`, and do
+  not run `scripts/release-from-trunk.sh` or `scripts/release-images.sh`:
+  the release is a person's to approve, and this task only writes a file.
+
+  ## 1. Find the release
+
+  - `git fetch origin --tags`.
+  - The release's commit is what `{{version}}-pending` names
+    (`git rev-parse '{{version}}-pending^{commit}'`), or `{{version}}` if a
+    person has already approved it.
+  - If neither tag exists, the pending release was rejected: finish with
+    `nothing_needed`, saying so. Write nothing.
+  - If `docs/releases/{{version}}.md` is already on `origin/main`, leave it
+    as it is -- somebody wrote or edited it by hand -- and finish with
+    `nothing_needed`.
+
+  ## 2. Draft the highlights
+
+  Read what landed between `{{previous_version}}` and the release
+  (`git log --first-parent --oneline {{previous_version}}..'{{version}}-pending^{commit}'`,
+  and the pull requests behind the merges worth a closer look). If
+  `{{previous_version}}` is empty, the range is everything up to the release.
+  The previous release is never a placeholder tag such as `v2.5.0`: the train
+  skips anything `RELEASE_NEVER_PROMOTE` in `scripts/release.conf` names.
+
+  Write `## Highlights` prose into a scratch file outside the checkout
+  (`/tmp/highlights.md`): a few short paragraphs or bullets on the features
+  and fixes an operator upgrading to `{{version}}` should know about, and a
+  **Breaking changes** paragraph first if anything needs action on upgrade
+  (a re-run installer, a changed flag, a removed setting). Say what changed
+  for the operator, not how it was implemented. Do not repeat the lists the
+  script writes below it.
+
+  ## 3. Generate the notes
+
+  ```
+  bash scripts/release-notes.sh {{version}} {{previous_version}} '{{version}}-pending^{commit}' /tmp/highlights.md \
+    > docs/releases/{{version}}.md
+  ```
+
+  (With an empty previous release, pass the root commit,
+  `$(git rev-list --max-parents=0 HEAD | tail -1)`, as the from-ref.) Read
+  the result: the highlights first, then Features, Fixes and Other changes.
+  Fix any highlight that does not match the lists.
+
+  ## 4. Open the pull request
+
+  Commit only `docs/releases/{{version}}.md`, as
+  `docs(releases): add the release notes for {{version}}`, push your branch
+  and wait for CI to pass. The pull request merges on its own; the
+  operator notification for `{{version}}` links to this task, so the person
+  approving the release reads these notes first.

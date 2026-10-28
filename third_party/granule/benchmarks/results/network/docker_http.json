@@ -1,0 +1,10 @@
+{
+  "workload": "http_concurrency_50",
+  "environment": "docker_native_bridge",
+  "rps": 21800.0,
+  "p50_ms": 2.15,
+  "p95_ms": 3.85,
+  "p99_ms": 5.2,
+  "completed": 5000,
+  "errors": 0
+}

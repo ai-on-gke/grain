@@ -1,0 +1,50 @@
+#!/bin/sh
+# Configure this guest's netshim control link.
+#
+# The guest's first NIC is spliced onto the container's own network
+# segment and takes over the address the container runtime assigned,
+# which the kernel's "ip=" boot parameter configures. That leaves nothing
+# able to reach the guest from *inside* the container's own network
+# namespace -- dialing that address from there reaches the local stack
+# instead -- so netshim also builds a private second segment, and this
+# configures the guest's end of it.
+#
+# The kernel's ip= parameter only ever configures one interface, so this
+# cannot be derived from the boot command line the way the first NIC is.
+# The addresses are fixed at image build time instead, the same way
+# granule-mem-agent's own target is; override them here if netshim was
+# given a non-default NETSHIM_CONTROL_CIDR.
+#
+# A guest with no second NIC -- one booted with the control link disabled,
+# or with no netshim in front of it at all -- has nothing to do here and
+# exits successfully.
+set -eu
+
+IFACE="${GRANULE_CONTROL_IFACE:-eth1}"
+ADDR="${GRANULE_CONTROL_ADDR:-169.254.100.2/24}"
+GATEWAY="${GRANULE_CONTROL_GATEWAY:-169.254.100.1}"
+ENV_FILE="${GRANULE_CONTROL_ENV_FILE:-/run/granule-control-net.env}"
+
+if [ ! -e "/sys/class/net/${IFACE}" ]; then
+	exit 0
+fi
+
+# No IPv6 on the control link: it is IPv4 only, and netshim's guard drops
+# whatever the guest sends over it on IPv6 anyway, so a link-local address
+# here would only send DAD, router solicitations and MLD into that drop.
+# addrgenmode has to be set before the link comes up to stop the address
+# being generated; the flush covers a link something else brought up
+# first. Both are best effort, and fail on a kernel with no IPv6, which
+# has nothing to quieten.
+ip link set dev "${IFACE}" addrgenmode none 2>/dev/null || true
+ip link set "${IFACE}" up
+ip -6 addr flush dev "${IFACE}" scope link 2>/dev/null || true
+# "replace" rather than "add" so a rerun converges instead of failing on
+# an address that is already there.
+ip addr replace "${ADDR}" dev "${IFACE}"
+
+# granule-mem-agent signals whichever host address it is given, defaulting
+# to its own default route's gateway -- which is wrong here, since this
+# guest's default route leads out to the container network rather than to
+# the "granule run" container beside it. Point it at the control link.
+printf 'GRANULE_MEM_AGENT_HOST=%s\n' "${GATEWAY}" > "${ENV_FILE}"

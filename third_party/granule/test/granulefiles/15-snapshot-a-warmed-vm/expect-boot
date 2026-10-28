@@ -1,0 +1,5 @@
+# The warm-up runs in the guest and the guest is then snapshotted, which
+# is the whole of 14.8.
+stage: warmed_vm
+snapshot: true
+argv=/bin/sh -c mkdir -p /run/model

@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+# granule-runlevel: boot
+
+description="Give this guest the IPv6 half of the container network's identity"
+
+# In the boot runlevel, before granule-net-routes: its granule.routes6=
+# pass installs routes over the addresses this puts on the interface.
+depend() {
+	after root
+	before granule-net-routes net
+}
+
+start() {
+	ebegin "Configuring the container network's IPv6 identity"
+	/usr/local/libexec/granule-configure-ip6
+	eend $?
+}

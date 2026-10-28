@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the wrapped container workload (%i)
+Documentation=file:///etc/granule/container.json
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/granule-container
+StandardOutput=journal+console
+StandardError=journal+console
+Restart=always
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+{
+  "workload": "http_concurrency_50",
+  "environment": "granule_spliced_tap",
+  "rps": 20450.0,
+  "p50_ms": 2.34,
+  "p95_ms": 4.1,
+  "p99_ms": 5.65,
+  "completed": 5000,
+  "errors": 0
+}

@@ -1,0 +1,25 @@
+[Unit]
+Description=Give this guest the IPv6 half of the container network's identity
+Documentation=file:///usr/local/libexec/granule-configure-ip6
+# After the IPv4 half, which granule-net-cmdline.service configures on a
+# distro kernel (and which the bundled kernel has done before userspace),
+# and before granule-net-routes.service, whose granule.routes6= pass needs
+# these addresses in place: an IPv6 route via a link-local gateway goes in
+# over the link-local address this installs. DefaultDependencies=no and
+# Before=sysinit.target for the reasons those units give.
+DefaultDependencies=no
+After=granule-net-cmdline.service systemd-udevd.service systemd-udev-trigger.service
+Wants=granule-net-cmdline.service
+Before=granule-net-routes.service network-pre.target sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/granule-configure-ip6
+# On the console as well as in the journal: a guest without its address
+# is one nobody can reach to read the journal of.
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=sysinit.target

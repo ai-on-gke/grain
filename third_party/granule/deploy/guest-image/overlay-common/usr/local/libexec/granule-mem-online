@@ -1,0 +1,68 @@
+#!/bin/sh
+# Make this guest online hotplugged memory as it arrives.
+#
+# cloud-hypervisor's virtio-mem device (CHV_MEMORY_HOTPLUG, driving both
+# "granule resize" and the automatic CHV_MEM_AGENT path) adds memory to a
+# running guest, but adding is only half of it: the guest kernel has to
+# online the new blocks before a single page of them counts towards
+# MemTotal. Whether it does that by itself is a kernel build option --
+# CONFIG_MEMORY_HOTPLUG_DEFAULT_ONLINE, i.e. the initial value of
+# /sys/devices/system/memory/auto_online_blocks -- and distro kernels
+# routinely leave it off, on the grounds that onlining policy belongs to
+# userspace (a udev rule, usually). The kernel granule bundles has it on;
+# Debian's own, which the "debian12" image variant installs, does not.
+#
+# The symptom of the second case is a resize that appears to work from
+# every angle except the one that matters: cloud-hypervisor accepts it,
+# "granule resize" returns success, the guest logs "virtio_mem virtio5:
+# requested size: 0x8000000" -- and MemTotal never moves, because the
+# block it added sits offline forever. Setting auto_online_blocks here
+# covers every later hotplug for the life of the boot, so it costs one
+# write at boot rather than a rule per event.
+#
+# "online" rather than "online_movable": ZONE_MOVABLE would make later
+# unplugging (shrinking back down with "granule resize -memory-mb" to a
+# smaller size) more reliable in principle, but measured on a debian12
+# guest it gave back exactly as much as plain "online" did, and
+# online_movable can fail outright depending on where in the address
+# space the block landed. See the top-level README's "Memory hotplug".
+#
+# Every reason not to act exits successfully: this runs on every boot of
+# both image variants, including guests whose kernel has no memory
+# hotplug at all, and no boot should fail over memory that was never
+# going to arrive.
+set -eu
+
+SYSFS="${GRANULE_MEMORY_SYSFS:-/sys/devices/system/memory}"
+
+log() {
+	echo "granule-mem-online: $*"
+}
+
+if [ ! -d "${SYSFS}" ]; then
+	log "no ${SYSFS}: this guest's kernel has no memory hotplug support, so nothing can be added to online"
+	exit 0
+fi
+
+if [ -f "${SYSFS}/auto_online_blocks" ]; then
+	case "$(cat "${SYSFS}/auto_online_blocks")" in
+	online*) ;;
+	*)
+		if ! echo online > "${SYSFS}/auto_online_blocks" 2>/dev/null; then
+			log "could not set ${SYSFS}/auto_online_blocks; hotplugged memory will stay offline unless something else onlines it"
+		fi
+		;;
+	esac
+fi
+
+# Anything already added and still offline -- memory hotplugged before
+# this ran, which the write above does not retroactively cover.
+for state in "${SYSFS}"/memory*/state; do
+	[ -e "${state}" ] || continue
+	[ "$(cat "${state}")" = "offline" ] || continue
+	if echo online > "${state}" 2>/dev/null; then
+		log "onlined ${state%/state}"
+	else
+		log "could not online ${state%/state}"
+	fi
+done

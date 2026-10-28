@@ -1,0 +1,5 @@
+volumes=$(docker image inspect -f '{{json .Config.Volumes}}' "$IMAGE")
+case "$volumes" in
+  *"/srv/data"*) ;;
+  *) echo "the packed image declares no /srv/data volume: $volumes" >&2; exit 1 ;;
+esac

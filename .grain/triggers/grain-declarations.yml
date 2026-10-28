@@ -1,0 +1,7 @@
+# Path trigger protecting repository declarations.
+# Any pull request modifying .grain/** gates on human approval.
+on: pull_request
+paths: [".grain/**"]
+gate: true
+human: required
+sensitive: true

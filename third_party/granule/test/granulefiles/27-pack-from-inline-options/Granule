@@ -1,0 +1,16 @@
+# docs/granulefile.md 4.3, 5.3, 5.5, and 14.6: VM PACK FROM stage header
+# with options (--variant=debian --disk-extra-mb=128), carrying workload
+# ENTRYPOINT/CMD from the pre-pack rootfs stage, offline COPY into guest,
+# and persistent disk mode VM SET.
+ARG ROOTFS=ghcr.io/gke-labs/granule-guest-rootfs:debian12
+
+FROM ${ROOTFS} AS rootfs_base
+RUN install -d /srv/service
+WORKDIR /srv/service
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["echo 'service running on persistent disk' > /run/service-status && sleep 3600"]
+
+VM PACK FROM rootfs_base --variant=debian --disk-extra-mb=128 AS persistent_vm
+COPY extra-service-config.json /etc/service-config.json
+LABEL org.opencontainers.image.title="PersistentDiskVM"
+VM SET memory-mb=2048 cpus=2 disk-mode=persistent

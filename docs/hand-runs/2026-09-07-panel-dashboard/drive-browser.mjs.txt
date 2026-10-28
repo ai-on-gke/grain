@@ -1,0 +1,371 @@
+// Drives the hand run in a real browser against the seeded store.
+// Usage: node drive.mjs <step>
+import { chromium } from "@playwright/test";
+
+const BASE = "http://127.0.0.1:8430";
+
+function log(...a) {
+  console.log(...a);
+}
+
+async function boards(page) {
+  const res = await page.request.get(`${BASE}/api/boards`);
+  return await res.json();
+}
+
+// panelState reads what every panel on the dashboard is showing: its
+// title, the count on its header, and the link out of it.
+async function panelState(page) {
+  return await page.$$eval(".panel", (els) =>
+    els.map((e) => ({
+      title: e.querySelector(".panel-title")?.textContent,
+      count: e.querySelector(".panel-header .count")?.textContent ?? null,
+      href: e.querySelector("a.panel-open")?.getAttribute("href"),
+      kind: e.className,
+      body: e.querySelector(".panel-body")?.textContent?.slice(0, 60),
+    })),
+  );
+}
+
+async function metrics(client) {
+  const { metrics } = await client.send("Performance.getMetrics");
+  const m = Object.fromEntries(metrics.map((x) => [x.name, x.value]));
+  return {
+    script: m.ScriptDuration,
+    layout: m.LayoutDuration,
+    recalc: m.RecalcStyleDuration,
+    task: m.TaskDuration,
+    nodes: m.Nodes,
+    heapMB: (m.JSHeapUsedSize / 1048576).toFixed(1),
+  };
+}
+
+function delta(a, b) {
+  return {
+    script: +(b.script - a.script).toFixed(3),
+    layout: +(b.layout - a.layout).toFixed(3),
+    recalc: +(b.recalc - a.recalc).toFixed(3),
+    task: +(b.task - a.task).toFixed(3),
+    nodes: b.nodes - a.nodes,
+    heapMB: b.heapMB,
+  };
+}
+
+const browser = await chromium.launch();
+const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+const page = await ctx.newPage();
+const client = await ctx.newCDPSession(page);
+await client.send("Performance.enable");
+
+const api = [];
+ctx.on("response", async (r) => {
+  const u = new URL(r.url());
+  if (!u.pathname.startsWith("/api/")) return;
+  const t = r.request().timing();
+  api.push({
+    url: u.pathname + u.search,
+    ms: +(t.responseEnd - t.requestStart).toFixed(1),
+  });
+});
+page.on("console", (m) => {
+  if (m.type() === "error") log("  browser console error:", m.text());
+});
+
+const list = await boards(page);
+const six = list.find((b) => b.name === "Deployment");
+const ten = list.find((b) => b.name === "Deployment (ten)");
+log(
+  `boards: six=${six.id} (${six.panels.length} panels) ten=${ten.id} (${ten.panels.length} panels)`,
+);
+
+// --- 1. open the dashboard cold -------------------------------------
+async function openCold(boardId, label) {
+  const p = await ctx.newPage();
+  const c = await ctx.newCDPSession(p);
+  await c.send("Performance.enable");
+  const before = await metrics(c);
+  const t0 = Date.now();
+  await p.goto(`${BASE}/boards/${boardId}`, { waitUntil: "load" });
+  await p.waitForSelector(".panel", { timeout: 30000 });
+  const painted = Date.now() - t0;
+  const loaded = await metrics(c);
+  const nav = await p.evaluate(() => {
+    const e = performance.getEntriesByType("navigation")[0];
+    return {
+      domContentLoaded: Math.round(e.domContentLoadedEventEnd),
+      load: Math.round(e.loadEventEnd),
+    };
+  });
+  log(
+    `${label}: first panel at ${painted}ms (DCL ${nav.domContentLoaded}ms), ` +
+      `cold: ${JSON.stringify(delta(before, loaded))}`,
+  );
+  // Then a steady window: the page sitting there, polling every 3s and
+  // re-rendering what it gets. Four ticks.
+  const apiBefore = api.length;
+  await p.waitForTimeout(12000);
+  const after = await metrics(c);
+  const d = delta(loaded, after);
+  log(
+    `${label}: steady 12s (4 poll ticks): ${JSON.stringify(d)} ` +
+      `= ${(d.script / 4).toFixed(2)}s of script per tick, ` +
+      `${api.length - apiBefore} API calls`,
+  );
+  const shape = await p.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    innerWidth: window.innerWidth,
+    panels: [...document.querySelectorAll(".panel")].map((e) => {
+      const b = e.querySelector(".panel-body");
+      return {
+        title: e.querySelector(".panel-title")?.textContent,
+        h: Math.round(e.getBoundingClientRect().height),
+        overflowY: b ? b.scrollHeight - b.clientHeight : 0,
+      };
+    }),
+    gridHeight: Math.round(
+      document.querySelector(".panel-grid")?.getBoundingClientRect().height ??
+        0,
+    ),
+  }));
+  log(`${label}: shape ${JSON.stringify(shape)}`);
+  const state = await panelState(p);
+  await p.close();
+  return state;
+}
+
+const step = process.argv[2] || "all";
+
+if (step === "all" || step === "cost") {
+  log("\n== cost ==");
+  await openCold(six.id, "six panels");
+  await openCold(ten.id, "ten panels");
+  // The flat list, as the baseline: the same 918 tasks, one view.
+  const p = await ctx.newPage();
+  const c = await ctx.newCDPSession(p);
+  await c.send("Performance.enable");
+  const before = await metrics(c);
+  const t0 = Date.now();
+  await p.goto(`${BASE}/`, { waitUntil: "load" });
+  await p.waitForSelector(".task-row");
+  const painted = Date.now() - t0;
+  await p.waitForTimeout(4000);
+  log(
+    `task list: first row at ${painted}ms, over 4s incl. one poll: ` +
+      JSON.stringify(delta(before, await metrics(c))),
+  );
+  log(`rows drawn: ${await p.locator(".task-row").count()}`);
+  await p.close();
+  const window = api.filter((a) => a.url.startsWith("/api/tasks"));
+  log(
+    `/api/tasks calls: ${window.length}, median ${
+      window.map((a) => a.ms).sort((x, y) => x - y)[
+        Math.floor(window.length / 2)
+      ]
+    }ms`,
+  );
+}
+
+if (step === "all" || step === "narrow") {
+  log("\n== narrowing ==");
+  await page.goto(`${BASE}/boards/${six.id}`);
+  await page.waitForSelector(".panel");
+  await page.waitForTimeout(1500);
+  const before = await panelState(page);
+  log("before:", JSON.stringify(before, null, 1));
+  const search = page.getByPlaceholder("Search this dashboard…");
+  await search.fill("sandbox");
+  await page.waitForTimeout(1500);
+  const after = await panelState(page);
+  log("after searching 'sandbox':", JSON.stringify(after, null, 1));
+  log("url:", page.url());
+
+  // Open one inheriting panel's link and compare the list with the
+  // count on the panel it came from.
+  const inheriting = after.find((p) => p.title === "Live work");
+  log(`opening "${inheriting.title}" (${inheriting.count}) -> ${inheriting.href}`);
+  const p2 = await ctx.newPage();
+  await p2.goto(BASE + inheriting.href);
+  await p2.waitForTimeout(2500);
+  log(`list at that link: ${await p2.locator(".task-row").count()} rows`);
+  await p2.close();
+
+  // ... and an overriding one.
+  const overriding = after.find((p) => p.title === "Tests and CI");
+  log(`opening "${overriding.title}" (${overriding.count}) -> ${overriding.href}`);
+  const p3 = await ctx.newPage();
+  await p3.goto(BASE + overriding.href);
+  await p3.waitForTimeout(2500);
+  log(`list at that link: ${await p3.locator(".task-row").count()} rows`);
+  await p3.close();
+}
+
+if (step === "all" || step === "states") {
+  log("\n== a state count ==");
+  await page.goto(`${BASE}/boards/${six.id}`);
+  await page.waitForSelector(".panel-states");
+  await page.waitForTimeout(1500);
+  const counts = await page.$$eval(".panel-state", (els) =>
+    els.map((e) => ({
+      title: e.querySelector(".panel-state-title")?.textContent,
+      count: e.querySelector(".panel-state-count")?.textContent,
+      href: e.getAttribute("href"),
+    })),
+  );
+  log("state counts:", JSON.stringify(counts));
+  const hidden = await page.locator(".panel-state-hidden").textContent().catch(() => null);
+  log("hidden note:", hidden);
+  const target = counts.find((c) => Number(c.count) > 0) || counts[0];
+  await page
+    .locator(".panel-state", { hasText: target.title.trim() })
+    .first()
+    .click();
+  await page.waitForTimeout(2500);
+  log(`clicked "${target.title.trim()}" (${target.count}) -> ${page.url()}`);
+  log(`rows: ${await page.locator(".task-row").count()}`);
+  const states = await page.$$eval(".task-row", (els) =>
+    els.slice(0, 500).map((e) => e.className),
+  );
+  log(`first row classes: ${states[0]}`);
+}
+
+if (step === "all" || step === "reload") {
+  log("\n== reload ==");
+  await page.goto(`${BASE}/boards/${six.id}`);
+  await page.waitForSelector(".panel");
+  await page.getByPlaceholder("Search this dashboard…").fill("sandbox");
+  await page.waitForTimeout(1200);
+  const urlBefore = page.url();
+  const before = await panelState(page);
+  await page.reload();
+  await page.waitForSelector(".panel");
+  await page.waitForTimeout(2500);
+  const after = await panelState(page);
+  log("url before:", urlBefore);
+  log("url after: ", page.url());
+  log(
+    "panel titles in order, before:",
+    before.map((p) => p.title).join(" | "),
+  );
+  log(
+    "panel titles in order, after: ",
+    after.map((p) => p.title).join(" | "),
+  );
+  log("counts before:", before.map((p) => p.count).join(","));
+  log("counts after: ", after.map((p) => p.count).join(","));
+  log(
+    "search box after reload:",
+    JSON.stringify(
+      await page.getByPlaceholder("Search this dashboard…").inputValue(),
+    ),
+  );
+}
+
+if (step === "all" || step === "phone") {
+  log("\n== phone ==");
+  for (const [label, viewport] of [
+    ["iPhone 12 (390x844)", { width: 390, height: 844 }],
+    ["small (360x740)", { width: 360, height: 740 }],
+  ]) {
+    const pctx = await browser.newContext({
+      viewport,
+      isMobile: true,
+      hasTouch: true,
+      deviceScaleFactor: 3,
+      userAgent:
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+    });
+    const pp = await pctx.newPage();
+    // A phone's CPU, roughly: this runner is a server core, and the
+    // point of the leg is what a phone does with six panels.
+    const pc = await pctx.newCDPSession(pp);
+    await pc.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+    const t0 = Date.now();
+    await pp.goto(`${BASE}/boards/${six.id}`);
+    await pp.waitForSelector(".panel");
+    const painted = Date.now() - t0;
+    await pp.waitForTimeout(3000);
+    const measured = await pp.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+      bodyHeight: document.documentElement.scrollHeight,
+      panels: [...document.querySelectorAll(".panel")].map((e) => {
+        const r = e.getBoundingClientRect();
+        return {
+          title: e.querySelector(".panel-title")?.textContent,
+          w: Math.round(r.width),
+          h: Math.round(r.height),
+          top: Math.round(r.top + window.scrollY),
+        };
+      }),
+      toolbarRows: document.querySelectorAll(".narrowing-row").length,
+      // What a finger has to hit, and what is clipped inside a panel
+      // that is now a third of its laptop width.
+      tapTargets: [...document.querySelectorAll(".panel-state, a.panel-open")]
+        .map((e) => {
+          const r = e.getBoundingClientRect();
+          return `${e.className}:${Math.round(r.width)}x${Math.round(r.height)}`;
+        })
+        .slice(0, 8),
+      clipped: [...document.querySelectorAll(".panel-body")]
+        .map((e) => ({
+          title:
+            e.parentElement.querySelector(".panel-title")?.textContent ?? "?",
+          overflowX: e.scrollWidth - e.clientWidth,
+          overflowY: e.scrollHeight - e.clientHeight,
+        }))
+        .filter((x) => x.overflowX > 2 || x.overflowY > 2),
+      fontPx: getComputedStyle(
+        document.querySelector(".task-row") || document.body,
+      ).fontSize,
+    }));
+    const search = pp.getByPlaceholder("Search this dashboard…");
+    const searchVisible = await search.isVisible().catch(() => false);
+    let narrowed = null;
+    let narrowMs = null;
+    if (searchVisible) {
+      const t1 = Date.now();
+      await search.fill("sandbox");
+      await pp.waitForFunction(
+        () =>
+          document.querySelector(".panel .count")?.textContent === "56",
+        null,
+        { timeout: 60000 },
+      );
+      narrowMs = Date.now() - t1;
+      await pp.waitForTimeout(1000);
+      narrowed = await pp.$$eval(".panel", (els) =>
+        els.map((e) => e.querySelector(".panel-header .count")?.textContent),
+      );
+    }
+    log(
+      `${label}: ${painted}ms to first panel; search box visible: ${searchVisible}; narrowing took ${narrowMs}ms; counts after: ${JSON.stringify(narrowed)}`,
+    );
+    log(JSON.stringify(measured, null, 1));
+    await pp.screenshot({
+      path: `/home/debian/shots/phone-${viewport.width}.png`,
+      fullPage: true,
+    });
+    await pctx.close();
+  }
+}
+
+if (step === "all" || step === "addpanel") {
+  log("\n== add a panel ==");
+  await page.goto(`${BASE}/boards/${six.id}`);
+  await page.waitForSelector(".panel");
+  await page.getByRole("button", { name: "Add panel" }).click();
+  await page.waitForTimeout(1500);
+  const overlay = await page.evaluate(() => {
+    const inputs = [...document.querySelectorAll("input, textarea")].map(
+      (e) => ({
+        name: e.name || e.id || e.placeholder,
+        value: e.value?.slice(0, 4000),
+      }),
+    );
+    return { title: document.body.innerText.slice(0, 300), inputs };
+  });
+  log(JSON.stringify(overlay, null, 1));
+  await page.screenshot({ path: "/home/debian/shots/add-panel.png" });
+}
+
+await browser.close();

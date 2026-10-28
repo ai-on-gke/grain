@@ -1,0 +1,5 @@
+EXPOSE 8080
+granule-wrap@web_service.service
+LABEL dev.granule.granulefile.kind="wrap"
+LABEL dev.granule.granulefile.stage="web_vm"
+ENV CHV_MEMORY_MB="1024"

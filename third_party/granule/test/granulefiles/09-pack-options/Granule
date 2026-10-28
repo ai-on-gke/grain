@@ -1,0 +1,10 @@
+# docs/granulefile.md 5.3: VM PACK's options -- which overlay is laid
+# down, and how much headroom the disk is given over the 20% it is
+# sized with.
+ARG ROOTFS=ghcr.io/gke-labs/granule-guest-rootfs:debian12
+
+FROM ${ROOTFS}
+
+RUN install -d /srv/headroom
+
+VM PACK --variant=debian --disk-extra-mb=64 AS sized_vm

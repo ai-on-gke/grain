@@ -1,0 +1,8 @@
+# A container image, so the check is a container: the package the file
+# installed has to be in it, and the image must not have become a
+# machine on the way (no guest disk, no granule entrypoint).
+docker run --rm --entrypoint /usr/bin/redis-server "$IMAGE" --version
+if docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'test -e /var/lib/granule/guest/disk.img'; then
+  echo "a file with no VM instruction produced a VM image" >&2
+  exit 1
+fi

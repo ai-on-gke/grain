@@ -1,0 +1,119 @@
+{
+  "models": [
+    {
+      "additional_speed_tiers": [
+        "fast"
+      ],
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": null,
+      "auto_review_model_override": null,
+      "availability_nux": null,
+      "available_in_plans": [
+        "business",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "education",
+        "enterprise",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_usage_based",
+        "finserv",
+        "free",
+        "free_workspace",
+        "go",
+        "hc",
+        "k12",
+        "plus",
+        "pro",
+        "prolite",
+        "quorum",
+        "sci",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "team"
+      ],
+      "base_instructions": "Use the provided tools.",
+      "comp_hash": "3000",
+      "context_window": 272000,
+      "default_reasoning_level": "low",
+      "default_reasoning_summary": "none",
+      "default_service_tier": null,
+      "default_verbosity": "low",
+      "description": "Metadata-only fixture; no live model or account access is tested.",
+      "display_name": "Synthetic Astra Code Mode profile",
+      "experimental_supported_tools": [],
+      "include_apps_usage_instructions": true,
+      "include_plugin_usage_instructions": true,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 872000,
+      "minimal_client_version": "0.144.0",
+      "model_messages": null,
+      "model_specialty": null,
+      "multi_agent_version": "v2",
+      "node_repl_auto_review_required": false,
+      "node_repl_disabled": false,
+      "prefer_websockets": true,
+      "priority": 1,
+      "service_tiers": [
+        {
+          "description": "1.5x speed, increased usage",
+          "id": "priority",
+          "name": "Fast"
+        },
+        {
+          "description": "The fastest available responses for latency-sensitive work.",
+          "id": "ultrafast",
+          "name": "Ultrafast"
+        }
+      ],
+      "shell_type": "unified_exec",
+      "slug": "gpt-6-astra",
+      "support_verbosity": true,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "effort": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "effort": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "effort": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "effort": "max"
+        },
+        {
+          "description": "Maximum reasoning with automatic task delegation",
+          "effort": "ultra"
+        }
+      ],
+      "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_search_tool": true,
+      "tool_mode": "code_mode_only",
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "list",
+      "web_search_tool_type": "text_and_image"
+    }
+  ]
+}

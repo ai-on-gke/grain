@@ -1,0 +1,203 @@
+name: guest suites
+
+# Builds the guest operating system on every Debian suite this repository
+# claims to support, and packs each one, so that a suite drifting out from
+# under a Dockerfile nobody edited is found here rather than by whoever
+# next passes GUEST_SUITE by hand.
+#
+# What it is for, concretely. `debootstrap --variant=minbase` installs the
+# suite's priority-*required* set and nothing else, and which packages are
+# in that set is the archive's business, not this tree's: e2fsprogs was
+# required on bullseye and bookworm and is merely *important* on trixie,
+# so GUEST_SUITE=trixie silently produced a guest with no resize2fs in it
+# -- granule-growfs's whole job -- until somebody built that suite by
+# hand. The fix names the package on --include (see the
+# guest-rootfs-debian stage), but the *class* of failure is open: the next
+# suite can move another one, and every package the guest gets by
+# inheritance rather than by name is a package a suite can take away.
+# Nothing else in CI builds a guest at all -- ci.yml's "published guest
+# rootfs" job pulls a published image rather than building one -- so
+# without this there is no build of any suite, default included.
+#
+# Why this is a schedule and not part of ci.yml:
+#
+#   - What it catches is the *archive* moving under a stable Dockerfile.
+#     That happens on nobody's commit, so hanging it off pull requests
+#     would redden changes that did nothing wrong, on a failure their
+#     author cannot fix by editing their diff.
+#   - It is not free. Each suite is its own debootstrap and its own pack,
+#     and three of them on every pull request is three guest builds per
+#     push to pay for a check whose subject changes a few times a year.
+#     A weekly run finds the same drift within a week of it landing,
+#     which is the timescale a suite moves on.
+#
+# A change to the recipe itself -- the --include list, the pack's
+# requirements, the suites named below -- is a change in the tree, and
+# that one *is* worth proving before it lands: run this workflow by hand
+# from the branch (workflow_dispatch, "suite" naming one suite or all)
+# rather than waiting for the Monday run.
+on:
+  schedule:
+    # Mondays, well away from the nightly suite's 02:00.
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Debian suite to build
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - bullseye
+          - bookworm
+          - trixie
+
+# Never cancel a run in progress: twenty minutes of guest builds thrown
+# away because a second dispatch arrived is worse than running them
+# twice, and nobody is standing over this one waiting for a tick the way
+# they are over a pull request's.
+concurrency:
+  group: guest-suites-${{ github.event_name }}-${{ inputs.suite || 'all' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  guest-suite:
+    name: guest ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    # A cold trixie build measured 4.5 minutes of debootstrap and a
+    # further 2 for the agents and the mke2fs, on four cores. The
+    # allowance is for a slow mirror rather than for the usual case, and
+    # is kept under grain's own 36-minute job timeout so that a job that
+    # really is stuck is failed here, by the number a reader of this file
+    # can see, rather than cancelled by a limit they cannot.
+    timeout-minutes: 30
+    strategy:
+      # One suite's failure is the news about that suite. Stopping the
+      # others would hide whether what moved was the archive as a whole
+      # or the one release nobody has looked at since it was cut.
+      fail-fast: false
+      matrix:
+        # The suites the Dockerfile's GUEST_SUITE comment and
+        # deploy/guest-image/README.md say are built and checked. This
+        # list is what makes that sentence true, so a suite added or
+        # dropped there is added or dropped here in the same change.
+        suite: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.suite != 'all' && format('["{0}"]', inputs.suite) || '["bullseye","bookworm","trixie"]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Split from the pack below rather than built in one command, so
+      # that the log says which half failed: a suite that cannot be
+      # bootstrapped at all (a package on --include that this release
+      # does not carry, a mirror that has dropped it) is a different
+      # answer from a suite that bootstraps into an OS granule cannot
+      # pack.
+      #
+      # --no-cache-filter is what makes this job check anything at all.
+      # The runner's BuildKit cache outlives a run -- grain skipping its
+      # own verdict cache for a scheduled run does nothing about it --
+      # and under a stable Dockerfile the debootstrap RUN lines and the
+      # digest-pinned FROM have the same cache key every week, so without
+      # this the "fresh" rootfs is whatever debootstrap produced the
+      # first time this runner built the suite, and an archive change
+      # stays green here until something happens to evict it. Naming
+      # the one stage keeps the Go build and the rest cached; every stage
+      # downstream of the rootfs is rebuilt anyway, because it copies
+      # that rootfs's contents and those are now new.
+      #
+      # --progress=plain because the TTY renderer's redraws are what a
+      # log is made of otherwise, and grain elides the middle of a log
+      # that size -- which took the report below with it.
+      - name: build the ${{ matrix.suite }} guest rootfs
+        run: |
+          set -euo pipefail
+          docker build \
+            --progress=plain \
+            --no-cache-filter guest-rootfs-debian \
+            --target guest-rootfs-image \
+            --build-arg "GUEST_SUITE=${{ matrix.suite }}" \
+            -t "granule-guest-rootfs:${{ matrix.suite }}" .
+
+      # Evidence in the log for the passing case, which is the case this
+      # job is almost always in: what the suite actually delivered, read
+      # out of the rootfs itself. A run that says "ok resize2fs
+      # /usr/sbin/resize2fs" is a run somebody can believe; an empty
+      # green tick is not, and the next person to wonder whether this
+      # check still checks anything would otherwise have to build a
+      # guest to find out.
+      #
+      # The programs are read out of pack-guest's own "needs" lines
+      # instead of being listed again here. What granule's guest side
+      # requires of an operating system is stated once, in that script
+      # (see its comment); a second list in a workflow is a list that
+      # goes stale without anything noticing.
+      - name: report what ${{ matrix.suite }} provides
+        run: |
+          set -euo pipefail
+          programs=$(sed -n 's/^needs \([A-Za-z0-9_-]*\) .*/\1/p' deploy/guest-image/pack-guest)
+          if [ -z "$programs" ]; then
+            echo "::error::no \"needs\" lines found in deploy/guest-image/pack-guest -- this step no longer knows what to look for" >&2
+            exit 1
+          fi
+          # One container for the lot: the rootfs image is the operating
+          # system itself, so its own shell is what answers. Nothing
+          # here fails the job -- the pack below is what decides, with
+          # the message that names the package to install. This only
+          # says what is there before it does.
+          docker run --rm "granule-guest-rootfs:${{ matrix.suite }}" sh -c '
+            echo "suite:     $(cat /etc/debian_version)"
+            for p in "$@"; do
+              where=$(command -v "$p" || true)
+              if [ -n "$where" ]; then
+                printf "ok      %-10s %s\n" "$p" "$where"
+              else
+                printf "MISSING %-10s\n" "$p"
+              fi
+            done
+          ' sh $programs
+
+      # The check itself. The rootfs stages build an operating system and
+      # assert nothing about it; what granule's guest-side half needs
+      # from that OS is asserted by deploy/guest-image/pack-guest, which
+      # runs in the guest-image stage and refuses a rootfs without
+      # resize2fs, modprobe, ip or acpid whoever built it. So packing is
+      # not an extra this job pays for on top of the rootfs build -- it
+      # is the part that fails.
+      #
+      # --build-context replaces the guest-customized stage with the
+      # image the first step built, so what is packed is the rootfs the
+      # report above described. Leaving BuildKit to find it by cache key
+      # does not do that: the first step's fresh rootfs and every
+      # earlier week's share one key, and a plain build was measured
+      # picking the oldest of them, not the newest -- which would pack
+      # exactly the stale rootfs the first step went out of its way not
+      # to use. guest-rootfs-image is guest-customized plus a LABEL, so
+      # the filesystem is the same either way.
+      - name: pack the ${{ matrix.suite }} guest
+        run: |
+          set -euo pipefail
+          docker build \
+            --progress=plain \
+            --build-context "guest-customized=docker-image://granule-guest-rootfs:${{ matrix.suite }}" \
+            --target guest-image \
+            --build-arg "GUEST_SUITE=${{ matrix.suite }}" \
+            -t "granule-guest-image:${{ matrix.suite }}" .
+
+      # The Alpine variant is exposed to the same thing through
+      # GUEST_ALPINE_VERSION -- Alpine splits resize2fs out into
+      # e2fsprogs-extra, and an upstream that moved another program
+      # between packages would land the same way -- and is not built
+      # here. Adding it is a second axis on the matrix rather than a
+      # second workflow; it is left out only because the suite list is
+      # what the two comments this job answers to actually claim.
+      #
+      # A packed guest that boots is the next thing to want here and is
+      # deliberately not here: booting needs a granule image, which is
+      # the expensive build this repository already decided not to put in
+      # front of every change (see ci.yml's "published guest rootfs"
+      # comment), and this job's subject -- what the suite's priority set
+      # did or did not install -- is settled by the pack. See the
+      # README's "Development" for the by-hand boot.

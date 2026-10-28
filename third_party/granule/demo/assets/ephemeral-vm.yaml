@@ -1,0 +1,81 @@
+# A whole VM, injected into a pod that is already running.
+#
+# This is the partial container spec `kubectl debug --custom` lays over
+# its built-in profile. The usual reason to reach for an ephemeral
+# container is a debugging shell in a pod whose image has no shell; here
+# the image being injected is a granule image, so what arrives in the pod
+# is another cloud-hypervisor VM -- with its own kernel, its own root
+# filesystem and its own memory -- beside the ones that were already
+# there. Nothing already in the pod restarts, which is the whole
+# attraction: the containers that were running keep running.
+#
+# Used by demo/demo.sh's "pod" chapter as:
+#
+#   kubectl debug granule-multi-vm \
+#     --image=ghcr.io/gke-labs/granule:latest -c vm-injected \
+#     --profile=sysadmin --custom demo/assets/ephemeral-vm.yaml
+#
+# Three things about an ephemeral container shape what can be here:
+#
+#  - It may not declare `resources`, `ports`, `lifecycle` or any probe.
+#    The API refuses those outright -- an ephemeral container is not
+#    scheduled, it is squeezed into a pod whose resources were decided
+#    when it was admitted. So there is no readiness probe on this VM and
+#    the demo waits for its guest by hand, with `granule ready`.
+#  - It cannot be removed or restarted once added. Deleting the pod is
+#    how the injected VM goes away.
+#  - It needs /dev/kvm like any other VM container. `--profile=sysadmin`
+#    is what makes it privileged (which is also what gives it the host's
+#    /dev); the explicit mount below is the pod's own `dev-kvm` volume,
+#    declared so the dependency is visible rather than inherited.
+#
+# The two flags do compose: kubectl lays this file over the profile's
+# output, so the injected container ends up with the profile's
+# `securityContext: {privileged: true}` *and* the args, env and mount
+# below. That was the open question about this file and it has now been
+# answered on a cluster. What it needs is kubectl **1.31 or newer**:
+# 1.30 has `--profile=sysadmin` but no `--custom` at all, and answers
+# "unknown flag: --custom". On such a client, put
+#
+#   securityContext:
+#     privileged: true
+#
+# in this file, drop `--profile`, and hand the whole thing to `kubectl
+# replace --raw /api/v1/namespaces/NS/pods/POD/ephemeralcontainers`.
+#
+# One more thing kubectl decides rather than this file: an injected
+# image tagged `:latest` gets `imagePullPolicy: Always`, so the node
+# fetches it again even when the pod's own containers are running the
+# same image -- and `kubectl exec` into the new container fails with
+# "container not found" until that finishes. demo.sh waits for
+# `.state.running` before it execs, for exactly that reason.
+#
+# `name` and `image` are deliberately not set here: they come from
+# kubectl's own -c and --image, so that one file serves whatever image
+# and container name the demo is run with.
+
+# The granule image's entrypoint takes a verb, and `run` is "boot the
+# bundled guest" -- the same argument the pod's own containers carry.
+args: ["run"]
+
+env:
+  # The pod's address belongs to whichever container took it over at
+  # startup, and that decision was made before this VM existed. `none`
+  # means this container sets up no network and derives nothing: the
+  # guest boots with no NIC, and `granule exec` still reaches it over the
+  # VM's own vsock device. Anything else would have this VM fighting the
+  # pod's own network for an address it cannot have.
+  - name: CHV_NET_MODE
+    value: "none"
+  - name: CHV_CPUS
+    value: "1"
+  - name: CHV_MEMORY_MB
+    value: "384"
+  - name: CHV_MEMORY_MAX_MB
+    value: "384"
+  - name: CHV_SHUTDOWN_TIMEOUT
+    value: "20s"
+
+volumeMounts:
+  - name: dev-kvm
+    mountPath: /dev/kvm

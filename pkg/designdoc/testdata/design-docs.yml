@@ -1,0 +1,18 @@
+# This is bwsalmon/grain's design-doc planner trigger, kept here while it
+# is turned off (docs/design-docs.md). It is not declared from here: grain
+# reads triggers only from .grain/triggers. Copying this file back to
+# .grain/triggers/design-docs.yml (without this paragraph) turns the
+# trigger on again, and the tests that fire it through the path-trigger machinery read it from here.
+#
+# Plan merged design-doc changes (docs/design-docs.md): every merge to the
+# default branch that touches a design doc files one design-planner task
+# per doc folder (or single-file doc), and a human approves it.
+#
+# The planner's task takes the merged pull request as its origin, and so
+# does everything it files: progress shows up as one comment on that pull
+# request, and what is built is read from commit trailers, not a file.
+on: merge
+paths: [docs/design/**]
+template: design-planner
+per: folder
+auto-approve: false

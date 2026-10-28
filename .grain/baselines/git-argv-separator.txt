@@ -1,0 +1,13 @@
+# Ratchet baseline for tests/security's git-argv-separator rule.
+# git invocations -- exec of the constant "git", or a package's own git
+# helper -- that pass a variable revision, ref, URL or path ahead of any
+# "--" or "--end-of-options", where git reads one starting with a dash
+# as an option (#2420).
+#
+# "<path> <count>": violations each file still has. The count may only
+# go down -- tests/security fails when it rises and when it falls without
+# this file being lowered to match. Raising a count needs a human's review.
+#
+# Empty: every site was fixed (#2420). Keep it that way -- on git 2.39
+# (the bookworm images) checkout and reset refuse --end-of-options, so use
+# switch and update-ref instead.

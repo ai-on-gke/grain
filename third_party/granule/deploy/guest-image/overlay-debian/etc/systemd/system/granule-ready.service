@@ -1,0 +1,25 @@
+[Unit]
+Description=Declare this guest ready
+Documentation=file:///usr/local/libexec/granule-declare-ready
+# Ordered directly after sysinit.target and granule-agent.service, rather
+# than after multi-user.target, so readiness is declared the moment the
+# guest reaches sysinit and the agent is answering rather than waiting
+# out the entire standard distribution service graph (logind, cron, getty,
+# etc.). A guest with a workload in it can declare after its own unit with
+# a drop-in (or drop the whole unit and call
+# /usr/local/libexec/granule-declare-ready from an ExecStartPost= of the unit
+# that knows first), or configure a custom target/condition in
+# /etc/granule/ready-target or /etc/granule/ready-condition.
+DefaultDependencies=no
+Conflicts=shutdown.target
+Requires=granule-agent.service
+After=sysinit.target granule-agent.service
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/granule-declare-ready
+
+[Install]
+WantedBy=sysinit.target

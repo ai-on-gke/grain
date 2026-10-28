@@ -1,0 +1,125 @@
+name: Install walkthrough - fresh single-tenant install
+title: Weekly walkthrough of a fresh single-tenant install, end to end
+base: main
+auto-merge: true
+capabilities:
+  - https://grain.dev/capabilities/gcp#gcp-key
+body: |
+  Walk a new user through a fresh single-tenant install of Grain from
+  `GRAIN_CHANNEL=main`, end to end, on a throwaway VM, and report what
+  regressed since last week. This runs every week
+  (`.grain/schedules/install-walkthrough-single-tenant.yml`;
+  `docs/test-plans/install-walkthroughs.md` is the plan). Task 4344 was the
+  first run, and `docs/test-runs/2026-10-16-single-tenant-install-walkthrough.md`
+  is its report. Those first runs used the Cloudtop installer; this
+  walkthrough installs with core `scripts/setup.sh` instead, and the
+  Cloudtop one is `google/docs/walkthroughs/install-walkthrough-cloudtop.yml`.
+
+  ## 1. Read last week's report first
+
+  - Find the newest `docs/test-runs/*-single-tenant-install-walkthrough.md`
+    and read its results table, its bugs and its human checklist.
+  - For each bug it filed, check whether the fix has landed on `main`
+    (`git log origin/main`, the task's pull request). Those are the steps
+    to look at hardest this week: a fixed bug that comes back is the most
+    important thing this run can find.
+
+  ## 2. Environment
+
+  - Create a throwaway VM in `grain-sandbox-dev` with the `gcp-key`
+    credential at `~/.gcp-service-account.json`: Debian 12
+    (`debian-12`), `e2-standard-4` or larger with nested virtualisation
+    enabled so `/dev/kvm` exists, a 50 GB disk, labelled
+    `purpose=grain-walkthrough` and `grain-task=<this task's id>`, and
+    named `grain-wt-<task id>`. Open tcp:4242 only to this sandbox's own
+    egress IP, with a firewall rule carrying the same name prefix.
+  - **Delete the VM and the firewall rule at the end, even on failure.**
+    Set up the deletion first (a `trap` in the driving script, or a note
+    to yourself that the last step is deletion whatever happened), and
+    confirm with `gcloud compute instances list --filter=labels.purpose=grain-walkthrough`
+    that nothing of this run is left. Also delete any
+    `purpose=grain-walkthrough` VM in the project older than 6 hours: an
+    earlier run's leftover.
+  - Install from `GRAIN_CHANNEL=main`. Use the installer from `main` as an
+    operator gets it from a clone (`git archive` of `origin/main`, copied
+    over). Record the image digest and the commit it was built from. If
+    `ghcr.io/bwsalmon/grain/grain:main` is behind `origin/main` (as it was
+    in the first run, when `release images` was failing), say so at the top
+    of the report, and say whether that changes what this run tested. A
+    second pass with a binary built from `origin/main`
+    (`GRAIN_HOST_BINARY`) is allowed then, but report it as its own
+    column, never in place of the published install.
+  - Install as a normal user with sudo, with `sudo` in front of
+    `scripts/setup.sh`, as the README says.
+  - Use the Gemini API key this sandbox carries at
+    `/home/debian/.gemini-api-key` for the model step. Never print, log or
+    commit it.
+  - Drive the browser steps with Playwright from this sandbox, against the
+    VM's external address and a proxy-style Host name
+    (`--host-resolver-rules`) so the daemon sees a remote, non-loopback
+    visitor.
+
+  ## 3. The flow
+
+  1. Run `sudo ./scripts/setup.sh` as the user, with no other answers
+     than its `--help` says an install needs. It should install and start
+     with exit 0. Check the closing text.
+  2. Check the unit's flags: no `-tenancy` (this build has none) and no
+     admin account, and the readiness report signs you in with the access
+     code.
+  3. Find the access code (`grain access-code`). Check its mode and owner,
+     and that another local user is refused and given a hint naming the
+     right account.
+  4. Loopback without the code: 401 page and JSON 401.
+  5. Remote, through a non-loopback Host: the access-code page, a wrong
+     code refused, the right code in, a reload keeps you in, the rate limit
+     after repeated wrong codes, 421 for an unknown Host, and an identity
+     header alone is not enough. Once in, the app must be usable: no
+     un-dismissable dialog.
+  6. The CLI with no extra setup in a fresh shell: `grain list`,
+     `grain access-code`, `grain team …`, `grain sync`.
+  7. Add a model connection the way the installer says to, and see its
+     models in the new-task picker.
+  8. Add a git connection and a starter local policy for that one repo.
+     Check that the policy refuses another repo and does not hold the
+     owner's own task.
+  9. File a first task in the UI and follow it: dispatch, push, CI, and the
+     merge queue where the git host has one. Say exactly how far it got and
+     what stopped it.
+  10. Rotate the access code: the open session is signed out, the old code
+      is refused, the new one works, the CLI still works.
+  11. Re-run the installer (plain, with a new key, after a rotation). Check
+      address, allowed hosts, access code, `-policy`, models, git
+      connections and tasks all survive.
+  12. Uninstall as documented, and list what is left behind (`docker images`,
+      `/var/lib/grain`, units, users). Never run `--purge` with your own
+      account as `GRAIN_USER`.
+
+  Explore beyond these steps where something looks wrong, and keep the
+  human checklist from last week's report up to date for what only a real
+  host can check.
+
+  ## 4. Bugs
+
+  - **File a bug task for each failure**, one per bug, with the exact
+    reproduction, what you saw and what you expected. Before filing, check
+    whether last week's run or anyone else already filed it, and add to
+    that task instead of filing it again. Put regressions and data loss at
+    the front of the queue.
+  - A fix that is small, safe and scoped (a file mode, a missing flag) may
+    land in this task with a regression test; say so in the report.
+
+  ## 5. Output
+
+  - Write `docs/test-runs/YYYY-MM-DD-single-tenant-install-walkthrough.md`:
+    the commit and image tested, the environment, the steps, the results
+    table, the bugs (with task numbers), the stubs and anything not run.
+    Commit only small screenshots that show a bug.
+  - **Call out regressions first**: open the report, and the closing
+    comment, with a "Since last week" section comparing every step's result
+    with the previous report's: what newly fails, what was fixed, what
+    still fails.
+  - **Close with a pass/fail table** in `comment_on_issue`: one row per
+    step, with PASS, FAIL, PARTIAL or NOT RUN, last week's result beside it,
+    and the bug task for each failure. Then confirm that the VM and the
+    firewall rule are deleted.

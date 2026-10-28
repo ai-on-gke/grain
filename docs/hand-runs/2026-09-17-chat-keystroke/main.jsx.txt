@@ -1,0 +1,105 @@
+import { StrictMode, useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+import TaskChat from "../src/components/TaskChat.jsx";
+import { TimeZoneProvider } from "../src/TimeZoneContext.jsx";
+import "../src/style.css";
+
+// One agent answer, at the length an agent actually writes one: headings,
+// a fenced diff, a table, backticked paths, a list. ~2.2 KB, which is
+// about the median of the relayed answers on this deployment's own
+// interactive tasks.
+const ANSWER = `## What I found
+
+\`pkg/dispatch/dispatch.go\` drains \`task_ready\` until \`max_workers\`,
+and the claim is a single \`UPDATE ... WHERE state = 'queued'\` so two
+daemons cannot take the same row. The part that surprised me is the
+*ordering*: the query has no \`ORDER BY\` at all, so SQLite hands back
+whatever the index walk finds first.
+
+### The three places it shows up
+
+1. A task filed while the queue is full waits behind tasks filed after
+   it, which is what the operator reported as "it skipped mine".
+2. \`priority\` is read *after* the claim, in \`pkg/orchestrator\`, so it
+   reorders nothing.
+3. The retry path re-queues at the tail, which is right, but it is right
+   by accident rather than by anything written down.
+
+### The change
+
+\`\`\`diff
+-	rows, err := tx.Query(\`SELECT id FROM task WHERE state = 'queued' LIMIT ?\`, n)
++	rows, err := tx.Query(\`SELECT id FROM task WHERE state = 'queued'
++		ORDER BY priority DESC, created_at ASC LIMIT ?\`, n)
+\`\`\`
+
+| Where | Before | After |
+| --- | --- | --- |
+| \`dispatch.claim\` | index order | priority, then age |
+| \`orchestrator.run\` | re-sorts | unchanged |
+
+There is an index for it already (\`task_state_created\`), so this costs
+nothing at the sizes here -- 929 tasks, 11 of them live.
+
+> One open question: a task deferred and then re-queued keeps its
+> original \`created_at\`, so it goes back to the *front*. That may be
+> what you want, but say so either way and I will pin it in a test.`;
+
+const task = (n) => ({
+  id: "42",
+  state: "running",
+  interactive: true,
+  author: "brandon",
+  authorKind: "human",
+  createdAt: "2026-09-17T09:00:00Z",
+  activity: "reading pkg/dispatch",
+  description:
+    "walk me through pkg/dispatch: who claims a queued task, in what order, and where priority is read",
+  comments: Array.from({ length: n }, (_, i) => ({
+    id: i + 1,
+    author: i % 2 === 0 ? "grain" : "brandon",
+    authorKind: i % 2 === 0 ? "automation" : "human",
+    onBehalfOf: i % 2 === 0 ? "run-7" : "",
+    // Every other message is the human's own, which is short, the way a
+    // real conversation alternates.
+    body: i % 2 === 0 ? `### Turn ${i}\n\n${ANSWER}` : `and turn ${i}? go on`,
+    createdAt: new Date(Date.UTC(2026, 8, 17, 9, 1 + i)).toISOString(),
+    attachments: [],
+  })),
+  attempts: [],
+  attachments: [],
+});
+
+const n = Number(new URLSearchParams(location.search).get("n") ?? 40);
+const strict = new URLSearchParams(location.search).get("strict") === "1";
+
+// Harness stands in for App: it owns the task the way App's `detail`
+// state does, and `window.__bench.poll()` is one poll landing on a task
+// whose live activity moved -- a fresh object, so App's own keepIfSame
+// could not have bailed out of it. That is the second cost the driver
+// measures, and the one this component exists for; the keystroke cost is
+// TaskChat's own and needs nothing from here.
+function Harness() {
+  const [t, setT] = useState(() => task(n));
+  useEffect(() => {
+    window.__bench = {
+      messages: n + 1,
+      poll: (i) => setT({ ...task(n), activity: `reading pkg/dispatch ${i}` }),
+    };
+  }, []);
+  return (
+    <div style={{ height: "90vh", display: "flex", flexDirection: "column" }}>
+      <TaskChat t={t} act={(fn) => fn()} />
+    </div>
+  );
+}
+
+const app = (
+  <TimeZoneProvider zone="UTC">
+    <Harness />
+  </TimeZoneProvider>
+);
+
+createRoot(document.getElementById("root")).render(
+  strict ? <StrictMode>{app}</StrictMode> : app,
+);

@@ -1,0 +1,10 @@
+name: Release qualification
+templates:
+  - qualification-mergequeue
+  - qualification-ci-diagnostics
+  - qualification-base-triage
+  - qualification-system-smoke
+mode: count
+count: 1
+require-approval: false
+auto-merge: true

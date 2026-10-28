@@ -1,0 +1,73 @@
+package daemon
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"github.com/bwsalmon/grain/pkg/agent/claude"
+	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/bwsalmon/grain/pkg/runhost"
+)
+
+// TestNewRunHostGivesDockerRunHostsTheCredentialDirectoryAsHome: a docker
+// run host runs as the daemon's uid, which has no passwd entry in the
+// image, so its CLI got HOME=/ and could not write ~/.claude
+// (docs/test-runs/2026-10-14-run-hosts-daemon.md). The credential
+// directory is where the design puts ~/.claude, and is mounted
+// read-write, so it is HOME -- as it already was for run pods.
+func TestNewRunHostGivesDockerRunHostsTheCredentialDirectoryAsHome(t *testing.T) {
+	dataDir := t.TempDir()
+	store, db, err := OpenStore("sqlite", "", dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	credDir := filepath.Join(t.TempDir(), "agent-home")
+	h, err := NewRunHost(context.Background(), Config{
+		DataDir: dataDir, RunHostImage: "grain:test", RunHostCredentialDir: credDir,
+	}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, ok := h.Driver.(runhost.Docker)
+	if !ok {
+		t.Fatalf("driver = %T, want runhost.Docker", h.Driver)
+	}
+	if d.Env["HOME"] != credDir {
+		t.Fatalf("docker run host HOME = %q, want the credential directory %q", d.Env["HOME"], credDir)
+	}
+	mounted := false
+	for _, m := range h.Mounts {
+		mounted = mounted || (m.Path == credDir && !m.ReadOnly)
+	}
+	if !mounted {
+		t.Fatalf("HOME %s is not mounted read-write into the run host: %+v", credDir, h.Mounts)
+	}
+}
+
+// TestClaudeUnderARunHostStartsTheRunHostsOwnMCPServer: the --mcp-config
+// a claude run is handed is read, and its mcpserver started, inside the
+// run host. The hand run (docs/test-runs/2026-10-15-upgrade-adopts-live-claude-run.md)
+// had the daemon installed somewhere other than the image's
+// /usr/local/bin/grain, the config named the daemon's own path, and every
+// run started with no tools and failed "the agent made no tool calls".
+func TestClaudeUnderARunHostStartsTheRunHostsOwnMCPServer(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := Config{
+		DataDir: dataDir, ClaudePath: "/opt/elsewhere/claude",
+		ClaudeAuthMode: model.AntigravityAuthAmbient,
+		RunHost:        &runhost.Host{Grain: runHostGrain},
+	}
+	fw, err := BuildClaudeFramework(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok := fw.(*claude.Framework)
+	if !ok {
+		t.Fatalf("framework = %T, want *claude.Framework", fw)
+	}
+	if got := c.GrainBinaryPath(); got != runHostGrain {
+		t.Fatalf("a run host's --mcp-config starts %q, want the run host image's own %q", got, runHostGrain)
+	}
+}

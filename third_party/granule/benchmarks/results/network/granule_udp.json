@@ -1,0 +1,6 @@
+{
+  "workload": "udp_1gbps_target",
+  "environment": "granule_spliced_tap",
+  "throughput_mbps": 972.0,
+  "loss_percent": 0.08
+}

@@ -1,0 +1,8 @@
+FROM alpine:latest AS builder
+FROM alpine:latest AS runner
+granule-wrap@server_app.service
+dev.granule.wrapped-image="runner"
+dev.granule.granulefile.kind="wrap"
+dev.granule.granulefile.stage="server_vm"
+ENV CHV_MEMORY_MB="1024"
+ENV CHV_CPUS="2"

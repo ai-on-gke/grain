@@ -1,0 +1,37 @@
+# grain's schedules, in the format a repository writes one in
+# (.grain/schedules/<name>.yml, docs/declarations.md), with the keys a
+# repository is not allowed to write as well. Edit it in a pull request:
+# a merged change is live on the next tick.
+
+# `id` is the identity and is grain's to allocate -- it is what history
+# and the other settings refer this schedule by, so changing one is a
+# delete and a create rather than a rename. Everything else is yours.
+schedules:
+  - id: golden-sch
+    title: Weekly sweep
+    body: Look again.
+    template: null
+    suite: null
+    weekly:
+      day: monday
+      at: "09:00"
+    overlap: allow
+    timezone: ""
+    enabled: true
+    base: null
+    review: ""
+    auto-approve-proposals: false
+    team: default
+    model: ""
+    auto-merge: false
+    network: ""
+    nothing-needed: ""
+    custom-fields:
+      customer: acme
+    target: owner/payments-api
+    writes:
+      - repo: owner/docs
+        base: main
+    next-run-at: "2026-08-27T12:00:00Z"
+    last-run-at: null
+    created-at: "2026-08-27T12:00:00Z"

@@ -1,0 +1,4 @@
+debugfs -R 'rdump / /rootfs' /disk.img
+FROM scratch AS extracted_container
+COPY --from=granule_unpack_0 /rootfs/ /
+ENV CONTAINER_EXTRACTED="true"

@@ -1,0 +1,2 @@
+COPY --from=source_vm /etc/os-release /extracted-guest-os-release
+ENV CONTAINER_TARGET="true"

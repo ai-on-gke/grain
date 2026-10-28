@@ -1,0 +1,88 @@
+name: GitHub runner images
+
+on:
+  schedule:
+    # GitHub refreshes the hosted images weekly. Build after that cadence
+    # rather than putting three multi-hour, 75 GB Packer jobs on every
+    # Kontur commit.
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Image to build
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - ubuntu-26.04
+          - ubuntu-slim
+      runner_images_ref:
+        description: actions/runner-images commit, tag, or branch
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: github-runner-images-${{ github.event_name }}-${{ inputs.image || 'all' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      runner-images-sha: ${{ steps.revision.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: actions/runner-images
+          ref: ${{ inputs.runner_images_ref || 'main' }}
+          path: runner-images
+      - id: revision
+        run: echo "sha=$(git -C runner-images rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    # These builds need roughly 250 GB of scratch space. The label keeps
+    # them off GitHub's small hosted runners and makes the requirement an
+    # explicit part of the image builder contract.
+    runs-on: [self-hosted, linux, x64, kontur-image-builder]
+    timeout-minutes: 720
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.image != 'all' && format('[\"{0}\"]', inputs.image) || '[\"ubuntu-22.04\",\"ubuntu-24.04\",\"ubuntu-26.04\",\"ubuntu-slim\"]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        if: matrix.image != 'ubuntu-slim'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish ${{ matrix.image }}
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RUNNER_IMAGE_RESOURCE_GROUP }}
+          AZURE_LOCATION: ${{ vars.AZURE_RUNNER_IMAGE_LOCATION }}
+          RUNNER_IMAGES_REF: ${{ needs.resolve.outputs.runner-images-sha }}
+          OUTPUT_IMAGE: ghcr.io/${{ github.repository }}:github-${{ matrix.image }}
+          PUSH: "true"
+        run: deploy/github-runner-images/build.sh "${{ matrix.image }}"
+

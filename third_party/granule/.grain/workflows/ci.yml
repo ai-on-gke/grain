@@ -1,0 +1,662 @@
+name: CI
+
+# push and pull_request cover different things and must not overlap:
+# pull_request tests the *proposed merge* (GitHub builds head into base
+# and runs against that), catching a change that only breaks once combined
+# with what has landed since; push on main tests what actually landed,
+# since two PRs that each pass alone can still conflict once both are in.
+# Firing push on every branch instead would run this whole workflow twice
+# for every push to a branch with a PR open.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# A branch pushed several times in a minute otherwise leaves earlier runs
+# burning runners on commits nobody is waiting for.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # "needs" is usable here again, with one restriction worth knowing before
+  # you write one.
+  #
+  # It was deleted on 18 September 2026 ("Stop declaring job dependencies
+  # that turn grain's CI off entirely", aea768e) because grain CI -- which
+  # borrows this file, GitHub's own runs of it being red before their first
+  # step on an Actions budget -- scheduled no jobs at all for a workflow
+  # that declared one and then reported the empty run as a success. grain
+  # now orders the jobs, skips a job whose dependency failed, and hands
+  # each job a copy of this file with its own "needs" commented out, so
+  # `act` runs that one job rather than its whole dependency chain.
+  #
+  # What grain still cannot carry across a sandbox boundary it refuses
+  # loudly, naming the job: reading "${{ needs.<job>.outputs.… }}", and
+  # downloading an artifact that another job uploaded. So a dependency in
+  # this file may sequence jobs and nothing more -- a job that wants a
+  # value or a file from the job before it has to produce it itself.
+  #
+  # About bringing the "image" job back (task 411, 20 September 2026).
+  # 1be56de cut it because three guest variants cost 20-40 minutes of a
+  # run, and the job's own comments explained that a layer cache could
+  # not help: grain CI runs this workflow through act in a sandbox it
+  # destroys afterwards, so act's own cache server died with the run and
+  # a type=gha export was pure waste. That is why the job's cache_to was
+  # emptied under ACT/GRAIN_CI while cache_from was kept.
+  #
+  # grain has since grown an Actions cache that lives on the controller,
+  # one per repository, so that premise may no longer hold -- and what it
+  # is worth here was measured rather than assumed. Three builds of this
+  # Dockerfile on one sandbox (4 vCPU, 7GB, docker-container driver), the
+  # "debian" variant, mode=max, using type=local as a stand-in for a
+  # cache backend that survives the run:
+  #
+  #   cold, --target guest-rootfs-image, exporting       7m24s
+  #     (of which 62s was the export; 561 MiB, 28 blobs, largest 119 MiB)
+  #   full image, importing that, exporting              3m26s
+  #     (961 MiB, 52 blobs, largest 119 MiB)
+  #   full image on a fresh builder, importing only        25s
+  #     (46 of 46 steps CACHED)
+  #
+  # So the arithmetic 1be56de did is the arithmetic of a cache that never
+  # survives. A run whose predecessor left a warm cache rebuilds nothing:
+  # debootstrap, the kernel fetch and the Go build all come back as
+  # CACHED, and a variant costs seconds plus whatever the import weighs
+  # over the network. No blob comes close to grain's 4 GiB per-entry
+  # limit -- the largest is a 119 MiB layer of the golang base -- so the
+  # entries should be storable as they stand.
+  #
+  # Two things that measurement does not settle, and both have to be
+  # settled before the job is written back:
+  #
+  #   - Whether the controller's cache actually reaches a job in *this*
+  #     repository. type=local on one host is not type=gha over grain's
+  #     cache API; if ACTIONS_CACHE_URL is unset in the CI sandbox, act
+  #     still runs a server of its own inside it and every export is
+  #     still waste. Check the variable in a real run before trusting any
+  #     of the numbers above.
+  #   - Whether the first, cold run fits. It does not have the cache to
+  #     import yet, and grain's default job timeout is 36 minutes while
+  #     the old job declared timeout-minutes: 45 -- a local runner
+  #     applies its own, which is how the job was being cancelled at a
+  #     bound nobody chose. A cold three-variant run has to finish inside
+  #     grain's bound, or the cache it would have written never gets
+  #     written and no later run is ever warm.
+  #
+  # The job itself is intact in 1be56de^, under this file's older path:
+  # `git show 1be56de^:.github/workflows/ci.yml`. Buildx setup, "image
+  # tags", three docker/build-push-action@v6 legs and the
+  # GUEST_READY_FILE checks. Restoring it means dropping the
+  # ACT/GRAIN_CI conditional so
+  # that cache-to is type=gha,mode=max,scope=<variant> unconditionally,
+  # and renaming kontur to granule throughout -- that history predates
+  # the rename. Note what comes back with it: images published from main,
+  # which deploy/publish-images.sh is currently the only route for.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: download dependencies
+        run: |
+          for i in 1 2 3 4 5; do
+            go mod download && break || sleep 2
+          done
+
+      # Every base image is pinned by digest (see deploy/base-images.sh):
+      # a FROM by tag alone lets whoever moves that tag choose what
+      # granule is built from. Offline and instant; the weekly
+      # base-images.yml is what notices a pin going stale.
+      - name: base images pinned by digest
+        run: deploy/base-images.sh lint
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l ./cmd ./pkg)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test ./...
+
+      # granule runs guests on arm64 too, but every runner here is
+      # x86_64, so nothing above would notice the tree drifting
+      # amd64-only: a test expecting ttyS0 where arm64's default is
+      # ttyAMA0 failed `go test ./...` on arm64 hosts unnoticed. Vetting
+      # for arm64 type-checks every package and test there; the packages
+      # whose behaviour depends on the architecture (the guest console,
+      # the default cmdline, the kernel package named in errors) then
+      # run under qemu-user, which costs about half a minute. Installing
+      # qemu-user registers it with binfmt_misc, which pkg/cli's tests
+      # rely on to run the arm64 fakedocker they build.
+      - name: vet for arm64
+        run: GOARCH=arm64 go vet ./...
+
+      - name: arm64 tests under qemu-user
+        run: |
+          set -euo pipefail
+          if ! command -v qemu-aarch64 >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq qemu-user
+          fi
+          GOARCH=arm64 go test -exec qemu-aarch64 ./pkg/config/ ./pkg/vmspec/ ./pkg/guestpack/ ./pkg/cli/
+
+      - name: check shell scripts syntax
+        run: find deploy benchmarks demo -name "*.sh" -exec bash -n {} +
+
+      # demo/demo.sh is only ever run by a person, in front of an
+      # audience, against a machine with KVM and a cluster -- so nothing
+      # else here would notice a chapter that had lost its quoting, an
+      # asset file that had been renamed out from under it, or a step
+      # whose command string no longer expands. --dry-run prints every
+      # line of every chapter and runs none of them, which needs no
+      # docker, no KVM and no credential, and costs a second.
+      - name: demo script dry run
+        run: |
+          set -euo pipefail
+          out=$(demo/demo.sh --dry-run --no-color)
+          echo "$out"
+          # Each chapter has to still be there and still have steps in
+          # it: a chapter that silently produced none would "pass" a
+          # rehearsal that only checked the exit status.
+          for chapter in provision publish local gke pod build rebase; do
+            grep -q "^\[$chapter 01\]" <<<"$out" || {
+              echo "::error::the demo's \"$chapter\" chapter ran no steps" >&2
+              exit 1
+            }
+          done
+
+      # `bash -n` above covers publish-images.sh's syntax and nothing
+      # else about it: it is only ever run by a person, so nothing on a
+      # pull request would otherwise notice its argument handling or the
+      # tags it constructs breaking. --dry-run builds nothing and pushes
+      # nothing, so this costs a second and still fails if the script
+      # stops publishing one of the tags a guest consumer pulls.
+      - name: publish script dry run
+        run: |
+          set -euo pipefail
+          out=$(deploy/publish-images.sh --dry-run --no-login all)
+          echo "$out"
+          for variant in debian alpine debian12; do
+            grep -q "ghcr.io/gke-labs/granule/$variant:latest\b" <<<"$out" || {
+              echo "::error::the publish script no longer publishes $variant:latest" >&2
+              exit 1
+            }
+          done
+          grep -q "ghcr.io/gke-labs/granule/github-ubuntu-slim:latest\b" <<<"$out" || {
+            echo "::error::the publish script no longer publishes github-ubuntu-slim:latest" >&2
+            exit 1
+          }
+          # And the rootfs image beside each guest, under the :latest tag in
+          # the <variant>.rootfs package: that pairing is the whole
+          # convention, so a script that quietly stopped publishing one
+          # half of it would leave `guest build`'s default -from naming
+          # something nobody pushes any more.
+          for variant in debian alpine debian12; do
+            grep -q "ghcr.io/gke-labs/granule/$variant.rootfs:latest\b" <<<"$out" || {
+              echo "::error::the publish script no longer publishes the guest rootfs $variant.rootfs:latest" >&2
+              exit 1
+            }
+          done
+          # The rootfs's immutable tag is its content key
+          # (deploy/guest-rootfs-key.sh), not this commit: the rootfs
+          # stages build an operating system and nothing of granule's, so
+          # a per-commit tag would mint an "immutable" rootfs a day for
+          # an OS nobody changed. What the key covers, and what moves it,
+          # is pkg/guestdockerfile's TestRootfsKey* -- asserted here is
+          # only the part a reader of this output sees: keyed tags for
+          # the rootfs, the commit for the packed guest, and no crossing
+          # of the two.
+          for variant in debian alpine debian12; do
+            grep -qE "ghcr.io/gke-labs/granule/$variant.rootfs:os-[0-9a-f]{12}\b" <<<"$out" || {
+              echo "::error::the publish script no longer publishes the $variant guest rootfs under a content-keyed tag" >&2
+              exit 1
+            }
+            grep -q "ghcr.io/gke-labs/granule/$variant:$(git rev-parse HEAD)" <<<"$out" || {
+              echo "::error::the publish script no longer publishes the packed $variant guest under its per-commit tag" >&2
+              exit 1
+            }
+          done
+          # The references themselves, not the lines they sit on: the
+          # rootfs build does name the commit, in a label, which is where
+          # "which tree built this" belongs once the tag no longer says.
+          if grep -o "ghcr.io/gke-labs/granule/[^ ]*\.rootfs:[^ ]*" <<<"$out" | grep -q "$(git rev-parse HEAD)"; then
+            echo "::error::a guest rootfs is being published under a tag carrying this commit, which is what the content key replaced" >&2
+            exit 1
+          fi
+
+      # pkg/netshim's integration tests create real interfaces and
+      # tc filters, so they need CAP_NET_ADMIN and /dev/net/tun (the
+      # netlink library opens that device to create a tap). The netlink
+      # tap path needs the module present; it is normally already
+      # loaded, and if it genuinely is not, the run below fails naming
+      # the device rather than failing obscurely inside link creation.
+      - name: load tun module
+        run: sudo modprobe tun || true
+
+      # Those tests skip when they cannot reach the kernel, and a package
+      # whose every such test skipped still reports "ok" -- so the "test"
+      # step above proves nothing about them. Re-run them as root with
+      # GRANULE_NETNS_TESTS=required, which turns that silence into a
+      # failure, so a runner that cannot exercise the kernel says so
+      # instead of passing quietly.
+      #
+      # -count=1 is load-bearing: without it the unprivileged run's
+      # cached "ok" for this package would be reused and nothing would
+      # actually execute. sudo resets PATH, hence passing the runner's
+      # own through so setup-go's toolchain is still found.
+      #
+      # Nothing here puts the tests in a namespace of their own: the test
+      # binary does that itself, re-executing under CLONE_NEWNET before
+      # the first test runs (see pkg/netshim/netns_test.go), so the
+      # interfaces below never appear in the runner's own namespace and
+      # nothing else on the runner -- systemd-networkd, udev, docker --
+      # is watching for them.
+      - name: test (kernel networking, as root)
+        run: sudo env "PATH=$PATH" GRANULE_NETNS_TESTS=required go test -count=1 ./pkg/netshim/...
+
+  # Everything else here builds from this tree, which is the one thing a
+  # consumer never does: they run `granule guest build` against
+  # ghcr.io/gke-labs/granule-guest-rootfs, and that is what
+  # guestdockerfile.DefaultBase points a bare build at. The ways that
+  # breaks are ways no build from source can show -- a package left
+  # private after its first push, a tag nobody pushed, a rootfs with no
+  # init system `guest pack` can detect a variant from, a default naming
+  # a reference nobody can resolve -- and every one of them surfaces in
+  # somebody else's CI before it surfaces here. This job is that
+  # consumer's walk, done here instead.
+  #
+  # Three things about it are deliberate, and none is what a casual
+  # reading would assume.
+  #
+  # **It does not test this commit.** The rootfs it pulls is whatever was
+  # published last, by hand, from whatever tree the person running
+  # deploy/publish-images.sh had; on a pull request nothing has been
+  # pushed for this commit at all. A green tick says "what is on GHCR
+  # right now still builds", which is the statement a consumer depends on
+  # and the one nothing else makes; it says nothing whatever about what
+  # this commit would publish. So do not read a failure here as "this
+  # change broke the publish" -- read it as "the published rootfs is
+  # broken now", which is usually nobody's commit at all. What this
+  # commit *would* publish is the "test" job's publish-images.sh
+  # --dry-run check of the tags, and a `deploy/publish-images.sh
+  # --no-push` by hand.
+  #
+  # **It does not boot.** Booting the result is the other half of a
+  # consumer's walk and it is not here, because the job that booted
+  # anything went in "Cut CI down to the Go test job" (1be56de) on the
+  # grounds that 20-40 minutes is more than a change should pay to land:
+  # a boot needs a granule image, no published one is public to pull, and
+  # building one here would rebuild exactly the lane that was removed.
+  # What is left still covers every failure mode above, because all of
+  # them are properties of the published rootfs rather than of the boot;
+  # what is given up is the mixture -- an old rootfs under today's
+  # agents -- which stays a by-hand check with the rest of the boot
+  # sequence (see README's "Development").
+  #
+  # **It pulls, so a registry it cannot reach is a verdict it has to
+  # make.** REQUIRE_PUBLISHED_ROOTFS below is that decision.
+  published-rootfs:
+    name: published guest rootfs
+    runs-on: ubuntu-latest
+    # Behind "test", which is what task 218 asked for and aea768e had to
+    # take out: grain runs both jobs on one host, and there is nothing to
+    # learn from pulling and building images for a commit whose gofmt,
+    # vet or Go suite is already red. It is a pure ordering -- nothing
+    # below reads an output or an artifact from "test", which is the part
+    # grain refuses -- so on GitHub, with a runner per job, this only
+    # delays the second one.
+    needs: [test]
+    timeout-minutes: 20
+    env:
+      ROOTFS_BASE: ghcr.io/gke-labs/granule
+      # Whether a rootfs that cannot be pulled fails this job.
+      #
+      # "false" is a statement about today rather than a policy:
+      # ghcr.io/gke-labs/granule/<variant>.rootfs is not published yet. An
+      # anonymous pull of any of its tags answers "denied", which is what
+      # a package that is private and a package that does not exist both
+      # say. Publishing it is a manual step (deploy/publish-images.sh
+      # with a credential -- CI publishes nothing) and making the package
+      # public is a second one, in GHCR's own settings. Flip this to
+      # "true" in the change that does them, and from then on a package
+      # that goes private again, or a tag that stops being pushed, turns
+      # this job red instead of printing a warning nobody reads, which is
+      # the whole point of the exercise.
+      #
+      # Note what it does not gate: once the pull succeeds, every
+      # assertion below is a hard failure whatever this says. So the
+      # check goes live the moment the package does, whether or not
+      # anybody remembered to come back here; this only decides what an
+      # *unpullable* rootfs means.
+      #
+      # Hard failure is the right setting once there is something to
+      # pull, even though it means a GHCR outage can redden a job that
+      # had nothing wrong with it. A client cannot honestly tell "the
+      # registry is down" from "our package went private": both arrive as
+      # an HTTP error from the same request, and a step that guesses is a
+      # step that can talk itself out of the one failure it exists to
+      # catch. A rare red run somebody re-runs is cheaper than a publish
+      # that is quietly broken for a week. A runner with no network at
+      # all -- this workflow is run locally through `act` as well as on
+      # GitHub -- is the case for overriding it there rather than for
+      # softening it here.
+      REQUIRE_PUBLISHED_ROOTFS: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Everything below that a reader is meant to see goes through
+      # "$RECORD", which both prints it and keeps it, so that the last
+      # step of the job can print the lot again.
+      #
+      # The reason is the log rather than the workflow: a runner caps
+      # what it keeps for a job and drops the middle, and the middle is
+      # exactly where these steps' own "::error::" and echo lines fall --
+      # under `granule guest build`'s docker output and the apt run
+      # inside the guest, which between them print more than the cap. A
+      # step's verdict is then at the mercy of how much the build above
+      # it happened to say. A digest printed as the very last step is
+      # not: the head and tail of a log are what a cap keeps.
+      #
+      # This is a file rather than $GITHUB_STEP_SUMMARY because the file
+      # is the part that works everywhere -- this workflow is run through
+      # `act` as well as on GitHub, and a summary is only worth as much
+      # as the runner's willingness to render one. The last step writes
+      # to both.
+      #
+      # It goes after the checkout, not before: the fallback below is the
+      # workspace, and a checkout is entitled to empty that.
+      - name: start this job's assertion log
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP:-$PWD}"
+          : > "$dir/assertions.txt"
+          cat > "$dir/record" <<'EOF'
+          #!/bin/sh
+          # record LINE: print LINE, as the step would have anyway, and
+          # append it to the digest printed at the end of the job.
+          #
+          # An "::error::" or "::warning::" marker stays on stdout, where
+          # the runner turns it into an annotation, and is reduced to a
+          # word in the file: the file is printed again later, and
+          # re-emitting the marker there would raise a second annotation
+          # for a failure that happened once.
+          set -eu
+          line="$*"
+          printf '%s\n' "$line"
+          case "$line" in
+            ::error::*)   printf 'FAIL %s\n' "${line#::error::}" ;;
+            ::warning::*) printf 'WARN %s\n' "${line#::warning::}" ;;
+            *)            printf 'ok   %s\n' "$line" ;;
+          esac >> "$ASSERTIONS"
+          EOF
+          chmod +x "$dir/record"
+          {
+            echo "ASSERTIONS=$dir/assertions.txt"
+            echo "RECORD=$dir/record"
+          } >> "$GITHUB_ENV"
+
+      - name: download dependencies
+        run: |
+          for i in 1 2 3 4 5; do
+            go mod download && break || sleep 2
+          done
+
+      # This tree's granule against a rootfs published whenever it was
+      # published, which is the pairing a consumer has: they install the
+      # current tooling and build on a base somebody pushed months ago.
+      - name: build granule
+        run: go build -o granule ./cmd/granule
+
+      - name: pull the published guest rootfs
+        id: rootfs
+        run: |
+          set -uo pipefail
+          # Every moving tag the publish is supposed to push: debian12.rootfs:latest is
+          # what the steps below build on, debian.rootfs:latest is what a bare build
+          # resolves by itself (pkg/guestdockerfile.DefaultBase), and
+          # alpine.rootfs:latest is the third of the set -- a tag that silently stopped
+          # being pushed is one of the failures this job is for, so it is
+          # pulled even though nothing is built on it.
+          available=true
+          for variant in debian alpine debian12; do
+            docker pull -q "$ROOTFS_BASE/$variant.rootfs:latest" || available=false
+          done
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          if [ "$available" = true ]; then
+            docker images "$ROOTFS_BASE/*.rootfs"
+            "$RECORD" "every moving tag of $ROOTFS_BASE/<variant>.rootfs pulled: debian, alpine, debian12"
+            exit 0
+          fi
+          msg="the published guest rootfs at $ROOTFS_BASE/<variant>.rootfs could not be pulled: the package is private or absent, a tag was never pushed, or the registry is unreachable from this runner. This is what a consumer's first \`granule guest build\` hits."
+          if [ "$REQUIRE_PUBLISHED_ROOTFS" = true ]; then
+            "$RECORD" "::error::$msg"
+            exit 1
+          fi
+          "$RECORD" "::warning::$msg Reported rather than failed, and the checks below skipped, while REQUIRE_PUBLISHED_ROOTFS is false -- see this job's env in .grain/workflows/ci.yml."
+
+      # What `granule guest pack` asks a rootfs before it packs it: not
+      # which distribution it is, but which init system it runs, because
+      # that is which overlay goes on. A rootfs it cannot answer for packs
+      # nowhere, and nothing else would notice -- the rootfs still builds,
+      # still pulls, and fails only at whoever boots it.
+      #
+      # The two tests below are deploy/guest-image/pack-guest's own, in
+      # its own order, and have to stay in step with it; the packing is
+      # not run here because it needs a granule image (see this job's
+      # header). The answer is also asserted against what the tag claims,
+      # which is the other thing nothing else checks: a :debian12 pushed
+      # from the alpine stage would build, pack and boot, and be wrong
+      # only in that the tag lied about it.
+      - name: the published rootfs runs an init system the packing knows
+        if: steps.rootfs.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          # A rootfs with no /bin/sh to ask fails here with docker's own
+          # error rather than with a verdict, which is the right answer:
+          # a guest rootfs a consumer writes FROM is one they run
+          # RUN lines on, so it has a shell by definition.
+          detect() {
+            docker run --rm --entrypoint /bin/sh "$1" -c '
+              if [ -e /lib/systemd/systemd ] || [ -e /usr/lib/systemd/systemd ]; then
+                echo debian
+              elif [ -e /sbin/openrc ] || [ -d /etc/runlevels ]; then
+                echo alpine
+              else
+                echo none
+              fi'
+          }
+          for pair in debian:debian alpine:alpine debian12:debian; do
+            variant=${pair%:*}
+            want=${pair#*:}
+            image="$ROOTFS_BASE/$variant.rootfs:latest"
+            got=$(detect "$image")
+            if [ "$got" != "$want" ]; then
+              "$RECORD" "::error::$image runs '$got', want '$want': a rootfs the packing cannot place, or a tag published from the wrong stage"
+              exit 1
+            fi
+            "$RECORD" "$image runs the $got variant, as its package says"
+          done
+
+      # The published rootfs is named after its recipe -- the Dockerfile's
+      # guest rootfs stages and the build args they read -- and not after
+      # the commit that published it (deploy/guest-rootfs-key.sh). This is
+      # the one place the two ends of that can be compared: what this tree
+      # says the rootfs for each variant should be called, against what is
+      # actually on GHCR under the moving tag a consumer pulls.
+      #
+      # The two outcomes are deliberately not both failures.
+      #
+      # A keyed tag that cannot be pulled means the rootfs recipe in this
+      # tree is not the published one -- somebody changed the OS and
+      # nobody has published it yet. That is a warning and not an error,
+      # because publishing is a manual step with a credential this
+      # workflow does not have: failing here would make a change to the
+      # rootfs stages unmergeable until it had been published, while
+      # publishing it is a thing that happens after it is merged. A gate
+      # that can only be cleared from outside the pull request it is
+      # gating is a gate that blocks its own fix.
+      #
+      # A keyed tag that pulls but is a *different image* from the moving
+      # tag is an error, and a plain one: the publish pushes those two
+      # names together or not at all, so they cannot disagree unless
+      # something pushed one of them by hand -- and whichever a consumer
+      # then pulled, it was not the other.
+      - name: the moving rootfs tags agree with this tree's content keys
+        if: steps.rootfs.outputs.available == 'true'
+        run: |
+          set -uo pipefail
+          tags=$(deploy/publish-images.sh --print-rootfs-tags guests) || {
+            "$RECORD" "::error::deploy/publish-images.sh cannot say what it would publish, so nothing below could be checked against it"
+            exit 1
+          }
+          echo "$tags"
+          rc=0
+          # A here-string rather than a pipe: a `while` on the right of a
+          # pipe is a subshell, and rc set inside one goes nowhere.
+          while read -r variant moving keyed; do
+            if ! docker pull -q "$keyed" >/dev/null 2>&1; then
+              "$RECORD" "::warning::$keyed is not published, so the $variant rootfs recipe in this tree is not the one behind $moving. Nothing is broken for a consumer; the published rootfs is simply older than this commit's recipe, and republishing it is deploy/publish-images.sh's job and a person's decision."
+              continue
+            fi
+            if [ "$(docker image inspect -f '{{.Id}}' "$moving")" != "$(docker image inspect -f '{{.Id}}' "$keyed")" ]; then
+              "$RECORD" "::error::$moving and $keyed are different images: the moving tag a consumer pulls is not the rootfs its own content key names"
+              rc=1
+              continue
+            fi
+            "$RECORD" "$moving is exactly $keyed, the rootfs this tree's recipe names"
+          done <<<"$tags"
+          exit $rc
+
+      # The end-to-end a consumer actually walks: their own Dockerfile,
+      # granule's published base under it, and a rootfs image at the end of
+      # it that they publish or pack themselves.
+      #
+      # -rootfs-only stops where this job's reach stops: what follows it
+      # in a full `guest build` is the packing, which needs a local granule
+      # image to lay the agents from and a boot to be worth asserting.
+      - name: build a guest on the published rootfs
+        if: steps.rootfs.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p consumer
+          # A consumer's file: no FROM (granule supplies the base and
+          # refuses a file that names one), and nothing in it that needs a
+          # running init -- that is the price of the Dockerfile route.
+          #
+          # The second line records which distribution the base turned out
+          # to be, so the assertion after the build is about the base and
+          # not only about the build having run at all.
+          cat > consumer/Dockerfile <<'EOF'
+          RUN echo built-on-the-published-rootfs > /etc/granule-published-base-ok
+          RUN . /etc/os-release && echo "$ID" > /etc/granule-published-base-id
+          EOF
+          # The build's own output -- docker's layer-by-layer log and the
+          # apt run inside the guest -- is the volume this job's log is
+          # spent on, so it goes to a file and is printed only when it is
+          # what a reader needs, which is when the build failed. A
+          # successful build's output has never been read by anybody.
+          ./granule guest build \
+            -f consumer/Dockerfile \
+            -from "$ROOTFS_BASE/debian12.rootfs:latest" \
+            -rootfs-only \
+            -t granule-consumer:published-base \
+            > consumer-build.log 2>&1 || { cat consumer-build.log >&2; exit 1; }
+          out=$(docker run --rm --entrypoint /bin/sh granule-consumer:published-base -c \
+            'cat /etc/granule-published-base-ok /etc/granule-published-base-id')
+          want=$(printf '%s\n%s' built-on-the-published-rootfs debian)
+          if [ "$out" != "$want" ]; then
+            # The two on their own lines: an annotation is one line, and
+            # what is being compared here is two.
+            echo "want:"; echo "$want"
+            echo "got:"; echo "$out"
+            "$RECORD" "::error::a guest built on $ROOTFS_BASE/debian12.rootfs:latest does not carry the consumer's own line and the base's ID -- see the want/got above"
+            exit 1
+          fi
+          "$RECORD" "a guest built on the published rootfs carries the consumer's own layer, on the distribution the tag claims"
+
+      # The other half a consumer meets before anything else: the command
+      # with no base in it at all. Everywhere else names one, so nothing
+      # else would notice guestdockerfile.DefaultBase naming a reference
+      # that cannot be resolved -- which is exactly the state of somebody
+      # who has built nothing of this tree and is typing the README's
+      # first example.
+      - name: a guest build with no -from resolves its own default
+        if: steps.rootfs.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p default-base
+          cat > default-base/Dockerfile <<'EOF'
+          RUN echo default-base-ok > /etc/granule-default-base-ok
+          EOF
+          granule="$PWD/granule"
+          # No -f, no context, no -from: ./Dockerfile in the directory the
+          # command runs in, which is what the README's example means by
+          # typing it in your own repository. -t and -rootfs-only are the
+          # two it cannot do without -- the first is required, the second
+          # is this job's reach (above) -- and neither touches the base.
+          #
+          # The log lands outside default-base, which is the build context
+          # the command tars up. It is printed when the build fails, and
+          # when the assertion below fails -- which is the only other
+          # time the base it named is worth a reader's screen -- and
+          # otherwise kept out of a log this job has better uses for.
+          ( cd default-base && "$granule" guest build -rootfs-only -t granule-default:rootfs ) \
+            > bare-build.log 2>&1 || { cat bare-build.log >&2; exit 1; }
+          # Which base it resolved to, asserted rather than inferred from
+          # the build having succeeded: a build says what it is building
+          # on, and this is the step that cares which reference that was.
+          if ! grep -q "on $ROOTFS_BASE/debian.rootfs:latest" bare-build.log; then
+            cat bare-build.log >&2
+            "$RECORD" "::error::a bare guest build did not report granule's published rootfs as its base -- its own log is above"
+            exit 1
+          fi
+          "$RECORD" "a bare guest build resolved $ROOTFS_BASE/debian.rootfs:latest and built on it"
+
+      # The whole of what this job decided, in the tail of the log, where
+      # a cap keeps it. always() is the point of it: a step that failed
+      # stops the ones after it, and this is then the one place its line
+      # is certain to be readable -- as is the warning from a rootfs that
+      # could not be pulled at all, which skips every check below it and
+      # would otherwise leave a green job with nothing in it to say so.
+      - name: what this job proved
+        if: always()
+        run: |
+          set -uo pipefail
+          file="${ASSERTIONS:-/nonexistent}"
+          digest() {
+            if [ -s "$file" ]; then
+              cat "$file"
+            else
+              echo "(nothing -- this job stopped before its first assertion)"
+            fi
+          }
+          echo "--- assertions recorded by this job ---"
+          digest
+          # The other place a verdict can outlive a trimmed log, where the
+          # runner renders one. `act` sets the variable to a file as
+          # GitHub does, so writing there costs nothing when nobody is
+          # looking; a runner that sets no such variable is skipped
+          # rather than failed, since the print above is the real answer.
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### published guest rootfs"
+              echo
+              echo '```'
+              digest
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
