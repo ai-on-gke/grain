@@ -31,7 +31,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
-	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -4744,7 +4743,7 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	if len(change.LiveChanges(*task)) > 0 {
+	if submitsAsCL(*task) {
 		// A CL is submitted by a person through its provider, never
 		// queued for a merge (change_submit.go).
 		return c.submitChange(ctx, *task)

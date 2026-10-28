@@ -51,10 +51,11 @@ type ChangeSubmit struct {
 }
 
 // changeSubmit is task's Submit and Sync for its first live CL, nil for a
-// task with none or a deployment with no provider for CLs.
+// task with none, one whose change is a pull request (a CL linked beside
+// it is not what Submit lands), or a deployment with no provider for CLs.
 func changeSubmit(task model.Task, state model.State) *ChangeSubmit {
 	live := change.LiveChanges(task)
-	if len(live) == 0 {
+	if len(live) == 0 || !submitsAsCL(task) {
 		return nil
 	}
 	if _, ok := change.Lookup(model.LinkChangelist); !ok {
@@ -270,4 +271,18 @@ func (s *Server) handleSyncChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondWithTask(w, r, id)
+}
+
+// submitsAsCL reports whether task's Submit is a CL's: it has a live CL
+// and no pull request.
+func submitsAsCL(task model.Task) bool {
+	if len(change.LiveChanges(task)) == 0 {
+		return false
+	}
+	for _, l := range task.Links {
+		if l.Kind == model.LinkFixes {
+			return false
+		}
+	}
+	return true
 }

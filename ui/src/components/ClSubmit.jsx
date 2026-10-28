@@ -52,7 +52,11 @@ export default function ClSubmitActions({ t, act }) {
   if (!submit || t.state === "closed") return null;
   const reasons = submit.reasons || [];
   return (
-    <Stack spacing={0.5} data-testid="cl-submit-actions">
+    <Stack
+      spacing={0.5}
+      id={`task-${t.id}-cl-submit`}
+      data-testid="cl-submit-actions"
+    >
       <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
         <Tooltip
           title={
