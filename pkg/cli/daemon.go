@@ -990,6 +990,16 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"all -- confirmed against a real cluster, where a pod running it exits immediately). Required "+
 			"with -k8s-granule-sandboxes; no context-free default to pick, since nothing publishes a "+
 			"packed guest image under a stable tag yet -- docs/k8s-granule-design.md §4"+seedOnly)
+	sandboxAccessAddr := fs.String("sandbox-access-addr", "",
+		"k8s-granule only: address to run the sandbox-access acceptor on (\":7443\"), which every sandbox pod's "+
+			"wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, "+
+			"docs/design/grain-on-gke.md \"Sandbox access\"); empty leaves it off and builds pods as before")
+	sandboxAccessDial := fs.String("sandbox-access-dial", "",
+		"the address sandbox wrappers dial the acceptor at; empty is grain-access.<-k8s-namespace>.svc:7443, "+
+			"the Service deploy/kubernetes/grain-granule.yaml creates")
+	sandboxAccessCASecret := fs.String("sandbox-access-ca-secret", "",
+		"Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload "+
+			"Identity and generated into it on first start; empty keeps the CA in <data-dir>/sandbox-access-ca.pem")
 	sandboxCPUs := fs.Int("sandbox-cpus", 0,
 		"deployment-wide default vCPU count for a granule-managed sandbox VM, passed as `granule vm create`'s "+
 			"own -cpus (only used with -granule-sandboxes); 0 uses grain's own default, "+
@@ -1284,7 +1294,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		},
 		K8sNetworkPolicy: *k8sNetworkPolicy, K8sGitProxyHost: daemon.K8sGitProxyHostOrPodIP(*k8sGitProxyHost),
 		K8sGranuleSandboxes: *k8sGranuleSandboxes, K8sGranuleImage: *k8sGranuleImage,
-		SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
+		SandboxAccessAddr: *sandboxAccessAddr, SandboxAccessDial: *sandboxAccessDial,
+		SandboxAccessCASecret: *sandboxAccessCASecret,
+		SandboxCPUs:           *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile); err != nil {
 		return cfg, fs, unknownFlags, err
