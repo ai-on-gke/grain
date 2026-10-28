@@ -19,8 +19,10 @@ import { test, expect } from "./fixtures.js";
 // allows (grain/task-543). `grain demo -upgrade-image` wires a real
 // image-mode upgrader; nothing of grain's own API is mocked.
 
-const GHCR = "ghcr.io/bwsalmon/grain/google-grain";
-const AR = "us-docker.pkg.dev/gke-adaptive-orchestration/grain/grain";
+// Core grain's own repository, the one repository core knows to offer
+// (pkg/installtrack's KnownSuccessorRepositories); an edition that
+// registers a track of its own adds its repositories beside it.
+const GHCR = "ghcr.io/bwsalmon/grain/grain";
 
 test.use({ demoArgs: [`-upgrade-image=${GHCR}`] });
 
@@ -54,7 +56,7 @@ test.describe("the upgrade image chooser", () => {
 
       // Every repository chip, and the reference, inside the page.
       const chip = page.locator(".upgrade-image .MuiChip-root", {
-        hasText: AR,
+        hasText: GHCR,
       });
       await expect(chip).toBeVisible();
       for (const box of [
@@ -71,8 +73,8 @@ test.describe("the upgrade image chooser", () => {
 
       // Choosing a repository changes what will be pulled.
       await chip.click();
-      await expect(image).toHaveValue(AR);
-      await expect(willPull).toHaveText(`${AR}:main`);
+      await expect(image).toHaveValue(GHCR);
+      await expect(willPull).toHaveText(`${GHCR}:main`);
     });
   }
 });

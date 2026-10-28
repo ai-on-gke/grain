@@ -69,7 +69,6 @@ var googleTokensPending = map[string]string{
 	"tests/deploy/image_channel_test.go":        "google install track",
 	"tests/deploy/root_writes_test.go":          "google install track",
 	"ui/e2e/hostd-missing-entry-layout.spec.js": "google install track",
-	"ui/e2e/upgrade-image-chooser.spec.js":      "google install track",
 }
 
 func TestCoreSaysNoGoogleTokens(t *testing.T) {
