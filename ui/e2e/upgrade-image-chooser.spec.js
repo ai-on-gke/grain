@@ -20,8 +20,7 @@ import { test, expect } from "./fixtures.js";
 // image-mode upgrader; nothing of grain's own API is mocked.
 
 // Core grain's own repository, the one repository core knows to offer
-// (pkg/installtrack's KnownSuccessorRepositories); an edition that
-// registers a track of its own adds its repositories beside it.
+// (pkg/installtrack's KnownSuccessorRepositories).
 const GHCR = "ghcr.io/bwsalmon/grain/grain";
 
 test.use({ demoArgs: [`-upgrade-image=${GHCR}`] });
@@ -54,27 +53,16 @@ test.describe("the upgrade image chooser", () => {
       expect(Math.abs(imageBox.width - branchBox.width)).toBeLessThanOrEqual(1);
       expect(imageBox.y).toBeGreaterThan(branchBox.y + branchBox.height);
 
-      // Every repository chip, and the reference, inside the page.
-      const chip = page.locator(".upgrade-image .MuiChip-root", {
-        hasText: GHCR,
-      });
-      await expect(chip).toBeVisible();
-      for (const box of [
-        await chip.boundingBox(),
-        await willPull.boundingBox(),
-      ]) {
-        expect(box.x).toBeGreaterThanOrEqual(0);
-        expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
-      }
+      // The reference inside the page. Core offers one repository, so
+      // there are no repository chips to choose between (UpgradePanel
+      // shows them only for more than one).
+      const box = await willPull.boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - window.innerWidth,
       );
       expect(overflow).toBeLessThanOrEqual(0);
-
-      // Choosing a repository changes what will be pulled.
-      await chip.click();
-      await expect(image).toHaveValue(GHCR);
-      await expect(willPull).toHaveText(`${GHCR}:main`);
     });
   }
 });
