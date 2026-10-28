@@ -323,7 +323,16 @@ func (p *GitProxy) ServeCapHTTP(w http.ResponseWriter, r *http.Request) {
 	p.noteActivity(r.Context(), modelScope.TaskID, act.Phrase)
 	cw := &countingResponseWriter{ResponseWriter: w}
 	if p.CapHandler != nil {
-		p.CapHandler.ServeHTTP(cw, r)
+		// The proxy token authenticates the sandbox to this proxy and to
+		// nothing else, and the X-Grain-* headers are the proxy's to set:
+		// neither is passed on to a capability server.
+		in := r.Clone(r.Context())
+		for k := range in.Header {
+			if strings.EqualFold(k, "Authorization") || strings.HasPrefix(strings.ToLower(k), "x-grain-") {
+				in.Header.Del(k)
+			}
+		}
+		p.CapHandler.ServeHTTP(cw, in)
 	} else if rest == "" && r.Method == http.MethodGet {
 		cw.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(cw).Encode(map[string]any{"servers": []any{}})

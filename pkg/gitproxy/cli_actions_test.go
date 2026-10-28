@@ -531,6 +531,27 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 			rec.Code, apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderAuth, apiHeaderTunnel, apiHeaderReason)
 	}
 
+	// An external capability server is never handed the sandbox's proxy
+	// token or a sandbox-supplied X-Grain-* header.
+	var capAuth, capActing string
+	capReached := false
+	proxy.CapHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capReached = true
+		capAuth = r.Header.Get("Authorization")
+		capActing = r.Header.Get("X-Grain-Acting-Task")
+		w.WriteHeader(http.StatusOK)
+	})
+	req = httptest.NewRequest(http.MethodPost, "/cap/widgets/mcp", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", basicAuthHeader(tok2))
+	req.Header.Set("X-Grain-Acting-Task", "1")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !capReached || capAuth != "" || capActing != "" {
+		t.Errorf("POST /cap/widgets/mcp: reached=%v auth=%q acting=%q; want the capability server reached with neither",
+			capReached, capAuth, capActing)
+	}
+	proxy.CapHandler = nil
+
 	// A live run with no task to act for is never forwarded: without
 	// X-Grain-Acting-Task the API would answer as the deployment itself.
 	scopes.scopes["sb-1"] = model.NamespaceScope{RunID: "run-2", Attempt: 2}
