@@ -317,6 +317,15 @@ var Migrations = []Migration{
 			"ALTER TABLE `template` ADD COLUMN `change_target_spec` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     59,
+		Description: "add the external agent API setting and per-agent scoped credentials",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `external_agent_api` INTEGER NOT NULL DEFAULT 0",
+			externalAgentTokenTable,
+			externalAgentTokenSequenceTable,
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

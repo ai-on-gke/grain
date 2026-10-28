@@ -489,6 +489,214 @@ To tell another task's running agent something, use
   question the target is parked on, and never queues a dispatch. The
   target's state is the same afterwards.
 
+## External agents
+
+An external agent -- one not running as a grain task in a grain sandbox
+(for example, a person's own Claude, Gemini, or Codex CLI session, an
+external orchestrator, or an automation bot) -- can drive grain through
+the same generated `api_*` MCP tools over Streamable HTTP at `POST /mcp`,
+using a per-agent scoped credential (`model.ExternalAgentToken`,
+`pkg/ui/external_agents.go`).
+
+### Enabling the endpoint
+
+`POST /mcp` is **off by default**. Enable it in Settings
+(`PUT /api/settings` with `{"externalAgentApi": true}`, or the
+`external_agent_api` parameter in `grain_config`). When disabled, every
+external agent request is refused with `403 Forbidden` even if it
+presents a valid token.
+
+### Per-agent credentials
+
+Each external agent is issued its own scoped bearer token (`gma_<hex>`):
+
+- **Name**: a unique identifier (`[a-zA-Z0-9][a-zA-Z0-9._-]*`, up to 64
+  characters) used for attribution (`external:<name>`).
+- **Grants**: a `scopeSet` (either a built-in preset such as
+  `grain/task-admin` or a declarative scope set from
+  `tables/api_scope_set.json`) and/or an explicit `scopes` list
+  (`<area>:<level>` or `<area>:*`).
+- **Repository restriction**: an optional `repos` list (`owner/name`).
+  When set, every scope granted to the credential is restricted to those
+  repositories; when omitted, scopes apply across all repositories.
+- **Expiry and limits**: an optional `expiresAt` timestamp, a per-credential
+  request rate limit (`rateLimit`, requests per minute, default `60`), and
+  an in-flight concurrency cap (`maxConcurrent`, default `8`).
+
+Only the SHA-256 hash of the token is stored (`external_agent_token`
+table). The raw `gma_...` secret is returned once when the credential is
+created or rotated and is never shown again.
+
+Issuing or rotating a credential that resolves to any **dangerous scope**
+or a declarative scope set with `requires_person: true` requires a human
+principal (`PrincipalHuman`), matching the admission policy for task
+grants.
+
+Credentials are managed through:
+
+| Route | Scope | Description |
+|---|---|---|
+| `GET /api/external-agents/tokens` | `capabilities:read` | List external agent credentials (metadata only; never returns secret tokens). |
+| `POST /api/external-agents/tokens` | `capabilities:admin` | Issue a new external agent credential and return its raw `gma_...` token once. |
+| `POST /api/external-agents/tokens/{id}/rotate` | `capabilities:admin` | Replace a credential's secret token immediately and return the new token once. |
+| `POST /api/external-agents/tokens/{id}/revoke` | `capabilities:admin` | Revoke a credential immediately (`204 No Content`). |
+| `DELETE /api/external-agents/tokens/{id}` | `capabilities:admin` | Delete a credential record (`204 No Content`). |
+| `POST /api/external-agents/tokens/revoke-all` | `capabilities:admin` | Emergency kill switch: revoke every active external agent credential immediately. |
+
+### Attribution
+
+Every call made with an external agent credential executes as
+`Principal{Kind: PrincipalAgent, ID: "external:<name>"}` and passes
+through `agentAPIGate`:
+
+- **Daemon journal**: every MCP request and every underlying API route
+  call is logged with `{agent, external:<name>}`, its route pattern,
+  scope, repository, reason, and HTTP status.
+- **Task conversations**: any non-GET call that modifies a task (including
+  `/api/tasks/{id}/*`, `POST /api/tasks/reorder`, and `POST /api/ci/runs`
+  with `taskId`) records an audit comment on the affected task's
+  conversation signed by `grain` on behalf of
+  `{agent, external:<name>}`.
+
+### Routes without calling-task context
+
+Because an external agent is not a running grain task and has no sandbox
+or console session of its own, routes and rails that assume "the calling
+task" behave as follows:
+
+| Route / Feature | External agent handling |
+|---|---|
+| `POST /api/tasks/{id}/messages` (`api_post_task_message`) | Excluded from `tools/list` and refused by `agentAPIGate`. It speaks as the calling task's own run to its operator and parks that task; external agents use `POST /api/tasks/{id}/comments` (`api_add_comment`) or `POST /api/tasks/{id}/agent-messages` (`api_message_task_agent`) instead. |
+| `PUT /api/tasks/{id}/session-title` (`api_set_task_session_title`) | Excluded from `tools/list` and refused by `agentAPIGate` (renames the calling run's own standing chat session). |
+| `/api/console/*` and `/api/console-sessions*` | Excluded from `tools/list` and refused by `agentAPIGate` (bound to in-grain sandbox consoles and session tasks). |
+| `POST /api/tasks` (`api_create_task`) | Requires an explicit target in the request body (`repo`, a `templateId` with a target, or `noRepo: true`) because there is no calling task from which to inherit a default repository. |
+| Self-protection on `/api/tasks/{id}/*` | No task ID matches `external:<name>`, so an external agent with the required scope and repository grant can stop, close, retry, pause, or reorder any task in its allowed repositories while still honouring standing-session ownership, pause ownership, and upgrade holds. |
+| Single-repo collection reads (`GET /api/tasks`, `GET /api/ci/runs`, `GET /api/ci/workflows`, `GET /api/merge-batches`, `GET /api/pipeline/changes`, `GET /api/memory/documents/{name}`) | When a credential is restricted to a single repository and omits `?repo=`, the query filter defaults automatically to that repository. |
+| External configuration repository (`409 config_managed_externally`) | Works unchanged: when the deployment's configuration lives in an external git repository, configuration-writing tools return `409 Conflict` (`code: "config_managed_externally"`) with the rehearsed git patch to commit. |
+
+### Worked example
+
+1. **Enable the external agent API and issue a credential** (as an
+   operator):
+
+   ```sh
+   export GRAIN_URL="https://grain.example.com"
+
+   # Enable POST /mcp in Settings:
+   curl -fsS -X PUT "$GRAIN_URL/api/settings" \
+     -H "Authorization: Bearer $GRAIN_ACCESS_CODE" \
+     -H "Content-Type: application/json" \
+     -d '{"externalAgentApi": true}'
+
+   # Issue credential "ops-laptop" with preset grain/task-admin on bwsalmon/grain:
+   curl -fsS -X POST "$GRAIN_URL/api/external-agents/tokens" \
+     -H "Authorization: Bearer $GRAIN_ACCESS_CODE" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "ops-laptop",
+       "scopeSet": "grain/task-admin",
+       "repos": ["bwsalmon/grain"],
+       "rateLimit": 60,
+       "maxConcurrent": 8
+     }'
+   ```
+
+   Save the returned `"token": "gma_..."` value as `GRAIN_MCP_TOKEN`.
+
+2. **Configure an external MCP client** (such as Claude Code, Gemini CLI,
+   or Codex) to connect over Streamable HTTP:
+
+   ```json
+   {
+     "mcpServers": {
+       "grain": {
+         "type": "http",
+         "url": "https://grain.example.com/mcp",
+         "headers": {
+           "Authorization": "Bearer gma_..."
+         }
+       }
+     }
+   }
+   ```
+
+3. **List tools, move a task to the front, and re-run CI on a PR**:
+
+   ```sh
+   # List the tools granted to ops-laptop:
+   curl -fsS -X POST "$GRAIN_URL/mcp" \
+     -H "Authorization: Bearer $GRAIN_MCP_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+   # Move task 42 ahead of task 10 at the front of the queue:
+   curl -fsS -X POST "$GRAIN_URL/mcp" \
+     -H "Authorization: Bearer $GRAIN_MCP_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "jsonrpc": "2.0",
+       "id": 2,
+       "method": "tools/call",
+       "params": {
+         "name": "api_reorder",
+         "arguments": {
+           "reason": "prioritize release blocker",
+           "body": {"ids": ["42"], "beforeId": "10"}
+         }
+       }
+     }'
+
+   # Re-run CI on task 42's pull request:
+   curl -fsS -X POST "$GRAIN_URL/mcp" \
+     -H "Authorization: Bearer $GRAIN_MCP_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "jsonrpc": "2.0",
+       "id": 3,
+       "method": "tools/call",
+       "params": {
+         "name": "api_start_ci_run",
+         "arguments": {
+           "reason": "re-run CI on PR",
+           "body": {"taskId": "42"}
+         }
+       }
+     }'
+   ```
+
+   Both calls are logged in the journal as `{agent, external:ops-laptop}`
+   and recorded on task 42's conversation on behalf of
+   `external:ops-laptop`.
+
+### Threat model and safety controls
+
+- **Off by default**: `POST /mcp` and `gma_` bearer authentication are
+  refused until an operator explicitly enables `externalAgentApi` in
+  Settings.
+- **Hashed at rest, shown once**: raw `gma_` tokens are 128-bit random
+  secrets hashed with SHA-256 before storage; a database read or
+  `GET /api/external-agents/tokens` response never reveals a usable token.
+- **Least privilege by scope and repository**: `tools/list` exposes only
+  the tools whose route scope the credential holds, and `agentAPIGate`
+  enforces both the route scope and the repository restriction on every
+  invocation.
+- **No privilege escalation or unreviewed merge**: external agents are
+  subject to the same `agentGrantEscalation` and `externalAgentFilingEscalation`
+  checks as in-grain task agents -- they cannot mint or grant capabilities
+  they do not hold, cannot issue or rotate dangerous-scope credentials,
+  and cannot enable `autoMerge` or submit a PR to merge without human
+  review.
+- **Rate limits, concurrency caps, and body limits**: each credential has
+  an independent token-bucket rate limiter (`rateLimit` req/min) and
+  in-flight concurrency cap (`maxConcurrent`), returning
+  `429 Too Many Requests` when exceeded, and `/mcp` bounds request bodies
+  to `4 MiB` (`413 Request Entity Too Large`).
+- **Immediate revocation and kill switch**: revoking or rotating a
+  credential takes effect on the next request without restarting the
+  daemon, and `POST /api/external-agents/tokens/revoke-all` revokes every
+  active external credential at once.
+
+
 It is refused on the caller's own task.
 
 Two other routes look like they do this, but don't:

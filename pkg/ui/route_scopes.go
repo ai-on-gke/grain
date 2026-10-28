@@ -330,6 +330,12 @@ var routeScopes = map[string]APIScope{
 	"GET /api/pipeline-pause":                                              "dispatch:read",
 	"POST /api/pipeline-pause":                                             "dispatch:write",
 	"DELETE /api/pipeline-pause":                                           "dispatch:write",
+	"GET /api/external-agents/tokens":                                      "capabilities:read",
+	"POST /api/external-agents/tokens":                                     "capabilities:admin",
+	"POST /api/external-agents/tokens/{id}/rotate":                         "capabilities:admin",
+	"POST /api/external-agents/tokens/{id}/revoke":                         "capabilities:admin",
+	"DELETE /api/external-agents/tokens/{id}":                              "capabilities:admin",
+	"POST /api/external-agents/tokens/revoke-all":                          "capabilities:admin",
 	"GET /api/executors":                                                   "deployment:read",
 	"GET /api/executors/install.sh":                                        "internal",
 	"GET /install-executor.sh":                                             "internal",
@@ -338,4 +344,5 @@ var routeScopes = map[string]APIScope{
 	"GET /_grain/executor":                                                 "internal",
 	"GET /api/executors/connect":                                           "internal",
 	"GET /api/executors/stream":                                            "internal",
+	"POST /mcp":                                                            "internal",
 }

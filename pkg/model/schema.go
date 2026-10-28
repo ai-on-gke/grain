@@ -275,7 +275,38 @@ import "strconv"
 // 58 adds `change_target_kind` and `change_target_spec` to `task` and
 // `template`: a task whose change is not a git branch, such as a changelist in a
 // workspace of a registered kind (Task.ChangeTarget).
-const SchemaVersion = 58
+//
+// 59 adds `external_agent_api` to `grain_config` and the
+// `external_agent_token` and `external_agent_token_sequence` tables for
+// scoped external-agent credentials served over `/mcp`
+// (model.ExternalAgentToken, docs/agent-api.md).
+const SchemaVersion = 59
+
+// externalAgentTokenTable and externalAgentTokenSequenceTable are named
+// once for Tables and for the migration that adds them.
+const externalAgentTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`external_agent_token`" + ` (
+  ` + "`id`" + `             TEXT     NOT NULL,
+  ` + "`name`" + `           TEXT     NOT NULL,
+  ` + "`token_hash`" + `     TEXT     NOT NULL,
+  ` + "`prefix`" + `         TEXT     NOT NULL,
+  ` + "`scope_set`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`scopes`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`repos`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`rate_limit`" + `     INTEGER  NOT NULL DEFAULT 0,
+  ` + "`max_concurrent`" + ` INTEGER  NOT NULL DEFAULT 0,
+  ` + "`created_at`" + `     DATETIME NOT NULL,
+  ` + "`expires_at`" + `     DATETIME NULL,
+  ` + "`revoked_at`" + `     DATETIME NULL,
+  ` + "`last_used_at`" + `   DATETIME NULL,
+  ` + "`created_by`" + `     TEXT     NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`id`" + `),
+  UNIQUE (` + "`token_hash`" + `)
+)`
+
+const externalAgentTokenSequenceTable = `CREATE TABLE IF NOT EXISTS ` + "`external_agent_token_sequence`" + ` (
+  ` + "`id`" + `        INTEGER  PRIMARY KEY AUTOINCREMENT,
+  ` + "`issued_at`" + ` DATETIME NOT NULL
+)`
 
 // gitHubCIJobTable is the `github_ci_job` table, named once for Tables and
 // for the migration that adds it.
@@ -1912,6 +1943,7 @@ var Tables = []string{
   ` + "`auto_upgrade_channel`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`auto_upgrade_time`" + `            TEXT    NOT NULL DEFAULT '',
   ` + "`judgement_model`" + `              TEXT    NOT NULL DEFAULT '',
+  ` + "`external_agent_api`" + `           INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3484,6 +3516,9 @@ var Tables = []string{
   ` + "`id`" + `        INTEGER PRIMARY KEY AUTOINCREMENT,
   ` + "`issued_at`" + ` DATETIME NOT NULL
 )`,
+
+	externalAgentTokenTable,
+	externalAgentTokenSequenceTable,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,

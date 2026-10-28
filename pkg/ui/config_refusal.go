@@ -184,6 +184,17 @@ func (c *Client) configRepoAccess(ctx context.Context, repo, branch string) *con
 		return nil
 	}
 	need := fmt.Sprintf("a writes: grant on %s (base %s)", repo, branch)
+	if call, ok := agentCallFromContext(ctx); ok && call.external != nil {
+		for _, allowed := range call.external.Repos {
+			if strings.EqualFold(allowed, repo) {
+				return &configRepoAccess{CanWrite: true, Via: "external agent credential"}
+			}
+		}
+		if len(call.external.Repos) == 0 {
+			return &configRepoAccess{CanWrite: true, Via: "external agent credential"}
+		}
+		return &configRepoAccess{Need: need}
+	}
 	task, err := c.Store.GetTask(ctx, p.ID)
 	if err != nil || task == nil {
 		return &configRepoAccess{Need: need}
