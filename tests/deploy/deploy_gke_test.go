@@ -274,6 +274,10 @@ func TestDeployGKEManifestsAndBaseSync(t *testing.T) {
 	contains(t, netpolYAML, "app.kubernetes.io/managed-by: grain")
 	contains(t, netpolYAML, "app.kubernetes.io/component: sandbox")
 	absent(t, netpolYAML, "app: grain-sandbox")
+	// NetworkPolicies are additive: the open-internet egress policy must
+	// exclude network:none pods, or it would hand them the network
+	// grain-sandbox-network-none withholds.
+	contains(t, netpolYAML, "key: grain.dev/network\n        operator: NotIn\n        values: [\"none\"]")
 
 	// Verify in-cluster Postgres image is digest-pinned and isolated by NetworkPolicy.
 	pgYAML := stripComments(read(t, "deploy", "kubernetes", "gke", "postgres-incluster.yaml"))
