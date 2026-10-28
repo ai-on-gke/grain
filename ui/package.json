@@ -40,6 +40,6 @@
     "@testing-library/user-event": "^14.6.6",
     "jsdom": "^26.1.0",
     "prettier": "^3.9.6",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }
