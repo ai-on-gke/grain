@@ -264,6 +264,12 @@ func SyncChangeThreads(ctx context.Context, store *model.Store, now time.Time) e
 		if change.Primary(task) == "" || isReviewTask(task) {
 			continue
 		}
+		// A change held on its own review's questions waits for its
+		// owner first, as SyncReviewThreads' does: their answer sends
+		// the run, and that run sees these threads too.
+		if _, held := model.ReviewQuestionsOf(task); held {
+			continue
+		}
 		state, err := store.State(ctx, task.ID)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: reading %s's state: %w", task.ID, err))

@@ -155,3 +155,42 @@ func TestCLThreadsOnARunningTaskAreAnAddendum(t *testing.T) {
 		t.Fatalf("comments = %+v, want one addendum from %v", comments, model.CLThreadsPrincipal)
 	}
 }
+
+// A CL task held on its own review's questions waits for its owner, as a
+// pull request's does: a reviewer's thread neither records nor sends a run.
+func TestCLThreadsWaitOnAHeldReviewsQuestions(t *testing.T) {
+	provider := &threadedCLs{threads: map[string][]change.Thread{
+		"cl/43": {{ID: "cl/43:c2", Author: "reviewer", Body: "rename"}},
+	}}
+	change.Register(provider)
+	t.Cleanup(func() { change.Unregister(model.LinkChangelist) })
+
+	store, ctx := openStore(t)
+	putCLTask(t, ctx, store, "43")
+	held := model.ReviewQuestions{ReviewTaskID: "50", AfterCommentID: 1}
+	if err := store.UpdateTask(ctx, "43", func(t *model.Task) error {
+		t.Links = append(t.Links, model.Link{Kind: model.LinkReviewQuestions, Target: held.Target()})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := baseTime
+	if err := store.ObserveField(ctx, "43", done, func(o *model.Observation) { o.CompletedAt = &done }); err != nil {
+		t.Fatal(err)
+	}
+	before := stateOf(t, ctx, store, "43")
+	if err := orchestrator.SyncChangeThreads(ctx, store, baseTime.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if s := stateOf(t, ctx, store, "43"); s != before {
+		t.Fatalf("state = %q, want %q -- a held change waits for its owner", s, before)
+	}
+	if provider.asked != 0 {
+		t.Fatalf("provider asked %d times, want 0", provider.asked)
+	}
+	for _, l := range reloaded(t, ctx, store, "43").Links {
+		if l.Kind == model.LinkCLThread {
+			t.Fatalf("thread %s recorded on a held change", l.Target)
+		}
+	}
+}
