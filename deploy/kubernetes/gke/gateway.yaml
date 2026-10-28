@@ -1,0 +1,173 @@
+# GKE Gateway API + Identity-Aware Proxy (IAP) routing for Grain on GKE.
+#
+# Uses the GKE global external Application Load Balancer Gateway class
+# (gke-l7-global-external-managed) with managed TLS and per-backend IAP policy:
+# - /* -> Service/grain:80 (IAP enabled)
+# - /api/hostd/connect, /api/hostd/install.sh, /api/executors/* -> Service/grain-hostd:80
+#   (IAP enabled, timeoutSec: 86400 so long-lived hostd WebSockets are not reset every 30s)
+# - /webhooks/github -> Service/grain-webhook:80 (GitHub HMAC, no IAP)
+#
+# Service/grain-access (port 7443) is NEVER exposed on the Gateway.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: grain-gateway
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/part-of: grain
+  annotations:
+    networking.gke.io/certmap: ""
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  addresses:
+    - type: NamedAddress
+      value: grain-gateway-ip
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        options:
+          networking.gke.io/pre-shared-certs: grain-gateway-cert
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grain-https-redirect
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/part-of: grain
+spec:
+  parentRefs:
+    - name: grain-gateway
+      sectionName: http
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grain-routes
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/part-of: grain
+spec:
+  parentRefs:
+    - name: grain-gateway
+      sectionName: https
+  rules:
+    # GitHub webhook receiver: authenticated via HMAC signature, not IAP.
+    - matches:
+        - path:
+            type: Exact
+            value: /webhooks/github
+      backendRefs:
+        - name: grain-webhook
+          port: 80
+    # hostd WebSocket and executor registration endpoints: IAP-authenticated
+    # with 86400s backend timeout via Service/grain-hostd.
+    - matches:
+        - path:
+            type: Exact
+            value: /api/hostd/connect
+        - path:
+            type: Exact
+            value: /api/hostd/install.sh
+        - path:
+            type: PathPrefix
+            value: /api/executors
+      backendRefs:
+        - name: grain-hostd
+          port: 80
+    # Operator UI and API: IAP-authenticated via Service/grain.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: grain
+          port: 80
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: grain-iap-policy
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/part-of: grain
+spec:
+  default:
+    timeoutSec: 300
+    iap:
+      enabled: true
+      oauth2ClientSecret:
+        name: grain-iap-oauth
+    logging:
+      enabled: true
+      sampleRate: 1000000
+  targetRef:
+    group: ""
+    kind: Service
+    name: grain
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: grain-hostd-iap-policy
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/part-of: grain
+spec:
+  default:
+    # On the global external load balancer, timeoutSec is also the maximum
+    # lifetime of a WebSocket connection. Set to 86400s (24h) so hostd does
+    # not reconnect every 30s.
+    timeoutSec: 86400
+    iap:
+      enabled: true
+      oauth2ClientSecret:
+        name: grain-iap-oauth
+    logging:
+      enabled: true
+      sampleRate: 1000000
+  targetRef:
+    group: ""
+    kind: Service
+    name: grain-hostd
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: grain-webhook-policy
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/part-of: grain
+spec:
+  default:
+    timeoutSec: 30
+    iap:
+      enabled: false
+  targetRef:
+    group: ""
+    kind: Service
+    name: grain-webhook
