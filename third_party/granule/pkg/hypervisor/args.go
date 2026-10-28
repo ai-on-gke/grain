@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/bwsalmon/granule/pkg/config"
+	"github.com/bwsalmon/granule/pkg/extents"
+	"github.com/bwsalmon/granule/pkg/guestimage"
 	"github.com/bwsalmon/granule/pkg/qcow2"
 )
 
@@ -76,13 +78,29 @@ func BuildArgs(cfg config.Config) ([]string, error) {
 		// btrfs), and calling that qcow2 has cloud-hypervisor refuse to
 		// boot (DiskImageTypeMismatch). The suffix is only a guess for a
 		// path that cannot be read yet.
-		extra := ",image_type=raw,sparse=on"
-		if isQcow2Disk(d.Path) {
-			extra = ",image_type=qcow2,backing_files=on,sparse=on"
-		}
 		numQueues := d.NumQueues
 		if numQueues == 0 {
 			numQueues = cfg.DiskNumQueues
+		}
+		if d.VhostUserSocket != "" || extents.IsExtentDir(d.Path) {
+			sock := d.VhostUserSocket
+			if sock == "" {
+				sock = guestimage.VhostBlkSocket
+			}
+			diskArg := fmt.Sprintf("vhost_user=true,socket=%s", sock)
+			if numQueues > 0 {
+				diskArg += fmt.Sprintf(",num_queues=%d,queue_size=256", numQueues)
+			}
+			if d.Serial != "" {
+				diskArg += ",serial=" + d.Serial
+			}
+			args = append(args, "--disk", diskArg)
+			continue
+		}
+
+		extra := ",image_type=raw,sparse=on"
+		if isQcow2Disk(d.Path) {
+			extra = ",image_type=qcow2,backing_files=on,sparse=on"
 		}
 		if numQueues > 0 {
 			extra += fmt.Sprintf(",num_queues=%d", numQueues)

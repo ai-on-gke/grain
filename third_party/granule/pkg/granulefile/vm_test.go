@@ -15,6 +15,7 @@ func TestSettingEnvLookup(t *testing.T) {
 		{"vcpus", "CHV_VCPUS", true},
 		{"memory-mb", "CHV_MEMORY_MB", true},
 		{"disk-mode", "CHV_DISK_MODE", true},
+		{"storage-backend", "CHV_STORAGE_BACKEND", true},
 		{"extent-size-mb", "CHV_EXTENT_SIZE_MB", true},
 		{"disk-num-queues", "CHV_DISK_NUM_QUEUES", true},
 		{"num-queues", "CHV_DISK_NUM_QUEUES", true},

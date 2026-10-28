@@ -206,10 +206,14 @@ type Request struct {
 	// must be empty when Argv is set.
 	Argv []string `json:"argv,omitempty"`
 
-	// Forward opens a multiplexed TCP port-forwarding session over the
-	// connection rather than running a command. ForwardSpecs lists the
-	// guest-bound (-R) specifications ("bindHost:bindPort:targetHost:targetPort")
-	// the agent must bind inside the guest before answering OK.
+	// Forward turns the connection into a port-forwarding session
+	// instead of a command: after the Response, the rest of the stream
+	// is pkg/guestforward's multiplexed protocol, with the agent as its
+	// guest end, until either side hangs up. Every other field must be
+	// left empty. It is how `granule forward` reaches a guest (see the
+	// shim's forward-stdio mode). When ForwardSpecs is non-empty, the
+	// legacy pkg/forward protocol binds those guest-side (-R) specs
+	// before answering OK.
 	Forward      bool     `json:"forward,omitempty"`
 	ForwardSpecs []string `json:"forward_specs,omitempty"`
 }
@@ -248,7 +252,10 @@ const FeatureNote = "note"
 const FeatureContainer = "container"
 
 // FeatureForward is the feature name an agent reports when it honours
-// Request.Forward and Request.ForwardSpecs.
+// Request.Forward. An agent that predates the field refuses a request
+// naming it outright (ReadRequest's strictness), so the check matters
+// less here than for Dir and Env; it is listed all the same, so a client
+// that wants to know before it asks can.
 const FeatureForward = "forward"
 
 // Features is every feature name an agent built from this commit

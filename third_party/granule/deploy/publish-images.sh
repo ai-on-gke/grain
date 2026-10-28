@@ -17,7 +17,9 @@ dry_run=${DRY_RUN:-false}
 grain_sandbox=${GRAIN_SANDBOX:-}
 # grain's registry mirror, which the grain-sandbox setup below points
 # docker and containerd at for ghcr.io. Read nowhere else.
-grain_registry_mirror=${GRAIN_REGISTRY_MIRROR:-http://172.17.0.1:43325/v2/ghcr}
+# Unset, it is the mirror grain itself already wrote into docker's
+# hosts.toml for ghcr.io, else http://172.17.0.1:43325/v2/ghcr.
+grain_registry_mirror=${GRAIN_REGISTRY_MIRROR:-}
 # The Dockerfile's GITHUB_PROXY build arg: empty, so github.com release
 # assets are fetched directly, unless this is a grain sandbox (below).
 github_proxy=""
@@ -118,7 +120,8 @@ Environment:
                               nameserver>, so the build fetches its github
                               release assets through grain's proxy.
   GRAIN_REGISTRY_MIRROR       grain's registry mirror for ghcr.io, used only
-                              by that setup (default
+                              by that setup (default: the mirror grain
+                              already configured for ghcr.io, else
                               http://172.17.0.1:43325/v2/ghcr)
   AZURE_RESOURCE_GROUP        required by the three full runner images
   AZURE_LOCATION              Azure region for those (default eastus)
@@ -476,8 +479,36 @@ grain_nameserver() {
   printf '%s' "$ns"
 }
 
+# Whether grain's proxy cache answers at the nameserver's address. On a
+# VM sandbox it does, and ghcr.io and github.com are only reachable through
+# it. On a Kubernetes-hosted sandbox the nameserver is the cluster's DNS
+# service, which answers nothing on 443, and those hosts are reached
+# directly -- pinning them to it in /etc/hosts makes every push and login
+# fail with "connection refused".
+grain_proxy_answers() {
+  local ns=$1
+  [[ -n $ns ]] || return 1
+  timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/443"' _ "$ns" 2>/dev/null
+}
+
+# The ghcr.io mirror grain already configured for this sandbox, if any:
+# the first [host."..."] entry of the hosts.toml grain writes.
+grain_existing_mirror() {
+  local f=/etc/docker/certs.d/ghcr.io/hosts.toml
+  [[ -r $f ]] && grep -q '^# Written by grain' "$f" || return 0
+  sed -n 's/^\[host\."\(http[^"]*\)"\]$/\1/p' "$f" | grep -v '^https://ghcr\.io$' | head -n 1 || true
+}
+
 grain_sandbox_setup() {
   ns=$(grain_nameserver)
+  if [[ -n $ns ]] && ! grain_proxy_answers "$ns"; then
+    echo "grain sandbox: $ns serves no proxy on 443; reaching $registry and github.com directly"
+    ns=""
+  fi
+  if [[ -z $grain_registry_mirror ]]; then
+    grain_registry_mirror=$(grain_existing_mirror)
+    grain_registry_mirror=${grain_registry_mirror:-http://172.17.0.1:43325/v2/ghcr}
+  fi
   if [[ -n $ns ]]; then
     if ! grep -q -E "^nameserver[[:space:]]+$ns" /etc/resolv.conf 2>/dev/null; then
       echo "nameserver $ns" | sudo tee /etc/resolv.conf >/dev/null || true
@@ -513,7 +544,7 @@ with open('/etc/docker/daemon.json', 'w') as f:
       break
     fi
   done
-  if [[ $found_ca != true ]]; then
+  if [[ $found_ca != true && -n $ns ]]; then
     target_host=${ns:-172.17.0.1}
     openssl s_client -connect "$target_host:443" -showcerts </dev/null 2>/dev/null | \
       awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/{ if (/BEGIN CERTIFICATE/) {cert++}; if (cert==2) print }' | \
@@ -625,6 +656,7 @@ if is_grain_sandbox; then
   # github.com is reached through grain's proxy cache rather than
   # directly here, and the Dockerfile only goes there when told to.
   github_proxy=$(grain_nameserver)
+  grain_proxy_answers "$github_proxy" || github_proxy=""
   if ! command -v sudo >/dev/null 2>&1; then
     echo "warning: this looks like a grain sandbox but has no sudo; leaving its DNS, CA and registry mirror alone" >&2
   elif [[ $dry_run == true ]]; then

@@ -113,6 +113,8 @@ parts=$2
 out=${3:-}
 extra_mb=${GUEST_DISK_EXTRA_MB:-0}
 variant=${GRANULE_GUEST_VARIANT:-auto}
+storage_backend=${GRANULE_STORAGE_BACKEND:-standard}
+extent_size_mb=${GRANULE_EXTENT_SIZE_MB:-64}
 
 [ -d "$rootfs" ] || die "$rootfs is not a directory"
 [ -d "$parts/overlay-common" ] || die "$parts holds no overlay-common: it is not a granule guest-parts directory"
@@ -121,6 +123,13 @@ if [ "$lay_only" = 0 ]; then
 
 	case "$extra_mb" in
 	'' | *[!0-9]*) die "GUEST_DISK_EXTRA_MB must be a whole number of MiB, got '$extra_mb'" ;;
+	esac
+	case "$storage_backend" in
+	standard | extents) ;;
+	*) die "unknown GRANULE_STORAGE_BACKEND '$storage_backend': expected standard or extents" ;;
+	esac
+	case "$extent_size_mb" in
+	'' | 0 | *[!0-9]*) die "GRANULE_EXTENT_SIZE_MB must be a positive whole number of MiB, got '$extent_size_mb'" ;;
 	esac
 
 	# Which of three kinds of image this is decides whether it can be a
@@ -163,7 +172,7 @@ if [ "$lay_only" = 0 ]; then
 	# describes the wrong problem. The path is pkg/guestimage's
 	# DiskImage; `granule guest rebase` is the verb that wants it, and
 	# -rootfs is how it repacks one.
-	if exists "$rootfs/var/lib/granule/guest/disk.img"; then
+	if exists "$rootfs/var/lib/granule/guest/disk.img" || exists "$rootfs/var/lib/granule/guest/disk.extents/manifest.json"; then
 		die "the image being packed is a packed granule image, not a guest rootfs: its filesystem is granule's own half with the guest sealed inside /var/lib/granule/guest/disk.img, and packing lays parts over a filesystem rather than into a disk. To make an already-packed image current use \`granule guest rebase\`, which replaces the VMM half of one -- and give it -rootfs <the rootfs image this was packed from> to repack the guest inside it too."
 	fi
 fi
@@ -523,6 +532,28 @@ if [ -n "$missing" ]; then
 fi
 say "enabled $enabled of granule's services for the $variant init system"
 
+# Loopback, on the one init system that does not bring it up by itself.
+# systemd configures lo in PID 1 before any unit runs; OpenRC leaves it
+# to its own "loopback" service, which an Alpine rootfs built from a
+# container image ships but does not enable. A guest with a network never
+# noticed, because the kernel's ip= autoconfiguration brings lo up along
+# with the NIC -- but a CHV_NET_MODE=none guest gets no ip=, and booted
+# with lo down and no 127.0.0.1 at all, which breaks anything in it that
+# talks to itself, and the loopback listeners `granule forward` holds in
+# a guest with no network (the case it exists for) in particular. This is
+# the distribution's own service, and it touches lo and nothing else.
+if [ "$variant" = alpine ] && exists "$rootfs/etc/init.d/loopback"; then
+	loopback_enabled=false
+	for dir in "$rootfs"/etc/runlevels/*; do
+		if exists "$dir/loopback"; then loopback_enabled=true; fi
+	done
+	if [ "$loopback_enabled" = false ]; then
+		mkdir -p "$rootfs/etc/runlevels/boot"
+		ln -sf /etc/init.d/loopback "$rootfs/etc/runlevels/boot/loopback"
+		say "enabled OpenRC's loopback service, which this rootfs left off"
+	fi
+fi
+
 # -lay-only stops here: there is no disk to make, because the rootfs this
 # was laid over is already one -- a guest booted by `granule guest
 # rebase -boot`, whose filesystem is committed by the build around it.
@@ -600,4 +631,32 @@ rm -f "$out/disk.img"
 truncate -s "${img_kb}K" "$out/disk.img"
 mke2fs -F -t ext4 -L granule-root -d "$rootfs" "$out/disk.img" >/dev/null
 [ -f "$out/disk.img" ] || die "mke2fs left no $out/disk.img"
-say "packed ${size_kb}K of rootfs into a ${img_kb}K ext4 disk at $out/disk.img"
+if [ "$storage_backend" = extents ]; then
+	rm -rf "$out/disk.extents"
+	if [ -x "$parts/granule-shim" ]; then
+		"$parts/granule-shim" extents split "$out/disk.img" "$out/disk.extents" "$extent_size_mb"
+	elif command -v granule-shim >/dev/null 2>&1; then
+		granule-shim extents split "$out/disk.img" "$out/disk.extents" "$extent_size_mb"
+	else
+		mkdir -p "$out/disk.extents/extents"
+		virt_bytes=$((img_kb * 1024))
+		ext_bytes=$((extent_size_mb * 1048576))
+		num_ext=$(((virt_bytes + ext_bytes - 1) / ext_bytes))
+		idx=0
+		while [ "$idx" -lt "$num_ext" ]; do
+			ext_file=$(printf '%s/disk.extents/extents/%08d.raw' "$out" "$idx")
+			dd if="$out/disk.img" of="$ext_file" bs=1048576 skip=$((idx * extent_size_mb)) count="$extent_size_mb" status=none 2>/dev/null ||
+				dd if="$out/disk.img" of="$ext_file" bs=1048576 skip=$((idx * extent_size_mb)) count="$extent_size_mb" 2>/dev/null
+			if [ -z "$(tr -d '\000' < "$ext_file" | head -c 1)" ]; then
+				rm -f "$ext_file"
+			fi
+			idx=$((idx + 1))
+		done
+		printf '{\n  "version": 1,\n  "virtualSizeBytes": %s,\n  "extentSizeBytes": %s\n}\n' "$virt_bytes" "$ext_bytes" > "$out/disk.extents/manifest.json"
+	fi
+	rm -f "$out/disk.img"
+	[ -f "$out/disk.extents/manifest.json" ] || die "splitting left no $out/disk.extents/manifest.json"
+	say "packed ${size_kb}K of rootfs into ${extent_size_mb}MiB extents (${img_kb}K virtual ext4 disk) at $out/disk.extents"
+else
+	say "packed ${size_kb}K of rootfs into a ${img_kb}K ext4 disk at $out/disk.img"
+fi

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bwsalmon/granule/pkg/config"
+	"github.com/bwsalmon/granule/pkg/extents"
 	"github.com/bwsalmon/granule/pkg/qcow2"
 )
 
@@ -546,5 +547,72 @@ func TestRunner_DirectRawDiskAttachment(t *testing.T) {
 	want := "path=" + rawPath + ",readonly=off,image_type=raw,sparse=on"
 	if got := argValue(t, args, "--disk"); got != want {
 		t.Errorf("--disk = %q, want %q", got, want)
+	}
+}
+
+func TestRunner_ExtentBackendAndSnapshotRestore(t *testing.T) {
+	dir := t.TempDir()
+	ovlDir := filepath.Join(dir, "overlay", "disk.extents")
+	st, err := extents.Open(extents.Options{
+		Dir:              ovlDir,
+		VirtualSizeBytes: 256 * 1024,
+		ExtentSizeBytes:  64 * 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.WriteAt([]byte("EXTENT-OVERLAY-DATA"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sockPath := filepath.Join(dir, "vhost-blk.sock")
+	cfg := testConfig(t)
+	cfg.StorageBackend = config.StorageBackendExtents
+	cfg.DiskMode = config.DiskModeOverlay
+	cfg.OverlayPath = ovlDir
+	cfg.SnapshotPath = filepath.Join(dir, "snapshot")
+	cfg.Disks = []config.Disk{{
+		Path:            ovlDir,
+		VhostUserSocket: sockPath,
+	}}
+
+	r := startRunner(t, cfg, nil)
+	readyCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := r.api.WaitReady(readyCtx); err != nil {
+		t.Fatalf("waiting for fakechv's api socket: %v", err)
+	}
+	if err := r.Suspend(context.Background()); err != nil {
+		t.Fatalf("Suspend() error = %v", err)
+	}
+	r.Shutdown(context.Background())
+
+	savedOverlay := filepath.Join(cfg.SnapshotPath, SnapshotDiskOverlayName)
+	if !extents.IsExtentDir(savedOverlay) {
+		t.Fatalf("saved overlay %s is not an extent directory", savedOverlay)
+	}
+
+	dstDir := filepath.Join(t.TempDir(), "restored", "disk.extents")
+	restored, err := RestoreDiskOverlay(cfg.SnapshotPath, dstDir)
+	if err != nil {
+		t.Fatalf("RestoreDiskOverlay() error = %v", err)
+	}
+	if !restored {
+		t.Fatal("RestoreDiskOverlay() = false, want true")
+	}
+	restoredStore, err := extents.Open(extents.Options{Dir: dstDir, ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restoredStore.Close()
+	buf := make([]byte, 19)
+	if _, err := restoredStore.ReadAt(buf, 0); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != "EXTENT-OVERLAY-DATA" {
+		t.Errorf("restored extent data = %q, want EXTENT-OVERLAY-DATA", buf)
 	}
 }

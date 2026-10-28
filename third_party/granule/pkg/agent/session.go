@@ -113,7 +113,6 @@ import (
 	"time"
 
 	"github.com/bwsalmon/granule/pkg/execwire"
-	"github.com/bwsalmon/granule/pkg/forward"
 )
 
 // terminateGrace is how long a command has between the SIGTERM that asks
@@ -637,28 +636,6 @@ func (s *session) closeOutputs() {
 	if s.stderr != nil {
 		_ = s.stderr.Close()
 	}
-}
-
-func serveForward(ctx context.Context, br *bufio.Reader, conn io.Writer, req execwire.Request) error {
-	var specs []forward.Spec
-	for _, raw := range req.ForwardSpecs {
-		spec, err := forward.ParseSpec(forward.RemoteToLocal, raw)
-		if err != nil {
-			_ = execwire.WriteResponse(conn, execwire.Response{OK: false, Error: err.Error(), Features: execwire.Features})
-			return nil
-		}
-		specs = append(specs, spec)
-	}
-	gl, err := forward.BindGuestListeners(specs)
-	if err != nil {
-		_ = execwire.WriteResponse(conn, execwire.Response{OK: false, Error: err.Error(), Features: execwire.Features})
-		return nil
-	}
-	defer gl.Close()
-	if err := execwire.WriteResponse(conn, execwire.Response{OK: true, Features: execwire.Features}); err != nil {
-		return fmt.Errorf("writing the forward response: %w", err)
-	}
-	return gl.Serve(ctx, br, conn)
 }
 
 // closeChildOut drops this process's copies of the writing ends of the

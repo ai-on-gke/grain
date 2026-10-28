@@ -1,0 +1,133 @@
+# Kubernetes NetworkPolicies for granule's sandbox access API.
+#
+# See docs/sandbox-access-api.md (section 5) and docs/sandbox-relay.md:
+#
+#   1. Sandbox pods run the access server in listen mode on TCP 7443
+#      (GRANULE_ACCESS_LISTEN=tcp://0.0.0.0:7443), serving TLS 1.3 and
+#      requiring the per-sandbox token on every connection. Whatever trusted
+#      component sits in the cluster dials the pod IP directly: granule relay
+#      (for an off-cluster controller) or an in-cluster controller.
+#   2. granule-sandbox-access-ingress denies all other ingress to sandbox
+#      pods, including from other sandbox pods. NetworkPolicy is the first line
+#      of defence; the TLS + token check in the sandbox is the second, and
+#      stays mandatory because sandboxes run untrusted agents.
+#   3. For sandboxes with guest network access (CHV_NET_MODE=inline), netshim
+#      passes TCP to the access port to the pod's own stack, where
+#      granule-shim listens, and never into the guest (NETSHIM_ACCESS_PORTS,
+#      set by granule-shim from GRANULE_ACCESS_LISTEN). The guest cannot reach
+#      the listener or read the token, which never enters the VM.
+#   4. The guest's own egress (granule-sandbox-guest-egress) is separate, so a
+#      sandbox with no network access (CHV_NET_MODE=none) still has its access
+#      listener.
+#
+# Sandboxes in networks a controller cannot reach into (other clusters,
+# NAT'd pools) can instead dial out (GRANULE_ACCESS_DIAL); for those, replace
+# the ingress policy with an egress rule to the controller on its port.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: granule-sandbox-access-ingress
+  namespace: granule-sandboxes
+spec:
+  podSelector:
+    matchLabels:
+      granule.gke.io/sandbox: "true"
+  policyTypes:
+    - Ingress
+    - Egress
+  # The pod-side wrapper initiates nothing in listen mode, so egress is denied
+  # too; granule-sandbox-guest-egress adds the guest's egress where granted.
+  egress: []
+  # Deny by default; the only ingress is to the access port, and only from
+  # the relay and the in-cluster controller. Sandbox pods are not listed, so
+  # sandbox-to-sandbox traffic is blocked.
+  ingress:
+    - from:
+        # granule relay, in the sandbox namespace.
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: granule-relay
+        # An in-cluster grain controller, if there is one.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: grain-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grain-controller
+      ports:
+        - protocol: TCP
+          port: 7443
+---
+# The relay accepts controllers from outside the cluster (through its
+# LoadBalancer Service) and may only dial sandbox pods' access port and the
+# Kubernetes API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: granule-relay
+  namespace: granule-sandboxes
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: granule-relay
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8443
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              granule.gke.io/sandbox: "true"
+      ports:
+        - protocol: TCP
+          port: 7443
+    # The Kubernetes API (pod list/watch). Narrow this to your control
+    # plane's address.
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: granule-sandbox-guest-egress
+  namespace: granule-sandboxes
+spec:
+  # Applied ONLY to sandboxes whose guest workload is granted external network
+  # access. Sandboxes with network_access=none omit this label and run with
+  # CHV_NET_MODE=none inside the pod.
+  podSelector:
+    matchLabels:
+      granule.gke.io/sandbox: "true"
+      granule.gke.io/network-access: "open"
+  policyTypes:
+    - Egress
+  egress:
+    # Guest egress to public networks, excluding cluster-internal and metadata
+    # ranges.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+    # Cluster DNS, for a guest resolving names through the pod's resolver.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

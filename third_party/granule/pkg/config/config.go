@@ -14,6 +14,8 @@ import (
 	"unicode"
 
 	"github.com/bwsalmon/granule/pkg/containerspec"
+	"github.com/bwsalmon/granule/pkg/extent"
+	"github.com/bwsalmon/granule/pkg/extents"
 	"github.com/bwsalmon/granule/pkg/guestimage"
 	"github.com/bwsalmon/granule/pkg/qcow2"
 	"github.com/bwsalmon/granule/pkg/workloadio"
@@ -27,6 +29,7 @@ const (
 	envDiskSizeMB                = "CHV_DISK_SIZE_MB"
 	envExtentSizeMB              = "CHV_EXTENT_SIZE_MB"
 	envDiskExtentSizeMB          = "CHV_DISK_EXTENT_SIZE_MB"
+	envStorageBackend            = "CHV_STORAGE_BACKEND"
 	envDiskNumQueues             = "CHV_DISK_NUM_QUEUES"
 	envDiskIOThreads             = "CHV_DISK_IOTHREADS"
 	envDiskIOEngine              = "CHV_DISK_IO_ENGINE"
@@ -173,6 +176,14 @@ const (
 	DiskModePersistent = "persistent"
 	DiskModeReadOnly   = "readonly"
 
+	// StorageBackendStandard and StorageBackendExtents select how the
+	// guest root disk is stored and presented to Cloud-Hypervisor
+	// (CHV_STORAGE_BACKEND). Standard (qcow2 overlay / flat disk.img) is
+	// the default; extents uses an N-MiB extent directory served over an
+	// in-process vhost-user-blk socket.
+	StorageBackendStandard = "standard"
+	StorageBackendExtents  = "extents"
+
 	NetModeInline = "inline"
 	NetModeNone   = "none"
 
@@ -222,6 +233,14 @@ type Disk struct {
 	IOThreads bool
 	IOEngine  string
 
+	// BasePath, when set on an extent overlay disk, names the read-only
+	// backing source (either a disk.extents directory or a flat disk.img).
+	BasePath string
+
+	// VhostUserSocket, when set, attaches the disk via vhost-user-blk
+	// (--disk vhost_user=true,socket=...) instead of a direct image path.
+	VhostUserSocket string
+
 	// Serial is the virtio-blk serial the guest sees the disk with (in
 	// /sys/block/vdX/serial), which is how it finds a disk by purpose
 	// rather than by the order it was attached in. Empty gives it none.
@@ -258,6 +277,10 @@ type Config struct {
 	// still names the *source* image here; the caller creates the overlay
 	// and repoints it (see PrepareOverlay) before the VM boots.
 	DiskMode string
+
+	// StorageBackend is how Disks[0] is backed: StorageBackendStandard
+	// (default) or StorageBackendExtents (CHV_STORAGE_BACKEND).
+	StorageBackend string
 
 	// OverlayPath is where DiskModeOverlay writes the guest's overlay.
 	// Its default (guestimage.Overlay) is named disk.qcow2;
@@ -597,19 +620,53 @@ func FromEnv() (Config, error) {
 		}
 	}
 
-	diskPath := getEnvDefault(envDiskImage, defaultDiskImage)
+	rawBackend := strings.TrimSpace(os.Getenv(envStorageBackend))
+	switch strings.ToLower(rawBackend) {
+	case "", StorageBackendStandard:
+		cfg.StorageBackend = StorageBackendStandard
+	case StorageBackendExtents:
+		cfg.StorageBackend = StorageBackendExtents
+	default:
+		return Config{}, fmt.Errorf("%s must be %q or %q, got %q",
+			envStorageBackend, StorageBackendStandard, StorageBackendExtents, rawBackend)
+	}
+
+	diskPath, hasDiskEnv := os.LookupEnv(envDiskImage)
+	if !hasDiskEnv || diskPath == "" {
+		if cfg.StorageBackend == StorageBackendExtents && (extents.IsExtentDir(guestimage.DiskExtents) || !fileExists(defaultDiskImage)) {
+			diskPath = guestimage.DiskExtents
+		} else if rawBackend == "" && !fileExists(defaultDiskImage) && extents.IsExtentDir(guestimage.DiskExtents) {
+			cfg.StorageBackend = StorageBackendExtents
+			diskPath = guestimage.DiskExtents
+		} else if rawBackend == "" && !fileExists(defaultDiskImage) && extent.IsExtentDir(guestimage.DiskExtents) {
+			diskPath = guestimage.DiskExtents
+		} else {
+			diskPath = defaultDiskImage
+		}
+	} else if rawBackend == "" && extents.IsExtentDir(diskPath) {
+		cfg.StorageBackend = StorageBackendExtents
+	}
 	mode, err := diskModeFromEnv()
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.DiskMode = mode
-	cfg.OverlayPath = getEnvDefault(envDiskOverlayPath, defaultOverlayPath)
+	defaultOvl := defaultOverlayPath
+	if cfg.StorageBackend == StorageBackendExtents {
+		defaultOvl = guestimage.OverlayExtents
+	}
+	cfg.OverlayPath = getEnvDefault(envDiskOverlayPath, defaultOvl)
+	var vhostSock string
+	if cfg.StorageBackend == StorageBackendExtents {
+		vhostSock = guestimage.VhostBlkSocket
+	}
 	cfg.Disks = append(cfg.Disks, Disk{
-		Path:      diskPath,
-		ReadOnly:  mode == DiskModeReadOnly,
-		NumQueues: cfg.DiskNumQueues,
-		IOThreads: cfg.DiskIOThreads,
-		IOEngine:  cfg.DiskIOEngine,
+		Path:            diskPath,
+		ReadOnly:        mode == DiskModeReadOnly,
+		NumQueues:       cfg.DiskNumQueues,
+		IOThreads:       cfg.DiskIOThreads,
+		IOEngine:        cfg.DiskIOEngine,
+		VhostUserSocket: vhostSock,
 	})
 
 	cfg.DiskSizeMB, err = getEnvInt(envDiskSizeMB, 0)
@@ -656,7 +713,7 @@ func FromEnv() (Config, error) {
 	if cfg.ExtentSizeMB < 0 {
 		return Config{}, fmt.Errorf("%s must not be negative, got %d", envExtentSizeMB, cfg.ExtentSizeMB)
 	}
-	if cfg.ExtentSizeMB > 0 && mode != DiskModeOverlay {
+	if cfg.ExtentSizeMB > 0 && mode != DiskModeOverlay && cfg.StorageBackend != StorageBackendExtents {
 		return Config{}, fmt.Errorf("%s requires %s=%s: extents are only used with overlay disks (got %s=%s)",
 			envExtentSizeMB, envDiskMode, DiskModeOverlay, envDiskMode, mode)
 	}
@@ -712,6 +769,10 @@ func FromEnv() (Config, error) {
 	cfg.MemoryShared, err = getEnvBool(envMemoryShared, true)
 	if err != nil {
 		return Config{}, err
+	}
+	if cfg.StorageBackend == StorageBackendExtents && !cfg.MemoryShared {
+		return Config{}, fmt.Errorf("%s=%s requires %s=true: vhost-user-blk needs a shared memory backend",
+			envStorageBackend, StorageBackendExtents, envMemoryShared)
 	}
 
 	// CHV_MEMORY_MAX_MB defaults to whichever is larger of
@@ -1299,12 +1360,60 @@ func diskModeFromEnv() (string, error) {
 // so it takes effect before the VM is started either way, and raising it on
 // an already-running VM's next boot enlarges the disk it comes back with
 // instead of being ignored.
+//
+// A source that is an extent directory (pkg/extent) is assembled into a
+// flat raw disk at OverlayPath -- reflinked extent by extent where the
+// filesystem allows, copied otherwise -- rather than overlaid: that is
+// the only writable form of it cloud-hypervisor can attach, and it boots
+// as image_type=raw with no backing file. The other two modes refuse an
+// extent directory, since there is no single file to write through to or
+// attach read-only.
 func (c *Config) PrepareOverlay() error {
-	if c.DiskMode != DiskModeOverlay || len(c.Disks) == 0 {
+	if len(c.Disks) == 0 {
 		return nil
 	}
+	useExtents := c.StorageBackend == StorageBackendExtents ||
+		extents.IsExtentDir(c.Disks[0].Path) ||
+		extents.IsExtentDir(c.OverlayPath)
+
 	source := c.Disks[0].Path
+	if c.DiskMode != DiskModeOverlay {
+		if useExtents && c.Disks[0].VhostUserSocket == "" {
+			c.Disks[0].VhostUserSocket = guestimage.VhostBlkSocket
+		}
+		if !useExtents && extent.IsExtentDir(source) {
+			return fmt.Errorf("%s %s is an extent directory, which only %s=%s can boot: it is assembled into the guest's own disk at boot, and there is no single image for %s=%s to attach",
+				envDiskImage, source, envDiskMode, DiskModeOverlay, envDiskMode, c.DiskMode)
+		}
+		return nil
+	}
 	wantBytes := int64(c.DiskSizeMB) * 1024 * 1024
+
+	if useExtents {
+		if c.OverlayPath == "" || c.OverlayPath == guestimage.Overlay {
+			c.OverlayPath = guestimage.OverlayExtents
+		}
+		extBytes := uint64(c.ExtentSizeMB) * 1024 * 1024
+		if err := extents.PrepareOverlay(c.OverlayPath, source, uint64(wantBytes), extBytes); err != nil {
+			return fmt.Errorf("preparing extent overlay %s from %s: %w", c.OverlayPath, source, err)
+		}
+		vhostSock := c.Disks[0].VhostUserSocket
+		if vhostSock == "" {
+			vhostSock = guestimage.VhostBlkSocket
+		}
+		c.StorageBackend = StorageBackendExtents
+		c.Disks[0] = Disk{
+			Path:            c.OverlayPath,
+			BasePath:        source,
+			VhostUserSocket: vhostSock,
+			ReadOnly:        false,
+			NumQueues:       c.Disks[0].NumQueues,
+			IOThreads:       c.Disks[0].IOThreads,
+			IOEngine:        c.Disks[0].IOEngine,
+			Serial:          c.Disks[0].Serial,
+		}
+		return nil
+	}
 
 	if _, err := os.Stat(c.OverlayPath); err == nil {
 		if wantBytes > 0 {
@@ -1339,6 +1448,28 @@ func (c *Config) PrepareOverlay() error {
 		return nil
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("checking for an existing overlay at %s: %w", c.OverlayPath, err)
+	}
+
+	if extent.IsExtentDir(source) {
+		m, err := extent.ReadManifest(source)
+		if err != nil {
+			return fmt.Errorf("reading the extent disk %s: %w", source, err)
+		}
+		if wantBytes > 0 && wantBytes < m.VirtualSize {
+			return fmt.Errorf("%s=%d is smaller than the source disk %s (%d bytes): the guest's filesystem would be truncated",
+				envDiskSizeMB, c.DiskSizeMB, source, m.VirtualSize)
+		}
+		if _, err := extent.Assemble(source, c.OverlayPath, wantBytes); err != nil {
+			return fmt.Errorf("assembling the extent disk %s into %s: %w", source, c.OverlayPath, err)
+		}
+		c.Disks[0] = Disk{
+			Path:      c.OverlayPath,
+			ReadOnly:  false,
+			NumQueues: c.Disks[0].NumQueues,
+			IOThreads: c.Disks[0].IOThreads,
+			IOEngine:  c.Disks[0].IOEngine,
+		}
+		return nil
 	}
 
 	sourceBytes, err := qcow2.VirtualSize(source)

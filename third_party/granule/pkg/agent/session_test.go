@@ -1116,11 +1116,11 @@ func TestAnEnvironmentEntryThatIsNotKeyValueIsRefused(t *testing.T) {
 // Dir/Env it sent were honoured or silently dropped by an older guest.
 func TestEveryResponseNamesTheFeaturesThisAgentImplements(t *testing.T) {
 	res := run(t, execwire.Request{Line: "true"}, "")
-	if !res.resp.Supports(execwire.FeatureDirEnv) || !res.resp.Supports(execwire.FeatureForward) {
+	if !res.resp.Supports(execwire.FeatureDirEnv) {
 		t.Errorf("a successful response reported features %v", res.resp.Features)
 	}
 	resp := serveOne(t, execwire.Request{Line: "echo unreachable", Dir: "/no/such/place"})
-	if !resp.Supports(execwire.FeatureDirEnv) || !resp.Supports(execwire.FeatureForward) {
+	if !resp.Supports(execwire.FeatureDirEnv) {
 		t.Errorf("a refusal reported features %v; a client cannot tell a refusal from an old agent", resp.Features)
 	}
 }
@@ -1278,4 +1278,3 @@ func TestForwardSessionRefusesInvalidSpecs(t *testing.T) {
 		t.Fatal("expected refusal for invalid forward spec")
 	}
 }
-

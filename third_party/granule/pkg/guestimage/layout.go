@@ -71,6 +71,16 @@ const (
 	// kept somewhere else.
 	DiskImage = Dir + "/disk.img"
 
+	// DiskExtents and DiskExtentsManifest are the optional alternative to
+	// DiskImage: the guest's root disk split into fixed-size raw extent files
+	// plus a manifest (see pkg/extents, pkg/extent, and
+	// docs/extent-storage-design.md), so that an image derived from this one
+	// ships only the extents its edit changed. Used when DiskImage is absent,
+	// when GRANULE_STORAGE_BACKEND=extents / CHV_STORAGE_BACKEND=extents is
+	// selected, or when named by CHV_DISK_IMAGE.
+	DiskExtents         = Dir + "/disk.extents"
+	DiskExtentsManifest = DiskExtents + "/manifest.json"
+
 	// SnapshotDir holds the VM snapshot state (RAM, device/vCPU registers,
 	// and disk overlay) saved when the image is built with VM SNAPSHOT or
 	// VM SET snapshot=on. At boot, if present, granule restores and resumes
@@ -156,8 +166,13 @@ const (
 	// it is per-VM state, it is written while the VM runs, and copying it
 	// between images would mean copying one VM's writes into another
 	// machine.
-	OverlayDir = Root + "/overlay"
-	Overlay    = OverlayDir + "/disk.qcow2"
+	OverlayDir     = Root + "/overlay"
+	Overlay        = OverlayDir + "/disk.qcow2"
+	OverlayExtents = OverlayDir + "/disk.extents"
+
+	// VhostBlkSocket is the default Unix socket path where granule-shim
+	// serves the in-process vhost-user-blk extent backend to Cloud-Hypervisor.
+	VhostBlkSocket = "/run/granule/vhost-blk.sock"
 )
 
 // File is one file of the guest half, as something a caller can enumerate
@@ -228,7 +243,7 @@ func Under(root, path string) string {
 // selects the deployment's own kernel, which is a working guest rather
 // than a failed boot.
 func Present(root string) (hasDisk, hasKernel bool) {
-	return regularFile(Under(root, DiskImage)),
+	return (regularFile(Under(root, DiskImage)) || regularFile(Under(root, DiskExtentsManifest))),
 		regularFile(Under(root, GuestKernel)) && regularFile(Under(root, GuestInitramfs))
 }
 
@@ -284,7 +299,7 @@ func CheckPresent(has func(path string) bool, name func(path string) string) err
 	if name == nil {
 		name = func(path string) string { return path }
 	}
-	if !has(DiskImage) {
+	if !has(DiskImage) && !has(DiskExtentsManifest) {
 		return fmt.Errorf("%s is missing: a guest image needs %s", name(DiskImage), describe(DiskImage))
 	}
 	kernel, initramfs := has(GuestKernel), has(GuestInitramfs)

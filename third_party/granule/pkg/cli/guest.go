@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bwsalmon/granule/pkg/extent"
+	"github.com/bwsalmon/granule/pkg/extents"
 	"github.com/bwsalmon/granule/pkg/guestbuild"
 	"github.com/bwsalmon/granule/pkg/guestdockerfile"
 	"github.com/bwsalmon/granule/pkg/guestpack"
@@ -31,7 +33,7 @@ func (r *repeatedFlag) Set(v string) error {
 // runGuest dispatches "granule guest <subcommand>".
 func runGuest(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("guest: expected a subcommand (build, pack, rebase, verify, flatten)")
+		return fmt.Errorf("guest: expected a subcommand (build, pack, rebase, verify, flatten, split, assemble)")
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
@@ -45,6 +47,10 @@ func runGuest(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return runGuestVerify(ctx, rest, stdout, stderr)
 	case "flatten":
 		return runGuestFlatten(ctx, rest, stdout, stderr)
+	case "split":
+		return runGuestSplit(ctx, rest, stdout, stderr)
+	case "assemble":
+		return runGuestAssemble(ctx, rest, stdout, stderr)
 	default:
 		return fmt.Errorf("guest: unknown subcommand %q", cmd)
 	}
@@ -140,6 +146,8 @@ func runGuestBuild(ctx context.Context, args []string, stdout, stderr io.Writer)
 	packerImage := fs.String("packer-image", guestpack.DefaultPackerImage, "image the packing itself runs in; anything with /bin/sh and mke2fs will do")
 	variant := fs.String("variant", "", "which overlay the packing lays down: \"debian\" (systemd) or \"alpine\" (OpenRC). The default asks the rootfs which init system it runs")
 	diskMode := fs.String("disk-mode", "", "disk mode to bake into the image: \"overlay\" (qcow2 disk overlay), \"persistent\" (raw read-write flat file), or \"readonly\"")
+	storageBackend := fs.String("storage-backend", "", "disk storage backend to bake into the image: \"standard\" (qcow2 overlay / flat disk.img) or \"extents\" (N-MiB extent directory over vhost-user-blk)")
+	extentSizeMB := fs.Int("extent-size-mb", 0, "extent size in MiB for the extent storage backend or overlay (default 64)")
 	diskNumQueues := fs.Int("disk-num-queues", 0, "virtio-blk multi-queue count to bake into the image")
 	diskIOThreads := fs.Bool("disk-iothreads", false, "dedicated host iothreads setting to bake into the image")
 	diskIOEngine := fs.String("disk-io-engine", "", "host asynchronous I/O backend to bake into the image: \"io_uring\", \"epoll\", or \"sync\"")
@@ -198,6 +206,8 @@ func runGuestBuild(ctx context.Context, args []string, stdout, stderr io.Writer)
 			Tag:             *tag,
 			Snapshot:        *snapshot,
 			DiskMode:        *diskMode,
+			StorageBackend:  *storageBackend,
+			ExtentSizeMB:    *extentSizeMB,
 			DiskNumQueues:   *diskNumQueues,
 			DiskIOThreads:   *diskIOThreads,
 			DiskIOEngine:    *diskIOEngine,
@@ -253,6 +263,8 @@ func runGuestBuild(ctx context.Context, args []string, stdout, stderr io.Writer)
 		PackerImage:    *packerImage,
 		Variant:        *variant,
 		DiskMode:       *diskMode,
+		StorageBackend: *storageBackend,
+		ExtentSizeMB:   *extentSizeMB,
 		DiskNumQueues:  *diskNumQueues,
 		DiskIOThreads:  *diskIOThreads,
 		DiskIOEngine:   *diskIOEngine,
@@ -311,7 +323,7 @@ var routeFlags = map[string]string{
 // packFlags are the ones that configure the packing at the end of the
 // Dockerfile route, and so mean nothing to a build that stops short of
 // it.
-var packFlags = []string{"disk-extra-mb", "disk-io-engine", "disk-iothreads", "disk-mode", "disk-num-queues", "kontur-image", "packer-image", "rootfs-tag", "variant"}
+var packFlags = []string{"disk-extra-mb", "disk-io-engine", "disk-iothreads", "disk-mode", "disk-num-queues", "extent-size-mb", "kontur-image", "packer-image", "rootfs-tag", "storage-backend", "variant"}
 
 func checkRouteFlags(set map[string]bool) error {
 	booting := set["setup"]
@@ -407,6 +419,8 @@ func runGuestPack(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	packerImage := fs.String("packer-image", guestpack.DefaultPackerImage, "image the packing itself runs in; anything with /bin/sh and mke2fs will do, and one that already has mke2fs needs no network at all")
 	variant := fs.String("variant", "", "which overlay to lay down: \"debian\" (systemd) or \"alpine\" (OpenRC). The default asks the rootfs which init system it runs")
 	diskMode := fs.String("disk-mode", "", "disk mode to bake into the image: \"overlay\" (qcow2 disk overlay), \"persistent\" (raw read-write flat file), or \"readonly\"")
+	storageBackend := fs.String("storage-backend", "", "disk storage backend to bake into the image: \"standard\" (qcow2 overlay / flat disk.img) or \"extents\" (N-MiB extent directory over vhost-user-blk)")
+	extentSizeMB := fs.Int("extent-size-mb", 0, "extent size in MiB for the extent storage backend or overlay (default 64)")
 	diskNumQueues := fs.Int("disk-num-queues", 0, "virtio-blk multi-queue count to bake into the image")
 	diskIOThreads := fs.Bool("disk-iothreads", false, "dedicated host iothreads setting to bake into the image")
 	diskIOEngine := fs.String("disk-io-engine", "", "host asynchronous I/O backend to bake into the image: \"io_uring\", \"epoll\", or \"sync\"")
@@ -429,6 +443,8 @@ func runGuestPack(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		PackerImage:    *packerImage,
 		Variant:        *variant,
 		DiskMode:       *diskMode,
+		StorageBackend: *storageBackend,
+		ExtentSizeMB:   *extentSizeMB,
 		DiskNumQueues:  *diskNumQueues,
 		DiskIOThreads:  *diskIOThreads,
 		DiskIOEngine:   *diskIOEngine,
@@ -534,6 +550,13 @@ func runGuestFlatten(ctx context.Context, args []string, stdout, stderr io.Write
 		return fmt.Errorf("guest flatten: requires <qcow-input> and <flat-output>")
 	}
 	inPath, outPath := rest[0], rest[1]
+	if extents.IsExtentDir(inPath) {
+		if err := extents.FlattenToFlat(inPath, outPath); err != nil {
+			return fmt.Errorf("flattening %s to %s: %w", inPath, outPath, err)
+		}
+		fmt.Fprintf(stdout, "Flattened %s to %s\n", inPath, outPath)
+		return nil
+	}
 	if *base != "" {
 		if err := qcow2.FlattenChain([]string{*base, inPath}, outPath); err != nil {
 			return fmt.Errorf("flattening %s with base %s to %s: %w", inPath, *base, outPath, err)
@@ -544,5 +567,76 @@ func runGuestFlatten(ctx context.Context, args []string, stdout, stderr io.Write
 		}
 	}
 	fmt.Fprintf(stdout, "Flattened %s to %s\n", inPath, outPath)
+	return nil
+}
+
+// runGuestSplit is "granule guest split": a raw disk into an extent
+// directory (pkg/extent). Run over a parent image's directory it rewrites
+// only the extents that changed, which is what keeps a derived image's
+// layer small -- see docs/extent-storage-design.md.
+func runGuestSplit(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("guest split", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	size := fs.Int("extent-size-mb", extent.DefaultExtentSizeMB, "extent size in MiB; must match an existing directory's")
+	fs.Usage = func() {
+		fmt.Fprintf(stderr, "usage: granule guest split [flags] <raw-disk> <extent-dir>\n\n")
+		fmt.Fprintf(stderr, "Split a raw guest disk into fixed-size extent files plus a manifest. Into an\nexisting extent directory, only changed extents are rewritten.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) != 2 {
+		fs.Usage()
+		return fmt.Errorf("guest split: requires <raw-disk> and <extent-dir>")
+	}
+	if qcow2.IsQcow2(rest[0]) {
+		return fmt.Errorf("guest split: %s is a qcow2 image; flatten it to raw first (granule guest flatten)", rest[0])
+	}
+	st, err := extent.Split(rest[0], rest[1], *size)
+	if err != nil {
+		return fmt.Errorf("splitting %s into %s: %w", rest[0], rest[1], err)
+	}
+	fmt.Fprintf(stdout, "Split %s into %s: %d written, %d unchanged, %d holes, %d removed\n",
+		rest[0], rest[1], st.Written, st.Unchanged, st.Holes, st.Removed)
+	return nil
+}
+
+// runGuestAssemble is "granule guest assemble": the boot-time assembly
+// (config.PrepareOverlay) as a command, for inspecting or exporting an
+// extent disk.
+func runGuestAssemble(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("guest assemble", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	sizeMB := fs.Int("size-mb", 0, "grow the assembled disk to this many MiB; 0 keeps the manifest's size")
+	verify := fs.Bool("verify", false, "check every extent's sha256 against the manifest first")
+	fs.Usage = func() {
+		fmt.Fprintf(stderr, "usage: granule guest assemble [flags] <extent-dir> <raw-disk>\n\n")
+		fmt.Fprintf(stderr, "Assemble an extent directory into one flat raw disk, reflinking extents where\nthe filesystem allows.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) != 2 {
+		fs.Usage()
+		return fmt.Errorf("guest assemble: requires <extent-dir> and <raw-disk>")
+	}
+	if *sizeMB < 0 {
+		return fmt.Errorf("guest assemble: -size-mb must not be negative")
+	}
+	if *verify {
+		if err := extent.Verify(rest[0]); err != nil {
+			return fmt.Errorf("verifying %s: %w", rest[0], err)
+		}
+	}
+	st, err := extent.Assemble(rest[0], rest[1], int64(*sizeMB)<<20)
+	if err != nil {
+		return fmt.Errorf("assembling %s into %s: %w", rest[0], rest[1], err)
+	}
+	fmt.Fprintf(stdout, "Assembled %s into %s: %d reflinked, %d copied, %d holes\n",
+		rest[0], rest[1], st.Reflinked, st.Copied, st.Holes)
 	return nil
 }

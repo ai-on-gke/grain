@@ -1,0 +1,134 @@
+# Reference manifest for granule relay: the in-cluster hop an off-cluster
+# grain controller uses to reach sandbox pods' access listeners.
+# See docs/sandbox-relay.md for the design and docs/sandbox-access-api.md for
+# the API it carries.
+#
+#   off-cluster controller --(TLS 1.3 + controller token or mTLS)--> Service/granule-relay (LoadBalancer)
+#   granule-relay pod      --(per stream: resolve pod by name, dial podIP:7443)--> sandbox pod
+#
+# The relay is stateless: no volumes beyond its certificate and token, no
+# database. It reads pods (get/list/watch) in the sandbox namespace only and
+# never uses exec. TLS and the per-sandbox token run end to end between the
+# controller and each sandbox, so the relay never holds sandbox tokens.
+#
+# Replace RELAY_IMAGE_PLACEHOLDER with an image carrying the granule CLI
+# (go build ./cmd/granule), and create the two Secrets named below:
+#   granule-relay-tls    tls.crt / tls.key  -- the relay's server certificate
+#                        (optionally client-ca.crt, then add -client-ca)
+#   granule-relay-token  token              -- the controller bearer token
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: granule-relay
+  namespace: granule-sandboxes
+---
+# Only what the pod resolver needs: read pods in the sandbox namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: granule-relay-pod-reader
+  namespace: granule-sandboxes
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: granule-relay-pod-reader
+  namespace: granule-sandboxes
+subjects:
+  - kind: ServiceAccount
+    name: granule-relay
+    namespace: granule-sandboxes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: granule-relay-pod-reader
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: granule-relay
+  namespace: granule-sandboxes
+  labels:
+    app.kubernetes.io/name: granule-relay
+spec:
+  # Stateless: any replica can carry any controller session.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: granule-relay
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: granule-relay
+    spec:
+      serviceAccountName: granule-relay
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: relay
+          image: RELAY_IMAGE_PLACEHOLDER
+          command: ["granule", "relay"]
+          args:
+            - -controller-listen=:8443
+            - -tls-cert=/etc/granule-relay/tls/tls.crt
+            - -tls-key=/etc/granule-relay/tls/tls.key
+            - -token-file=/etc/granule-relay/token/token
+            - -namespace=granule-sandboxes
+            - -selector=granule.gke.io/sandbox=true
+            - -name-label=granule.gke.io/sandbox-name
+            - -sandbox-port=7443
+          ports:
+            - name: controller
+              containerPort: 8443
+          readinessProbe:
+            tcpSocket:
+              port: controller
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/granule-relay/tls
+              readOnly: true
+            - name: token
+              mountPath: /etc/granule-relay/token
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: granule-relay-tls
+        - name: token
+          secret:
+            secretName: granule-relay-token
+---
+# The off-cluster controller's one way in. Restrict loadBalancerSourceRanges
+# to the controller's egress addresses.
+apiVersion: v1
+kind: Service
+metadata:
+  name: granule-relay
+  namespace: granule-sandboxes
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: granule-relay
+  ports:
+    - name: controller
+      port: 443
+      targetPort: controller
+  # loadBalancerSourceRanges:
+  #   - 203.0.113.10/32

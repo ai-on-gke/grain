@@ -85,7 +85,7 @@ import (
 // its packing in this image, so whoever could move the tag would choose
 // the userland that packs every guest. deploy/base-images.sh update
 // bumps both.
-const DefaultPackerImage = "debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587"
+const DefaultPackerImage = "debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8"
 
 // partsIn is where guestimage.PartsDir is copied to inside the packing
 // stage. A path of its own rather than the absolute one it has in the
@@ -207,6 +207,12 @@ type Options struct {
 
 	// DiskIOEngine configures the host asynchronous I/O backend (CHV_DISK_IO_ENGINE: "io_uring", "epoll", or "sync").
 	DiskIOEngine string
+
+	// StorageBackend selects the VM disk storage backend ("standard" or "extents").
+	StorageBackend string
+
+	// ExtentSizeMB configures the extent size in MiB (CHV_EXTENT_SIZE_MB / GRANULE_EXTENT_SIZE_MB).
+	ExtentSizeMB int
 
 	// DiskExtraMB is headroom in MiB on top of the 20% the disk is sized
 	// with, for a guest that will be provisioned further after packing.
@@ -443,6 +449,14 @@ func (opts Options) resolve() (Options, error) {
 		default:
 			return opts, fmt.Errorf("unknown disk io engine %q: expected \"io_uring\", \"epoll\", or \"sync\"", opts.DiskIOEngine)
 		}
+	}
+	switch opts.StorageBackend {
+	case "", config.StorageBackendStandard, config.StorageBackendExtents:
+	default:
+		return opts, fmt.Errorf("unknown storage backend %q: expected %q or %q", opts.StorageBackend, config.StorageBackendStandard, config.StorageBackendExtents)
+	}
+	if opts.ExtentSizeMB < 0 {
+		return opts, fmt.Errorf("extent size cannot be negative, got %d", opts.ExtentSizeMB)
 	}
 	if len(opts.ExposedPorts) > 0 {
 		// A copy rather than a normalization in place: resolve is called
@@ -779,7 +793,14 @@ func PackStages(opts Options) (string, error) {
 	w(`# settings are passed in the environment rather than as ARGs so`)
 	w(`# that this file is the whole build and nothing has to be supplied`)
 	w(`# alongside it.`)
-	w(`RUN GUEST_DISK_EXTRA_MB=%d GRANULE_GUEST_VARIANT=%s \`, opts.DiskExtraMB, variant)
+	packEnv := fmt.Sprintf("GUEST_DISK_EXTRA_MB=%d GRANULE_GUEST_VARIANT=%s", opts.DiskExtraMB, variant)
+	if opts.StorageBackend == config.StorageBackendExtents {
+		packEnv += " GRANULE_STORAGE_BACKEND=extents"
+		if opts.ExtentSizeMB > 0 {
+			packEnv += fmt.Sprintf(" GRANULE_EXTENT_SIZE_MB=%d", opts.ExtentSizeMB)
+		}
+	}
+	w(`RUN %s \`, packEnv)
 	w(`    /bin/sh %s /rootfs %s %s`, path.Join(partsIn, path.Base(guestimage.PartsScript)), partsIn, staged)
 	w(``)
 	w(`# The VMM half, with the packed guest half copied in at the paths`)
@@ -839,6 +860,16 @@ func PackStages(opts Options) (string, error) {
 		w(``)
 		w(`# Default disk io engine baked into the image.`)
 		w(`ENV %s="%s"`, "CHV_DISK_IO_ENGINE", opts.DiskIOEngine)
+	}
+	if opts.StorageBackend == config.StorageBackendExtents {
+		w(``)
+		w(`# Default storage backend baked into the image.`)
+		w(`ENV %s="%s"`, "CHV_STORAGE_BACKEND", config.StorageBackendExtents)
+	}
+	if opts.ExtentSizeMB > 0 {
+		w(``)
+		w(`# Default extent size in MiB baked into the image.`)
+		w(`ENV %s="%d"`, "CHV_EXTENT_SIZE_MB", opts.ExtentSizeMB)
 	}
 	return b.String(), nil
 }

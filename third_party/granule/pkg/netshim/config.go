@@ -28,6 +28,8 @@ const (
 	envDNS           = "NETSHIM_DNS"
 	envTapOwner      = "NETSHIM_TAP_OWNER"
 	envIPv6          = "NETSHIM_IPV6"
+	envControllerIPs = "NETSHIM_CONTROLLER_IPS"
+	envAccessPorts   = "NETSHIM_ACCESS_PORTS"
 
 	defaultControlCIDR   = "169.254.100.1/24"
 	defaultBridge        = "granule0"
@@ -138,6 +140,22 @@ type Config struct {
 	// IPv4-only behaviour every netshim had before IPv6 was discovered at
 	// all.
 	IPv6 string
+
+	// ControllerIPs are the IPv4 or IPv6 addresses of the sandbox access
+	// controller that the pod-side wrapper dials out to, parsed from
+	// NETSHIM_CONTROLLER_IPS. When set, Setup drops any frame from the
+	// guest tap addressed to these IPs and passes frames from these IPs
+	// arriving on the external interface to the namespace's own network
+	// stack rather than redirecting them to the guest tap.
+	ControllerIPs []net.IP
+
+	// AccessPorts are the TCP ports the sandbox access server listens on
+	// in this namespace, parsed from NETSHIM_ACCESS_PORTS. TCP segments
+	// arriving on the external interface for these ports are passed to
+	// the namespace's own stack, from any source, instead of to the
+	// guest; the access server authenticates every connection itself
+	// (TLS 1.3 and the per-sandbox token).
+	AccessPorts []uint16
 }
 
 // The NETSHIM_IPV6 values (and VMSpec.IPv6, and granule's -ipv6).
@@ -215,6 +233,21 @@ func FromEnv() (Config, error) {
 	cfg.IPv6 = strings.TrimSpace(getEnvDefault(envIPv6, IPv6Auto))
 	if err := ValidateIPv6(cfg.IPv6); err != nil {
 		return Config{}, fmt.Errorf("%s=%q: %w", envIPv6, cfg.IPv6, err)
+	}
+
+	if rawControllers := strings.TrimSpace(os.Getenv(envControllerIPs)); rawControllers != "" {
+		cips, err := ParseControllerIPs(rawControllers)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", envControllerIPs, err)
+		}
+		cfg.ControllerIPs = cips
+	}
+	if rawPorts := strings.TrimSpace(os.Getenv(envAccessPorts)); rawPorts != "" {
+		ports, err := ParseAccessPorts(rawPorts)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", envAccessPorts, err)
+		}
+		cfg.AccessPorts = ports
 	}
 
 	cfg.VM = strings.TrimSpace(os.Getenv(envVM))
@@ -347,4 +380,51 @@ func ParseDNS(spec string) ([]net.IP, error) {
 		return nil, fmt.Errorf("at most %d IPv4 nameservers fit the guest's ip= boot parameter, got %d", maxDNS4, v4)
 	}
 	return dns, nil
+}
+
+// ParseAccessPorts parses a comma-separated list of TCP ports for
+// NETSHIM_ACCESS_PORTS.
+func ParseAccessPorts(spec string) ([]uint16, error) {
+	var ports []uint16
+	for _, f := range strings.Split(spec, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		n, err := strconv.ParseUint(f, 10, 16)
+		if err != nil || n == 0 {
+			return nil, fmt.Errorf("invalid TCP port %q", f)
+		}
+		ports = append(ports, uint16(n))
+	}
+	return ports, nil
+}
+
+// ParseControllerIPs parses a comma-separated list of IPv4 or IPv6 addresses
+// for NETSHIM_CONTROLLER_IPS.
+func ParseControllerIPs(spec string) ([]net.IP, error) {
+	var ips []net.IP
+	seen := make(map[string]bool)
+	for _, field := range strings.Split(spec, ",") {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		ip := net.ParseIP(field)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid controller IP address %q", field)
+		}
+		if ip4 := ip.To4(); ip4 != nil {
+			ip = ip4
+		} else {
+			ip = ip.To16()
+		}
+		key := string(ip)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		ips = append(ips, ip)
+	}
+	return ips, nil
 }

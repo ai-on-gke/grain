@@ -31,6 +31,7 @@ var settings = map[string]struct {
 	"memory-hotplug":   {env: "CHV_MEMORY_HOTPLUG", check: onOff, syntax: "on or off"},
 	"kernel-cmdline":   {env: "CHV_CMDLINE", check: nonEmpty, syntax: "kernel command line arguments; quote it if it has a space in it"},
 	"disk-mode":        {env: "CHV_DISK_MODE", check: oneOf("overlay", "persistent", "readonly"), syntax: "overlay, persistent or readonly"},
+	"storage-backend":  {env: "CHV_STORAGE_BACKEND", check: oneOf("standard", "extents"), syntax: "standard or extents"},
 	"disk-size-mb":     {env: "CHV_DISK_SIZE_MB", check: positiveInt, syntax: "a positive whole number of MiB"},
 	"extent-size-mb":   {env: "CHV_EXTENT_SIZE_MB", check: positiveInt, syntax: "a positive whole number of MiB"},
 	"disk-num-queues":  {env: "CHV_DISK_NUM_QUEUES", check: positiveInt, syntax: "a positive whole number of virtio-blk queues"},

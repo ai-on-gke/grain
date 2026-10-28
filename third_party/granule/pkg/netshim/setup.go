@@ -66,7 +66,7 @@ func Setup(cfg Config) error {
 		return fmt.Errorf("looking up %s: %w", cfg.ExternalIface, err)
 	}
 
-	if err := spliceGuest(ext, tap, id); err != nil {
+	if err := spliceGuestWithAccess(ext, tap, id, cfg.ControllerIPs, cfg.AccessPorts); err != nil {
 		return err
 	}
 	var held []string

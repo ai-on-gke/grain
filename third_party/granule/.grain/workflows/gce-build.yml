@@ -36,7 +36,7 @@ jobs:
     # The key test/gce-build.sh creates and deletes its VM with, placed at
     # /home/debian/.gcp-service-account.json.
     capabilities:
-      - gcp-key
+      - https://grain.dev/capabilities/gcp#gcp-key
     # A cold build of all three guests measured under ten minutes on the
     # VM, plus about a minute to create it and install docker. The rest is
     # for a slow mirror. The VM deletes itself after GCE_MAX_RUN even if
@@ -80,12 +80,22 @@ jobs:
           grep "^+ grain sandbox setup:" <<<"$out"
           # The Dockerfile fetches github release assets through grain's
           # proxy only when GITHUB_PROXY says where it is; it no longer
-          # guesses from resolv.conf.
-          grep -q -- "--build-arg GITHUB_PROXY=[^ ]" <<<"$out" || {
+          # guesses from resolv.conf. Only a sandbox whose nameserver is
+          # grain's proxy has one: on a Kubernetes-hosted sandbox the
+          # nameserver is the cluster DNS, github.com is reached directly,
+          # and passing GITHUB_PROXY there would be the bug.
+          ns=$(grep -E '^nameserver' /etc/resolv.conf | awk '{print $2}' | grep -v -E '^(8\.8\.8\.8|8\.8\.4\.4|127\.|0\.)' | head -n 1 || true)
+          if [[ -n $ns ]] && timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/443"' _ "$ns" 2>/dev/null; then
+            grep -q -- "--build-arg GITHUB_PROXY=[^ ]" <<<"$out" || {
+              echo "$out"
+              echo "::error::deploy/publish-images.sh detected this grain sandbox but passed the Dockerfile no GITHUB_PROXY, so release.yml's publish would fetch from github.com directly" >&2
+              exit 1
+            }
+          elif grep -q -- "--build-arg GITHUB_PROXY=" <<<"$out"; then
             echo "$out"
-            echo "::error::deploy/publish-images.sh detected this grain sandbox but passed the Dockerfile no GITHUB_PROXY, so release.yml's publish would fetch from github.com directly" >&2
+            echo "::error::$ns serves no proxy on 443, but deploy/publish-images.sh passed it to the Dockerfile as GITHUB_PROXY anyway" >&2
             exit 1
-          }
+          fi
 
       - name: build granule's images on a stock GCE VM
         run: test/gce-build.sh guests

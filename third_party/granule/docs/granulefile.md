@@ -581,6 +581,7 @@ specification does not give a Granule a way to prevent that.
 | `memory-hotplug` | `on`/`off` | `CHV_MEMORY_HOTPLUG` |
 | `kernel-cmdline` | extra kernel command line | `CHV_CMDLINE` |
 | `disk-mode` | `overlay`/`persistent`/`readonly` | `CHV_DISK_MODE` |
+| `storage-backend` | `standard`/`extents` | `CHV_STORAGE_BACKEND` |
 | `disk-size-mb` | grow the writable overlay at boot | `CHV_DISK_SIZE_MB` |
 | `extent-size-mb` | overlay extent size, MiB (default 64) | `CHV_EXTENT_SIZE_MB` |
 | `disk-num-queues` | virtio-blk queues (`num-queues`) | `CHV_DISK_NUM_QUEUES` |
