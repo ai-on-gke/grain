@@ -23,8 +23,16 @@ const STATES = {
   passed: { label: "presubmit passed", color: "success", variant: "filled" },
   failed: { label: "presubmit failed", color: "error", variant: "filled" },
   running: { label: "presubmit running", color: "info", variant: "outlined" },
-  not_run: { label: "presubmit not run", color: "default", variant: "outlined" },
-  unknown: { label: "presubmit unknown", color: "default", variant: "outlined" },
+  not_run: {
+    label: "presubmit not run",
+    color: "default",
+    variant: "outlined",
+  },
+  unknown: {
+    label: "presubmit unknown",
+    color: "default",
+    variant: "outlined",
+  },
 };
 
 export function presubmitLabel(presubmit) {

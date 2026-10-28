@@ -36,9 +36,9 @@ describe("PresubmitBadge", () => {
   });
 
   it("names the failing checks", () => {
-    expect(
-      presubmitLabel({ state: "failed", failing: ["//a:test"] }),
-    ).toBe("presubmit failed: //a:test");
+    expect(presubmitLabel({ state: "failed", failing: ["//a:test"] })).toBe(
+      "presubmit failed: //a:test",
+    );
     render(
       <PresubmitBadge
         presubmit={{ state: "failed", failing: ["//a:test", "//b:test"] }}
