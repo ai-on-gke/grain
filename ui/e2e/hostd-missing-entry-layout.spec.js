@@ -17,14 +17,14 @@ import { expect, test } from "./fixtures.js";
 // Settings → Capability servers and System → Health saying that one of
 // grain's own hostd allowlist entries is missing (HostdMissingNote.jsx).
 // grain demo has no grain hostd, so what hostd offers is answered here
-// and a run: host citc row is added to the demo's own list; everything
+// and a run: host workspace row is added to the demo's own list; everything
 // else is the demo's.
 
-const CITC = "https://grain.dev/capabilities/citc";
+const WORKSPACE = "https://grain.dev/capabilities/workspace";
 const ENTRY =
-  "  grain-citc:\n    command: /usr/local/bin/grain\n    args: [capability, citc]\n    extra_args: true\n    env: [GRAIN_CAPABILITY_PROBE]\n    pass_env: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy]\n";
+  "  grain-workspace:\n    command: /usr/local/bin/grain\n    args: [capability, workspace]\n    extra_args: true\n    env: [GRAIN_CAPABILITY_PROBE]\n    pass_env: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy]\n";
 const MISSING = {
-  name: "grain-citc",
+  name: "grain-workspace",
   entry: ENTRY,
   command: "sudo systemctl start grain-hostd-allowlist.service",
 };
@@ -42,26 +42,30 @@ async function stub(page) {
   await page.route(/\/api\/capability-servers$/, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const listed = (await (await route.fetch()).json()).filter(
-      (s) => s.id !== CITC,
+      (s) => s.id !== WORKSPACE,
     );
     listed.unshift({
-      id: CITC,
+      id: WORKSPACE,
       config: {
-        command: "grain-citc",
+        command: "grain-workspace",
         run: "host",
         args: ["-listen", "127.0.0.1:4250"],
-        builtin: "citc",
+        builtin: "workspace",
       },
       secrets: [],
-      builtin: { name: "citc", id: CITC, summary: "CitC workspaces" },
+      builtin: {
+        name: "workspace",
+        id: WORKSPACE,
+        summary: "Workspace directories",
+      },
       status: {
-        id: CITC,
+        id: WORKSPACE,
         state: "needs-config",
         transport: "stdio",
         run: "host",
-        builtin: "citc",
+        builtin: "workspace",
         error:
-          'capability server grain-citc is set to run: host, but grain hostd\'s allowlist (/etc/grain/hostd.yaml) offers no capability entry "grain-citc"',
+          'capability server grain-workspace is set to run: host, but grain hostd\'s allowlist (/etc/grain/hostd.yaml) offers no capability entry "grain-workspace"',
       },
     });
     await route.fulfill({ json: listed });
@@ -74,15 +78,15 @@ for (const [width, theme] of [
   [1280, "dark"],
   [390, "dark"],
 ]) {
-  test(`the missing grain-citc entry is said in Settings at ${width}px (${theme}), inside its card`, async ({
+  test(`the missing grain-workspace entry is said in Settings at ${width}px (${theme}), inside its card`, async ({
     page,
   }) => {
     await page.emulateMedia({ colorScheme: theme });
     await page.setViewportSize({ width, height: 900 });
     await stub(page);
     await page.goto("/settings/capabilities#capability-servers");
-    await page.locator(`[data-capability-server-row="${CITC}"]`).click();
-    const card = page.locator(`[data-capability-server="${CITC}"]`);
+    await page.locator(`[data-capability-server-row="${WORKSPACE}"]`).click();
+    const card = page.locator(`[data-capability-server="${WORKSPACE}"]`);
     const note = card.getByTestId("hostd-entry-missing");
     await expect(note).toContainText("grain adds it automatically");
     await expect(note.getByTestId("hostd-entry-text")).toHaveText(ENTRY);
@@ -120,6 +124,6 @@ test("System → Health names grain's own missing hostd entries", async ({
   });
   await page.goto("/system");
   const note = page.getByTestId("hostd-health-missing");
-  await expect(note).toContainText("grain-citc", { timeout: 30000 });
+  await expect(note).toContainText("grain-workspace", { timeout: 30000 });
   await page.screenshot({ path: "screenshots/after/hostd-missing-health.png" });
 });

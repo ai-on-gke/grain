@@ -301,7 +301,7 @@ func TestAnOlderUnitsRunLocationFlagsStillPassVerifyDaemonFlags(t *testing.T) {
 		}
 		spec.WriteString(name + " " + kind + "\n")
 	}
-	older := ` daemon -claude-run auto -codex-run container -agy-run host -cli-image ghcr.io/bwsalmon/grain/google-grain:v2.1.0` +
+	older := ` daemon -claude-run auto -codex-run container -agy-run host -cli-image ghcr.io/bwsalmon/grain/grain:v2.1.0` +
 		` -cli-image-file /etc/grain/image.env -cli-container-engine docker`
 	env := []string{"DAEMON_FLAG_SPEC_READ=1", "DAEMON_FLAG_SPEC=" + spec.String(), "GRAIN_IMAGE_REF=ghcr.io/bwsalmon/grain/grain:v2.3.0"}
 	out := runBash(t, logFn+shellFunction(t, "verify_daemon_flags")+"verify_daemon_flags"+older, env...)

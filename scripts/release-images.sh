@@ -89,11 +89,11 @@
 #   rc [vX.Y.0-rc.N]
 #           publish a release candidate the way `promote` publishes a
 #           release (docs/design/release-from-trunk.md, RFT-4): the guest
-#           and k8s-sandbox `sha-<short>` images retagged, grain and
-#           google-grain rebuilt from the same commit with
-#           RELEASE=vX.Y.0-rc.N, and all four published as
-#           `:vX.Y.0-rc.N`, `:candidate` and `:rc` -- the two moving names
-#           the candidate (and its `rc` alias) upgrade channel resolves.
+#           and k8s-sandbox `sha-<short>` images retagged, grain rebuilt
+#           from the same commit with RELEASE=vX.Y.0-rc.N, and all three
+#           published as `:vX.Y.0-rc.N`, `:candidate` and `:rc` -- the two
+#           moving names the candidate (and its `rc` alias) upgrade channel
+#           resolves.
 #           With no argument the rc is the one the remote's
 #           refs/heads/candidate is on, which scripts/release-from-trunk.sh
 #           force-moves onto each cut. `:candidate` and `:rc` move only
@@ -105,11 +105,11 @@
 #           stage a release whose soak passed, for a person to approve
 #           (docs/design/release-from-trunk.md, §4): exactly `promote`'s
 #           publishing of the commit the git tag vX.Y.0-pending names --
-#           guest and k8s-sandbox retagged, grain and google-grain rebuilt
-#           with RELEASE=vX.Y.0 -- but published under `:vX.Y.0-pending`
+#           guest and k8s-sandbox retagged, grain rebuilt with
+#           RELEASE=vX.Y.0 -- but published under `:vX.Y.0-pending`
 #           alone. Neither `:vX.Y.0` nor `latest` moves, and no upgrade
 #           channel resolves `-pending`. `promote vX.Y.0` then finds the
-#           stamped `:vX.Y.0-pending` builds and only retags them, so
+#           stamped `:vX.Y.0-pending` build and only retags it, so
 #           approving builds and tests nothing.
 #
 #   discard-pending <vX.Y.0>
@@ -420,21 +420,10 @@ guest="$root/guest:sha-$short"
 granule_image="granule:vendored"
 k8s_sandbox_base="$root/k8s-sandbox-base:sha-$short"
 k8s_sandbox="$root/k8s-sandbox:sha-$short"
-# The two daemon images, one per build of the same command
-# (google/README.md): `grain` is core grain, built from ./cmd/grain, and
-# `google-grain` is the Google build, ./google/cmd/grain with the
-# Google-internal registrations linked in. Which one a deployment runs is
-# its install track (pkg/installtrack): google installs pull
-# google-grain, every other install pulls grain. Before the split there
-# was only `grain`, and it was the Google build -- which is why an
-# upgrade of a Google-track deployment still naming grain/grain is moved
-# onto google-grain rather than onto the core build (pkg/upgrade's
-# effectiveRepository, scripts/setup.sh's resolve_image_repository).
-# Both share the guest and the Kubernetes sandbox image.
+# The daemon image, built from ./cmd/grain alongside the guest and the
+# Kubernetes sandbox image.
 grain="$root/grain:sha-$short"
-google_grain="$root/google-grain:sha-$short"
 core_main=./cmd/grain
-google_main=./google/cmd/grain
 
 # Where the build phase records what it built. Steps of a Grain CI job
 # share a sandbox but not a shell, so a variable does not reach the step
@@ -688,27 +677,22 @@ fetch_promote_tag_into() {
   return 1
 }
 
-# Whether $promote_tag's own Dockerfile takes MAIN_GRAIN, which is what
-# says the release job built after the two-daemon split; asked of a
-# shallow fetch of the tag, since this job's checkout is main or
-# candidate's head rather than the release. Also sets has_google_daemon
-# (whether the tag tree contains $google_main) and promote_is_root_commit
-# (whether the tag is a root or initial cutover commit).
-release_builds_two_daemons() {
+# Whether $promote_tag's own Dockerfile takes MAIN_GRAIN, asked of a
+# shallow fetch of the tag since this job's checkout is main or
+# candidate's head rather than the release. Also sets
+# promote_is_root_commit (whether the tag is a root or initial cutover
+# commit).
+release_takes_main_grain() {
   local work answer=1
-  has_google_daemon=false
   promote_is_root_commit=false
   work="$(mktemp -d)"
   if ! fetch_promote_tag_into "$work" 2; then
     rm -rf "$work"
-    echo "release-images.sh: could not fetch $promote_tag from $remote to see which daemon images it builds" >&2
+    echo "release-images.sh: could not fetch $promote_tag from $remote to inspect its Dockerfile" >&2
     exit 1
   fi
   if git -C "$work" show FETCH_HEAD:Dockerfile 2>/dev/null | grep -q '^ARG MAIN_GRAIN='; then
     answer=0
-    if git -C "$work" cat-file -e "FETCH_HEAD:$google_main" 2>/dev/null; then
-      has_google_daemon=true
-    fi
   fi
   if ! git -C "$work" rev-parse --verify -q "FETCH_HEAD^" >/dev/null 2>&1 ||
      ! git -C "$work" cat-file -e "FETCH_HEAD^:Dockerfile" 2>/dev/null; then
@@ -727,49 +711,42 @@ stage_grain_ca
 if [ "$dry_run" = true ]; then
   echo "release-images.sh: [dry-run] repository: $GRAIN_CI_REPO (ref: $GRAIN_CI_REF, commit: $commit)"
   echo "release-images.sh: [dry-run] registry: $registry, root: $root"
-  echo "release-images.sh: [dry-run] images: guest=$guest, k8s_sandbox=$k8s_sandbox, grain=$grain, google_grain=$google_grain"
+  echo "release-images.sh: [dry-run] images: guest=$guest, k8s_sandbox=$k8s_sandbox, grain=$grain"
   echo "release-images.sh: [dry-run] base images: guest_base=$guest_base, k8s_sandbox_base=$k8s_sandbox_base"
-  echo "release-images.sh: [dry-run] daemon images: $grain from $core_main (install track oss), $google_grain from $google_main (install track google)"
+  echo "release-images.sh: [dry-run] daemon image: $grain from $core_main (install track oss)"
   case "$phase" in
     build | all)
       if [ -n "$build_version" ]; then
-        echo "release-images.sh: [dry-run] version: $build_version, stamped into both daemon binaries as -X github.com/ai-on-gke/grain/pkg/version.Release=$build_version and labelled onto $grain and $google_grain as org.opencontainers.image.version=$build_version"
+        echo "release-images.sh: [dry-run] version: $build_version, stamped into the daemon binary as -X github.com/ai-on-gke/grain/pkg/version.Release=$build_version and labelled onto $grain as org.opencontainers.image.version=$build_version"
       else
-        echo "release-images.sh: [dry-run] version: none; both daemon images would report themselves unversioned"
+        echo "release-images.sh: [dry-run] version: none; the daemon image would report itself unversioned"
       fi
       ;;
   esac
   case "$phase" in
     build)
-      echo "release-images.sh: [dry-run] phase 'build': would build $guest, $k8s_sandbox, $grain and $google_grain, publishing the two sandbox images so both daemon images can name them by digest (state: $state)"
+      echo "release-images.sh: [dry-run] phase 'build': would build $guest, $k8s_sandbox and $grain, publishing the two sandbox images so the daemon image can name them by digest (state: $state)"
       ;;
     push)
-      echo "release-images.sh: [dry-run] phase 'push': would publish and sign $grain and $google_grain to $registry, and move the $branch tags of all four"
+      echo "release-images.sh: [dry-run] phase 'push': would publish and sign $grain to $registry, and move the $branch tags of all three"
       ;;
     guest-cache)
       echo "release-images.sh: [dry-run] phase 'guest-cache': would resolve and build guest cache inputs"
       ;;
     all)
-      echo "release-images.sh: [dry-run] phase 'all': would build and publish $guest, $k8s_sandbox, $grain and $google_grain to $registry"
+      echo "release-images.sh: [dry-run] phase 'all': would build and publish $guest, $k8s_sandbox and $grain to $registry"
       ;;
     promote)
       select_promotion "$promote_request"
       targets="$promote_tag"
       [ "$promote_latest" = true ] && targets="$targets and latest"
       echo "release-images.sh: [dry-run] phase 'promote': would retag $root/{guest,k8s-sandbox}:sha-${promote_commit:0:7} as $targets"
-      if release_builds_two_daemons; then
-        dry_daemons=("grain $core_main")
-        [ "$has_google_daemon" = true ] && dry_daemons+=("google-grain $google_main")
-        for daemon in "${dry_daemons[@]}"; do
-          read -r image main <<< "$daemon"
-          echo "release-images.sh: [dry-run] and rebuild $root/$image:sha-${promote_commit:0:7} from $promote_commit ($main) with RELEASE=$promote_tag as $targets, unless $root/$image:$promote_tag already reports $promote_tag"
-          echo "release-images.sh: [dry-run] and point $root/$image:sha-${promote_commit:0:7} at the stamped $root/$image:$promote_tag"
-        done
+      if release_takes_main_grain; then
+        echo "release-images.sh: [dry-run] and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit ($core_main) with RELEASE=$promote_tag as $targets, unless $root/grain:$promote_tag already reports $promote_tag"
       else
         echo "release-images.sh: [dry-run] and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit with RELEASE=$promote_tag as $targets, unless $root/grain:$promote_tag already reports $promote_tag"
-        echo "release-images.sh: [dry-run] and point $root/grain:sha-${promote_commit:0:7} at the stamped $root/grain:$promote_tag"
-        echo "release-images.sh: [dry-run] and, since $promote_tag predates the two daemon images and its grain is the Google build, retag $root/grain:$promote_tag as $root/google-grain:{$promote_tag,sha-${promote_commit:0:7}}$([ "$promote_latest" != true ] || echo " and $root/google-grain:latest")"
       fi
+      echo "release-images.sh: [dry-run] and point $root/grain:sha-${promote_commit:0:7} at the stamped $root/grain:$promote_tag"
       if [ "$promote_latest" != true ]; then
         echo "release-images.sh: [dry-run] latest stays put: the git tag latest names ${latest_commit:-nothing}, not $promote_tag"
       fi
@@ -779,27 +756,24 @@ if [ "$dry_run" = true ]; then
       targets="$promote_tag"
       [ "${#moving[@]}" -eq 0 ] || targets="$targets, ${moving[*]}"
       echo "release-images.sh: [dry-run] phase 'rc': would retag $root/{guest,k8s-sandbox}:sha-${promote_commit:0:7} as $targets"
-      for daemon in "grain $core_main" "google-grain $google_main"; do
-        read -r image main <<< "$daemon"
-        echo "release-images.sh: [dry-run] and rebuild $root/$image:sha-${promote_commit:0:7} from $promote_commit ($main) with RELEASE=$promote_tag as $targets, unless $root/$image:$promote_tag already reports $promote_tag"
-      done
+      echo "release-images.sh: [dry-run] and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit ($core_main) with RELEASE=$promote_tag as $targets, unless $root/grain:$promote_tag already reports $promote_tag"
       if [ "${#moving[@]}" -eq 0 ]; then
         echo "release-images.sh: [dry-run] candidate and rc stay put"
       fi
       ;;
     pending)
       select_pending "$pending_request"
-      echo "release-images.sh: [dry-run] phase 'pending': would retag $root/{guest,k8s-sandbox}:sha-${promote_commit:0:7} as $promote_tag, and rebuild $root/{grain,google-grain}:sha-${promote_commit:0:7} from $promote_commit with RELEASE=$stamp_tag as $promote_tag, unless they already report $stamp_tag at $promote_commit; $stamp_tag and latest stay put"
+      echo "release-images.sh: [dry-run] phase 'pending': would retag $root/{guest,k8s-sandbox}:sha-${promote_commit:0:7} as $promote_tag, and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit with RELEASE=$stamp_tag as $promote_tag, unless it already reports $stamp_tag at $promote_commit; $stamp_tag and latest stay put"
       ;;
     discard-pending)
-      echo "release-images.sh: [dry-run] phase 'discard-pending': would tag $root/{grain,google-grain,guest,k8s-sandbox}:$pending_request-pending as $pending_request-rejected"
+      echo "release-images.sh: [dry-run] phase 'discard-pending': would tag $root/{grain,guest,k8s-sandbox}:$pending_request-pending as $pending_request-rejected"
       ;;
     discard-rc)
       if ! [[ "$rc_request" =~ $rc_tag_pattern ]]; then
         echo "release-images.sh: $rc_request is not a release candidate tag (vX.Y.0-rc.N)" >&2
         exit 1
       fi
-      echo "release-images.sh: [dry-run] phase 'discard-rc': would tag $root/{grain,google-grain,guest,k8s-sandbox}:$rc_request as $rc_request-discarded, and leave candidate and rc where they are"
+      echo "release-images.sh: [dry-run] phase 'discard-rc': would tag $root/{grain,guest,k8s-sandbox}:$rc_request as $rc_request-discarded, and leave candidate and rc where they are"
       ;;
   esac
   exit 0
@@ -1002,34 +976,20 @@ resolve_guest() {
   echo "release-images.sh: published $guest_cache"
 }
 
-# Whether daemon image $1 is the build main package $2 makes, by the
-# edition it reports in `grain version --json`: "google" for the Google
-# main, none for core. An image published under one name must never be
-# the other build -- the Makefile's MAIN_grain default is the Google main,
-# and a Dockerfile that dropped MAIN_GRAIN on the floor would build that
-# under both names.
+# Whether daemon image $1 is core grain (`./cmd/grain`), reporting no
+# edition in `grain version --json`.
 check_edition() {
   local image="$1" main="$2" answered
   answered="$(docker run --rm "$image" version --json | tr -d ' \n')"
-  case "$main" in
-    "$google_main")
-      if [[ "$answered" != *'"edition":"google"'* ]]; then
-        echo "release-images.sh: $image was built from $main and should report edition google, but \`version --json\` says ${answered:-nothing}" >&2
-        exit 1
-      fi
-      ;;
-    *)
-      if [[ "$answered" == *'"edition":'* ]]; then
-        echo "release-images.sh: $image was built from $main, core grain, but reports an edition: $answered" >&2
-        exit 1
-      fi
-      ;;
-  esac
+  if [[ "$answered" == *'"edition":'* ]]; then
+    echo "release-images.sh: $image was built from $main, core grain, but reports an edition: $answered" >&2
+    exit 1
+  fi
 }
 
-# Build daemon image $1 from main package $2 (core or Google), naming the
-# two sandbox images build_images just pinned, and check what it says of
-# itself before anything may publish it.
+# Build daemon image $1 from main package $2, naming the two sandbox images
+# build_images just pinned, and check what it says of itself before
+# anything may publish it.
 build_daemon_image() {
   local image="$1" main="$2" pair question want answered labelled stamp_dir container stamped
   make image IMAGE="$image" MAIN_grain="$main" SANDBOX_IMAGE="$guest_pinned" K8S_SANDBOX_IMAGE="$k8s_sandbox_pinned" \
@@ -1165,11 +1125,6 @@ build_images() {
   # v2.2.0-rc.1.<n>+<sha7> on candidate). Never a bare vX.Y.Z here: that
   # is `promote`'s to stamp, by rebuilding.
   build_daemon_image "$grain" "$core_main"
-  if [ -d "$repo_root/google/cmd/grain" ]; then
-    build_daemon_image "$google_grain" "$google_main"
-  else
-    google_grain=""
-  fi
 
   cat > "$state" <<EOF
 # Written by scripts/release-images.sh for $commit. The steps after the
@@ -1181,7 +1136,6 @@ RELEASE_IMAGE_GUEST='$guest'
 RELEASE_IMAGE_K8S_SANDBOX_BASE='$k8s_sandbox_base'
 RELEASE_IMAGE_K8S_SANDBOX='$k8s_sandbox'
 RELEASE_IMAGE_GRAIN='$grain'
-RELEASE_IMAGE_GOOGLE_GRAIN='$google_grain'
 # Already published by the build, and stamped into the grain image by
 # these references; the push phase signs them.
 RELEASE_IMAGE_GUEST_BASE_PINNED='$guest_base_pinned'
@@ -1190,7 +1144,7 @@ RELEASE_IMAGE_K8S_SANDBOX_BASE_PINNED='$k8s_sandbox_base_pinned'
 RELEASE_IMAGE_K8S_SANDBOX_PINNED='$k8s_sandbox_pinned'
 EOF
   cleanup_ca
-  echo "release-images.sh: built $grain and $google_grain, naming $guest_pinned and $k8s_sandbox_pinned; $state names them"
+  echo "release-images.sh: built $grain, naming $guest_pinned and $k8s_sandbox_pinned; $state names them"
 }
 
 # Signing (docs/image-signing.md, grain/task-1773). A signature covers a
@@ -1289,15 +1243,10 @@ publish_images() {
     sign_image "$k8s_sandbox_base" "$(repository_of "$k8s_sandbox_base_pinned")@${k8s_sandbox_base_pinned#*@}"
   fi
   sign_image "$k8s_sandbox" "$(repository_of "$k8s_sandbox_pinned")@${k8s_sandbox_pinned#*@}"
-  # Both daemon images, each signed before any moving tag names it, so no
-  # tag a deployment resolves ever points at an image that is not yet
-  # signed.
+  # The daemon image, signed before any moving tag names it, so no tag a
+  # deployment resolves ever points at an image that is not yet signed.
   push_image "$grain"
   sign_image "$grain"
-  if [ -n "${google_grain:-}" ]; then
-    push_image "$google_grain"
-    sign_image "$google_grain"
-  fi
 
   # Immutable tags are published for every merge. Moving tags move forward
   # only: onto this commit when the commit the grain image's branch tag
@@ -1308,9 +1257,8 @@ publish_images() {
   # tag_may_move decides, failing closed, and says why.
   # The branch tag is the only moving tag a merge moves: `latest` is the
   # last promoted release, and `promote` is the one thing that moves it.
-  # grain:<branch> decides for all four: the tags move together, so what
-  # one holds is what they all hold, and google-grain:<branch> did not
-  # exist before the first release that built it.
+  # grain:<branch> decides for all three: the tags move together, so what
+  # one holds is what they all hold.
   if ! tag_may_move "$root/grain:$branch" "$commit" "$GRAIN_CI_REF"; then
     echo "published immutable sha-$short images; moving tags stay put"
     return 0
@@ -1321,8 +1269,7 @@ publish_images() {
     "$guest $root/guest:$branch" \
     "$k8s_sandbox_base $root/k8s-sandbox-base:$branch" \
     "$k8s_sandbox $root/k8s-sandbox:$branch" \
-    "$grain $root/grain:$branch" \
-    ${google_grain:+"$google_grain $root/google-grain:$branch"}; do
+    "$grain $root/grain:$branch"; do
     read -r source target <<< "$pair"
     docker tag "$source" "$target"
     push_image "$target"
@@ -1335,25 +1282,17 @@ publish_images() {
 # from one commit and a guest from another.
 #
 # The guest and the Kubernetes sandbox are retagged registry-side: they
-# carry no version anybody reads. The daemon images -- grain and
-# google-grain -- are rebuilt, once per release, because the ones built
-# when the commit was the candidate carry the version Go read off that
-# commit -- the rc tag, since vX.Y.Z did not exist yet -- and that is
-# what the UI's sidebar footer and /api/config's version.release would
-# go on showing (grain/task-3064). Each rebuild is of the same commit and
-# the same main, naming the same pinned sandbox images and the same
-# image reference the candidate's build stamped -- read back off that
-# image -- so the release name is the only thing that differs. Each is
-# then published as vX.Y.Z, labelled with the release, and every later
-# tick sees that label and rebuilds nothing, so `latest`'s digest does
-# not churn.
-#
-# A release cut before the two daemon images existed (its Dockerfile has
-# no ARG MAIN_GRAIN) has no google-grain build at all, and its grain
-# image *is* the Google build: there it is grain alone that is rebuilt,
-# as it always was, and google-grain:vX.Y.Z (and `latest`) are a retag
-# of the stamped grain:vX.Y.Z. That is what lets a Google install pull
-# google-grain:latest before the first two-image release is promoted.
+# carry no version anybody reads. The daemon image (`grain`) is rebuilt,
+# once per release, because the one built when the commit was the
+# candidate carries the version Go read off that commit -- the rc tag,
+# since vX.Y.Z did not exist yet -- and that is what the UI's sidebar
+# footer and /api/config's version.release would go on showing
+# (grain/task-3064). The rebuild is of the same commit and the same main,
+# naming the same pinned sandbox images and the same image reference the
+# candidate's build stamped -- read back off that image -- so the release
+# name is the only thing that differs. It is then published as vX.Y.Z,
+# labelled with the release, and every later tick sees that label and
+# rebuilds nothing, so `latest`'s digest does not churn.
 promote_images() {
   local image source missing=() targets tag daemon main
   select_promotion "$promote_request"
@@ -1379,25 +1318,16 @@ rc_images() {
 
 # What promote_images and rc_images share: publish $promote_commit's
 # images as each of targets, the first of which is the name stamped into
-# both daemon images ($promote_tag) and the rest the moving tags that go
+# the daemon image ($promote_tag) and the rest the moving tags that go
 # with it.
 publish_release() {
   local image source missing=() tag daemon main
   local promoted_short="${promote_commit:0:7}"
   ensure_direct_registry_route "$registry"
-  # Each daemon image this release has a build of, with the main it was
-  # built from.
   local daemons=()
-  local split=false
-  if release_builds_two_daemons; then
-    split=true
-    if [ "$has_google_daemon" = true ]; then
-      daemons=("grain $core_main" "google-grain $google_main")
-    else
-      daemons=("grain $core_main")
-    fi
+  if release_takes_main_grain; then
+    daemons=("grain $core_main")
   else
-    echo "release-images.sh: $promote_tag predates the two daemon images (its Dockerfile takes no MAIN_GRAIN), so its grain image is the Google build: google-grain:$promote_tag will be a retag of it"
     daemons=("grain ")
   fi
   # The daemons' sha- builds are only the rebuilds' source. Until the
@@ -1504,20 +1434,11 @@ publish_release() {
     # string they report differs.
     retag_image "$root/$image:$promote_tag" "$root/$image:sha-$promoted_short"
   done
-  if [ "$split" != true ]; then
-    for tag in "$promote_tag" sha-"$promoted_short" "${targets[@]:1}"; do
-      retag_image "$root/grain:$promote_tag" "$root/google-grain:$tag"
-    done
-  fi
-  if [ "$split" = true ] && [ "$has_google_daemon" != true ]; then
-    echo "release-images.sh: $root/{guest,k8s-sandbox}:sha-$promoted_short are now also ${targets[*]}, and $root/grain:$promote_tag is $promote_commit stamped $promote_tag, as is its sha-$promoted_short$([ "${#targets[@]}" -le 1 ] || echo " and ${targets[*]:1}")"
-  else
-    echo "release-images.sh: $root/{guest,k8s-sandbox}:sha-$promoted_short are now also ${targets[*]}, and $root/{grain,google-grain}:$promote_tag are $promote_commit stamped $promote_tag, as are their sha-$promoted_short$([ "${#targets[@]}" -le 1 ] || echo " and ${targets[*]:1}")"
-  fi
+  echo "release-images.sh: $root/{guest,k8s-sandbox}:sha-$promoted_short are now also ${targets[*]}, and $root/grain:$promote_tag is $promote_commit stamped $promote_tag, as is its sha-$promoted_short$([ "${#targets[@]}" -le 1 ] || echo " and ${targets[*]:1}")"
 }
 
 # Stage a pending release: the commit vX.Y.0-pending names, published as
-# :vX.Y.0-pending with vX.Y.0 stamped into both daemon images and nothing
+# :vX.Y.0-pending with vX.Y.0 stamped into the daemon image and nothing
 # else moved (select_pending).
 pending_images() {
   local targets
@@ -1530,9 +1451,6 @@ pending_images() {
 # beside every image it was staged as. Nothing that resolves moves.
 discard_pending() {
   local image images=(grain guest k8s-sandbox) marked=()
-  if [ -d "$repo_root/google/cmd/grain" ]; then
-    images=(grain google-grain guest k8s-sandbox)
-  fi
   if ! [[ "$pending_request" =~ $release_tag_pattern ]]; then
     echo "release-images.sh: $pending_request is not a release tag (vX.Y.Z)" >&2
     return 1
@@ -1553,9 +1471,6 @@ discard_pending() {
 # and is said so; a deployment never ran it.
 discard_rc() {
   local image images=(grain guest k8s-sandbox) marked=() unpublished=()
-  if [ -d "$repo_root/google/cmd/grain" ]; then
-    images=(grain google-grain guest k8s-sandbox)
-  fi
   if ! [[ "$rc_request" =~ $rc_tag_pattern ]]; then
     echo "release-images.sh: $rc_request is not a release candidate tag (vX.Y.0-rc.N)" >&2
     return 1
@@ -1627,11 +1542,10 @@ check_release_stamp() {
 
 # Rebuild the daemon image $1 (a release job's sha- tag) as $2 from
 # $promote_commit with RELEASE=$promote_tag and main package $3, verify
-# it, and publish and sign it. An empty $3 is a release from before the
-# two daemon images, whose Dockerfile builds the Google main and takes no
-# MAIN_GRAIN. Built from a clean checkout of the release tag rather than
-# from this job's own tree, which is main or candidate's head: the
-# Dockerfile, the Makefile and the source are the release's own.
+# it, and publish and sign it. An empty $3 is a release whose Dockerfile
+# takes no MAIN_GRAIN. Built from a clean checkout of the release tag
+# rather than from this job's own tree, which is main or candidate's head:
+# the Dockerfile, the Makefile and the source are the release's own.
 rebuild_release_grain() {
   local source="$1" target="$2" main="${3:-}" question want answered work go_version
   local guest_ref k8s_ref image_ref
@@ -1790,11 +1704,6 @@ if [ "$phase" = push ]; then
   k8s_sandbox_base="${RELEASE_IMAGE_K8S_SANDBOX_BASE:-$k8s_sandbox_base}"
   k8s_sandbox="$RELEASE_IMAGE_K8S_SANDBOX"
   grain="$RELEASE_IMAGE_GRAIN"
-  google_grain="${RELEASE_IMAGE_GOOGLE_GRAIN:-}"
-  if [ -d "$repo_root/google/cmd/grain" ] && [ -z "$google_grain" ]; then
-    echo "release-images.sh: $state names no Google grain image -- it was written by a build older than the one publishing it; run \`build\` again" >&2
-    exit 1
-  fi
   guest_base_pinned="${RELEASE_IMAGE_GUEST_BASE_PINNED:-}"
   guest_pinned="${RELEASE_IMAGE_GUEST_PINNED:-}"
   k8s_sandbox_base_pinned="${RELEASE_IMAGE_K8S_SANDBOX_BASE_PINNED:-}"

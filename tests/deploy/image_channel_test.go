@@ -31,6 +31,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/installtrack/installtracktest"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
@@ -282,79 +283,35 @@ func TestTheInstallSaysWhichCommitItsImageWasBuiltFrom(t *testing.T) {
 	containsRun(t, report("main", "", head), "carries no revision label")
 }
 
-func TestSetupDetectsGoogleAndOSSInstallTracks(t *testing.T) {
+func TestSetupDetectsInstallTrack(t *testing.T) {
 	dir := t.TempDir()
 	missingUnit := filepath.Join(dir, "absent.service")
 	emptyDataDir := filepath.Join(dir, "empty-data")
-	missingGoogleBin := filepath.Join(dir, "no-google-bin")
 
-	runDetect := func(env []string, unitFile, dataDir string) (track, signals string) {
+	runDetect := func(env []string) string {
 		t.Helper()
 		baseEnv := []string{
-			"GRAIN_HOST_FQDN=devbox.example.com",
-			"GRAIN_GOOGLE_BIN_DIR=" + missingGoogleBin,
 			"GRAIN_INSTALL_TRACK=",
-			"GRAIN_AGY_PATH=",
-			"GRAIN_UI_ALLOWED_HOSTS=",
-			"GRAIN_TARGET_REPOS=",
-			"GRAIN_TARGET_REPO=",
 		}
 		out, ok := channelShell(t, append(baseEnv, env...),
-			"printf 'TRACK=%s\\nSIGNALS=%s\\n' \"$(detect_install_track \"$2\" \"$3\")\" \"$(detect_install_track_signals \"$2\" \"$3\")\"\n",
-			unitFile, dataDir)
+			"printf 'TRACK=%s\\n' \"$(detect_install_track \"$2\" \"$3\")\"\n",
+			missingUnit, emptyDataDir)
 		if !ok {
 			t.Fatalf("detect_install_track failed:\n%s", out)
 		}
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 			if v, found := strings.CutPrefix(line, "TRACK="); found {
-				track = v
-			}
-			if v, found := strings.CutPrefix(line, "SIGNALS="); found {
-				signals = v
+				return v
 			}
 		}
-		return track, signals
+		return ""
 	}
 
-	if track, signals := runDetect(nil, missingUnit, emptyDataDir); track != "oss" || signals != "" {
-		t.Errorf("clean install detected track=%q signals=%q, want oss and empty", track, signals)
+	if track := runDetect(nil); track != "oss" {
+		t.Errorf("clean install detected track=%q, want oss", track)
 	}
-
-	if track, signals := runDetect([]string{"GRAIN_HOST_FQDN=alice.c.googlers.com"}, missingUnit, emptyDataDir); track != "google" || signals != "host:*.c.googlers.com" {
-		t.Errorf("cloudtop hostname detected track=%q signals=%q, want google and host:*.c.googlers.com", track, signals)
-	}
-
-	googleBin := filepath.Join(dir, "google-bin")
-	if err := os.MkdirAll(googleBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if track, signals := runDetect([]string{"GRAIN_GOOGLE_BIN_DIR=" + googleBin}, missingUnit, emptyDataDir); track != "google" || signals != "host:/google/bin" {
-		t.Errorf("/google/bin detected track=%q signals=%q, want google and host:/google/bin", track, signals)
-	}
-
-	unitFile := filepath.Join(dir, "grain-daemon.service")
-	if err := os.WriteFile(unitFile, []byte("[Service]\nExecStart=/usr/local/bin/grain daemon -agy-path /google/bin/releases/jetski-devs/tools/cli -ui-allowed-hosts *.proxy.googlers.com\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if track, signals := runDetect(nil, unitFile, emptyDataDir); track != "google" || signals != "unit:-agy-path=/google/bin,unit:-ui-allowed-hosts=*.proxy.googlers.com" {
-		t.Errorf("unit signals detected track=%q signals=%q, want google and unit signals", track, signals)
-	}
-
-	dataDir := filepath.Join(dir, "google-data")
-	if err := os.MkdirAll(filepath.Join(dataDir, "state-repo"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	stateCfg := `{
-  "gitConnections": [{"host": "depot.code.corp.goog", "ambient": true, "ambientSource": "ggh"}],
-  "agentBackends": [{"type": "antigravity", "authMethod": "ambient", "cliPath": "/google/bin/releases/jetski-devs/tools/cli"}],
-  "capabilities": ["corp-research"]
-}`
-	if err := os.WriteFile(filepath.Join(dataDir, "state-repo", "config.json"), []byte(stateCfg), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	wantSignals := "store:git-code.corp.goog,store:git-ggh,store:antigravity-ambient,store:antigravity-google-bin,store:capability=corp-research"
-	if track, signals := runDetect(nil, missingUnit, dataDir); track != "google" || signals != wantSignals {
-		t.Errorf("store signals detected track=%q signals=%q, want google and %q", track, signals, wantSignals)
+	if track := runDetect([]string{"GRAIN_INSTALL_TRACK=enterprise"}); track != "enterprise" {
+		t.Errorf("explicit GRAIN_INSTALL_TRACK detected track=%q, want enterprise", track)
 	}
 }
 
@@ -362,11 +319,8 @@ func TestSetupResolvesRepositoryForInstallTrackAndShiftsCleanly(t *testing.T) {
 	dir := t.TempDir()
 	missingUnit := filepath.Join(dir, "absent.service")
 	emptyDataDir := filepath.Join(dir, "empty-data")
-	missingGoogleBin := filepath.Join(dir, "no-google-bin")
 
 	baseEnv := []string{
-		"GRAIN_HOST_FQDN=devbox.example.com",
-		"GRAIN_GOOGLE_BIN_DIR=" + missingGoogleBin,
 		"GRAIN_INSTALL_TRACK=",
 		"GRAIN_IMAGE_EXPLICIT=",
 	}
@@ -392,68 +346,31 @@ func TestSetupResolvesRepositoryForInstallTrackAndShiftsCleanly(t *testing.T) {
 		return out, image, tag, track, ok
 	}
 
-	// Pre-v2.0 deployment on ghcr.io/bwsalmon/grain/grain:candidate shifting to the Google repository.
+	// Deployment on ghcr.io/bwsalmon/grain/grain:candidate stays on candidate.
 	legacyCandidate := refFile(t, "ghcr.io/bwsalmon/grain/grain:candidate")
-	out, image, tag, track, ok := resolveRepoAndTag([]string{
-		"GRAIN_HOST_FQDN=alice.c.googlers.com",
-	}, legacyCandidate, legacyCandidate)
+	out, image, tag, track, ok := resolveRepoAndTag(nil, legacyCandidate, legacyCandidate)
 	if !ok {
 		t.Fatalf("resolve failed:\n%s", out)
 	}
-	if track != "google" || image != "ghcr.io/bwsalmon/grain/google-grain" || tag != "candidate" {
-		t.Errorf("Google repository shift settled on track=%q image=%q tag=%q, want google, ghcr.io/bwsalmon/grain/google-grain, candidate:\n%s",
+	if track != "oss" || image != "ghcr.io/bwsalmon/grain/grain" || tag != "candidate" {
+		t.Errorf("default repository resolution settled on track=%q image=%q tag=%q, want oss, ghcr.io/bwsalmon/grain/grain, candidate:\n%s",
 			track, image, tag, out)
 	}
-	contains(t, out, "kept across repository shift (ghcr.io/bwsalmon/grain/grain -> ghcr.io/bwsalmon/grain/google-grain)")
 
-	// A Google deployment that an earlier installer moved onto Artifact
-	// Registry -- which is not populated -- shifts back onto
-	// ghcr.io/bwsalmon/grain/google-grain and keeps its channel.
-	artifactRegistryCandidate := refFile(t, "us-docker.pkg.dev/gke-adaptive-orchestration/grain/grain:candidate")
+	// Deployment on an allowed edition repository shifting back onto core
+	// ghcr.io/bwsalmon/grain/grain keeps its channel.
+	editionCandidate := refFile(t, installtracktest.Repository+":candidate")
 	out, image, tag, track, ok = resolveRepoAndTag([]string{
-		"GRAIN_HOST_FQDN=alice.c.googlers.com",
-	}, artifactRegistryCandidate, artifactRegistryCandidate)
+		"GRAIN_ALLOWED_IMAGE_REPOS=" + installtracktest.Repository + "," + installtracktest.MovedRepository,
+	}, editionCandidate, editionCandidate)
 	if !ok {
 		t.Fatalf("resolve failed:\n%s", out)
 	}
-	if track != "google" || image != "ghcr.io/bwsalmon/grain/google-grain" || tag != "candidate" {
-		t.Errorf("Artifact Registry repository shift settled on track=%q image=%q tag=%q, want google, ghcr.io/bwsalmon/grain/google-grain, candidate:\n%s",
+	if track != "oss" || image != "ghcr.io/bwsalmon/grain/grain" || tag != "candidate" {
+		t.Errorf("edition repository shift settled on track=%q image=%q tag=%q, want oss, ghcr.io/bwsalmon/grain/grain, candidate:\n%s",
 			track, image, tag, out)
 	}
-	contains(t, out, "kept across repository shift (us-docker.pkg.dev/gke-adaptive-orchestration/grain/grain -> ghcr.io/bwsalmon/grain/google-grain)")
-
-	// One that opted into Artifact Registry explicitly stays there.
-	out, image, _, _, ok = resolveRepoAndTag([]string{
-		"GRAIN_HOST_FQDN=alice.c.googlers.com",
-		"GRAIN_GOOGLE_IMAGE_REPO=us-docker.pkg.dev/gke-adaptive-orchestration/grain/grain",
-	}, artifactRegistryCandidate, artifactRegistryCandidate)
-	if !ok {
-		t.Fatalf("resolve failed:\n%s", out)
-	}
-	if image != "us-docker.pkg.dev/gke-adaptive-orchestration/grain/grain" {
-		t.Errorf("GRAIN_GOOGLE_IMAGE_REPO=%s settled on image=%q:\n%s", "us-docker.pkg.dev/gke-adaptive-orchestration/grain/grain", image, out)
-	}
-
-	// grain/grain:main, which before the split was the Google build and is
-	// now core grain: a Google-track deployment on it moves onto
-	// ghcr.io/bwsalmon/grain/google-grain:main, and an OSS-track one stays on grain:main and gets
-	// the core build (grain/task-4944).
-	legacyMain := refFile(t, "ghcr.io/bwsalmon/grain/grain:main")
-	for _, c := range []struct {
-		fqdn, track, image string
-	}{
-		{"alice.c.googlers.com", "google", "ghcr.io/bwsalmon/grain/google-grain"},
-		{"devbox.example.com", "oss", "ghcr.io/bwsalmon/grain/grain"},
-	} {
-		out, image, tag, track, ok := resolveRepoAndTag([]string{"GRAIN_HOST_FQDN=" + c.fqdn}, legacyMain, legacyMain)
-		if !ok {
-			t.Fatalf("resolve failed:\n%s", out)
-		}
-		if track != c.track || image != c.image || tag != "main" {
-			t.Errorf("%s on grain/grain:main settled on track=%q image=%q tag=%q, want %s, %s, main:\n%s",
-				c.fqdn, track, image, tag, c.track, c.image, out)
-		}
-	}
+	contains(t, out, "kept across repository shift ("+installtracktest.Repository+" -> ghcr.io/bwsalmon/grain/grain)")
 
 	// Pre-v2.0 deployment shifting to a configured new OSS repository.
 	out, image, tag, track, ok = resolveRepoAndTag([]string{

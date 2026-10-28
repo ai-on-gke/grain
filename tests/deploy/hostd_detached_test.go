@@ -105,7 +105,7 @@ func TestARerunAddsTheDetachedEntriesToAnOlderAllowlist(t *testing.T) {
 	env := append([]string{"HOSTD_ALLOWLIST=" + allow}, detachedEnv...)
 
 	for _, before := range []string{
-		"clis:\n  agy:\n    path: /google/bin/agy\ncapabilities:\n  host-git:\n    command: /usr/local/bin/grain\n",
+		"clis:\n  agy:\n    path: /opt/acme/bin/agy\ncapabilities:\n  host-git:\n    command: /usr/local/bin/grain\n",
 		"clis: {}\ncapabilities:\n  host-git:\n    command: /usr/local/bin/grain\n",
 		// One an operator already gave a claude-detached of their own.
 		"clis:\n  claude-detached:\n    path: /opt/mine/claude\ncapabilities: {}\n",
@@ -152,7 +152,7 @@ func TestClaudeDefaultsToDetachedWithHostd(t *testing.T) {
 	contains(t, out, "claude runs detached through hostd")
 	got := func(env ...string) string {
 		out := runBash(t, logFn+shellFunction(t, "resolve_hostd")+`resolve_hostd; echo "RUN=$GRAIN_CLAUDE_RUN"`,
-			append([]string{"GRAIN_USER=grain", "GRAIN_AGY_PATH=", "GOOGLE_AGY_CLI_PATH=/google/bin/agy", "HOSTD_AGY_PATH=",
+			append([]string{"GRAIN_USER=grain", "GRAIN_AGY_PATH=", "HOSTD_AGY_PATH=",
 				"GRAIN_CLAUDE_RUN=", "GRAIN_CODEX_RUN=", "GRAIN_AGY_RUN=", "GRAIN_CLAUDE_PATH="}, env...)...)
 		for _, line := range strings.Split(out, "\n") {
 			if v, ok := strings.CutPrefix(line, "RUN="); ok {

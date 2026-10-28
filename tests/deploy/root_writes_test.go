@@ -311,8 +311,8 @@ func TestTheCLIIsNeverRunAsRootBesideHostd(t *testing.T) {
 
 func TestThePromoterAcceptsKnownSuccessorRepositoriesAndRejectsUntrustedOnes(t *testing.T) {
 	const legacyRepo = "ghcr.io/bwsalmon/grain/grain"
-	const legacyGoogleRepo = "ghcr.io/bwsalmon/grain/google-grain"
-	const googleRepo = "us-docker.pkg.dev/gke-adaptive-orchestration/grain/grain"
+	const allowedPrimaryRepo = "registry.example.com/grain/enterprise-grain"
+	const allowedLegacyRepo = "ghcr.io/example/grain/enterprise-grain"
 	const customOSSRepo = "ghcr.io/grain-org/grain/grain"
 	const running = "GRAIN_IMAGE=" + legacyRepo + ":v2.0.0\n"
 
@@ -320,14 +320,14 @@ func TestThePromoterAcceptsKnownSuccessorRepositoriesAndRejectsUntrustedOnes(t *
 		name, request, want string
 	}{
 		{
-			name:    "shift from legacy repo to google repo",
-			request: "GRAIN_IMAGE=" + googleRepo + ":v2.0.0\n",
-			want:    "GRAIN_IMAGE=" + googleRepo + ":v2.0.0\n",
+			name:    "shift from legacy repo to allowed primary repo",
+			request: "GRAIN_IMAGE=" + allowedPrimaryRepo + ":v2.0.0\n",
+			want:    "GRAIN_IMAGE=" + allowedPrimaryRepo + ":v2.0.0\n",
 		},
 		{
-			name:    "shift from legacy repo to legacy google-grain repo",
-			request: "GRAIN_IMAGE=" + legacyGoogleRepo + ":v2.0.0\n",
-			want:    "GRAIN_IMAGE=" + legacyGoogleRepo + ":v2.0.0\n",
+			name:    "shift from legacy repo to allowed legacy repo",
+			request: "GRAIN_IMAGE=" + allowedLegacyRepo + ":v2.0.0\n",
+			want:    "GRAIN_IMAGE=" + allowedLegacyRepo + ":v2.0.0\n",
 		},
 		{
 			name:    "shift from legacy repo to configured OSS successor repo",
@@ -363,6 +363,7 @@ func TestThePromoterAcceptsKnownSuccessorRepositoriesAndRejectsUntrustedOnes(t *
 				"write_image_ref_promoter\n\"$IMAGE_REF_PROMOTER\"\n",
 				"GRAIN_IMAGE="+legacyRepo,
 				"GRAIN_OSS_IMAGE_REPO="+customOSSRepo,
+				"GRAIN_ALLOWED_IMAGE_REPOS="+allowedPrimaryRepo+","+allowedLegacyRepo,
 				"GRAIN_USER=grain",
 				"IMAGE_REF_FILE="+request, "UNIT_IMAGE_REF_DIR="+unitDir,
 				"UNIT_IMAGE_REF_FILE="+unitFile, "IMAGE_REF_PROMOTER="+promoter)

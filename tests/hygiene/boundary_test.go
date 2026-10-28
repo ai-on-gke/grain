@@ -60,15 +60,6 @@ var googleTokensPending = map[string]string{
 	"ui/src/components/NewTaskOverlay.google3.test.jsx": "google3 change target",
 	"ui/src/components/NewTaskOverlay.jsx":              "google3 change target",
 	"ui/src/components/RepoField.jsx":                   "google3 change target",
-	// The installer's google install track and the tests that drive it.
-	"scripts/setup.sh":                          "google install track",
-	"tests/deploy/deploy_test.go":               "google install track",
-	"tests/deploy/hostd_builtins_test.go":       "google install track",
-	"tests/deploy/hostd_detached_test.go":       "google install track",
-	"tests/deploy/hostd_host_git_test.go":       "google install track",
-	"tests/deploy/image_channel_test.go":        "google install track",
-	"tests/deploy/root_writes_test.go":          "google install track",
-	"ui/e2e/hostd-missing-entry-layout.spec.js": "google install track",
 }
 
 func TestCoreSaysNoGoogleTokens(t *testing.T) {

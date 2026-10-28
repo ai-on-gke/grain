@@ -591,11 +591,11 @@ exit 0
     const imageRefFile = path.join(root, "image-ref");
     await fs.writeFile(
       imageRefFile,
-      "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/google-grain:main\n",
+      "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n",
     );
     daemon = await startDaemon(root, dataDir, sandboxDir, [
       "-disable-native-sandboxes",
-      "-upgrade-image=ghcr.io/bwsalmon/grain/google-grain:main",
+      "-upgrade-image=ghcr.io/bwsalmon/grain/grain:main",
       `-upgrade-image-ref-file=${imageRefFile}`,
     ]);
 
