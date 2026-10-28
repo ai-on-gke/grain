@@ -1412,6 +1412,17 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	// runner's task one recommendation short with no word why.
 	var refusedTuning []refusedTuningProposal
 
+	// The capability catalogue (settings/capabilities.yml), read once:
+	// each proposal is judged against it below, as ui.CreateTask judges
+	// the identical call filed live.
+	catalogueCfg, err := store.GetConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("orchestrator: reading the capability catalogue for proposed tasks: %w", err)
+	}
+	var catalogue *model.CapabilityCatalogue
+	if catalogueCfg != nil {
+		catalogue = catalogueCfg.CapabilityPolicy.Catalogue
+	}
 	for _, p := range proposals {
 		title, _ := p["title"].(string)
 		body, _ := p["body"].(string)
@@ -1761,6 +1772,51 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			}
 			if needsPersonWhy != "" {
 				proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", needsPersonWhy)
+			}
+		}
+		// The capability catalogue, as ui.CreateTask applies it to the
+		// identical call filed live: a default it refuses this proposal is
+		// dropped, since nobody asked for it, and a grant it marks as a
+		// person's decision (requires_person) files the proposal for a
+		// person whatever this task's permission would have said. A grant
+		// the run asked for that it refuses is kept, and holds the
+		// proposal at dispatch (catalogueHold), saying why -- and files it
+		// for a person too, since a refusal says nothing of whether the
+		// grant needs one: dispatch judges only refusals, so a catalogue
+		// later loosened to admit it as requires_person would otherwise
+		// let it run on its proposer's permission.
+		if catalogue != nil {
+			kept := proposal.Grants[:0:0]
+			var needsPerson, refused []string
+			for _, g := range proposal.Grants {
+				gc := model.TaskGrantContext(proposal)
+				gc.Grants = []string{g.Capability}
+				verdict, err := catalogue.ValidateGrants(gc)
+				if err != nil {
+					if g.Via == model.GrantByDefault {
+						continue
+					}
+					refused = append(refused, err.Error())
+				}
+				kept = append(kept, g)
+				needsPerson = append(needsPerson, verdict.RequiresPerson...)
+			}
+			proposal.Grants = kept
+			var whys []string
+			if len(needsPerson) > 0 {
+				whys = append(whys, model.CatalogueRequiresPersonNote(needsPerson))
+			}
+			if len(refused) > 0 {
+				whys = append(whys, "settings/capabilities.yml refuses what it asked for ("+strings.Join(refused, "; ")+")")
+			}
+			if len(whys) > 0 {
+				why := strings.Join(whys, "; ")
+				proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
+				if needsPersonWhy == "" {
+					needsPersonWhy = why
+				} else {
+					needsPersonWhy += "; " + why
+				}
 			}
 		}
 		// Scheduled for later: filed deferred with the wake time the

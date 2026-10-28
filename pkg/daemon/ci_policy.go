@@ -15,6 +15,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
@@ -77,4 +78,51 @@ func ciPolicyRefusal(p *policy.Policy, req ci.SandboxRequest, logf func(string, 
 		logf("grain ci: %s: %s job %s refused by local policy (-policy): %v", req.Repo, req.Event, req.Name, err)
 	}
 	return fmt.Errorf("local policy refuses this CI job: %w", err)
+}
+
+// CheckCIJobCatalogue judges one CI job's capabilities against the
+// deployment's capability catalogue (settings/capabilities.yml,
+// model.CapabilityCatalogue) as a CI job of the repository under test,
+// before any of them is materialized: a capability the catalogue has
+// since revoked, or keeps off this repository, is refused rather than
+// minted. The grain-ci capability every job carries is grain's own and is
+// not judged. A nil catalogue admits every job.
+func CheckCIJobCatalogue(cat *model.CapabilityCatalogue, req ci.SandboxRequest) error {
+	if cat == nil {
+		return nil
+	}
+	gc := model.GrantContext{Kind: model.CatalogueKindCI}
+	if repo, err := model.ParseRepo(req.Repo); err == nil {
+		gc.Repo = &repo
+	}
+	for _, id := range req.Capabilities {
+		if id != grainci.CapabilityName {
+			gc.Grants = append(gc.Grants, id)
+		}
+	}
+	_, err := cat.ValidateGrants(gc)
+	return err
+}
+
+// ciCatalogueRefusal is CheckCIJobCatalogue for CiGrantReservations.Acquire,
+// reading the catalogue through config and saying a refusal once in the
+// daemon log.
+func ciCatalogueRefusal(ctx context.Context, config func(context.Context) (*model.Config, error), req ci.SandboxRequest, logf func(string, ...any)) error {
+	if config == nil {
+		return nil
+	}
+	cfg, err := config(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the capability catalogue: %w", err)
+	}
+	if cfg == nil {
+		return nil
+	}
+	if err := CheckCIJobCatalogue(cfg.CapabilityPolicy.Catalogue, req); err != nil {
+		if logf != nil {
+			logf("grain ci: %s: %s job %s refused by settings/capabilities.yml: %v", req.Repo, req.Event, req.Name, err)
+		}
+		return fmt.Errorf("the capability catalogue refuses this CI job: %w", err)
+	}
+	return nil
 }
