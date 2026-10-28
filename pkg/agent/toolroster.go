@@ -100,6 +100,9 @@ func PublishedToolNames() []string {
 
 	// The tools that need the daemon this run's mcpserver was given.
 	add(mcp.NewOpenPullRequestTools(nil))
+	// A changelist task's checks tools, registered in place of the
+	// pull-request and grain CI tools of the same names.
+	add(mcp.NewChangeChecksTools(nil))
 	add(mcp.NewRecreateSandboxTools(nil))
 	add(mcp.NewStatusTools(nil))
 	// rename_session is registered only for a task that is a standing
