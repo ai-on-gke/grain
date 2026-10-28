@@ -2449,6 +2449,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			return fmt.Errorf("orchestrator: materializing run %s's capability grants: %w", d.RunID, err)
 		}
 		defer mat.Close()
+		mat.registerSandboxCapabilities(cfg.CapabilitySandboxServers, gitproxy.CapRunKey(d.RunID))
 		cfg.capabilityMCPServers = mat.servers
 		cfg.capabilityPromptSections = mat.promptSections
 		deps.Config.SandboxRecreations.setCapabilityPass(d.TaskID, mat)

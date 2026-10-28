@@ -16,7 +16,6 @@ package gitproxy
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -257,8 +256,9 @@ func (p *GitProxy) forwardToAPI(w http.ResponseWriter, r *http.Request, modelSco
 // ServeCapHTTP handles a request under /cap/..., authenticating with the
 // sandbox's per-attempt proxy token and auditing the call. Built-in capability
 // endpoints (/cap/memory, /cap/release-notes, /cap/quarantine) delegate to the
-// corresponding API or CLI routes; external capability servers delegate to
-// p.CapHandler when configured.
+// corresponding API or CLI routes; external capability servers are the
+// sandbox-callable ones CapServers holds for the attempt or CI job
+// (capserver.go).
 func (p *GitProxy) ServeCapHTTP(w http.ResponseWriter, r *http.Request) {
 	if p == nil {
 		http.Error(w, "capability proxy not configured", http.StatusNotFound)
@@ -274,11 +274,18 @@ func (p *GitProxy) ServeCapHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer p.nsLimiter.release(grant.Sandbox)
 
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/cap"), "/")
+	// A CI job's sandbox has no task run behind it: its servers are
+	// registered under the sandbox itself, and it reaches nothing else
+	// here.
+	if servers, ok := p.CapServers.Servers(CapSandboxKey(grant.Sandbox)); ok {
+		p.serveExternalCap(w, r, servers, rest, "", "", "CI sandbox "+grant.Sandbox)
+		return
+	}
 	modelScope, ok := p.resolveSandboxScope(w, r, grant)
 	if !ok {
 		return
 	}
-	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/cap"), "/")
 	srv, tail, _ := strings.Cut(rest, "/")
 	switch srv {
 	case "memory":
@@ -312,34 +319,8 @@ func (p *GitProxy) ServeCapHTTP(w http.ResponseWriter, r *http.Request) {
 		p.recordRouteCall(r.Context(), modelScope.RunID, act, cw)
 		return
 	}
-
-	toolName := "cap_list"
-	phrase := "listing capability tools"
-	if srv != "" {
-		toolName = "cap__" + srv
-		phrase = fmt.Sprintf("calling capability %s", srv)
-	}
-	act := RouteActivity{Tool: toolName, Phrase: phrase}
-	p.noteActivity(r.Context(), modelScope.TaskID, act.Phrase)
-	cw := &countingResponseWriter{ResponseWriter: w}
-	if p.CapHandler != nil {
-		// The proxy token authenticates the sandbox to this proxy and to
-		// nothing else, and the X-Grain-* headers are the proxy's to set:
-		// neither is passed on to a capability server.
-		in := r.Clone(r.Context())
-		for k := range in.Header {
-			if strings.EqualFold(k, "Authorization") || strings.HasPrefix(strings.ToLower(k), "x-grain-") {
-				in.Header.Del(k)
-			}
-		}
-		p.CapHandler.ServeHTTP(cw, in)
-	} else if rest == "" && r.Method == http.MethodGet {
-		cw.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(cw).Encode(map[string]any{"servers": []any{}})
-	} else {
-		http.Error(cw, fmt.Sprintf("forbidden: capability server %q is not granted to this attempt or its tools are model-only", srv), http.StatusForbidden)
-	}
-	p.recordRouteCall(r.Context(), modelScope.RunID, act, cw)
+	servers, _ := p.CapServers.Servers(CapRunKey(modelScope.RunID))
+	p.serveExternalCap(w, r, servers, rest, modelScope.TaskID, modelScope.RunID, "run "+modelScope.RunID)
 }
 
 func toNamespaceScope(modelScope model.NamespaceScope) namespace.Scope {

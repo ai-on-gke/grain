@@ -535,13 +535,19 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 	// token or a sandbox-supplied X-Grain-* header.
 	var capAuth, capActing string
 	capReached := false
-	proxy.CapHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capReached = true
-		capAuth = r.Header.Get("Authorization")
-		capActing = r.Header.Get("X-Grain-Acting-Task")
-		w.WriteHeader(http.StatusOK)
-	})
-	req = httptest.NewRequest(http.MethodPost, "/cap/widgets/mcp", strings.NewReader(`{}`))
+	caps := gitproxy.NewCapRegistry()
+	proxy.CapServers = caps
+	unregister := caps.Register(gitproxy.CapRunKey("run-2"), []gitproxy.CapServer{{
+		Name: "widgets", Grant: "https://example.com/widgets#w",
+		Tools: []gitproxy.CapTool{{Name: "ping"}, {Name: "secret", ModelOnly: true}},
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capReached = true
+			capAuth = r.Header.Get("Authorization")
+			capActing = r.Header.Get("X-Grain-Acting-Task")
+			w.WriteHeader(http.StatusOK)
+		}),
+	}})
+	req = httptest.NewRequest(http.MethodPost, "/cap/widgets/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping"}}`))
 	req.Header.Set("Authorization", basicAuthHeader(tok2))
 	req.Header.Set("X-Grain-Acting-Task", "1")
 	rec = httptest.NewRecorder()
@@ -550,7 +556,39 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 		t.Errorf("POST /cap/widgets/mcp: reached=%v auth=%q acting=%q; want the capability server reached with neither",
 			capReached, capAuth, capActing)
 	}
-	proxy.CapHandler = nil
+	// A model-only tool -- alone or inside a batch -- and a tool the
+	// server never listed are refused before the server sees them.
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"secret"}}`,
+		`[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping"}},{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"secret"}}]`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unlisted"}}`,
+	} {
+		capReached = false
+		req = httptest.NewRequest(http.MethodPost, "/cap/widgets/mcp", strings.NewReader(body))
+		req.Header.Set("Authorization", basicAuthHeader(tok2))
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || capReached {
+			t.Errorf("POST /cap/widgets/mcp %s: code=%d reached=%v; want 403 and the server untouched", body, rec.Code, capReached)
+		}
+	}
+	req = httptest.NewRequest(http.MethodGet, "/cap/", nil)
+	req.Header.Set("Authorization", basicAuthHeader(tok2))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"ping"`) ||
+		!strings.Contains(rec.Body.String(), `"modelOnlyTools":["secret"]`) || strings.Contains(rec.Body.String(), `"name":"secret"`) {
+		t.Errorf("GET /cap/: %d %s; want widgets listing ping as a tool and secret as model-only", rec.Code, rec.Body)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/cap/gadgets/mcp", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", basicAuthHeader(tok2))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("POST /cap/gadgets/mcp, never granted: %d, want 403", rec.Code)
+	}
+	unregister()
+	proxy.CapServers = nil
 
 	// A live run with no task to act for is never forwarded: without
 	// X-Grain-Acting-Task the API would answer as the deployment itself.
