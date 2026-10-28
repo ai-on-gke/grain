@@ -1211,6 +1211,13 @@ jobs:
     steps:
       - &assemble-installer-image
         name: Assemble the image to install
+        # Nothing is published under ghcr.io/ai-on-gke/grain yet: until the
+        # image workflows publish there, install on top of the images
+        # bwsalmon/grain publishes, the registry every grain image still
+        # names.
+        env:
+          GRAIN_INSTALLER_BASE_IMAGE: ghcr.io/bwsalmon/grain/grain:main
+          GRAIN_INSTALLER_SANDBOX_IMAGE: ghcr.io/bwsalmon/grain/k8s-sandbox:main
         run: ./scripts/installer-test-image.sh grain-installer:test
 
       - &configure-installer-package-cache
