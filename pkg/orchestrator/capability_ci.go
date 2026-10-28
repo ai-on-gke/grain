@@ -16,15 +16,18 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 )
 
 // This file carries a CI job's pass (minted by pkg/daemon's grant
@@ -32,10 +35,14 @@ import (
 // §5 sets: the same ports, placements and setup an agent run's pass gets
 // (capability_materialize.go), then every mcp_endpoint proxied, handshaken
 // and named as for an agent (capability_endpoints.go). A job's steps run
-// inside the sandbox rather than on grain's host, though, so each proxy is
-// also forwarded into the sandbox over the capability port relay -- which
-// is on the sandbox fabric, so it is reachable under network_access: none
-// -- and listed in /home/debian/.grain/mcp.json (§5.2.4 item 4).
+// inside the sandbox rather than on grain's host, though, and a job has
+// no model channel: only a tool whose delivery resolves to the sandbox
+// (§5.2.6) is reachable at all, through the sandbox proxy's
+// /cap/<server>/mcp -- the same route, and the same model-only refusal,
+// an agent's grain cap uses -- listed in /home/debian/.grain/mcp.json
+// (§5.2.4 item 4) with the job sandbox's own proxy token. A deployment
+// that wires no such registry falls back to forwarding each proxy into
+// the sandbox over the capability port relay, on the sandbox fabric.
 
 // CIMCPConfigPath is where a CI job finds its capability MCP servers.
 const CIMCPConfigPath = "/home/debian/.grain/mcp.json"
@@ -58,6 +65,14 @@ type CIPassOptions struct {
 	// Servers are the capability servers the pass was minted through,
 	// whose services and data planes its grants are carried from.
 	Servers CapabilityServers
+	// CapServers, ProxyURL and ProxyToken route the job's capability MCP
+	// servers through the sandbox proxy's /cap/<server>/mcp: the
+	// registry the proxy answers from, the proxy's base URL as the
+	// sandbox reaches it, and the sandbox's own proxy token. Nil
+	// CapServers forwards each endpoint proxy over Ports instead.
+	CapServers *gitproxy.CapRegistry
+	ProxyURL   string
+	ProxyToken func(sandbox string) (string, error)
 	// Now is the clock; nil is the wall clock.
 	Now func() time.Time
 }
@@ -73,6 +88,8 @@ type CIPassMaterialization struct {
 	// guest port it is listed under, and config the mcp.json naming them.
 	exposed []openForward
 	config  string
+	// opts is kept for the /cap/ route, whose mcp.json is per sandbox.
+	opts CIPassOptions
 }
 
 // MaterializeCIPass materializes pass into sandbox, a CI job's, before
@@ -85,7 +102,7 @@ func MaterializeCIPass(ctx context.Context, opts CIPassOptions, sandbox Sandbox,
 	if err != nil {
 		return nil, err
 	}
-	c := &CIPassMaterialization{m: m}
+	c := &CIPassMaterialization{m: m, opts: opts}
 	if err := m.wireEndpoints(ctx, deps.capabilityDataPlane); err != nil {
 		c.Close()
 		return nil, err
@@ -104,7 +121,7 @@ func MaterializeCIPass(ctx context.Context, opts CIPassOptions, sandbox Sandbox,
 // exposeEndpoints opens a relay forward to each endpoint proxy and writes
 // the mcp.json listing it at the guest port it will be forwarded to.
 func (c *CIPassMaterialization) exposeEndpoints(ctx context.Context, cfg Config) error {
-	if len(c.m.servers) == 0 {
+	if len(c.m.servers) == 0 || c.opts.CapServers != nil {
 		return nil
 	}
 	if cfg.CapabilityPorts == nil || cfg.CapabilityPortsURL == "" {
@@ -158,6 +175,9 @@ func (c *CIPassMaterialization) exposeEndpoints(ctx context.Context, cfg Config)
 // applyEndpoints starts the guest end of every endpoint's forward in
 // sandbox and writes its mcp.json there.
 func (c *CIPassMaterialization) applyEndpoints(ctx context.Context, sandbox Sandbox) error {
+	if c.opts.CapServers != nil {
+		return c.applyCapEndpoints(ctx, sandbox)
+	}
 	if len(c.exposed) == 0 {
 		return nil
 	}
@@ -168,6 +188,50 @@ func (c *CIPassMaterialization) applyEndpoints(ctx context.Context, sandbox Sand
 	if err := c.m.startForwarders(ctx, sandbox, commander, c.exposed); err != nil {
 		return err
 	}
+	if err := placeInSandbox(ctx, sandbox, commander, protocol.Placement{Path: CIMCPConfigPath, Mode: "0600", Content: c.config}); err != nil {
+		return fmt.Errorf("writing %s: %w", CIMCPConfigPath, err)
+	}
+	return nil
+}
+
+// applyCapEndpoints registers the pass's sandbox tools for sandbox on the
+// proxy's /cap/ and writes the mcp.json naming /cap/<server>/mcp there.
+// A tool that resolved model-only is in neither: a job has no model to
+// call it, and the proxy refuses it (§5.2.6).
+func (c *CIPassMaterialization) applyCapEndpoints(ctx context.Context, sandbox Sandbox) error {
+	c.m.registerSandboxCapabilities(nil, "")
+	c.config = ""
+	if len(c.m.capServers) == 0 {
+		return nil
+	}
+	if c.opts.ProxyURL == "" || c.opts.ProxyToken == nil {
+		return &protocol.RefusedError{Reason: "this deployment gives CI sandboxes no proxy token, so a job cannot reach its capability MCP servers"}
+	}
+	token, err := c.opts.ProxyToken(sandbox.Name())
+	if err != nil {
+		return fmt.Errorf("minting %s's proxy token for its capability MCP servers: %w", sandbox.Name(), err)
+	}
+	commander, ok := sandboxRunsCommands(sandbox)
+	if !ok {
+		return fmt.Errorf("this sandbox backend (%T) cannot run commands in its sandbox, so it cannot reach capability MCP servers", sandbox)
+	}
+	type entry struct {
+		Type    string            `json:"type"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers"`
+	}
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
+	servers := map[string]entry{}
+	for _, s := range c.m.capServers {
+		servers[s.Name] = entry{Type: "http", URL: strings.TrimRight(c.opts.ProxyURL, "/") + "/cap/" + s.Name + "/mcp",
+			Headers: map[string]string{"Authorization": auth}}
+	}
+	data, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
+	if err != nil {
+		return err
+	}
+	c.m.registerSandboxCapabilities(c.opts.CapServers, gitproxy.CapSandboxKey(sandbox.Name()))
+	c.config = string(data) + "\n"
 	if err := placeInSandbox(ctx, sandbox, commander, protocol.Placement{Path: CIMCPConfigPath, Mode: "0600", Content: c.config}); err != nil {
 		return fmt.Errorf("writing %s: %w", CIMCPConfigPath, err)
 	}

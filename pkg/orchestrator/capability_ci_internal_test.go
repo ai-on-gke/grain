@@ -32,6 +32,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 )
 
 // ciMCPConfig is the mcp.json a CI job's sandbox was given.
@@ -225,5 +226,88 @@ func TestMaterializeCIPassRefusesEndpointsWithoutARelay(t *testing.T) {
 	defer m.Close()
 	if m.MCPConfig() != "" || strings.Contains(strings.Join(sb.describe(), "\n"), CIMCPConfigPath) {
 		t.Errorf("a pass with no endpoints wrote %q: %v", m.MCPConfig(), sb.describe())
+	}
+}
+
+// renamedSandbox is a commandSandbox under another name, as a job's
+// retry gets a fresh sandbox of its own.
+type renamedSandbox struct {
+	*commandSandbox
+	name string
+}
+
+func (s renamedSandbox) Name() string { return s.name }
+
+// TestMaterializeCIPassRoutesSandboxToolsThroughTheProxy: with the proxy's
+// registry wired, a job's mcp.json names /cap/<server>/mcp with the
+// sandbox's own token, the proxy reaches exactly the sandbox-callable
+// tools, a retry's sandbox takes them over, and Close takes them away.
+func TestMaterializeCIPassRoutesSandboxToolsThroughTheProxy(t *testing.T) {
+	fake := &fakeDataPlane{
+		names: map[string]string{"grain-task-1-1-0": "widgets", "grain-task-1-1-1": "gadgets"},
+		tools: []string{"ping", "rotate"},
+		extra: map[string]map[string]any{"rotate": {"annotations": map[string]any{"modelOnly": true}}},
+	}
+	upstream := httptest.NewServer(fake)
+	defer upstream.Close()
+	pass := testPass(
+		&protocol.MintResponse{MCPEndpoint: "/runs/grain-task-1-1-0/mcp"},
+		// gadgets' method says nothing, so neither of its tools is the
+		// job's: it is in no mcp.json at all.
+		&protocol.MintResponse{MCPEndpoint: "/runs/grain-task-1-1-1/mcp"},
+	)
+	pass.Grants[0].MCPDelivery = protocol.DeliverySandbox
+	registry := gitproxy.NewCapRegistry()
+	opts := CIPassOptions{
+		Servers: ciTestServers(t, upstream.URL), CapServers: registry, ProxyURL: "http://127.0.0.1:9728/",
+		ProxyToken: func(sandbox string) (string, error) { return "tok-" + sandbox, nil },
+	}
+	first := renamedSandbox{&commandSandbox{}, "ci-job-1"}
+	m, err := MaterializeCIPass(context.Background(), opts, first, pass, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	var cfg struct {
+		MCPServers map[string]struct {
+			Type    string            `json:"type"`
+			URL     string            `json:"url"`
+			Headers map[string]string `json:"headers"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(first.placed(t, CIMCPConfigPath)), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:tok-ci-job-1"))
+	if len(cfg.MCPServers) != 1 || cfg.MCPServers["widgets"].URL != "http://127.0.0.1:9728/cap/widgets/mcp" ||
+		cfg.MCPServers["widgets"].Headers["Authorization"] != auth {
+		t.Errorf("mcp.json = %+v, want widgets alone at the proxy's /cap/widgets/mcp with the sandbox's token", cfg)
+	}
+	servers, ok := registry.Servers(gitproxy.CapSandboxKey("ci-job-1"))
+	if !ok || len(servers) != 1 || servers[0].Name != "widgets" {
+		t.Fatalf("registered = %+v, %v", servers, ok)
+	}
+	for _, tool := range servers[0].Tools {
+		if tool.ModelOnly != (tool.Name == "rotate") {
+			t.Errorf("tool %s registered modelOnly=%v", tool.Name, tool.ModelOnly)
+		}
+	}
+
+	retry := renamedSandbox{&commandSandbox{}, "ci-job-1-retry"}
+	if err := m.Apply(context.Background(), retry); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Servers(gitproxy.CapSandboxKey("ci-job-1")); ok {
+		t.Error("the first sandbox still reaches the job's tools after its retry took them over")
+	}
+	if _, ok := registry.Servers(gitproxy.CapSandboxKey("ci-job-1-retry")); !ok {
+		t.Error("the retry's sandbox does not reach the job's tools")
+	}
+	if !strings.Contains(retry.placed(t, CIMCPConfigPath), base64.StdEncoding.EncodeToString([]byte("x-access-token:tok-ci-job-1-retry"))) {
+		t.Error("the retry's mcp.json does not carry its own sandbox's token")
+	}
+	m.Close()
+	if _, ok := registry.Servers(gitproxy.CapSandboxKey("ci-job-1-retry")); ok {
+		t.Error("the job's tools are still on the proxy after it closed")
 	}
 }
