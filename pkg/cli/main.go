@@ -108,6 +108,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/gitrefs"
 	"github.com/ai-on-gke/grain/pkg/hostscriptcli"
@@ -240,6 +241,9 @@ func Main() {
 			return
 		case claude.StopHookSubcommand:
 			claude.ServeStopHook(args[1:], os.Stdin, os.Stdout, os.Stderr)
+			return
+		case codex.DetachedSubcommand:
+			runCodexDetached(args[1:])
 			return
 		}
 	}

@@ -361,7 +361,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	}
 	claudeRun := fs.String("claude-run", "", runHelp("claude")+". claude also takes \"detached\": the image's claude, "+
 		"through grain hostd's claude-detached entry, so a daemon upgrade does not interrupt it")
-	codexRun := fs.String("codex-run", "", runHelp("codex"))
+	codexRun := fs.String("codex-run", "", runHelp("codex")+". codex also takes \"detached\": the image's codex, "+
+		"through grain hostd's codex-detached entry, so a daemon upgrade does not interrupt it")
 	agyRun := fs.String("agy-run", "", runHelp("agy"))
 	// The per-run docker launcher these configured is gone (v2.3.0). They
 	// stay defined so a unit an older installer wrote still starts, and

@@ -516,9 +516,10 @@ GRAIN_CODEX_MODEL="${GRAIN_CODEX_MODEL:-}"
 # With GRAIN_HOSTD=0 a "host" is dropped (resolve_hostd). "auto" is no
 # longer a location (v2.3.0): it is accepted with a warning for one
 # release and dropped, which is the default it meant in a container.
-# GRAIN_CLAUDE_RUN may also be "detached": the image's claude, detached
-# through grain hostd's container-equivalent entry so an upgrade does not
-# interrupt it -- the default when hostd is on (resolve_hostd).
+# GRAIN_CLAUDE_RUN and GRAIN_CODEX_RUN may also be "detached": the image's
+# CLI, detached through grain hostd's container-equivalent entry so an
+# upgrade does not interrupt it -- the default when hostd is on
+# (resolve_hostd).
 GRAIN_CLAUDE_RUN="${GRAIN_CLAUDE_RUN:-}"
 GRAIN_CODEX_RUN="${GRAIN_CODEX_RUN:-}"
 GRAIN_AGY_RUN="${GRAIN_AGY_RUN:-}"
@@ -526,8 +527,8 @@ for cli_run_var in GRAIN_CLAUDE_RUN GRAIN_CODEX_RUN GRAIN_AGY_RUN; do
   case "${!cli_run_var}" in
     ''|host|container) ;;
     detached)
-      if [ "$cli_run_var" != GRAIN_CLAUDE_RUN ]; then
-        echo "setup.sh: $cli_run_var=detached: only claude has a detached run location yet; want host or container" >&2
+      if [ "$cli_run_var" = GRAIN_AGY_RUN ]; then
+        echo "setup.sh: $cli_run_var=detached: only claude and codex have a detached run location; want host or container" >&2
         exit 2
       fi
       ;;
@@ -537,7 +538,7 @@ for cli_run_var in GRAIN_CLAUDE_RUN GRAIN_CODEX_RUN GRAIN_AGY_RUN; do
       printf -v "$cli_run_var" '%s' ""
       ;;
     *)
-      echo "setup.sh: $cli_run_var=${!cli_run_var}: want host or container (or detached, for claude)" >&2
+      echo "setup.sh: $cli_run_var=${!cli_run_var}: want host or container (or detached, for claude and codex)" >&2
       exit 2
       ;;
   esac
@@ -1063,9 +1064,9 @@ Recognized variables:
   GRAIN_CLAUDE_RUN          where claude runs: container (a subprocess in the
   GRAIN_CODEX_RUN            daemon's container) or host (on this machine through
   GRAIN_AGY_RUN              grain hostd, for a CLI its allowlist names; dropped
-                             with GRAIN_HOSTD=0). claude also takes detached: the
-                             image's claude through hostd's claude-detached entry,
-                             which an upgrade does not interrupt. Passed as
+                             with GRAIN_HOSTD=0). claude and codex also take
+                             detached: the image's CLI through hostd's *-detached
+                             entry, which an upgrade does not interrupt. Passed as
                              -claude-run/-codex-run/-agy-run; Settings -> Models
                              overrides them (default: detached for claude with
                              grain hostd, otherwise the daemon's own default)
@@ -3859,7 +3860,7 @@ HOSTD_EXTRACTED_ID_FILE=/usr/local/lib/grain/.extracted-image-id-hostd
 # a detached run's mcpserver reaches a kubernetes-granule sandbox with
 # on a host that has none of its own. Each is the image's /usr/local/bin
 # copy, dereferenced (claude's is a symlink into /opt/claude).
-HOSTD_IMAGE_CLIS=(claude codex kubectl)
+HOSTD_IMAGE_CLIS=(claude codex codex-code-mode-host kubectl)
 # The marker, in a version's directory, that the extractor took the
 # image's CLIs out as well as its grain: a version an older extractor
 # installed has none, and is not skipped over.
@@ -3955,7 +3956,8 @@ want_id="\$($DOCKER_BIN image inspect --format '{{.Id}}' "\$image" 2>/dev/null |
 if [ -n "\$want_id" ] && [ -r "\$extracted_id_file" ] \
    && [ "\$(cat "\$extracted_id_file" 2>/dev/null || true)" = "\$want_id" ] \
    && [ -x "${HOST_GRAIN_BIN}" ] && [ -x "${HOSTD_VERSIONS_DIR}/current/grain" ] \
-   && [ -e "${HOSTD_VERSIONS_DIR}/current/${HOSTD_CLIS_MARKER:-.clis}" ]; then
+   && [ -e "${HOSTD_VERSIONS_DIR}/current/${HOSTD_CLIS_MARKER:-.clis}" ] \
+   && { [ ! -x "${HOSTD_VERSIONS_DIR}/current/codex" ] || [ -x "${HOSTD_VERSIONS_DIR}/current/codex.bin" ]; }; then
   exit 0
 fi
 
@@ -3994,13 +3996,21 @@ install_hostd_version() {
   # lacks it, since a detached run adopted across an upgrade may be
   # executing the copy already here.
   if [ -n "\$stage" ]; then
-    for name in ${HOSTD_IMAGE_CLIS[*]:-claude codex kubectl}; do
+    for name in ${HOSTD_IMAGE_CLIS[*]:-claude codex codex-code-mode-host kubectl} codex.bin; do
       if [ -f "\$stage/\$name" ] && [ ! -x "\$dir/\$version/\$name" ]; then
         cp "\$stage/\$name" "\$dir/\$version/\$name.new"
         chmod 0755 "\$dir/\$version/\$name.new"
         mv -f "\$dir/\$version/\$name.new" "\$dir/\$version/\$name"
       fi
     done
+    # A version an older extractor populated before codex was wrapped
+    # has the real binary at codex and no codex.bin beside it.
+    if [ -x "\$dir/\$version/codex" ] && [ ! -x "\$dir/\$version/codex.bin" ] && [ -f "\$stage/codex.bin" ]; then
+      mv -f "\$dir/\$version/codex" "\$dir/\$version/codex.bin"
+      cp "\$stage/codex" "\$dir/\$version/codex.new"
+      chmod 0755 "\$dir/\$version/codex.new"
+      mv -f "\$dir/\$version/codex.new" "\$dir/\$version/codex"
+    fi
     touch "\$dir/\$version/${HOSTD_CLIS_MARKER:-.clis}"
   fi
   previous="\$(readlink "\$dir/current" 2>/dev/null || true)"
@@ -4048,9 +4058,16 @@ mv "${HOST_GRAIN_BIN}.new" "${HOST_GRAIN_BIN}"
 # without one (INSTALL_CLAUDE_CLI=0) leaves it out, and its detached
 # entry then offers a path that does not exist, which a run is refused
 # for rather than started on.
-for name in ${HOSTD_IMAGE_CLIS[*]:-claude codex kubectl}; do
+for name in ${HOSTD_IMAGE_CLIS[*]:-claude codex codex-code-mode-host kubectl}; do
   $DOCKER_BIN cp -L "\$cid:/usr/local/bin/\$name" "\$stage/\$name" >/dev/null 2>&1 || rm -f "\$stage/\$name"
 done
+# codex-detached runs "grain codex-detached" around the extracted binary so
+# the run's loopback HTTP MCP adapter is served outside the daemon and
+# outlives a daemon upgrade with codex.
+if [ -f "\$stage/codex" ]; then
+  mv -f "\$stage/codex" "\$stage/codex.bin"
+  printf '#!/bin/sh\nexec "\$(dirname "\$0")/grain" codex-detached "\$(dirname "\$0")/codex.bin" "\$@"\n' > "\$stage/codex"
+fi
 
 version="\${want_id#sha256:}"
 version="\${version:0:12}"

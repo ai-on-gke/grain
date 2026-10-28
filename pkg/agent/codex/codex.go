@@ -165,6 +165,7 @@ type Framework struct {
 	host            agent.Host
 	grainBinaryPath string
 	startMCP        func(context.Context, string, []string) (*mcp.ManagedHTTP, error)
+	detachedMCP     bool
 	// binPath is the codex binary itself, held here as well as inside
 	// the runner above because an interactive session is not run through
 	// that seam: TerminalCommand hands the argv to pkg/console, which
@@ -322,6 +323,22 @@ func WithHost(host agent.Host) Option {
 // Host returns the Host this framework stages files on and runs the CLI on.
 func (f *Framework) Host() agent.Host {
 	return f.host
+}
+
+// WithDetachedMCP defers starting the managed grain-sandbox HTTP MCP
+// adapter to the host-side wrapper (`grain codex-detached`), writing
+// mcpserver.json into CODEX_HOME instead of serving the adapter inside the
+// daemon process so the endpoint outlives a daemon upgrade alongside codex.
+func WithDetachedMCP() Option {
+	return func(f *Framework) { f.detachedMCP = true }
+}
+
+// HostdEnv is every variable name Run may send codex. grain hostd refuses
+// a request carrying any name its allowlist entry does not list, so
+// setup.sh's container-equivalent entry (cli codex-detached) names
+// exactly these, and tests/deploy holds the two in step.
+func HostdEnv() []string {
+	return []string{"CODEX_HOME", "CODEX_EXEC_SERVER_URL", "OPENAI_API_KEY"}
 }
 
 // WithGitHubAccess is agent/claude's option of the same name: it gives
@@ -628,6 +645,12 @@ const configFileName = "config.toml"
 // outright, and a run must never inherit another run's (runFileNames).
 const environmentsFileName = "environments.toml"
 
+// mcpServerFileName is the spec writeConfig writes into CODEX_HOME when
+// WithDetachedMCP is set, telling the host-side `grain codex-detached`
+// wrapper how to start `grain mcpserver` behind mcp.StartCommandHTTP and
+// write the resulting loopback URL and bearer token into config.toml.
+const mcpServerFileName = "mcpserver.json"
+
 // frameworkName is what this package is called wherever a framework has
 // to be named to something outside it -- the session store's own
 // directory, and model.SuspendedSession.Framework, which is what stops a
@@ -670,31 +693,8 @@ func (f *Framework) configTOML(endpoint *mcp.ManagedHTTP, servers ...agent.Capab
 	b.WriteString("[features]\ncode_mode_host = true\napps = false\nplugins = false\nmulti_agent = false\nmulti_agent_v2 = false\n")
 	b.WriteString("[orchestrator.skills]\nenabled = false\n")
 	b.WriteString("[skills.bundled]\nenabled = false\n")
-	if endpoint == nil {
-		return []byte(b.String()), nil
-	}
-	fmt.Fprintf(&b, "[mcp_servers.%s]\n", mcpServerName)
-	url, _ := tomlString(endpoint.URL)
-	auth, _ := tomlString("Bearer " + endpoint.Token)
-	fmt.Fprintf(&b, "url = %s\nhttp_headers = { Authorization = %s }\nrequired = true\n", url, auth)
-	// codex caps one MCP tool call at a minute unless told otherwise,
-	// which is far short of a chat turn waiting on a person or a
-	// wait_for_checks waiting on CI (mcp.MaxBlockingToolWait). The same
-	// limit, plus slack, as claude's MCP_TOOL_TIMEOUT and agy's
-	// timeoutSeconds, so that grain's own clock ends a wait rather than
-	// the CLI abandoning it.
-	fmt.Fprintf(&b, "tool_timeout_sec = %d\n", int((mcp.MaxBlockingToolWait + mcpToolTimeoutSlack).Seconds()))
-	// Only tools actually granted to this run are preapproved. New tools
-	// from unrelated MCP servers cannot acquire approval through this.
-	names := make([]string, 0, len(endpoint.Tools))
-	for _, tool := range endpoint.Tools {
-		names = append(names, tool.Name)
-	}
-	allowed, _ := tomlStringArray(names)
-	fmt.Fprintf(&b, "enabled_tools = %s\n", allowed)
-	for _, name := range names {
-		quoted, _ := tomlString(name)
-		fmt.Fprintf(&b, "[mcp_servers.%s.tools.%s]\napproval_mode = \"approve\"\n", mcpServerName, quoted)
+	if endpoint != nil {
+		b.WriteString(mcpServerTOML(endpoint))
 	}
 	for _, s := range servers {
 		table, err := tomlString(s.Name)
@@ -722,6 +722,37 @@ func (f *Framework) configTOML(endpoint *mcp.ManagedHTTP, servers ...agent.Capab
 		}
 	}
 	return []byte(b.String()), nil
+}
+
+// mcpServerTOML formats the [mcp_servers.grain-sandbox] stanza for a
+// started ManagedHTTP endpoint: its loopback URL, per-run bearer token,
+// tool timeout, and startup tool snapshot with per-tool preapproval.
+func mcpServerTOML(endpoint *mcp.ManagedHTTP) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[mcp_servers.%s]\n", mcpServerName)
+	url, _ := tomlString(endpoint.URL)
+	auth, _ := tomlString("Bearer " + endpoint.Token)
+	fmt.Fprintf(&b, "url = %s\nhttp_headers = { Authorization = %s }\nrequired = true\n", url, auth)
+	// codex caps one MCP tool call at a minute unless told otherwise,
+	// which is far short of a chat turn waiting on a person or a
+	// wait_for_checks waiting on CI (mcp.MaxBlockingToolWait). The same
+	// limit, plus slack, as claude's MCP_TOOL_TIMEOUT and agy's
+	// timeoutSeconds, so that grain's own clock ends a wait rather than
+	// the CLI abandoning it.
+	fmt.Fprintf(&b, "tool_timeout_sec = %d\n", int((mcp.MaxBlockingToolWait + mcpToolTimeoutSlack).Seconds()))
+	// Only tools actually granted to this run are preapproved. New tools
+	// from unrelated MCP servers cannot acquire approval through this.
+	names := make([]string, 0, len(endpoint.Tools))
+	for _, tool := range endpoint.Tools {
+		names = append(names, tool.Name)
+	}
+	allowed, _ := tomlStringArray(names)
+	fmt.Fprintf(&b, "enabled_tools = %s\n", allowed)
+	for _, name := range names {
+		quoted, _ := tomlString(name)
+		fmt.Fprintf(&b, "[mcp_servers.%s.tools.%s]\napproval_mode = \"approve\"\n", mcpServerName, quoted)
+	}
+	return b.String()
 }
 
 // mcpToolTimeoutSlack is how far past the longest wait grain's own tools
@@ -787,6 +818,34 @@ func (f *Framework) writeConfig(ctx context.Context, mcpArgs []string, taskID st
 	servers, releaseServers, err := agent.CarryCapabilityServers(f.host, servers)
 	if err != nil {
 		return "", false, nil, fmt.Errorf("codex: %w", err)
+	}
+	if f.detachedMCP {
+		config, err := f.configTOML(nil, servers...)
+		if err != nil {
+			releaseServers()
+			return "", false, nil, err
+		}
+		home, persistent, removeHome, err := f.writeHome(ctx, config, taskID)
+		if err != nil {
+			releaseServers()
+			return "", false, nil, err
+		}
+		specData, err := json.Marshal(detachedMCPSpec{
+			GrainBinary: f.grainBinaryPath,
+			Args:        mcpArgs,
+			BaseConfig:  string(config),
+		})
+		if err != nil {
+			removeHome()
+			releaseServers()
+			return "", false, nil, fmt.Errorf("codex: encoding detached MCP spec: %w", err)
+		}
+		if err := f.host.WriteFile(ctx, filepath.Join(home, mcpServerFileName), specData, 0o600); err != nil {
+			removeHome()
+			releaseServers()
+			return "", false, nil, fmt.Errorf("codex: writing detached MCP spec: %w", err)
+		}
+		return home, persistent, func() { releaseServers(); removeHome() }, nil
 	}
 	endpoint, err := f.startMCP(ctx, f.grainBinaryPath, mcpArgs)
 	if err != nil {
@@ -865,7 +924,7 @@ func (f *Framework) openHome(ctx context.Context, taskID string) (home string, p
 // rather than only written: a daemon killed mid-run would otherwise
 // leave a task's home holding a link to a credential for as long as the
 // store keeps that task.
-var runFileNames = []string{configFileName, environmentsFileName, authFileName}
+var runFileNames = []string{configFileName, environmentsFileName, authFileName, mcpServerFileName}
 
 // clearRunFiles takes this run's own files back out of a home that
 // outlives it. Failures are not reported: this runs in a deferred
