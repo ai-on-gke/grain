@@ -1238,10 +1238,30 @@ const (
 	// LinkChangelist records a changelist (CL) that is this task's work (->
 	// "cl/<number>"), the way a pull request is a git task's: written
 	// when a run's capability grants report one in their audit
-	// (protocol.AuditTaskChangelistField). Shown on the task page;
-	// never blocks dispatch.
+	// (protocol.AuditTaskChangelistField), or when open_pull_request
+	// creates one (pkg/change). It is the task's change as LinkFixes is:
+	// a finished task with one is awaiting_submit (AwaitsSubmit). A task
+	// may have several; the first is its primary CL. Never blocks
+	// dispatch.
 	LinkChangelist LinkKind = "changelist"
+	// LinkChangelistSubmitted records the number a task's CL was
+	// submitted as ("cl/<submitted number>"): a forge that renumbers a
+	// pending CL on submit records the submitted number here. A work tree
+	// reads it as cl-submitted.
+	LinkChangelistSubmitted LinkKind = "changelist-submitted"
 )
+
+// IsChange reports whether a link of kind k is the task's own change --
+// a pull request (LinkFixes) or a changelist (LinkChangelist) -- which
+// is what parks a finished task on awaiting_submit rather than on a
+// reader (AwaitsSubmit, AwaitsAck, and the task_state view's
+// changeLinkKindsSQL).
+func (k LinkKind) IsChange() bool {
+	return k == LinkFixes || k == LinkChangelist
+}
+
+// changeLinkKindsSQL is IsChange's kinds as a SQL IN list.
+const changeLinkKindsSQL = `'` + string(LinkFixes) + `','` + string(LinkChangelist) + `'`
 
 // TagMechanicalPort marks a port grain made itself, by cherry-picking
 // with no agent run behind it (orchestrator.filePorts): what the merges

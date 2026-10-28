@@ -5160,3 +5160,57 @@ func TestInitLeavesAStoreItRefusesUntouched(t *testing.T) {
 		t.Errorf("Init restamped a store it refused: version %d", version)
 	}
 }
+
+// TestAChangelistIsTheTasksChangeLikeAPullRequest holds task_state and
+// model.StateOf to one answer for a changelist task whose change is a CL
+// (model.LinkChangelist, docs/design/changelists.md#G3-2): a
+// finished task with a live CL is awaiting_submit, not awaiting_reply,
+// and a task with several CLs is still exactly one row of the view.
+func TestAChangelistIsTheTasksChangeLikeAPullRequest(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	done := now.Add(time.Hour)
+	for id, links := range map[string][]model.Link{
+		"cl01": {{Kind: model.LinkChangelist, Target: "cl/612345678"}},
+		"cl02": {
+			{Kind: model.LinkChangelist, Target: "cl/612345678"},
+			{Kind: model.LinkChangelist, Target: "cl/612345690"},
+			{Kind: model.LinkChangelist, Target: "cl/612345701"},
+		},
+	} {
+		tk := task(id, true)
+		tk.ChangeTarget = &model.ChangeTarget{Kind: "changelist"}
+		tk.Links = links
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Observe(ctx, model.Observation{TaskID: id, CompletedAt: &done}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := store.State(ctx, id)
+		if err != nil {
+			t.Fatalf("state %s: %v", id, err)
+		}
+		if got != model.StateAwaitingSubmit {
+			t.Errorf("task %s with %d CL(s): state = %q, want %q", id, len(links), got, model.StateAwaitingSubmit)
+		}
+		stored, err := store.GetTask(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		obs, err := store.GetObservation(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if derived := model.StateOf(*stored, obs, false, 0); derived != got {
+			t.Errorf("task %s: task_state view = %q, model.StateOf = %q", id, got, derived)
+		}
+		var rows int
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task_state` WHERE `task_id` = ?", id).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 1 {
+			t.Errorf("task %s with %d CL links has %d task_state rows, want 1", id, len(links), rows)
+		}
+	}
+}

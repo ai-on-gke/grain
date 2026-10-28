@@ -436,6 +436,9 @@ var routeAuthorization = map[string]authLevel{
 	"GET /_grain/executor":            public,
 	"GET /api/executors/connect":      public,
 	"GET /api/executors/stream":       public,
+	// A grain hostd dialing in authenticates with the hostd token in
+	// its upgrade (hostd.Remote.ServeHTTP), not with a principal.
+	"GET /api/hostd/connect": public,
 }
 
 // The people the fixtures name. On the single-tenant daemon

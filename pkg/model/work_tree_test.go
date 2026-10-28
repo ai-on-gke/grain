@@ -126,3 +126,47 @@ func TestATaskRootedTreeDrawsWhatTheRootFiledIntoAnotherTree(t *testing.T) {
 		t.Errorf("issue tree = %s, total %d; want 2(3) of 2", got, gh.Total)
 	}
 }
+
+// A changelist task's CLs are drawn on its node and counted the way a pull
+// request is: a live CL is cl-pending and not done; a submitted one is
+// done; a closed task whose CL was never submitted is cl-abandoned.
+func TestWorkTreeCountsCLsLikePullRequests(t *testing.T) {
+	store, ctx := open(t)
+	proposal(t, store, ctx, "1", "", nil)
+	withCLs := func(id string, links ...model.Link) {
+		t.Helper()
+		tk := proposal(t, store, ctx, id, "1", nil)
+		tk.ChangeTarget = &model.ChangeTarget{Kind: "changelist"}
+		tk.Links = append(tk.Links, links...)
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withCLs("2", model.Link{Kind: model.LinkChangelist, Target: "cl/10"}, model.Link{Kind: model.LinkChangelist, Target: "cl/11"})
+	withCLs("3", model.Link{Kind: model.LinkChangelist, Target: "cl/12"}, model.Link{Kind: model.LinkChangelistSubmitted, Target: "cl/13"})
+	withCLs("4", model.Link{Kind: model.LinkChangelist, Target: "cl/14"})
+	closed := now
+	if err := store.Observe(ctx, model.Observation{TaskID: "4", ClosedAt: &closed}); err != nil {
+		t.Fatal(err)
+	}
+
+	tree, err := store.WorkTree(ctx, model.TaskOrigin("1"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"2": model.TreeStatusCLPending, "3": model.TreeStatusCLSubmitted, "4": model.TreeStatusCLAbandoned}
+	for _, n := range tree.Roots[0].Children {
+		if n.Status != want[n.Task.ID] {
+			t.Errorf("task %s status = %q, want %q", n.Task.ID, n.Status, want[n.Task.ID])
+		}
+		if n.Done != model.TreeStatusIsDone(n.Status) {
+			t.Errorf("task %s done = %v for %q", n.Task.ID, n.Done, n.Status)
+		}
+	}
+	if got := tree.Roots[0].Children[0].Changelists; len(got) != 2 || got[0] != "cl/10" {
+		t.Errorf("task 2's CLs = %v, want cl/10 (primary) and cl/11", got)
+	}
+	if tree.Done != 2 || tree.Total != 3 {
+		t.Errorf("%d of %d done, want 2 of 3", tree.Done, tree.Total)
+	}
+}
