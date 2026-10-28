@@ -104,7 +104,7 @@ starts a new one on the same address with no page reload. The new cases, run onc
 ## 2. Signed assertions
 
 **Go tests.** `tests/security/signed_assertion_test.go` is new. It runs a real `ui.Server` behind
-`httptest.NewServer`, on a loopback TCP listener, configured as `docs/beyondcorp.md` says to.
+`httptest.NewServer`, on a loopback TCP listener, configured as `docs/zero-trust.md` says to.
 
 ```
 go test ./tests/security/ -run 'SignedAssertion|BadSignedAssertions|PlaintextEmailHeaderAlone|NoAudienceConfigured' -count=1 -v
@@ -151,7 +151,7 @@ standing in for the tunnel, against a real daemon:
   against this deployment's IAP audience, issuer and keys (-ui-iap-audience, -ui-iap-issuer,
   -ui-iap-keys-url)".
 
-**The operator notes.** `docs/beyondcorp.md` (`67f1f439b`) tells the operator what to set in both cases:
+**The operator notes.** `docs/zero-trust.md` (`67f1f439b`) tells the operator what to set in both cases:
 - **The tunnel sends an assertion.** Grep for `refused an X-Goog-IAP-JWT-Assertion`, then set
   `GRAIN_IAP_AUDIENCE` or `-ui-iap-audience` (with `-ui-iap-issuer` and `-ui-iap-keys-url` for a non-IAP
   issuer). This matches the log line above exactly.
@@ -250,7 +250,7 @@ a UI that serves a page. The page case fails without the fix ("still retrying th
 
 After upgrading, a BeyondCorp-tunnel user whose tunnel sends only `X-Goog-Authenticated-User-Email` sees the
 log-in dialog, not the AccessDenied page. The only statement of why is the 401's text, shown once as a toast
-that disappears after 5 seconds. The daemon logs nothing, as `docs/beyondcorp.md` itself says ("nothing is
+that disappears after 5 seconds. The daemon logs nothing, as `docs/zero-trust.md` itself says ("nothing is
 logged").
 
 So neither the person in front of the browser nor the operator reading `journalctl` has a lasting record that

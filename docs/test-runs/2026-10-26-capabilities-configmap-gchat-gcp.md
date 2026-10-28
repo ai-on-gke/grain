@@ -1,9 +1,9 @@
-# Walkthrough Report: Tabbed `/settings/capabilities`, Kubernetes-Style `config-map` & Secret Maps, `gchat`, `citc` & `gcp` Ambient Admin Default (`docs/test-plans/2026-10-26.md` §5)
+# Walkthrough Report: Tabbed `/settings/capabilities`, Kubernetes-Style `config-map` & Secret Maps, `gchat`, `workspace` & `gcp` Ambient Admin Default (`docs/test-plans/2026-10-26.md` §5)
 
 - **Date:** 2026-10-26
 - **Task:** [Task #1203](/tasks/1203) (Origin: [Task #1140](/tasks/1140))
 - **Branch:** `grain/049f1e09/task-1203`
-- **Test Plan Reference:** `docs/test-plans/2026-10-26.md` §5 (Tabbed `/settings/capabilities` UI, Kubernetes-Style `config-map` & Secret Maps, `citc` & `gchat` Capability Servers, and `gcp` Ambient Admin Default)
+- **Test Plan Reference:** `docs/test-plans/2026-10-26.md` §5 (Tabbed `/settings/capabilities` UI, Kubernetes-Style `config-map` & Secret Maps, `workspace` & `gchat` Capability Servers, and `gcp` Ambient Admin Default)
 - **Environment:**
   - OS / Kernel: Debian GNU/Linux sandbox (`linux/amd64`)
   - Binary: `grain` built from `./google/cmd/grain` (with embedded `pkg/ui/static` bundle from `ui/`)
@@ -18,7 +18,7 @@ Executed the end-to-end walkthrough and verification suite for `docs/test-plans/
 
 1. **Scope 1 — Split `[/settings/capabilities](/settings/capabilities)` horizontal server tabs & live capability method propagation (`bf30d21fd`, PR #4741; `78a2c3d4a`, PR #4824; `97774207f`, PR #4803; `896d1893e`, PR #4874; `cd582719f`; `b52d45ed5`):** **PASS** (after fixing 4 bugs discovered during live verification).
 2. **Scope 2 — Kubernetes-style `config-map` & `secrets` maps (`886e16bea`, PR #4740; `e1080c4e8`, PR #4758; `e991ba904`, PR #4808):** **PASS**.
-3. **Scope 3 — `gchat` (`9a0e45549`, `aa1204a7c`, PR #4864), `citc` (`1d5c8790b`, `e735175b3`, PR #4841), and `gcp` ambient admin default (`c626f9fb4`, `a518b1b2e`, PR #4739):** **PASS**.
+3. **Scope 3 — `gchat` (`9a0e45549`, `aa1204a7c`, PR #4864), `workspace` (`1d5c8790b`, `e735175b3`, PR #4841), and `gcp` ambient admin default (`c626f9fb4`, `a518b1b2e`, PR #4739):** **PASS**.
 
 During the live walkthrough against `grain demo -secrets-store -github-sim -fake-ci`, **four bugs** were discovered, reproduced deterministically, fixed in this branch, and covered by unit and Playwright E2E regression tests.
 
@@ -64,7 +64,7 @@ During the live walkthrough against `grain demo -secrets-store -github-sim -fake
 
 | Check | Viewport | Action / Verification | Result |
 | :--- | :--- | :--- | :--- |
-| Horizontal server tab strip ordering & badges | `1440x900` | Navigated to `[/settings/capabilities](/settings/capabilities)`. Verified 10 tabs in `role="tablist"`: 7 built-in tabs first (`citc`, `config-map`, `gchat`, `gcp`, `git`, `host-script`, `model-proxy`, each badged `built-in` with no `Remove` button), followed by 2 custom demo servers (`capabilities.demo.grain.example/cloud`, `capabilities.demo.grain.example/gcp`, badged `custom`) and `+ Add server`. | **PASS** |
+| Horizontal server tab strip ordering & badges | `1440x900` | Navigated to `[/settings/capabilities](/settings/capabilities)`. Verified 10 tabs in `role="tablist"`: 7 built-in tabs first (`workspace`, `config-map`, `gchat`, `gcp`, `git`, `host-script`, `model-proxy`, each badged `built-in` with no `Remove` button), followed by 2 custom demo servers (`capabilities.demo.grain.example/cloud`, `capabilities.demo.grain.example/gcp`, badged `custom`) and `+ Add server`. | **PASS** |
 | Configurable built-in initial state | `1440x900` | Clicked `config-map`, `gchat`, `gcp`, and `host-script` tabs; verified each shows state `"needs configuring"` and a visible `Configure` button. | **PASS** |
 | Desktop ↔ Phone viewport resize preservation (`cd582719f`, `b52d45ed5`) | `1440x900` → `390x844` → `1440x900` | Selected `gchat` tab, opened `Configure`, typed `https://grain.example.com` into `grain_url`, resized to `390x844`, and verified `aria-selected="true"`, open form, and input value are preserved with zero horizontal overflow (`cardBox.x = 25`, `cardBox.width = 340` within `390px`). | **PASS** |
 | Split `[/settings/credentials](/settings/credentials)` ("Legacy capabilities") | `1440x900` & `390x844` | Navigated to `[/settings/credentials](/settings/credentials)`; verified `"Legacy capabilities"` heading renders cleanly at desktop and phone widths without the capability server tablist (`credsHasServerTablist: false`). | **PASS** |
@@ -87,14 +87,14 @@ During the live walkthrough against `grain demo -secrets-store -github-sim -fake
 
 ---
 
-### 3. Scope 3: `gchat`, `citc`, and `gcp` Ambient Admin Default
+### 3. Scope 3: `gchat`, `workspace`, and `gcp` Ambient Admin Default
 
 | Check | Action / Verification | Result |
 | :--- | :--- | :--- |
 | `gchat` lazy data-plane port binding (`aa1204a7c`) | Verified `127.0.0.1:4251` (`DefaultGChatPort`) was **not** listening before configuring a `gchat` space (`before: false`), and bound `127.0.0.1:4251` immediately once space `releases` was saved (`after: true`). | **PASS** |
 | `gchat` UI configuration & `Test` (`97774207f`, `9a0e45549`) | Configured `gchat` in `[/settings/capabilities](/settings/capabilities)` with `dataPlaneToken`, `grain_url: "https://grain.example.com"`, `display_name: "Grain Bot"`, `per_attempt: 2`, webhook space `releases` (`display_name: "Release bot"`), and `webhook_urls`. Clicked `Test` and verified report: `space releases: webhook (the sender name is the webhook's own; cards show "Release bot")`. Verified non-`chat.googleapis.com` webhook URL is refused unless allowlisted in `WebhookHosts`. | **PASS** |
 | `gchat#post` webhook payload & guardrails | Verified against local `httptest.NewServer` webhook listener (`go test -v ./pkg/capability/intree -run TestGChat`): card header `Release bot`, task subtitle and link button under `grain_url`, `threadKey` threading, `@all` and `<users/...>` mention rejections when disallowed, Markdown link rejection, `max_len` character bound, `per_attempt` and `per_hour` rate limits, and `test_post` delivery. | **PASS** |
-| `citc` capability server (`1d5c8790b`, `e735175b3`) | Verified `citc` tab in `[/settings/capabilities](/settings/capabilities)` (`grain-citc -listen 127.0.0.1:4250`, `built-in`, `host`, `mint_workspace`) and ran `go test -v ./google/capability/citc/...` verifying `os.Root("google3")` confinement, symlink traversal rejection, and `read`/`write`/`edit`/`list`/`grep`/`diff`/`status` tools. | **PASS** |
+| `workspace` capability server (`1d5c8790b`, `e735175b3`) | Verified `workspace` tab in `[/settings/capabilities](/settings/capabilities)` (`grain-workspace -listen 127.0.0.1:4250`, `built-in`, `host`, `mint_workspace`) and ran `go test -v ./google/capability/workspace/...` verifying `os.Root("monorepo")` confinement, symlink traversal rejection, and `read`/`write`/`edit`/`list`/`grep`/`diff`/`status` tools. | **PASS** |
 | `gcp` deprecated/internal field hiding & `ambient` default admin (`c626f9fb4`) | On the `gcp` `Configure` form, verified deprecated fixed-pool fields (`service_accounts`, `project`, `keys_json`) and internal `_grain_*` fields have DOM count `0`. Added permission set `walkthrough-reader` (`demo-project`, `roles/storage.objectViewer`) without specifying an admin, clicked `Test`, and verified `admin default (ambient) is you@demo.grain.example; has every permission it needs` and `set walkthrough-reader (demo-project, roles/storage.objectViewer)`. | **PASS** |
 | `gcp` explicit admin `role_ceiling` enforcement (`a518b1b2e`) | Configured explicit admin `capped-admin` with `role_ceiling: ["roles/storage.objectViewer"]` and permission set `too-broad` requesting `roles/owner`; verified refusal: `permission set "too-broad": roles/owner exceed(s) admin "capped-admin"'s role ceiling`. | **PASS** |
 
@@ -106,6 +106,6 @@ During the live walkthrough against `grain demo -secrets-store -github-sim -fake
 - `go test -v ./pkg/capability/intree -run "TestHostScript|TestGChat|TestConfigMap"`: **PASS**
 - `go test -v ./pkg/capability/servers/...`: **PASS**
 - `go test -v ./pkg/capability/gcpsets/...`: **PASS**
-- `go test -v ./google/capability/citc/...`: **PASS**
+- `go test -v ./google/capability/workspace/...`: **PASS**
 - `go test ./pkg/ui/...`: **PASS**
 - `PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright npx playwright test e2e/capability-server-settings.spec.js e2e/gcp-permission-sets.spec.js e2e/host-script-settings.spec.js`: **6 passed (27.7s)**

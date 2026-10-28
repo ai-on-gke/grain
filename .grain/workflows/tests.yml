@@ -645,7 +645,7 @@ jobs:
         run: |
           ./scripts/run-go-tests.sh go test -race -timeout 20m \
             ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-connect/... ./cmd/grain-sandbox/... ./cmd/grit/... \
-            ./docs/releases/... ./google/... ./tests/container/... ./tests/installer/... \
+            ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
             ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/apierror/... ./pkg/attest/... \
             ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/checkpost/... \
             ./pkg/ci/... ./pkg/cifault/... ./pkg/cli/... ./pkg/console/... ./pkg/daemon/... \
@@ -1058,10 +1058,10 @@ jobs:
     capabilities: []
     name: lint
     # Shellcheck over what `git ls-files --
-    # 'scripts/*.sh' 'google/scripts/*.sh' 'deploy/terraform/*.sh'` matches -- git's pathspec
+    # 'scripts/*.sh' 'deploy/terraform/*.sh'` matches -- git's pathspec
     # wildcards cross `/`, so all of those match at any depth, which is
     # what `**` spells here.
-    paths: [scripts/**.sh, google/scripts/**.sh, deploy/terraform/**.sh]
+    paths: [scripts/**.sh, deploy/terraform/**.sh]
     timeout-minutes: 15
     steps:
       - name: Require shellcheck
@@ -1083,7 +1083,7 @@ jobs:
         run: |
           set -euo pipefail
           shellcheck --version
-          mapfile -t scripts < <(git ls-files -- 'scripts/*.sh' 'google/scripts/*.sh' 'deploy/terraform/*.sh')
+          mapfile -t scripts < <(git ls-files -- 'scripts/*.sh' 'deploy/terraform/*.sh')
           if [ "${#scripts[@]}" -eq 0 ]; then
             echo "no shell scripts matched; this job is checking nothing" >&2
             exit 1

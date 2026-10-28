@@ -109,7 +109,7 @@ func TestREADMEGettingStartedConsistency(t *testing.T) {
 	absent(t, readme, "system admin")
 	contains(t, readme, "grain create")
 	contains(t, readme, "grain list")
-	contains(t, readme, "./google/scripts/cloudtop-install.sh")
+	absent(t, readme, "google/scripts")
 }
 
 func TestClientScriptUsageAndHelpFlags(t *testing.T) {

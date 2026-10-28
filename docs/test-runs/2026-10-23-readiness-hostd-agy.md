@@ -31,7 +31,7 @@ against a real hostd.
 ## Settings -> Models, "Where each agent CLI runs"
 
 `grain demo -host-executor=hostd`, whose real hostd offers agy at
-`/google/bin/releases/jetski-devs/tools/cli`. No stubs. Contact sheets
+`/opt/corp/bin/releases/agy-devs/tools/cli`. No stubs. Contact sheets
 cover desktop (1440) and phone (390), light and dark, scrolled to
 `#cli-run`.
 
@@ -39,7 +39,7 @@ Before: the agy row reads `host (through grain hostd)`.
 
 ![before](2026-10-23-readiness-hostd-agy/settings-models-cli-run-before.jpg)
 
-After: it reads `host (/google/bin/releases/jetski-devs/tools/cli, through grain hostd)`.
+After: it reads `host (/opt/corp/bin/releases/agy-devs/tools/cli, through grain hostd)`.
 The chip sits level with the first line of the path at both widths. The
 first version of this change let the longer line wrap below the chip,
 and that is fixed. `e2e/cli-run-locations-hostd.spec.js` checks the

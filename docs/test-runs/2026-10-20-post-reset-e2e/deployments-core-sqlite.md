@@ -5,7 +5,7 @@
 | I2b | Access-code login form (lower-case, spaces) sets a session cookie | core/sqlite | **PASS** | POST /api/auth/access-code: 303; cookie → /api/tasks 200 |
 | U1 | No team/account/admin/hub API routes | core/sqlite | **PASS** | all 404 |
 | C3 | Command-backed forge advertised only in the Google build | core/sqlite | **PASS** | sources: [] |
-| C3b | Core refuses the ggh source cleanly | core/sqlite | **PASS** | exit 1: grain: unknown ambient source "ggh": gh, git, auto |
+| C3b | Core refuses the forgecli source cleanly | core/sqlite | **PASS** | exit 1: grain: unknown ambient source "forgecli": gh, git, auto |
 | C5 | Fresh install has no default model | core/sqlite | **PASS** | defaultModel unset |
 | I4 | grain connections import (git + model + default model), idempotent | core/sqlite | **PASS** | imported 1 git and 1 model connections; token 0600; default model read back |
 | L1 | Task from the CLI: create, approve, close, reopen | core/sqlite | **PASS** | task 2: approved→queued, closed→closed, reopened→queued |

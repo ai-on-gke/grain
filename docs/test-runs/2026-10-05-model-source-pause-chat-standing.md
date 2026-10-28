@@ -65,7 +65,7 @@ All as `f275315c5` intends. Restating the template's own model when filing gives
 
 Test 2 of the same spec **passes**:
 
-- `GET /api/config` → `agentPause: {paused: true, frameworks: ["antigravity"], reason: "antigravity: usage limit reached; Gemini API quota exhausted for project bsalmon-fun-sandbox (demo); resets at …"}`.
+- `GET /api/config` → `agentPause: {paused: true, frameworks: ["antigravity"], reason: "antigravity: usage limit reached; Gemini API quota exhausted for project example-sandbox (demo); resets at …"}`.
 - **Connections** (Team settings → Connections): the connection's chip reads `Paused` (no `Active` chip anywhere), with the line `paused until 11:31:58 AM (about 5h 59m) — antigravity: usage limit reached; Gemini API quota exhausted …` under it.
 - **Models**: "Served by" chips `gemini-pro (Paused)`, and its `title` tooltip is `… : paused until … — … Gemini API quota exhausted …`.
 - **Queued task's pane**: `grain waiting: Antigravity is paused until 11:31:58 AM (about 5h 59m) — antigravity: usage limit reached; …`.

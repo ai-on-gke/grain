@@ -2,7 +2,7 @@
 
 Task 4345. An operator's walk through `scripts/setup.sh` (container and host
 mode), `grain init`, channel switches, a rollback and an uninstall, on
-throwaway Debian 12 VMs in `bsalmon-fun-sandbox`.
+throwaway Debian 12 VMs in `example-sandbox`.
 
 ## Setup
 
@@ -42,7 +42,7 @@ $ sudo ./scripts/setup.sh
 sudo: ./scripts/setup.sh: command not found          # mode 100644, see flow 0
 $ sudo GRAIN_CHANNEL=latest bash ./scripts/setup.sh
 ==> UI/API address: 0.0.0.0:4242 (the default for a fresh install)
-==> UI/API allowed hosts: grain-wt-4345.us-central1-a.c.bsalmon-fun-sandbox.internal,grain-wt-4345 -- this machine's own names
+==> UI/API allowed hosts: grain-wt-4345.us-central1-a.c.example-sandbox.internal,grain-wt-4345 -- this machine's own names
 ==> installing docker (... no Debian cloud image carries it)
 ==> WARNING: this unit passes -tenancy, which ghcr.io/bwsalmon/grain/grain:latest does not define.
 ==>   could not set up debian as a system admin: ... grain: unknown user subcommand "bootstrap-admin"

@@ -21,7 +21,7 @@
 # none) on a fresh data dir and drives it the way an operator would:
 # the CLI, the HTTP API with the access code as a bearer, and the
 # on-disk data dir. Nothing of grain's own is stubbed. The only stub is
-# a fake `ggh` for the Google build's command-backed forge, put on the
+# a fake `forgecli` for the Google build's command-backed forge, put on the
 # daemon's PATH.
 #
 # Usage:
@@ -70,7 +70,7 @@ trap cleanup EXIT
 
 if [[ -z "$GRAIN" ]]; then
   GRAIN=$WORK/grain
-  if [[ $BUILD == google ]]; then pkg=./google/cmd/grain; else pkg=./cmd/grain; fi
+  pkg=./cmd/grain
   (cd "$ROOT" && go build -o "$GRAIN" "$pkg") || { echo "build failed" >&2; exit 1; }
 fi
 
@@ -103,20 +103,20 @@ new_db_flags() { # echoes the daemon flags for a fresh database
   fi
 }
 
-# --- the fake ggh (Google build's command-backed forge) ---------------------
+# --- the fake forgecli (Google build's command-backed forge) ---------------------
 STUBS=$WORK/stubs
 mkdir -p "$STUBS"
-cat >"$STUBS/ggh" <<'EOF'
+cat >"$STUBS/forgecli" <<'EOF'
 #!/bin/sh
-echo "ggh $*" >>"${GGH_LOG:-/dev/null}"
+echo "forgecli $*" >>"${FORGECLI_LOG:-/dev/null}"
 case "$1 $2" in
-  "auth token") echo "ggh-fake-token-not-a-secret"; exit 0 ;;
+  "auth token") echo "forgecli-fake-token-not-a-secret"; exit 0 ;;
   "auth status") echo "Logged in as walker"; exit 0 ;;
 esac
 exit 1
 EOF
-chmod +x "$STUBS/ggh"
-export GGH_LOG=$WORK/ggh.log
+chmod +x "$STUBS/forgecli"
+export FORGECLI_LOG=$WORK/forgecli.log
 
 # --- daemons ----------------------------------------------------------------
 PORT_BASE=$((18100 + RANDOM % 200))
@@ -200,20 +200,20 @@ else
   row U1 "No team/account/admin/hub API routes" FAIL "$bad"
 fi
 
-# C3 git ambient sources: ggh in Google, none in core
+# C3 git ambient sources: forgecli in Google, none in core
 api GET /api/git-ambient-sources >/dev/null
 srcs=$(jq_py 'print(",".join(sorted(str(s.get("name", s) if isinstance(s, dict) else s) for s in d)))')
-if [[ $BUILD == google && $srcs == *ggh* ]] || [[ $BUILD == core && $srcs != *ggh* ]]; then
+if [[ $BUILD == google && $srcs == *forgecli* ]] || [[ $BUILD == core && $srcs != *forgecli* ]]; then
   row C3 "Command-backed forge advertised only in the Google build" PASS "sources: [${srcs}]"
 else
   row C3 "Command-backed forge advertised only in the Google build" FAIL "sources: [${srcs}]"
 fi
 if [[ $BUILD == core ]]; then
-  out=$(cli git-ambient -source ggh -host git.corp.example 2>&1); rc=$?
+  out=$(cli git-ambient -source forgecli -host git.corp.example 2>&1); rc=$?
   if [[ $rc -ne 0 && $out != *panic* ]]; then
-    row C3b "Core refuses the ggh source cleanly" PASS "exit $rc: $(echo "$out" | head -1 | cut -c1-160)"
+    row C3b "Core refuses the forgecli source cleanly" PASS "exit $rc: $(echo "$out" | head -1 | cut -c1-160)"
   else
-    row C3b "Core refuses the ggh source cleanly" FAIL "exit $rc: $(echo "$out" | head -2 | tr '\n' ' ' | cut -c1-200)"
+    row C3b "Core refuses the forgecli source cleanly" FAIL "exit $rc: $(echo "$out" | head -2 | tr '\n' ' ' | cut -c1-200)"
   fi
 fi
 

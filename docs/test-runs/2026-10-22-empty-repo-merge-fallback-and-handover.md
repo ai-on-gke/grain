@@ -23,7 +23,7 @@
   - `pkg/github` & `pkg/github/githubsim`
   - `pkg/orchestrator`
   - `pkg/agent/antigravity`
-  - `pkg/capability/packagepublish`, `pkg/gitproxy`, `google/gitproxy/ggh`
+  - `pkg/capability/packagepublish`, `pkg/gitproxy`, `google/gitproxy/forgecli`
 
 ---
 
@@ -133,7 +133,7 @@
 - **Subtest 5A (`package_publish_capability_and_ggh_ambient_registry_env`):**
   1. Verified `package-publish` (`pkg/capability/packagepublish`) refuses a fine-grained PAT (`github_pat_...`) for `ghcr.io` during capability resolution with a clear message explaining that GitHub Container Registry only supports classic PATs (`write:packages`) or GitHub App installation tokens.
   2. Verified `package-publish` honours a classic PAT (`ghp_...`) and materializes `/home/debian/.package-publish-registry` (`ghcr.io`), `/home/debian/.package-publish-username` (`x-access-token`), and `/home/debian/.package-publish-token`.
-  3. Verified `google/gitproxy/ggh` ambient `gcloud` credential source refuses `PackageCredential("", ...)` when `GRAIN_GOOGLE_PACKAGE_REGISTRY` is unset, and mints `oauth2accesstoken` against the configured Artifact Registry host (`us-central1-docker.pkg.dev`) when `GRAIN_GOOGLE_PACKAGE_REGISTRY=us-central1-docker.pkg.dev` is set.
+  3. Verified `google/gitproxy/forgecli` ambient `gcloud` credential source refuses `PackageCredential("", ...)` when `GRAIN_GOOGLE_PACKAGE_REGISTRY` is unset, and mints `oauth2accesstoken` against the configured Artifact Registry host (`us-central1-docker.pkg.dev`) when `GRAIN_GOOGLE_PACKAGE_REGISTRY=us-central1-docker.pkg.dev` is set.
 - **Subtest 5B (`release_images_pat_scope_check_and_docker_config_json`):**
   1. Ran `scripts/release-images.sh` against a local mock GitHub API server (`GHCR_SCOPES_URL`) and stub `docker` binary that records whether `docker build` is invoked:
      - **Classic PAT with `X-OAuth-Scopes: repo, workflow` (missing `write:packages`):** Verified `scripts/release-images.sh` exited non-zero **before** `docker build` was invoked, reporting that the classic PAT has scopes `'repo, workflow'` and is missing `'write:packages'` (with remediation steps pointing to `/settings/git-connections`).

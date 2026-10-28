@@ -13,7 +13,7 @@ installer, uninstall.
 | User | `debian`, a normal account with sudo. The installer was run as it, with no `sudo` in front, as the README says |
 | Build | `main` at 1cf49bd (2026-10-16 21:34Z), built with `make build` and installed with `GRAIN_CHANNEL=main GRAIN_HOST_BINARY=$PWD/bin/grain GRAIN_HOST_SOURCE_DIR=$PWD ./scripts/cloudtop-install.sh` |
 | Why not the image | `ghcr.io/bwsalmon/grain/grain:main` is **stale**: it is f09c277 (built 15:04Z), from before the access code merged (393cc69, 15:26Z). Every `release images` run on `main` since then has failed in `tests/container`, so nothing newer was published. `GRAIN_CHANNEL=main` alone would have tested the build *without* access codes. The binary had to be built from the checkout |
-| "Remote" access | Chromium (Playwright 1.62, headless) with `--host-resolver-rules=MAP wt4344.proxy.googlers.com 172.17.0.5`. The browser sent `Host: wt4344.proxy.googlers.com` (matched by the installer's `*.proxy.googlers.com`) from the host's non-loopback address, so the daemon saw a non-loopback source and a proxy-style Host. There was no TLS, and no real uberproxy in front |
+| "Remote" access | Chromium (Playwright 1.62, headless) with `--host-resolver-rules=MAP wt4344.proxy.corp.example 172.17.0.5`. The browser sent `Host: wt4344.proxy.corp.example` (matched by the installer's `*.proxy.corp.example`) from the host's non-loopback address, so the daemon saw a non-loopback source and a proxy-style Host. There was no TLS, and no real corp-proxy in front |
 | Model | Antigravity (`agy` 1.2.2, copied out of the `main` image to `/usr/local/bin/agy`) with the Gemini API key this task was given |
 | Git | No `github-sandbox` capability, so a local smart-HTTP git server (`git http-backend` behind Go's `net/http/cgi`, basic auth `walk`) holding the bare repo `walk/demo` with a one-step `.grain/workflows/ci.yml` |
 | Stubs | None of grain's own APIs. The only stand-ins are the git server above and the host-resolver mapping |
@@ -23,7 +23,7 @@ installer, uninstall.
 | # | Step | Result |
 |---|---|---|
 | 1 | Run the installer as a normal user | **PASS with bugs**. Installs and starts in about 3 minutes, exit 0. But the model seed fails with a 401 (`grain sync` sends no access code, B2), and the closing text contradicts itself about single mode (B4) |
-| 2 | Confirm single mode | **PASS**. Log line `tenancy: single (set by -tenancy)`. Unit flags: `-tenancy single -ui-addr 0.0.0.0:4242 -ui-allowed-hosts debuerreotype,*.proxy.googlers.com` |
+| 2 | Confirm single mode | **PASS**. Log line `tenancy: single (set by -tenancy)`. Unit flags: `-tenancy single -ui-addr 0.0.0.0:4242 -ui-allowed-hosts debuerreotype,*.proxy.corp.example` |
 | 3 | Find the access code; mode, owner, another user | **PASS**. The installer's summary says `grain access-code`, which prints it. `/var/lib/grain/local-api-token` is `-rw------- debian debian`, and `/var/lib/grain` is `drwxr-x--- debian debian`. A new user `mallory` gets `Permission denied` from `cat`, from `grain access-code` and from `grain list`. The hints mallory sees name a `grain` account that doesn't exist on this install (B5) |
 | 4 | Loopback without the code | **PASS**. `GET /` returns 401 with the "enter access code" page, and `GET /api/tasks` returns a JSON 401, from `127.0.0.1` and with `Host: localhost` |
 | 5 | Remote via a non-loopback Host | **PASS** for the access code itself, **FAIL** for the app behind it, fixed in this PR (B1). Login page (401), wrong code refused, right code in (typed lower-case with spaces), and reload keeps you in. The cookie is `grain_access`, `HttpOnly`, `SameSite=Strict`, 90 days. Nine wrong codes in a row, then `429` for that source, even with the right code, as `docs/access-code.md` says. Loopback with the right code is still let in. An unknown Host gets `421`. A Google identity header with no code still gets `401`. **But once you're in, the UI covers every page with an un-dismissable "create account" dialog**, which single mode can't satisfy |
@@ -139,7 +139,7 @@ build that carries this PR's B1 fix, and after B2 and B3 land.
 1. **Install as yourself:** `GRAIN_CHANNEL=main ./scripts/cloudtop-install.sh`.
    Check the summary's Model line says `created` (it says "not set up" until B2
    is fixed) and that `Git` shows the depot connection.
-2. **Uberproxy URL:** open `https://<id>.proxy.googlers.com/`. Expect the
+2. **Uberproxy URL:** open `https://<id>.proxy.corp.example/`. Expect the
    "Enter access code" page, not 421. Enter `grain access-code`'s output, and
    check that the app loads with **no** "create account" dialog (B1). Reload,
    and check you stay signed in. Open it in a second browser profile and check
@@ -151,9 +151,9 @@ build that carries this PR's B1 fix, and after B2 and B3 land.
 4. **Ambient `agy` login:** Settings, then Models: the seeded "Antigravity
    (ambient login)" connection should list models. `grain settings
    -check-agent-key antigravity` should say ok.
-5. **`ggh`/depot:** `GH_HOST=depot.code.corp.goog ggh auth status`. Then
+5. **`forgecli`/depot:** `GH_HOST=depot.code.corp.example forgecli auth status`. Then
    re-run the installer with
-   `GRAIN_TARGET_REPOS=depot.code.corp.goog/<you>/<scratch-repo>` and check
+   `GRAIN_TARGET_REPOS=depot.code.corp.example/<you>/<scratch-repo>` and check
    it reports the git connection as created.
 6. **First task through the merge queue:** file a small task on that depot
    repo in the UI. Watch it dispatch on agy, push a branch, open a PR on depot,
@@ -181,8 +181,8 @@ printed, in order:
 ```
 ==> Tenancy: single (the default for a fresh cloudtop install; export GRAIN_TENANCY=multi for a shared one)
 ==> UI/API address: 0.0.0.0:4242 (the default for a fresh install)
-==> UI/API allowed hosts: debuerreotype,*.proxy.googlers.com (this machine's own names, plus *.proxy.googlers.com ...)
-==> WARNING: /google/bin/releases/jetski-devs/tools/cli is not an executable file on this host.
+==> UI/API allowed hosts: debuerreotype,*.proxy.corp.example (this machine's own names, plus *.proxy.corp.example ...)
+==> WARNING: /opt/corp/bin/releases/agy-devs/tools/cli is not an executable file on this host.
 ==> Installing as debian: host-mode daemon, host-directory sandboxes, UI on 0.0.0.0:4242     <- B4: it is granule
 ...
 ==> Done.
@@ -198,7 +198,7 @@ printed, in order:
 grain sync: applying settings: grain server: this daemon is single-tenant ... (401 Unauthorized)   <- B2
 ==> WARNING: configuring that model failed. ...
 ==> System admin: none needed -- single-tenant, so the access code is owner access
-==> WARNING: ggh is not installed for debian (go/gh-cli).
+==> WARNING: forgecli is not installed for debian (go/gh-cli).
   Access    single-tenant: every visitor, localhost included, enters this
             deployment's access code. Show it with:
                 grain access-code
@@ -206,7 +206,7 @@ grain sync: applying settings: grain server: this daemon is single-tenant ... (4
   you, ... in a directory under /var/lib/grain-sandbox.
 ```
 
-The missing `agy`, `claude` and `codex` warnings, and the missing ggh login,
+The missing `agy`, `claude` and `codex` warnings, and the missing forgecli login,
 are correct for a non-corp machine. The warning about the unverified image
 publisher (`no GRAIN_IMAGE_VERIFY_KEY`) appears on every run and has no
 pointer to how to set one.
@@ -227,7 +227,7 @@ grain access-code: /var/lib/grain/local-api-token is readable only by the accoun
 
 | Screenshot | What it shows |
 |---|---|
-| [01](2026-10-16-single-tenant-install-walkthrough/01-access-code-page.png) | The 401 "Enter access code" page at `http://wt4344.proxy.googlers.com:4242/` |
+| [01](2026-10-16-single-tenant-install-walkthrough/01-access-code-page.png) | The 401 "Enter access code" page at `http://wt4344.proxy.corp.example:4242/` |
 | [02](2026-10-16-single-tenant-install-walkthrough/02-wrong-code.png) | "That access code was not accepted." |
 | [03](2026-10-16-single-tenant-install-walkthrough/03-signed-in.png), [04](2026-10-16-single-tenant-install-walkthrough/04-after-reload.png) | Signed in, and still signed in after a reload (before the B1 fix, so the dialog is up) |
 | [05](2026-10-16-single-tenant-install-walkthrough/05-rate-limited.png) | "too many wrong access codes: wait a minute and try again" |

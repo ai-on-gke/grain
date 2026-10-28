@@ -43,7 +43,7 @@ from its `results/*.jsonl`, run through `scripts/bench/summarize.py`.
 |---|---|
 | Controller (all carriers) | grain sandbox VM (cloud-hypervisor guest), 8 vCPU Intel Xeon @ 2.60GHz, 15 GiB, Debian, kernel 6.1.0-54. Runs on GCE in us-west1 (The Dalles, Oregon; egress 35.233.217.181). Docker 29.9.2, Go 1.26.10, kubectl v1.36.5-gke.100, Google Cloud SDK 590.0.0 |
 | Local sandbox (carriers 1, 2) | a Docker container (`mirror.gcr.io/library/golang:1.26-bookworm`) on the controller, on its own bridge `bench-net` 192.168.77.0/24 with the controller at the gateway 192.168.77.1 |
-| Remote cluster (carriers 3, 4) | `bench-tunnel-483`: GKE 1.36.4-gke.1495002, zonal us-central1-a, one n2-standard-8 node (nested virtualization enabled), Container-Optimized OS, kernel 6.12.105+, containerd 2.2.7. Private nodes (org policy `constraints/container.managed.enablePrivateNodes` requires it), public control-plane endpoint 34.68.114.158, project bsalmon-fun-sandbox. The task's service-account key stopped authenticating ("Invalid JWT Signature") before the delete, so the deletion went to a follow-up task |
+| Remote cluster (carriers 3, 4) | `bench-tunnel-483`: GKE 1.36.4-gke.1495002, zonal us-central1-a, one n2-standard-8 node (nested virtualization enabled), Container-Optimized OS, kernel 6.12.105+, containerd 2.2.7. Private nodes (org policy `constraints/container.managed.enablePrivateNodes` requires it), public control-plane endpoint 34.68.114.158, project example-sandbox. The task's service-account key stopped authenticating ("Invalid JWT Signature") before the delete, so the deletion went to a follow-up task |
 | Remote sandbox | a plain pod from the same golang image (see "What was not measured") |
 | Distance | controller to API server: TCP connect 33 to 38 ms. Setting up a `kubectl exec POD -- true` session: p50 0.52 s, worst 0.61 s, over 10 tries |
 | grain | base `835b687df`. granule vendored in `third_party/granule` as `github.com/bwsalmon/granule v0.0.0-20260921040231-1d6b7e1fad96`, not exercised (see below) |
@@ -291,6 +291,6 @@ with the bandwidth-delay product.
 - **Real `npm ci` and `apt-get install`.** These were replayed, as
   described in the package cache section. The installs' own work does not
   depend on the carrier.
-- **A separate project for the cluster.** Only bsalmon-fun-sandbox was
+- **A separate project for the cluster.** Only example-sandbox was
   available to this task. The cluster and the controller were in
   different regions, which is the part that matters for distance.

@@ -13,7 +13,7 @@ The row numbers below are that plan's.
 | Commit | `main` at **b93646ebc** (merge of 4864, 6-ii-b5, **schema 25**). Every stage of all three changes is on `main`: google/ 4660–4665; the hub removal 4826; reset stages 1–5 and 7 (4680–4684, 4686), every 3x and 4x sub-stage, and stage 6 (4685, 4768, 4839, 4861, 4862, 4863, 4864). The owner was asked about the stages still open at 04:10Z (6-ii-b2 to b5); all four had landed by 16:35Z |
 | Builds | **core** `go build ./cmd/grain`; **Google** `go build ./google/cmd/grain`; core again with the frontend embedded (`cd ui && npm ci && npm run build`) for the browser pass; **v1.13.0** built from its tag (a `git worktree`) for the upgrade and guard row |
 | Deployments | Four fresh single-tenant installs: core on SQLite, Google on SQLite, core on PostgreSQL 15, Google on PostgreSQL 15. Each runs `grain daemon -sandbox-backend none` on a fresh data dir, and each Postgres install gets its own database in a throwaway cluster. All are driven by `scripts/post-reset-e2e.sh`. The e2e harness runs its own daemons with real sandboxes |
-| Stubs | **GitHub**: `pkg/github/githubsim` in the e2e harness. The owner said on this task to use git servers and the GitHub simulator, since github-sandbox isn't set up. **ggh**: a shell script on the Google daemon's PATH (the script writes it). Nothing of grain's own is stubbed |
+| Stubs | **GitHub**: `pkg/github/githubsim` in the e2e harness. The owner said on this task to use git servers and the GitHub simulator, since github-sandbox isn't set up. **forgecli**: a shell script on the Google daemon's PATH (the script writes it). Nothing of grain's own is stubbed |
 | Real | Gemini API (this task's key) through **agy 1.2.2**, copied from `ghcr.io/bwsalmon/grain/grain:main` (`/opt/antigravity/antigravity`); Chromium headless shell (Playwright) |
 | Host | Task sandbox, Debian 12, 4 vCPU, 8 GB |
 
@@ -21,14 +21,14 @@ The row numbers below are that plan's.
 
 | File | What |
 |---|---|
-| [`deployments-core-sqlite.md`](deployments-core-sqlite.md), [`deployments-google-sqlite.md`](deployments-google-sqlite.md), [`deployments-core-postgres.md`](deployments-core-postgres.md), [`deployments-google-postgres.md`](deployments-google-postgres.md) | `scripts/post-reset-e2e.sh`'s rows for each deployment. **All PASS**: 17 rows on core and 16 on Google (C3b, core's refusal of `ggh`, is core-only) |
+| [`deployments-core-sqlite.md`](deployments-core-sqlite.md), [`deployments-google-sqlite.md`](deployments-google-sqlite.md), [`deployments-core-postgres.md`](deployments-core-postgres.md), [`deployments-google-postgres.md`](deployments-google-postgres.md) | `scripts/post-reset-e2e.sh`'s rows for each deployment. **All PASS**: 17 rows on core and 16 on Google (C3b, core's refusal of `forgecli`, is core-only) |
 | [`e2e-harness.md`](e2e-harness.md) | `go test ./tests/e2e/`: **117 pass, 16 skip, 0 fail** (210.8s). The skips are the live-agent, load, soak and stress tests |
 | [`ui-browser.md`](ui-browser.md), [`ui-browser-check.mjs`](ui-browser-check.mjs) | The browser pass over 43 paths |
 | this file | The per-flow verdicts, Gemini discovery, and the suites run locally |
 
 Run locally as well: `go test ./tests/security/... ./google/...`. **All
 `ok`**: `tests/security` 49.4s, plus 8 `google/...` packages, including
-`google/scripts` (the Cloudtop installer tests) and `google/gitproxy/ggh`.
+`google/scripts` (the Cloudtop installer tests) and `google/gitproxy/forgecli`.
 
 ## Results
 
@@ -38,7 +38,7 @@ Run locally as well: `go test ./tests/security/... ./google/...`. **All
 | 2 | Access-code sign-in | **PASS** | D-I2 ×4: `/` 401, `/api/tasks` 401, a wrong code 401, the right code 200; `grain access-code` prints it |
 | 3 | Login form, lower case with spaces | **PASS** | D-I2b ×4: `POST /api/auth/access-code` 303, and the cookie gets `/api/tasks` 200. B: typed into the real login page |
 | 4 | `scripts/setup.sh` (core) | **PASS (CI)** | grain CI `installer` job on this branch |
-| 5 | Cloudtop installer (Google) | **PASS (stubbed)**, **M** on a real Cloudtop | `google/scripts` (33 tests: fresh install, no account made, model seeded, depot opt-in, `ggh` checks) |
+| 5 | Cloudtop installer (Google) | **PASS (stubbed)**, **M** on a real Cloudtop | `google/scripts` (33 tests: fresh install, no account made, model seeded, depot opt-in, `forgecli` checks) |
 | 6 | Installer re-run | **PASS** | `TestCloudtopInstallerReRunChangesNothing`, `…KeepsAnExistingGitConnection`, `…KeepsTheInstalledAddress`; CI `installer` |
 | 7 | Upgrade from v1.13.0 | **PASS** | D-I5 ×4. A v1.13.0 build writes a dir (SQLite, or its own Postgres database). The new build exits 1 with "this build of grain is single-tenant only, and this data dir was written by a build from before the single-tenant reset: schema 17, from before the single-tenant baseline (schema 19)…", and the dir's sha256 manifest is unchanged |
 | 8 | Startup guard, pre-reset and multi-tenant | **PASS** | D-I5; `go` (`TestADumpWithASecondTeamIsRefused`, `TestADumpWithAnotherTeamsMemberIsRefused`, `TestTheGoldenDumpMigratesIntoThisBuildsSchema`); interim check 8 rows 5–8 |
@@ -48,9 +48,9 @@ Run locally as well: `go test ./tests/security/... ./google/...`. **All
 | 12 | `grain upgrade-postgres` | **PASS (CI)** | `postgres` job; interim check 8 row 21a |
 | 13 | PAT against real github.com | **NOT TESTABLE** | github-sandbox isn't configured on this deployment (attempt 1 was refused for it), and the owner said to use githubsim. Every H lifecycle test runs a PAT-style connection against githubsim. **M** |
 | 14 | GitHub App against real github.com | **NOT TESTABLE** | As row 13. githubsim: H `TestARunGitHubRefusesTheDeploymentsCredentialOnFailsAndTellsTheAgentWhy`, `TestARunWrongHostCredentialFailsAndTellsAgentAndTaskNotes`. **M** |
-| 15 | `ggh` forge only in the Google build | **PASS** | D-C3: Google `[ggh]`, core `[]` |
-| 16 | Core refuses `ggh` cleanly | **PASS** | D-C3b: exit 1, `grain: unknown ambient source "ggh": gh, git, auto` |
-| 17 | Depot / GHOP with the real `ggh` | **NOT TESTABLE** | Corp hosts can't be reached from a sandbox. **M** on a Cloudtop |
+| 15 | `forgecli` forge only in the Google build | **PASS** | D-C3: Google `[forgecli]`, core `[]` |
+| 16 | Core refuses `forgecli` cleanly | **PASS** | D-C3b: exit 1, `grain: unknown ambient source "forgecli": gh, git, auto` |
+| 17 | Depot / GHOP with the real `forgecli` | **NOT TESTABLE** | Corp hosts can't be reached from a sandbox. **M** on a Cloudtop |
 | 18 | Gemini discovery | **PASS (live)** | See "Gemini discovery" below |
 | 19 | Per-model pause and resume; pipeline pause | **PASS** | D-L3 ×4: `grain pause -set` / `-resume`; `DELETE /api/pause?connection=gemini&model=…` 200. H `TestWalkthroughRefusalBurstPausesTheFrameworkAndQueuedTasksWait`, `…ReplayedClaudeSessionLimitPausesUntilItsReset`, `…AShortPauseExpiresAndTheQueuedTaskDispatches` |
 | 20 | Default model on a fresh install | **PASS** | D-C5 ×4: unset; D-I4: set by the seed and read back |
@@ -179,7 +179,7 @@ candidate gate once the cut is re-enabled.
 
 From that checklist:
 1. Cloudtop install and re-run (Google build).
-2. Depot / GHOP through the real `ggh`.
+2. Depot / GHOP through the real `forgecli`.
 3. PAT and GitHub App against a real github.com scratch repo.
 4. An image upgrade of a post-reset deployment. Not the eu host.
 5. A release cut and gate.
