@@ -1,0 +1,224 @@
+# Kustomize strategic merge patches for Grain on GKE over grain-granule.yaml and github-webhook.yaml.
+#
+# Configures:
+# - Workload Identity annotation on ServiceAccount/grain
+# - Secret creation/deletion RBAC on Role/grain for per-sandbox dial-out credentials
+# - 100Gi standard-rwo PersistentVolumeClaim/grain-data
+# - Digest-pinned images (ghcr.io/bwsalmon/grain/grain@sha256:... and granule@sha256:...)
+# - Cloud SQL Auth Proxy sidecar (IAM auth over private IP)
+# - Secret Manager CSI volume mount (/var/run/grain/secrets)
+# - Granule dial-out acceptor port (7443) and in-clusterService flags
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grain
+  namespace: grain
+  annotations:
+    iam.gke.io/gcp-service-account: grain-daemon@PROJECT_ID.iam.gserviceaccount.com
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grain
+  namespace: grain
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Per-sandbox dial-out mTLS client certificate and token Secrets
+  # (grain-access-<pod>), each created with ownerReference set to its pod.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["grain"]
+    verbs: ["patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grain-data
+  namespace: grain
+spec:
+  storageClassName: standard-rwo
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grain
+  namespace: grain
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  selector:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: daemon
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grain
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: daemon
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grain
+      app.kubernetes.io/component: daemon
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grain
+        app.kubernetes.io/component: daemon
+    spec:
+      nodeSelector:
+        grain.dev/pool: daemon
+      initContainers:
+        - name: home
+          image: ghcr.io/bwsalmon/grain/grain@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      containers:
+        - name: grain
+          image: ghcr.io/bwsalmon/grain/grain@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          args:
+            - daemon
+            - -data-dir=/data
+            - -db-driver=postgres
+            - -ui-addr=0.0.0.0:8080
+            - -ui-iap-audience=$(GRAIN_IAP_AUDIENCE)
+            - -k8s-granule-sandboxes
+            - -k8s-namespace=grain
+            - -k8s-workspace=/home/debian
+            - -k8s-granule-image=ghcr.io/bwsalmon/grain/granule@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            - -k8s-sandbox-service=grain-sandbox
+            - -k8s-sandbox-service-account=grain-sandbox
+            - -k8s-network-policy
+            - -k8s-node-selector=grain.dev/nested-virt=true
+            - -github-webhook-url=http://grain-webhook.grain.svc.cluster.local
+            - -k8s-deployment=grain
+            - -k8s-container=grain
+            - -default-target-repo=ai-on-gke/grain
+          env:
+            - name: GRAIN_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: GRAIN_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOME
+              value: /data/home
+            - name: GRAIN_DB_DRIVER
+              value: postgres
+            - name: DATABASE_URL
+              value: "host=/cloudsql/PROJECT_ID:REGION:CLOUDSQL_INSTANCE user=grain-daemon@PROJECT_ID.iam dbname=grain sslmode=disable"
+            - name: GRAIN_IAP_AUDIENCE
+              value: "/projects/PROJECT_NUMBER/global/backendServices/BACKEND_SERVICE_ID"
+            - name: GRAIN_SECRETS_KEY_FILE
+              value: /var/run/grain/secrets/secrets.key
+            - name: GRAIN_SANDBOX_CA_KEY_FILE
+              value: /var/run/grain/secrets/sandbox-ca.key
+            - name: GRAIN_GRANULE_ACCESS_MODE
+              value: dialout
+            - name: GRAIN_SANDBOX_ACCESS_ADDR
+              value: grain-access.grain.svc.cluster.local:7443
+            - name: GITHUB_WEBHOOK_RELAY_SECRET_FILE
+              value: /var/run/grain/secrets/github-webhook-relay-secret
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: sandbox-access
+              containerPort: 7443
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              memory: 8Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: secrets-store
+              mountPath: /var/run/grain/secrets
+              readOnly: true
+            - name: cloudsql
+              mountPath: /cloudsql
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1
+          args:
+            - "--structured-logs"
+            - "--auto-iam-authn"
+            - "--private-ip"
+            - "--unix-socket=/cloudsql"
+            - "PROJECT_ID:REGION:CLOUDSQL_INSTANCE"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: cloudsql
+              mountPath: /cloudsql
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grain-data
+        - name: secrets-store
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: grain-secrets
+        - name: cloudsql
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grain-webhook
+  namespace: grain
+spec:
+  template:
+    spec:
+      nodeSelector:
+        grain.dev/pool: daemon
+      containers:
+        - name: github-webhook
+          image: ghcr.io/bwsalmon/grain/grain@sha256:0000000000000000000000000000000000000000000000000000000000000000

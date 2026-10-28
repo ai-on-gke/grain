@@ -1,0 +1,88 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Gateway static IP, managed TLS certificate, Cloud DNS A record, and IAP OAuth
+# configuration for Grain on GKE.
+#
+# The GKE Gateway controller creates the underlying global external Application
+# Load Balancer and backend services for Service/grain, Service/grain-hostd, and
+# Service/grain-webhook from deploy/kubernetes/gke/gateway.yaml, binding the
+# named IP (`grain-gateway-ip`) and pre-shared managed certificate
+# (`grain-gateway-cert`) created below.
+
+resource "google_compute_global_address" "gateway_ip" {
+  name    = "grain-gateway-ip"
+  project = var.project_id
+
+  depends_on = [google_project_service.services]
+}
+
+resource "google_compute_managed_ssl_certificate" "gateway_cert" {
+  name    = "grain-gateway-cert"
+  project = var.project_id
+
+  managed {
+    domains = [var.domain]
+  }
+
+  depends_on = [google_project_service.services]
+}
+
+resource "google_dns_record_set" "gateway" {
+  count        = var.dns_managed_zone != "" ? 1 : 0
+  name         = "${trimsuffix(var.domain, ".")}."
+  project      = var.project_id
+  managed_zone = var.dns_managed_zone
+  type         = "A"
+  ttl          = 300
+  rrdatas      = [google_compute_global_address.gateway_ip.address]
+}
+
+resource "google_iap_brand" "grain" {
+  count             = var.create_iap_brand ? 1 : 0
+  support_email     = var.iap_support_email
+  application_title = "Grain"
+  project           = var.project_id
+
+  depends_on = [google_project_service.services]
+
+  lifecycle {
+    precondition {
+      condition     = var.iap_support_email != ""
+      error_message = "iap_support_email is required when create_iap_brand is true."
+    }
+  }
+}
+
+resource "google_iap_client" "grain" {
+  count        = var.create_iap_brand ? 1 : 0
+  brand        = google_iap_brand.grain[0].name
+  display_name = "Grain GKE Gateway"
+}
+
+locals {
+  iap_client_id = var.create_iap_brand ? google_iap_client.grain[0].client_id : var.iap_client_id
+}
+
+# Note: `scripts/deploy-gke.sh` also binds `roles/iap.httpsResourceAccessor`
+# directly onto the GKE Gateway's synthesized `grain` and `grain-hostd` backend
+# services (and never onto `grain-webhook`).
+resource "google_iap_web_iam_member" "allowed_members" {
+  for_each = toset(var.iap_allowed_members)
+  project  = var.project_id
+  role     = "roles/iap.httpsResourceAccessor"
+  member   = each.value
+
+  depends_on = [google_project_service.services]
+}

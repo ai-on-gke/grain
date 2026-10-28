@@ -1,0 +1,456 @@
+# grain, deployed into a Kubernetes cluster running every sandbox as a
+# real granule VM over /dev/kvm rather than a plain container.
+#
+# This is grain-granule.yaml, not grain.yaml with a label changed: see
+# docs/k8s-granule-design.md §3 for why the two platforms need separate
+# manifests. Three things differ from grain.yaml, and none of them are
+# a single flag flip:
+#
+#  1. There is no Namespace object in this file at all. grain.yaml's
+#     own Namespace carries pod-security.kubernetes.io/enforce=baseline,
+#     which refuses every privileged pod this platform's sandboxes are
+#     -- applying a Namespace that instead set enforce=privileged here
+#     would be grain init performing exactly the relaxation
+#     docs/k8s-granule-design.md §1 argues it must not perform. Create
+#     and label the namespace yourself, first, with the exact command
+#     `grain init -platform=k8s-granule`'s own preflight reports:
+#
+#       kubectl create namespace grain
+#       kubectl label namespace grain pod-security.kubernetes.io/enforce=privileged --overwrite
+#
+#     A reference copy, for an operator who wants to see the whole
+#     object rather than two commands, is commented out at the bottom
+#     of this file -- never applied by `kubectl apply -f` on this file,
+#     since it is text inside a comment.
+#
+#  2. The daemon's own pod below is identical in shape to grain.yaml's
+#     -- same uid 1000, same securityContext, same RBAC verbs -- and is
+#     never privileged. Only the *sandbox* pods -k8s-granule-sandboxes
+#     creates (one per run, over orchestrator.K8sGranuleSandboxes) are
+#     privileged with a real /dev/kvm; creating one is an admission
+#     decision the namespace label above governs, not an RBAC verb this
+#     Role needs more of.
+#
+#  3. The Deployment's own flags differ: -k8s-granule-sandboxes selects
+#     this backend, -k8s-granule-image names a *packed guest* image (a
+#     self-contained image with its own guest disk and kernel already
+#     baked in -- docs/k8s-granule-design.md §4 -- not the thin
+#     k8s-sandbox image grain.yaml names, and not "granule:vendored"
+#     either, which has no guest disk and cannot boot at all), and
+#     -k8s-node-selector pins every sandbox pod to a nested-virt-capable
+#     node pool.
+#
+# Edit the CHANGEME values below (the image this platform's own image
+# publish pipeline produces, once it exists -- see
+# docs/k8s-granule-design.md §4 -- and the default target repo), the
+# node-selector entry to match this cluster's own nested-virt pool
+# labelling, then:
+#
+#   kubectl create namespace grain   # if it does not exist yet
+#   kubectl label namespace grain pod-security.kubernetes.io/enforce=privileged --overwrite
+#   kubectl apply -f deploy/kubernetes/grain-granule.yaml
+---
+# Everything grain needs from the API server, and nothing else -- the
+# same Role grain.yaml grants, for the same reasons (see that file's
+# own comment above its Role): the pod lifecycle, pods/exec for every
+# tool call, pods/log, events and pod metrics for an operator's own
+# debugging (read-only; see the comment on those rules), and the
+# self-upgrade's deployment verbs. Unlike grain.yaml this platform's
+# self-upgrade is not built yet (cmd/grain's own checkConfig refuses
+# -upgrade-image with -k8s-granule-sandboxes), but the verbs are
+# granted now so enabling it later is a flag, not a RoleBinding change.
+# Reading nodes, for the sandbox budget, is the one cluster-scoped grant
+# and has its own read-only ClusterRole (grain-node-reader, below).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grain
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grain
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Read-only diagnostics, and nothing the daemon itself needs: events
+  # (core and events.k8s.io) so `kubectl describe pod` and `get events`
+  # show why a sandbox pod was not scheduled or was evicted, and pod
+  # metrics for `kubectl top pods` -- both used by the host-script
+  # server's kubectl-sandboxes script, which runs as this identity.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["grain"]
+    verbs: ["patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: grain
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: grain
+subjects:
+  - kind: ServiceAccount
+    name: grain
+    namespace: grain
+---
+# The one thing grain reads outside its own namespace, and so the one
+# grant that has to be a ClusterRole: nodes are cluster-scoped, and their
+# allocatable CPU and memory are what the sandbox budget is held against
+# (K8sSandboxes.HostCapacity; Config.Budget). Read-only, and nothing
+# else -- without it the daemon still runs, but every queued CI job
+# launches a pod at once and the scheduler is left to sort it out.
+#
+# Pods are listed (never read one by one, never written) across every
+# namespace for the same reason: what a node has *free* is its
+# allocatable less every pod bound to it, system pods and other
+# workloads included, and each sandbox pod is admitted only onto a node
+# that still has room for its requests (k8s.FitChecker). Without the
+# pods rule grain counts only its own namespace's pods there.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: grain-node-reader
+  labels:
+    app.kubernetes.io/name: grain
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: grain-node-reader
+  labels:
+    app.kubernetes.io/name: grain
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: grain-node-reader
+subjects:
+  - kind: ServiceAccount
+    name: grain
+    namespace: grain
+---
+# Lets the daemon make sure the sandbox PriorityClasses below exist. It
+# checks at start and on every reconcile cycle, and creates grain's own
+# when they are missing -- a cluster set up before they shipped, upgraded
+# without re-applying this file. Kept as small as the API allows: get
+# only on grain's three names, and create, which Kubernetes cannot
+# narrow by resourceNames (the name is not known when a create is
+# authorized). Without this grant the daemon still runs: it creates
+# sandbox pods with no priority class and raises an alert saying what to
+# apply.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: grain-priorityclasses
+  labels:
+    app.kubernetes.io/name: grain
+rules:
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    resourceNames: ["grain-interactive", "grain-agent", "grain-ci"]
+    verbs: ["get"]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: grain-priorityclasses
+  labels:
+    app.kubernetes.io/name: grain
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: grain-priorityclasses
+subjects:
+  - kind: ServiceAccount
+    name: grain
+    namespace: grain
+---
+# The PriorityClasses sandbox pods run at -- identical to grain.yaml's
+# own; see that file's comment for what each is for. Cluster-scoped, and
+# applying either file defines them.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: grain-daemon
+  labels:
+    app.kubernetes.io/name: grain
+value: 2000000
+globalDefault: false
+preemptionPolicy: Never
+description: "the grain daemon itself; above every sandbox class so no sandbox pod can preempt it."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: grain-interactive
+  labels:
+    app.kubernetes.io/name: grain
+value: 1000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "grain sandbox pods for interactive sessions; may preempt grain agent and CI pods."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: grain-agent
+  labels:
+    app.kubernetes.io/name: grain
+value: 100000
+globalDefault: false
+preemptionPolicy: Never
+description: "grain sandbox pods for agent runs, persistent sandboxes and base-branch repairs."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: grain-ci
+  labels:
+    app.kubernetes.io/name: grain
+value: 1000
+globalDefault: false
+preemptionPolicy: Never
+description: "grain sandbox pods for CI jobs; never preempts, and is retried when preempted."
+---
+# grain's own state -- identical to grain.yaml's own PVC; see that
+# file's own comment for why ReadWriteOnce and why 20Gi is a starting
+# size rather than a measured one.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grain-data
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grain
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate -- grain.yaml's own reasoning applies
+  # verbatim: two grain processes against one SQLite store is data
+  # loss.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grain
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grain
+    spec:
+      serviceAccountName: grain
+      # Above every sandbox class (grain-daemon, above): a
+      # grain-interactive sandbox pod preempts lower-priority pods, and at
+      # the default priority of 0 that would include this one.
+      priorityClassName: grain-daemon
+      # The daemon's own pod is never privileged -- see this file's own
+      # top-of-file comment, point 2. Identical to grain.yaml's own
+      # securityContext; see that file's comment for the full reasoning
+      # (uid 1000, fsGroup, the agent-CLI-root hole it closes).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      # shutdownDrain plus slack, as in grain.yaml.
+      terminationGracePeriodSeconds: 300
+      initContainers:
+        - name: home
+          image: ghcr.io/bwsalmon/grain/grain:main
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "mkdir -p /data/home && chmod 0700 /data/home"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: grain
+          image: ghcr.io/bwsalmon/grain/grain:main
+          imagePullPolicy: IfNotPresent
+          args:
+            - daemon
+            - -data-dir=/data
+            - -ui-addr=0.0.0.0:8080
+            # The Kubernetes granule sandbox backend -- every sandbox is
+            # a privileged pod booting a real VM over /dev/kvm, not a
+            # plain container (orchestrator.K8sGranuleSandboxes).
+            - -k8s-granule-sandboxes
+            - -k8s-namespace=grain
+            # The guest account's home, reached only over `kubectl exec
+            # -- granule exec --`, and nothing to do with the uid this
+            # pod runs as -- the two filesystems never meet.
+            - -k8s-workspace=/home/debian
+            # CHANGEME (1 of 2): a *packed guest* image -- a
+            # self-contained image with its own guest disk and kernel
+            # already baked in, not "granule:vendored" (which has no
+            # guest disk and cannot boot at all). Nothing publishes one
+            # yet; see docs/k8s-granule-design.md §4, which is a
+            # prerequisite for this platform to exist at all and a
+            # separate task from this manifest.
+            - -k8s-granule-image=CHANGEME
+            # CHANGEME (2 of 2, optional): pin every sandbox pod -- and
+            # grain init's own preflight nested-virt check -- to a node
+            # pool that actually offers nested virtualization. Leave
+            # unset only on a single-pool cluster where every node does
+            # (docs/k8s-granule-design.md §2's "one real gap").
+            # - -k8s-node-selector=CHANGEME=CHANGEME
+            # NOT -upgrade-image. cmd/grain's checkConfig refuses it
+            # outright with -k8s-granule-sandboxes, so a Deployment that
+            # passes it does not start at all: the container exits
+            # immediately with "-upgrade-image is not supported yet with
+            # -k8s-granule-sandboxes", CrashLoopBackOff, and `grain init
+            # -platform=k8s-granule` then waits out its whole five-minute
+            # rollout for a pod that was never going to come up. The Role
+            # above already grants the self-upgrade's deployment verbs, so
+            # when this backend's upgrade is built this becomes one
+            # uncommented line and not a RoleBinding change -- which is
+            # what that Role's own comment says, and what this line
+            # contradicted by shipping the flag anyway.
+            # - -upgrade-image=ghcr.io/bwsalmon/grain/grain
+            - -k8s-deployment=grain
+            - -k8s-container=grain
+            # CHANGEME (3 of 3): which repository this deployment files
+            # tasks against by default.
+            - -default-target-repo=CHANGEME/CHANGEME
+          env:
+            - name: GRAIN_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: GRAIN_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOME
+              value: /data/home
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["NET_BIND_SERVICE"]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /api/auth/access-code
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/auth/access-code
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              memory: 4Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grain-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grain
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grain
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+
+# Reference only -- never applied by `kubectl apply -f` on this file,
+# since it sits inside this trailing comment block. Copy it out if you
+# want to apply the Namespace as an object rather than run the two
+# `kubectl create namespace`/`kubectl label` commands this file's own
+# top-of-file comment gives.
+#
+# apiVersion: v1
+# kind: Namespace
+# metadata:
+#   name: grain
+#   labels:
+#     app.kubernetes.io/name: grain
+#     pod-security.kubernetes.io/enforce: privileged
