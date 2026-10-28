@@ -107,6 +107,17 @@ spec:
       initContainers:
         - name: home
           image: ghcr.io/bwsalmon/grain/grain@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          command:
+            - /bin/sh
+            - -c
+            - |
+              mkdir -p /data/home /data/secrets && chmod 0700 /data/home /data/secrets && if [ -s /var/run/grain/secrets/secrets.key ]; then cp /var/run/grain/secrets/secrets.key /data/secrets/secrets.key && chmod 0600 /data/secrets/secrets.key; fi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: secrets-store
+              mountPath: /var/run/grain/secrets
+              readOnly: true
       containers:
         - name: grain
           image: ghcr.io/bwsalmon/grain/grain@sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -115,6 +126,7 @@ spec:
             - -data-dir=/data
             - -db-driver=postgres
             - -ui-addr=0.0.0.0:8080
+            - -ui-allowed-hosts=DNS_NAME
             - -ui-iap-audience=$(GRAIN_IAP_AUDIENCE)
             - -k8s-granule-sandboxes
             - -k8s-namespace=grain
@@ -153,6 +165,20 @@ spec:
               value: dialout
             - name: GRAIN_SANDBOX_ACCESS_ADDR
               value: grain-access.grain.svc.cluster.local:7443
+            - name: GRAIN_HOSTD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: grain-hostd-token
+                  key: token
+                  optional: true
+            - name: GRAIN_HOSTD_TOKEN_FILE
+              value: /var/run/grain/secrets/hostd-token
+            - name: GITHUB_WEBHOOK_RELAY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: grain-github-webhook
+                  key: relay-secret
+                  optional: true
             - name: GITHUB_WEBHOOK_RELAY_SECRET_FILE
               value: /var/run/grain/secrets/github-webhook-relay-secret
           ports:
@@ -175,7 +201,7 @@ spec:
             - name: cloudsql
               mountPath: /cloudsql
         - name: cloud-sql-proxy
-          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1@sha256:5cf206e6b9609aaa666db20c6c6632521985a5412ebbe4835e83d39bc76501e9
           args:
             - "--structured-logs"
             - "--auto-iam-authn"

@@ -3,17 +3,21 @@
 #   1. grain-sandbox-network-none: restricts `grain.dev/network: none` sandbox
 #      pods to zero ingress and egress only to the grain daemon pod (proxies,
 #      package cache, and the sandbox-access acceptor on 7443).
-#   2. grain-sandbox-egress: selects every sandbox pod (`app: grain-sandbox`).
-#      Empty ingress (nothing dials a sandbox pod). Separate egress rules for:
+#   2. grain-sandbox-egress: selects every sandbox pod (`app.kubernetes.io/managed-by: grain`,
+#      `app.kubernetes.io/component: sandbox`, the labels `pkg/k8s.Manifest` stamps on every
+#      sandbox pod). Empty ingress (nothing dials a sandbox pod). Separate egress rules for:
 #        - the wrapper's dial-out mTLS channel to `grain-access:7443`;
 #        - the guest's proxy/package-cache traffic to `grain-sandbox`;
 #        - cluster DNS;
 #        - public internet for open-network sandboxes, explicitly excluding
 #          the metadata server (`169.254.169.254/32`) and private/cluster CIDRs.
 #   3. grain-access-ingress: selects the grain daemon pod. Admits port 7443
-#      and guest-facing proxy ports only from `app: grain-sandbox`, and port
-#      8080 only from the GKE Gateway proxy-only / health-check ranges and
-#      `grain-webhook`.
+#      and guest-facing proxy ports only from sandbox pods, and port 8080
+#      only from the GKE Gateway proxy-only / health-check ranges.
+#   4. grain-webhook-isolation: selects the unauthenticated GitHub webhook pod
+#      (`app: grain-webhook`). Blocks all outbound egress (`egress: []`) because
+#      `grain` polls `grain-webhook` inbound over `/v1/events`, and restricts
+#      inbound port 8080 to the `grain` daemon pod and GKE Gateway ranges.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -35,6 +39,7 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: grain
+              app.kubernetes.io/component: daemon
       ports:
         - protocol: UDP
           port: 53
@@ -65,7 +70,8 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: grain-sandbox
+      app.kubernetes.io/managed-by: grain
+      app.kubernetes.io/component: sandbox
   policyTypes:
     - Ingress
     - Egress
@@ -147,7 +153,8 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app: grain-sandbox
+              app.kubernetes.io/managed-by: grain
+              app.kubernetes.io/component: sandbox
       ports:
         - protocol: TCP
           port: 7443
@@ -156,7 +163,8 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app: grain-sandbox
+              app.kubernetes.io/managed-by: grain
+              app.kubernetes.io/component: sandbox
       ports:
         - protocol: UDP
           port: 53
@@ -174,12 +182,40 @@ spec:
           port: 9745
         - protocol: TCP
           port: 9746
-    # UI, API and hostd port (8080): only from grain-webhook and the GKE
-    # Gateway / Google load balancer ranges.
+    # UI, API and hostd port (8080): only from the GKE Gateway / Google
+    # load balancer and proxy-only subnet ranges.
+    - from:
+        - ipBlock:
+            cidr: 130.211.0.0/22
+        - ipBlock:
+            cidr: 35.191.0.0/16
+        - ipBlock:
+            cidr: 10.129.0.0/23
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grain-webhook-isolation
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  podSelector:
+    matchLabels:
+      app: grain-webhook
+  policyTypes:
+    - Ingress
+    - Egress
+  egress: []
+  ingress:
     - from:
         - podSelector:
             matchLabels:
-              app: grain-webhook
+              app.kubernetes.io/name: grain
+              app.kubernetes.io/component: daemon
         - ipBlock:
             cidr: 130.211.0.0/22
         - ipBlock:

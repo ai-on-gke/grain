@@ -153,35 +153,59 @@ append_iap_principals_csv() {
 load_config_file() {
   local file="$1"
   [[ -f "${file}" ]] || die "config file not found: ${file}"
-  # shellcheck disable=SC1090
-  source "${file}"
-  PROJECT="${GRAIN_GKE_PROJECT:-${PROJECT}}"
-  REGION="${GRAIN_GKE_REGION:-${REGION}}"
-  ZONE="${GRAIN_GKE_ZONE:-${ZONE}}"
-  CLUSTER="${GRAIN_GKE_CLUSTER:-${CLUSTER}}"
-  ADOPT_CLUSTER="${GRAIN_GKE_ADOPT_CLUSTER:-${ADOPT_CLUSTER}}"
-  NAMESPACE="${GRAIN_GKE_NAMESPACE:-${NAMESPACE}}"
-  DNS_NAME="${GRAIN_GKE_DNS_NAME:-${DNS_NAME}}"
-  DNS_ZONE="${GRAIN_GKE_DNS_ZONE:-${DNS_ZONE}}"
-  IAP_PRINCIPALS_RAW="${GRAIN_GKE_IAP_PRINCIPALS:-${IAP_PRINCIPALS_RAW}}"
-  IAP_CLIENT_ID="${GRAIN_GKE_IAP_CLIENT_ID:-${IAP_CLIENT_ID}}"
-  IAP_CLIENT_SECRET_FILE="${GRAIN_GKE_IAP_CLIENT_SECRET_FILE:-${IAP_CLIENT_SECRET_FILE}}"
-  IMAGE="${GRAIN_GKE_IMAGE:-${IMAGE}}"
-  SANDBOX_IMAGE="${GRAIN_GKE_SANDBOX_IMAGE:-${SANDBOX_IMAGE}}"
-  POSTGRES_MODE="${GRAIN_GKE_POSTGRES:-${POSTGRES_MODE}}"
-  CLOUDSQL_INSTANCE="${GRAIN_GKE_CLOUDSQL_INSTANCE:-${CLOUDSQL_INSTANCE}}"
-  CLOUDSQL_TIER="${GRAIN_GKE_CLOUDSQL_TIER:-${CLOUDSQL_TIER}}"
-  DAEMON_MACHINE_TYPE="${GRAIN_GKE_DAEMON_MACHINE_TYPE:-${DAEMON_MACHINE_TYPE}}"
-  SANDBOX_MACHINE_TYPE="${GRAIN_GKE_SANDBOX_MACHINE_TYPE:-${SANDBOX_MACHINE_TYPE}}"
-  SANDBOX_MIN_NODES="${GRAIN_GKE_SANDBOX_MIN_NODES:-${SANDBOX_MIN_NODES}}"
-  SANDBOX_MAX_NODES="${GRAIN_GKE_SANDBOX_MAX_NODES:-${SANDBOX_MAX_NODES}}"
-  TARGET_REPO="${GRAIN_GKE_TARGET_REPO:-${TARGET_REPO}}"
-  HOSTD_NAME="${GRAIN_GKE_HOSTD_NAME:-${HOSTD_NAME}}"
-  HOSTD_OWNER="${GRAIN_GKE_HOSTD_OWNER:-${HOSTD_OWNER}}"
-  DATA_DIR="${GRAIN_GKE_DATA_DIR:-${DATA_DIR}}"
-  STAGING_BUCKET="${GRAIN_GKE_STAGING_BUCKET:-${STAGING_BUCKET}}"
-  ACCESS_MODE="${GRAIN_GKE_ACCESS_MODE:-${ACCESS_MODE}}"
-  USE_TERRAFORM="${GRAIN_GKE_USE_TERRAFORM:-${USE_TERRAFORM}}"
+  local raw line key val
+  while IFS= read -r raw || [[ -n "${raw}" ]]; do
+    line="${raw#"${raw%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    if [[ -z "${line}" || "${line}" == \#* ]]; then
+      continue
+    fi
+    if [[ ! "${line}" =~ ^([A-Z0-9_]+)=(.*)$ ]]; then
+      die "invalid line in config file ${file}: ${line}"
+    fi
+    key="${BASH_REMATCH[1]}"
+    val="${BASH_REMATCH[2]}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+    if [[ "${val}" =~ ^\"(.*)\"$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    elif [[ "${val}" =~ ^\'(.*)\'$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    fi
+    if [[ "${val}" == *'$('* || "${val}" == *'`'* ]]; then
+      die "refusing command substitution in config file ${file} for ${key}"
+    fi
+    case "${key}" in
+      GRAIN_GKE_PROJECT) PROJECT="${val}" ;;
+      GRAIN_GKE_REGION) REGION="${val}" ;;
+      GRAIN_GKE_ZONE) ZONE="${val}" ;;
+      GRAIN_GKE_CLUSTER) CLUSTER="${val}" ;;
+      GRAIN_GKE_ADOPT_CLUSTER) ADOPT_CLUSTER="${val}" ;;
+      GRAIN_GKE_NAMESPACE) NAMESPACE="${val}" ;;
+      GRAIN_GKE_DNS_NAME) DNS_NAME="${val}" ;;
+      GRAIN_GKE_DNS_ZONE) DNS_ZONE="${val}" ;;
+      GRAIN_GKE_IAP_PRINCIPALS) IAP_PRINCIPALS_RAW="${val}" ;;
+      GRAIN_GKE_IAP_CLIENT_ID) IAP_CLIENT_ID="${val}" ;;
+      GRAIN_GKE_IAP_CLIENT_SECRET_FILE) IAP_CLIENT_SECRET_FILE="${val}" ;;
+      GRAIN_GKE_IMAGE) IMAGE="${val}" ;;
+      GRAIN_GKE_SANDBOX_IMAGE) SANDBOX_IMAGE="${val}" ;;
+      GRAIN_GKE_POSTGRES) POSTGRES_MODE="${val}" ;;
+      GRAIN_GKE_CLOUDSQL_INSTANCE) CLOUDSQL_INSTANCE="${val}" ;;
+      GRAIN_GKE_CLOUDSQL_TIER) CLOUDSQL_TIER="${val}" ;;
+      GRAIN_GKE_DAEMON_MACHINE_TYPE) DAEMON_MACHINE_TYPE="${val}" ;;
+      GRAIN_GKE_SANDBOX_MACHINE_TYPE) SANDBOX_MACHINE_TYPE="${val}" ;;
+      GRAIN_GKE_SANDBOX_MIN_NODES) SANDBOX_MIN_NODES="${val}" ;;
+      GRAIN_GKE_SANDBOX_MAX_NODES) SANDBOX_MAX_NODES="${val}" ;;
+      GRAIN_GKE_TARGET_REPO) TARGET_REPO="${val}" ;;
+      GRAIN_GKE_HOSTD_NAME) HOSTD_NAME="${val}" ;;
+      GRAIN_GKE_HOSTD_OWNER) HOSTD_OWNER="${val}" ;;
+      GRAIN_GKE_DATA_DIR) DATA_DIR="${val}" ;;
+      GRAIN_GKE_STAGING_BUCKET) STAGING_BUCKET="${val}" ;;
+      GRAIN_GKE_ACCESS_MODE) ACCESS_MODE="${val}" ;;
+      GRAIN_GKE_USE_TERRAFORM) USE_TERRAFORM="${val}" ;;
+      *) die "unknown config key in ${file}: ${key}" ;;
+    esac
+  done <"${file}"
 }
 
 # Pre-scan for --config so explicit CLI flags override config file values.
@@ -480,6 +504,19 @@ if [[ -z "${STAGING_BUCKET}" ]]; then
   STAGING_BUCKET="${PROJECT}-grain-staging"
 fi
 
+[[ "${PROJECT}" =~ ^[a-z][a-z0-9-]{4,29}$ ]] || die "invalid --project '${PROJECT}'"
+[[ "${REGION}" =~ ^[a-z0-9-]+$ ]] || die "invalid --region '${REGION}'"
+[[ "${ZONE}" =~ ^[a-z0-9-]+$ ]] || die "invalid --zone '${ZONE}'"
+[[ "${CLUSTER}" =~ ^[a-z0-9-]+$ ]] || die "invalid --cluster '${CLUSTER}'"
+[[ "${NAMESPACE}" =~ ^[a-z0-9-]+$ ]] || die "invalid --namespace '${NAMESPACE}'"
+[[ "${CLOUDSQL_INSTANCE}" =~ ^[a-z0-9-]+$ ]] || die "invalid --cloudsql-instance '${CLOUDSQL_INSTANCE}'"
+[[ "${DNS_NAME}" =~ ^[a-zA-Z0-9.-]+$ ]] || die "invalid --dns-name '${DNS_NAME}'"
+[[ -z "${DNS_ZONE}" || "${DNS_ZONE}" =~ ^[a-z0-9-]+$ ]] || die "invalid --dns-zone '${DNS_ZONE}'"
+[[ "${TARGET_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "invalid --target-repo '${TARGET_REPO}'"
+[[ "${HOSTD_NAME}" =~ ^[A-Za-z0-9_.-]+$ ]] || die "invalid --hostd-name '${HOSTD_NAME}'"
+[[ "${HOSTD_OWNER}" =~ ^[A-Za-z0-9_.-]+$ ]] || die "invalid --hostd-owner '${HOSTD_OWNER}'"
+[[ "${STAGING_BUCKET}" =~ ^[a-z0-9._-]+$ ]] || die "invalid --staging-bucket '${STAGING_BUCKET}'"
+
 GSA_NAME="grain-daemon"
 GSA_EMAIL="${GSA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 NODE_GSA_NAME="grain-gke-node"
@@ -605,7 +642,9 @@ stage_cluster() {
         --gateway-api=standard \
         --enable-secret-manager \
         --node-labels="grain.dev/pool=daemon" \
-        --enable-shielded-nodes
+        --enable-shielded-nodes \
+        --shielded-secure-boot \
+        --shielded-integrity-monitoring
     fi
 
     log "  Ensuring nested-virtualization granule sandbox node pool ('grain-sandbox-pool')..."
@@ -625,7 +664,9 @@ stage_cluster() {
         --enable-autoscaling \
         --min-nodes="${SANDBOX_MIN_NODES}" \
         --max-nodes="${SANDBOX_MAX_NODES}" \
-        --node-labels="grain.dev/pool=sandboxes,grain.dev/nested-virt=true"
+        --node-labels="grain.dev/pool=sandboxes,grain.dev/nested-virt=true" \
+        --shielded-secure-boot \
+        --shielded-integrity-monitoring
     fi
   fi
 
@@ -681,6 +722,7 @@ stage_dependencies() {
     "grain-github-app-private-key"
     "grain-github-webhook-secret"
     "grain-github-webhook-relay-secret"
+    "grain-hostd-token"
   )
   local sec
   for sec in "${secrets[@]}"; do
@@ -712,7 +754,8 @@ stage_dependencies() {
         --no-assign-ip \
         --network="projects/${PROJECT}/global/networks/default" \
         --backup-start-time=04:00 \
-        --enable-point-in-time-recovery
+        --enable-point-in-time-recovery \
+        --deletion-protection
     fi
 
     run_cmd gcloud sql databases create grain \
@@ -737,6 +780,16 @@ stage_dependencies() {
       --quiet
   else
     log "  Deploying in-cluster PostgreSQL 16 StatefulSet ('grain-postgres')..."
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      printf 'DRY-RUN: kubectl -n %q create secret generic grain-postgres-credentials (password + dsn redacted)\n' "${NAMESPACE}"
+    elif ! kubectl -n "${NAMESPACE}" get secret grain-postgres-credentials >/dev/null 2>&1; then
+      local pg_pass
+      pg_pass="$(openssl rand -hex 32)"
+      kubectl -n "${NAMESPACE}" create secret generic grain-postgres-credentials \
+        --from-literal=password="${pg_pass}" \
+        --from-literal=dsn="postgres://grain:${pg_pass}@grain-postgres.${NAMESPACE}.svc.cluster.local:5432/grain?sslmode=disable" \
+        --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    fi
     run_cmd kubectl -n "${NAMESPACE}" apply -f "${REPO_ROOT}/deploy/kubernetes/gke/postgres-incluster.yaml"
   fi
 }
@@ -755,7 +808,10 @@ stage_deploy_grain() {
     | sed \
       -e "s|PROJECT_ID:REGION:CLOUDSQL_INSTANCE|${CLOUDSQL_CONN_NAME}|g" \
       -e "s|PROJECT_ID|${PROJECT}|g" \
+      -e "s|DNS_NAME|${DNS_NAME}|g" \
       -e "s|namespace: grain|namespace: ${NAMESPACE}|g" \
+      -e "s|-k8s-namespace=grain|-k8s-namespace=${NAMESPACE}|g" \
+      -e "s|\.grain\.svc\.cluster\.local|.${NAMESPACE}.svc.cluster.local|g" \
       -e "s|ghcr.io/bwsalmon/grain/grain@sha256:0000000000000000000000000000000000000000000000000000000000000000|${PINNED_IMAGE}|g" \
       -e "s|ghcr.io/bwsalmon/grain/granule@sha256:0000000000000000000000000000000000000000000000000000000000000000|${PINNED_SANDBOX_IMAGE}|g" \
       -e "s|-default-target-repo=ai-on-gke/grain|-default-target-repo=${TARGET_REPO}|g" \
@@ -764,7 +820,7 @@ stage_deploy_grain() {
 
   if [[ "${POSTGRES_MODE}" == "in-cluster" ]]; then
     sed -i \
-      -e "s|host=/cloudsql/${CLOUDSQL_CONN_NAME} user=${GSA_NAME}@${PROJECT}.iam dbname=grain sslmode=disable|postgres://grain@grain-postgres.${NAMESPACE}.svc.cluster.local:5432/grain?sslmode=disable|g" \
+      -e "s|value: host=/cloudsql/${CLOUDSQL_CONN_NAME} user=${GSA_NAME}@${PROJECT}.iam dbname=grain sslmode=disable|valueFrom:\\n          secretKeyRef:\\n            name: grain-postgres-credentials\\n            key: dsn|g" \
       "${rendered}"
   fi
 
@@ -827,29 +883,72 @@ stage_iap() {
     fi
   fi
 
-  # Grant roles/iap.httpsResourceAccessor to every configured principal on the
-  # IAP-protected UI (`grain`) and hostd (`grain-hostd`) backend services.
-  local principal
+  # Resolve the Gateway backend services for Service/grain and Service/grain-hostd,
+  # populate GRAIN_IAP_AUDIENCE on Deployment/grain for in-daemon JWT defense-in-depth,
+  # and bind roles/iap.httpsResourceAccessor ONLY on those two IAP backend services
+  # (never project-wide).
+  local project_number="000000000000"
+  local -a iap_services=("gkegw1-grain-${NAMESPACE}-grain-80" "gkegw1-grain-${NAMESPACE}-grain-hostd-80")
+  local iap_audiences="/projects/${project_number}/global/backendServices/gkegw1-grain-${NAMESPACE}-grain-80,/projects/${project_number}/global/backendServices/gkegw1-grain-${NAMESPACE}-grain-hostd-80"
+  if [[ "${DRY_RUN}" != "true" ]]; then
+    project_number="$(gcloud projects describe "${PROJECT}" --format='value(projectNumber)')"
+    mapfile -t resolved_services < <(
+      gcloud compute backend-services list \
+        --project="${PROJECT}" \
+        --global \
+        --filter="name~'${NAMESPACE}-grain(-hostd)?-80'" \
+        --format="value(name)"
+    )
+    if [[ "${#resolved_services[@]}" -gt 0 ]]; then
+      iap_services=("${resolved_services[@]}")
+    fi
+    local -a aud_list=()
+    local bs_name bs_id
+    for bs_name in "${iap_services[@]}"; do
+      bs_id="$(gcloud compute backend-services describe "${bs_name}" --global --project="${PROJECT}" --format='value(id)' 2>/dev/null || true)"
+      if [[ -n "${bs_id}" ]]; then
+        aud_list+=("/projects/${project_number}/global/backendServices/${bs_id}")
+      fi
+    done
+    if [[ "${#aud_list[@]}" -gt 0 ]]; then
+      local IFS=','
+      iap_audiences="${aud_list[*]}"
+    fi
+  fi
+
+  log "  Setting GRAIN_IAP_AUDIENCE=${iap_audiences} on Deployment/grain..."
+  run_cmd kubectl -n "${NAMESPACE}" set env deployment/grain "GRAIN_IAP_AUDIENCE=${iap_audiences}"
+
+  local principal bs_svc
   for principal in "${IAP_PRINCIPALS[@]}"; do
-    log "  Granting roles/iap.httpsResourceAccessor to ${principal}..."
-    run_cmd gcloud projects add-iam-policy-binding "${PROJECT}" \
-      --member="${principal}" \
-      --role="roles/iap.httpsResourceAccessor" \
-      --condition=None \
-      --quiet
+    for bs_svc in "${iap_services[@]}"; do
+      log "  Granting roles/iap.httpsResourceAccessor to ${principal} on backend service ${bs_svc}..."
+      run_cmd gcloud iap web add-iam-policy-binding \
+        --resource-type=backend-services \
+        --service="${bs_svc}" \
+        --project="${PROJECT}" \
+        --member="${principal}" \
+        --role="roles/iap.httpsResourceAccessor" \
+        --condition=None \
+        --quiet
+    done
   done
 }
 
 # Step 5: Connect `grain hostd` on the existing cloudtop host.
 # Leaves `/usr/local/bin/grain hostd`, `/etc/grain/hostd.yaml` and its allowlist
-# untouched, writes the minted 0600 hostd token and remote connection config,
-# and restarts ONLY `grain-hostd.service`.
+# untouched, writes the minted 0600 hostd token (owned by HOSTD_OWNER), uploads
+# it to Secret Manager (`grain-hostd-token`) and Kubernetes (`Secret/grain-hostd-token`),
+# writes a systemd drop-in passing `-server` and `-token-file`, and restarts ONLY
+# `grain-hostd.service`.
 stage_connect_hostd() {
   log "Stage 5: Connecting cloudtop 'grain hostd' (${HOSTD_NAME}, owner=${HOSTD_OWNER}) to ${GATEWAY_URL}/api/hostd/connect..."
 
   local hostd_yaml="/etc/grain/hostd.yaml"
   local hostd_token_file="/etc/grain/hostd.token"
   local hostd_remote_env="/etc/grain/hostd-remote.env"
+  local hostd_dropin_dir="/etc/systemd/system/grain-hostd.service.d"
+  local hostd_dropin_file="${hostd_dropin_dir}/remote.conf"
 
   if [[ -f "${hostd_yaml}" ]]; then
     log "  Preserving existing ${hostd_yaml} and its allowlist in place."
@@ -857,19 +956,32 @@ stage_connect_hostd() {
     log "  Note: ${hostd_yaml} not present on this machine; leaving allowlist untouched."
   fi
 
-  log "  Minting scoped hostd credential for '${HOSTD_NAME}' (owner=${HOSTD_OWNER}) and writing ${hostd_token_file} (mode 0600)..."
+  log "  Minting scoped hostd credential for '${HOSTD_NAME}' (owner=${HOSTD_OWNER}) and writing ${hostd_token_file} (mode 0600, owner ${HOSTD_OWNER})..."
   if [[ "${DRY_RUN}" == "true" ]]; then
-    printf 'DRY-RUN: install -m 0600 /dev/null %q (populated via /api/hostd/tokens for %q)\n' \
-      "${hostd_token_file}" "${HOSTD_NAME}"
+    printf 'DRY-RUN: install -o %q -m 0600 /dev/null %q (populated and uploaded to Secret Manager grain-hostd-token)\n' \
+      "${HOSTD_OWNER}" "${hostd_token_file}"
+    printf 'DRY-RUN: gcloud secrets versions add grain-hostd-token --project=%q --data-file=%q\n' \
+      "${PROJECT}" "${hostd_token_file}"
     printf 'DRY-RUN: write %q (GRAIN_HOSTD_URL=%q GRAIN_HOSTD_NAME=%q GRAIN_HOSTD_OWNER=%q GRAIN_HOSTD_TOKEN_FILE=%q)\n' \
       "${hostd_remote_env}" "${GATEWAY_URL}/api/hostd/connect" "${HOSTD_NAME}" "${HOSTD_OWNER}" "${hostd_token_file}"
+    printf 'DRY-RUN: write %q (-server %q -token-file %q -executor-name %q)\n' \
+      "${hostd_dropin_file}" "${GATEWAY_URL}" "${hostd_token_file}" "${HOSTD_NAME}"
   else
-    sudo mkdir -p /etc/grain
+    sudo mkdir -p /etc/grain "${hostd_dropin_dir}"
     if [[ ! -s "${hostd_token_file}" ]]; then
       sudo install -m 0600 /dev/null "${hostd_token_file}"
       openssl rand -hex 32 | sudo tee "${hostd_token_file}" >/dev/null
-      sudo chmod 0600 "${hostd_token_file}"
     fi
+    sudo chown "${HOSTD_OWNER}" "${hostd_token_file}"
+    sudo chmod 0600 "${hostd_token_file}"
+
+    sudo gcloud secrets versions add grain-hostd-token \
+      --project="${PROJECT}" \
+      --data-file="${hostd_token_file}" >/dev/null
+    sudo kubectl -n "${NAMESPACE}" create secret generic grain-hostd-token \
+      --from-file=token="${hostd_token_file}" \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+
     sudo tee "${hostd_remote_env}" >/dev/null <<EOF
 # Managed by scripts/deploy-gke.sh — outbound IAP/TLS connection for grain hostd.
 GRAIN_HOSTD_URL=${GATEWAY_URL}/api/hostd/connect
@@ -878,7 +990,17 @@ GRAIN_HOSTD_OWNER=${HOSTD_OWNER}
 GRAIN_HOSTD_TOKEN_FILE=${hostd_token_file}
 GRAIN_HOSTD_IAP_AUDIENCE=${IAP_CLIENT_ID}
 EOF
+    sudo chown "${HOSTD_OWNER}" "${hostd_remote_env}"
     sudo chmod 0600 "${hostd_remote_env}"
+
+    sudo tee "${hostd_dropin_file}" >/dev/null <<EOF
+# Managed by scripts/deploy-gke.sh — connects grain-hostd to GKE Gateway over IAP/TLS.
+[Service]
+EnvironmentFile=${hostd_remote_env}
+ExecStart=
+ExecStart=/usr/local/bin/grain hostd -config ${hostd_yaml} -server ${GATEWAY_URL} -token-file ${hostd_token_file} -executor-name ${HOSTD_NAME}
+EOF
+    sudo chmod 0644 "${hostd_dropin_file}"
   fi
 
   log "  Restarting grain-hostd.service only (leaving grain-daemon.service untouched)..."
@@ -927,11 +1049,14 @@ stage_migrate() {
   log "  Step 1/3: Upgrading database store to PostgreSQL via POST /api/database/upgrade..."
   run_cmd curl -fsS -X POST "http://127.0.0.1:4242/api/database/upgrade" \
     -H "Content-Type: application/json" \
-    -d "{\"target_dsn\": \"${dsn}\", \"restart\": false}"
+    -d "{\"dsn\": \"${dsn}\", \"migrateData\": true}"
 
   # 2. Push encryption key and bootstrap secrets to Secret Manager without logging values.
   log "  Step 2/3: Uploading secrets.key and bootstrap credentials to Secret Manager (values redacted)..."
-  local key_file="${DATA_DIR}/secrets.key"
+  local key_file="${DATA_DIR}/secrets/secrets.key"
+  if [[ ! -f "${key_file}" && -f "${DATA_DIR}/secrets.key" ]]; then
+    key_file="${DATA_DIR}/secrets.key"
+  fi
   if [[ "${DRY_RUN}" == "true" ]]; then
     printf 'DRY-RUN: gcloud secrets versions add grain-secrets-key --project=%q --data-file=%q\n' \
       "${PROJECT}" "${key_file}"
@@ -947,18 +1072,20 @@ stage_migrate() {
   # Per design doc: repos/, home/, and cache/jobs/ are NOT copied.
   log "  Step 3/3: Staging last 30 days of transcripts/ and artifacts/ from ${DATA_DIR} to gs://${STAGING_BUCKET}/migration/..."
   log "  (Excluding repos/, home/, and cache/jobs/ per docs/design/grain-on-gke.md)"
-  local archive="/tmp/grain-pvc-seed.tar.zst"
   if [[ "${DRY_RUN}" == "true" ]]; then
+    local dry_archive="/tmp/grain-pvc-seed.tar.zst"
     printf 'DRY-RUN: find %q/transcripts %q/artifacts -mtime -30 | tar --zstd -cf %q -T -\n' \
-      "${DATA_DIR}" "${DATA_DIR}" "${archive}"
+      "${DATA_DIR}" "${DATA_DIR}" "${dry_archive}"
     printf 'DRY-RUN: gcloud storage cp %q %q\n' \
-      "${archive}" "gs://${STAGING_BUCKET}/migration/grain-pvc-seed.tar.zst"
+      "${dry_archive}" "gs://${STAGING_BUCKET}/migration/grain-pvc-seed.tar.zst"
     printf 'DRY-RUN: kubectl -n %q scale deployment/grain --replicas=0\n' "${NAMESPACE}"
-    printf 'DRY-RUN: kubectl -n %q apply -f <grain-data-seed Job>\n' "${NAMESPACE}"
+    printf 'DRY-RUN: kubectl -n %q apply -f <grain-data-seed Job (image=%s)>\n' "${NAMESPACE}" "${PINNED_IMAGE}"
     printf 'DRY-RUN: kubectl -n %q wait --for=condition=complete --timeout=600s job/grain-data-seed\n' "${NAMESPACE}"
   else
-    local filelist
-    filelist="$(mktemp)"
+    local filelist archive
+    filelist="$(mktemp "${TMPDIR:-/tmp}/grain-pvc-files.XXXXXX")"
+    archive="$(mktemp "${TMPDIR:-/tmp}/grain-pvc-seed.XXXXXX.tar.zst")"
+    chmod 0600 "${filelist}" "${archive}"
     (
       cd "${DATA_DIR}"
       for subdir in transcripts artifacts; do
@@ -986,6 +1113,7 @@ spec:
   template:
     spec:
       serviceAccountName: grain
+      automountServiceAccountToken: false
       restartPolicy: Never
       nodeSelector:
         grain.dev/pool: daemon
@@ -994,17 +1122,26 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: seed
-          image: google/cloud-sdk:slim
+          image: ${PINNED_IMAGE}
           command:
             - /bin/sh
             - -c
             - |
               set -eu
-              gcloud storage cp "gs://${STAGING_BUCKET}/migration/grain-pvc-seed.tar.zst" /tmp/seed.tar.zst
+              token="\$(curl -fsS -H 'Metadata-Flavor: Google' 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token' | sed -n 's/.*\"access_token\":\"\\([^\"]*\\)\".*/\\1/p')"
+              curl -fsS -H "Authorization: Bearer \${token}" \
+                "https://storage.googleapis.com/storage/v1/b/${STAGING_BUCKET}/o/migration%2Fgrain-pvc-seed.tar.zst?alt=media" \
+                -o /tmp/seed.tar.zst
               tar --zstd -xf /tmp/seed.tar.zst -C /data
               rm -f /tmp/seed.tar.zst
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: data
               mountPath: /data
@@ -1063,7 +1200,8 @@ stage_rollback() {
   fi
 
   log "  Step 2/3: Restoring cloudtop grain-hostd to local socket mode and restarting grain-hostd.service..."
-  run_cmd sudo rm -f /etc/grain/hostd-remote.env
+  run_cmd sudo rm -f /etc/grain/hostd-remote.env /etc/systemd/system/grain-hostd.service.d/remote.conf
+  run_cmd sudo systemctl daemon-reload
   run_cmd sudo systemctl restart grain-hostd.service
 
   log "  Step 3/3: Re-enabling and starting cloudtop grain-daemon.service against Cloud SQL..."
@@ -1079,20 +1217,26 @@ stage_rollback() {
 stage_check() {
   log "Stage 7 (--check): Verifying GKE deployment at ${GATEWAY_URL}..."
 
-  # 1. Verify UI answers through IAP.
-  log "  Check 1/4: Verifying UI answers through IAP at ${GATEWAY_URL}/api/auth/access-code..."
+  # 1. Verify UI is protected by IAP (unauthenticated requests must be rejected with 302/401/403, never 200)
+  #    and answers when an IAP identity token is presented.
+  log "  Check 1/4: Verifying UI is gated by IAP at ${GATEWAY_URL}/api/auth/access-code..."
   if [[ "${DRY_RUN}" == "true" ]]; then
+    printf 'DRY-RUN: curl -sS -o /dev/null -w "%%{http_code}" %q (must be 302, 401, or 403; never 200)\n' \
+      "${GATEWAY_URL}/api/auth/access-code"
     printf 'DRY-RUN: curl -fsS -H "Authorization: Bearer <iap-id-token>" %q\n' \
       "${GATEWAY_URL}/api/auth/access-code"
   else
+    local unauth_code
+    unauth_code="$(curl -sS -o /dev/null -w '%{http_code}' "${GATEWAY_URL}/api/auth/access-code")"
+    if [[ ! "${unauth_code}" =~ ^(302|401|403)$ ]]; then
+      die "IAP check failed: unauthenticated request to ${GATEWAY_URL}/api/auth/access-code returned HTTP ${unauth_code} (expected 302, 401, or 403)"
+    fi
     local iap_token=""
     if [[ -n "${IAP_CLIENT_ID}" ]]; then
       iap_token="$(gcloud auth print-identity-token --audiences="${IAP_CLIENT_ID}" 2>/dev/null || true)"
     fi
     if [[ -n "${iap_token}" ]]; then
       curl -fsS -H "Authorization: Bearer ${iap_token}" "${GATEWAY_URL}/api/auth/access-code" >/dev/null
-    else
-      curl -fsS -o /dev/null -w '%{http_code}' "${GATEWAY_URL}/api/auth/access-code" | grep -Eq '^(200|302|401)$'
     fi
   fi
 

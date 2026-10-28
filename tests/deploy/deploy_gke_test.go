@@ -100,17 +100,35 @@ func TestDeployGKEScriptDryRunAllModes(t *testing.T) {
 		// 3. Digest-pinned image from ghcr.io/bwsalmon/grain/...
 		contains(t, out, "ghcr.io/bwsalmon/grain/grain@sha256:")
 		contains(t, out, "ghcr.io/bwsalmon/grain/granule@sha256:")
-		// 4. IAP Gateway + SSL cert + IAM bindings.
+		// 4. IAP Gateway + SSL cert + backend-service-scoped IAM bindings (never project-wide).
 		contains(t, out, "grain-gateway-ip")
 		contains(t, out, "grain-gateway-cert")
 		contains(t, out, "user:alice@example.com")
 		contains(t, out, "user:bob@example.com")
+		contains(t, out, "gcloud iap web add-iam-policy-binding --resource-type=backend-services")
 		contains(t, out, "roles/iap.httpsResourceAccessor")
+		contains(t, out, "GRAIN_IAP_AUDIENCE=")
 		// 5. Connects hostd on the existing host without stopping grain-daemon.
 		contains(t, out, "/etc/grain/hostd.token")
+		contains(t, out, "gcloud secrets versions add grain-hostd-token")
 		contains(t, out, "https://grain.example.com/api/hostd/connect")
+		contains(t, out, "/etc/systemd/system/grain-hostd.service.d/remote.conf")
 		contains(t, out, "systemctl restart grain-hostd.service")
 		absent(t, out, "systemctl stop grain-daemon.service")
+	})
+
+	t.Run("config file rejects shell command substitution", func(t *testing.T) {
+		badCfg := filepath.Join(t.TempDir(), "bad.env")
+		if err := os.WriteFile(badCfg, []byte("GRAIN_GKE_PROJECT=\"$(id)\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(script, "--config", badCfg, "--dry-run")
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("expected --config with command substitution to be rejected, got:\n%s", out)
+		}
+		contains(t, string(out), "refusing command substitution")
 	})
 
 	t.Run("in-cluster postgres and config file", func(t *testing.T) {
@@ -244,10 +262,23 @@ func TestDeployGKEManifestsAndBaseSync(t *testing.T) {
 		contains(t, rendered, "port: 7443")
 		contains(t, rendered, "name: grain-sandbox-egress")
 		contains(t, rendered, "name: grain-access-ingress")
+		contains(t, rendered, "name: grain-webhook-isolation")
 		contains(t, rendered, "name: grain-quota")
 		contains(t, rendered, "ghcr.io/bwsalmon/grain/grain@sha256:")
 		contains(t, rendered, "-k8s-granule-image=ghcr.io/bwsalmon/grain/granule@sha256:")
+		contains(t, rendered, "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1@sha256:")
 	}
+
+	// Verify NetworkPolicies match pkg/k8s.Manifest sandbox labels and isolate grain-webhook.
+	netpolYAML := stripComments(read(t, "deploy", "kubernetes", "gke", "networkpolicy.yaml"))
+	contains(t, netpolYAML, "app.kubernetes.io/managed-by: grain")
+	contains(t, netpolYAML, "app.kubernetes.io/component: sandbox")
+	absent(t, netpolYAML, "app: grain-sandbox")
+
+	// Verify in-cluster Postgres image is digest-pinned and isolated by NetworkPolicy.
+	pgYAML := stripComments(read(t, "deploy", "kubernetes", "gke", "postgres-incluster.yaml"))
+	contains(t, pgYAML, "postgres:16-bookworm@sha256:")
+	contains(t, pgYAML, "name: grain-postgres-isolation")
 
 	// Verify ServiceAccount/grain-sandbox has automountServiceAccountToken: false and
 	// no Workload Identity annotation.
@@ -270,6 +301,7 @@ func TestDeployGKETerraformModule(t *testing.T) {
 		`variable "postgres_mode"`,
 		`variable "domain"`,
 		`variable "iap_allowed_members"`,
+		`variable "iap_backend_services"`,
 	} {
 		contains(t, vars, v)
 	}
@@ -282,4 +314,8 @@ func TestDeployGKETerraformModule(t *testing.T) {
 	contains(t, iamTF, "roles/iam.workloadIdentityUser")
 	contains(t, iamTF, "roles/cloudsql.client")
 	contains(t, iamTF, "roles/cloudsql.instanceUser")
+
+	iapTF := stripComments(read(t, "deploy", "gke", "terraform", "iap.tf"))
+	contains(t, iapTF, "google_iap_web_backend_service_iam_member")
+	absent(t, iapTF, "google_iap_web_iam_member ")
 }

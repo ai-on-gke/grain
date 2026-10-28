@@ -158,6 +158,12 @@ variable "iap_allowed_members" {
   default     = []
 }
 
+variable "iap_backend_services" {
+  description = "Names of the GKE Gateway synthesized BackendServices for Service/grain and Service/grain-hostd to scope roles/iap.httpsResourceAccessor bindings to (never Service/grain-webhook)."
+  type        = list(string)
+  default     = []
+}
+
 variable "create_iap_brand" {
   description = "Whether to create the project's OAuth consent screen brand and IAP OAuth client via Terraform."
   type        = bool

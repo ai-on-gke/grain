@@ -21,6 +21,7 @@ locals {
   grain_secret_ids = toset([
     "grain-secrets-key",
     "grain-sandbox-ca-key",
+    "grain-hostd-token",
     "grain-state-repo-token",
     "grain-secrets-repo-token",
     "grain-github-app-private-key",

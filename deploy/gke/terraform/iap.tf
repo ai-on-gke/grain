@@ -73,16 +73,24 @@ resource "google_iap_client" "grain" {
 
 locals {
   iap_client_id = var.create_iap_brand ? google_iap_client.grain[0].client_id : var.iap_client_id
+
+  iap_backend_member_bindings = {
+    for pair in setproduct(toset(var.iap_backend_services), toset(var.iap_allowed_members)) :
+    "${pair[0]}:${pair[1]}" => {
+      backend_service = pair[0]
+      member          = pair[1]
+    }
+  }
 }
 
-# Note: `scripts/deploy-gke.sh` also binds `roles/iap.httpsResourceAccessor`
-# directly onto the GKE Gateway's synthesized `grain` and `grain-hostd` backend
-# services (and never onto `grain-webhook`).
-resource "google_iap_web_iam_member" "allowed_members" {
-  for_each = toset(var.iap_allowed_members)
-  project  = var.project_id
-  role     = "roles/iap.httpsResourceAccessor"
-  member   = each.value
+# Scoped strictly to the GKE Gateway's synthesized `grain` and `grain-hostd`
+# backend services (never project-wide and never onto `grain-webhook`).
+resource "google_iap_web_backend_service_iam_member" "allowed_members" {
+  for_each            = local.iap_backend_member_bindings
+  project             = var.project_id
+  web_backend_service = each.value.backend_service
+  role                = "roles/iap.httpsResourceAccessor"
+  member              = each.value.member
 
   depends_on = [google_project_service.services]
 }

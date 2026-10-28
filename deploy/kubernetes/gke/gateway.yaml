@@ -76,7 +76,7 @@ spec:
     # GitHub webhook receiver: authenticated via HMAC signature, not IAP.
     - matches:
         - path:
-            type: PathPrefix
+            type: Exact
             value: /webhooks/github
       backendRefs:
         - name: grain-webhook
