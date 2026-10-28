@@ -376,6 +376,8 @@ var notSettings = []string{
 	// repo declarative settings.
 	"executor_token",
 	"executor_token_sequence",
+	"external_agent_token",
+	"external_agent_token_sequence",
 	// Security audit log. Dynamic runtime records, not state repo
 	// declarative settings.
 	"secret_resolution_audit",

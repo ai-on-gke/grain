@@ -156,11 +156,11 @@ describe("SystemPage", () => {
     ).toBeInTheDocument();
     expect(
       await screen.findByText(
-        /Connected executors could not be read \(executor registry offline\)\./,
+        /Model servers could not be read \(executor registry offline\)\./,
       ),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("No remote executors connected."),
+      screen.queryByText("No model servers connected."),
     ).not.toBeInTheDocument();
   });
 

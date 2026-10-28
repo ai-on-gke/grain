@@ -1,0 +1,18 @@
+# Dedicated Kubernetes ServiceAccount for sandbox pods
+# (docs/design/grain-on-gke.md §Workload Identity, #GKE-7).
+#
+# Sandbox pods run untrusted agent and CI workloads. They must NEVER run as
+# the `grain` daemon ServiceAccount (which carries Workload Identity bindings
+# for Cloud SQL and Secret Manager), must carry NO `iam.gke.io/gcp-service-account`
+# annotation, and must set `automountServiceAccountToken: false` so a sandbox
+# pod receives no Kubernetes API token either.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grain-sandbox
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: sandbox
+automountServiceAccountToken: false

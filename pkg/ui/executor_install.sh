@@ -14,15 +14,17 @@
 # limitations under the License.
 
 #
-# Single-command bootstrap and execution script for Grain remote model executors.
+# Single-command bootstrap and execution script for Grain model servers (formerly remote model executors).
 #
 # Auto-detects platform OS (Linux / macOS) and architecture (amd64 / arm64),
 # downloads the matching grain binary if needed, discovers installed agent CLIs
-# (agy, claude, codex), and launches the remote executor (`grain executor`)
+# (agy, claude, codex), and launches the model server (`grain model-server`, alias `grain executor`)
 # or installs it as a persistent system service (systemd / launchd).
 #
 # Usage:
+#   ./scripts/run-model-server.sh [options]
 #   ./scripts/run-remote-executor.sh [options]
+#   curl -fsSL https://<grain-host>/api/model-servers/install.sh | bash -s -- [options]
 #   curl -fsSL https://<grain-host>/api/executors/install.sh | bash -s -- [options]
 #
 # Options:
@@ -93,9 +95,10 @@ TOKEN_FROM_ARGV=0
 
 usage() {
   cat <<'EOF'
-Usage: run-remote-executor.sh [options]
+Usage: run-model-server.sh [options]
+       run-remote-executor.sh [options]
 
-Bootstrap and run a Grain remote model executor.
+Bootstrap and run a Grain model server (`grain model-server`, alias `grain executor`).
 
 Options:
   -s, --server ADDR          Address or URL of grain executor listener (host:port or https://..., required)
@@ -779,7 +782,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=$GRAIN_BIN executor ${EXECUTOR_ARGS[*]}
+ExecStart=$GRAIN_BIN model-server ${EXECUTOR_ARGS[*]}
 Restart=always
 RestartSec=5s
 Environment=PATH=$PATH
@@ -802,7 +805,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=$GRAIN_BIN executor ${EXECUTOR_ARGS[*]}
+ExecStart=$GRAIN_BIN model-server ${EXECUTOR_ARGS[*]}
 Restart=always
 RestartSec=5s
 Environment=PATH=$PATH
@@ -823,7 +826,7 @@ EOF
     echo "Installing macOS launchd agent at $PLIST_FILE..."
 
     # Build XML array of arguments
-    PLIST_ARGS="        <string>$GRAIN_BIN</string>\n        <string>executor</string>\n"
+    PLIST_ARGS="        <string>$GRAIN_BIN</string>\n        <string>model-server</string>\n"
     for arg in "${EXECUTOR_ARGS[@]}"; do
       PLIST_ARGS="${PLIST_ARGS}        <string>${arg}</string>\n"
     done
@@ -859,5 +862,5 @@ EOF
 fi
 
 # Foreground execution
-echo "Launching grain executor..."
-exec "$GRAIN_BIN" executor "${EXECUTOR_ARGS[@]}"
+echo "Launching grain model-server..."
+exec "$GRAIN_BIN" model-server "${EXECUTOR_ARGS[@]}"

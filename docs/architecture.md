@@ -31,7 +31,7 @@ A Grain deployment is a **single daemon** (`grain daemon`) owned by one person o
 
 ```
                          ┌───────────────────────────────────────────────────┐
-                         │                   grain daemon                    │
+                         │           grain controller (grain daemon)         │
                          │                                                   │
   Operator (Web UI / CLI)│  ┌─────────────────────────────────────────────┐  │
  ────────────────────────┼─▶│  Orchestrator & Dispatch (pkg/orchestrator) │  │
@@ -45,20 +45,22 @@ A Grain deployment is a **single daemon** (`grain daemon`) owned by one person o
                          │  │ Forge & Merge Queue │   │ Agent & MCP Host  │  │
                          │  │ (pkg/forge, pkg/ci) │   │ (pkg/agent,       │  │
                          │  │ • .grain/workflows  │   │  pkg/mcp,         │  │
-                         │  │ • Merge batches     │   │  pkg/runhost)     │  │
-                         │  │ • Local git proxy   │   │ • agy/claude/codex│  │
-                         │  └──────┬──────┬───────┘   └────────┬──────────┘  │
-                         └─────────┼──────┼────────────────────┼─────────────┘
-                                   │      │                    │
-              ┌────────────────────┘      │                    ▼
-              │                           │         ┌────────────────────────┐
-              ▼                           │         │ grain hostd (optional) │
-   ┌─────────────────────┐                │         │ • Runs host-side CLIs  │
-   │   GitHub & Model    │                │         │   (e.g. agy + login)   │
-   │     Providers       │                │         │ • Capability servers   │
-   └─────────────────────┘                │         └──────────┬─────────────┘
-                                          │                    │
-                                          ▼                    ▼
+                         │  │ • Merge batches     │   │  pkg/modelexec,   │  │
+                         │  │ • Local git proxy   │   │  pkg/runhost)     │  │
+                         │  └──────┬──────┬───────┘   └────┬──────────┬───┘  │
+                         └─────────┼──────┼────────────────┼──────────┼──────┘
+                                   │      │                │          │
+       ┌───────────────────────────┘      │                ▼          ▼
+       ▼                                  │  ┌──────────────────┐  ┌────────────────────────┐
+┌─────────────────────┐                   │  │   model-server   │  │ grain hostd (optional) │
+│   grit controller   │                   │  │ (grain           │  │ • Capability server set│
+│  (CI service split, │                   │  │  model-server)   │  │   (grain-gcp,          │
+│   grit-split.md)    │                   │  │ • Runs agent CLIs│  │    grain-host-script,  │
+└──────────┬──────────┘                   │  │   (agy, claude,  │  │    grain-gchat,        │
+           │                              │  │    codex) on host│  │    host-git)           │
+           │                              │  └────────┬─────────┘  └───────────┬────────────┘
+           │                              │           │                        │
+           ▼                              ▼           ▼                        ▼
                                ┌─────────────────────────────────────────────┐
                                │      Disposable Sandboxes (pkg/granule)     │
                                │  • Granule KVM microVMs (or pods/containers)│
@@ -66,6 +68,15 @@ A Grain deployment is a **single daemon** (`grain daemon`) owned by one person o
                                │  • Reaches Git only via daemon git proxy    │
                                └─────────────────────────────────────────────┘
 ```
+
+### The 4-component architecture
+
+Across single-host, hybrid, and Kubernetes deployments, Grain's runtime splits into **four components**:
+
+1. **`grain` controller (`grain daemon`):** Owns the task store (`pkg/model`), the level-triggered orchestrator and dispatch loop (`pkg/orchestrator`, `pkg/dispatch`), the batching merge queue (`pkg/forge`), the web UI and REST/SSE API (`pkg/ui`), and disposable sandbox lifecycle (`pkg/granule`, `pkg/k8s`).
+2. **`grit` controller (`pkg/ci`, [Grit Split](design/grit-split.md)):** The CI controller service that plans `.grain/workflows` DAGs, executes steps in isolated sandboxes, maintains the content-addressed job cache and CI artifacts, and reports verdicts back to `grain` (in progress as a standalone service under [`docs/design/grit-split.md`](design/grit-split.md)).
+3. **`model-server` (`grain model-server`, aliases `grain executor` and `grain modelexec`, `pkg/modelexec`):** A service that runs agent model CLIs (`agy`, `claude`, `codex`) on a host with local ambient credentials and binaries, connecting outbound to the `grain` controller (`GET /api/executors/connect`) while tunneling MCP tool calls back into Grain's sandboxes. Bootstrapped with `./scripts/run-model-server.sh` or `/api/model-servers/install.sh`.
+4. **`hostd` (capability server set, `grain hostd`, `pkg/hostd`):** A host companion service that brings up allowlisted capability servers (`grain-gcp`, `grain-host-script`, `grain-gchat`, `host-git`, etc. from `/etc/grain/hostd.yaml`) and host CLIs, connecting them back to `grain` over `/run/grain-hostd` or outbound via `grain hostd -server` (`GET /api/hostd/connect`).
 
 ### How it is deployed
 
@@ -129,21 +140,22 @@ When reading logs (`pkg/...`), metrics, or stack traces, here is how the reposit
 | :--- | :--- | :--- |
 | **Orchestration** | `pkg/model` (`sqlite`, `postgres`) | The domain types (`Task`, `Observation`, `Run`, `Comment`, `Link`, `Grant`, `Schedule`, `Template`, `Suite`) and SQL store. Defines `model.StateOf` (`pkg/model/state.go`) and run endings (`pkg/model/ending.go`). |
 | | `pkg/dispatch` | Pure store-backed admission logic (`dispatch.Cycle`). Orders ready tasks, enforces retry backoff, handles `RunNow` and base-repair preemption, and charges the shared sandbox resource budget (`model.Budget` / `model.Ledger`). |
-| | `pkg/orchestrator` | The heart of the daemon. Runs the level-triggered reconcile loop (`RunCycle` in `cycle.go`, comprising 29 reconcilers), builds agent prompts, materializes capabilities, processes run results, drives the merge queue (`sync.go`, `queuestatus.go`, `mergepredicate.go`, `mergebatch.go`), enforces the liveness rule (`liveness.go`), and files paired-branch ports (`port.go`). |
+| | `pkg/orchestrator` | The heart of the `grain` controller. Runs the level-triggered reconcile loop (`RunCycle` in `cycle.go`, comprising 29 reconcilers), builds agent prompts, materializes capabilities, processes run results, drives the merge queue (`sync.go`, `queuestatus.go`, `mergepredicate.go`, `mergebatch.go`), enforces the liveness rule (`liveness.go`), and files paired-branch ports (`port.go`). |
 | | `pkg/agent` | Drivers for each agent CLI framework (`agy`, `claude`, `codex`, `custom`), parsing streaming transcripts, token usage, and rate-limit resets. |
+| | `pkg/modelexec` | The **`model-server`** (`grain model-server`, aliases `grain executor` and `grain modelexec`) server and outbound client daemon that runs agent model CLIs (`agy`, `claude`, `codex`) on a remote host with ambient credentials and tunnels MCP tool calls back to `grain`. |
 | | `pkg/capability` | Built-in capability grant providers (`pkg/capability/*`), the external capability MCP protocol (`pkg/capability/protocol`), and in-tree capability servers (`pkg/capability/intree`). |
 | | `pkg/mcp` | The `grain mcpserver` binary attached to each agent run over stdio, exposing `mcp_grain-sandbox_*` tools (`run_command`, `read_file`, `edit_file`, `write_file`, `wait_for_checks`, `propose_task`, `ask_question`, etc.). |
 | | `pkg/staterepo` | Syncs live settings, secrets metadata, agent memory, and release notes between the database and the `grain/config` Git state repository (`tables/*.json`, `memory/`). |
 | | `pkg/ui` & `ui/` | The HTTP REST/SSE server and embedded React single-page application. |
 | | `pkg/daemon` | Wires all stores, proxies, caches, and the orchestrator loop into the `grain daemon` binary (`cmd/grain`, `google/cmd/grain`). |
 | **Forge** | `pkg/forge` | Computes branch health (`PrClean`, `PrPending`, `PrFailing`, `PrConflicted`) from GitHub pull-request state and CI runs, and executes merges. |
-| | `pkg/ci` & `pkg/cifault` | Parses `.grain/workflows/*.yml`, plans job DAGs, caches job results by content fingerprint (`DirCache`), runs steps inside sandboxes, and detects cross-branch shared faults (`sharedfault.go`). |
+| | `pkg/ci` & `pkg/cifault` | The **`grit` controller** engine ([`docs/design/grit-split.md`](design/grit-split.md)): parses `.grain/workflows/*.yml`, plans job DAGs, caches job results by content fingerprint (`DirCache`), runs steps inside sandboxes, and detects cross-branch shared faults (`sharedfault.go`). |
 | | `pkg/github` & `pkg/gitproxy` | GitHub REST/GraphQL client and the local authenticating Git HTTP proxy (`:9728`) that gates every `git clone`, `fetch`, and `push` from sandboxes. |
 | | `pkg/portpick` | Performs mechanical git cherry-picks across paired branches (`main` ↔ `candidate`) without spinning up an agent sandbox when commits apply cleanly. |
 | **Sandboxes** | `pkg/granule` & `third_party/granule` | Manages disposable KVM microVMs (`granule`), rootfs overlays, vsock guest-agent channels, and guest image builds (`pkg/sandboximage`). |
 | | `pkg/k8s` | Manages Kubernetes Pod sandboxes when running on a cluster. |
 | | `pkg/runhost` | Runs the agent CLI and `grain mcpserver` in a detached sibling Docker container (`docker.go`) or Kubernetes pod (`kube.go`) with an append-only disk spool (`spool.go`), allowing in-flight agent runs to survive a `grain daemon` restart (`adopt.go`). |
-| | `pkg/hostd` | The host-side companion daemon (`grain hostd`) that executes allowlisted binaries (`agy`, capability servers) on the host OS over a Unix socket (`protocol.go` v2), also backed by a detached spool for live run adoption. |
+| | `pkg/hostd` | The **`hostd` capability server set** daemon (`grain hostd`) that brings up allowlisted capability servers (`grain-gcp`, `grain-host-script`, `grain-gchat`, `host-git`, etc. from `/etc/grain/hostd.yaml`) and host CLIs on a host and connects them back to `grain`. |
 
 ---
 
@@ -447,6 +459,7 @@ Remember that the **repository code and shell commands always run inside the san
 
 - **`container` (default for `claude` and `codex`):** The CLI runs inside a sibling `runhost` container (or inside the daemon container), isolated from the host OS.
 - **`host` (via `grain hostd`, default for `agy` on Cloudtops):** The daemon asks `grain hostd` over its Unix socket in `/run/grain-hostd` to spawn the CLI on the host OS. `hostd` enforces the root-owned binary allowlist `/etc/grain/hostd.yaml` and passes through only the host environment variables required for authentication (such as the host account's credential sockets), while piping all tool calls back into the Granule sandbox VM. See [CLI Run Location](design/cli-run-location.md).
+- **Remote `model-server` (`grain model-server`, aliases `grain executor` and `grain modelexec`, `pkg/modelexec`):** When `grain` runs in Kubernetes or on a headless server without local model credentials, a separate host runs `grain model-server` (bootstrapped via `./scripts/run-model-server.sh` or `/api/model-servers/install.sh`). It connects outbound to the `grain` controller using a token from **Settings → Executors** (`/settings/executors`), advertises its local agent CLIs (`agy`, `claude`, `codex`), and executes model turns on the remote host while tunneling `grain mcpserver` stdio back to the task's sandbox on `grain`. Connected model servers are shown on **System → Sandboxes** (`/system/sandboxes`).
 
 ### Quotas, rate limits, and pauses (`pkg/orchestrator/pause.go`)
 
@@ -684,7 +697,9 @@ When a task or pull request is not moving, check its status note on `/tasks/<id>
 | **Sandbox** | An isolated, disposable execution environment (by default a **Granule** KVM microVM; alternatively a Docker container, Kubernetes pod, or local workstation directory) where repository code is cloned at `/home/debian/work` and all agent tool commands or CI steps run. |
 | **Granule** (`pkg/granule`) | Grain's lightweight KVM microVM manager (`third_party/granule/`), booting isolated Linux guest VMs in roughly a second with a copy-on-write rootfs and a vsock guest-agent channel. |
 | **Run Host** (`pkg/runhost`) | A detached sibling Docker container or Kubernetes pod that hosts the agent CLI (`claude`, `codex`) and `grain mcpserver` with an on-disk event spool (`runhosts/spool/`), allowing live runs to survive a `grain daemon` restart. |
-| **hostd** (`pkg/hostd`) | The small companion daemon (`grain hostd`) running on the host OS outside the `grain daemon` container. Spawns allowlisted host binaries (configured in `/etc/grain/hostd.yaml`, such as `agy` or host capability servers) over its Unix socket in `/run/grain-hostd`. |
+| **grit controller** (`pkg/ci`, [Grit Split](design/grit-split.md)) | The CI controller service that runs `.grain/workflows`, manages the content-addressed CI job cache and artifacts, and reports commit verdicts to `grain` (in progress as an independent service under `docs/design/grit-split.md`). |
+| **model-server** (`pkg/modelexec`) | The service (`grain model-server`, aliases `grain executor` and `grain modelexec`) that runs agent model CLIs (`agy`, `claude`, `codex`) on a host with local ambient credentials/binaries and connects outbound to the `grain` controller. |
+| **hostd** (`pkg/hostd`) | The companion capability-server-set daemon (`grain hostd`) running on a host. Runs allowlisted capability servers (`grain-gcp`, `grain-host-script`, `grain-gchat`, `host-git`, etc. from `/etc/grain/hostd.yaml`) and host CLIs, connecting them back to the `grain` controller over `/run/grain-hostd` or outbound via `grain hostd -server`. |
 | **Connection** (`model.Connection`) | A configured credential and concurrency boundary for an agent framework (`agy`, `claude`, `codex`, `custom`) in `/settings/models`. Connections advertise the models they can serve and track usage-limit pauses per `(connection, model)`. |
 | **Grant** (`model.Grant`) | A capability attached to a task or CI job (e.g., `self-debug`, `gcp-key`, or a capability server URI with `with` arguments) authorizing extra credentials, port forwards, MCP tools, or setup steps for that run. |
 | **Capability Server** | An MCP server (in-tree via `grain capability <name>` or external over stdio/HTTP) that implements `mint_<method>` and `release_<method>` to issue short-lived, attempt-scoped capability **Passes** (`protocol.Pass`). |

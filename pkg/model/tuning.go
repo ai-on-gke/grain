@@ -102,6 +102,7 @@ var RecognizedGrainConfigParameters = map[string]struct{}{
 	"auto_upgrade_channel":           {},
 	"auto_upgrade_time":              {},
 	"judgement_model":                {},
+	"external_agent_api":             {},
 	"password_auth_enabled":          {},
 	"open_registration":              {},
 	"google_oauth_enabled":           {},

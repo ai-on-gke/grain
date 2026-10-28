@@ -319,6 +319,15 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     59,
+		Description: "add the external agent API setting and per-agent scoped credentials",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `external_agent_api` INTEGER NOT NULL DEFAULT 0",
+			externalAgentTokenTable,
+			externalAgentTokenSequenceTable,
+		},
+	},
+	{
+		Version:     60,
 		Description: "label each recorded CI wait with the CI that answered it (grain, github, tap)",
 		Statements: []string{
 			"ALTER TABLE `task_run_check_wait` ADD COLUMN `provider` TEXT NOT NULL DEFAULT ''",

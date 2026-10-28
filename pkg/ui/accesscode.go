@@ -334,6 +334,9 @@ func accessSessionIssued(r *http.Request, cfg IAPConfig) (time.Time, bool) {
 // request carrying the code is judged by the code alone, so a proxy's
 // forwarding or identity headers beside it neither help nor hinder.
 func singleTenantTrusted(r *http.Request) bool {
+	if externalTokenFromContext(r.Context()) != nil {
+		return true
+	}
 	cfg, _ := IAPConfigFromContext(r.Context())
 	if presentsAccessCode(r, cfg) {
 		return true

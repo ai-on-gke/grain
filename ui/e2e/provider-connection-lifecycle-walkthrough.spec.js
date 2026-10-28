@@ -467,12 +467,12 @@ test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and 
     // connected executors are status; their join tokens are a setting).
     await page.goto("/system/sandboxes");
 
-    // Verify the Connected executors header
+    // Verify the Model servers header
     await expect(
-      page.getByRole("heading", { name: "Connected executors" }),
+      page.getByRole("heading", { name: "Model servers" }),
     ).toBeVisible();
     await expect(
-      page.getByText("Remote executor nodes connected now, providing agent"),
+      page.getByText(/Model servers .* connected now, providing agent/),
     ).toBeVisible();
 
     // Verify Connected Executor Hostnames and Details
@@ -501,7 +501,7 @@ test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and 
 
     await expect(
       page.getByText(
-        "Manage authentication credentials for remote executor worker daemons.",
+        /Manage authentication credentials for remote model server worker daemons/,
       ),
     ).toBeVisible();
 
@@ -529,7 +529,7 @@ test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and 
     await expect(createdDialog).toBeVisible();
     await expect(
       createdDialog.getByText(
-        /Run the grain executor daemon on your remote machine/i,
+        /Run the grain model-server daemon on your remote machine/i,
       ),
     ).toBeVisible();
 
@@ -549,7 +549,7 @@ test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and 
     );
     expect(clipboardText).toMatch(/^gxt_/);
     await expect(
-      createdDialog.getByText(/grain executor --token gxt_/),
+      createdDialog.getByText(/grain model-server --token gxt_/),
     ).toBeVisible();
 
     // Close token dialog

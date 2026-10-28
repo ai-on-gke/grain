@@ -1121,6 +1121,13 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("creating an executor token: %v", err)
 	}
+	if _, err := store.CreateExternalAgentToken(ctx, model.ExternalAgentToken{
+		Name: "ops-laptop", TokenHash: "fedcba9876543210", Prefix: "gma_1234",
+		ScopeSet: "grain/task-admin", Scopes: []string{"tasks:read"}, Repos: []string{"owner/payments-api"},
+		RateLimit: 60, MaxConcurrent: 8, CreatedAt: sub, ExpiresAt: &sub, CreatedBy: "owner",
+	}); err != nil {
+		t.Fatalf("creating an external agent token: %v", err)
+	}
 
 	// A handful of tables nothing above reaches, written straight through
 	// SQL: they exist in the dump, and a value that does not survive them

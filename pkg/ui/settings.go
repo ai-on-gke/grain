@@ -227,6 +227,7 @@ type Settings struct {
 	// reads as the figure in effect. The controller's live ratios, recent
 	// adjustments and OOM kills are SandboxCommitment.Budget.Overcommit.
 	SandboxOvercommit model.OvercommitSettings `json:"sandboxOvercommit"`
+	ExternalAgentAPI  bool                     `json:"externalAgentApi"`
 	// SandboxMemoryReserveMBDefault is what a negative reserve comes to
 	// on the host this process can speak for (model.DefaultReserveMemoryMB),
 	// so the pane's blank field can say what blank means. Zero, and so
@@ -1120,6 +1121,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxDiskOvercommitDefault:       model.DefaultDiskOvercommit,
 		SandboxMemoryReserveMBDefault:      c.sandboxMemoryReserveDefault(),
 		SandboxOvercommit:                  cfg.SandboxOvercommit.Resolved(),
+		ExternalAgentAPI:                   cfg.ExternalAgentAPI,
 		SandboxDiskFloorShare:              cfg.SandboxDiskFloorShare,
 		SandboxDiskFloorMinMB:              cfg.SandboxDiskFloorMinMB,
 		SandboxDiskFloorShareDefault:       model.DefaultDiskFloorShare,
@@ -1334,6 +1336,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			SandboxDiskOvercommit:          def.SandboxDiskOvercommit,
 			SandboxDiskOvercommitDefault:   model.DefaultDiskOvercommit,
 			SandboxOvercommit:              def.SandboxOvercommit.Resolved(),
+			ExternalAgentAPI:               def.ExternalAgentAPI,
 			SandboxDiskFloorShare:          def.SandboxDiskFloorShare,
 			SandboxDiskFloorMinMB:          def.SandboxDiskFloorMinMB,
 			SandboxDiskFloorShareDefault:   model.DefaultDiskFloorShare,
@@ -1460,6 +1463,7 @@ type UpdateSettingsRequest struct {
 	// SandboxOvercommit replaces the whole overcommit mode and its bounds
 	// (model.OvercommitSettings); zero bounds are grain's defaults.
 	SandboxOvercommit      *model.OvercommitSettings `json:"sandboxOvercommit"`
+	ExternalAgentAPI       *bool                     `json:"externalAgentApi"`
 	SandboxMemoryReserveMB *int                      `json:"sandboxMemoryReserveMb"`
 	SandboxDiskFloorShare  *float64                  `json:"sandboxDiskFloorShare"`
 	SandboxDiskFloorMinMB  *int                      `json:"sandboxDiskFloorMinMb"`
@@ -1801,6 +1805,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			return model.Config{}, validationErrorf("sandboxOvercommit: %v", err)
 		}
 		cfg.SandboxOvercommit = *req.SandboxOvercommit
+	}
+	if req.ExternalAgentAPI != nil {
+		cfg.ExternalAgentAPI = *req.ExternalAgentAPI
 	}
 	// A negative reserve is grain's own (an eighth of the machine), so
 	// what there is to refuse here is the other end: a reserve at or
