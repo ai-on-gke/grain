@@ -154,7 +154,8 @@ func TestDetachedMCPTestChild(t *testing.T) {
 func TestDetachedMCPWrapperServesToolsAndWritesConfig(t *testing.T) {
 	dir := t.TempDir()
 	fakeGrain := filepath.Join(dir, "grain")
-	grainScript := fmt.Sprintf("#!/bin/sh\nexport GRAIN_CODEX_DETACHED_MCP_CHILD=1\nexec %q -test.run=^TestDetachedMCPTestChild$\n", os.Args[0])
+	grainEnv := filepath.Join(dir, "grain-env")
+	grainScript := fmt.Sprintf("#!/bin/sh\nenv > %q\nexport GRAIN_CODEX_DETACHED_MCP_CHILD=1\nexec %q -test.run=^TestDetachedMCPTestChild$\n", grainEnv, os.Args[0])
 	if err := os.WriteFile(fakeGrain, []byte(grainScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -194,6 +195,7 @@ if [ "${1:-}" = "--version" ]; then
   exit 0
 fi
 cp "$CODEX_HOME/config.toml" %q
+[ "${OPENAI_API_KEY:-}" = sk-detached-test ] || { echo "codex lost OPENAI_API_KEY" >&2; exit 3; }
 url=$(sed -n 's/^url = "\(.*\)"/\1/p' "$CODEX_HOME/config.toml")
 auth=$(sed -n 's/^http_headers = { Authorization = "\(.*\)" }/\1/p' "$CODEX_HOME/config.toml")
 curl -fsS -X POST "$url" \
@@ -207,6 +209,7 @@ curl -fsS -X POST "$url" \
 	}
 
 	t.Setenv("CODEX_HOME", home)
+	t.Setenv("OPENAI_API_KEY", "sk-detached-test")
 	// A --version probe must not start the MCP adapter or rewrite config.toml.
 	if code, err := RunDetached(context.Background(), []string{fakeCodex, "--version"}); err != nil || code != 0 {
 		t.Fatalf("RunDetached(--version) = %d, %v", code, err)
@@ -248,6 +251,15 @@ curl -fsS -X POST "$url" \
 	}
 	if !strings.Contains(string(respBytes), "wrote detached.txt") {
 		t.Errorf("MCP response = %s, want 'wrote detached.txt'", respBytes)
+	}
+	// codex keeps its model credential; the mcpserver beside it on the
+	// host is not handed it.
+	envBytes, err := os.ReadFile(grainEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(envBytes), "sk-detached-test") {
+		t.Errorf("grain mcpserver was started with OPENAI_API_KEY in its environment")
 	}
 }
 

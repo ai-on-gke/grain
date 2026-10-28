@@ -102,6 +102,10 @@ func RunDetached(ctx context.Context, args []string) (int, error) {
 	return 0, nil
 }
 
+// mcpWithheldEnv is what of codex's environment (HostdEnv) the wrapper
+// keeps from the grain mcpserver it starts on the host.
+var mcpWithheldEnv = []string{"OPENAI_API_KEY"}
+
 const localWaitDelay = 5 * mcpToolTimeoutSlack / 24 // 5s
 
 func isProbeArgs(args []string) bool {
@@ -137,6 +141,14 @@ func startDetachedMCP(ctx context.Context, home string) (func(), error) {
 	grainBin, err := detachedGrainBinary()
 	if err != nil {
 		return nil, fmt.Errorf("locating grain: %w", err)
+	}
+	// grain mcpserver inherits the wrapper's environment, which is
+	// codex's: it is not given the model credential codex alone needs.
+	for _, name := range mcpWithheldEnv {
+		if v, ok := os.LookupEnv(name); ok {
+			os.Unsetenv(name)
+			defer os.Setenv(name, v)
+		}
 	}
 	endpoint, err := mcp.StartCommandHTTP(ctx, grainBin, spec.Args)
 	if err != nil {
