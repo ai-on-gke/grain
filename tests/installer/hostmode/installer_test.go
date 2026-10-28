@@ -39,7 +39,9 @@ package hostmode
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/tls"
+	_ "embed"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -224,8 +226,36 @@ func setupCommand(host, script, root, repo, tag string, extra ...string) []strin
 }
 
 // lastHostModeSetup is the commit whose scripts/setup.sh was the last to
-// install host mode: main just before task 5041 removed it.
+// install host mode: main just before task 5041 removed it. When a
+// repository's history starts from a squashed commit after that point,
+// testdata/setup-host-mode.sh.gz carries the same script verbatim.
 const lastHostModeSetup = "4cb28b7de5c1a0b31db53d2e5a6554efa83cbb38"
+
+//go:embed testdata/setup-host-mode.sh.gz
+var embeddedHostModeSetupGz []byte
+
+func lastHostModeSetupScript(t *testing.T) []byte {
+	t.Helper()
+	oldBody, err := exec.Command("git", "-C", repoRoot(t), "show", lastHostModeSetup+":scripts/setup.sh").Output()
+	if err != nil {
+		// A shallow checkout: fetch that one commit and ask again.
+		_ = exec.Command("git", "-C", repoRoot(t), "fetch", "--quiet", "--depth", "1", "origin", lastHostModeSetup).Run()
+		oldBody, err = exec.Command("git", "-C", repoRoot(t), "show", lastHostModeSetup+":scripts/setup.sh").Output()
+	}
+	if err == nil {
+		return oldBody
+	}
+	zr, gzErr := gzip.NewReader(bytes.NewReader(embeddedHostModeSetupGz))
+	if gzErr != nil {
+		t.Fatalf("reading the last host-mode setup.sh (%s): git show failed (%v) and opening embedded fallback failed: %v", lastHostModeSetup, err, gzErr)
+	}
+	defer zr.Close()
+	unpacked, readErr := io.ReadAll(zr)
+	if readErr != nil {
+		t.Fatalf("reading embedded host-mode setup.sh (%s): %v", lastHostModeSetup, readErr)
+	}
+	return unpacked
+}
 
 // TestSetupMovesAHostModeInstallToContainerModePlusHostd is the whole of
 // the migration, in the order a deployment meets it. One test rather than
@@ -326,17 +356,11 @@ WantedBy=multi-user.target
 		t.Fatal(err)
 	}
 	// The installer a host-mode deployment was made with, out of this
-	// checkout's history: no file in the tree carries the mode any more.
+	// checkout's history (or its embedded snapshot when the repo history
+	// was squashed after lastHostModeSetup): no live file in the tree
+	// carries the mode any more.
 	oldScript := filepath.Join(root, "setup-host-mode.sh")
-	oldBody, err := exec.Command("git", "-C", repoRoot(t), "show", lastHostModeSetup+":scripts/setup.sh").Output()
-	if err != nil {
-		// A shallow checkout: fetch that one commit and ask again.
-		_ = exec.Command("git", "-C", repoRoot(t), "fetch", "--quiet", "--depth", "1", "origin", lastHostModeSetup).Run()
-		oldBody, err = exec.Command("git", "-C", repoRoot(t), "show", lastHostModeSetup+":scripts/setup.sh").Output()
-	}
-	if err != nil {
-		t.Fatalf("reading the last host-mode setup.sh (%s) out of this checkout's history: %v -- the job needs the full history", lastHostModeSetup, err)
-	}
+	oldBody := lastHostModeSetupScript(t)
 	if err := os.WriteFile(oldScript, oldBody, 0o755); err != nil {
 		t.Fatal(err)
 	}
