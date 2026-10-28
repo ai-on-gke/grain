@@ -214,6 +214,9 @@ func Create(ctx context.Context, d *Docker, spec vmspec.VMSpec, stdout io.Writer
 	if spec.DiskIOEngine != "" {
 		vmArgs = append(vmArgs, "-e", "CHV_DISK_IO_ENGINE="+spec.DiskIOEngine)
 	}
+	if spec.StorageBackend != "" {
+		vmArgs = append(vmArgs, "-e", "CHV_STORAGE_BACKEND="+spec.StorageBackend)
+	}
 	// A spec with no disk of its own boots the one baked into the granule
 	// image: nothing to mount, and CHV_DISK_IMAGE left unset so "granule
 	// run"'s own default applies. See VMSpec.Validate.

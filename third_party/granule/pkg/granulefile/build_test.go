@@ -579,3 +579,27 @@ VM SET extent-size-mb=128
 		t.Errorf("Dockerfile still contains stale CHV_EXTENT_SIZE_MB=64 env:\n%s", plan.Dockerfile)
 	}
 }
+
+func TestPlanBuild_VMSetStorageBackendExtents(t *testing.T) {
+	src := `FROM ghcr.io/gke-labs/granule-guest-rootfs:debian12
+VM PACK AS extents_vm
+VM SET storage-backend=extents extent-size-mb=16
+`
+	f, err := Parse("Granulefile", src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	plan, err := PlanBuild(context.Background(), f, BuildOptions{Tag: "extents:test"})
+	if err != nil {
+		t.Fatalf("PlanBuild: %v", err)
+	}
+	for _, want := range []string{
+		"GRANULE_STORAGE_BACKEND=extents GRANULE_EXTENT_SIZE_MB=16",
+		`ENV CHV_STORAGE_BACKEND="extents"`,
+		`ENV CHV_EXTENT_SIZE_MB="16"`,
+	} {
+		if !strings.Contains(plan.Dockerfile, want) {
+			t.Errorf("Dockerfile missing %q:\n%s", want, plan.Dockerfile)
+		}
+	}
+}

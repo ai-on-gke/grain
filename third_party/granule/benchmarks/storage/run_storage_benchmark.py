@@ -1,338 +1,429 @@
 #!/usr/bin/env python3
 """
-Storage Benchmark: Native Host vs Straight Flat File vs Flat Multi-Extent VMDK vs QCOW2 (64K vs 2M)
+Storage benchmark: Granule's extent storage backends vs flat disk.img, QCOW2
+and the native host.
 
-Runs direct I/O and large sequential/random fio workloads comparing:
-1. Native Host storage performance
-2. Granule MicroVM with straight flat file (CHV_DISK_MODE=persistent, raw disk.img)
-3. Granule MicroVM with flat multi-extent VMDK (CHV_DISK_MODE=overlay, 64MB extents, reflink-capable)
-4. Granule MicroVM with QCOW2 (64KB cluster size, default block size)
-5. Granule MicroVM with QCOW2 (2MB cluster size, maximum format block size)
+Backends compared (all on the same host, see benchmarks/storage/gce-bench.sh
+for the dedicated GCE VM this is meant to run on):
 
-Calculates the overhead of the overlay / qcow2 layers relative to straight flat files.
-Note: While 32M block size was investigated to match extent sizing, the QCOW2 specification
-hard-limits cluster size to 2MB (2048KB).
+  host                   fio directly on the host filesystem
+  flat                   CHV_DISK_MODE=persistent, raw disk.img read-write
+  qcow_64k               CHV_DISK_MODE=overlay, QCOW2 overlay, 64 KiB clusters
+                         (made with qemu-img and bind-mounted over the
+                         overlay path, since granule itself only writes 2 MiB)
+  qcow_2m                CHV_DISK_MODE=overlay, granule's own 2 MiB QCOW2 overlay
+  extent_boot_64         pkg/extent directory (granule guest split, 64 MiB),
+                         assembled into a flat overlay by PrepareOverlay
+  extents_persistent_N   CHV_STORAGE_BACKEND=extents, CHV_DISK_MODE=persistent,
+                         N MiB extents served over vhost-user-blk
+  extents_overlay_N      CHV_STORAGE_BACKEND=extents, CHV_DISK_MODE=overlay
+                         (lazy O_RDONLY -> O_RDWR promotion per extent)
+
+For every VM backend it measures:
+
+  1. the fio suite (direct=1, libaio, numjobs=4, 4 GiB dataset as four 1 GiB
+     files, CHV_VCPUS=4, CHV_DISK_NUM_QUEUES=4): sequential write/read
+     (bs=1M), random read/write 4K (iodepth=32) and mixed 70/30 4K
+     (iodepth=16); bandwidth, IOPS, p50/p95/p99 completion latency, CPU;
+  2. cold start (docker run -> granule ready, host caches dropped) and warm
+     start (docker start of the same stopped container -> granule ready);
+  3. the OCI layer a small guest change costs: 10 MiB written in the guest,
+     the container stopped, then docker commit timed and the committed
+     layer's size taken from docker.
+
+--live runs all of that and writes the parsed results to --out-dir (and
+prints them between STORAGE-BENCH-*-BEGIN/END markers, which is how
+gce-bench.sh's CI log is harvested). Without --live it renders the report
+from a summary JSON written earlier (benchmarks/results/storage by default).
 """
 
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_STORAGE_RESULTS_DIR = os.path.join(SCRIPT_DIR, "results")
+RESULTS_DIR = os.path.join(SCRIPT_DIR, "..", "results", "storage")
+SUMMARY_NAME = "summary_storage_benchmark.json"
 
-def run_cmd(cmd, check=True):
-    print(f"[RUN] {cmd}")
+GUEST_FIO_DIR = "/var/tmp/fio"
+HOST_FIO_DIR = "/var/tmp/bench_host"
+
+# Display order and labels.
+VARIANT_LABELS = {
+    "host": "Native Host",
+    "flat": "Flat raw disk.img (persistent)",
+    "qcow_64k": "QCOW2 overlay, 64 KiB clusters",
+    "qcow_2m": "QCOW2 overlay, 2 MiB clusters",
+    "extent_boot_64": "Boot-assembled extents, 64 MiB (pkg/extent)",
+    "extents_persistent_16": "vhost-user extents, persistent, 16 MiB",
+    "extents_persistent_64": "vhost-user extents, persistent, 64 MiB",
+    "extents_overlay_16": "vhost-user extents, overlay, 16 MiB",
+    "extents_overlay_64": "vhost-user extents, overlay, 64 MiB",
+}
+
+# Variants whose committed OCI layer is measured. The others share a disk
+# layout with one of these (qcow_64k's overlay is a bind mount, so docker
+# never sees it at all).
+OCI_VARIANTS = ["flat", "qcow_2m", "extent_boot_64", "extents_persistent_16",
+                "extents_persistent_64", "extents_overlay_16", "extents_overlay_64"]
+
+
+def log(msg):
+    print(f"[bench {time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def run(cmd, check=True, quiet=False):
+    if not quiet:
+        log(f"$ {cmd}")
     res = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if check and res.returncode != 0:
-        print(f"[ERROR] {res.stderr}", file=sys.stderr)
-        raise RuntimeError(res.stderr)
+        raise RuntimeError(f"{cmd!r} exited {res.returncode}: {res.stderr.strip()[-2000:]}")
     return res.stdout
 
-def drop_caches(vm_container=None):
-    run_cmd("sudo sync && echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null")
-    if vm_container:
-        run_cmd(f"sudo docker exec {vm_container} granule exec -- sync || true")
-        run_cmd(f"sudo docker exec {vm_container} granule exec -- sh -c 'echo 3 > /proc/sys/vm/drop_caches' || true")
 
-def split_size(size_str, numjobs):
-    size_str = size_str.upper()
-    if size_str.endswith("G"):
-        mb = int(size_str[:-1]) * 1024
-    elif size_str.endswith("M"):
-        mb = int(size_str[:-1])
-    else:
-        mb = int(size_str) // (1024 * 1024)
-    per_job_mb = max(1, mb // numjobs)
-    if per_job_mb >= 1024 and per_job_mb % 1024 == 0:
-        return f"{per_job_mb // 1024}G"
-    return f"{per_job_mb}M"
+def fio_tests(numjobs, size_per_job, runtime):
+    common = (f"--name=bench --directory={{dir}} --size={size_per_job} --numjobs={numjobs} "
+              f"--group_reporting --ioengine=libaio --direct=1 --runtime={runtime} --output-format=json")
+    return [
+        ("seq_write", "Sequential Write 1M", "--rw=write --bs=1M --iodepth=1"),
+        ("seq_read", "Sequential Read 1M", "--rw=read --bs=1M --iodepth=1"),
+        ("rand_read", "Random Read 4K (iodepth=32)", "--rw=randread --bs=4k --iodepth=32"),
+        ("rand_write", "Random Write 4K (iodepth=32)", "--rw=randwrite --bs=4k --iodepth=32"),
+        ("mixed_rw", "Mixed Random 70/30 4K (iodepth=16)", "--rw=randrw --rwmixread=70 --bs=4k --iodepth=16"),
+    ], common
 
-def parse_job(job_data):
-    if not job_data or "jobs" not in job_data or not job_data["jobs"]:
-        return {
-            "read_bw": 0.0, "write_bw": 0.0,
-            "read_iops": 0.0, "write_iops": 0.0,
-            "read_lat_us": 0.0, "write_lat_us": 0.0,
-            "read_p50_us": 0.0, "write_p50_us": 0.0,
-            "read_p95_us": 0.0, "write_p95_us": 0.0,
-            "read_p99_us": 0.0, "write_p99_us": 0.0,
-            "usr_cpu": 0.0, "sys_cpu": 0.0,
+
+def parse_fio(data):
+    job = data["jobs"][0]
+    out = {}
+    for side in ("read", "write"):
+        s = job[side]
+        pct = (s.get("clat_ns") or {}).get("percentile") or {}
+        out[side] = {
+            "bw_mbs": round(s["bw_bytes"] / (1024 * 1024), 1),
+            "iops": round(s["iops"], 0),
+            "mean_us": round(((s.get("lat_ns") or {}).get("mean", 0)) / 1000.0, 1),
+            "p50_us": round(pct.get("50.000000", 0) / 1000.0, 1),
+            "p95_us": round(pct.get("95.000000", 0) / 1000.0, 1),
+            "p99_us": round(pct.get("99.000000", 0) / 1000.0, 1),
         }
-    job = job_data["jobs"][0]
-    r = job["read"]
-    w = job["write"]
-    read_bw = r["bw_bytes"] / (1024 * 1024)
-    write_bw = w["bw_bytes"] / (1024 * 1024)
-    read_iops = r["iops"]
-    write_iops = w["iops"]
-    read_lat_us = r["lat_ns"]["mean"] / 1000.0 if "lat_ns" in r and r["lat_ns"] else 0
-    write_lat_us = w["lat_ns"]["mean"] / 1000.0 if "lat_ns" in w and w["lat_ns"] else 0
+    out["usr_cpu"] = round(job.get("usr_cpu", 0.0), 1)
+    out["sys_cpu"] = round(job.get("sys_cpu", 0.0), 1)
+    return out
 
-    read_p50_us = 0
-    read_p95_us = 0
-    read_p99_us = 0
-    if "clat_ns" in r and "percentile" in r["clat_ns"]:
-        pct = r["clat_ns"]["percentile"]
-        read_p50_us = pct.get("50.000000", 0) / 1000.0
-        read_p95_us = pct.get("95.000000", 0) / 1000.0
-        read_p99_us = pct.get("99.000000", 0) / 1000.0
 
-    write_p50_us = 0
-    write_p95_us = 0
-    write_p99_us = 0
-    if "clat_ns" in w and "percentile" in w["clat_ns"]:
-        pct = w["clat_ns"]["percentile"]
-        write_p50_us = pct.get("50.000000", 0) / 1000.0
-        write_p95_us = pct.get("95.000000", 0) / 1000.0
-        write_p99_us = pct.get("99.000000", 0) / 1000.0
+def fio_json(text):
+    # fio can print warnings ahead of its JSON document.
+    i = text.find("{")
+    if i < 0:
+        raise ValueError(f"no JSON in fio output: {text[:500]!r}")
+    return json.loads(text[i:])
 
-    usr_cpu = job.get("usr_cpu", 0.0)
-    sys_cpu = job.get("sys_cpu", 0.0)
 
-    return {
-        "read_bw": read_bw, "write_bw": write_bw,
-        "read_iops": read_iops, "write_iops": write_iops,
-        "read_lat_us": read_lat_us, "write_lat_us": write_lat_us,
-        "read_p50_us": read_p50_us, "write_p50_us": write_p50_us,
-        "read_p95_us": read_p95_us, "write_p95_us": write_p95_us,
-        "read_p99_us": read_p99_us, "write_p99_us": write_p99_us,
-        "usr_cpu": usr_cpu, "sys_cpu": sys_cpu,
-    }
+def drop_host_caches():
+    run("sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null", quiet=True)
+
+
+def gexec(container, cmd, check=True):
+    return run(f"sudo docker exec {container} granule exec -- sh -c {sh_quote(cmd)}", check=check, quiet=True)
+
+
+def sh_quote(s):
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+class Bench:
+    def __init__(self, args):
+        self.args = args
+        self.tests, self.fio_common = fio_tests(args.numjobs, args.size_per_job, args.runtime)
+        self.summary = {"meta": {}, "fio": {}, "startup": {}, "oci": {}, "errors": {}}
+
+    # -- containers ---------------------------------------------------------
+
+    def spec(self, variant):
+        a = self.args
+        env = {"CHV_VCPUS": "4", "CHV_DISK_NUM_QUEUES": "4"}
+        vols = []
+        image = a.image_flat
+        if variant == "flat":
+            env["CHV_DISK_MODE"] = "persistent"
+        elif variant == "qcow_2m":
+            env["CHV_DISK_MODE"] = "overlay"
+        elif variant == "qcow_64k":
+            env["CHV_DISK_MODE"] = "overlay"
+            vols.append(f"{a.qcow64k_overlay}:/var/lib/granule/overlay/disk.qcow2")
+        elif variant == "extent_boot_64":
+            env["CHV_DISK_MODE"] = "overlay"
+            image = a.image_extent_boot
+        elif variant.startswith("extents_"):
+            _, mode, size = variant.split("_")
+            env["CHV_DISK_MODE"] = mode
+            env["CHV_STORAGE_BACKEND"] = "extents"
+            env["CHV_EXTENT_SIZE_MB"] = size
+            image = a.image_extents_16 if size == "16" else a.image_extents_64
+        else:
+            raise ValueError(variant)
+        return image, env, vols
+
+    def fresh_qcow64k(self):
+        a = self.args
+        run(f"rm -f {a.qcow64k_overlay} && qemu-img create -q -f qcow2 -u -o cluster_size=65536 "
+            f"-b /var/lib/granule/guest/disk.img -F raw {a.qcow64k_overlay} {a.disk_bytes}")
+        run(f"chmod 666 {a.qcow64k_overlay}")
+
+    def start(self, variant, name):
+        image, env, vols = self.spec(variant)
+        if variant == "qcow_64k":
+            self.fresh_qcow64k()
+        run(f"sudo docker rm -f {name} >/dev/null 2>&1 || true", quiet=True)
+        envs = " ".join(f"-e {k}={v}" for k, v in env.items())
+        mounts = " ".join(f"-v {v}" for v in vols)
+        drop_host_caches()
+        t0 = time.monotonic()
+        run(f"sudo docker run -d --name {name} --privileged {envs} {mounts} {image}")
+        self.ready(name)
+        return (time.monotonic() - t0) * 1000.0
+
+    def ready(self, name):
+        try:
+            run(f"sudo docker exec {name} granule ready -timeout {self.args.ready_timeout}s", quiet=True)
+        except RuntimeError:
+            print(run(f"sudo docker logs --tail 60 {name} 2>&1", check=False), flush=True)
+            raise
+
+    def remove(self, name):
+        run(f"sudo docker rm -f {name} >/dev/null 2>&1 || true", quiet=True)
+
+    # -- workloads ----------------------------------------------------------
+
+    def fio_host(self):
+        res = {}
+        run(f"sudo rm -rf {HOST_FIO_DIR} && sudo mkdir -p {HOST_FIO_DIR}")
+        for tid, title, extra in self.tests:
+            drop_host_caches()
+            out = run(f"sudo fio {self.fio_common.format(dir=HOST_FIO_DIR)} {extra}", quiet=True)
+            res[tid] = parse_fio(fio_json(out))
+            log(f"host {tid}: {res[tid]}")
+        run(f"sudo rm -rf {HOST_FIO_DIR}")
+        return res
+
+    def fio_guest(self, variant):
+        name = f"bench-{variant.replace('_', '-')}"
+        res = {}
+        try:
+            ms = self.start(variant, name)
+            self.summary["startup"].setdefault(variant, {})["cold_ms_2"] = round(ms)
+            df = gexec(name, f"mkdir -p {GUEST_FIO_DIR} && df -h {GUEST_FIO_DIR} | tail -1", check=False).strip()
+            log(f"{variant}: guest {GUEST_FIO_DIR} on: {df}")
+            self.summary["meta"].setdefault("guest_df", {})[variant] = df
+            for tid, title, extra in self.tests:
+                drop_host_caches()
+                gexec(name, "sync; echo 3 > /proc/sys/vm/drop_caches", check=False)
+                out = gexec(name, f"fio {self.fio_common.format(dir=GUEST_FIO_DIR)} {extra} --output=/tmp/fio.json >/dev/null 2>&1; cat /tmp/fio.json")
+                res[tid] = parse_fio(fio_json(out))
+                log(f"{variant} {tid}: {res[tid]}")
+        finally:
+            self.remove(name)
+        return res
+
+    def oci_and_startup(self, variant):
+        a = self.args
+        name = f"oci-{variant.replace('_', '-')}"
+        tag = f"granule-bench-commit:{variant.replace('_', '-')}"
+        image, _, _ = self.spec(variant)
+        st = self.summary["startup"].setdefault(variant, {})
+        try:
+            st["cold_ms"] = round(self.start(variant, name))
+            log(f"{variant}: cold start {st['cold_ms']} ms")
+            if variant not in OCI_VARIANTS:
+                return
+            gexec(name, f"dd if=/dev/urandom of=/root/bench-delta-1.bin bs=1M count={a.delta_mb // 2} conv=fsync 2>/dev/null && "
+                        f"dd if=/dev/urandom of=/root/bench-delta-2.bin bs=1M count={a.delta_mb - a.delta_mb // 2} conv=fsync 2>/dev/null && sync")
+            run(f"sudo docker stop -t 60 {name}")
+            diff = run(f"sudo docker diff {name}", quiet=True).splitlines()
+            changed = [l for l in diff if "/var/lib/granule" in l and not l.rstrip().endswith(("/var/lib/granule", "/guest", "/overlay"))]
+            t0 = time.monotonic()
+            run(f"sudo docker commit {name} {tag}")
+            commit_ms = (time.monotonic() - t0) * 1000.0
+            base = int(run(f"sudo docker image inspect -f '{{{{.Size}}}}' {image}", quiet=True).strip())
+            new = int(run(f"sudo docker image inspect -f '{{{{.Size}}}}' {tag}", quiet=True).strip())
+            self.summary["oci"][variant] = {
+                "guest_write_mib": a.delta_mb,
+                "layer_mib": round((new - base) / (1024 * 1024), 1),
+                "commit_ms": round(commit_ms),
+                "changed_files": len(changed),
+                "changed_sample": changed[:12],
+            }
+            log(f"{variant}: oci {self.summary['oci'][variant]}")
+            run(f"sudo docker rmi -f {tag} >/dev/null", check=False, quiet=True)
+            # Warm start: the same container, its disk already prepared.
+            drop_host_caches()
+            t0 = time.monotonic()
+            run(f"sudo docker start {name}")
+            self.ready(name)
+            st["warm_ms"] = round((time.monotonic() - t0) * 1000.0)
+            log(f"{variant}: warm start {st['warm_ms']} ms")
+        finally:
+            self.remove(name)
+
+    def run_all(self):
+        a = self.args
+        self.summary["meta"].update({
+            "numjobs": a.numjobs, "size_per_job": a.size_per_job, "runtime_s": a.runtime,
+            "vcpus": 4, "disk_num_queues": 4, "disk_bytes": a.disk_bytes,
+            "host": run("uname -srm; nproc; free -g | awk '/Mem:/{print $2\"G\"}'; df -h / | tail -1", check=False, quiet=True).split("\n"),
+        })
+        for variant in a.variants:
+            log(f"===== {variant}: {VARIANT_LABELS.get(variant, variant)} =====")
+            try:
+                if variant == "host":
+                    self.summary["fio"]["host"] = self.fio_host()
+                else:
+                    self.oci_and_startup(variant)
+                    self.summary["fio"][variant] = self.fio_guest(variant)
+            except Exception as e:  # keep going: one broken backend should not cost the rest
+                log(f"{variant} FAILED: {e}")
+                self.summary["errors"][variant] = str(e)[-1500:]
+            print("STORAGE-BENCH-PARTIAL " + json.dumps({variant: {k: self.summary[k].get(variant) for k in ("fio", "startup", "oci", "errors")}}), flush=True)
+        return self.summary
+
+
+# -- report -----------------------------------------------------------------
+
+def fmt(v, unit=""):
+    if v is None:
+        return "–"
+    if isinstance(v, float) and v < 100:
+        return f"{v:,.1f}{unit}"
+    return f"{v:,.0f}{unit}"
+
+
+def markdown(summary):
+    fio = summary.get("fio", {})
+    variants = [v for v in VARIANT_LABELS if v in fio and fio[v]]
+    lines = []
+    tests = [("seq_write", "Seq Write 1M", "write", "bw_mbs", "MB/s"),
+             ("seq_read", "Seq Read 1M", "read", "bw_mbs", "MB/s"),
+             ("rand_read", "Rand Read 4K", "read", "iops", "IOPS"),
+             ("rand_write", "Rand Write 4K", "write", "iops", "IOPS"),
+             ("mixed_rw", "Mixed 70/30 4K", None, "iops", "IOPS")]
+
+    lines.append("### Throughput and IOPS")
+    lines.append("")
+    lines.append("| Backend | " + " | ".join(f"{t[1]} ({t[4]})" for t in tests) + " |")
+    lines.append("|:---|" + "---:|" * len(tests))
+    for v in variants:
+        cells = []
+        for tid, _, side, metric, _ in tests:
+            r = fio[v].get(tid)
+            if not r:
+                cells.append("–")
+            elif side is None:
+                cells.append(f"{fmt(r['read'][metric] + r['write'][metric])} ({fmt(r['read'][metric])} r / {fmt(r['write'][metric])} w)")
+            else:
+                cells.append(fmt(r[side][metric]))
+        lines.append(f"| {VARIANT_LABELS[v]} | " + " | ".join(cells) + " |")
+
+    lines.append("")
+    lines.append("### Completion latency p50 / p95 / p99 (µs) and guest CPU (usr / sys %)")
+    lines.append("")
+    lines.append("| Workload | Backend | p50 | p95 | p99 | usr / sys |")
+    lines.append("|:---|:---|---:|---:|---:|---:|")
+    for tid, title, side, _, _ in tests:
+        first = True
+        for v in variants:
+            r = fio[v].get(tid)
+            if not r:
+                continue
+            sides = [side] if side else ["read", "write"]
+            p = lambda k: " / ".join(fmt(r[s][k]) for s in sides)
+            lines.append(f"| {'**' + title + '**' if first else ''} | {VARIANT_LABELS[v]} | {p('p50_us')} | {p('p95_us')} | {p('p99_us')} | {fmt(r['usr_cpu'])} / {fmt(r['sys_cpu'])} |")
+            first = False
+
+    st = summary.get("startup", {})
+    if st:
+        lines.append("")
+        lines.append("### Start latency (`docker run` / `docker start` -> `granule ready`, ms)")
+        lines.append("")
+        lines.append("| Backend | Cold start | Cold start (2nd sample) | Warm restart (disk already prepared) |")
+        lines.append("|:---|---:|---:|---:|")
+        for v in VARIANT_LABELS:
+            if v in st:
+                s = st[v]
+                lines.append(f"| {VARIANT_LABELS[v]} | {fmt(s.get('cold_ms'))} | {fmt(s.get('cold_ms_2'))} | {fmt(s.get('warm_ms'))} |")
+
+    oci = summary.get("oci", {})
+    if oci:
+        lines.append("")
+        lines.append("### OCI layer cost of a 10 MiB guest change (`docker commit`)")
+        lines.append("")
+        lines.append("| Backend | Guest write (MiB) | Committed layer (MiB) | `docker commit` (ms) | Files under /var/lib/granule in `docker diff` |")
+        lines.append("|:---|---:|---:|---:|---:|")
+        for v in VARIANT_LABELS:
+            if v in oci:
+                o = oci[v]
+                lines.append(f"| {VARIANT_LABELS[v]} | {o['guest_write_mib']} | {fmt(o['layer_mib'])} | {fmt(o['commit_ms'])} | {o['changed_files']} |")
+
+    if summary.get("errors"):
+        lines.append("")
+        lines.append("### Backends that failed")
+        lines.append("")
+        for v, e in summary["errors"].items():
+            lines.append(f"- `{v}`: {e.splitlines()[-1] if e else ''}")
+    return "\n".join(lines)
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Storage benchmark: Host vs Flat File vs Flat Multi-Extent VMDK vs QCOW2")
-    parser.add_argument("--seq-size", default="4G", help="Total dataset size for sequential tests (default: 4G)")
-    parser.add_argument("--rand-size", default="4G", help="Total dataset size for random tests (default: 4G)")
-    parser.add_argument("--numjobs", type=int, default=4, help="Number of parallel fio worker jobs (default: 4)")
-    parser.add_argument("--flat-container", default="benchvm-flat", help="Name of running granule container with flat file (persistent)")
-    parser.add_argument("--delta-container", default="benchvm-delta", help="Name of running granule container with multi-extent VMDK (overlay)")
-    parser.add_argument("--qcow-64k-container", default="benchvm-qcow-64k", help="Name of running granule container with QCOW2 64k")
-    parser.add_argument("--qcow-2m-container", default="benchvm-qcow-2m", help="Name of running granule container with QCOW2 2M")
-    parser.add_argument("--skip-host", action="store_true", help="Skip native host benchmarks")
-    parser.add_argument("--skip-qcow", action="store_true", help="Skip QCOW2 benchmarks")
-    parser.add_argument("--out-dir", default="/tmp/bench_results", help="Directory to save raw json results")
-    parser.add_argument("--live", action="store_true", help="Run live fio benchmarks")
-    parser.add_argument("--dry-run", action="store_true", help="Print planned benchmarks and exit")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--live", action="store_true", help="run the benchmarks (default: render the report from --summary)")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and exit")
+    p.add_argument("--variants", default=",".join(VARIANT_LABELS), help="comma-separated backends to run")
+    p.add_argument("--numjobs", type=int, default=4)
+    p.add_argument("--size-per-job", default="1G", help="fio file size per job (4 jobs x 1G = 4 GiB dataset)")
+    p.add_argument("--runtime", type=int, default=15, help="fio --runtime cap per workload in seconds")
+    p.add_argument("--delta-mb", type=int, default=10, help="MiB the OCI-diff test writes in the guest")
+    p.add_argument("--ready-timeout", type=int, default=600)
+    p.add_argument("--image-flat", default="granule-bench:flat")
+    p.add_argument("--image-extent-boot", default="granule-bench:extent-boot-64")
+    p.add_argument("--image-extents-16", default="granule-bench:extents-16")
+    p.add_argument("--image-extents-64", default="granule-bench:extents-64")
+    p.add_argument("--disk-bytes", type=int, default=0, help="virtual size of the guest disk.img (for the 64 KiB qcow2 overlay)")
+    p.add_argument("--qcow64k-overlay", default="/var/tmp/bench-qcow64k/disk.qcow2")
+    p.add_argument("--out-dir", default=RESULTS_DIR)
+    p.add_argument("--summary", default=os.path.join(RESULTS_DIR, SUMMARY_NAME))
+    args = p.parse_args()
+    args.variants = [v for v in args.variants.split(",") if v]
 
     if args.dry_run:
-        print(f"[DRY-RUN] Storage benchmark suite configured successfully (numjobs={args.numjobs}):")
-        print(f"  - Sequential Write ({args.seq_size}, bs=1M, direct=1, numjobs={args.numjobs})")
-        print(f"  - Sequential Read ({args.seq_size}, bs=1M, direct=1, numjobs={args.numjobs})")
-        print(f"  - Random Read 4K (iodepth=32, direct=1, {args.rand_size}, numjobs={args.numjobs})")
-        print(f"  - Random Write 4K (iodepth=32, direct=1, {args.rand_size}, numjobs={args.numjobs})")
-        print(f"  - Mixed Random 70/30 4K (iodepth=16, direct=1, {args.rand_size}, numjobs={args.numjobs})")
-        print(f"  - Storage Formats: Host, Flat (raw), VMDK (64M), QCOW2 (64K cluster), QCOW2 (2M cluster)")
-        sys.exit(0)
+        tests, common = fio_tests(args.numjobs, args.size_per_job, args.runtime)
+        print("backends: " + ", ".join(args.variants))
+        for tid, title, extra in tests:
+            print(f"  fio {tid}: {common.format(dir='<dir>')} {extra}")
+        return
 
+    if not args.live:
+        with open(args.summary) as f:
+            print(markdown(json.load(f)))
+        return
+
+    if "qcow_64k" in args.variants:
+        if args.disk_bytes <= 0:
+            sys.exit("--disk-bytes is required for qcow_64k")
+        os.makedirs(os.path.dirname(args.qcow64k_overlay), exist_ok=True)
+    summary = Bench(args).run_all()
     os.makedirs(args.out_dir, exist_ok=True)
-    os.makedirs("/tmp/bench_host", exist_ok=True)
+    with open(os.path.join(args.out_dir, SUMMARY_NAME), "w") as f:
+        json.dump(summary, f, indent=2)
+    print("===== STORAGE-BENCH-JSON-BEGIN =====")
+    print(json.dumps(summary, separators=(",", ":")))
+    print("===== STORAGE-BENCH-JSON-END =====")
+    print("===== STORAGE-BENCH-MARKDOWN-BEGIN =====")
+    print(markdown(summary))
+    print("===== STORAGE-BENCH-MARKDOWN-END =====", flush=True)
 
-    seq_size_per_job = split_size(args.seq_size, args.numjobs)
-    rand_size_per_job = split_size(args.rand_size, args.numjobs)
-
-    tests = [
-        {
-            "id": f"seq_write_{args.seq_size.lower()}",
-            "name": f"Sequential Write ({args.seq_size}, bs=1M, direct=1)",
-            "fio_args": f"--name=seq_write --rw=write --bs=1M --size={seq_size_per_job} --numjobs={args.numjobs} --group_reporting --time_based=0 --ioengine=libaio --direct=1"
-        },
-        {
-            "id": f"seq_read_{args.seq_size.lower()}",
-            "name": f"Sequential Read ({args.seq_size}, bs=1M, direct=1)",
-            "fio_args": f"--name=seq_read --rw=read --bs=1M --size={seq_size_per_job} --numjobs={args.numjobs} --group_reporting --time_based=0 --ioengine=libaio --direct=1"
-        },
-        {
-            "id": f"rand_read_{args.rand_size.lower()}",
-            "name": f"Random Read 4K (iodepth=32, direct=1, {args.rand_size})",
-            "fio_args": f"--name=rand_read --rw=randread --bs=4k --size={rand_size_per_job} --numjobs={args.numjobs} --group_reporting --time_based=0 --ioengine=libaio --iodepth=32 --direct=1"
-        },
-        {
-            "id": f"rand_write_{args.rand_size.lower()}",
-            "name": f"Random Write 4K (iodepth=32, direct=1, {args.rand_size})",
-            "fio_args": f"--name=rand_write --rw=randwrite --bs=4k --size={rand_size_per_job} --numjobs={args.numjobs} --group_reporting --time_based=0 --ioengine=libaio --iodepth=32 --direct=1"
-        },
-        {
-            "id": f"mixed_rand_rw_{args.rand_size.lower()}",
-            "name": f"Mixed Random 70/30 4K (iodepth=16, direct=1, {args.rand_size})",
-            "fio_args": f"--name=mixed_rw --rw=randrw --rwmixread=70 --bs=4k --size={rand_size_per_job} --numjobs={args.numjobs} --group_reporting --time_based=0 --ioengine=libaio --iodepth=16 --direct=1"
-        }
-    ]
-
-    results = {}
-    ref_storage_dir = os.path.join(SCRIPT_DIR, "..", "results", "storage")
-
-    for t in tests:
-        tid = t["id"]
-        results[tid] = {"name": t["name"]}
-
-        # Helper to load or run
-        def get_variant_data(target_key, prefix, container_name, display_name):
-            out_path = os.path.join(args.out_dir, f"{prefix}_{tid}.json")
-            ref_path = os.path.join(ref_storage_dir, f"{prefix}_{tid}.json")
-            if os.path.exists(out_path) and os.path.getsize(out_path) > 100:
-                try:
-                    with open(out_path) as f:
-                        data = json.load(f)
-                    print(f"[SKIP/LOAD] Loading existing {display_name}: {t['name']}")
-                    return data
-                except Exception:
-                    pass
-            if not args.live and os.path.exists(ref_path) and os.path.getsize(ref_path) > 100:
-                try:
-                    with open(ref_path) as f:
-                        data = json.load(f)
-                    with open(out_path, "w") as f:
-                        json.dump(data, f, indent=2)
-                    print(f"[SKIP/LOAD] Loading baseline {display_name}: {t['name']}")
-                    return data
-                except Exception:
-                    pass
-
-            if prefix == "host":
-                print(f"\n=======================================================")
-                print(f"Running Host: {t['name']}")
-                print(f"=======================================================")
-                drop_caches()
-                host_file = "/tmp/bench_host/testfile"
-                run_cmd(f"rm -f {host_file}")
-                cmd = f"fio {t['fio_args']} --filename={host_file} --output={out_path} --output-format=json"
-                run_cmd(cmd)
-                run_cmd(f"rm -f {host_file}")
-                with open(out_path) as f:
-                    return json.load(f)
-            else:
-                print(f"\n=======================================================")
-                print(f"Running {display_name} ({container_name}): {t['name']}")
-                print(f"=======================================================")
-                drop_caches(container_name)
-                vm_file = "/tmp/testfile"
-                run_cmd(f"sudo docker exec {container_name} granule exec -- rm -f {vm_file} /tmp/fio_out.json")
-                cmd = f"sudo docker exec {container_name} granule exec -- fio {t['fio_args']} --filename={vm_file} --output=/tmp/fio_out.json --output-format=json"
-                run_cmd(cmd)
-                json_str = run_cmd(f"sudo docker exec {container_name} granule exec -- cat /tmp/fio_out.json")
-                with open(out_path, "w") as f:
-                    f.write(json_str)
-                run_cmd(f"sudo docker exec {container_name} granule exec -- rm -f {vm_file} /tmp/fio_out.json")
-                return json.loads(json_str)
-
-        if not args.skip_host:
-            results[tid]["host"] = get_variant_data("host", "host", None, "Native Host")
-
-        results[tid]["flat"] = get_variant_data("flat", "flat", args.flat_container, "Flat File uVM")
-        results[tid]["vmdk"] = get_variant_data("vmdk", "vmdk", args.delta_container, "Flat Multi-Extent VMDK uVM")
-
-        if not args.skip_qcow:
-            results[tid]["qcow_64k"] = get_variant_data("qcow_64k", "qcow_64k", args.qcow_64k_container, "QCOW2 (64K cluster) uVM")
-            results[tid]["qcow_2m"] = get_variant_data("qcow_2m", "qcow_2m", args.qcow_2m_container, "QCOW2 (2M cluster) uVM")
-
-        all_out_path = os.path.join(args.out_dir, "summary_storage_benchmark.json")
-        with open(all_out_path, "w") as f:
-            json.dump(results, f, indent=2)
-
-    # Print markdown table
-    print("\n\n=======================================================")
-    print(f"STORAGE BENCHMARK RESULTS: HOST vs FLAT vs VMDK vs QCOW2 (64K & 2M) [numjobs={args.numjobs}]")
-    print("=======================================================\n")
-    print("| Benchmark Workload | Metric | Native Host | Flat File uVM (`persistent`) | Flat VMDK uVM (`overlay`) | QCOW2 (64K cluster) | QCOW2 (2M cluster) | QCOW2 2M vs 64K Speedup |")
-    print("|:---|:---|:---|:---|:---|:---|:---|:---:|")
-
-    for tid, data in results.items():
-        name = data["name"]
-        h = parse_job(data.get("host"))
-        fl = parse_job(data.get("flat"))
-        dl = parse_job(data.get("vmdk"))
-        q64 = parse_job(data.get("qcow_64k"))
-        q2m = parse_job(data.get("qcow_2m"))
-
-        if "write" in tid and "rand" not in tid:
-            h_bw = f"{h['write_bw']:.1f} MB/s" if h else "N/A"
-            fl_bw = f"{fl['write_bw']:.1f} MB/s"
-            dl_bw = f"{dl['write_bw']:.1f} MB/s"
-            q64_bw = f"{q64['write_bw']:.1f} MB/s"
-            q2m_bw = f"{q2m['write_bw']:.1f} MB/s"
-            speedup = f"{q2m['write_bw']/q64['write_bw']:.2f}x" if q64['write_bw'] > 0 else "N/A"
-            print(f"| **{name}** | Sequential Write BW | {h_bw} | {fl_bw} | {dl_bw} | {q64_bw} | {q2m_bw} | **{speedup}** |")
-
-        elif "read" in tid and "rand" not in tid:
-            h_bw = f"{h['read_bw']:.1f} MB/s" if h else "N/A"
-            fl_bw = f"{fl['read_bw']:.1f} MB/s"
-            dl_bw = f"{dl['read_bw']:.1f} MB/s"
-            q64_bw = f"{q64['read_bw']:.1f} MB/s"
-            q2m_bw = f"{q2m['read_bw']:.1f} MB/s"
-            speedup = f"{q2m['read_bw']/q64['read_bw']:.2f}x" if q64['read_bw'] > 0 else "N/A"
-            print(f"| **{name}** | Sequential Read BW | {h_bw} | {fl_bw} | {dl_bw} | {q64_bw} | {q2m_bw} | **{speedup}** |")
-
-        elif "rand_read" in tid:
-            h_str = f"{h['read_iops']:,.0f} IOPS" if h else "N/A"
-            fl_str = f"{fl['read_iops']:,.0f} IOPS"
-            dl_str = f"{dl['read_iops']:,.0f} IOPS"
-            q64_str = f"{q64['read_iops']:,.0f} IOPS"
-            q2m_str = f"{q2m['read_iops']:,.0f} IOPS"
-            speedup = f"{q2m['read_iops']/q64['read_iops']:.2f}x" if q64['read_iops'] > 0 else "N/A"
-            print(f"| **{name}** | Random Read IOPS | {h_str} | {fl_str} | {dl_str} | {q64_str} | {q2m_str} | **{speedup}** |")
-
-        elif "rand_write" in tid:
-            h_str = f"{h['write_iops']:,.0f} IOPS" if h else "N/A"
-            fl_str = f"{fl['write_iops']:,.0f} IOPS"
-            dl_str = f"{dl['write_iops']:,.0f} IOPS"
-            q64_str = f"{q64['write_iops']:,.0f} IOPS"
-            q2m_str = f"{q2m['write_iops']:,.0f} IOPS"
-            speedup = f"{q2m['write_iops']/q64['write_iops']:.2f}x" if q64['write_iops'] > 0 else "N/A"
-            print(f"| **{name}** | Random Write IOPS | {h_str} | {fl_str} | {dl_str} | {q64_str} | {q2m_str} | **{speedup}** |")
-
-        elif "mixed" in tid:
-            h_tot = (h['read_iops'] + h['write_iops']) if h else 0
-            fl_tot = fl['read_iops'] + fl['write_iops']
-            dl_tot = dl['read_iops'] + dl['write_iops']
-            q64_tot = q64['read_iops'] + q64['write_iops']
-            q2m_tot = q2m['read_iops'] + q2m['write_iops']
-            h_str = f"{h_tot:,.0f} IOPS" if h else "N/A"
-            fl_str = f"{fl_tot:,.0f} IOPS"
-            dl_str = f"{dl_tot:,.0f} IOPS"
-            q64_str = f"{q64_tot:,.0f} IOPS"
-            q2m_str = f"{q2m_tot:,.0f} IOPS"
-            speedup = f"{q2m_tot/q64_tot:.2f}x" if q64_tot > 0 else "N/A"
-            print(f"| **{name}** | Mixed 70/30 IOPS | {h_str} | {fl_str} | {dl_str} | {q64_str} | {q2m_str} | **{speedup}** |")
-
-    print("\n### Latency Percentiles (p50 / p95 / p99) & CPU Utilization")
-    for tid, data in results.items():
-        name = data["name"]
-        fl = parse_job(data.get("flat"))
-        dl = parse_job(data.get("vmdk"))
-        q64 = parse_job(data.get("qcow_64k"))
-        q2m = parse_job(data.get("qcow_2m"))
-        print(f"\n- **{name}**:")
-        if "write" in tid and "rand" not in tid:
-            print(f"  - Flat uVM:     p50: {fl['write_p50_us']:,.1f} µs, p95: {fl['write_p95_us']:,.1f} µs, p99: {fl['write_p99_us']:,.1f} µs, usr: {fl['usr_cpu']:.1f}%, sys: {fl['sys_cpu']:.1f}%")
-            print(f"  - Flat VMDK:    p50: {dl['write_p50_us']:,.1f} µs, p95: {dl['write_p95_us']:,.1f} µs, p99: {dl['write_p99_us']:,.1f} µs, usr: {dl['usr_cpu']:.1f}%, sys: {dl['sys_cpu']:.1f}%")
-            print(f"  - QCOW2 (64k):  p50: {q64['write_p50_us']:,.1f} µs, p95: {q64['write_p95_us']:,.1f} µs, p99: {q64['write_p99_us']:,.1f} µs, usr: {q64['usr_cpu']:.1f}%, sys: {q64['sys_cpu']:.1f}%")
-            print(f"  - QCOW2 (2M):   p50: {q2m['write_p50_us']:,.1f} µs, p95: {q2m['write_p95_us']:,.1f} µs, p99: {q2m['write_p99_us']:,.1f} µs, usr: {q2m['usr_cpu']:.1f}%, sys: {q2m['sys_cpu']:.1f}%")
-        elif "read" in tid and "rand" not in tid:
-            print(f"  - Flat uVM:     p50: {fl['read_p50_us']:,.1f} µs, p95: {fl['read_p95_us']:,.1f} µs, p99: {fl['read_p99_us']:,.1f} µs, usr: {fl['usr_cpu']:.1f}%, sys: {fl['sys_cpu']:.1f}%")
-            print(f"  - Flat VMDK:    p50: {dl['read_p50_us']:,.1f} µs, p95: {dl['read_p95_us']:,.1f} µs, p99: {dl['read_p99_us']:,.1f} µs, usr: {dl['usr_cpu']:.1f}%, sys: {dl['sys_cpu']:.1f}%")
-            print(f"  - QCOW2 (64k):  p50: {q64['read_p50_us']:,.1f} µs, p95: {q64['read_p95_us']:,.1f} µs, p99: {q64['read_p99_us']:,.1f} µs, usr: {q64['usr_cpu']:.1f}%, sys: {q64['sys_cpu']:.1f}%")
-            print(f"  - QCOW2 (2M):   p50: {q2m['read_p50_us']:,.1f} µs, p95: {q2m['read_p95_us']:,.1f} µs, p99: {q2m['read_p99_us']:,.1f} µs, usr: {q2m['usr_cpu']:.1f}%, sys: {q2m['sys_cpu']:.1f}%")
-        elif "rand_read" in tid:
-            print(f"  - Flat uVM:     p50: {fl['read_p50_us']:,.1f} µs, p95: {fl['read_p95_us']:,.1f} µs, p99: {fl['read_p99_us']:,.1f} µs, usr: {fl['usr_cpu']:.1f}%, sys: {fl['sys_cpu']:.1f}%")
-            print(f"  - Flat VMDK:    p50: {dl['read_p50_us']:,.1f} µs, p95: {dl['read_p95_us']:,.1f} µs, p99: {dl['read_p99_us']:,.1f} µs, usr: {dl['usr_cpu']:.1f}%, sys: {dl['sys_cpu']:.1f}%")
-            print(f"  - QCOW2 (64k):  p50: {q64['read_p50_us']:,.1f} µs, p95: {q64['read_p95_us']:,.1f} µs, p99: {q64['read_p99_us']:,.1f} µs, usr: {q64['usr_cpu']:.1f}%, sys: {q64['sys_cpu']:.1f}%")
-            print(f"  - QCOW2 (2M):   p50: {q2m['read_p50_us']:,.1f} µs, p95: {q2m['read_p95_us']:,.1f} µs, p99: {q2m['read_p99_us']:,.1f} µs, usr: {q2m['usr_cpu']:.1f}%, sys: {q2m['sys_cpu']:.1f}%")
-        elif "rand_write" in tid:
-            print(f"  - Flat uVM:     p50: {fl['write_p50_us']:,.1f} µs, p95: {fl['write_p95_us']:,.1f} µs, p99: {fl['write_p99_us']:,.1f} µs, usr: {fl['usr_cpu']:.1f}%, sys: {fl['sys_cpu']:.1f}%")
-            print(f"  - Flat VMDK:    p50: {dl['write_p50_us']:,.1f} µs, p95: {dl['write_p95_us']:,.1f} µs, p99: {dl['write_p99_us']:,.1f} µs, usr: {dl['usr_cpu']:.1f}%, sys: {dl['sys_cpu']:.1f}%")
-            print(f"  - QCOW2 (64k):  p50: {q64['write_p50_us']:,.1f} µs, p95: {q64['write_p95_us']:,.1f} µs, p99: {q64['write_p99_us']:,.1f} µs, usr: {q64['usr_cpu']:.1f}%, sys: {q64['sys_cpu']:.1f}%")
-            print(f"  - QCOW2 (2M):   p50: {q2m['write_p50_us']:,.1f} µs, p95: {q2m['write_p95_us']:,.1f} µs, p99: {q2m['write_p99_us']:,.1f} µs, usr: {q2m['usr_cpu']:.1f}%, sys: {q2m['sys_cpu']:.1f}%")
-        elif "mixed" in tid:
-            print(f"  - Flat uVM:     Read p50: {fl['read_p50_us']:,.1f} µs, Write p50: {fl['write_p50_us']:,.1f} µs, usr: {fl['usr_cpu']:.1f}%, sys: {fl['sys_cpu']:.1f}%")
-            print(f"  - Flat VMDK:    Read p50: {dl['read_p50_us']:,.1f} µs, Write p50: {dl['write_p50_us']:,.1f} µs, usr: {dl['usr_cpu']:.1f}%, sys: {dl['sys_cpu']:.1f}%")
-            print(f"  - QCOW2 (64k):  Read p50: {q64['read_p50_us']:,.1f} µs, Write p50: {q64['write_p50_us']:,.1f} µs, usr: {q64['usr_cpu']:.1f}%, sys: {q64['sys_cpu']:.1f}%")
-            print(f"  - QCOW2 (2M):   Read p50: {q2m['read_p50_us']:,.1f} µs, Write p50: {q2m['write_p50_us']:,.1f} µs, usr: {q2m['usr_cpu']:.1f}%, sys: {q2m['sys_cpu']:.1f}%")
 
 if __name__ == "__main__":
     main()

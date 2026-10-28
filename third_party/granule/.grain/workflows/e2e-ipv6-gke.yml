@@ -22,7 +22,7 @@ jobs:
     # Natively in a grain sandbox, which is what can hold the key (see
     # gce-build.yml).
     capabilities:
-      - gcp-key
+      - https://grain.dev/capabilities/gcp#gcp-key
     timeout-minutes: 90
     sandbox:
       cpus: 4

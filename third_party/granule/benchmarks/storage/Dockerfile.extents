@@ -1,0 +1,47 @@
+# Derives the extent-backed benchmark images from a packed flat guest
+# (BASE, a granule image whose guest disk is /var/lib/granule/guest/disk.img).
+# Built by benchmarks/storage/gce-bench.sh; not something to publish.
+#
+# The granule image is FROM scratch with granule-shim as its only binary
+# (its "granule" is the shim's multi-call name, which has no "guest"
+# command), so the splitting happens in a debian stage that borrows the
+# shim and the full granule CLI from the main Dockerfile's build stage
+# (BUILD; both are static) and the result is copied back on top of BASE. BASE's disk.img
+# stays in the lower layer -- there is no shell to delete it with -- and
+# CHV_DISK_IMAGE points the runtime at the extent directory instead.
+#
+#   --target extent-boot    pkg/extent directory (granule guest split),
+#                           assembled into a flat overlay by PrepareOverlay
+#   --target extents        pkg/extents directory (granule-shim extents
+#                           split), served at runtime over vhost-user-blk
+ARG BASE=granule-bench:flat
+ARG BUILD=granule-bench:build
+
+FROM ${BASE} AS base
+FROM ${BUILD} AS cli
+
+FROM debian:bookworm-slim AS split
+ARG EXTENT_SIZE_MB=64
+COPY --from=base /usr/local/bin/granule-shim /usr/local/bin/granule-shim
+COPY --from=cli /out/granule /usr/local/bin/granule
+COPY --from=base /var/lib/granule/guest/disk.img /disk.img
+RUN mkdir -p /out \
+    && stat -c %s /disk.img > /out/disk.size \
+    && granule guest split -extent-size-mb "${EXTENT_SIZE_MB}" /disk.img /out/extent-boot \
+    && granule-shim extents split /disk.img /out/extents "${EXTENT_SIZE_MB}" \
+    && rm /disk.img \
+    && du -sh --apparent-size /out/extent-boot /out/extents
+
+FROM ${BASE} AS extent-boot
+COPY --from=split /out/extent-boot /var/lib/granule/guest/disk.extents
+ENV CHV_DISK_IMAGE=/var/lib/granule/guest/disk.extents
+ENV CHV_STORAGE_BACKEND=standard
+
+FROM ${BASE} AS extents
+ARG EXTENT_SIZE_MB=64
+COPY --from=split /out/extents /var/lib/granule/guest/disk.extents
+ENV CHV_DISK_IMAGE=/var/lib/granule/guest/disk.extents
+ENV CHV_STORAGE_BACKEND=extents
+ENV CHV_EXTENT_SIZE_MB=${EXTENT_SIZE_MB}
+
+FROM split AS tools

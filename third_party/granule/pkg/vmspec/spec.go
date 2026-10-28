@@ -96,6 +96,9 @@ type VMSpec struct {
 	// DiskIOEngine configures the host asynchronous I/O backend (CHV_DISK_IO_ENGINE: "io_uring", "epoll", or "sync").
 	DiskIOEngine string `json:"diskIOEngine,omitempty"`
 
+	// StorageBackend configures the disk storage backend (CHV_STORAGE_BACKEND: "standard" or "extents").
+	StorageBackend string `json:"storageBackend,omitempty"`
+
 	Kernel    string `json:"kernel,omitempty"`
 	Initramfs string `json:"initramfs,omitempty"`
 	Firmware  string `json:"firmware,omitempty"`
@@ -494,6 +497,12 @@ func ImageSettings(env []string) VMSpec {
 				image.DiskIOEngine = value
 			}
 			continue
+		case "CHV_STORAGE_BACKEND":
+			switch strings.ToLower(value) {
+			case config.StorageBackendStandard, config.StorageBackendExtents:
+				image.StorageBackend = strings.ToLower(value)
+			}
+			continue
 		case "CHV_DISK_IOTHREADS":
 			if on, err := onOffBool(value); err == nil {
 				image.DiskIOThreads = on
@@ -614,6 +623,9 @@ func (s *VMSpec) ResolveSettings(imageEnv []string) {
 	}
 	if s.DiskIOEngine == "" {
 		s.DiskIOEngine = image.DiskIOEngine
+	}
+	if s.StorageBackend == "" {
+		s.StorageBackend = image.StorageBackend
 	}
 	if !s.DiskIOThreads {
 		s.DiskIOThreads = image.DiskIOThreads
@@ -803,9 +815,18 @@ func (s *VMSpec) Validate() error {
 	if s.ExtentSizeMB < 0 {
 		return fmt.Errorf("extent-size-mb must not be negative, got %d", s.ExtentSizeMB)
 	}
-	if s.ExtentSizeMB > 0 && s.DiskMode != config.DiskModeOverlay {
-		return fmt.Errorf("extent-size-mb needs -disk-mode=%s: extents are only used with overlay disks (got %q)",
-			config.DiskModeOverlay, s.DiskMode)
+	if s.StorageBackend != "" {
+		switch strings.ToLower(s.StorageBackend) {
+		case config.StorageBackendStandard, config.StorageBackendExtents:
+			s.StorageBackend = strings.ToLower(s.StorageBackend)
+		default:
+			return fmt.Errorf("storage-backend must be %q or %q, got %q",
+				config.StorageBackendStandard, config.StorageBackendExtents, s.StorageBackend)
+		}
+	}
+	if s.ExtentSizeMB > 0 && s.DiskMode != config.DiskModeOverlay && s.StorageBackend != config.StorageBackendExtents {
+		return fmt.Errorf("extent-size-mb needs -disk-mode=%s or -storage-backend=%s: extents are only used with overlay disks or the extent storage backend (got %q)",
+			config.DiskModeOverlay, config.StorageBackendExtents, s.DiskMode)
 	}
 	// Checked here rather than left to the probe: the path is looked for
 	// inside the guest, from a session that starts in the account's home
@@ -874,7 +895,7 @@ func (s *VMSpec) Validate() error {
 			return fmt.Errorf("invalid env %q: prefix must be CHV_, NETSHIM_ or GRANULE_", e)
 		}
 		switch key {
-		case "CHV_DISK_MODE", "CHV_DISK_SIZE_MB", "CHV_EXTENT_SIZE_MB", "CHV_DISK_EXTENT_SIZE_MB", "CHV_DISK_NUM_QUEUES", "CHV_DISK_IOTHREADS", "CHV_DISK_IO_ENGINE", "CHV_DISK_IMAGE", "CHV_KERNEL", "CHV_INITRAMFS", "CHV_FIRMWARE", "CHV_CMDLINE", "CHV_CPUS", "CHV_VCPUS", "CHV_MEMORY_MB", "CHV_SHUTDOWN_TIMEOUT", "CHV_CPUS_MAX", "CHV_MEMORY_MAX_MB", "CHV_MEM_AGENT", "CHV_MEM_AGENT_ADDR", "CHV_MEM_AGENT_STEP_MB", "CHV_MEM_AGENT_COOLDOWN", "GRANULE_EXEC_USER", "GRANULE_READY_FILE", "NETSHIM_VM", "NETSHIM_BRIDGE", "NETSHIM_CONTROL_CIDR", "NETSHIM_EXTERNAL_IFACE", "NETSHIM_DNS", "NETSHIM_IPV6":
+		case "CHV_DISK_MODE", "CHV_STORAGE_BACKEND", "CHV_DISK_SIZE_MB", "CHV_EXTENT_SIZE_MB", "CHV_DISK_EXTENT_SIZE_MB", "CHV_DISK_NUM_QUEUES", "CHV_DISK_IOTHREADS", "CHV_DISK_IO_ENGINE", "CHV_DISK_IMAGE", "CHV_KERNEL", "CHV_INITRAMFS", "CHV_FIRMWARE", "CHV_CMDLINE", "CHV_CPUS", "CHV_VCPUS", "CHV_MEMORY_MB", "CHV_SHUTDOWN_TIMEOUT", "CHV_CPUS_MAX", "CHV_MEMORY_MAX_MB", "CHV_MEM_AGENT", "CHV_MEM_AGENT_ADDR", "CHV_MEM_AGENT_STEP_MB", "CHV_MEM_AGENT_COOLDOWN", "GRANULE_EXEC_USER", "GRANULE_READY_FILE", "NETSHIM_VM", "NETSHIM_BRIDGE", "NETSHIM_CONTROL_CIDR", "NETSHIM_EXTERNAL_IFACE", "NETSHIM_DNS", "NETSHIM_IPV6":
 			return fmt.Errorf("env %q is controlled by its own flag; use the flag instead of -e", key)
 		}
 	}

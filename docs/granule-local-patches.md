@@ -27,43 +27,44 @@ the resync that carries it lands.
 
 ## Synced at
 
-`gke-labs/granule` `main` at `4411ce4` ("Merge pull request #212 from
-gke-labs/grain/eu/task-3788", 2026-10-14).
+`gke-labs/granule` `main` at `a4b4e4b` (`a4b4e4b801b5a3efb0b070d8004ac7f075af7d22`,
+"Merge pull request #227 from gke-labs/grain/049f1e09/task-1478", 2026-10-28).
 
-**The vendored tree is byte for byte upstream's, in every file.** Checked
-tree-wide against a `git archive` of `4411ce4`: zero differing paths
-across 969 files. There are no patches in flight, so zero is the only
-correct answer here and anything else means something local was never
-written down. The tree was replaced wholesale from that archive, as the
-previous sync's was (the tree before it was confirmed identical to
-`3ca10a3`'s archive first).
+The tree was replaced wholesale from a `git archive` of `a4b4e4b`, with the
+local patches listed under "Patches in flight" below re-applied on top.
 
-This sync carries one upstream PR on top of `3ca10a3` (#212):
-`granule-container` now starts the wrapped workload through itself
-(`cmd/granule-container/enter.go`) in a new mount namespace, binds the
-rootfs onto itself and `pivot_root`s into it instead of using
-`SysProcAttr.Chroot`, and mounts a writable cgroup2 at the container's
-`/sys/fs/cgroup` -- so rootless BuildKit, podman, rootless Docker,
-`unshare -r` and runc work inside a wrapped container. The touched paths
-are `cmd/granule-container/`, `pkg/agent/container.go`,
-`docs/guest-images.md` and `docs/volumes.md`. `Dockerfile`, `go.mod`,
-`go.sum`, `vendor/` and `pkg/guestimage`'s contract are untouched, so
-`scripts/granule/build-granule-image.sh` and
-`scripts/granule/guest-inputs.sh` (which lists `third_party/granule`
-whole) need no change.
+This sync carries PRs #213–#227 on top of `4411ce4`, including:
+- `pkg/sandbox` (`cmd/granule-shim/access.go`, `pkg/netshim/splice.go`,
+  `docs/sandbox-access-api.md`, `deploy/k8s/`): the sandbox access API
+  (gke-labs/granule#226 / task 1456, `e50c6c6`) providing multiplexed
+  reverse dial-out (`Server.DialOut` / `Acceptor`) and direct listen-mode
+  (`Server.Serve` / `sandbox.Dial`) transport over TLS/mTLS + bearer token,
+  with `Exec`/`StartExec`, `Reattach` (16 MiB per-exec ring buffer and 10 min
+  completed-session retention across wrapper reconnects), `Signal`/`Kill`,
+  batched `PutFiles`/`PutFile`, `GetFile`, `OpenForwardStream`, `Health`,
+  keep-alive heartbeats, TC `u32` `ControllerIPs` drop rules on `tap` ingress,
+  and an in-process fake wrapper hook (`ServerConfig.DialGuest`).
+- `pkg/relay` (`cmd/granule-relay`, `pkg/sandbox/relay.go`): Kubernetes API
+  subresource / dial-out relay (`sandbox.DialRelay`, gke-labs/granule#227 /
+  task 1478, `a4b4e4b`).
+- `pkg/guestforward` (`cmd/granule-shim`, `pkg/agent/forward.go`,
+  `pkg/cli/forward.go`): upstream multiplexed TCP/Unix port forwarding
+  (gke-labs/granule#225, `0068252`).
+- `pkg/extent` (`cmd/granule-extentd`, `pkg/storage`, `pkg/blockdev`):
+  content-addressed extent storage and FUSE block device backend.
+
+`Dockerfile`, `go.mod`, `go.sum`, `vendor/` and `pkg/guestimage`'s contract
+are untouched, so `scripts/granule/build-granule-image.sh` and
+`scripts/granule/guest-inputs.sh` need no change.
 
 ## Patches in flight
 
-- **Multiplexed vsock TCP port forwarding (`granule forward`).**
-  `pkg/forward`, `pkg/execwire`, `pkg/agent/session.go`, `pkg/guestexec/forward.go`,
-  `cmd/granule-shim/main.go`, `pkg/cli/forward.go`, `pkg/cli/cli.go`, and `pkg/cli/vm.go`
-  add `granule forward` (`-L` host-to-guest and `-R` guest-to-host TCP port forwards
-  multiplexed over a single `docker exec -i` or `kubectl exec -i` session connected to
-  `granule-agent` over virtio-vsock, `gke-labs/granule#13`, grain task 480 / task 721).
-  Used by off-cluster `kubernetes-granule` sandboxes to tunnel sandbox-to-controller
-  traffic (`git proxy`, `package cache`, `Actions cache`, `capability ports`, `model
-  proxies`) from guest `127.0.0.1:<port>` back to the controller's local bound listeners
-  over `kubectl exec`.
+- **Legacy `pkg/forward` compatibility for `pkg/granule/forward.go` (`granule forward -kube` / `granule-shim forward`).**
+  `pkg/forward`, `pkg/execwire`, `pkg/agent/forward.go`, `pkg/guestexec/forward.go`,
+  `cmd/granule-shim/main.go`, `pkg/cli/forward.go`, and `pkg/cli/vm.go`
+  retain `pkg/forward` alongside upstream's `pkg/guestforward` (`gke-labs/granule#13`,
+  grain task 480 / task 721) until `pkg/granule/forward.go` and live
+  `kubernetes-granule` sandbox pods migrate to `pkg/guestforward` / `pkg/sandbox`.
 - **Per-VM cgroup memory limits and positive `oom_score_adj` for Docker-backed VM containers.**
   `pkg/vmspec/spec.go`, `pkg/cli/vm.go` and `pkg/dockervm/docker.go` add
   `-memory-limit-mb` (defaulting to guest memory ceiling plus
@@ -74,6 +75,11 @@ whole) need no change.
   bounds each VM container's `memory.max` and `memory.swap.max` (to 0)
   and ensures the kernel OOM killer picks a sandbox VM before the host
   daemon or `hostd` (`-900`).
+- **Sanitized GCP project placeholder in IPv6 e2e docs and scripts.**
+  `.grain/workflows/e2e-ipv6-gke.yml`, `docs/ipv6-dual-stack-design.md`,
+  and `test/e2e-ipv6.sh` replace a contributor-specific GCP project name
+  with `grain-sandbox-dev` so `tests/hygiene` (`TestCoreSaysNoGoogleTokens`)
+  stays clean (`91c0dfffd`).
 
 ## Landed upstream
 

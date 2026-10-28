@@ -529,6 +529,9 @@ func dockerfileFor(ctx context.Context, d *dockerCLI, opts Options) (string, err
 		}
 		w(`COPY --from=%s %s %s`, opts.From, f.Path, f.Path)
 	}
+	if guest.diskExtents && !guest.disk {
+		w(`COPY --from=%s %s %s`, opts.From, guestimage.DiskExtents, guestimage.DiskExtents)
+	}
 	w(``)
 	// The contract label describes the guest inside the image, and this
 	// build does not touch that guest -- so the value is the one the
@@ -869,10 +872,11 @@ const granuleBinary = "/usr/local/bin/granule-shim"
 // half is what an image carries of the guest half, and whether it is a
 // granule image at all.
 type half struct {
-	disk      bool
-	kernel    bool
-	initramfs bool
-	granule   bool
+	disk        bool
+	diskExtents bool
+	kernel      bool
+	initramfs   bool
+	granule     bool
 
 	// runtimeKernel is guestimage.RuntimeKernel, which sits in the same
 	// directory as the three above but belongs to the VMM half: it is
@@ -886,6 +890,8 @@ func (h half) has(path string) bool {
 	switch path {
 	case guestimage.DiskImage:
 		return h.disk
+	case guestimage.DiskExtents, guestimage.DiskExtentsManifest:
+		return h.diskExtents
 	case guestimage.GuestKernel:
 		return h.kernel
 	case guestimage.GuestInitramfs:
@@ -933,7 +939,27 @@ func (d *dockerCLI) guestHalf(ctx context.Context, ref string) (half, error) {
 		}
 		*q.into = present
 	}
+	if !h.disk && d.isExtentsImage(ctx, ref) {
+		present, err := files.Has(ctx, guestimage.DiskExtentsManifest)
+		if err != nil {
+			return half{}, err
+		}
+		h.diskExtents = present
+	}
 	return h, nil
+}
+
+func (d *dockerCLI) isExtentsImage(ctx context.Context, ref string) bool {
+	env, err := (&dockercli.CLI{Binary: d.binary}).ConfigEnv(ctx, ref)
+	if err != nil {
+		return false
+	}
+	for _, entry := range env {
+		if k, v, ok := strings.Cut(entry, "="); ok && k == "CHV_STORAGE_BACKEND" && strings.Trim(v, `"`) == "extents" {
+			return true
+		}
+	}
+	return false
 }
 
 // files opens an image for reading, without starting anything from it.

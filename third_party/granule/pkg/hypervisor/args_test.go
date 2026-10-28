@@ -408,6 +408,19 @@ func TestBuildArgs_DiskTuningParameters(t *testing.T) {
 	if got := argValue(t, args2, "--disk"); got != want2 {
 		t.Errorf("--disk = %q, want %q", got, want2)
 	}
+
+	// Test vhost-user-blk extent disk
+	cfg3 := baseConfig()
+	cfg3.Disks = []config.Disk{{
+		Path:            "/var/lib/granule/overlay/disk.extents",
+		VhostUserSocket: "/run/granule/vhost-blk.sock",
+		NumQueues:       4,
+	}}
+	args3 := mustBuildArgs(t, cfg3)
+	want3 := "vhost_user=true,socket=/run/granule/vhost-blk.sock,num_queues=4,queue_size=256"
+	if got := argValue(t, args3, "--disk"); got != want3 {
+		t.Errorf("--disk = %q, want %q", got, want3)
+	}
 }
 
 func TestString_QuotesArgsWithSpaces(t *testing.T) {

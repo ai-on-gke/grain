@@ -452,6 +452,7 @@ OCI Image Layer (Base)          Runtime MicroVM Overlay
 * **Instant Boot with Reflinks**: When the underlying disk is a flat file on a filesystem supporting reflinks (`FICLONE`), the disk is cloned in $O(1)$ time with copy-on-write sharing; otherwise a QCOW2 layer is added.
 * **Small Layer Optimization**: Layers smaller than 64MB are resized in-place rather than adding new chained layers.
 * **Flatten Replay**: `granule guest flatten` replays chained QCOW2 disks against the flat base file into a single consolidated layer.
+* **Extent Disks (optional)**: `granule guest split` stores the root disk as N-MiB raw extent files (`/var/lib/granule/guest/disk.extents`), rewriting only changed extents, so a derived OCI image's layer carries just the extents it changed. At boot the extents are assembled (reflinked where possible) into one flat raw disk with no backing file. See [docs/extent-storage-design.md](docs/extent-storage-design.md).
 
 ---
 
@@ -533,6 +534,108 @@ A VM saved before `-publish-addr` existed publishes on loopback the next
 time `granule vm update` re-creates it. Pass `-publish-addr 0.0.0.0` to keep
 the old behaviour.
 
+### Forwarding ports over the exec channel (`granule forward`)
+
+`granule forward` is `ssh -L`/`-R` for a VM container. It carries TCP (or
+unix-socket) connections into and out of a guest over the same path
+`granule vm exec` takes: `docker exec` or `kubectl exec` into the VM's
+container, then vsock to the guest's agent. It never uses the guest's
+network, so it works the same on Docker and on Kubernetes. It also works
+for a guest booted with `CHV_NET_MODE=none`.
+
+```bash
+# guest -> caller (-R): inside the guest, 127.0.0.1:9728 reaches this
+# machine's 127.0.0.1:9728.
+granule forward web -R 9728=127.0.0.1:9728
+
+# caller -> guest (-L): a port here reaches 127.0.0.1:7000 inside the guest.
+# Port 0 picks a free one; -json prints what was bound, as one line.
+granule forward web -L 127.0.0.1:0=7000 -json
+# {"bindings":[{"direction":"local","listen":"127.0.0.1:41234","target":"7000"}]}
+
+# Any docker container running a granule VM, or a pod on Kubernetes. One
+# process carries any number of mappings, in both directions.
+granule forward container/my-sandbox -R 9728=9728 -L 0=7000
+granule forward pod/sandbox-1 -n sandboxes -c vm -R 9728=9728 -L 0=7000 -reconnect
+```
+
+An address is `host:port`, a bare port (which means `127.0.0.1`), or
+`unix:/path`. The process runs until it is interrupted. It prints its
+bindings once every mapping is up. It exits non-zero with the reason if
+the VM is not running, the guest's agent does not answer within
+`-ready-timeout`, or a port is taken. With `-reconnect` it outlives a
+dropped exec stream: it redials with backoff and asks the agent for every
+guest-side listener again, at the address it reported the first time.
+Kubelet and API-server streams drop on control-plane upgrades and idle
+timeouts, so long-lived forwards on Kubernetes want `-reconnect`.
+Connections in flight when the stream drops are lost.
+
+**It is out-of-band only.** The guest's real networking stays whatever
+Docker or Kubernetes made it: its NIC, egress, DNS, NetworkPolicy and
+Services. `granule forward` touches no interface and no route. A forwarded
+port inside the guest is a loopback listener held by `granule-agent` and
+backed by vsock. Nothing on the guest's network can see it, and a caller
+needs no Service, no LoadBalancer and no inbound connectivity to reach the
+guest. For example, a guest with no network at all can reach a package
+cache running on the caller's machine:
+
+```bash
+# The no-network container from "Running on Unmodified Docker" above.
+docker run -d --name offline --device /dev/kvm --cap-drop=ALL \
+  -e CHV_NET_MODE=none granule/alpine:latest
+granule forward container/offline -R 3142=127.0.0.1:3142 &
+docker exec offline granule exec -- \
+  wget -qO- http://127.0.0.1:3142/   # answered by the cache on this machine
+```
+
+Limits and safety:
+
+- Guest-side listeners are loopback-only. A non-loopback guest address is
+  refused unless `-remote-any-addr` is given.
+- One session holds at most 64 mappings and 256 concurrent streams (one per
+  listener and one per forwarded connection). Opens past the stream cap are
+  refused.
+- Flow control is per connection and end to end: each side buffers at most
+  256 KiB for a connection whose reader has stopped reading. A slow reader
+  stalls its own connection, not the agent's memory or the other
+  connections.
+- Mappings die with the session. When the exec stream ends, the agent
+  closes every listener and connection it opened for that session.
+- The trust model is the same as `granule exec`. Anyone who can exec into
+  the VM's container can already run any command in the guest as root, so
+  they can forward too. On Kubernetes, `pods/exec` on the pod is all the
+  RBAC it needs. There is no separate authentication.
+
+Throughput depends on the exec stream and the vsock hop. Under Docker on
+one host, a guest downloading from a caller-side server through `-R`
+measured about 20 MB/s (200 MB in 9.5 s, with a 4-vCPU sandbox and an
+Alpine guest). A larger flow-control window did not change that figure,
+so the limit is the vsock path, not the protocol. On Kubernetes every byte goes through the API
+server and the kubelet's exec streaming (SPDY or WebSocket). On GKE a
+guest `wget` of a 200 MiB file from a caller-side server through `-R`
+measured 1.2 MB/s (200 MiB in 170.1 s, bounded by `kubectl exec`'s stdin
+path, where raw `kubectl exec -i` without `granule forward` measured
+0.9 MB/s), while a caller reading 200 MiB from the guest through `-L`
+measured 4.7 MB/s (200 MiB in 45.0 s, over `kubectl exec`'s stdout), and
+sequential HTTP GETs inside the guest averaged 82.5 ms per request. This
+suits control traffic, git, package fetches and MCP. It does not suit bulk
+data paths.
+
+Embedding: [`pkg/guestforward`](pkg/guestforward) is the same thing as a
+Go library. Call `guestforward.Start` with a `Transport` (`DockerExec`,
+`KubectlExec`, or your own, such as a client-go exec stream running
+`granule forward-stdio`) and the mappings you want. You get back a
+`Forwarder` that reports its `Bindings()` and reconnects by itself. The
+VM container's half is `granule forward-stdio`, which relays its stdio to
+the agent; `docker exec -i` and `kubectl exec -i` are all a transport has
+to provide. A VM whose guest image predates forwarding answers with the
+agent's own refusal. `granule guest rebase` brings the guest's agent up to
+date. Rebasing also matters for an Alpine guest booted with no network.
+Before this change it came up with `lo` down, because only the kernel's
+`ip=` setup ever brought loopback up, so there was no `127.0.0.1` to
+listen on. pack-guest now enables OpenRC's own `loopback` service. The
+agent names that cause when a loopback listen fails for it.
+
 ### Guest DNS (`NETSHIM_DNS`, `-dns`)
 
 By default (`auto`) a networked guest resolves through the sandbox's own resolver: the VM container reads its `/etc/resolv.conf` and hands the guest the nameservers a guest on a tap can reach (IPv4, not loopback, not link-local, at most two), plus that file's `search` domains and `ndots`. In a Kubernetes pod that is the cluster DNS ClusterIP and the pod's search list, so Service names resolve in the guest as they do in the pod. Where the sandbox's resolver is unreachable from the guest -- docker's embedded `127.0.0.11` on a user-defined network, a link-local cloud resolver such as GCE's `169.254.169.254` -- the guest gets `8.8.8.8`. An explicit `-dns 10.0.0.53[,10.0.1.53]` / `NETSHIM_DNS` is used as given; the empty string leaves the guest image's own `/etc/resolv.conf` alone. See [deploy/guest-image/README.md](deploy/guest-image/README.md), "The resolver".
@@ -558,6 +661,7 @@ granule vm create <name> [flags]            # start a new VM
 granule vm run <name> [flags] -- <command>  # create a VM, wait for it, run one command, delete it
 granule vm exec <name> [flags] -- <command> # run a command in a running VM's guest
 granule vm shell <name> [flags]             # open an interactive shell in a running VM's guest
+granule forward <vm|pod/name> [flags]       # forward ports into/out of a guest over the exec channel, not its network
 granule vm wait <name> [flags]              # block until a VM's guest answers a command
 granule vm status <name> [flags]            # report whether a VM's guest is up, without waiting
 granule vm update <name> [flags]            # change a VM's settings and re-submit it
