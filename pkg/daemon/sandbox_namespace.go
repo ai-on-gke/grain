@@ -96,6 +96,26 @@ func (a *inProcessAPI) RoundTrip(req *http.Request) (*http.Response, error) {
 	return rec.Result(), nil
 }
 
+// ServeHTTP answers r with the published handler in-process, for the sandbox
+// proxy's /api/ forwarding.
+func (a *inProcessAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h := a.handler.Load()
+	if h == nil {
+		http.Error(w, "grain's API is not serving yet", http.StatusServiceUnavailable)
+		return
+	}
+	in := r.Clone(r.Context())
+	in.RequestURI = in.URL.RequestURI()
+	in.RemoteAddr = ""
+	in.Host = "localhost"
+	in.Header.Del("Authorization")
+	in.Header.Del("X-Grain-Tunnel-Token")
+	if in.Body == nil {
+		in.Body = http.NoBody
+	}
+	(*h).ServeHTTP(w, in)
+}
+
 // inProcessAPIClient is a ui.HTTPClient over api: the client every
 // daemon* reader below already takes.
 func inProcessAPIClient(api http.RoundTripper) *ui.HTTPClient {
