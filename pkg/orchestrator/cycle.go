@@ -158,6 +158,11 @@ type Deps struct {
 	// cannot be replayed by, or on behalf of, anything dispatched after
 	// it.
 	MintSandboxToken func(sandbox string) (string, error)
+	// MintSandboxGrant mints a per-attempt sandbox token bound to (sandbox, taskID, attempt)
+	// -- gitproxy.SandboxTokenStore.EnsureGrant in a deployment. When non-nil,
+	// runOne uses it in preference to MintSandboxToken so persistent sandboxes
+	// rotate tokens across attempts and bind TaskID and Attempt.
+	MintSandboxGrant func(sandbox, taskID string, attempt int) (string, error)
 	// RevokeSandboxToken drops the token MintSandboxToken made, once the
 	// sandbox it identified has been released -- gitproxy.
 	// SandboxTokenStore.Revoke, in a deployment; nil wherever
@@ -2267,9 +2272,15 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// deployment-wide setup step any more: there is nothing to configure
 	// until a run has a sandbox, and what is configured is destroyed with
 	// it.
-	if deps.MintSandboxToken != nil {
+	if deps.MintSandboxGrant != nil || deps.MintSandboxToken != nil {
 		notes.say(ctx, sandboxCredentialsNote)
-		token, err := deps.MintSandboxToken(sandboxName)
+		var token string
+		var err error
+		if deps.MintSandboxGrant != nil {
+			token, err = deps.MintSandboxGrant(sandboxName, d.TaskID, d.Attempt)
+		} else {
+			token, err = deps.MintSandboxToken(sandboxName)
+		}
 		if err != nil {
 			return fmt.Errorf("orchestrator: minting run %s's sandbox token: %w", d.RunID, err)
 		}

@@ -2207,7 +2207,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, validationErrorf("creator is required")
 		}
 	}
-	orderKey, err := c.Store.OrderKeyForNewTask(ctx, atFront || req.Interactive)
+	orderKey, err := c.Store.OrderKeyForNewTask(ctx, atFront || (req.Interactive && proposedBy == nil && c.actor(ctx).Kind != model.PrincipalAgent))
 	if err != nil {
 		return Task{}, err
 	}
@@ -2457,7 +2457,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	switch {
 	case catalogueHold:
 		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
-	case req.Approved || (req.Interactive && proposedBy == nil):
+	case req.Approved || (req.Interactive && proposedBy == nil && c.actor(ctx).Kind != model.PrincipalAgent):
 		task.Approval = &model.Attribution{Actor: c.actor(ctx)}
 		task.ApprovedAt = &now
 	case sessionQueued:
