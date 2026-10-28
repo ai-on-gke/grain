@@ -103,6 +103,8 @@ func PublishedToolNames() []string {
 	// A changelist task's checks tools, registered in place of the
 	// pull-request and grain CI tools of the same names.
 	add(mcp.NewChangeChecksTools(nil))
+	// And its review-thread tools, in place of the pull-request ones.
+	add(mcp.NewChangeReviewTools(nil))
 	add(mcp.NewRecreateSandboxTools(nil))
 	add(mcp.NewStatusTools(nil))
 	// rename_session is registered only for a task that is a standing

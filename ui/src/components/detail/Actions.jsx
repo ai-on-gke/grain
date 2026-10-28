@@ -34,6 +34,7 @@ import {
 import { heldForRunNow, pausedUntil, pauseSubject } from "../../alerts.js";
 import { forceMergeOffered } from "../../taskWrites.js";
 import TaskLink from "./TaskLink.jsx";
+import { ReviewActions } from "../ClReview.jsx";
 
 // closePullRequest is deliberately local state that dies with the
 // overlay, and starts false every time it is mounted: it is a choice
@@ -450,6 +451,11 @@ export default function Actions({ t, config, act, onOpenTask }) {
             </TaskLink>
           </Alert>
         )}
+      {/* A CL's review loop: Mail it to its reviewers, and publish the
+          replies its runs left as drafts (ClReview.jsx). */}
+      {t.changelists?.length > 0 && t.clReview && t.state !== "closed" && (
+        <ReviewActions t={t} act={act} />
+      )}
       {t.pullRequest && !t.autoMerge && (
         <Button
           variant={t.reviewQuestions ? "outlined" : "contained"}
