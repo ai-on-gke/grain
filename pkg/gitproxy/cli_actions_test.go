@@ -531,6 +531,21 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 			rec.Code, apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderAuth, apiHeaderTunnel, apiHeaderReason)
 	}
 
+	// A live run with no task to act for is never forwarded: without
+	// X-Grain-Acting-Task the API would answer as the deployment itself.
+	scopes.scopes["sb-1"] = model.NamespaceScope{RunID: "run-2", Attempt: 2}
+	apiHeaderTask = "unset"
+	for _, path := range []string{"/api/tasks", "/cap/memory"} {
+		req = httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", basicAuthHeader(tok2))
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || apiHeaderTask != "unset" {
+			t.Errorf("GET %s with no live task: code=%d, forwarded=%v; want 403 and nothing forwarded",
+				path, rec.Code, apiHeaderTask != "unset")
+		}
+	}
+
 	act.mu.Lock()
 	apiCallCount := len(act.apiCalls)
 	act.mu.Unlock()

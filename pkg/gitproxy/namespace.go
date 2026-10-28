@@ -218,6 +218,14 @@ func (p *GitProxy) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *GitProxy) forwardToAPI(w http.ResponseWriter, r *http.Request, modelScope model.NamespaceScope, targetPath string) {
+	// p.API answers as the deployment's own actor, and X-Grain-Acting-Task
+	// is the only thing that holds a forwarded request to a task's grants:
+	// agentAPIGate passes a request without one straight through. A live
+	// run with no task to act for is refused rather than forwarded bare.
+	if strings.TrimSpace(modelScope.TaskID) == "" {
+		http.Error(w, "forbidden: this sandbox has no task to act for", http.StatusForbidden)
+		return
+	}
 	in := r.Clone(r.Context())
 	in.URL.Path = targetPath
 	in.URL.RawPath = ""
