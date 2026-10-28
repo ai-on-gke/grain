@@ -28,7 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// A CL's review loop (google3-cls.md §5, G3-5), as the daemon answers it:
+// A CL's review loop (changelists.md §5, G3-5), as the daemon answers it:
 // a run's replies and resolutions on the CL's threads, which the
 // provider saves as drafts, and a person's Publish replies and Mail.
 

@@ -103,7 +103,7 @@ func TestSeedDemoCoversEveryState(t *testing.T) {
 			t.Errorf("no seeded changelist task shows presubmit %q", state)
 		}
 	}
-	// And every review badge state (google3-cls.md §5).
+	// And every review badge state (changelists.md §5).
 	for _, state := range []string{"draft", "in_review", "changes_requested", "needs_approval", "approved"} {
 		if !reviews[state] {
 			t.Errorf("no seeded changelist task shows review state %q", state)

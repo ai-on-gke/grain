@@ -146,7 +146,7 @@ func releaseRunCapabilities(ctx context.Context, deps Deps, taskID, runID string
 }
 
 // publishRunReplies publishes the draft replies runID left on its task's
-// CLs (google3-cls.md §5): a run's answers to its reviewers are drafts
+// CLs (changelists.md §5): a run's answers to its reviewers are drafts
 // until it ends, so a reviewer reads one run's replies together. What
 // stays unpublished -- a reviewer policy that publishes only CLs grain
 // mailed, say -- is left for a person's Publish replies.

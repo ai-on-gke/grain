@@ -239,7 +239,7 @@ func reviewCommentsFingerprint(comments []github.ReviewComment) string {
 }
 
 // SyncChangeThreads is SyncReviewThreads for a task whose change is a CL
-// (google3-cls.md §5, G3-5): it asks the registered change.Provider for
+// (changelists.md §5, G3-5): it asks the registered change.Provider for
 // each linked CL's new threads -- the provider leaves out the operator's
 // own, bots', resolved ones and every one already recorded -- records
 // each as model.LinkCLThread, and only then asks for one run for the

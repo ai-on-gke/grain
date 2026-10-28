@@ -15,7 +15,7 @@
 import { Button, Chip, Stack, Tooltip } from "@mui/material";
 import api from "../api.js";
 
-// A CL's review (the task's `clReview`, google3-cls.md §5): its state
+// A CL's review (the task's `clReview`, changelists.md §5): its state
 // beside the cl/N chip, who has said LGTM and which approvals it still
 // lacks, and the two things a person does with it -- Mail it to its
 // reviewers, and Publish the replies a run left as drafts.

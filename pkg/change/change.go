@@ -82,7 +82,7 @@ type Observation struct {
 	Presubmit string  `json:"presubmit,omitempty"`
 	Checks    []Check `json:"checks,omitempty"`
 	URL       string  `json:"url,omitempty"`
-	// The CL's review, from stage S4 (google3-cls.md §5): where it is
+	// The CL's review, from stage S4 (changelists.md §5): where it is
 	// (the ReviewState* constants), who has said LGTM, which approvals
 	// it still lacks ("owners", "readability", ...), and whether it has
 	// not been mailed to a reviewer yet.
