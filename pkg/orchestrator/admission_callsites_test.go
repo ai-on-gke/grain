@@ -72,10 +72,10 @@ func TestSandboxAcquiringCallSitesAreAllAccountedFor(t *testing.T) {
 	}
 
 	// 6. ci.Sandboxes.Acquire(ctx, req) (2 arguments) may only be called from
-	// Engine.runJob in pkg/ci/engine.go right after e.Jobs.Acquire, and
+	// Engine.runJob in pkg/grit/engine/engine.go right after e.Jobs.Acquire, and
 	// forwarded by StateCheckSandboxes in pkg/daemon/ci_statecheck.go.
 	allowedCISandboxesAcquire := []string{
-		"pkg/ci/engine.go",
+		"pkg/grit/engine/engine.go",
 		"pkg/daemon/ci_statecheck.go",
 	}
 

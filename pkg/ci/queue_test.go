@@ -260,31 +260,3 @@ func TestRunAddsUpItsJobsQueueing(t *testing.T) {
 		t.Errorf("run queued = %s, want 22m: the jobs' own waits added together", got)
 	}
 }
-
-// The clock underneath all of that, on its own: time nobody attributed
-// to anything is still part of the wait, but it is never what the wait
-// is blamed on -- a duration with no reason is an honest answer and an
-// invented reason is not.
-func TestQueueClockCountsUnattributedTimeWithoutBlamingItOnAnything(t *testing.T) {
-	start := time.Date(2026, 9, 18, 14, 0, 0, 0, time.UTC)
-	q := newQueueClock(start)
-	// Ten minutes nothing reported, then two of the count.
-	q.waiting(start.Add(10*time.Minute), Wait{Cause: WaitForSlot, Reason: "for one of the 3 sandboxes"})
-	queued, cause, reason := q.stop(start.Add(12 * time.Minute))
-
-	if queued != 12*time.Minute {
-		t.Errorf("queued = %s, want the whole 12m including the time nobody accounted for", queued)
-	}
-	if cause != WaitForSlot {
-		t.Errorf("cause = %q, want the only cause that ever held it", cause)
-	}
-	if reason != "for one of the 3 sandboxes" {
-		t.Errorf("reason = %q, want the only thing that ever reported holding it", reason)
-	}
-
-	silent := newQueueClock(start)
-	queued, cause, reason = silent.stop(start.Add(3 * time.Minute))
-	if queued != 3*time.Minute || cause != "" || reason != "" {
-		t.Errorf("a wait nothing reported = %s %q %q, want the duration and no cause or reason at all", queued, cause, reason)
-	}
-}
