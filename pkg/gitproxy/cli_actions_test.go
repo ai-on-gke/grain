@@ -419,7 +419,7 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 			Grants: []string{"quarantine-test", "api:tasks:read"},
 		},
 	}}
-	var apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderReason string
+	var apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderReason, apiHeaderAuth, apiHeaderTunnel string
 	proxy := &gitproxy.GitProxy{
 		Tokens:          tokens,
 		Namespace:       &namespace.Server{CIStore: ci.NewRunStore(10)},
@@ -432,6 +432,8 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 			apiHeaderTask = r.Header.Get("X-Grain-Acting-Task")
 			apiHeaderRun = r.Header.Get("X-Grain-Acting-Run")
 			apiHeaderReason = r.Header.Get("X-Grain-Acting-Reason")
+			apiHeaderAuth = r.Header.Get("Authorization")
+			apiHeaderTunnel = r.Header.Get("X-Grain-Tunnel-Token")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		}),
@@ -508,6 +510,25 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 		apiHeaderChannel != "sandbox-cli" || apiHeaderTask != "7" || apiHeaderRun != "run-2" || apiHeaderReason != "obsolete note" {
 		t.Errorf("DELETE /api/tasks/9/comments/1: code=%d channel=%q task=%q run=%q reason=%q",
 			rec.Code, apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderReason)
+	}
+
+	// The acting task, run and channel are the proxy's to say, never the
+	// sandbox's: a sandbox naming another task, dropping the channel or
+	// passing its own credential on is overwritten, not believed.
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	req.Header.Set("Authorization", basicAuthHeader(tok2))
+	req.Header.Set("X-Grain-Acting-Task", "1")
+	req.Header.Set("X-Grain-Acting-Run", "run-of-task-1")
+	req.Header.Set("X-Grain-Channel", "model")
+	req.Header.Set("X-Grain-Tunnel-Token", "stolen")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK ||
+		apiHeaderChannel != "sandbox-cli" || apiHeaderTask != "7" || apiHeaderRun != "run-2" ||
+		apiHeaderAuth != "" || apiHeaderTunnel != "" || apiHeaderReason != "" {
+		t.Errorf("GET /api/tasks with spoofed headers: code=%d channel=%q task=%q run=%q auth=%q tunnel=%q reason=%q, "+
+			"want the proxy's own task 7, run-2, sandbox-cli and no credential",
+			rec.Code, apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderAuth, apiHeaderTunnel, apiHeaderReason)
 	}
 
 	act.mu.Lock()
