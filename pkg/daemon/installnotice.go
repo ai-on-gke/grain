@@ -172,11 +172,14 @@ func InstallNotice() *ui.InstallNotice { return installNotice.Load() }
 // host-mode install, logs the warning once if so, and keeps the notice
 // for the UI.
 func checkInstallMode(ctx context.Context, cfg Config) {
-	n := hostModeInstallNotice(cfg, systemHostModeProbe(), cfg.ResolveCLIRuns(ctx))
-	installNotice.Store(n)
-	if n == nil {
+	p := systemHostModeProbe()
+	ok, signals := hostModeInstall(cfg, p)
+	if !ok {
+		installNotice.Store(nil)
 		return
 	}
+	n := HostModeNotice(signals, cfg.ResolveCLIRuns(ctx))
+	installNotice.Store(n)
 	log.Printf("level=warning condition=host_mode_install grain daemon: %s -- run %s. Signals: %s", n.Message, n.Command, strings.Join(n.Signals, "; "))
 	for _, a := range n.AffectedCLIs {
 		log.Printf("level=warning condition=host_mode_install grain daemon: agent CLI %s", a)
