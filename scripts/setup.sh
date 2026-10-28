@@ -5941,7 +5941,11 @@ verify_daemon_flags() {
       *=*) attached=1 ;;
     esac
     name="${name%%=*}"
-    kind="$(printf '%s\n' "$spec" | awk -v n="$name" '$1 == n { print $2; exit }')"
+    # A here-string, not `printf | awk`: awk exits at the first match,
+    # and under pipefail a printf still writing the rest of a spec that
+    # long takes SIGPIPE and turns the assignment into a 141 that
+    # `set -e` ends the install on (the codex-surface.sh note).
+    kind="$(awk -v n="$name" '$1 == n { print $2; exit }' <<<"$spec")"
     if [ -z "$kind" ]; then
       unknown+=("-$name")
       continue
