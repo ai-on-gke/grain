@@ -816,11 +816,21 @@ keep it from being a way in.
      nothing else. Reaching it is useless without the key, and the key
      is not reachable from the guest.
 
-   **Open dependency:** if #1456's inline mode cannot keep the wrapper's
-   egress apart from the guest's, open-network sandboxes switch to a NAT
-   mode where the wrapper owns the pod IP and the guest is behind it.
-   The drop then lives in the pod namespace's FORWARD chain. GKE-2 must
-   pick one of the two before it merges.
+   **Settled (GKE-2): the in-pod drop, no NAT mode.** #1456's inline
+   mode keeps the two apart. granule's netshim installs TC drop filters
+   on the guest's tap for every address in `NETSHIM_CONTROLLER_IPS`
+   (IPv4, ARP, IPv6 and neighbour solicitation;
+   `third_party/granule/pkg/netshim/splice.go`, `controllerDropRules`),
+   and passes return traffic from those addresses up to the pod's own
+   stack, where the wrapper's dial-out lives. The drop matches the
+   address the guest sent to, before DNAT, so grain names the acceptor's
+   addresses explicitly in `GRANULE_ACCESS_CONTROLLER_IPS`: the
+   `grain-access` ClusterIP and the grain pod's IP. A dial name alone
+   would not tell granule them. `scripts/sandbox-access-guest-probe.sh`
+   verifies this on a real guest. The wrapper connects and runs execs
+   over the channel. From inside the guest, a connection to the acceptor
+   fails, and one to a control listener on a sibling address and the
+   same port succeeds.
 3. **Dial-out only.** Nothing dials a sandbox pod. Two NetworkPolicies
    apply:
    - **`grain-sandbox-egress`** selects every sandbox pod. Its egress
