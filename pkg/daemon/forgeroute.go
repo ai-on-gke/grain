@@ -102,7 +102,7 @@ func (r *forgeRouter) defViaCommand(owner, repo string) bool {
 
 // Request is github.Transport.
 func (r *forgeRouter) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
-	host, owner, repo, rest, newBody, ok := r.route(path, body)
+	host, owner, repo, rest, newBody, ok := r.route(path, headers, body)
 	if !ok {
 		return r.def.Request(method, path, headers, body)
 	}
@@ -124,11 +124,12 @@ func (r *forgeRouter) Request(method, path string, headers map[string]string, bo
 }
 
 // route reads the repository a request is about out of its path (a
-// /repos/{owner}/{repo} call) or its body (a GraphQL query's owner and
-// repo variables): the host it is on, and the path and body with that
-// host taken out of them. ok is false for a request about no one
+// /repos/{owner}/{repo} call), its body (a GraphQL query's owner and
+// repo variables), or its RepoHeader (a Link-header follow-up under
+// /repositories/{id}/...): the host it is on, and the path and body with
+// that host taken out of them. ok is false for a request about no one
 // repository (/user, /search/...), which goes to def unchanged.
-func (r *forgeRouter) route(path string, body []byte) (host, owner, repo, newPath string, newBody []byte, ok bool) {
+func (r *forgeRouter) route(path string, headers map[string]string, body []byte) (host, owner, repo, newPath string, newBody []byte, ok bool) {
 	if path == "/graphql" {
 		var doc map[string]json.RawMessage
 		if json.Unmarshal(body, &doc) != nil {
@@ -157,8 +158,18 @@ func (r *forgeRouter) route(path string, body []byte) (host, owner, repo, newPat
 		}
 		return host, owner, n, path, body, true
 	}
+	if strings.HasPrefix(path, "/api/v3/") {
+		path = strings.TrimPrefix(path, "/api/v3")
+	}
 	tail, found := strings.CutPrefix(path, "/repos/")
 	if !found {
+		if v := headers[github.RepoHeader]; v != "" {
+			if i := strings.LastIndexByte(v, '/'); i > 0 && i+1 < len(v) {
+				o, n := v[:i], v[i+1:]
+				host, owner = r.split(o, n)
+				return host, owner, n, path, body, true
+			}
+		}
 		return "", "", "", "", nil, false
 	}
 	query := ""

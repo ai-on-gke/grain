@@ -141,11 +141,12 @@ func fakeForgeCLI(args []string) int {
 // by a githubsim over the bare repository, and git smart HTTP for the
 // same repository through `git http-backend`. Every request is recorded.
 type fakeDepot struct {
-	sim  *githubsim.Sim
-	bare string
-	mu   sync.Mutex
-	reqs []string
-	auth []string
+	sim    *githubsim.Sim
+	bare   string
+	handle func(w http.ResponseWriter, r *http.Request) bool
+	mu     sync.Mutex
+	reqs   []string
+	auth   []string
 }
 
 func (d *fakeDepot) requests() []string {
@@ -161,6 +162,9 @@ func (d *fakeDepot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		d.auth = append(d.auth, a)
 	}
 	d.mu.Unlock()
+	if d.handle != nil && d.handle(w, r) {
+		return
+	}
 	if rest, ok := strings.CutPrefix(r.URL.RequestURI(), "/api/v3"); ok {
 		body, _ := io.ReadAll(r.Body)
 		headers := map[string]string{}
@@ -513,20 +517,87 @@ func TestForgeRouterResolvesOnlyAnUnambiguousOtherHost(t *testing.T) {
 	}
 
 	r := &forgeRouter{defHost: model.DefaultGitHost, hostOf: hostOf}
-	for _, tc := range []struct{ path, host, rest string }{
-		{"/repos/depot.code.forge.test/acme/both/pulls?state=open", depotTestHost, "/repos/acme/both/pulls?state=open"},
-		{"/repos/acme/both/pulls", "", "/repos/acme/both/pulls"},
-		{"/repos/experimental/only-depot", depotTestHost, "/repos/experimental/only-depot"},
+	for _, tc := range []struct {
+		path    string
+		headers map[string]string
+		host    string
+		rest    string
+	}{
+		{"/repos/depot.code.forge.test/acme/both/pulls?state=open", nil, depotTestHost, "/repos/acme/both/pulls?state=open"},
+		{"/repos/acme/both/pulls", nil, "", "/repos/acme/both/pulls"},
+		{"/repos/experimental/only-depot", nil, depotTestHost, "/repos/experimental/only-depot"},
+		{
+			"/repositories/80876/pulls/1/files?per_page=100&page=2",
+			map[string]string{github.RepoHeader: "depot.code.forge.test/experimental/grain"},
+			depotTestHost,
+			"/repositories/80876/pulls/1/files?per_page=100&page=2",
+		},
+		{
+			"/api/v3/repositories/80876/pulls/1/files?per_page=100&page=2",
+			map[string]string{github.RepoHeader: "experimental/only-depot"},
+			depotTestHost,
+			"/repositories/80876/pulls/1/files?per_page=100&page=2",
+		},
 	} {
-		host, _, _, rest, _, ok := r.route(tc.path, nil)
+		host, _, _, rest, _, ok := r.route(tc.path, tc.headers, nil)
 		if !ok || host != tc.host || rest != tc.rest {
 			t.Errorf("route(%s) = %q %q %v, want %q %q", tc.path, host, rest, ok, tc.host, tc.rest)
 		}
 	}
 	body := []byte(`{"query":"q","variables":{"owner":"depot.code.forge.test/acme","repo":"both","number":1}}`)
-	host, owner, _, _, newBody, ok := r.route("/graphql", body)
+	host, owner, _, _, newBody, ok := r.route("/graphql", nil, body)
 	if !ok || host != depotTestHost || owner != "acme" || !bytes.Contains(newBody, []byte(`"owner":"acme"`)) {
 		t.Errorf("route(graphql) = %q %q %s %v", host, owner, newBody, ok)
+	}
+}
+
+// GitHub and GitHub Enterprise Link headers paginate via /repositories/<id>/...
+// (and /api/v3/repositories/<id>/... on GHE) rather than /repos/<owner>/<repo>/...;
+// page 2 and beyond must still route to the repository's forge host without
+// doubling /api/v3 or falling back to api.github.com.
+func TestForgeRouterPaginatesRepositoryIDLinksOnAForgeCLIHost(t *testing.T) {
+	f := newDepotFixture(t)
+	_ = f.fileTask(t, "t-paginated")
+	client, guard := f.client(t)
+
+	f.depot.handle = func(w http.ResponseWriter, r *http.Request) bool {
+		if v := r.Header.Get(github.RepoHeader); v != "" {
+			t.Errorf("upstream depot saw internal %s header: %q", github.RepoHeader, v)
+		}
+		switch r.URL.RequestURI() {
+		case "/api/v3/repos/experimental/bsalmon-test/pulls/1/files?per_page=100":
+			w.Header().Set("Link", `<https://depot.code.forge.test/api/v3/repositories/80876/pulls/1/files?per_page=100&page=2>; rel="next"`)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[{"filename":"page1.go"}]`))
+			return true
+		case "/api/v3/repositories/80876/pulls/1/files?per_page=100&page=2":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[{"filename":"page2.go"}]`))
+			return true
+		}
+		return false
+	}
+
+	for _, owner := range []string{f.repo.StoredOwner(), f.repo.Owner} {
+		files, err := client.ListPullRequestFiles(owner, f.repo.Name, 1)
+		if err != nil {
+			t.Fatalf("ListPullRequestFiles(%q): %v\ndepot saw: %q\nguard saw: %q", owner, err, f.depot.requests(), guard.calls)
+		}
+		if len(files) != 2 || files[0] != "page1.go" || files[1] != "page2.go" {
+			t.Fatalf("ListPullRequestFiles(%q) = %v, want [page1.go page2.go]", owner, files)
+		}
+	}
+	if len(guard.calls) != 0 {
+		t.Fatalf("requests fell back to api.github.com: %q", guard.calls)
+	}
+	var sawPage2 bool
+	for _, r := range f.depot.requests() {
+		if r == "GET /api/v3/repositories/80876/pulls/1/files?per_page=100&page=2 host="+depotTestHost {
+			sawPage2 = true
+		}
+	}
+	if !sawPage2 {
+		t.Fatalf("depot did not see page 2 request: %q", f.depot.requests())
 	}
 }
 

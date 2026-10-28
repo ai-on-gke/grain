@@ -186,6 +186,13 @@ func TestNextPagePathKeepsAnEscapedSegmentEscaped(t *testing.T) {
 	}
 }
 
+func TestNextPagePathStripsGHEApiV3Prefix(t *testing.T) {
+	header := `<https://depot.code.forge.test/api/v3/repositories/80876/pulls/1/files?per_page=100&page=2>; rel="next"`
+	if got := nextPagePath(header); got != "/repositories/80876/pulls/1/files?per_page=100&page=2" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestListIssuesRaisesOnANon200(t *testing.T) {
 	transport := NewFakeTransport(ApiResponse{Status: 403, Body: []byte("nope")})
 	client := NewClient(transport, StaticToken{strPtr("t")})
@@ -2455,6 +2462,59 @@ func TestListPullRequestFilesFollowsLinkHeaderPagination(t *testing.T) {
 	}
 	if transport.Calls[1].Path != "/repos/o/r/pulls/5/files?page=2" {
 		t.Fatalf("unexpected second call path: %s", transport.Calls[1].Path)
+	}
+}
+
+func TestListPullRequestFilesOnGHEHostDoesNotDoubleApiV3OrLeakRepoHeader(t *testing.T) {
+	var seen []string
+	var leakedRepoHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.RequestURI())
+		if v := r.Header.Get(RepoHeader); v != "" {
+			leakedRepoHeader = v
+		}
+		switch r.URL.RequestURI() {
+		case "/api/v3/repos/experimental/grain/pulls/1/files?per_page=100":
+			w.Header().Set("Link", `<https://depot.code.forge.test/api/v3/repositories/80876/pulls/1/files?per_page=100&page=2>; rel="next"`)
+			w.WriteHeader(200)
+			w.Write(mustJSON(t, []any{map[string]any{"filename": "README.md"}}))
+		case "/api/v3/repositories/80876/pulls/1/files?per_page=100&page=2":
+			w.WriteHeader(200)
+			w.Write(mustJSON(t, []any{map[string]any{"filename": ".github/workflows/ci.yml"}}))
+		default:
+			w.WriteHeader(404)
+			w.Write([]byte(`{"message":"Not Found"}`))
+		}
+	}))
+	defer server.Close()
+
+	host := strings.TrimPrefix(server.URL, "http://")
+	transport := &RealTransport{Host: host, PathPrefix: "/api/v3", UseTLS: false}
+	client := NewClient(transport, StaticToken{strPtr("t")})
+	files, err := client.ListPullRequestFiles("experimental", "grain", 1)
+	if err != nil {
+		t.Fatalf("ListPullRequestFiles: %v (seen: %q)", err, seen)
+	}
+	wantFiles := []string{"README.md", ".github/workflows/ci.yml"}
+	if !slices.Equal(files, wantFiles) {
+		t.Fatalf("files = %v, want %v", files, wantFiles)
+	}
+	wantSeen := []string{
+		"/api/v3/repos/experimental/grain/pulls/1/files?per_page=100",
+		"/api/v3/repositories/80876/pulls/1/files?per_page=100&page=2",
+	}
+	if !slices.Equal(seen, wantSeen) {
+		t.Fatalf("seen = %q, want %q", seen, wantSeen)
+	}
+	if leakedRepoHeader != "" {
+		t.Fatalf("RepoHeader leaked to upstream: %q", leakedRepoHeader)
+	}
+
+	// Calling RealTransport directly with a path that already carries
+	// PathPrefix does not prepend a second /api/v3 either.
+	resp, err := transport.Request("GET", "/api/v3/repositories/80876/pulls/1/files?per_page=100&page=2", nil, nil)
+	if err != nil || resp.Status != 200 {
+		t.Fatalf("direct /api/v3 Request = %+v, %v", resp, err)
 	}
 }
 
