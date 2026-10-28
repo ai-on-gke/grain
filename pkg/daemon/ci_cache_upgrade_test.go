@@ -813,3 +813,163 @@ jobs:
 		time.Sleep(25 * time.Millisecond)
 	}
 }
+
+func TestCIShutdownStopsRetriesAndMarksDaemonServiceFailureInterrupted(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	sandboxRoot := t.TempDir()
+	flagDir := t.TempDir()
+
+	workflowYAML := `name: tests
+on: push
+jobs:
+  build:
+    steps:
+      - name: checkout-and-cache
+        run: |
+          echo build-attempt >> "` + flagDir + `/attempts"
+          if [ ! -f "` + flagDir + `/daemon2" ]; then
+            while [ ! -f "` + flagDir + `/shutting-down" ]; do sleep 0.02; done
+            echo "fatal: unable to access 'http://127.0.0.1:9728/acme/widgets.git/': Recv failure: Connection reset by peer"
+            echo "Actions cache http://127.0.0.1:9758/_apis/artifactcache/ is not reachable"
+            exit 128
+          fi
+          echo build-ok
+  after:
+    needs: [build]
+    steps:
+      - name: after-step
+        run: |
+          echo after-ran >> "` + flagDir + `/after"
+`
+	bareRepoRoot, commitSHA, source := setupTestCIRepo(t, workflowYAML)
+
+	store1, closeStore1 := openTestStore(t, dataDir)
+	defer closeStore1()
+
+	stopping1 := make(chan struct{})
+	runStore1 := ci.NewStoredRunStore(store1, ci.StoredRunStoreOptions{})
+	cache1 := CiJobCache(Config{DataDir: dataDir}, nil)
+	sb1 := orchestrator.NewHostSandboxes(sandboxRoot)
+	ciSb1 := newTestCiSandboxes(sb1, bareRepoRoot)
+	ciSb1.Stopping = stopping1
+	svc1 := &ci.Service{
+		Source:   source,
+		Engine:   &ci.Engine{Sandboxes: ciSb1, Cache: cache1, Stopping: stopping1},
+		Runs:     runStore1,
+		PlanDir:  filepath.Join(dataDir, "state", "ci-plans"),
+		Stopping: stopping1,
+	}
+
+	started, err := svc1.Start(ctx, ci.Request{
+		Repo:   "acme/widgets",
+		Ref:    "main",
+		Commit: commitSHA,
+		Event:  ci.EventPush,
+	})
+	if err != nil {
+		t.Fatalf("starting CI run on daemon 1: %v", err)
+	}
+
+	// Wait until the first attempt of build has started inside the sandbox.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if data, err := os.ReadFile(filepath.Join(flagDir, "attempts")); err == nil && len(data) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for build job to start on daemon 1")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// Begin daemon 1 shutdown and allow the in-flight step to fail on the
+	// torn-down git proxy and Actions cache.
+	close(stopping1)
+	if err := os.WriteFile(filepath.Join(flagDir, "shutting-down"), []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline = time.Now().Add(15 * time.Second)
+	for {
+		r, ok := svc1.Get(started.ID)
+		if ok && r.Conclusion.Done() {
+			if !r.Interrupted || r.Conclusion != ci.ConclusionCancelled {
+				t.Fatalf("daemon 1 recorded run as (Interrupted=%v, Conclusion=%s, Error=%q), want Interrupted=true Conclusion=cancelled: %+v",
+					r.Interrupted, r.Conclusion, r.Error, r)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			r, _ := svc1.Get(started.ID)
+			t.Fatalf("timed out waiting for daemon 1 run to finish as interrupted; run=%+v", r)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	attemptsBytes, err := os.ReadFile(filepath.Join(flagDir, "attempts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(strings.TrimSpace(string(attemptsBytes)), "\n"); len(lines) != 1 {
+		t.Fatalf("build job ran %d attempt(s) during shutdown, want 1 (no automatic retry)", len(lines))
+	}
+	if _, err := os.Stat(filepath.Join(flagDir, "after")); err == nil {
+		t.Fatal("dependent job 'after' ran during shutdown")
+	}
+
+	svc1.Detach()
+	closeStore1()
+
+	// Daemon 2 starts up and re-runs the interrupted run cleanly to success.
+	if err := os.WriteFile(filepath.Join(flagDir, "daemon2"), []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store2, closeStore2 := openTestStore(t, dataDir)
+	defer closeStore2()
+
+	runStore2 := ci.NewStoredRunStore(store2, ci.StoredRunStoreOptions{})
+	cache2 := CiJobCache(Config{DataDir: dataDir}, nil)
+	sb2 := orchestrator.NewHostSandboxes(sandboxRoot)
+	ciSb2 := newTestCiSandboxes(sb2, bareRepoRoot)
+	svc2 := &ci.Service{
+		Source:  source,
+		Engine:  &ci.Engine{Sandboxes: ciSb2, Cache: cache2},
+		Runs:    runStore2,
+		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
+	}
+
+	storedRun, ok := svc2.Get(started.ID)
+	if !ok || !storedRun.Interrupted || storedRun.Conclusion != ci.ConclusionCancelled {
+		t.Fatalf("daemon 2 read stored run as %+v, want Interrupted=true Conclusion=cancelled", storedRun)
+	}
+
+	rerun, err := svc2.Start(ctx, ci.Request{
+		Repo:   "acme/widgets",
+		Ref:    "main",
+		Commit: commitSHA,
+		Event:  ci.EventPush,
+	})
+	if err != nil {
+		t.Fatalf("re-running interrupted CI run on daemon 2: %v", err)
+	}
+	if rerun.ID == started.ID {
+		t.Fatalf("daemon 2 deduplicated against interrupted run %s instead of starting a new run", started.ID)
+	}
+
+	deadline = time.Now().Add(15 * time.Second)
+	for {
+		r2, ok := svc2.Get(rerun.ID)
+		if ok && r2.Conclusion.Done() {
+			if r2.Conclusion != ci.ConclusionSuccess {
+				t.Fatalf("daemon 2 re-run finished with %s, want success: %+v", r2.Conclusion, r2)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			r2, _ := svc2.Get(rerun.ID)
+			t.Fatalf("timed out waiting for daemon 2 re-run; run=%+v", r2)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}

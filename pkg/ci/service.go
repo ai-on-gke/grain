@@ -90,6 +90,9 @@ type Service struct {
 	// workflow tree. Empty disables disk persistence (ReconstructPlan can
 	// still re-plan from Source).
 	PlanDir string
+	// Stopping, when non-nil, is closed when the hosting daemon begins
+	// shutting down.
+	Stopping <-chan struct{}
 
 	mu       sync.Mutex
 	runs     RunStore
@@ -419,6 +422,9 @@ func (s *Service) launchRun(ctx context.Context, run Run, plan Plan, adopted map
 			remaining = time.Minute
 		}
 	}
+	if s.Stopping != nil && s.Engine != nil && s.Engine.Stopping == nil {
+		s.Engine.Stopping = s.Stopping
+	}
 	baseCtx, detach := WithDetach(context.WithoutCancel(ctx))
 	runCtx, cancel := context.WithTimeout(baseCtx, remaining)
 	s.mu.Lock()
@@ -459,16 +465,40 @@ func (s *Service) launchRun(ctx context.Context, run Run, plan Plan, adopted map
 		} else {
 			finished = s.Engine.Run(runCtx, run.ID, plan, observe)
 		}
-		if isDetaching(runCtx) {
+		if isDetaching(runCtx) && !finished.Interrupted && finished.Conclusion != ConclusionSuccess {
 			return
 		}
 		s.removePlan(run.ID)
 		finished.ID, finished.StartedAt, finished.Build = run.ID, run.StartedAt, run.Build
-		asked := s.cancellationOf(run.ID)
-		finished.CancelReason, finished.CancelledBy = asked.reason, asked.by
+		if !finished.Interrupted {
+			asked := s.cancellationOf(run.ID)
+			finished.CancelReason, finished.CancelledBy = asked.reason, asked.by
+		}
 		s.store().Put(finished)
 		s.log("ci: run %s: %s@%s: %s", run.ID, run.Repo, run.Ref, finished.Conclusion)
 	}()
+}
+
+// IsStopping reports whether the service's hosting daemon has begun shutting down.
+func (s *Service) IsStopping() bool {
+	if s == nil {
+		return false
+	}
+	if s.Stopping != nil {
+		select {
+		case <-s.Stopping:
+			return true
+		default:
+		}
+	}
+	if s.Engine != nil && s.Engine.Stopping != nil {
+		select {
+		case <-s.Engine.Stopping:
+			return true
+		default:
+		}
+	}
+	return false
 }
 
 // Adopt resumes an unconcluded run across a daemon restart, reattaching to
@@ -476,6 +506,9 @@ func (s *Service) launchRun(ctx context.Context, run Run, plan Plan, adopted map
 func (s *Service) Adopt(ctx context.Context, run Run, plan Plan, adopted map[string]AdoptedJob) error {
 	if s == nil || s.Engine == nil {
 		return fmt.Errorf("ci: this deployment has no CI engine wired")
+	}
+	if s.IsStopping() {
+		return nil
 	}
 	s.mu.Lock()
 	_, alreadyLive := s.cancels[run.ID]
