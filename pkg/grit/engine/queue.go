@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ci
+package engine
 
-import "time"
+import (
+	"time"
+
+	"github.com/ai-on-gke/grain/pkg/workflows"
+)
 
 // queueClock measures one job's wait for a machine: how long it was
 // between becoming startable and getting one, and which of the things
@@ -46,16 +50,16 @@ type queueClock struct {
 	// attributed to anything, which is what a job passing through a gate
 	// that reports no wait spends.
 	since   time.Time
-	current WaitCause
-	spent   map[WaitCause]time.Duration
-	said    map[WaitCause]string
+	current workflows.WaitCause
+	spent   map[workflows.WaitCause]time.Duration
+	said    map[workflows.WaitCause]string
 }
 
 func newQueueClock(now time.Time) *queueClock {
 	return &queueClock{
 		start: now, since: now,
-		spent: map[WaitCause]time.Duration{},
-		said:  map[WaitCause]string{},
+		spent: map[workflows.WaitCause]time.Duration{},
+		said:  map[workflows.WaitCause]string{},
 	}
 }
 
@@ -63,7 +67,7 @@ func newQueueClock(now time.Time) *queueClock {
 // since the last change goes to whatever was holding it until now, and
 // the new wait starts running. The zero Wait is "nothing is holding it
 // any more", which is what a gate reports as it admits the job.
-func (q *queueClock) waiting(now time.Time, w Wait) {
+func (q *queueClock) waiting(now time.Time, w workflows.Wait) {
 	if q == nil {
 		return
 	}
@@ -90,7 +94,7 @@ func (q *queueClock) waiting(now time.Time, w Wait) {
 // "how much of this deployment's CI waiting was the sandbox count" from
 // the sentences alone would have to match prose that every gate is free
 // to rewrite (metrics.CIQueueing, grain/task-345).
-func (q *queueClock) stop(now time.Time) (time.Duration, WaitCause, string) {
+func (q *queueClock) stop(now time.Time) (time.Duration, workflows.WaitCause, string) {
 	if q == nil {
 		return 0, "", ""
 	}
@@ -103,7 +107,7 @@ func (q *queueClock) stop(now time.Time) (time.Duration, WaitCause, string) {
 		queued = 0
 	}
 	var (
-		worst WaitCause
+		worst workflows.WaitCause
 		most  time.Duration
 	)
 	for cause, spent := range q.spent {
