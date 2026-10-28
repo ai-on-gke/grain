@@ -123,6 +123,29 @@ thing this deployment will have, and it should not share a process with
 every credential grain holds. It is the first piece of the forge to live
 on its own, and the reason to have the boundary drawn before it does.
 
+## How the three pieces map to the 4 runtime components
+
+At runtime, the three internal dependency layers (`tasks`, `forge`,
+`sandboxes`) map onto Grain's **4-component architecture**:
+
+1. **`grain` controller (`grain daemon`)** — task store (`pkg/model`),
+   orchestrator (`pkg/orchestrator`, `pkg/dispatch`), merge queue
+   (`pkg/forge`), UI/API (`pkg/ui`), and sandbox lifecycle (`pkg/granule`,
+   `pkg/k8s`).
+2. **`grit` controller ([`docs/design/grit-split.md`](design/grit-split.md))** —
+   the CI controller service (`pkg/ci`), carved out along the forge
+   boundary so CI workflow execution, caching, and verdict reporting can
+   run as an independent service.
+3. **`model-server` (`grain model-server`, aliases `grain executor` and
+   `grain modelexec`, `pkg/modelexec`)** — the service that runs agent
+   model CLIs (`agy`, `claude`, `codex`) on a host with local ambient
+   credentials and binaries, connecting outbound to the `grain`
+   controller while tunneling MCP tool calls back to the task's sandbox.
+4. **`hostd` (capability server set, `grain hostd`, `pkg/hostd`)** — the
+   service on a host that runs allowlisted capability servers
+   (`grain-gcp`, `grain-host-script`, `grain-gchat`, `host-git`, etc.
+   from `/etc/grain/hostd.yaml`) and connects them back to `grain`.
+
 ## What to do first
 
 Not a split. Fix the direction inside the module, in this order:

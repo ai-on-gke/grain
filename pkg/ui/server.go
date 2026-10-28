@@ -569,8 +569,9 @@ func (s *Server) routes() {
 	s.route("POST /api/pipeline-pause", s.handlePausePipeline)
 	s.route("DELETE /api/pipeline-pause", s.handleResumePipeline)
 
-	// Remote executors API and bootstrap scripts.
+	// Remote executors / model servers API and bootstrap scripts.
 	s.route("GET /api/executors", s.handleListExecutors)
+	s.route("GET /api/model-servers/install.sh", s.handleExecutorInstallScript)
 	s.route("GET /api/executors/install.sh", s.handleExecutorInstallScript)
 	s.route("GET /install-executor.sh", s.handleExecutorInstallScript)
 	s.route("GET /api/executors/bin/{binary}", s.handleExecutorBinary)

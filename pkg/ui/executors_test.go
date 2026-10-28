@@ -133,7 +133,7 @@ func TestExecutorInstallScriptEndpoint(t *testing.T) {
 
 	srv, _ := testServer(t)
 
-	for _, path := range []string{"/api/executors/install.sh", "/install-executor.sh"} {
+	for _, path := range []string{"/api/model-servers/install.sh", "/api/executors/install.sh", "/install-executor.sh"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, req)
@@ -151,8 +151,14 @@ func TestExecutorInstallScriptEndpoint(t *testing.T) {
 		if len(body) == 0 {
 			t.Errorf("GET %s returned empty body", path)
 		}
+		if !bytes.Contains(rec.Body.Bytes(), []byte("run-model-server.sh")) {
+			t.Errorf("GET %s body missing run-model-server.sh banner / identifier", path)
+		}
 		if !bytes.Contains(rec.Body.Bytes(), []byte("run-remote-executor.sh")) {
 			t.Errorf("GET %s body missing script banner / identifier", path)
+		}
+		if !bytes.Contains(rec.Body.Bytes(), []byte("grain model-server")) {
+			t.Errorf("GET %s body missing grain model-server invocation", path)
 		}
 		if !bytes.Contains(rec.Body.Bytes(), []byte("grain executor")) {
 			t.Errorf("GET %s body missing grain executor invocation", path)
@@ -163,7 +169,7 @@ func TestExecutorInstallScriptEndpoint(t *testing.T) {
 func TestExecutorInstallScriptContentMatchesRepoScript(t *testing.T) {
 	t.Parallel()
 
-	scriptPath := filepath.Join("..", "..", "scripts", "run-remote-executor.sh")
+	scriptPath := filepath.Join("..", "..", "scripts", "run-model-server.sh")
 	repoScript, err := os.ReadFile(scriptPath)
 	if err != nil {
 		t.Skipf("cannot read repo script at %s: %v", scriptPath, err)
@@ -171,12 +177,14 @@ func TestExecutorInstallScriptContentMatchesRepoScript(t *testing.T) {
 	}
 
 	srv, _ := testServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/executors/install.sh", nil)
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
+	for _, path := range []string{"/api/model-servers/install.sh", "/api/executors/install.sh"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
 
-	if !bytes.Equal(rec.Body.Bytes(), repoScript) {
-		t.Errorf("embedded executor install script differs from scripts/run-remote-executor.sh")
+		if !bytes.Equal(rec.Body.Bytes(), repoScript) {
+			t.Errorf("GET %s differs from scripts/run-model-server.sh", path)
+		}
 	}
 }
 
