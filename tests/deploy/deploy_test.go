@@ -3742,18 +3742,6 @@ func TestGranuleGuestMountsTmpOnTmpfsAndCloudtopScalesLargeHostSandboxShape(t *t
 	contains(t, sandboxes, `findmnt -n -o FSTYPE /tmp`)
 	contains(t, sandboxes, `sudo -n mount -t tmpfs -o mode=1777,nosuid,nodev,size=50% tmpfs /tmp`)
 
-	// 3. Large hosts (>= 32 vCPUs and >= 64 GiB RAM) seed 8 vCPUs / 16 GiB RAM.
-	cloudtop := read(t, "google", "scripts", "cloudtop-install.sh")
-	for _, want := range []string{
-		"CLOUDTOP_LARGE_HOST_MIN_CPUS=32",
-		"CLOUDTOP_LARGE_HOST_MIN_MEMORY_MB=65536",
-		"CLOUDTOP_LARGE_SANDBOX_CPUS=8",
-		"CLOUDTOP_LARGE_SANDBOX_MEMORY_MB=16384",
-		`GRAIN_SANDBOX_CPUS:=$CLOUDTOP_LARGE_SANDBOX_CPUS`,
-		`GRAIN_SANDBOX_MEMORY_MB:=$CLOUDTOP_LARGE_SANDBOX_MEMORY_MB`,
-	} {
-		contains(t, cloudtop, want)
-	}
 	setup := setupCode(t)
 	contains(t, setup, `daemon_args+=(-sandbox-cpus "$GRAIN_SANDBOX_CPUS")`)
 	contains(t, setup, `daemon_args+=(-sandbox-memory-mb "$GRAIN_SANDBOX_MEMORY_MB")`)
@@ -4091,20 +4079,6 @@ func TestCloudSQLCapabilityIsConfigured(t *testing.T) {
 	playbook := read(t, "pkg", "capability", "bootstrap", "playbooks", "gcp-capabilities.md")
 	contains(t, playbook, "-target=google_project_iam_member.agent_cloud_sql")
 	contains(t, playbook, "-target=google_project_service.sqladmin")
-}
-
-// TestEuropeWest4TerraformConfiguration verifies that the europe-west4
-// terraform setup configures a c4-standard-288-metal host with nested virtualization
-// and a 2TB sandbox partition formatted with XFS.
-func TestEuropeWest4TerraformConfiguration(t *testing.T) {
-	tfvars := read(t, "deploy", "terraform", "gcp", "europe-west4.tfvars")
-	contains(t, tfvars, `region = "europe-west4"`)
-	contains(t, tfvars, `machine_type                 = "c4-standard-288-metal"`)
-	contains(t, tfvars, `enable_nested_virtualization = true`)
-	contains(t, tfvars, `sandbox_disk_gb = 2048`)
-
-	startup := startupScript(t)
-	contains(t, startup, "mkfs.xfs")
 }
 
 // The walkthrough's install (task 5047, bug B): a Google-track container

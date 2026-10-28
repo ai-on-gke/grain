@@ -1790,7 +1790,7 @@ func TestEverythingTheGateDoesNotRunTheNightlyDoes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("go list ./tests/installer/...: %v\n%s", err, out)
 	}
-	const module = "github.com/bwsalmon/grain/"
+	const module = "github.com/ai-on-gke/grain/"
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 2 {

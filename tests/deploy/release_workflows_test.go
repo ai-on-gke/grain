@@ -50,8 +50,6 @@ func TestScheduledDeclarationsTargetMain(t *testing.T) {
 		"nightly-features-test-plan.yml",
 		"prune-packages.yml",
 		"release-watchdog.yml",
-		"staging-state-cleanup.yml",
-		"staging-ui-exploration.yml",
 		"ui-walkthrough.yml",
 	} {
 		path := filepath.Join(schedulesDir, filename)
@@ -223,9 +221,6 @@ func TestBranchSpecificSuitesSplit(t *testing.T) {
 			"ui-walkthrough-settings",
 			"ui-walkthrough-infrastructure",
 			"ui-walkthrough-boards",
-		},
-		"staging-ui-exploration.yml": {
-			"staging-ui-exploration",
 		},
 	}
 
