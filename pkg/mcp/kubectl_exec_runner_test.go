@@ -17,14 +17,22 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/granule"
 	"github.com/ai-on-gke/grain/pkg/kubectlgate"
+	granuleagent "github.com/bwsalmon/granule/pkg/agent"
+	"github.com/bwsalmon/granule/pkg/guestexec"
+	"github.com/bwsalmon/granule/pkg/sandbox"
 )
 
 func TestKubectlExecArgsNameTheNamespacePodAndContainer(t *testing.T) {
@@ -360,5 +368,205 @@ func TestContainerExecRunnerStreamsBothStreamsToAFollower(t *testing.T) {
 	}
 	if !strings.Contains(followed.String(), "out\n") || !strings.Contains(followed.String(), "err\n") {
 		t.Errorf("followed = %q, want both stdout and stderr", followed.String())
+	}
+}
+
+func startInProcessGranuleServer(t *testing.T, podName string) (addr string, spec granule.SandboxAccessSpec, dropActiveConns func()) {
+	t.Helper()
+	u, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current: %v", err)
+	}
+	ca, err := granule.NewSandboxCA()
+	if err != nil {
+		t.Fatalf("NewSandboxCA: %v", err)
+	}
+	certPEM, keyPEM, err := ca.IssueSandboxCert(podName, podName)
+	if err != nil {
+		t.Fatalf("IssueSandboxCert: %v", err)
+	}
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("X509KeyPair: %v", err)
+	}
+	token, err := granule.MintToken()
+	if err != nil {
+		t.Fatalf("MintToken: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	srv := sandbox.NewServer(sandbox.ServerConfig{
+		SandboxID: podName,
+		Token:     token,
+		TLSConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS13,
+			Certificates: []tls.Certificate{tlsCert},
+		},
+		Guest: guestexec.Config{
+			User: u.Username,
+		},
+		DialGuest: func(dialCtx context.Context) (net.Conn, error) {
+			if err := dialCtx.Err(); err != nil {
+				return nil, err
+			}
+			c1, c2 := net.Pipe()
+			go func() {
+				defer c2.Close()
+				_ = granuleagent.Serve(ctx, c2)
+			}()
+			return c1, nil
+		},
+	})
+
+	rawLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	t.Cleanup(func() { _ = rawLn.Close() })
+
+	var mu sync.Mutex
+	var conns []net.Conn
+	trackLn := &trackingListener{
+		Listener: rawLn,
+		onAccept: func(c net.Conn) {
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		},
+	}
+	go func() {
+		_ = srv.Serve(ctx, trackLn)
+	}()
+
+	tcpAddr := rawLn.Addr().(*net.TCPAddr)
+	spec = granule.SandboxAccessSpec{
+		Mode:      granule.AccessModeDirect,
+		PodName:   podName,
+		SandboxID: podName,
+		Token:     token,
+		CACertPEM: string(ca.CAPEM()),
+		Port:      tcpAddr.Port,
+		PodIP:     "127.0.0.1",
+	}
+	drop := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+		conns = nil
+	}
+	return rawLn.Addr().String(), spec, drop
+}
+
+type trackingListener struct {
+	net.Listener
+	onAccept func(net.Conn)
+}
+
+func (l *trackingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil && l.onAccept != nil {
+		l.onAccept(c)
+	}
+	return c, err
+}
+
+func TestGranuleSandboxRunnerRunStreamAndPutFiles(t *testing.T) {
+	_, spec, _ := startInProcessGranuleServer(t, "grain-granule-42-1")
+	u, _ := user.Current()
+	runner, err := NewGranuleSandboxRunnerFromSpec(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("NewGranuleSandboxRunnerFromSpec: %v", err)
+	}
+	runner.User = u.Username
+	t.Cleanup(func() { _ = runner.Close() })
+
+	ctx := context.Background()
+	info, err := runner.Health(ctx)
+	if err != nil || !info.Ready {
+		t.Fatalf("Health = (%+v, %v), want Ready=true", info, err)
+	}
+
+	var followed strings.Builder
+	stdout, stderr, code := runner.RunStream(ctx, []string{"sh", "-c", "echo hello-out; echo hello-err >&2; exit 7"}, "", &followed)
+	if code != 7 || stdout != "hello-out\n" || stderr != "hello-err\n" {
+		t.Fatalf("RunStream = (%q, %q, %d), want (hello-out, hello-err, 7)", stdout, stderr, code)
+	}
+	if !strings.Contains(followed.String(), "hello-out\n") || !strings.Contains(followed.String(), "hello-err\n") {
+		t.Errorf("followed = %q, want both streams", followed.String())
+	}
+
+	dir := t.TempDir()
+	f1 := filepath.Join(dir, "nested", "a.txt")
+	f2 := filepath.Join(dir, "nested", "b.sh")
+	if err := PlaceFilesOverSSH(ctx, runner, []FilePlacement{
+		{Path: f1, Content: []byte("alpha"), Mode: "0600"},
+		{Path: f2, Content: []byte("#!/bin/sh\necho beta\n"), Mode: "0755"},
+	}); err != nil {
+		t.Fatalf("PlaceFilesOverSSH: %v", err)
+	}
+	got1, err := os.ReadFile(f1)
+	if err != nil || string(got1) != "alpha" {
+		t.Fatalf("ReadFile(%s) = (%q, %v), want alpha", f1, got1, err)
+	}
+	out2, stderr2, code2 := runner.Run(ctx, []string{f2}, "")
+	if code2 != 0 || out2 != "beta\n" {
+		t.Fatalf("running placed script: code=%d stdout=%q stderr=%q", code2, out2, stderr2)
+	}
+
+	writeTool := sshWriteFileTool(runner, dir)
+	f3 := filepath.Join(dir, "tool-written.txt")
+	res := writeTool.Handler(ctx, map[string]any{
+		"file_path": f3,
+		"content":   "written-via-putfiles",
+	})
+	if res.IsError {
+		t.Fatalf("write_file returned error: %s", res.Text)
+	}
+	got3, err := os.ReadFile(f3)
+	if err != nil || string(got3) != "written-via-putfiles" {
+		t.Fatalf("ReadFile(%s) = (%q, %v), want written-via-putfiles", f3, got3, err)
+	}
+}
+
+func TestGranuleSandboxRunnerReattachesAfterConnectionDrop(t *testing.T) {
+	_, spec, dropConns := startInProcessGranuleServer(t, "grain-granule-99-1")
+	u, _ := user.Current()
+	runner, err := NewGranuleSandboxRunnerFromSpec(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("NewGranuleSandboxRunnerFromSpec: %v", err)
+	}
+	runner.User = u.Username
+	t.Cleanup(func() { _ = runner.Close() })
+
+	// Drop the TCP connection as soon as the first line arrives on the live stream.
+	dropped := make(chan struct{})
+	var once sync.Once
+	live := writerFunc(func(p []byte) (int, error) {
+		if bytes.Contains(p, []byte("part-1")) {
+			once.Do(func() {
+				close(dropped)
+				go dropConns()
+			})
+		}
+		return len(p), nil
+	})
+
+	stdout, stderr, code := runner.RunStream(
+		context.Background(),
+		[]string{"sh", "-c", "echo part-1; sleep 0.25; echo part-2; exit 3"},
+		"",
+		live,
+	)
+	select {
+	case <-dropped:
+	default:
+		t.Fatal("expected live stream to trigger connection drop")
+	}
+	if code != 3 || stdout != "part-1\npart-2\n" {
+		t.Fatalf("after Reattach: code=%d stdout=%q stderr=%q, want code=3 stdout=\"part-1\\npart-2\\n\"", code, stdout, stderr)
 	}
 }

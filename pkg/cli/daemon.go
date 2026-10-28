@@ -987,6 +987,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"all -- confirmed against a real cluster, where a pod running it exits immediately). Required "+
 			"with -k8s-granule-sandboxes; no context-free default to pick, since nothing publishes a "+
 			"packed guest image under a stable tag yet -- docs/k8s-granule-design.md §4"+seedOnly)
+	k8sGranuleRelayAddr := fs.String("k8s-granule-relay-addr", "",
+		"host:port of the in-cluster `granule relay` LoadBalancer Service used by an off-cluster controller "+
+			"with -k8s-granule-sandboxes (overrides /var/lib/grain/gke-sandboxes/relay.json)")
 	sandboxCPUs := fs.Int("sandbox-cpus", 0,
 		"deployment-wide default vCPU count for a granule-managed sandbox VM, passed as `granule vm create`'s "+
 			"own -cpus (only used with -granule-sandboxes); 0 uses grain's own default, "+
@@ -1280,7 +1283,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			Interactive: *k8sPriorityInteractive, Agent: *k8sPriorityAgent, CI: *k8sPriorityCI,
 		},
 		K8sNetworkPolicy: *k8sNetworkPolicy, K8sGitProxyHost: daemon.K8sGitProxyHostOrPodIP(*k8sGitProxyHost),
-		K8sGranuleSandboxes: *k8sGranuleSandboxes, K8sGranuleImage: *k8sGranuleImage,
+		K8sGranuleSandboxes: *k8sGranuleSandboxes, K8sGranuleImage: *k8sGranuleImage, K8sGranuleRelayAddr: *k8sGranuleRelayAddr,
 		SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	cfg, err = local(cfg, passed)

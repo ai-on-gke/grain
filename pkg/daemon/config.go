@@ -759,6 +759,9 @@ type Config struct {
 	// default does not extend here (nothing publishes a packed guest
 	// image yet).
 	K8sGranuleImage string
+	// K8sGranuleRelayAddr is the host:port of the `granule relay`
+	// LoadBalancer (-k8s-granule-relay-addr) for an off-cluster controller.
+	K8sGranuleRelayAddr string
 
 	// sandboxCPUs, sandboxMemoryMB and sandboxDiskGB are store-backed
 	// (model.Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB,

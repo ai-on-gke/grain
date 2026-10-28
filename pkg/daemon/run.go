@@ -494,6 +494,7 @@ func Run(ctx context.Context, cfg Config) error {
 			Namespace:          k8sNamespace,
 			Kubectl:            cfg.K8sKubectl,
 			Kubeconfig:         k8sKubeconfig,
+			RelayAddr:          cfg.K8sGranuleRelayAddr,
 			Image:              k8sGranuleImage,
 			ServiceAccount:     cfg.K8sServiceAccount,
 			Workspace:          k8sWorkspace,

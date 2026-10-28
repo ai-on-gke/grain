@@ -1198,3 +1198,64 @@ func TestClusterCapacityFiltersByNodeSelector(t *testing.T) {
 		t.Errorf("calls = %v, want get nodes -l pool=kvm,tier=sandbox -o json", recorded)
 	}
 }
+
+func TestManifestSecretVolumeAndPorts(t *testing.T) {
+	c := Client{Namespace: "grain", Instance: "test-inst"}
+	raw, err := c.Manifest("grain-sandbox-1-1", PodShape{CPUs: 2, MemoryMB: 4096, DiskGB: 20}, PodOptions{
+		Image:     "example/sandbox:latest",
+		NoCommand: true,
+		Ports:     []ContainerPort{{Name: "granule-access", Port: 7443}},
+		SecretVolume: &SecretVolume{
+			Name:      "grain-sandbox-1-1-access",
+			MountPath: "/var/run/granule/access",
+			Data:      map[string]string{"token": "secret-tok"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Manifest: %v", err)
+	}
+	s := string(raw)
+	for _, want := range []string{
+		`"containerPort":7443`,
+		`"name":"granule-access"`,
+		`"mountPath":"/var/run/granule/access"`,
+		`"name":"grain-sandbox-1-1-access"`,
+		`"defaultMode":256`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("Manifest missing %s in %s", want, s)
+		}
+	}
+	if strings.Contains(s, "secret-tok") {
+		t.Errorf("Pod manifest leaked secret data: %s", s)
+	}
+}
+
+func TestCreateWithSecretVolumeCreatesSecretViaCreateVerb(t *testing.T) {
+	kubectl, calls := fakeKubectl(t, nil)
+	c := Client{Kubectl: kubectl, Namespace: "grain"}
+	err := c.Create(context.Background(), "grain-sandbox-1-1", PodShape{CPUs: 2, MemoryMB: 4096, DiskGB: 20}, PodOptions{
+		Image: "example/sandbox:latest",
+		SecretVolume: &SecretVolume{
+			Name:      "grain-sandbox-1-1-access",
+			MountPath: "/var/run/granule/access",
+			Data:      map[string]string{"token": "secret-tok"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	recorded := calls()
+	if len(recorded) != 3 {
+		t.Fatalf("recorded %d calls, want 3 (delete secret, create secret, apply pod): %v", len(recorded), recorded)
+	}
+	if !strings.Contains(recorded[0], "delete secret grain-sandbox-1-1-access --ignore-not-found") {
+		t.Errorf("call[0] = %q, want delete secret", recorded[0])
+	}
+	if !strings.Contains(recorded[1], "create --validate=false -f -") {
+		t.Errorf("call[1] = %q, want create -f -", recorded[1])
+	}
+	if !strings.Contains(recorded[2], "apply --validate=false -f -") {
+		t.Errorf("call[2] = %q, want apply -f -", recorded[2])
+	}
+}
