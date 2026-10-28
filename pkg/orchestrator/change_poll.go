@@ -114,7 +114,7 @@ func PollChangesOnce(ctx context.Context, store ChangePollStore) int {
 
 // ChangeOutcomeStore is the daemon's store as a poll that acts on what it
 // saw needs it: a CL submitted or abandoned outside grain, and the syncs
-// a CL's health calls for (google3-cls.md §6-§7).
+// a CL's health calls for (changelists.md §6-§7).
 type ChangeOutcomeStore interface {
 	ChangePollStore
 	change.Store

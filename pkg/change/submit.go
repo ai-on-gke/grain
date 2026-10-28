@@ -25,7 +25,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// Stages S5 and S6 (google3-cls.md §6-§7, G3-6/G3-7): a person's Submit
+// Stages S5 and S6 (changelists.md §6-§7, G3-6/G3-7): a person's Submit
 // of a task's change, what each outcome does to the task, and the CL a
 // poll finds submitted or abandoned outside grain. Like the earlier
 // stages these speak through Provider and optional interfaces; core never

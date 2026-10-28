@@ -358,7 +358,7 @@ func HealthOf(kind string) HealthState {
 }
 
 // Forger is a Provider that names the forge its changes land on, as
-// merge metrics count them ("google3" for a CL).
+// merge metrics count them.
 type Forger interface {
 	Forge() string
 }

@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// Stage S6 (google3-cls.md §7, G3-7): the daemon syncing a CL to head on
+// Stage S6 (changelists.md §7, G3-7): the daemon syncing a CL to head on
 // its own, with no agent. Each automatic trigger fires at most once per
 // CL snapshot, never while the task has a run going, and a sync that
 // failed is not tried again automatically until the CL is uploaded anew
@@ -38,7 +38,7 @@ const (
 
 // DefaultSyncAfter is how old an awaiting_submit CL's snapshot may grow
 // before the daemon syncs it, where the provider does not say
-// (google3.sync_after).
+// (the edition's own sync_after setting).
 const DefaultSyncAfter = 24 * time.Hour
 
 // SyncPolicy is a Provider that says how old an awaiting_submit snapshot

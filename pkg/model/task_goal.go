@@ -55,7 +55,7 @@ const (
 	// and no pipeline.* notification is open.
 	GoalPipelineHealthy GoalKind = "pipeline-healthy"
 	// GoalCLSubmitted is met when every CL of a task has been submitted,
-	// or one named CL has (google3-cls.md §6), as its change provider
+	// or one named CL has (changelists.md §6), as its change provider
 	// observes it.
 	GoalCLSubmitted GoalKind = "cl-submitted"
 )

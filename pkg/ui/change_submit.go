@@ -28,7 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// A CL's Submit and Sync buttons (google3-cls.md §6-§7, G3-6/G3-7): a
+// A CL's Submit and Sync buttons (changelists.md §6-§7, G3-6/G3-7): a
 // person submitting a task's CL through its change provider, and what
 // each outcome does to the task. A pull request's Submit is untouched;
 // Client.Submit hands a task whose change is a CL to submitChange.

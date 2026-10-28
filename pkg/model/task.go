@@ -1250,7 +1250,7 @@ const (
 	// reads it as cl-submitted.
 	LinkChangelistSubmitted LinkKind = "changelist-submitted"
 	// LinkChangelistAbandoned records a task's CL that was abandoned
-	// (-> "cl/<number>"), as a poll found it (google3-cls.md §7). It is
+	// (-> "cl/<number>"), as a poll found it (changelists.md §7). It is
 	// not a change link: a task whose every CL is abandoned no longer
 	// awaits a Submit, and reads awaiting_reply once its run is over.
 	LinkChangelistAbandoned LinkKind = "changelist-abandoned"

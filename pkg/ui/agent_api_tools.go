@@ -87,6 +87,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/undefer":                                         "Pick a deferred task back up now.",
 	"POST /api/tasks/{id}/submit":                                          "Submit a task's pull request to the merge queue, to be brought up to date and merged.",
 	"POST /api/tasks/{id}/change-mail":                                     "Mail a task's CL to its reviewers. A person's call only: agents are refused.",
+	"POST /api/tasks/{id}/change-sync":                                     "Sync a task's CL to head. A person's call only: agents are refused, and it is refused while the task has a run going.",
 	"POST /api/tasks/{id}/change-publish":                                  "Publish the replies a task's runs left as drafts on its CLs. A person's call only: agents are refused.",
 	"POST /api/tasks/{id}/comments":                                        "Comment on a task's conversation.",
 	"PUT /api/tasks/{id}/secret":                                           "Answer a task's pending secret request with its value, which goes to the secret store and is never shown back.",
