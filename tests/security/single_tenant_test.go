@@ -418,8 +418,8 @@ func TestASingleTenantDaemonAcceptsRemoteExecutors(t *testing.T) {
 	if rec := serveFrom(srv, publicAddr, http.MethodGet, "/api/tasks", "", accessHeader(testAccessCode)); rec.Code != http.StatusOK {
 		t.Errorf("the right code from a source that connected executors: %d, want 200: %s", rec.Code, rec.Body.String())
 	}
-	// And the bootstrap: the install script, from either of its paths.
-	for _, target := range []string{"/install-executor.sh", "/api/executors/install.sh"} {
+	// And the bootstrap: the install script, from any of its paths.
+	for _, target := range []string{"/install-executor.sh", "/api/executors/install.sh", "/api/model-servers/install.sh"} {
 		if rec := serveFrom(srv, publicAddr, http.MethodGet, target, "", accessHeader("gxt_0123456789abcdef0123456789abcdef")); rec.Code != http.StatusOK ||
 			!strings.HasPrefix(rec.Body.String(), "#!") {
 			t.Errorf("GET %s from %s without the access code: %d, want 200 and the script", target, publicAddr, rec.Code)
@@ -675,6 +675,7 @@ var singleTenantOpenRoutes = map[string]string{
 	"GET /api/auth/access-code/login.js": "the login page's script",
 	"POST /api/auth/logout":              "signing out",
 	"GET /api/auth/logout":               "signing out",
+	"GET /api/model-servers/install.sh":  "remote execution",
 	"GET /api/executors/install.sh":      "remote execution",
 	"GET /install-executor.sh":           "remote execution",
 	"GET /api/executors/bin/{binary}":    "remote execution",
@@ -682,6 +683,7 @@ var singleTenantOpenRoutes = map[string]string{
 	"GET /_grain/executor":               "remote execution",
 	"GET /api/executors/connect":         "remote execution",
 	"GET /api/executors/stream":          "remote execution",
+	"GET /api/hostd/connect":             "a grain hostd dialing in, with the hostd token",
 }
 
 // singleTenantGatedPublicRoutes are the public routes a single-tenant

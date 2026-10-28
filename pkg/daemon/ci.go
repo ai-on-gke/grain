@@ -39,6 +39,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/grit/actions"
+	"github.com/ai-on-gke/grain/pkg/gritapi"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -57,6 +58,13 @@ import (
 // nothing through it, and the proxy answers exactly as it did before it
 // existed.
 var CiReadScopes = gitproxy.NewReadScopes()
+
+// SandboxCapabilities is the registry of capability tools a sandbox may
+// call through the proxy's /cap/<server>/mcp (grain cap,
+// docs/capabilities-spec.md §5.2.6): filled by each agent run's and CI
+// job's capability pass for as long as it is materialized, and read by
+// the proxy BuildProxy wires.
+var SandboxCapabilities = gitproxy.NewCapRegistry()
 
 // ciWriteScopes is the registry of write git scopes CI jobs hold while they run
 // (gitproxy.WriteScopes).
@@ -349,6 +357,8 @@ type CiSandboxes struct {
 	// as it did before this existed, and exports into a cache that dies
 	// with the machine.
 	ActionsCache func(scope actionscache.Scope) (url string, revoke func(), err error)
+	// Stopping, when non-nil, is closed when the daemon begins shutting down.
+	Stopping <-chan struct{}
 }
 
 // ciActionsCacheScope is the corner of the Actions cache a job may use:
@@ -386,6 +396,13 @@ type CiGrantReservations struct {
 	Ports        *portforward.Relay
 	PortsURL     string
 	SetupTimeout time.Duration
+	// CapServers, ProxyURL and ProxyToken carry a job's sandbox-callable
+	// capability tools through the sandbox proxy's /cap/<server>/mcp
+	// (orchestrator.CIPassOptions); nil CapServers forwards each endpoint
+	// over Ports instead.
+	CapServers *gitproxy.CapRegistry
+	ProxyURL   string
+	ProxyToken func(sandbox string) (string, error)
 	// Now and Sleep are the clock a pass's retries are timed against;
 	// nil is the real one.
 	Now   func() time.Time
@@ -427,6 +444,9 @@ func (g *CiGrantReservations) Acquire(ctx context.Context, req ci.SandboxRequest
 		return nil, fmt.Errorf("CI grant admission has no capability registry")
 	}
 	if err := ciPolicyRefusal(g.Policy, req, g.Log); err != nil {
+		return nil, err
+	}
+	if err := ciCatalogueRefusal(ctx, g.Config, req, g.Log); err != nil {
 		return nil, err
 	}
 	repo, err := model.ParseRepo(req.Repo)
@@ -582,6 +602,13 @@ var ciGitSafe = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 // clone the commit under test, provision explicit CI grants, and answer
 // only once a step could run.
 func (s CiSandboxes) Acquire(ctx context.Context, req ci.SandboxRequest) (ci.Sandbox, error) {
+	if s.Stopping != nil {
+		select {
+		case <-s.Stopping:
+			return nil, errors.New("this daemon is shutting down")
+		default:
+		}
+	}
 	repo, err := model.ParseRepo(req.Repo)
 	if err != nil {
 		return nil, fmt.Errorf("%q is not a repository this deployment can check out: %w", req.Repo, err)
@@ -1226,11 +1253,26 @@ func ciTrustedScheduleAdmits(provider model.CapabilityProvider, event ci.Event, 
 // (model.Store.EffectiveRepoConfig), which holds what the default team's
 // team_repo_config layered over it until schema 23. Repo spelling is
 // case-insensitive,
-// including requests coming directly from the MCP CI tool.
+// including requests coming directly from the MCP CI tool. The capability
+// catalogue's deployment-wide CI defaults (settings/capabilities.yml
+// defaults.ci) join every repository's own list.
 func CiRepoCapabilities(store *model.Store) func(context.Context, string) ([]string, error) {
 	return func(ctx context.Context, name string) ([]string, error) {
 		eff, err := ciRepoConfig(ctx, store, name)
-		return eff.CICapabilities, err
+		if err != nil {
+			return eff.CICapabilities, err
+		}
+		cfg, err := store.GetConfig(ctx)
+		if err != nil || cfg == nil || cfg.CapabilityPolicy.Catalogue == nil {
+			return eff.CICapabilities, err
+		}
+		out := append([]string{}, eff.CICapabilities...)
+		for _, id := range cfg.CapabilityPolicy.Catalogue.Defaults.CI {
+			if !slices.Contains(out, id) {
+				out = append(out, id)
+			}
+		}
+		return out, nil
 	}
 }
 
@@ -2422,6 +2464,9 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 	if store != nil {
 		grantReservations.Config = store.GetConfig
 	}
+	if tokens != nil && proxyURL != "" {
+		grantReservations.CapServers, grantReservations.ProxyURL, grantReservations.ProxyToken = SandboxCapabilities, proxyURL, tokens.EnsureToken
+	}
 	jobSandboxes := CiSandboxes{
 		Capabilities: capabilities, Credentials: capabilityCredentials, Sandboxes: sandboxes,
 		DefaultShape: func() orchestrator.Shape {
@@ -2439,6 +2484,7 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 		PackageCacheCA:    packageCacheCA,
 		PackageCacheDNS:   packageCacheDNS,
 		ActionsCache:      actionsCache,
+		Stopping:          cfg.shutdownStarted,
 		// Counted into the same two rows dispatch's own sandboxes are
 		// counted into, out of the same store this service already holds
 		// for its run history.
@@ -2577,9 +2623,11 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 				Wake: wakeCycle,
 				Log:  log.Printf,
 			},
-			Log: log.Printf,
+			Stopping: cfg.shutdownStarted,
+			Log:      log.Printf,
 		},
-		Log: log.Printf,
+		Stopping: cfg.shutdownStarted,
+		Log:      log.Printf,
 	}
 	// The warmer is set after the service rather than inside it because
 	// it needs the service: warming a guest is starting a CI run and
@@ -2606,7 +2654,7 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 // service.Adopt. Runs that cannot be resumed are finished as interrupted via
 // RecoverInterruptedExcept.
 func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orchestrator.AdoptedCIJobNote) {
-	if service == nil || service.Runs == nil || service.Engine == nil {
+	if service == nil || service.Runs == nil || service.Engine == nil || service.IsStopping() {
 		return nil, nil
 	}
 	lister, ok := service.Runs.(interface {
@@ -2641,6 +2689,9 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 
 	var adoptedRunIDs []string
 	for _, run := range liveRuns {
+		if service.IsStopping() {
+			break
+		}
 		plan, err := service.ReconstructPlan(ctx, run)
 		if err != nil {
 			log.Printf("ci: run %s (%s@%s): cannot load or reconstruct plan for adoption: %v", run.ID, run.Repo, run.Ref, err)
@@ -2663,7 +2714,14 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 		var runAdoptedNotes, runLostNotes []orchestrator.AdoptedCIJobNote
 		canAdoptRun := true
 
-		for _, j := range run.Jobs {
+		for i, j := range run.Jobs {
+			if (j.Conclusion == ci.ConclusionErrored || j.Conclusion == ci.ConclusionFailure) && ci.JobFailedOnDaemonService(j) {
+				if pj, hasPlanned := plannedByJobID[j.JobID]; hasPlanned {
+					run.Jobs[i] = ci.NewJobRun(pj)
+					service.Runs.Put(run)
+				}
+				continue
+			}
 			if j.Conclusion.Done() || j.StartedAt == nil {
 				continue
 			}
@@ -3005,3 +3063,24 @@ func deployedImages(configCheckImage func() string) []string {
 // ciClusterFullRetry is how long a CI job whose pod the cluster had no
 // room for waits before asking again.
 var ciClusterFullRetry = 15 * time.Second
+
+// BuildGritBackendRunner constructs a `ci.BackendRunner` connected to a remote
+// `grit serve` endpoint (`cfg.GritURL`) and starts its background `/v1/events`
+// consumer loop.
+func BuildGritBackendRunner(ctx context.Context, cfg Config, retention func() ci.StoredRunRetention, store *model.Store) *ci.BackendRunner {
+	stateDir := filepath.Join(cfg.DataDir, "state")
+	cursor := ci.NewFileCursorStore(filepath.Join(stateDir, "grit-cursor.json"))
+	client := gritapi.NewClient(gritapi.ClientConfig{
+		BaseURL:     cfg.GritURL,
+		ClientToken: cfg.GritClientToken,
+		Cursor:      cursor,
+	})
+	runner := ci.NewBackendRunner(ci.BackendRunnerConfig{
+		Backend:  client,
+		Store:    buildCIRunStore(ctx, store, retention),
+		Cursor:   cursor,
+		StateDir: stateDir,
+	})
+	go runner.RunConsumer(ctx, 250*time.Millisecond)
+	return runner
+}

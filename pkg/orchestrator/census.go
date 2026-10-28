@@ -162,6 +162,7 @@ func runTelemetryAt(result *agent.Result, at time.Time) model.RunTelemetry {
 				out.CheckWaits = append(out.CheckWaits, model.RunCheckWait{
 					Seq:          len(out.CheckWaits),
 					Verdict:      wait.Verdict,
+					Provider:     wait.Provider,
 					Waited:       wait.Waited,
 					PushesBefore: pushes,
 				})

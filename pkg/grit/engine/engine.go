@@ -138,6 +138,11 @@ type Engine struct {
 	// finishes or is served from cache -- the daemon's own log, in a
 	// real deployment. nil discards.
 	Log func(format string, args ...any)
+	// Stopping, when non-nil, is closed when the hosting daemon begins
+	// shutting down. Once closed, the engine stops starting new jobs, new
+	// steps, or automatic retries, and records jobs that fail in the
+	// shutdown window as interrupted rather than errored or failed.
+	Stopping <-chan struct{}
 
 	// flightMu and inFlight coalesce concurrent cacheable executions of the
 	// same job Key across runs on this Engine.
@@ -187,6 +192,42 @@ func IsDetaching(ctx context.Context) bool {
 		return flag.Load()
 	}
 	return false
+}
+
+func (e *Engine) daemonStopping() bool {
+	if e == nil || e.Stopping == nil {
+		return false
+	}
+	select {
+	case <-e.Stopping:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) stopping(ctx context.Context) bool {
+	return IsDetaching(ctx) || e.daemonStopping()
+}
+
+func (e *Engine) withStoppingCancel(parent context.Context) (context.Context, context.CancelFunc) {
+	if e == nil || e.Stopping == nil {
+		return context.WithCancel(parent)
+	}
+	if e.daemonStopping() {
+		ctx, cancel := context.WithCancel(parent)
+		cancel()
+		return ctx, cancel
+	}
+	ctx, cancel := context.WithCancel(parent)
+	go func() {
+		select {
+		case <-e.Stopping:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
 }
 
 // AdoptedJob carries the pre-existing state and readopted sandbox for an
@@ -320,19 +361,7 @@ func (e *Engine) Run(ctx context.Context, runID string, plan workflows.Plan, obs
 	}
 
 	results := e.runJobs(ctx, runID, plan, observe)
-	if IsDetaching(ctx) {
-		return run
-	}
-	for _, pj := range plan.Jobs {
-		jobRes := results[pj.ID]
-		if jobRes.Quarantined {
-			run.Quarantined = true
-		}
-		run.Jobs = append(run.Jobs, jobRes)
-	}
-	run.FinishedAt = e.instant()
-	run.Conclusion = ConcludeRun(run.Jobs)
-	return run
+	return e.finishRun(ctx, plan, run, results)
 }
 
 // Resume continues an unconcluded Run across a daemon restart, preserving
@@ -347,7 +376,53 @@ func (e *Engine) Resume(ctx context.Context, run workflows.Run, plan workflows.P
 		return run
 	}
 	results := e.runJobsWithAdopted(ctx, run.ID, plan, run.Jobs, adopted, observe)
-	if IsDetaching(ctx) {
+	return e.finishRun(ctx, plan, run, results)
+}
+
+func (e *Engine) finishRun(ctx context.Context, plan workflows.Plan, run workflows.Run, results map[string]workflows.JobRun) workflows.Run {
+	hasDetachedStep := false
+	allDone := len(plan.Jobs) > 0
+	hasDaemonServiceFailure := false
+	for _, pj := range plan.Jobs {
+		jobRes, ok := results[pj.ID]
+		if !ok || !jobRes.Conclusion.Done() {
+			allDone = false
+		}
+		if ok && !jobRes.Conclusion.Done() && jobRes.StartedAt != nil && jobRes.Sandbox != "" {
+			hasDetachedStep = true
+		}
+		if ok && jobRes.Conclusion != workflows.ConclusionSuccess && JobFailedOnDaemonService(jobRes) {
+			hasDaemonServiceFailure = true
+		}
+	}
+	if IsDetaching(ctx) && (!e.daemonStopping() || hasDetachedStep) {
+		return run
+	}
+	if e.daemonStopping() && (!allDone || hasDaemonServiceFailure) {
+		run.Jobs = nil
+		now := e.instant()
+		for _, pj := range plan.Jobs {
+			jobRes, ok := results[pj.ID]
+			if !ok || jobRes.Name == "" {
+				jobRes = NewJobRun(pj)
+			}
+			if jobRes.Quarantined {
+				run.Quarantined = true
+			}
+			if !jobRes.Conclusion.Done() || (jobRes.Conclusion != workflows.ConclusionSuccess && JobFailedOnDaemonService(jobRes)) {
+				jobRes.Conclusion = workflows.ConclusionCancelled
+				jobRes.Error = workflows.InterruptedRunError
+				jobRes.Sandbox = ""
+				if jobRes.StartedAt != nil && jobRes.FinishedAt == nil {
+					jobRes.FinishedAt = now
+				}
+			}
+			run.Jobs = append(run.Jobs, jobRes)
+		}
+		run.FinishedAt = now
+		run.Conclusion = workflows.ConclusionCancelled
+		run.Interrupted = true
+		run.Error = workflows.InterruptedRunError
 		return run
 	}
 	run.Jobs = nil
@@ -529,7 +604,7 @@ func (e *Engine) runJobsWithAdopted(ctx context.Context, runID string, plan work
 
 	for len(results) < len(plan.Jobs) {
 		progress := false
-		if !IsDetaching(ctx) {
+		if !e.stopping(ctx) {
 			for _, pj := range plan.Jobs {
 				if started[pj.ID] {
 					continue
@@ -560,7 +635,7 @@ func (e *Engine) runJobsWithAdopted(ctx context.Context, runID string, plan work
 			}
 		}
 		if running == 0 && !progress {
-			if IsDetaching(ctx) {
+			if e.stopping(ctx) {
 				break
 			}
 			// Nothing running and nothing startable, with jobs left over:
@@ -579,7 +654,7 @@ func (e *Engine) runJobsWithAdopted(ctx context.Context, runID string, plan work
 		}
 		if running > 0 {
 			ev := <-events
-			if !IsDetaching(ctx) {
+			if !e.stopping(ctx) || (!ev.inFlight && ev.result.Conclusion == "" && ev.result.StartedAt == nil) {
 				report(ev.result)
 			}
 			// A progress snapshot is still a running job: it has no result
@@ -745,6 +820,8 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 	// pass runs, since what waits behind it could not run otherwise.
 	dependencyOfRecheck := plan.Request.Recheck && pj.DependencyOnly
 	useCache := e.Cache != nil && pj.Job.Cache && (!plan.Request.Recheck || dependencyOfRecheck)
+	queueCtx, stopQueue := e.withStoppingCancel(ctx)
+	defer stopQueue()
 	if useCache {
 		if adopted != nil {
 			if flight, mine := e.claimFlight(pj.Key, runID); mine {
@@ -776,9 +853,9 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 					if hit, ok := e.lookupCache(ctx, runID, plan, pj, dependencyOfRecheck); ok {
 						return hit
 					}
-				case <-ctx.Done():
-					if IsDetaching(ctx) {
-						return result
+				case <-queueCtx.Done():
+					if e.stopping(ctx) {
+						return NewJobRun(pj)
 					}
 					neverRan(&result, pj, queue, e.now(), conclusionFor(ctx, workflows.ConclusionErrored),
 						fmt.Sprintf("waiting for identical %s job in flight in run %s: %v", pj.Job.DisplayName(), flight.runID, ctx.Err()))
@@ -811,14 +888,14 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		Builtin:         pj.Job.Builtin,
 	}
 	if adopted == nil && e.GuestCache != nil && pj.GuestKey != "" {
-		warmCtx, cancel := context.WithTimeout(ctx, pj.Job.Timeout())
+		warmCtx, cancel := context.WithTimeout(queueCtx, pj.Job.Timeout())
 		err := e.GuestCache.Warm(warmCtx, gritcache.GuestCacheRequest{
 			RunID: runID, Repo: plan.Request.Repo, Ref: plan.Request.Ref,
 			Commit: plan.Request.Commit, Key: pj.GuestKey, Job: pj.ID,
 		}, waiting)
 		cancel()
-		if IsDetaching(ctx) {
-			return result
+		if e.stopping(ctx) {
+			return NewJobRun(pj)
 		}
 		if err != nil {
 			e.log("ci: run %s: job %s: the sandbox guest it resolves was not warmed (%v): "+
@@ -831,10 +908,10 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 
 	var keepLeaseOnDetach bool
 	if adopted == nil && e.Admission != nil {
-		release, err := e.Admission.Acquire(ctx, request, waiting)
+		release, err := e.Admission.Acquire(queueCtx, request, waiting)
 		if err != nil {
-			if IsDetaching(ctx) {
-				return result
+			if e.stopping(ctx) {
+				return NewJobRun(pj)
 			}
 			neverRan(&result, pj, queue, e.now(), conclusionFor(ctx, workflows.ConclusionErrored),
 				fmt.Sprintf("waiting for this job's capability grants: %v", err))
@@ -852,10 +929,10 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 	}
 
 	if perRun != nil {
-		release, err := perRun.Acquire(ctx, GateRequest{Wait: waiting})
+		release, err := perRun.Acquire(queueCtx, GateRequest{Wait: waiting})
 		if err != nil {
-			if IsDetaching(ctx) {
-				return result
+			if e.stopping(ctx) {
+				return NewJobRun(pj)
 			}
 			neverRan(&result, pj, queue, e.now(), conclusionFor(ctx, workflows.ConclusionErrored),
 				fmt.Sprintf("waiting for this run's CI sandbox capacity: %v", err))
@@ -870,7 +947,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		// deployment's, and what it rations is the machine as well as
 		// the count (grain/task-173).
 		var jobID string
-		release, err := e.Jobs.Acquire(ctx, GateRequest{
+		release, err := e.Jobs.Acquire(queueCtx, GateRequest{
 			Want: workflows.SandboxCommitment(pj.Job.Sandbox), Priority: rank, Wait: waiting,
 			Adopted: adopted != nil,
 			Assigned: func(id string) {
@@ -890,8 +967,8 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			e.JobDequeued(jobID)
 		}
 		if err != nil {
-			if IsDetaching(ctx) {
-				return result
+			if e.stopping(ctx) {
+				return NewJobRun(pj)
 			}
 			// Only ctx's own error: the run was cancelled, or it hit
 			// Service.MaxRunTime, while this job was still queueing for
@@ -934,6 +1011,9 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		result.Sandbox = sandbox.Name()
 		e.log("ci: run %s: job %s: resumed in sandbox %s", runID, pj.ID, sandbox.Name())
 	} else {
+		if e.stopping(ctx) {
+			return NewJobRun(pj)
+		}
 		// After the permit, so that a job made to queue reads as having
 		// started when it got a machine rather than when it got in line --
 		// and so that its own timeout (below) is the time it had to work in,
@@ -949,10 +1029,12 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		defer cancel()
 
 		var err error
-		sandbox, err = e.Sandboxes.Acquire(jobCtx, request)
+		acquireCtx, cancelAcquire := e.withStoppingCancel(jobCtx)
+		sandbox, err = e.Sandboxes.Acquire(acquireCtx, request)
+		cancelAcquire()
 		if err != nil {
-			if IsDetaching(ctx) {
-				return result
+			if e.stopping(ctx) {
+				return NewJobRun(pj)
 			}
 			// Errored, not failure: this job never ran a line of the tree,
 			// so what went wrong is the deployment's and a red verdict on
@@ -967,7 +1049,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			return result
 		}
 		result.Sandbox = sandbox.Name()
-		if progress != nil {
+		if progress != nil && !e.stopping(ctx) {
 			progress(jobRunSnapshot(result))
 		}
 	}
@@ -985,15 +1067,21 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			releaseSandbox(activeSandbox)
 		}
 	}()
+	if adopted == nil && e.stopping(ctx) {
+		return NewJobRun(pj)
+	}
 
 	// Run steps in initial (or readopted) sandbox
 	initialAttempt := len(result.Attempts) + 1
 	attempt1StartedAt := result.StartedAt
 	e.runSteps(ctx, newJobClock(jobCtx, pj.Job), plan, pj, sandbox, initialAttempt, &result, progress)
-	if IsDetaching(ctx) {
+	if IsDetaching(ctx) && result.Conclusion == "" {
 		activeSandbox = nil
 		keepLeaseOnDetach = true
 		return result
+	}
+	if result.Conclusion != workflows.ConclusionSuccess && e.stopping(ctx) {
+		return NewJobRun(pj)
 	}
 	e.collectGoTestLog(jobCtx, runID, pj, sandbox, &result)
 
@@ -1011,8 +1099,12 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 	}
 	lost := oomKilled || preempted
 
+	if result.Conclusion != workflows.ConclusionSuccess && e.stopping(ctx) {
+		return NewJobRun(pj)
+	}
+
 	// Check if this job failed on attempt 1 and is eligible for automatic retry
-	if initialAttempt == 1 && (lost || IsJobRetryEligible(pj.Job, result, 0)) && ctx.Err() == nil && !IsDetaching(ctx) {
+	if initialAttempt == 1 && (lost || IsJobRetryEligible(pj.Job, result, 0)) && ctx.Err() == nil && !e.stopping(ctx) {
 		firstFailureSummary := SummarizeFailure(result)
 		if oomKilled {
 			firstFailureSummary = OOMRetryReasonPrefix + oomHow
@@ -1040,15 +1132,20 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		// Release initial sandbox before acquiring a fresh one
 		activeSandbox = nil
 		releaseSandbox(sandbox)
+		if e.stopping(ctx) {
+			return NewJobRun(pj)
+		}
 
 		// Acquire fresh sandbox for retry attempt with a fresh job timeout budget
 		attempt2StartedAt := e.instant()
 		retryCtx, retryCancel := context.WithTimeout(ctx, pj.Job.Timeout())
 		defer retryCancel()
-		sandbox2, err2 := e.Sandboxes.Acquire(retryCtx, request)
+		retryAcquireCtx, cancelRetryAcquire := e.withStoppingCancel(retryCtx)
+		sandbox2, err2 := e.Sandboxes.Acquire(retryAcquireCtx, request)
+		cancelRetryAcquire()
 		if err2 != nil {
-			if IsDetaching(ctx) {
-				return result
+			if e.stopping(ctx) {
+				return NewJobRun(pj)
 			}
 			result.FinishedAt = e.instant()
 			result.Retried = true
@@ -1068,6 +1165,9 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		}
 
 		activeSandbox = sandbox2
+		if e.stopping(ctx) {
+			return NewJobRun(pj)
+		}
 		result.Sandbox = sandbox2.Name()
 		// The job is running again, so it must not read as finished: a
 		// conclusion left over from the first attempt makes every reader
@@ -1084,15 +1184,18 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		result.Retried = true
 		result.RetryCount = 1
 		result.RetryReason = firstFailureSummary
-		if progress != nil {
+		if progress != nil && !e.stopping(ctx) {
 			progress(jobRunSnapshot(result))
 		}
 
 		e.runSteps(ctx, newJobClock(retryCtx, pj.Job), plan, pj, sandbox2, 2, &result, progress)
-		if IsDetaching(ctx) {
+		if IsDetaching(ctx) && result.Conclusion == "" {
 			activeSandbox = nil
 			keepLeaseOnDetach = true
 			return result
+		}
+		if result.Conclusion != workflows.ConclusionSuccess && e.stopping(ctx) {
+			return NewJobRun(pj)
 		}
 		e.collectGoTestLog(retryCtx, runID, pj, sandbox2, &result)
 
@@ -1192,6 +1295,9 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			Artifacts:      append([]workflows.Artifact(nil), result.Artifacts...),
 			GoTestLog:      result.GoTestLog,
 		})
+	}
+	if result.Conclusion != workflows.ConclusionSuccess && e.stopping(ctx) {
+		return NewJobRun(pj)
 	}
 	// Both are set: this is the path where the job got a machine.
 	e.log("ci: run %s: job %s: %s in %s", runID, pj.ID, result.Conclusion,
@@ -1371,7 +1477,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 		environmentWhy string
 	)
 	for i, step := range pj.Job.Steps {
-		if IsDetaching(ctx) {
+		if e.stopping(ctx) {
 			return
 		}
 		if i < len(result.Steps) && result.Steps[i].Conclusion != "" {
@@ -1381,7 +1487,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 			continue
 		}
 		if failed || ctx.Err() != nil {
-			if IsDetaching(ctx) {
+			if e.stopping(ctx) {
 				return
 			}
 			conclusion := workflows.ConclusionSkipped
@@ -1437,7 +1543,11 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 			}
 		}
 		spent()
-		if IsDetaching(ctx) {
+		if IsDetaching(ctx) && err != nil && !IsDaemonServiceError(out.Output) && !IsDaemonServiceError(err.Error()) {
+			return
+		}
+		if e.stopping(ctx) && (err != nil || out.ExitCode != 0) && !step.ContinueOnError {
+			result.Conclusion = workflows.ConclusionCancelled
 			return
 		}
 		// A step's own `timeout-minutes` is enforced by the sandbox through

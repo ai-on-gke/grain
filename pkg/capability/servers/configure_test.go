@@ -181,6 +181,11 @@ func TestProbeReportsWithoutAttaching(t *testing.T) {
 	if !res.OK || len(res.Methods) != 1 || res.ConfigSchema == nil {
 		t.Errorf("probe = %+v", res)
 	}
+	// A method that declares no mcpDelivery keeps its tools model-only,
+	// and the probe says so (docs/capabilities-spec.md §5.2.6).
+	if len(res.Methods) == 1 && (res.Methods[0].Delivery != protocol.DeliveryModelOnly || res.Methods[0].DeliveryDeclared) {
+		t.Errorf("probe method delivery = %q (declared %v), want the model_only default", res.Methods[0].Delivery, res.Methods[0].DeliveryDeclared)
+	}
 	if !h.callers[1].closed {
 		t.Errorf("the probe's session was left open")
 	}

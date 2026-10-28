@@ -142,6 +142,10 @@ func buildNamespaceRedactor(dataDir string) *redact.Redactor {
 // in when the process started. A nil set is a caller with nothing that
 // can change that answer, which gets one of its own.
 func StartGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet) (url string, handler http.Handler, stop func(context.Context) error, err error) {
+	return startGitProxy(dataDir, store, githubHost, insecureHTTP, fabric, forbidden, nil)
+}
+
+func startGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet, shutdownStarted <-chan struct{}) (url string, handler http.Handler, stop func(context.Context) error, err error) {
 	repos, err := ForbiddenRepos(context.Background(), dataDir)
 	if err != nil {
 		return "", nil, nil, err
@@ -177,8 +181,13 @@ func StartGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 		// The acting /cli/ routes (grain ci wait, grain pr open, ...),
 		// through the UI/API server's own client once it is up, and the
 		// credit their waits earn (sandbox_cli.go).
-		CLIActions: sandboxCLIGate{},
-		WaitCredit: waitCreditAdapter{runWaitCredits},
+		CLIActions:      sandboxCLIGate{},
+		WaitCredit:      waitCreditAdapter{runWaitCredits},
+		API:             LiveAPI,
+		ShutdownStarted: shutdownStarted,
+		// External capability tools a run or CI job may call from its
+		// sandbox under /cap/<server>/mcp (grain cap).
+		CapServers: SandboxCapabilities,
 		// The scopes that belong to a sandbox rather than to a task --
 		// grain CI's job sandboxes, which have no task to be resolved
 		// through (pkg/cli/ci.go's ciReadScopes and ciWriteScopes). Wired whether or not

@@ -70,6 +70,9 @@ const (
 // safe: pkg/metrics drops a non-positive duration rather than counting it
 // as a zero-second wait.
 type CheckWait struct {
+	// Provider is the CI waited on: "github" for a pull request's checks,
+	// or the provider a changelist wait names ("tap").
+	Provider    string
 	Verdict     string
 	Waited      time.Duration
 	WaitedKnown bool
@@ -91,6 +94,9 @@ type CheckWait struct {
 // a log that happens to quote another verdict's wording cannot displace
 // it.
 func ReadCheckWait(text string) (CheckWait, bool) {
+	if wait, ok := readChangeWait(text); ok {
+		return wait, true
+	}
 	var verdict string
 	switch {
 	case strings.Contains(text, waitFailedMarker):
@@ -105,7 +111,42 @@ func ReadCheckWait(text string) (CheckWait, bool) {
 		return CheckWait{}, false
 	}
 	waited, known := waitedFrom(text)
-	return CheckWait{Verdict: verdict, Waited: waited, WaitedKnown: known}, true
+	return CheckWait{Provider: "github", Verdict: verdict, Waited: waited, WaitedKnown: known}, true
+}
+
+// readChangeWait reads a changelist wait's "Verdict from tap: passed."
+// line (renderChangeWait). It is tried first and only in the report's
+// own header -- the two lines before the provider's text -- so a check's
+// log tail quoting GitHub's wording is never read as a GitHub wait.
+func readChangeWait(text string) (CheckWait, bool) {
+	// The clamp note may come first; the header is the paragraph holding
+	// the verdict line, one of the first two.
+	head := ""
+	for _, para := range strings.SplitN(text, "\n\n", 3)[:min(2, strings.Count(text, "\n\n")+1)] {
+		if strings.Contains(para, changeWaitVerdictPrefix) {
+			head = para
+			break
+		}
+	}
+	start := strings.Index(head, changeWaitVerdictPrefix)
+	if start < 0 {
+		return CheckWait{}, false
+	}
+	line := head[start+len(changeWaitVerdictPrefix):]
+	if end := strings.IndexByte(line, '\n'); end >= 0 {
+		line = line[:end]
+	}
+	provider, verdict, ok := strings.Cut(strings.TrimSuffix(line, "."), ": ")
+	if !ok || provider == "" {
+		return CheckWait{}, false
+	}
+	switch verdict {
+	case WaitVerdictFailed, WaitVerdictPassed, WaitVerdictTimedOut, WaitVerdictNoChecks:
+	default:
+		return CheckWait{}, false
+	}
+	waited, known := waitedFrom(head)
+	return CheckWait{Provider: provider, Verdict: verdict, Waited: waited, WaitedKnown: known}, true
 }
 
 // waitedFrom reads the "Waited 4m12s for CI on ..." header every report

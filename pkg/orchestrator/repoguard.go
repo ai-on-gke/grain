@@ -62,13 +62,13 @@ const (
 
 // repoGuard is the repository's half of the effective list for files:
 // the rules' identity, and the categories they add.
-func repoGuard(ctx context.Context, store *model.Store, repo model.RepoRef, files []string,
+func repoGuard(ctx context.Context, store *model.Store, client github.Client, repo model.RepoRef, files []string,
 	known bool) (model.RepoRules, []trustboundary.Match) {
 
 	triggers, rules := repoRules(ctx, store, repo)
 	// grain's own guard on its state repository comes first, and is not
 	// the repository's to declare: see stateRepoGuard.
-	out := stateRepoGuard(store, repo, files, known)
+	out := stateRepoGuard(client, store, repo, files, known)
 	if rules.Broken != "" {
 		out = append(out, trustboundary.Match{
 			Category: trustboundary.Category{

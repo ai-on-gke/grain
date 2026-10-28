@@ -47,6 +47,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 )
 
 // ImageConfig, set on Config.Image, makes an Upgrader upgrade a
@@ -394,13 +395,39 @@ func (u *Upgrader) imageRefIn(repository, branch string) (string, error) {
 // step -- the same pull runs for the grain image and for the sandbox
 // image that goes with it, and those are two different steps of the
 // plan, so which one this is has to be passed in.
+//
+// The default `docker pull` of an image on Artifact Registry or GCR logs
+// docker in to that registry first with this host's Google access token
+// (registryauth.Token): the token setup.sh logged in with at install
+// time lasts an hour, so a later upgrade cannot count on docker still
+// holding a usable one. No token, or a login that fails, is only logged
+// -- the pull is what says whether it mattered.
 func (u *Upgrader) pullImage(ctx context.Context, p *progress, step, ref string) error {
 	argv := u.cfg.Image.PullCmd
 	if len(argv) == 0 {
 		argv = []string{"docker", "pull"}
+		if host := registryauth.HostOf(ref); registryauth.IsGoogleRegistry(host) {
+			if token, err := registryauth.Token(ctx); err != nil {
+				p.logf("%s: no Google access token for %s, pulling anonymously: %v", step, host, err)
+			} else if err := dockerLogin(ctx, host, token); err != nil {
+				p.logf("%s: docker login to %s failed, pulling anyway: %v", step, host, err)
+			}
+		}
 	}
 	argv = append(append([]string{}, argv...), ref)
 	return runLogged(ctx, p, step, "", argv)
+}
+
+// dockerLogin logs docker in to a Google registry with token, given on
+// stdin so it is never on a command line. A variable so tests can see
+// the login without a docker.
+var dockerLogin = func(ctx context.Context, host, token string) error {
+	cmd := newCommand(ctx, "", "docker", "login", "-u", registryauth.GoogleUser, "--password-stdin", "https://"+host)
+	cmd.Stdin = strings.NewReader(token)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // pinImage turns ref, a tag this host has just pulled, into a reference

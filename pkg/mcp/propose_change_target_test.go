@@ -17,9 +17,15 @@ package mcp
 import (
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-func TestProposedChangeTargetReadsTheGoogle3Argument(t *testing.T) {
+const testChangeTargetKind = "monorepo"
+
+func TestProposedChangeTargetReadsRegisteredArgument(t *testing.T) {
+	t.Cleanup(model.RegisterChangeTarget(model.ChangeTargetRegistration{Kind: testChangeTargetKind}))
+
 	for name, c := range map[string]struct {
 		arg      any
 		wantKind string
@@ -28,14 +34,14 @@ func TestProposedChangeTargetReadsTheGoogle3Argument(t *testing.T) {
 	}{
 		"absent":    {arg: nil},
 		"false":     {arg: false},
-		"true":      {arg: true, wantKind: "google3"},
-		"empty":     {arg: map[string]any{}, wantKind: "google3"},
-		"spec":      {arg: map[string]any{"workspace": "w", "start_cl": float64(12)}, wantKind: "google3", wantSpec: `{"start_cl":12,"workspace":"w"}`},
+		"true":      {arg: true, wantKind: testChangeTargetKind},
+		"empty":     {arg: map[string]any{}, wantKind: testChangeTargetKind},
+		"spec":      {arg: map[string]any{"workspace": "w", "start_cl": float64(12)}, wantKind: testChangeTargetKind, wantSpec: `{"start_cl":12,"workspace":"w"}`},
 		"not a map": {arg: "w", err: "must be an object"},
 	} {
 		args := map[string]any{}
 		if c.arg != nil {
-			args["google3"] = c.arg
+			args[testChangeTargetKind] = c.arg
 		}
 		ct, err := ProposedChangeTarget(args)
 		if c.err != "" {
@@ -60,7 +66,9 @@ func TestProposedChangeTargetReadsTheGoogle3Argument(t *testing.T) {
 	}
 }
 
-func TestProposeTaskRefusesGoogle3WithGitArguments(t *testing.T) {
+func TestProposeTaskRefusesChangeTargetWithGitArguments(t *testing.T) {
+	t.Cleanup(model.RegisterChangeTarget(model.ChangeTargetRegistration{Kind: testChangeTargetKind}))
+
 	var propose Tool
 	for _, tool := range NewMockTools(&MockSink{}, nil) {
 		if tool.Name == "propose_task" {
@@ -79,19 +87,19 @@ func TestProposeTaskRefusesGoogle3WithGitArguments(t *testing.T) {
 		{"auto_merge": true},
 		{"goal": map[string]any{"kind": "base-green", "spec": map[string]any{"repo": "a/b", "branch": "main"}}},
 	} {
-		args := map[string]any{"title": "t", "body": "b", "google3": map[string]any{}}
+		args := map[string]any{"title": "t", "body": "b", testChangeTargetKind: map[string]any{}}
 		for k, v := range extra {
 			args[k] = v
 		}
 		res := propose.Handler(t.Context(), args)
-		if !res.IsError || !strings.Contains(res.Text, "google3 cannot be combined") {
+		if !res.IsError || !strings.Contains(res.Text, testChangeTargetKind+" cannot be combined") {
 			t.Errorf("%v: result %+v, want a refusal", extra, res)
 		}
 	}
 	res := propose.Handler(t.Context(), map[string]any{
-		"title": "t", "body": "b", "google3": map[string]any{"sync_to": "head"}, "reads": []any{"acme/widgets"},
+		"title": "t", "body": "b", testChangeTargetKind: map[string]any{"sync_to": "head"}, "reads": []any{"acme/widgets"},
 	})
 	if res.IsError {
-		t.Errorf("google3 with reads refused: %s", res.Text)
+		t.Errorf("%s with reads refused: %s", testChangeTargetKind, res.Text)
 	}
 }

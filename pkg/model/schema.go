@@ -275,7 +275,41 @@ import "strconv"
 // 58 adds `change_target_kind` and `change_target_spec` to `task` and
 // `template`: a task whose change is not a git branch, such as a changelist in a
 // workspace of a registered kind (Task.ChangeTarget).
-const SchemaVersion = 58
+//
+// 59 adds `external_agent_api` to `grain_config` and the
+// `external_agent_token` and `external_agent_token_sequence` tables for
+// scoped external-agent credentials served over `/mcp`
+// (model.ExternalAgentToken, docs/agent-api.md).
+//
+// 60 adds `provider` to `task_run_check_wait`, labelling each recorded CI
+// wait with the CI it was on (grain, github, tap).
+const SchemaVersion = 60
+
+// externalAgentTokenTable and externalAgentTokenSequenceTable are named
+// once for Tables and for the migration that adds them.
+const externalAgentTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`external_agent_token`" + ` (
+  ` + "`id`" + `             TEXT     NOT NULL,
+  ` + "`name`" + `           TEXT     NOT NULL,
+  ` + "`token_hash`" + `     TEXT     NOT NULL,
+  ` + "`prefix`" + `         TEXT     NOT NULL,
+  ` + "`scope_set`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`scopes`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`repos`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`rate_limit`" + `     INTEGER  NOT NULL DEFAULT 0,
+  ` + "`max_concurrent`" + ` INTEGER  NOT NULL DEFAULT 0,
+  ` + "`created_at`" + `     DATETIME NOT NULL,
+  ` + "`expires_at`" + `     DATETIME NULL,
+  ` + "`revoked_at`" + `     DATETIME NULL,
+  ` + "`last_used_at`" + `   DATETIME NULL,
+  ` + "`created_by`" + `     TEXT     NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`id`" + `),
+  UNIQUE (` + "`token_hash`" + `)
+)`
+
+const externalAgentTokenSequenceTable = `CREATE TABLE IF NOT EXISTS ` + "`external_agent_token_sequence`" + ` (
+  ` + "`id`" + `        INTEGER  PRIMARY KEY AUTOINCREMENT,
+  ` + "`issued_at`" + ` DATETIME NOT NULL
+)`
 
 // gitHubCIJobTable is the `github_ci_job` table, named once for Tables and
 // for the migration that adds it.
@@ -944,6 +978,7 @@ var Tables = []string{
   ` + "`verdict`" + `       TEXT     NOT NULL,
   ` + "`waited_ms`" + `     INTEGER  NOT NULL,
   ` + "`pushes_before`" + ` INTEGER  NOT NULL,
+  ` + "`provider`" + `      TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
 )`,
 
@@ -1912,6 +1947,7 @@ var Tables = []string{
   ` + "`auto_upgrade_channel`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`auto_upgrade_time`" + `            TEXT    NOT NULL DEFAULT '',
   ` + "`judgement_model`" + `              TEXT    NOT NULL DEFAULT '',
+  ` + "`external_agent_api`" + `           INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3485,6 +3521,9 @@ var Tables = []string{
   ` + "`issued_at`" + ` DATETIME NOT NULL
 )`,
 
+	externalAgentTokenTable,
+	externalAgentTokenSequenceTable,
+
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,
   ` + "`timestamp`" + `   DATETIME NOT NULL,
@@ -3604,7 +3643,9 @@ WHERE ` + "`streak_count`" + ` > 0`},
 	// (model.AwaitsSubmit, which this EXISTS clause and the auto_merge
 	// test spell out in SQL). EXISTS rather than a join to task_link,
 	// because a task carrying two fixes-links would otherwise appear
-	// twice in a view whose whole point is one row per task.
+	// twice in a view whose whole point is one row per task. A
+	// changelist link (a changelist CL, LinkKind.IsChange) counts as a
+	// fixes-link does, and a task with several CLs is still one row.
 	//
 	// 'awaiting_reply' also splits the same completed_at a third way, and it is
 	// model.AwaitsAck in SQL: a finished task with no pull request at all
@@ -3626,12 +3667,12 @@ SELECT
     WHEN ` + "`o`.`closed_at`" + `    IS NOT NULL THEN 'closed'
     WHEN ` + "`o`.`completed_at`" + ` IS NOT NULL AND ` + "`t`.`auto_merge`" + ` = FALSE AND EXISTS (
            SELECT 1 FROM ` + "`task_link`" + ` AS ` + "`fl`" + `
-           WHERE ` + "`fl`.`task_id`" + ` = ` + "`t`.`id`" + ` AND ` + "`fl`.`kind`" + ` = '` + string(LinkFixes) + `'
+           WHERE ` + "`fl`.`task_id`" + ` = ` + "`t`.`id`" + ` AND ` + "`fl`.`kind`" + ` IN (` + changeLinkKindsSQL + `)
          ) THEN 'awaiting_submit'
     WHEN ` + "`o`.`completed_at`" + ` IS NOT NULL
          AND ` + "`t`.`origin_reason`" + ` != '` + string(ReasonReview) + `' AND NOT EXISTS (
            SELECT 1 FROM ` + "`task_link`" + ` AS ` + "`al`" + `
-           WHERE ` + "`al`.`task_id`" + ` = ` + "`t`.`id`" + ` AND ` + "`al`.`kind`" + ` = '` + string(LinkFixes) + `'
+           WHERE ` + "`al`.`task_id`" + ` = ` + "`t`.`id`" + ` AND ` + "`al`.`kind`" + ` IN (` + changeLinkKindsSQL + `)
          ) THEN 'awaiting_reply'
     WHEN ` + "`o`.`completed_at`" + ` IS NOT NULL THEN 'completed'
     WHEN ` + "`o`.`pending_question_comment_id`" + ` IS NOT NULL THEN 'awaiting_reply'

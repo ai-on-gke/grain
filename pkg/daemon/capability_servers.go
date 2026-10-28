@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"context"
+	"github.com/ai-on-gke/grain/pkg/change"
 	"log"
 
 	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
@@ -117,6 +118,15 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		// Task workspaces any agent may create (RegisterWorkspaceJanitorTools)
 		// are deleted once their tasks have closed and the server's retention has passed.
 		go runWorkspaceJanitor(ctx, reg, storeClosedAt(store), workspaceJanitorInterval)
+		// Non-PR change providers (pkg/change: workspace changelists) reach their
+		// capability server's daemon-only control tools through reg, and
+		// a kind blocked on expired credentials is checked again every
+		// 5 minutes until it clears.
+		change.Bind(changeControl{reg: reg})
+		go change.Watch(ctx, store)
+		// Every live CL is handed to its provider's poller once a minute,
+		// for the task view's presubmit badge (changelists.md §3).
+		go orchestrator.PollChanges(ctx, store)
 	}
 	return reg
 }

@@ -2099,6 +2099,46 @@ func (c *RESTClient) PullRequestDiff(owner, repo string, number int) (string, er
 	return string(resp.Body), nil
 }
 
+// FileReader is an optional Client capability for reading a single file's raw
+// contents from a repository at a given git ref (branch, tag, or commit SHA).
+// It returns (nil, false, nil) when the file does not exist at ref.
+//
+// Like DiffReader, callers assert for it on their github.Client, and wrappers
+// such as StateRepoPullRequestClient implement it directly against the local
+// config repository checkout.
+type FileReader interface {
+	ReadFile(owner, repo, ref, filePath string) ([]byte, bool, error)
+}
+
+var _ FileReader = (*RESTClient)(nil)
+
+// ReadFile returns the raw bytes of filePath at ref in owner/repo, or
+// (nil, false, nil) when the file is absent (HTTP 404).
+func (c *RESTClient) ReadFile(owner, repo, ref, filePath string) ([]byte, bool, error) {
+	clean := strings.TrimPrefix(strings.TrimSpace(filePath), "/")
+	if clean == "" {
+		return nil, false, nil
+	}
+	endpoint := fmt.Sprintf("/repos/%s/%s/contents/%s", owner, repo, quoteKeepSlash(clean))
+	if strings.TrimSpace(ref) != "" {
+		endpoint += "?ref=" + url.QueryEscape(strings.TrimSpace(ref))
+	}
+	headers := c.headers(owner, repo, false)
+	headers["Accept"] = "application/vnd.github.raw+json"
+	resp, err := c.request("GET", endpoint, headers, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	switch resp.Status {
+	case 200:
+		return resp.Body, true, nil
+	case 404:
+		return nil, false, nil
+	default:
+		return nil, false, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+}
+
 // CreateBranch creates branch pointing at sha -- release management's own
 // "cut" (bwsalmon/agents#398): a fresh, never-before-existing ref, via
 // GitHub's git-database API rather than the higher-level "create from" a

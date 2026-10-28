@@ -300,6 +300,16 @@ type Task struct {
 	// Changelists are the changelists (CLs) that are this task's work, as
 	// cl/<number> (model.LinkChangelist).
 	Changelists []string `json:"changelists,omitempty"`
+	// Presubmit is what grain last observed of the primary CL's checks
+	// (change.LastObserved): the presubmit badge beside its cl/N chip.
+	// Nil until the CL has been polled or its checks read.
+	Presubmit *ChangePresubmit `json:"presubmit,omitempty"`
+	// Review is the primary CL's review beside its chip, with its Mail
+	// and Publish replies buttons (change_review.go). Nil until observed.
+	CLReview *ChangeReview `json:"clReview,omitempty"`
+	// ChangeTargetKind is the kind of non-git change this task's work is
+	// ("changelist"), or "" for a git task (model.ChangeTarget).
+	ChangeTargetKind string `json:"changeTargetKind,omitempty"`
 	// Stacked is true for a task filed automatically onto another task's
 	// own branch and merged straight back into it once green -- a repair
 	// of a broken pull request (model.ReasonFix) or a review of one
@@ -968,6 +978,9 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		out.HeldBy = t.Origin.Attribution.OnBehalfOf.ID
 	}
 	out.Origin = string(t.WorkOrigin)
+	if t.ChangeTarget != nil {
+		out.ChangeTargetKind = t.ChangeTarget.Kind
+	}
 	for _, l := range t.Links {
 		if l.Kind == model.LinkFixes {
 			out.PullRequest = l.Target
@@ -1031,6 +1044,10 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 			out.GoogleChatSpace = l.Target
 		}
 		if l.Kind == model.LinkChangelist {
+			if len(out.Changelists) == 0 {
+				out.Presubmit = changePresubmit(l.Target)
+				out.CLReview = changeReview(t.ID, l.Target)
+			}
 			out.Changelists = append(out.Changelists, l.Target)
 		}
 		if l.Kind == model.LinkDependsOn {

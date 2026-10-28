@@ -3200,14 +3200,63 @@ image_run() {
 # case: bwsalmon/grain's GHCR package is public, and an anonymous pull
 # works. Never fatal on its own -- a failed login is reported here and
 # then simply becomes whatever the pull below reports.
+#
+# An image on Artifact Registry or GCR takes a Google OAuth2 access token
+# instead, under the fixed user name oauth2accesstoken. With no
+# GRAIN_IMAGE_PULL_TOKEN given, one is looked up the way
+# ensure_granule_oci_image does for the sandbox image: gcloud's own
+# credential if this host has gcloud, otherwise the metadata server's
+# token for the host's attached service account. granule_gcp_access_token
+# asks the metadata server from the host first for exactly this call,
+# which runs before $GRAIN_IMAGE_REF has been pulled.
 registry_login() {
-  [ -n "$GRAIN_IMAGE_PULL_TOKEN" ] || return 0
-  local registry="${GRAIN_IMAGE%%/*}"
-  log "Logging in to $registry as ${GRAIN_IMAGE_PULL_USER:-<token>}"
-  if ! printf '%s' "$GRAIN_IMAGE_PULL_TOKEN" \
-     | docker login "$registry" -u "${GRAIN_IMAGE_PULL_USER:-x-access-token}" --password-stdin >/dev/null 2>&1; then
+  local registry="${GRAIN_IMAGE%%/*}" target user token="$GRAIN_IMAGE_PULL_TOKEN"
+  target="$registry"
+  user="${GRAIN_IMAGE_PULL_USER:-x-access-token}"
+  if [[ "$GRAIN_IMAGE" == */* ]] && google_registry_host "$registry"; then
+    target="https://${registry}"
+    user="${GRAIN_IMAGE_PULL_USER:-oauth2accesstoken}"
+    if [ -z "$token" ]; then
+      token="$(gcp_access_token || true)"
+    fi
+  fi
+  [ -n "$token" ] || return 0
+  log "Logging in to $registry as $user"
+  if ! printf '%s' "$token" \
+     | docker login "$target" -u "$user" --password-stdin >/dev/null 2>&1; then
     log "  docker login against $registry failed -- the pull below will say whether it mattered"
   fi
+}
+
+# google_registry_host is whether $1, an image reference's registry
+# host, is Artifact Registry or GCR -- the hosts that are handed this
+# machine's Google access token. Matched on the host alone and only on a
+# bare DNS name: a glob over the whole reference ("*-docker.pkg.dev/*")
+# also matches evil.test/x-docker.pkg.dev/img, and a host carrying a "?"
+# or "#" ends in a Google suffix while docker logs in somewhere else.
+google_registry_host() {
+  [[ "$1" =~ ^[a-z0-9.-]+$ ]] || return 1
+  case "$1" in
+    *-docker.pkg.dev|gcr.io|*.gcr.io) return 0 ;;
+  esac
+  return 1
+}
+
+# gcp_access_token prints a Google OAuth2 access token for pulling from
+# Artifact Registry or GCR: the gcloud credential of $GRAIN_USER when
+# this host has gcloud and it answers, otherwise the metadata server's
+# (granule_gcp_access_token). Neither is required; no token is a non-zero
+# return, and the pull that follows then says whether it mattered.
+gcp_access_token() {
+  local token=""
+  if command -v gcloud >/dev/null 2>&1; then
+    token="$(as_grain gcloud auth print-access-token 2>/dev/null | tr -d '\r\n' || true)"
+  fi
+  if [ -z "$token" ]; then
+    token="$(granule_gcp_access_token 2>/dev/null || true)"
+  fi
+  [ -n "$token" ] || return 1
+  printf '%s\n' "$token"
 }
 
 # pull_image fetches the build this deploy is meant to run.
@@ -4470,12 +4519,22 @@ granule_unavailable() {
 # /etc/hosts entry, and a container gets docker's own /etc/hosts even
 # under --network host, so the name is not reliably there. The address
 # is the documented one that entry points at.
+#
+# A host that does have curl asks from the host first: registry_login
+# needs this token before $GRAIN_IMAGE_REF has been pulled, when there
+# is no image yet to borrow curl out of. That curl is optional, not a
+# requirement -- with none, or with no answer from it, the image's own
+# curl is asked as before.
 granule_gcp_access_token() {
-  local json
-  json="$(image_run --network host --entrypoint curl -- \
-    -fsS -H "Metadata-Flavor: Google" \
-    "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" \
-    2>/dev/null)" || return 1
+  local json="" url="http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token"
+  if command -v curl >/dev/null 2>&1; then
+    json="$(as_grain curl -fsS --connect-timeout 2 -H "Metadata-Flavor: Google" "$url" 2>/dev/null || true)"
+  fi
+  if [ -z "$json" ]; then
+    json="$(image_run --network host --entrypoint curl -- \
+      -fsS -H "Metadata-Flavor: Google" "$url" \
+      2>/dev/null)" || return 1
+  fi
   [[ "$json" =~ \"access_token\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] || return 1
   printf '%s\n' "${BASH_REMATCH[1]}"
 }
@@ -4542,14 +4601,14 @@ ensure_granule_oci_image() {
   # keeps that session for every later pull from it. So this is attempted
   # only for Artifact Registry, and is never fatal on its own: the pull
   # below is what actually decides.
-  case "$GRAIN_GRANULE_OCI_IMAGE" in
-    *-docker.pkg.dev/*|gcr.io/*)
-      local registry_host="${GRAIN_GRANULE_OCI_IMAGE%%/*}"
-      if ! docker login -u oauth2accesstoken -p "$(granule_gcp_access_token)" "https://${registry_host}" >/dev/null 2>&1; then
-        log "  could not authenticate docker to ${registry_host}; trying the pull anyway"
-      fi
-      ;;
-  esac
+  local registry_host="${GRAIN_GRANULE_OCI_IMAGE%%/*}" gcp_token
+  if [[ "$GRAIN_GRANULE_OCI_IMAGE" == */* ]] && google_registry_host "$registry_host"; then
+    gcp_token="$(gcp_access_token || true)"
+    if [ -z "$gcp_token" ] \
+       || ! printf '%s' "$gcp_token" | docker login -u oauth2accesstoken --password-stdin "https://${registry_host}" >/dev/null 2>&1; then
+      log "  could not authenticate docker to ${registry_host}; trying the pull anyway"
+    fi
+  fi
 
   log "Pulling the sandbox container $GRAIN_GRANULE_OCI_IMAGE"
   if ! docker pull "$GRAIN_GRANULE_OCI_IMAGE"; then

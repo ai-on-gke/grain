@@ -30,13 +30,6 @@ const CUSTOM = "custom";
 // no real option can collide with it.
 export const NO_REPO = "none";
 
-// GOOGLE3 is the "this task's change is a google3 CL" choice
-// (google/docs/design/google3-cls.md#G3-1): no repo either, but a CitC
-// workspace instead, offered only where the binary registers the kind
-// (config.changeTargets). Not a valid repo name, so it cannot collide
-// with one.
-export const GOOGLE3 = "google3";
-
 // RepoField is the repo dropdown bwsalmon/agents#447 asked for in place
 // of a bare "type an owner/name and hope you spelled it right" input:
 // options is normally knownRepos(config, tasks) (state.js), the same
@@ -68,7 +61,7 @@ export default function RepoField({
   required = false,
   placeholder = "owner/name",
   allowNoRepo = false,
-  allowGoogle3 = false,
+  changeTargets = [],
   onChange,
   onCommit,
 }) {
@@ -76,7 +69,7 @@ export default function RepoField({
     defaultValue === "" ||
     options.includes(defaultValue) ||
     (allowNoRepo && defaultValue === NO_REPO) ||
-    (allowGoogle3 && defaultValue === GOOGLE3);
+    changeTargets.includes(defaultValue);
   // What the dropdown shows when it is (re)drawn, and what "Choose from
   // list" reports back: the default when the list holds it, otherwise
   // the list's own empty row (or, for a required field, its first
@@ -86,7 +79,7 @@ export default function RepoField({
   const selectDefault =
     options.includes(defaultValue) ||
     (allowNoRepo && defaultValue === NO_REPO) ||
-    (allowGoogle3 && defaultValue === GOOGLE3) ||
+    changeTargets.includes(defaultValue) ||
     (!required && defaultValue === "")
       ? defaultValue
       : required
@@ -192,11 +185,11 @@ export default function RepoField({
               No repo (standalone task -- nothing to check out)
             </option>
           )}
-          {allowGoogle3 && (
-            <option value={GOOGLE3}>
-              google3 (CitC) -- a CL in a CitC workspace, no git checkout
+          {changeTargets.map((kind) => (
+            <option key={kind} value={kind}>
+              {`${kind} -- a changelist in a ${kind} workspace, no git checkout`}
             </option>
-          )}
+          ))}
           <option value={CUSTOM}>Other…</option>
         </select>
       </div>

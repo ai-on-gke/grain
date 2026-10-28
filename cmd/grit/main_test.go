@@ -19,6 +19,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +29,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/attest"
 	"github.com/ai-on-gke/grain/pkg/grit/actions"
+	"github.com/ai-on-gke/grain/pkg/gritapi"
 )
 
 func TestMappingsString(t *testing.T) {
@@ -192,5 +195,53 @@ func TestGritClientAndServe(t *testing.T) {
 	var verOut bytes.Buffer
 	if code := run(context.Background(), []string{"version"}, &verOut, io.Discard); code != 0 || strings.TrimSpace(verOut.String()) == "" {
 		t.Fatalf("grit version = %d, %q", code, verOut.String())
+	}
+
+	// 7. grit serve -grain-url reverse-tunnel mode connects to SessionHub.
+	var tok2Out bytes.Buffer
+	if code := run(context.Background(), []string{
+		"client", "add",
+		"-data-dir", dataDir,
+		"-id", "grain-tunnel",
+		"-scope", "submit:*,read:*,cancel:*",
+	}, &tok2Out, &stderr); code != 0 {
+		t.Fatalf("grit client add grain-tunnel = %d: %s", code, stderr.String())
+	}
+	tunnelTok := strings.TrimSpace(tok2Out.String())
+
+	hub := gritapi.NewSessionHub(tunnelTok)
+	defer func() { _ = hub.Close() }()
+	muxHandler := http.NewServeMux()
+	muxHandler.Handle("/v1/session", hub)
+	grainSrv := httptest.NewServer(muxHandler)
+	defer grainSrv.Close()
+
+	tCtx, tCancel := context.WithCancel(context.Background())
+	defer tCancel()
+	tDone := make(chan int, 1)
+	go func() {
+		tDone <- run(tCtx, []string{
+			"serve",
+			"-listen", "127.0.0.1:0",
+			"-data-dir", dataDir,
+			"-executor", "local",
+			"-grain-url", grainSrv.URL,
+			"-client-token", tunnelTok,
+		}, io.Discard, &stderr)
+	}()
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer waitCancel()
+	if err := hub.WaitConnected(waitCtx); err != nil {
+		t.Fatalf("hub.WaitConnected: %v", err)
+	}
+	hc := hub.NewClient(gritapi.ClientConfig{ClientToken: tunnelTok})
+	info, err := hc.Info(waitCtx)
+	if err != nil || info.Epoch == "" {
+		t.Fatalf("Info over reverse tunnel = (%+v, %v)", info, err)
+	}
+	tCancel()
+	if code := <-tDone; code != 0 {
+		t.Fatalf("grit serve -grain-url = %d: %s", code, stderr.String())
 	}
 }

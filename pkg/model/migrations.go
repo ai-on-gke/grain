@@ -309,12 +309,28 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     58,
-		Description: "add each task's non-git change target (a google3 CL's workspace) to task and template",
+		Description: "add each task's non-git change target (a registered changelist workspace) to task and template",
 		Statements: []string{
 			"ALTER TABLE `task` ADD COLUMN `change_target_kind` TEXT NOT NULL DEFAULT ''",
 			"ALTER TABLE `task` ADD COLUMN `change_target_spec` TEXT NOT NULL DEFAULT ''",
 			"ALTER TABLE `template` ADD COLUMN `change_target_kind` TEXT NOT NULL DEFAULT ''",
 			"ALTER TABLE `template` ADD COLUMN `change_target_spec` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     59,
+		Description: "add the external agent API setting and per-agent scoped credentials",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `external_agent_api` INTEGER NOT NULL DEFAULT 0",
+			externalAgentTokenTable,
+			externalAgentTokenSequenceTable,
+		},
+	},
+	{
+		Version:     60,
+		Description: "label each recorded CI wait with the CI that answered it (grain, github, tap)",
+		Statements: []string{
+			"ALTER TABLE `task_run_check_wait` ADD COLUMN `provider` TEXT NOT NULL DEFAULT ''",
 		},
 	},
 }

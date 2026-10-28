@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/gritapi"
@@ -43,10 +44,12 @@ type ServerConfig struct {
 
 // Server serves grit's `/v1` and `/pkg/v1` HTTP APIs over a `*Local` instance.
 type Server struct {
-	local   *Local
-	noAuth  bool
-	limiter *clientRateLimiter
-	pkgV1   http.Handler
+	local         *Local
+	noAuth        bool
+	limiter       *clientRateLimiter
+	pkgV1         http.Handler
+	sessionMu     sync.RWMutex
+	sessionOffers []string
 }
 
 // NewServer constructs an HTTP Server for grit's `/v1` and `/pkg/v1` routes.
@@ -153,6 +156,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleEvents(w, r, client)
 		return
 
+	case path == "/v1/session":
+		s.handleSession(w, r, client)
+		return
+
 	default:
 		writeAPIError(w, &gritapi.APIError{
 			StatusCode: http.StatusNotFound,
@@ -165,17 +172,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (ClientRecord, bool) {
 	id, secret, ok := ExtractClientToken(r)
 	if !ok {
+		if preAuth, hasPre := sessionClientFromContext(r.Context()); hasPre {
+			// Re-verify that the client has not been revoked in SQLite since the
+			// session opened, unless running in unauthenticated mode or synthetic client.
+			if preAuth.ID == "anonymous" && s.noAuth {
+				return preAuth, true
+			}
+			rec, found, err := s.local.Store().GetClient(preAuth.ID)
+			if err == nil && found && !rec.Revoked {
+				return rec, true
+			}
+		}
 		if s.noAuth {
-			return ClientRecord{
-				ID: "anonymous",
-				Scopes: []ClientScope{
-					{Scope: gritapi.ScopeSubmit, Repo: "*"},
-					{Scope: gritapi.ScopeRead, Repo: "*"},
-					{Scope: gritapi.ScopeCancel, Repo: "*"},
-					{Scope: gritapi.ScopeCacheAdmin, Repo: "*"},
-					{Scope: gritapi.ScopeRelease, Repo: "*"},
-				},
-			}, true
+			return anonymousClientRecord(), true
 		}
 		writeAPIError(w, &gritapi.APIError{
 			StatusCode: http.StatusUnauthorized,

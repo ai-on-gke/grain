@@ -157,7 +157,7 @@ describe("pointers to Settings sections and System tabs", () => {
   it("on ConnectedExecutors and scheduled-upgrade resume prompts name tabs that exist", async () => {
     api.mockResolvedValue([]);
     render(<ConnectedExecutors />);
-    await screen.findByText(/No remote executors connected/);
+    await screen.findByText(/No model servers connected/);
 
     const found = expectRealTabs(document.body.textContent);
     expect(

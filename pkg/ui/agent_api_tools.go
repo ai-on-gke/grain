@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"slices"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // This file turns the route table into MCP tools (docs/agent-api.md): one
@@ -84,6 +86,8 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/defer":                                           "Put a task aside until deferredUntil (an RFC 3339 time), or indefinitely without one.",
 	"POST /api/tasks/{id}/undefer":                                         "Pick a deferred task back up now.",
 	"POST /api/tasks/{id}/submit":                                          "Submit a task's pull request to the merge queue, to be brought up to date and merged.",
+	"POST /api/tasks/{id}/change-mail":                                     "Mail a task's CL to its reviewers. A person's call only: agents are refused.",
+	"POST /api/tasks/{id}/change-publish":                                  "Publish the replies a task's runs left as drafts on its CLs. A person's call only: agents are refused.",
 	"POST /api/tasks/{id}/comments":                                        "Comment on a task's conversation.",
 	"PUT /api/tasks/{id}/secret":                                           "Answer a task's pending secret request with its value, which goes to the secret store and is never shown back.",
 	"POST /api/tasks/{id}/close":                                           "Close a task.",
@@ -243,6 +247,12 @@ var routeDocs = map[string]string{
 	"POST /api/actions-cache/flush":                                        "Empty the actions cache: query repo (owner/name) for one repository's entries, or every repository's without.",
 	"POST /api/pipeline-pause":                                             "Pause the pipeline: nothing new is dispatched until it is resumed.",
 	"DELETE /api/pipeline-pause":                                           "Resume the paused pipeline.",
+	"GET /api/external-agents/tokens":                                      "List external agent credentials (metadata only; secret tokens are never shown after issue).",
+	"POST /api/external-agents/tokens":                                     "Issue a scoped external agent credential for /mcp.",
+	"POST /api/external-agents/tokens/{id}/rotate":                         "Rotate an external agent credential, returning a new secret token once and invalidating the previous token immediately.",
+	"POST /api/external-agents/tokens/{id}/revoke":                         "Revoke an external agent credential immediately.",
+	"DELETE /api/external-agents/tokens/{id}":                              "Delete an external agent credential record.",
+	"POST /api/external-agents/tokens/revoke-all":                          "Emergency kill switch: revoke every active external agent credential immediately.",
 }
 
 // routeBodies is the request type a route reads its body into, which
@@ -265,6 +275,7 @@ var routeBodies = map[string]any{
 	"PUT /api/tasks/{id}/goal":                                       setGoalRequest{},
 	"POST /api/tasks/{id}/run-now":                                   runNowRequest{},
 	"POST /api/tasks/{id}/comments":                                  addCommentRequest{},
+	"POST /api/tasks/{id}/change-mail":                               MailChangeRequest{},
 	"PUT /api/tasks/{id}/secret":                                     setPendingSecretRequest{},
 	"POST /api/tasks/{id}/close":                                     closeRequest{},
 	"POST /api/tasks/{id}/force-merge":                               forceMergeRequest{},
@@ -360,6 +371,7 @@ var routeBodies = map[string]any{
 	"POST /api/ci/runs":                                              CIRunRequest{},
 	"DELETE /api/ci/runs/{id}":                                       CICancelRequest{},
 	"POST /api/pipeline-pause":                                       pausePipelineRequest{},
+	"POST /api/external-agents/tokens":                               CreateExternalAgentTokenRequest{},
 }
 
 // routeQueries is the query parameters a route's handler reads, each
@@ -814,6 +826,140 @@ func getTaskAs(ctx context.Context, client *HTTPClient, taskID, id string) (Task
 	}
 	var detail TaskDetail
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&detail); err != nil {
+		return TaskDetail{}, fmt.Errorf("reading task %s: %w", id, err)
+	}
+	return detail, nil
+}
+
+func (r APIRoute) externalTool(s *Server, tok *model.ExternalAgentToken) mcp.Tool {
+	return mcp.Tool{
+		Name:        r.Tool,
+		Description: r.Description,
+		InputSchema: r.inputSchema(),
+		Handler: func(ctx context.Context, args map[string]any) mcp.Result {
+			text, err := r.externalCall(ctx, s, tok, args)
+			if err != nil {
+				return mcp.Result{Text: r.Tool + " failed: " + err.Error(), IsError: true}
+			}
+			return mcp.Result{Text: text}
+		},
+		ElisionAdvice: "narrow it with query parameters, or read one item by its id",
+	}
+}
+
+// externalCall dispatches r in-process on s on behalf of the external agent
+// credential tok, running through s.ServeHTTP and agentAPIGate so the same
+// scope, repository, rail, and audit checks apply as on HTTP requests.
+func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.ExternalAgentToken, args map[string]any) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("this server is not initialized")
+	}
+	if tok == nil {
+		return "", fmt.Errorf("missing external agent credential")
+	}
+	path := r.Path
+	for _, p := range r.Params {
+		v, _ := args[p].(string)
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return "", fmt.Errorf("%s is required", p)
+		}
+		escaped := url.PathEscape(v)
+		path = strings.Replace(path, "{"+p+"...}", escaped, 1)
+		path = strings.Replace(path, "{"+p+"}", escaped, 1)
+	}
+	reason, _ := args["reason"].(string)
+	reason = strings.TrimSpace(reason)
+	if r.NeedsReason && reason == "" {
+		return "", fmt.Errorf("reason is required: %s is destructive", r.Pattern)
+	}
+	if expect, ok := expectation(args); ok && r.takesExpect() {
+		id, _ := args["id"].(string)
+		detail, err := getTaskAsExternal(ctx, s, tok, strings.TrimSpace(id))
+		if err != nil {
+			return "", fmt.Errorf("reading task %s to check expect: %w", id, err)
+		}
+		if err := expect.Check(detail.Task); err != nil {
+			return "", err
+		}
+	}
+	if q, ok := args["query"].(map[string]any); ok && len(q) > 0 {
+		values := url.Values{}
+		for k, v := range q {
+			values.Set(k, fmt.Sprint(v))
+		}
+		path += "?" + values.Encode()
+	}
+	var encoded []byte
+	if r.Method != http.MethodGet {
+		if body, ok := args["body"]; ok && body != nil {
+			var err error
+			if encoded, err = json.Marshal(body); err != nil {
+				return "", fmt.Errorf("encoding body: %w", err)
+			}
+		} else if r.body != nil {
+			fallback := map[string]any{}
+			for k, v := range args {
+				if k == "reason" || k == "query" || k == "expect" || k == "body" || slices.Contains(r.Params, k) {
+					continue
+				}
+				fallback[k] = v
+			}
+			if len(fallback) > 0 {
+				var err error
+				if encoded, err = json.Marshal(fallback); err != nil {
+					return "", fmt.Errorf("encoding body: %w", err)
+				}
+			}
+		}
+	}
+	var reader io.Reader
+	if encoded != nil {
+		reader = bytes.NewReader(encoded)
+	}
+	req := httptest.NewRequest(r.Method, path, reader)
+	req = req.WithContext(withExternalToken(ctx, tok))
+	if encoded != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if reason != "" {
+		req.Header.Set(ActingReasonHeader, reason)
+	}
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code < 200 || rec.Code > 299 {
+		var errBody struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		if json.Unmarshal(rec.Body.Bytes(), &errBody) == nil && errBody.Error != "" && errBody.Code == "" {
+			return "", fmt.Errorf("HTTP %d: %s", rec.Code, errBody.Error)
+		}
+		return "", fmt.Errorf("HTTP %d: %s", rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
+	data := rec.Body.Bytes()
+	if len(bytes.TrimSpace(data)) == 0 {
+		return fmt.Sprintf("%s %s: %d %s", r.Method, path, rec.Code, http.StatusText(rec.Code)), nil
+	}
+	return string(data), nil
+}
+
+func getTaskAsExternal(ctx context.Context, s *Server, tok *model.ExternalAgentToken, id string) (TaskDetail, error) {
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/"+url.PathEscape(id), nil)
+	req = req.WithContext(withExternalToken(ctx, tok))
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code < 200 || rec.Code > 299 {
+		var errBody struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(rec.Body.Bytes(), &errBody) == nil && errBody.Error != "" {
+			return TaskDetail{}, fmt.Errorf("HTTP %d: %s", rec.Code, errBody.Error)
+		}
+		return TaskDetail{}, fmt.Errorf("HTTP %d: %s", rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
+	var detail TaskDetail
+	if err := json.NewDecoder(io.LimitReader(rec.Body, 4<<20)).Decode(&detail); err != nil {
 		return TaskDetail{}, fmt.Errorf("reading task %s: %w", id, err)
 	}
 	return detail, nil

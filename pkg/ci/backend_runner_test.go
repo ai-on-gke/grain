@@ -1,0 +1,417 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package ci
+
+import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/ai-on-gke/grain/pkg/attest"
+	"github.com/ai-on-gke/grain/pkg/grit"
+	"github.com/ai-on-gke/grain/pkg/gritapi"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/treeid"
+)
+
+func buildTestTree(t *testing.T, files map[string]string) (treeid.ID, []byte) {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for name, body := range files {
+		hdr := &tar.Header{
+			Name:     name,
+			Mode:     0o644,
+			Size:     int64(len(body)),
+			Typeflag: tar.TypeReg,
+			Format:   tar.FormatUSTAR,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := buf.Bytes()
+	sum := sha256.Sum256(raw)
+	gitSum := sha256.Sum256(append([]byte("git-tree:"), raw...))
+	return treeid.ID{
+		GitTree: hex.EncodeToString(gitSum[:20]),
+		SHA256:  hex.EncodeToString(sum[:]),
+	}, raw
+}
+
+type backendTestEnv struct {
+	local   *grit.Local
+	srv     *httptest.Server
+	backend gritapi.Backend
+	token   string
+}
+
+func (e *backendTestEnv) close() {
+	if e.srv != nil {
+		e.srv.Close()
+	}
+	if e.local != nil {
+		_ = e.local.Close()
+	}
+}
+
+func newBackendTestEnv(t *testing.T, mode, gritDir string, signer attest.Signer, token string, jobRunner grit.JobRunner) *backendTestEnv {
+	t.Helper()
+	pkgAdmin, err := pkgcache.OpenAdmin(filepath.Join(gritDir, "pkgcache"), 32<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc, err := grit.NewLocal(grit.LocalConfig{
+		DataDir:       gritDir,
+		Executor:      "local",
+		Concurrency:   4,
+		Signer:        signer,
+		PkgCacheAdmin: pkgAdmin,
+		JobRunner:     jobRunner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token == "" {
+		var hash string
+		token, hash, err = grit.GenerateClientToken("grain-ci")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := loc.Store().CreateOrUpdateClient(grit.ClientRecord{
+			ID:           "grain-ci",
+			SecretSHA256: hash,
+			Scopes: []grit.ClientScope{
+				{Scope: gritapi.ScopeSubmit, Repo: "*"},
+				{Scope: gritapi.ScopeRead, Repo: "*"},
+				{Scope: gritapi.ScopeCancel, Repo: "*"},
+				{Scope: gritapi.ScopeCacheAdmin, Repo: "*"},
+				{Scope: gritapi.ScopeRelease, Repo: "*"},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := &backendTestEnv{
+		local: loc,
+		token: token,
+	}
+	if mode == "local" {
+		env.backend = loc
+	} else {
+		srv := httptest.NewServer(grit.NewServer(grit.ServerConfig{Local: loc}))
+		env.srv = srv
+		env.backend = gritapi.NewClient(gritapi.ClientConfig{
+			BaseURL:     srv.URL,
+			ClientToken: token,
+		})
+	}
+	return env
+}
+
+func waitRunnerRunDone(t *testing.T, r *BackendRunner, runID string) Run {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for {
+		_ = r.SyncOnce(ctx, 10*time.Millisecond, 100)
+		if run, ok := r.Get(runID); ok && run.Conclusion.Done() {
+			return run
+		}
+		select {
+		case <-ctx.Done():
+			run, _ := r.Get(runID)
+			t.Fatalf("timed out waiting for runner run %s to conclude (last=%+v)", runID, run)
+		case <-time.After(15 * time.Millisecond):
+		}
+	}
+}
+
+func TestBackendRunnerContract(t *testing.T) {
+	for _, mode := range []string{"local", "remote"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Run("SubmitWithTreeSecretsAndVerifyAttestation", func(t *testing.T) {
+				signer, err := attest.LoadOrCreateFileSigner(filepath.Join(t.TempDir(), "attest.key"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				gritDir := t.TempDir()
+				env := newBackendTestEnv(t, mode, gritDir, signer, "", func(ctx context.Context, jenv grit.JobExecEnv) (grit.JobExecResult, error) {
+					msg, _ := os.ReadFile(filepath.Join(jenv.WorkDir, "msg.txt"))
+					return grit.JobExecResult{
+						Conclusion: "success",
+						Log:        []byte("msg=" + string(msg) + " env=" + strings.Join(jenv.Env, ",")),
+					}, nil
+				})
+				defer env.close()
+
+				treeID, archive := buildTestTree(t, map[string]string{"msg.txt": "hello-grit"})
+				stateDir := t.TempDir()
+				var verifiedRuns []Run
+				runner := NewBackendRunner(BackendRunnerConfig{
+					Backend:  env.backend,
+					StateDir: stateDir,
+					TreeResolver: func(ctx context.Context, req Request) (treeid.ID, []byte, error) {
+						return treeID, archive, nil
+					},
+					SecretResolver: func(ctx context.Context, req Request) (gritapi.SecretPayload, error) {
+						raw := []byte("cap-secret-token-xyz")
+						sum := sha256.Sum256(raw)
+						h := hex.EncodeToString(sum[:])
+						return gritapi.SecretPayload{
+							Manifest: []gritapi.SecretManifestEntry{
+								{Capability: "test-cap", Kind: "env", Target: "CAP_TOKEN", SHA256: h},
+							},
+							Blobs: map[string][]byte{h: raw},
+						}, nil
+					},
+					OnVerdictVerified: func(run Run) {
+						verifiedRuns = append(verifiedRuns, run)
+					},
+				})
+
+				ctx := context.Background()
+				run, err := runner.Start(ctx, Request{
+					Repo:   "ai-on-gke/grain",
+					Ref:    "grain/task-1496",
+					Commit: "1111111111111111111111111111111111111111",
+					Event:  EventPush,
+					Jobs:   []string{"go"},
+				})
+				if err != nil {
+					t.Fatalf("runner.Start: %v", err)
+				}
+
+				done := waitRunnerRunDone(t, runner, run.ID)
+				if done.Conclusion != ConclusionSuccess {
+					t.Fatalf("done.Conclusion = %q (err=%q), want success", done.Conclusion, done.Error)
+				}
+				if len(verifiedRuns) != 1 || verifiedRuns[0].ID != run.ID {
+					t.Fatalf("OnVerdictVerified = %+v, want 1 verified run %s", verifiedRuns, run.ID)
+				}
+				if len(done.Jobs) != 1 || len(done.Jobs[0].Steps) != 1 {
+					t.Fatalf("done.Jobs = %+v, want 1 job with 1 step", done.Jobs)
+				}
+				out := done.Jobs[0].Steps[0].Output
+				if !strings.Contains(out, "hello-grit") || strings.Contains(out, "cap-secret-token-xyz") || !strings.Contains(out, "[REDACTED]") {
+					t.Fatalf("unexpected step output: %q", out)
+				}
+			})
+
+			t.Run("AttestationForAnotherTreeFailsVerificationAndNeverRecordsGreen", func(t *testing.T) {
+				signer, err := attest.LoadOrCreateFileSigner(filepath.Join(t.TempDir(), "attest.key"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				gritDir := t.TempDir()
+				env := newBackendTestEnv(t, mode, gritDir, signer, "", func(ctx context.Context, jenv grit.JobExecEnv) (grit.JobExecResult, error) {
+					return grit.JobExecResult{
+						Conclusion: "success",
+						Log:        []byte("ok"),
+					}, nil
+				})
+				defer env.close()
+
+				treeA, archiveA := buildTestTree(t, map[string]string{"a.txt": "tree-a"})
+				treeB, _ := buildTestTree(t, map[string]string{"b.txt": "tree-b"})
+
+				var verifiedRuns []Run
+				runner := NewBackendRunner(BackendRunnerConfig{
+					Backend:  env.backend,
+					StateDir: t.TempDir(),
+					TreeResolver: func(ctx context.Context, req Request) (treeid.ID, []byte, error) {
+						return treeA, archiveA, nil
+					},
+					OnVerdictVerified: func(run Run) {
+						verifiedRuns = append(verifiedRuns, run)
+					},
+				})
+
+				ctx := context.Background()
+				run, err := runner.Start(ctx, Request{
+					Repo:   "ai-on-gke/grain",
+					Ref:    "grain/task-1496",
+					Commit: "2222222222222222222222222222222222222222",
+					Event:  EventPush,
+					Jobs:   []string{"go"},
+				})
+				if err != nil {
+					t.Fatalf("runner.Start: %v", err)
+				}
+
+				// Override the expected tree on the runner to treeB so that the
+				// attestation signed by grit for treeA does not match treeB.
+				runner.OverrideExpectedTree(run.ID, treeB)
+
+				done := waitRunnerRunDone(t, runner, run.ID)
+				if done.Conclusion != ConclusionErrored || !strings.Contains(done.Error, "attestation verification failed") {
+					t.Fatalf("done = (conclusion=%q, error=%q), want errored with attestation verification failed", done.Conclusion, done.Error)
+				}
+				if len(verifiedRuns) != 0 {
+					t.Fatalf("OnVerdictVerified was called for mismatched tree attestation: %+v", verifiedRuns)
+				}
+			})
+
+			t.Run("KillAndRestartEitherSideLosesNoVerdict", func(t *testing.T) {
+				signer, err := attest.LoadOrCreateFileSigner(filepath.Join(t.TempDir(), "attest.key"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				gritDir := t.TempDir()
+				stateDir := t.TempDir()
+
+				jobStarted := make(chan struct{})
+				var once sync.Once
+				blockFirst := make(chan struct{})
+				defer close(blockFirst)
+
+				env1 := newBackendTestEnv(t, mode, gritDir, signer, "", func(ctx context.Context, jenv grit.JobExecEnv) (grit.JobExecResult, error) {
+					once.Do(func() { close(jobStarted) })
+					select {
+					case <-ctx.Done():
+						return grit.JobExecResult{}, ctx.Err()
+					case <-blockFirst:
+						return grit.JobExecResult{Conclusion: "success"}, nil
+					}
+				})
+
+				treeID, archive := buildTestTree(t, map[string]string{"f.txt": "v1"})
+				runner1 := NewBackendRunner(BackendRunnerConfig{
+					Backend:  env1.backend,
+					StateDir: stateDir,
+					TreeResolver: func(ctx context.Context, req Request) (treeid.ID, []byte, error) {
+						return treeID, archive, nil
+					},
+				})
+
+				ctx := context.Background()
+				run, err := runner1.Start(ctx, Request{
+					Repo:   "ai-on-gke/grain",
+					Ref:    "main",
+					Commit: "3333333333333333333333333333333333333333",
+					Event:  EventPush,
+					Jobs:   []string{"go"},
+				})
+				if err != nil {
+					t.Fatalf("runner1.Start: %v", err)
+				}
+
+				<-jobStarted
+				// Sync runner1 once while the run is in flight, then kill both grit and runner1.
+				_ = runner1.SyncOnce(ctx, 0, 50)
+				savedToken := env1.token
+				env1.close()
+
+				// Restart grit over the same gritDir and a new BackendRunner over the same stateDir.
+				env2 := newBackendTestEnv(t, mode, gritDir, signer, savedToken, func(ctx context.Context, jenv grit.JobExecEnv) (grit.JobExecResult, error) {
+					return grit.JobExecResult{
+						Conclusion: "success",
+						Log:        []byte("resumed-after-restart"),
+					}, nil
+				})
+				defer env2.close()
+
+				runner2 := NewBackendRunner(BackendRunnerConfig{
+					Backend:  env2.backend,
+					StateDir: stateDir,
+				})
+
+				done := waitRunnerRunDone(t, runner2, run.ID)
+				if done.Conclusion != ConclusionSuccess {
+					t.Fatalf("done after restart = (conclusion=%q, error=%q), want success", done.Conclusion, done.Error)
+				}
+			})
+
+			t.Run("CursorGone410ResyncReconcilesAndVerifiesAttestation", func(t *testing.T) {
+				signer, err := attest.LoadOrCreateFileSigner(filepath.Join(t.TempDir(), "attest.key"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				gritDir := t.TempDir()
+				env := newBackendTestEnv(t, mode, gritDir, signer, "", func(ctx context.Context, jenv grit.JobExecEnv) (grit.JobExecResult, error) {
+					return grit.JobExecResult{
+						Conclusion: "success",
+						Log:        []byte("ok-410"),
+					}, nil
+				})
+				defer env.close()
+
+				treeID, archive := buildTestTree(t, map[string]string{"f.txt": "410"})
+				stateDir := t.TempDir()
+				runner := NewBackendRunner(BackendRunnerConfig{
+					Backend:  env.backend,
+					StateDir: stateDir,
+					TreeResolver: func(ctx context.Context, req Request) (treeid.ID, []byte, error) {
+						return treeID, archive, nil
+					},
+				})
+
+				ctx := context.Background()
+				// Seed the cursor at seq=1, then run a job to completion and prune events <= 3
+				// so the next SyncOnce encounters 410 cursor_gone.
+				run, err := runner.Start(ctx, Request{
+					Repo:   "ai-on-gke/grain",
+					Ref:    "main",
+					Commit: "4444444444444444444444444444444444444444",
+					Event:  EventPush,
+					Jobs:   []string{"go"},
+				})
+				if err != nil {
+					t.Fatalf("runner.Start: %v", err)
+				}
+
+				// Wait for grit to finish the run before runner consumes events.
+				deadline := time.Now().Add(5 * time.Second)
+				for time.Now().Before(deadline) {
+					rs, gErr := env.backend.GetRun(ctx, run.ID)
+					if gErr == nil && rs.Status == "completed" {
+						break
+					}
+					time.Sleep(15 * time.Millisecond)
+				}
+
+				if err := runner.cursor.SaveCursor(env.local.Store().Epoch(), 1); err != nil {
+					t.Fatal(err)
+				}
+				if err := env.local.Store().PruneEventsUpTo(3); err != nil {
+					t.Fatal(err)
+				}
+
+				if err := runner.SyncOnce(ctx, 0, 50); err != nil {
+					t.Fatalf("runner.SyncOnce on 410 cursor_gone: %v", err)
+				}
+				done, ok := runner.Get(run.ID)
+				if !ok || done.Conclusion != ConclusionSuccess {
+					t.Fatalf("run after 410 resync = (%+v, %v), want ConclusionSuccess", done, ok)
+				}
+			})
+		})
+	}
+}

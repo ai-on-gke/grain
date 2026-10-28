@@ -1238,10 +1238,50 @@ const (
 	// LinkChangelist records a changelist (CL) that is this task's work (->
 	// "cl/<number>"), the way a pull request is a git task's: written
 	// when a run's capability grants report one in their audit
-	// (protocol.AuditTaskChangelistField). Shown on the task page;
-	// never blocks dispatch.
+	// (protocol.AuditTaskChangelistField), or when open_pull_request
+	// creates one (pkg/change). It is the task's change as LinkFixes is:
+	// a finished task with one is awaiting_submit (AwaitsSubmit). A task
+	// may have several; the first is its primary CL. Never blocks
+	// dispatch.
 	LinkChangelist LinkKind = "changelist"
+	// LinkChangelistSubmitted records the number a task's CL was
+	// submitted as ("cl/<submitted number>"): a forge that renumbers a
+	// pending CL on submit records the submitted number here. A work tree
+	// reads it as cl-submitted.
+	LinkChangelistSubmitted LinkKind = "changelist-submitted"
+	// LinkCLThread records one review thread on a task's CL that grain
+	// has already sent a run (or a running run's addendum) to deal with
+	// (-> "cl/<number>:<comment id>"): LinkReviewThread's job for a CL.
+	// Recorded before the run is asked for, so one batch of threads sends
+	// one run. Written by orchestrator's reviewthreads.go and read by the
+	// edition's change provider, which leaves recorded threads out of
+	// Threads. Blocks nothing.
+	LinkCLThread LinkKind = "cl-thread"
+	// LinkCLReviewCleared records that a required review passed on one
+	// snapshot of a task's CL (-> "cl/<number>@<snapshot>:<template>"),
+	// the CL's LinkTrustBoundaryCleared. A new snapshot clears nothing
+	// that an older one did. Read by the edition's review gate
+	// (changelists.md §5, G3-5). Blocks nothing itself.
+	LinkCLReviewCleared LinkKind = "cl-review-cleared"
 )
+
+// CLThreadsPrincipal is who tells a task about new review threads on its
+// CL. Unlike grain's other automation notices, a running run is handed
+// its comments as addenda (pkg/ui's AddendaSince): a reviewer's thread
+// opened mid-run is the run's to deal with before it ends.
+var CLThreadsPrincipal = Principal{Kind: PrincipalAutomation, ID: "cl-review-threads"}
+
+// IsChange reports whether a link of kind k is the task's own change --
+// a pull request (LinkFixes) or a changelist (LinkChangelist) -- which
+// is what parks a finished task on awaiting_submit rather than on a
+// reader (AwaitsSubmit, AwaitsAck, and the task_state view's
+// changeLinkKindsSQL).
+func (k LinkKind) IsChange() bool {
+	return k == LinkFixes || k == LinkChangelist
+}
+
+// changeLinkKindsSQL is IsChange's kinds as a SQL IN list.
+const changeLinkKindsSQL = `'` + string(LinkFixes) + `','` + string(LinkChangelist) + `'`
 
 // TagMechanicalPort marks a port grain made itself, by cherry-picking
 // with no agent run behind it (orchestrator.filePorts): what the merges

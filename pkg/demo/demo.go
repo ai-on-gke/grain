@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -152,7 +153,11 @@ type Options struct {
 //     configured but not answering, with agy set to run through it;
 //   - "hostd": the one install shape, a daemon in the release container
 //     with a real grain hostd beside it (startDemoHostd) offering agy and
-//     one capability server, and agy set to run through it.
+//     one capability server, and agy set to run through it;
+//   - "hostd-remote": a Kubernetes daemon taking a grain hostd that dials
+//     in to it (grain hostd -server), with a real one dialing in over
+//     loopback (startDemoRemoteHostd), offering what "hostd"'s does;
+//   - "hostd-remote-down": the same daemon with no hostd dialed in.
 func demoCLIRunConfig(executor string) (daemon.Config, error) {
 	inContainer := whererun.Detection{Host: false, Signal: whererun.InContainerEnv + "=1, which grain's deployment image sets"}
 	noSocketDir := func(string) bool { return false }
@@ -174,8 +179,16 @@ func demoCLIRunConfig(executor string) (daemon.Config, error) {
 			return daemon.Config{}, err
 		}
 		c = daemon.Config{AgyRun: model.CLIRunHost, HostdSocket: socket}
+	case "hostd-remote", "hostd-remote-down":
+		remote := &hostd.Remote{Token: "grain-demo-hostd-token"}
+		if executor == "hostd-remote" {
+			if err := startDemoRemoteHostd(remote); err != nil {
+				return daemon.Config{}, err
+			}
+		}
+		c = daemon.Config{K8sSandboxes: true, AgyRun: model.CLIRunHost, HostdRemote: remote}
 	default:
-		return daemon.Config{}, fmt.Errorf("grain demo: -host-executor=%q: want kubernetes, none, hostd-down or hostd", executor)
+		return daemon.Config{}, fmt.Errorf("grain demo: -host-executor=%q: want kubernetes, none, hostd-down, hostd, hostd-remote or hostd-remote-down", executor)
 	}
 	exec := daemon.DetectHostExecutor(c, inContainer, noSocketDir)
 	c.HostExec = &exec
@@ -1361,6 +1374,90 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err := seedDemoNotifications(ctx, store, darkMode.ID, ago); err != nil {
 		return err
 	}
+	// A changelist task: its change is two CLs in a workspace rather than
+	// a pull request, the first its primary. Finished and unsubmitted, it
+	// reads awaiting_submit, so the task view and the inbox both draw its
+	// CL chip. Seeded last, so every task id above stays what the demo
+	// tests pin.
+	var clTarget *model.ChangeTarget
+	if kinds := model.ChangeTargetKinds(); len(kinds) > 0 {
+		clTarget = &model.ChangeTarget{Kind: kinds[0]}
+	}
+	clTask, err := create(ago(26*time.Hour), ui.CreateTaskRequest{
+		Title:        "Port the retry budget to the depot",
+		Description:  "Mirror grain's retry budget in //devtools/grain/retry and split the BUILD changes into their own CL.",
+		Approved:     true,
+		NoRepo:       clTarget == nil,
+		ChangeTarget: clTarget,
+	})
+	if err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	if err := store.UpdateTask(ctx, clTask.ID, func(t *model.Task) error {
+		t.Links = append(t.Links,
+			model.Link{Kind: model.LinkChangelist, Target: "cl/612400001"},
+			model.Link{Kind: model.LinkChangelist, Target: "cl/612400017"})
+		return nil
+	}); err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	clDone := ago(25 * time.Hour)
+	if err := store.ObserveField(ctx, clTask.ID, clDone, func(o *model.Observation) {
+		o.CompletedAt = &clDone
+	}); err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	// Its primary CL's presubmit failed; four more CL tasks show the
+	// badge's other states (changelists.md §3). What a poll would have
+	// recorded is remembered directly: the demo has no provider to poll.
+	change.Remember(change.Observation{Target: "cl/612400001", Health: change.HealthFailing,
+		Presubmit: change.PresubmitFailed, Snapshot: 3, Checks: []change.Check{
+			{Name: "//devtools/grain/retry:budget_test", State: "failed"},
+			{Name: "//devtools/grain/retry:lint", State: "failed"},
+			{Name: "//devtools/grain/retry:build", State: "passed"},
+		},
+		// And its reviewer asked for changes (changelists.md §5); the four
+		// below show the review badge's other states.
+		ReviewState: change.ReviewStateChangesRequested})
+	for i, seed := range []struct {
+		title, cl, presubmit string
+		health               change.Health
+		review               change.Observation
+	}{
+		{"Move the depot retry budget behind a flag", "cl/612400101", change.PresubmitPassed, change.HealthOK,
+			change.Observation{ReviewState: change.ReviewStateApproved, LGTM: []string{"alice"}}},
+		{"Add a TAP project for the retry budget", "cl/612400102", change.PresubmitRunning, change.HealthPending,
+			change.Observation{ReviewState: change.ReviewStateInReview}},
+		{"Document the depot retry budget", "cl/612400103", change.PresubmitNotRun, change.HealthPending,
+			change.Observation{ReviewState: change.ReviewStateDraft, NeedsMailing: true}},
+		{"Trim the retry budget's BUILD deps", "cl/612400104", change.PresubmitUnknown, change.HealthUnknown,
+			change.Observation{ReviewState: change.ReviewStateNeedsApproval, LGTM: []string{"bob"},
+				NeedsApproval: []string{"owners", "readability"}}},
+	} {
+		at := ago(time.Duration(24-i) * time.Hour)
+		seeded, err := create(at, ui.CreateTaskRequest{
+			Title: seed.title, Approved: true, NoRepo: clTarget == nil, ChangeTarget: clTarget,
+			Description: "A changelist task whose CL's presubmit is " + seed.presubmit + ".",
+		})
+		if err != nil {
+			return fmt.Errorf("seeding a changelist task: %w", err)
+		}
+		if err := store.UpdateTask(ctx, seeded.ID, func(t *model.Task) error {
+			t.Links = append(t.Links, model.Link{Kind: model.LinkChangelist, Target: seed.cl})
+			return nil
+		}); err != nil {
+			return fmt.Errorf("seeding a changelist task: %w", err)
+		}
+		done := at.Add(30 * time.Minute)
+		if err := store.ObserveField(ctx, seeded.ID, done, func(o *model.Observation) {
+			o.CompletedAt = &done
+		}); err != nil {
+			return fmt.Errorf("seeding a changelist task: %w", err)
+		}
+		obs := seed.review
+		obs.Target, obs.Health, obs.Presubmit, obs.Snapshot = seed.cl, seed.health, seed.presubmit, 1
+		change.Remember(obs)
+	}
 
 	return nil
 }
@@ -1835,24 +1932,11 @@ func IsLoopbackHostPort(hostPort string) bool {
 // and Settings only lists what it offers. hostd refuses to run as root
 // and runs on Linux only; either way the demo shows hostd not answering.
 func startDemoHostd() (string, error) {
-	dir, err := os.MkdirTemp("", "grain-demo-hostd-")
+	srv, err := demoHostdServer("hostd")
 	if err != nil {
-		return "", fmt.Errorf("grain demo: -host-executor=hostd: %v", err)
+		return "", err
 	}
-	allow := filepath.Join(dir, "hostd.yaml")
-	body := "clis:\n  agy:\n    path: /opt/agy/bin/agy\n    cwd_under: [" + dir + "]\n" +
-		"capabilities:\n  corp-search:\n    command: /usr/local/bin/corp-search-mcp\n"
-	if err := os.WriteFile(allow, []byte(body), 0o644); err != nil {
-		return "", fmt.Errorf("grain demo: -host-executor=hostd: %v", err)
-	}
-	srv := &hostd.Server{
-		Socket:          filepath.Join(dir, "hostd.sock"),
-		Allowlist:       allow,
-		AllowlistOwners: []uint32{uint32(os.Getuid())},
-		StateDir:        filepath.Join(dir, "state"),
-		Logf:            func(string, ...any) {},
-		Build:           version.Get().Release,
-	}
+	srv.Socket = filepath.Join(filepath.Dir(srv.Allowlist), "hostd.sock")
 	go func() {
 		if err := srv.Serve(context.Background()); err != nil {
 			log.Printf("grain demo: the demo's grain hostd is not running, so Settings shows it not answering: %v", err)
@@ -1866,6 +1950,57 @@ func startDemoHostd() (string, error) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return srv.Socket, nil
+}
+
+// demoHostdServer is the demo's grain hostd, serving nothing yet: an
+// allowlist offering agy and one capability server, in a directory of
+// its own.
+func demoHostdServer(executor string) (*hostd.Server, error) {
+	dir, err := os.MkdirTemp("", "grain-demo-hostd-")
+	if err != nil {
+		return nil, fmt.Errorf("grain demo: -host-executor=%s: %v", executor, err)
+	}
+	allow := filepath.Join(dir, "hostd.yaml")
+	body := "clis:\n  agy:\n    path: /opt/agy/bin/agy\n    cwd_under: [" + dir + "]\n" +
+		"capabilities:\n  corp-search:\n    command: /usr/local/bin/corp-search-mcp\n"
+	if err := os.WriteFile(allow, []byte(body), 0o644); err != nil {
+		return nil, fmt.Errorf("grain demo: -host-executor=%s: %v", executor, err)
+	}
+	return &hostd.Server{
+		Allowlist:       allow,
+		AllowlistOwners: []uint32{uint32(os.Getuid())},
+		StateDir:        filepath.Join(dir, "state"),
+		Logf:            func(string, ...any) {},
+		Build:           version.Get().Release,
+	}, nil
+}
+
+// startDemoRemoteHostd serves a real grain hostd for
+// -host-executor=hostd-remote with no socket, dialing in to remote over
+// a loopback listener of its own as one on an operator's machine dials
+// in to a daemon in a cluster. It is connected before it returns, so
+// Settings never catches it connecting, or it is left to Settings to say
+// it is not.
+func startDemoRemoteHostd(remote *hostd.Remote) error {
+	srv, err := demoHostdServer("hostd-remote")
+	if err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("grain demo: -host-executor=hostd-remote: %v", err)
+	}
+	go func() { _ = http.Serve(ln, remote) }()
+	srv.Remote = hostd.Dialer{Server: "http://" + ln.Addr().String(), Token: remote.Token, Host: "cloudtop", Build: srv.Build}.Dial
+	go func() {
+		if err := srv.Serve(context.Background()); err != nil {
+			log.Printf("grain demo: the demo's grain hostd is not running, so Settings shows none connected: %v", err)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = remote.WaitConnected(ctx)
+	return nil
 }
 
 // demoGitHubCalls is ui.GitHubCallStats for a demo: an hour two-thirds

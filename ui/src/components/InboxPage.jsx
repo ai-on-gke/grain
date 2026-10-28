@@ -32,6 +32,9 @@ import {
 import { forceMergeOffered, promptForceMerge } from "../taskWrites.js";
 import { useNotificationSetting } from "../inboxNotifications.js";
 import ItemGlyph from "./ItemGlyph.jsx";
+import ClChip from "./ClChip.jsx";
+import PresubmitBadge from "./PresubmitBadge.jsx";
+import ReviewBadge from "./ClReview.jsx";
 import { STATE_SYNC_TITLE, muiSeverity, stateSyncSentence } from "../alerts.js";
 import {
   ackNotification,
@@ -908,6 +911,15 @@ export default function InboxPage({
                       hideQuestion={!!group.reply}
                     />
                     <div className="inbox-actions">
+                      {t.changelists?.length > 0 && (
+                        <ClChip cl={t.changelists[0]} primary />
+                      )}
+                      {t.changelists?.length > 0 && t.presubmit && (
+                        <PresubmitBadge presubmit={t.presubmit} />
+                      )}
+                      {t.changelists?.length > 0 && t.clReview && (
+                        <ReviewBadge review={t.clReview} />
+                      )}
                       {group.reply && (
                         <Button
                           size="small"

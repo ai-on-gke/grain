@@ -172,6 +172,7 @@ func (g *CiGrantReservations) materializeCIPass(ctx context.Context, name string
 	}
 	m, err := orchestrator.MaterializeCIPass(ctx, orchestrator.CIPassOptions{
 		Ports: g.Ports, PortsURL: g.PortsURL, SetupTimeout: g.SetupTimeout, Servers: servers, Now: g.Now,
+		CapServers: g.CapServers, ProxyURL: g.ProxyURL, ProxyToken: g.ProxyToken,
 	}, sandbox, held.pass, held.deadline)
 	if err != nil {
 		return ciMaterializeFailure(err)

@@ -67,8 +67,9 @@ type Server struct {
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
-	access     accessLimiter
-	accessCode atomic.Pointer[accessCodeFile]
+	access          accessLimiter
+	accessCode      atomic.Pointer[accessCodeFile]
+	externalLimiter *externalAgentLimiter
 }
 
 // NewServer builds a Server over a store.
@@ -77,9 +78,10 @@ func NewServer(cfg Config, store *model.Store) *Server {
 		cfg.Secrets.SetAuditLogger(store)
 	}
 	s := &Server{
-		tasks: NewClient(cfg, store),
-		mux:   http.NewServeMux(),
-		paths: http.NewServeMux(),
+		tasks:           NewClient(cfg, store),
+		mux:             http.NewServeMux(),
+		paths:           http.NewServeMux(),
+		externalLimiter: newExternalAgentLimiter(),
 	}
 	s.routes()
 	return s
@@ -93,9 +95,10 @@ func NewServerWithClient(client *Client) *Server {
 		client.Config.Secrets.SetAuditLogger(client.Store)
 	}
 	s := &Server{
-		tasks: client,
-		mux:   http.NewServeMux(),
-		paths: http.NewServeMux(),
+		tasks:           client,
+		mux:             http.NewServeMux(),
+		paths:           http.NewServeMux(),
+		externalLimiter: newExternalAgentLimiter(),
 	}
 	s.routes()
 	return s
@@ -121,27 +124,44 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}))
 	}
 	// Nobody gets further without the access code -- loopback included
-	// (accesscode.go, grain/task-4343).
+	// (accesscode.go, grain/task-4343) -- unless the request presents a
+	// scoped external agent bearer token (gma_...), which authenticates as
+	// PrincipalAgent("external:<name>") and is held to its own scopes by
+	// agentAPIGate and handleMCP.
 	cfg, _ := IAPConfigFromContext(r.Context())
+	if externalTokenFromContext(r.Context()) == nil && presentsExternalAgentToken(r) {
+		tok, release, ok := s.authenticateExternalAgent(w, r)
+		if !ok {
+			return
+		}
+		defer release()
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name}
+		r = r.WithContext(withExternalToken(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), tok))
+	}
 	if !s.singleTenantGate(w, r, cfg) {
 		return
 	}
-	if singleTenantRefusesIdentity(r) && !s.presentsAccess(r) && !executorBootstrapRoute(r) {
+	if singleTenantRefusesIdentity(r) && !s.presentsAccess(r) && !executorBootstrapRoute(r) && externalTokenFromContext(r.Context()) == nil {
 		writeError(w, http.StatusUnauthorized, errors.New(singleTenantProxiedRefusal))
 		return
 	}
-	p, method, ok := extractPrincipal(r)
-	if ok {
-		r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
-	}
-	if requiresAccess(r) && !ok && !singleTenantTrusted(r) {
-		// No verified principal at all. Only a caller this daemon
-		// already trusts as itself -- the access code's, or an
-		// in-process request -- runs as the deployment's own actor
-		// (Client.actor). The gate above already refused anybody else
-		// on every route but its own open ones (singleTenantOpenRoute).
-		writeError(w, http.StatusUnauthorized, errors.New(singleTenantRefusal))
-		return
+	if tok := externalTokenFromContext(r.Context()); tok != nil {
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name}
+		r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted))
+	} else {
+		p, method, ok := extractPrincipal(r)
+		if ok {
+			r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
+		}
+		if requiresAccess(r) && !ok && !singleTenantTrusted(r) {
+			// No verified principal at all. Only a caller this daemon
+			// already trusts as itself -- the access code's, or an
+			// in-process request -- runs as the deployment's own actor
+			// (Client.actor). The gate above already refused anybody else
+			// on every route but its own open ones (singleTenantOpenRoute).
+			writeError(w, http.StatusUnauthorized, errors.New(singleTenantRefusal))
+			return
+		}
 	}
 	// Unarmed until a configuration write's guard finds the deployment
 	// managed by an external config repository (checkSettingsWritable).
@@ -163,7 +183,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 // the same gate as the API: it is somebody's running service, not a page
 // of the frontend.
 func requiresAccess(r *http.Request) bool {
-	if strings.HasPrefix(r.URL.Path, model.PersistentSandboxSubpathPrefix) {
+	if strings.HasPrefix(r.URL.Path, model.PersistentSandboxSubpathPrefix) || r.URL.Path == "/mcp" {
 		return true
 	}
 	return strings.HasPrefix(r.URL.Path, "/api/") &&
@@ -256,6 +276,12 @@ func (s *Server) routes() {
 	// (Observation.DeliveredCommentID).
 	s.route("POST /api/tasks/{id}/delivered", s.handleRecordDelivered)
 	s.route("POST /api/tasks/{id}/wait-credit", s.handleCreditWait)
+	s.route("POST /api/tasks/{id}/change-checks", s.handleChangeChecks)
+	// A CL's review loop: a run's draft replies (internal), and a
+	// person's Publish replies and Mail (change_review.go).
+	s.route("POST /api/tasks/{id}/change-review", s.handleChangeReview)
+	s.route("POST /api/tasks/{id}/change-publish", s.handlePublishReplies)
+	s.route("POST /api/tasks/{id}/change-mail", s.handleMailChange)
 	// The wait_for_task tool, from inside the run that is waiting: check
 	// and describe the tasks it names, or park its own task on them as
 	// depends-on links (wait_task.go).
@@ -405,6 +431,14 @@ func (s *Server) routes() {
 	s.route("POST /api/executors/tokens/{id}/revoke", s.handleRevokeExecutorToken)
 	s.route("DELETE /api/executors/tokens/{id}", s.handleRevokeExecutorToken)
 	s.route("DELETE /api/executors/tokens/{id}/revoke", s.handleRevokeExecutorToken)
+
+	s.route("GET /api/external-agents/tokens", s.handleListExternalAgentTokens)
+	s.route("POST /api/external-agents/tokens", s.handleCreateExternalAgentToken)
+	s.route("POST /api/external-agents/tokens/{id}/rotate", s.handleRotateExternalAgentToken)
+	s.route("POST /api/external-agents/tokens/{id}/revoke", s.handleRevokeExternalAgentToken)
+	s.route("DELETE /api/external-agents/tokens/{id}", s.handleDeleteExternalAgentToken)
+	s.route("POST /api/external-agents/tokens/revoke-all", s.handleRevokeAllExternalAgentTokens)
+	s.route("POST /mcp", s.handleMCP)
 
 	s.route("GET /api/agent-keys", s.handleListAgentKeys)
 	s.route("PUT /api/agent-keys/{framework}", s.handleSetAgentKey)
@@ -569,8 +603,9 @@ func (s *Server) routes() {
 	s.route("POST /api/pipeline-pause", s.handlePausePipeline)
 	s.route("DELETE /api/pipeline-pause", s.handleResumePipeline)
 
-	// Remote executors API and bootstrap scripts.
+	// Remote executors / model servers API and bootstrap scripts.
 	s.route("GET /api/executors", s.handleListExecutors)
+	s.route("GET /api/model-servers/install.sh", s.handleExecutorInstallScript)
 	s.route("GET /api/executors/install.sh", s.handleExecutorInstallScript)
 	s.route("GET /install-executor.sh", s.handleExecutorInstallScript)
 	s.route("GET /api/executors/bin/{binary}", s.handleExecutorBinary)
@@ -580,6 +615,8 @@ func (s *Server) routes() {
 	s.route("GET /_grain/executor", s.handleExecutorConnect)
 	s.route("GET /api/executors/connect", s.handleExecutorConnect)
 	s.route("GET /api/executors/stream", s.handleExecutorConnect)
+	// A grain hostd on another machine dialing in (hostd -server).
+	s.route("GET /api/hostd/connect", s.handleHostdConnect)
 
 	static, err := fs.Sub(staticFS, "static")
 	if err != nil {

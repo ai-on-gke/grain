@@ -82,10 +82,12 @@ type Scope struct {
 	TaskID            int64
 	TaskIDStr         string
 	RunID             string
+	Attempt           int
 	TaskRepo          string
 	TaskBranch        string
 	TaskBase          string
 	ConfigRepo        string
+	Grants            []string
 	MayReadCI         bool
 	MayReadAllCI      bool
 	AllowedRepos      map[string]bool

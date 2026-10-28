@@ -351,6 +351,20 @@ type EndpointRoster struct {
 	// tool name, and absent for a tool that says none of them. The
 	// server's own text, so untrusted.
 	Labels map[string]string
+	// Specs are the tools as the server described them, in Tools' order:
+	// what grain cap renders a tool's --help from, and whether the tool
+	// declared its own delivery (§5.2.6).
+	Specs []EndpointTool
+}
+
+// EndpointTool is one tool of an attempt's toolset.
+type EndpointTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"inputSchema,omitempty"`
+	// ModelOnly is the tool's own annotations.modelOnly (or
+	// x-grain-model-only), nil when it says neither.
+	ModelOnly *bool `json:"-"`
 }
 
 // Handshake performs initialize and tools/list against url, a proxy
@@ -379,6 +393,7 @@ func Handshake(ctx context.Context, url string) (EndpointRoster, error) {
 		if !seen[t.Name] {
 			seen[t.Name] = true
 			out.Tools = append(out.Tools, t.Name)
+			out.Specs = append(out.Specs, EndpointTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema, ModelOnly: t.DeclaredModelOnly()})
 			if label := toolLabel(t); label != "" {
 				if out.Labels == nil {
 					out.Labels = map[string]string{}

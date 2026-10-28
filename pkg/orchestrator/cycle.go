@@ -158,6 +158,11 @@ type Deps struct {
 	// cannot be replayed by, or on behalf of, anything dispatched after
 	// it.
 	MintSandboxToken func(sandbox string) (string, error)
+	// MintSandboxGrant mints a per-attempt sandbox token bound to (sandbox, taskID, attempt)
+	// -- gitproxy.SandboxTokenStore.EnsureGrant in a deployment. When non-nil,
+	// runOne uses it in preference to MintSandboxToken so persistent sandboxes
+	// rotate tokens across attempts and bind TaskID and Attempt.
+	MintSandboxGrant func(sandbox, taskID string, attempt int) (string, error)
 	// RevokeSandboxToken drops the token MintSandboxToken made, once the
 	// sandbox it identified has been released -- gitproxy.
 	// SandboxTokenStore.Revoke, in a deployment; nil wherever
@@ -512,6 +517,7 @@ func Reconcilers() []Reconciler {
 		{Name: "takeovers", Reconcile: reconcileTakeovers},
 		{Name: "review-questions", Reconcile: reconcileReviewQuestions},
 		{Name: "review-threads", Reconcile: reconcileReviewThreads},
+		{Name: "cl-review-threads", Reconcile: reconcileChangeThreads},
 		// An operator's pause on one task (model.TaskPause): its live
 		// run and grain CI run are ended here, before dispatch, so the
 		// slots they free are free to this cycle's dispatch.
@@ -865,6 +871,15 @@ func reconcileReviewThreads(ctx context.Context, deps Deps, now time.Time) error
 	return SyncReviewThreads(ctx, deps.Store, deps.Client, now)
 }
 
+// reconcileChangeThreads is reconcileReviewThreads for a task whose change
+// is a CL (reviewthreads.go's SyncChangeThreads).
+func reconcileChangeThreads(ctx context.Context, deps Deps, now time.Time) error {
+	if deps.Store == nil {
+		return nil
+	}
+	return SyncChangeThreads(ctx, deps.Store, now)
+}
+
 // reconcileSync refreshes every pull request grain is still watching --
 // told, as the plain SyncPullRequests is not, which repository holds
 // this deployment's own settings and what that repository's own rules
@@ -1027,6 +1042,9 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	}
 	if deps.Policy != nil || isUnisolated(deps.Sandboxes) {
 		holds = append(holds, policyHold(ctx, deps))
+	}
+	if held := catalogueHold(ctx, deps); held != nil {
+		holds = append(holds, held)
 	}
 	if len(holds) > 0 {
 		opts = append(opts, dispatch.Hold(func(taskID string) string {
@@ -1632,6 +1650,60 @@ func pendingBranchHold(ctx context.Context, deps Deps) func(string) string {
 	}
 }
 
+// catalogueHold re-judges a queued task's grants against the capability
+// catalogue (settings/capabilities.yml) before anything is minted or a
+// sandbox started for it (docs/design/config-repo-settings.md §3.4): a
+// config change merged after the task was filed may have revoked a
+// capability or narrowed who may hold it, and the task waits, saying
+// which grant and why (model.CatalogueWaitCapability), rather than
+// running with it. A wait it recorded is cleared once the task passes.
+// nil when the deployment has no catalogue. Like policyHold it fails
+// closed: a catalogue that cannot be read holds every task this cycle,
+// and a task that cannot be read is held, rather than either being
+// dispatched unjudged.
+func catalogueHold(ctx context.Context, deps Deps) func(string) string {
+	cfg, err := deps.Store.GetConfig(ctx)
+	if err != nil {
+		log.Printf("orchestrator: reading the capability catalogue: %v", err)
+		return func(string) string {
+			return "held by settings/capabilities.yml: the capability catalogue could not be read to check it"
+		}
+	}
+	if cfg == nil || cfg.CapabilityPolicy.Catalogue == nil {
+		return nil
+	}
+	cat := cfg.CapabilityPolicy.Catalogue
+	return func(taskID string) string {
+		task, err := deps.Store.GetTask(ctx, taskID)
+		if err != nil || task == nil {
+			if err != nil {
+				log.Printf("orchestrator: reading %s to check it against the capability catalogue: %v", taskID, err)
+			}
+			return "held by settings/capabilities.yml: the task could not be read to check it"
+		}
+		gc := model.TaskGrantContext(*task)
+		if gc.TemplateID != "" {
+			if tmpl, err := deps.Store.GetTemplate(ctx, gc.TemplateID); err == nil && tmpl != nil {
+				gc.TemplateName = tmpl.Name
+			}
+		}
+		if _, err := cat.ValidateGrants(gc); err != nil {
+			if serr := deps.Store.SetGrantWait(ctx, model.GrantWait{
+				TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: err.Error(), WaitingAt: deps.Config.now(),
+			}); serr != nil {
+				log.Printf("orchestrator: recording why the capability catalogue holds %s: %v", taskID, serr)
+			}
+			return "held by settings/capabilities.yml: " + err.Error()
+		}
+		if wait, err := deps.Store.GrantWaitOf(ctx, taskID); err == nil && wait != nil && wait.Capability == model.CatalogueWaitCapability {
+			if err := deps.Store.ClearGrantWait(ctx, taskID); err != nil {
+				log.Printf("orchestrator: clearing %s's capability catalogue wait: %v", taskID, err)
+			}
+		}
+		return ""
+	}
+}
+
 // heldByPolicy holds a task deps.Policy refuses, saying on the task
 // which claim it refused (model.PolicyWaitCapability). It fails closed: a
 // task that cannot be read is held too. A wait it recorded earlier is
@@ -2218,9 +2290,15 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// deployment-wide setup step any more: there is nothing to configure
 	// until a run has a sandbox, and what is configured is destroyed with
 	// it.
-	if deps.MintSandboxToken != nil {
+	if deps.MintSandboxGrant != nil || deps.MintSandboxToken != nil {
 		notes.say(ctx, sandboxCredentialsNote)
-		token, err := deps.MintSandboxToken(sandboxName)
+		var token string
+		var err error
+		if deps.MintSandboxGrant != nil {
+			token, err = deps.MintSandboxGrant(sandboxName, d.TaskID, d.Attempt)
+		} else {
+			token, err = deps.MintSandboxToken(sandboxName)
+		}
 		if err != nil {
 			return fmt.Errorf("orchestrator: minting run %s's sandbox token: %w", d.RunID, err)
 		}
@@ -2438,6 +2516,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			return fmt.Errorf("orchestrator: materializing run %s's capability grants: %w", d.RunID, err)
 		}
 		defer mat.Close()
+		mat.registerSandboxCapabilities(cfg.CapabilitySandboxServers, gitproxy.CapRunKey(d.RunID))
 		cfg.capabilityMCPServers = mat.servers
 		cfg.capabilityPromptSections = mat.promptSections
 		deps.Config.SandboxRecreations.setCapabilityPass(d.TaskID, mat)

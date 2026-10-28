@@ -37,6 +37,7 @@ package metrics
 
 import (
 	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -217,7 +218,26 @@ type Checks struct {
 	Repairs BranchRepairs
 	// RedCI is how the window's CI-fixing runs worked a red build.
 	RedCI RedCI
+	// ByProvider is the same waits labelled by the CI they were on --
+	// "grain", "github" or "tap" (model.CIProvider*) -- one entry per
+	// provider seen, in that order. TAP waits (a changelist task's
+	// presubmit) are counted here, beside the others, and not in the
+	// totals above, which stay grain's own CI loop over pull requests.
+	ByProvider []ProviderChecks
 }
+
+// ProviderChecks is one CI provider's waits.
+type ProviderChecks struct {
+	Provider string
+	Waits    int
+	Runs     int
+	Verdicts map[string]int
+	Blocked  Distribution
+}
+
+// providerOrder is the order ByProvider lists providers in; any other
+// label follows, alphabetically.
+var providerOrder = []string{model.CIProviderGrain, model.CIProviderGitHub, model.CIProviderTAP}
 
 // RedCI measures the red-CI procedure every run with grain CI is given
 // (orchestrator's redCIProcedureSection) by what runs did, from the rows
@@ -378,9 +398,28 @@ func checksOf(w Window, runs []model.RunTiming, waits []model.RunCheckWait) Chec
 	// gets the same answer as one reading Store.RunCheckWaits.
 	type green struct{ seq, pushes int }
 	greenRun := map[string]green{}
+	type providerTotals struct {
+		entry   ProviderChecks
+		runs    map[string]bool
+		blocked []time.Duration
+	}
+	byProvider := map[string]*providerTotals{}
 
 	for _, wait := range waits {
 		if !finished[wait.RunID] {
+			continue
+		}
+		provider := wait.CIProviderOf()
+		pt, ok := byProvider[provider]
+		if !ok {
+			pt = &providerTotals{entry: ProviderChecks{Provider: provider, Verdicts: map[string]int{}}, runs: map[string]bool{}}
+			byProvider[provider] = pt
+		}
+		pt.entry.Waits++
+		pt.entry.Verdicts[wait.Verdict]++
+		pt.runs[wait.RunID] = true
+		pt.blocked = appendIfPositive(pt.blocked, wait.Waited)
+		if provider == model.CIProviderTAP {
 			continue
 		}
 		out.Waits++
@@ -404,6 +443,30 @@ func checksOf(w Window, runs []model.RunTiming, waits []model.RunCheckWait) Chec
 	pushes := make([]int64, 0, len(greenRun))
 	for _, first := range greenRun {
 		pushes = append(pushes, int64(first.pushes))
+	}
+
+	providers := make([]string, 0, len(byProvider))
+	for name := range byProvider {
+		providers = append(providers, name)
+	}
+	sort.Slice(providers, func(i, j int) bool {
+		ri, rj := slices.Index(providerOrder, providers[i]), slices.Index(providerOrder, providers[j])
+		if ri < 0 {
+			ri = len(providerOrder)
+		}
+		if rj < 0 {
+			rj = len(providerOrder)
+		}
+		if ri != rj {
+			return ri < rj
+		}
+		return providers[i] < providers[j]
+	})
+	for _, name := range providers {
+		pt := byProvider[name]
+		pt.entry.Runs = len(pt.runs)
+		pt.entry.Blocked = summarize(pt.blocked)
+		out.ByProvider = append(out.ByProvider, pt.entry)
 	}
 
 	out.Blocked = summarize(blocked)

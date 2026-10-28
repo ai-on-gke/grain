@@ -77,10 +77,11 @@ type Store struct {
 	// so end-of-run RecordRunTelemetry merges proxy calls with MCP sidecar calls.
 	proxyToolsMu sync.Mutex
 	proxyTools   map[string]map[string]RunToolUse
-	// proxyCheckWaits and proxyCalls are the sandbox CLI's CI waits and
-	// argument-carrying calls per run (proxy_cli.go), under proxyToolsMu.
+	// proxyCheckWaits, proxyCalls and proxyAPICalls are the sandbox CLI's CI waits,
+	// argument-carrying calls and audited API calls per run (proxy_cli.go), under proxyToolsMu.
 	proxyCheckWaits map[string][]RunCheckWait
 	proxyCalls      map[string][]ProxyToolCall
+	proxyAPICalls   map[string][]RunAPICall
 
 	// SettingsRepo is the deployment's own state repository, whose merged
 	// changes the daemon applies to itself on its next tick
@@ -4215,6 +4216,7 @@ func (s *Store) GitPushAnyRef(ctx context.Context, sandbox string) (bool, error)
 type NamespaceScope struct {
 	TaskID            string
 	RunID             string
+	Attempt           int
 	TaskRepo          string
 	TaskBranch        string
 	TaskBase          string
@@ -4255,6 +4257,8 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 
 	var storedBranch, storedBase sql.NullString
 	_ = s.db.QueryRowContext(ctx, "SELECT `branch`, `base` FROM `task` WHERE `id` = ?", taskID).Scan(&storedBranch, &storedBase)
+	var attempt int
+	_ = s.db.QueryRowContext(ctx, "SELECT `attempt` FROM `task_run` WHERE `id` = ?", runID).Scan(&attempt)
 	taskBranch := Task{ID: taskID, Branch: storedBranch.String}.BranchName()
 	taskBase := strings.TrimSpace(storedBase.String)
 
@@ -4381,6 +4385,7 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	return NamespaceScope{
 		TaskID:            taskID,
 		RunID:             runID,
+		Attempt:           attempt,
 		TaskRepo:          taskRepo,
 		TaskBranch:        taskBranch,
 		TaskBase:          taskBase,
@@ -4786,7 +4791,7 @@ const configColumns = "`poll_interval_ms`,`max_workers`,`max_mergers`,`max_merge
 	"`k8s_privileged`,`k8s_network_policy`,`k8s_deployment`,`k8s_container`," +
 	"`mcp_servers`,`capability_policy`,`cli_run`,`sandbox_overcommit`,`base_ci_red_streak`," +
 	"`k8s_priority_class_interactive`,`k8s_priority_class_agent`,`k8s_priority_class_ci`,`sandbox_disk_overcommit`," +
-	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`"
+	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`"
 
 func scanConfig(scan func(...any) error) (Config, error) {
 	var c Config
@@ -4844,7 +4849,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 		&c.K8sPrivileged, &c.K8sNetworkPolicy, &c.K8sDeployment, &c.K8sContainer,
 		&mcpServers, &capabilityPolicy, &cliRun, &sandboxOvercommit, &c.BaseCIRedStreak,
 		&c.K8sPriorityClassInteractive, &c.K8sPriorityClassAgent, &c.K8sPriorityClassCI, &c.SandboxDiskOvercommit,
-		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel); err != nil {
+		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI); err != nil {
 		return Config{}, err
 	}
 	backends, err := DecodeAgentBackends(agentBackends)
@@ -4953,7 +4958,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
-		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		c.PollInterval.Milliseconds(), c.MaxWorkers, c.MaxMergers, c.MaxMergesPerRepo, c.MergeBatchSize,
 		c.MergeGatherWindow.Milliseconds(), c.MaxCIJobs, c.MaxAgentTurns,
 		c.GitHubHost, c.GitHubInsecureHTTP, c.GCPProject, c.GCPServiceAccountEmail,
@@ -4988,7 +4993,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		strings.TrimSpace(c.K8sPriorityClassInteractive), strings.TrimSpace(c.K8sPriorityClassAgent),
 		strings.TrimSpace(c.K8sPriorityClassCI), c.SandboxDiskOvercommit,
 		strings.TrimSpace(c.AutoUpgradeChannel), strings.TrimSpace(c.AutoUpgradeTime),
-		strings.TrimSpace(c.JudgementModel))
+		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI)
 	return err
 }
 

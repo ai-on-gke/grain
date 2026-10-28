@@ -1,0 +1,32 @@
+# Namespace and resource quotas for the GKE production deployment of grain
+# (docs/design/grain-on-gke.md).
+#
+# Unlike deploy/kubernetes/grain-granule.yaml, which leaves the Namespace out
+# so `grain init` never relaxes Pod Security admission behind an operator's
+# back, this overlay is applied by scripts/deploy-gke.sh specifically to run
+# granule microVM sandboxes over /dev/kvm on a dedicated GKE cluster.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: grain
+  labels:
+    app.kubernetes.io/name: grain
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: grain-quota
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  hard:
+    pods: "64"
+    requests.cpu: "256"
+    requests.memory: "512Gi"
+    limits.memory: "1024Gi"
+    persistentvolumeclaims: "8"

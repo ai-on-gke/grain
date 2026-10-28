@@ -27,6 +27,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
@@ -185,8 +186,9 @@ var manifestCheckCache sync.Map // map[string]cachedManifestResult
 const manifestCheckTTL = 5 * time.Minute
 
 // CheckImageManifest performs a cheap OCI/Docker Registry v2 manifest HEAD
-// check for imageRef. It supports anonymous Bearer token exchange (e.g. GHCR)
-// and caches results in memory for 5 minutes.
+// check for imageRef. It supports anonymous Bearer token exchange (e.g. GHCR),
+// sends this host's Google access token to Artifact Registry and GCR
+// (registryauth.TokenFor), and caches results in memory for 5 minutes.
 func CheckImageManifest(ctx context.Context, imageRef string) error {
 	imageRef = strings.TrimSpace(imageRef)
 	if imageRef == "" {
@@ -212,10 +214,13 @@ func checkImageManifestUncached(ctx context.Context, imageRef string) error {
 	if err != nil {
 		return err
 	}
+	// Resolved before the probe's own deadline: a token lookup can take
+	// longer than the HEAD it is for, and is cached for later probes.
+	googleToken := registryauth.TokenFor(ctx, host)
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Second, Transport: registryTransport}
 	scheme := "https"
 	if isLoopbackRegistryHost(host) {
 		scheme = "http"
@@ -239,7 +244,7 @@ func checkImageManifestUncached(ctx context.Context, imageRef string) error {
 		return client.Do(req)
 	}
 
-	resp, err := doHead("")
+	resp, err := doHead(googleToken)
 	if err != nil {
 		return err
 	}

@@ -43,6 +43,14 @@ func NewHandler(proxy *GitProxy) http.Handler {
 			proxy.ServeCLIHTTP(w, r)
 			return
 		}
+		if isAPIPath(r.URL.Path) {
+			proxy.ServeAPIHTTP(w, r)
+			return
+		}
+		if isCapPath(r.URL.Path) {
+			proxy.ServeCapHTTP(w, r)
+			return
+		}
 		if isGitSignPath(r.URL.Path) {
 			proxy.ServeGitSignHTTP(w, r)
 			return
@@ -163,6 +171,10 @@ type BuildConfig struct {
 	// routes act through, and what credits their waits.
 	CLIActions CLIActions
 	WaitCredit CLIWaitCreditor
+	API        http.Handler
+	// CapServers is GitProxy.CapServers.
+	CapServers      *CapRegistry
+	ShutdownStarted <-chan struct{}
 }
 
 // BuildProxy wires the real files under DataDir plus the live model store
@@ -248,5 +260,8 @@ func BuildProxy(cfg BuildConfig) (*GitProxy, error) {
 		Activity:            activity,
 		CLIActions:          cfg.CLIActions,
 		WaitCredit:          cfg.WaitCredit,
+		API:                 cfg.API,
+		CapServers:          cfg.CapServers,
+		ShutdownStarted:     cfg.ShutdownStarted,
 	}, nil
 }

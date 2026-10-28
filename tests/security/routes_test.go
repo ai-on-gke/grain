@@ -152,6 +152,10 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/notifications/{id}/clear":                            trusted,
 	"POST /api/notifications/{id}/investigate":                      trusted,
 	"POST /api/tasks/{id}/wait-credit":                              trusted,
+	"POST /api/tasks/{id}/change-checks":                            trusted,
+	"POST /api/tasks/{id}/change-review":                            trusted,
+	"POST /api/tasks/{id}/change-publish":                           trusted,
+	"POST /api/tasks/{id}/change-mail":                              trusted,
 	"POST /api/tasks/{id}/wait-on":                                  trusted,
 	"POST /api/tasks/{id}/park-until":                               trusted,
 	"POST /api/tasks/{id}/resume-later":                             trusted,
@@ -291,15 +295,22 @@ var routeAuthorization = map[string]authLevel{
 
 	// Deployment-wide credentials: executor tokens, model keys, GitHub
 	// tokens, secrets.
-	"GET /api/executors/tokens":                trusted,
-	"POST /api/executors/tokens":               trusted,
-	"POST /api/executors/tokens/{id}/revoke":   trusted,
-	"DELETE /api/executors/tokens/{id}":        trusted,
-	"DELETE /api/executors/tokens/{id}/revoke": trusted,
-	"GET /api/agent-keys":                      trusted,
-	"PUT /api/agent-keys/{framework}":          trusted,
-	"DELETE /api/agent-keys/{framework}":       trusted,
-	"POST /api/agent-keys/{framework}/check":   trusted,
+	"GET /api/executors/tokens":                    trusted,
+	"POST /api/executors/tokens":                   trusted,
+	"POST /api/executors/tokens/{id}/revoke":       trusted,
+	"DELETE /api/executors/tokens/{id}":            trusted,
+	"DELETE /api/executors/tokens/{id}/revoke":     trusted,
+	"GET /api/external-agents/tokens":              trusted,
+	"POST /api/external-agents/tokens":             trusted,
+	"POST /api/external-agents/tokens/{id}/rotate": trusted,
+	"POST /api/external-agents/tokens/{id}/revoke": trusted,
+	"DELETE /api/external-agents/tokens/{id}":      trusted,
+	"POST /api/external-agents/tokens/revoke-all":  trusted,
+	"POST /mcp":                              trusted,
+	"GET /api/agent-keys":                    trusted,
+	"PUT /api/agent-keys/{framework}":        trusted,
+	"DELETE /api/agent-keys/{framework}":     trusted,
+	"POST /api/agent-keys/{framework}/check": trusted,
 	// A connection's key (grain/task-1601).
 	"PUT /api/agent-backends/{id}/credential":    trusted,
 	"DELETE /api/agent-backends/{id}/credential": trusted,
@@ -421,14 +432,18 @@ var routeAuthorization = map[string]authLevel{
 	// binaries are fetched by a machine with nothing but curl, and the
 	// connection authenticates with an executor token in its own
 	// handshake, after the upgrade -- not with a principal.
-	"GET /api/executors":              trusted,
-	"GET /api/executors/install.sh":   public,
-	"GET /install-executor.sh":        public,
-	"GET /api/executors/bin/{binary}": public,
-	"GET /install/{os}/{arch}":        public,
-	"GET /_grain/executor":            public,
-	"GET /api/executors/connect":      public,
-	"GET /api/executors/stream":       public,
+	"GET /api/executors":                trusted,
+	"GET /api/model-servers/install.sh": public,
+	"GET /api/executors/install.sh":     public,
+	"GET /install-executor.sh":          public,
+	"GET /api/executors/bin/{binary}":   public,
+	"GET /install/{os}/{arch}":          public,
+	"GET /_grain/executor":              public,
+	"GET /api/executors/connect":        public,
+	"GET /api/executors/stream":         public,
+	// A grain hostd dialing in authenticates with the hostd token in
+	// its upgrade (hostd.Remote.ServeHTTP), not with a principal.
+	"GET /api/hostd/connect": public,
 }
 
 // The people the fixtures name. On the single-tenant daemon

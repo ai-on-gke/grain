@@ -21,6 +21,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 )
 
 // What the daily automatic upgrade asks before it holds the queue
@@ -162,7 +164,8 @@ var manifestAccept = []string{
 // RegistryManifestDigest reads the digest a tagged ref
 // ("ghcr.io/bwsalmon/grain/grain:main") names, with a HEAD request to the
 // registry's v2 API and anonymously, as ListRegistryTags does: nothing
-// is pulled.
+// is pulled. An image on Artifact Registry or GCR is asked with a Google
+// access token instead, when this host has one (registryauth.TokenFor).
 func RegistryManifestDigest(ctx context.Context, ref string) (string, error) {
 	repository := repositoryOf(ref)
 	tag := strings.TrimPrefix(strings.TrimPrefix(ref, repository), ":")
@@ -172,7 +175,8 @@ func RegistryManifestDigest(ctx context.Context, ref string) (string, error) {
 	host, name := registryLocation(repository)
 	target := "https://" + host + "/v2/" + name + "/manifests/" + tag
 	header := http.Header{"Accept": {strings.Join(manifestAccept, ", ")}}
-	token := ""
+	token := registryauth.TokenFor(ctx, host)
+	exchanged := false
 	for attempt := 0; attempt < 2; attempt++ {
 		resp, err := registryDo(ctx, http.MethodHead, target, token, header)
 		if err != nil && attempt == 0 && errors.Is(err, http.ErrSchemeMismatch) && loopbackRegistry(host) {
@@ -183,7 +187,8 @@ func RegistryManifestDigest(ctx context.Context, ref string) (string, error) {
 			return "", err
 		}
 		resp.Body.Close()
-		if resp.StatusCode == http.StatusUnauthorized && token == "" {
+		if resp.StatusCode == http.StatusUnauthorized && !exchanged {
+			exchanged = true
 			if token, err = registryToken(ctx, resp.Header.Get("WWW-Authenticate")); err != nil {
 				return "", err
 			}

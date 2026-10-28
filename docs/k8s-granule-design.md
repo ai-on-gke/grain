@@ -681,3 +681,34 @@ same way, rather than `CHANGEME`, is a real question this change does
 not answer; it is the stable-tag question this document's §4 already
 left open, now narrower than "none exists" but still a separate
 decision from `grain init`'s own default above.
+
+## Migrating a local install onto this platform
+
+`scripts/migrate-local-to-gke.sh` moves an existing single-host
+deployment onto this platform. It does not apply
+`grain-granule.yaml` as shipped. It renders the file first, filling in
+the three CHANGEMEs from the local daemon's own flags, and changing two
+more things:
+
+- **`replicas: 0` on first apply.** The controller only starts once the
+  local data directory has been copied into `grain-data` through a uid
+  1000 transfer pod. A controller that came up first would create an
+  empty store on the PVC and start its own installation, and the copy
+  would then land on top of a live daemon.
+- **A Secret for the off-cluster processes.** `Secret/grain-migration`
+  is mounted read-only at `/etc/grain-secrets`, and its `hostd-token` is
+  passed as `-hostd-token-file`, `-executor-token-file` and
+  `-executor-addr=:4243`. The host's own `grain hostd -server` and
+  `grain model-server -server` both dial in with that one token. That
+  is how `run: host` capability servers and ambient CLIs such as `agy`
+  keep working once the controller is in the cluster.
+  `pkg/daemon.Config.HostdRemote` (comment on that field) describes the
+  hostd side of it.
+
+The namespace label and the device plugin are checked the way §1 and
+§2 describe. The script creates and labels the namespace the same way
+`gke-sandboxes`' RBAC manifest does, and refuses a cluster with no
+`granule-device-plugin` rather than installing one. That install is
+`grain init -platform=gke-sandboxes`'s job, and `--provision` runs it.
+[grain-init-platforms.md](grain-init-platforms.md#migrating-a-local-install-to-gke)
+lists the stages, the rollback and how it is tested.

@@ -232,6 +232,13 @@ type Run struct {
 	Jobs []JobRun `json:"jobs"`
 }
 
+// InterruptedRunError is what a run gets for an Error when the daemon
+// running it stopped before it concluded. It is prose rather than a
+// sentinel because the thing that reads it is a person looking at the
+// run; the fact a *caller* acts on is Run.Interrupted.
+const InterruptedRunError = "this run was interrupted: the grain daemon running it stopped before " +
+	"it finished, so its jobs were never concluded"
+
 // Build is the build of grain that produced a run: the binary that read
 // the workflows, planned the jobs, ran them and wrote the conclusion
 // down.

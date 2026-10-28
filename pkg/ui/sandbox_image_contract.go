@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 )
 
@@ -129,10 +130,16 @@ const imageLabelTTL = 5 * time.Minute
 // FetchImageLabels reads an image's OCI labels from its registry (Docker
 // Registry HTTP API v2): the manifest -- the linux/amd64 one of an index
 // -- and then the config blob it names, which is where labels live.
-// Anonymous Bearer token exchange is supported (GHCR's public images); a
-// registry that needs credentials answers with an error, which the
-// Settings pane reports as an unverified contract rather than as an
-// incompatible image.
+// Anonymous Bearer token exchange is supported (GHCR's public images),
+// and an image on Artifact Registry or GCR is read with this host's
+// Google access token when it has one (registryauth.TokenFor); a
+// registry that needs credentials beyond that answers with an error,
+// which the Settings pane reports as an unverified contract rather than
+// as an incompatible image.
+//
+// The token goes to the registry's own host only: a blob GET that the
+// registry redirects to storage elsewhere is followed without it, which
+// net/http does by itself for a redirect to another domain.
 func FetchImageLabels(ctx context.Context, imageRef string) (map[string]string, error) {
 	host, repo, ref, err := parseOCIImageReference(imageRef)
 	if err != nil {
@@ -140,7 +147,7 @@ func FetchImageLabels(ctx context.Context, imageRef string) (map[string]string, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	r := &registryReader{client: &http.Client{Timeout: 10 * time.Second}, base: "https://" + host + "/v2/" + repo}
+	r := &registryReader{client: &http.Client{Timeout: 10 * time.Second, Transport: registryTransport}, base: "https://" + host + "/v2/" + repo, token: registryauth.TokenFor(ctx, host)}
 	if isLoopbackRegistryHost(host) {
 		r.base = "http://" + host + "/v2/" + repo
 	}
@@ -197,12 +204,18 @@ var manifestAccept = strings.Join([]string{
 	"application/vnd.docker.distribution.manifest.v2+json",
 }, ", ")
 
-// registryReader is one repository's v2 API, holding the anonymous token
-// the first challenge handed out for the requests after it.
+// registryTransport is what FetchImageLabels and CheckImageManifest
+// reach a registry through: nil, net/http's default, except in tests.
+var registryTransport http.RoundTripper
+
+// registryReader is one repository's v2 API, holding the token its
+// requests carry: a Google access token from the start, for a Google
+// registry, or else the anonymous one the first challenge handed out.
 type registryReader struct {
-	client *http.Client
-	base   string
-	token  string
+	client    *http.Client
+	base      string
+	token     string
+	exchanged bool
 }
 
 func (r *registryReader) getJSON(ctx context.Context, path, accept string, into any) error {
@@ -221,7 +234,8 @@ func (r *registryReader) getJSON(ctx context.Context, path, accept string, into 
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode == http.StatusUnauthorized && r.token == "" {
+	if resp.StatusCode == http.StatusUnauthorized && !r.exchanged {
+		r.exchanged = true
 		chal := resp.Header.Get("WWW-Authenticate")
 		resp.Body.Close()
 		tok, tokErr := fetchRegistryBearerToken(ctx, r.client, chal)
