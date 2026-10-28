@@ -1028,6 +1028,9 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	if deps.Policy != nil || isUnisolated(deps.Sandboxes) {
 		holds = append(holds, policyHold(ctx, deps))
 	}
+	if held := catalogueHold(ctx, deps); held != nil {
+		holds = append(holds, held)
+	}
 	if len(holds) > 0 {
 		opts = append(opts, dispatch.Hold(func(taskID string) string {
 			for _, held := range holds {
@@ -1629,6 +1632,52 @@ func pendingBranchHold(ctx context.Context, deps Deps) func(string) string {
 			log.Printf("orchestrator: recording why %s waits for its branch: %v", task.ID, err)
 		}
 		return "held for its branch: " + reason
+	}
+}
+
+// catalogueHold re-judges a queued task's grants against the capability
+// catalogue (settings/capabilities.yml) before anything is minted or a
+// sandbox started for it (docs/design/config-repo-settings.md §3.4): a
+// config change merged after the task was filed may have revoked a
+// capability or narrowed who may hold it, and the task waits, saying
+// which grant and why (model.CatalogueWaitCapability), rather than
+// running with it. A wait it recorded is cleared once the task passes.
+// nil when the deployment has no catalogue.
+func catalogueHold(ctx context.Context, deps Deps) func(string) string {
+	cfg, err := deps.Store.GetConfig(ctx)
+	if err != nil {
+		log.Printf("orchestrator: reading the capability catalogue: %v", err)
+		return nil
+	}
+	if cfg == nil || cfg.CapabilityPolicy.Catalogue == nil {
+		return nil
+	}
+	cat := cfg.CapabilityPolicy.Catalogue
+	return func(taskID string) string {
+		task, err := deps.Store.GetTask(ctx, taskID)
+		if err != nil || task == nil {
+			return ""
+		}
+		gc := model.TaskGrantContext(*task)
+		if gc.TemplateID != "" {
+			if tmpl, err := deps.Store.GetTemplate(ctx, gc.TemplateID); err == nil && tmpl != nil {
+				gc.TemplateName = tmpl.Name
+			}
+		}
+		if _, err := cat.ValidateGrants(gc); err != nil {
+			if serr := deps.Store.SetGrantWait(ctx, model.GrantWait{
+				TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: err.Error(), WaitingAt: deps.Config.now(),
+			}); serr != nil {
+				log.Printf("orchestrator: recording why the capability catalogue holds %s: %v", taskID, serr)
+			}
+			return "held by settings/capabilities.yml: " + err.Error()
+		}
+		if wait, err := deps.Store.GrantWaitOf(ctx, taskID); err == nil && wait != nil && wait.Capability == model.CatalogueWaitCapability {
+			if err := deps.Store.ClearGrantWait(ctx, taskID); err != nil {
+				log.Printf("orchestrator: clearing %s's capability catalogue wait: %v", taskID, err)
+			}
+		}
+		return ""
 	}
 }
 
