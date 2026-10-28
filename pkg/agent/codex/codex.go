@@ -831,9 +831,8 @@ func (f *Framework) writeConfig(ctx context.Context, mcpArgs []string, taskID st
 			return "", false, nil, err
 		}
 		specData, err := json.Marshal(detachedMCPSpec{
-			GrainBinary: f.grainBinaryPath,
-			Args:        mcpArgs,
-			BaseConfig:  string(config),
+			Args:       mcpArgs,
+			BaseConfig: string(config),
 		})
 		if err != nil {
 			removeHome()

@@ -158,7 +158,12 @@ func TestDetachedMCPWrapperServesToolsAndWritesConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := newFramework(nil, fakeGrain, WithDetachedMCP(), WithEffort("high"))
+	// The wrapper starts its own grain, never a path from mcpserver.json.
+	prev := detachedGrainBinary
+	detachedGrainBinary = func() (string, error) { return fakeGrain, nil }
+	t.Cleanup(func() { detachedGrainBinary = prev })
+
+	f := newFramework(nil, "/nonexistent/grain-from-the-daemon", WithDetachedMCP(), WithEffort("high"))
 	f.startMCP = func(context.Context, string, []string) (*mcp.ManagedHTTP, error) {
 		t.Fatal("daemon started MCP adapter despite WithDetachedMCP")
 		return nil, nil

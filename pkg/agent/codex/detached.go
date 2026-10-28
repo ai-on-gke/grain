@@ -39,11 +39,19 @@ const DetachedSubcommand = "codex-detached"
 // mcp.StartCommandHTTP in its own process outside the daemon, and writes
 // BaseConfig + the endpoint's [mcp_servers.grain-sandbox] stanza into
 // $CODEX_HOME/config.toml before starting codex.
+//
+// It names no binary: the file is written by the daemon into a directory
+// it controls, and hostd's allowlist entry is what bounds what runs on the
+// host, so the wrapper only ever starts its own grain (detachedGrainBinary).
 type detachedMCPSpec struct {
-	GrainBinary string   `json:"grain_binary"`
-	Args        []string `json:"args"`
-	BaseConfig  string   `json:"base_config"`
+	Args       []string `json:"args"`
+	BaseConfig string   `json:"base_config"`
 }
+
+// detachedGrainBinary is the grain the wrapper starts `grain mcpserver`
+// from: itself, the hostd version's grain beside codex.bin. A variable
+// so tests can stand in a fake.
+var detachedGrainBinary = os.Executable
 
 // RunDetached implements `grain codex-detached <codex-bin> [args...]`.
 //
@@ -119,15 +127,9 @@ func startDetachedMCP(ctx context.Context, home string) (func(), error) {
 	if err := json.Unmarshal(data, &spec); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", specPath, err)
 	}
-	grainBin := spec.GrainBinary
-	if grainBin == "" {
-		if self, err := os.Executable(); err == nil {
-			grainBin = self
-		}
-	} else if _, err := os.Stat(grainBin); err != nil {
-		if self, selfErr := os.Executable(); selfErr == nil {
-			grainBin = self
-		}
+	grainBin, err := detachedGrainBinary()
+	if err != nil {
+		return nil, fmt.Errorf("locating grain: %w", err)
 	}
 	endpoint, err := mcp.StartCommandHTTP(ctx, grainBin, spec.Args)
 	if err != nil {
