@@ -1,0 +1,102 @@
+# In-cluster Services for grain on GKE (docs/design/grain-on-gke.md §Topology):
+#
+#   1. Service/grain-sandbox: guest-facing ClusterIP Service exposing the
+#      git proxy (9728), model proxies (9744-9746) and package cache
+#      interception listeners (53, 80, 443).
+#   2. Service/grain-access: wrapper-facing ClusterIP Service exposing ONLY
+#      the granule dial-out mTLS acceptor port (7443). Never exposed on the
+#      Gateway, and separated from grain-sandbox so NetworkPolicy and the
+#      in-pod netshim filter can distinguish wrapper egress from guest egress.
+#   3. Service/grain-hostd: Gateway backend Service for `/api/hostd/*` and
+#      `/api/executors/*` so the hostd WebSocket/HTTP2 stream gets its own
+#      GCPBackendPolicy with `timeoutSec: 86400` without widening the UI
+#      backend timeout.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grain-sandbox
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: sandbox-services
+spec:
+  type: ClusterIP
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: daemon
+  ports:
+    - name: pkgcache-dns-udp
+      protocol: UDP
+      port: 53
+      targetPort: 53
+    - name: pkgcache-dns-tcp
+      protocol: TCP
+      port: 53
+      targetPort: 53
+    - name: pkgcache-http
+      protocol: TCP
+      port: 80
+      targetPort: 80
+    - name: pkgcache-https
+      protocol: TCP
+      port: 443
+      targetPort: 443
+    - name: git-proxy
+      protocol: TCP
+      port: 9728
+      targetPort: 9728
+    - name: claude-proxy
+      protocol: TCP
+      port: 9744
+      targetPort: 9744
+    - name: openai-proxy
+      protocol: TCP
+      port: 9745
+      targetPort: 9745
+    - name: gemini-proxy
+      protocol: TCP
+      port: 9746
+      targetPort: 9746
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grain-access
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: sandbox-access
+spec:
+  type: ClusterIP
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: daemon
+  ports:
+    - name: sandbox-access
+      protocol: TCP
+      port: 7443
+      targetPort: 7443
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grain-hostd
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: hostd-ingress
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: daemon
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http
