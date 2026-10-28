@@ -315,3 +315,32 @@ func TestCheckConfigAllowsHostSandboxesOnAWorkstation(t *testing.T) {
 		t.Fatalf("checkConfig(-container-sandboxes and -host-sandboxes) = %v, want both named", err)
 	}
 }
+
+func TestParseDaemonArgsGritFlags(t *testing.T) {
+	t.Parallel()
+	// Default: neither -grit-url nor -grit-client-token is set.
+	defCfg, _, unknown, err := parseDaemonArgs([]string{
+		"-data-dir", "/var/lib/grain/data",
+		"-disable-native-sandboxes",
+	})
+	if err != nil || len(unknown) != 0 {
+		t.Fatalf("parseDaemonArgs default = %v, unknown %v", err, unknown)
+	}
+	if defCfg.GritURL != "" || defCfg.GritClientToken != "" {
+		t.Fatalf("default GritURL=%q GritClientToken=%q, want both empty", defCfg.GritURL, defCfg.GritClientToken)
+	}
+
+	// With -grit-url and -grit-client-token set: parsed into daemon.Config.
+	cfg, _, unknown, err := parseDaemonArgs([]string{
+		"-data-dir", "/var/lib/grain/data",
+		"-disable-native-sandboxes",
+		"-grit-url", "http://127.0.0.1:4244",
+		"-grit-client-token", "grain-main.secret123",
+	})
+	if err != nil || len(unknown) != 0 {
+		t.Fatalf("parseDaemonArgs with grit flags = %v, unknown %v", err, unknown)
+	}
+	if cfg.GritURL != "http://127.0.0.1:4244" || cfg.GritClientToken != "grain-main.secret123" {
+		t.Fatalf("got GritURL=%q GritClientToken=%q", cfg.GritURL, cfg.GritClientToken)
+	}
+}

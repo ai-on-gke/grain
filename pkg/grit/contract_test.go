@@ -21,6 +21,7 @@ import (
 	"crypto"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -56,19 +57,32 @@ func (m *memCursor) SaveCursor(epoch string, seq int64) error {
 }
 
 type harness struct {
-	name    string
-	dataDir string
-	signer  attest.Signer
-	keys    attest.KeySet
-	local   *Local
-	srv     *httptest.Server
-	backend gritapi.Backend
-	client  *gritapi.Client
-	cursor  *memCursor
-	token   string
+	name      string
+	dataDir   string
+	signer    attest.Signer
+	keys      attest.KeySet
+	local     *Local
+	gritSrv   *Server
+	srv       *httptest.Server
+	sess      *gritapi.Session
+	hub       *gritapi.SessionHub
+	cancelTun context.CancelFunc
+	backend   gritapi.Backend
+	client    *gritapi.Client
+	cursor    *memCursor
+	token     string
 }
 
 func (h *harness) close() {
+	if h.cancelTun != nil {
+		h.cancelTun()
+	}
+	if h.sess != nil {
+		_ = h.sess.Close()
+	}
+	if h.hub != nil {
+		_ = h.hub.Close()
+	}
 	if h.srv != nil {
 		h.srv.Close()
 	}
@@ -174,10 +188,13 @@ func startHarness(t *testing.T, mode string, dataDir string, signer attest.Signe
 		cursor:  cursor,
 		token:   token,
 	}
-	if mode == "local" {
+	switch mode {
+	case "local":
 		h.backend = loc
-	} else {
-		srv := httptest.NewServer(NewServer(ServerConfig{Local: loc}))
+	case "remote":
+		gritSrv := NewServer(ServerConfig{Local: loc})
+		srv := httptest.NewServer(gritSrv)
+		h.gritSrv = gritSrv
 		h.srv = srv
 		h.client = gritapi.NewClient(gritapi.ClientConfig{
 			BaseURL:     srv.URL,
@@ -185,6 +202,59 @@ func startHarness(t *testing.T, mode string, dataDir string, signer attest.Signe
 			Cursor:      cursor,
 		})
 		h.backend = h.client
+	case "session":
+		gritSrv := NewServer(ServerConfig{Local: loc})
+		srv := httptest.NewServer(gritSrv)
+		h.gritSrv = gritSrv
+		h.srv = srv
+		h.client = gritapi.NewClient(gritapi.ClientConfig{
+			BaseURL:     srv.URL,
+			ClientToken: token,
+			Cursor:      cursor,
+		})
+		sess, err := h.client.ConnectSession(context.Background(), "git-proxy", "capability-ports", "ci-api")
+		if err != nil {
+			t.Fatalf("ConnectSession: %v", err)
+		}
+		h.sess = sess
+		if got := gritSrv.ActiveSessionOffers(); len(got) != 3 || got[0] != "git-proxy" {
+			t.Fatalf("ActiveSessionOffers = %v, want [git-proxy capability-ports ci-api]", got)
+		}
+		h.backend = h.client
+	case "reverse-session":
+		gritSrv := NewServer(ServerConfig{Local: loc})
+		h.gritSrv = gritSrv
+		hub := gritapi.NewSessionHub(token)
+		h.hub = hub
+		muxHandler := http.NewServeMux()
+		muxHandler.Handle("/v1/session", hub)
+		srv := httptest.NewServer(muxHandler)
+		h.srv = srv
+		tunCtx, cancelTun := context.WithCancel(context.Background())
+		h.cancelTun = cancelTun
+		go func() {
+			_ = DialSession(tunCtx, SessionDialConfig{
+				GrainURL:    srv.URL,
+				ClientToken: token,
+				Offers:      []string{"git-proxy", "ci-api"},
+				Server:      gritSrv,
+			})
+		}()
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer waitCancel()
+		if err := hub.WaitConnected(waitCtx); err != nil {
+			t.Fatalf("hub.WaitConnected: %v", err)
+		}
+		if got := hub.Offers(); len(got) != 2 || got[0] != "git-proxy" {
+			t.Fatalf("hub.Offers = %v, want [git-proxy ci-api]", got)
+		}
+		h.client = hub.NewClient(gritapi.ClientConfig{
+			ClientToken: token,
+			Cursor:      cursor,
+		})
+		h.backend = h.client
+	default:
+		t.Fatalf("unknown mode %q", mode)
 	}
 	return h
 }
@@ -209,10 +279,11 @@ func waitForRunCompleted(t *testing.T, b gritapi.Backend, runID string) gritapi.
 	}
 }
 
-// TestBackendContract runs the full GS-2 contract suite against both
-// in-process `grit.Local` and `gritapi.Client` talking to `grit.Server`.
+// TestBackendContract runs the full GS-2 contract suite against in-process
+// `grit.Local`, `gritapi.Client` over HTTP, `gritapi.Client` over `/v1/session`,
+// and reverse-tunnel `/v1/session` (`grit serve -grain-url ...`).
 func TestBackendContract(t *testing.T) {
-	for _, mode := range []string{"local", "remote"} {
+	for _, mode := range []string{"local", "remote", "session", "reverse-session"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Run("TreeNegotiateUploadDedupeAndAttestation", func(t *testing.T) {
 				signer, ks := newTestSigner(t)
@@ -340,6 +411,20 @@ func TestBackendContract(t *testing.T) {
 				}
 				if len(stmt.Predicate.Jobs) != 2 || stmt.Predicate.Jobs[0].Result.Conclusion != "success" {
 					t.Fatalf("unexpected attestation predicate: %+v", stmt.Predicate)
+				}
+
+				// Attestation must fail verification when checked against another tree,
+				// another commit, or another signing keyset.
+				otherTreeID, _ := makeSampleTree(t, map[string]string{"hello.txt": "different-tree"})
+				if err := stmt.CheckSubject(attest.Tree{SHA256: otherTreeID.SHA256, GitTree: otherTreeID.GitTree}, commitSHA); err == nil {
+					t.Fatal("stmt.CheckSubject succeeded for another tree, want error")
+				}
+				if err := stmt.CheckSubject(attest.Tree{SHA256: treeID.SHA256, GitTree: treeID.GitTree}, "ffffffffffffffffffffffffffffffffffffffff"); err == nil {
+					t.Fatal("stmt.CheckSubject succeeded for another commit, want error")
+				}
+				_, otherKS := newTestSigner(t)
+				if _, err := attest.Verify(env, otherKS); err == nil {
+					t.Fatal("attest.Verify succeeded against another signing keyset, want error")
 				}
 
 				// Event stream must contain run.queued, job.started, job.completed, run.attested, and run.completed.

@@ -41,15 +41,8 @@ var googleTokensExempt = []string{
 	"tests/hygiene/boundary_test.go",
 }
 
-// googleTokensPending are files that still say a Google token, imported
-// from bwsalmon/grain before it was all moved out. The list may only
-// shrink: a file here that no longer says one fails the test until it is
-// taken off, so that it cannot quietly start again.
-var googleTokensPending = map[string]string{}
-
 func TestCoreSaysNoGoogleTokens(t *testing.T) {
 	root := repoRoot(t)
-	seen := map[string]bool{}
 	for _, rel := range trackedFiles(t, root) {
 		if exempt(rel) {
 			continue
@@ -62,17 +55,8 @@ func TestCoreSaysNoGoogleTokens(t *testing.T) {
 		if loc == nil {
 			continue
 		}
-		if _, ok := googleTokensPending[rel]; ok {
-			seen[rel] = true
-			continue
-		}
 		line := 1 + bytes.Count(data[:loc[0]], []byte("\n"))
 		t.Errorf("%s:%d says %q, which is Google's: use a made-up fixture instead", rel, line, data[loc[0]:loc[1]])
-	}
-	for rel := range googleTokensPending {
-		if !seen[rel] {
-			t.Errorf("%s no longer says a Google token: take it off googleTokensPending", rel)
-		}
 	}
 }
 

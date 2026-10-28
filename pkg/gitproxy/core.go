@@ -150,6 +150,11 @@ type GitProxy struct {
 	// CapHandler, when set, serves external capability server requests under
 	// /cap/<server>/mcp.
 	CapHandler http.Handler
+	// ShutdownStarted, when set, is closed as the daemon begins to stop:
+	// a blocking /cli/ci/wait or /cli/ci/run-job ends its slice at once
+	// and hands back ResumeRunID rather than holding the proxy's
+	// graceful shutdown until the slice expires.
+	ShutdownStarted <-chan struct{}
 }
 
 // pushSpoolThreshold returns the threshold above which push bodies spool to disk.
