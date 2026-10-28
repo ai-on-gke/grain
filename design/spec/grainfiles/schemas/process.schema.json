@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://grain.dev/schemas/grainfiles/process.schema.json",
+  "title": "A process grainfile (<name>.process.grain.md, docs/grainfiles-spec.md §7.2)",
+  "type": "object",
+  "properties": {
+    "grainfile": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/grainfile"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "draft": {
+      "type": "boolean",
+      "default": false
+    },
+    "not_before": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/notBefore"
+    },
+    "capabilities": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/capabilityList"
+    },
+    "references": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/refList"
+    },
+    "from_template": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/ref"
+    },
+    "when": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/when"
+    },
+    "gate": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "grainfile",
+    "title",
+    "when"
+  ],
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false
+}
