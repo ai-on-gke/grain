@@ -1261,7 +1261,7 @@ const (
 	// snapshot of a task's CL (-> "cl/<number>@<snapshot>:<template>"),
 	// the CL's LinkTrustBoundaryCleared. A new snapshot clears nothing
 	// that an older one did. Read by the edition's review gate
-	// (google3-cls.md §5, G3-5). Blocks nothing itself.
+	// (changelists.md §5, G3-5). Blocks nothing itself.
 	LinkCLReviewCleared LinkKind = "cl-review-cleared"
 )
 

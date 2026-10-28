@@ -23,7 +23,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// Stage S4 (google3-cls.md §5, G3-5): the review loop on a change that is
+// Stage S4 (changelists.md §5, G3-5): the review loop on a change that is
 // not a pull request. A run answers a CL's review threads as drafts
 // (Replier), which are published when the run ends (Publisher.PublishRun)
 // or when a person presses Publish replies (Publisher.PublishReplies); a

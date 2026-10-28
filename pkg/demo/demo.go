@@ -1416,7 +1416,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 			{Name: "//devtools/grain/retry:lint", State: "failed"},
 			{Name: "//devtools/grain/retry:build", State: "passed"},
 		},
-		// And its reviewer asked for changes (google3-cls.md §5); the four
+		// And its reviewer asked for changes (changelists.md §5); the four
 		// below show the review badge's other states.
 		ReviewState: change.ReviewStateChangesRequested})
 	for i, seed := range []struct {

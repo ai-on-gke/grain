@@ -22,7 +22,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/change"
 )
 
-// The review tools of a run whose task's change is a CL (google3-cls.md
+// The review tools of a run whose task's change is a CL (changelists.md
 // §5, G3-5): reply_to_pull_request_comment and resolve_review_thread
 // answer one of the CL's threads, by the ID the run was told
 // ("cl/<number>:<comment id>"), as a draft the provider publishes when

@@ -2523,7 +2523,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		if taskDetail.Task.ChangeTargetKind != "" || len(taskDetail.Task.Changelists) > 0 {
 			registry.Register(mcp.NewChangeChecksTools(DaemonChangeChecks{Client: client, TaskID: *taskID})...)
 			// Its review threads are answered on the CL, as drafts
-			// published when the run ends (google3-cls.md §5).
+			// published when the run ends (changelists.md §5).
 			registry.Register(mcp.NewChangeReviewTools(DaemonChangeReview{Client: client, TaskID: *taskID})...)
 		}
 		// Not a tool either: the same row, written the way that costs
