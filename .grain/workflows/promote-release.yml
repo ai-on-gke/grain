@@ -1,0 +1,93 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Make a pending release official, or drop it -- a person's answer to
+# "vX.Y.0 is ready to promote" (docs/design/release-from-trunk.md, §4).
+#
+# The release train (scripts/release-from-trunk.sh, run daily by
+# .grain/workflows/release-train.yml) does everything up to the release
+# and stops: a release candidate whose staging soak passes is tagged
+# vX.Y.0-pending, its vX.Y.0-stamped images are built and published as
+# :vX.Y.0-pending, the release-notes task is filed, and an operator
+# notification offers Approve and Reject. This workflow is those two
+# buttons, and it is the only thing that pushes vX.Y.0 or moves `latest`.
+#
+# human: required. Only a person starts it, never an agent and never a
+# schedule:
+#   - it answers workflow_dispatch and nothing else -- no push, no
+#     release, no cron;
+#   - it is started by POST /api/releases/{version}/approve or /reject
+#     (`grain release approve vX.Y.0`, the Upgrade pane, the
+#     notification's own buttons), which refuse any caller that is not a
+#     person and set GRAIN_CI_REQUESTED_BY_KIND=human and
+#     GRAIN_CI_RELEASE_VERSION on the run -- variables no API caller can
+#     set (ci.Request.RequestedByKind is never read from JSON);
+#   - every job refuses to run without them, so a dispatch by any other
+#     route -- `grain ci run`, POST /api/ci/runs, an agent's run -- fails
+#     at its first step and pushes nothing;
+#   - .grain/triggers/release-promotion.yml holds every change to this
+#     file and the scripts it runs for a person's Submit.
+#
+# The route selects one job: `promote` for an approval (which brings
+# `approve` in front of it) or `reject`. Dispatched whole, all three
+# refuse.
+name: promote-release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  approve:
+    name: approve the pending release
+    # Each run is a decision, never a replay of one.
+    cache: false
+    capabilities: ["repo-write:bwsalmon/grain", package-publish]
+    optional-capabilities: [image-signing]
+    # Approving builds nothing: release-images.sh promote finds the
+    # stamped :vX.Y.0-pending images and retags them.
+    timeout-minutes: 30
+    steps:
+      - name: Promote the pending release a person approved
+        run: bash ./scripts/release-from-trunk.sh approve "$GRAIN_CI_RELEASE_VERSION"
+
+  promote:
+    # .grain/workflows/promote.yml's job, dispatched as the approval's last
+    # step the way the orchestrator dispatches it after a release-train
+    # run: publish whatever the git `latest` tag now names. After the
+    # approve job's own `release-images.sh promote vX.Y.0` it is a few
+    # manifest copies onto the tags they already hold.
+    name: publish the promoted release as latest
+    needs: [approve]
+    cache: false
+    capabilities: [package-publish]
+    optional-capabilities: [image-signing]
+    timeout-minutes: 30
+    steps:
+      - name: Refuse anybody but a person
+        run: |
+          if [ "${GRAIN_CI_REQUESTED_BY_KIND:-}" != human ]; then
+            echo "promote-release: only a person approves a release" >&2
+            exit 1
+          fi
+      - name: Publish the last promoted release as latest
+        run: bash ./scripts/release-images.sh promote
+
+  reject:
+    name: reject the pending release
+    cache: false
+    capabilities: ["repo-write:bwsalmon/grain", package-publish]
+    timeout-minutes: 30
+    steps:
+      - name: Drop the pending release a person rejected
+        run: bash ./scripts/release-from-trunk.sh reject "$GRAIN_CI_RELEASE_VERSION"

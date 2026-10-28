@@ -1,0 +1,105 @@
+name: UI walkthrough - responsive shell and live sessions
+title: Walk through responsive navigation and live-session UI
+base: main
+auto-merge: true
+body: |
+  Thoroughly exercise the shared shell and the live interaction
+  surfaces across desktop, tablet and phone layouts, in a real browser
+  against a real server.
+
+  ## Coverage
+
+  - At representative desktop, iPad/tablet and narrow phone widths, use
+    the real navigation controls to visit Inbox, the task
+    list/detail/new-task screens, Boards and each major visualization,
+    Sessions and a session, Repos and a repo's tabs, Processes, CI,
+    every Settings section group and every System tab (Metrics
+    included).
+  - The page header rail on desktop and tablet: one row holding the
+    section glyph and crumbs (`tasks`, `repositories / <repo> / <tab>`,
+    `settings / <section>`, `system / <tab>`, `task <id>`), then the
+    page's own count, search and filters on the left and its actions
+    ("New", "Add repo", "New board") at the right, then the global
+    alerts bell, System and Settings buttons at the very end, none of
+    them hidden or clipped. When the page's row does not fit, the
+    "More page actions" button opens the rest as a menu rather than the
+    rail growing a second row; counts sit level with the title. There is
+    no team, team switcher, user tile, Admin mode switch or "All teams"
+    anywhere, and an old `/t/<team>/...` link opens its team-less page.
+  - On a phone: the bar (menu, page title, alerts bell, Settings) and
+    the navigation drawer, a modal dialog that keeps itself open for the
+    create menu and Customize pinned items and closes on navigation,
+    with the System row and the build stamp at its foot.
+  - The rail: the create menu (New task, New session, New board),
+    pinned items and Customize, Tasks with its Merged and Blocked
+    counts, Boards and Sessions with their own entries, Processes and
+    Repos with their counts, CI, the Staging list of staging
+    environments (each linked to its host port or `/staging/` sub-path,
+    pinnable, and marked when the port is not reachable through this
+    proxy), and the build stamp linked to Settings → Upgrade.
+  - Verify rail and drawer behaviour, selected state and counts, the
+    banners (the disconnected banner and the host-mode install notice
+    together, and the error snackbar above them) and the alerts panel
+    staying off a phone's edge, tab-strip scrolling, overlay sizing and
+    back controls, sticky actions, nested scrolling, long
+    names/markdown/tables, orientation changes, browser Back/Forward,
+    deep links and hard reloads. Assert that there are no hidden
+    controls, no overlap, no horizontal page overflow, no clipped footer
+    or build stamp, and no accidental background scrolling.
+  - Exercise the mouse, keyboard-only and coarse-pointer/touch paths,
+    and the WebKit path where it is supported. Check focus restoration
+    (including when a declined discard prompt hands focus back), Escape
+    and back behaviour, accessible names, confirmation dialogs, and
+    reduced-motion, dark and light rendering.
+  - Sessions (`/sessions`): New session (from the create menu and the
+    Sessions page) opens an empty chat with the composer focused, a
+    Session name field, the model to run on and Pin to sidebar; send
+    the first message and confirm the session is named, pinned if
+    asked, and lit in the rail. Open and direct-link sessions (`/director`
+    included, and a deep link to a deleted session, which lists the
+    sessions rather than another's chat), send and render messages and
+    markdown, inspect status/reconnect/exit behaviour and the work tree
+    of what the session filed, Pause and Resume (absent before the
+    session has started), Restart (with and without carrying the
+    handover) and Delete with its confirmation, resize the terminal of
+    a task-bound interactive console, switch sessions, and verify that
+    the rail updates.
+  - The demo may not provide session managers, live streams, banners or
+    device metrics. Intercept only those external or live boundaries,
+    with realistic incremental, disconnect, empty and error states; keep
+    navigation, React rendering, browser layout and the real Grain
+    server in the loop. Do not weaken the exercise into screenshot-only
+    inspection.
+
+  ## Walkthrough protocol
+
+  - Build and start this repository's real `grain demo` server over a
+    throwaway embedded store, open its built frontend in an actual
+    Playwright browser, and interact through visible UI controls. Do not
+    substitute a source review, a jsdom-only test, or an API-only
+    exercise for the walkthrough.
+  - Prefer the Gemini-backed model and tooling when this sandbox carries
+    a key at `/home/debian/.gemini-api-key`; never print, log or commit
+    it. A repository-declared template carries no capabilities of its
+    own, so what the sandbox holds is whatever this deployment already
+    gives tasks in this repository.
+  - Explore beyond the scripted cases in `ui/e2e`. Check browser console
+    errors, failed network requests, loading/empty/error states,
+    keyboard reachability, and destructive-action confirmations relevant
+    to this area.
+  - Confirm mutations by returning to the screen, reloading and
+    deep-linking where applicable, and observing the persisted result.
+    Stub only an unavailable external or system boundary; keep the real
+    server, frontend, browser and user gestures in the loop, and
+    document every stub.
+  - Record the commit tested, the environment, the exact steps, the
+    outcomes and every stub in a dated report under `docs/test-runs/`,
+    named `YYYY-MM-DD-responsive-navigation-live-sessions.md`. Do not
+    commit screenshots or generated browser artifacts.
+  - For each bug found: capture a deterministic reproduction; fix it in
+    this task when the correction is safe and scoped; add regression
+    coverage at the strongest practical level; and run the relevant
+    tests. If the fix is unsafe, materially separate, or needs
+    infrastructure this sandbox does not have, propose a focused
+    follow-up task with `branch: "main"` carrying the reproduction,
+    the evidence and the expected behaviour.

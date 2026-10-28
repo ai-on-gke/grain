@@ -1,0 +1,75 @@
+name: Release qualification - Merge queue & demand-driven CI
+title: Validate merge queue states, demand-driven base CI, batching and bisection
+base: main
+auto-merge: true
+# The scratch branch this template's body tells its runs to create from
+# main and delete when done (qualification/<this task id>). Create and
+# delete only: no force, so an existing qualification branch can be
+# fast-forwarded but never rewritten, and main itself stays out of reach.
+push:
+  - ref: refs/heads/qualification/*
+    delete: true
+body: |
+  Execute deep verification of Grain's merge queue orchestration, demand-driven
+  base branch CI invocation, optimistic multi-PR batch evaluation, and bisection
+  on deliberate test failures.
+
+  Grain releases from trunk (`docs/release-candidate-management.md`): `candidate`
+  is a pointer the release train force-moves, and pull requests targeting it are
+  refused. Run every batch below against a scratch branch, never against `main`
+  or `candidate`:
+
+  - Create the scratch branch from `main`'s tip and push it:
+    `git push origin origin/main:refs/heads/qualification/<this task id>`.
+  - File the batch members with `propose_task`, each with
+    `branch: qualification/<this task id>` so its pull request targets the
+    scratch branch, and `depends_on` empty so they enqueue together.
+  - Never give a batch member, and never push to this task's own branch, a
+    change carrying an intentional failure: this task's own pull request merges
+    into `main`. Push to it only a real fix for something this run found.
+  - Delete the scratch branch when you are done
+    (`git push origin :refs/heads/qualification/<this task id>`).
+
+  ## 1. 4-State Merge Queue Lifecycle Validation
+
+  - Verify state transitions across the full merge queue lifecycle:
+    `enqueued` -> `running` -> `ready_to_merge` -> `merged` (and `failed` on error).
+  - Inspect queue position tracking, batch membership, and status transitions
+    using `list_grain_tasks`, `query_merge_queue` and `read_deployment_state`.
+  - Confirm that tasks entering the merge queue respect prerequisites, dependency
+    constraints, and branch concurrency locks.
+
+  ## 2. Demand-Driven Base CI Execution
+
+  - Confirm that base branch CI runs are invoked strictly demand-driven:
+    - Base CI is scheduled only when queued commits are ready for merge validation.
+    - Idle intervals or non-merging pushes do not trigger spurious base branch CI runs.
+  - Inspect `list_ci_runs` and `read_grain_metrics` (ci_queueing section) on both
+    `main` and the scratch branch to verify proper triggering and absence of
+    redundant base CI cycles.
+
+  ## 3. Optimistic Batch Testing with 3+ Parallel PRs
+
+  - Simulate an optimistic batch containing at least 3 concurrent pull requests:
+    - Enqueue 3 distinct non-conflicting changes targeting the scratch branch.
+    - Verify that the merge queue forms an optimistic speculative batch combining all 3 changes.
+    - Validate that CI runs on the combined tip of the speculative batch.
+    - Upon batch success, verify all 3 pull requests advance to `ready_to_merge` and
+      are merged atomically into the scratch branch without redundant individual runs.
+
+  ## 4. Bisection on Intentional Test Failures
+
+  - Simulate a failing change within an optimistic batch on the scratch branch:
+    - Enqueue a batch of 3+ pull requests where one PR introduces an intentional test failure.
+    - Verify that the combined batch CI fails as expected.
+    - Verify that the merge queue triggers automated bisection to isolate the failing branch.
+    - Confirm that passing pull requests in the batch are isolated, validated, and merged.
+    - Confirm that the failing pull request transitions to `failed` state with appropriate
+      diagnostic error output and review feedback, and close its task unmerged.
+
+  ## 5. Verification & Reporting
+
+  - Verify queue metrics, latency distributions, and batching efficiency.
+  - Confirm the scratch branch is deleted and nothing from it reached `main`.
+  - Summarize all test results, state transitions, bisection events, and metrics
+    in the task completion comment.

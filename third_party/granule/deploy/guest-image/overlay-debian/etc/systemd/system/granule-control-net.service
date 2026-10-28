@@ -1,0 +1,13 @@
+[Unit]
+Description=Configure the granule flat-mode control link
+After=network-pre.target
+Wants=network-pre.target
+Before=granule-mem-agent.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/granule-control-net
+
+[Install]
+WantedBy=multi-user.target

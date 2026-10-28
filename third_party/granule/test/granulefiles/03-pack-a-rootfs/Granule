@@ -1,0 +1,17 @@
+# docs/granulefile.md 14.3: pack a rootfs into a machine. Everything
+# here is a container build plus a pack -- no /dev/kvm.
+#
+# The base is granule's published guest rootfs. ARG so that a test run
+# can point the build at a rootfs built from this checkout; the default
+# is the reference the specification names.
+ARG ROOTFS=ghcr.io/gke-labs/granule-guest-rootfs:debian12
+
+FROM ${ROOTFS}
+
+# Copy a file into the rootfs (in a container, offline).
+COPY greeting.txt /greeting.txt
+RUN apt-get update && apt-get install -y nginx && systemctl enable nginx
+VOLUME /var/log/nginx
+
+# Now the VM boots with that rootfs as its root filesystem.
+VM PACK AS web_vm

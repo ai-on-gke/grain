@@ -1,0 +1,7 @@
+name: Release watchdog
+template: release-watchdog
+base: main
+every:
+  hours: 6
+overlap: skip
+auto-approve-proposals: true

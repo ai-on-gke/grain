@@ -1,0 +1,10 @@
+[the pre-pack container copy was written into the guest]
+cat /etc/from-container.txt
+grep -q "built in pre-pack stage" /etc/from-container.txt
+
+[the converted VM stage copy was written into the guest]
+cat /etc/from-vm.txt
+grep -q "built in pre-pack stage" /etc/from-vm.txt
+
+[the machine boots with granule agent]
+test -x /usr/local/bin/granule-agent

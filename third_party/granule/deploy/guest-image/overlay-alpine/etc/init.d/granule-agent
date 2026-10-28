@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+# granule-runlevel: boot
+
+description="Answer \"granule exec\" over this VM's vsock device"
+command="/usr/local/bin/granule-agent"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+# Deliberately not ordered after the network. The whole reason exec moved
+# off SSH is that a guest whose networking had not come up was a guest
+# granule could not get into to find out why, so this answers before
+# anything that could go wrong with the network has had the chance to.
+depend() {
+	need localmount
+	before net
+}
+
+start_pre() {
+	# Alpine's kernel builds virtio-vsock as a module; granule's own
+	# bundled kernel has it built in, where this fails harmlessly.
+	modprobe vmw_vsock_virtio_transport 2>/dev/null || true
+}

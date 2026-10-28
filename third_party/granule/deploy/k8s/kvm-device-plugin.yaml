@@ -1,0 +1,99 @@
+# Hands /dev/kvm and /dev/net/tun to pods as extended resources, so the
+# granule pod examples can run without `privileged: true`.
+#
+# Why this exists: a hostPath mount of /dev/kvm puts the device node in
+# the container but not in the container's device cgroup allow-list, so
+# an unprivileged container can open it and still fails the first KVM
+# ioctl (cloud-hypervisor reports `CreateHypervisor(VmCreate(Operation
+# not permitted))`). Likewise a pod has no /dev/net/tun at all. The
+# kubelet's device-plugin API is the stock way to add a device node *and*
+# its cgroup rule to a container; a pod asks for one by requesting the
+# resource:
+#
+#   resources:
+#     limits:
+#       devic.es/kvm: "1"
+#       devic.es/tun: "1"   # only for inline/netshim networking
+#
+# This uses squat/generic-device-plugin (https://github.com/squat/
+# generic-device-plugin), a small, generic plugin with no knowledge of
+# granule. Any plugin that exposes the same two device nodes works -- for
+# example KubeVirt's virt-handler, which publishes devices.kubevirt.io/kvm
+# and devices.kubevirt.io/tun -- with the resource names in the pod
+# manifests changed to match.
+#
+# Neither device is exclusive: every VM on a node opens the same /dev/kvm
+# and /dev/net/tun, so "count" is just how many pods per node may hold
+# one at a time, and is set well above any realistic pod density.
+#
+# The plugin itself is the one node-level component this setup adds. It
+# does not need to be privileged: it only has to see the device nodes
+# (a read-only /dev mount) and register over the kubelet's device-plugin
+# socket directory. It runs as root because that directory is root-owned.
+#
+#   kubectl apply -f deploy/k8s/kvm-device-plugin.yaml
+#   kubectl get node -o jsonpath='{.items[*].status.allocatable}'
+#
+# and look for devic.es/kvm and devic.es/tun. Nodes without /dev/kvm
+# simply advertise none, so pods requesting it are never scheduled there.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: granule-device-plugin
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: granule-device-plugin
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: granule-device-plugin
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: granule-device-plugin
+    spec:
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+          effect: NoExecute
+        - operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: generic-device-plugin
+          # Pinned by digest; any recent release behaves the same.
+          image: ghcr.io/squat/generic-device-plugin@sha256:dc192e164c69b03f156765793a1be62ca437709ae477b27ca7d8f3dcf5021576
+          args:
+            - --domain=devic.es
+            - --device
+            - '{"name": "kvm", "groups": [{"count": 1000, "paths": [{"path": "/dev/kvm"}]}]}'
+            - --device
+            - '{"name": "tun", "groups": [{"count": 1000, "paths": [{"path": "/dev/net/tun"}]}]}'
+          # The default, /dev/termination-log, would land inside the
+          # read-only /dev mount below and fail container creation.
+          terminationMessagePath: /tmp/termination-log
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: dev
+              mountPath: /dev
+              readOnly: true
+            - name: device-plugins
+              mountPath: /var/lib/kubelet/device-plugins
+      volumes:
+        - name: dev
+          hostPath:
+            path: /dev
+        - name: device-plugins
+          hostPath:
+            path: /var/lib/kubelet/device-plugins

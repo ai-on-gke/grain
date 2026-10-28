@@ -1,0 +1,146 @@
+# Three VMs in one pod, one per container.
+#
+# A granule image is one container that boots one VM, so "several VMs in a
+# pod" needs no new machinery at all: it is several containers. What it
+# does need is an answer to the one thing a pod has exactly one of --
+# its IP address.
+#
+#   web      CHV_NET_MODE=inline. This container sets up the pod's
+#            network and hands it to its guest, which takes over the
+#            pod's IP, MAC, MTU and routes. Exactly one container in a
+#            pod may do this.
+#   builder  CHV_NET_MODE=none. No network is set up or derived for this
+#            guest and nothing is taken over. `granule exec` still
+#            reaches it, because exec goes over the VM's own vsock device
+#            rather than over IP -- which is the property that makes a
+#            pod full of VMs practical.
+#   sidecar  the same again, to make the point that the pattern is not
+#            limited to two.
+#
+# A guest that wants IP of its own without holding the pod's can be
+# reached on the control link instead (NETSHIM_CONTROL_CIDR on the
+# inline container, 169.254.100.2 in that guest); see the main README's
+# "Container networking".
+#
+# Substitute IMAGE_PLACEHOLDER with a pushed granule image before
+# applying -- demo/demo.sh does that with sed. Requires a node with a
+# real /dev/kvm (on GKE: --enable-nested-virtualization) and permission
+# to run privileged containers, so not GKE Autopilot.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: granule-multi-vm
+  labels:
+    app: granule-multi-vm
+spec:
+  restartPolicy: Never
+  # Comfortably more than the CHV_SHUTDOWN_TIMEOUT below, and the three
+  # guests power off in parallel rather than in series, so this does not
+  # have to be three times one VM's allowance.
+  terminationGracePeriodSeconds: 40
+  containers:
+    - name: web
+      image: IMAGE_PLACEHOLDER
+      args: ["run"]
+      env:
+        - name: CHV_NET_MODE
+          value: "none"
+        - name: CHV_CPUS
+          value: "1"
+        - name: CHV_MEMORY_MB
+          value: "384"
+        - name: CHV_MEMORY_MAX_MB
+          value: "384"
+        - name: CHV_SHUTDOWN_TIMEOUT
+          value: "20s"
+      readinessProbe:
+        exec:
+          command: ["/usr/local/bin/granule", "ready", "-timeout", "0"]
+        periodSeconds: 2
+        timeoutSeconds: 5
+      resources:
+        requests:
+          cpu: "250m"
+          memory: 384Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: dev-kvm
+          mountPath: /dev/kvm
+
+    - name: builder
+      image: IMAGE_PLACEHOLDER
+      args: ["run"]
+      env:
+        - name: CHV_NET_MODE
+          value: "none"
+        - name: CHV_CPUS
+          value: "1"
+        - name: CHV_MEMORY_MB
+          value: "384"
+        - name: CHV_MEMORY_MAX_MB
+          value: "384"
+        - name: CHV_SHUTDOWN_TIMEOUT
+          value: "20s"
+      readinessProbe:
+        exec:
+          command: ["/usr/local/bin/granule", "ready", "-timeout", "0"]
+        periodSeconds: 2
+        timeoutSeconds: 5
+      resources:
+        requests:
+          cpu: "250m"
+          memory: 384Mi
+        limits:
+          cpu: "2"
+          memory: 1536Mi
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: dev-kvm
+          mountPath: /dev/kvm
+
+    - name: sidecar
+      image: IMAGE_PLACEHOLDER
+      args: ["run"]
+      env:
+        - name: CHV_NET_MODE
+          value: "none"
+        - name: CHV_CPUS
+          value: "1"
+        - name: CHV_MEMORY_MB
+          value: "384"
+        - name: CHV_MEMORY_MAX_MB
+          value: "384"
+        - name: CHV_SHUTDOWN_TIMEOUT
+          value: "20s"
+      readinessProbe:
+        exec:
+          command: ["/usr/local/bin/granule", "ready", "-timeout", "0"]
+        periodSeconds: 2
+        timeoutSeconds: 5
+      resources:
+        requests:
+          cpu: "250m"
+          memory: 384Mi
+        limits:
+          cpu: "2"
+          memory: 1536Mi
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: dev-kvm
+          mountPath: /dev/kvm
+
+  volumes:
+    # One hostPath, mounted into each container: /dev/kvm is a device, and
+    # each VM opens it independently. Privileged containers would see the
+    # host's /dev anyway; mounting it explicitly is what makes the
+    # dependency visible in the manifest, and what an ephemeral container
+    # injected later mounts too (see demo/assets/ephemeral-vm.yaml).
+    - name: dev-kvm
+      hostPath:
+        path: /dev/kvm

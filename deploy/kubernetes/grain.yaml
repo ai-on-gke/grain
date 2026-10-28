@@ -1,0 +1,849 @@
+# grain, deployed into a Kubernetes cluster.
+#
+# This is the whole deployment in one file, in dependency order:
+# namespace, identity and permissions, the priorities sandbox pods run
+# at, storage, the key upgrades are
+# verified against, the deployment itself, a Service in front of its UI,
+# and a Service in front of what its sandboxes reach. `kubectl apply -f grain.yaml` after editing the three values called
+# out below stands a deployment up; see
+# deploy/kubernetes/README.md for what those three are and what has to
+# exist before this will run.
+#
+# What it is *not* is a Helm chart or a kustomize base. This is the
+# "initially deployed as a k8s yaml" shape asked for by grain/task-358:
+# one readable file an operator can diff against what is running. It has
+# exactly the templating a plain manifest has -- none -- and the values
+# that must change per deployment are marked CHANGEME rather than
+# substituted, so applying it unedited fails on something obvious rather
+# than half-working.
+#
+# The single-node docker deployment (scripts/setup.sh) remains what it
+# was; nothing here replaces it. What differs is that sandboxes are pods
+# rather than VMs, upgrades are a rollout rather than a restarted
+# container, and the host-facing controls in the UI are unavailable
+# because there is no host here that belongs to this deployment.
+---
+# Pod Security admission is what bounds the *content* of a pod created
+# here, which RBAC cannot: the Role below lets grain create pods, and
+# without these labels nothing would stop a compromised daemon creating
+# one that is privileged, shares the node's PID or network namespace, or
+# mounts the node's / through a hostPath -- node root, one API call away.
+#
+# enforce is baseline rather than restricted because sandbox pods are
+# baseline and not restricted: k8s.Client.Manifest names no uid and no
+# securityContext for them, since which user a sandbox runs as is its
+# image's decision, and a sandbox image that wants sudo needs privilege
+# escalation to have it. Baseline still refuses everything in the list
+# above. The daemon's own pod, and the upgrade check pod created under
+# its securityContext, already meet restricted -- audit and warn say so
+# for anything that stops meeting it without refusing it.
+#
+# -k8s-sandbox-privileged cannot work under this, by design: a privileged
+# sandbox is refused at admission. A deployment that really needs one
+# (nested docker or kind) has to set enforce to privileged here as well,
+# knowingly -- that is the same decision as the flag, made where the
+# cluster enforces it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: grain
+  labels:
+    app.kubernetes.io/name: grain
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# The identity grain itself runs as. Sandbox pods deliberately do not use
+# it -- they run as the namespace's "default" account with no token
+# mounted at all (k8s.PodOptions.ServiceAccount), because nothing inside
+# a sandbox has any business talking to the API server.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grain
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+---
+# Everything grain needs from the API server, and nothing else. It is a
+# Role rather than a ClusterRole on purpose: every verb below is scoped
+# to this one namespace, so a compromised daemon reaches the sandboxes it
+# already controls and no other workload in the cluster. The single
+# exception is reading nodes, which are cluster-scoped and so have a
+# read-only ClusterRole of their own (grain-node-reader, below).
+#
+# The pod verbs are the sandbox lifecycle (create one per run, read its
+# status while it starts, delete it when the run ends, and list them at
+# startup to sweep up what a killed process left behind). pods/exec is
+# how every tool call, git credential write and capability placement
+# reaches a sandbox. pods/log is not needed to run anything -- it is
+# there so an operator debugging a sandbox that will not start can use
+# the same credential grain does.
+#
+# The deployment verbs are the self-upgrade: repointing this Deployment
+# at a new image is what an upgrade *is* here, in place of the binary
+# swap and restart a host deployment does. replicasets and pods are read
+# alongside it because that is how `kubectl rollout status` decides
+# whether the new pods came up. Only the reads are namespace-wide: the
+# writes are pinned by resourceNames to the one Deployment an upgrade
+# repoints (-k8s-deployment below; `kubectl set image` and `rollout
+# undo` both address it by name), so a compromised daemon cannot rewrite
+# any other workload an operator puts in this namespace. list and watch
+# cannot be pinned that way, which is why they stay in their own rule.
+#
+# What cannot be narrowed is pods create and pods/exec: sandbox pod
+# names are made per run, and RBAC has no way to say "only pods carrying
+# this label". The Namespace's Pod Security labels above are what bound
+# what such a pod may ask for.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grain
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Read-only diagnostics, and nothing the daemon itself needs: events
+  # (core and events.k8s.io) so `kubectl describe pod` and `get events`
+  # show why a sandbox pod was not scheduled or was evicted, and pod
+  # metrics for `kubectl top pods` -- both used by the host-script
+  # server's kubectl-sandboxes script, which runs as this identity.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Read-only, and only so a daemon with run hosts (-run-host-image) can
+  # check at startup that each -k8s-run-host-volume claim is one run pods
+  # can share: not ReadWriteOncePod, not gcsfuse (runhost.CheckClaim).
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["grain"]
+    verbs: ["patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: grain
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: grain
+subjects:
+  - kind: ServiceAccount
+    name: grain
+    namespace: grain
+---
+# The one thing grain reads outside its own namespace, and so the one
+# grant that has to be a ClusterRole: nodes are cluster-scoped, and their
+# allocatable CPU and memory are what the sandbox budget is held against
+# (K8sSandboxes.HostCapacity; Config.Budget). Read-only, and nothing
+# else -- without it the daemon still runs, but every queued CI job
+# launches a pod at once and the scheduler is left to sort it out.
+#
+# Pods are listed (never read one by one, never written) across every
+# namespace for the same reason: what a node has *free* is its
+# allocatable less every pod bound to it, system pods and other
+# workloads included, and each sandbox pod is admitted only onto a node
+# that still has room for its requests (k8s.FitChecker). Without the
+# pods rule grain counts only its own namespace's pods there.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: grain-node-reader
+  labels:
+    app.kubernetes.io/name: grain
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: grain-node-reader
+  labels:
+    app.kubernetes.io/name: grain
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: grain-node-reader
+subjects:
+  - kind: ServiceAccount
+    name: grain
+    namespace: grain
+---
+# Lets the daemon make sure the sandbox PriorityClasses below exist. It
+# checks at start and on every reconcile cycle, and creates grain's own
+# when they are missing -- a cluster set up before they shipped, upgraded
+# without re-applying this file. Kept as small as the API allows: get
+# only on grain's three names, and create, which Kubernetes cannot
+# narrow by resourceNames (the name is not known when a create is
+# authorized). Without this grant the daemon still runs: it creates
+# sandbox pods with no priority class and raises an alert saying what to
+# apply.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: grain-priorityclasses
+  labels:
+    app.kubernetes.io/name: grain
+rules:
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    resourceNames: ["grain-interactive", "grain-agent", "grain-ci"]
+    verbs: ["get"]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: grain-priorityclasses
+  labels:
+    app.kubernetes.io/name: grain
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: grain-priorityclasses
+subjects:
+  - kind: ServiceAccount
+    name: grain
+    namespace: grain
+---
+# The PriorityClasses sandbox pods run at, highest first: an interactive
+# session (a Director or chat a person is waiting on), an ordinary agent
+# run (and persistent sandboxes and base-branch repairs), and a CI job.
+# grain sets one on every sandbox pod it creates (priorityClassName,
+# orchestrator.K8sPriorityClasses), so that on a cluster with no room
+# left the scheduler has something to evict: an interactive session's
+# pod preempts a CI job's rather than failing "0/3 nodes are available:
+# 3 Insufficient cpu ... No preemption victims found". A preempted CI
+# job is retried as infrastructure, not failed.
+#
+# Only grain-interactive preempts: an agent run waits for room as it
+# always has, and a CI job never evicts anything (preemptionPolicy:
+# Never). The scheduler evicts the lowest-priority pods that make enough
+# room, so an interactive session takes CI pods before agent runs' --
+# but any pod below it is a candidate, and a pod with no PriorityClass
+# runs at 0, below grain-ci: on a cluster shared with other workloads,
+# those are preempted first. The daemon's own pod runs at grain-daemon,
+# above every sandbox class and never preempting, so no sandbox can
+# evict it. None is globalDefault, so nothing else in the cluster
+# changes priority.
+#
+# Cluster-scoped objects, shipped here so applying this file defines
+# them; the daemon also creates the three sandbox classes from the same
+# spec (k8s.SandboxPriorityClasses) when they are missing, under the
+# grain-priorityclasses grant above. The names are the defaults in
+# Settings -> Sandbox; when a class the settings name is missing and
+# cannot be created, sandbox pods are created without one and an alert
+# says what to apply.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: grain-daemon
+  labels:
+    app.kubernetes.io/name: grain
+value: 2000000
+globalDefault: false
+preemptionPolicy: Never
+description: "the grain daemon itself; above every sandbox class so no sandbox pod can preempt it."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: grain-interactive
+  labels:
+    app.kubernetes.io/name: grain
+value: 1000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "grain sandbox pods for interactive sessions; may preempt grain agent and CI pods."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: grain-agent
+  labels:
+    app.kubernetes.io/name: grain
+value: 100000
+globalDefault: false
+preemptionPolicy: Never
+description: "grain sandbox pods for agent runs, persistent sandboxes and base-branch repairs."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: grain-ci
+  labels:
+    app.kubernetes.io/name: grain
+value: 1000
+globalDefault: false
+preemptionPolicy: Never
+description: "grain sandbox pods for CI jobs; never preempts, and is retried when preempted."
+---
+# grain's own state: the embedded SQLite store, its secrets, its git
+# checkouts and its transcripts, all under one directory (-data-dir).
+#
+# ReadWriteOnce, and the Deployment below is strategy: Recreate with one
+# replica, because that store is a single-writer SQLite database on a
+# filesystem. A rolling update would briefly run two grains against one
+# volume, which is the one thing this deployment must never do -- see the
+# Deployment's own comment.
+#
+# 20Gi is a starting size, not a measured one. What grows here is the
+# checkouts and the transcripts rather than the database; a deployment
+# running many concurrent tasks against large repositories should raise
+# it before it finds out.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grain-data
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+  # storageClassName is left unset deliberately: the cluster's default
+  # class is almost always right, and naming one here would make this
+  # file wrong on every cluster that calls it something else. Set it if
+  # the default is not the one you want grain's state on.
+---
+# CHANGEME (3 of 3 -- first in the file, since the Deployment that
+# mounts it has to come after it, and numbered last because it was added
+# last): the cosign public key an upgrade's image must be signed with
+# (docs/image-signing.md) -- the cosign.pub half of the pair
+# the images this deployment upgrades to are released with. The Upgrade
+# button runs `cosign verify` against it (the -upgrade-verify-cmd flags
+# on the Deployment below) before anything runs the image it pulled, and
+# pins the check pod and the rollout to the digest that verified.
+#
+# Shipped as a placeholder rather than a key, so that until it is
+# replaced every upgrade is refused at its signature step -- the daemon
+# itself starts and runs whatever image it was applied with. A
+# deployment that means to upgrade unverified removes the four
+# -upgrade-verify-cmd lines below instead, and is warned at every start
+# that it does.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grain-image-verify-key
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+data:
+  cosign.pub: |
+    CHANGEME: replace this whole value with the release's cosign.pub
+    (-----BEGIN PUBLIC KEY----- ... -----END PUBLIC KEY-----).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grain
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate. Two grain processes against one SQLite
+  # store is data loss, and two against one deployment's GitHub state is
+  # duplicated dispatches -- so the old pod must be gone before the new
+  # one starts, and a rollout is a short outage of the UI by design. This
+  # is also what makes an upgrade (which repoints .spec.template's image)
+  # safe to trigger from inside the running pod: the process that asked
+  # for it is the one Kubernetes then terminates.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grain
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grain
+        # What run pods' podAffinity selects (runhost.KubeDaemonComponent):
+        # the daemon pod, and nothing else in the namespace. A template
+        # label rather than a selector one, so adding it to a running
+        # deployment is an ordinary rollout.
+        app.kubernetes.io/component: daemon
+    spec:
+      serviceAccountName: grain
+      # Above every sandbox class (grain-daemon, above): a
+      # grain-interactive sandbox pod preempts lower-priority pods, and at
+      # the default priority of 0 that would include this one.
+      priorityClassName: grain-daemon
+      # Run pods (-run-host-image; docs/non-disruptive-upgrade.md, Stage 2)
+      # are pinned to this pod's node by a required podAffinity, because
+      # they share grain-data, which is ReadWriteOnce: RWO is per node, so
+      # pods on the node it is attached to share it read-write. That pin
+      # is IgnoredDuringExecution, so when this pod is replaced -- a
+      # rollout, an upgrade, `kubectl rollout restart` -- the run pods
+      # keep running on the old node and keep the volume attached there.
+      # The replacement has to come back to that node to mount it, and
+      # this preference is what brings it: weight 100 towards wherever
+      # run pods are. With no run pods it means nothing.
+      #
+      # It is a preference and not a requirement on purpose. If that node
+      # is full, cordoned or gone, the scheduler places this pod
+      # elsewhere: on a lost node the run pods are gone too, and the next
+      # daemon finishes their rows as interrupted with that reason; on a
+      # node that is merely full, this pod waits in ContainerCreating on
+      # a Multi-Attach error until the run pods there end (each by its
+      # own deadline label at the latest), then starts and finishes their
+      # rows from their spools. A deployment that cannot accept that runs
+      # its run hosts on a ReadWriteMany volume instead
+      # (deploy/kubernetes/runhost-rwx.yaml), which needs no pinning.
+      affinity:
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/managed-by: grain
+                    app.kubernetes.io/component: runhost
+                topologyKey: kubernetes.io/hostname
+      # grain does not run as root here, and that is a decision this file
+      # has to make because the image does not: the main Dockerfile
+      # declares no USER of its own on purpose (the systemd unit
+      # scripts/setup.sh writes passes --user with the host's own grain
+      # uid, so that a bind-mounted store comes out owned by the host
+      # account that owns it), which leaves a manifest saying nothing
+      # about uids running the daemon as uid 0. This one used to say
+      # nothing.
+      #
+      # What that was worth, concretely. The agent CLIs a dispatch runs --
+      # claude, agy and codex -- run *in this container*, beside the
+      # daemon; only their tool calls are relayed into a sandbox pod. So
+      # the least trusted process in the deployment had root over the
+      # image it was started from, and could rewrite the binaries the
+      # Dockerfile fetched and checksummed. That is not hypothetical: agy
+      # was replacing its own pinned, sha256-verified 1.1.27 with
+      # whatever its updater served, on the first dispatch of every fresh
+      # pod (docs/hand-runs/2026-09-17-agy-self-update.md §3). That one
+      # hole is held shut by an environment variable now, because no
+      # permission could cover every case of it
+      # (pkg/agent/antigravity/selfupdate.go) -- but nothing at all was
+      # holding the other two CLIs, /usr/local/bin/grain itself, or
+      # anything else in this image a run can reach.
+      #
+      # Container root is not node root, and a daemon that can create and
+      # exec into pods in this namespace is already as powerful as its
+      # RBAC, so this is not a boundary against a compromised daemon. It
+      # is worth having anyway: it keeps the image a deployment is
+      # running the image it was built from, and it takes this pod out of
+      # the class of workloads that a container escape needing uid 0 can
+      # use.
+      #
+      # 1000 is an arbitrary non-root number, and nothing in the image
+      # knows it: there is no passwd entry for it, exactly as there is
+      # none for the host uid setup.sh passes --user, and nothing needs
+      # one. The daemon binds 8080 and ephemeral ports only, writes
+      # nothing outside /data (-sandbox-dir is unset under
+      # -k8s-sandboxes, so orchestrator.HostSandboxes is never wired),
+      # and reaches the API server through the projected service account
+      # token, which is world-readable. A cluster that assigns uids of
+      # its own -- OpenShift's SCCs -- should put its number here
+      # instead; only this and fsGroup have to agree with each other.
+      #
+      # fsGroup is what makes /data writable to it, and it is the part
+      # with teeth on a deployment that already exists: a volume written
+      # by the root this used to be is full of uid-0 files. The kubelet
+      # fixes that itself on the next mount, recursively -- but only on a
+      # CSI driver that implements fsGroup at all, so
+      # deploy/kubernetes/README.md carries the one-off chown for the
+      # drivers that do not and says to take it *before* applying this.
+      # OnRootMismatch so that walk happens once rather than on every pod
+      # start over a volume of checkouts and transcripts.
+      #
+      # readOnlyRootFilesystem is deliberately not set. An agent CLI here
+      # writes in more places than this file can enumerate, and a root
+      # filesystem the daemon cannot write is a change to measure rather
+      # than to assert. Running as a uid that owns none of it already
+      # makes every binary in the image -- all of them root-installed and
+      # a+rX -- unwritable, which is what was actually at stake.
+      #
+      # An upgrade reads this block back and runs the candidate image's
+      # health-check pod under it (pkg/upgrade's stageKube), so a change
+      # here needs no counterpart anywhere in grain's own flags -- and a
+      # future image that only works as root fails the check instead of
+      # failing the rollout that has already stopped this pod.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      # The drain a stopping daemon does for runs still in flight
+      # (pkg/daemon's shutdownDrain, 4m30s) plus 30s of slack, so the
+      # kubelet does not SIGKILL a daemon that is still releasing its
+      # runs' sandboxes. A run killed past it leaves its sandbox pod
+      # behind, which the next process reaps at startup
+      # (K8sSandboxes.ReapOrphans). pkg/daemon's
+      # TestStopTimeoutsCoverTheShutdownDrain holds the two together.
+      # Run hosts do not change this: a stopping daemon detaches from its
+      # run pods rather than draining them, and the drain is still owed
+      # to the runs that are not in run hosts (codex, antigravity). Run
+      # pods carry a grace period of their own (runhost.
+      # DefaultKubeGracePeriod, 30s) that covers killing the CLI and
+      # writing exit.json, which is all a deleted run pod has to do.
+      terminationGracePeriodSeconds: 300
+      # $HOME has to exist and be writable before the daemon starts, and
+      # with no passwd entry for the uid above there is no home directory
+      # to inherit -- so one is made here, on the volume, and named in
+      # the container's own env below. It is not optional decoration:
+      # claude runs on the controller rather than in the sandbox (see
+      # pkg/agent/claude's own doc comment on why the credential never
+      # leaves it) and keeps its state under the controller's $HOME, and
+      # kubectl caches API discovery there on every call pkg/k8s makes.
+      # scripts/setup.sh does exactly these two things for the single-node
+      # deployment -- `install -d -m0700 $GRAIN_DATA_DIR/home` and
+      # `--env HOME=` pointing at it -- and for the same second reason:
+      # under the data directory, so that state lives on the same disk as
+      # everything else this deployment keeps rather than in a pod
+      # filesystem a rollout throws away.
+      #
+      # This fails loudly, before the daemon starts, on a cluster whose
+      # storage driver ignored the fsGroup above -- which is the failure
+      # worth having, since the alternative is a daemon that comes up and
+      # cannot write its own store.
+      initContainers:
+        - name: home
+          # The same image as the container below, only so that this pod
+          # pulls one image rather than two; it runs `mkdir` and nothing
+          # else, so a deployment pinning an immutable sha- tag above can
+          # leave this one on the branch tag without changing what runs.
+          image: ghcr.io/bwsalmon/grain/grain:main
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "mkdir -p /data/home && chmod 0700 /data/home"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: grain
+          # CHANGEME (1 of 3): the grain image to run. CI publishes one
+          # per commit; ":main" is what the branch tip is kept at, and a
+          # deployment that wants to be sure what it is running pins the
+          # immutable sha- tag instead.
+          image: ghcr.io/bwsalmon/grain/grain:main
+          imagePullPolicy: IfNotPresent
+          args:
+            - daemon
+            - -data-dir=/data
+            - -ui-addr=0.0.0.0:8080
+            # The Kubernetes sandbox backend. This is also what tells the
+            # daemon it has no host of its own, so the reboot, power-off,
+            # restart, `top` and root-shell controls are not wired at all
+            # (cmd/grain's kubernetesMode).
+            - -k8s-sandboxes
+            - -k8s-namespace=grain
+            # A path in the *sandbox* pod, reached only over `kubectl
+            # exec`, and nothing to do with the uid this pod runs as: it
+            # is the home of the `agent` account (uid 1000)
+            # Dockerfile.k8s-sandbox creates and declares USER for. The
+            # two filesystems never meet, so the securityContext above
+            # can change without this following it -- what has to agree
+            # with this value is the sandbox image, not the daemon.
+            - -k8s-workspace=/home/agent
+            # CI publishes this unprivileged image with all three agent
+            # CLIs; a build also carries its same-commit immutable tag as
+            # the flag default.
+            - -k8s-sandbox-image=ghcr.io/bwsalmon/grain/k8s-sandbox:main
+            # Where sandboxes reach the git proxy and the model proxies:
+            # the grain-sandbox Service at the end of this file, whose
+            # cluster IP outlives this pod, rather than this pod's own IP,
+            # which does not. A run the next daemon pod adopts after a
+            # rollout still has a pull request to push. The port block is
+            # spelled out because the Service forwards fixed ports out of
+            # it, and the two have to agree.
+            - -sandbox-port-base=9728
+            - -k8s-sandbox-service=grain-sandbox
+            # Uncomment once deploy/kubernetes/networkpolicy.yaml is
+            # installed *and* this cluster's CNI enforces NetworkPolicy.
+            # Without it a task asking for no network access is refused
+            # rather than quietly given a networked pod.
+            # - -k8s-network-policy
+            # Run hosts (docs/non-disruptive-upgrade.md, Stage 2): each
+            # claude run in a pod of its own, which a rollout of this
+            # Deployment does not stop and the next daemon pod adopts.
+            # The pod runs this image, under this pod's securityContext
+            # and service account, and is given the spool, staging and
+            # credential directories as subPaths of grain-data at the
+            # same paths -- never the rest of /data. Uncomment all five
+            # together. For run pods spread across nodes, use
+            # runhost-rwx.yaml's claim instead and add -k8s-run-host-rwx.
+            # "self" is the image this Deployment runs, read back at
+            # startup: the digest an upgrade verified and pinned, so run
+            # pods follow every upgrade and never run a mutable tag.
+            # - -run-host-image=self
+            # - -run-host-credential-dir=/data/agent-home
+            # - -run-host-dir=/data/runhosts
+            # - -k8s-run-host-volume=grain-data:/data
+            # # The Service below: a run pod is not this pod, and its
+            # # mcpserver needs an address that outlives this pod.
+            # - -run-host-daemon-url=http://grain.grain.svc
+            # What the Upgrade button repoints, and where it gets the
+            # image from. Together these three are what make an upgrade
+            # here a rollout rather than a swapped binary: the branch's
+            # published image is health-checked as a throwaway pod and
+            # then written into this Deployment's own spec. That check
+            # pod is created under this Deployment's own securityContext,
+            # read back from here through -k8s-deployment -- so editing
+            # the securityContext below changes what an upgrade candidate
+            # has to survive, with no second copy of the uid to keep in
+            # step.
+            - -upgrade-image=ghcr.io/bwsalmon/grain/grain
+            - -k8s-deployment=grain
+            - -k8s-container=grain
+            # Who published what an upgrade pulls: `cosign verify` (the
+            # image's own, Dockerfile) against the key the ConfigMap
+            # above mounts at /etc/grain. Here the verifier is handed
+            # the *tag*, since nothing has pulled the image yet, and
+            # what it prints -- cosign's JSON, which `cosign verify`
+            # writes by default -- is where the upgrade learns the
+            # digest every pod after it is created from; so no --output
+            # flag that would change that. One argument per flag.
+            - -upgrade-verify-cmd=cosign
+            - -upgrade-verify-cmd=verify
+            - -upgrade-verify-cmd=--key=/etc/grain/cosign.pub
+            - -upgrade-verify-cmd=--insecure-ignore-tlog=true
+            # CHANGEME (2 of 3): which repository this deployment files
+            # tasks against by default. Everything else -- concurrency,
+            # the agent framework, the sandbox shape -- is a setting in
+            # the UI rather than a flag here.
+            - -default-target-repo=CHANGEME/CHANGEME
+          env:
+            # How a sandbox pod reaches this one. Sandbox pods route to a
+            # pod IP directly, so this is the address of everything a
+            # sandbox reaches here that -k8s-sandbox-service does not
+            # front (the package and Actions caches) -- see
+            # -k8s-git-proxy-host, which reads this variable when the
+            # flag names nothing.
+            - name: GRAIN_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # Which pod this is, so the daemon can ask the kubelet how
+            # many times it has restarted this container and report it in
+            # the Sandboxes pane's Daemon line -- this shape's answer to
+            # "is this deployment restarting rather than running?", which
+            # on a host is a count out of the journal and here is
+            # .status.containerStatuses[].restartCount. A pod cannot
+            # learn its own name any other way, and a daemon that is not
+            # given it reports why there is no count rather than
+            # claiming one. The Role below already allows `pods get`.
+            - name: GRAIN_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # The directory the initContainer above made, for the reasons
+            # given there. Kubernetes sets no HOME of its own and the
+            # runtime has no passwd entry to take one from, so without
+            # this the daemon inherits HOME=/ and the first claude
+            # dispatch fails writing to a filesystem it does not own.
+            - name: HOME
+              value: /data/home
+          # CAP_NET_BIND_SERVICE, and nothing else: the Dockerfile
+          # setcaps /usr/local/bin/grain with it (cap_net_bind_service=+ep)
+          # so the package cache can bind 443/80, the same reason
+          # pkg/hostinit's own ensureSetcap exists for the host
+          # platforms. Dropping every capability without adding this
+          # one back is not merely "no cap_net_bind_service" -- the
+          # kernel refuses to exec a binary carrying a file capability
+          # at all once the bounding set cannot satisfy it, so the
+          # container never starts: confirmed against a real cluster
+          # while building -platform=k8s-container
+          # (pkg/hostinit/k8s.go), where this exact combination failed
+          # every pod with "[FATAL tini (12)] exec /usr/local/bin/grain
+          # failed: Operation not permitted". A process that still
+          # cannot gain any further privilege (allowPrivilegeEscalation
+          # stays false) is one an suid binary in the image (or in a
+          # future base image) cannot hand uid 0 back to; the pod-level
+          # securityContext above is why this pod is not root at all.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["NET_BIND_SERVICE"]
+          ports:
+            - name: http
+              containerPort: 8080
+          # GET /api/auth/access-code (whether the caller has an access
+          # session) is the cheapest thing the UI server answers to a caller
+          # nobody has vouched for, in every auth mode: a single-tenant
+          # daemon answers /api/config itself with 401 to anybody without
+          # the access code, the kubelet included, so a probe there never
+          # passed and the liveness probe restarted the pod every few
+          # minutes. It is answered from the moment that server is up -- which is
+          # deliberately early, before the git proxy and the reconcile
+          # loop, so that a deployment whose reconciler has died is still
+          # one an operator can open (bwsalmon/agents#550). That is the
+          # right liveness contract here too: restarting the pod is not
+          # the fix for a dead reconciler, and the UI says so itself with
+          # a standing banner.
+          readinessProbe:
+            httpGet:
+              path: /api/auth/access-code
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/auth/access-code
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              # No CPU limit: this process spends most of its wall time
+              # waiting on GitHub and on models, and throttling the
+              # bursts in between only makes the UI slow. Memory is
+              # limited because a leak here should kill one pod rather
+              # than a node.
+              memory: 4Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: image-verify-key
+              mountPath: /etc/grain
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grain-data
+        - name: image-verify-key
+          configMap:
+            name: grain-image-verify-key
+---
+# The UI and API. ClusterIP, because how this is reached from outside is
+# a decision this file should not make for you: an Ingress, a Gateway,
+# `kubectl port-forward`, or a mesh, depending on what the cluster
+# already runs and what authenticates in front of it.
+#
+# Do not expose it without something authenticating in front. grain's own
+# API has no login of its own -- the single-node deployment binds the UI
+# to loopback and expects the operator to tunnel to it -- so anything
+# that can reach this Service can file, approve and dispatch tasks.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grain
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grain
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# What sandbox pods reach: the git proxy and one model proxy per vendor,
+# at their offsets in the -sandbox-port-base block (pkg/daemon's
+# sandboxPortOffsets: the git proxy at +0, the model proxies from +16 in
+# modelproxy.Vendors() order).
+#
+# A Service rather than the daemon pod's own IP because a sandbox is
+# handed these addresses once, when it is created, and under run hosts
+# (docs/non-disruptive-upgrade.md, Stage 2) it can outlive the pod that
+# created it: the next daemon pod adopts its run, and the run still has
+# a pull request to push. The cluster IP survives a rollout; a pod IP
+# does not. The daemon resolves this Service at startup
+# (-k8s-sandbox-service) and hands sandboxes the IP itself, so a sandbox
+# needs no resolver to use it -- one whose task asked for no network
+# reaches the daemon pod and nothing else, kube-dns included
+# (networkpolicy.yaml, which allows this traffic as it is: a policy is
+# applied to the pod the Service forwards to, not to the Service).
+#
+# Separate from the grain Service above so that what the UI Service
+# exposes is not widened, and selecting the daemon component rather than
+# every pod named grain so it can never forward to a run pod or an
+# upgrade check. ClusterIP and not headless: a headless Service resolves
+# to the pod's own address, which is the thing this replaces, and the
+# daemon refuses one.
+#
+# publishNotReadyAddresses because the daemon starts dispatching before
+# its readinessProbe has passed: without it the Service has no endpoint
+# for the pod's first seconds, and a run dispatched then fails its clone
+# with "Failed to connect to <cluster IP> port 9728"
+# (docs/test-runs/2026-10-15-k8s-run-hosts-sandboxes.md, F2). The
+# proxies listen before anything is dispatched, and the Deployment's
+# Recreate strategy means there is never a second daemon pod to send
+# traffic to instead.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grain-sandbox
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: daemon
+  publishNotReadyAddresses: true
+  ports:
+    - name: git-proxy
+      port: 9728
+      targetPort: 9728
+    - name: claude-proxy
+      port: 9744
+      targetPort: 9744
+    - name: openai-proxy
+      port: 9745
+      targetPort: 9745
+    - name: gemini-proxy
+      port: 9746
+      targetPort: 9746

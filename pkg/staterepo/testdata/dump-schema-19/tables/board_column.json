@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "board_id": "board-1",
+    "name": "Queued",
+    "states": "queued",
+    "order_key": 0
+  },
+  {
+    "id": 2,
+    "board_id": "board-1",
+    "name": "In flight",
+    "states": "running,awaiting_reply",
+    "order_key": 1
+  }
+]

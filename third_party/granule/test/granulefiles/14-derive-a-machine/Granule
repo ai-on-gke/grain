@@ -1,0 +1,11 @@
+# docs/granulefile.md 14.4: deriving a machine from a machine. The COPY
+# is applied offline; the RUN boots the guest and executes in it, so
+# this file needs /dev/kvm (level 3).
+ARG SOURCE_VM=ghcr.io/example/github-runner-vm:latest
+
+# Inherit the machine; the hypervisor half is this build's own.
+VM FROM ${SOURCE_VM}
+
+COPY runner.service /etc/systemd/system/runner.service
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN systemctl enable runner.service

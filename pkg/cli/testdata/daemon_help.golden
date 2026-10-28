@@ -1,0 +1,367 @@
+Usage of grain daemon:
+  -actions-cache-dir string
+    	root directory for the GitHub Actions cache -- defaults to <sandbox-dir>/cache/actions when -sandbox-dir is set, and <data-dir>/cache/actions otherwise
+  -actions-cache-size-gb cache-from: type=gha
+    	how much disk, in GiB, this deployment's GitHub Actions cache may use before it starts evicting the entries nothing has read for longest. It is what makes a cache-from: type=gha build warm across CI runs, and every branch of a repository shares one. 0 seeds a deployment that keeps no such cache. Seeds a fresh database only: the stored setting (Settings -> Sandbox, 'Actions cache') wins from then on (default 20)
+  -agy-path string
+    	path to the Antigravity CLI binary (agy) agent/antigravity runs as a subprocess; empty resolves "agy" against $PATH instead. Only used by a run driven by the "antigravity" framework
+  -agy-run string
+    	where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release
+  -allow-unisolated-host-sandboxes
+    	let -host-sandboxes start on a daemon others can reach, accepting that everyone who can file a task there may run anything on this host as this daemon's user
+  -as string
+    	principal the UI/API attributes tasks and comments it creates to (defaults to the OS user)
+  -backup-gcs-bucket string
+    	GCS bucket for scheduled backups; when set, upload to GCS instead of Google Drive
+  -backup-google-credentials-file string
+    	Google credential JSON for scheduled backups; omitted uses Application Default Credentials
+  -backup-google-drive-folder string
+    	Google Drive folder ID for scheduled backups (default "root")
+  -backup-interval duration
+    	how often to upload the database and config repository to Google Drive or GCS; 0 disables scheduled backups
+  -checkpost-expect string
+    	which reporting checks make a repository's answer complete, as owner/name=check,check;owner/other=check -- a repository not named here is always read from GitHub
+  -checkpost-url string
+    	base url of this deployment's checkpost service, which CI reports verdicts to; empty asks GitHub for check runs as before
+  -ci
+    	run grain's own CI: the .grain/workflows a repository declares, in this deployment's own sandboxes, for the repos whose CI mode is "Use Grain CI" (Settings -> Repos), which also grants their tasks the grain-ci capability. -ci=false turns the engine off entirely, so no repository's workflows run however its CI mode is set, and the CI API reports that this deployment has none. A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of the one repository under test (pkg/ci, "What a workflow file is trusted with"). (default true)
+  -ci-artifact-max-age duration
+    	how long a run's CI artifacts are kept before the sweep drops them; 0 uses grain's own default, 336h0m0s, which is about how long a red run stays worth investigating. See -ci-artifact-max-bytes for what this group holds. (default 336h0m0s)
+  -ci-artifact-max-bytes bytes
+    	ceiling on the whole CI artifact directory under -data-dir, in bytes -- the oldest runs' artifacts are swept whole until it fits (0 uses grain's own default, 2048MB). A job that does not succeed and declares 'artifacts:' has those paths copied out of its sandbox before the sandbox is destroyed, which is the only way a file survives a grain CI job at all; nothing here can change a verdict, so every bound in this group trades disk against how often somebody has to reproduce a failure by hand. Stored on the config row at first start and edited in Settings from then on, like the -ci-cache-max-* group beside it (default 2147483648)
+  -ci-artifact-max-entry-bytes int
+    	largest single CI artifact worth keeping, in bytes; one past it is refused inside the job's own sandbox -- so it is never copied out -- and the run records how big it was and that it was not kept. 0 uses grain's own default, 32MB. See -ci-artifact-max-bytes for what this group holds. (default 33554432)
+  -ci-artifact-max-run-bytes int
+    	ceiling on what one CI run's artifacts may add up to, in bytes: one push of a workflow whose dozen jobs all fail and all keep a trace is the shape this bounds. 0 uses grain's own default, 128MB. See -ci-artifact-max-bytes for what this group holds. (default 134217728)
+  -ci-cache-max-age duration
+    	how long an unasked-for CI job result is kept before the cache's sweep drops it; 0 uses grain's own default, 720h0m0s. See -ci-cache-max-bytes for what this group is and is not about. (default 720h0m0s)
+  -ci-cache-max-bytes bytes
+    	ceiling on the whole CI job cache directory under -data-dir, in bytes -- the oldest entries are swept until it fits (0 uses grain's own default, 256MB). Lower it on a deployment whose data disk is small, raise it on one with room, where a bigger cache is simply more jobs that do not run twice. Nothing in this group can change an answer: a cache key is a promise that the work is identical, so every bound here trades disk against how often a job is re-run and no value of one can make CI report wrongly. Stored on this deployment's config row the first time it starts; change it in Settings (or 'grain settings') after that, where it binds the next sweep rather than the next restart -- 'grain ci cache' reports what is held against it, and 'grain ci cache clear' empties it now (default 268435456)
+  -ci-cache-max-entries int
+    	ceiling on how many entries the CI job cache holds, alongside -ci-cache-max-bytes: the entries are one flat directory and a hit is one open() in it, so small results would otherwise reach six figures long before they reached the byte ceiling. 0 uses grain's own default, 4096. See -ci-cache-max-bytes for what this group is and is not about. (default 4096)
+  -ci-cache-max-entry-bytes int
+    	largest single CI job result worth keeping, in bytes; a result past it is declined and logged rather than stored, and its job runs again next time. 0 uses grain's own default, 4MB, which is a job of a dozen or so maximally noisy steps. See -ci-cache-max-bytes for what this group is and is not about. (default 4194304)
+  -ci-run-history runs
+    	how many concluded grain CI runs keep their record -- the id, ref, commit and every job's and step's verdict, which is what "was this job red last week too?" is answered from and is the cheap half of a run. 0 uses grain's own default, 5000, which is a fortnight of a deployment starting a run every few minutes; a negative number keeps every run forever. Stored on this deployment's config row the first time it starts; change it in Settings (or 'grain settings') after that, where it takes effect without a restart.
+  -ci-run-output-kb KiB
+    	largest amount of step output one grain CI run may store, in KiB, spent on the steps a reader opens first: a run past it keeps the failing steps' logs and a note in place of the rest, and a run larger than the whole -ci-step-output-mb ceiling has its output declined rather than sweeping every older run's away. 0 uses grain's own default, 256KiB. Stored on this deployment's config row the first time it starts; change it in Settings (or 'grain settings') after that, where it takes effect without a restart.
+  -ci-step-output-days days
+    	how many days a grain CI run's step output may live, whatever room there is under -ci-step-output-mb. 0 uses grain's own default, 14 days; a negative number bounds output by size alone. Stored on this deployment's config row the first time it starts; change it in Settings (or 'grain settings') after that, where it takes effect without a restart.
+  -ci-step-output-mb MiB
+    	ceiling on the step output grain CI keeps across its whole history, in MiB -- whole runs' output is swept, oldest first, until what is left fits, and the runs themselves stay where they are. This is the expensive half and the only one that makes a red run diagnosable rather than merely countable, so it is bounded by disk rather than by a count of runs: what one run prints is between nothing and the -ci-run-output-kb cap. 0 uses grain's own default, 64MiB, which is three or four days of a deployment starting 300 runs a day; a negative number keeps every byte forever. Stored on this deployment's config row the first time it starts; change it in Settings (or 'grain settings') after that, where it takes effect without a restart.
+  -claude-oauth-token-file string
+    	file holding the Claude Code OAuth token the agent authenticates as, passed to the claude subprocess as CLAUDE_CODE_OAUTH_TOKEN. Optional, and the exact counterpart of -gemini-api-key-file above: the UI stores one as the "claude-oauth-token" secret and that wins over this file
+  -claude-path string
+    	path to the claude CLI binary agent/claude runs as a subprocess; empty resolves "claude" against $PATH instead. Only used when the agent-framework setting is "claude"
+  -claude-run string
+    	where the claude CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. claude also takes "detached": the image's claude, through grain hostd's claude-detached entry, so a daemon upgrade does not interrupt it
+  -cli-container-engine string
+    	deprecated and ignored: agent CLIs no longer run in a per-run container of an image
+  -cli-image string
+    	deprecated and ignored: agent CLIs no longer run in a per-run container of an image
+  -cli-image-file string
+    	deprecated and ignored: agent CLIs no longer run in a per-run container of an image
+  -codex-auth-file codex login
+    	shared auth.json written by codex login for ChatGPT authentication. Used only when no OpenAI API key is configured. The file must be writable so Codex can persist refreshed tokens; Grain links it into each private per-run CODEX_HOME
+  -codex-path string
+    	path to the codex CLI binary agent/codex runs as a subprocess; empty resolves "codex" against $PATH instead. Only used when the agent-framework setting is "codex"
+  -codex-run string
+    	where the codex CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release
+  -container-git-proxy-host string
+    	host address grain services are reachable at from local sandbox containers
+  -container-sandbox-cap-add string
+    	comma-separated Linux capabilities handed back to local sandbox containers, which otherwise run with every capability dropped and no-new-privileges set; the stock sandbox image needs none
+  -container-sandbox-image string
+    	image used by local container sandboxes (default "ghcr.io/bwsalmon/grain/k8s-sandbox:latest")
+  -container-sandbox-network string
+    	Docker network local sandbox containers join. Empty uses grain-sandboxes, a bridge grain creates with inter-container traffic disabled; any other name must already exist ("bridge" is Docker's shared default network)
+  -container-sandboxes
+    	dispatch each run into its own local Docker container
+  -data-dir string
+    	root directory for the store and secrets -- the state a redeploy must not lose, and the one directory to back up (required; scripts/setup.sh installs it at /var/lib/grain/data)
+  -db-driver string
+    	database backend driver ("sqlite" or "postgres"); defaults to sqlite (default "sqlite")
+  -db-dsn string
+    	database connection string / DSN or path; for sqlite defaults to <data-dir>/store
+  -default-target-repo string
+    	owner/name a task created through the UI/API with no repo of its own targets
+  -disable-native-sandboxes
+    	disable native sandboxes on this host -- in this mode only remote execution sandboxes can exist
+  -docker-root-dir docker info
+    	path to the local docker engine's own data root, for the UI's host disk figures only (grain/task-148): the sandbox image and every granule VM's disk overlay are written there rather than under -sandbox-dir, so on a deployment that gives sandboxes a volume of their own it is a disk worth a figure. Empty asks docker info for it once at startup, which is right whenever the daemon can reach the docker socket and sees that path where dockerd does; name it here when it cannot, or when this process sees the same directory at a path of its own. A path this process cannot stat is logged once and left out, not reported as a broken figure -- a containerised daemon is usually shown docker's socket and not the tree behind it
+  -executor-addr string
+    	address to listen on for remote model executors (host:port, e.g. :4243); empty disables remote execution
+  -executor-cert-file string
+    	PEM certificate file for TLS on -executor-addr (required with -executor-key-file)
+  -executor-key-file string
+    	PEM private key file for TLS on -executor-addr (required with -executor-cert-file)
+  -executor-token-file string
+    	file holding the shared token remote executors authenticate with (required with -executor-addr)
+  -executor-wait duration
+    	how long a dispatch waits for a remote executor to connect before giving up (default 30s)
+  -flag-names grain daemon
+    	print every flag this build's grain daemon accepts, one per line -- the name, then "bool" or "value" for whether it takes an argument -- and exit. Not configuration: it is what an upgrade asks a newly pulled image before cutting over to it, so that a systemd unit passing a flag the new build dropped is reported then rather than discovered at the next start (pkg/upgrade/image.go)
+  -gcp-agent-account-count int
+    	the number of agent service accounts to use for gcp-key (default 1) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default 1)
+  -gcp-agent-service-account string
+    	the narrow agent service account gcp-key mints keys for (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -gcp-project string
+    	GCP project the gcp-key/gemini-key capabilities mint into; empty disables both (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -gemini-api-key-file string
+    	file holding the Gemini API key the agent runs as. Optional now that the key can be set from the UI instead (Settings -> Models, stored as the "gemini-api-key" secret): a key set there wins, and this file is what a deployment seeded one with before that existed. With neither, a run driven by the gemini framework fails as setup-failed saying so, rather than the daemon refusing to start
+  -github-host string
+    	GitHub git host -- what the proxy forwards to and, via github.APIHost, where REST calls go; override to point at a mock for local testing (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "github.com")
+  -github-insecure-http
+    	speak plain HTTP to -github-host instead of HTTPS (mock servers only) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -github-webhook-addr string
+    	local address (e.g. :4244) to listen on directly for signed GitHub App webhooks using GITHUB_WEBHOOK_SECRET or a GitHub App credential's webhook_secret; mutually exclusive with -github-webhook-url
+  -github-webhook-url string
+    	base URL of this deployment's github-webhook gateway service (e.g. http://grain-webhook:8080), signed with GITHUB_WEBHOOK_RELAY_SECRET; empty disables remote webhook long-polling
+  -granule-base-ip string
+    	ignored, and removed in a later release. A granule guest takes over the address the container runtime assigned its container, and granule's own -ip is "deprecated and ignored"; there has been no way to assign one from here for some time. Assigning a sandbox's address is coming back by a different route -- pkg/sandboxaddr, reaching the VM as a docker run option on a user-defined network -- which is not this flag.
+  -granule-base-port int
+    	ignored, and removed in a later release. granule publishes ports on the sandbox itself (-docker-run-opt -p, or -publish-declared) rather than forwarding one per VM, and its own -port is "deprecated and ignored".
+  -granule-command granule
+    	how to invoke granule, when it is not a granule on this machine's PATH: the whole command, space-separated, with granule's own arguments appended to it. granule builds only for Linux (its netshim is netlink, tc and tuntap), so a grain running on macOS has no granule to exec and reaches one in a local Linux VM instead -- -granule-command="limactl shell grain-sbx -- granule", or an ssh, or a docker exec. Setting it also moves granule's state directory to that machine, which is why grain then asks `granule vm list` what VMs exist rather than reading -granule-state-dir itself (granule.Command.Exists). Left empty, granule is exec'd here, which is every deployment that runs grain and granule on one host.
+  -granule-create-arg granule vm create <name> -state-dir <dir>
+    	one argument appended verbatim to the granule vm create <name> -state-dir <dir> that builds a run's VM -- repeat for every flag and value bwsalmon/granule's own `granule vm create -h` calls for beyond a name and -state-dir (disk mode, guest user, resolver, ...), e.g. -granule-create-arg=-disk-mode=overlay -granule-create-arg=-guest-user -granule-create-arg=debian, which is what scripts/setup.sh passes for terraform/gcp. The guest image itself -- the repository's Granulefile, built and published by scripts/release-images.sh (see scripts/granule/README.md) -- comes from -sandbox-image or this binary's own stamp rather than from here. Only used with -granule-sandboxes. Under -granule-net nat, prefer -granule-base-ip/-granule-base-port over putting -ip/-port here: they are appended last, so they win over this list.
+  -granule-exec-key granule exec
+    	path, *inside the VM's container*, of the private key granule exec authenticates to the guest with. Optional, and normally left unset: `granule run` generates a keypair for each guest it boots and hands the guest the public half on its kernel command line, so the default path already holds a key that guest authorizes (bwsalmon/granule's internal/guestkey). Set this only for a custom guest image that authorizes a key of its own instead -- e.g. /images/granule-exec-key for a key placed in the directory -granule-create-arg's own -images-hostpath mounts read-only at /images.
+  -granule-git-proxy-host docker network inspect bridge
+    	host (no port) this daemon's git proxy is reachable at from inside a granule VM's own guest, in place of the loopback address the proxy binds to by default -- required with -granule-sandboxes. A granule VM (GranuleConfig.createArgs always builds one against -backend docker) runs its guest in its own network namespace behind netshim's NAT (third_party/granule/internal/netshim), with its own 127.0.0.1 that never reaches this process's -- so a clone against the default 127.0.0.1 proxy URL fails the moment it leaves the guest (bwsalmon/agents#567: "Failed to connect to 127.0.0.1 ... Couldn't connect to server"). Setting this makes startGitProxy bind on every interface instead of just loopback, and advertise this host to every run's sandbox in loopback's place -- typically the docker bridge gateway address the guest's own outbound NAT routes through to reach this host (see netshim's masqueradeExprs); run docker network inspect bridge (or whichever network the granule VM containers join) and read "Gateway" if unsure -- commonly 172.17.0.1.
+  -granule-net string
+    	ignored, and removed in a later release. The granule this build vendors has only the former "flat" behaviour -- its own -net says "deprecated: only the former flat behaviour exists now, and it is the default" -- so there is nothing left to select. A start that is passed this says so and carries on. (default "flat")
+  -granule-ready-timeout duration
+    	how long Acquire waits for a freshly created granule VM's guest to answer and carry a default route before giving the sandbox up; 0 uses the built-in two minutes. Worth raising wherever a guest boots slowly for reasons that are not grain's: nested virtualisation is the one measured here, where kernel and initramfs alone took 109s on an arm64 Mac under Lima and the default route landed at ~126s, two seconds past the built-in deadline, so every acquire failed with "vsock port 1024 is not being listened on" -- which reads as a networking fault and is a budget one. The same deadline has bitten before for a different slow boot (grain/task-593: 254 failed creations in one window), which is why it is a flag now rather than a constant.
+  -granule-sandbox-cidr string
+    	address pool every sandbox VM is given an address out of, as a CIDR -- for example 10.128.0.0/16. Empty (the default) is how every deployment has run until now: grain names no address, docker assigns one from whichever network the VM container lands on, and grain reads it back afterwards. Setting this makes the address grain's own choice, which is what lets the host isolation rules be written without first asking docker what happened, lets a sandbox be identified by where it is as well as by the token it carries, and stops two sandbox hosts handing out the same 172.17.0.0/16. Addresses are allocated in blocks of sandboxaddr.FamilySize, one block per sandbox and everything that sandbox goes on to create, so a whole family is one aligned CIDR and so destroying a parent frees its children with it. Requires -granule-sandboxes, and a pool big enough for the sandboxes this deployment runs at once: a /16 holds 2047 families of 32.
+  -granule-sandbox-network string
+    	name of the user-defined docker network those addresses live on, created with -granule-sandbox-cidr as its subnet if it is not already there. It has to be user-defined and it has to be this deployment's: docker honours "--ip" only on a network it was given a subnet for and never on the default bridge, so there is no arrangement in which grain assigns an address on 172.17.0.0/16. Only used with -granule-sandbox-cidr. (default "grain-sandboxes")
+  -granule-sandboxes
+    	dispatch onto real bwsalmon/granule-managed VMs (one per run, named orchestrator.VMNamePrefix+<run id>) over SSH, instead of local host directories. This was -granule-vm-name-prefix, whose value both opted in and named the VMs; the name is a constant now, since a VM name has 11 bytes to live in and a run id needs nine of them, leaving nothing an operator could usefully choose -- see orchestrator.VMNamePrefix
+  -granule-ssh-user string
+    	username to SSH into each granule VM as (required with -granule-sandboxes)
+  -granule-state-dir string
+    	granule's VM state directory (only used with -granule-sandboxes) (default "/var/lib/granule/vms")
+  -granule-workspace string
+    	working directory run_command/read_file/edit_file/write_file operate in on each granule VM (required with -granule-sandboxes)
+  -host-sandbox-env value
+    	NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone
+  -host-sandboxes
+    	dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, -executor-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed
+  -hostd-socket string
+    	grain hostd's unix socket, for a daemon in a container whose host CLIs run through hostd; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host
+  -iap-backend-service string
+    	GCP Compute backend service name for dynamic IAP IAM reconciliation; empty disables IAP reconciliation (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -iap-resource string
+    	IAP web resource whose IAP access is reconciled from the teams and access list too, e.g. projects/<NUMBER>/iap_web/compute/services/<SERVICE>; empty or "none" disables it (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -k8s-container string
+    	name of grain's own container within that Deployment (only used with -k8s-sandboxes and -upgrade-image) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "grain")
+  -k8s-deployment string
+    	name of the Kubernetes Deployment running grain itself, which the Upgrade button repoints at a new image (only used with -k8s-sandboxes and -upgrade-image). deploy/kubernetes/grain.yaml calls it "grain" (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "grain")
+  -k8s-git-proxy-host string
+    	address (no port) this daemon's git proxy and model proxies are reachable at from inside a sandbox pod, in place of the loopback address the proxy binds to by default -- required with -k8s-sandboxes, the same way -granule-git-proxy-host is required with -granule-sandboxes and for the same reason: a pod's 127.0.0.1 is its own. In-cluster this is grain's own pod IP, which every other pod can route to directly, so it defaults to $GRAIN_POD_IP when that is set -- deploy/kubernetes/deployment.yaml fills it from the downward API (status.podIP); see -k8s-sandbox-service (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -k8s-granule-image string
+    	the packed guest image every pod this backend creates runs: a self-contained image with its own guest disk and kernel already baked in -- the shape Granulefile's own build produces, not the thin exec target -k8s-sandbox-image names and, just as importantly, not "granule:vendored" either (grain init's own -granule-runtime-image default, what scripts/granule/build-granule-image.sh produces, which has no guest disk and cannot boot at all -- confirmed against a real cluster, where a pod running it exits immediately). Required with -k8s-granule-sandboxes; no context-free default to pick, since nothing publishes a packed guest image under a stable tag yet -- docs/k8s-granule-design.md §4 (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "ghcr.io/bwsalmon/grain/guest:latest")
+  -k8s-granule-sandboxes
+    	dispatch into privileged Kubernetes pods, each booting a real cloud-hypervisor VM over /dev/kvm (one per run), instead of -k8s-sandboxes' plain pods or -granule-sandboxes' single-host VMs. Reuses -k8s-namespace/-k8s-kubectl/-k8s-workspace/-k8s-node-selector/-k8s-git-proxy-host, which mean the same thing on either Kubernetes backend; see -k8s-granule-image for the one that does not. docs/k8s-granule-design.md
+  -k8s-kubeconfig string
+    	kubeconfig path passed to kubectl for -k8s-sandboxes and -k8s-granule-sandboxes; when empty and KUBECONFIG is unset, defaults to <data-dir>/kubeconfig or /var/lib/grain/kubeconfig if present
+  -k8s-kubectl string
+    	kubectl binary pkg/k8s and the exec transport run (only used with -k8s-sandboxes); empty finds "kubectl" on PATH (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -k8s-namespace string
+    	namespace sandbox pods are created in (only used with -k8s-sandboxes). Two deployments sharing a cluster must not share this: the sweep for pods a dead process or a failed delete left behind (K8sSandboxes.SweepOrphans, at startup and on every reconcile tick) deletes every grain sandbox pod in the namespace it is not itself holding (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "grain")
+  -k8s-network-policy
+    	assert that this cluster's CNI actually enforces NetworkPolicy objects, and that deploy/kubernetes/networkpolicy.yaml is installed. Without it a task asking for no network access is refused rather than silently given a networked pod, since a policy object is accepted by every cluster and enforced by only some. Only used with -k8s-sandboxes (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -k8s-node-selector value
+    	one "key=value" nodeSelector entry for sandbox pods -- repeat for each. Pins sandboxes to a node pool sized for build workloads, or one whose nodes offer nested virtualization. Only used with -k8s-sandboxes (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -k8s-priority-class-agent string
+    	PriorityClass for the sandbox pods of ordinary agent runs and persistent sandboxes; empty sets none (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "grain-agent")
+  -k8s-priority-class-ci string
+    	PriorityClass for CI jobs' sandbox pods; empty sets none. The lowest of the three, so on a full cluster these are what an interactive session preempts, and a preempted job is retried (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "grain-ci")
+  -k8s-priority-class-interactive string
+    	PriorityClass for the sandbox pods of interactive tasks (Director sessions, chats); empty sets none. deploy/kubernetes/ defines it, and the daemon creates grain's own classes when they are missing -- a name the cluster still has no PriorityClass for is left off the pods, with an alert (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "grain-interactive")
+  -k8s-run-host-rwx
+    	the -k8s-run-host-volume claims are ReadWriteMany, so run pods may use any node; off, they are ReadWriteOnce and run pods are pinned to this pod's node
+  -k8s-run-host-service-account string
+    	the service account run pods run as (default "grain")
+  -k8s-run-host-volume value
+    	CLAIM:PATH, repeatable: a claim this pod mounts at PATH; run pods get the spool, staging and credential directories as subPaths of these, at the same paths
+  -k8s-sandbox-image string
+    	container image every sandbox pod runs; defaults to the image stamped into this build. It is the whole of what a dispatched agent finds when it lands. It needs the agent framework's own CLI, git, and a shell; Dockerfile.k8s-sandbox in this repo builds the published one (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "ghcr.io/bwsalmon/grain/k8s-sandbox:latest")
+  -k8s-sandbox-privileged
+    	run sandbox containers privileged (only used with -k8s-sandboxes). This gives every dispatched agent root on the node it lands on; it is here because a sandbox that has to run docker or kind cannot work without it, not because it is a reasonable default (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -k8s-sandbox-service string
+    	name of a ClusterIP Service in -k8s-namespace that selects this daemon's pod and forwards the git proxy's and model proxies' ports from the -sandbox-port-base block (so it needs that block). When set, sandbox pods are handed the Service's cluster IP for those, in place of -k8s-git-proxy-host, so a sandbox that outlives this pod -- a run the next daemon pod adopts after a rollout -- can still push and still reach its model. The daemon resolves it at startup and refuses to start if it cannot. deploy/kubernetes/grain.yaml names its grain-sandbox Service. Only used with -k8s-sandboxes or -k8s-granule-sandboxes (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -k8s-sandbox-service-account string
+    	ServiceAccount for sandbox pods (only used with -k8s-sandboxes). Normally left empty: nothing in a sandbox should be talking to the API server, and no token is mounted into one regardless (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -k8s-sandboxes kubectl exec
+    	dispatch into Kubernetes pods (one per run, named orchestrator.PodNamePrefix+<run id>) reached with kubectl exec, instead of local containers or granule VMs. Credentials are kubectl's own: in-cluster that is this pod's ServiceAccount token, which deploy/kubernetes/ binds the pod and pod/exec permissions this needs to. A pod shares its node's kernel, so this is weaker isolation than -granule-sandboxes
+  -k8s-workspace string
+    	working directory run_command/read_file/edit_file/write_file operate in inside each sandbox pod (required with -k8s-sandboxes) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -kontur-base-port int
+    	former name of -granule-base-port, still accepted so existing systemd unit files keep working
+  -kontur-create-arg value
+    	former name of -granule-create-arg, still accepted so existing systemd unit files keep working
+  -kontur-exec-key string
+    	former name of -granule-exec-key, still accepted so existing systemd unit files keep working
+  -kontur-git-proxy-host string
+    	former name of -granule-git-proxy-host, still accepted so existing systemd unit files keep working
+  -kontur-net string
+    	former name of -granule-net, still accepted so existing systemd unit files keep working
+  -kontur-sandboxes
+    	former name of -granule-sandboxes, still accepted so existing systemd unit files keep working
+  -kontur-ssh-user string
+    	former name of -granule-ssh-user, still accepted so existing systemd unit files keep working
+  -kontur-state-dir string
+    	former name of -granule-state-dir, still accepted so existing systemd unit files keep working
+  -kontur-workspace string
+    	former name of -granule-workspace, still accepted so existing systemd unit files keep working
+  -local-scripts value
+    	NAME=/absolute/path/local-scripts.yaml, repeatable: a host-managed local-scripts declaration a task holding local-scripts:NAME is served (docs/local-scripts.md). Every other declaration is read from the state repository's local-scripts/NAME/local-scripts.yaml
+  -max-agent-turns int
+    	cap on model/tool round trips per run (0 = uncapped; runs are bounded by wall-clock runtime instead) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -max-ci-jobs int
+    	deprecated and ignored; configure max CI jobs in Settings
+  -max-concurrent int
+    	former name of -max-workers, still accepted so an existing unit file keeps working; pass one or the other, not both
+  -max-mergers int
+    	deprecated and ignored: this deployment's sandbox budget is what bounds the host (model.Ledger) (default 1)
+  -max-workers int
+    	maximum number of ordinary tasks dispatched at once -- the worker half of the concurrency dispatch.Cycle fills (model.Limits) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default 10)
+  -model-backend string
+    	agy, claude or codex: the same as -agent-framework (agy is antigravity)
+  -model-exec-addr string
+    	legacy alias for -executor-addr
+  -model-exec-cert-file string
+    	legacy alias for -executor-cert-file
+  -model-exec-key-file string
+    	legacy alias for -executor-key-file
+  -model-exec-token-file string
+    	legacy alias for -executor-token-file
+  -model-exec-wait duration
+    	legacy alias for -executor-wait
+  -model-proxy-max-concurrent int
+    	how many requests one run may have open through each model proxy at once, a streamed reply counting until it finishes. The next waits up to -model-proxy-slot-wait for one, then is refused with a 429 in the vendor's own error shape, so one run's token cannot monopolize this deployment's shared credential. 0 or less means the default (default 16)
+  -model-proxy-slot-wait duration
+    	how long a request over -model-proxy-max-concurrent waits for a slot before its 429, so stock vendor clients ride out the cap. 0 means the default; a negative duration, such as -1s, refuses at once (default 1m0s)
+  -model-proxy-unrestricted
+    	let the model proxies forward every method, path and query parameter of a vendor's API with this deployment's credential, rather than only its model-inference endpoints (messages, responses, chat completions, generateContent and the model listings). Off by default: a sandbox token then cannot reach a vendor's files, batch, fine-tuning or organization APIs. Turn it on only for a deployment whose runs deliberately need those
+  -native-sandboxes
+    	enable native sandboxes on this host; set to false to disable native sandboxes (default true)
+  -openai-api-key-file string
+    	file holding the OpenAI API key the agent authenticates as, passed to the codex subprocess as OPENAI_API_KEY. Optional, and the exact counterpart of the two files above: the UI stores one as the "openai-api-key" secret and that wins over this file
+  -package-cache-apt-upstream value
+    	fetch one intercepted archive from a mirror instead of from itself, as "archive-host=base-url" (deb.debian.org=http://mirror.internal/debian) -- repeat for each. The host is one this cache already serves, and is what sandboxes go on asking for; the URL is what this service fetches from, with the request's own path appended. An archive not named here is fetched from itself
+  -package-cache-dir string
+    	root directory for the package cache -- defaults to <sandbox-dir>/cache/packages when -sandbox-dir is set, and <data-dir>/cache/packages otherwise
+  -package-cache-docker-registry string
+    	the registry this cache mirrors for Docker Hub, for a deployment running a pull-through cache of its own (https://registry.internal). Defaults to https://registry-1.docker.io
+  -package-cache-gcr-registry string
+    	the registry this cache mirrors for Google Container Registry, for a deployment running a pull-through cache of its own (https://registry.internal/gcr). Defaults to https://gcr.io
+  -package-cache-ghcr-registry string
+    	the registry this cache mirrors for GitHub Container Registry, for a deployment running a pull-through cache of its own (https://registry.internal/ghcr). Defaults to https://ghcr.io
+  -package-cache-go-proxy string
+    	the Go module proxy this cache forwards to, for a deployment running an Athens of its own (http://athens.internal). Defaults to https://proxy.golang.org
+  -package-cache-npm-registry string
+    	the npm registry this cache proxies, for a deployment running a mirror of its own (http://mirror.internal/npm). Defaults to https://registry.npmjs.org
+  -package-cache-pypi-index string
+    	the PyPI simple index this cache proxies, for a deployment running a mirror of its own (http://mirror.internal/pypi/simple). Defaults to https://pypi.org/simple
+  -package-cache-size-gb int
+    	how much disk, in GiB, this deployment's package cache may use before it starts evicting the packages it fetched longest ago. 0 leaves it at the default (default 20)
+  -policy string
+    	local policy file (grain_policy.yml) every task must fit before it gets a sandbox; empty enforces none (docs/local-policy.md)
+  -poll-interval duration
+    	how often to run a reconcile cycle (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default 10s)
+  -postgres-url string
+    	PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL)
+  -reboot-cmd sudo systemctl reboot
+    	one argument of the command the UI's reboot-host button runs -- repeat for every argument. Defaults to sudo systemctl reboot.
+  -relay-audience string
+    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+  -relay-auth-token-file string
+    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+  -relay-iap-jwt-audience string
+    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+  -relay-session-lifetime string
+    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+  -relay-token string
+    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+  -relay-url string
+    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+  -repair-reserve-sandboxes int
+    	how many standard agent sandboxes' worth of that budget is kept for base-branch repairs -- tasks marked fixes_base_branch and the CI confirming their branch green -- so a red base branch's repair starts on a saturated deployment instead of queueing behind the work it blocks. 0 reserves nothing; a repair the reserve cannot hold may still pre-empt work blocked on the same base (model.Budget.RepairReserve) (default 1)
+  -repo value
+    	a repository this workstation works on, as a local checkout's path or owner/name or URL; repeatable. Each is added to the -policy file's repos, added to the default team's target repositories when that list restricts them, and the first is -default-target-repo unless that is set
+  -restart-cmd sudo systemctl restart grain-daemon.service
+    	one argument of the command the UI's restart-grain button runs to restart this daemon alone, without rebooting the host -- repeat for every argument. Defaults to sudo systemctl restart grain-daemon.service.
+  -run-host-credential-dir string
+    	the shared credential directory every run host mounts read-write, as a directory and at the same path (only used with -run-host-image)
+  -run-host-daemon-url string
+    	the API address a run host's mcpserver is given, when not this process's own: a run pod needs one that outlives the daemon pod, e.g. http://grain.grain.svc
+  -run-host-dir string
+    	where run hosts' spools and staging live, seen at the same path by the daemon and every run host (default <data-dir>/runhosts; under -k8s-run-host-rwx, on that volume)
+  -run-host-image string
+    	drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, docs/non-disruptive-upgrade.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox
+  -sandbox-backend string
+    	container, granule, kubernetes, kubernetes-granule, host or none: the same as -container-sandboxes, -granule-sandboxes, -k8s-sandboxes, -k8s-granule-sandboxes, -host-sandboxes or -disable-native-sandboxes
+  -sandbox-cpu-overcommit float
+    	how much more vCPU than this host has may be committed to sandboxes at once -- 2 promises a 28-core host 56 vCPU of agent and CI sandboxes. Some CPU overcommitment is right: a run spends most of its wall time waiting on a model or a network rather than on a core. 0 leaves vCPU bounded by the run counts alone (model.Budget) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default 2)
+  -sandbox-cpus granule vm create
+    	deployment-wide default vCPU count for a granule-managed sandbox VM, passed as granule vm create's own -cpus (only used with -granule-sandboxes); 0 uses grain's own default, 2. Overridable per task from the UI/API (model.Task.SandboxCPUs) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -sandbox-dir string
+    	root directory for this deployment's disposable scratch space -- host-sandbox run directories, and the package and Actions caches default under it, and the UI reports its disk as the sandboxes' own (scripts/setup.sh installs it at /var/lib/grain/scratch, beside -data-dir's /var/lib/grain/data). Deliberately a separate flag from -data-dir rather than a subdirectory of it (bwsalmon/agents#587): what lives here is disposable, unlike the store and secrets under -data-dir, so it is never backed up and belongs on storage -- ideally a disk of its own -- that a VM wipe or redeploy is free to discard
+  -sandbox-disk-floor-min-mb int
+    	the least that floor is ever worth, whatever the share comes to on a small volume -- a tenth of a 20 GB store disk is 2 GB, which is not enough room to notice a runaway write in (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default 5120)
+  -sandbox-disk-floor-share float
+    	how much of the volume this deployment writes to (-data-dir, and -sandbox-dir when that is a different filesystem) is kept free: new CI jobs are held and agent dispatch deferred while free space is below it. A share rather than a size because a fixed number is wrong on both a 100 GB and a 4 TB volume. Never more than a quarter of the volume, whatever this and -sandbox-disk-floor-min-mb come to. 0 with a min of 0 leaves a filling disk to hold nothing back (model.DiskFloor) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default 0.1)
+  -sandbox-disk-gb granule vm create
+    	deployment-wide default root disk size, in GiB, for a granule-managed sandbox VM, passed as granule vm create's own -disk-size-mb (only used with -granule-sandboxes); 0 uses grain's own default, 30 -- every VM is sized explicitly, rather than being left as large as the guest image behind it the way it was before. Overridable per task from the UI/API (model.Task.SandboxDiskGB) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -sandbox-disk-overcommit float
+    	the same ratio for sandbox disk: how many times over the sandbox volume (less its free-space floor), or a cluster's allocatable ephemeral storage, sandbox disks may be promised. A sandbox disk is a thin overlay a run mostly never writes; on Kubernetes this also scales each pod's ephemeral-storage request down while its limit stays the full disk. 0 leaves disk bounded by the free-space floor alone (model.Budget) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default 2)
+  -sandbox-image grain sandbox-image
+    	the sandbox container image every granule VM is created from, overriding the reference stamped into this build at build time (grain sandbox-image). Left empty (the default), each start resolves that stamp, so an upgrade -- which pulls the new grain image and the sandbox image that grain names -- moves both halves together. Set it only to run something else on purpose: a mirror, a private copy, or a guest held at an older commit. This is where such a pin belongs; a -granule-create-arg -kontur-image naming another tag of the stamp's own repository is read as the install-time value an older scripts/setup.sh wrote unconditionally, and the stamp is used instead (chooseSandboxImage). Only used with -granule-sandboxes.
+  -sandbox-memory-mb granule vm create
+    	deployment-wide default guest memory, in MiB, for a granule-managed sandbox VM, passed as granule vm create's own -memory-mb (only used with -granule-sandboxes); 0 uses grain's own default, 8192. Overridable per task from the UI/API (model.Task.SandboxMemoryMB) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+  -sandbox-memory-overcommit float
+    	the same ratio for memory, and 1 by default rather than 2: the way a host finds memory it has already promised is to swap, and a deployment that swaps has lost more throughput than the extra sandbox was worth. 0 leaves memory bounded by the run counts alone (model.Budget) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default 1)
+  -sandbox-memory-reserve-mb int
+    	memory kept back from that budget for everything on this host that is not a sandbox -- this daemon, the container runtime, each VM's own qemu overhead and the page cache they all read through. Taken off the top, before the overcommit ratio, so raising the ratio never eats into it. -1 takes an eighth of the machine, never less than 8 GiB and never more than half of it (model.DefaultReserveMemoryMB) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default -1)
+  -sandbox-port-base int
+    	first port of the block every sandbox-facing service binds in: the git proxy, the model proxies, the package cache and the Actions cache each take a reserved offset within it (sandboxnet.go's own sandboxPortOffsets). It is one aligned range of 256 ports, so what has to reach these services -- a firewall rule, a security group, a VPN ACL -- is one rule that a seventh service does not change. Must be a multiple of 256, and should stay below the ephemeral range this host allocates from (/proc/sys/net/ipv4/ip_local_port_range, 32768 by default) so the block cannot collide with this daemon's own outbound connections. 0 restores the behaviour before the block existed: every service on whatever ephemeral port the kernel gives it, renumbered on every restart -- which is why a sandbox that outlives a restart holds addresses that have moved. Not used by the package cache's interception listeners or its resolver, whose ports (443, 80, 53) are fixed by their protocols. (default 9728)
+  -shutdown-cmd sudo systemctl poweroff
+    	one argument of the command the UI's shut-down-host button runs -- repeat for every argument. Defaults to sudo systemctl poweroff.
+  -tunnel-gateway-url string
+    	removed: the tunnel gateway is gone. The daemon refuses to start with this set
+  -tunnel-token string
+    	removed: the tunnel gateway is gone. The daemon refuses to start with this set
+  -ui-access-session-lifetime duration
+    	on this single-tenant daemon, how long a browser stays signed in after entering the access code without using the UI; each use renews it. Rotating the code (grain access-code rotate) ends every session at once (default 2160h0m0s)
+  -ui-addr string
+    	address to serve the UI/API on, in-process, over this same store -- empty disables it (default "0.0.0.0:4242")
+  -ui-allowed-hosts string
+    	comma-separated host names the UI/API answers to besides IP literals, localhost and this machine's own hostname ("grain.example.com", "*.example.com"); a request with any other Host header is refused with 421, which is what stops a DNS-rebinding page reaching a loopback-bound API (grain#2380). Checked on every request when this is set or -ui-addr names a specific address; on an every-interface -ui-addr with this unset, on loopback requests only. "*" turns the check off
+  -ui-iap-audience string
+    	the audience a signed X-Goog-IAP-JWT-Assertion must carry for the UI/API to accept the identity in it, or several separated by commas -- IAP's /projects/NUMBER/global/backendServices/ID or /projects/NUMBER/apps/PROJECT, or what a BeyondCorp tunnel's assertion names (the proxy's own docs); defaults to $GRAIN_IAP_AUDIENCE. With none, no assertion is accepted
+  -ui-iap-issuer string
+    	the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then https://cloud.google.com/iap
+  -ui-iap-keys-url string
+    	where the signing keys for those assertions are published (IAP's PEM map or a JWK set); defaults to $GRAIN_IAP_KEYS_URL, then https://www.gstatic.com/iap/verify/public_key
+  -ui-open
+    	open the UI in the system's default browser once it's listening
+  -upgrade-allowed-branches string
+    	comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here (default "main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*")
+  -upgrade-drain-window duration
+    	maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally)
+  -upgrade-image string
+    	image repository, with no tag, that CI publishes a tag per branch to (e.g. ghcr.io/bwsalmon/grain/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required
+  -upgrade-image-ref-file string
+    	file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image)
+  -upgrade-install-path string
+    	where a successful upgrade's binary is installed to (required with -upgrade-src-dir)
+  -upgrade-restart-cmd value
+    	one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below.
+  -upgrade-src-dir string
+    	git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature
+  -upgrade-verify-cmd value
+    	one argument of the command that verifies an -upgrade-image image's signature before anything runs it -- repeat for every argument, e.g. -upgrade-verify-cmd=cosign -upgrade-verify-cmd=verify -upgrade-verify-cmd=--key=/etc/grain/cosign.pub -upgrade-verify-cmd=--insecure-ignore-tlog=true (docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead unverified and say so.

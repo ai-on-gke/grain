@@ -1,0 +1,17 @@
+name: nightly
+title: "Nightly: Master regression triage and continuous verification suite"
+body: |
+  Execute the comprehensive nightly continuous verification suite for `gke-labs/granule`.
+
+  Run all verification stages declared in `.grain/prompts/` and `test/run-nightly-suite.sh`:
+  1. Quality Gates & Test Suite (`.grain/prompts/01-test-suite-and-quality-gates.md`)
+  2. Granulefile Conformance (`.grain/prompts/02-granulefile-conformance-and-compiler.md`)
+  3. Guest Lifecycle & Rebase (`.grain/prompts/03-guest-image-lifecycle-and-rebase.md`)
+  4. VM Runtime & Networking (`.grain/prompts/04-vm-runtime-networking-and-control-plane.md`)
+  5. K8s & Docker Orchestration (`.grain/prompts/05-k8s-and-docker-orchestration.md`)
+  6. Storage & Performance Benchmarks (`.grain/prompts/06-storage-and-performance-benchmarks.md`)
+  7. Documentation & Spec Audit (`.grain/prompts/07-docs-and-api-spec-consistency.md`)
+  8. Daily New Features Discovery (`.grain/prompts/09-daily-new-features-test-plan.md`)
+  9. Master Regression Triage & Summary (`.grain/prompts/08-nightly-regression-triage-and-summary.md`)
+
+  Triage any regressions and classify root causes (code regression, test flake, infra flake). Report only what the user needs to address: a run that finds nothing wrong stays silent, clear bugs are filed as `propose_task` follow-ups with `auto_merge: true`, and only issues needing an architectural change or user intervention are reported, as `.grain/prompts/08-nightly-regression-triage-and-summary.md` describes.

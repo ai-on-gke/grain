@@ -1,0 +1,12 @@
+[the file copied into the rootfs is in the guest]
+cat /greeting.txt
+
+[nginx is enabled and serving]
+systemctl is-enabled nginx
+for i in $(seq 1 60); do
+  ss -ltn 2>/dev/null | grep -q ':80' && exit 0
+  sleep 1
+done
+echo "nginx is not listening on 80" >&2
+systemctl status nginx >&2
+exit 1

@@ -1,0 +1,7 @@
+debugfs -R 'rdump / /rootfs' /disk.img
+COPY banner.txt /etc/motd
+dev.granule.granulefile.kind="from"
+dev.granule.granulefile.stage="derived_vm"
+LABEL org.opencontainers.image.vendor="GranuleProject"
+ENV CHV_MEMORY_MB="1536"
+ENV CHV_CPUS="2"

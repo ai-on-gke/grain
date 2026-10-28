@@ -1,0 +1,11 @@
+# docs/granulefile.md 1.2, 4.4, and 8: an intermediate VM stage (VM FROM)
+# used as a source of files for a final container target stage. The result
+# is an OCI container image containing the extracted guest file.
+ARG SOURCE_VM=ghcr.io/example/my-vm:latest
+
+VM FROM ${SOURCE_VM} AS source_vm
+
+FROM alpine:latest AS container_target
+COPY --from=source_vm /etc/os-release /extracted-guest-os-release
+ENV CONTAINER_TARGET="true"
+CMD ["/bin/sh", "-c", "cat /extracted-guest-os-release"]

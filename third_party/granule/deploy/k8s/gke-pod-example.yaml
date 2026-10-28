@@ -1,0 +1,136 @@
+# Minimal, self-contained example of running granule on GKE: apply this to
+# a cluster that has nested virtualization enabled (see
+# deploy/k8s/gke.md) and it boots one VM -- no node-local image cache to
+# pre-populate, no init container to fetch anything first.
+#
+# It gets away with that because both the guest disk image and the guest
+# kernel are baked into the granule image itself (CHV_DISK_IMAGE/
+# CHV_KERNEL are both left unset below, so granule run's own defaults take
+# over -- see the main README's "Guest disk image and kernel"). The only
+# thing granule still needs from outside the image is /dev/kvm, which
+# kvm-device-plugin.yaml hands to the pod; apply that once per cluster.
+#
+# With no network to set up, this pod needs no privilege at all: it runs
+# as an unprivileged user with every capability dropped, a read-only root
+# filesystem and the runtime's default seccomp profile, which is what the
+# "restricted" Pod Security Standard asks for. A compromise of granule or
+# cloud-hypervisor here is a compromise of an ordinary unprivileged
+# container. See gke.md's "Privileges".
+#
+# The VM this boots has no network of its own -- that is what the
+# inline networking in gke-pod-exec-example.yaml adds -- but it is
+# still one you can run commands in: `kubectl exec <pod> -- granule exec
+# -- <command>` reaches the guest over the VM's own vsock device rather
+# than over guest networking (see the main README's "Execing into a
+# VM"), which is why this example needs no control link and no extra
+# environment for it.
+#
+# Substitute IMAGE_PLACEHOLDER with your own pushed granule image
+# (see deploy/k8s/gke.md) before applying.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: granule-gke-example
+  labels:
+    app: granule-gke-example
+spec:
+  restartPolicy: Never
+  securityContext:
+    # Any non-root UID works: granule run writes only to the emptyDir
+    # volumes below, which are world-writable. /dev/kvm on a GKE nested-virtualization
+    # node is mode 0666, so no group is needed to open it; on a node
+    # where it is 0660 root:kvm instead, add that node's kvm GID here as
+    # supplementalGroups: [<gid>] -- the device plugin passes the node's
+    # own ownership and mode through unchanged.
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  # Must comfortably exceed CHV_SHUTDOWN_TIMEOUT below so granule's own
+  # graceful-shutdown sequence can run to completion before the kubelet
+  # SIGKILLs the container itself.
+  terminationGracePeriodSeconds: 40
+  containers:
+    - name: web
+      image: IMAGE_PLACEHOLDER
+      args: ["run"]
+      env:
+        # Explicitly disable automatic networking for this networkless example.
+        - name: CHV_NET_MODE
+          value: "none"
+        # Boot sizes, plus the ceilings `kubectl exec <pod> -- granule
+        # resize` can grow the running guest up to. Both ceilings are
+        # fixed at boot and both default to no headroom at all
+        # (CHV_CPUS_MAX to CHV_CPUS, CHV_MEMORY_MAX_MB to the larger of
+        # 2048 and CHV_MEMORY_MB), so a resize against a pod without
+        # them fails ("Requested vCPUs exceed maximum") or silently does
+        # nothing. See the main README's "Memory hotplug"/"CPU hotplug".
+        - name: CHV_CPUS
+          value: "2"
+        - name: CHV_CPUS_MAX
+          value: "4"
+        - name: CHV_MEMORY_MB
+          value: "1024"
+        - name: CHV_MEMORY_MAX_MB
+          value: "2048"
+        # Any other cloud-hypervisor setting without a dedicated flag of
+        # its own, passed straight through (e.g. extra disks or raw CLI
+        # arguments). This is the same passthrough `granule vm create
+        # -e CHV_EXTRA_ARGS="--api-socket /tmp/chv.sock"` gives on docker.
+        # - name: CHV_EXTRA_ARGS
+        #   value: "--api-socket /tmp/chv.sock"
+        - name: CHV_SHUTDOWN_TIMEOUT
+          value: "20s"
+      # Without this the pod's Ready condition reports on the container,
+      # which is up well before the guest inside it has booted. "granule
+      # ready" dials the guest's own agent over the VM's vsock device --
+      # so it works on this manifest too, which gives the guest no
+      # network at all -- and exits zero once the guest answers a
+      # command, which is what makes "kubectl wait
+      # --for=condition=Ready" wait for the guest. "-timeout 0" is a
+      # single attempt; the kubelet does the retrying. See the top-level
+      # README's "Readiness".
+      readinessProbe:
+        exec:
+          command: ["/usr/local/bin/granule", "ready", "-timeout", "0"]
+        periodSeconds: 5
+        timeoutSeconds: 5
+      resources:
+        # Requests cover the VM as it boots; limits cover it grown to
+        # both ceilings above, since a hotplugged vCPU competes for this
+        # container's CPU quota and hotplugged guest memory counts
+        # against its memory limit like any other page it touches.
+        requests:
+          cpu: "2"
+          memory: 2Gi
+        limits:
+          cpu: "4"
+          memory: 3Gi
+          # /dev/kvm, from kvm-device-plugin.yaml. The device plugin adds
+          # it to the container's device cgroup; a hostPath would not.
+          devic.es/kvm: "1"
+      securityContext:
+        capabilities:
+          drop: ["ALL"]
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        # The only places granule run writes with a read-only root:
+        # its sockets, and the default overlay disk mode's copy-on-write
+        # layer. CHV_DISK_MODE=persistent writes the guest disk in place
+        # and needs readOnlyRootFilesystem dropped.
+        - name: run
+          mountPath: /run
+        - name: tmp
+          mountPath: /tmp
+        - name: overlay
+          mountPath: /var/lib/granule/overlay
+  volumes:
+    - name: run
+      emptyDir:
+        medium: Memory
+    - name: tmp
+      emptyDir: {}
+    - name: overlay
+      emptyDir: {}

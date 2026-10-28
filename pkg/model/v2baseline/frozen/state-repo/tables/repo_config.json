@@ -1,0 +1,33 @@
+[
+  {
+    "owner": "owner",
+    "name": "payments-api",
+    "clone_url": "",
+    "default_capabilities": "githubtoken",
+    "prompt_extension": "",
+    "setup_command": {
+      "file": "scripts/repos/owner/payments-api/setup.sh"
+    },
+    "ci_capabilities": "",
+    "release_workflows_disabled": 0,
+    "work_ownership": "",
+    "work_overrides": "",
+    "release_secrets": "",
+    "declarations": 0,
+    "require_branch_up_to_date": 0,
+    "ignore_github_ci": 0,
+    "watch_default_branch": 0,
+    "unfixable_checks": "",
+    "base_branch_ci_jobs": "",
+    "post_merge_dispatch_jobs": "",
+    "declared_prompt_extension": "",
+    "declared_setup_command": "",
+    "ci_mode": "",
+    "repair_template_id": "",
+    "port_branches": "",
+    "declared_port_branches": "",
+    "port_types": "",
+    "declared_port_types": "",
+    "git_credential": ""
+  }
+]

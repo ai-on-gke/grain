@@ -1,0 +1,14 @@
+# A snapshotted machine says so in its own config: the label is how
+# anything looking at the image knows it resumes rather than boots, and
+# the VM SET is recorded beside it as on any other machine.
+label=$(docker image inspect -f '{{index .Config.Labels "dev.granule.guest.snapshotted"}}' "$IMAGE")
+if [ "$label" != "true" ]; then
+  echo "the machine does not declare itself snapshotted: dev.granule.guest.snapshotted=$label" >&2
+  exit 1
+fi
+
+env=$(docker image inspect -f '{{json .Config.Env}}' "$IMAGE")
+case "$env" in
+  *'CHV_MEMORY_MB=1024'*) ;;
+  *) echo "the machine does not record CHV_MEMORY_MB=1024: $env" >&2; exit 1 ;;
+esac

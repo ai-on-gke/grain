@@ -1,0 +1,5 @@
+{
+  "workload": "tcp_single_stream",
+  "environment": "docker_native_bridge",
+  "throughput_mbps": 32800.0
+}

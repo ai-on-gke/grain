@@ -1,0 +1,24 @@
+# docs/granulefile.md 14.6: packing directly from an earlier stage.
+# The RUNs below the header are VM-stage RUNs -- they execute inside the
+# booted guest (6), which is level 3 and needs /dev/kvm.
+ARG ROOTFS=ghcr.io/gke-labs/granule-guest-rootfs:debian12
+
+FROM ${ROOTFS} AS rootfs_builder
+RUN apt-get update && apt-get install -y redis-server
+
+# Start a VM stage directly by packing the builder stage.
+VM PACK FROM rootfs_builder AS redis_vm
+USER redis
+# The specification prints `RUN redis-server --test-config`. Redis has no
+# such flag -- it reads "test-config" as a configuration directive and
+# exits 1 -- so what stands for it here is the check that instruction
+# means: redis, as the redis account, reading the configuration the
+# package installed. It exits 124 when the configuration was good enough
+# to start on and 1 when it was not, which is the difference the
+# specification's line is after. It takes no port and saves nothing,
+# because the machine this runs inside is already serving redis.
+RUN timeout 5 redis-server /etc/redis/redis.conf --port 0 --unixsocket /var/lib/redis/config-test.sock --save '' --daemonize no --logfile /var/lib/redis/config-test.log; test $? -eq 124
+USER root
+RUN systemctl enable redis-server
+VOLUME /var/lib/redis
+VM SET memory-mb=2048 cpus=2

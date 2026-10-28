@@ -1,0 +1,4 @@
+debugfs -R 'rdump / /rootfs' /disk.img
+FROM scratch AS unpacked
+COPY updated-config.yaml /etc/service/config.yaml
+LABEL dev.granule.granulefile.kind="pack"

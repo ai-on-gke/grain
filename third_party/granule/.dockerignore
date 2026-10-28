@@ -1,0 +1,8 @@
+.git
+deploy
+!deploy/guest-image/overlay-common
+!deploy/guest-image/overlay-debian
+!deploy/guest-image/overlay-alpine
+!deploy/guest-image/pack-guest
+README.md
+*.md

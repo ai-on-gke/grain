@@ -1,0 +1,14 @@
+# docs/granulefile.md 5.5: VM SET records the machine's defaults.
+# Later VM SET instructions in the same stage override earlier ones,
+# and multiple settings accumulate across instructions.
+ARG ROOTFS=ghcr.io/gke-labs/granule-guest-rootfs:debian12
+
+FROM ${ROOTFS}
+
+RUN install -d /srv/configured
+WORKDIR /srv/configured
+
+VM PACK AS override_vm
+VM SET memory-mb=1024 cpus=2 kernel-cmdline=debug disk-mode=overlay
+VM SET memory-mb=4096 memory-max-mb=8192 memory-hotplug=on shutdown-timeout=60s
+VM SET kernel-cmdline=quiet disk-mode=persistent

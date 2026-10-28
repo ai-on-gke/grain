@@ -1,0 +1,12 @@
+# docs/granulefile.md 4.3 and 5.2: VM WRAP FROM starts a VM stage directly
+# by wrapping an earlier container stage as a workload.
+FROM alpine:latest AS builder
+RUN echo "built inside builder" > /built-app.txt
+
+FROM alpine:latest AS runner
+COPY --from=builder /built-app.txt /app/built-app.txt
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["cat /app/built-app.txt > /run/wrapped-app-output && sleep 3600"]
+
+VM WRAP FROM runner --name=server_app AS server_vm
+VM SET memory-mb=1024 cpus=2

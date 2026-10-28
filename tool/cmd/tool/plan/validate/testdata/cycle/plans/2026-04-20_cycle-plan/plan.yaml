@@ -1,9 +1,0 @@
-name: task-a
-spec: my-spec
-deps: [task-b]
-out: [file1.go]
----
-name: task-b
-spec: my-spec
-deps: [task-a]
-out: [file2.go]

@@ -1,0 +1,21 @@
+[Unit]
+Description=Grow the root filesystem onto its disk
+Documentation=file:///usr/local/libexec/granule-growfs
+# The same shape as systemd's own systemd-growfs-root.service, and for
+# the same reason: growing the root filesystem is early-boot work, so it
+# is kept out of the ordering cycle ordinary units get against
+# sysinit.target (which this is itself a part of) and ordered after the
+# point where the root is mounted the way it will stay -- read-only roots
+# included, which the script itself then declines to touch.
+DefaultDependencies=no
+Conflicts=shutdown.target
+After=systemd-remount-fs.service
+Before=shutdown.target local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/granule-growfs
+
+[Install]
+WantedBy=sysinit.target

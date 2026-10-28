@@ -1,0 +1,89 @@
+name: Nightly security review
+title: Security review of the last day's merges to main
+base: main
+# Deliberate: fable-5.1-high is advertised by this deployment's Antigravity
+# backend (cloudtop-antigravity), so the task dispatches on it. Do not drop
+# the pin because a model looks unavailable from inside a sandbox.
+model: fable-5.1-high
+auto-merge: true
+body: |
+  Review everything merged to `main` since the last security review for
+  security defects, the way the one-off 2.4 audit did
+  (`docs/security/audits/2026-10-25-2.4-audit.md`, task 907): commit a
+  dated report, and file one fix task per confirmed finding. This run's
+  own pull request is docs-only -- it adds the report and nothing else.
+
+  ## 1. Scope
+
+  - Every commit merged to `main` since the most recent report under
+    `docs/security/audits/` (its date, or the `Base audited:` commit it
+    names), or the last 24 hours if there is none. Use
+    `git fetch origin && git log --since=... origin/main`, the merge
+    commits, and the merged pull requests they name.
+  - Map each change to the trust-boundary surfaces it touches:
+    - agent API scopes and route authorization (`pkg/ui/agent_api*.go`,
+      `pkg/ui/route_scopes.go`, `.grain/baselines/route-authorization.txt`);
+    - capability grants and placements (`pkg/capability/...`,
+      `pkg/orchestrator/run.go` `applyPlacements`, `pkg/mcp/ssh_placements.go`);
+    - sandbox backends (`pkg/k8s`, the `kubernetes-granule` backend in
+      `pkg/orchestrator/k8s_granule_sandboxes.go`, granule exec and
+      forward in `pkg/granule` and `third_party/granule`);
+    - release and secrets gating (`pkg/ci`, `pkg/ui/ci.go`,
+      `pkg/ui/repo_release_workflows.go`, `pkg/orchestrator/basebranch*.go`);
+    - state-repo sync (`pkg/staterepo`, `pkg/orchestrator/sync.go`);
+    - `pkg/trustboundary` classification and the security hold
+      (`pkg/orchestrator/securityhold.go`);
+    - path containment (`pkg/safepath` and its callers).
+  - If the day's changes touch none of these, say so explicitly and keep
+    the report short: the commit list, "no trust-boundary surface
+    touched", and why.
+
+  ## 2. Method
+
+  - Read the code of every change in scope, and the code it calls into on
+    the far side of the boundary.
+  - Run the security and baseline suites --
+    `go test ./pkg/trustboundary/... ./tests/security/...` -- plus the
+    packages the day's changes touched. Report any failure, and say
+    whether it is a security result or an environmental one.
+  - Confirm each finding with a throwaway test against the real code
+    before calling it reproduced. Do not commit those tests; each fix task
+    names the regression test to add instead.
+  - Do not flag style, or hypotheticals without a concrete failure mode.
+    A finding names who can do what they should not be able to, and how.
+
+  ## 3. Report
+
+  - Commit `docs/security/audits/YYYY-MM-DD.md` (today's date, UTC) to
+    this task's branch, following the shape of
+    `docs/security/audits/2026-10-25-2.4-audit.md`:
+    - the date, the `origin/main` commit reviewed up to, and the range;
+    - the commits reviewed;
+    - the trust-boundary surfaces touched;
+    - findings, each with a severity, whether it was reproduced, the
+      failure mode, and the fix task filed (or the existing task that
+      already covers it);
+    - what was examined and found sound, so the next night can tell what
+      was looked at.
+  - Leave the same summary as the closing note (`comment_on_issue`).
+
+  ## 4. Fix tasks
+
+  - Before filing, check open tasks (`list_grain_tasks`, `read_grain_task`)
+    for one already covering the same finding, so consecutive nights do
+    not file duplicates. If one exists, name it in the report instead of
+    filing again.
+  - Otherwise file one `propose_task` per finding, with
+    `repo: bwsalmon/grain`, `branch: main`, and a title
+    `fix(security): ...`. Leave `model` and `agent_framework` unset so it
+    runs on the default rotation. Its body must give:
+    - the exact files, functions and lines;
+    - the failure mode, and how it was reproduced;
+    - the fix;
+    - the regression test to add.
+  - Ordinary fixes: `auto_merge: true`.
+  - Fixes that change trust-boundary classification (`pkg/trustboundary`),
+    authorization or scope rules (`route_scopes.go`, the route
+    authorization baseline, agent API scopes), or anything the
+    `hold-policy` classifies: `auto_merge: false` and
+    `hold_for_approval: true`, so a person submits them.

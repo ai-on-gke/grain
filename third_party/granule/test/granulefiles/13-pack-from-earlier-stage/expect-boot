@@ -1,0 +1,6 @@
+# The two RUNs run in the machine this stage packs, and USER decides who
+# runs each: the config test as the redis account, the enable as root.
+stage: redis_vm
+snapshot: false
+step 20 user=redis dir= env= argv=/bin/sh -c timeout 5 redis-server
+step 22 user=root dir= env= argv=/bin/sh -c systemctl enable redis-server

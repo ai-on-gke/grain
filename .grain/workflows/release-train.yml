@@ -1,0 +1,100 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The release train: release grain from main after a staging soak
+# (docs/design/release-from-trunk.md, RFT-6; docs/release-candidate-management.md).
+#
+# Once a day it runs scripts/release-from-trunk.sh, which does two
+# idempotent things and stops:
+#
+#   1. judges the release candidate soaking on staging (grain-candidate,
+#      :4280), if there is one and it is 24h old. A soak that passes
+#      stages the release: vX.Y.0-pending is tagged on the rc's commit,
+#      its vX.Y.0-stamped images are published as :vX.Y.0-pending
+#      (release-images.sh pending), the release-notes task is filed
+#      (.grain/templates/release-notes.yml) and an operator notification
+#      offers Approve and Reject. A soak that fails drops the rc
+#      (vX.Y.0-rc.N-discarded, release-images.sh discard-rc);
+#   2. with nothing soaking, tags the newest known-good main commit
+#      vX.Y.0-rc.N, force-moves refs/heads/candidate onto it and publishes
+#      its images as :vX.Y.0-rc.N, :candidate and :rc (release-images.sh rc).
+#
+# It never pushes vX.Y.0 and never moves `latest`, as a git tag or as an
+# image tag: a release becomes official only when a person approves it,
+# and .grain/workflows/promote-release.yml -- workflow_dispatch only,
+# human: required -- is the one thing that does. Nothing here may call
+# `release-from-trunk.sh approve` or `release-images.sh promote`
+# (TestTheReleaseTrainNeverPromotesARelease, tests/deploy).
+#
+# The `cron:` is grain's: it fires the run as a trusted schedule of main
+# (pkg/repodecl's workflows.go) at release-gate priority
+# (ci.PriorityReleaseGate), re-runs an infra verdict before reviewing it
+# (pkg/orchestrator/infraverdict.go), and files a review of a run that
+# fails -- which is how a soak failure no defect accounts for, the run
+# exiting 1, reaches soak triage. 04:15 UTC, after nightly (02:11) has
+# had two hours to report on the commits select-lkg reads; the script
+# allows RELEASE_INTERVAL_SLACK_HOURS of jitter around the 24h soak.
+#
+# By hand (a repository admin, from the CLI):
+#
+#     grain ci run -repo bwsalmon/grain -branch main -event workflow_dispatch \
+#       -job .grain/workflows/release-train.yml:train -watch
+name: release-train
+
+on:
+  schedule:
+    - cron: "15 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  train:
+    name: cut, soak and stage a release from trunk
+    # Every run reads the remote's tags, the CI runs on main and staging's
+    # state, none of which is in the tree: a replayed green is not a run.
+    cache: false
+    # repo-write pushes the rc, -discarded and -pending tags and moves
+    # refs/heads/candidate (pkg/gitproxy/ciref.go); release-gate-read is
+    # the api:release-gate-read token the script reads main's runs,
+    # grain-candidate and the exploration tasks through, and files the
+    # release-notes task and the release.pending notification with;
+    # package-publish publishes the rc and pending images. Signing is
+    # optional, as in release.yml: a deployment without a signing key
+    # still releases.
+    capabilities: ["repo-write:bwsalmon/grain", release-gate-read, package-publish]
+    optional-capabilities: [image-signing]
+    # A run can build two sets of daemon images -- the pending release's
+    # and the next rc's -- each about as long as promote.yml's one
+    # rebuild; every other run is a few API reads and nothing else.
+    timeout-minutes: 120
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    steps:
+      # package-publish answers `release` and `workflow_dispatch` only,
+      # and has not opted in to grain's trusted schedules (unlike
+      # repo-write and release-gate-read; docs/ci-capabilities.md), so a
+      # cron run can reach this job with no registry credential. Without
+      # one the train would push an rc or -pending tag and then fail to
+      # publish its images, so it stops here instead, before touching any
+      # ref, and the run's review says why. A dispatch carries it.
+      - name: Require the publishing credential
+        run: |
+          if [ ! -s /home/debian/.package-publish-token ] && [ "${RELEASE_IMAGES:-}" != off ]; then
+            echo "release-train: no package-publish credential reached this ${GRAIN_CI_EVENT:-} run, so the rc and pending images could not be published; nothing was tagged." >&2
+            echo "release-train: run it by dispatch (see the top of this file), which package-publish answers." >&2
+            exit 1
+          fi
+      - name: Run the release train
+        run: bash ./scripts/release-from-trunk.sh

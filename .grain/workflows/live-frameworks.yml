@@ -1,0 +1,181 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# live-frameworks.yml runs live claude and codex probes nightly and on demand.
+name: live-frameworks
+
+on:
+  schedule:
+    - cron: "19 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  live-claude:
+    name: live claude run
+    # Optional, not required (docs/ci-capabilities.md): the probes above
+    # the credential still run without it. A job is placed only the
+    # capabilities it declares, so without this line no
+    # .claude-proxy-token ever reached the steps that read it below.
+    optional-capabilities: [claude-proxy]
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 20
+    timeout-minutes: 45
+    cache: false
+    steps:
+      - name: Install the claude CLI
+        run: |
+          set -euo pipefail
+          curl -4 -fsSL --max-time 120 --retry 3 --retry-delay 2 --retry-all-errors https://claude.ai/install.sh -o /tmp/claude-install.sh
+          test -s /tmp/claude-install.sh
+          bash /tmp/claude-install.sh
+          rm -f /tmp/claude-install.sh
+          test -x "$HOME/.local/bin/claude"
+          sudo ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude
+          claude --version
+
+      - name: Live claude probes (no credential)
+        env:
+          GRAIN_LIVE_AGENT_TEST: "1"
+        run: |
+          go test ./pkg/agent/claude/ -count=1 -v -timeout 10m \
+            -run '^(TestLiveClaudeResumeReplaysTheEarlierConversation|TestLiveClaudeResumesASessionTheProviderRefused|TestLiveClaudeRefusesASessionItDoesNotHave|TestLiveClaudeRetryResumesTheRunAfterARefusal)$'
+
+      - name: Require a credential
+        run: |
+          if [ -f /home/debian/.claude-proxy-token ]; then
+            export CLAUDE_CODE_OAUTH_TOKEN="$(cat /home/debian/.claude-proxy-token)"
+          fi
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "No CLAUDE_CODE_OAUTH_TOKEN reached this job."
+            exit 0
+          fi
+          echo "a credential is present (${#CLAUDE_CODE_OAUTH_TOKEN} characters)"
+
+      - name: Live claude run
+        env:
+          GRAIN_LIVE_AGENT_TEST: "1"
+        run: |
+          set -uo pipefail
+          if [ -f /home/debian/.claude-proxy-token ]; then
+            export CLAUDE_CODE_OAUTH_TOKEN="$(cat /home/debian/.claude-proxy-token)"
+          fi
+          if [ -f /home/debian/.claude-proxy-url ]; then
+            export ANTHROPIC_BASE_URL="$(cat /home/debian/.claude-proxy-url)"
+          fi
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "skipping live claude run: no CLAUDE_CODE_OAUTH_TOKEN or claude-proxy capability available"
+            exit 0
+          fi
+          for attempt in 1 2; do
+            echo "live claude run, attempt $attempt of 2"
+            if go test ./pkg/agent/claude/ -run 'TestLive' \
+                 -count=1 -v -timeout 15m; then
+              exit 0
+            fi
+            echo "attempt $attempt failed"
+          done
+          echo "the live claude tests failed twice" >&2
+          exit 1
+
+  live-codex:
+    name: live codex run
+    # As live-claude's: the steps below read .openai-proxy-token, which
+    # is placed only for a job that declares it.
+    optional-capabilities: [openai-proxy]
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 20
+    timeout-minutes: 30
+    cache: false
+    steps:
+      - name: Install the codex CLI
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^ARG CODEX_CLI_VERSION=//p' Dockerfile | head -n1)"
+          if [ -z "$version" ]; then
+            echo "could not read ARG CODEX_CLI_VERSION out of the Dockerfile; this job installs the codex the image would carry, and has nothing to install without it" >&2
+            exit 1
+          fi
+          echo "installing codex $version, the release the Dockerfile pins"
+          sudo mkdir -p /opt/codex
+          curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+            "https://github.com/openai/codex/releases/download/${version}/codex-x86_64-unknown-linux-musl.tar.gz" \
+            -o /tmp/codex.tar.gz
+          test -s /tmp/codex.tar.gz
+          sudo tar -xzf /tmp/codex.tar.gz -C /opt/codex
+          rm -f /tmp/codex.tar.gz
+          codex="$(find /opt/codex -type f -name 'codex*' -perm -u+x | head -n1)"
+          test -n "$codex"
+          sudo chmod -R a+rX /opt/codex
+          sudo ln -sf "$codex" /usr/local/bin/codex
+          curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+            "https://github.com/openai/codex/releases/download/${version}/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz" \
+            -o /tmp/codex-code-mode-host.tar.gz
+          test -s /tmp/codex-code-mode-host.tar.gz
+          sudo tar -xzf /tmp/codex-code-mode-host.tar.gz -C /opt/codex
+          rm -f /tmp/codex-code-mode-host.tar.gz
+          code_mode_host="$(find /opt/codex -type f -name 'codex-code-mode-host*' -perm -u+x | head -n1)"
+          test -n "$code_mode_host"
+          sudo ln -sf "$code_mode_host" /opt/codex/codex-code-mode-host
+          sudo ln -sf /opt/codex/codex-code-mode-host /usr/local/bin/codex-code-mode-host
+          sudo chmod -R a+rX /opt/codex
+          /opt/codex/codex-code-mode-host --help >/dev/null
+          codex --version
+
+      - name: Live codex probes (no credential)
+        env:
+          GRAIN_LIVE_AGENT_TEST: "1"
+        run: |
+          go test ./pkg/agent/codex/ -count=1 -v -timeout 10m \
+            -run '^(TestLiveCodexMCPOnlyAcrossModelProfiles|TestLiveCodexLoadsTheConfigGrainWrites|TestLiveCodexResumesAThreadAcrossExecs|TestLiveCodexRefusesAThreadItDoesNotHave|TestLiveCodexRetriesARefusedTurnItself|TestLiveCodexReportsA429GrainCanClassify|TestLiveCodexRetryResumesTheRunAfterARefusal|TestLiveCodexFallsBackWhenAResumeIsRefused|TestLiveCodexSharedLoginSurvivesConcurrentRefresh)$'
+
+      - name: Require a credential
+        run: |
+          if [ -f /home/debian/.openai-proxy-token ]; then
+            export OPENAI_API_KEY="$(cat /home/debian/.openai-proxy-token)"
+          fi
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "No OPENAI_API_KEY reached this job."
+            exit 0
+          fi
+          echo "a credential is present (${#OPENAI_API_KEY} characters)"
+
+      - name: Live codex run
+        env:
+          GRAIN_LIVE_AGENT_TEST: "1"
+        run: |
+          set -uo pipefail
+          if [ -f /home/debian/.openai-proxy-token ]; then
+            export OPENAI_API_KEY="$(cat /home/debian/.openai-proxy-token)"
+          fi
+          if [ -f /home/debian/.openai-proxy-url ]; then
+            export OPENAI_BASE_URL="$(cat /home/debian/.openai-proxy-url)"
+          fi
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "skipping live codex run: no OPENAI_API_KEY or openai-proxy capability available"
+            exit 0
+          fi
+          for attempt in 1 2; do
+            echo "live codex run, attempt $attempt of 2"
+            if go test ./pkg/agent/codex/ -run 'TestLive' \
+                 -count=1 -v -timeout 15m; then
+              exit 0
+            fi
+            echo "attempt $attempt failed"
+          done
+          echo "the live codex tests failed twice" >&2
+          exit 1

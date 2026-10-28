@@ -1,0 +1,42 @@
+{
+  "Static 4096MB VM": {
+    "idle_boot": {
+      "rss_mb": 268.1,
+      "pss_mb": 261.8,
+      "private_dirty_mb": 258.5,
+      "shared_mb": 9.6
+    },
+    "active_1gb_used": {
+      "rss_mb": 272.5,
+      "pss_mb": 266.2,
+      "private_dirty_mb": 262.9,
+      "shared_mb": 9.6
+    }
+  },
+  "Hotplug 1024MB-4096MB VM": {
+    "pre_expansion_1gb": {
+      "rss_mb": 132.8,
+      "pss_mb": 126.5,
+      "private_dirty_mb": 123.2,
+      "shared_mb": 9.6
+    },
+    "expanded_2gb": {
+      "rss_mb": 149.0,
+      "pss_mb": 142.5,
+      "private_dirty_mb": 139.2,
+      "shared_mb": 9.7
+    },
+    "expanded_4gb": {
+      "rss_mb": 181.1,
+      "pss_mb": 174.6,
+      "private_dirty_mb": 171.3,
+      "shared_mb": 9.7
+    },
+    "active_2gb_used": {
+      "rss_mb": 185.3,
+      "pss_mb": 178.8,
+      "private_dirty_mb": 175.5,
+      "shared_mb": 9.7
+    }
+  }
+}

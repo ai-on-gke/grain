@@ -1,0 +1,10 @@
+# Empty on purpose, and present on purpose.
+#
+# Empty: the Go side's gate is "whatever the standard tool does with no
+# options" (see the Makefile's fmt target), and the frontend's is the
+# same bargain -- prettier's defaults, no house style to remember, no
+# number in here that we then own forever. Present: without a config
+# file prettier walks up out of the repository looking for one, so a
+# contributor with a ~/.prettierrc would format this tree to their own
+# settings and redden CI. This file is what stops that.
+{}

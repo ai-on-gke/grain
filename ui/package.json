@@ -1,0 +1,45 @@
+{
+  "name": "grain-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "brand": "npm run brand:assets && npm run brand:candidates && npm run brand:sheets",
+    "brand:assets": "node scripts/export-brand-assets.mjs",
+    "brand:candidates": "node scripts/export-glyph-candidates.mjs",
+    "brand:sheets": "node scripts/export-mark-sheets.mjs"
+  },
+  "dependencies": {
+    "@chatscope/chat-ui-kit-react": "^2.1.1",
+    "@chatscope/chat-ui-kit-styles": "^1.4.0",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^6.5.0",
+    "@mui/material": "^6.5.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "mermaid": "^12.2.0",
+    "react": "^18.3.1",
+    "react-diff-view": "^3.3.3",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.1",
+    "vite": "^6.3.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.6",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.9.6",
+    "vitest": "^4.1.11"
+  }
+}

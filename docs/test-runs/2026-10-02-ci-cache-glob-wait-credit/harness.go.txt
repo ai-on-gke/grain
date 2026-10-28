@@ -1,0 +1,450 @@
+// Walkthrough harness for docs/test-runs/2026-10-02-ci-cache-glob-wait-credit.md.
+//
+// Extends docs/test-runs/2026-10-01-ci-base-gate-retry-state's harness.
+//
+// serve: the real ui.Server over a real SQLite model.Store, with a real
+// ci.Service (StoredRunStore, Engine, DirCache) whose workflows and file
+// tree are read by git from local bare repositories (cmd/grain's
+// ciWorkflowSource + ciTree, minus GitHub), whose jobs run in real
+// orchestrator.HostSandboxes, and whose Actions cache is the real
+// pkg/actionscache Cache + Server + Scopes, granted per job the way
+// cmd/grain's ciSandboxes.Acquire does (ciActionsCacheScope).
+//
+// agent: a scripted agent run. A real mcp.Registry with the real
+// wait_for_checks / list_ci_runs tools, a deadline announced the way
+// `grain mcpserver -run-deadline` does, and wait credit announced the way
+// mcpserver does (orchestrator.RunWaitCreditCap, reported over the real
+// POST /api/tasks/{id}/wait-credit route). Tools are called as JSON-RPC
+// lines through Registry.Handle, which is what an agent's MCP client sends.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/ai-on-gke/grain/pkg/actionscache"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ui"
+)
+
+var bares = map[string]string{
+	"acme/widgets": "/tmp/w7/widgets.git",
+	"acme/gadgets": "/tmp/w7/gadgets.git",
+}
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "agent" {
+		agentMain(os.Args[2:])
+		return
+	}
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	data := fs.String("data", "/tmp/w7/data", "store and sandbox directory")
+	addr := fs.String("addr", "127.0.0.1:18081", "listen address")
+	cacheAddr := fs.String("cache-addr", "127.0.0.1:18082", "actions cache listen address")
+	_ = fs.Parse(os.Args[1:])
+	ctx := context.Background()
+
+	os.MkdirAll(*data, 0o755)
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(*data, "store")))
+	if err != nil {
+		log.Fatal(err)
+	}
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		log.Fatal(err)
+	}
+	actor := model.Principal{Kind: model.PrincipalHuman, ID: "operator"}
+	cfgRow := model.DefaultConfig()
+	cfgRow.AdminAccounts = []string{"operator"}
+	_ = store.PutConfig(ctx, cfgRow)
+	_ = store.PutTeam(ctx, model.Team{ID: model.DefaultTeamID, Name: "admin", TargetRepos: []string{"acme/widgets", "acme/gadgets"}})
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	for _, r := range []model.RepoRef{repo, {Owner: "acme", Name: "gadgets"}} {
+		_ = store.PutRepoConfig(ctx, model.RepoConfig{Repo: r, CIMode: model.CIModeGrain})
+	}
+	for _, b := range []string{"wait", "cache"} {
+		id := "walk-" + b
+		if t, _ := store.GetTask(ctx, id); t != nil {
+			continue
+		}
+		if err := store.PutTask(ctx, model.Task{
+			ID: id, Title: "walkthrough branch " + b, Team: model.DefaultTeamID,
+			Target: &repo, Base: "main", Branch: "walk/" + b,
+			Grants: []model.Grant{{Capability: "grain-ci"}},
+		}); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	// The Actions cache, as cmd/grain/actionscache.go starts it.
+	acache, err := actionscache.NewCache(filepath.Join(*data, "cache", "actions"), 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+	scopes := actionscache.NewScopes()
+	cln, err := net.Listen("tcp", *cacheAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	go http.Serve(cln, actionscache.NewServer(actionscache.Config{Cache: acache, Scopes: scopes, Log: log.Printf}))
+	cacheURL := "http://" + cln.Addr().String()
+	log.Printf("walk: actions cache on %s, dir %s", cacheURL, acache.Dir())
+
+	cache, err := ci.OpenDirCache(filepath.Join(*data, "ci-cache"), ci.DirCacheOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	runs := ci.NewStoredRunStore(store, ci.StoredRunStoreOptions{Log: log.Printf})
+	if n, err := runs.RecoverInterrupted(ctx, time.Now().UTC()); err != nil || n > 0 {
+		log.Printf("recovered %d interrupted run(s), err=%v", n, err)
+	}
+	service := &ci.Service{
+		Runs:   runs,
+		Source: gitSource{tmp: filepath.Join(*data, "clones")},
+		Engine: &ci.Engine{
+			Sandboxes: hostCISandboxes{
+				hosts: orchestrator.NewHostSandboxes(filepath.Join(*data, "sandboxes")),
+				grant: func(scope actionscache.Scope) (string, func(), error) {
+					token, err := actionscache.MintToken()
+					if err != nil {
+						return "", func() {}, err
+					}
+					scopes.Grant(token, scope)
+					log.Printf("walk: cache token for %s@%s trusted=%v", scope.Repo, scope.Ref, scope.Trusted)
+					return actionscache.SandboxURL(cacheURL, token), func() { scopes.Revoke(token) }, nil
+				},
+			},
+			Cache:       cache,
+			Concurrency: 6,
+			Log:         log.Printf,
+		},
+	}
+	credits := &stubCredits{live: map[string]*clock{}}
+	cfg := ui.Config{CI: service, Actor: actor, DefaultTarget: &repo, WaitCredit: credits}
+	srv := ui.NewServer(cfg, store)
+	mux := http.NewServeMux()
+	mux.Handle("/", srv)
+	// A release run: the one event only grain itself can start
+	// (ci.Request.TrustedRelease), so it cannot come through /api/ci/runs.
+	mux.HandleFunc("/walk/release", func(w http.ResponseWriter, r *http.Request) {
+		run, err := service.Start(r.Context(), ci.Request{
+			Repo: repo.String(), Ref: r.URL.Query().Get("ref"), Event: ci.EventRelease,
+			TrustedRelease: true, RequestedBy: "walk:release",
+		})
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		json.NewEncoder(w).Encode(run)
+	})
+	// The daemon's run clock for a scripted agent run (stub; see stubCredits).
+	mux.HandleFunc("/walk/run-start", func(w http.ResponseWriter, r *http.Request) {
+		budget, _ := time.ParseDuration(r.URL.Query().Get("budget"))
+		c := credits.start(r.URL.Query().Get("task"), budget, orchestrator.RunWaitCreditCap)
+		json.NewEncoder(w).Encode(map[string]any{"deadline": c.base})
+	})
+	mux.HandleFunc("/walk/run-ledger", func(w http.ResponseWriter, r *http.Request) {
+		credits.mu.Lock()
+		c := credits.live[r.URL.Query().Get("task")]
+		credits.mu.Unlock()
+		if c == nil {
+			http.NotFound(w, r)
+			return
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{"blocked": c.blocked.String(), "credited": c.credited.String(),
+			"deadline": c.base.Add(c.credited), "reports": c.reports})
+	})
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("walk: serving on http://%s", ln.Addr())
+	log.Fatal(http.Serve(ln, mux))
+}
+
+// stubCredits stands in for orchestrator.RunWaitCredits, whose register
+// is unexported and called only by a real dispatched agent run. clock.credit
+// is orchestrator.runClock.credit line for line (max(seen, reported),
+// capped), without the timer that would cancel the run.
+type stubCredits struct {
+	mu   sync.Mutex
+	live map[string]*clock
+}
+
+type clock struct {
+	base     time.Time
+	cap      time.Duration
+	mu       sync.Mutex
+	blocked  time.Duration
+	credited time.Duration
+	reports  []string
+}
+
+func (s *stubCredits) start(task string, budget, cap time.Duration) *clock {
+	c := &clock{base: time.Now().Add(budget), cap: cap}
+	s.mu.Lock()
+	s.live[task] = c
+	s.mu.Unlock()
+	return c
+}
+
+func (s *stubCredits) CreditWaitForTask(ctx context.Context, task string, blocked time.Duration) (ui.WaitCredit, error) {
+	s.mu.Lock()
+	c := s.live[task]
+	s.mu.Unlock()
+	if c == nil {
+		return ui.WaitCredit{}, nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reports = append(c.reports, blocked.Round(time.Millisecond).String())
+	if blocked > c.blocked {
+		c.blocked = blocked
+	}
+	if granted := min(c.blocked, c.cap); granted > c.credited {
+		c.credited = granted
+	}
+	d := c.base.Add(c.credited).UTC()
+	return ui.WaitCredit{BlockedMS: c.blocked.Milliseconds(), CreditedMS: c.credited.Milliseconds(), Live: true, Deadline: &d}, nil
+}
+
+// gitSource is cmd/grain's ciWorkflowSource (and ciTree) over local bare
+// repositories instead of GitHub.
+type gitSource struct{ tmp string }
+
+func (s gitSource) Workflows(ctx context.Context, repo, ref string) ([]ci.Workflow, string, error) {
+	w, c, _, err := s.WorkflowsAndTree(ctx, repo, ref)
+	return w, c, err
+}
+
+func (s gitSource) WorkflowsAndTree(ctx context.Context, repo, ref string) ([]ci.Workflow, string, *ci.Tree, error) {
+	bare, ok := bares[repo]
+	if !ok {
+		return nil, "", nil, fmt.Errorf("no such repo %s", repo)
+	}
+	os.MkdirAll(s.tmp, 0o755)
+	dir, err := os.MkdirTemp(s.tmp, "clone-")
+	if err != nil {
+		return nil, "", nil, err
+	}
+	defer os.RemoveAll(dir)
+	args := []string{"clone", "-q", "--depth", "1"}
+	if ref != "" {
+		args = append(args, "--branch", ref)
+	}
+	args = append(args, "file://"+bare, dir)
+	if out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput(); err != nil {
+		return nil, "", nil, fmt.Errorf("git clone %s: %v: %s", ref, err, out)
+	}
+	sha, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "ls-tree", "-r", "-z", "HEAD").Output()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	tree := &ci.Tree{}
+	for _, entry := range strings.Split(string(out), "\x00") {
+		meta, path, ok := strings.Cut(entry, "\t")
+		if !ok {
+			continue
+		}
+		f := strings.Fields(meta)
+		tree.Files = append(tree.Files, ci.TreeFile{Path: path, Blob: f[0] + ":" + f[2]})
+	}
+	wfs, _, err := ci.LoadDir(os.DirFS(dir))
+	return wfs, strings.TrimSpace(string(sha)), tree, err
+}
+
+type hostCISandboxes struct {
+	hosts *orchestrator.HostSandboxes
+	grant func(actionscache.Scope) (string, func(), error)
+}
+
+func (h hostCISandboxes) Acquire(ctx context.Context, req ci.SandboxRequest) (ci.Sandbox, error) {
+	sb, err := h.hosts.Acquire(ctx, req.Name, orchestrator.Shape{})
+	if err != nil {
+		return nil, err
+	}
+	root, _ := sb.(interface{ Root() (string, error) }).Root()
+	work := filepath.Join(root, orchestrator.CheckoutDir)
+	script := fmt.Sprintf("git clone -q file://%s %s && git -C %s checkout -q %s", bares[req.Repo], work, work, req.Commit)
+	if out, err := exec.CommandContext(ctx, "sh", "-c", script).CombinedOutput(); err != nil {
+		_ = sb.Release(context.Background())
+		return nil, fmt.Errorf("checkout: %v: %s", err, out)
+	}
+	// cmd/grain's ciActionsCacheScope, field for field.
+	url, revoke, err := h.grant(actionscache.Scope{Repo: req.Repo, Ref: req.Ref, Trusted: req.Event == ci.EventRelease})
+	if err != nil {
+		_ = sb.Release(context.Background())
+		return nil, err
+	}
+	return &hostCISandbox{backing: sb, shell: sb.(orchestrator.SandboxShell), cacheURL: url, revoke: revoke}, nil
+}
+
+type hostCISandbox struct {
+	backing  orchestrator.Sandbox
+	shell    orchestrator.SandboxShell
+	cacheURL string
+	revoke   func()
+}
+
+func (s *hostCISandbox) Name() string { return s.backing.Name() }
+func (s *hostCISandbox) Exec(ctx context.Context, cmd ci.Command) (ci.CommandResult, error) {
+	dir := orchestrator.CheckoutDir
+	if cmd.Dir != "" {
+		dir = filepath.Join(dir, cmd.Dir)
+	}
+	env := map[string]string{}
+	for k, v := range cmd.Env {
+		env[k] = v
+	}
+	// What act --env ACTIONS_CACHE_URL=<url> hands an Actions job.
+	if s.cacheURL != "" {
+		env["ACTIONS_CACHE_URL"] = s.cacheURL
+	}
+	res, err := s.shell.RunShell(ctx, orchestrator.ShellRequest{Script: cmd.Script, Dir: dir, Env: env, Timeout: cmd.Timeout})
+	return ci.CommandResult{Output: res.Output, ExitCode: res.ExitCode}, err
+}
+func (s *hostCISandbox) Release(ctx context.Context) error {
+	s.revoke()
+	return s.backing.Release(ctx)
+}
+
+// --- agent: a scripted agent run ---------------------------------------------
+
+type runner struct {
+	c    *ui.HTTPClient
+	task string
+}
+
+func (r runner) StartGrainCI(ctx context.Context, jobs []string) (ci.Run, error) {
+	return r.c.StartTaskCIRun(ctx, r.task, jobs)
+}
+func (r runner) RetriggerGrainCI(ctx context.Context, wf, commit string) (ci.Run, error) {
+	return r.c.RetriggerTaskCIRun(ctx, r.task, wf, commit)
+}
+func (r runner) GrainCIRun(ctx context.Context, id string) (ci.Run, error) { return r.c.CIRun(ctx, id) }
+func (r runner) FindGrainCIRuns(ctx context.Context, f ci.RunFilter, limit int) (ci.RunPage, error) {
+	resp, err := r.c.FindCIRuns(ctx, f, limit)
+	if err != nil {
+		return ci.RunPage{}, err
+	}
+	return ci.RunPage{Runs: resp.Runs, Matched: resp.Matched, Stored: resp.Stored}, nil
+}
+func (r runner) GrainCISharedFaults(context.Context) ([]mcp.CIFault, error) { return nil, nil }
+
+// reporter is cmd/grain/mcpserver.go's daemonWaitCredit, verbatim.
+type reporter struct {
+	client *ui.HTTPClient
+	taskID string
+}
+
+func (d reporter) CreditWait(ctx context.Context, blocked time.Duration) (mcp.WaitCredit, error) {
+	credit, err := d.client.CreditWait(ctx, d.taskID, blocked)
+	if err != nil {
+		return mcp.WaitCredit{}, err
+	}
+	return mcp.WaitCredit{Credited: time.Duration(credit.CreditedMS) * time.Millisecond, Live: credit.Live}, nil
+}
+
+func agentMain(args []string) {
+	fs := flag.NewFlagSet("agent", flag.ExitOnError)
+	url := fs.String("url", "http://127.0.0.1:18081", "server")
+	task := fs.String("task", "walk-wait", "task id")
+	waits := fs.Int("waits", 3, "wait_for_checks calls")
+	budget := fs.Duration("budget", 2*time.Hour, "run budget")
+	script := fs.String("calls", "", "JSON array of {name, arguments} tool calls instead of the waits")
+	reads := fs.String("reads", "acme/gadgets", "comma-separated reads repos")
+	_ = fs.Parse(args)
+	client := ui.NewHTTPClient(*url)
+	ledger := func() string {
+		resp, err := http.Get(*url + "/walk/run-ledger?task=" + *task)
+		if err != nil {
+			return err.Error()
+		}
+		defer resp.Body.Close()
+		var m map[string]any
+		json.NewDecoder(resp.Body).Decode(&m)
+		b, _ := json.Marshal(m)
+		return string(b)
+	}
+	resp, err := http.Get(fmt.Sprintf("%s/walk/run-start?task=%s&budget=%s", *url, *task, *budget))
+	if err != nil {
+		log.Fatal(err)
+	}
+	var start struct{ Deadline time.Time }
+	json.NewDecoder(resp.Body).Decode(&start)
+	resp.Body.Close()
+
+	registry := mcp.NewRegistry()
+	registry.AnnounceDeadline(start.Deadline, nil)
+	registry.Register(mcp.NewGrainCIWaitTools(runner{c: client, task: *task},
+		mcp.CIRepoScope{Repo: "acme/widgets", Reads: strings.Split(*reads, ",")})...)
+	registry.AnnounceWaitCredit(orchestrator.RunWaitCreditCap, reporter{client: client, taskID: *task})
+
+	call := func(i int, name string, arguments map[string]any) {
+		line, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": i, "method": "tools/call",
+			"params": map[string]any{"name": name, "arguments": arguments}})
+		t0 := time.Now()
+		out := registry.Handle(context.Background(), line)
+		var rpc struct {
+			Result struct {
+				Content []struct{ Text string } `json:"content"`
+			} `json:"result"`
+			Error any `json:"error"`
+		}
+		json.Unmarshal(out, &rpc)
+		text := ""
+		for _, c := range rpc.Result.Content {
+			text += c.Text
+		}
+		if rpc.Error != nil {
+			text = fmt.Sprint(rpc.Error)
+		}
+		fmt.Printf("\n### call %d: %s %v (blocked %s)\n%s\nledger after: %s\n", i, name, arguments,
+			time.Since(t0).Round(time.Millisecond), text, ledger())
+	}
+	fmt.Printf("run start: deadline %s\nledger before: %s\n", start.Deadline.UTC().Format(time.RFC3339), ledger())
+	if *script != "" {
+		var calls []struct {
+			Name      string
+			Arguments map[string]any
+		}
+		if err := json.Unmarshal([]byte(*script), &calls); err != nil {
+			log.Fatal(err)
+		}
+		for i, c := range calls {
+			call(i+1, c.Name, c.Arguments)
+		}
+		return
+	}
+	for i := 1; i <= *waits; i++ {
+		if i > 1 {
+			// What an agent does between waits: push another commit.
+			push := fmt.Sprintf("cd /tmp/w7/seed && git checkout -q walk/wait && git commit -q --allow-empty -m 'wait %d' && git push -q /tmp/w7/widgets.git walk/wait", i)
+			if out, err := exec.Command("sh", "-c", push).CombinedOutput(); err != nil {
+				log.Fatalf("push: %v: %s", err, out)
+			}
+		}
+		call(i, "wait_for_checks", map[string]any{"timeout_seconds": float64(120)})
+	}
+}

@@ -1,0 +1,11 @@
+{
+  "workload": "tcp_rtt_ping_pong",
+  "environment": "granule_spliced_tap",
+  "avg_us": 34.2,
+  "min_us": 22.0,
+  "max_us": 115.0,
+  "p50_us": 31.8,
+  "p95_us": 48.2,
+  "p99_us": 62.5,
+  "samples": 1000
+}

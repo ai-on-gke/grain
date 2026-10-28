@@ -1,0 +1,10 @@
+{
+  "workload": "http_concurrency_50",
+  "environment": "host_native",
+  "rps": 24500.0,
+  "p50_ms": 1.82,
+  "p95_ms": 3.12,
+  "p99_ms": 4.45,
+  "completed": 5000,
+  "errors": 0
+}

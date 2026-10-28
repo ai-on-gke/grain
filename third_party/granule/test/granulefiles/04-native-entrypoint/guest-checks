@@ -1,0 +1,16 @@
+[the native entrypoint and command ran at boot]
+for i in $(seq 1 60); do
+  [ -f /run/app-started ] && break
+  sleep 1
+done
+if [ ! -f /run/app-started ]; then
+  echo "the workload the file names as ENTRYPOINT never ran" >&2
+  cat /etc/granule/container.json >&2 || echo "no /etc/granule/container.json" >&2
+  exit 1
+fi
+# CMD is the entrypoint's arguments, and the guest has to have passed them.
+grep -q -- "--port 8080" /run/app-started
+
+[the workload runs in the working directory the file set]
+cat /etc/granule/container.json
+grep -q '"/app"' /etc/granule/container.json

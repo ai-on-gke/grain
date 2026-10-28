@@ -1,0 +1,22 @@
+[the unit the COPY brought in is in the machine]
+test -f /etc/systemd/system/runner.service
+grep -q "copied into a machine by 14.4" /etc/systemd/system/runner.service
+
+[the RUN enabled it inside the booted guest]
+# `systemctl enable` is the whole of this example's RUN, and the only
+# thing that could have made this link: the COPY above puts the unit
+# file in place and enables nothing, and the machine this was derived
+# from had never heard of it.
+systemctl is-enabled runner.service
+
+[and so the machine boots into it]
+# The unit is Type=oneshot with RemainAfterExit, wanted by
+# multi-user.target -- so it is active here only because the enable ran
+# in the guest during the build.
+for i in $(seq 1 60); do
+  systemctl is-active runner.service >/dev/null 2>&1 && exit 0
+  sleep 1
+done
+echo "runner.service never came up" >&2
+systemctl status runner.service >&2
+exit 1

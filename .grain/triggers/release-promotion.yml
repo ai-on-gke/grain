@@ -1,0 +1,13 @@
+# Path trigger protecting the person-only release promotion
+# (docs/design/release-from-trunk.md, §4): the workflow that pushes vX.Y.0
+# and `latest`, and the scripts it runs. A change to any of them could let
+# a release become official without a person, so it waits for one.
+on: pull_request
+paths:
+  - .grain/workflows/promote-release.yml
+  - .grain/workflows/promote.yml
+  - scripts/release-from-trunk.sh
+  - scripts/release-images.sh
+gate: true
+human: required
+sensitive: true

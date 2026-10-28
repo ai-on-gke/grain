@@ -1,0 +1,178 @@
+#!/bin/sh
+# Write this guest's /etc/resolv.conf from the nameservers on the kernel
+# command line.
+#
+# The "ip=" boot parameter carries two of them past the fields that
+# configure the interface --
+# ip=<client>:<server>:<gw>:<netmask>:<hostname>:<device>:<autoconf>:<dns0>:<dns1>
+# -- and granule fills them in from NETSHIM_DNS (see
+# pkg/netshim.FlatGuestConfig). Nothing else in a granule guest ever writes that
+# file: there is no systemd-resolved here and no DHCP client, since the
+# address is static on the command line, so a plain file written once per
+# boot is the whole of this guest's DNS configuration and nothing later
+# overwrites it.
+#
+# Without this a guest resolves through whatever baseline its image was
+# built with and never through the resolver the deployment booting it
+# named: granule's own image bakes one in (the GUEST_DNS build arg,
+# 8.8.8.8 by default), while granule's published rootfs -- and any rootfs
+# `granule guest pack` packs -- carries no /etc/resolv.conf at all. Both
+# of those beat the older behaviour of shipping whatever the machine that
+# *built* the image happened to have, which debootstrap copies in:
+# typically the build host's own resolver, on an address reachable in the
+# build host's network namespace and unroutable from a guest on a tap.
+# The symptom of that one was a guest with completely open IP egress
+# where every name lookup hangs until it times out, which reads as a
+# blocked network rather than as a missing resolver.
+#
+# Neither the kernel's own CONFIG_IP_PNP handling nor klibc's ipconfig(8)
+# (which granule-configure-net runs on a distro-kernel guest) writes
+# resolv.conf: the kernel only exposes what it was given, in
+# /proc/net/pnp, and ipconfig only writes /run/net-<dev>.conf, leaving the
+# file itself to an initramfs script this guest does not run. So this is a
+# step of its own, in overlay-common rather than beside
+# granule-configure-net, and it applies to every guest granule builds --
+# bundled kernel or distro kernel, Debian or Alpine.
+#
+# granule.dns= (comma separated, in order, either family, at most three)
+# carries the nameservers ip= cannot: an IPv6 address is made of the
+# colons that separate ip='s fields, and a v6-only guest has no ip= at
+# all. When it is present it is the whole list and ip='s dns0/dns1 are
+# not read; netshim passes it only when ip= does not already say
+# everything, and keeps putting the IPv4 nameservers on ip= too, for
+# guest images that predate this parameter.
+#
+# Two more parameters complete the file: granule.dns_search= (comma
+# separated domains) becomes its "search" line and granule.dns_options=
+# (comma separated, only ever ndots:<n> today) its "options" line.
+# netshim passes them when the nameservers came from the sandbox's own
+# resolv.conf -- a Kubernetes pod's, whose search list is what makes a
+# short Service name resolve. They are written only beside nameservers
+# from the command line, from either parameter: a search list for a
+# resolver this script did not write would be a guess.
+#
+# A command line naming no nameservers leaves the file alone: an operator
+# who set CHV_CMDLINE by hand, or who set NETSHIM_DNS to the empty string
+# to keep whatever the image ships with, gets exactly that.
+set -eu
+
+RESOLV_CONF="${GRANULE_RESOLV_CONF:-/etc/resolv.conf}"
+CMDLINE="${GRANULE_CMDLINE_FILE:-/proc/cmdline}"
+
+param() {
+	sed -n "s/.*\b$1=\([^ ]*\).*/\1/p" "${CMDLINE}"
+}
+
+# MAXNS: glibc and musl read no more nameservers than this out of the
+# file, so a fourth would be written down and never asked.
+maxns=3
+
+# Globbing is off while the lists are split: a field that is a pattern is
+# checked as written rather than expanded to the names of whatever files
+# sit in the working directory.
+set -f
+nameservers=""
+count=0
+# add <source> <address> appends one nameserver line, if it is an
+# address. Only an address goes into the file: resolv.conf takes keywords
+# on the same terms as nameservers, and this file is what every name
+# lookup in the guest believes. An IPv4 address is digits and dots; an
+# IPv6 one hex digits and colons (dots too, for an embedded IPv4 tail),
+# and never a zone index, which resolv.conf cannot carry portably.
+add() {
+	ok=""
+	case "$2" in
+		# 0.0.0.0 is how the kernel's own ip= handling spells "no
+		# nameserver here", so it is not one to write down.
+		"" | 0.0.0.0) return 0 ;;
+		*[!0-9A-Fa-f:.]*) ;;
+		*:*) ok=1 ;;
+		*[!0-9.]*) ;;
+		*) ok=1 ;;
+	esac
+	if [ -z "$ok" ]; then
+		echo "granule-configure-dns: ignoring nameserver '$2' from $1, which is not an IP address" >&2
+		return 0
+	fi
+	if [ "$count" -ge "$maxns" ]; then
+		echo "granule-configure-dns: ignoring nameserver '$2' from $1, past the ${maxns} a resolver reads" >&2
+		return 0
+	fi
+	nameservers="${nameservers}nameserver $2
+"
+	count=$((count + 1))
+}
+
+dnsparam=$(param granule.dns)
+if [ -n "$dnsparam" ]; then
+	for ns in $(printf '%s' "$dnsparam" | tr ',' ' '); do
+		add granule.dns= "$ns"
+	done
+else
+	ipparam=$(param ip)
+	# Fields 8 and 9 of the ip= spec. cut yields the empty string for a
+	# field the spec is too short to have, which is the common case: the
+	# parameter is normally written with seven. Only an IPv4 address can
+	# be one of them, since the fields are colon-separated.
+	if [ -n "$ipparam" ]; then
+		for ns in "$(printf '%s' "$ipparam" | cut -d: -f8)" "$(printf '%s' "$ipparam" | cut -d: -f9)"; do
+			case "$ns" in
+				*[!0-9.]*)
+					echo "granule-configure-dns: ignoring nameserver '${ns}' from ip=, which is not an IPv4 address" >&2
+					continue
+					;;
+			esac
+			add ip= "$ns"
+		done
+	fi
+fi
+set +f
+[ -n "$nameservers" ] || exit 0
+
+# Every domain is checked to be a hostname -- letters, digits, '-', '_'
+# and '.' -- for the same reason the nameservers are: this line is
+# resolv.conf syntax, and a field that is not a name has no place in it.
+set -f
+search=""
+for d in $(param granule.dns_search | tr ',' ' '); do
+	case "$d" in
+		*[!A-Za-z0-9._-]*)
+			echo "granule-configure-dns: ignoring search domain '${d}', which is not a domain name" >&2
+			continue
+			;;
+	esac
+	search="${search:+${search} }${d}"
+done
+options=""
+for o in $(param granule.dns_options | tr ',' ' '); do
+	case "$o" in
+		ndots:[0-9] | ndots:[0-9][0-9]) ;;
+		*)
+			echo "granule-configure-dns: ignoring resolver option '${o}'" >&2
+			continue
+			;;
+	esac
+	options="${options:+${options} }${o}"
+done
+set +f
+[ -z "$search" ] || nameservers="${nameservers}search ${search}
+"
+[ -z "$options" ] || nameservers="${nameservers}options ${options}
+"
+
+# Written through a temporary file and renamed, so a resolver reading the
+# file while this runs sees either the old contents or the new ones
+# rather than a half-written file. The rename also replaces a symlink
+# (e.g. one left pointing into a stub resolver's runtime directory) with a
+# real file, which is what a guest with no resolver daemon wants.
+tmp="${RESOLV_CONF}.granule.$$"
+if ! printf '%s' "$nameservers" > "$tmp" 2>/dev/null; then
+	# A read-only root (CHV_DISK_MODE=readonly) has nowhere to write
+	# this. Not fatal: a guest that boots without DNS is worth more
+	# than a guest that does not boot, and the message lands on the
+	# console, which is where a VM's boot is read from.
+	echo "granule-configure-dns: cannot write ${RESOLV_CONF} -- leaving this guest's DNS configuration as it is" >&2
+	exit 0
+fi
+chmod 0644 "$tmp"
+mv -f "$tmp" "$RESOLV_CONF"

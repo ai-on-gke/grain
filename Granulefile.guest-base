@@ -1,0 +1,169 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Granulefile.guest-base: Minimal base OS rootfs and VM image for Grain sandboxes
+#
+# This image carries ONLY what stock Granule and Grain's own runtime boundary
+# require to boot and drive a microVM sandbox (systemd, kernel, granule guest
+# agents, debian uid 1000, /home/agent -> /home/debian, passwordless sudo, git,
+# curl, ca-certificates, python3-minimal for pkg/capability/portforward.GuestForwarder,
+# /usr/local/bin/grain-connect, /usr/local/bin/grain (cmd/grain-sandbox), and
+# core POSIX utilities).
+#
+# Language toolchains, Docker, OCR/attachment packages, and developer CLI tools
+# live in Granulefile (Stage 2, sandbox_rootfs) so users who build custom
+# sandbox images FROM ghcr.io/bwsalmon/grain/guest-base:<tag> get a minimal
+# Debian VM base that only needs to be updated when dev.grain.sandbox.contract
+# (or dev.granule.guest.contract) bumps.
+#
+# The base is pinned by digest as well as by tag, for the reason the main
+# Dockerfile gives above its own ARGs: a tag is a name its registry can
+# repoint, and the digest is what is fetched. `granule granulefile build`
+# hands this FROM to docker unchanged, so the digest is honoured. It is
+# the same value as the Dockerfile's RUNTIME_IMAGE and
+# Dockerfile.k8s-sandbox's BASE_IMAGE -- bump all of them together
+# (TestEveryBaseImageIsPinnedByDigest checks they agree).
+ARG BASE_IMAGE=debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+ARG GO_VERSION=1.26.10
+ARG GO_IMAGE=golang
+ARG GO_IMAGE_DIGEST=sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af
+
+FROM ${GO_IMAGE}:${GO_VERSION}-bookworm@${GO_IMAGE_DIGEST} AS grain_connect_builder
+ENV GOTOOLCHAIN=local
+COPY cmd/grain-connect/main.go /tmp/grain-connect/main.go
+RUN CGO_ENABLED=0 go build -o /out/grain-connect /tmp/grain-connect/main.go \
+    && chmod 0755 /out/grain-connect
+# The sandbox's own grain (cmd/grain-sandbox: `grain host-script`), built
+# from standard-library packages alone: a go.mod naming the module is all
+# it needs, so the repository's own (and every go.mod bump) stays out of
+# this image's inputs (scripts/granule/guest-inputs.sh).
+COPY pkg/hostscriptcli /src/pkg/hostscriptcli
+COPY cmd/grain-sandbox /src/cmd/grain-sandbox
+RUN cd /src && printf 'module github.com/ai-on-gke/grain\n\ngo 1.26\n' > go.mod \
+    && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/grain ./cmd/grain-sandbox \
+    && chmod 0755 /out/grain
+
+FROM ${BASE_IMAGE} AS guest_base_rootfs
+
+# Build-time apt network configuration
+RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "3";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\n' > /etc/apt/apt.conf.d/99-grain-build
+
+# No suspend/resume device, so the initramfs must not wait for one.
+#
+# initramfs-tools' scripts/local-premount/resume waits for the device named
+# by RESUME= and eventually gives up ("Gave up waiting for suspend/resume
+# device" on the guest console). Without this file, initramfs-tools infers a
+# RESUME device at build time, the guest -- which has no swap and no
+# hibernation image -- never sees it appear, and every boot pays ~105
+# seconds for the wait: that is the whole of the gap between
+# "virtio_blk virtio0: [vda]" and "EXT4-fs (vda): mounted filesystem" that
+# put the login prompt at ~122s against GranuleConfig.readyTimeout's
+# hard-coded two minutes, and so cost 254 sandbox creations in a day. A
+# guest here is booted fresh from a packed image every time and never
+# hibernates, so there is never a resume to do.
+#
+# It is written before any package is installed so that every initramfs
+# this build generates carries it -- the guest kernel package's own, and the
+# regeneration further down this file, and so does any guest packed FROM
+# this rootfs.
+RUN install -d -m0755 /etc/initramfs-tools/conf.d \
+    && echo 'RESUME=none' > /etc/initramfs-tools/conf.d/resume
+
+# Stock Granule Debian VM base packages + Grain's minimal sandbox boundary
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    systemd-sysv \
+    udev \
+    kmod \
+    iproute2 \
+    acpid \
+    linux-image-$(dpkg --print-architecture) \
+    klibc-utils \
+    e2fsprogs \
+    libnss-myhostname \
+    sudo \
+    git \
+    curl \
+    ca-certificates \
+    python3-minimal \
+    procps \
+    findutils \
+    grep \
+    sed \
+    gawk \
+    tar \
+    coreutils \
+    && python3 -c 'import os, socket, sys, threading' \
+    && systemctl enable acpid \
+    && printf 'evdev\n' > /etc/modules-load.d/granule-evdev.conf \
+    && rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/99-grain-build
+
+COPY Granulefile* .grain-ca.cr[t] /tmp/
+RUN if [ -f /tmp/.grain-ca.crt ]; then \
+        cp /tmp/.grain-ca.crt /usr/local/share/ca-certificates/grain-ca.crt \
+        && update-ca-certificates; \
+    fi && rm -f /tmp/.grain-ca.crt /tmp/Granulefile*
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+
+# Hostname resolution and interface naming
+RUN sed -i 's/^hosts:.*/hosts:          files myhostname dns/' /etc/nsswitch.conf \
+    && install -d -m0755 /etc/systemd/network \
+    && printf '[Match]\nType=ether\n\n[Link]\nNamePolicy=\nName=eth0\n' > /etc/systemd/network/00-eth0.link \
+    && ln -sf /dev/null /etc/udev/rules.d/80-net-setup-link.rules \
+    && update-initramfs -u -k all
+
+# The "debian" account (uid 1000), /home/agent -> /home/debian symlink, sudo
+# access, and kvm group for nested virtualization.
+# Passwordless root for "debian" is deliberate: the boundary is the VM and
+# the host firewall, not this account. Do not narrow or remove it without
+# reading docs/granule-guest-root.md.
+RUN useradd -m -u 1000 -s /bin/bash debian \
+    && ln -s /home/debian /home/agent \
+    && echo 'debian ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-debian \
+    && chmod 0440 /etc/sudoers.d/90-debian \
+    && install -d -m0700 -o debian -g debian /home/debian/.ssh \
+    && (getent group kvm >/dev/null || groupadd --system kvm) \
+    && usermod -aG kvm debian
+
+# grain-connect forwarder (part of the base boundary so custom images FROM
+# guest-base do not need a Go toolchain)
+COPY --from=grain_connect_builder /out/grain-connect /usr/local/bin/grain-connect
+RUN chmod 0755 /usr/local/bin/grain-connect \
+    && install -d -m0755 /usr/lib/tmpfiles.d \
+    && printf 'd /run/grain 0755 root root -\n' > /usr/lib/tmpfiles.d/grain.conf
+
+# grain, for `grain host-script <name>` (pkg/hostscriptcli). A grant
+# installs a shell stand-in instead where an image has none.
+COPY --from=grain_connect_builder /out/grain /usr/local/bin/grain
+RUN chmod 0755 /usr/local/bin/grain
+
+# grain-growfs: resize root filesystem to fill virtual disk on boot
+RUN printf '#!/bin/sh\nset -u\nroot_dev=$(findmnt -n -o SOURCE / 2>/dev/null || true)\ncase "${root_dev}" in\n  /dev/*) ;;\n  *) echo "grain-growfs: root is ${root_dev:-unknown}, not a block device -- nothing to grow"; exit 0 ;;\nesac\nif ! resize2fs "${root_dev}"; then\n  echo "grain-growfs: resize2fs ${root_dev} failed -- continuing with the filesystem as it is" >&2\nfi\nexit 0\n' > /usr/local/sbin/grain-growfs \
+    && chmod 0755 /usr/local/sbin/grain-growfs
+
+RUN printf '[Unit]\nDescription=Grow the root filesystem onto the whole virtual disk (grain sandbox)\nDefaultDependencies=no\nAfter=systemd-remount-fs.service\nBefore=sysinit.target\nConditionPathIsReadWrite=/\n\n[Service]\nType=oneshot\nExecStart=/usr/local/sbin/grain-growfs\nRemainAfterExit=yes\nStandardOutput=journal+console\nStandardError=journal+console\n\n[Install]\nWantedBy=sysinit.target\n' > /etc/systemd/system/grain-growfs.service \
+    && ln -sf /etc/systemd/system/grain-growfs.service /etc/systemd/system/sysinit.target.wants/grain-growfs.service
+
+# Mount /tmp on tmpfs so go test link outputs (/tmp/go-build*) and
+# t.TempDir() SQLite databases stay in RAM instead of hitting /dev/vda
+# (ext4 over nested virtio-blk).
+RUN echo 'tmpfs /tmp tmpfs mode=1777,strictatime,nosuid,nodev,size=50% 0 0' >> /etc/fstab
+
+# Stamp the Grain sandbox contract version (pkg/sandboximage.Contract).
+RUN install -d -m0755 /etc/grain \
+    && printf '1\n' > /etc/grain/sandbox-contract
+LABEL dev.grain.sandbox.contract="1"
+
+# Pack the base guest rootfs into a bootable VM image
+VM PACK --variant=debian AS guest_base
+LABEL dev.grain.sandbox.contract="1"

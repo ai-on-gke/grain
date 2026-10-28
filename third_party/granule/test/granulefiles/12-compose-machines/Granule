@@ -1,0 +1,20 @@
+# docs/granulefile.md 14.7: composing machines. Neither stage runs
+# anything, so neither needs KVM: the copy reads the first stage's guest
+# root filesystem directly (8).
+#
+# The specification's own line copies /etc/runner/config.json out of a
+# runner machine. This one copies a file every guest has, so that the
+# example can be built against any two machines a test run happens to
+# hold.
+ARG SOURCE_VM=ghcr.io/example/github-runner-vm:latest
+ARG BASE_VM=ghcr.io/gke-labs/granule-alpine-vm:latest
+
+# A VM build stage, used only as a source of files.
+VM FROM ${SOURCE_VM} AS source_vm
+
+# The final machine.
+VM FROM ${BASE_VM}
+
+# Copy out of the other machine's root filesystem.
+COPY --from=source_vm /etc/os-release /etc/runner/source-os-release
+VM SET memory-mb=1024

@@ -1,0 +1,142 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Regenerate docs/codex-surface.md against the codex binary an image
+# would carry, and push the diff to the codex-surface branch if it
+# differs from what is committed.
+#
+# It is manual (workflow_dispatch) rather than scheduled or push-triggered,
+# because the version an image carries moves only when Dockerfile's
+# ARG CODEX_CLI_VERSION is bumped -- a commit that bumps it should run
+# this afterwards to record what the new release changed, and there is
+# no reason to re-measure a frozen binary on the clock.
+name: codex-surface
+
+on:
+  workflow_dispatch:
+
+jobs:
+  capture:
+    capabilities: []
+    name: read codex's surface
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 20
+    timeout-minutes: 20
+    artifacts:
+      - name: codex-surface
+        path: docs/codex-surface.md
+    steps:
+      - name: Install the codex CLI
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^ARG CODEX_CLI_VERSION=//p' Dockerfile | head -n1)"
+          if [ -z "$version" ]; then
+            echo "could not read ARG CODEX_CLI_VERSION out of the Dockerfile; this job captures the codex the image would carry, and has nothing to install without it" >&2
+            exit 1
+          fi
+          echo "installing codex $version, the release the Dockerfile pins"
+          sudo mkdir -p /opt/codex
+          curl -4 -fsSL --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors \
+            "https://github.com/openai/codex/releases/download/${version}/codex-x86_64-unknown-linux-musl.tar.gz" \
+            -o /tmp/codex.tar.gz
+          test -s /tmp/codex.tar.gz
+          sudo tar -xzf /tmp/codex.tar.gz -C /opt/codex
+          rm -f /tmp/codex.tar.gz
+          codex="$(find /opt/codex -type f -name 'codex*' -perm -u+x | head -n1)"
+          test -n "$codex"
+          sudo chmod -R a+rX /opt/codex
+          sudo ln -sf "$codex" /usr/local/bin/codex
+          codex --version
+
+      - name: Require python3 and git
+        run: |
+          set -euo pipefail
+          for tool in python3 git; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              echo "$tool is not on this runner, and scripts/codex-surface.sh needs it: the probes that depend on it would record their own absence and this capture would publish that as a finding about codex." >&2
+              exit 1
+            fi
+          done
+          python3 --version
+          git --version
+
+      - name: Read codex's surface
+        run: ./scripts/codex-surface.sh -o docs/codex-surface.md
+
+      - name: The capture has to have captured something
+        run: |
+          set -euo pipefail
+          bytes=$(wc -c < docs/codex-surface.md)
+          echo "docs/codex-surface.md is $bytes bytes"
+          if [ "$bytes" -lt 8192 ]; then
+            echo "the capture is $bytes bytes: codex answered almost nothing, and publishing this would replace a real capture with an empty one" >&2
+            exit 1
+          fi
+          for heading in '## The binary' '## Commands and flags' '## Where each flag lives' \
+                         '## The argv grain builds' '## Interactive mode'; do
+            if ! grep -qF -- "$heading" docs/codex-surface.md; then
+              echo "the capture has no \"$heading\" section; scripts/codex-surface.sh did not run to the end" >&2
+              exit 1
+            fi
+          done
+          missing=""
+          grep -q '^### .codex mcp.$' docs/codex-surface.md || missing="$missing no-subcommand-help"
+          grep -qE '^(accepted|rejected) +exec +--skip-git-repo-check' docs/codex-surface.md || missing="$missing no-flag-verdicts"
+          grep -qE '^(accepted|rejected) +codex --model' docs/codex-surface.md || missing="$missing no-argv-verdicts"
+          grep -q '^pinned by the Dockerfile' docs/codex-surface.md || missing="$missing no-pin"
+          grep -qE '^Ask Codex to do anything +(drawn|not drawn)' docs/codex-surface.md || missing="$missing no-tui-probe"
+          if [ -n "$missing" ]; then
+            echo "the capture ran to the end but answered nothing for:$missing -- codex's shape has moved under scripts/codex-surface.sh, and publishing this would replace measurements with silence" >&2
+            exit 1
+          fi
+
+  publish:
+    capabilities: []
+    name: publish the capture
+    needs: [capture]
+    sandbox:
+      cpus: 2
+      memory-mb: 4096
+      disk-gb: 10
+    timeout-minutes: 10
+    cache: false
+    steps:
+      - name: Push the capture, if it differs from what is committed
+        run: |
+          set -euo pipefail
+          git config user.name "grain-ci[bot]"
+          git config user.email "grain-ci[bot]@users.noreply.github.com"
+          git add docs/codex-surface.md
+          if git diff --cached --quiet -- docs/codex-surface.md; then
+            echo "no drift: docs/codex-surface.md already matches"
+            exit 0
+          fi
+          version="$(sed -n 's/^ARG CODEX_CLI_VERSION=//p' Dockerfile | head -n1)"
+          codex_version="$(NO_COLOR=1 codex --version 2>&1 | sed -e 's/\x1b\[[0-9;]*[a-zA-Z]//g' -e 's/\r//g' | grep -m1 'codex-cli' || echo "$version")"
+          git commit -F - <<EOF
+          Regenerate docs/codex-surface.md against ${codex_version}
+
+          Captured by scripts/codex-surface.sh, run by
+          .grain/workflows/codex-surface.yml: every
+          subcommand and flag the installed codex will admit to, whether
+          the two argv pkg/agent/codex builds -- the unattended run's and
+          the interactive session's -- are argv it parses, and what its
+          terminal interface does when started the way a session starts it.
+          The diff against the committed capture is what codex changed --
+          the script writes nothing run-specific, so a diff is drift and
+          nothing else.
+          EOF
+          git push origin HEAD:refs/heads/codex-surface --force

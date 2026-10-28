@@ -1,0 +1,29 @@
+# `go build ./cmd/<name>` writes its output into the working directory,
+# so a plain build of any command in this repo leaves a binary at the
+# root. One of them (kontur-agent) reached a commit that way; these
+# entries are so the next one cannot.
+/kontur
+/kontur-agent
+/kontur-mem-agent
+/konturctl
+/granule
+/granule-shim
+/granule-agent
+/granule-mem-agent
+
+# Everything demo/demo.sh makes on the machine it runs on: the CLI it
+# builds, the VM state directory it points granule at, and the scratch
+# files its steps write. One directory so that `demo/demo.sh cleanup` is
+# a removal rather than a hunt.
+/.demo/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# The directory `granule granulefile build` stages its generated files
+# in, inside the author's own build context. It removes it when the
+# build ends, so one of these on disk is a build that was interrupted --
+# and one in a commit is a run of test/granulefiles/run.sh that a `git
+# add -A` happened to catch mid-build.
+.granule-build-*/

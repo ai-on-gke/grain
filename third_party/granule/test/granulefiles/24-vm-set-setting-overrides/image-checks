@@ -1,0 +1,7 @@
+# The final overridden settings must be recorded in the image environment.
+docker inspect "$IMAGE" | grep -q '"CHV_MEMORY_MB=4096"'
+docker inspect "$IMAGE" | grep -q '"CHV_MEMORY_MAX_MB=8192"'
+docker inspect "$IMAGE" | grep -q '"CHV_MEMORY_HOTPLUG=on"'
+docker inspect "$IMAGE" | grep -q '"CHV_CMDLINE=quiet"'
+docker inspect "$IMAGE" | grep -q '"CHV_DISK_MODE=persistent"'
+docker inspect "$IMAGE" | grep -q '"CHV_SHUTDOWN_TIMEOUT=60s"'

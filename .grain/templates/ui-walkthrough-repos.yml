@@ -1,0 +1,82 @@
+name: UI walkthrough - repositories, merge queue, releases
+title: Walk through repository, merge queue, and release UI
+base: main
+auto-merge: true
+body: |
+  Thoroughly exercise the repository-centric operator workflow, in a
+  real browser against a real server.
+
+  ## Coverage
+
+  - Open Repos from the rail and from a direct URL; inspect counts,
+    search/sort, long-name layout, and reorder repositories through
+    pointer and keyboard/tap affordances.
+  - Open a repo row and return to the list. Follow its task count into
+    the filtered task list, then return with browser navigation.
+  - File a task from the repo page and verify repo preselection and
+    persistence.
+  - Walk the repo page's tabs (Overview, CI, Merge queue, Agents,
+    Branches, Releases, Advanced), each of which rides in the URL as
+    `/repos/<owner>/<name>/settings/<tab>` through reload and
+    Back/Forward, and reach them also from Settings → Repositories,
+    whose rows show each repository's base branch, declarations, CI mode
+    and git connection. Inspect and safely edit branch rules
+    (base/head), CI and default capabilities, prompt
+    extension/instructions, the setup command, read/write repository
+    relationships, declaration syncing and the declared triggers on
+    Advanced, CI workflows, and repo-scoped custom configuration; reload
+    and verify the saved values, and confirm leaving with an unsaved
+    edit asks first.
+  - Merge queue: switch the repository's CI mode between GitHub, grain
+    and none and verify the base-gate warnings on the overview and the
+    Releases pane appear, read correctly, link to the fix and clear
+    without a reload once it is fixed; edit the merge queue settings,
+    including the Merge when green and Base repair bypass switches;
+    inspect the merge batch panel on the repo page and on a task in a
+    batch.
+  - Compare branches: pick a base and head on the repo page and open the
+    pull request page (`/repos/<owner>/<name>/compare/<base>...<head>`),
+    choosing from the repository's own branches; inspect the diff, a
+    direct link and reload, and an unknown ref. (Repository memory is on
+    Settings → Memory, covered by the settings walkthrough.)
+  - Walk through releases and release trains, including direct URLs,
+    status/history, task links, create/edit controls, Cut new RC and
+    Promote current RC (and the reason shown when either is greyed
+    out), and whatever validation and confirmations the demo exposes.
+  - If GitHub-derived branches, release state, or train execution is
+    unavailable in the demo, intercept only that external boundary with
+    realistic success, empty, loading and failure responses; do not
+    replace Grain's own API or its React UI.
+
+  ## Walkthrough protocol
+
+  - Build and start this repository's real `grain demo` server over a
+    throwaway embedded store, open its built frontend in an actual
+    Playwright browser, and interact through visible UI controls. Do not
+    substitute a source review, a jsdom-only test, or an API-only
+    exercise for the walkthrough.
+  - Prefer the Gemini-backed model and tooling when this sandbox carries
+    a key at `/home/debian/.gemini-api-key`; never print, log or commit
+    it. A repository-declared template carries no capabilities of its
+    own, so what the sandbox holds is whatever this deployment already
+    gives tasks in this repository.
+  - Explore beyond the scripted cases in `ui/e2e`. Check browser console
+    errors, failed network requests, loading/empty/error states,
+    keyboard reachability, and destructive-action confirmations relevant
+    to this area.
+  - Confirm mutations by returning to the screen, reloading and
+    deep-linking where applicable, and observing the persisted result.
+    Stub only an unavailable external or system boundary; keep the real
+    server, frontend, browser and user gestures in the loop, and
+    document every stub.
+  - Record the commit tested, the environment, the exact steps, the
+    outcomes and every stub in a dated report under `docs/test-runs/`,
+    named `YYYY-MM-DD-repository-release-memory-ui.md`. Do not commit
+    screenshots or generated browser artifacts.
+  - For each bug found: capture a deterministic reproduction; fix it in
+    this task when the correction is safe and scoped; add regression
+    coverage at the strongest practical level; and run the relevant
+    tests. If the fix is unsafe, materially separate, or needs
+    infrastructure this sandbox does not have, propose a focused
+    follow-up task with `branch: "main"` carrying the reproduction,
+    the evidence and the expected behaviour.

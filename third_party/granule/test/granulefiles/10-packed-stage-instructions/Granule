@@ -1,0 +1,13 @@
+# docs/granulefile.md 7 and 6: what a container stage above VM PACK may
+# use, and what ENTRYPOINT/CMD mean once it is packed. CMD in shell form
+# here, which is the other half of 14.9's exec form.
+ARG ROOTFS=ghcr.io/gke-labs/granule-guest-rootfs:debian12
+
+FROM ${ROOTFS}
+
+RUN install -d /srv/data
+WORKDIR /srv
+VOLUME ["/srv/data"]
+CMD echo "reached $(pwd)" > /run/packed-cmd-ran && sleep 3600
+
+VM PACK AS packed_vm

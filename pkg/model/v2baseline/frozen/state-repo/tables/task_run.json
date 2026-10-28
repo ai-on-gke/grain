@@ -1,0 +1,20 @@
+[
+  {
+    "id": "v2-1-1",
+    "task_id": "v2-1",
+    "sandbox": "grain-v2-1-1",
+    "unit": null,
+    "attempt": 1,
+    "started_at": "2026-10-21T12:00:00Z",
+    "agent_started_at": null,
+    "finished_at": null,
+    "outcome": null,
+    "detail": null,
+    "transcript": "make test\nok\n",
+    "prompt": null,
+    "activity": null,
+    "activity_at": null,
+    "target_owner": null,
+    "target_name": null
+  }
+]

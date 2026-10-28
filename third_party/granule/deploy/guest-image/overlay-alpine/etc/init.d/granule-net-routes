@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+# granule-runlevel: boot
+
+description="Apply the container network's own routes to this guest"
+
+# In the boot runlevel, beside granule-agent: the address itself is the
+# kernel's own doing ("ip=", handled before userspace starts), and these
+# routes are what makes it usable off the guest's own segment, so they
+# belong before anything that talks to the network rather than after it.
+depend() {
+	after root
+	before net
+}
+
+start() {
+	ebegin "Applying the container network's routes"
+	/usr/local/libexec/granule-configure-routes
+	eend $?
+}

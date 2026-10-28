@@ -1,0 +1,74 @@
+name: IPv6 end to end
+
+# test/e2e-ipv6.sh's docker and kind targets, every night: a granule guest
+# built from this tree, booted on a dual-stack docker network, a v6-only
+# one, a dual-stack kind cluster and a v6-only one, and checked for the
+# address, gateway, peer, published-port, Service, DNS and pod-to-pod
+# reachability section 8.3 of docs/ipv6-dual-stack-design.md asks for.
+# The script's own header says what each check is.
+#
+# Why a schedule and not part of ci.yml: one run is a guest image build
+# (the kernel is compiled from source, which is most of it, on a cold
+# cache) and four real VMs on two kind clusters. That is too slow and
+# too heavy for every push. What it guards -- that the guest scripts, netshim's
+# derivation and a real CNI still agree -- moves with commits, though, so
+# nightly rather than weekly, after the 02:00 nightly suite. A change to
+# the IPv6 path itself is worth running by hand from its branch first
+# (workflow_dispatch).
+#
+# GKE is in e2e-ipv6-gke.yml, by hand only: it needs the GCP key, which a
+# scheduled run is not given, and it costs a cluster.
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+
+jobs:
+  e2e-ipv6:
+    name: IPv6 on docker and kind
+    # No runs-on, so grain runs the job natively in a sandbox of its own,
+    # which is what has /dev/kvm, a docker daemon of its own and the room
+    # for two kind clusters. A job that names a runner gets a container,
+    # and no KVM in it.
+    #
+    # Never write the key's name followed by a colon anywhere in this
+    # job, comments included. Grain's build of 2026-10-03 (11606c9) reads
+    # it as the key even inside a comment, takes the job for a GitHub
+    # Actions one, and refuses the whole file at plan time for not naming
+    # ubuntu-latest. That is how the first two nightly firings ended
+    # without running a step.
+    timeout-minutes: 90
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 50
+    steps:
+      # Said up front, so a red run on a host that cannot boot a guest
+      # reads as that rather than as the first check that needed one.
+      - name: the host can boot guests and run kind
+        run: |
+          set -euo pipefail
+          ok=true
+          for c in docker kind kubectl; do
+            if command -v "$c" >/dev/null; then
+              echo "ok      $c $(command -v "$c")"
+            else
+              echo "::error::no $c on this runner"; ok=false
+            fi
+          done
+          if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "ok      /dev/kvm"
+          else
+            echo "::error::no usable /dev/kvm on this runner"; ok=false
+          fi
+          docker version -f 'docker {{.Server.Version}}'
+          $ok
+
+      # No GRANULE_IMAGE: the script builds the alpine guest from this
+      # tree (through grain's proxy for the kernel and cloud-hypervisor
+      # downloads, which it detects as deploy/publish-images.sh does), so
+      # what is tested is this commit rather than whatever was last
+      # published.
+      - name: test/e2e-ipv6.sh
+        run: test/e2e-ipv6.sh docker kind

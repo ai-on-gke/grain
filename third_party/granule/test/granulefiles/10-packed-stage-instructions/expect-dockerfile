@@ -1,0 +1,2 @@
+COPY container_0.json /rootfs/etc/granule/container.json
+VOLUME ["/srv/data"]

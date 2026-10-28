@@ -1,0 +1,6 @@
+[the wrap named the service after the header option]
+test -L /etc/systemd/system/multi-user.target.wants/granule-wrap@server_app.service
+
+[the workload configuration was inherited from runner stage]
+cat /etc/granule/container.json
+grep -q 'server_app' /etc/granule/container.json

@@ -1,0 +1,11 @@
+{
+  "workload": "tcp_rtt_ping_pong",
+  "environment": "docker_native_bridge",
+  "avg_us": 26.4,
+  "min_us": 16.5,
+  "max_us": 92.0,
+  "p50_us": 24.1,
+  "p95_us": 38.5,
+  "p99_us": 49.2,
+  "samples": 1000
+}

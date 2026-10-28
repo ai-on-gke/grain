@@ -1,0 +1,105 @@
+name: UI walkthrough coverage review
+title: Review the standing UI walkthrough templates against the current UI
+base: main
+auto-merge: true
+body: |
+  Bring the standing UI walkthrough templates up to date with the UI as it
+  is now. The nightly `release-ui-walkthrough` suite
+  (`.grain/suites/release-ui-walkthrough.yml`) only exercises what its
+  templates name, and the nightly new-features plan files one-off
+  walkthroughs without ever editing them, so a surface that is not written
+  into a standing template is tested once and then drops out of coverage.
+  This review is what folds it in. It runs weekly; `docs/ui-walkthrough.md`
+  describes the chunks and why they are split the way they are.
+
+  This task edits declarations; it does not walk the UI itself. Open at most
+  one pull request, against `main` -- the walkthrough templates are
+  maintained there, and the nightly suite runs from there too.
+
+  ## 1. Inventory the current UI surfaces
+
+  - Read `ui/src/App.jsx`, `ui/src/paths.js` (the URL paths each view
+    maps to) and `ui/src/components/Sidebar.jsx` for routes, sidebar
+    destinations and top-level pages.
+  - List the `ui/src/components/*Overlay.jsx`, `*Page.jsx` and
+    `*Panel.jsx` components, the tabs each overlay and page offers, and the
+    dialogs (`*Dialog.jsx`) and banners (`*Banner*.jsx`, `BannerStrip.jsx`)
+    the shell can show. Note where each is reached from.
+  - Use `git log --since="8 days ago" --stat -- ui/src` on `origin/main` to
+    see which surfaces were added, renamed, moved or deleted in the past
+    week, and compare against the previous inventory implied by the
+    templates rather than trusting file names alone.
+  - The nightly suite runs on `main` and walks the staging deployment,
+    which runs the current release candidate and can be a day or two behind
+    `main`. Add steps for every surface on `origin/main`, and note in the
+    review entry any surface not yet in the newest `v*-rc.*` tag
+    (`git tag --contains <sha>`) so a walkthrough that cannot find it on
+    staging yet is not read as a regression.
+
+  ## 2. Read the past week's plans and runs
+
+  - Read `docs/test-plans/*.md` and `docs/test-runs/*.md` dated within the
+    past seven days. Collect the user-visible features they name, the
+    walkthroughs they filed, and the defects they found -- a defect a
+    one-off run found is a step the standing walkthrough should keep
+    repeating.
+
+  ## 3. Compare against the standing walkthroughs
+
+  - Read every template the suite names (`ui-walkthrough-tasks`, `-boards`,
+    `-repos`, `-automation`, `-settings`, `-infrastructure`,
+    `-operations`, `-shell`, and any added
+    since) and `.grain/suites/release-ui-walkthrough.yml` itself, plus
+    `.grain/suites/main-ui-smoke.yml`, which reuses some of them.
+  - For each surface from steps 1 and 2, decide which template's Coverage
+    section should exercise it, by workflow rather than by screen, and
+    whether it already does.
+  - Find steps that name UI that no longer exists, has been renamed, or has
+    moved to another page or tab.
+
+  ## 4. Update the templates
+
+  - Add missing steps to the template that owns the workflow, written in the
+    existing style: concrete controls to drive and outcomes to confirm, not
+    a list of component names.
+  - Rewrite or remove steps for UI that has moved or no longer exists.
+  - Keep every template runnable in one agent run. If a template has grown
+    too large for one sitting (roughly beyond a dozen Coverage bullets, or
+    more than one sitting's worth of distinct workflows), split it into two
+    coherent templates named `ui-walkthrough-<area>.yml`, give the new one
+    the same Walkthrough protocol section, add it to
+    `.grain/suites/release-ui-walkthrough.yml` (and to
+    `.grain/suites/main-ui-smoke.yml` if the original was there), and
+    update the chunks table in `docs/ui-walkthrough.md`. Do not rename an
+    existing template's file: the stem is its identity. Every
+    `ui-walkthrough-*` template except this one must be in the release
+    suite (`pkg/repodecl/selfcheck_test.go`), and
+    `tests/deploy/release_workflows_test.go` lists the suite's chunks, so
+    update it with a split.
+  - Keep each template's `base: main` and its Walkthrough protocol
+    section unchanged unless the protocol itself is wrong.
+  - Run `go run ./cmd/grain declarations check .` and fix anything it
+    refuses before pushing.
+
+  ## 5. Open one pull request, or close with nothing needed
+
+  - If coverage is already current, call `nothing_needed` with a short
+    summary of what was checked. Never push an empty branch, and do not
+    push a branch that only reformats.
+  - Otherwise commit everything as one change and open one pull request.
+    The pull request description is built from the commit message, so the
+    commit body must carry a short dated entry:
+
+        Coverage review YYYY-MM-DD
+        Added: <surface> -> <template>, ...
+        Moved: <step> from <template> to <template>, ...
+        Dropped: <step> (<why: removed / renamed to ...>), ...
+        Pending the next cut: <main-only surface>, ...
+
+  - Any change under `.grain/` waits for a human Submit
+    (`.grain/triggers/grain-declarations.yml`), so get grain CI green and
+    leave the pull request for review rather than waiting on the merge.
+  - Do not edit the UI, the e2e specs or the one-off walkthrough reports
+    here, and do not file walkthrough tasks: the nightly suite runs the
+    updated templates. If a surface you find looks broken, say so in the
+    commit body or with `propose_task`, not by fixing it in this change.

@@ -1,0 +1,7 @@
+# docs/granulefile.md 5.4: the short form given with VM UNPACK FROM --
+# an unnamed unpacked stage converted straight back with a bare VM PACK.
+ARG VM_IMAGE=ghcr.io/example/my-vm:latest
+
+VM UNPACK FROM ${VM_IMAGE}
+COPY myfile /myfile
+VM PACK

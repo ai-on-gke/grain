@@ -1,0 +1,87 @@
+#!/bin/sh
+# Create the file this guest declares its own readiness with, if it was
+# built to declare one.
+#
+# "granule ready" -- the probe behind "granule vm wait", "vm status" and
+# a pod's readinessProbe -- reports a VM ready when granule-agent answers,
+# and optionally when a file inside the guest exists as well
+# (GRANULE_READY_FILE, granule's -ready-file). The second condition is
+# the guest's own to report: the agent answers seconds before whatever
+# the guest boots into is serving, and only the guest knows when that
+# gap has closed. See the top-level README's "Readiness".
+#
+# What the file is called is a build-time decision (the GUEST_READY_FILE
+# build arg, which writes the path into the config file read below and
+# enables granule-ready.service / /etc/init.d/granule-ready), and creating
+# it is this script's whole job. Splitting the two that way is what keeps
+# the service definitions ordinary overlay files with no path baked into
+# them, and it means a guest customized after the fact can point the
+# declaration somewhere else by writing one line into the same config
+# file rather than editing a unit.
+#
+# A guest built without the arg has no config file, nothing enabled to
+# run this, and declares nothing -- which is the default and has to stay
+# the default: the check is opt-in precisely so that a guest which never
+# answers does not silently become a VM that is never ready.
+set -eu
+
+CONF="${GRANULE_READY_FILE_CONF:-/etc/granule/ready-file}"
+TARGET_CONF="${GRANULE_READY_TARGET_CONF:-/etc/granule/ready-target}"
+COND_CONF="${GRANULE_READY_CONDITION_CONF:-/etc/granule/ready-condition}"
+
+[ -f "${CONF}" ] || exit 0
+
+# One line, the path. A file that exists but is empty means the same as
+# no file: nothing to declare.
+path=$(head -n 1 "${CONF}")
+[ -n "${path}" ] || exit 0
+
+# If a custom minimal target is specified, wait for it to be active
+if [ -f "${TARGET_CONF}" ]; then
+	target=$(head -n 1 "${TARGET_CONF}")
+	if [ -n "${target}" ] && command -v systemctl >/dev/null 2>&1; then
+		count=0
+		while ! systemctl is-active --quiet "${target}" 2>/dev/null; do
+			sleep 0.1
+			count=$((count + 1))
+			if [ "$count" -ge 300 ]; then
+				echo "granule-declare-ready: timed out waiting for target ${target}" >&2
+				exit 1
+			fi
+		done
+	fi
+fi
+
+# If a custom readiness condition command or script is specified, evaluate it
+if [ -f "${COND_CONF}" ]; then
+	cond=$(head -n 1 "${COND_CONF}")
+	if [ -n "${cond}" ]; then
+		if [ -x "${cond}" ]; then
+			"${cond}"
+		else
+			sh -c "${cond}"
+		fi
+	fi
+fi
+
+dir=$(dirname "${path}")
+
+# Failing here is deliberate, and it is the one place in this overlay
+# where it is: every other boot-time script exits successfully when it
+# has nothing to do, because a guest that boots with no DNS or an
+# ungrown disk is worth more than a guest that does not boot. This one
+# has nothing to fall back to -- the file is either created or the VM
+# never becomes ready -- so it says why on the console and leaves a
+# failed unit for "granule exec" to find, which is where anyone asking
+# "why is this VM not ready" is going to look. A failed oneshot does not
+# stop the boot either way.
+if ! mkdir -p "${dir}" 2>/dev/null; then
+	echo "granule-declare-ready: cannot create ${dir} -- this guest cannot declare itself ready" >&2
+	exit 1
+fi
+if ! touch "${path}" 2>/dev/null; then
+	echo "granule-declare-ready: cannot create ${path} -- this guest cannot declare itself ready" >&2
+	exit 1
+fi
+
+echo "granule-declare-ready: declared ready via ${path}"

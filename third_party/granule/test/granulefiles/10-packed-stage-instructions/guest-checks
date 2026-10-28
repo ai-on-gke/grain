@@ -1,0 +1,7 @@
+[the shell-form CMD ran at boot, in the working directory the stage set]
+for i in $(seq 1 60); do
+  [ -f /run/packed-cmd-ran ] && break
+  sleep 1
+done
+cat /run/packed-cmd-ran
+grep -q "reached /srv" /run/packed-cmd-ran

@@ -1,0 +1,6 @@
+# This image COPYs nothing -- it is a toolchain, and the tree it builds
+# arrives as a bind mount at run time (see the Makefile's
+# `container-build`). Excluding everything keeps the build context empty
+# rather than shipping a ~200 MB bin/grain and a module cache to the
+# daemon on every `make builder`.
+*

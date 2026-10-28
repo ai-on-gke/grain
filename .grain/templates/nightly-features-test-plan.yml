@@ -1,0 +1,53 @@
+name: Nightly new features test plan
+title: Generate nightly new features test plan and walkthrough tasks
+base: main
+auto-merge: true
+body: |
+  Audit newly merged features on `main` submitted over the previous day,
+  design comprehensive end-to-end tests and walkthrough procedures covering
+  those features, and file auto-merging follow-up tasks to execute those
+  walkthroughs/tests and fix any bugs found.
+
+  ## 1. Inspect recent changes on `main`
+
+  - Identify all commits merged into `main` over the past day (or since the
+    previous test plan batch in `docs/test-plans/`). Use `git log latest..origin/main --oneline`
+    for everything not yet released, `git log --since="24 hours ago" --oneline`,
+    `git log --merges`, and examine commit diffs and pull requests.
+  - Review the changes to identify newly introduced features, user-visible
+    workflows, CLI subcommands/flags, API endpoints, configuration options,
+    or UI interactions. Bug fixes and internal refactorings should be noted
+    if they affect feature behaviors or user flows.
+
+  ## 2. Design tests for the new features
+
+  - Follow the structure, standards, and methodology established in
+    `docs/test-plans/` (e.g. `docs/test-plans/2026-09-13.md`, `docs/test-plans/2026-09-07.md`).
+  - For each new feature or behavioral change:
+    - Detail what was added/changed, referencing relevant commits and pull requests.
+    - Evaluate what existing CI jobs (unit tests, contract tests, etc.) already prove.
+    - Identify what is NOT proved -- gaps in integration, real sandbox/VM behavior,
+      end-to-end user journeys, browser interactions, error handling, or edge cases.
+    - Formulate concrete, reproducible test and walkthrough procedures (e.g.
+      running `grain demo` with Playwright browser interactions, exercising CLI
+      subcommands in isolated environments, or multi-step API workflows).
+  - Author a new test plan document under `docs/test-plans/YYYY-MM-DD.md` (using
+    the current date) capturing the full analysis and plan.
+  - Commit the new test plan file to the task's branch.
+
+  ## 3. File follow-up walkthrough and test tasks
+
+  - For each feature area requiring walkthrough or new test coverage defined
+    in the test plan, file a task using `propose_task` with `branch: "main"` and `auto_merge: true`
+    (or let it inherit the task's auto-submit/merge permission).
+  - Each filed task must:
+    - Have a clear, descriptive title referencing the feature and test plan section
+      (e.g., "Walkthrough: <feature name> (docs/test-plans/YYYY-MM-DD.md §N)").
+    - Provide complete instructions instructing the assigned agent to execute the
+      walkthrough/test against a real environment (`grain demo`, Playwright browser,
+      or live CLI backend), stubbing only unavailable external boundaries.
+    - Instruct the agent to capture deterministic reproductions for any bugs or
+      flaws found, fix scoped and safe bugs directly in the task, add regression
+      tests, and run CI checks.
+    - Instruct the agent to record execution steps, findings, outcomes, and environment
+      details in a dated test run report in `docs/test-runs/YYYY-MM-DD-<feature>.md`.

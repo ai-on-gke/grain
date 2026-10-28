@@ -1,0 +1,19 @@
+[Unit]
+Description=Online memory hotplugged into this guest as it arrives
+Documentation=file:///usr/local/libexec/granule-mem-online
+# One write to sysfs with no dependency on anything else having started,
+# and it has to be in place before the first resize can arrive -- which,
+# with CHV_MEM_AGENT, is as soon as the guest is under pressure. So:
+# early, alongside the other sysinit-target work, and out of the ordinary
+# ordering cycle the same way granule-growfs.service is.
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/granule-mem-online
+
+[Install]
+WantedBy=sysinit.target

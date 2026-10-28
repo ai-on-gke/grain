@@ -1,0 +1,37 @@
+[Unit]
+Description=Configure networking from the ip= kernel command line
+Documentation=file:///usr/local/libexec/granule-configure-net
+# Early, and before anything that needs an address: sshd is what a
+# caller reaches the guest on, and granule-authorized-key.service runs
+# ahead of it for the same reason. DefaultDependencies=no keeps this out
+# of the ordering cycle that ordinary units get against
+# sysinit.target, which this is itself a part of.
+DefaultDependencies=no
+After=systemd-udevd.service systemd-udev-trigger.service
+Wants=systemd-udev-trigger.service network-pre.target
+# Before=sysinit.target as well as WantedBy=: a unit merely *wanted* by a
+# target it is not ordered before runs whenever the manager gets to it,
+# which on a real booted guest was observed to be after sysinit.target
+# had already been reached -- i.e. after everything that was supposed to
+# find an address in place.
+Before=network-pre.target sysinit.target sshd.service ssh.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The NIC has to exist under the name the ip= spec names before
+# ipconfig is asked to configure it; udev renaming is masked (see the
+# Dockerfile's guest-rootfs-debian stage) but the device still has to
+# have been probed.
+#
+# Waiting for the device is handled directly in granule-configure-net via
+# fast tight polling, avoiding blocking sysinit on udevadm settle.
+ExecStart=/usr/local/libexec/granule-configure-net
+# A guest that gets this wrong has no network to be reached over, so the
+# console is where its complaints have to go: this is what puts them in
+# "docker logs"/"kubectl logs" for the granule container beside it.
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=sysinit.target

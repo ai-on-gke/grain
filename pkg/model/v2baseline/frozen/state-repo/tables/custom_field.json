@@ -1,0 +1,13 @@
+[
+  {
+    "name": "customer",
+    "label": "Customer",
+    "type": "enum",
+    "options": "[\"acme\",\"globex\"]",
+    "description": "",
+    "default_value": "",
+    "position": 1,
+    "multiple": 1,
+    "show_on_row": 1
+  }
+]

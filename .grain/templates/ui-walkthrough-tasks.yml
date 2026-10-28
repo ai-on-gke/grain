@@ -1,0 +1,99 @@
+name: UI walkthrough - intake, inbox, task lifecycle
+title: Walk through task intake, inbox, and lifecycle UI
+base: main
+auto-merge: true
+body: |
+  Thoroughly exercise the operator workflow from incoming work through
+  task disposition, in a real browser against a real server.
+
+  ## Coverage
+
+  - Open Inbox directly and from the rail; inspect its proposal,
+    parked-question, stalled and config-repo sync groups, counts, row
+    navigation, and empty-state behaviour. A stalled row shows its
+    sub-case and offers the control that sub-case names (Run now,
+    Cancel, Undefer or Retry merge); press one and confirm the row
+    leaves the group.
+  - Approve the seeded proposal from the Inbox and answer the seeded
+    parked question, then confirm each task leaves the appropriate group
+    and lands in the expected task state.
+  - Create tasks from the global New task form using both the queued and
+    the proposed path, from the rail's create menu and from `/new?field.<name>=`
+    links that prefill custom fields. Exercise repo/no-repo choice, description,
+    attachments, base branch, auto-merge, capabilities (the Grain API
+    group included, and a ticked capability that is not ready staying
+    ticked), custom fields, the advanced agent/model/network/resource
+    options (the model picker offers exactly the models the deployment's
+    enabled connections advertise), validation (a refused field inside
+    Advanced options opens them), cancel, and submission.
+  - Use Tasks and its Merged and Blocked views from the rail, and the
+    state filter. Exercise search, sort, compound narrowing (including
+    clearing it), URL persistence, browser Back/Forward, and refresh.
+    On the rows, confirm blocked shows as its own state oval, a change
+    in the merge queue reads "Merging", a live task carries its
+    sub-case chip with the reason on hover, and a proposal its agent
+    held for approval carries the "held for approval by <task>" chip
+    until it is approved.
+  - Open task detail from several entry points; edit
+    title/description/repo/base/custom fields/auto-merge, approve a
+    proposal, defer it with and without a date, pick it back up, and
+    inspect attempts, transcripts (and an attempt's capability audit),
+    chat and CI links as far as the seeded data permits.
+  - Pause and resume an open task from its page and from its chat pane
+    (Pause, Pause now for a running one, Resume) and confirm it keeps
+    its state and its place; Force merge a task whose run is stuck
+    waiting on CI, and Re-run CI or Retry merge where the task offers
+    them, confirming each asks first where it should and that the task
+    page follows without a reload.
+  - On task detail, exercise the sections a task can carry: add and
+    remove a dependency and confirm the chips (state and title on
+    hover), the blocked view and the Blocked rail count follow; the work
+    tree a task belongs to, nested under who filed what, with its done
+    count and links; the merge policy lines its repository's merge rules
+    require, with the rule behind each; the grain CI verdict and its link
+    into CI; a pending-secret request box (and that its value never
+    appears in the timeline); a suspended agent session; cross-team
+    approvals and their withdraw control; a host-script approval
+    request with its stdin preview, approved and denied; a parked
+    question's callout; the full prompt; the live
+    attempt transcript; and the Internal PR link into the pull request
+    page's diff.
+  - Select several rows, bulk-edit shared fields, cancel a bulk
+    operation, and verify that the selection and the persisted task data
+    both behave correctly. With the pipeline in manual mode (System →
+    Pipeline), confirm the rows that would run carry the waits-for-Run-now
+    marker, that Run selected now in the selection bar starts them, and
+    that the marker does not come back for a task already started.
+
+  ## Walkthrough protocol
+
+  - Build and start this repository's real `grain demo` server over a
+    throwaway embedded store, open its built frontend in an actual
+    Playwright browser, and interact through visible UI controls. Do not
+    substitute a source review, a jsdom-only test, or an API-only
+    exercise for the walkthrough.
+  - Prefer the Gemini-backed model and tooling when this sandbox carries
+    a key at `/home/debian/.gemini-api-key`; never print, log or commit
+    it. A repository-declared template carries no capabilities of its
+    own, so what the sandbox holds is whatever this deployment already
+    gives tasks in this repository.
+  - Explore beyond the scripted cases in `ui/e2e`. Check browser console
+    errors, failed network requests, loading/empty/error states,
+    keyboard reachability, and destructive-action confirmations relevant
+    to this area.
+  - Confirm mutations by returning to the screen, reloading and
+    deep-linking where applicable, and observing the persisted result.
+    Stub only an unavailable external or system boundary; keep the real
+    server, frontend, browser and user gestures in the loop, and
+    document every stub.
+  - Record the commit tested, the environment, the exact steps, the
+    outcomes and every stub in a dated report under `docs/test-runs/`,
+    named `YYYY-MM-DD-task-intake-inbox-lifecycle.md`. Do not commit
+    screenshots or generated browser artifacts.
+  - For each bug found: capture a deterministic reproduction; fix it in
+    this task when the correction is safe and scoped; add regression
+    coverage at the strongest practical level; and run the relevant
+    tests. If the fix is unsafe, materially separate, or needs
+    infrastructure this sandbox does not have, propose a focused
+    follow-up task with `branch: "main"` carrying the reproduction,
+    the evidence and the expected behaviour.

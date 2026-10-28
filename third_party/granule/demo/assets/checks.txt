@@ -1,0 +1,26 @@
+# What `granule guest verify` asserts about the guest the "build" chapter
+# builds: boot it, run each of these in it as root, print a verdict. No
+# commit, no tag, no image -- verify judges, it does not produce.
+#
+# The format is a [name] line and then the shell that tests it. The name
+# is the sentence the verdict is reported as, so it is written as the
+# claim rather than as the command.
+
+[the machine the Dockerfile described actually booted]
+test -f /etc/os-release
+grep -q 'ID=debian' /etc/os-release
+
+[nginx is installed and enabled, not merely present in the image]
+command -v nginx
+systemctl is-enabled nginx
+
+[nginx started on its own at boot and answers on the port the image EXPOSEs]
+systemctl is-active nginx
+curl -fsS http://127.0.0.1:8080/whoami | grep -q 'granule demo guest'
+
+[the guest half granule packed is the one that is running]
+test -f /etc/granule/guest-contract
+command -v granule-agent
+
+[the disk grew onto the space it was given]
+df -h / | tail -1

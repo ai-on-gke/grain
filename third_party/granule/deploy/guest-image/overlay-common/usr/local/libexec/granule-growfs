@@ -1,0 +1,74 @@
+#!/bin/sh
+# Grow this guest's root filesystem onto the disk it was actually given.
+#
+# CHV_DISK_SIZE_MB (granule's -disk-size-mb) sizes the overlay
+# before cloud-hypervisor is started, so a VM created with
+# -disk-size-mb 8192 boots with an 8GiB /dev/vda. Only the block device
+# grows: the ext4 inside it is still exactly what `mke2fs -d` made when
+# the image was built, so without this the guest sees a large disk and
+# the same few hundred MiB of free space it always had.
+#
+# This guest puts ext4 directly on /dev/vda with no partition table (see
+# the Dockerfile's guest-image stage), so there is nothing to grow first
+# -- no `growpart`, no partition table to rewrite -- and resize2fs on the
+# whole device is the entire job. ext4 grows online, with the filesystem
+# mounted as root, so this needs no initramfs hook either.
+#
+# Every reason not to resize exits successfully rather than failing. This
+# runs on every boot, and on most of them the disk is already exactly the
+# size the filesystem is (nobody set CHV_DISK_SIZE_MB, or it was already
+# grown onto on an earlier boot) -- resize2fs itself is the no-op there,
+# reporting "Nothing to do!". A boot must not fail because a disk didn't
+# need growing, wasn't ext4, or was attached read-only.
+set -eu
+
+log() {
+	echo "granule-growfs: $*"
+}
+
+# Field 1 is the device, 3 the filesystem type and 4 the mount options.
+# The last "/" line wins: an initramfs' own root can still be listed
+# ahead of the real one on a guest booting a GUEST_KERNEL_PACKAGE kernel.
+root_field() {
+	awk -v n="$1" '$2 == "/" { v = $n } END { print v }' /proc/mounts
+}
+
+DEV="${GRANULE_GROWFS_DEVICE:-$(root_field 1)}"
+# Some kernels name a root mounted before udev "/dev/root" rather than
+# the device it actually is; fall back to the device this guest is built
+# around rather than handing resize2fs a name it cannot open.
+if [ ! -b "${DEV}" ]; then
+	DEV=/dev/vda
+fi
+if [ ! -b "${DEV}" ]; then
+	log "no root block device to grow; nothing to do"
+	exit 0
+fi
+
+case ",$(root_field 4)," in
+*,ro,*)
+	log "the root filesystem is mounted read-only (CHV_DISK_MODE=readonly?); leaving it alone"
+	exit 0
+	;;
+esac
+
+case "$(root_field 3)" in
+ext2 | ext3 | ext4) ;;
+*)
+	log "the root filesystem is not ext2/3/4; resize2fs does not apply"
+	exit 0
+	;;
+esac
+
+if ! command -v resize2fs >/dev/null 2>&1; then
+	log "resize2fs is not installed; leaving the filesystem at its built size"
+	exit 0
+fi
+
+# Non-fatal on failure, deliberately: a guest that could not grow its
+# filesystem is a guest with less free space than asked for, which is
+# worth a line on the console, while a guest that fails to finish booting
+# over it is unreachable. The message is what says which happened.
+if ! resize2fs "${DEV}"; then
+	log "resize2fs ${DEV} failed; the guest keeps the filesystem it booted with"
+fi

@@ -1,0 +1,172 @@
+# The exec-capable counterpart to gke-pod-example.yaml: the same
+# self-contained VM (the guest disk image and kernel baked into the
+# granule image), with inline networking enabled in the VM container
+# itself. No netshim init container or separate network holder is needed.
+#
+# The one piece of cluster setup it needs is kvm-device-plugin.yaml,
+# which hands /dev/kvm and /dev/net/tun to the pod; the container is
+# not privileged and holds only NET_ADMIN (see gke.md's "Privileges").
+#
+# Use this one for the walkthroughs in the main README's "User flows",
+# since a guest with no network of its own is a thin thing to run
+# commands in; use gke-pod-example.yaml when all you want is to watch a
+# VM boot in `kubectl logs`. Exec itself is not what the difference is
+# about -- `kubectl exec ... -- granule exec` reaches the guest over the
+# VM's own vsock device (see the main README's "Execing into a VM"), so
+# it works on the netshim-less example too, verified on a cluster.
+#
+# What netshim adds here, over that example:
+#  - the guest takes over the pod's own IP and MAC, so the pod is
+#    addressed as any other single-container pod is: other pods reach
+#    it on the pod IP and through a Service, and it reaches them, on
+#    GKE's own point-to-point (`ptp`) CNI, and on `kind`'s, as much as
+#    on a bridge one.
+#    That needs the guest to install the routes `netshim` carries to it
+#    on `granule.routes=`, which both reference guest images do -- see
+#    the main README's "Container networking" for the mechanism and its
+#    "Validated on GKE" for what was measured on this manifest;
+#  - a private control link (169.254.100.1/24 on the pod side,
+#    169.254.100.2 in the guest) for anything in the pod that wants to
+#    reach the guest over IP. It has to be that address rather than the
+#    pod's own: the guest holds the pod's address, so dialing it from
+#    inside the pod reaches the pod's own network stack.
+#
+# Substitute IMAGE_PLACEHOLDER with your own pushed granule image (see
+# gke.md) before applying.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: granule-gke-exec-example
+  labels:
+    app: granule-gke-exec-example
+spec:
+  restartPolicy: Never
+  # Must comfortably exceed CHV_SHUTDOWN_TIMEOUT below so granule's own
+  # graceful-shutdown sequence can run to completion before the kubelet
+  # SIGKILLs the container itself.
+  terminationGracePeriodSeconds: 40
+  containers:
+    - name: web
+      image: IMAGE_PLACEHOLDER
+      args: ["run"]
+      env:
+        - name: CHV_NET_MODE
+          value: "inline"
+        # No CHV_DISK_IMAGE/CHV_KERNEL: both default to the reference
+        # guest baked into the image (see the main README's "Guest disk
+        # image and kernel"), which is what makes this manifest
+        # self-contained.
+        #
+        # The same NETSHIM_* settings the init container got, so the two
+        # cannot disagree about the tap: netshim creates it, and this
+        # container derives its own --net and the guest's "ip=" boot
+        # parameter from the address the CNI put on the pod's interface.
+        - name: NETSHIM_VM
+          value: "web"
+        - name: NETSHIM_CONTROL_CIDR
+          value: "169.254.100.1/24"
+        # Boot sizes, and the ceilings `granule resize` can grow the
+        # running guest up to (see the main README's "Memory hotplug" and
+        # "CPU hotplug"). Both ceilings are fixed at boot, and both
+        # default to "no headroom at all" -- CHV_CPUS_MAX to CHV_CPUS,
+        # CHV_MEMORY_MAX_MB to the larger of 2048 and CHV_MEMORY_MB -- so
+        # without these two the `kubectl exec ... -- granule resize` line
+        # in the README's Flow 3 has nowhere to grow into and quietly
+        # does nothing.
+        - name: CHV_CPUS
+          value: "2"
+        - name: CHV_CPUS_MAX
+          value: "4"
+        - name: CHV_MEMORY_MB
+          value: "1024"
+        - name: CHV_MEMORY_MAX_MB
+          value: "2048"
+        # Growth the guest asks for itself, rather than waiting for a
+        # `granule resize`: this container listens on the control link
+        # above for the pressure signals the guest's own
+        # granule-mem-agent sends, and hotplugs CHV_MEM_AGENT_STEP_MB per
+        # signal up to CHV_MEMORY_MAX_MB. Commented out because it is
+        # only useful on a guest whose kernel reports pressure through
+        # /proc/pressure/memory -- of the images this tree builds, the
+        # debian12 variant; the bundled kernel has no CONFIG_PSI, so
+        # there the listener is never signalled. This is the same VM
+        # `granule vm create -mem-agent -mem-agent-step-mb 128
+        # -mem-agent-cooldown 30s` creates on docker. See the main
+        # README's "Memory hotplug".
+        # - name: CHV_MEM_AGENT
+        #   value: "true"
+        # - name: CHV_MEM_AGENT_STEP_MB
+        #   value: "128"
+        # - name: CHV_MEM_AGENT_COOLDOWN
+        #   value: "30s"
+        # Any other cloud-hypervisor setting without a dedicated flag of
+        # its own, passed straight through (e.g. extra disks or raw CLI
+        # arguments). This is the same passthrough `granule vm create
+        # -e CHV_EXTRA_ARGS="--api-socket /tmp/chv.sock"` gives on docker.
+        # - name: CHV_EXTRA_ARGS
+        #   value: "--api-socket /tmp/chv.sock"
+
+        - name: CHV_SHUTDOWN_TIMEOUT
+          value: "20s"
+      # Without this the pod's Ready condition reports on the container,
+      # which is up well before the guest inside it has booted -- so
+      # "kubectl wait --for=condition=Ready" would return on a VM the
+      # exec lines in Flow 3 cannot reach yet. "granule ready" is a mode
+      # of the same binary this image already runs: it dials the guest's
+      # own agent over the VM's vsock device and exits zero once the
+      # guest answers a command. "-timeout 0" is a single attempt; the
+      # kubelet does the retrying, on periodSeconds. See the top-level
+      # README's "Readiness".
+      readinessProbe:
+        exec:
+          command: ["/usr/local/bin/granule", "ready", "-timeout", "0"]
+        periodSeconds: 5
+        timeoutSeconds: 5
+      resources:
+        # Requests cover the VM as it boots; limits cover it grown to
+        # both ceilings above, since a hotplugged vCPU competes for this
+        # container's CPU quota and hotplugged guest memory counts
+        # against its memory limit like any other page it touches.
+        requests:
+          cpu: "2"
+          memory: 2Gi
+        limits:
+          cpu: "4"
+          memory: 3Gi
+          # The device nodes, from kvm-device-plugin.yaml: /dev/kvm for
+          # cloud-hypervisor, /dev/net/tun for the tap inline networking
+          # creates. A device plugin adds each to the container's device
+          # cgroup as well as its /dev, which a hostPath does not.
+          devic.es/kvm: "1"
+          devic.es/tun: "1"
+      securityContext:
+        # Instead of privileged: true. NET_ADMIN is what inline
+        # networking needs to build the tap and splice it onto eth0, and
+        # what cloud-hypervisor needs to set that tap's MTU; it reaches
+        # no further than the pod's own network namespace.
+        capabilities:
+          drop: ["ALL"]
+          add: ["NET_ADMIN"]
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        # The only places granule run writes with a read-only root:
+        # its sockets, and the default overlay disk mode's copy-on-write
+        # layer. CHV_DISK_MODE=persistent writes the guest disk in place
+        # and needs readOnlyRootFilesystem dropped.
+        - name: run
+          mountPath: /run
+        - name: tmp
+          mountPath: /tmp
+        - name: overlay
+          mountPath: /var/lib/granule/overlay
+  volumes:
+    - name: run
+      emptyDir:
+        medium: Memory
+    - name: tmp
+      emptyDir: {}
+    - name: overlay
+      emptyDir: {}

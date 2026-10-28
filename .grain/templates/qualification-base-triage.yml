@@ -1,0 +1,61 @@
+name: Release qualification - Base branch triage & team inheritance
+title: Validate base branch triage, team ownership inheritance, and repair unblocking
+base: main
+auto-merge: true
+# The scratch branch this template's body tells its runs to create from
+# main and delete when done (qualification/<this task id>). Create and
+# delete only: no force, so an existing qualification branch can be
+# fast-forwarded but never rewritten, and main itself stays out of reach.
+push:
+  - ref: refs/heads/qualification/*
+    delete: true
+body: |
+  Validate the end-to-end base branch failure triage, team ownership inheritance,
+  and unblocking verification.
+
+  Grain releases from trunk (`docs/release-candidate-management.md`): `candidate`
+  is a pointer the release train force-moves, and pull requests targeting it are
+  refused. Stage the deliberate failure on a scratch branch, never on `main` or
+  `candidate`:
+
+  - Create the scratch branch from `main`'s tip and push it:
+    `git push origin origin/main:refs/heads/qualification/<this task id>`.
+  - Land the failure, and later its repair, through tasks filed with
+    `propose_task` and `branch: qualification/<this task id>`, so each merges
+    through the scratch branch's own merge queue and base-branch CI.
+  - Never push the deliberate failure to this task's own branch: this task's own
+    pull request merges into `main`. Push to it only a real fix for something
+    this run found.
+  - If grain does not run base-branch CI or triage on the scratch branch, report
+    that as the finding. Do not move the experiment onto `main` to get it.
+  - Delete the scratch branch when you are done
+    (`git push origin :refs/heads/qualification/<this task id>`).
+
+  ## 1. Simulate Base Branch Failure
+
+  - Stage a deliberate build/test failure on the scratch branch.
+  - Observe failure detection by base-branch CI and the triage reconcilers, and
+    confirm with `query_merge_queue` that merges to the scratch branch are held
+    while `main`'s queue carries on unaffected.
+
+  ## 2. Team Ownership Inheritance Verification
+
+  - Verify that the automatically filed triage task inherits the responsible team:
+    - Match failure stack traces and touched paths against team ownership declarations
+      in `pkg/model/team_config.go` and `.grain/settings.yml`.
+    - Inspect the created triage task metadata using `read_grain_task` and verify that
+      its team attribution and custom fields correctly match the owning team.
+
+  ## 3. Fix Verification & Unblocking
+
+  - Land a targeted repair commit fixing the staged failure on the scratch branch.
+  - Run `wait_for_checks` or `run_ci_job` to confirm that the scratch branch's base CI
+    turns green.
+  - Verify that the merge hold on the scratch branch clears automatically and the
+    triage task closes.
+
+  ## 4. Reporting
+
+  - Confirm the scratch branch is deleted and nothing from it reached `main`.
+  - Document all triage events, team attribution mappings, merge hold transitions,
+    and unblocking in the final task comment.

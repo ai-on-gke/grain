@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "board_id": "board-3",
+    "kind": "throughput",
+    "title": "Last thirty days",
+    "order_key": 0
+  },
+  {
+    "id": 2,
+    "board_id": "board-3",
+    "kind": "latency",
+    "title": "",
+    "order_key": 1
+  }
+]

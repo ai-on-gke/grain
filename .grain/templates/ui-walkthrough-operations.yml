@@ -1,0 +1,109 @@
+name: UI walkthrough - System, CI, alerts and banners
+title: Walk through System (Health, Logs, Sandboxes, Caches, Top, Pipeline, Metrics, Power), Settings → Upgrade, CI, the alerts bell and banners
+base: main
+auto-merge: true
+body: |
+  Thoroughly exercise the observability and operator-control screens --
+  the System view and its tabs, the rail's CI page, the alerts bell and
+  the standing banners -- in a real browser against a real server. The
+  settings that tune the same machinery are Settings' (the settings and
+  infrastructure walkthroughs).
+
+  ## Coverage
+
+  - System: open it from the System button in the page header rail (on
+    a phone, the System row at the foot of the drawer) and from the
+    build stamp at the foot of the rail, which opens Settings → Upgrade
+    (`/settings/upgrade`; the old `/system/upgrade` must redirect there).
+    Traverse every tab (Health, Logs, Sandboxes, Caches, Top, Pipeline,
+    Metrics, Power), its scrolling on a narrow window and the
+    phone's section list, and confirm each rides in the URL
+    (`/system/<tab>`) through reload and Back/Forward, and that the old
+    `/admin/logs`, `/sandboxes`, `/caches` and `/metrics?<query>` links
+    land on the matching tab with their query kept.
+  - Health (System's default tab): the alerts the bell lists, each with
+    its link; the config-repo backing state; the settings saved but not
+    applied until a restart and the ones stored but not runnable, each
+    linking to its Settings section; and the host-mode install notice
+    when the install still needs migrating.
+  - Sandboxes: host commitment and pressure, the sandbox budget and the
+    auto overcommit controller's live status, pool status, sandbox
+    lifetime and storage, CI sandboxes folded behind their summary row
+    in the live table, persistent sandboxes (their running commit and
+    last refresh, and the empty state), connected remote executors,
+    health/error/empty states, resource trends, and long-table
+    scrolling.
+  - Caches: the proxy and Actions caches, their sizes and hit history,
+    and each named Flush control (against throwaway entries only), with
+    its confirmation.
+  - CI (`/ci`, from the rail): the active-sandboxes table collapsed to a
+    summary and expanded, run filtering; open runs/jobs/steps/log output
+    from rows and from task links; exercise direct-link and reload,
+    including a run id the daemon no longer remembers; inspect
+    cache/pending/running/success/failure/errored/skipped states, a
+    shared CI fault and the task it is assigned to, Retry on a concluded
+    run (every job, and failed jobs only, following to the run it
+    starts) and Cancel run on an open one.
+  - Logs tail/search/refresh and Top. Pipeline: pause and resume with
+    the confirmation, and manual mode, confirming the alert it raises
+    appears and clears. Power: exercise the confirmations (Restart
+    grain, Reboot host, Shut down host). Never actually reboot, restart,
+    shut down, or otherwise mutate the host; intercept only those POST
+    boundaries and verify the cancel, success and failure UI behaviour.
+  - Metrics (System → Metrics, and from a dashboard's throughput panel):
+    inspect every section, the time windows and trends, the release
+    notes panel, narrowing carried in the URL, the empty/loading/failure
+    states, long values, and navigation into the underlying tasks.
+  - Settings → Upgrade (it left System for Settings; still check it
+    here, from the build stamp and the old `/system/upgrade` link): the
+    version display, the image the upgrade would pull and
+    choosing another, the upgrade check mode shown read-only with its
+    link to Settings → General, and the database panel. Never actually
+    upgrade; intercept only that boundary.
+  - Alerts bell (in the page header rail, and on a phone's bar): drive
+    (or, where only a live boundary can cause them, intercept) the
+    reconciler-down, failing config-repo sync, agent/connection pause
+    with its resume time, pipeline pause and manual mode, setup
+    (no git connection, no model connection, no repository), host
+    sandboxes and red-base-branch repair alerts. Verify their wording and
+    links, that "see all" opens System → Health, and that each clears
+    when its cause does. The only standing banners left are the
+    disconnected banner and the host-mode install notice: raise each,
+    confirm it sits above the rail and the page without covering them,
+    and that it clears.
+  - Stub the host, CI-execution, cache, upgrade and live-connection
+    boundaries only where the demo lacks them, retaining the real Grain
+    server and browser UI, and document each intercepted route.
+
+  ## Walkthrough protocol
+
+  - Build and start this repository's real `grain demo` server over a
+    throwaway embedded store, open its built frontend in an actual
+    Playwright browser, and interact through visible UI controls. Do not
+    substitute a source review, a jsdom-only test, or an API-only
+    exercise for the walkthrough.
+  - Prefer the Gemini-backed model and tooling when this sandbox carries
+    a key at `/home/debian/.gemini-api-key`; never print, log or commit
+    it. A repository-declared template carries no capabilities of its
+    own, so what the sandbox holds is whatever this deployment already
+    gives tasks in this repository.
+  - Explore beyond the scripted cases in `ui/e2e`. Check browser console
+    errors, failed network requests, loading/empty/error states,
+    keyboard reachability, and destructive-action confirmations relevant
+    to this area.
+  - Confirm mutations by returning to the screen, reloading and
+    deep-linking where applicable, and observing the persisted result.
+    Stub only an unavailable external or system boundary; keep the real
+    server, frontend, browser and user gestures in the loop, and
+    document every stub.
+  - Record the commit tested, the environment, the exact steps, the
+    outcomes and every stub in a dated report under `docs/test-runs/`,
+    named `YYYY-MM-DD-deployment-operations.md`. Do not commit
+    screenshots or generated browser artifacts.
+  - For each bug found: capture a deterministic reproduction; fix it in
+    this task when the correction is safe and scoped; add regression
+    coverage at the strongest practical level; and run the relevant
+    tests. If the fix is unsafe, materially separate, or needs
+    infrastructure this sandbox does not have, propose a focused
+    follow-up task with `branch: "main"` carrying the reproduction,
+    the evidence and the expected behaviour.

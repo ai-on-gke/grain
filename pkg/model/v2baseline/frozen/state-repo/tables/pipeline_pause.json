@@ -1,0 +1,10 @@
+[
+  {
+    "id": 1,
+    "paused_at": "2026-10-21T12:00:00Z",
+    "reason": "upgrading the sandbox image",
+    "actor_kind": "human",
+    "actor_id": "owner",
+    "until_task_id": ""
+  }
+]

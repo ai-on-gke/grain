@@ -1,0 +1,1371 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# grain's own checks, run by grain (pkg/ci) rather than by GitHub.
+#
+# This began as .github/workflows/tests.yml's credential-free half (that
+# file has since been removed; this is now the only copy) -- gofmt, the
+# frontend build, `go build`, `go vet`, both Go modules' tests, `npm test`,
+# the Playwright UI suite, shellcheck and the Terraform module -- said in
+# grain's own workflow format, which is GitHub Actions' wherever GitHub
+# has a word for the thing. The differences from that file were all
+# differences between a hosted runner and a grain sandbox:
+#
+#   - No `uses:`. There is no checkout step because a job's sandbox
+#     arrives with the commit already checked out, and no setup-go or
+#     setup-node step because the sandbox image already carries both
+#     (the repository's Granulefile installs the Go version go.mod
+#     names and the Node major ui/ is tested on).
+#   - No `if:` on a step, and no step outputs: a job's steps run in
+#     order and a job stops at the first one that fails, so a GitHub job
+#     written as "try the cheap thing, then `if: steps.x.outputs.hit !=
+#     'true'` do the expensive one" becomes one step that decides for
+#     itself.
+#   - Artifacts are a key on the job rather than a step. GitHub's ui-e2e
+#     job ends with `uses: actions/upload-artifact` under an `if:
+#     failure()`; there is no `uses:` and no `if:` here, and a step could
+#     not do it anyway -- a grain sandbox is destroyed the moment its job
+#     ends, so the copy has to be grain's rather than the workflow's. So
+#     a job says `artifacts:` with upload-artifact's own `name` and
+#     `path`, and grain collects those paths out of the sandbox before it
+#     destroys it, for a job that did not succeed. That last clause is
+#     the `if: failure()` this format cannot spell: there is no key for
+#     "keep this from a green run too" and nothing here wants one.
+#     What is kept is bounded (an age, a size per artifact, a size per
+#     run, a size for the lot -- the daemon's -ci-artifact-max-* flags),
+#     and `grain ci show <run>` names what a run kept while `grain ci
+#     artifact <run> <job> <name>` fetches it. ui-e2e below is the one
+#     job that uses it, and its comment says why a new key always lands
+#     one deployment behind the build that adds it.
+#   - `paths:` and `paths-ignore:` are keys on the job rather than on the
+#     trigger, and they buy something stronger than GitHub's. On GitHub
+#     they sit under `on:` and decide whether the workflow runs at all;
+#     here a job that says which files it reads is *keyed* on the content
+#     of those files rather than on the commit, so a commit touching
+#     nothing it reads is a cache hit and the job does not run -- across
+#     branches, across a rebase, and across a merge of main that changed
+#     nothing the job reads. Same globs, same `!` negation, same
+#     evaluation order, and the same refusal to take both keys in one
+#     job. pkg/ci/paths.go is the whole of what declaring one promises
+#     and what defends it.
+#
+#     Every job below declares one, and each says on itself what it reads
+#     and why that is the list. The `go` job's is the one the other four
+#     Go-running jobs share, through a YAML anchor, so there is one list
+#     to keep honest rather than five -- and tests/deploy's
+#     TestTheGoJobDeclaresEveryFileItsOwnTestsRead reads it back out of
+#     this file and checks it against the files those tests really open.
+#
+#     What they are worth here, measured against this repository's tree
+#     as "jobs that would run rather than be served from the cache": a
+#     docs-only commit 0 of 8, a README-only commit 0 of 8, a ui/-only
+#     commit 6 of 8, a pkg/orchestrator-only commit 5 of 8, a
+#     terraform-only commit 7 of 8 (tests/deploy reads that module), a
+#     one-shell-script commit 6 of 8. Every one of those ran all eight
+#     before these keys were real.
+#
+#     Measured while this file had eight jobs. It has seven now -- real
+#     KVM sandboxes has left it, see the list further down -- and that
+#     job shared the `go` list, so it was one of the counted jobs in
+#     every line above except the two docs ones: read them as 5 of 7,
+#     4 of 7, 6 of 7 and 5 of 7 until somebody measures them again.
+#
+# What is *not* a difference, and used to be written here as though it
+# were: this file said a grain sandbox "reaches nothing but the git
+# proxy" and so could carry no terraform, no actionlint and no
+# shellcheck, and could not be sure of KVM. That was measured on this
+# deployment's own CI sandboxes on 16 September 2026 (grain/task-109),
+# one job per claim, and every part of it was wrong: shellcheck and
+# terraform are both on PATH, /dev/kvm is present and writable, docker
+# answers, `sudo apt-get update` works, and github.com, registry.npmjs.org,
+# cdn.playwright.dev and registry.terraform.io are all reachable.
+#
+# packages.cloud.google.com belongs on that list too, and is written down
+# here because three runs that died fetching from it read as though it
+# did not: they are what grain/task-72's branch was held up by, and
+# "CI sandboxes cannot reach Google's apt archive" is the conclusion
+# grain/task-183 was dispatched to act on. Measured from a CI sandbox on
+# 17 September 2026, in a job of its own: that host served its Packages
+# index and a 141MB .deb at ~17MB/s, apt.releases.hashicorp.com and
+# deb.debian.org did the same, and ghcr.io served an anonymous pull of
+# this repository's own guest image. Repeated from an agent sandbox and
+# from a container nested inside one, with the same numbers. What a
+# sandbox has no route for at all is IPv6 -- only fe80::/64 per
+# interface -- so an AAAA-first fetch spends a connect attempt on
+# "Network is unreachable" before falling back to IPv4, which is what the
+# first of those three runs logged and is not why it failed.
+#
+# Where they did fail is a layer further in, and worth knowing before
+# anyone spends an afternoon on a firewall. All three died *building a
+# sandbox guest*, which boots a nested VM inside the sandbox and pulls
+# ~500MB into it, on a host that is routinely running a dozen other
+# sandboxes at 8-16GB each; the last of them managed 68.7MB at 393kB/s
+# before timing out, with Acquire::Retries already set, which is a
+# throughput collapse under contention rather than a blocked route.
+# Nothing in this file builds a guest today -- the granule job that did
+# is gone (grain/task-171), and "real KVM sandboxes" is out of this file
+# again (see the list below) -- so this is a measurement rather than a
+# live problem. It was a live problem in the days before that job left,
+# and that is why it left: a commit that changes a path guest-inputs.sh
+# names, or one whose key nothing published, finds no such tag and
+# builds the guest inline, which is the nested-VM download the paragraph
+# above is about and which by 2026-09-20 was failing outright rather
+# than merely crawling. So the thing to check before putting a
+# guest-building job back here is not the route but the publisher:
+# whether `guest:inputs-<key>` exists for the commit being tested.
+#
+# Nothing had published one since 2026-09-16, when this account's Actions
+# began being refused before their first step and
+# .github/workflows/build-artifacts.yml stopped running. Publishing the
+# guest from somewhere other than GitHub Actions was the fix, and it has
+# landed: .grain/workflows/release.yml builds the guest from the same
+# Granulefile and publishes the same four names --
+# `guest:inputs-<key>`, `guest:sha-<short>`, `guest:<branch>` and
+# `guest:latest` -- from a Grain CI sandbox on every merge into main
+# (scripts/release-images.sh). tests/deploy holds its cache key to the
+# same definition the four GitHub jobs derive.
+#
+# What was outstanding was the credential, and it is the half no file in
+# this repository can supply (grain/task-188): publishing needs the
+# `package-publish` CI capability on bwsalmon/grain, which is
+# operator-owned repository configuration -- this deployment's own
+# settings, so a change to grain/config rather than to a workflow here
+# (docs/ci-capabilities.md). Until it was granted every release run
+# stopped on its first step saying so, and before 4db248e43 they got as
+# far as being refused by ghcr.io at the push.
+#
+# It was granted, and for a while the cache was being filled: the tag
+# for main's guest inputs on 2026-09-18,
+# ghcr.io/bwsalmon/grain/guest:inputs-afbc4749d901b21b8af17f2a1f9bcd04,
+# has a config blob dated 2026-09-18T14:47:29Z and is labelled with the
+# build VM ("granule.dev/vm: gb-47ukpg") that produced it. On the days
+# that held, "real KVM sandboxes" resolved its guest with one `docker
+# pull` and was green in about ten minutes. It is the days it stopped
+# holding that took the job out of this file; the list below has them.
+#
+# The one case a merge-triggered publisher cannot reach is the branch
+# that changes a guest input: its key does not exist in the registry
+# until it lands, so every run on it until then builds a guest inline.
+# .grain/workflows/image.yml's `guest-cache` job is the opt-in for it
+# (grain/task-222) -- the same phase of the same publisher, filling the
+# content-addressed tags and nothing that a deployment resolves --
+# dispatched once on the commit that changed the input:
+#
+#     grain ci run -repo bwsalmon/grain -branch <branch> \
+#       -job .grain/workflows/image.yml:guest-cache -watch
+#
+# It is a dispatch rather than something this file does because grain
+# places a publishing credential only for a post-merge release or an
+# operator-triggered dispatch, and an agent's task-scoped CI request is
+# an ordinary push (docs/ci-capabilities.md). That dispatch is still how
+# a branch in that position warms its own key -- for the guest-resolving
+# jobs in other files, and for this one on the day it comes back.
+#
+# Nesting is not a difference either, which that task's note on the
+# Kubernetes job guessed it was: the real-kubernetes job that used to be
+# in this file built a kind cluster in a sandbox -- a privileged
+# container with its own cgroup namespace and its own CNI, inside a
+# sandbox that is already one of those -- installed Calico into it and
+# passed. What had stood between that job and a green tick was a sandbox
+# too small for the node it becomes and two bugs in the suite itself,
+# which had never passed anywhere: it asked for a shell its image did not
+# have, and its Calico wait raced the DaemonSet that had not created a
+# pod yet. It has since started failing again and is out of this file for
+# now; see the list below.
+#
+# That does not make a download in a step a good idea where the guest
+# image could carry the thing instead -- a job that fetches at run time
+# is a job an outage elsewhere can redden -- so the rule for this file is
+# the narrower one: prefer what the image already has (actionlint,
+# Playwright's browsers cache), and where a job must fetch, pin the
+# version and check what came back. `go test` and `npm ci` still run against the
+# module and npm caches the guest image was built with, which is why they
+# are fast; a dependency added since that image was built now fetches
+# instead of failing, which is slower rather than red, and rebuilding the
+# guest is still the fix.
+#
+# --- The fetch and the check ---
+#
+# "A job that fetches at run time is a job an outage elsewhere can
+# redden" is the paragraph above, and until grain/task-498 this file
+# only knew how to make that less likely. `infrastructure:` on a step
+# (pkg/ci.Step.Infrastructure) is how a fetch can now say what it is: a
+# step declared with it that does not succeed ends the job `errored`
+# rather than `failure`, which is grain's word for "we did not get an
+# answer" -- no verdict about the tree, no repair task filed against the
+# branch, no Broken base branch, and nothing written to the job cache,
+# so the next run samples the commit again.
+#
+# `npm ci` could not simply be declared with it, and that is the whole
+# of why the arrangement below is shaped the way it is. A registry that
+# will not answer is this deployment's problem and must not redden a
+# branch; a lockfile that does not resolve, a dependency that was
+# removed, an `engines:` mismatch is the *commit's* problem and must
+# redden it; and `npm ci` exits 1 either way. A blanket
+# `infrastructure: true` over the install would hide real breakage
+# behind a verdict nobody blames, which is worse than the bug it fixes.
+#
+# Three ways out were weighed:
+#
+#   1. Split the fetch from the check. An `infrastructure:` step that
+#      only fills the cache, and an ordinary step after it that must
+#      install from what is already local -- whose failure is then
+#      unambiguously the tree's.
+#   2. Classify inside the step, which needs a way for a step to say
+#      "this particular exit is infrastructure". The format has no such
+#      thing: `infrastructure:` is a property of a step, not of an exit
+#      code, and adding one would be a change to the format.
+#   3. Take the fetch out of CI's path entirely, by baking the
+#      dependencies into the guest image.
+#
+# (1) is what this file does, and (2) refused. (3) could only ever be a
+# floor -- a guest image is built from *a* commit's lockfile, and a
+# branch that changes ui/ is exactly the branch it cannot cover -- and
+# the Granulefile the guest is built from now resolves no lockfile at
+# all, so the fetch here is the whole of it. (2) was refused because the format should not grow a key for
+# "ignore this exit code" before something needs one that a split cannot
+# serve: a step that can tell grain to disregard its own failure is a
+# step that can be wrong in the direction nobody notices.
+#
+# So each job that installs npm packages runs scripts/warm-npm-cache.sh
+# in a step of its own, and installs with `npm_config_offline` set
+# afterwards. The fetch is allowed to fail and says so; the install
+# cannot reach the network at all, so its failure is the tree's by
+# construction. The one judgement left is inside that script -- an
+# install that did not work, while the cache is all the next step will
+# get: was that the registry's fault or the lockfile's? -- and it is
+# made on npm's own error code and on a ping, defaulting to the tree
+# whenever it cannot tell. That default is the point: an unrecognised
+# infrastructure failure costs a red tick somebody has to look at, while
+# an unrecognised tree failure would cost a green one nobody does.
+# tests/deploy/warm_npm_cache_test.go drives those decisions directly,
+# and tests/deploy/grain_workflows_test.go holds this file to the shape
+# (every npm install offline, behind a warm step of its own).
+#
+# That second commit is this one (grain/task-546), and it is worth
+# saying why it was ever separate. The key exists in pkg/ci and has
+# since 606cdb96c, but this file is parsed by the *daemon's* build
+# rather than by the checkout's, so declaring it here before the
+# deployment was running that build errored every job on the branch with
+# "field infrastructure not found in type ci.rawStep" -- the same trap
+# `artifacts:` and `paths-ignore:` each fell into, see the `ui e2e`
+# job's own note on it. The warm steps therefore said
+# `continue-on-error: true` for a day, which stopped a registry outage
+# failing the job but still let an incomplete cache redden the offline
+# install below as a verdict. A new key here is always a second commit,
+# pushed once the daemon is known to carry it; the way to know is to
+# push one word of it and read the planning failure.
+#
+# Playwright's browsers go the same way in the `ui e2e` job below, which
+# is the other half of the trade the paragraph above this section
+# describes: the download stays a download rather than becoming an image
+# rebuild on every lockfile change, but it is no longer in the verdict's
+# path.
+#
+# What is still fetched from inside an ordinary step, and so can still
+# redden a branch that has nothing to do with it: the module downloads
+# `go build` and `go test` make when go.sum names something the image's
+# module cache has not got, and the `docker pull` inside the installer
+# job's image build. Each is the same shape as `npm ci` and wants the
+# same split; neither has been measured costing a verdict here yet,
+# which is the only reason they are a list rather than a change. (The
+# "Install actionlint" step was previously of that shape; it is now
+# pre-installed in the guest image with checksum verification at build time.)
+#
+# What is only on GitHub is two jobs, and the reason is measured here
+# rather than assumed:
+#
+#   - "real KVM sandboxes". This one ran here and passed from
+#     grain/task-116 onwards -- about ten minutes a push, nearly all of
+#     it the suite -- and what has gone is not the suite but the guest it
+#     drives. Its first step resolves `guest:inputs-<key>` for the
+#     commit under test and builds a guest inline when the registry has
+#     none, and since 2026-09-18 that miss has been happening on commit
+#     after commit: every red run of this job in the week to 2026-09-20
+#     failed on "Resolve the sandbox guest" and none of them on the
+#     suite, on grain/task-237, -244, -248, -349, -353, -355, -359,
+#     -360, -385 and -397, and on the merge queue's own run against main
+#     at 243d161 -- so it is not one branch's changed guest input. The
+#     inline build is what cannot be done here: it boots a nested VM and
+#     provisions it, and both attempts die fetching google-cloud-cli
+#     from packages.cloud.google.com, which times out from inside that
+#     VM on port 80 however well the sandbox around it reaches the same
+#     host. The cost of leaving it in is the whole of the argument -- a
+#     job that was ten minutes takes 35 minutes to an hour and a half
+#     per push, hit or miss, and reddens branches that have touched
+#     nothing it tests -- so it is out of this file (grain/task-427)
+#     until the cache is reliably published for every commit, or the
+#     guest build inside a CI sandbox can reach what it installs.
+#     pkg/orchestrator/granule_docker_real_test.go and
+#     model_proxy_real_test.go are untouched, and
+#     GRAIN_REAL_VM_TESTS=1 still runs the suite by hand; so does
+#     .grain/workflows/kvm-route-stress.yml, which boots the two-VM test
+#     twenty times over in one sandbox and is how to sample this suite
+#     while the gate is off. What this file loses meanwhile is the check
+#     on b8503b73d's guest-side fix for the "boots, answers `granule
+#     exec`, never acquires a default route" failure that kept this job
+#     out twice before (grain/task-109, -116, -130): that fix is
+#     measured rather than trusted -- 20/20 boots in the stress
+#     workflow, and every run of this job since 45e2099 green on the
+#     suite step -- but nothing gates a regression in it here now, which
+#     is a reason to put this job back rather than to leave it out.
+#
+#   - "real Kubernetes sandboxes". This one ran here and passed from
+#     grain/task-117 onwards, and it is red again now: on bf7a9eb, the
+#     tip of main, the job stopped at its own "A kind cluster was
+#     created" step, so the suite never got a cluster to test anything
+#     against and nothing further in it was exercised. Nobody has yet
+#     found out why -- a 30-minute job that reddens every branch while
+#     that question is open blocks work that has nothing to do with
+#     Kubernetes, so it is out of this file (grain/task-161) until
+#     someone has debugged that cluster-creation failure, and goes back
+#     once they have. pkg/orchestrator/k8s_sandboxes_real_test.go is untouched,
+#     so the suite itself is intact and can be run by hand with
+#     GRAIN_REAL_K8S_TESTS=1 meanwhile.
+#
+# Both entries say what has to be true for the job to come back, and
+# both are worth the trouble of saying: a job that leaves a file with no
+# written condition for its return is a job nobody ever returns. The KVM
+# one came off this list once before on exactly that strength -- it was
+# absent for a reason that turned out to be a real bug in the guest
+# rather than a fact about sandboxes, and it was let back in the day the
+# bug was fixed and measured.
+#
+# A third job, "container and installer", left this file for a reason
+# that was about cost rather than about what a sandbox can do, and has
+# now come back in two pieces. It did run here and pass -- the container
+# half from grain/task-118, the installer half from 38e939732 -- but it
+# built the shipped image and the Kubernetes sandbox image from source
+# and then drove a real container and a real installer on top of them,
+# which took about forty minutes and so was the wall clock of every
+# check-in waiting on this suite. grain/task-158 removed it to be
+# triaged: what the time actually goes on, and how much of it is worth
+# paying on every push.
+#
+# The answer, measured in grain/task-157, was that almost all of it was
+# the build -- apt twice, three agent CLI downloads, kubectl, granule,
+# `npm ci`, Vite and `go build`, none of it cached in a fresh sandbox --
+# and that tests/installer is not asking about the build at all. So the
+# two halves now run on different schedules. The `installer` job below
+# drives the same three tests/installer packages on every push, against
+# an image assembled out of the published runtime and this commit's own
+# binary. The build itself, and tests/container with it, happens once per
+# merge in .grain/workflows/release.yml -- which builds the images it
+# publishes, so the suites gate the push rather than racing it
+# (grain/task-180) -- and on demand for a branch, in
+# .grain/workflows/image.yml's `workflow_dispatch`.
+#
+# The trade that buys, stated plainly: a break in the image build, or a
+# change to what the image contains, is now caught when the commit
+# merges rather than while it is still a branch. image.yml's
+# `workflow_dispatch` is the opt-in for a branch that touches the
+# Dockerfiles or the installer's container arguments and wants that
+# answer first.
+#
+# Everything else in that file either runs here now or needs a credential
+# (live-agent.yml's model key, gcp-smoke.yml's project) or publishes an
+# image, and image publishing has a workflow of its own.
+#
+# One job goes the other way and exists only here: `package cache`, which
+# points this sandbox's own dockerd at the package cache, pulls an image
+# through it, and builds a container that fetches its own packages through
+# it. A hosted runner could run the code but not the claim
+# -- what it asserts is that the merge into /etc/docker/daemon.json leaves
+# the *guest image's* own bridge configuration alone, and a GitHub runner
+# has no such file to keep. See that job's own comment for why it is not
+# folded into `go`.
+#
+# The jobs are independent on purpose -- `needs:` between them would
+# serialise a five-minute Go suite behind a one-minute frontend one for
+# no reason -- and they are separate jobs rather than one because a job is
+# what gets a sandbox of its own and what gets cached of its own, so
+# splitting on "what can fail independently" is also splitting on "what
+# need not be re-run".
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  # Deliberately no `release:` here, and this repository's own history is
+  # the reason (grain/task-461).
+  #
+  # The `push:` above is the merge queue's gate. Grain judges a base
+  # branch after a merge with a run asked for under `push`
+  # (orchestrator.baseBranchCIWanted) -- `["**"]` rather than `[main]` is
+  # what makes that match, because which branches grain judges is grain's
+  # to decide (a release train's own branch, a repository's second base
+  # branch) and a base-branch run that matched no workflow would be an
+  # errored run judging nothing.
+  #
+  # This file answered `release` as well for a while (grain/task-355),
+  # because the base-branch run used to *be* the trusted release event and
+  # `release` matched .grain/workflows/release.yml and nothing else -- so
+  # the gate was asking "does the deployable image still build and
+  # publish" and running no test at all. Adding the trigger fixed that and
+  # kept the wrong shape: the publisher's conclusion was still the
+  # verdict, so a flaky `release images` stopped every merge in the
+  # repository, and the whole suite ran twice per merge -- once as the
+  # gate, once inside a trusted run carrying this repository's release
+  # secrets. An operator ruled on it: release is not the gate, that is
+  # CI's job.
+  #
+  # So the publishing is a run of its own now
+  # (orchestrator.reconcileBaseBranchRelease), recorded where the merge
+  # queue cannot see it, and the jobs below judge the tree exactly once
+  # per coalesced tip with no release material anywhere near them.
+
+env:
+  # Deliberately not -mod=mod: a sandbox that cannot reach the network
+  # should fail saying the module is missing rather than hanging on a
+  # proxy it will never reach.
+  GOFLAGS: -mod=readonly
+  PLAYWRIGHT_BROWSERS_PATH: /var/cache/playwright
+
+# Every job here says `capabilities: []`: none of them uses a credential
+# the deployment provides this repository (gemini-key, gcp-key,
+# package-publish), and a job that omits the key is handed the whole set
+# -- minting a GCP service-account key and a Gemini key at admission for
+# every job of every run, which is what emptied the gcp-key pool and set
+# off the IAM write-quota storm of 2026-10-23 (docs/ci-capabilities.md,
+# "What a job is given"). A job that comes to need one names it instead.
+jobs:
+  go:
+    capabilities: []
+    name: go
+    # What this job reads, and so what it is keyed on: everything in the
+    # repository except the files below.
+    #
+    # `paths-ignore:` rather than a positive `paths:` list on purpose,
+    # and the asymmetry is the whole argument -- forgetting to *exclude*
+    # something costs a cache miss and a job that runs when it need not,
+    # while forgetting to *include* something is a green tick over code
+    # nobody compiled. So a job this broad states the short list it does
+    # not read and takes everything else, and that list is checked rather
+    # than assumed:
+    #
+    #   - docs/**, except the three agent surface captures. Those really
+    #     are read by a test -- pkg/agent/{claude,codex,antigravity}'s
+    #     surface_capture_test.go open ../../../docs/*-surface.md and
+    #     assert against them -- and nothing else under docs/ is opened
+    #     by anything this job runs. That is what the `!` line is for;
+    #     drop it and a stale capture passes.
+    #   - README.md (the `*.md` glob does not cross `/`, so it is
+    #     top-level markdown only and pkg/capability/bootstrap's embedded
+    #     playbooks stay in) and the two licence files.
+    #
+    # Everything else stays in, including terraform/ and .github/, which
+    # look like things no Go test could care about and are both read by
+    # tests/deploy. The anchor is for the jobs below whose steps
+    # also build or run the Go program with the frontend -- ui e2e and
+    # installer -- so there is one list to keep honest.
+    #
+    # The Go suite is partitioned into five 8-vCPU / 16 GiB RAM shards
+    # (`go`, `go-e2e`, `go-orchestrator`, `go-model`, `go-unit`) so that
+    # every shard completes well inside ten minutes, sharing compiled
+    # -race artifacts across sandboxes through GOCACHEPROG
+    # (pkg/pkgcache/gocache.go, KindGoBuild). Only `go` and `go-e2e` build
+    # the frontend (`warm-npm-cache.sh` + `make frontend`), because only
+    # the packages they test embed or inspect the built UI: `go` runs
+    # `make fmt`, `go build ./...`, `go vet ./...` and the tests of
+    # `pkg/ui`, `cmd/grain` and `ui/e2e/...`; `go-e2e` runs `tests/e2e` and
+    # `tests/deploy`, both of which import pkg/ui. The three backend shards
+    # compile against the tracked placeholder in pkg/ui/static and exclude
+    # `ui/**` from their cache key so UI-only edits do not invalidate them.
+    paths-ignore: &not-read-by-the-go-program
+      - docs/**
+      - "!docs/*-surface.md"
+      - "*.md"
+      - LICENSE
+      - NOTICE
+    sandbox:
+      cpus: 8
+      memory-mb: 16384
+      disk-gb: 60
+    # Until 2026-10-26 this job also ran tests/e2e and tests/deploy, and
+    # at 3x sandbox CPU overcommit on the kubernetes-granule backend its
+    # median went to 16-18 minutes, with a slow tail cancelled at
+    # 20m11s-20m19s -- which abandons a merge batch instead of bisecting
+    # it. Those two packages are `go-e2e` now, running beside this job;
+    # each test step was ~6-7 minutes of the old job's time. The
+    # `go test -timeout 20m` below stays under this so a hung test is
+    # named by go test before the job is killed.
+    timeout-minutes: 25
+    # Every `npm ci` below this line installs out of the cache the
+    # `infrastructure:` step before it filled, and out of nothing else:
+    # npm's `--offline`, said as the environment variable so that it
+    # reaches the `npm ci` inside `make frontend` without the Makefile
+    # having to know CI is running it. An install that cannot reach the
+    # network cannot fail on the network, which is what makes its
+    # failure the tree's -- see "The fetch and the check" in this file's
+    # header for the whole argument, and scripts/warm-npm-cache.sh for
+    # the other half of it.
+    env: &install-offline
+      npm_config_offline: "true"
+    steps:
+      - name: Format
+        run: make fmt
+
+      # The fetch, split off from the check (grain/task-498). This step
+      # is where registry.npmjs.org is allowed to be unreachable: it
+      # fills npm's cache with what ui/package-lock.json names and
+      # nothing else, it writes no node_modules anything is later judged
+      # on, and it exits 0 -- deliberately -- when npm fails while the
+      # registry is up, because that failure is the lockfile's and
+      # belongs to the step below.
+      #
+      # `infrastructure:` is what this step wants and now has: errored
+      # rather than failed, no repair task filed against the branch,
+      # nothing written to the job cache, so the next run samples the
+      # commit again instead of replaying a verdict an outage invented.
+      - &fill-the-npm-cache
+        name: Fill the npm cache from the registry
+        infrastructure: true
+        run: ./scripts/warm-npm-cache.sh ui
+
+      # Before `go build`: pkg/ui go:embeds pkg/ui/static, which is
+      # written by the frontend build, so nothing Go here compiles
+      # against an empty one.
+      - name: Build frontend
+        run: make frontend
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # scripts/run-go-tests.sh captures the full raw run to
+      # /tmp/gotest.log while streaming concise live progress to stdout
+      # (each package's ok/FAIL/? line, immediate --- FAIL:/panic:/data-race
+      # lines, and periodic heartbeats naming in-flight packages and slow
+      # tests), and then prints the structured failure summary at the end.
+      #
+      #
+      # Each `go test` step here and in `go-e2e` stays well under ten
+      # minutes: on a kubernetes-granule CI host whose grain predates
+      # k8sGranuleSandbox.RunShell, a step goes through run_command and
+      # is killed at its 600s ceiling whatever timeout-minutes says.
+      - name: Test
+        run: ./scripts/run-go-tests.sh go test -race -timeout 20m ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...
+
+  # The end-to-end walkthroughs and the repository-as-data checks, split
+  # out of `go` so that the two run side by side rather than one after
+  # the other. Both packages import pkg/ui, which go:embeds pkg/ui/static,
+  # so this job builds the frontend too (without fmt, build or vet, which
+  # `go` already does for the whole module) and is keyed on the same list
+  # as `go`: tests/deploy reads ui/package.json, the Makefile, terraform/
+  # and .github/ as data.
+  go-e2e:
+    capabilities: []
+    name: go e2e
+    paths-ignore: *not-read-by-the-go-program
+    sandbox:
+      cpus: 8
+      memory-mb: 16384
+      disk-gb: 60
+    # 25 like `go`: its first run, on a host busy enough that `go unit`
+    # took 9m33s, was 13m52s -- about 4 minutes of npm, frontend and
+    # compiling before a ~10 minute `go test`.
+    timeout-minutes: 25
+    env: *install-offline
+    steps:
+      - *fill-the-npm-cache
+      - name: Build frontend
+        run: make frontend
+      - name: Test
+        run: ./scripts/run-go-tests.sh go test -race -timeout 20m ./tests/e2e/... ./tests/deploy/...
+
+  go-orchestrator:
+    capabilities: []
+    name: go orchestrator
+    paths-ignore: &not-read-by-the-go-backend
+      - docs/**
+      - "!docs/*-surface.md"
+      - "*.md"
+      - LICENSE
+      - NOTICE
+      - ui/**
+    sandbox:
+      cpus: 8
+      memory-mb: 16384
+      disk-gb: 40
+    timeout-minutes: 20
+    steps:
+      - name: Test
+        run: ./scripts/run-go-tests.sh go test -race -timeout 20m ./pkg/orchestrator/...
+
+  go-model:
+    capabilities: []
+    name: go model
+    paths-ignore: *not-read-by-the-go-backend
+    sandbox:
+      cpus: 8
+      memory-mb: 16384
+      disk-gb: 40
+    timeout-minutes: 20
+    steps:
+      - name: Test
+        run: ./scripts/run-go-tests.sh go test -race -timeout 20m ./pkg/model/... ./pkg/staterepo/... ./tests/security/...
+
+  go-unit:
+    capabilities: []
+    name: go unit
+    # Backend and CLI unit packages ignore ui/** except the two frontend
+    # source files that pkg/mcp/merge_queue_phrases_test.go and
+    # pkg/cli/taskattributes_test.go read directly to check parity.
+    paths-ignore:
+      - docs/**
+      - "!docs/*-surface.md"
+      - "*.md"
+      - LICENSE
+      - NOTICE
+      - ui/**
+      - "!ui/src/state.js"
+      - "!ui/src/taskAttributes.js"
+    sandbox:
+      cpus: 8
+      memory-mb: 16384
+      disk-gb: 40
+    timeout-minutes: 20
+    steps:
+      - name: Test
+        run: |
+          ./scripts/run-go-tests.sh go test -race -timeout 20m \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-connect/... ./cmd/grain-sandbox/... ./cmd/grit/... \
+            ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
+            ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/apierror/... ./pkg/attest/... \
+            ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/checkpost/... \
+            ./pkg/ci/... ./pkg/cifault/... ./pkg/cli/... ./pkg/console/... ./pkg/daemon/... \
+            ./pkg/declschema/... ./pkg/demo/... ./pkg/designdoc/... ./pkg/dispatch/... \
+            ./pkg/forge/... ./pkg/gcpsetup/... ./pkg/ghwebhook/... ./pkg/github/... ./pkg/gitproxy/... ./pkg/gitrefs/... \
+            ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
+            ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
+            ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
+            ./pkg/metrics/... ./pkg/modelexec/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/pkgcache/... \
+            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... \
+            ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
+            ./pkg/sandboxaddr/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
+            ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
+            ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... \
+            ./pkg/version/... ./tests/bench/...
+
+  # The vendored granule tree's own tests. third_party/granule is a module
+  # of its own (github.com/bwsalmon/granule), so none of the four shards
+  # above reaches it -- their `./...` stops at its go.mod -- and until
+  # this job the only thing that ran `go test` in it was somebody doing it
+  # by hand. pkg/forward/forward_test.go's refusal of Open frames for targets
+  # outside the mux's specs (grain/task-944) is the test that made that
+  # matter: its guest-side half, GuestListeners.Serve with -L specs, is
+  # not exercised by anything in pkg/granule.
+  #
+  # The whole module, `./...`, with nothing excluded: every test that
+  # needs more than an unprivileged process skips itself, and on a CI
+  # sandbox as the unprivileged user those are --
+  #   - pkg/netshim: every test that builds links or splices frames
+  #     (needs root/CAP_NET_ADMIN);
+  #   - cmd/granule-container: TestRunPivotsIntoTheRootfs and
+  #     TestRunReportsWhatStoppedTheHelper (need root for pivot_root);
+  #   - cmd/granule-mem-agent: TestPsiTrigger_LiveKernelTrigger (a PSI
+  #     trigger the kernel refuses an unprivileged writer);
+  #   - test/multivm: TestMultiVM_ConcurrentStress (needs a built
+  #     `granule:latest` image and GRANULE_MULTIVM_TESTS; it boots VMs);
+  #   - pkg/guestimage: TestReadContractRefusesBelowTheFloor (no version
+  #     below the floor exists yet).
+  # Nothing in the module boots a real guest without that opt-in, so
+  # no package needs KVM. 58s for the whole module under -race on a
+  # 7-vCPU sandbox; pkg/guestpack (20s), pkg/agent (17s) and pkg/qcow2
+  # (16s) are the long ones.
+  #
+  # -mod=vendor over the workflow's -mod=readonly: granule carries a
+  # vendor/ tree and its dependencies (netlink, x/sys, x/term) are not
+  # all in the main module's graph, so readonly would send a sandbox
+  # with an empty module cache to a proxy for them.
+  granule:
+    capabilities: []
+    name: granule
+    paths:
+      - third_party/granule/**
+      - scripts/run-go-tests.sh
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+    timeout-minutes: 15
+    env:
+      GOFLAGS: -mod=vendor
+    steps:
+      - name: Test
+        working-directory: third_party/granule
+        run: ../../scripts/run-go-tests.sh go test -race -count=1 -timeout 10m ./...
+
+  # The PostgreSQL store, against a real server. pkg/model/postgres (the
+  # parity suite that mirrors pkg/model/sqlite) and pkg/model's simulation
+  # start their own server out of the PostgreSQL binaries
+  # (postgrestest, postgres.EnsureRunning) and *skip* when there are none.
+  # The sandbox image carries none, so until grain/task-1441 every one of
+  # those tests was skipped in this gate while the package still printed
+  # `ok`, and a Postgres-only regression in the dialect adapter could merge
+  # with nobody the wiser.
+  #
+  # Its own job rather than one more step in `go`, for time: `go` runs
+  # everything under -race, and the race detector makes this package
+  # about sixteen times slower -- 133s plain, 36 minutes under -race on a
+  # four-vCPU sandbox, more than the whole of `go`'s timeout. pkg/model is
+  # 80s here. Without -race both fit easily beside `go`, which still
+  # runs the same packages under -race and has them skip there.
+  #
+  # GRAIN_REQUIRE_POSTGRES makes every "postgres is not available" skip
+  # in those packages a failure instead, so a server that does not come
+  # up is this job's red rather than another quiet `ok`.
+  postgres:
+    capabilities: []
+    name: postgres
+    # `go test` over backend packages of the module, so the backend list:
+    # docs, Markdown and ui/** are ignored.
+    paths-ignore: *not-read-by-the-go-backend
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+    timeout-minutes: 15
+    steps:
+      # `infrastructure:` because this is a download: an archive that is
+      # down errors the job instead of failing the commit. policy-rc.d
+      # (the image's own, or one written here when it has none) keeps
+      # the package's own cluster from starting -- the tests start
+      # theirs on a free port and want nothing on 5432.
+      - name: Install PostgreSQL
+        infrastructure: true
+        run: |
+          if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
+            if [ ! -e /usr/sbin/policy-rc.d ]; then
+              printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+              sudo chmod +x /usr/sbin/policy-rc.d
+            fi
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql >/dev/null
+          fi
+          ls /usr/lib/postgresql/*/bin/initdb
+
+      # initdb and postgres refuse to run as root, so where this step
+      # is root the test binaries drop to the image's own "debian"
+      # account (scripts/exec-unprivileged.sh); anywhere else the
+      # wrapper is a plain exec.
+      - name: Test
+        env:
+          GRAIN_REQUIRE_POSTGRES: "1"
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/
+
+  run-host:
+    capabilities: []
+    name: run host
+    # A run host (pkg/runhost) against a real docker daemon: a run in a
+    # sibling container survives the Host that started it stopping, and
+    # the next one adopts it from the persisted spool cursor with no hole
+    # in the transcript (docs/non-disruptive-upgrade.md, Stage 2) -- and
+    # the same across a whole daemon restart, pull request included. It
+    # needs docker rather than KVM, so it sits here rather than beside
+    # kvm-route-stress.yml's guests.
+    paths-ignore: *not-read-by-the-go-backend
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+    timeout-minutes: 15
+    steps:
+      - name: Pull the run-host test image
+        infrastructure: true
+        run: docker pull -q debian:bookworm-slim
+
+      - name: Test
+        env:
+          GRAIN_RUNHOST_DOCKER: "1"
+        run: ./scripts/run-go-tests.sh go test -race -count=1 -timeout 15m ./pkg/runhost/
+
+      # The acceptance test itself: a real daemon dispatches a stub
+      # claude into a run host, is stopped mid-run, and the next daemon
+      # over the same data directory adopts the run, which finishes and
+      # opens its pull request with no hole in its transcript and its
+      # start (so its deadline) unmoved.
+      - name: Daemon restart acceptance test
+        env:
+          GRAIN_RUNHOST_DOCKER: "1"
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -run '^TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest$' -v ./pkg/cli/
+
+  host-script-container:
+    capabilities: []
+    name: host-script container
+    # A host-script grant materialized into a real container sandbox
+    # running the stock sandbox image (Dockerfile.k8s-sandbox, what
+    # -container-sandbox-image and -k8s-sandbox-image default to), built
+    # from this commit: the guest forwarder started with the image's
+    # python3, the placements written as its debian user, the command
+    # called through run_command. That image once ran as agent in
+    # /home/agent with no python3, and every capability grant with a port
+    # or a placement failed in it at dispatch; nothing else ran a grant
+    # against it. The image is built without its three agent CLIs, which
+    # this does not call and which are most of the build.
+    paths-ignore: *not-read-by-the-go-backend
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+    timeout-minutes: 15
+    steps:
+      - name: Build the sandbox image
+        infrastructure: true
+        run: |
+          set -euo pipefail
+          if [ -f /usr/local/share/ca-certificates/grain-ca.crt ]; then
+            cp /usr/local/share/ca-certificates/grain-ca.crt .grain-ca.crt
+          fi
+          docker build -q -f Dockerfile.k8s-sandbox \
+            --build-arg INSTALL_CLAUDE_CLI=0 --build-arg INSTALL_AGY_CLI=0 --build-arg INSTALL_CODEX_CLI=0 \
+            -t grain-k8s-sandbox:host-script .
+          rm -f .grain-ca.crt
+
+      - name: Test
+        env:
+          GRAIN_HOST_SCRIPT_CONTAINER_IMAGE: grain-k8s-sandbox:host-script
+        run: |
+          set -euo pipefail
+          GRAIN_GOTEST_LOG=/tmp/host-script.log ./scripts/run-go-tests.sh \
+            go test -count=1 -timeout 10m -run '^TestHostScriptGrantInARealContainerSandbox$' -v ./pkg/orchestrator/
+          if ! grep -q -- "--- PASS: TestHostScriptGrantInARealContainerSandbox" /tmp/host-script.log; then
+            echo "TestHostScriptGrantInARealContainerSandbox did not run and pass; this job only means something when it does" >&2
+            exit 1
+          fi
+
+  frontend:
+    capabilities: []
+    name: frontend
+    # `make frontend`, `make fmt-frontend` and `npm test`, all three of
+    # which are `cd ui && npm ...` with the Makefile as the only thing
+    # outside ui/ they touch. Nothing here compiles a line of Go, so a
+    # commit in pkg/ is a cache hit for this job.
+    #
+    # scripts/warm-npm-cache.sh is in the list because this job runs it:
+    # a job keyed on the files it reads has to name the script its own
+    # first step is, or a change to that script is a cache hit and this
+    # job never re-runs against it.
+    paths: [ui/**, Makefile, scripts/warm-npm-cache.sh]
+    sandbox:
+      cpus: 8
+      memory-mb: 16384
+    timeout-minutes: 15
+    env: *install-offline
+    steps:
+      - *fill-the-npm-cache
+
+      - name: Build frontend
+        run: make frontend
+
+      - name: Format frontend
+        run: make fmt-frontend
+
+      - name: Test frontend
+        working-directory: ui
+        # Four workers on eight vCPU: half the sandbox's cores, so a jsdom
+        # test file still has two cores of headroom to render and transform
+        # on and the 20s testTimeout (see ui/vite.config.js, which sets it
+        # and says what it is a bound on) stays a bound on a stuck test
+        # rather than on a busy box. Measured across 190 files / 2963 tests:
+        # 260s (~4m20s) at four workers on eight vCPU.
+        run: npm test -- --maxWorkers=4
+
+  # The Playwright suite, against a real pkg/ui.Server (`grain demo`) --
+  # Makefile's test-e2e target, which builds the frontend, downloads
+  # the browsers with their apt dependencies, and runs the suite (here
+  # its Chromium project alone; see the job). It is the most valuable of the three jobs this file gained
+  # in grain/task-109: it is the one that was carrying real regressions
+  # while nothing ran it (five separate specs red on main before anybody
+  # looked, task 106), because it existed only in .github/workflows and
+  # this repository's Actions runs are rejected before their first step
+  # by an account-level budget.
+  #
+  # `npx playwright install --with-deps` is a download and an apt-get,
+  # which is the one thing this file would rather a job did not do. It
+  # stays a download for now because it works and because the alternative
+  # is a decision about the guest image: Playwright's browser build is
+  # pinned by ui/package-lock.json's playwright version, so baking the
+  # browsers into the image makes the image something that has to be
+  # rebuilt when that lock file moves, and guest-inputs.sh already names
+  # ui/package-lock.json for exactly that reason. Moving it there is the
+  # right answer if this download ever becomes the flaky part of this
+  # file; it is not worth the image churn before then.
+  #
+  # No "Disable the unused Chrome apt source" step. That exists on
+  # ubuntu-latest because the runner image configures a Google Chrome apt
+  # source that `--with-deps`' own `apt-get update` then chokes on; a
+  # grain sandbox has no such source, so there is nothing to remove.
+  #
+  # `cpus: 4` is the host, not a guess, and raising it is not a fix for
+  # anything. docs/design.md's own target is an n2-highmem-4: four vCPU
+  # for the whole machine, controller and agent sandboxes included. A
+  # bigger number here buys no cores -- it only tells the guest a larger
+  # lie, and Playwright sizes its worker pool at half the cores it is
+  # told about (ui/playwright.config.js), so the first thing an 8 would
+  # do is put twice as many browsers on the same four. Memory is the one
+  # dimension with real headroom (32 GiB on that host) if a suite ever
+  # needs it; this one does not.
+  #
+  # Read "the host" there as docs/design.md's target rather than as the
+  # machine this deployment's CI is running on today, which holds ten
+  # 4-to-16 GiB CI sandboxes at once and is a good deal bigger than an
+  # n2-highmem-4. That is why the `go` job above now asks for eight and
+  # this one still asks for four: the argument against a bigger number
+  # here is Playwright's own worker arithmetic, which does not change
+  # with the machine, rather than the size of the box.
+  #
+  # That matters because this job *is* slow and variable -- the same
+  # suite has measured 4.2m and 6.9m on the same commit -- and "the box
+  # is too small" is the reading a red run invites. grain/task-182 chased
+  # exactly that: two runs red on two different specs, both of them
+  # "element(s) not found, 5000ms", neither of them about the box. Both
+  # were a frontend crash on a load-order race, and the contention only
+  # decided which run lost it. e2e/pageerrors.js is there so the next one
+  # says so in its own report.
+  #
+  # This job is the one `artifacts:` was built for (grain/task-186). The
+  # declaration below keeps the trace bundle ui/playwright.config.js's
+  # `trace: "retain-on-failure"` writes, under the name
+  # .github/workflows/tests.yml's own upload step uses, copied out of the
+  # sandbox before it is destroyed and kept with the run. That is the
+  # evidence task 182 went looking for and could not have: the trace was
+  # in ui/test-results/ both times and died with the machine, so finding
+  # the TypeError cost a local reproduction of the whole suite after two
+  # attempts had spent twenty-five minutes each re-running the commit.
+  #
+  # It arrived a commit after the key itself, `paths-ignore:` below did
+  # the same, and the next new key here will have to as well: this file
+  # is parsed by the *daemon's* build, not by the checkout's, and an
+  # unknown key is a refusal rather than a shrug (Parse, over a decoder
+  # with KnownFields set). So a key can only appear here once the
+  # deployment is running a build that knows it -- declaring one before
+  # then turns every run of this file, on every branch, into "field
+  # artifacts not found in type ci.rawJob", which is what the first push
+  # of both of those keys got. A new key in this file is therefore always
+  # a second commit after the one that adds it to pkg/ci.
+  ui-e2e:
+    capabilities: []
+    name: ui e2e
+    # `make test-e2e` builds the frontend and then drives a real
+    # pkg/ui.Server through `grain demo`, so this job reads the Go
+    # program as well as ui/ and takes the same list the `go-ui` job does.
+    # Chromium only. The WebKit project (ui/playwright.config.js) runs
+    # five specs -- phone, responsive-navigation-walkthrough,
+    # alerts-panel-layout, keyboard-open-rows,
+    # candidate-keyboard-walkthrough -- every one of which this job also
+    # runs on Chromium. It was a job of its own here, `ui-e2e-webkit`, at
+    # 7-12 minutes of a 4-vCPU sandbox per run, and in the week before
+    # grain/task-980 it was the failing job in only a handful of some 600
+    # runs. So the second engine is nightly now: nightly.yml's
+    # `ui-e2e-long` runs `make
+    # test-e2e-long`, which is both projects three times over.
+    paths-ignore: *not-read-by-the-go-program
+    sandbox:
+      cpus: 8
+      memory-mb: 16384
+      disk-gb: 40
+    # 25 rather than the 15 every other job here has: by 10-23 the
+    # Chromium suite routinely took 14-15 minutes on green branches, and a
+    # branch adding four specs (task 5048) was killed at test 513 of 513
+    # with every test passed. Raise it again, or shard the suite with
+    # Playwright's --shard keeping this job id as one shard, before it
+    # creeps back up to the limit. tests.yml has no `on: schedule`, so the
+    # scheduled-workflow cadence budget does not count this job.
+    timeout-minutes: 25
+    artifacts:
+      - name: playwright-test-results
+        path: ui/test-results
+    env:
+      npm_config_offline: "true"
+      PLAYWRIGHT_BROWSERS: chromium
+      PLAYWRIGHT_PROJECT: chromium
+    steps:
+      - *fill-the-npm-cache
+
+      - name: Build frontend
+        run: make frontend
+
+      # The browsers, and the apt packages they need: the other download
+      # this job makes from inside a step whose failure was read as a
+      # verdict (grain/task-498). `make test-e2e` still runs it for a
+      # person; here it is a step of its own so that it can *be* an
+      # `infrastructure:` one, and it runs after the install above
+      # because `npx playwright` resolves out of ui/node_modules -- see
+      # the Makefile's own note on why that order is not optional.
+      #
+      # Declared with the npm step's key and by the same commit
+      # (grain/task-546): cdn.playwright.dev and an apt-get say as much
+      # about this commit as registry.npmjs.org does, which is nothing.
+      # With both of them declared, this job now fetches nothing from
+      # anywhere inside a step whose failure is a verdict -- what is left
+      # to redden it is the suite.
+      - name: Download the browsers the suite drives
+        infrastructure: true
+        run: make playwright-browsers
+
+      # `make test-e2e` minus its two fetches, which the two steps above
+      # have already done. Everything this step needs is on the machine
+      # already, so what it can still fail on is the suite.
+      #
+      # The summarize-trace-network.mjs call after it has to live in this
+      # same step rather than a step of its own: a job here has no `if:`,
+      # so a step placed after this one would simply never run once the
+      # suite fails (see this file's own header on step order). Capturing
+      # the suite's exit code and re-raising it after the summary keeps
+      # this step's verdict exactly what `make test-e2e-suite` would have
+      # given alone.
+      #
+      # playwright.config.js's `trace: "retain-on-failure"` means a
+      # trace.zip only exists under ui/test-results for a test that
+      # failed, and grain/task-46's own investigation was answered by one
+      # specific thing inside one: the network log, showing four PUTs to
+      # one backend id. get_ci_artifact (grain/task-48) can fetch the
+      # whole trace for anything richer than that; this is only for the
+      # network log, cheap enough to always be in this step's own text
+      # output on the runs where it would have mattered.
+      - name: Test e2e
+        run: |
+          set -uo pipefail
+          make test-e2e-suite
+          status=$?
+          node ui/scripts/summarize-trace-network.mjs || true
+          exit $status
+
+  # shellcheck over the shell scripts -- nothing else in this repository
+  # reads a .sh under scripts/, and several only ever run on a schedule,
+  # so a break in one first reports itself as a red scheduled run days
+  # after the commit that caused it. (This job also ran actionlint over
+  # .github/workflows until those files were removed; .grain/workflows is
+  # not GitHub's schema, so actionlint has nothing left here to read.)
+  #
+  # shellcheck is not pinned to anything but its own version on purpose:
+  # a new release must not be able to redden a pull request that
+  # touched nothing, so moving to a newer one is a commit someone makes
+  # deliberately, with whatever it newly reports in front of them.
+  lint:
+    capabilities: []
+    name: lint
+    # Shellcheck over what `git ls-files --
+    # 'scripts/*.sh' 'deploy/terraform/*.sh'` matches -- git's pathspec
+    # wildcards cross `/`, so all of those match at any depth, which is
+    # what `**` spells here.
+    paths: [scripts/**.sh, deploy/terraform/**.sh]
+    timeout-minutes: 15
+    steps:
+      - name: Require shellcheck
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            echo "shellcheck is not in this sandbox image." >&2
+            exit 1
+          fi
+          shellcheck --version
+
+      # `git ls-files` rather than a shell glob, because git's pathspec
+      # wildcards cross `/`: the one pattern matches at any depth, so
+      # scripts/granule/build-granule-image.sh and guest-inputs.sh are
+      # covered and a script added in a new subdirectory is checked the day it lands.
+      # The count is asserted for the same reason shellcheck's presence
+      # is: a lint that matched nothing exits 0 and looks exactly like a
+      # lint that passed.
+      - name: Lint scripts
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          mapfile -t scripts < <(git ls-files -- 'scripts/*.sh' 'deploy/terraform/*.sh')
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "no shell scripts matched; this job is checking nothing" >&2
+            exit 1
+          fi
+          printf 'checking %s\n' "${scripts[@]}"
+          shellcheck --color=always "${scripts[@]}"
+
+  # deploy/terraform/gcp, which nothing else in this repository reads: a typo'd
+  # variable reference or an unformatted block otherwise sits on main
+  # until `terraform apply` finds it in front of a real project, and now
+  # two deployments' worth of it, since bwsalmon/agents applies this one
+  # module for both its main and its staging install.
+  #
+  # `init -backend=false` is what keeps this job as credential-free as
+  # every other one here. The module declares `backend "gcs" {}` and
+  # expects an operator to fill it in with -backend-config; -backend=false
+  # skips backend initialization outright, so this installs the provider
+  # plugins and nothing more -- no GCS bucket, no service account, no
+  # state. `validate` is local after that: syntax, references and types
+  # against the provider schema, without contacting GCP.
+  #
+  # The provider download is the one thing this job needs the network
+  # for. .github/workflows/tests.yml's copy also pins the Terraform
+  # version with hashicorp/setup-terraform; this one takes whatever the
+  # guest image carries, because there is no `uses:` here and installing
+  # a second Terraform to pin it would be a bigger download than the
+  # provider. The module's versions.tf requires >= 1.6.0 and validates
+  # that for itself.
+  #
+  # The module's `google_iap_brand` deprecation (see its README, "Get an
+  # IAP OAuth client") surfaces here as a warning, which `validate` does
+  # not fail on. It stays visible in the log rather than becoming a red
+  # build for a resource `create_iap_brand = false` does not create.
+  terraform:
+    capabilities: []
+    name: terraform
+    # deploy/terraform/gcp: Format checks the whole of deploy/terraform
+    # rather than gcp's own directory alone.
+    paths: [deploy/terraform/**]
+    timeout-minutes: 15
+    steps:
+      # -diff so a formatting failure shows what to change, rather than
+      # naming the file and leaving the reader to run fmt locally.
+      - name: Format
+        working-directory: deploy/terraform/gcp
+        run: |
+          terraform version
+          terraform fmt -check -recursive -diff ..
+
+      - name: Init
+        working-directory: deploy/terraform/gcp
+        run: |
+          for i in 1 2 3 4 5; do
+            if terraform init -backend=false -input=false; then
+              exit 0
+            fi
+            if [ "$i" -eq 5 ]; then
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Validate
+        working-directory: deploy/terraform/gcp
+        run: terraform validate
+
+  # tests/installer, against an image assembled rather than rebuilt.
+  #
+  # This job and .grain/workflows/image.yml are the two halves of what
+  # used to be one "container and installer" job here, and the split is
+  # what this file's wall clock is made of: that job built both images
+  # from source on every push and took about forty minutes, of which the
+  # build was almost all.
+  #
+  # The build is not what tests/installer is asking about. That suite
+  # drives scripts/setup.sh -- which account it creates, which unit it
+  # writes, what the daemon that unit starts can then do, and whether a
+  # dispatch out of it reaches a real sandbox -- and the image is the
+  # payload rather than the subject. So it is handed one that was
+  # assembled: the published runtime image, pulled anonymously, with this
+  # checkout's own `grain` and its own source laid over it
+  # (scripts/installer-test-image.sh, which says what that does and does
+  # not reproduce). Everything setup.sh installs and everything the
+  # daemon executes is this commit's; the layers underneath are last
+  # published main's, and a full rebuild is where a commit answers for
+  # those -- release.yml's own job on the merge, image.yml on demand for
+  # a branch.
+  #
+  # Only the root package, `./tests/installer`, runs here: a fresh
+  # install onto this machine, which is the install path a pull request
+  # most plausibly breaks. Its two neighbours each boot a privileged
+  # systemd container and re-drive setup.sh in it -- `trixie` on the
+  # Debian release whose docker packaging differs, `hostmode` the
+  # migration off the retired host mode -- and were jobs of their own
+  # here (`installer-trixie`, `installer-hostmode`, 4-13 minutes of an
+  # 8-vCPU sandbox each). Neither failed on its own in the week before
+  # grain/task-980. They run in nightly.yml's `installer-variants` now,
+  # against the same assembled image, and release.yml's `images` job
+  # still runs all three against the image it is about to publish on
+  # every merge into main -- so a break in either is caught at the merge
+  # rather than on the branch. A branch that changes scripts/setup.sh or
+  # the installer's container arguments and wants the variants' answer
+  # first can ask for that one job by hand:
+  #
+  #     grain ci run -repo bwsalmon/grain -branch <branch> \
+  #       -job .grain/workflows/nightly.yml:installer-variants -watch
+  #
+  # Every test here skips itself when GRAIN_TEST_IMAGE names nothing,
+  # when docker does not answer, or on three more gates besides, and `go
+  # test` says "ok" for a package whose tests all skipped -- so the log is
+  # read rather than trusted: a skip here is this commit's verdict quietly
+  # not existing, which is what this job is for.
+  installer-e2e:
+    capabilities: []
+    name: installer
+    # scripts/installer-test-image.sh assembles an image out of this
+    # commit's own binary and tests/installer drives it: the Go program
+    # and the Dockerfiles, so the `go-ui` job's list again.
+    paths-ignore: *not-read-by-the-go-program
+    sandbox:
+      cpus: 8
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 15
+    steps:
+      - &assemble-installer-image
+        name: Assemble the image to install
+        # Nothing is published under ghcr.io/ai-on-gke/grain yet: until the
+        # image workflows publish there, install on top of the images
+        # bwsalmon/grain publishes, the registry every grain image still
+        # names.
+        env:
+          GRAIN_INSTALLER_BASE_IMAGE: ghcr.io/bwsalmon/grain/grain:main
+          GRAIN_INSTALLER_SANDBOX_IMAGE: ghcr.io/bwsalmon/grain/k8s-sandbox:main
+        run: ./scripts/installer-test-image.sh grain-installer:test
+
+      - &configure-installer-package-cache
+        name: Configure package cache
+        run: |
+          if /usr/bin/timeout 1 bash -c 'echo > /dev/tcp/172.17.0.1/53' 2>/dev/null; then
+            if [ ! -f /usr/local/share/ca-certificates/grain-ca.crt ]; then
+              openssl s_client -connect 172.17.0.1:443 -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERTIFICATE/{flag=1; buf=""} flag{buf = buf $0 RS} /END CERTIFICATE/{flag=0; last=buf} END{printf "%s", last}' | sudo -n tee /usr/local/share/ca-certificates/grain-ca.crt >/dev/null 2>&1 || true
+              sudo -n update-ca-certificates 2>/dev/null || true
+            fi
+            if [ -f /etc/resolv.conf ] && ! grep -q "172.17.0.1" /etc/resolv.conf; then
+              sudo -n sh -c 'echo "nameserver 172.17.0.1" > /etc/resolv.conf' 2>/dev/null || true
+            fi
+          fi
+
+      - name: Run the installer e2e suite
+        env:
+          GRAIN_TEST_IMAGE: grain-installer:test
+          GRAIN_INSTALLER_E2E: "1"
+        run: |
+          set -euo pipefail
+          GRAIN_GOTEST_LOG=/tmp/installer.log ./scripts/run-go-tests.sh \
+            go test ./tests/installer -count=1 -v -timeout 15m
+          if grep -q -- "--- SKIP" /tmp/installer.log; then
+            grep -- "--- SKIP" /tmp/installer.log >&2
+            echo "tests/installer skipped a test in a sandbox that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this job is for." >&2
+            exit 1
+          fi
+          if ! grep -q -- "--- PASS" /tmp/installer.log; then
+            echo "tests/installer passed no test at all, so its green tick would mean nothing." >&2
+            exit 1
+          fi
+
+  # The package cache's halves that need a real machine under them: the
+  # image pull a dockerd pointed at the cache makes, the package downloads
+  # a container the sandbox *builds* makes, and the transparent
+  # interception a sandbox's own fetches are served by.
+  #
+  # A job of its own, and one that exists only in this file rather than in
+  # .github/workflows/tests.yml, because what it asserts is about a grain
+  # sandbox specifically: that /etc/docker/daemon.json comes out of the
+  # merge still holding the guest image's own `bip` and
+  # `default-address-pools` (the repository's Granulefile writes them; a
+  # hosted runner has neither), and that the running dockerd picks the
+  # mirror up on the reload rather than on a boot a one-run sandbox never
+  # gets to.
+  #
+  # It is a job rather than a few more tests in `go` because it owns this
+  # machine while it runs: it writes the three files a dispatch writes into
+  # /etc, and it stops and starts dockerd. Both are restored before it
+  # finishes -- but a suite running beside it in the same sandbox would see
+  # an apt pointed at a cache that is about to go away, so it gets a
+  # sandbox to itself and `go` keeps the gate closed.
+  #
+  # The second half is the one 2026-09-18 got wrong, and it needs a real
+  # dockerd for the same reason: a `docker build` given the settings out of
+  # /etc/grain/package-cache.env has to fetch through the cache *and* still
+  # reach an https:// host and a plain-HTTP host the cache does not serve,
+  # and the only place all three are true at once is inside a real build.
+  # The same build is then run again with the cache handed to it as a proxy,
+  # where it must fail -- which is what stops the first half passing against
+  # a build that was never in any danger.
+  #
+  # The third step is interception itself -- the DNS server, the 443 and 80
+  # listeners its answers send a fetch to, and the resolv.conf and trust
+  # store a sandbox is configured with -- driven from inside a container on
+  # this machine's docker bridge. It is here rather than in `go` for the
+  # same two reasons: it owns three privileged ports of this machine while
+  # it runs, and there is no hosted runner where the thing it asserts is
+  # even true (the sandbox is a container on the bridge the cache
+  # advertises, configured by the function a dispatch calls). It is also
+  # the half that was merged twice with nobody able to run it.
+  #
+  # Nothing here reaches the internet: the cache is pointed at stand-in
+  # registries and archives on this machine's own addresses -- one small
+  # image built in memory, one PyPI index, one packument, one module list
+  # (pkg/orchestrator/packagecache_real_test.go), one archive and one
+  # upstream nameserver
+  # (pkg/daemon/packagecache_intercept_hermetic_test.go) -- which is what
+  # pkgcache.Config's DockerRegistry, PyPIIndex, NPMRegistry, GoProxy and
+  # AptUpstream are for and what makes this job's verdict independent of
+  # whether a CI sandbox can reach Docker Hub or an archive today. Neither
+  # container pulls anything either: the image the build step builds is
+  # `FROM scratch` over a static binary compiled in the test, and the
+  # sandbox the interception step configures is imported from a tar of this
+  # machine's own /bin/sh and one more such binary.
+  package-cache:
+    capabilities: []
+    name: package cache
+    # `go test ./pkg/orchestrator` and one test out of ./pkg/daemon, with a
+    # real dockerd under them, so the backend list again.
+    paths-ignore: *not-read-by-the-go-backend
+    sandbox:
+      cpus: 2
+      memory-mb: 8192
+    timeout-minutes: 15
+    steps:
+      - name: Pull an image through the cache this sandbox is pointed at
+        env:
+          GRAIN_REAL_DOCKER_CACHE_TESTS: "1"
+        run: |
+          set -euo pipefail
+          GRAIN_GOTEST_LOG=/tmp/pkgcache.log ./scripts/run-go-tests.sh \
+            go test ./pkg/orchestrator/ -run 'PackageCache|ReloadDockerScript|AsRootScript' \
+            -count=1 -v -timeout 20m
+          for want in TestPackageCachePullsThroughARealDockerd TestPackageCacheReachesAChildContainerBuild TestPackageCacheLeavesASandboxWithNoRunningDockerdAlone; do
+            if ! grep -q -- "--- PASS: $want" /tmp/pkgcache.log; then
+              cat /tmp/pkgcache.log >&2 || true
+              grep -E -- "--- (SKIP|FAIL)" /tmp/pkgcache.log >&2 || true
+              echo "$want did not pass in a sandbox that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this job is for." >&2
+              exit 1
+            fi
+          done
+
+      # Interception, end to end: this sandbox binds 53, 443 and 80 on its
+      # own docker bridge, configures a container on that bridge exactly as
+      # a dispatch would, and asks it the four questions an operator would
+      # ask from inside a fresh sandbox.
+      #
+      # The test is a compiled binary rather than `go test`, and the reason
+      # is the three ports: they are privileged, this job runs
+      # unprivileged, and CAP_NET_BIND_SERVICE on the file is how a
+      # deployment's own daemon holds them (scripts/setup.sh grants exactly
+      # this, for exactly these binds). `sudo -E go test` would pass too,
+      # and would be testing something no deployment does. The binary lives
+      # in /var/tmp rather than /tmp because systemd's tmp.mount mounts /tmp
+      # as a nosuid tmpfs in the guest VM, and on Linux execve on a nosuid
+      # filesystem ignores file capabilities set by setcap.
+      #
+      # It fetches nothing from the internet -- see this job's header --
+      # and it is run by name, because its neighbour in the same file
+      # (TestInterceptionServesARealSandboxesOwnFetches) asks the same
+      # questions of the real Debian archive and is for a person to run by
+      # hand.
+      - name: Serve a container's own fetches through real interception
+        env:
+          GRAIN_REAL_INTERCEPT_TESTS: "1"
+        run: |
+          set -euo pipefail
+          want=TestInterceptionServesASandboxFromStandInArchives
+          go test -c -o /var/tmp/grain-intercept.test ./pkg/daemon
+          sudo setcap cap_net_bind_service=+ep /var/tmp/grain-intercept.test
+          GRAIN_GOTEST_LOG=/tmp/intercept.log ./scripts/run-go-tests.sh \
+            /var/tmp/grain-intercept.test -test.v -test.count=1 -test.timeout 15m \
+            -test.run "$want"
+          if ! grep -q -- "--- PASS: $want" /tmp/intercept.log; then
+            cat /tmp/intercept.log >&2 || true
+            grep -E -- "--- (SKIP|FAIL)" /tmp/intercept.log >&2 || true
+            echo "$want did not pass in a sandbox that has everything it asks for -- a dockerd, and the capability to bind 53, 443 and 80 on its own bridge. A skip here is this commit's verdict quietly not existing, which is what this job is for." >&2
+            exit 1
+          fi

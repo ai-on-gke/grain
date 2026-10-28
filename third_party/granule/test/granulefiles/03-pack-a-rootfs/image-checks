@@ -1,0 +1,7 @@
+# VOLUME in a packed container stage is the guest's mount point
+# declaration, and it has to reach the image somebody runs.
+volumes=$(docker image inspect -f '{{json .Config.Volumes}}' "$IMAGE")
+case "$volumes" in
+  *"/var/log/nginx"*) ;;
+  *) echo "the packed image declares no /var/log/nginx volume: $volumes" >&2; exit 1 ;;
+esac

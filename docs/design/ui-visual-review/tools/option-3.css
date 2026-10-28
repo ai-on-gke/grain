@@ -1,0 +1,176 @@
+/* Option 3 — "Plate": the Chladni plate made literal. A warm-ink rail in
+   both themes carrying wheat glyphs; sand-coloured paper in light, deep
+   ink in dark. IBM Plex Sans + Plex Mono. Status is loud: a coloured
+   stripe on every row, filled state pills, large state glyphs. Injected
+   over the real UI by tools/shoot.mjs. */
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+:root {
+  --rail: #1b1916;
+  --rail-2: #262320;
+  --rail-text: #ece7dc;
+  --rail-muted: #a69e8e;
+  --rail-accent: #e3b65a;
+  --rail-border: #332f2a;
+}
+:root[data-theme="light"] {
+  --canvas: #f4f0e8;
+  --surface: #fffdf8;
+  --surface-hover: #f7f2e8;
+  --surface-active: #f1e6cf;
+  --border: #e4ddcf;
+  --border-strong: #cdc3ad;
+  --text: #1b1916;
+  --text-secondary: #5a5447;
+  --text-tertiary: #6e675a;
+  --text-placeholder: #a09a8c;
+  --accent: #7d5a1c;
+  --accent-hover: #5f4413;
+  --on-accent: #ffffff;
+  --accent-subtle: #f1e6cf;
+  --danger: #b3261e;
+  --danger-subtle: #fbe9e7;
+  --state-proposed: #a8530a;
+  --state-queued: #6e675a;
+  --state-interactive: #0b6f78;
+  --state-awaiting: #6d28d9;
+  --state-awaiting-submit: #b83a0b;
+  --state-completed: #1a56c4;
+  --state-merging: #1a56c4;
+  --state-deferred: #4b5a6e;
+  --state-closed: #736c5d;
+  --pr-merged: #167a3c;
+  --mock-pill-bg: #ebe4d6;
+}
+:root[data-theme="dark"] {
+  --rail: #0c0d10;
+  --rail-2: #15161a;
+  --rail-border: #23252b;
+  --rail-muted: #8c8577;
+  --canvas: #0c0d10;
+  --surface: #15161a;
+  --surface-hover: #1c1e23;
+  --surface-active: #2c2514;
+  --border: #262930;
+  --border-strong: #3a3e47;
+  --text: #ece7dc;
+  --text-secondary: #aaa393;
+  --text-tertiary: #8c8577;
+  --text-placeholder: #5f5a50;
+  --accent: #e3b65a;
+  --accent-hover: #efc877;
+  --on-accent: #1a1405;
+  --accent-subtle: #2c2514;
+  --danger: #f4776c;
+  --danger-subtle: #3a1f1c;
+  --state-proposed: #f6a623;
+  --state-queued: #a09a8c;
+  --state-interactive: #3fc3cf;
+  --state-awaiting: #c99cff;
+  --state-awaiting-submit: #fb9a4a;
+  --state-completed: #6fb1ff;
+  --state-merging: #6fb1ff;
+  --state-deferred: #9aa9bd;
+  --state-closed: #8c8577;
+  --pr-merged: #4fcf72;
+  --mock-pill-bg: #23252b;
+}
+
+body, .MuiTypography-root, .MuiButton-root, .MuiChip-label, .MuiTab-root, .MuiInputBase-root, .MuiTableCell-root, .MuiFormLabel-root, .MuiMenuItem-root {
+  font-family: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+.task-number, .declared-key, code, pre, .freshness, aside a.MuiTypography-root, .task-id-bubble {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace !important;
+}
+
+/* The rail is the plate: ink in both themes, wheat for the mark, the
+   primary action and the active item. 224px, 40px rows, big glyphs. */
+aside.MuiBox-root { background: var(--rail) !important; color: var(--rail-text) !important; width: 224px !important; min-width: 224px !important; padding: 14px 12px !important; border-right: 1px solid var(--rail-border) !important; }
+aside .MuiTypography-root, aside .MuiListItemText-root .MuiTypography-root { color: var(--rail-text) !important; }
+aside h1.MuiTypography-root { font-size: 17px !important; font-weight: 600 !important; letter-spacing: -0.01em !important; }
+aside .sidebar-section-heading { color: var(--rail-muted) !important; font-size: 11px !important; letter-spacing: .08em !important; text-transform: uppercase !important; font-weight: 600 !important; }
+aside .MuiButtonGroup-root .MuiButton-root { background: var(--rail-accent) !important; color: #1a1405 !important; font-weight: 600 !important; font-size: 13.5px !important; height: 34px !important; border-color: rgba(0,0,0,.25) !important; border-radius: 8px !important; }
+aside .MuiButtonGroup-root .MuiButton-root:last-child { border-radius: 0 8px 8px 0 !important; }
+aside .MuiButtonGroup-root .MuiButton-root:first-child { border-radius: 8px 0 0 8px !important; }
+aside .MuiButton-root:not(.MuiButton-contained) { color: var(--rail-muted) !important; }
+aside .MuiListItemButton-root { min-height: 36px !important; padding: 5px 10px !important; border-radius: 8px !important; }
+aside .MuiListItemButton-root:hover { background: var(--rail-2) !important; }
+aside .MuiListItemButton-root .MuiTypography-root { font-size: 14px !important; font-weight: 500 !important; }
+aside .MuiListItemButton-root > .MuiTypography-root:last-child { color: var(--rail-muted) !important; font-variant-numeric: tabular-nums; font-size: 12px !important; }
+aside .MuiListItemButton-root.Mui-selected { background: var(--rail-2) !important; box-shadow: inset 3px 0 0 var(--rail-accent) !important; }
+aside .MuiListItemButton-root.Mui-selected .MuiTypography-root { color: var(--rail-accent) !important; }
+aside .nav-icon { color: var(--rail-muted) !important; }
+aside .nav-icon svg { width: 18px !important; height: 18px !important; }
+aside .MuiChip-root { background: var(--rail-accent) !important; color: #1a1405 !important; font-weight: 700 !important; height: 18px !important; border-radius: 999px !important; }
+aside .dot { width: 9px !important; height: 9px !important; box-shadow: 0 0 0 2px var(--rail); }
+aside a.MuiTypography-root { color: var(--rail-muted) !important; font-size: 10px !important; opacity: .8; }
+aside .MuiDivider-root { border-color: var(--rail-border) !important; }
+
+/* Header: 60px, title 18/600, page glyph in the accent. */
+.page-header { height: 60px !important; padding: 0 28px !important; background: var(--canvas) !important; border-bottom: 1px solid var(--border) !important; }
+.page-header-title .MuiTypography-root { font-size: 18px !important; font-weight: 600 !important; letter-spacing: -0.01em !important; }
+.page-header .header-icon { color: var(--accent) !important; }
+.page-header .header-icon svg { width: 22px !important; height: 22px !important; }
+
+/* Rows: 52px, a state stripe on the left edge, state pill filled. */
+.task-row { position: relative; padding: 10px 28px 10px 32px !important; gap: 14px !important; border-bottom: 1px solid var(--border) !important; background: var(--surface); }
+.task-row::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 4px; border-radius: 0 3px 3px 0; background: var(--text-tertiary); }
+.task-row:has(.badge-proposed)::before { background: var(--state-proposed); }
+.task-row:has(.badge-queued)::before { background: var(--state-queued); }
+.task-row:has(.badge-running)::before { background: var(--accent); }
+.task-row:has(.badge-awaiting_reply)::before { background: var(--state-awaiting); }
+.task-row:has(.badge-awaiting_submit)::before { background: var(--state-awaiting-submit); }
+.task-row:has(.badge-merging)::before, .task-row:has(.badge-completed)::before { background: var(--state-merging); }
+.task-row:has(.badge-failed)::before { background: var(--danger); }
+.task-row:has(.badge-deferred)::before { background: var(--state-deferred); }
+.task-row:has(.badge-closed)::before { background: var(--state-closed); }
+.task-list, .select-all, .narrowing-chips { background: var(--canvas); }
+.task-list li { background: var(--surface); }
+.task-title { font-size: 15px !important; font-weight: 500 !important; color: var(--text) !important; }
+.task-number { font-size: 12px !important; color: var(--text-tertiary) !important; }
+.task-number::before { content: "#"; }
+.badge { font-size: 12.5px !important; font-weight: 600 !important; color: var(--text-secondary) !important; }
+.badge::before { width: 10px !important; height: 10px !important; }
+.MuiChip-root { height: 22px !important; border-radius: 999px !important; background: var(--mock-pill-bg) !important; border: none !important; color: var(--text-secondary) !important; }
+.MuiChip-root .MuiChip-label { font-size: 12px !important; padding: 0 8px !important; font-weight: 500 !important; }
+.MuiChip-root.chip-field { background: transparent !important; box-shadow: inset 0 0 0 1px var(--border-strong) !important; }
+.task-reason { background: var(--text) !important; color: var(--canvas) !important; font-weight: 600 !important; }
+.task-row:has(.badge-awaiting_reply) .task-reason { background: var(--state-awaiting) !important; color: #fff !important; }
+.task-row:has(.badge-running) .task-reason { background: var(--accent) !important; color: var(--on-accent) !important; }
+.task-row:has(.badge-merging) .task-reason { background: var(--state-merging) !important; color: #fff !important; }
+.task-row:has(.badge-proposed) .task-reason { background: var(--state-proposed) !important; color: #fff !important; }
+.mock-more-chip { font: 500 12px "IBM Plex Sans", sans-serif; color: var(--text-tertiary); background: var(--mock-pill-bg); border-radius: 999px; padding: 0 8px; line-height: 22px; }
+.MuiChip-root.MuiChip-colorSuccess { background: var(--pr-merged) !important; color: #fff !important; }
+.MuiChip-root.MuiChip-colorError { background: var(--danger) !important; color: #fff !important; }
+:root[data-theme="dark"] .MuiChip-root.MuiChip-colorSuccess, :root[data-theme="dark"] .MuiChip-root.MuiChip-colorError { color: #0c0d10 !important; }
+
+/* Controls: 8px radius, heavier primary, paper-coloured outlines. */
+.MuiButton-root { border-radius: 8px !important; font-weight: 500 !important; }
+.MuiButton-containedPrimary { font-weight: 600 !important; box-shadow: none !important; }
+.MuiButton-outlined { border-color: var(--border-strong) !important; color: var(--text) !important; background: var(--surface) !important; }
+.MuiOutlinedInput-notchedOutline { border-color: var(--border-strong) !important; border-radius: 8px !important; }
+.MuiInputBase-root { border-radius: 8px !important; background: var(--surface) !important; }
+.MuiPaper-root { border-radius: 12px !important; box-shadow: none !important; border: 1px solid var(--border) !important; background-image: none !important; }
+.MuiPaper-root.MuiDialog-paper, .MuiPaper-root.MuiAppBar-root { border-radius: 0 !important; border: none !important; }
+.MuiTableCell-head { color: var(--text-tertiary) !important; font-size: 12px !important; font-weight: 600 !important; letter-spacing: .05em !important; text-transform: uppercase !important; border-color: var(--border) !important; }
+.MuiTableCell-root { border-color: var(--border) !important; padding: 10px 14px !important; }
+.MuiTab-root { font-size: 14px !important; font-weight: 500 !important; }
+.MuiTabs-indicator { height: 3px !important; border-radius: 3px 3px 0 0; }
+h3, .timeline h3 { font-size: 12px !important; font-weight: 600 !important; text-transform: uppercase !important; letter-spacing: .08em !important; color: var(--text-tertiary) !important; }
+
+/* Task page: id in a filled state pill, pending question as a card with
+   a state-coloured edge, side column on paper. */
+.task-id-bubble { border-radius: 8px !important; font-weight: 600 !important; font-size: 13px !important; padding: 2px 10px !important; }
+.pending-question { background: var(--surface) !important; border: 1px solid var(--border) !important; border-left: 4px solid var(--state-awaiting) !important; border-radius: 10px !important; }
+.markdown.description { background: var(--surface) !important; border: 1px solid var(--border) !important; border-radius: 10px !important; }
+.detail-side { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px !important; }
+.detail-side legend { font-size: 11px !important; letter-spacing: .08em; text-transform: uppercase; color: var(--text-tertiary) !important; }
+
+/* Phone: the app bar is the plate too. */
+header.MuiAppBar-root { background: var(--rail) !important; color: var(--rail-text) !important; box-shadow: none !important; border-bottom: 1px solid var(--rail-border) !important; }
+header.MuiAppBar-root .MuiTypography-root, header.MuiAppBar-root .MuiIconButton-root { color: var(--rail-text) !important; }
+.mock-more-chip { color: var(--text-secondary); }
+:root[data-theme="dark"] { --rail-muted: #a09a8c; }
+:root[data-theme="dark"] .task-reason, :root[data-theme="dark"] .task-row:has(.badge-awaiting_reply) .task-reason, :root[data-theme="dark"] .task-row:has(.badge-running) .task-reason, :root[data-theme="dark"] .task-row:has(.badge-merging) .task-reason, :root[data-theme="dark"] .task-row:has(.badge-proposed) .task-reason { color: #0c0d10 !important; }

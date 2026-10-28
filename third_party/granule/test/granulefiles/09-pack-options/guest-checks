@@ -1,0 +1,6 @@
+[the machine booted the systemd overlay the variant selected]
+test -d /run/systemd/system
+test -x /usr/local/bin/granule-agent
+
+[the disk carries the headroom the pack was asked for]
+df -m / | awk 'NR==2 {exit ($2 > 64) ? 0 : 1}'

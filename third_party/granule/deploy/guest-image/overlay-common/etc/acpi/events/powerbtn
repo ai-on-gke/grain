@@ -1,0 +1,8 @@
+# Matches both old- and new-style kernel event strings for the power
+# button. Same config format on both guest variants (Debian's acpid and
+# Alpine's busybox acpid applet both read /etc/acpi/events/* this way);
+# only the action script's contents differ -- see
+# ../../../overlay-debian/etc/acpi/powerbtn.sh and
+# ../../../overlay-alpine/etc/acpi/powerbtn.sh.
+event=button[ /]power
+action=/etc/acpi/powerbtn.sh

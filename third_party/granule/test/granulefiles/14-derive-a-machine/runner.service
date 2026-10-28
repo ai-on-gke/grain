@@ -1,0 +1,10 @@
+[Unit]
+Description=An example service copied into a machine by 14.4
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

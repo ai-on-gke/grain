@@ -1,0 +1,10 @@
+# docs/granulefile.md 14.2: one line added to the end of 14.1, nothing
+# above it touched. The result is a granule VM image whose guest runs
+# the container above as granule-wrap@redis.
+FROM alpine:latest
+
+RUN apk add --no-cache redis
+CMD ["redis-server", "--protected-mode", "no"]
+
+# Now it runs inside a VM.
+VM WRAP redis AS redis_vm

@@ -1,0 +1,40 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// The schemes a link or image in rendered prose or a diagram may carry.
+// Owned here rather than left to react-markdown's defaultUrlTransform or
+// Mermaid's sanitizer alone, so the policy that keeps `javascript:`,
+// `data:` or `vbscript:` out of an href cannot widen under us with a
+// dependency bump, and is narrower than either library's: nothing in a
+// task body or comment needs irc: or xmpp:.
+const SAFE_PROTOCOL = /^(https?|mailto)$/i;
+
+// safeUrl returns url unchanged when it is relative or carries an
+// allowed scheme, and "" otherwise. A colon only names a scheme when it
+// comes before any `/`, `?` or `#`; one after them is part of a relative
+// path, query or fragment.
+export function safeUrl(url) {
+  const value = String(url ?? "").trim();
+  const colon = value.indexOf(":");
+  if (colon === -1) {
+    return value;
+  }
+  for (const delimiter of ["/", "?", "#"]) {
+    const at = value.indexOf(delimiter);
+    if (at !== -1 && at < colon) {
+      return value;
+    }
+  }
+  return SAFE_PROTOCOL.test(value.slice(0, colon)) ? value : "";
+}

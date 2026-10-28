@@ -1,0 +1,26 @@
+name: release
+
+on:
+  release:
+    branches: [main]
+
+jobs:
+  publish:
+    name: publish guest images
+    capabilities:
+      - package-publish
+    cache: false
+    timeout-minutes: 60
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 50
+    steps:
+      - name: Publish guest images to GHCR
+        run: |
+          set -euo pipefail
+          if [ -f /home/debian/.package-publish-token ]; then
+            export GHCR_USER="$(cat /home/debian/.package-publish-username)"
+            export GHCR_TOKEN="$(cat /home/debian/.package-publish-token)"
+          fi
+          deploy/publish-images.sh guests

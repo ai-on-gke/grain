@@ -1,0 +1,370 @@
+// Command handrun serves a grain UI over a store seeded from this
+// repository's own git history -- one task per merged pull request --
+// for the hand run written up in docs/hand-runs/2026-09-07-panel-
+// dashboard.md. It is `grain demo` with a real history in place of the
+// dozen fake tasks, and a dashboard of panels already on it.
+package main
+
+import (
+	"bufio"
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
+	"github.com/ai-on-gke/grain/pkg/ui"
+)
+
+type merged struct {
+	PR       int
+	Branch   string
+	First    time.Time
+	Last     time.Time
+	Merged   time.Time
+	Commits  int
+	HeadSHA  string
+	Title    string
+	Body     string
+	TaskNum  int
+	IsClaude bool
+}
+
+func mustTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		log.Fatalf("parsing %q: %v", s, err)
+	}
+	return t.UTC()
+}
+
+func main() {
+	tsv := flag.String("tsv", "/home/debian/history.tsv", "history extract")
+	dir := flag.String("dir", "", "store directory (created if empty)")
+	addr := flag.String("addr", "127.0.0.1:8430", "address to serve on")
+	repoDir := flag.String("repo", "/home/debian/work", "the git checkout to read bodies from")
+	limit := flag.Int("limit", 0, "seed at most this many merged tasks (0 = all)")
+	flag.Parse()
+
+	rows := readHistory(*tsv, *limit)
+	log.Printf("history: %d merged pull requests, %s .. %s", len(rows),
+		rows[len(rows)-1].Merged.Format(time.RFC3339), rows[0].Merged.Format(time.RFC3339))
+	fillBodies(*repoDir, rows)
+
+	repo, err := model.ParseRepo("bwsalmon/grain")
+	if err != nil {
+		log.Fatal(err)
+	}
+	cfg := ui.Config{
+		Actor:         ui.DefaultActor("handrun"),
+		DefaultTarget: &repo,
+		Capabilities:  ui.OfferedCapabilities(),
+	}
+	storeDir := *dir
+	if storeDir == "" {
+		storeDir, err = os.MkdirTemp("", "grain-handrun-")
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	fresh := true
+	if _, err := os.Stat(storeDir + "/grain.db"); err == nil {
+		fresh = false
+	}
+	db, err := sqlite.Open(sqlite.DefaultConfig(storeDir))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	logPath := storeDir + "/daemon.log"
+	if err := os.WriteFile(logPath, []byte("handrun\n"), 0o644); err == nil {
+		cfg.Logs = map[string]ui.LogSource{"daemon": systemlog.File{Path: logPath}}
+	}
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		log.Fatal(err)
+	}
+	if fresh {
+		start := time.Now()
+		if err := seed(ctx, store, cfg, rows, *repoDir); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("seeded %d tasks in %s into %s", len(rows), time.Since(start).Round(time.Millisecond), storeDir)
+	} else {
+		log.Printf("re-using the store already in %s", storeDir)
+	}
+
+	srv := ui.NewServer(cfg, store)
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("serving http://%s", ln.Addr().String())
+	log.Fatal(http.Serve(ln, logRequests(srv)))
+}
+
+// logRequests times every API call the browser makes, which is half of
+// what the hand run is measuring.
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		rec := &countingWriter{ResponseWriter: w}
+		next.ServeHTTP(rec, r)
+		log.Printf("API %s %s%s -> %d bytes in %s", r.Method, r.URL.Path,
+			query(r.URL.RawQuery), rec.n, time.Since(start).Round(time.Microsecond))
+	})
+}
+
+func query(q string) string {
+	if q == "" {
+		return ""
+	}
+	return "?" + q
+}
+
+type countingWriter struct {
+	http.ResponseWriter
+	n int
+}
+
+func (w *countingWriter) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	w.n += n
+	return n, err
+}
+
+func readHistory(path string, limit int) []merged {
+	f, err := os.Open(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	var out []merged
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		parts := strings.Split(sc.Text(), "\t")
+		if len(parts) != 8 {
+			continue
+		}
+		pr, _ := strconv.Atoi(parts[0])
+		n, _ := strconv.Atoi(parts[5])
+		m := merged{
+			PR: pr, Branch: parts[1],
+			First: mustTime(parts[2]), Last: mustTime(parts[3]), Merged: mustTime(parts[4]),
+			Commits: n, HeadSHA: parts[6], Title: parts[7],
+		}
+		if strings.Contains(m.Branch, "/grain/task-") {
+			m.TaskNum, _ = strconv.Atoi(strings.TrimPrefix(m.Branch, "bwsalmon/grain/task-"))
+		} else if strings.Contains(m.Branch, "/claude/") {
+			m.IsClaude = true
+		}
+		if m.Last.Before(m.First) {
+			m.Last = m.First
+		}
+		if m.Merged.Before(m.Last) {
+			m.Merged = m.Last
+		}
+		out = append(out, m)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+// fillBodies reads each branch head's own commit message body -- the
+// paragraph the run wrote for a reviewer, which is what the real task's
+// description reads like -- in one git invocation rather than 900.
+func fillBodies(repoDir string, rows []merged) {
+	args := []string{"-C", repoDir, "show", "-s", "--format=%H%x1f%b%x1e"}
+	for _, r := range rows {
+		args = append(args, r.HeadSHA)
+	}
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		log.Printf("reading commit bodies: %v (descriptions will be short)", err)
+		return
+	}
+	bodies := map[string]string{}
+	for _, rec := range strings.Split(string(out), "\x1e") {
+		rec = strings.TrimSpace(rec)
+		if rec == "" {
+			continue
+		}
+		sha, body, ok := strings.Cut(rec, "\x1f")
+		if !ok {
+			continue
+		}
+		bodies[strings.TrimSpace(sha)] = strings.TrimSpace(body)
+	}
+	for i := range rows {
+		rows[i].Body = bodies[rows[i].HeadSHA]
+	}
+}
+
+func seed(ctx context.Context, store *model.Store, cfg ui.Config, rows []merged, repoDir string) error {
+	client := ui.NewClient(cfg, store)
+	create := func(at time.Time, req ui.CreateTaskRequest) (ui.Task, error) {
+		client.Now = func() time.Time { return at }
+		return client.CreateTask(ctx, req)
+	}
+	// Oldest first, so ids and order keys come out in the order the work
+	// actually happened.
+	for i := len(rows) - 1; i >= 0; i-- {
+		r := rows[i]
+		desc := r.Body
+		if desc == "" {
+			desc = fmt.Sprintf("Merged as bwsalmon/grain#%d.", r.PR)
+		}
+		task, err := create(r.First, ui.CreateTaskRequest{
+			Title:       r.Title,
+			Description: desc,
+			Repo:        "bwsalmon/grain",
+			AutoMerge:   true,
+			Approved:    true,
+		})
+		if err != nil {
+			return fmt.Errorf("task for #%d: %w", r.PR, err)
+		}
+		runID := fmt.Sprintf("run-%d", r.PR)
+		if err := store.StartRun(ctx, model.Run{
+			ID: runID, TaskID: task.ID, Sandbox: fmt.Sprintf("sandbox-%d", r.PR),
+			Attempt: 1, StartedAt: r.First,
+		}, model.Limits{}); err != nil {
+			return fmt.Errorf("run for #%d: %w", r.PR, err)
+		}
+		if err := store.FinishRun(ctx, runID, r.Last, "succeeded",
+			fmt.Sprintf("pushed %d commits", r.Commits)); err != nil {
+			return fmt.Errorf("finishing run for #%d: %w", r.PR, err)
+		}
+		stored, err := store.GetTask(ctx, task.ID)
+		if err != nil {
+			return err
+		}
+		stored.Links = append(stored.Links, model.Link{
+			Kind:   model.LinkFixes,
+			Target: fmt.Sprintf("https://github.com/ai-on-gke/grain/pull/%d", r.PR),
+		})
+		if err := store.PutTask(ctx, *stored); err != nil {
+			return err
+		}
+		completed, closed := r.Last, r.Merged
+		if err := store.ObserveField(ctx, task.ID, closed, func(o *model.Observation) {
+			o.CompletedAt = &completed
+			o.ClosedAt = &closed
+		}); err != nil {
+			return err
+		}
+	}
+	if err := seedInFlight(ctx, store, client, repoDir); err != nil {
+		return err
+	}
+	return seedBoards(ctx, client)
+}
+
+// seedInFlight seeds the branches this repository has that main does not
+// -- work that was open when the run was done -- as the live tasks a
+// deployment always has a handful of. Their states are the one thing
+// here git cannot say, so they are spread across the live states rather
+// than read off anything.
+func seedInFlight(ctx context.Context, store *model.Store, client *ui.Client, repoDir string) error {
+	// A literal separator byte in the format string: for-each-ref prints
+	// %x1f as those four characters rather than as a unit separator.
+	const sep = "\x1f"
+	out, err := exec.Command("git", "-C", repoDir, "for-each-ref",
+		"--format=%(refname:short)"+sep+"%(committerdate:iso-strict)"+sep+"%(contents:subject)",
+		"--no-merged=origin/main", "refs/remotes/origin").Output()
+	if err != nil {
+		return fmt.Errorf("listing open branches: %w", err)
+	}
+	now := time.Now().UTC()
+	i := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Split(line, "\x1f")
+		if len(fields) != 3 {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, fields[1])
+		if err != nil {
+			continue
+		}
+		client.Now = func() time.Time { return at.UTC() }
+		task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+			Title:       fields[2],
+			Description: fmt.Sprintf("Open on %s when this run was made.", fields[0]),
+			Repo:        "bwsalmon/grain",
+			Approved:    i%4 != 3,
+		})
+		if err != nil {
+			return err
+		}
+		switch i % 4 {
+		case 0, 1: // running
+			if err := store.StartRun(ctx, model.Run{
+				ID: "run-open-" + task.ID, TaskID: task.ID,
+				Sandbox: "sandbox-open-" + task.ID, Attempt: 1,
+				StartedAt: now.Add(-time.Duration(20+7*i) * time.Minute),
+			}, model.Limits{}); err != nil {
+				return err
+			}
+		case 2: // queued: approved, nothing started
+		case 3: // proposed: not approved
+		}
+		i++
+	}
+	return nil
+}
+
+// seedBoards makes the dashboards the run is about: six panels, and a
+// second board of ten for the question the plan asks about ten.
+func seedBoards(ctx context.Context, client *ui.Client) error {
+	six := []ui.BoardPanel{
+		{Kind: "gantt", Title: "This week, as bars", Range: "7d", Width: "full", OrderKey: 1},
+		{Kind: "metrics", Title: "Throughput, 7 days", Range: "7d", Width: "half", OrderKey: 2},
+		{Kind: "states", Title: "Where everything is", Width: "half", OrderKey: 3},
+		{Kind: "list", Title: "Tests and CI", Query: "q=test", Width: "half", OrderKey: 4},
+		{Kind: "list", Title: "The sandbox and the guest", Query: "q=sandbox", Width: "half", OrderKey: 5},
+		{Kind: "list", Title: "Live work", Width: "full", OrderKey: 6},
+	}
+	if _, err := client.CreateBoard(ctx, ui.CreateBoardRequest{
+		Name:        "Deployment",
+		Kind:        "panels",
+		Folder:      "Dashboards",
+		Description: "Six panels over this deployment's own history",
+		Panels:      six,
+	}); err != nil {
+		return err
+	}
+	ten := append([]ui.BoardPanel{}, six...)
+	ten = append(ten,
+		ui.BoardPanel{Kind: "list", Title: "The UI", Query: "q=ui", Width: "half", OrderKey: 7},
+		ui.BoardPanel{Kind: "list", Title: "The merge queue", Query: "q=merge", Width: "half", OrderKey: 8},
+		ui.BoardPanel{Kind: "gantt", Title: "A day, as bars", Range: "1d", Width: "half", OrderKey: 9},
+		ui.BoardPanel{Kind: "metrics", Title: "Throughput, 30 days", Range: "30d", Width: "half", OrderKey: 10},
+	)
+	if _, err := client.CreateBoard(ctx, ui.CreateBoardRequest{
+		Name:        "Deployment (ten)",
+		Kind:        "panels",
+		Folder:      "Dashboards",
+		Description: "The same dashboard with ten panels, for the cost question",
+		Panels:      ten,
+	}); err != nil {
+		return err
+	}
+	return nil
+}

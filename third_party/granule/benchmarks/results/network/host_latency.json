@@ -1,0 +1,11 @@
+{
+  "workload": "tcp_rtt_ping_pong",
+  "environment": "host_native",
+  "avg_us": 18.5,
+  "min_us": 12.0,
+  "max_us": 65.0,
+  "p50_us": 17.2,
+  "p95_us": 24.8,
+  "p99_us": 32.1,
+  "samples": 1000
+}

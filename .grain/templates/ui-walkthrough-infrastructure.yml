@@ -1,0 +1,89 @@
+name: UI walkthrough - Settings' connections and infrastructure sections
+title: Walk through Settings -- Git, Capabilities, Legacy capabilities, Executors, Engine, CI, Sandboxes and Caches
+base: main
+auto-merge: true
+body: |
+  Thoroughly exercise the Settings sections that connect grain to
+  outside systems and tune the machines it runs on -- the Connections
+  group (Git, Capabilities, Legacy capabilities, Executors) and the
+  Infrastructure group (Engine, CI, Sandboxes, Caches) -- in a real
+  browser against a real server. Settings' layout, filter and save model
+  and its other sections are the settings walkthrough's; the live
+  sandbox, cache and CI status in System and on the CI page is the
+  operations walkthrough's.
+
+  ## Coverage
+
+  - Git (`/settings/git`): the git connections table; add, test and
+    remove a throwaway connection on a plain git host (token, and SSH
+    key with known hosts), on GitHub and as a GitHub App, with its scope
+    and proxy; confirm Remove asks first, and that the no-git-connection
+    notice in New task and on Repos links here.
+  - Capabilities (`/settings/capabilities`, and the old
+    `/settings/capability-servers` link): capability servers with the
+    built-in ones first, disable-only, and a needs-configuring state
+    until configured; a tab per server; configure one through its
+    schema form, edit, rename and test it in place, and read which tasks,
+    templates and schedules hold it. Exercise config-map and secret-map
+    file placements and the host process server's host scripts (edit,
+    test, and the version, adopted runs and allowlist suggestions it
+    reports), against throwaway entries only.
+  - Capability policy: edit the policy, save, reload, and confirm a
+    capability picker (New task, a template) offers what it now allows.
+  - Legacy capabilities (`/settings/credentials`): the GitHub host, the
+    GCP project and service accounts, and the legacy capabilities and
+    the secrets each one uses (without storing real credentials: add,
+    mask, replace and remove a throwaway one).
+  - Executors: issue a throwaway executor join token and read it back,
+    revoke it with its confirmation, and follow the connected count to
+    System → Sandboxes.
+  - Engine: Polling and the Merge queue card (batch size and gather
+    window, with the gathering note); verify blank-means-default
+    placeholders and out-of-range validation.
+  - CI: the CI queue, CI history, CI job cache and CI artifacts cards;
+    save, reload and verify the values read back.
+  - Sandboxes: Backend and size (backends that cannot run here shown
+    disabled, with the reason), network, the Sandbox budget with fixed
+    overcommit ratios and the auto overcommit bounds (an out-of-range
+    bound refused by name), the disk floor, the Kubernetes card (its
+    prefilled defaults and the pod priority classes) and the custom
+    sandbox image that replaced the setup script.
+  - Caches: the proxy cache and Actions cache maximum sizes, saved,
+    reloaded and read back.
+  - Stub the git-host, GitHub, capability-server, secret-validation,
+    host-process and Kubernetes boundaries only where the demo lacks
+    them, retaining the real Grain server and browser UI, and document
+    each intercepted route.
+
+  ## Walkthrough protocol
+
+  - Build and start this repository's real `grain demo` server over a
+    throwaway embedded store, open its built frontend in an actual
+    Playwright browser, and interact through visible UI controls. Do not
+    substitute a source review, a jsdom-only test, or an API-only
+    exercise for the walkthrough.
+  - Prefer the Gemini-backed model and tooling when this sandbox carries
+    a key at `/home/debian/.gemini-api-key`; never print, log or commit
+    it. A repository-declared template carries no capabilities of its
+    own, so what the sandbox holds is whatever this deployment already
+    gives tasks in this repository.
+  - Explore beyond the scripted cases in `ui/e2e`. Check browser console
+    errors, failed network requests, loading/empty/error states,
+    keyboard reachability, and destructive-action confirmations relevant
+    to this area.
+  - Confirm mutations by returning to the screen, reloading and
+    deep-linking where applicable, and observing the persisted result.
+    Stub only an unavailable external or system boundary; keep the real
+    server, frontend, browser and user gestures in the loop, and
+    document every stub.
+  - Record the commit tested, the environment, the exact steps, the
+    outcomes and every stub in a dated report under `docs/test-runs/`,
+    named `YYYY-MM-DD-connections-infrastructure-settings.md`. Do not
+    commit screenshots or generated browser artifacts.
+  - For each bug found: capture a deterministic reproduction; fix it in
+    this task when the correction is safe and scoped; add regression
+    coverage at the strongest practical level; and run the relevant
+    tests. If the fix is unsafe, materially separate, or needs
+    infrastructure this sandbox does not have, propose a focused
+    follow-up task with `branch: "main"` carrying the reproduction,
+    the evidence and the expected behaviour.

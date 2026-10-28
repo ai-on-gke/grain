@@ -1,0 +1,8 @@
+name: UI walkthrough coverage review
+template: ui-walkthrough-review
+base: main
+timezone: UTC
+weekly:
+  day: monday
+  at: "05:00"
+overlap: skip

@@ -1,0 +1,15 @@
+# docs/granulefile.md 14.5: update a VM image offline, without KVM.
+#
+# The default is the specification's own reference; a test run points
+# VM_IMAGE at a machine it has just built, since the point of the
+# example is that an existing VM image goes in and a new one comes out.
+ARG VM_IMAGE=ghcr.io/example/my-vm:latest
+
+# Unpack the guest rootfs of an existing VM image into a container stage.
+VM UNPACK FROM ${VM_IMAGE} AS unpacked
+
+# Offline container-level copy into the rootfs -- no /dev/kvm needed.
+COPY updated-config.yaml /etc/service/config.yaml
+
+# Repack the modified rootfs into a bootable VM image.
+VM PACK AS updated_vm

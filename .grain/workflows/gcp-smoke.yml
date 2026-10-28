@@ -1,0 +1,116 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# gcp-smoke.yml runs the GCE and GKE lifecycle smoke scripts every night and
+# on demand.
+#
+# Unlike tests.yml, which runs on pull requests and holds no credentials, this
+# workflow is scheduled and workflow_dispatch only: it consumes the short-lived
+# key placed by the gcp server's gcp-key method
+# (https://grain.dev/capabilities/gcp#gcp-key, at
+# /home/debian/.gcp-service-account.json)
+# to prove that the GCP infrastructure this deployment manages can be stood up
+# and torn down cleanly. A failure here is an early warning that something has
+# changed in GCP (a policy, an API, a role) before a task fails on it.
+name: gcp-smoke
+
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+env:
+  ZONE: us-central1-a
+
+jobs:
+  smoke:
+    name: GCE and GKE lifecycle
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 20
+    timeout-minutes: 45
+    cache: false
+    # Declared, not inherited: a scarce capability such as gcp-key is
+    # never part of the repository's whole set that a job declaring
+    # nothing gets (pkg/ci jobCapabilities, grain/task-281). This is the
+    # gcp capability server's reference rather than the legacy in-process
+    # `gcp-key`, so the deployment's capability_policy grants it (run kind
+    # ci) and its default permission set is minted, not the fixed pool.
+    capabilities: ["https://grain.dev/capabilities/gcp#gcp-key"]
+    steps:
+      - name: Activate the GCP service account
+        run: |
+          set -euo pipefail
+          if [ ! -f /home/debian/.gcp-service-account.json ]; then
+            echo "No /home/debian/.gcp-service-account.json found. Check that the gcp server (https://grain.dev/capabilities/gcp) is configured with a permission set and that capability_policy allows it for CI." >&2
+            exit 1
+          fi
+          gcloud auth activate-service-account --key-file=/home/debian/.gcp-service-account.json
+          project="$(jq -r .project_id /home/debian/.gcp-service-account.json)"
+          gcloud config set project "$project"
+          echo "active account: $(gcloud config get-value account), project: $(gcloud config get-value project)"
+
+      - name: Install GKE prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y kubectl google-cloud-cli-gke-gcloud-auth-plugin
+
+      - name: GCE VM lifecycle
+        run: |
+          set -euo pipefail
+          args=(--iap)
+          if [ "${SERVICE_ACCOUNT_SHAPE:-self}" = "default" ]; then
+            args+=(--service-account=default)
+          fi
+          ./scripts/gce-vm-smoke.sh "${args[@]}"
+
+      - name: GKE cluster lifecycle
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "${SERVICE_ACCOUNT_SHAPE:-self}" = "default" ]; then
+            args+=(--node-service-account=default)
+          fi
+          ./scripts/gke-cluster-smoke.sh "${args[@]}"
+
+      - name: Delete anything left behind
+        run: |
+          set -uo pipefail
+          cutoff=7200
+          now="$(date -u +%s)"
+          ours_or_stale() {
+            local created
+            created="$(date -u -d "$1" +%s)" || return 1
+            [ $(( now - created )) -ge "$cutoff" ]
+          }
+          gcloud compute instances list \
+            --filter='labels.purpose=gce-vm-smoke' \
+            --format='value(name,zone.basename(),creationTimestamp)' |
+          while read -r name zone created; do
+            if ours_or_stale "$created"; then
+              echo "sweeping VM $name ($created)"
+              gcloud compute instances delete "$name" --zone="$zone" --quiet || true
+            fi
+          done
+
+          gcloud container clusters list \
+            --filter='resourceLabels.purpose=gke-cluster-smoke' \
+            --format='value(name,location,createTime)' |
+          while read -r name zone created; do
+            if ours_or_stale "$created"; then
+              echo "sweeping cluster $name ($created)"
+              gcloud container clusters delete "$name" --zone="$zone" --quiet || true
+            fi
+          done

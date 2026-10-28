@@ -1,0 +1,39 @@
+# The guest the demo's "build" chapter makes: an ordinary Dockerfile that
+# describes a machine rather than a process.
+#
+# There is no FROM here on purpose. `granule guest build` supplies one --
+# the published guest rootfs, ghcr.io/gke-labs/granule/debian.rootfs:latest
+# -- and a file that names its own FROM is still fine (a pinned base is
+# the reason to). Either way the packing lays granule's own guest half
+# over the top afterwards, so the machine that boots carries today's
+# agents however old the base is.
+#
+# What is allowed here is a subset of Docker's vocabulary, and what is
+# not is refused by name and line rather than quietly dropped: see
+# deploy/guest-image/README.md. The important limit is not the
+# instruction list, though, it is the machine: this builds under the
+# build host's kernel with no init, so nothing here can start a service,
+# run a container or open /dev/kvm. Enabling a unit is a build-time
+# operation and works; starting one is not, and does not.
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends nginx curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# The site the guest serves. COPY takes it out of the build context,
+# which is this directory (`granule guest build -f` makes the file's own
+# directory the context when no context is given).
+COPY nginx-demo.conf /etc/nginx/sites-available/default
+
+# Enabled, not started: systemd links the unit into the boot target now,
+# and the guest's own init starts it when the VM boots. This is the line
+# that makes the difference between "an image with nginx installed" and
+# "a machine that serves".
+RUN systemctl enable nginx
+
+# Recorded rather than honoured, exactly as it is under docker build: the
+# image declares what it wants reachable, and something else grants it.
+# It survives the packing and a later `granule guest rebase` -- the
+# declaration belongs to the machine inside, not to the granule half a
+# rebase replaces.
+EXPOSE 8080

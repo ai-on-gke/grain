@@ -1,0 +1,23 @@
+[Unit]
+Description=Write /etc/resolv.conf from the kernel command line (granule.dns= or ip=)
+Documentation=file:///usr/local/libexec/granule-configure-dns
+# Early, and for the same reason granule-net-cmdline.service is: this is
+# part of the guest's own networking rather than something layered on top
+# of it, and anything that resolves a name -- a setup script's package
+# mirror, an agent's first HTTPS call -- wants it already done.
+# DefaultDependencies=no keeps it out of the ordering cycle an ordinary
+# unit gets against sysinit.target, which this is itself a part of.
+DefaultDependencies=no
+After=granule-net-cmdline.service
+Wants=network-pre.target
+Before=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/granule-configure-dns
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=sysinit.target

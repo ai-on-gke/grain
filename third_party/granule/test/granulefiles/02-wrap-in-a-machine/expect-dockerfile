@@ -1,0 +1,4 @@
+FROM alpine:latest AS workload_stage_0
+granule-wrap@redis.service
+LABEL dev.granule.granulefile.kind="wrap"
+FROM granule:latest AS redis_vm

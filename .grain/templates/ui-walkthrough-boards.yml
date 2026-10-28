@@ -1,0 +1,69 @@
+name: UI walkthrough - boards and visualizations
+title: Walk through saved boards and task visualizations
+base: main
+auto-merge: true
+body: |
+  Thoroughly exercise saved views and every board presentation, using
+  the seeded demo data and the UI's own creation flows, in a real
+  browser against a real server.
+
+  ## Coverage
+
+  - Open the Boards index (`/boards`) and the seeded boards
+    from the rail and from direct URLs; verify folders, ordering, counts, narrowing, search and
+    sort where offered, and Back/Forward/reload behaviour.
+  - Request a new board from the rail's create menu (New board) and from
+    the Boards index header, then inspect the resulting task or proposal, so the product's
+    asynchronous creation contract is verified rather than bypassed.
+  - List and kanban: open task detail from rows and cards, edit column
+    definitions, move cards and columns through mouse and keyboard/tap
+    affordances, and verify that state and order persist. Confirm the
+    merge-queue column reads "Merging", blocked cards show the blocked
+    state oval, and a held proposal's card carries its "held for
+    approval" chip.
+  - Timeline and gantt: change range and lanes, inspect
+    bars/dependencies/today marker, open a task from a bar, and verify
+    that settings and URL survive a reload.
+  - Tree: open a `tree` board and verify tasks nest under the task that
+    filed them, that the board's narrowing applies and survives a
+    reload, and that a row opens task detail.
+  - Dashboard: exercise whole-board narrowing; configure, add/request,
+    reorder and open panels; verify panel-specific query scoping, links
+    to the underlying task lists, and loading/empty/error rendering.
+  - Report: inspect and reorder sections, repo and query scoping,
+    prose/metric/task sections, and the links into the underlying data.
+  - Exercise delete and confirmation only where the UI actually exposes
+    it, and only against throwaway objects created in this run.
+
+  ## Walkthrough protocol
+
+  - Build and start this repository's real `grain demo` server over a
+    throwaway embedded store, open its built frontend in an actual
+    Playwright browser, and interact through visible UI controls. Do not
+    substitute a source review, a jsdom-only test, or an API-only
+    exercise for the walkthrough.
+  - Prefer the Gemini-backed model and tooling when this sandbox carries
+    a key at `/home/debian/.gemini-api-key`; never print, log or commit
+    it. A repository-declared template carries no capabilities of its
+    own, so what the sandbox holds is whatever this deployment already
+    gives tasks in this repository.
+  - Explore beyond the scripted cases in `ui/e2e`. Check browser console
+    errors, failed network requests, loading/empty/error states,
+    keyboard reachability, and destructive-action confirmations relevant
+    to this area.
+  - Confirm mutations by returning to the screen, reloading and
+    deep-linking where applicable, and observing the persisted result.
+    Stub only an unavailable external or system boundary; keep the real
+    server, frontend, browser and user gestures in the loop, and
+    document every stub.
+  - Record the commit tested, the environment, the exact steps, the
+    outcomes and every stub in a dated report under `docs/test-runs/`,
+    named `YYYY-MM-DD-saved-boards-and-visualizations.md`. Do not commit
+    screenshots or generated browser artifacts.
+  - For each bug found: capture a deterministic reproduction; fix it in
+    this task when the correction is safe and scoped; add regression
+    coverage at the strongest practical level; and run the relevant
+    tests. If the fix is unsafe, materially separate, or needs
+    infrastructure this sandbox does not have, propose a focused
+    follow-up task with `branch: "main"` carrying the reproduction,
+    the evidence and the expected behaviour.

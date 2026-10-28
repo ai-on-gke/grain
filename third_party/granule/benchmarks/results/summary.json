@@ -1,0 +1,42 @@
+{
+  "suite": "granule-unified-benchmarks",
+  "version": "1.0",
+  "status": "PASS",
+  "dimensions": {
+    "startup_latency_ms": {
+      "target_threshold_ms": 100,
+      "microvm_vmm_init_ms": 82.5,
+      "status": "PASS"
+    },
+    "compute_cpu_efficiency": {
+      "single_thread_pct_host": 97.7,
+      "multi_thread_pct_host": 97.8,
+      "crypto_pct_host": 98.5,
+      "status": "PASS"
+    },
+    "syscall_overhead": {
+      "direct_kernel_getpid_ns": 51.0,
+      "host_baseline_ns": 42.0,
+      "gvisor_sentry_ns": 1850.0,
+      "status": "PASS"
+    },
+    "memory_bandwidth": {
+      "seq_read_1mb_pct_host": 96.9,
+      "seq_write_1mb_pct_host": 97.0,
+      "hotplug_latency_p50_ms": 281.07,
+      "status": "PASS"
+    },
+    "storage_io": {
+      "flat_seq_write_mb_s": 409.4,
+      "delta_seq_write_mb_s": 101.9,
+      "flat_rand_write_iops": 8627,
+      "status": "PASS"
+    },
+    "network_datapath": {
+      "spliced_tap_tcp_mbps": 31200.0,
+      "docker_bridge_tcp_mbps": 32800.0,
+      "efficiency_pct_docker": 95.1,
+      "status": "PASS"
+    }
+  }
+}

@@ -1,0 +1,119 @@
+name: UI walkthrough - Settings, its deployment, agents and work sections, and Memory
+title: Walk through Settings -- its layout and save model, Preferences, Access, General, Config repo, Models, Agents, Memory and Tasks
+base: main
+auto-merge: true
+body: |
+  Thoroughly exercise the Settings view -- its layout, filter and save
+  model, the browser's own Preferences, and the Deployment, Agents and
+  Work groups of sections, Memory among them -- in a real browser
+  against a real server. Settings' Connections and Infrastructure groups
+  (Git, Capabilities, Legacy capabilities, Executors, Engine, CI,
+  Sandboxes, Caches) are the infrastructure walkthrough's; System, CI and
+  Metrics are the operations walkthrough's; Settings → Repositories is
+  the repos walkthrough's.
+
+  ## Coverage
+
+  - Layout and paths: open Settings from the gear at the right of the
+    page header rail (its only entry; on a phone, from the bar). Bare
+    `/settings` opens General on desktop and the grouped section list on
+    a phone; each section rides in the URL (`/settings/<section>`, and
+    `#<card>` scrolls to a card) through reload and Back/Forward. At a
+    tablet width the section nav becomes a Section select; on a phone a
+    section opens alone under a back arrow. Old links land where they
+    should: `/admin` and `/admin/<tab>` (`/admin/workflow` on Tasks,
+    `/admin/upgrade` and `/system/upgrade` on Settings → Upgrade), and
+    `/memory` on Settings → Memory.
+  - Filter settings: `/` focuses the box; a label or a helper keyword
+    lists matches by section, choosing one scrolls to the field, focuses
+    and outlines it; a miss says "No setting matches"; Escape restores
+    the groups.
+  - Save model: a checkbox, select or radio commits on change and a
+    text or number box on blur or Enter, while multi-line and composite
+    cards wait for their own Save (with Discard). Confirm the section
+    header's state line (Saving…, Unsaved changes in <card>, Couldn't
+    save <field> with Retry, All changes saved), the dirty dot in the
+    section nav, that leaving a dirty section or Settings asks first and
+    a clean one never does, that the field reads back what the server
+    answered ("1m" as "60s"), that an out-of-range number is refused by
+    name before saving and the error clears once the box is put back,
+    and that a restart-pending setting shows the Restart needed chip,
+    linked to System → Power.
+  - Preferences (`/settings/preferences`): appearance (Auto/Light/Dark),
+    time zone (every printed time on the pages follows it, and with none
+    chosen they are in the browser's zone), task-timeline order, and
+    Customize pinned items (pin a Settings section, a System tab, a
+    board and a session; unpin, reorder, and confirm the rail follows
+    after a reload). Verify nothing deployment-wide is saved from here.
+  - Access (`/settings/access`): the This browser card says how this
+    browser signed in; Sign out returns to the access-code prompt.
+  - General: the Deployment card (environment name, closed tasks shown
+    by default), Updates (upgrade check mode and whether it pauses the
+    pipeline) and About, whose version matches the build stamp at the
+    foot of the rail.
+  - Config repo: the state repository panel and its sync status, the
+    failing-sync alert and Inbox row pointing back here, switching
+    between the internal and the external read-only modes, and that a
+    write refused in external mode says where to commit it instead.
+  - Models: the deployment's provider connections (New connection, Test
+    Connection, Edit, Enable/Disable, and Remove, which asks first; an
+    unfinished new connection cleans itself up without a Remove prompt;
+    with none, the section says so), the default model and per-model
+    reasoning effort, and the Where each agent CLI runs card (container
+    or host, and the readiness it reports). Verify the models each
+    connection advertises (discovered models included) feed the model
+    pickers in New task, sessions, schedules and templates; the warnings
+    for a default model only disabled or paused connections serve and
+    for a model named that no connection advertises; and that a paused
+    connection or model can be resumed from here.
+  - Agents: Agent runs (max turns), Standing instructions (Save and
+    Discard), Task branches (the branch name template refused when it
+    cannot be unique, and the deployment ID) and the Commit identity
+    pointer.
+  - Memory (`/settings/memory`): it shows the deployment's notes and
+    each repository's (and their documents); a reversible correction to
+    a note saves and the next open reads it back; leaving with an
+    unsaved edit -- the rail, Back, a reload -- asks first. Memory is not
+    in the rail unless pinned, and does not appear on a repository's
+    page.
+  - Tasks: Task defaults (approved and auto-merge by default, ignore
+    GitHub CI, default capabilities), Backlog & follow-up limits, and
+    Task fields (including the note on values a field no longer offers);
+    save, reload and verify a new task picks them up.
+  - Stub the GitHub, upgrade, model-provider and config-repo boundaries
+    (the model provider where a connection test reaches it) only where
+    the demo lacks them, retaining the real Grain server and browser UI,
+    and document each intercepted route.
+
+  ## Walkthrough protocol
+
+  - Build and start this repository's real `grain demo` server over a
+    throwaway embedded store, open its built frontend in an actual
+    Playwright browser, and interact through visible UI controls. Do not
+    substitute a source review, a jsdom-only test, or an API-only
+    exercise for the walkthrough.
+  - Prefer the Gemini-backed model and tooling when this sandbox carries
+    a key at `/home/debian/.gemini-api-key`; never print, log or commit
+    it. A repository-declared template carries no capabilities of its
+    own, so what the sandbox holds is whatever this deployment already
+    gives tasks in this repository.
+  - Explore beyond the scripted cases in `ui/e2e`. Check browser console
+    errors, failed network requests, loading/empty/error states,
+    keyboard reachability, and destructive-action confirmations relevant
+    to this area.
+  - Confirm mutations by returning to the screen, reloading and
+    deep-linking where applicable, and observing the persisted result.
+    Stub only an unavailable external or system boundary; keep the real
+    server, frontend, browser and user gestures in the loop, and
+    document every stub.
+  - Record the commit tested, the environment, the exact steps, the
+    outcomes and every stub in a dated report under `docs/test-runs/`,
+    named `YYYY-MM-DD-user-system-settings.md`. Do not commit
+    screenshots or generated browser artifacts.
+  - For each bug found: capture a deterministic reproduction; fix it in
+    this task when the correction is safe and scoped; add regression
+    coverage at the strongest practical level; and run the relevant
+    tests. If the fix is unsafe, materially separate, or needs
+    infrastructure this sandbox does not have, propose a focused
+    follow-up task with `branch: "main"` carrying the reproduction,
+    the evidence and the expected behaviour.

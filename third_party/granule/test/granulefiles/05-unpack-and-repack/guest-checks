@@ -1,0 +1,6 @@
+[the file copied in offline is in the repacked machine]
+cat /etc/service/config.yaml
+grep -q "updated: true" /etc/service/config.yaml
+
+[the machine that was unpacked is still itself]
+test -x /usr/local/bin/granule-agent

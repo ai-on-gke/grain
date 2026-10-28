@@ -1,0 +1,20 @@
+[the wrapped workload is running in the guest]
+# The workload is a process of the guest, started by the unit the wrap
+# generated -- so it is in the guest's own process table, under the
+# command the wrapped image's CMD gave it.
+for i in $(seq 1 60); do
+  grep -als redis-server /proc/[0-9]*/cmdline >/dev/null && exit 0
+  sleep 1
+done
+echo "redis-server never started in the guest" >&2
+systemctl status granule-container granule-wrap@redis >&2 2>/dev/null
+exit 1
+
+[redis is listening on its port]
+for i in $(seq 1 60); do
+  ss -ltn 2>/dev/null | grep -q ':6379' && exit 0
+  sleep 1
+done
+echo "nothing is listening on 6379" >&2
+ss -ltn >&2
+exit 1

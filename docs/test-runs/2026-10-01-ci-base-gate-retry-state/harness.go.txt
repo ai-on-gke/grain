@@ -1,0 +1,231 @@
+// Walkthrough harness for docs/test-runs/2026-10-01-ci-base-gate-retry-state.md.
+//
+// serve: the real ui.Server over a real SQLite model.Store, with a real
+// ci.Service (StoredRunStore, Engine, DirCache) whose workflows are read by
+// git from a local bare repository and whose jobs run in real
+// orchestrator.HostSandboxes directories holding a clone of the commit.
+// Nothing GitHub-shaped is involved; that is the only stubbed boundary.
+//
+// wait: the real mcp wait_for_checks tool, over ui.HTTPClient, for a task.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ui"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "wait" {
+		waitMain(os.Args[2:])
+		return
+	}
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	data := fs.String("data", "/tmp/walk/data", "store and sandbox directory")
+	bare := fs.String("bare", "/tmp/walk/widgets.git", "bare repository")
+	addr := fs.String("addr", "127.0.0.1:18080", "listen address")
+	_ = fs.Parse(os.Args[1:])
+	ctx := context.Background()
+
+	os.MkdirAll(*data, 0o755)
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(*data, "store")))
+	if err != nil {
+		log.Fatal(err)
+	}
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		log.Fatal(err)
+	}
+	actor := model.Principal{Kind: model.PrincipalHuman, ID: "operator"}
+	cfgRow := model.DefaultConfig()
+	cfgRow.AdminAccounts = []string{"operator"}
+	_ = store.PutConfig(ctx, cfgRow)
+	_ = store.PutTeam(ctx, model.Team{ID: model.DefaultTeamID, Name: "admin", TargetRepos: []string{"acme/widgets"}})
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	_ = store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGrain})
+	for _, b := range []string{"x", "y", "z", "r"} {
+		id := "walk-" + b
+		if t, _ := store.GetTask(ctx, id); t != nil {
+			continue
+		}
+		if err := store.PutTask(ctx, model.Task{
+			ID: id, Title: "walkthrough branch " + b, Team: model.DefaultTeamID,
+			Target: &repo, Base: "main", Branch: "walk/" + b,
+			Grants: []model.Grant{{Capability: "grain-ci"}},
+		}); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	cache, err := ci.OpenDirCache(filepath.Join(*data, "ci-cache"), ci.DirCacheOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	runs := ci.NewStoredRunStore(store, ci.StoredRunStoreOptions{Log: log.Printf})
+	if n, err := runs.RecoverInterrupted(ctx, time.Now().UTC()); err != nil || n > 0 {
+		log.Printf("recovered %d interrupted run(s), err=%v", n, err)
+	}
+	service := &ci.Service{
+		Runs:   runs,
+		Source: gitSource{bare: *bare, tmp: filepath.Join(*data, "clones")},
+		Engine: &ci.Engine{
+			Sandboxes:   hostCISandboxes{hosts: orchestrator.NewHostSandboxes(filepath.Join(*data, "sandboxes")), bare: *bare},
+			Cache:       cache,
+			Concurrency: 4,
+			Log:         log.Printf,
+		},
+	}
+	cfg := ui.Config{CI: service, Actor: actor, DefaultTarget: &repo}
+	srv := ui.NewServer(cfg, store)
+	mux := http.NewServeMux()
+	mux.Handle("/", srv)
+	// The one request grain's merge queue makes (orchestrator.startMergeBatch),
+	// reproduced field for field, since the merge queue itself needs GitHub.
+	mux.HandleFunc("/walk/mergebatch", func(w http.ResponseWriter, r *http.Request) {
+		ref := r.URL.Query().Get("ref")
+		run, err := service.Start(r.Context(), ci.Request{
+			Repo: repo.String(), Ref: ref, Event: ci.EventPullRequest,
+			RequestedBy: "merge-batch:" + repo.String() + ":main",
+			GateOnBase:  true, BaseRef: "main",
+		})
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		json.NewEncoder(w).Encode(run)
+	})
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("walk: serving on http://%s", ln.Addr())
+	log.Fatal(http.Serve(ln, mux))
+}
+
+// gitSource reads a branch's workflows out of a shallow clone of the bare
+// repository, the way cmd/grain's ciWorkflowSource does from GitHub.
+type gitSource struct{ bare, tmp string }
+
+func (s gitSource) Workflows(ctx context.Context, repo, ref string) ([]ci.Workflow, string, error) {
+	os.MkdirAll(s.tmp, 0o755)
+	dir, err := os.MkdirTemp(s.tmp, "clone-")
+	if err != nil {
+		return nil, "", err
+	}
+	defer os.RemoveAll(dir)
+	args := []string{"clone", "-q", "--depth", "1"}
+	if ref != "" {
+		args = append(args, "--branch", ref)
+	}
+	args = append(args, "file://"+s.bare, dir)
+	if out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput(); err != nil {
+		return nil, "", fmt.Errorf("git clone %s: %v: %s", ref, err, out)
+	}
+	sha, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return nil, "", err
+	}
+	wfs, _, err := ci.LoadDir(os.DirFS(dir))
+	return wfs, strings.TrimSpace(string(sha)), err
+}
+
+type hostCISandboxes struct {
+	hosts *orchestrator.HostSandboxes
+	bare  string
+}
+
+func (h hostCISandboxes) Acquire(ctx context.Context, req ci.SandboxRequest) (ci.Sandbox, error) {
+	sb, err := h.hosts.Acquire(ctx, req.Name, orchestrator.Shape{})
+	if err != nil {
+		return nil, err
+	}
+	root, _ := sb.(interface{ Root() (string, error) }).Root()
+	work := filepath.Join(root, orchestrator.CheckoutDir)
+	script := fmt.Sprintf("git clone -q file://%s %s && git -C %s checkout -q %s", h.bare, work, work, req.Commit)
+	if out, err := exec.CommandContext(ctx, "sh", "-c", script).CombinedOutput(); err != nil {
+		_ = sb.Release(context.Background())
+		return nil, fmt.Errorf("checkout: %v: %s", err, out)
+	}
+	return &hostCISandbox{backing: sb, shell: sb.(orchestrator.SandboxShell)}, nil
+}
+
+type hostCISandbox struct {
+	backing orchestrator.Sandbox
+	shell   orchestrator.SandboxShell
+}
+
+func (s *hostCISandbox) Name() string { return s.backing.Name() }
+func (s *hostCISandbox) Exec(ctx context.Context, cmd ci.Command) (ci.CommandResult, error) {
+	dir := orchestrator.CheckoutDir
+	if cmd.Dir != "" {
+		dir = filepath.Join(dir, cmd.Dir)
+	}
+	res, err := s.shell.RunShell(ctx, orchestrator.ShellRequest{Script: cmd.Script, Dir: dir, Env: cmd.Env, Timeout: cmd.Timeout})
+	return ci.CommandResult{Output: res.Output, ExitCode: res.ExitCode}, err
+}
+func (s *hostCISandbox) Release(ctx context.Context) error { return s.backing.Release(ctx) }
+
+// --- wait: the real wait_for_checks tool against the server ---------------
+
+type runner struct {
+	c    *ui.HTTPClient
+	task string
+}
+
+func (r runner) StartGrainCI(ctx context.Context, jobs []string) (ci.Run, error) {
+	return r.c.StartTaskCIRun(ctx, r.task, jobs)
+}
+func (r runner) RetriggerGrainCI(ctx context.Context, wf, commit string) (ci.Run, error) {
+	return r.c.RetriggerTaskCIRun(ctx, r.task, wf, commit)
+}
+func (r runner) GrainCIRun(ctx context.Context, id string) (ci.Run, error) { return r.c.CIRun(ctx, id) }
+func (r runner) FindGrainCIRuns(ctx context.Context, f ci.RunFilter, limit int) (ci.RunPage, error) {
+	resp, err := r.c.FindCIRuns(ctx, f, limit)
+	if err != nil {
+		return ci.RunPage{}, err
+	}
+	return ci.RunPage{Runs: resp.Runs, Matched: resp.Matched, Stored: resp.Stored}, nil
+}
+func (r runner) GrainCISharedFaults(context.Context) ([]mcp.CIFault, error) { return nil, nil }
+
+func waitMain(args []string) {
+	fs := flag.NewFlagSet("wait", flag.ExitOnError)
+	url := fs.String("url", "http://127.0.0.1:18080", "server")
+	task := fs.String("task", "walk-x", "task id")
+	jobs := fs.String("jobs", "", "comma-separated job selection")
+	_ = fs.Parse(args)
+	tools := mcp.NewGrainCIWaitTools(runner{c: ui.NewHTTPClient(*url), task: *task}, mcp.CIRepoScope{Repo: "acme/widgets"})
+	in := map[string]any{"timeout_seconds": float64(300)}
+	if *jobs != "" {
+		var list []any
+		for _, j := range strings.Split(*jobs, ",") {
+			list = append(list, j)
+		}
+		in["jobs"] = list
+	}
+	start := time.Now()
+	for _, t := range tools {
+		if t.Name == "wait_for_checks" {
+			res := t.Handler(context.Background(), in)
+			fmt.Printf("[returned after %s]\n%s\n", time.Since(start).Round(time.Second), res.Text)
+			return
+		}
+	}
+	log.Fatal("no wait_for_checks tool")
+}

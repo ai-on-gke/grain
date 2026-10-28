@@ -1,0 +1,219 @@
+# Optional split-privilege example. The single-container pod-example.yaml
+# is simpler. This layout is for keeping NET_ADMIN, and root, out of the
+# long-lived container: only the netshim init container holds them, while
+# it builds the taps, and the VM container runs as UID 65534 with no
+# capabilities (see gke.md's "Privileges").
+# Example Pod running one cloud-hypervisor VM that takes over the pod's
+# own IP. The netshim init container splices the VM's tap onto the pod's
+# interface, so the guest boots with the address and MAC the CNI assigned
+# and the pod behaves like any other single-container pod from outside:
+# Services, readiness probes and DNS all address it the ordinary way,
+# with no per-VM port forwarding to arrange.
+#
+# One VM per pod is the model -- there is exactly one identity in a
+# network namespace to take over -- so a second VM belongs in a second
+# pod.
+#
+# The init container and the VM container both use the same granule image
+# -- one Go binary with two modes, selected by args ("netshim" for the
+# init container, "run" for the VM container) -- and both read the same
+# NETSHIM_* settings, so they cannot disagree about the tap: netshim
+# creates it, and the VM container derives its own --net and the guest's
+# "ip=" boot parameter from what it reads off the pod's interface.
+#
+# Assumes:
+#  - the node has /dev/kvm and /dev/net/tun exposed as the allocatable
+#    resources "devic.es/kvm" and "devic.es/tun", which
+#    kvm-device-plugin.yaml sets up. KubeVirt's virt-handler publishes the
+#    same two devices as devices.kubevirt.io/kvm and devices.kubevirt.io/tun;
+#    either works, with the names below changed to match.
+#  - the disk image and kernel are already present on the node under
+#    /var/lib/vm-images, e.g. pre-populated by a node-local image cache.
+#    Omitting CHV_DISK_IMAGE/CHV_KERNEL instead boots the reference guest
+#    disk image and kernel baked into the granule image itself (see the
+#    main README's "Guest disk image and kernel"), which is what
+#    deploy/k8s/gke-pod-example.yaml does.
+#
+# `kubectl exec -it chv-vm-example -- granule exec -- <command>` runs
+# <command> inside the VM's guest itself, rather than in this otherwise-
+# empty container -- `kubectl exec ... -- granule exec` alone (no `--
+# <command>`) opens an interactive login shell instead. It needs nothing
+# configured here: exec reaches the guest over the VM's own vsock device
+# (see the top-level README's "Execing into a VM"), not over the control
+# link below, which is why there is no exec address to set and why a VM
+# with no netshim in front of it is still one you can exec into.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: chv-vm-split-example
+  labels:
+    app: chv-vm-example
+spec:
+  restartPolicy: Never
+  # Must comfortably exceed CHV_SHUTDOWN_TIMEOUT below so granule's own
+  # graceful-shutdown sequence can run to completion before the kubelet
+  # SIGKILLs the container itself.
+  terminationGracePeriodSeconds: 40
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  initContainers:
+    - name: netshim
+      image: ghcr.io/gke-labs/granule:latest
+      args: ["netshim"]
+      env:
+        - name: NETSHIM_VM
+          value: "web"
+        - name: NETSHIM_CONTROL_CIDR
+          value: "169.254.100.1/24"
+        # Who may attach to the taps netshim creates without NET_ADMIN:
+        # the UID:GID the VM container below runs as. Change it there
+        # and change it here, or cloud-hypervisor fails to open its tap
+        # with EPERM.
+        - name: NETSHIM_TAP_OWNER
+          value: "65534:65534"
+      resources:
+        limits:
+          # /dev/net/tun, which netshim opens to create the tap. A pod has
+          # none otherwise; the device plugin adds it to this container's
+          # /dev and its device cgroup, as `docker run --device` would.
+          devic.es/tun: "1"
+      securityContext:
+        # netshim creates a tap and splices it onto eth0 in the pod's own
+        # network namespace, which is NET_ADMIN and nothing else -- it
+        # writes no sysctl and installs no nftables rules, and needs no
+        # NET_RAW.
+        capabilities:
+          drop: ["ALL"]
+          add: ["NET_ADMIN"]
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+  containers:
+    - name: web
+      image: ghcr.io/gke-labs/granule:latest
+      args: ["run"]
+      env:
+        - name: CHV_NET_MODE
+          value: "external"
+        - name: CHV_DISK_IMAGE
+          value: /images/disk.img
+        - name: CHV_DISK_READONLY
+          value: "true"
+        - name: CHV_KERNEL
+          value: /images/vmlinux
+        # No "ip=" here, and no CHV_NET: both are derived at boot from
+        # the address, MAC and MTU the CNI put on the pod's interface,
+        # which is why this container reads the same NETSHIM_* settings
+        # the init container did. The CNI's own routes come across on a
+        # "granule.routes=" parameter beside that derived "ip=", since a
+        # netmask alone describes a bridge CNI's world and not a
+        # point-to-point one's -- which is what stands between this
+        # guest and the other pods on GKE-style nodes. See the main
+        # README's "Container networking".
+        # No "console=" either: granule puts the one for the node's
+        # architecture in (ttyS0 on x86_64, ttyAMA0 on arm64, where a
+        # guest told ttyS0 has no console and never becomes reachable).
+        # Naming one here would replace it on every node.
+        - name: CHV_CMDLINE
+          value: "root=/dev/vda ro"
+        - name: NETSHIM_VM
+          value: "web"
+        - name: NETSHIM_CONTROL_CIDR
+          value: "169.254.100.1/24"
+        - name: CHV_CPUS
+          value: "2"
+        - name: CHV_MEMORY_MB
+          value: "2048"
+        # Any other cloud-hypervisor setting without a dedicated flag of
+        # its own, passed straight through (e.g. extra disks or raw CLI
+        # arguments). This is the same passthrough `granule vm create
+        # -e CHV_EXTRA_ARGS="--api-socket /tmp/chv.sock"` gives on docker.
+        # - name: CHV_EXTRA_ARGS
+        #   value: "--api-socket /tmp/chv.sock"
+        - name: CHV_SHUTDOWN_TIMEOUT
+          value: "20s"
+      # Without this the pod's Ready condition reports on the container,
+      # which is up well before the guest inside it has booted. "granule
+      # ready" dials the guest's own agent over the VM's vsock device and
+      # exits zero once the guest answers a command, so "kubectl wait
+      # --for=condition=Ready" waits for the guest rather than for the
+      # container wrapping it. "-timeout 0" is a single attempt; the
+      # kubelet does the retrying, on periodSeconds. See the top-level
+      # README's "Readiness".
+      #
+      # A guest answers seconds before whatever it boots into is
+      # serving. To make this condition report the second instant
+      # instead, have the guest create a file when its workload is up
+      # and name that file in the container's environment above:
+      #
+      #   - name: GRANULE_READY_FILE
+      #     value: "/run/granule/ready"
+      #
+      # The probe below is unchanged either way -- what "ready" means is
+      # configured on the container, not written into the probe.
+      readinessProbe:
+        exec:
+          command: ["/usr/local/bin/granule", "ready", "-timeout", "0"]
+        periodSeconds: 5
+        timeoutSeconds: 5
+      resources:
+        requests:
+          cpu: "2"
+          memory: 3Gi
+        limits:
+          cpu: "2"
+          memory: 3Gi
+          devic.es/kvm: "1"
+          # cloud-hypervisor opens the tap netshim made through
+          # /dev/net/tun, so this container needs the device as well.
+          devic.es/tun: "1"
+      securityContext:
+        # No capabilities, and not root. This is what the split layout
+        # buys over the single-container pod-example.yaml: NET_ADMIN is
+        # held only by netshim, for as long as netshim runs, and never by
+        # cloud-hypervisor or the granule supervisor, the long-lived
+        # processes that parse what the guest sends them.
+        #
+        # Attaching to the taps netshim built needs no capability.
+        # netshim creates them owned by NETSHIM_TAP_OWNER, which above
+        # is this container's UID:GID. granule also leaves mtu= off
+        # cloud-hypervisor's --net when the tap already has the pod
+        # interface's MTU, which netshim has set. Otherwise
+        # cloud-hypervisor would set the MTU itself (SIOCSIFMTU), and
+        # that ioctl needs NET_ADMIN.
+        #
+        # Any non-root UID works: granule run writes only to the
+        # emptyDir volumes below. /dev/kvm on a GKE nested-virtualization
+        # node is mode 0666; on a node where it is 0660 root:kvm, add
+        # that node's kvm GID to the pod's supplementalGroups -- the
+        # device plugin passes the node's own ownership and mode through
+        # unchanged. /dev/net/tun is 0666 everywhere.
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        capabilities:
+          drop: ["ALL"]
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - name: run
+          mountPath: /run
+        - name: tmp
+          mountPath: /tmp
+        - name: overlay
+          mountPath: /var/lib/granule/overlay
+        - name: images
+          mountPath: /images
+          readOnly: true
+  volumes:
+    - name: run
+      emptyDir:
+        medium: Memory
+    - name: tmp
+      emptyDir: {}
+    - name: overlay
+      emptyDir: {}
+    - name: images
+      hostPath:
+        path: /var/lib/vm-images
+        type: Directory

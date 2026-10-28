@@ -1,0 +1,33 @@
+// Walkthrough-only script (not committed): drive the built CI page while
+// job a on walk/r is in its retry attempt.
+const { chromium } = require("@playwright/test");
+
+(async () => {
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+  await page.addInitScript(() => localStorage.setItem("grain.username", "operator"));
+  const base = process.env.WALK_URL || "http://127.0.0.1:18080";
+  await page.goto(base + "/ci");
+  const row = page.locator("tr").filter({ hasText: "walk/r" }).filter({ hasText: "push" }).first();
+  await row.waitFor({ timeout: 30000 });
+  await row.getByRole("button", { name: "acme/widgets" }).click();
+  await page.waitForTimeout(2000);
+  await page.screenshot({ path: "/tmp/walk/after-click.png", fullPage: true });
+  console.log("URL:", page.url());
+  const chip = page.getByText("retry 1/1").first();
+  await chip.waitFor({ timeout: 30000 });
+  const note = page.getByText(/first attempt failed/).first();
+  await note.waitFor({ timeout: 10000 });
+  console.log("chip:", await chip.textContent());
+  console.log("note:", (await note.textContent()).slice(0, 200));
+  // While the retry runs, nothing on the page may claim the run finished.
+  const body = await page.locator("body").innerText();
+  console.log("says 'all jobs completed':", /all jobs completed/i.test(body));
+  const jobLine = body.split("\n").filter((l) => /^a\b|job a/i.test(l)).slice(0, 5);
+  console.log("job a lines:", JSON.stringify(jobLine));
+  await page.screenshot({ path: "/tmp/walk/retry-ci-page.png", fullPage: true });
+  await browser.close();
+})().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

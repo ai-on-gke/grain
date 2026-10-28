@@ -1,0 +1,27 @@
+[Unit]
+Description=Signal host-side granule listener when this guest is under memory pressure
+After=granule-control-net.service
+
+[Service]
+Type=simple
+# Written by granule-control-net when this guest has a control link,
+# naming the host address to signal. Absent on a guest booted without
+# one, which leaves the agent's own default (this guest's default route's
+# gateway) -- reaching the container network rather than the host side of
+# this VM, so nothing answers.
+EnvironmentFile=-/run/granule-control-net.env
+# Runs as root, deliberately: the token it signs its signals with is in
+# /run/granule-mem-agent/token, which granule writes over vsock and only
+# root can read -- that is what keeps every other process in this guest
+# from signalling as it. No RuntimeDirectory= for that path either:
+# systemd would empty it whenever this unit restarts, and granule only
+# delivers the token once per boot or resume.
+ExecStart=/usr/local/bin/granule-mem-agent
+# on-failure, not always: the agent exits zero and stays exited on a
+# kernel with no CONFIG_PSI (nothing to poll, and no amount of restarting
+# grows a /proc/pressure), while a crash still comes back.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+# docs/granulefile.md 14.9: a native entrypoint and command in a packed
+# stage. ENTRYPOINT and CMD are carried into the VM image so the guest
+# boots directly into the workload without a systemd unit of its own.
+ARG ROOTFS=ghcr.io/gke-labs/granule-guest-rootfs:debian12
+
+FROM ${ROOTFS}
+
+RUN apt-get update && apt-get install -y python3
+COPY app.py /app/app.py
+WORKDIR /app
+
+ENTRYPOINT ["python3", "app.py"]
+CMD ["--port", "8080"]
+
+# Pack into a VM image. The entrypoint and command execute natively at boot.
+VM PACK AS app_vm

@@ -1,0 +1,41 @@
+# The build context for Dockerfile, whose context is this repository
+# root (it builds granulectl out of third_party/granule and reads the
+# commit stamp out of .git, neither of which is under the Go tree).
+# Nothing else in this repo builds from here: scripts/granule's two builds
+# each cd into their own directory first, and Dockerfile.build -- the
+# toolchain image, which COPYs nothing -- carries its own
+# Dockerfile.build.dockerignore excluding everything, which BuildKit
+# prefers over this file for that build.
+#
+# .git is deliberately NOT excluded: `go build` stamps bin/grain with the
+# commit it came from and can only read that here.
+
+# Build outputs and caches, none of which the image build reads and all
+# of which are large: bin/grain is ~200 MB on its own, and shipping a
+# host's node_modules would both bloat the context and risk `npm ci`
+# resolving against a tree built for a different platform.
+bin/
+.container-cache/
+ui/node_modules/
+ui/test-results/
+ui/playwright-report/
+
+# The same things again, unanchored, because the patterns above describe
+# *this* layout of the repository and a build context is only ever as
+# tidy as the directory it was taken from. A release host's checkout held
+# the tree from before the Go module was promoted out of its old
+# subdirectory -- untracked, so no `git checkout` since has touched it --
+# and every pattern above missed it by one path segment: 3.0GB of module
+# and build cache and a node_modules under the UI path that layout used,
+# uploaded into the builder on every build.
+#
+# What the *image* carries is no longer decided here at all: the source
+# it exports is what git says is tracked (scripts/export-source.sh). This
+# is about the context, which is bytes and time on every build.
+**/node_modules/
+**/.container-cache/
+# Where the guest build left a kernel, an initramfs and a disk image --
+# multiple GB of them -- before it became a Granulefile. Nothing writes it
+# now, but a host that built a guest back then can still have it, and
+# .gitignore drops it too.
+scripts/granule/output/

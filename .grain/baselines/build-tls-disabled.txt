@@ -1,0 +1,7 @@
+# Ratchet baseline for tests/security's build-tls-disabled rule.
+# Image builds and scripts that turn TLS verification off: curl -k,
+# wget --no-check-certificate, apt Verify-Peer "false" (#2397, #2419).
+#
+# "<path> <count>": violations each file still has. The count may only
+# go down -- tests/security fails when it rises and when it falls without
+# this file being lowered to match. Raising a count needs a human's review.

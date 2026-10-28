@@ -1,0 +1,17 @@
+{
+  "host": {
+    "cpu_events_per_sec": 1281.5,
+    "memory_read_mib_s": 7059.5,
+    "disk_randwrite_iops": 30884
+  },
+  "docker": {
+    "cpu_events_per_sec": 1275.0,
+    "memory_read_mib_s": 7046.3,
+    "disk_randwrite_iops": 29850
+  },
+  "granule": {
+    "cpu_events_per_sec": 1252.0,
+    "memory_read_mib_s": 6998.0,
+    "disk_randwrite_iops": 8627
+  }
+}

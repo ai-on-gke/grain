@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+# granule-runlevel: boot
+
+description="Write /etc/resolv.conf from the kernel command line (granule.dns= or ip=)"
+
+depend() {
+	# Enabled in the "boot" runlevel rather than "default" (see the
+	# Dockerfile's guest-rootfs-alpine stage), so it has already run by
+	# the time anything that resolves a name starts.
+	before sshd granule-mem-agent
+}
+
+start() {
+	ebegin "Configuring this guest's resolver"
+	/usr/local/libexec/granule-configure-dns
+	eend $?
+}

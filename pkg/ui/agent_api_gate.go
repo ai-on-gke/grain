@@ -1,0 +1,848 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package ui
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"reflect"
+	"regexp"
+	"runtime"
+	"slices"
+	"strings"
+
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/model"
+)
+
+// ActingTaskHeader names the task whose run is making a request through
+// the agent API: `grain mcpserver` sets it on every call a generated api
+// tool makes (agent_api_tools.go). A request carrying it is held to that
+// task's api grants by agentAPIGate below and attributed to it.
+//
+// The header can only narrow what a request may do, never widen it: a
+// request without it is whatever the access gate already let in, so a
+// caller able to send this header at all could have left it off. Which
+// is why it is believed as it stands rather than signed.
+const ActingTaskHeader = "X-Grain-Acting-Task"
+
+// ActingReasonHeader carries the reason an agent gave for a call. A call
+// under a dangerous scope, and every DELETE, is refused without one.
+const ActingReasonHeader = "X-Grain-Acting-Reason"
+
+// maxAgentAPIBody bounds how much of a request body the gate reads to
+// find the repository and the capabilities it names; the handler reads
+// the same bytes again after.
+const maxAgentAPIBody = 8 << 20
+
+// selfMutableTaskRoutes are the task routes a run may call on its own
+// task: everything else under /api/tasks/{id} could end it (stop, close,
+// retry, defer), orphan it (withdraw its approval, change its
+// dependencies), or rewrite what it was granted, and a run is not to do
+// any of that to itself (task 420's self-protection rails).
+var selfMutableTaskRoutes = map[string]bool{
+	"POST /api/tasks/{id}/comments": true,
+	"POST /api/tasks/{id}/messages": true,
+}
+
+// ownTaskOnlyRoutes are the task routes a run may call on its own task
+// and on no other. POST /api/tasks/{id}/messages is the chat tool's write
+// half: it speaks as the run of task {id} to the person watching it and
+// parks {id} on their reply (Client.PostAgentMessage). Called on another
+// task it put words in that task's mouth and parked it on the operator
+// (task 768's advice to tasks 796, 657 and 736, which went to their
+// operators as questions and never reached their agents).
+var ownTaskOnlyRoutes = map[string]string{
+	"POST /api/tasks/{id}/messages": "it says something to the human watching your own task and parks it on their reply",
+}
+
+// agentMessageRail refuses the two ways round a run can reach the wrong
+// conversation: an own-task-only route on another task, which it points
+// at POST /api/tasks/{id}/agent-messages instead, and that route on the
+// run's own task, which is no other agent.
+func agentMessageRail(acting, pattern, target string) error {
+	if what, ok := ownTaskOnlyRoutes[pattern]; ok && target != acting {
+		return fmt.Errorf("task %s cannot call %s on task %s: %s, so it takes only your own task's id (%s). "+
+			"To send a message to task %s's agent, call POST /api/tasks/{id}/agent-messages "+
+			"(the api_message_task_agent tool) with id %s; to leave a note for the people on it, "+
+			"POST /api/tasks/{id}/comments", acting, pattern, target, what, acting, target, target)
+	}
+	if pattern == agentMessagesRoute && target == acting {
+		return fmt.Errorf("task %s cannot send a message to its own agent with %s: to ask the human "+
+			"watching your task something, use the chat tool (POST /api/tasks/{id}/messages with id %s)",
+			acting, pattern, acting)
+	}
+	return nil
+}
+
+// agentMessagesRoute is one run's message to another task's agent
+// (Client.PostMessageToAgent). The message is itself signed as the
+// sender, so recordAgentCall writes no second note about it.
+const agentMessagesRoute = "POST /api/tasks/{id}/agent-messages"
+
+// agentCall is one authorized call, for recordAgentCall.
+type agentCall struct {
+	taskID     string
+	pattern    string
+	scope      APIScope
+	repo       string
+	reason     string
+	targetTask string
+}
+
+type agentCallContextKey struct{}
+
+// withAgentCall records the agentCall that agentAPIGate authorized on ctx,
+// so downstream checks (checkRepoPerson) know the request passed its
+// route's api:<scope> gate even though its principal is PrincipalAgent.
+func withAgentCall(ctx context.Context, call agentCall) context.Context {
+	return context.WithValue(ctx, agentCallContextKey{}, call)
+}
+
+func agentCallFromContext(ctx context.Context) (agentCall, bool) {
+	if ctx == nil {
+		return agentCall{}, false
+	}
+	call, ok := ctx.Value(agentCallContextKey{}).(agentCall)
+	if !ok || call.scope == "" {
+		return agentCall{}, false
+	}
+	return call, true
+}
+
+// handlerName is the bare method name of a handler bound from a Server
+// method ("handleRunSchedule"), or "" for anything else.
+func handlerName(h http.HandlerFunc) string {
+	fn := runtime.FuncForPC(reflect.ValueOf(h).Pointer())
+	if fn == nil {
+		return ""
+	}
+	name := fn.Name()
+	name = strings.TrimSuffix(name, "-fm")
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		name = name[i+1:]
+	}
+	if !strings.HasPrefix(name, "handle") {
+		return ""
+	}
+	return name
+}
+
+// agentAPIGate wraps one route's handler: a request with no
+// ActingTaskHeader passes straight through, and one with it is
+// authorized against the acting task's api grants, run as that task's
+// agent principal, and recorded.
+func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.HandlerFunc {
+	scope := routeScopes[pattern]
+	return func(w http.ResponseWriter, r *http.Request) {
+		taskID := strings.TrimSpace(r.Header.Get(ActingTaskHeader))
+		if taskID == "" {
+			next(w, r)
+			return
+		}
+		call, err := s.authorizeAgentCall(r, pattern, scope, taskID)
+		if err != nil {
+			log.Printf("grain api: refused {agent, %s} %s: %v", taskID, pattern, err)
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID}
+		r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next(rec, r)
+		s.recordAgentCall(r.Context(), call, rec.status)
+	}
+}
+
+var errNoAgentAPI = errors.New("this server has no task store, so it cannot check an agent's api grants")
+
+// authorizeAgentCall decides whether taskID's run may make this call.
+func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APIScope, taskID string) (agentCall, error) {
+	call := agentCall{taskID: taskID, pattern: pattern, scope: scope,
+		reason: strings.TrimSpace(r.Header.Get(ActingReasonHeader))}
+	if scope == "" || scope == scopeInternal {
+		return call, fmt.Errorf("%s is not part of the agent API (docs/agent-api.md)", pattern)
+	}
+	if s.tasks == nil || s.tasks.Store == nil {
+		return call, errNoAgentAPI
+	}
+	ctx := r.Context()
+	acting, err := s.tasks.Store.GetTask(ctx, taskID)
+	if err != nil || acting == nil {
+		return call, fmt.Errorf("acting task %s could not be read: %v", taskID, err)
+	}
+	held := grantNames(acting.Grants)
+	set := APIGrantsOf(held)
+	if !set.Has(scope) {
+		return call, fmt.Errorf("task %s holds no api grant for scope %s, which %s needs: "+
+			"ask a person to grant api:%s or a preset that includes it (docs/agent-api.md)", taskID, scope, pattern, scope)
+	}
+	body, err := peekBody(r)
+	if err != nil {
+		return call, err
+	}
+	method, _, _ := strings.Cut(pattern, " ")
+	if target := r.PathValue("id"); target != "" && strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") {
+		call.targetTask = target
+	}
+	call.repo, err = s.agentCallRepo(ctx, r, pattern, call.targetTask, body)
+	if err != nil {
+		return call, err
+	}
+	if !set.Allows(scope, call.repo) {
+		if call.repo == "" {
+			return call, fmt.Errorf("task %s holds %s only for some repositories, and %s does not name one it reaches",
+				taskID, scope, pattern)
+		}
+		return call, fmt.Errorf("task %s holds %s, but not on %s", taskID, scope, call.repo)
+	}
+	if (IsDangerousAPIScope(scope) || method == http.MethodDelete) && call.reason == "" {
+		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
+	}
+	if err := s.agentRails(ctx, acting, pattern, method, scope, call.targetTask, r.PathValue("id")); err != nil {
+		return call, err
+	}
+	if err := agentGrantEscalationFrom(held, pattern, body, s.storedFieldGrants(ctx, pattern, call.repo), s.tasks.normalizeCapabilityID); err != nil {
+		return call, err
+	}
+	if err := s.agentFilingEscalation(ctx, acting, set, pattern, scope, call.repo, body); err != nil {
+		return call, err
+	}
+	return call, nil
+}
+
+// agentRails are the self-protection rails: a run cannot end or orphan
+// its own run, cannot act on a standing session it does not own, and
+// honours an upgrade's hold on dispatch.
+func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, method string, scope APIScope,
+	target, sessionID string) error {
+	if method == http.MethodGet {
+		return nil
+	}
+	ownSession, _ := model.ConsoleSessionIDOf(*acting)
+	if target != "" {
+		if err := agentMessageRail(acting.ID, pattern, target); err != nil {
+			return err
+		}
+		if target == acting.ID && !selfMutableTaskRoutes[pattern] {
+			return fmt.Errorf("task %s cannot call %s on itself: a run does not end, orphan or regrant its own task", acting.ID, pattern)
+		}
+		if t, err := s.tasks.Store.GetTask(ctx, target); err == nil && t != nil {
+			if session, ok := model.ConsoleSessionIDOf(*t); ok && session != ownSession {
+				return fmt.Errorf("task %s is the standing session %q, which task %s does not own", target, session, acting.ID)
+			}
+		}
+		if pattern == "POST /api/tasks/{id}/run-now" || pattern == "POST /api/tasks/{id}/pause" || pattern == "POST /api/tasks/{id}/resume" {
+			me := model.Principal{Kind: model.PrincipalAgent, ID: acting.ID}
+			if p, err := s.tasks.Store.GetPause(ctx, target); err == nil && p != nil && p.PausedBy != me {
+				return fmt.Errorf("task %s is paused by %s %s; only they may lift or override that pause",
+					target, p.PausedBy.Kind, principalName(p.PausedBy))
+			}
+		}
+	}
+	path := pathOf(pattern)
+	if strings.HasPrefix(path, "/api/console/{id}") {
+		return fmt.Errorf("task %s cannot type into or close a live console through the agent API", acting.ID)
+	}
+	if strings.HasPrefix(path, "/api/console-sessions") {
+		// Creating, deleting, restarting or cancelling a session ends
+		// somebody's run; editing one is only a run's own to do.
+		if pattern != "PUT /api/console-sessions/{id}" || ownSession == "" || ownSession != sessionID {
+			return fmt.Errorf("task %s may only edit its own standing session, and never create, restart, "+
+				"cancel or delete one", acting.ID)
+		}
+	}
+	upgradeHold := pattern == "POST /api/pipeline-pause" ||
+		pattern == "DELETE /api/pipeline-pause" || pattern == "DELETE /api/pause" ||
+		strings.HasPrefix(string(scope), "deployment:") && scope != "deployment:read"
+	if upgradeHold {
+		pause, err := s.tasks.Store.GetPipelinePause(ctx)
+		if err != nil {
+			return fmt.Errorf("reading the pipeline pause: %w", err)
+		}
+		if pause != nil {
+			me := model.Principal{Kind: model.PrincipalAgent, ID: acting.ID}
+			switch {
+			case strings.HasPrefix(path, "/api/pipeline-pause") || strings.HasPrefix(path, "/api/pause"):
+				if pause.By != me {
+					return fmt.Errorf("dispatch was paused by %s %s (%s); only they may lift it", pause.By.Kind, pause.By.ID, pause.Reason)
+				}
+				if method == http.MethodDelete && (!pause.AdmitsRunNow() || s.tasks.upgradeUnderway(ctx)) {
+					return fmt.Errorf("an upgrade holds the queue (%s); %s waits for it", pause.Reason, pattern)
+				}
+			case pause.UntilTaskID != "" && pause.UntilTaskID != acting.ID:
+				return fmt.Errorf("an upgrade hold is standing for task %s (%s); %s waits for it", pause.UntilTaskID, pause.Reason, pattern)
+			}
+		}
+	}
+	return nil
+}
+
+// agentGrantEscalation refuses a body that writes any capability the
+// acting task does not itself hold, or any dangerous api grant at all:
+// an agent can never use the API to raise its own or another task's
+// grants, and dangerous scopes are a person's to give. Which names a
+// body grants is grantsInBody's to say; normalize, when not nil, puts a
+// capability reference in the form the store records it in (the
+// Client's normalizeCapabilityID) before it is compared.
+func agentGrantEscalation(held []string, pattern string, body []byte, normalize func(string) (string, error)) error {
+	return agentGrantEscalationFrom(held, pattern, body, nil, normalize)
+}
+
+// agentGrantEscalationFrom is agentGrantEscalation subtracting the grants
+// already stored on each whole-list replacement field (storedFieldGrants),
+// so an agent can narrow an existing capability list without holding every
+// other capability already on that row.
+func agentGrantEscalationFrom(held []string, pattern string, body []byte, stored map[string][]string, normalize func(string) (string, error)) error {
+	for _, name := range addedGrantsInBody(pattern, body, stored, normalize) {
+		if err := agentGrantRefusal(held, name, normalize); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// storedFieldGrants returns the capability lists already stored on the row
+// pattern replaces, keyed by lowercase JSON field name ("cicapabilities",
+// "defaultcapabilities"). On whole-list replacement routes an agent is only
+// escalating when it adds a capability that is not already on that field;
+// keeping or narrowing the stored list grants nothing new.
+func (s *Server) storedFieldGrants(ctx context.Context, pattern, repo string) map[string][]string {
+	if s.tasks == nil || s.tasks.Store == nil {
+		return nil
+	}
+	switch pattern {
+	case "PUT /api/repos/{owner}/{name}/ci-capabilities":
+		rc := s.storedRepoConfig(ctx, repo)
+		if rc == nil {
+			return nil
+		}
+		return map[string][]string{"cicapabilities": rc.CICapabilities}
+	case "PUT /api/repos/{owner}/{name}/capabilities":
+		rc := s.storedRepoConfig(ctx, repo)
+		if rc == nil {
+			return nil
+		}
+		return map[string][]string{"defaultcapabilities": rc.DefaultCapabilities}
+	case "PUT /api/repos/{owner}/{name}/settings",
+		"PUT /api/deployment/repos/{owner}/{name}/config":
+		rc := s.storedRepoConfig(ctx, repo)
+		if rc == nil {
+			return nil
+		}
+		return map[string][]string{
+			"cicapabilities":      rc.CICapabilities,
+			"defaultcapabilities": rc.DefaultCapabilities,
+		}
+	case "PUT /api/settings", "POST /api/settings", "POST /api/settings/plan":
+		cfg, err := s.tasks.Store.GetConfig(ctx)
+		if err != nil || cfg == nil {
+			return nil
+		}
+		return map[string][]string{"defaultcapabilities": cfg.DefaultCapabilities}
+	default:
+		return nil
+	}
+}
+
+func (s *Server) storedRepoConfig(ctx context.Context, repo string) *model.RepoConfig {
+	if repo == "" {
+		return nil
+	}
+	parsed, err := s.tasks.parseRepo(repo)
+	if err != nil {
+		return nil
+	}
+	rc, err := s.tasks.Store.GetRepoConfig(ctx, parsed)
+	if err != nil {
+		return nil
+	}
+	return rc
+}
+
+// agentGrantRefusal applies agentGrantEscalation's two rules to one
+// grant name, compared as grants rather than as strings: an api grant
+// by the scopes and repository it reads as (so api:tasks:read@acme/x is
+// held by a task holding api:tasks:read, whatever the repository's
+// case), a capability reference by whether a held one covers it
+// (model.UncoveredCapabilityRefs), and anything else by its name.
+func agentGrantRefusal(held []string, name string, normalize func(string) (string, error)) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	// APIGrantsOf reads an alias (self-upgrade) as the preset it now is,
+	// which ParseAPIGrant alone does not.
+	if slices.ContainsFunc(APIGrantsOf([]string{name}).Scopes(), IsDangerousAPIScope) || model.IsDangerousAPIGrant(name) {
+		return fmt.Errorf("%s is a dangerous api grant: only a person may grant it", name)
+	}
+	// priority-dispatch lets a task jump the queue, so it is a person's
+	// to give even to an agent whose own task holds it.
+	if name == model.PriorityDispatchCapability {
+		return fmt.Errorf("%s lets a task jump the queue: only a person may grant it", name)
+	}
+	// durable implies priority-dispatch, and holds a sandbox for as long
+	// as the work lasts.
+	if name == model.DurableCapability {
+		return fmt.Errorf("%s lets a task jump the queue and run with no deadline: only a person may grant it", name)
+	}
+	notHeld := fmt.Errorf("an agent cannot grant %s, which its own task does not hold", name)
+	if g, ok, err := ParseAPIGrant(name); ok {
+		if err != nil {
+			return notHeld
+		}
+		set := APIGrantsOf(held)
+		for _, scope := range g.Scopes {
+			if !set.Allows(scope, g.Repo) {
+				return notHeld
+			}
+		}
+		return nil
+	}
+	if model.IsCapabilityRef(name) {
+		if normalize != nil {
+			if recorded, err := normalize(name); err == nil {
+				name = recorded
+			}
+		}
+		parent := make([]model.Grant, len(held))
+		for i, h := range held {
+			parent[i] = model.Grant{Capability: h}
+		}
+		if len(model.UncoveredCapabilityRefs([]model.Grant{{Capability: name}}, parent)) > 0 {
+			return notHeld
+		}
+		return nil
+	}
+	if !slices.Contains(held, name) {
+		return notHeld
+	}
+	return nil
+}
+
+// grantBodies are the routes whose bodies name a grant under keys of
+// their own, read structurally: every name the handler could record (or
+// take away) is returned, however the body spells it.
+var grantBodies = map[string]func(body []byte) []string{
+	"POST /api/tasks/{id}/capabilities": func(body []byte) []string {
+		var req setCapabilityRequest
+		if json.Unmarshal(body, &req) != nil {
+			return nil // the handler refuses a body it cannot read
+		}
+		names := []string{req.ID, req.Grant, req.Replace}
+		if req.Capability != "" {
+			grant, err := model.EncodeCapabilityGrant(protocol.GrantSpec{Capability: strings.TrimSpace(req.Capability), With: req.With})
+			if err != nil {
+				grant = req.Capability
+			}
+			names = append(names, grant)
+		}
+		return names
+	},
+	// A scope set is granted by name and resolved when used, so writing
+	// one hands what it resolves to every task holding it (or a set that
+	// includes it): an agent may write only a set whose every scope it
+	// holds, none of them dangerous. One that does not resolve against
+	// the sets in effect is refused rather than read as granting nothing.
+	"PUT /api/api-scope-sets": func(body []byte) []string {
+		var req PutAPIScopeSetRequest
+		if json.Unmarshal(body, &req) != nil {
+			return nil // the handler refuses a body it cannot read
+		}
+		req.Set.Name = strings.TrimSpace(req.Set.Name)
+		names, err := model.APIScopeSetWriteGrantNames(req.Set)
+		if err != nil {
+			return []string{APIGrantPrefix + req.Set.Name + " (" + err.Error() + ")"}
+		}
+		return names
+	},
+}
+
+// grantsInBody is every grant name a request body for pattern writes.
+// A route in grantBodies is read by its own request type; any other
+// body by key: a key naming capabilities, or "grants", holding a name,
+// a list of them (each a name or a {capability, with} object, as
+// model.CapabilityList reads one), or a map of such lists by repository.
+func grantsInBody(pattern string, body []byte) []string {
+	return addedGrantsInBody(pattern, body, nil, nil)
+}
+
+func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, normalize func(string) (string, error)) []string {
+	if len(body) == 0 {
+		return nil
+	}
+	if read, ok := grantBodies[pattern]; ok {
+		return read(body)
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return nil
+	}
+	var names []string
+	for key, raw := range fields {
+		lower := strings.ToLower(key)
+		if !strings.Contains(lower, "capabilit") && !strings.EqualFold(key, "grants") {
+			continue
+		}
+		existing := stored[lower]
+		for _, name := range grantNamesIn(raw) {
+			if grantAlreadyStored(existing, name, normalize) {
+				continue
+			}
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func grantAlreadyStored(existing []string, name string, normalize func(string) (string, error)) bool {
+	if len(existing) == 0 {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	if slices.Contains(existing, name) {
+		return true
+	}
+	if model.IsCapabilityRef(name) && normalize != nil {
+		if recorded, err := normalize(name); err == nil && slices.Contains(existing, recorded) {
+			return true
+		}
+	}
+	if target, ok := model.RepoReadTarget(name); ok {
+		return slices.Contains(existing, model.RepoReadCapability(target))
+	}
+	if target, ok := model.RepoWriteTarget(name); ok {
+		return slices.Contains(existing, model.RepoWriteCapability(target))
+	}
+	return false
+}
+
+func grantNamesIn(raw json.RawMessage) []string {
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		return []string{one}
+	}
+	var list []json.RawMessage
+	if json.Unmarshal(raw, &list) == nil {
+		var names []string
+		for _, item := range list {
+			if entries, err := model.CapabilityEntryNames(item); err == nil {
+				names = append(names, entries...)
+			} else if spec, err := protocol.ParseGrant(item); err == nil {
+				names = append(names, spec.Capability)
+			}
+		}
+		return names
+	}
+	var byRepo map[string]json.RawMessage
+	if json.Unmarshal(raw, &byRepo) == nil {
+		var names []string
+		for _, v := range byRepo {
+			names = append(names, grantNamesIn(v)...)
+		}
+		return names
+	}
+	return nil
+}
+
+// agentFilingEscalation refuses the rest of what a task, schedule or
+// template body can hand out beyond its capabilities (agentGrantEscalation):
+// push or read access to a repository, auto-merge (and Submit, which
+// turns it on), approval, a requester,
+// a template's grants, or a move of the work to a repository the scope does
+// not reach. Each is what propose_task already withholds from a run
+// (model.EscalatedCapabilities, the auto-merge and approval rules), and the
+// API is not a way around it. encoding/json matches keys without regard to
+// case, and so does this.
+func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, set APIGrantSet,
+	pattern string, scope APIScope, repo string, body []byte) error {
+	if pattern == "POST /api/tasks/{id}/submit" {
+		return errAgentAutoMerge
+	}
+	if len(body) == 0 {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return nil
+	}
+	for key, raw := range fields {
+		switch strings.ToLower(key) {
+		case "writes":
+			var targets []WriteTarget
+			if json.Unmarshal(raw, &targets) != nil {
+				continue // the handler refuses a body it cannot read
+			}
+			for _, t := range targets {
+				if !agentMayWrite(acting, t.Repo) {
+					return fmt.Errorf("an agent cannot grant push access to %s, which its own task cannot push to", t.Repo)
+				}
+			}
+		case "reads":
+			var repos []string
+			if json.Unmarshal(raw, &repos) != nil {
+				continue
+			}
+			for _, r := range repos {
+				if !agentMayRead(acting, r) {
+					return fmt.Errorf("an agent cannot grant read access to %s, which its own task cannot read", r)
+				}
+			}
+		case "automerge":
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on {
+				return errAgentAutoMerge
+			}
+		case "autoapproveproposals":
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on && !acting.AutoApproveProposals {
+				return errors.New("an agent cannot turn on autoApproveProposals, which its own task does not have")
+			}
+		case "approved":
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
+				return errors.New("an agent files work unapproved: approving it needs tasks:admin")
+			}
+		case "author", "proposedby":
+			var who string
+			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
+				return fmt.Errorf("an agent cannot name somebody else as the %s of work it files", key)
+			}
+		case "templateid":
+			var id string
+			if json.Unmarshal(raw, &id) != nil || strings.TrimSpace(id) == "" {
+				continue
+			}
+			tmpl, err := s.tasks.Store.GetTemplate(ctx, strings.TrimSpace(id))
+			if err != nil || tmpl == nil {
+				continue // the handler says it is not there
+			}
+			if err := model.TemplateWithinTask(*acting, *tmpl); err != nil {
+				return err
+			}
+			if tmpl.AutoMerge {
+				return fmt.Errorf("template %s is auto-merge: %w", tmpl.ID, errAgentAutoMerge)
+			}
+			if tmpl.Target != nil && !set.Allows(scope, tmpl.Target.String()) {
+				return fmt.Errorf("template %s files against %s, which the agent's %s does not reach", tmpl.ID, tmpl.Target, scope)
+			}
+		case "reviewtemplateid":
+			// The template a task's review is filed from once its work
+			// is done (orchestrator.fileReviewTask): approved,
+			// auto-merge, and on the branch this agent's work is on, so
+			// it is held to the same grants as templateId -- less
+			// auto-merge and target, which a review never takes from its
+			// template. The repository's own default review is always
+			// allowed: it is what the task gets by naming none.
+			var id string
+			if json.Unmarshal(raw, &id) != nil || strings.TrimSpace(id) == "" {
+				continue
+			}
+			tmpl, err := s.tasks.Store.GetTemplate(ctx, strings.TrimSpace(id))
+			if err != nil || tmpl == nil {
+				continue // the handler says it is not there
+			}
+			var target *model.RepoRef
+			if r, err := model.ParseRepo(repo); err == nil {
+				target = &r
+			}
+			if err := model.ReviewTemplateWithinTask(*acting, *tmpl, target); err != nil {
+				return err
+			}
+		case "repo":
+			// Moving work to another repository (PATCH /api/tasks/{id}
+			// with a new repo) is a call on that repository too.
+			var to string
+			if json.Unmarshal(raw, &to) != nil || strings.TrimSpace(to) == "" || strings.EqualFold(strings.TrimSpace(to), repo) {
+				continue
+			}
+			if !set.Allows(scope, strings.TrimSpace(to)) {
+				return fmt.Errorf("the agent's %s does not reach %s", scope, strings.TrimSpace(to))
+			}
+		}
+	}
+	return nil
+}
+
+// errAgentAutoMerge is the refusal of anything that would let work merge
+// with nobody looking: turning auto-merge on (a body's autoMerge, a
+// template that has it) and the Submit that does the same. That is the
+// decision a person's Submit makes -- the one a held review waits for --
+// so no scope hands it to an agent.
+var errAgentAutoMerge = errors.New("an agent cannot turn on auto-merge or submit work: " +
+	"letting a change merge unreviewed is a person's decision (docs/agent-api.md)")
+
+// agentMayWrite reports whether the acting task's own runs may push to
+// repo: its target, or a repository its writes name.
+func agentMayWrite(acting *model.Task, repo string) bool {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return true
+	}
+	if t := taskRepo(acting); t != "" && strings.EqualFold(t, repo) {
+		return true
+	}
+	return slices.ContainsFunc(acting.Writes, func(w model.WriteTarget) bool { return strings.EqualFold(w.Repo.String(), repo) })
+}
+
+// agentMayRead reports whether the acting task's own runs may read repo.
+func agentMayRead(acting *model.Task, repo string) bool {
+	if agentMayWrite(acting, repo) {
+		return true
+	}
+	return slices.ContainsFunc(acting.Reads, func(r model.RepoRef) bool { return strings.EqualFold(r.String(), strings.TrimSpace(repo)) })
+}
+
+// agentCallRepo is the repository a call acts on, where one can be told:
+// the {owner}/{name} of its path, the repository of the task its path
+// names, or -- for a route whose path names no other resource -- a "repo"
+// (or the task of a "taskId") in its body, or a read's repo query. A
+// route whose path names something else ({id} of a CI run, a schedule, a
+// template, ...) acts on that thing's repository whatever the body or
+// query claim, so for those "" is returned: none is known, and only a
+// grant for every repository reaches it.
+func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, target string, body []byte) (string, error) {
+	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
+		return owner + "/" + name, nil
+	}
+	if target != "" {
+		t, err := s.tasks.Store.GetTask(ctx, target)
+		if err != nil || t == nil {
+			return "", nil
+		}
+		return taskRepo(t), nil
+	}
+	if pathParam.MatchString(pathOf(pattern)) {
+		return "", nil
+	}
+	var fields struct {
+		Repo   string `json:"repo"`
+		TaskID string `json:"taskId"`
+	}
+	if len(body) > 0 && json.Unmarshal(body, &fields) == nil {
+		if fields.Repo != "" {
+			return fields.Repo, nil
+		}
+		if fields.TaskID != "" {
+			if t, err := s.tasks.Store.GetTask(ctx, fields.TaskID); err == nil && t != nil {
+				return taskRepo(t), nil
+			}
+		}
+	}
+	if repo := r.URL.Query().Get("repo"); repo != "" && r.Method == http.MethodGet {
+		return repo, nil
+	}
+	return "", nil
+}
+
+// recordAgentCall writes the attribution: a line in the daemon's journal
+// for every call, and, for a change to another task, a note in that
+// task's conversation signed as grain on the acting run's behalf.
+func (s *Server) recordAgentCall(ctx context.Context, call agentCall, status int) {
+	log.Printf("grain api: {agent, %s} %s scope=%s repo=%q reason=%q -> %d",
+		call.taskID, call.pattern, call.scope, call.repo, call.reason, status)
+	method, _, _ := strings.Cut(call.pattern, " ")
+	if method == http.MethodGet || status >= 300 || call.targetTask == "" || call.targetTask == call.taskID ||
+		call.pattern == agentMessagesRoute {
+		return
+	}
+	body := fmt.Sprintf("Task %s called `%s` through the agent API (scope `%s`).", call.taskID, call.pattern, call.scope)
+	if call.reason != "" {
+		body += " Reason: " + call.reason
+	}
+	_, err := s.tasks.Store.AddComment(context.WithoutCancel(ctx), model.Comment{
+		TaskID: call.targetTask,
+		Author: model.Attribution{
+			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: call.taskID},
+		},
+		Body: body,
+	})
+	if err != nil {
+		log.Printf("grain api: recording {agent, %s}'s %s on task %s: %v", call.taskID, call.pattern, call.targetTask, err)
+	}
+}
+
+// taskRepo is the repository a task's runs push to, or "" for a task
+// with none.
+func taskRepo(t *model.Task) string {
+	if t.Target == nil {
+		return ""
+	}
+	return t.Target.String()
+}
+
+func grantNames(grants []model.Grant) []string {
+	out := make([]string, len(grants))
+	for i, g := range grants {
+		out[i] = g.Capability
+	}
+	return out
+}
+
+// peekBody reads r's body and puts the same bytes back for the handler.
+func peekBody(r *http.Request) ([]byte, error) {
+	if r.Body == nil || r.Body == http.NoBody {
+		return nil, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxAgentAPIBody+1))
+	r.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("reading the request body: %w", err)
+	}
+	if len(data) > maxAgentAPIBody {
+		return nil, fmt.Errorf("request body is larger than the agent API reads (%d bytes)", maxAgentAPIBody)
+	}
+	r.Body = io.NopCloser(bytes.NewReader(data))
+	return data, nil
+}
+
+// pathOf is a pattern's path, without its method.
+func pathOf(pattern string) string {
+	if _, path, ok := strings.Cut(pattern, " "); ok {
+		return path
+	}
+	return pattern
+}
+
+var pathParam = regexp.MustCompile(`\{([A-Za-z]+)(\.\.\.)?\}`)
+
+// statusRecorder remembers the status a handler wrote.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }

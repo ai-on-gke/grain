@@ -1,0 +1,43 @@
+[the machine boots with the kernel command line the file set]
+# The table in §5.5 calls kernel-cmdline "extra kernel command line", so
+# what the file set is added to the line granule boots a guest with
+# rather than put in place of it: a machine whose CHV_CMDLINE replaced
+# root= and console= had nothing to mount and nowhere to say so, and
+# never came up at all.
+grep -qw quiet /proc/cmdline
+grep -qw 'root=/dev/vda' /proc/cmdline
+grep -q 'console=ttyS0' /proc/cmdline
+
+[the machine boots with the cpus and memory the file set]
+test "$(nproc)" = 2
+# 1024 MiB of guest memory, less whatever the kernel keeps for itself.
+total=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+test "$total" -gt 700000
+test "$total" -lt 1100000
+
+[the machine boots with the writable disk the file sized]
+# disk-size-mb=2048: the VM's own overlay is grown to that before boot,
+# and the guest resizes its root filesystem onto it. The disk packed
+# into this image is a little under 400 MiB, so a boot that ignored the
+# setting would be off by more than a rounding: this says the machine
+# comes up with the disk it asked for rather than the one it was built
+# with.
+sectors=$(cat /sys/block/vda/size)
+test "$sectors" = "$((2048 * 2048))"
+
+[the machine boots with the memory hotplug the file set]
+# memory-hotplug=on, with memory-max-mb above memory-mb, is a virtio-mem
+# device sized for the difference -- the device "granule resize" and the
+# memory agent both grow the guest through. Off, or with no headroom,
+# the guest has no such device at all and can never grow, which is a
+# machine nothing here would otherwise notice was the wrong one.
+for dev in /sys/bus/virtio/devices/virtio*; do
+	# "test -e" rather than "[ -e ... ]": a check file's own format
+	# reads a bracketed line as the name of the next check.
+	test -e "$dev/driver" || continue
+	case "$(readlink -f "$dev/driver")" in
+	*/virtio_mem) exit 0 ;;
+	esac
+done
+echo "no virtio-mem device: this machine records memory-hotplug=on and came up unable to grow" >&2
+exit 1

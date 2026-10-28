@@ -1,0 +1,310 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Build Grain's deployable images after a pull request has merged, test
+# what was built, and publish it if the tests pass. `release` is emitted
+# by Grain's pull-request reconciler against the destination branch's new
+# head; it is deliberately distinct from an untrusted branch push, because
+# this job receives a credential that can write this repository's packages
+# -- the deployment's own GitHub credential for it, placed by the
+# `package-publish` CI capability (docs/ci-capabilities.md).
+#
+# The tests are here, in front of the push, rather than beside it in
+# another workflow. They used to be beside it: grain/task-157 moved the
+# full image rebuild and tests/container out of tests.yml into
+# .grain/workflows/image.yml and ran that on `release` too, which built
+# the shipped image twice per merge -- once here to publish it, once
+# there to test it -- in two workflows that cannot see each other. Two
+# workflows are two independent units of work in Grain CI as on GitHub,
+# `needs:` does not cross between them, so nothing made the publish wait
+# for the verdict: a commit that broke what the image contains was
+# published first and reddened afterwards, which is how a 3.1GB stale
+# source export reached a registry in the first place (3d2d48f7d).
+#
+# So this is one job, which is what makes the ordering expressible at
+# all: steps of a job share a sandbox, so the image the suite drives is
+# the image the build produced and the image the push publishes, with no
+# registry hop and no second build in between. scripts/release-images.sh
+# has two phases for it -- `build` stops before pushing anything anyone
+# resolves, `push` publishes what that build recorded -- and the suites
+# run between them. A red suite means none of the names a deployment
+# resolves are published for that commit: no sha- tag and no branch tag.
+# (`latest` is not this workflow's: it is the last promoted release, moved
+# by .grain/workflows/promote.yml onto sha- tags published here.) That is the trade being made, and it is the right way round
+# for an artifact every deployment pulls. A red release is not the end of
+# its branch's image, though (grain/task-4432). Grain releases a branch's
+# tip whenever its last release did not publish it, whatever that release
+# ended as, one run at a time per branch -- an open release triage task
+# does not hold it -- and it retries a commit that is still the tip once
+# when its release fails (model.MaxReleaseAttempts). After two failures of
+# one commit the branch waits for its next merge, or for somebody to run
+# the release again. And the branch's moving tag goes forward, not just
+# from the tip: release-images.sh's tag_may_move moves it onto any commit
+# that the commit it holds is an ancestor of, so a run of merges no longer
+# keeps every release from moving it, and an older release finishing late
+# never moves it back. Running the release again by hand is
+# the deployment's own release run rather than `grain ci run` -- `POST
+# /api/repos/{owner}/{name}/release-runs`, since a release event is not
+# one a caller may ask for -- and `cache: false` is what makes it a real
+# rebuild and a real publish rather than a replayed green tick.
+#
+# Both end-to-end verification suites -- tests/container and tests/installer --
+# run before the push and gate publishing. tests/container asks what a freshly
+# built image is and verifies upgrades, while tests/installer verifies
+# scripts/setup.sh against the fully built image. All end-to-end verification
+# gates publishing so that no release images are published to the container
+# registry if either suite fails.
+#
+# # One of the things this publishes is a CI input, not a release
+#
+# The build phase fills `guest:inputs-<key>` -- the content-addressed
+# sandbox guest cache every job that resolves a guest reads
+# (scripts/release-images.sh, scripts/granule/guest-inputs.sh). That is
+# not a release artifact in the sense `release_workflows_disabled` is
+# named for: it is what makes a job that resolves a sandbox guest a
+# `docker pull` rather than `granulectl guest build` booting a VM inside
+# a CI sandbox and pulling ~1GB into it.
+#
+# This file being the only thing that filled it on merge is why turning
+# releases off used to cost every branch in flight 40-55 extra minutes
+# on the longest job in the suite (grain/task-397). It is not that any
+# more, and reading it as if it were is what grain/task-408 spent a run
+# on: the same cache is filled after a merge from outside this workflow,
+# by the job a repository names in
+# model.RepoConfig.PostMergeDispatchJobs, which follows the base branch
+# whatever releases are doing (grain/task-409), and which grain adds to
+# that list unasked -- while releases are off -- for the repository
+# publishing the guest its own sandboxes are built from
+# (model.GuestCacheFollowsBaseBranch, grain/task-457). So "this
+# repository's releases are off" is no longer a reason to believe
+# `guest:inputs-<key>` is missing for its base branch's inputs, and it
+# is not a reason to go and publish one by hand. What answers that
+# question is the registry, or grain's own reading of it
+# (pkg/ui/sandbox_guest.go, `GET /api/sandboxes`), which says both
+# whether this repository still publishes and whether the cache is
+# being dispatched anyway.
+#
+# Being an input rather than a release is also why it is filled by the
+# build step and is deliberately not held behind the gate:
+# scripts/release-images.sh's `resolve_guest` pushes
+# `guest:inputs-<key>` -- and, on a base miss, `guest-base:<key>` -- as
+# soon as it has built one, minutes before tests/container is asked
+# anything. Moving that push into the `push` phase would mean every
+# merge whose suite goes red built a guest and threw it away, leaving
+# every branch in flight to build the same one inline; and it would buy
+# nothing, because these tags are safe by construction. The tag names
+# the hash of its own inputs, so a guest published from a commit whose
+# suite then fails is still exactly the guest those inputs describe, and
+# nothing resolves it except a commit that derives the same key. The
+# moving tags stay behind the gate, where they belong; tests/deploy's
+# TestARedReleaseGateDoesNotCostTheGuestCache holds the two apart.
+#
+# Nothing here can stop that -- an operator may turn releases off for
+# good reasons, and this workflow is not run when they have. What grain
+# does instead is say so, where the switch is and in the sandbox health
+# reading: docs/merge-queue-behind.md's "Publishing is also a CI input",
+# and pkg/ui/sandbox_guest.go. The dispatch that fills the cache without
+# turning publishing back on is .grain/workflows/image.yml's
+# `guest-cache` -- following the base branch on its own wherever the two
+# paragraphs above apply, and dispatchable on one branch by hand with
+# the invocation in that job's own comment.
+#
+# Publishing stays on `release` alone. .grain/workflows/image.yml is the
+# `workflow_dispatch` half -- the same two suites against a freshly built
+# image, on a branch, with no step in it that pushes anything -- and it
+# is a workflow of its own because Grain CI has no per-job event
+# condition: a job in a file that answers `workflow_dispatch` runs on
+# every manual dispatch of that file, and a publish is not what somebody
+# asking "does my Dockerfile change still build" wants to trigger. That
+# also means a dispatch of this file is not how a release is re-run: it
+# answers no such event, and the release-run endpoint above is the way.
+# Following candidate workflow streamlining (grain/task-775), releases run
+# against the main development branch, the candidate stabilization branch,
+# and legacy release branches.
+name: release
+
+on:
+  release:
+    branches: [main, candidate, "rc/v*", "release/v*"]
+
+jobs:
+  images:
+    name: release images
+    cache: false
+    # A requirement, not a grant (pkg/ci/requirements.go). This job's
+    # reason for existing is the "Publish the images" step and the GHCR
+    # prune after it, so without `package-publish` there is nothing here
+    # worth spending two hours of sandbox on: it builds the guest, the
+    # Kubernetes sandbox image and the grain image, runs a 30m suite, and
+    # is then refused at the push. Declaring it means a release run whose
+    # row has lost the grant says which grant it lost, before the first
+    # step.
+    #
+    # `image-signing` -- the cosign key the push signs each image's digest
+    # with (docs/image-signing.md) -- is optional, not required. It was a
+    # requirement here once (d0d4ff46b), and a deployment whose build
+    # predated its provider refused every release before its first step,
+    # including the one that would have upgraded it (grain/task-2016).
+    # Optional means it is placed when the repository's CI capabilities
+    # grant it and absent otherwise: granted, scripts/release-images.sh
+    # signs every image; not granted, it publishes unsigned with a
+    # WARNING. Nothing here sets REQUIRE_IMAGE_SIGNING, and nothing may
+    # until the key is granted, or that warning becomes a failed release.
+    capabilities: [package-publish]
+    optional-capabilities: [image-signing]
+    env:
+      # Where the build step records the three tags it built, for the two
+      # suites and the push that follow it in this same sandbox. Named
+      # here rather than left to the script's default so that the file
+      # the steps source and the file the script writes cannot drift
+      # apart.
+      RELEASE_IMAGES_STATE: /tmp/release-images.env
+    # Four phases with bounds of their own -- a guest build on a cache
+    # miss, a 30m suite, the push, another 30m suite -- and a timeout
+    # that fires mid-push leaves a half-published release, so this is
+    # generous on purpose rather than tuned. It replaces two 60m jobs
+    # that used to run at the same time.
+    timeout-minutes: 120
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      # 80 was what the guest build alone asked for; the suites add the
+      # image they drive, the second image tests/container builds for the
+      # schema-change upgrade, and the containers tests/installer boots.
+      disk-gb: 100
+    steps:
+      # Everything except the push: the guest (pulled from its
+      # content-addressed cache on almost every commit), the Kubernetes
+      # sandbox image, the two daemon images (grain from ./cmd/grain and
+      # google-grain from ./google/cmd/grain), and the checks that each
+      # says which commit and which build it is.
+      - name: Build the images
+        run: bash ./scripts/release-images.sh build
+
+      # The gate. tests/container is the suite that asks what a freshly
+      # built image *is* -- which binaries are in it, what its labels
+      # say, that a non-root process in it can bind :80 through a file
+      # capability, and that a real upgrade can pull a real tag and cut a
+      # real deployment over to it -- so it is part of what the push waits
+      # for. What it does not hold back is the content-addressed guest
+      # cache the step above already filled: that one is a CI input, the
+      # file header says why it is published ahead of this step, and a
+      # red gate here must not cost every branch in flight a guest build
+      # of its own.
+      #
+      # Every test in it skips itself when GRAIN_TEST_IMAGE names nothing
+      # or docker does not answer, and `go test` says "ok" for a package
+      # whose tests all skipped, so the log is read rather than trusted:
+      # a skip here is a publish gated on a verdict that quietly does not
+      # exist.
+      #
+      # Run once per daemon image -- grain, the core build, and
+      # google-grain, the Google build -- since both are about to be
+      # published and either is what some deployment will run.
+      - name: Run the container e2e suite against what is about to be published
+        run: |
+          set -euo pipefail
+          . "$RELEASE_IMAGES_STATE"
+          for image in "$RELEASE_IMAGE_GRAIN" "$RELEASE_IMAGE_GOOGLE_GRAIN"; do
+            echo "tests/container against $image"
+            export GRAIN_TEST_IMAGE="$image"
+            go test ./tests/container/... -count=1 -v -timeout 30m 2>&1 | tee /tmp/container.log
+            if grep -q -- "--- SKIP" /tmp/container.log; then
+              grep -- "--- SKIP" /tmp/container.log >&2
+              echo "tests/container skipped a test against $image in a sandbox that has everything it asks for: a skip here is this release's verdict quietly not existing, which is what this step is for." >&2
+              exit 1
+            fi
+            if ! grep -q -- "--- PASS" /tmp/container.log; then
+              echo "tests/container passed no test at all against $image, so its green tick would not be permission to publish." >&2
+              exit 1
+            fi
+          done
+
+      # The second verification suite before publish: tests/installer drives
+      # scripts/setup.sh against the freshly built image.
+      #
+      # Split into three sequential steps (one per package) because all three
+      # packages own real system state while they run -- the root one deploys
+      # onto this machine, and the Trixie and host-mode ones each own the
+      # fixed grain-daemon container name and boot a privileged systemd
+      # container of their own -- and running all three in one step exceeds
+      # the 10-minute per-step timeout while checking --- PASS only once
+      # across the combined log.
+      - name: Run the installer e2e suite
+        env:
+          GRAIN_INSTALLER_E2E: "1"
+        run: |
+          set -euo pipefail
+          . "$RELEASE_IMAGES_STATE"
+          export GRAIN_TEST_IMAGE="$RELEASE_IMAGE_GRAIN"
+          go test ./tests/installer -count=1 -v -timeout 15m 2>&1 | tee /tmp/installer.log
+          if grep -q -- "--- SKIP" /tmp/installer.log; then
+            grep -- "--- SKIP" /tmp/installer.log >&2
+            echo "tests/installer skipped a test in a sandbox that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this step is for." >&2
+            exit 1
+          fi
+          if ! grep -q -- "--- PASS" /tmp/installer.log; then
+            echo "tests/installer passed no test at all, so its green tick would mean nothing." >&2
+            exit 1
+          fi
+
+      - name: Run the installer trixie e2e suite
+        env:
+          GRAIN_INSTALLER_TRIXIE_E2E: "1"
+        run: |
+          set -euo pipefail
+          . "$RELEASE_IMAGES_STATE"
+          export GRAIN_TEST_IMAGE="$RELEASE_IMAGE_GRAIN"
+          go test ./tests/installer/trixie -count=1 -v -timeout 15m 2>&1 | tee /tmp/installer-trixie.log
+          if grep -q -- "--- SKIP" /tmp/installer-trixie.log; then
+            grep -- "--- SKIP" /tmp/installer-trixie.log >&2
+            echo "tests/installer/trixie skipped a test in a sandbox that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this step is for." >&2
+            exit 1
+          fi
+          if ! grep -q -- "--- PASS" /tmp/installer-trixie.log; then
+            echo "tests/installer/trixie passed no test at all, so its green tick would mean nothing." >&2
+            exit 1
+          fi
+
+      - name: Run the installer hostmode e2e suite
+        env:
+          GRAIN_INSTALLER_HOSTMODE_E2E: "1"
+        run: |
+          set -euo pipefail
+          . "$RELEASE_IMAGES_STATE"
+          export GRAIN_TEST_IMAGE="$RELEASE_IMAGE_GRAIN"
+          go test ./tests/installer/hostmode -count=1 -v -timeout 15m 2>&1 | tee /tmp/installer-hostmode.log
+          if grep -q -- "--- SKIP" /tmp/installer-hostmode.log; then
+            grep -- "--- SKIP" /tmp/installer-hostmode.log >&2
+            echo "tests/installer/hostmode skipped a test in a sandbox that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this step is for." >&2
+            exit 1
+          fi
+          if ! grep -q -- "--- PASS" /tmp/installer-hostmode.log; then
+            echo "tests/installer/hostmode passed no test at all, so its green tick would mean nothing." >&2
+            exit 1
+          fi
+
+      # The sha- tags for all three images, then the moving ones where the
+      # commit they hold is an ancestor of this one
+      # (release-images.sh's tag_may_move) -- of exactly the images the
+      # steps above drove, named by the file the build phase wrote.
+      - name: Publish the images
+        run: bash ./scripts/release-images.sh push
+
+      # Prune old, superseded GHCR package versions that deployments have
+      # stopped needing. The release workflow runs under the trusted release
+      # event where the package-publish CI capability is active.
+      - name: Prune old package versions
+        continue-on-error: true
+        run: go run ./cmd/ghcr-prune -apply=true

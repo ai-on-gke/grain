@@ -1,0 +1,5 @@
+{
+  "workload": "tcp_single_stream",
+  "environment": "host_native",
+  "throughput_mbps": 38450.0
+}

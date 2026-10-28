@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+# granule-runlevel: boot
+
+description="Online memory hotplugged into this guest as it arrives"
+
+# In the boot runlevel, and after sysfs is mounted: this writes one file
+# under /sys, and it has to be in place before the first hotplug can
+# arrive -- which, with CHV_MEM_AGENT, is as soon as the guest is under
+# pressure.
+depend() {
+	need sysfs
+	before granule-mem-agent
+}
+
+start() {
+	ebegin "Onlining memory hotplugged into this guest as it arrives"
+	/usr/local/libexec/granule-mem-online
+	eend $?
+}

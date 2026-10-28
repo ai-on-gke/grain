@@ -1,0 +1,2 @@
+LABEL dev.granule.granulefile.kind="pack"
+VOLUME ["/var/log/nginx"]

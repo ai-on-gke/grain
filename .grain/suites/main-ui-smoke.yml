@@ -1,0 +1,11 @@
+name: Main UI smoke
+templates:
+  - ui-walkthrough-tasks
+  - ui-walkthrough-shell
+  - ui-walkthrough-settings
+  - ui-walkthrough-infrastructure
+  - ui-walkthrough-boards
+mode: count
+count: 1
+require-approval: false
+auto-merge: true

@@ -1,0 +1,4852 @@
+/* Plane-inspired tokens (bwsalmon/agents#364): a sidebar-plus-list issue
+   tracker shell, dense rows with a status dot instead of a filled pill,
+   and property panels that read as plain key/value rows rather than
+   bordered fieldset boxes. Values are hand-picked to read as "the same
+   family as Plane's own UI" rather than lifted from its (private,
+   generated) design tokens -- this ships with no build step beyond Vite,
+   so the tokens live here as plain custom properties instead of an
+   imported theme.
+
+   The accent and the greys are the brand's, not Plane's: the mark is
+   sand on a vibrating plate, so the accent is the grain colour itself --
+   bronze on white, wheat on black (docs/brand.md) -- and the neutrals
+   are warmed to sit under it rather than the blue-greys that went with
+   the blue accent this replaced. src/theme.js carries the same values
+   for the MUI primitives; the two are edited together. */
+:root {
+  color-scheme: light dark;
+
+  --canvas: #f7f6f3;
+  --surface: #ffffff;
+  --surface-hover: #f1efea;
+  --surface-active: #f6eeda;
+  --border: #e6e3dc;
+  --border-strong: #d5d1c7;
+
+  --text: #24221d;
+  --text-secondary: #6e6a60;
+  --text-tertiary: #9a9588;
+  --text-placeholder: #b5b0a3;
+
+  /* Bronze, not the wheat gold the dark theme uses: the gold washes out
+     on white, and this has to carry white button text at 5:1. */
+  --accent: #8a6a2e;
+  --accent-hover: #6d5324;
+  --on-accent: #ffffff;
+  --accent-subtle: #f6eeda;
+
+  --danger: #d0453a;
+  --danger-subtle: #fbebe9;
+
+  --state-proposed: #b45309;
+  --state-queued: #6e6a60;
+  /* Running is the accent itself rather than a colour of its own: it is
+     the state the animated mark in the sidebar is reporting, and the two
+     should read as the same signal. */
+  --state-running: var(--accent);
+  /* A live interactive session is active work, but it is a conversation
+     somebody may return to rather than an unattended background run. */
+  --state-interactive: #0e7c86;
+  --state-awaiting: #9333ea;
+  --state-failed: var(--danger);
+  /* Awaiting submit is the other state waiting on a person, and it is
+     orange-coral rather than state-awaiting's purple or proposed's amber:
+     the two are adjacent in STATE_ORDER and sit in the same sidebar rail,
+     so a reader scanning for "what needs me" should be able to tell a
+     question to answer from a pull request to submit without reading the
+     labels. */
+  --state-awaiting-submit: #d95f02;
+  --state-completed: #0969da;
+  /* Deferred is a cool slate, and the only cool grey on this palette:
+     queued and closed are warm greys, and a task somebody put aside on
+     purpose has to be tellable at a glance from one waiting to run and
+     one that is over with. */
+  --state-deferred: #64748b;
+  --state-closed: #9a9588;
+  /* Merged is green, reserved exclusively for changes that have actually
+     landed: a merged change is the best way a task can end, and it used
+     to wear GitHub's purple, which read as state-awaiting's "waiting on
+     you" purple in the same list. */
+  --pr-merged: #1a7f37;
+  /* Merging is blue: grain landing or repairing a change (the merge
+     queue's spinner and the repair mark) is neither an agent at work
+     (the accent) nor a change that has landed (pr-merged's green). */
+  --state-merging: #0969da;
+
+  --shadow-panel:
+    0 16px 40px rgba(26, 24, 19, 0.16), 0 2px 8px rgba(26, 24, 19, 0.08);
+  --shadow-toast: 0 10px 28px rgba(26, 24, 19, 0.28);
+
+  /* The gap between a list page's toolbar and its first row, for the
+     four pages with no "Select all" row to provide it -- see .select-all
+     below for the whole of the argument. */
+  --list-rows-gap: 1.1rem;
+
+  /* The width a list row's own name keeps for itself no matter what
+     else the row is carrying -- see .task-title and .repo-list-name,
+     which are the two the chips beside them used to squeeze to nothing
+     (grain/task-199). Enough for twenty-odd characters: a truncated
+     title is still a task you can recognise and click, and no title at
+     all is a row that says nothing. */
+  --list-title-min: 9rem;
+
+  /* How tall one line of chips is, and so how far down a list row's
+     chip strip is clipped: MUI's own small Chip is 24px, and the couple
+     of pixels of slack keep a browser's rounding from shaving the
+     bottom off the line that is meant to show. The second line starts
+     a row-gap below that and is clipped away whole, which is the point
+     -- see .task-row .chips. */
+  --chips-line: 26px;
+}
+
+/* AppThemeProvider sets data-theme on <html> to "light" or "dark" --
+   resolving "auto" against prefers-color-scheme itself -- so this
+   attribute, not the media query directly, is what light/dark/auto in
+   Settings (bwsalmon/agents#535) actually switches on. There is no
+   plain-CSS fallback for a pre-JS paint because index.html renders
+   nothing (a bare #root) until React mounts, so there is nothing to
+   flash between. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --canvas: #0f1013;
+  --surface: #14161a;
+  --surface-hover: #1c1f24;
+  --surface-active: #2a2314;
+  --border: #292b31;
+  --border-strong: #3a3d44;
+
+  --text: #e9e7e1;
+  --text-secondary: #9b988f;
+  --text-tertiary: #6f6c65;
+  --text-placeholder: #57544e;
+
+  /* The grain colour, on the two grounds the mark was drawn against. */
+  --accent: #d9a441;
+  --accent-hover: #e8b962;
+  --on-accent: #17130a;
+  --accent-subtle: #2a2314;
+
+  --danger: #ec7469;
+  --danger-subtle: #3a201e;
+
+  --state-proposed: #f59e0b;
+  --state-queued: #9b988f;
+  --state-running: var(--accent);
+  --state-interactive: #3fb8c4;
+  --state-awaiting: #c084fc;
+  --state-failed: var(--danger);
+  --state-awaiting-submit: #fb923c;
+  --state-completed: #58a6ff;
+  --state-deferred: #8fa1b8;
+  --state-closed: #6f6c65;
+  --pr-merged: #3fb950;
+  --state-merging: #58a6ff;
+
+  --shadow-panel: 0 16px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-toast: 0 10px 28px rgba(0, 0, 0, 0.6);
+}
+
+/* Scrollbars are hidden when not in use and revealed on hover or focus,
+   keeping dense panes, lists, and dashboards clean while preserving scroll affordances. */
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover,
+*:focus,
+*:focus-within {
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+
+*:hover::-webkit-scrollbar-thumb,
+*:focus::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+body {
+  margin: 0;
+  font:
+    14px/1.5 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+  color: var(--text);
+  background: var(--canvas);
+}
+
+/* Headings, page headers, navigation, section titles, buttons, and table headers match the lowercase identity of grain */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+th,
+table th,
+thead th,
+aside nav,
+aside .MuiListItemButton-root,
+aside .MuiListItemText-primary,
+button,
+.btn,
+.content-header,
+.content-header h2,
+.repo-page-header,
+.overlay-pane-header,
+.overlay-pane-header h2,
+.detail-header,
+.detail-header h2,
+.console-session-header,
+.panel-title,
+.panel-state-title,
+.inbox-group-header h3,
+.board-column-title,
+.gantt-lane-title,
+.MuiDialogTitle-root,
+.badge,
+.chip,
+.tab,
+label,
+.MuiTableCell-head,
+.MuiFormLabel-root,
+.MuiInputLabel-root,
+.MuiTableSortLabel-root,
+.MuiChip-root,
+.MuiChip-label {
+  text-transform: lowercase;
+}
+
+/* Input placeholders match the lowercase system marker style */
+::placeholder,
+input::placeholder,
+textarea::placeholder,
+.MuiInputBase-input::placeholder,
+.MuiOutlinedInput-input::placeholder {
+  text-transform: lowercase;
+}
+
+/* User-submitted content, inputs, diffs, code blocks, and long-form text retain original casing */
+input,
+textarea,
+select,
+pre,
+code,
+kbd,
+samp,
+.markdown,
+.markdown *,
+.task-title,
+.board-card-title,
+.gantt-row-title,
+.diff-view,
+.diff-view *,
+.react-diff-view,
+.react-diff-view *,
+.diff,
+.diff *,
+.MuiInputBase-input,
+.MuiOutlinedInput-input,
+.cs-message__content,
+.cs-message-input__content-editor,
+.task-description,
+.MuiFormHelperText-root {
+  text-transform: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The name on a list row, as the link a keyboard opens that row by
+   (ListPrimitives.jsx's RowLink). It reads as the name it always was --
+   the row around it is what a pointer clicks -- and says it is a link
+   only on hover and when focused. */
+.row-link {
+  color: inherit;
+  text-decoration: none;
+}
+.row-link:hover {
+  text-decoration: underline;
+}
+
+/* ---------- Shell: a fixed sidebar beside the task list, the same
+   frame Plane builds every view inside of. ---------- */
+/* height (not min-height) plus overflow: hidden bounds .app-shell to
+   the viewport instead of growing to fit whatever a pane's content
+   needs -- without that, a tall pane (e.g. LogsPage's own log lines)
+   stretches .app-shell past the viewport and the whole document
+   scrolls, carrying the sidebar off screen with it (bwsalmon/agents
+   #544). Each pane is now the one that scrolls its own overflow
+   internally; see main / .main-column below.
+
+   A *column*: the shell is DisconnectedBanner (when the daemon cannot be
+   reached) and the top bar over the rail-and-page row below them. Banners
+   used to be position: fixed over the top of the page instead, which was
+   survivable while the only banners were incidents -- but host mode's was
+   true for the life of the deployment (grain/task-15), so on that
+   deployment ~80px of the rail's head and of every page's header was
+   permanently underneath a banner and the visible UI was a line taller
+   than the screen (grain/task-24). In the flow it costs its own height and
+   nothing else. Every other standing warning is now a row in the top
+   bar's alerts panel (components/AlertsButton.jsx, grain/task-4008).
+
+   The insets are what "fits the screen exactly" means on an iOS home
+   screen web app: index.html asks for viewport-fit=cover, so the window
+   this is 100dvh of runs edge to edge, under the status bar at the top
+   and the home indicator at the bottom. Reserving both here -- with
+   box-sizing: border-box above, so the height is still exactly the
+   window -- keeps every child inside the part of it a person can
+   actually see. Zero in a browser tab and on a desktop, where env()
+   resolves to 0px, so this costs those nothing.
+
+   Here rather than on whatever happens to be at the top of the shell,
+   which on a phone is PhoneNav's bar, on a tablet the rail, and on
+   either of them a banner when one is up: one rule that is right in all
+   three beats three that have to be kept in step. What shows through
+   the strips it holds back is the page's own canvas (body, above),
+   which is a colour in both themes rather than the white a bare inset
+   would leave under a dark UI. */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  /* dvh, with vh under it for anything predating it: a mobile browser's
+     vh is measured with the address bar retracted, so 100vh puts the
+     bottom of the page under a toolbar that is currently showing --
+     which on the task list is the last row and on a form is the Save
+     button. */
+  height: 100vh;
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  overflow: hidden;
+}
+
+/* The rail beside the page: what .app-shell itself was before the banner
+   strip took a row above it. flex: 1 with a min-height floor is what
+   makes the banners cost the *panes* their height rather than pushing
+   the bottom of the shell off screen -- without the floor a long list
+   grows this row instead of scrolling inside it. */
+.app-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* The page beside the rail (grain/task-4915): its header rail
+   (components/PageHeader.jsx) over the page itself. The frame is a
+   column so the rail keeps its row whatever the page under it does --
+   it never scrolls away, since the page scrolls inside the body below
+   it -- and the body is the row the pages used to be children of
+   .app-body in, so every page root keeps the sizing it had. */
+.page-frame {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-frame-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* The one header rail every page has: title, the page's own actions,
+   "more", then the bell, System and Settings. One row of one height.
+   The slot wraps but is clipped to its first line; when something is
+   clipped PageHeader shows "more", which opens the slot under the rail
+   with every row of it showing. Sticky as well as outside the scroller,
+   for a page root that lets the frame itself scroll. */
+.page-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  flex: none;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  /* The slot's own gap, so the first count in the slot stands as far
+     from the title as a later list's count does from its label. */
+  gap: 0.75rem;
+  height: 77px;
+  padding: 1rem 1.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.page-header-title {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.page-header-slot {
+  flex: 1 1 0;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* Stretch, not flex-start: a first line shorter than the slot -- a
+     count and a button, with no 40px field to make it tall -- is
+     stretched to the slot's full height, so what is centred on it is
+     centred on the rail, level with the title, on every page. Before,
+     the line was only as tall as its tallest item and a count sat
+     8-30px off the title's centre line depending on the page
+     (grain/task-4980). Once anything wraps there is no free space to
+     stretch into and the lines pack from the top, as flex-start did. */
+  align-content: stretch;
+  /* A row gap as tall as the slot itself: whatever wraps starts below
+     the clip however short the first line's items are, rather than
+     showing its top edge under them. The menu puts it back. */
+  gap: 44px 0.75rem;
+  height: 44px;
+  padding: 2px 0;
+  overflow: hidden;
+}
+.page-header-slot-expanded {
+  row-gap: 0.5rem;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: auto;
+  max-height: 70vh;
+  overflow: auto;
+  padding: 0.75rem 1.75rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-panel);
+}
+/* A page's own header row, drawn into the slot: its pieces become the
+   slot's own items, so they wrap -- and clip -- one by one rather than
+   as one block. The page's heading stays in its body (ListHeader); the
+   first header's label is the rail's title said again, so only a second
+   list's (Processes) is shown, to say what its count and button belong
+   to. .visually-hidden is that heading, kept for screen readers. */
+.page-header-slot .content-header,
+.page-header-slot .task-list-toolbar,
+.page-header-slot .logs-toolbar {
+  display: contents;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.page-header-slot .content-header-label {
+  align-self: center;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.page-header-slot > .content-header:first-child .header-icon,
+.page-header-slot > .content-header:first-child .content-header-label {
+  display: none;
+}
+/* The page's own actions (PageHeaderPageActions): drawn after the
+   rest of the slot, whatever order the page portalled them in, and
+   pushed to its right-hand end, just before the global buttons. Without
+   this a page whose header came before its toolbar had its "+ New" or
+   "Add repo" stranded between the count and a search box that grows
+   into the rest of the rail (grain/task-4980). A later list's header
+   (Processes' "Suite runs") goes after them as one group, its own
+   action with it. */
+.page-header-slot .page-header-page-actions {
+  order: 1;
+  margin-left: auto;
+}
+/* A list's search box gives up width before the page's actions are
+   wrapped behind "more": a line breaks on its items' basis, and the
+   actions now come last on it. It still grows into whatever the line
+   has spare. */
+.page-header-slot .list-search-field {
+  flex-basis: 9rem;
+  min-width: 9rem;
+}
+.page-header-slot > .content-header ~ .content-header > * {
+  order: 2;
+}
+.page-header-slot
+  > .content-header
+  ~ .content-header
+  > .page-header-page-actions {
+  margin-left: 0;
+}
+.page-header-page-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: none;
+}
+.page-header .overlay-pane-back {
+  padding: 0;
+}
+:root[data-phone="true"] .page-header {
+  padding-left: 1rem;
+  padding-right: 1rem;
+  gap: 0.5rem;
+}
+
+/* Sidebar's own layout (width, padding, nav rows) now comes from
+   AppThemeProvider's theme plus MUI primitives (Box, List,
+   ListItemButton) rather than from rules here. The plain accent square
+   that used to stand in for a logo beside the wordmark is now the real
+   mark -- see components/GrainMark.jsx, which sizes and paints itself
+   and so needs no rule here either. */
+
+.main-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+/* A standing session uses the same header and body gutters as the list and
+   task-detail surfaces around it. The body owns scrolling so a long
+   conversation or an open capability panel cannot grow the fixed shell. */
+.console-session-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.console-session-header {
+  flex: none;
+}
+.console-session-header .badge {
+  margin-left: auto;
+}
+.console-session-body {
+  min-width: 0;
+  overflow-y: auto;
+  padding: 0 1.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.console-session-body .task-chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.console-session-body .task-chat-window {
+  height: auto;
+  flex: 1;
+}
+
+.console-session-capabilities {
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-top: 0.5rem;
+}
+:root[data-phone="true"] .console-session-body {
+  padding-right: 0.9rem;
+  padding-left: 0.9rem;
+  padding-bottom: 0.9rem;
+}
+
+/* CI and Sandboxes carry denser tables and controls than the flat list
+   pages, but their content starts at the same page gutter. The header's
+   negative side margin lets its divider span the pane while its own padding
+   keeps the title aligned with the content below. */
+.standalone-page {
+  --standalone-page-gutter: 1.75rem;
+  padding: 0 var(--standalone-page-gutter) 1.5rem;
+}
+.standalone-page > .content-header {
+  margin: 0 calc(-1 * var(--standalone-page-gutter)) 1rem;
+}
+
+/* LoadingScreen (bwsalmon/agents#555) stands in for the sidebar plus
+   main column both, for the one stretch before the first load has
+   landed and neither has anything to render -- so it takes .app-shell's
+   own flex: 1/stretch sizing rather than the fixed sidebar width plus
+   scrolling main column split either of them use once it has. */
+.loading-screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.access-denied-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.access-denied-content h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem 0;
+  color: var(--text);
+}
+
+.access-denied-content p {
+  margin: 0 0 0.5rem 0;
+  color: var(--text-muted);
+  max-width: 440px;
+  line-height: 1.5;
+}
+
+.access-denied-user {
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+}
+
+.access-denied-user code {
+  background: var(--surface);
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.content-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 1rem 1.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.content-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+/* The page's item glyph, ahead of its title. Centred on the line rather
+   than on the header's baseline, which for a replaced element is its
+   bottom edge and would hang the figure a third of itself too high.
+   Same tone as the count beside it: the heading is the loud part. */
+.page-header .header-icon,
+.content-header .header-icon {
+  display: flex;
+  align-self: center;
+  color: var(--text-tertiary);
+}
+/* Every count beside a label -- a list's in the header rail, a board
+   column's, an inbox group's, a dashboard panel's, a Gantt lane's --
+   is this one badge: the sidebar's count size, tabular numerals so a
+   count changing from 9 to 10 does not shift what follows it, and
+   centred on its label's line rather than sat on its baseline, which
+   for a smaller face beside a larger one puts it below the label's
+   centre (grain/task-4980). */
+.count {
+  flex: none;
+  align-self: center;
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+/* The inbox's desktop-notification switch, at the far end of its
+   header (InboxPage.jsx's NotificationSwitch). */
+.content-header .inbox-notify {
+  margin-left: auto;
+  align-self: center;
+}
+
+/* ---------- Status dot: a small colored circle stands in for the state
+   pill everywhere a state is shown, in place of the filled badge. ---------- */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-tertiary);
+}
+.dot-all {
+  background: transparent;
+}
+.dot-proposed {
+  background: transparent;
+  border: 1.5px solid var(--state-proposed);
+  box-sizing: border-box;
+}
+.dot-queued {
+  background: transparent;
+  border: 1.5px solid var(--state-queued);
+}
+.dot-running {
+  background: var(--state-running);
+}
+.grain-mark-sheet.grain-mark-interactive {
+  background: var(--state-interactive);
+}
+.dot-awaiting_reply,
+.dot-asked {
+  background: var(--state-awaiting);
+}
+.dot-failed {
+  background: var(--state-failed);
+}
+.dot-awaiting_submit {
+  background: var(--state-awaiting-submit);
+}
+.dot-completed {
+  background: var(--state-completed);
+}
+/* Hollow, like .dot-queued: a deferred task has not happened, and the
+   filled dots on this rail are the states that are happening or are
+   over. The colour is what tells it from queued. */
+.dot-deferred {
+  background: transparent;
+  border: 1.5px solid var(--state-deferred);
+}
+.dot-closed {
+  background: var(--state-closed);
+}
+.dot-merged {
+  background: var(--pr-merged);
+}
+.dot-blocked {
+  background: var(--danger);
+}
+
+/* ---------- The sidebar nav's icon column. A state entry's marker is an
+   8px dot and a list entry's is a 16px glyph (ItemGlyph.jsx), so without
+   a fixed box the two groups' labels would start 8px apart from each
+   other down one rail. Same job as .badge-icon does for a task row. --- */
+.nav-icon {
+  width: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+/* The rail folded down to its icons (Sidebar.jsx's `collapsed`,
+   sidebarCollapse.js). The width animates, unless the reader asked for
+   less motion. Every entry keeps its label in the document for a screen
+   reader -- the tooltip beside it is what the eye gets -- so the label
+   is hidden the way .visually-hidden hides a heading, never clipped
+   half-way. A count moves onto the icon's corner as a badge, and a zero
+   is left off; anything else that only makes sense with room beside it
+   (.rail-hidden: section headings, pin buttons) goes. */
+.sidebar {
+  transition:
+    width 160ms ease,
+    padding 160ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
+}
+.sidebar-collapsed .MuiListItemButton-root {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+  min-height: 34px;
+}
+.sidebar-collapsed .MuiListItemText-root {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.sidebar-collapsed .rail-hidden {
+  display: none;
+}
+.sidebar-collapsed .rail-count {
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  margin: 0;
+  border-radius: 8px;
+  font-size: 0.6rem;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
+}
+.sidebar-collapsed .MuiTypography-root.rail-count {
+  background: var(--surface-hover);
+}
+.sidebar-collapsed .rail-count .MuiChip-label {
+  padding: 0;
+}
+.sidebar-collapsed svg.rail-count {
+  padding: 0;
+  background: none;
+  font-size: 0.8rem;
+}
+.sidebar-collapsed .rail-count[data-zero] {
+  display: none;
+}
+
+/* The heading over the nav rail's Boards section (Sidebar.jsx): a
+   button, because clicking the word is how you get to the list of
+   boards, but drawn as the small caption it reads as rather than as a
+   control competing with the entries under it. */
+.sidebar-section-heading {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  font-weight: 600;
+}
+.sidebar-section-heading:hover {
+  color: var(--text);
+}
+
+/* A folder's own name, over the boards filed under it -- on the boards
+   page. Indented to the same column the labels beside it start in, so a
+   folder reads as being above its boards rather than beside them. */
+.board-folder-heading {
+  margin: 0.5rem 0 0.15rem;
+  padding-left: 1.75rem;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  font-weight: 600;
+}
+
+/* The bottom padding carries the batch-actions bar's own height while
+   there is a selection (BatchActionsBar.jsx publishes it): the bar is
+   fixed to the bottom edge and takes no space in the layout, so without
+   this the end of the list is behind it once the scroll runs out. Zero
+   when no bar is up, which is what the fallback in the var() says.
+   .task-view is the same pane drawn under a saved board's page, which
+   is the main landmark itself and so takes a plain element instead
+   (BoardPage.jsx, grain/task-1253). */
+main,
+.task-view {
+  flex: 1;
+  min-width: 0;
+  padding: 0 0 calc(2.5rem + var(--batch-bar-height, 0px));
+  overflow-y: auto;
+}
+
+/* Wraps because a task view's toolbar is search, a Filter button, a Sort
+   button and whatever that view adds to the end of the row
+   (NarrowingBar.jsx) -- which with the task list's "show closed tasks"
+   checkboxes is more than fits a narrow window in one row. The other
+   list pages carry two controls at most, so they never reach a second
+   row and look no different for it. */
+.task-list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.75rem 0;
+}
+
+/* The filter and sort editors, and the chips a closed filter editor
+   leaves behind (NarrowingBar.jsx). Indented to the toolbar's own left
+   edge, so a condition lines up under the button that opened it. */
+.narrowing-chips,
+.narrowing-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.75rem 0;
+}
+
+/* One condition, read left to right as the sentence it is: attribute,
+   comparison, value. It stays one line for as long as it fits and wraps
+   within itself rather than breaking the panel's own rows apart. */
+.narrowing-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1 1 100%;
+}
+
+.narrowing-values {
+  min-width: 12rem;
+  max-width: 22rem;
+}
+
+.narrowing-value {
+  max-width: 14rem;
+}
+
+.narrowing-note {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+/* --list-rows-gap (declared with the other variables at the top of this
+   file) is the air between a list page's filter/sort toolbar and its
+   first row. The task list gets that air for free: this "Select all" row
+   sits in between and brings its own padding with it. Nothing sits there
+   on the repos, templates, schedules or suites pages, so their rows
+   began flush against the toolbar's controls and read as crammed under
+   it (grain/task-327) -- the variable is that missing row's own vertical
+   space, handed to those four lists as a margin instead, so all five
+   pages start their rows the same distance below the panel above them. */
+.select-all {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--on-surface-variant);
+  font-size: 0.85rem;
+  padding: 0.6rem 1.75rem 0;
+}
+
+.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.6rem 1.75rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.task-row:hover {
+  background: var(--surface-hover);
+}
+/* A stacked task (bwsalmon/agents#378) nests under the task that
+   generated it rather than getting a row of its own -- indented and
+   set off from the parent's own row, so it reads as a continuation of
+   the same change rather than a separate task. */
+.task-sublist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.task-sublist .task-row {
+  padding-left: 3.25rem;
+}
+.task-select {
+  flex: 0 0 auto;
+}
+/* Drag-and-drop backlog reordering (bwsalmon/agents#476). The handle is
+   the drag affordance; the row itself stays draggable so grabbing
+   anywhere on it still works, the handle just signals that it can be.
+   It is also the button that picks the row up for tap-to-move
+   (ReorderPickup.jsx, grain/task-23), hence the button reset -- a
+   <button> is what a finger and a keyboard can both reach, and the icon
+   inside it is the same figure it always was.
+   .task-drag-placeholder is the same column left empty on a row that has
+   no handle to put in it -- a stacked merge fix, which the merge queue
+   always runs ahead of the backlog rather than letting it be dragged
+   about -- so that row's contents still line up with every other row's.
+   Both are fixed at the small icon's own 1.25rem so they cannot drift
+   apart. */
+.task-drag-handle,
+.task-drag-placeholder {
+  flex: none;
+  width: 1.25rem;
+}
+.task-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: grab;
+  /* A finger drags this handle (ReorderPickup.jsx, grain/task-51), and
+     these are the four ways a browser would take that touch away first:
+     scrolling the list under it, selecting the icon, iOS's
+     press-and-hold callout, and the row's own HTML5 drag. touch-action
+     is the one that matters -- without it the first millimetre of every
+     drag is a scroll, and the gesture never starts. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.task-drag-handle:hover {
+  color: var(--text-secondary);
+}
+/* The handle for as long as a finger is actually dragging it: the same
+   accent the picked-up row wears, so the thing being moved and the thing
+   moving it read as one. */
+.task-drag-handle-dragging {
+  color: var(--accent);
+  cursor: grabbing;
+}
+/* The handle of a row with nowhere to go -- the only task in its list,
+   the only card in its column. Still in its column, so the row lines up
+   with every other row, and visibly not something to press. */
+.task-drag-handle:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+/* The row that is currently picked up, on both sides of the gesture: it
+   is still where it was, so it says so by holding the accent rather than
+   by fading out the way a row mid-drag does. */
+.task-drag-handle-picked {
+  color: var(--accent);
+}
+.task-row-picked,
+.board-card-picked {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.task-row-dragging {
+  opacity: 0.4;
+}
+
+/* .task-drop-target marks whichever <li> (a task row, or the trailing
+   .task-drop-end sentinel for "drop at the very end of the list") the
+   dragged task(s) are currently over, with a rule drawn where they would
+   land -- above the row for an ordinary task, above the sentinel row for
+   the end of the list. */
+.task-drop-target {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.task-drop-end {
+  min-height: 2.5rem;
+}
+
+/* Tap-to-move (ReorderPickup.jsx, grain/task-23): the drop targets a
+   drag draws as a 2px rule, drawn instead as things you can hit with a
+   thumb. A slot is a row of its own between two rows -- dashed, in the
+   accent, so it reads as a gap waiting to be filled rather than as
+   another item in the list -- and it is a button, so it is reachable
+   with a finger, a mouse and the Tab key alike.
+
+   The gutter modifier is for the lists whose rows carry the page's own
+   1.75rem side padding (the task list and the four ReorderableList
+   pages); a board column has its own padding and the slot sits inside
+   it, so it takes none. */
+.reorder-slot {
+  list-style: none;
+}
+.reorder-slot-gutter {
+  padding: 0.25rem 1.75rem;
+}
+/* The end of one folder's boards, while a board is being dragged
+   (BoardList.jsx). Without it the last position in a folder has no drop
+   target of its own: the row below it is the next folder's heading, and
+   dropping on that files the board *into* that folder. Only on screen
+   during a drag, like the task list's own trailing zone, and shorter
+   than it -- it sits inside a list of sections rather than after all of
+   them, so every folder grows by its height the moment a drag starts. */
+.board-drop-end {
+  list-style: none;
+  min-height: 1.25rem;
+}
+.reorder-slot-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0 0.75rem;
+  border: 1px dashed var(--accent);
+  border-radius: 6px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.reorder-slot-button:hover {
+  background: var(--surface-hover);
+}
+/* The slot a finger is over, which is where letting go would drop the
+   row (ReorderPickup.jsx's nearestSlot). Filled rather than tinted: it
+   is the one piece of feedback a drag has, it is being read past a
+   finger sitting on top of it, and the dashed outline every other slot
+   wears is exactly what "not this one" should look like beside it. */
+.reorder-slot-button-over {
+  border-style: solid;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* The bar that says a row is up and offers the way back down. Sticky
+   because the slot somebody wants can be a scroll away, and the way out
+   should not be. */
+.reorder-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 1.75rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+.reorder-bar-note {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Touch targets, wherever the pointer is a finger rather than a mouse
+   -- a phone, and a tablet, which has the width for the desktop layout
+   but the same thumb. The sizes are what the platform guidelines have
+   agreed on for years: ~44px, against a drag handle's 1.25rem icon, a
+   row's 38px checkbox and MUI's own 31px small button.
+
+   Two ways of getting there, and the difference matters. The handle
+   grows its *hit area* rather than its box -- a pseudo-element centred
+   on the icon -- because it sits in a fixed 1.25rem column that every
+   row's contents line up against (.task-drag-placeholder above), and
+   widening the box would move every row's text on a phone to fix a
+   target nobody can see. Everything else simply gets bigger, since a
+   button that is easier to hit is also easier to read.
+
+   The doubled selectors are specificity, not a typo: these sit against
+   MUI's own emotion classes, which are one class each and injected
+   after this sheet, so a single .task-select never wins. */
+@media (pointer: coarse) {
+  .task-drag-handle {
+    position: relative;
+  }
+  .task-drag-handle::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+  .task-select.task-select,
+  .select-all .MuiCheckbox-root,
+  .board-column-header .MuiCheckbox-root {
+    padding: 0.7rem;
+  }
+  /* 40px rather than the 44 the rail's drawer entries take: a button
+     here stands beside a text field or a select, which are 40px, and a
+     toolbar of controls that do not line up reads worse than it aims.
+     MUI's own are 31px small and 37px medium. */
+  .MuiButton-root.MuiButton-root {
+    min-height: 40px;
+  }
+  /* An icon button has nothing but the icon to aim at: the close on
+     every overlay, and the three per row in the board's column editor
+     (BoardColumnsOverlay.jsx), all 30px until this. */
+  .MuiIconButton-sizeSmall.MuiIconButton-sizeSmall {
+    padding: 0.7rem;
+    min-width: 40px;
+    min-height: 40px;
+  }
+  /* MUI's Autocomplete brings its own input and its own dropdown
+     toggle, and neither is a .MuiButton-root or a small icon button, so
+     neither rule above reaches them: the repo picker on the New task
+     form -- the one thing somebody files from a phone, and the reason
+     "+" is on the phone's own bar -- was a 28px field with a 28px arrow
+     on the end of it. The same picker stands on the Settings pane and
+     in the schedule and suite forms. */
+  .MuiAutocomplete-root .MuiInputBase-root,
+  .MuiSelect-root,
+  .MuiAutocomplete-popupIndicator,
+  .MuiAutocomplete-clearIndicator {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  /* Picker suggestions are controls too. MUI's dense MenuList makes
+     BranchField's rows 32px tall, which is suitable for a mouse but not
+     for the coarse pointer that opened the list. */
+  .MuiMenuItem-root.MuiMenuItem-root {
+    min-height: 44px;
+  }
+  /* "Boards" in the rail is the way into that list, not decoration --
+     and at 55x20px it was the smallest
+     targets on a tablet's rail and in a phone's drawer, in a rail whose
+     every other entry is at least 40. The row costs nothing for it:
+     each heading already stands beside the "+" the rule above makes
+     40px tall, so the words simply fill the height the row has. */
+  .sidebar-section-heading {
+    display: flex;
+    align-items: center;
+    min-height: 40px;
+  }
+  /* RepoField's "Choose from list", the way back out of a typed repo
+     name (RepoField.jsx): a 0.8rem text link, 19px tall, and the only
+     control on a task's own pane that a thumb has nothing to aim at.
+     It is easy to miss because it is only rendered while the field is
+     in its typed state -- which a pane whose repo options had not
+     arrived when it first mounted is also in, so phone.spec.js's
+     "everything you can press" measurement finds it on the task pane
+     intermittently rather than never. The link reads as a link either
+     way; it just gets a row to be pressed in, the same trade the
+     sidebar headings above make. */
+  .link-button {
+    display: flex;
+    align-items: center;
+    min-height: 40px;
+  }
+  .reorder-slot-button {
+    min-height: 2.75rem;
+  }
+}
+.task-number {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  width: 2.75rem;
+  flex: none;
+}
+/* min-width, rather than the 0 a flex item usually needs: the title is
+   what the row is for, so the chips and the status beside it give way
+   to it and not the other way round (grain/task-199, and .task-row
+   .chips below for the half of that they do). Above this width it still
+   shrinks and ellipsises as it always did -- what it will not do is
+   reach zero and leave a row of chips with nothing to say which task
+   they belong to. */
+.task-title {
+  flex: 1;
+  min-width: var(--list-title-min);
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* What a running task's own agent says it is doing (update_status), set
+   quietly beside the title: it is the row's one live detail, so it reads
+   as an aside to the title rather than as a chip in the row's fixed
+   vocabulary. It gives way to the title when the row runs out of width
+   -- a truncated status is still a glance, where a truncated title is a
+   task you can no longer identify -- and its age is dimmer again, since
+   it only matters when the phrase itself has stopped changing. */
+.task-activity {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-style: italic;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.task-activity-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* How long a phrase has stood, shown only once it has stood long enough
+   to be worth saying (state.js's activityAge). The separator is here
+   rather than in the three components that render this chip, and it is
+   what keeps "reading the code 22m ago" from reading as one sentence the
+   run wrote about itself. */
+/* When a row on the Merged panel merged (TaskRow's showMergedAt): a
+   dim aside like the activity's age, kept whole rather than truncated. */
+.task-merged-at {
+  flex: none;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.task-activity-age {
+  color: var(--text-tertiary);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.task-activity-age::before {
+  content: "·";
+  margin-right: 0.4rem;
+}
+/* The merge-queue state's sub-case beside its phrase (ui.Task.
+   MergeQueueReason): the same dimmer, upright aside as the age, and the
+   first thing to go when the row runs out of width. */
+.task-activity-reason {
+  color: var(--text-tertiary);
+  font-style: normal;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-activity-reason::before {
+  content: "·";
+  margin-right: 0.4rem;
+}
+/* The task's own sub-case chip and its control (ui.Task.Reason): quieter
+   than the chips that correct the badge, and never shrunk out of shape. */
+.task-row .task-reason {
+  flex: none;
+  color: var(--text-secondary);
+}
+.task-row .task-reason-control {
+  flex: none;
+  padding: 0 0.6rem;
+  min-height: 24px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+/* The mark on a phrase grain wrote itself, while the run's sandbox was
+   still being built and there was no agent to write one (ui.Task.
+   ActivityBySetup). Small and upright against the italic status beside
+   it: it is an attribution, not part of the sentence, and it has to
+   survive the note being truncated -- so it never shrinks. */
+.task-activity-by {
+  flex: none;
+  color: var(--text-tertiary);
+  font-style: normal;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+.chips {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: nowrap;
+  flex: none;
+}
+
+/* On a list row -- the task list's rows, the inbox's copy of them, the
+   repos list's, and the four shapes of .template-row -- the chips are
+   the one thing on the row that is both unbounded in width and not the
+   point of it: a task can carry a custom field, a repo, a base, read
+   and write repos and a capability set, a repo row carries a count chip
+   per state it has tasks in, and a suite run carries its status, its
+   repo, its base and the mark of the schedule that started it.
+   Held at `flex: none` above, they took the width they wanted and the
+   title beside them was squeezed to nothing, so a row wide enough to
+   carry ten chips carried no title at all (grain/task-199).
+
+   So here they shrink, and what falls out of the width disappears whole
+   rather than in half: the strip wraps, and it is clipped to one line's
+   height (--chips-line), so a chip that no longer fits is laid out on a
+   second line nobody can see. No half-chip against the edge, no
+   ellipsis in the middle of "acme/widgets" -- either a chip is there to
+   be read or it is not there. The chips themselves keep their default
+   shrink, which only ever applies to a chip alone on the line and wider
+   than the strip: that one ellipsises inside its own pill (MUI's
+   .MuiChip-label) instead of being clipped.
+
+   The last chips are the ones to go, which is the order the rows put
+   them in: on a task row the annotations grain added come first and the
+   repo/base/capability facts last, on a repo row the state counts run
+   in STATE_ORDER, and on the suites page each row is ordered by what it
+   would least like to lose (SuitesList.jsx says which and why). Nothing
+   is lost with it -- every one of them is on the page the row opens.
+
+   Scoped to the rows rather than put on .chips itself, because
+   RepoPage's header uses the same strip for the counts that are the
+   point of that block, with a whole heading's width to wrap into and
+   nothing beside them to squeeze. */
+.task-row .chips,
+.repo-list-row .chips,
+.template-row .chips {
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  max-height: var(--chips-line);
+  overflow: hidden;
+}
+/* RepoPage's header is that heading's width: its counts wrap onto as
+   many lines as they need and none is hidden. `.chips` alone is
+   `nowrap` and `flex: none`, which a phone lifts (data-phone below) but
+   a tablet or a narrow desktop window did not, so a repo with tasks in
+   every state ran its last chips past the page's column, where the
+   column scrolled sideways to reach them. */
+.repo-page-header .chips {
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 0.35rem;
+}
+
+/* ---------- Board: the same tasks as .task-list, in columns
+   (components/TaskBoard.jsx). ---------- */
+/* The board is the one view whose body scrolls sideways, so it takes
+   its own height from the shell and hands the scrolling to the columns
+   instead of letting the page grow: the header and toolbar stay put,
+   the strip of columns scrolls horizontally, and each column scrolls
+   its own cards vertically. Without this the longest column would set
+   the height of the page and the toolbar would leave the screen with
+   it. */
+main.board,
+.task-view.board {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.board-hidden-note {
+  margin: 0.75rem 1.75rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+/* The columns end above the batch-actions bar rather than under it, for
+   the reason `main` above pads by the same property -- the board's own
+   main is overflow:hidden and pads nothing, so the reservation belongs
+   here, where the columns take their height from. */
+.board-columns {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0.9rem;
+  padding: 1rem 1.75rem calc(1.5rem + var(--batch-bar-height, 0px));
+  overflow-x: auto;
+}
+.board-column {
+  flex: 0 0 19rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.board-column-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+}
+.board-column-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-column-header .count {
+  margin-left: auto;
+}
+.board-column-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+  min-height: 0;
+}
+.board-column-empty {
+  margin: 0;
+  padding: 0 0.7rem 0.8rem;
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+}
+.board-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  cursor: pointer;
+}
+.board-card:hover {
+  background: var(--surface-hover);
+}
+.board-card-dragging {
+  opacity: 0.4;
+}
+.board-card-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+/* The number is the row's own fixed-width column in a list; in a card
+   it is one item in a line that has room to spare, so it shrinks to
+   the digits it has. */
+.board-card-top .task-number {
+  width: auto;
+}
+/* A link (ListPrimitives.jsx's RowLink), laid out as the line of its
+   own the title always was. */
+.board-card-title {
+  display: block;
+  font-size: 0.85rem;
+  margin-top: 0.2rem;
+  overflow-wrap: anywhere;
+}
+.board-card-activity {
+  margin-top: 0.25rem;
+  white-space: normal;
+}
+.board-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+.board-card-chips:empty {
+  display: none;
+}
+/* The same "a rule where they would land" the list draws for a drop,
+   on a card rather than a row -- and the same trailing sentinel for
+   "at the end of this column". */
+.board-drop-target {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.board-drop-end {
+  min-height: 2rem;
+}
+
+/* ---------- The timeline (components/GanttChart.jsx, gantt.js): the
+   same tasks again, as bars against a clock. ----------
+
+   Two columns all the way down -- a name and a track -- so that every
+   row's track starts at the same x and a bar's left edge is directly
+   comparable with the bar three rows below it. The width is a variable
+   because the grid and the axis have to be inset by exactly the same
+   amount as the rows are, and three copies of one number would be three
+   chances to disagree.
+
+   Like the board, this view takes its own height from the shell and
+   hands the scrolling to its body, so the header, the toolbar and the
+   axis stay put while a hundred rows scroll under them. */
+.gantt {
+  --gantt-label: 17rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.gantt-off-note {
+  margin: 0.75rem 1.75rem 0;
+}
+.gantt-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0.6rem 1.75rem 1.5rem;
+}
+/* The axis. It sits above the scrolling lanes rather than inside them,
+   so it is still on screen at row 90 -- the whole point of an axis. */
+.gantt-scale {
+  display: grid;
+  grid-template-columns: var(--gantt-label) 1fr;
+  align-items: end;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3rem;
+}
+.gantt-scale-label {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 0.6rem;
+}
+.gantt-scale-track {
+  position: relative;
+  height: 1.1rem;
+}
+/* A tick's label hangs from the rule it names rather than being centred
+   on it: the rule is the fact, and a label centred on the last tick
+   would fall off the right-hand edge of the pane. */
+.gantt-tick {
+  position: absolute;
+  bottom: 0;
+  transform: translateX(-2px);
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.gantt-tick-day {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.gantt-lanes {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* One grid for the whole chart, behind every lane, inset by the label
+   column so its rules line up with the axis above (GanttChart.jsx says
+   why it is drawn once rather than per row). */
+.gantt-grid {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--gantt-label);
+  right: 0;
+  pointer-events: none;
+  /* The "now" line sits at 100% while anything is still running, and its
+     2px would otherwise reach past the lanes and give them a sideways
+     scrollbar that scrolls by those two pixels. Centred on the moment
+     it marks, so the clip leaves half of it showing at the edge. */
+  overflow: hidden;
+}
+.gantt-rule {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  opacity: 0.6;
+}
+.gantt-rule-day {
+  opacity: 1;
+}
+/* The current moment, which is where every unfinished bar ends. Drawn
+   in the accent so it reads as the one live thing on the chart. */
+.gantt-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  opacity: 0.55;
+}
+.gantt-lane-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0 0.25rem;
+  position: sticky;
+  top: 0;
+  background: var(--canvas);
+  z-index: 1;
+}
+.gantt-lane-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.gantt-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.gantt-row {
+  display: grid;
+  grid-template-columns: var(--gantt-label) 1fr;
+  align-items: center;
+  gap: 0;
+  height: 1.65rem;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.gantt-row:hover {
+  background: var(--surface-hover);
+}
+.gantt-row-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  padding-right: 0.6rem;
+}
+.gantt-row-title {
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gantt-track {
+  position: relative;
+  height: 100%;
+  /* A bar that began a moment ago starts just short of 100%, and its
+     2px min-width would carry it past the lanes' edge (see .gantt-grid). */
+  overflow: hidden;
+}
+/* The bar itself, coloured by the task's state so a row says the same
+   thing at a glance as its badge does. Sized in percentages by
+   gantt.js's placeOf -- the track has no idea how wide it is. */
+.gantt-bar {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 0.62rem;
+  min-width: 2px;
+  border-radius: 3px;
+  background: var(--text-tertiary);
+  overflow: hidden;
+}
+.gantt-bar-proposed {
+  background: var(--state-proposed);
+}
+.gantt-bar-queued {
+  background: var(--state-queued);
+}
+.gantt-bar-running {
+  background: var(--state-running);
+}
+.gantt-bar-awaiting_reply {
+  background: var(--state-awaiting);
+}
+.gantt-bar-awaiting_submit {
+  background: var(--state-awaiting-submit);
+}
+.gantt-bar-failed {
+  background: var(--state-failed);
+}
+.gantt-bar-completed {
+  background: var(--state-completed);
+}
+.gantt-bar-deferred {
+  background: var(--state-deferred);
+}
+.gantt-bar-closed {
+  background: var(--state-closed);
+}
+/* The stretch before the task was first dispatched: the same bar, drawn
+   hollow, so the length being compared across rows is still one bar and
+   the wait inside it is visibly not work. */
+.gantt-bar-wait {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--canvas);
+  opacity: 0.55;
+  border-right: 1px solid var(--surface);
+}
+/* An unfinished bar has no right-hand end: it fades out at the current
+   moment rather than stopping square, because it has not stopped. */
+.gantt-bar-ongoing {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  -webkit-mask-image: linear-gradient(to right, #000 82%, transparent);
+  mask-image: linear-gradient(to right, #000 82%, transparent);
+}
+/* A bar that runs off an edge of the window is cut square there and
+   notched, so "longer than this range" cannot be misread as "exactly
+   this long". */
+.gantt-bar-clipped-start {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 2px dotted var(--canvas);
+}
+.gantt-bar-clipped-end {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: 2px dotted var(--canvas);
+}
+/* A phone has no room for a 17rem name column beside a track worth
+   looking at, so the name shrinks to the id and the first few words and
+   the track takes the rest. */
+html[data-phone="true"] .gantt {
+  --gantt-label: 8.5rem;
+}
+html[data-phone="true"] .gantt-body {
+  padding-left: 0.9rem;
+  padding-right: 0.9rem;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.badge::before {
+  content: "";
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  flex: none;
+}
+.badge-queued::before {
+  background: transparent;
+  border: 1.5px solid var(--state-queued);
+  box-sizing: border-box;
+}
+.badge-running::before {
+  background: transparent;
+  border: 2px solid var(--state-running);
+  border-top-color: transparent;
+  box-sizing: border-box;
+  animation: badge-spin 0.8s linear infinite;
+}
+/* When grain is performing active merge operations or merge-queue repair,
+   the standard CSS spinner runs in state-merging's blue rather than the
+   accent's gold, matching the grain-mark-repair agent spinner. */
+.badge-running.badge-repair::before {
+  border-color: var(--state-merging);
+  border-top-color: transparent;
+}
+.badge-running.badge-interactive::before {
+  border-color: var(--state-interactive);
+  border-top-color: transparent;
+}
+.badge-awaiting_reply::before,
+.badge-asked::before {
+  background: var(--state-awaiting);
+}
+.badge-failed::before {
+  background: var(--state-failed);
+}
+.badge-proposed::before {
+  background: transparent;
+  border: 1.5px solid var(--state-proposed);
+  box-sizing: border-box;
+}
+.badge-awaiting_submit::before {
+  background: var(--state-awaiting-submit);
+}
+.badge-completed::before {
+  background: var(--state-completed);
+}
+.badge-deferred::before {
+  background: transparent;
+  border: 1.5px solid var(--state-deferred);
+  box-sizing: border-box;
+}
+.badge-closed::before {
+  background: var(--state-closed);
+}
+.badge-merged::before {
+  background: var(--pr-merged);
+}
+/* A task waiting on another task (state.js's isBlockedWaiting): an open
+   ring like queued's and proposed's -- it has not started either -- in
+   the sidebar's .dot-blocked colour, struck through with a bar so it reads
+   as "no entry yet" and cannot be mistaken for failed's solid dot in the
+   same colour. The bar is a background gradient sized inside the ring, so
+   it follows --danger through a theme change like everything else. */
+.badge-blocked::before {
+  background: linear-gradient(var(--danger), var(--danger)) center / 7px 1.5px
+    no-repeat;
+  border: 1.5px solid var(--danger);
+  box-sizing: border-box;
+}
+
+/* RepoList (bwsalmon/agents#546) is the one place .badge sits on an MUI
+   Chip rather than a plain span, to get its filled pill background. The
+   Chip root has zero left padding of its own -- only its .MuiChip-label
+   child carries an inset (8px, small size), which keeps chip text clear
+   of the pill's rounded right corner. Nothing plays that role on the
+   left, so the ::before dot -- the chip root's first flex child -- sits
+   flush against x:0, exactly where the pill's own border-radius rounds
+   the corner away, and reads as spilling outside the bubble instead of
+   sitting inside it. */
+.MuiChip-root.badge {
+  padding-left: 0.45rem;
+}
+
+/* .badge-static is for a "running" badge that records a past moment
+   (e.g. a Timeline entry once superseded by a later transition) rather
+   than the task's live status -- it should read as the same solid dot
+   every other historical state gets, not keep spinning as if that run
+   were still happening. */
+.badge-static.badge-running::before {
+  animation: none;
+  border: none;
+  background: var(--state-running);
+}
+.badge-static.badge-running.badge-repair::before {
+  background: var(--state-merging);
+}
+.badge-static.badge-running.badge-interactive::before {
+  background: var(--state-interactive);
+}
+
+/* The pre-recorded mark (GrainMark.jsx, src/brand/mark-sheet.js). The
+   sheet is a vertical strip of frames carrying alpha only, used as a
+   mask so `background` supplies the colour -- which is why one file
+   works in both themes and follows a theme change with no reload.
+
+   Scaled to the mark's width, the strip's frames are each exactly one
+   --mark-size tall, so stepping the mask down by that much is stepping
+   one frame. The keyframes run to a full --mark-frames * --mark-size,
+   one frame past the last, and steps() lands on 0..n-1 rather than ever
+   showing that wrapped frame.
+
+   The animation is what the whole thing costs per frame: a mask offset,
+   which the compositor moves without repainting anything. */
+.grain-mark-sheet {
+  background: var(--accent);
+  -webkit-mask-image: var(--mark-sheet);
+  mask-image: var(--mark-sheet);
+  -webkit-mask-size: 100% auto;
+  mask-size: 100% auto;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  animation: grain-mark-play var(--mark-loop) steps(var(--mark-frames)) infinite;
+}
+@keyframes grain-mark-play {
+  from {
+    -webkit-mask-position: 0 0;
+    mask-position: 0 0;
+  }
+  to {
+    -webkit-mask-position: 0 calc(-1 * var(--mark-frames) * var(--mark-size));
+    mask-position: 0 calc(-1 * var(--mark-frames) * var(--mark-size));
+  }
+}
+/* A reader who asked for less motion gets the still instead, which
+   GrainMark.jsx decides -- this is the belt-and-braces for a mark
+   already on screen when the preference changes. */
+@media (prefers-reduced-motion: reduce) {
+  .grain-mark-sheet {
+    animation: none;
+  }
+}
+
+/* A run that is the merge queue repairing a task's own pull request
+   branch rather than writing the change (StateDot's own `repairing`,
+   ui.Task.Repairing). The sheet is an alpha mask, so the whole
+   difference is one `background`: the same mark, moving the same way, in
+   state-merging's blue instead of the accent's gold -- because a row
+   that has gone back to running has not gone back to the beginning, it
+   is a finished change being unstuck, and the two should not look alike
+   at a glance. */
+.grain-mark-sheet.grain-mark-repair {
+  background: var(--state-merging);
+}
+
+/* .badge-mark is for a "running" badge showing a task's live status
+   (bwsalmon/agents#586): StateDot renders the grain mark's animated
+   cycle -- the same "agents are working" figure the sidebar shows -- as
+   a real child instead of the spinning-border dot, so the dot the
+   ::before rule above draws is suppressed here rather than doubled up
+   underneath it. */
+.badge-mark::before {
+  content: none;
+}
+
+/* .badge-icon is for a badge that is only the state icon -- no label
+   text beside it -- sitting in a fixed column ahead of a task's title
+   (TaskList, RepoReleases' qualification list). Unlike .badge-mark's
+   20px grain mark, every other state is still the 11px ::before dot, so
+   without a fixed, centred box here a running row's icon column would
+   be 9px wider than every other row's and the titles after it would
+   not line up. */
+.badge-icon {
+  width: 20px;
+  justify-content: center;
+}
+
+/* .badge-running's own spin animation still drives RepoList's chip
+   (bwsalmon/agents#546), which badges a repo's *count* of running tasks
+   rather than one task's live status, so there is no single task for a
+   grain mark to represent there. Blocked/dependency/task-picker chips
+   and inputs were converted to MUI Chip/TaskPicker components instead,
+   so their CSS (dependency-chip, chip-remove, chip-read,
+   task-picker*) is gone rather than merged back in. */
+@keyframes badge-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .badge-running::before {
+    animation: none;
+  }
+}
+
+/* RepoList (bwsalmon/agents#561) uses TaskList's own flat, full-width
+   divider-row treatment instead of its old card-per-repo look, so all
+   four list pages share one row shape. */
+.repo-list {
+  list-style: none;
+  margin: var(--list-rows-gap) 0 0;
+  padding: 0;
+}
+.repo-list-row {
+  padding: 0.6rem 1.75rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+.repo-list-row:hover {
+  background: var(--surface-hover);
+}
+/* The status dot ahead of a repo's name (state.js's repoActivity,
+   grain/task-327): a .badge with no label at all, so the whole of it is
+   the ::before dot in .badge-icon's fixed, centred column -- which is
+   what keeps every row's name starting at the same x whether its dot is
+   the 11px circle or the spinning ring "running" draws. flex: none for
+   the same reason: it is a fixed column, not something for a long repo
+   name to squeeze. */
+.repo-status {
+  flex: none;
+}
+
+/* A flex:1 item's minimum width defaults to its content's min-content
+   size, not 0 -- so without a min-width of its own a long repo/org name
+   would refuse to shrink and stretch the row past its container's edge.
+   The width it is held to instead is not 0 but --list-title-min: a repo
+   with tasks in six states carries six count chips, which used to take
+   the whole row and leave the name at nothing (grain/task-199). Now the
+   chips give way first and the name keeps enough width to be read (see
+   .repo-list-row .chips). */
+.repo-list-name {
+  flex: 1;
+  min-width: var(--list-title-min);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* One repo's own page (RepoPage, grain/task-111): the repo's controls
+   and status live together in one page-width column. */
+.repo-page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.9rem 1.75rem 1.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.repo-page-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  padding: 1.5rem 1.75rem 2.5rem;
+}
+
+/* ---------- The dashboard (components/PanelBoard.jsx, panels.js,
+   grain/task-88): several of the views above at once, each panel
+   narrowed to its own question. ----------
+
+   The grid is fractions of a row rather than a column count, so the
+   same three widths a panel can be given ("third", "half", "full")
+   reflow on a narrow window without the layout having to be described
+   twice. A panel that would be squeezed below a readable width takes
+   the whole row instead -- the media query below -- which is what a
+   phone gets for nothing. */
+.panel-board {
+  padding: 0 1.75rem 1.5rem;
+  overflow-y: auto;
+}
+/* The dashboard's own toolbar and its editors (NarrowingBar.jsx,
+   grain/task-111). They carry the indent every task view's toolbar has,
+   and the panel board already has that indent of its own, so it comes
+   off here rather than being paid twice: the search box lines up with
+   the left edge of the panels under it. */
+.panel-board > .task-list-toolbar,
+.panel-board > .narrowing-chips,
+.panel-board > .narrowing-panel {
+  padding-left: 0;
+  padding-right: 0;
+}
+.panel-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  align-items: flex-start;
+}
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+/* The gaps are subtracted so that two halves, or three thirds, sit on
+   one row rather than wrapping the last of them onto their own. */
+.panel-third {
+  flex: 1 1 calc(33.333% - 0.6rem);
+  max-width: calc(33.333% - 0.6rem);
+}
+.panel-half {
+  flex: 1 1 calc(50% - 0.45rem);
+  max-width: calc(50% - 0.45rem);
+}
+.panel-full {
+  flex: 1 1 100%;
+  max-width: 100%;
+}
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+/* The header is the panel's drag handle when the dashboard can be
+   reordered (PanelBoard.jsx, grain/task-368) -- a panel is dragged by
+   its title bar, so its body stays a thing you can scroll, select and
+   click rows inside. The cursor is what says so: the drag figure beside
+   the heading is the affordance, and the whole bar answering the same
+   press should look like it does. */
+.panel-header-grip {
+  cursor: grab;
+}
+.panel-header-grip:active {
+  cursor: grabbing;
+}
+/* The panel a mouse is currently dragging, and the one it is over. The
+   rule is down the *leading* edge rather than across the top: the
+   panels wrap left to right and then down, so the panel a drop lands
+   above is as often the one to the right as the one below, and a
+   horizontal rule would be pointing at the wrong gap half the time. */
+.panel-dragging {
+  opacity: 0.4;
+}
+.panel-drop-target {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* "Last on the dashboard", while a drag is in flight: the last panel's
+   own target means "above it", so without a zone of its own the end of
+   the order has no drop target at all. It takes whatever is left of the
+   row the last panel is on, and a row of its own when that row is
+   full. */
+.panel-drop-end {
+  flex: 1 1 8rem;
+  min-height: 4rem;
+  border-radius: 8px;
+}
+/* A slot between two panels, while one is picked up: full width, like
+   the panels are in that state, so the column of drop targets reads as
+   the order itself. */
+.reorder-slot-panel {
+  flex: 1 1 100%;
+  max-width: 100%;
+}
+/* The dashboard while a panel is up (PanelBoard.jsx's own "Why a
+   picked-up panel stacks the dashboard"). Every panel takes the full
+   row and closes its body, which turns the grid into the list of
+   headings the order actually is -- the same shape a phone gets, where
+   the order is the whole layout. Six panels of real history are 2,500px
+   of scrolling with their bodies open, and drop targets three screens
+   apart are not a choice anybody can make. */
+.panel-grid-arranging .panel {
+  flex: 1 1 100%;
+  max-width: 100%;
+}
+.panel-grid-arranging .panel-body {
+  display: none;
+}
+/* ...and the panel that is up says so, the way a picked-up card does
+   (.board-card-picked). */
+.panel-picked {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.panel-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.panel-open {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+.panel-open:hover {
+  text-decoration: underline;
+}
+/* "Keep": on a panel showing a narrowing its reader made rather than the
+   board's own question (PanelBoard.jsx). It sits beside "Open" and reads
+   like it -- a word in the header rather than a button with a box round
+   it, since it is the second of two things a panel offers and neither is
+   the panel's point. It takes the auto margin over from "Open" when it
+   is there: two auto margins in one flex row would share the free space
+   and push the pair apart. */
+.panel-keep {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--accent);
+  cursor: pointer;
+}
+.panel-keep:hover {
+  text-decoration: underline;
+}
+.panel-keep + .panel-open {
+  margin-left: 0;
+}
+/* ...and on a finger, the same link with a target under it. "Open" set
+   at 0.8rem with no padding is a 31x19px box -- measured in a real
+   browser at 390px and 360px, docs/hand-runs/2026-09-07-panel-dashboard.md
+   section 6 -- and it is the only way out of a panel into the view it
+   summarises, so it is the gesture a phone reader makes most and the
+   smallest thing on the page. 44px is what the coarse-pointer block
+   above puts under everything else you can press, and the same reason
+   applies here. "Keep" is the same word at the same size right next to
+   it, so it takes the same box: a target you can miss is worse on the
+   one that writes a task than on the one that navigates.
+
+   They grow their boxes rather than a hit area behind them (the two ways
+   that block describes): nothing lines up against these two -- they are
+   the last items of a flex row, pushed right by "Keep"'s (or, alone,
+   "Open"'s) own `margin-left: auto` -- so a wider box moves nothing,
+   where an invisible one would leave a reader aiming at 31px of text and
+   hoping.
+
+   The negative margins are what keep the header the height it was: they
+   cancel .panel-header's own 0.6rem of padding, so the words fill the
+   header's full height instead of standing 44px tall inside it and
+   pushing the heading beside them down. Only "Open" cancels on the
+   right, so the last word still sits against the same edge it does with
+   a mouse; between the pair the padding is left to stand, because two
+   targets a thumb has to tell apart want the space more than the two
+   words want to sit 0.5rem apart. */
+@media (pointer: coarse) {
+  .panel-keep,
+  .panel-open {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 0.9rem;
+    margin-top: -0.6rem;
+    margin-bottom: -0.6rem;
+  }
+  .panel-open {
+    margin-right: -0.9rem;
+  }
+}
+/* The line a panel prints when the `range` on its row was a word this
+   build could not use (panels.js's panelRangeNote). Between the header
+   and the body, because it is about what the body below it is showing
+   rather than about the panel's name -- and only ever on a panel where
+   something is wrong, so it costs a healthy dashboard no space at all. */
+/* The line a panel prints when its own query names an attribute this
+   deployment does not have (PanelBoard.jsx's unknownNote) sits in the
+   same place for the same reason. */
+.panel-range-note,
+.panel-unknown-note,
+.panel-list-more {
+  display: block;
+  padding: 0.4rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+/* A panel is a window onto a view, not the view: its body scrolls at a
+   height that keeps four panels on a laptop screen, which is the whole
+   difference between a dashboard and four pages. */
+.panel-body {
+  min-height: 0;
+  max-height: 22rem;
+  overflow: auto;
+}
+/* The timeline drawn as a panel (GanttChart's own `embedded`): it keeps
+   its axis and its bars and loses the two rows above them, so the
+   padding those rows carried comes off here too. */
+.panel-body .gantt {
+  overflow: visible;
+}
+.panel-body .gantt-body {
+  padding: 0.5rem 0.9rem 0.9rem;
+}
+.panel-body .gantt {
+  --gantt-label: 11rem;
+}
+/* The state counts: one figure per column of the board's own layout,
+   each a link into the list of exactly those tasks. */
+.panel-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.9rem;
+}
+.panel-state {
+  flex: 1 1 6rem;
+  min-width: 6rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.panel-state:hover {
+  border-color: var(--accent);
+}
+.panel-state-count {
+  font-size: 1.4rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.panel-state-title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+.panel-state-hidden {
+  flex: 1 1 100%;
+}
+/* The throughput trend: a count, what it counts, and the shape of the
+   series behind it (Sparkline auto-scales, so the line is the shape and
+   the number is the size). */
+.panel-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  padding: 0.9rem;
+}
+.panel-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.panel-metric-count {
+  font-size: 1.4rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.panel-metric-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+/* Below this a third of a row is narrower than a task title, so every
+   panel takes the whole width and the dashboard becomes one column --
+   the same answer the detail pane's two columns give at the same
+   width. */
+@media (max-width: 900px) {
+  .panel-third,
+  .panel-half {
+    flex-basis: 100%;
+    max-width: 100%;
+  }
+}
+
+/* ---------- Inbox (InboxPage.jsx, grain/task-20): the same task rows
+   the list draws, grouped by what each one is waiting on a person for,
+   each with that answer beside it. ---------- */
+
+/* The group's own heading, in the same left margin as a row's badge so
+   the two read as one column. Quieter than .content-header's page title
+   -- there are up to five of these on a page and only one of that. */
+.inbox-group-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 1.2rem 1.75rem 0.5rem;
+}
+.inbox-group-header h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+/* The whole-group answers ("Approve all", "Submit all"), pushed to the
+   far end of the header so they sit above the column of per-row buttons
+   they are the shortcut for rather than beside the heading, where they
+   would read as part of the group's name. */
+.inbox-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+/* The sentence saying what this group's wait actually is. On its own
+   line (flex-basis: 100%) rather than after the count, so a long one
+   does not push the number off the end of a narrow window. */
+.inbox-group-hint {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+}
+
+/* The border moves from .task-row to the <li>, because a row's own reply
+   box (.inbox-responder) belongs inside the same bordered block as the
+   row it answers rather than under a rule of its own. */
+.inbox-item {
+  border-bottom: 1px solid var(--border);
+}
+.inbox-line {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.inbox-line .task-row {
+  flex: 1;
+  min-width: 0;
+  border-bottom: none;
+}
+.inbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
+  padding-right: 1.75rem;
+}
+/* The one row on this page that is not a task (InboxPage's
+   base_branch_gate group): a base branch nothing is judging. It stands
+   in .task-row's place inside .inbox-line, so it takes the same width
+   and the same left gutter -- the note under it is indented to the
+   title the way a task's note is, and two kinds of row in one list
+   should not start in two different columns. */
+.inbox-gate {
+  display: flex;
+  align-items: center;
+  /* .task-row's own gap, which is what puts this row's name in the same
+     column as .inbox-note's 3.6rem indent under it. */
+  gap: 0.85rem;
+  flex: 1;
+  min-width: 0;
+  padding: 0.55rem 0 0.55rem 1.75rem;
+}
+.inbox-gate-repo {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The merge queue's own account of one stalled wait (InboxPage's
+   merge_stalled group), under the row it is about. Indented to the
+   title, like the reply box below, because it is the same kind of thing:
+   something said about the one task above it. */
+.inbox-note {
+  margin: 0;
+  padding: 0 1.75rem 0.7rem 3.6rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+/* Indented to the row's title rather than to the page edge: the box is
+   about the one task above it, and the row's badge and number column is
+   what says which. */
+.inbox-responder {
+  padding: 0 1.75rem 0.9rem 3.6rem;
+}
+.inbox-responder-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  margin-top: 0.6rem;
+}
+/* The question being answered. Capped rather than left to run: an agent
+   that asks for a decision often lays out the whole of its reasoning
+   first, and a page of parked tasks is unreadable if each one can be a
+   screen tall. */
+.inbox-question {
+  max-height: 14rem;
+  overflow-y: auto;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--canvas);
+  border-radius: 8px;
+}
+
+.empty {
+  color: var(--text-tertiary);
+  padding: 1.5rem 1.75rem;
+}
+.hidden {
+  display: none !important;
+}
+
+.candidate-current {
+  background: var(--canvas);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  margin: 0 0 1rem;
+}
+.candidate-current p {
+  margin: 0.2rem 0;
+}
+.candidate-error {
+  color: var(--danger, #c0392b);
+}
+.candidate-history {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+}
+.candidate-history li {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.qualification-task-list {
+  list-style: none;
+  margin: 0.5rem 0 1rem;
+  padding: 0;
+}
+.qualification-task-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.secrets-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+}
+.secret-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.secret-name {
+  font-weight: 500;
+}
+
+.schedule-title {
+  font-weight: 500;
+}
+/* A next run that has gone by, and the sentence saying why nothing
+   happened at it (grain/task-544). Both are drawn in the accent rather
+   than in --danger: a suppressed firing is a schedule waiting on work
+   that has not finished, which is the overlap policy doing its job, not
+   a failure -- but it is also what a schedule that has silently stopped
+   running looks like, so it must not read as ordinary meta text. */
+.schedule-overdue {
+  color: var(--accent);
+}
+.schedule-overdue a {
+  color: inherit;
+}
+
+/* The Processes table (docs/design/settings-panel.md §5.1): one grid
+   row per schedule, template, suite or trigger, with the columns every
+   kind shares -- kind, name, repo, last run, next run, enabled -- and
+   what only one kind has as chips under the name. The heading row is
+   the same grid, so its labels sit over their columns. Under 900px the
+   run columns drop under the name, the way the old schedule rows put
+   their meta line under the title. */
+.processes-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.process-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.5rem 1.75rem 0;
+}
+.process-row {
+  display: grid;
+  grid-template-columns:
+    1.25rem 7.5rem minmax(12rem, 2.5fr) minmax(7rem, 1fr)
+    minmax(8rem, 1fr) minmax(8rem, 1fr) 5rem 4.5rem;
+  align-items: start;
+  gap: 0.75rem;
+  padding: 0.6rem 1.75rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.process-row:hover {
+  background: var(--surface-hover);
+}
+.process-head {
+  cursor: default;
+  padding-top: 0.75rem;
+  padding-bottom: 0.35rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.process-head:hover {
+  background: none;
+}
+.process-name {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.process-name .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+.process-name .chips:empty {
+  display: none;
+}
+/* In a column of its own the name wraps rather than ellipsising: the
+   column is as wide as the table can give it, and a name cut short is
+   the one thing on the row that says which process it is. */
+.process-name .template-name,
+.process-name .template-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+/* A template's task title is a line of its own under the chips. */
+.process-name .template-title {
+  flex: 1 1 100%;
+}
+.process-repo {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.process-actions {
+  text-align: right;
+}
+@media (max-width: 900px) {
+  .process-row {
+    grid-template-columns: 1.25rem 6.5rem minmax(0, 1fr) auto;
+  }
+  .process-head {
+    display: none;
+  }
+  .process-repo,
+  .process-last,
+  .process-next,
+  .process-enabled {
+    grid-column: 3 / 4;
+  }
+  .process-actions {
+    grid-column: 4 / 5;
+    grid-row: 1;
+  }
+  .process-last::before {
+    content: "Last run ";
+  }
+  .process-next::before {
+    content: "Next run ";
+  }
+}
+
+/* The templates page's own list (bwsalmon/agents#545): one row of key
+   details per template -- name, target repo, title -- TaskList's own
+   .task-row look, minus the drag handle and checkbox neither template
+   nor this list has any use for. Clicking a row opens TemplateOverlay
+   with everything else about that template, the same "list vs. behind
+   a click" split .task-row itself draws against DetailOverlay. */
+.template-list {
+  list-style: none;
+  margin: var(--list-rows-gap) 0 0;
+  padding: 0;
+}
+.template-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.6rem 1.75rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.template-row:hover {
+  background: var(--surface-hover);
+}
+/* What this row does when it has more to carry than it has width
+   (grain/task-248), which is .task-row's own question one row shape
+   later. None of the three parts used to say anything about shrinking,
+   and a flex item that says nothing will not shrink below its own
+   min-content: so a long name stood at the width of its longest word
+   and wrapped down four lines, the chip beside it stood at its full
+   width and was sliced in half by the row's edge, and the title -- last
+   in the row and the only part with an overflow rule of its own -- was
+   pushed off it entirely and rendered at zero width. At 620px, the
+   narrowest a desktop window goes before the phone layout takes over,
+   that was a template you could not read the point of at all.
+
+   So the name gives way with an ellipsis rather than wrapping (the same
+   truncation .repo-list-name takes, and a name at half its length is
+   still a template you recognise), the chips give way with the ellipsis
+   MUI's own .MuiChip-label already has ready, and what they give up
+   goes to the title, which keeps --list-title-min the way a task's
+   title does. e2e/narrow.spec.js measures it.
+
+   The chips are no longer loose, though (grain/task-294): all four of
+   these rows carry them in a .chips strip now, which the clip rule
+   above covers, so a chip that no longer fits is dropped whole. That is
+   the half task-248 left wrong. Ellipsising is the right answer for one
+   chip and the wrong one for four: a suite run carries its status, its
+   repo, its base and possibly the mark of the schedule that fired it,
+   and at 620px the ellipsis gave every one of them a share of what was
+   left -- 10px of "Active", 18px of "acme/widgets", 34px of a branch
+   name -- three empty pills and no word between them. The strip shows
+   "Active" whole and hides the rest.
+
+   The min-width below is what is left of the ellipsis, and it is the
+   case the strip cannot help with: a chip alone on the strip's line and
+   wider than it has no second line to be dropped onto, so it truncates
+   inside its own pill instead (MUI's .MuiChip-label) rather than being
+   sliced by the strip's edge. That is the templates and boards rows'
+   one chip whenever it is too long, which is why putting their single
+   chip in a strip changed nothing about how they lay out -- they are in
+   one for the sake of the rule being true of every row here, not for a
+   pixel. */
+.template-name {
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.template-row .MuiChip-root {
+  min-width: 0;
+}
+/* `flex: 1` rather than the `flex: 0 1 auto` a flex item takes by
+   default, and it is the whole of grain/task-431: the title asks the
+   row for its floor and grows into whatever is left over, instead of
+   asking for the width of its own text and being shrunk back down to
+   the floor. The two end at the same place on a row that is short of
+   width -- min-width holds the title at 9rem either way -- and nowhere
+   near it on a row that is not.
+   Asking for the whole of the text is what cost the name beside it. A
+   flex item shrinks in proportion to its own width, so a row whose
+   parts want 1100px in 1048px of window does not take the 52px off the
+   part with the most to spare: it takes a proportional share off every
+   one of them, and a short name's share of that is most of the name.
+   Measured in Chromium and WebKit on /templates, on a template named
+   "Nightly" (49px of text) carrying a repo chip and a 95-character
+   title, before this line: 13px of name at 620px, 22px at 800px, 46px
+   at 1280px -- a maximised window in which the name of the template
+   rendered as a bare ellipsis, next to a title with 631px and an
+   ellipsis of its own. After it: 49px at 1024px and up, whole, and the
+   title takes the rest. A board's row is the same shape and was the
+   same figure (22px at 620px, 49px from 1024px up).
+   What it does not fix, and what nothing at this level can: at 620px
+   and 800px that same row is genuinely short of width once the title
+   is at its floor -- 388px of row, less the handle, the gaps and the
+   9rem, leaves 179px for a name and a repo chip that want 299px
+   between them -- so the name and the chip go on sharing what is
+   there (19px and 47px of "Nightly", up from 13px and 22px). The name
+   only stops truncating there if it takes a floor of its own, and a
+   floor is exactly what a name must not have: it is a label somebody
+   chose, it is as long as they made it, and 9rem of it reserved on
+   every row is 9rem the title cannot use. `min-width: min(9rem,
+   max-content)` would have said the useful half of that -- floor a
+   short name at its own width, floor nothing at all above 9rem -- but
+   an intrinsic keyword is not a valid argument to a math function, and
+   both engines drop the whole declaration rather than part of it
+   (measured: CSS.supports() is false for it in Chromium and WebKit,
+   and the computed min-width is the initial value). A floor that
+   silently is not there is worse than no floor.
+   This is the .task-title rule above, in other words, which has said
+   `flex: 1` with the same min-width since grain/task-199. The suites
+   page's two rows are the exception and keep the default -- see
+   .suite-run-row .template-title below. */
+.template-title {
+  color: var(--text-tertiary);
+  flex: 1;
+  min-width: var(--list-title-min);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* One floor per row, not one per hint: a suite run's row (SuitesList)
+   is the one that carries two of these -- the pass it is on, and the
+   error if it failed -- and two floors of 9rem each is more than a
+   narrow row has to give, which would put the row back over its own
+   edge. The first keeps the floor and the second takes what is left. */
+.template-title ~ .template-title {
+  min-width: 0;
+}
+/* A session's row (SessionsPage.jsx) is this shape plus a bin at its
+   end, since grain/task-15 lets a session be deleted from the list. The
+   bin is the row's one control that is not the row: it takes no share
+   of the width the name, chip and hint divide between them, and sits at
+   the padding edge where the other rows' right-hand slot is. A small
+   icon button is 30px tall against the row's 24px line, so without the
+   negative margin every session row stood 6px taller than a template's
+   or a board's for carrying one -- the margin lets the button keep its
+   hit area and overhang the line instead. */
+/* The button inside a session's row that opens it (SessionsPage.jsx):
+   the glyph and the name, drawn as the row's own text rather than as a
+   button, and giving way like the name it holds -- so the row lays out
+   exactly as it did when the whole <li> was the control. */
+.session-row-open {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.session-row-actions {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+}
+.session-row-actions .MuiIconButton-root {
+  margin: -3px 0;
+}
+/* ...and on the suites page that one floor belongs to the other part of
+   the row (grain/task-346). A template's .template-name is a label
+   somebody chose and the .template-title after it is the task that will
+   actually be filed, which is why grain/task-248 gave the floor to the
+   title; a board's row is the same shape for the same reason. Neither
+   of the suites page's two rows is that. There the name is the suite's
+   name -- which suite this is, or which suite this is a run of -- and
+   it is the only part of either row that says so. What follows it on a
+   run's row is "pass 1 · run until clean (max 3)": the mode the run was
+   started in, which never changes, is on the run's own page
+   (SuiteRunPane) and on the suite's row above, and is a hint in the
+   sense .hint means.
+
+   Measured in Chromium at 620px, the narrowest window that is still the
+   desktop layout, before this rule. A run of "Qualify the release
+   branch before anything merges into it" gave its name 88px -- two
+   words -- and gave the hint beside it the full 144px floor. A run of a
+   suite named "Nightly" was worse, and is the case that shows the floor
+   rather than the phrasing is the bug: a flex item shrinks in
+   proportion to its own width, so being short protects a name from
+   nothing. 49px of "Nightly" shrank to 21px, which renders as "…" --
+   a row identified by an ellipsis, next to a hint that was complete.
+   The suite's own row above did the same, at 24px, so this is both of
+   them and not the runs list alone.
+
+   So the name takes --list-title-min here and the hint gives way. Still
+   one floor per row and not a second one: the hint's goes to 0 beside
+   the error hint's, which is what keeps this rule off the end of a
+   phone's ~358px row -- a .template-row does not wrap at any width. The
+   hint gives up its end, and it is written pass-first for that reason:
+   at 620px it reads "pass 1…", which is the one part of it that changes
+   over a run's life, and the mode phrase is what goes. */
+.suite-run-row .template-name {
+  min-width: var(--list-title-min);
+}
+/* ...which leaves this hint the one .template-title in the tree that
+   keeps a flex item's own default (grain/task-431). Everywhere else the
+   title floors at 9rem and grows into what is left, and both halves of
+   that are wrong here. It has no floor on this row -- the name above
+   took it -- so `flex: 1` would give it a flex base size of 0 with
+   nothing to clamp it back up, and a row already short of width would
+   resolve it to no width at all: at 620px the "pass 1…" a run is
+   actually read for would go, and the chips beside it would keep every
+   pixel it gave up. Growing is no better: what a suite run's row has to
+   spare at 1280px would go into this hint's box rather than staying
+   after it, and the error hint that follows it -- the second
+   .template-title, and the one thing on the row saying why a run
+   failed -- would start wherever that box now ended. So it shrinks from
+   its own text, the way it did before, and the name's floor is what
+   decides how far. */
+.suite-run-row .template-title {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* A schedule-filed task is not the write target, so it gets a tinted
+   fill rather than the plain default Chip -- its own category of
+   annotation, distinct from an ordinary repo/capability chip. A suite
+   run's own tasks (bwsalmon/agents#642) and an un-nested merge fix
+   (bwsalmon/agents#378) say the same kind of thing -- nobody filed this
+   by hand -- so they share the treatment. */
+.chip-scheduled,
+.chip-suite,
+.chip-stacked {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+/* Those first two carry the figure of the thing that filed the task
+   (ItemGlyph.jsx), and the whole point of an inline SVG filled with
+   currentColor is that it goes with the label -- MUI colours
+   .MuiChip-icon itself (text.secondary), which would leave the glyph
+   grey inside an accent-coloured chip. */
+.chip-scheduled .MuiChip-icon,
+.chip-suite .MuiChip-icon {
+  color: inherit;
+}
+
+/* A value of one of this deployment's own fields (model.CustomField),
+   on the rows and cards that list a task -- the field the list is
+   sorted by, and the ones declared as belonging on every row
+   (components/CustomFields.jsx's rowFields).
+
+   Outlined and uncoloured on purpose: a repo chip and a capability chip
+   are facts about the task grain itself knows, and this is a fact the
+   deployment added, so it reads as the quietest thing in the row rather
+   than competing with the annotations beside it. The name is dimmer
+   again than the value, because the value is what is being read -- the
+   name is there so that "high" is not a word floating in a row.
+
+   Capped in width and ellipsised (MUI's own .MuiChip-label already
+   truncates): a multi-valued field can hold "ui, daemon, store,
+   prompt", and a row where one chip eats the title is worse than a chip
+   you have to hover to finish reading. .chips does not shrink, so every
+   pixel here comes out of the title -- 10rem against ROW_FIELD_LIMIT's
+   three is the worst case this is willing to take off it, and the whole
+   value is on the chip's own title either way. */
+.chip-field {
+  max-width: 10rem;
+}
+.chip-field-name {
+  color: var(--text-tertiary);
+  margin-right: 0.35rem;
+}
+
+/* Form fields themselves are MUI's own TextField/Checkbox now; fieldset
+   and legend remain plain HTML (MUI has no fieldset primitive) and keep
+   their own look here. RepoField's <input>/<select> are plain HTML too
+   (it predates this MUI pass and needs native <select> semantics its
+   own tests rely on) -- scoped to .repo-field rather than a bare "form
+   input" selector so it never fights MUI's own input styling elsewhere
+   in the same form. */
+/* The repos glyph and the control it labels sit on one line, with the
+   "Choose from list" link below both -- hence the inner wrapper rather
+   than making .repo-field itself the flex row. */
+.repo-field-control {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.repo-field-control input,
+.repo-field-control select {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+.repo-field-icon {
+  display: flex;
+  color: var(--text-tertiary);
+}
+.repo-field input,
+.repo-field select {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+}
+.repo-field input:focus,
+.repo-field select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  outline: none;
+}
+form .hint {
+  font-weight: normal;
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+}
+/* Settings is not a <form>, so the rule above never reached the hint a
+   checkbox's label carries there, and it ran on in the label's own type
+   with no space: "Show closed tasks by defaultoff (default): ..." (found
+   in the 2026-10-23 regression sweep). Under the label, as an aside, with
+   the box beside the label's first line rather than the middle of the
+   paragraph. */
+.settings-content .MuiFormControlLabel-label > .hint {
+  display: block;
+  margin-top: 0.15rem;
+  font-weight: normal;
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+}
+.settings-content
+  .MuiFormControlLabel-root:has(> .MuiFormControlLabel-label > .hint) {
+  align-items: flex-start;
+}
+.settings-content
+  .MuiFormControlLabel-root:has(> .MuiFormControlLabel-label > .hint)
+  > .MuiFormControlLabel-label {
+  padding-top: 9px;
+}
+/* .link-button is RepoField's "Choose from list" toggle back out of its
+   typed-a-custom-repo state -- chip-remove's own button reset, styled to
+   read as a text link rather than a chip's own × since it sits below a
+   full-width field instead of inline with a short label. */
+.link-button {
+  display: block;
+  margin-top: 0.3rem;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+fieldset {
+  border: none;
+  padding: 0;
+  margin: 0 0 1.1rem;
+}
+fieldset legend {
+  display: block;
+  width: 100%;
+  padding: 0;
+  margin-bottom: 0.5rem;
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+
+/* One row of the System pane's Power tab: a sentence saying what the
+   button takes down, and the button (SystemOverlay.jsx's POWER_ACTIONS).
+   Three of them stack in one "danger zone" fieldset, so they need a gap
+   between them that the single button this pane used to hold did not. */
+.power-action + .power-action {
+  margin-top: 1.4rem;
+}
+
+.upgrade-status {
+  margin: 1rem 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.3rem 0.75rem;
+  font-size: 0.85rem;
+}
+.upgrade-status dt {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+/* Wraps on a phone: Source alone is 220px, and without the wrap Search
+   was squeezed to nothing and Refresh pushed past the screen's edge. */
+.logs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 0.75rem;
+}
+.logs-view {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* An attempt's capability audit (CapabilityAudit.jsx), above its
+   transcript in the same overlay: its own scroll, so a grant that made a
+   thousand calls cannot push the transcript out of reach. */
+.capability-audit {
+  margin: 0 0 1rem;
+}
+.capability-audit h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+}
+/* AttemptTranscriptOverlay's "Ran on <model>" line under its title. */
+.attempt-transcript-model {
+  margin: 0 0 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+.capability-audit-hint {
+  margin: 0 0 0.5rem;
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+}
+.capability-audit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 30vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--canvas);
+}
+.capability-audit-entry {
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid var(--border);
+}
+.capability-audit-entry:first-child {
+  border-top: none;
+}
+.capability-audit-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+}
+.capability-audit-grant {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.capability-audit-time {
+  color: var(--text-tertiary);
+}
+.capability-audit-note {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  margin-top: 0.25rem;
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+  font-style: italic;
+  word-break: break-word;
+}
+.capability-audit-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 1rem;
+  margin: 0.25rem 0 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+}
+.capability-audit-fields > div {
+  display: flex;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.capability-audit-fields dt {
+  color: var(--text-tertiary);
+}
+.capability-audit-fields dd {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* `top` output is a table held together by its columns: wrapping a row
+   that overflows (which .logs-view does, and should, for a log line)
+   would interleave halves of one process's row with the next one's. It
+   scrolls sideways instead. */
+.top-view {
+  max-height: 75vh;
+  white-space: pre;
+  word-break: normal;
+}
+.upgrade-status dd {
+  margin: 0;
+  word-break: break-word;
+}
+.upgrade-phase-running {
+  color: var(--accent);
+}
+.upgrade-phase-ok {
+  color: var(--state-completed);
+}
+.upgrade-phase-failed {
+  color: var(--danger);
+}
+
+/* The step list under the progress bar (grain/task-37): one row per step
+   of the upgrade's plan, with its own second line for whatever the step
+   last printed. The grid keeps the marks, names and durations in
+   columns, so a list of five steps reads as a list rather than as five
+   sentences of differing length. */
+.upgrade-steps-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  font-size: 0.85rem;
+}
+.upgrade-step {
+  display: grid;
+  grid-template-columns: 1.2rem 1fr max-content max-content;
+  column-gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.15rem 0;
+}
+/* Spelled out rather than left to the mark and the colour alone: the
+   glyph is aria-hidden, and "skipped" is not something a tick or a dash
+   conveys on its own to anyone. */
+.upgrade-step-state {
+  color: var(--text-tertiary);
+}
+.upgrade-step-time {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+/* The command's latest output line: under the name, across the whole
+   row, and clipped to one line -- a docker build's lines are long, and a
+   pane that reflows every three seconds as they change is harder to
+   read than one that does not. */
+.upgrade-step-detail {
+  grid-column: 2 / -1;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upgrade-step-pending {
+  color: var(--text-tertiary);
+}
+.upgrade-step-running .upgrade-step-mark,
+.upgrade-step-running .upgrade-step-name {
+  color: var(--accent);
+}
+.upgrade-step-done .upgrade-step-mark {
+  color: var(--state-completed);
+}
+.upgrade-step-failed .upgrade-step-mark,
+.upgrade-step-failed .upgrade-step-detail {
+  color: var(--danger);
+}
+.upgrade-step-skipped {
+  color: var(--text-tertiary);
+}
+
+/* ---------- The detail pane: what opening a task, a schedule, a
+   template or a suite fills the whole content area beside the sidebar
+   with (grain/task-94, Overlay's own `pane`). ---------- */
+/* The pane's paper is the viewport's full height, so this -- not the
+   document -- is what scrolls, the same split .main-column already
+   draws for a list pane. */
+.overlay-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.5rem 1.75rem;
+}
+
+/* The pane's own way out: a back button in the top-left corner, above
+   everything else the pane draws, the way a repo's page wears one
+   (.repo-page-header, grain/task-177). Sized to its content and outside
+   .overlay-pane below, so it stays put rather than scrolling away with
+   the body. */
+.overlay-pane-back {
+  flex: none;
+  padding: 0.9rem 1.75rem 0;
+}
+
+/* The fixed chrome a pane can pin above that scrolling body (Overlay's
+   own `header`): Settings' and System's title and tab strip, which
+   would otherwise scroll away the moment a tab's own content ran past
+   the bottom of a full-height pane (grain/task-115). Sized to its
+   content, so .overlay-pane above still takes the rest of the paper.
+   Nothing floats in the top-right corner any more, so the tab strip
+   runs the full width and both paddings are the pane's own. */
+.overlay-pane-header {
+  flex: none;
+  padding: 0.75rem 1.75rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Whichever of the two the back button sits directly above starts
+   closer to it than it would to the top of the paper: the gap is
+   already there in the button's own row. */
+.page-header-pane + .overlay-pane {
+  padding-top: 0.75rem;
+}
+.overlay-pane-header h2 {
+  margin: 0 0 0.5rem;
+}
+
+/* A form is a single column of fields however wide the pane is: full
+   width would stretch a one-word "Name" input across the screen. Both
+   caps here are left-aligned rather than centred, so what an item you
+   opened shows starts exactly where the list you opened it from did.
+   Settings' tab bodies wear it too (grain/task-115) -- each is a column
+   of configuration, whether or not the tab happens to be one <form>. */
+.pane-form {
+  max-width: 44rem;
+}
+
+/* Wider than a form -- two columns of a task use the room -- but still
+   capped: a line of prose running the width of a widescreen is no more
+   readable than the 900px dialog this replaced. */
+.detail-layout {
+  display: flex;
+  gap: 1.75rem;
+  align-items: flex-start;
+  max-width: 1200px;
+}
+.detail-main {
+  flex: 1;
+  min-width: 0;
+}
+/* Sticky so the state, the actions and the dependencies stay put while
+   a long timeline scrolls past them -- in a pane tall enough to scroll
+   a long way, the buttons would otherwise be a scroll back up. */
+.detail-side {
+  width: 260px;
+  flex: none;
+  position: sticky;
+  top: 0;
+}
+@media (max-width: 720px) {
+  .overlay-pane {
+    padding: 1.25rem 1rem;
+  }
+  .overlay-pane-back {
+    padding: 0.75rem 1rem 0;
+  }
+  .overlay-pane-header {
+    padding: 0.5rem 1rem 0;
+  }
+}
+/* The two columns stack once there is no room for two -- and the width
+   that decides that is the *pane's*, not the window's. The rail stands
+   beside the pane on everything that is not a phone, so a window is
+   232px wider than the pane in it (theme.js's SIDEBAR_WIDTH, repeated
+   here the way phone.js's own query is): an iPad Air in portrait is
+   820px of window and 588px of pane, which this rule used to read as
+   roomy and hand 260px of it to .detail-side and 243px -- less than the
+   side column beside it -- to the task itself. 952 is 720 + the rail,
+   so the condition is the one the padding above states, asked about the
+   box it actually governs.
+
+   width, not just flex-direction: .detail-layout aligns its items to
+   flex-start, which in a column means each one is as wide as its own
+   contents rather than as wide as the pane. A task carrying anything
+   that cannot wrap -- a code block in a description, a chat message
+   with one in it -- would otherwise stretch this column past the edge
+   of the screen and be clipped there, with nothing to scroll. */
+@media (max-width: 952px) {
+  .detail-layout {
+    flex-direction: column;
+  }
+  .detail-main {
+    width: 100%;
+  }
+  .detail-side {
+    width: 100%;
+    position: static;
+  }
+}
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+  flex-wrap: wrap;
+}
+/* A title is whatever its author typed, and one unbroken run in it -- a
+   long identifier, a URL -- was the heading's min-content width: the
+   flex item would not shrink below it, and on a phone the whole task
+   pane scrolled sideways to show it. */
+.detail-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The task's number, in the detail header, as a pill in its own state's
+   colour (grain/task-85) -- "12 Fix the thing" read as one sentence
+   starting with a stray number, and the bubble makes the number a label
+   on the title rather than the first word of it. --on-accent is the
+   foreground each theme already pairs with a saturated block of colour:
+   white on the light theme's mid-dark state colours, near-black on the
+   dark theme's brighter ones. */
+.task-id-bubble {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.1rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--text-tertiary);
+  color: var(--on-accent);
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  vertical-align: 0.08em;
+}
+.task-id-proposed {
+  background: var(--state-proposed);
+}
+.task-id-queued {
+  background: var(--state-queued);
+}
+.task-id-running {
+  background: var(--state-running);
+}
+.task-id-awaiting_reply {
+  background: var(--state-awaiting);
+}
+.task-id-failed {
+  background: var(--state-failed);
+}
+.task-id-completed {
+  background: var(--state-completed);
+}
+.task-id-closed {
+  background: var(--state-closed);
+}
+.freshness {
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+  margin-bottom: 1rem;
+}
+/* No white-space: pre-wrap any more -- a description is rendered as
+   markdown (Markdown.jsx), whose own remark-breaks keeps the hard line
+   breaks pre-wrap used to be here for, and leaving it on would also
+   preserve the leading indentation of a nested list or a fenced block
+   the renderer has already turned into real elements. */
+.description {
+  margin: 1rem 0;
+  background: var(--canvas);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  font-size: 0.9rem;
+}
+
+/* Everything Markdown.jsx can emit for a comment body or a description
+   (grain/task-93). These bodies are agent prose in a dense panel, not an
+   article: the spacing is tighter than a browser's own defaults, headings
+   stay close to body size (an agent's "## " should read as a heading, not
+   as a banner three times the size of the text around it), and the first
+   and last blocks lose their outer margin so a one-paragraph comment sits
+   exactly where the plain <div> it replaced did. */
+.markdown {
+  word-break: break-word;
+}
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+.markdown p {
+  margin: 0 0 0.6rem;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 0.9rem 0 0.4rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+}
+.markdown h1 {
+  font-size: 1.15em;
+}
+.markdown h2 {
+  font-size: 1.08em;
+}
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 1em;
+}
+.markdown ul,
+.markdown ol {
+  margin: 0 0 0.6rem;
+  padding-left: 1.4rem;
+}
+.markdown li {
+  margin: 0.15rem 0;
+}
+.markdown li > ul,
+.markdown li > ol {
+  margin-bottom: 0;
+}
+/* GFM task lists: the checkbox is the list marker, so the bullet beside
+   it is noise. */
+.markdown li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -1.1rem;
+}
+.markdown li > input[type="checkbox"] {
+  margin-right: 0.4rem;
+}
+.markdown a {
+  color: var(--accent);
+}
+.markdown code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.88em;
+  background: var(--surface-hover);
+  border-radius: 4px;
+  padding: 0.1em 0.3em;
+}
+/* A fenced block keeps its own alignment and scrolls sideways rather
+   than wrapping: a diff or a stack trace rewrapped is unreadable. The
+   <code> inside drops the inline chip styling it would otherwise
+   inherit, since the <pre> already carries the box. surface-hover, the
+   same tint an inline chip gets, rather than canvas: a description is
+   itself a canvas-coloured box, and a block that matched it would read
+   as a hairline border around nothing. */
+.markdown pre {
+  margin: 0 0 0.6rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.markdown pre code {
+  background: none;
+  border-radius: 0;
+  padding: 0;
+  font-size: 0.85em;
+}
+/* Mermaid diagrams and Before / After architecture comparisons rendered
+   from ```mermaid fences (MermaidDiagram.jsx). Framed on --surface rather
+   than --surface-hover so node fills and edge labels retain crisp
+   contrast inside a canvas-coloured task description box. */
+.mermaid-block {
+  margin: 0 0 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.mermaid-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--surface-hover);
+  border-bottom: 1px solid var(--border);
+}
+.mermaid-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: lowercase;
+}
+.mermaid-toolbar .MuiToggleButton-root {
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+.mermaid-canvas {
+  padding: 0.85rem;
+  overflow-x: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  background: var(--surface);
+}
+.mermaid-svg-wrap {
+  max-width: 100%;
+  display: flex;
+  justify-content: center;
+}
+.mermaid-svg-wrap svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.mermaid-loading {
+  padding: 1rem 0.85rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+.mermaid-fallback-note {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  background: var(--surface-hover);
+  border-bottom: 1px solid var(--border);
+}
+.mermaid-block pre.mermaid-source {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: var(--surface);
+}
+.mermaid-comparison-grid {
+  display: grid;
+  gap: 1px;
+  background: var(--border);
+}
+.mermaid-comparison-split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.mermaid-comparison-stacked {
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (max-width: 599.95px), (max-height: 480px) and (orientation: landscape) {
+  .mermaid-comparison-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.mermaid-pane {
+  min-width: 0;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+}
+.mermaid-pane-header {
+  padding: 0.35rem 0.65rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--canvas);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.mermaid-state-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.mermaid-state-before {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+}
+.mermaid-state-after {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.markdown blockquote {
+  margin: 0 0 0.6rem;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-tertiary);
+}
+.markdown hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.9rem 0;
+}
+.markdown img {
+  max-width: 100%;
+}
+/* GFM tables. display: block so a wide one scrolls inside the panel
+   instead of stretching it. */
+.markdown table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 0.6rem;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid var(--border);
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+}
+.markdown th {
+  background: var(--surface-hover);
+  font-weight: 600;
+}
+
+.detail-state {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+/* The running task's own status, under the state badge. It wraps here,
+   unlike the one-line .task-activity on a list row: this column has the
+   height to spare, and a status is worth reading in full where somebody
+   has already opened the task to find out what is happening. */
+.detail-activity {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: -0.6rem 0 1rem;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-style: italic;
+}
+/* The merge queue's own account of what this change is waiting for, on
+   its own line under the phrase it explains: the line above is a row of
+   short pieces -- whose voice this is, the phrase, how old it is -- and
+   this is a sentence, so it takes the whole width rather than joining
+   that row and pushing the age off the end of it. */
+.detail-activity-note {
+  flex-basis: 100%;
+  font-style: normal;
+}
+/* A usage-limit pause's line ends in its reason (alerts.js's
+   pausedUntil), which is the provider's or an operator's text: an id, a
+   URL or a path that has nowhere to break. The alerts panel's row wraps
+   one (AlertsButton.jsx); these are the same sentence in a task's pane and on Team
+   settings, and an unbroken reason there stretched the whole pane to
+   its width and made it scroll sideways on a tablet or a phone. */
+.detail-framework-paused,
+.framework-paused-hint,
+.connection-paused {
+  overflow-wrap: anywhere;
+}
+/* What a state that has stood too long has to say for itself, under the
+   badge it corrects (ui.Task.Stall). It sits where .detail-activity
+   sits and reads the same way -- a sentence in the secondary colour,
+   not an alert: it is a diagnosis off the record's own timestamps
+   rather than a failure grain has recorded, and the chip beside the
+   badge is what catches the eye. */
+.detail-stall {
+  margin: -0.6rem 0 1rem;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.declared {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1.1rem;
+}
+.declared-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.82rem;
+}
+.declared-key {
+  color: var(--text-tertiary);
+}
+/* pre-wrap because one of these values is prose rather than a word: a
+   task's own prompt extension override (grain/task-114) can be several
+   lines, and collapsing them would run its sentences together. Every
+   other value here is a single token, which pre-wrap leaves exactly as
+   it was. */
+.declared-value {
+  color: var(--text-secondary);
+  text-align: right;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* .hint is styled above for the forms it started in, and the detail
+   pane's side column uses the same class for the same thing -- "No
+   dependencies.", the "None" an empty capability picker shows, and the
+   note under the read-only repos picker about what an edit made mid-run
+   does and does not reach. Without this they inherit body type in a
+   260px column, which reads as prose rather than as an aside. */
+.detail-side .hint {
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+  font-weight: normal;
+}
+.detail-side p.hint {
+  margin: 0.4rem 0 0;
+}
+
+/* The token that reopens a task's suspended agent conversation
+   (DetailOverlay's SuspendedSession). It is an opaque id somebody
+   copies into `claude --resume`, so it is set in the monospace face
+   every other id on this page is, and allowed to wrap rather than
+   overflow a 260px column -- a session id is long enough to need the
+   whole width and then some, and one clipped at the edge is one that
+   cannot be read off the screen. */
+.detail-side .suspended-session-token {
+  display: block;
+  margin-top: 0.4rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin: 0 0 1.1rem;
+}
+.detail-side .actions {
+  flex-direction: column;
+}
+.detail-side .actions button {
+  width: 100%;
+}
+
+/* Timeline merges every state transition, attempt result and comment
+   into one time-ordered feed (bwsalmon/agents#453). Each entry is a dot
+   (reusing .badge's own colours) in a fixed-width marker column, joined
+   to the next by a connecting line drawn on the marker itself, with a
+   timestamp and its content beside it. */
+.timeline {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  margin-top: 1rem;
+}
+.timeline h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  margin: 0 0 0.75rem;
+}
+.timeline-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+}
+.timeline-item {
+  display: flex;
+  gap: 0.75rem;
+  padding-bottom: 1.1rem;
+}
+.timeline-item:last-child {
+  padding-bottom: 0;
+}
+.timeline-marker {
+  position: relative;
+  width: 11px;
+  flex: none;
+  display: flex;
+  justify-content: center;
+  padding-top: 0.15rem;
+}
+/* Without this, .badge -- a flex item in .timeline-marker -- stretches
+   to the marker's full (content-driven) height and centers its dot
+   inside that stretched box, so the dot drifts away from the top-aligned
+   timestamp and the fixed-offset connecting line below cuts through it
+   instead of starting just past it. */
+.timeline-marker .badge {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  align-self: flex-start;
+}
+.timeline-marker::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 15px;
+  bottom: -1.1rem;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--border);
+}
+/* A running entry with an agent at work shows the 20px grain mark
+   (.badge-mark) instead of the 11px dot. The marker column stays 11px
+   wide -- the mark overflows it evenly on both sides, so it stays
+   centred on the line without widening every row -- and the mark is
+   pulled up by half the difference so its centre sits where the dot's
+   would, level with the timestamp. The line then starts just past the
+   mark's bottom edge rather than inside it (z-index above keeps it
+   under the mark regardless). */
+.timeline-marker-mark .badge {
+  margin-top: -4.5px;
+}
+.timeline-marker-mark::after {
+  top: 20px;
+}
+.timeline-item:last-child .timeline-marker::after {
+  display: none;
+}
+/* Read newest first (TimelineOrderContext, grain/task-203), the reply
+   box comes before the list rather than after it, so the two swap their
+   own margins: the box sits under the heading and the feed runs to the
+   bottom of the pane with nothing trailing it. The connecting line needs
+   nothing here -- it is drawn per item and stopped on :last-child, both
+   of which follow whatever order the list is rendered in. */
+.timeline-newest-first .comment-form {
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+.timeline-newest-first .timeline-list {
+  margin-bottom: 0;
+}
+/* An attempt's own row opens AttemptTranscriptOverlay on click or on
+   Enter/Space while focused (bwsalmon/agents#446) -- cursor and a subtle
+   hover background are this row's only visual difference from a plain
+   (non-interactive) transition or comment entry; :focus-visible (above)
+   already covers the focus ring. */
+.timeline-item-attempt {
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 0 -0.4rem;
+  padding-left: 0.4rem;
+  padding-right: 0.4rem;
+}
+.timeline-item-attempt:hover {
+  background: var(--canvas);
+}
+/* The attempt's title, as the button a keyboard opens its transcript by
+   (DetailOverlay.jsx): it reads as the title it always was. */
+.timeline-attempt-open {
+  all: unset;
+  cursor: pointer;
+}
+.timeline-attempt-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.badge-comment::before {
+  background: var(--text-placeholder);
+}
+/* Timeline's own pull request events (bwsalmon/agents#493) -- GitHub's
+   own colours for the three ("PR opened" reuses state-completed's green,
+   the same "something new and live" green an open PR gets on github.com;
+   "PR merged" gets pr-merged's deeper green; "PR closed unmerged" reuses
+   state-failed's red, github.com's own colour for a closed PR). */
+.badge-pr_opened::before {
+  background: var(--state-completed);
+}
+.badge-pr_merged::before {
+  background: var(--pr-merged);
+}
+.badge-pr_closed::before {
+  background: var(--state-failed);
+}
+.timeline-body {
+  flex: 1;
+  min-width: 0;
+}
+.timeline-when {
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  margin-bottom: 0.15rem;
+}
+.timeline-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+.timeline-meta {
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+}
+/* The model an attempt ran on, on its meta line: a model id is one
+   word to the reader, so a narrow line wraps before it, not inside it
+   or inside the timestamp ahead of it. */
+.timeline-attempt-ran-on {
+  white-space: nowrap;
+}
+/* The phrase grain stopped on while setting a failed attempt up
+   (DetailOverlay.jsx's setupBreadcrumb). Italic and quiet like the live
+   status it is the past tense of, with the same upright "grain" mark
+   beside it saying whose sentence it is. */
+.timeline-setup-note {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+  font-style: italic;
+  margin-top: 0.15rem;
+  word-break: break-word;
+}
+.timeline-detail {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin-top: 0.3rem;
+  word-break: break-word;
+}
+.timeline-comment-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.timeline-comment-body {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-top: 0.15rem;
+  word-break: break-word;
+}
+.comment-form,
+.pending-question-form {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.85rem;
+  align-items: flex-end;
+}
+.comment-form textarea,
+.pending-question-form textarea {
+  flex: 1;
+}
+
+.pending-question {
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+}
+.pending-question-header {
+  font-size: 0.9rem;
+  margin-bottom: 0.4rem;
+}
+.pending-question-body {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+/* ---------- Phone (src/phone.js). ----------
+
+   App.jsx publishes phone.js's answer as data-phone on <html>, the way
+   AppThemeProvider publishes the resolved light/dark mode, so this is
+   the same question the layout asks in JS rather than a second media
+   query free to drift from it. It is an attribute rather than a class on
+   the shell for a second reason: the overlay panes are rendered into a
+   portal outside .app-shell, and they need these rules too.
+
+   Nothing here is a phone-only *feature*. It is the same views, given
+   the room a 390px screen has: the 1.75rem gutters every page draws come
+   in to 1rem, a task row wraps into two lines instead of truncating
+   everything after its title, a board column is a screen wide instead of
+   a third of one, and the two-column task detail stacks. A tablet
+   matches none of this and is untouched. */
+
+/* The body is "rail, then page" beside each other everywhere else; on a
+   phone the rail is PhoneNav's top bar plus its drawer, so it is "bar,
+   then page" stacked. */
+:root[data-phone="true"] .app-body {
+  flex-direction: column;
+}
+
+/* Both page roots take what is left of that height and scroll their own
+   overflow, which in a *column* needs an explicit floor: without it a
+   long list grows its flex item instead of scrolling inside it, and the
+   bar above scrolls off with it. */
+:root[data-phone="true"] main,
+:root[data-phone="true"] .task-view,
+:root[data-phone="true"] .main-column {
+  min-height: 0;
+}
+
+/* The gutter, everywhere a page draws one. 1.75rem of it on each side of
+   a 390px screen is a fifth of the window spent on margin. */
+:root[data-phone="true"] .content-header,
+:root[data-phone="true"] .task-list-toolbar,
+:root[data-phone="true"] .narrowing-chips,
+:root[data-phone="true"] .narrowing-panel,
+:root[data-phone="true"] .select-all,
+:root[data-phone="true"] .task-row,
+:root[data-phone="true"] .reorder-slot-gutter,
+:root[data-phone="true"] .reorder-bar,
+:root[data-phone="true"] .board-columns,
+:root[data-phone="true"] .repo-list-row,
+:root[data-phone="true"] .repo-page-header,
+:root[data-phone="true"] .inbox-group-header,
+:root[data-phone="true"] .inbox-gate,
+:root[data-phone="true"] .inbox-note,
+:root[data-phone="true"] .inbox-responder,
+:root[data-phone="true"] .template-row,
+:root[data-phone="true"] .process-kinds,
+:root[data-phone="true"] .process-row,
+:root[data-phone="true"] .empty,
+:root[data-phone="true"] .standalone-page,
+:root[data-phone="true"] .overlay-pane,
+:root[data-phone="true"] .overlay-pane-back,
+:root[data-phone="true"] .overlay-pane-header {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+:root[data-phone="true"] .standalone-page {
+  --standalone-page-gutter: 1rem;
+}
+:root[data-phone="true"] .board-hidden-note {
+  margin-left: 1rem;
+  margin-right: 1rem;
+}
+
+/* A task row is one line of "badge, number, title, status, chips" that
+   truncates the title and drops nothing, which needs a width a phone
+   does not have -- the chips alone (repo, base, capabilities) can be
+   wider than the screen. So it wraps: the title keeps the first line and
+   is allowed two of them, and the status and the chips take rows of
+   their own beneath it. Taller rows, but a row you can read.
+
+   The touch target grows with it: 0.6rem of padding on a 0.9rem line is
+   under 40px, which is below what a thumb can reliably hit. */
+:root[data-phone="true"] .task-row {
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+:root[data-phone="true"] .task-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  flex: 1 1 8rem;
+  /* The floor --list-title-min holds the title to on a desktop row is
+     the desktop row's own answer to chips crowding it out. Here nothing
+     crowds it: the chips have a line of their own below, and the title
+     has the width of the phone. What a floor could do is push the row
+     wider than the screen, which is the one thing this whole block
+     exists to prevent (e2e/phone.spec.js measures it), so it goes. */
+  min-width: 0;
+}
+:root[data-phone="true"] .task-activity,
+:root[data-phone="true"] .chips {
+  flex: 1 1 100%;
+}
+/* The state badge leads the row everywhere else -- badge, number, title
+   -- which on a phone spends the first 20px of a ~360px line on an icon
+   before the title has started, and puts the row's least specific fact
+   where the eye lands first. Here it goes to the other end instead: the
+   number and the title start at the gutter, and the state is read at
+   the end of the line, on the side a thumb is already on.
+   `order` is what moves it, so the markup stays one shape at every width
+   (TaskRow renders no phone variant of itself). But a wrapping flex
+   container sorts its items by order *across* lines as well as along
+   one, so the activity note and the chip strip -- which take lines of
+   their own under the title -- need orders of their own to stay under
+   it, rather than being sorted ahead of a badge that now comes last. */
+:root[data-phone="true"] .task-row .badge-icon {
+  order: 1;
+}
+:root[data-phone="true"] .task-row .task-activity,
+:root[data-phone="true"] .task-row .task-merged-at {
+  order: 2;
+}
+:root[data-phone="true"] .task-row .chips {
+  order: 3;
+}
+/* And the two chips a row carries outside that strip -- the completion
+   phase, and "Blocked" -- are last in the markup and stay last here.
+   Without an order of their own the badge's would sort them up onto the
+   title's line, taking width from the title that on a phone they have
+   never taken. */
+:root[data-phone="true"] .task-row > .MuiChip-root {
+  order: 4;
+}
+:root[data-phone="true"] .chips {
+  flex-wrap: wrap;
+  row-gap: 0.35rem;
+}
+/* A phone task row wraps, so its chips are not competing with the title
+   for a line: they have rows of their own beneath it and the width of
+   the screen to use, and there is nothing to be gained by hiding any of
+   them. So the one-line clip a desktop row applies (.task-row .chips)
+   is lifted here, and only here -- a repo row does not wrap, so on a
+   phone as on a desktop its count chips are what gives way to the name
+   beside them. */
+:root[data-phone="true"] .task-row .chips {
+  max-height: none;
+}
+/* And a .template-row does not wrap either: a template, a board, a
+   suite and a suite run each stay one line of "name, chips, hint" at
+   every width. So the full-width line the rule above hands a task row's
+   strip is a line this one never gets -- it would be a flex item asking
+   for the whole row from inside a row that has no second one, and the
+   name and hint beside it would pay for it. It keeps the desktop's own
+   `flex: 0 1 auto` here, and the clip it comes with (.template-row
+   .chips): the chips give way to the name, and what no longer fits is
+   dropped rather than squeezed. */
+:root[data-phone="true"] .template-row .chips {
+  flex: 0 1 auto;
+}
+/* A session row's hint ("Director standing session", "Standing
+   interactive session") is the one part of it that says nothing the
+   row does not say already -- the glyph before the name tells the
+   director from the rest -- and on a phone it is also the one part
+   holding a floor (--list-title-min, 9rem of a 358px row). With the
+   bin at the row's end (grain/task-15) that floor came out of the
+   status chip: "Starting" on the Director's row was cut to "Starti…"
+   at 390px, and the chip is the question somebody coming back to this
+   list is asking. So on a phone the hint goes, and the name and the
+   chip have the row. A desktop row keeps it: there it has the width. */
+:root[data-phone="true"] .session-row .template-title {
+  display: none;
+}
+/* A process row under 900px still gives the kind chip a column of its
+   own beside the name, which on a phone leaves the name -- and a
+   template's task title and repo under it -- about 110px, broken a
+   word or two to the line. So the chip moves up to a line of its own
+   with the row's action (Use…, Run…) at the end of it, and the name and
+   everything under it take the rest of the row: the whole width but
+   the drag handle's gutter. */
+:root[data-phone="true"] .process-row {
+  grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+  gap: 0.35rem 0.75rem;
+}
+:root[data-phone="true"] .process-kind {
+  grid-column: 2 / 3;
+  grid-row: 1;
+  align-self: center;
+}
+:root[data-phone="true"] .process-actions {
+  grid-column: 3 / 4;
+  grid-row: 1;
+  align-self: center;
+}
+:root[data-phone="true"] .process-name,
+:root[data-phone="true"] .process-repo,
+:root[data-phone="true"] .process-last,
+:root[data-phone="true"] .process-next,
+:root[data-phone="true"] .process-enabled {
+  grid-column: 2 / -1;
+}
+/* An inbox row is a task row plus its own answers, side by side, which
+   is two things competing for a width that barely holds one. So the
+   answers take a row of their own under the task, right-aligned so the
+   primary one (Approve, Submit, Retry) sits under the thumb rather than
+   across the screen from it. */
+:root[data-phone="true"] .inbox-line {
+  flex-wrap: wrap;
+}
+:root[data-phone="true"] .inbox-actions {
+  flex: 1 1 100%;
+  justify-content: flex-end;
+  padding: 0 1rem 0.75rem;
+}
+/* And the group's own answers get a line of their own for the same
+   reason: "Approve all (12)" beside "Defer all (12)" and the heading is
+   more than a phone's width holds. */
+:root[data-phone="true"] .inbox-group-actions {
+  flex: 1 1 100%;
+  margin-left: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* The handle used to be hidden here: reordering was a drag, a drag was
+   the HTML5 drag events, and a phone browser fires none of them, so the
+   handle was an affordance that did nothing when pressed. It does
+   something now -- one tap picks the row up and the list draws a "Move
+   here" slot at every position it could go to (ReorderPickup.jsx,
+   grain/task-23) -- so it stays, and so does the empty column held open
+   beside the rows that never had one. */
+/* A stacked task still has to read as nested, but 3.25rem of indent on
+   a phone leaves its title about a third of the screen. */
+:root[data-phone="true"] .task-sublist .task-row {
+  padding-left: 1.9rem;
+}
+
+/* Metrics reports its latency percentiles and its tool use as tables of
+   six and seven columns, and MUI's own cell padding is most of a phone
+   screen before a single figure is printed -- a table that will not fit
+   takes the whole pane sideways with it when it is panned. Tighter
+   cells, and the columns fit. */
+:root[data-phone="true"] .MuiTableCell-sizeSmall {
+  padding: 6px;
+  font-size: 0.78rem;
+}
+
+/* The rail's entries are 38px tall, which is a comfortable click and a
+   miss with a thumb; in the drawer they get the ~44px a touch target
+   wants. The rail beside a page keeps its own density -- this is the
+   drawer's paper, so only the phone's copy of it is affected. */
+:root[data-phone="true"] .MuiDrawer-paper .MuiListItemButton-root,
+:root[data-phone="true"] .MuiDrawer-paper .MuiButton-root {
+  min-height: 44px;
+}
+
+/* A board column is a screen wide, and the strip snaps: the board is
+   the one view that scrolls sideways, and on a phone that turns into
+   swiping between whole columns rather than dragging a strip of
+   thirds about. */
+:root[data-phone="true"] .board-columns {
+  scroll-snap-type: x mandatory;
+  gap: 0.75rem;
+}
+:root[data-phone="true"] .board-column {
+  flex: 0 0 calc(100% - 2rem);
+  scroll-snap-align: center;
+}
+
+/* The task detail's two columns stack, for the reason the narrow-window
+   rule above (max-width: 720px) stacks them -- repeated under this
+   condition because a phone held sideways is wider than 720px and has
+   even less height to give a sticky side column. */
+:root[data-phone="true"] .detail-layout {
+  flex-direction: column;
+  gap: 1rem;
+}
+:root[data-phone="true"] .detail-main {
+  width: 100%;
+}
+:root[data-phone="true"] .detail-side {
+  width: 100%;
+  position: static;
+}
+
+/* A textarea and a Comment button side by side leave the textarea about
+   half the screen; stacked, it gets the width and the button stays a
+   full-width target under it. */
+:root[data-phone="true"] .comment-form,
+:root[data-phone="true"] .pending-question-form {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Nothing on a phone can be reached by hovering, and a row that keeps
+   its hover tint after a tap reads as selected long after the tap is
+   over -- the pane that tap opened is already covering the row that
+   appears to still be highlighted. */
+@media (hover: none) {
+  .task-row:hover,
+  .repo-list-row:hover,
+  .template-row:hover {
+    background: none;
+  }
+  /* A card, unlike those rows, has a ground of its own to go back to. */
+  .board-card:hover {
+    background: var(--surface);
+  }
+}
+
+/* An interactive task's own chat window (TaskChat.jsx, grain/task-414).
+   The bubbles, their layout and the composer are
+   @chatscope/chat-ui-kit-react's; what is here is the box it is given
+   and the handful of its own variables that carry this shell's theme
+   into it, so a chat in dark mode is dark and a message in it is the
+   same ink as every other body of prose in the pane.
+
+   A fixed height rather than one that grows with the conversation: the
+   library scrolls its own message list and pins it to the newest message
+   unless the reader has scrolled up, and a container that grew instead
+   would hand it an ever-taller viewport it never scrolls. 60vh is enough
+   for a working exchange without pushing the task's own properties off
+   the screen behind it. */
+.task-chat {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  margin-top: 1rem;
+}
+.task-chat h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+.task-chat-waiting {
+  color: var(--state-awaiting);
+}
+.task-chat-window {
+  height: min(60vh, 34rem);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+/* The chat kit's whole palette, mapped onto this theme's tokens here
+   and nowhere else.
+
+   @chatscope/chat-ui-kit-styles is a vendored stylesheet imported whole
+   and compiled with its colours inlined -- a pale blue, a mid blue, a
+   near-white, a blue-grey border and Material's black-alpha text ramp,
+   painting every part of the widget. Correcting that a rule at a time
+   is what produced two identical reports months apart: the composer was
+   "light blue and the only ui element of that color" (task 23), then
+   the message list's scroll bar was (task 267), and a header, a
+   separator or a focus ring was next. So the sheet's colours are
+   rewritten to these properties as Vite loads it
+   (src/chatscopeTheme.js, and vite.config.js's plugin), and the whole
+   widget -- including every part of it nobody has looked at yet --
+   takes its colour from this block.
+
+   One block rather than a light one and a dark one: every value below
+   is a token that already differs between the two themes, so the widget
+   follows the mode with no second set of values to keep in step. */
+:root {
+  --cs-color-text: var(--text);
+  --cs-color-text-medium: var(--text-secondary);
+  --cs-color-text-light: var(--text-tertiary);
+  --cs-color-text-disabled: var(--text-placeholder);
+
+  --cs-bg: var(--surface);
+  --cs-border-color: var(--border);
+  --cs-shadow-color: var(--border-strong);
+
+  /* The kit's primary in three steps: the fill behind the composer and
+     an incoming bubble, the near-white ground behind a conversation
+     header, and the mid tone it treats as its accent (buttons, the
+     typing indicator, an outgoing bubble). The first two are this
+     shell's quiet surfaces; the accent is the brand's own grain
+     colour. */
+  --cs-color-primary: var(--surface-hover);
+  --cs-color-primary-light: var(--surface-hover);
+  --cs-color-primary-dark: var(--accent);
+  --cs-color-primary-faded: color-mix(
+    in srgb,
+    var(--surface-hover) 38%,
+    transparent
+  );
+  --cs-color-primary-dark-faded: color-mix(
+    in srgb,
+    var(--accent) 60%,
+    transparent
+  );
+
+  --cs-bg-hover: var(--surface-hover);
+  --cs-bg-active: var(--surface-active);
+  --cs-color-selected: var(--accent-hover);
+
+  --cs-color-danger: var(--danger);
+  --cs-unread-dot: var(--accent);
+  --cs-unread-dot-light: var(--accent-hover);
+}
+
+/* Nothing below here is palette repair any more -- the block above is
+   that. What is left is this pane's own layout inside the widget, and
+   the few places it wants a different *role* for a colour than the kit
+   chose for it: each of those is a design decision that would outlive
+   the library being swapped out, rather than a correction of one
+   element's hue. */
+
+/* A bubble stays inside the window, whatever is in it. The library lays
+   a message out as nested flex items, and a flex item's default
+   `min-width: auto` refuses to shrink below its own contents -- so one
+   message carrying something that cannot wrap (a code block, which is
+   most of what an agent sends) sized the bubble to its widest line, and
+   the bubble in turn stretched .detail-main and ran off the side of a
+   390px screen, where .task-chat-window's own `overflow: hidden` clipped
+   it with nothing left to scroll. With this the bubble is the width of
+   the conversation and the block inside it scrolls on its own, which is
+   what .markdown pre has always asked for and could not get here. */
+.task-chat-window .cs-message__content-wrapper,
+.task-chat-window .cs-message__content {
+  min-width: 0;
+}
+/* An outgoing bubble is tinted rather than filled. The kit fills it
+   with its accent, which here is the brand's bronze -- a button colour,
+   which would want its own ink on it and would make the reader's own
+   messages the loudest thing in the pane. The accent's subtle tint is
+   what this shell already uses for "you did this" elsewhere; an
+   incoming bubble takes the mapped surface, which is the same quiet
+   fill the composer has. */
+.task-chat-window
+  .cs-message-list
+  .cs-message.cs-message--outgoing
+  .cs-message__content {
+  background: var(--accent-subtle);
+}
+/* A separator and the typing indicator are the quietest things in a
+   conversation -- a date, a rule, "the agent is working" -- and the kit
+   draws all three in its accent. The accent is reserved here for what
+   can be acted on, so these read as the tertiary text and border they
+   are. */
+.task-chat-window .cs-message-list .cs-message-separator {
+  color: var(--text-tertiary);
+}
+.task-chat-window .cs-message-list .cs-message-separator::before,
+.task-chat-window .cs-message-list .cs-message-separator::after {
+  background-color: var(--border);
+}
+.task-chat-window .cs-message-list .cs-typing-indicator__dot {
+  background-color: var(--text-tertiary);
+}
+.task-chat-window .cs-message-list .cs-typing-indicator__text {
+  color: var(--text-tertiary);
+}
+/* The message list's own scroll bar (perfect-scrollbar, which the kit
+   bundles and styles from the same palette -- its thumb was the "blue
+   scroll bar, the only element of that colour" of task 267). Mapped, it
+   would be a surface, and a scroll bar is not a surface: it is a
+   handle, drawn like every other strong edge in this pane and darkening
+   under the pointer. */
+.task-chat-window .ps__thumb-x,
+.task-chat-window .ps__thumb-y {
+  background-color: var(--border-strong);
+}
+.task-chat-window .ps__rail-x:hover > .ps__thumb-x,
+.task-chat-window .ps__rail-y:hover > .ps__thumb-y,
+.task-chat-window .ps__rail-x:focus > .ps__thumb-x,
+.task-chat-window .ps__rail-y:focus > .ps__thumb-y,
+.task-chat-window .ps__rail-x.ps--clicking .ps__thumb-x,
+.task-chat-window .ps__rail-y.ps--clicking .ps__thumb-y {
+  background-color: var(--text-tertiary);
+}
+/* The box you type into is 20px of contenteditable inside a 50px row --
+   the library's own padding is the container's, and a tap that lands on
+   it lands on nothing. On a touchscreen that is the one control in this
+   pane somebody has to hit before they can say anything at all, so it
+   gets the same floor every other control here has. Left at 20px where
+   there is a mouse: a caret is aimed with a pointer, and the row is the
+   height the library drew it. */
+@media (pointer: coarse) {
+  .task-chat-window .cs-message-input__content-editor {
+    min-height: 40px;
+  }
+}
+/* The composer's scroll wrapper only gets the class carrying its type
+   size (.cs-message-input__content-editor-container, 0.94em at 1.35em)
+   once it has mounted -- after the message list above it has already
+   taken its own height. For that first frame the row is about 4px
+   taller, and when it shrinks the list's resize handler scrolls up by
+   the difference. The kit's "pinned to the newest message" check is
+   exact to a pixel, so the conversation then never followed a reply or
+   a sent message again. Giving the wrapper the same metrics from the
+   start leaves the row one height throughout. A coarse pointer's 40px
+   floor above happened to hide it. */
+.task-chat-window .cs-message-input__content-editor-wrapper > div {
+  font-size: 0.94em;
+  line-height: 1.35em;
+}
+/* A message body is Markdown, and its first and last block would
+   otherwise open a gap inside the bubble that the bubble's own padding
+   has already left. */
+.task-chat-body > :first-child {
+  margin-top: 0;
+}
+.task-chat-body > :last-child {
+  margin-bottom: 0;
+}
+.task-chat-message-content {
+  display: flex;
+  flex-direction: column;
+}
+.task-chat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin-top: 0.25rem;
+}
+.copy-button {
+  padding: 2px;
+  opacity: 0.7;
+  transition: opacity 0.15s ease-in-out;
+}
+.copy-button:hover {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .copy-button.copy-button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0.6rem;
+  }
+}
+.task-chat-compose {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+/* The timeline, folded up under the chat: still the whole history, and
+   still one click away, without competing with the conversation for the
+   top of the pane. */
+.task-chat-history > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  margin-top: 1rem;
+}
+
+/* A report is already a vertical stack, so its anonymous section rows can
+   use the ordinary list-shaped move slots without an arranging mode. */
+.report-sections {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.report-section-grip {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.report-section-dragging,
+.report-section-picked {
+  opacity: 0.55;
+}
+
+.report-section-drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.report-section-drop-end {
+  min-height: 2rem;
+}
+
+/* ErrorBoundary.jsx's fallback: where a page, or the whole app, would
+   have been had it not thrown while drawing (grain/task-1435). */
+.render-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 2rem;
+  color: var(--text);
+  min-width: 0;
+}
+
+.render-error-app {
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.render-error h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.render-error p {
+  margin: 0;
+  color: var(--text-muted);
+  max-width: 560px;
+  line-height: 1.5;
+}
+
+.render-error-message {
+  margin: 0;
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8125rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  color: var(--text);
+}
+
+.render-error-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.config-unavailable .MuiButton-root {
+  margin-top: 1rem;
+}
+
+/* A tree of work (TaskTree.jsx): a task's own page, and a Tree board. */
+.work-tree,
+.provenance-disclosure {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.provenance-toggle {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline;
+  text-align: left;
+}
+@media (pointer: coarse) {
+  .provenance-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-height: 40px;
+  }
+}
+.provenance-toggle:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.provenance-toggle-caret {
+  display: inline-block;
+  font-size: 0.75em;
+}
+.provenance-panel {
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+.provenance-links + .task-tree {
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+}
+.task-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+}
+.task-tree .task-tree {
+  padding-left: 1.2rem;
+  border-left: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  margin-left: 0.4rem;
+  overflow-x: visible;
+}
+.task-tree-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+  font-size: 0.88rem;
+}
+.task-tree-id {
+  flex: none;
+  white-space: nowrap;
+}
+.task-tree-current {
+  font-weight: 600;
+}
+.task-tree-done .task-tree-title {
+  color: var(--text-tertiary);
+}
+.task-tree-title {
+  flex: 1 1 auto;
+  min-width: 6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-tree-status,
+.task-tree-pr {
+  flex: none;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+.task-tree-board {
+  padding: 1rem;
+}
+
+/* A setting the Settings filter jumped to, outlined for two seconds
+   (docs/design/settings-panel.md §3.3). */
+.setting-highlight {
+  outline: 2px solid var(--mui-palette-primary-main, #1976d2);
+  outline-offset: 4px;
+  border-radius: 4px;
+  transition: outline-color 0.3s;
+}
+
+/* ---------- A question shown by its summary (QuestionDisclosure). ----------
+
+   The inbox lists every parked question by its one-line summary alone
+   (Comment.Summary), with the whole question -- markdown and
+   attachments -- one click away in place. The toggle is the full width
+   of the row so the summary itself is what is clicked; the summary is
+   cut with an ellipsis rather than wrapped, so every row stays one line. */
+.question-disclosure-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+.question-disclosure-toggle:disabled {
+  cursor: default;
+}
+.question-disclosure-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.question-disclosure-chevron {
+  flex: none;
+  color: var(--text-secondary);
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+.question-disclosure-toggle[aria-expanded="true"] .question-disclosure-chevron {
+  transform: none;
+}
+.question-disclosure-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.question-disclosure-hint {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+}
+.question-disclosure-body {
+  margin-top: 0.5rem;
+}
+/* The same summary at the head of the question on the task's own pane
+   and in its conversation: the bold first line, the full text below. */
+.question-summary-line {
+  margin: 0 0 0.35rem;
+  font-size: 0.92rem;
+  word-break: break-word;
+}
+/* A thumb's worth of target on a phone, as every other pressable there
+   (e2e/phone.spec.js). */
+:root[data-phone="true"] .question-disclosure-toggle {
+  min-height: 44px;
+}

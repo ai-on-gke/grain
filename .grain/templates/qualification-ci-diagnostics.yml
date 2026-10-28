@@ -1,0 +1,58 @@
+name: Release qualification - Quarantine & CI diagnostics MCP tools
+title: Validate quarantine and CI diagnostic MCP tool invocations
+base: main
+auto-merge: true
+# The scratch branch this template's body tells its runs to create from
+# main and delete when done (qualification/<this task id>). Create and
+# delete only: no force, so an existing qualification branch can be
+# fast-forwarded but never rewritten, and main itself stays out of reach.
+push:
+  - ref: refs/heads/qualification/*
+    delete: true
+body: |
+  Validate the live execution and interactive capabilities of CI diagnostic tools
+  and quarantine mechanisms (`quarantine_test`, `get_ci_log`, `retrigger_ci`, and
+  `query_test_history`) within an active agent session against `main`.
+
+  Grain releases from trunk (`docs/release-candidate-management.md`): `candidate`
+  is a pointer the release train force-moves, not a branch CI runs pull requests
+  on, so read history on `main`. If you need a deliberately flaky or failing test
+  to quarantine, put it on a scratch branch
+  (`git push origin origin/main:refs/heads/qualification/<this task id>`, then
+  `propose_task` with `branch: qualification/<this task id>`), never on `main` or
+  this task's own branch, whose pull request merges into `main`. Delete the
+  scratch branch when you are done
+  (`git push origin :refs/heads/qualification/<this task id>`).
+
+  ## 1. CI Failure Inspection with Byte Ranges
+
+  - Identify failing or flaky CI steps in active or recent runs using `list_ci_runs`.
+  - Exercise `get_ci_log` with specified `offset`, `size`, and `tail` parameters:
+    - Validate incremental log streaming from running or completed CI steps.
+    - Confirm accurate byte-level positioning and pagination across large log outputs.
+
+  ## 2. Cross-Branch Test History Analysis
+
+  - Execute `query_test_history` for targeted test identifiers across branches:
+    - Assess historical pass/fail rates, durations, and failure patterns on `main`
+      and on pull request branches.
+    - Verify that known flakes and persistent regressions are accurately differentiated.
+
+  ## 3. Test Quarantine Lifecycle
+
+  - Execute `quarantine_test` on an identified flaky test case:
+    - Verify that quarantine state is recorded in deployment tables.
+    - Verify that subsequent CI runs execute the quarantined test in non-blocking mode
+      (reporting status without failing the overall CI build gate).
+    - Validate unquarantine workflows once a fix or stabilization is proved.
+
+  ## 4. Targeted CI Retriggering
+
+  - Invoke `retrigger_ci` / `run_ci_job` for single targeted jobs (e.g. `go`, `lint`, `ui`):
+    - Verify that targeted jobs run promptly without invoking redundant unaffected workflow jobs.
+    - Confirm fast feedback loop and immediate pass/fail verdict reporting.
+
+  ## 5. Summary & Diagnostic Audit
+
+  - Record all executed tool calls, responses, quarantine transitions, and test
+    history queries in the task completion report.

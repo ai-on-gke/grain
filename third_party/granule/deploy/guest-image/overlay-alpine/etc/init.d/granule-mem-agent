@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+# granule-runlevel: default
+
+description="Signal host-side granule listener when this guest is under memory pressure"
+command="/usr/local/bin/granule-mem-agent"
+command_background="yes"
+# Runs as root, deliberately: the token it signs its signals with is in
+# /run/granule-mem-agent/token, which granule writes over vsock and only
+# root can read -- that is what keeps every other process in this guest
+# from signalling as it.
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+	after granule-control-net
+}
+
+start_pre() {
+	# Written by granule-control-net when this guest has a control link,
+	# naming the host address to signal. Absent on a guest booted
+	# without one, which leaves the agent's own default (this guest's
+	# default route's gateway) -- reaching the container network rather
+	# than the host side of this VM, so nothing answers.
+	if [ -f /run/granule-control-net.env ]; then
+		. /run/granule-control-net.env
+		export GRANULE_MEM_AGENT_HOST
+	fi
+}

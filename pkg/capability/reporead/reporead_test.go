@@ -1,0 +1,71 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package reporead_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/capability/reporead"
+	"github.com/ai-on-gke/grain/pkg/model"
+)
+
+func TestRepoReadProviderSpec(t *testing.T) {
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	p := reporead.New(repo)
+	spec := p.Spec()
+
+	if spec.Name != "repo-read:acme/widgets" {
+		t.Errorf("Spec.Name = %q, want repo-read:acme/widgets", spec.Name)
+	}
+	if !spec.CIOnly {
+		t.Error("Spec.CIOnly must be true")
+	}
+	if !spec.SupportsCI() {
+		t.Error("Spec.SupportsCI() must be true")
+	}
+	if spec.SupportsTask() {
+		t.Error("Spec.SupportsTask() must be false")
+	}
+	if p.Repo() != repo {
+		t.Errorf("Repo() = %v, want %v", p.Repo(), repo)
+	}
+}
+
+func TestRepoReadDynamicProvider(t *testing.T) {
+	p, ok := reporead.DynamicProvider("repo-read:acme/tools")
+	if !ok {
+		t.Fatal("DynamicProvider(repo-read:acme/tools) returned false")
+	}
+	if p.Spec().Name != "repo-read:acme/tools" {
+		t.Errorf("Spec.Name = %q, want repo-read:acme/tools", p.Spec().Name)
+	}
+
+	if _, ok := reporead.DynamicProvider("repo-read:invalid"); ok {
+		t.Error("DynamicProvider(repo-read:invalid) should return false")
+	}
+	if _, ok := reporead.DynamicProvider("other-cap"); ok {
+		t.Error("DynamicProvider(other-cap) should return false")
+	}
+}
+
+func TestRepoReadResolve(t *testing.T) {
+	repo := model.RepoRef{Owner: "acme", Name: "tools"}
+	p := reporead.New(repo)
+	res, err := p.Resolve(context.Background(), model.CapabilityContext{CI: true})
+	if err != nil || res.Refused {
+		t.Fatalf("Resolve = %+v, %v", res, err)
+	}
+}

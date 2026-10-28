@@ -1,0 +1,14 @@
+name: Release UI walkthrough
+templates:
+  - ui-walkthrough-tasks
+  - ui-walkthrough-boards
+  - ui-walkthrough-repos
+  - ui-walkthrough-automation
+  - ui-walkthrough-settings
+  - ui-walkthrough-infrastructure
+  - ui-walkthrough-operations
+  - ui-walkthrough-shell
+mode: count
+count: 1
+require-approval: false
+auto-merge: true

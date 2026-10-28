@@ -1,0 +1,10 @@
+name: Nightly security review
+template: nightly-security-review
+base: main
+# UTC: after the 02:11 nightly CI workflow and the 03:00 features test plan.
+daily:
+  at: "03:30"
+overlap: skip
+# Queues only what the template permits: trust-boundary fixes are filed
+# with hold_for_approval and stay held for a person.
+auto-approve-proposals: true
