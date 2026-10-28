@@ -527,6 +527,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"workflows run however its CI mode is set, and the CI API reports that this deployment has none. "+
 			"A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of "+
 			"the one repository under test (pkg/ci, \"What a workflow file is trusted with\").")
+	gritURL := fs.String("grit-url", "", "remote grit server base `url` (e.g. http://127.0.0.1:4244); when unset, CI runs in-process")
+	gritClientToken := fs.String("grit-client-token", "", "client `token` (<id>.<secret>) sent in Grit-Client when -grit-url is set")
 
 	// The CI job cache's bounds (ci.DirCacheOptions). Seeds, like the CI
 	// history's four below and unlike what they were until
@@ -1228,6 +1230,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		CiStepOutputMB:   *ciStepOutputMB,
 		CiStepOutputDays: *ciStepOutputDays,
 		CiRunOutputKB:    *ciRunOutputKB,
+		GritURL:          *gritURL,
+		GritClientToken:  *gritClientToken,
 
 		DisableNativeSandboxes: *disableNativeSandboxes || (passed["native-sandboxes"] && !*nativeSandboxes),
 		PackageCacheDir:        *packageCacheDir,

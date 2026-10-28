@@ -1160,26 +1160,32 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		AgentShape: cfg.AgentShape(),
 	})
 	if cfg.Ci {
-		ciProviders := func() *model.CapabilityRegistry {
-			return newCapabilityRegistryWithStore(store, live.Current().LocalScriptsConfig(), CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
+		if strings.TrimSpace(cfg.GritURL) != "" {
+			gritRunner := BuildGritBackendRunner(ctx, cfg, live.ciRetention, store)
+			LiveCI.Store(gritRunner)
+			log.Printf("grain daemon: grain CI is wired to remote grit server at %s", cfg.GritURL)
+		} else {
+			ciProviders := func() *model.CapabilityRegistry {
+				return newCapabilityRegistryWithStore(store, live.Current().LocalScriptsConfig(), CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
+			}
+			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live))
+			ciService.SandboxImage = live.CurrentSandboxImage
+			// A trusted release runs only from a branch the repository has
+			// reviewed into, whoever asked for it (grain/task-949).
+			ciService.ReleaseRefRefusal = CiReleaseRefRefusal(store, githubClient)
+			// The attached capability servers a job's capability references
+			// are minted through, the same ones a task's are.
+			WithCICapabilityServers(ciService, func() orchestrator.CapabilityServers { return capabilityServerLookup(live) })
+			// And the relay their ports and mcp_endpoints reach a job's
+			// sandbox through, the same one a task's do.
+			WithCICapabilityPorts(ciService, capabilityPorts, capabilityPortsURL)
+			LiveCI.Store(ciService)
+			defer ciService.Detach()
+			log.Printf("grain daemon: grain CI is on for repos whose CI mode is \"Use Grain CI\" (Settings -> Repos); "+
+				"attaching the %q capability alone does not turn it on. How many jobs run at once is "+
+				"bounded by %s",
+				grainci.CapabilityName, BudgetSentence(cfg.Limits(), KubernetesSandboxes(cfg)))
 		}
-		ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live))
-		ciService.SandboxImage = live.CurrentSandboxImage
-		// A trusted release runs only from a branch the repository has
-		// reviewed into, whoever asked for it (grain/task-949).
-		ciService.ReleaseRefRefusal = CiReleaseRefRefusal(store, githubClient)
-		// The attached capability servers a job's capability references
-		// are minted through, the same ones a task's are.
-		WithCICapabilityServers(ciService, func() orchestrator.CapabilityServers { return capabilityServerLookup(live) })
-		// And the relay their ports and mcp_endpoints reach a job's
-		// sandbox through, the same one a task's do.
-		WithCICapabilityPorts(ciService, capabilityPorts, capabilityPortsURL)
-		LiveCI.Store(ciService)
-		defer ciService.Detach()
-		log.Printf("grain daemon: grain CI is on for repos whose CI mode is \"Use Grain CI\" (Settings -> Repos); "+
-			"attaching the %q capability alone does not turn it on. How many jobs run at once is "+
-			"bounded by %s",
-			grainci.CapabilityName, BudgetSentence(cfg.Limits(), KubernetesSandboxes(cfg)))
 	}
 	// The tokens those runs held came back with the registry's file
 	// (modelproxy.Tokens.PersistTo); the runs did not.

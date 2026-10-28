@@ -409,7 +409,9 @@ type Config struct {
 	// with it off, there is no engine, no CI API and no way for a CI mode
 	// to turn one on (buildCIService, and ui.Config.CI's own contract
 	// that nil means "this deployment has no grain CI").
-	Ci bool
+	Ci              bool
+	GritURL         string
+	GritClientToken string
 
 	// ciCacheMaxAge, ciCacheMaxBytes, ciCacheMaxEntries and
 	// ciCacheMaxEntryBytes are the CI job cache's bounds
