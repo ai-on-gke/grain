@@ -16,6 +16,7 @@ package ui_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -845,5 +846,30 @@ func TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes(t *testing.T) {
 		if r.Pattern == "PUT /api/release-notes" {
 			t.Errorf("SandboxAPIRoutes([api:releases:write]) lists PUT /api/release-notes")
 		}
+	}
+}
+
+// TestAgentReleaseNoteWriteIsAttributedToTheAgent: a run that may write
+// the release notes (the release-notes capability) over the sandbox
+// channel is refused naming a person as their author, and a write that
+// names nobody is recorded as the acting run itself.
+func TestAgentReleaseNoteWriteIsAttributedToTheAgent(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "release-notes")
+	spoofed := `{"period":"2026-W43","title":"t","text":"x","author":"alice@example.com","authorKind":"human"}`
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPut, "/api/release-notes", spoofed, ""); code != http.StatusForbidden {
+		t.Errorf("an agent naming a person as the release notes' author: %d %s, want 403", code, resp)
+	}
+	body := `{"period":"2026-W43","title":"t","text":"x"}`
+	code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPut, "/api/release-notes", body, "")
+	if code != http.StatusOK {
+		t.Fatalf("release-notes capability writing release notes over sandbox-cli: %d %s, want 200", code, resp)
+	}
+	var note ui.ReleaseNote
+	if err := json.Unmarshal([]byte(resp), &note); err != nil {
+		t.Fatalf("decoding %s: %v", resp, err)
+	}
+	if note.UpdatedByKind != string(model.PrincipalAgent) || note.UpdatedBy != "1" {
+		t.Errorf("release note written by task 1 is attributed to %s %q, want agent \"1\"", note.UpdatedByKind, note.UpdatedBy)
 	}
 }
