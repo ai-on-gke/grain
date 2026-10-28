@@ -74,3 +74,41 @@ func TestSandboxAccessSpecFilesStayPrivate(t *testing.T) {
 		t.Error("ReadSandboxAccessSpec accepted a spec in a world-writable directory")
 	}
 }
+
+// TestSandboxAccessSpecRefusesAnotherAccountsFiles pins the ownership
+// half of the check: a daemon running as root passes every mode check
+// and Chmod, so a 0700 directory or 0600 spec another account planted
+// (the default directory is under the shared os.TempDir) must still be
+// refused rather than handing the controller someone else's address and
+// CA.
+func TestSandboxAccessSpecRefusesAnotherAccountsFiles(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("needs root to chown a file to another account")
+	}
+	const nobody = 65534
+	dir := filepath.Join(t.TempDir(), "access")
+	path := filepath.Join(dir, "pod.json")
+	if err := WriteSandboxAccessSpec(path, SandboxAccessSpec{PodName: "pod", Token: "secret"}); err != nil {
+		t.Fatalf("WriteSandboxAccessSpec: %v", err)
+	}
+
+	if err := os.Lchown(path, nobody, nobody); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSandboxAccessSpec(path); err == nil {
+		t.Error("ReadSandboxAccessSpec accepted a spec another account owns")
+	}
+	if err := os.Lchown(path, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Lchown(dir, nobody, nobody); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSandboxAccessSpec(path); err == nil {
+		t.Error("ReadSandboxAccessSpec accepted a spec in a directory another account owns")
+	}
+	if err := WriteSandboxAccessSpec(path, SandboxAccessSpec{PodName: "pod"}); err == nil {
+		t.Error("WriteSandboxAccessSpec wrote into a directory another account owns")
+	}
+}

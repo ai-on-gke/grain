@@ -482,8 +482,9 @@ type SandboxAccessSpec struct {
 // bearer token and names the CA and address the controller trusts, so a
 // directory someone else pre-created (the default lives under the
 // shared os.TempDir) must not be able to hand the controller a spec of
-// its own or read the ones written there. Chmod doubles as the
-// ownership check: it fails for anyone but the directory's owner.
+// its own or read the ones written there. Ownership is checked outright
+// rather than left to Chmod, which root passes for any directory and
+// which is skipped for one already at 0700.
 func privateAccessDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -494,6 +495,9 @@ func privateAccessDir(dir string) error {
 	}
 	if !fi.IsDir() {
 		return fmt.Errorf("sandbox access directory %s is not a directory", dir)
+	}
+	if !ownedByUs(fi) {
+		return fmt.Errorf("sandbox access directory %s is owned by another account", dir)
 	}
 	if fi.Mode().Perm() != 0o700 {
 		if err := os.Chmod(dir, 0o700); err != nil {
@@ -531,8 +535,9 @@ func WriteSandboxAccessSpec(path string, spec SandboxAccessSpec) error {
 }
 
 // ReadSandboxAccessSpec reads a SandboxAccessSpec from path, refusing a
-// symlink, a file group or other may access, or one in a directory they
-// may write to -- WriteSandboxAccessSpec never leaves any of those.
+// symlink, a file group or other may access, one in a directory they may
+// write to, or a file or directory another account owns --
+// WriteSandboxAccessSpec never leaves any of those.
 func ReadSandboxAccessSpec(path string) (*SandboxAccessSpec, error) {
 	fi, err := os.Lstat(path)
 	if err != nil {
@@ -541,10 +546,15 @@ func ReadSandboxAccessSpec(path string) (*SandboxAccessSpec, error) {
 	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("sandbox access spec %s is not a private regular file (mode %s)", path, fi.Mode())
 	}
+	if !ownedByUs(fi) {
+		return nil, fmt.Errorf("sandbox access spec %s is owned by another account", path)
+	}
 	if di, err := os.Stat(filepath.Dir(path)); err != nil {
 		return nil, err
 	} else if di.Mode().Perm()&0o022 != 0 {
 		return nil, fmt.Errorf("sandbox access spec %s is in a directory group or other may write to (mode %s)", path, di.Mode())
+	} else if !ownedByUs(di) {
+		return nil, fmt.Errorf("sandbox access spec %s is in a directory another account owns", path)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
