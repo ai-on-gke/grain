@@ -17,11 +17,157 @@ package hostinit
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/granule"
+	granuleagent "github.com/bwsalmon/granule/pkg/agent"
+	"github.com/bwsalmon/granule/pkg/guestexec"
+	"github.com/bwsalmon/granule/pkg/relay"
+	"github.com/bwsalmon/granule/pkg/sandbox"
 )
+
+type funcPodResolver struct {
+	resolve func(ctx context.Context, target string) (string, error)
+}
+
+func (f funcPodResolver) Resolve(ctx context.Context, target string) (string, error) {
+	return f.resolve(ctx, target)
+}
+
+func stubGKESandboxesRelayServer(t *testing.T, sys *fakeSystem, opts *Options, unchanged bool) {
+	t.Helper()
+	scratchDir := filepath.Join(opts.DataDir, "gke-sandboxes")
+	pki, err := granule.MintRelayPKI(scratchDir, "grain")
+	if err != nil {
+		t.Fatalf("MintRelayPKI: %v", err)
+	}
+	ca, err := granule.NewSandboxCA()
+	if err != nil {
+		t.Fatalf("NewSandboxCA: %v", err)
+	}
+	access, err := ca.MintSandbox(gkeSandboxesVerifyPodName)
+	if err != nil {
+		t.Fatalf("MintSandbox: %v", err)
+	}
+	sbTLS, err := access.ServerTLSConfig()
+	if err != nil {
+		t.Fatalf("access.ServerTLSConfig: %v", err)
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current: %v", err)
+	}
+	srvCtx, srvCancel := context.WithCancel(context.Background())
+	t.Cleanup(srvCancel)
+
+	sbSrv := sandbox.NewServer(sandbox.ServerConfig{
+		SandboxID: gkeSandboxesVerifyPodName,
+		Token:     access.Token,
+		TLSConfig: sbTLS,
+		Guest: guestexec.Config{
+			User: u.Username,
+		},
+		DialGuest: func(dialCtx context.Context) (net.Conn, error) {
+			if err := dialCtx.Err(); err != nil {
+				return nil, err
+			}
+			c1, c2 := net.Pipe()
+			go func() {
+				defer c2.Close()
+				_ = granuleagent.Serve(srvCtx, c2)
+			}()
+			return c1, nil
+		},
+	})
+	sbLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen sandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = sbLn.Close() })
+	go func() { _ = sbSrv.Serve(srvCtx, sbLn) }()
+
+	sbHost, sbPortStr, err := net.SplitHostPort(sbLn.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort sandbox: %v", err)
+	}
+	sbPort, err := strconv.Atoi(sbPortStr)
+	if err != nil {
+		t.Fatalf("Atoi sandbox port: %v", err)
+	}
+
+	relayTLS, err := pki.ServerTLSConfig()
+	if err != nil {
+		t.Fatalf("pki.ServerTLSConfig: %v", err)
+	}
+	relayLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen relay: %v", err)
+	}
+	t.Cleanup(func() { _ = relayLn.Close() })
+
+	relaySrv, err := relay.New(relay.Config{
+		Token:       pki.Token,
+		TLSConfig:   relayTLS,
+		SandboxPort: sbPort,
+		Resolver: funcPodResolver{
+			resolve: func(_ context.Context, name string) (string, error) {
+				if name == gkeSandboxesVerifyPodName {
+					return sbHost, nil
+				}
+				return "", fmt.Errorf("unexpected sandbox %q", name)
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("relay.New: %v", err)
+	}
+	go func() { _ = relaySrv.Serve(srvCtx, relayLn) }()
+
+	_, portStr, err := net.SplitHostPort(relayLn.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q): %v", relayLn.Addr().String(), err)
+	}
+	relayPort, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("Atoi(%q): %v", portStr, err)
+	}
+
+	opts.GKESandboxes.RelayPort = relayPort
+	opts.GKESandboxes.VerifySandboxAccess = access
+	opts.GKESandboxes.VerifyExecScript = "echo verified-over-relay"
+
+	adminKube := filepath.Join(scratchDir, "admin.kubeconfig")
+	relayManifest := filepath.Join(scratchDir, "relay.yaml")
+	if unchanged {
+		relayCfgPath := granule.RelayConfigPath(scratchDir)
+		if err := granule.SaveRelayConfig(relayCfgPath, granule.RelayConfig{
+			Addr:       net.JoinHostPort("127.0.0.1", strconv.Itoa(relayPort)),
+			CAFile:     pki.CAFile,
+			CertFile:   pki.ClientCert,
+			KeyFile:    pki.ClientKey,
+			TokenFile:  pki.TokenFile,
+			ServerName: DefaultGKESandboxesRelayService,
+		}); err != nil {
+			t.Fatalf("SaveRelayConfig: %v", err)
+		}
+		sys.on("secret/grain-sandbox-relay-tls unchanged\nserviceaccount/grain-sandbox-relay unchanged\nrole.rbac.authorization.k8s.io/grain-sandbox-relay unchanged\nrolebinding.rbac.authorization.k8s.io/grain-sandbox-relay unchanged\ndeployment.apps/grain-sandbox-relay unchanged\nservice/grain-sandbox-relay unchanged\nnetworkpolicy.networking.k8s.io/granule-sandbox-access unchanged\n", nil,
+			"kubectl", "--kubeconfig="+adminKube, "apply", "-f", relayManifest)
+	} else {
+		sys.on("secret/grain-sandbox-relay-tls created\nserviceaccount/grain-sandbox-relay created\nrole.rbac.authorization.k8s.io/grain-sandbox-relay created\nrolebinding.rbac.authorization.k8s.io/grain-sandbox-relay created\ndeployment.apps/grain-sandbox-relay created\nservice/grain-sandbox-relay created\nnetworkpolicy.networking.k8s.io/granule-sandbox-access created\n", nil,
+			"kubectl", "--kubeconfig="+adminKube, "apply", "-f", relayManifest)
+	}
+	sys.on("deployment \"grain-sandbox-relay\" successfully rolled out", nil,
+		"kubectl", "--kubeconfig="+adminKube, "-n", "grain", "rollout", "status", "deployment/grain-sandbox-relay", "--timeout=2m")
+	sys.on("127.0.0.1\n", nil,
+		"kubectl", "--kubeconfig="+adminKube, "-n", "grain", "get", "service", "grain-sandbox-relay",
+		"-o", "jsonpath={.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}")
+}
 
 func TestGKESandboxesDryRunPlanDefaultN2(t *testing.T) {
 	t.Parallel()
@@ -44,6 +190,7 @@ func TestGKESandboxesDryRunPlanDefaultN2(t *testing.T) {
 		"install granule KVM device plugin",
 		"create grain namespace and least-privilege ServiceAccount RBAC",
 		"write /var/lib/grain/kubeconfig",
+		"deploy granule sandbox relay and sandbox NetworkPolicy",
 		"verify with scripts/platform-verify/k8s-granule.sh",
 		"verify throwaway sandbox git proxy clone and package cache fetch",
 	}
@@ -87,7 +234,7 @@ func TestGKESandboxesDryRunPlanDefaultN2(t *testing.T) {
 	rbacStep, _ := stepStatus(result, "create grain namespace and least-privilege ServiceAccount RBAC")
 	for _, wantSub := range []string{
 		"pod-security.kubernetes.io/enforce=privileged",
-		"pods, pods/exec, pods/log",
+		"pods, pods/exec, pods/log, secrets (create/delete)",
 		"PriorityClasses grain-interactive, grain-agent, grain-ci",
 	} {
 		if !strings.Contains(rbacStep.Detail, wantSub) {
@@ -98,6 +245,18 @@ func TestGKESandboxesDryRunPlanDefaultN2(t *testing.T) {
 	kubeStep, _ := stepStatus(result, "write /var/lib/grain/kubeconfig")
 	if !strings.Contains(kubeStep.Command, DefaultGKESandboxesKubeconfig) {
 		t.Errorf("kubeconfig Command %q missing %s", kubeStep.Command, DefaultGKESandboxesKubeconfig)
+	}
+
+	relayStep, _ := stepStatus(result, "deploy granule sandbox relay and sandbox NetworkPolicy")
+	for _, wantSub := range []string{
+		"grain-sandbox-relay-tls",
+		"grain-sandbox-relay",
+		"granule-sandbox-access",
+		"relay.json",
+	} {
+		if !strings.Contains(relayStep.Detail, wantSub) {
+			t.Errorf("relay Detail %q missing %q", relayStep.Detail, wantSub)
+		}
 	}
 
 	verifyStep, _ := stepStatus(result, "verify with scripts/platform-verify/k8s-granule.sh")
@@ -215,6 +374,8 @@ func TestGKESandboxesFreshClusterCreationAndVerification(t *testing.T) {
 
 	adminKube := filepath.Join(opts.DataDir, "gke-sandboxes", "admin.kubeconfig")
 	rbacManifest := filepath.Join(opts.DataDir, "gke-sandboxes", "rbac.yaml")
+	relayManifest := filepath.Join(opts.DataDir, "gke-sandboxes", "relay.yaml")
+	relayConfigPath := filepath.Join(opts.DataDir, "gke-sandboxes", "relay.json")
 	verifyPodManifest := filepath.Join(opts.DataDir, "gke-sandboxes", "verify-sandbox-pod.yaml")
 	devicePluginManifest := filepath.Join(opts.RepoRoot, "third_party", "granule", "deploy", "k8s", "kvm-device-plugin.yaml")
 	verifyScript := filepath.Join(opts.RepoRoot, "scripts", "platform-verify", "k8s-granule.sh")
@@ -229,10 +390,6 @@ func TestGKESandboxesFreshClusterCreationAndVerification(t *testing.T) {
 		"-n", "kube-system", "rollout", "status", "daemonset/granule-device-plugin", "--timeout=2m")
 
 	// Namespace not yet present -> apply RBAC manifest.
-	sys.on("NotFound", fmt.Errorf("exit 1"), "kubectl", "--kubeconfig="+adminKube,
-		"get", "namespace", "grain", "-o", `jsonpath={.metadata.labels.pod-security\.kubernetes\.io/enforce}`)
-	sys.on("NotFound", fmt.Errorf("exit 1"), "kubectl", "--kubeconfig="+adminKube,
-		"-n", "grain", "get", "rolebinding", "grain", "-o", "name")
 	sys.on("namespace/grain created\nserviceaccount/grain created\nrole.rbac/grain created\nrolebinding.rbac/grain created", nil,
 		"kubectl", "--kubeconfig="+adminKube, "apply", "-f", rbacManifest)
 
@@ -255,18 +412,17 @@ func TestGKESandboxesFreshClusterCreationAndVerification(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Relay + NetworkPolicy deployment and in-process granule relay/sandbox server.
+	stubGKESandboxesRelayServer(t, sys, &opts, false)
+
 	// Verify script + throwaway sandbox.
 	sys.on("OK: k8s-granule verified", nil, verifyScript, "--keep")
 	sys.on("", nil, "kubectl", "--kubeconfig="+kubeconfigOut,
 		"-n", "grain", "delete", "pod/"+gkeSandboxesVerifyPodName, "--ignore-not-found", "--wait=true", "--grace-period=1")
-	sys.on("pod/grain-init-gke-sandboxes-verify created", nil, "kubectl", "--kubeconfig="+kubeconfigOut,
+	sys.on("secret/grain-init-gke-sandboxes-verify-access created\npod/grain-init-gke-sandboxes-verify created", nil, "kubectl", "--kubeconfig="+kubeconfigOut,
 		"-n", "grain", "apply", "-f", verifyPodManifest)
 	sys.on("pod/grain-init-gke-sandboxes-verify condition met", nil, "kubectl", "--kubeconfig="+kubeconfigOut,
 		"-n", "grain", "wait", "--for=condition=Ready", "pod/"+gkeSandboxesVerifyPodName, "--timeout=5m")
-	guestCheckScript := fmt.Sprintf("git -c http.proxy=%s ls-remote %s >/dev/null && curl -fsSL --proxy %s https://proxy.golang.org >/dev/null",
-		DefaultGKESandboxesGitProxyURL, DefaultGKESandboxesVerifyRepo, DefaultGKESandboxesPackageCacheURL)
-	sys.on("", nil, "kubectl", "--kubeconfig="+kubeconfigOut,
-		"-n", "grain", "exec", gkeSandboxesVerifyPodName, "--", "granule", "exec", "--", "sh", "-c", guestCheckScript)
 
 	result, err := Init(context.Background(), sys, opts)
 	if err != nil {
@@ -279,6 +435,7 @@ func TestGKESandboxesFreshClusterCreationAndVerification(t *testing.T) {
 		"install granule KVM device plugin",
 		"create grain namespace and least-privilege ServiceAccount RBAC",
 		"write /var/lib/grain/kubeconfig",
+		"deploy granule sandbox relay and sandbox NetworkPolicy",
 		"verify with scripts/platform-verify/k8s-granule.sh",
 		"verify throwaway sandbox git proxy clone and package cache fetch",
 	} {
@@ -307,6 +464,8 @@ func TestGKESandboxesFreshClusterCreationAndVerification(t *testing.T) {
 		`verbs: ["create"]`,
 		`resources: ["pods/log"]`,
 		`verbs: ["get"]`,
+		`resources: ["secrets"]`,
+		`verbs: ["create", "delete"]`,
 		"kind: PriorityClass",
 		"name: grain-interactive",
 		"value: 1000000",
@@ -318,6 +477,66 @@ func TestGKESandboxesFreshClusterCreationAndVerification(t *testing.T) {
 	} {
 		if !strings.Contains(string(rbacBytes), want) {
 			t.Errorf("rbac.yaml missing %q:\n%s", want, string(rbacBytes))
+		}
+	}
+
+	// Verify the relay manifest has Secret/grain-sandbox-relay-tls, least-privilege Role,
+	// Deployment/grain-sandbox-relay, LoadBalancer Service, and NetworkPolicy/granule-sandbox-access.
+	relayBytes, err := os.ReadFile(relayManifest)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", relayManifest, err)
+	}
+	for _, want := range []string{
+		"name: grain-sandbox-relay-tls",
+		"kind: Deployment",
+		"name: grain-sandbox-relay",
+		`command: ["granule", "relay"]`,
+		"- -selector=granule.gke.io/sandbox=true",
+		"- -name-label=granule.gke.io/sandbox-name",
+		"- -sandbox-port=7443",
+		"kind: Service",
+		"type: LoadBalancer",
+		"kind: NetworkPolicy",
+		"name: granule-sandbox-access",
+		`granule.gke.io/sandbox: "true"`,
+		"app.kubernetes.io/name: grain-sandbox-relay",
+		"app.kubernetes.io/name: grain",
+		"port: 7443",
+	} {
+		if !strings.Contains(string(relayBytes), want) {
+			t.Errorf("relay.yaml missing %q:\n%s", want, string(relayBytes))
+		}
+	}
+
+	// Verify relay.json was written with mode 0600 and valid credentials.
+	if fi, err := os.Stat(relayConfigPath); err != nil {
+		t.Fatalf("Stat(%s): %v", relayConfigPath, err)
+	} else if mode := fi.Mode().Perm(); mode != 0o600 {
+		t.Errorf("%s mode = %o, want 600", relayConfigPath, mode)
+	}
+	relayCfg, err := granule.LoadRelayConfig(relayConfigPath)
+	if err != nil {
+		t.Fatalf("LoadRelayConfig(%s): %v", relayConfigPath, err)
+	}
+	if !strings.HasPrefix(relayCfg.Addr, "127.0.0.1:") {
+		t.Errorf("relayCfg.Addr = %q, want 127.0.0.1:<port>", relayCfg.Addr)
+	}
+
+	// Verify throwaway sandbox manifest uses Secret volume and TCP listen mode.
+	verifyBytes, err := os.ReadFile(verifyPodManifest)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", verifyPodManifest, err)
+	}
+	for _, want := range []string{
+		"name: grain-init-gke-sandboxes-verify-access",
+		`granule.gke.io/sandbox: "true"`,
+		"granule.gke.io/sandbox-name: grain-init-gke-sandboxes-verify",
+		"name: GRANULE_ACCESS_LISTEN",
+		"value: tcp://0.0.0.0:7443",
+		"secretName: grain-init-gke-sandboxes-verify-access",
+	} {
+		if !strings.Contains(string(verifyBytes), want) {
+			t.Errorf("verify-sandbox-pod.yaml missing %q:\n%s", want, string(verifyBytes))
 		}
 	}
 }
@@ -341,7 +560,7 @@ func TestGKESandboxesIdempotentAndResumableWhenAlreadyProvisioned(t *testing.T) 
 	sys.on("Client Version: v1.31.0", nil, "kubectl", "version", "--client")
 	sys.on("gke-gcloud-auth-plugin v0.5.9", nil, "gke-gcloud-auth-plugin", "--version")
 
-	// Cluster, node pool, device plugin, RBAC, and kubeconfig all already exist!
+	// Cluster, node pool, device plugin, RBAC, kubeconfig, and relay all already exist!
 	sys.on("RUNNING\n", nil, "gcloud",
 		"container", "clusters", "describe", "grain-sandboxes",
 		"--project=sandbox-proj", "--zone=us-central1-a", "--format=value(status)")
@@ -373,6 +592,8 @@ func TestGKESandboxesIdempotentAndResumableWhenAlreadyProvisioned(t *testing.T) 
 	sys.on("no\n", fmt.Errorf("exit 1"), "kubectl", "--kubeconfig="+kubeconfigOut,
 		"-n", "grain", "auth", "can-i", "get", "secrets")
 
+	stubGKESandboxesRelayServer(t, sys, &opts, true)
+
 	sys.on("OK: k8s-granule verified", nil, verifyScript, "--keep")
 	sys.on("", nil, "kubectl", "--kubeconfig="+kubeconfigOut,
 		"-n", "grain", "delete", "pod/"+gkeSandboxesVerifyPodName, "--ignore-not-found", "--wait=true", "--grace-period=1")
@@ -380,10 +601,6 @@ func TestGKESandboxesIdempotentAndResumableWhenAlreadyProvisioned(t *testing.T) 
 		"-n", "grain", "apply", "-f", verifyPodManifest)
 	sys.on("pod/grain-init-gke-sandboxes-verify condition met", nil, "kubectl", "--kubeconfig="+kubeconfigOut,
 		"-n", "grain", "wait", "--for=condition=Ready", "pod/"+gkeSandboxesVerifyPodName, "--timeout=5m")
-	guestCheckScript := fmt.Sprintf("git -c http.proxy=%s ls-remote %s >/dev/null && curl -fsSL --proxy %s https://proxy.golang.org >/dev/null",
-		DefaultGKESandboxesGitProxyURL, DefaultGKESandboxesVerifyRepo, DefaultGKESandboxesPackageCacheURL)
-	sys.on("", nil, "kubectl", "--kubeconfig="+kubeconfigOut,
-		"-n", "grain", "exec", gkeSandboxesVerifyPodName, "--", "granule", "exec", "--", "sh", "-c", guestCheckScript)
 
 	result, err := Init(context.Background(), sys, opts)
 	if err != nil {
@@ -396,6 +613,7 @@ func TestGKESandboxesIdempotentAndResumableWhenAlreadyProvisioned(t *testing.T) 
 		"install granule KVM device plugin",
 		"create grain namespace and least-privilege ServiceAccount RBAC",
 		"write /var/lib/grain/kubeconfig",
+		"deploy granule sandbox relay and sandbox NetworkPolicy",
 	} {
 		s, ok := stepStatus(result, skippedStep)
 		if !ok || s.Status != StepSkipped {

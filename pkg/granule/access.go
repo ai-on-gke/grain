@@ -637,3 +637,44 @@ func DialDirect(ctx context.Context, podName string, port int, fixedIP string, r
 	}
 	return sandbox.Dial(ctx, addr, opts)
 }
+
+// RelayConfigPath returns the path to relay.json inside dir.
+func RelayConfigPath(dir string) string {
+	return filepath.Join(dir, "relay.json")
+}
+
+// MintSandbox generates a per-sandbox bearer token and server TLS keypair for
+// podName signed by ca.
+func (ca *SandboxCA) MintSandbox(podName string) (*SandboxAccessSpec, error) {
+	tok, err := MintToken()
+	if err != nil {
+		return nil, err
+	}
+	certPEM, keyPEM, err := ca.IssueSandboxCert(podName, podName)
+	if err != nil {
+		return nil, err
+	}
+	return &SandboxAccessSpec{
+		PodName:   podName,
+		SandboxID: podName,
+		Port:      DefaultAccessPort,
+		Token:     tok,
+		CACertPEM: string(ca.CAPEM()),
+		CertPEM:   string(certPEM),
+		KeyPEM:    string(keyPEM),
+	}, nil
+}
+
+// ServerTLSConfig returns a TLS 1.3 server configuration for the sandbox's
+// minted server certificate and private key.
+func (s SandboxAccessSpec) ServerTLSConfig() (*tls.Config, error) {
+	cert, err := tls.X509KeyPair([]byte(s.CertPEM), []byte(s.KeyPEM))
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+	}, nil
+}
+

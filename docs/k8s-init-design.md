@@ -328,15 +328,28 @@ controller stays on its existing host outside the cluster and dispatches
    Creates the `grain` Namespace labelled with
    `pod-security.kubernetes.io/enforce=privileged` and a `grain`
    ServiceAccount + Role/RoleBinding granting only `pods` (`get`, `list`,
-   `watch`, `create`, `delete`), `pods/exec` (`create`), and `pods/log`
-   (`get`).
+   `watch`, `create`, `delete`), `pods/exec` (`create`), `pods/log`
+   (`get`), and `secrets` (`create`, `delete`, for per-sandbox access
+   Secrets).
 4. **`/var/lib/grain/kubeconfig`**:
    Mints a bearer token for the `grain` ServiceAccount and writes a
    self-contained kubeconfig to `/var/lib/grain/kubeconfig`
    (`daemon.DefaultKubeconfigPath`), which the off-cluster daemon uses
-   automatically for both pod lifecycle and `granule forward` tunnels.
-5. **End-to-end verification**:
+   automatically for pod and per-sandbox Secret lifecycle.
+5. **Granule sandbox relay and ingress NetworkPolicy**:
+   Mints an mTLS CA, server/client certificates, and a controller token
+   under `/var/lib/grain/gke-sandboxes/`, stores the server credentials
+   in `Secret/grain-sandbox-relay-tls`, and applies a 1-replica
+   `Deployment/grain-sandbox-relay` (with a ServiceAccount and Role
+   limited to `get/list/watch pods`), `Service/grain-sandbox-relay`
+   (`type: LoadBalancer`), and `NetworkPolicy/granule-sandbox-access`
+   (denying all ingress to `granule.gke.io/sandbox=true` pods except TCP
+   port `7443` from `grain-sandbox-relay` and in-cluster `grain`
+   controller pods, blocking sandbox-to-sandbox traffic). Waits for the
+   LoadBalancer IP and writes `/var/lib/grain/gke-sandboxes/relay.json`.
+6. **End-to-end verification**:
    Runs `scripts/platform-verify/k8s-granule.sh --keep` and boots one
-   throwaway sandbox pod that clones through the git proxy and fetches
-   through the package cache before cleaning up.
+   throwaway sandbox pod in listen mode (`tcp://0.0.0.0:7443`) that
+   clones through the git proxy and fetches through the package cache
+   over `granule relay` before cleaning up.
 
