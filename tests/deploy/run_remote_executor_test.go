@@ -30,18 +30,35 @@ import (
 
 func TestRunRemoteExecutorIsSyntacticallyValidBash(t *testing.T) {
 	t.Parallel()
-	scriptPath := filepath.Join(repoRoot(t), "scripts", "run-remote-executor.sh")
-	out, err := exec.Command("bash", "-n", scriptPath).CombinedOutput()
-	if err != nil {
-		t.Fatalf("bash -n scripts/run-remote-executor.sh: %v\n%s", err, out)
-	}
+	for _, script := range []string{"run-model-server.sh", "run-remote-executor.sh"} {
+		scriptPath := filepath.Join(repoRoot(t), "scripts", script)
+		out, err := exec.Command("bash", "-n", scriptPath).CombinedOutput()
+		if err != nil {
+			t.Fatalf("bash -n scripts/%s: %v\n%s", script, err, out)
+		}
 
-	helpOut, err := exec.Command("bash", scriptPath, "--help").CombinedOutput()
-	if err != nil {
-		t.Fatalf("scripts/run-remote-executor.sh --help: %v\n%s", err, helpOut)
+		helpOut, err := exec.Command("bash", scriptPath, "--help").CombinedOutput()
+		if err != nil {
+			t.Fatalf("scripts/%s --help: %v\n%s", script, err, helpOut)
+		}
+		if !strings.Contains(string(helpOut), "run-model-server.sh [options]") {
+			t.Errorf("expected run-model-server.sh usage in --help output, got:\n%s", helpOut)
+		}
+		if !strings.Contains(string(helpOut), "run-remote-executor.sh [options]") {
+			t.Errorf("expected run-remote-executor.sh usage in --help output, got:\n%s", helpOut)
+		}
 	}
-	if !strings.Contains(string(helpOut), "run-remote-executor.sh [options]") {
-		t.Errorf("expected usage in --help output, got:\n%s", helpOut)
+}
+
+func TestRunRemoteExecutorSymlink(t *testing.T) {
+	t.Parallel()
+	symlinkPath := filepath.Join(repoRoot(t), "scripts", "run-remote-executor.sh")
+	target, err := os.Readlink(symlinkPath)
+	if err != nil {
+		t.Fatalf("reading symlink %s: %v", symlinkPath, err)
+	}
+	if target != "run-model-server.sh" {
+		t.Errorf("expected symlink to point to run-model-server.sh, got %q", target)
 	}
 }
 
@@ -186,8 +203,8 @@ func TestRunRemoteExecutorArgumentConstructionAndDiscovery(t *testing.T) {
 		t.Fatalf("no arguments recorded for grain execution")
 	}
 
-	if res.args[0] != "executor" {
-		t.Errorf("expected first argument to be 'executor', got %q", res.args[0])
+	if res.args[0] != "model-server" {
+		t.Errorf("expected first argument to be 'model-server', got %q", res.args[0])
 	}
 
 	hasArg := func(flag, val string) bool {
@@ -469,8 +486,8 @@ func TestRunRemoteExecutorDownloadsGrainFromGrainURL(t *testing.T) {
 
 	if data, readErr := os.ReadFile(recordFile); readErr != nil {
 		t.Fatalf("stub grain was not executed: %v", readErr)
-	} else if !strings.Contains(string(data), "executor") {
-		t.Errorf("expected stub grain to receive 'executor' subcommand, got: %s", string(data))
+	} else if !strings.Contains(string(data), "model-server") {
+		t.Errorf("expected stub grain to receive 'model-server' subcommand, got: %s", string(data))
 	}
 }
 

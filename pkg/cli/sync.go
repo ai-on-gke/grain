@@ -308,6 +308,7 @@ var settingsDiffRows = []settingsDiffRow{
 		b, _ := json.Marshal(s.SandboxOvercommit)
 		return string(b)
 	}},
+	{"externalAgentApi", "external agent api", func(s ui.Settings) any { return s.ExternalAgentAPI }},
 	{"sandboxDiskFloorShare", "sandbox disk floor share", func(s ui.Settings) any { return s.SandboxDiskFloorShare }},
 	{"sandboxDiskFloorMinMb", "sandbox disk floor min mb", func(s ui.Settings) any { return s.SandboxDiskFloorMinMB }},
 	{"networkAccess", "sandbox network", func(s ui.Settings) any { return s.NetworkAccess }},

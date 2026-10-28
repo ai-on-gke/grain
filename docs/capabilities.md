@@ -142,6 +142,15 @@ The `grain` binary serves seven capability servers of its own over stdio, one pe
 
 `grain capability host-git` is an internal in-tree server, not a grant: grain hostd starts it on the host so a containerised daemon can use the installing account's gh (or a registered source's tool) login for an ambient git connection. It serves plain tools to the daemon rather than `mint_` methods (see [docs/git-hosts.md](git-hosts.md)).
 
+### `hostd` (capability server set) in the 4-component architecture
+
+In Grain's [4-component architecture](architecture.md#the-4-component-architecture):
+
+1. **`grain` controller (`grain daemon`)** runs the task store, orchestrator, merge queue, UI/API, and sandbox lifecycle.
+2. **`grit` controller** runs the CI controller service ([`docs/design/grit-split.md`](design/grit-split.md)).
+3. **`model-server` (`grain model-server`, aliases `grain executor` and `grain modelexec`)** runs agent model CLIs (`agy`, `claude`, `codex`) on a host with local ambient credentials/binaries and connects outbound to the `grain` controller.
+4. **`hostd` (capability server set, `grain hostd`)** runs on a host to bring up allowlisted capability servers (`grain-gcp`, `grain-host-script`, `grain-gchat`, `host-git`, etc. from `/etc/grain/hostd.yaml`) and connects them back to the `grain` controller — either over the local `/run/grain-hostd` Unix socket when co-located with the `grain` container, or outbound over HTTPS/WebSocket via `grain hostd -server <grain-url> -token-file <path>` (`GET /api/hostd/connect`) when `grain` runs remotely (such as on GKE).
+
 | `<name>` | Method (pattern) | `with:` arguments | Environment | Flags | `configure` fields (secret fields in bold) |
 |---|---|---|---|---|---|
 | `gcp` | `gcp-key` (§6.1, leased) | `permission_set`: one of the configured sets (an enum, default the first); `primary`: boolean, default `true` (`account` and `activate` are accepted for old grants) | none; admins' configured credentials come through `configure` (`GCP_MINTER_KEY` only for a migrated entry) | none needed (`-project`, `-account [name=]email[*pool-size]`, `-max-key-age` are migrated, deprecated) | `admins`, **`admin_credentials`**, `permission_sets` (see below) |

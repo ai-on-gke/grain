@@ -14,9 +14,9 @@
 
 package cli
 
-// `grain executor` (and alias `grain modelexec`) -- the daemon a remote executor machine runs.
+// `grain model-server` (and aliases `grain executor`, `grain modelexec`) -- the model-server daemon a host machine runs.
 //
-// It connects outbound to a Grain installation, registers as an active source
+// It connects outbound to a Grain controller, registers as an active model server
 // for the whole deployment, and executes agent CLIs (agy, claude, codex)
 // using local ambient credentials while tunneling MCP tool calls back to Grain's sandboxes.
 
@@ -63,26 +63,30 @@ func (b binaryFlag) Set(value string) error {
 	return nil
 }
 
-func executorCmd(args []string) {
-	fs := flag.NewFlagSet("grain executor", flag.ExitOnError)
-	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), `Usage: grain executor [flags]
+func writeExecutorUsage(fs *flag.FlagSet) {
+	fmt.Fprintf(fs.Output(), `Usage: grain model-server [flags]
+       grain executor [flags] (alias)
+       grain modelexec [flags] (alias)
 
-Connects this host to a Grain daemon as a remote model executor.
+Connects this host to a Grain controller as a model server (formerly remote model executor).
 Allows Grain sandboxes to run agent model CLIs (Antigravity, Claude, Codex)
 on this machine using its local ambient credentials or environment.
 
 Flags:
 `)
-		fs.PrintDefaults()
-		fmt.Fprintf(fs.Output(), `
+	fs.PrintDefaults()
+	fmt.Fprintf(fs.Output(), `
 Bootstrap Script:
   For automated setup, binary download, and CLI discovery, use:
-    ./scripts/run-remote-executor.sh --server <host:port> --token-file <path>
+    ./scripts/run-model-server.sh --server <host:port> --token-file <path>
   or single-command via curl:
-    curl -fsSL https://<grain-host>/api/executors/install.sh | bash -s -- --server <host:port> --token-file <path>
+    curl -fsSL https://<grain-host>/api/model-servers/install.sh | bash -s -- --server <host:port> --token-file <path>
 `)
-	}
+}
+
+func executorCmd(args []string) {
+	fs := flag.NewFlagSet("grain model-server", flag.ExitOnError)
+	fs.Usage = func() { writeExecutorUsage(fs) }
 	addr := fs.String("server", "", "address or URL of the grain daemon's executor listener (host:port or https://...). Required")
 	serverAlias := fs.String("addr", "", "alias for -server")
 	tokenFile := fs.String("token-file", "", "file holding the shared token this daemon authenticates with")

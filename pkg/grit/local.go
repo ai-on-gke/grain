@@ -18,6 +18,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -144,9 +145,16 @@ func NewLocal(cfg LocalConfig) (*Local, error) {
 	if len(cfg.PublicKeys) > 0 {
 		pubKeys = append(pubKeys, cfg.PublicKeys...)
 	} else if cfg.Signer != nil {
+		var pubPEM string
+		if pp, ok := cfg.Signer.(interface{ Public() *ecdsa.PublicKey }); ok && pp.Public() != nil {
+			if b, mErr := attest.MarshalPublicKey(pp.Public()); mErr == nil {
+				pubPEM = string(b)
+			}
+		}
 		pubKeys = append(pubKeys, gritapi.PublicKeyInfo{
-			KeyID:  cfg.Signer.KeyID(),
-			Status: attest.KeyActive,
+			KeyID:     cfg.Signer.KeyID(),
+			PublicPEM: pubPEM,
+			Status:    attest.KeyActive,
 		})
 	}
 
