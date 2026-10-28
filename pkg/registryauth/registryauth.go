@@ -164,10 +164,14 @@ func gcloudToken(ctx context.Context) (string, error) {
 		}
 		// Best effort: a key gcloud will not take still leaves whatever
 		// account it already has.
-		_ = exec.CommandContext(ctx, "gcloud", "auth", "activate-service-account", "--key-file="+keyFile, "--quiet").Run()
+		activate := exec.CommandContext(ctx, "gcloud", "auth", "activate-service-account", "--key-file="+keyFile, "--quiet")
+		activate.Env = gcloudEnv()
+		_ = activate.Run()
 		break
 	}
-	out, err := exec.CommandContext(ctx, "gcloud", "auth", "print-access-token").Output()
+	printToken := exec.CommandContext(ctx, "gcloud", "auth", "print-access-token")
+	printToken.Env = gcloudEnv()
+	out, err := printToken.Output()
 	if err != nil {
 		return "", err
 	}
@@ -176,6 +180,14 @@ func gcloudToken(ctx context.Context) (string, error) {
 		return "", errors.New("gcloud printed no access token")
 	}
 	return token, nil
+}
+
+// gcloudEnv is the whole of this process's environment, deliberately:
+// gcloud is the credential being asked for, and finds its configuration
+// and account through HOME, CLOUDSDK_CONFIG and
+// GOOGLE_APPLICATION_CREDENTIALS.
+func gcloudEnv() []string {
+	return os.Environ()
 }
 
 func metadataToken(ctx context.Context) (string, error) {
