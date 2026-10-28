@@ -80,6 +80,15 @@ are untouched, so `scripts/granule/build-granule-image.sh` and
   and `test/e2e-ipv6.sh` replace a contributor-specific GCP project name
   with `grain-sandbox-dev` so `tests/hygiene` (`TestCoreSaysNoGoogleTokens`)
   stays clean (`91c0dfffd`).
+- **`pkg/sandbox.Server`: shell-quote `handlePutFiles` `trap`/directory-error commands and enforce per-exec replay buffer & retention bounds.**
+  `pkg/sandbox/server.go` and `pkg/sandbox/sandbox_test.go` fix single-quote
+  escaping in `handlePutFiles`'s `trap ... EXIT` cleanup command and directory
+  check error message (which otherwise left `tmpQuoted` paths and `sf.dstPath`
+  unquoted inside single quotes, breaking paths with spaces/quotes or allowing
+  shell injection), reject `FileUpload.Owner` values starting with `-`, and
+  enforce the documented 16 MiB per-exec replay ring buffer
+  (`MaxExecBufferBytes`) and 10-minute completed-session eviction
+  (`CompletedExecRetention`) on `Server.execs`.
 
 ## Landed upstream
 

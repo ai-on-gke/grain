@@ -60,7 +60,22 @@ type ServerConfig struct {
 
 	// MuxConfig tunes the underlying guestforward.Session per connection.
 	MuxConfig guestforward.Config
+
+	// MaxExecBufferBytes bounds the per-exec output replay buffer retained
+	// in the wrapper for Reattach across transport reconnects. Zero
+	// defaults to maxExecBufferBytes (16 MiB).
+	MaxExecBufferBytes int64
+
+	// CompletedExecRetention is how long a completed exec session is kept
+	// in the wrapper's session table for Reattach after the guest command
+	// exits. Zero defaults to completedExecRetention (10 minutes).
+	CompletedExecRetention time.Duration
 }
+
+const (
+	maxExecBufferBytes     = 16 << 20
+	completedExecRetention = 10 * time.Minute
+)
 
 // DialOutOptions configures TLS and reconnection backoff for Server.DialOut.
 type DialOutOptions struct {
@@ -103,6 +118,12 @@ func NewServer(cfg ServerConfig) *Server {
 	}
 	if cfg.Guest.ConnectTimeout == 0 {
 		cfg.Guest.ConnectTimeout = 30 * time.Second
+	}
+	if cfg.MaxExecBufferBytes <= 0 {
+		cfg.MaxExecBufferBytes = maxExecBufferBytes
+	}
+	if cfg.CompletedExecRetention <= 0 {
+		cfg.CompletedExecRetention = completedExecRetention
 	}
 	return &Server{
 		cfg:   cfg,
@@ -475,29 +496,55 @@ type managedExec struct {
 	guestConn net.Conn
 	br        *bufio.Reader
 	features  []string
+	maxBuf    int64
+	onExit    func()
 
 	writeMu sync.Mutex
 
-	mu           sync.Mutex
-	cond         *sync.Cond
-	chunks       []outputChunk
-	totalBytes   int64
-	exited       bool
-	exitCode     int
-	transportCut bool
-	transportErr string
+	mu            sync.Mutex
+	cond          *sync.Cond
+	chunks        []outputChunk
+	baseIdx       int
+	bufferedBytes int64
+	totalBytes    int64
+	exited        bool
+	exitCode      int
+	transportCut  bool
+	transportErr  string
 }
 
-func newManagedExec(id string, conn net.Conn, br *bufio.Reader, features []string) *managedExec {
+func newManagedExec(id string, conn net.Conn, br *bufio.Reader, features []string, maxBuf int64, onExit func()) *managedExec {
 	ex := &managedExec{
 		id:        id,
 		guestConn: conn,
 		br:        br,
 		features:  features,
+		maxBuf:    maxBuf,
+		onExit:    onExit,
 	}
 	ex.cond = sync.NewCond(&ex.mu)
 	go ex.readLoop()
 	return ex
+}
+
+func (ex *managedExec) trimLocked() {
+	if ex.maxBuf <= 0 {
+		return
+	}
+	trimmed := 0
+	for len(ex.chunks)-trimmed > 1 && ex.bufferedBytes > ex.maxBuf {
+		c := ex.chunks[trimmed]
+		if c.typ == execwire.TypeStdout || c.typ == execwire.TypeStderr {
+			ex.bufferedBytes -= int64(len(c.data))
+		}
+		trimmed++
+	}
+	if trimmed > 0 {
+		remaining := make([]outputChunk, len(ex.chunks)-trimmed)
+		copy(remaining, ex.chunks[trimmed:])
+		ex.chunks = remaining
+		ex.baseIdx += trimmed
+	}
 }
 
 func (ex *managedExec) writeFrame(typ byte, payload []byte) error {
@@ -507,7 +554,12 @@ func (ex *managedExec) writeFrame(typ byte, payload []byte) error {
 }
 
 func (ex *managedExec) readLoop() {
-	defer ex.guestConn.Close()
+	defer func() {
+		_ = ex.guestConn.Close()
+		if ex.onExit != nil {
+			ex.onExit()
+		}
+	}()
 	for {
 		typ, payload, err := execwire.ReadFrame(ex.br)
 		if err != nil {
@@ -529,12 +581,14 @@ func (ex *managedExec) readLoop() {
 			start := ex.totalBytes
 			end := start + int64(len(data))
 			ex.totalBytes = end
+			ex.bufferedBytes += int64(len(data))
 			ex.chunks = append(ex.chunks, outputChunk{
 				typ:         typ,
 				data:        data,
 				startOffset: start,
 				endOffset:   end,
 			})
+			ex.trimLocked()
 			ex.cond.Broadcast()
 			ex.mu.Unlock()
 		case execwire.TypeNote:
@@ -611,11 +665,11 @@ func (ex *managedExec) attach(ctx context.Context, st *guestforward.Stream, from
 		}
 	}()
 
-	sentIdx := 0
+	nextSeq := 0
 	curOffset := fromOffset
 	for {
 		ex.mu.Lock()
-		for sentIdx == len(ex.chunks) && !ex.exited {
+		for nextSeq >= ex.baseIdx+len(ex.chunks) && !ex.exited {
 			select {
 			case <-detachCh:
 				ex.mu.Unlock()
@@ -624,8 +678,16 @@ func (ex *managedExec) attach(ctx context.Context, st *guestforward.Stream, from
 			}
 			ex.cond.Wait()
 		}
-		pending := ex.chunks[sentIdx:]
-		sentIdx = len(ex.chunks)
+		if nextSeq < ex.baseIdx {
+			nextSeq = ex.baseIdx
+		}
+		startIdx := nextSeq - ex.baseIdx
+		var pending []outputChunk
+		if startIdx < len(ex.chunks) {
+			pending = make([]outputChunk, len(ex.chunks)-startIdx)
+			copy(pending, ex.chunks[startIdx:])
+			nextSeq = ex.baseIdx + len(ex.chunks)
+		}
 		exited := ex.exited
 		exitCode := ex.exitCode
 		transportCut := ex.transportCut
@@ -741,7 +803,6 @@ func (s *Server) handleExec(ctx context.Context, st *guestforward.Stream, req *E
 		return
 	}
 
-	ex := newManagedExec(id, guestConn, br, resp.Features)
 	s.mu.Lock()
 	if _, exists := s.execs[id]; exists {
 		s.mu.Unlock()
@@ -749,6 +810,19 @@ func (s *Server) handleExec(ctx context.Context, st *guestforward.Stream, req *E
 		_ = st.Reject(fmt.Sprintf("exec session %q already exists", id))
 		return
 	}
+	var ex *managedExec
+	ex = newManagedExec(id, guestConn, br, resp.Features, s.cfg.MaxExecBufferBytes, func() {
+		if s.cfg.CompletedExecRetention <= 0 {
+			return
+		}
+		time.AfterFunc(s.cfg.CompletedExecRetention, func() {
+			s.mu.Lock()
+			if s.execs[id] == ex {
+				delete(s.execs, id)
+			}
+			s.mu.Unlock()
+		})
+	})
 	s.execs[id] = ex
 	s.mu.Unlock()
 
@@ -872,6 +946,11 @@ func (s *Server) handlePutFiles(ctx context.Context, st *guestforward.Stream) {
 			_ = writeJSONLine(st, PutFilesReply{OK: false, Error: fmt.Sprintf("file %q: negative size %d", f.Path, f.Size)})
 			return
 		}
+		owner := strings.TrimSpace(f.Owner)
+		if strings.HasPrefix(owner, "-") {
+			_ = writeJSONLine(st, PutFilesReply{OK: false, Error: fmt.Sprintf("file %q: invalid owner %q", f.Path, f.Owner)})
+			return
+		}
 		dir := path.Dir(cleanDst)
 		if !dirsSeen[dir] {
 			dirsSeen[dir] = true
@@ -890,7 +969,7 @@ func (s *Server) handlePutFiles(ctx context.Context, st *guestforward.Stream) {
 			relTmp:  relTmp,
 			size:    f.Size,
 			mode:    mode,
-			owner:   strings.TrimSpace(f.Owner),
+			owner:   owner,
 		}
 		tmpQuoted = append(tmpQuoted, shellQuote(tmpPath))
 	}
@@ -904,13 +983,14 @@ func (s *Server) handlePutFiles(ctx context.Context, st *guestforward.Stream) {
 	//     each temporary file into place with mv -f.
 	var script strings.Builder
 	script.WriteString("set -e; ")
-	script.WriteString("trap 'rm -f " + strings.Join(tmpQuoted, " ") + "' EXIT; ")
+	script.WriteString("trap " + shellQuote("rm -f "+strings.Join(tmpQuoted, " ")) + " EXIT; ")
 	script.WriteString("mkdir -p " + strings.Join(dirs, " ") + "; ")
 	script.WriteString("tar -xf - -C /")
 	for _, sf := range staged {
 		qDst := shellQuote(sf.dstPath)
 		qTmp := shellQuote(sf.tmpPath)
-		script.WriteString(fmt.Sprintf("; if [ -d %s ]; then echo 'sandbox put-files: %s is a directory' >&2; exit 2; fi", qDst, sf.dstPath))
+		qErr := shellQuote(fmt.Sprintf("sandbox put-files: %s is a directory", sf.dstPath))
+		script.WriteString(fmt.Sprintf("; if [ -d %s ]; then printf '%%s\\n' %s >&2; exit 2; fi", qDst, qErr))
 		script.WriteString(fmt.Sprintf("; chmod %04o %s", sf.mode, qTmp))
 		if sf.owner != "" {
 			script.WriteString(fmt.Sprintf("; chown %s %s", shellQuote(sf.owner), qTmp))

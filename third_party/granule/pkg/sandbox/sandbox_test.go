@@ -434,6 +434,47 @@ func runClientSuite(
 		}
 	}
 
+	// 3b. PutFiles and GetFile with spaces, single quotes, and shell metacharacters
+	// must not break trap quoting or allow command injection.
+	injectedMarker := filepath.Join(workDir, "pwned")
+	trickyFile := filepath.Join(workDir, "dir with 'quote' and $(id)", "file 'a' EXIT; touch "+injectedMarker+"; trap true.txt")
+	if err := cli.PutFiles(ctx, []FileUpload{
+		{
+			Path:    trickyFile,
+			Content: []byte("safe-content\n"),
+			Mode:    0o600,
+		},
+	}); err != nil {
+		t.Fatalf("PutFiles(trickyFile): %v", err)
+	}
+	if _, statErr := os.Stat(injectedMarker); !os.IsNotExist(statErr) {
+		t.Fatalf("command injection marker %s was created!", injectedMarker)
+	}
+	gotTricky, modeTricky, err := cli.GetFile(ctx, trickyFile)
+	if err != nil {
+		t.Fatalf("GetFile(trickyFile): %v", err)
+	}
+	if string(gotTricky) != "safe-content\n" || modeTricky.Perm() != 0o600 {
+		t.Fatalf("GetFile(trickyFile) = %q (%04o), want safe-content (0600)", string(gotTricky), modeTricky.Perm())
+	}
+
+	// Refusing to overwrite an existing directory whose name contains a single quote
+	// must return a clean error without shell syntax errors.
+	existingDirWithQuote := filepath.Join(workDir, "dir 'existing'")
+	if err := os.MkdirAll(existingDirWithQuote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dirErr := cli.PutFiles(ctx, []FileUpload{
+		{
+			Path:    existingDirWithQuote,
+			Content: []byte("nope"),
+			Mode:    0o644,
+		},
+	})
+	if dirErr == nil || !strings.Contains(dirErr.Error(), "is a directory") {
+		t.Fatalf("PutFiles onto directory with quote = %v, want error containing 'is a directory'", dirErr)
+	}
+
 	// 4. Reconnect / Detach in the middle of a running command + Reattach.
 	gateFile := filepath.Join(workDir, "gate")
 	proc, err := cli.StartExec(ctx, ExecRequest{
@@ -695,4 +736,100 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+func TestExecReplayBufferCapAndRetention(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	srv := NewServer(ServerConfig{
+		SandboxID:              "sbx-cap",
+		Guest:                  guestexec.Config{User: currentUsername(t)},
+		DialGuest:              inProcessGuestDialer(ctx),
+		MaxExecBufferBytes:     64,
+		CompletedExecRetention: 150 * time.Millisecond,
+	})
+
+	sockDir, err := os.MkdirTemp("", "sbx-cap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(sockDir)
+	sockPath := filepath.Join(sockDir, "access.sock")
+
+	go func() {
+		_ = srv.ListenAndServe(ctx, "unix:"+sockPath)
+	}()
+
+	var cli *Client
+	for range 50 {
+		cli, err = Dial(ctx, "unix:"+sockPath, DialOptions{})
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer cli.Close()
+
+	// Emit several distinct chunks totaling > 64 bytes so old chunks are evicted
+	// from the wrapper's replay buffer.
+	proc, err := cli.StartExec(ctx, ExecRequest{
+		ID:   "exec-bounded",
+		Line: `for i in 1 2 3 4 5 6; do printf 'chunk-%d-0123456789\n' "$i"; sleep 0.01; done; exit 7`,
+	})
+	if err != nil {
+		t.Fatalf("StartExec: %v", err)
+	}
+	_ = proc.Stdin().Close()
+
+	var fullOut bytes.Buffer
+	code, _, err := proc.Wait(&fullOut, io.Discard)
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if code != 7 {
+		t.Fatalf("exit code = %d, want 7", code)
+	}
+
+	srv.mu.Lock()
+	ex := srv.execs["exec-bounded"]
+	srv.mu.Unlock()
+	if ex == nil {
+		t.Fatal("expected exec-bounded to still be retained immediately after exit")
+	}
+	ex.mu.Lock()
+	bufBytes := ex.bufferedBytes
+	baseIdx := ex.baseIdx
+	ex.mu.Unlock()
+	if bufBytes > 64 && len(ex.chunks) > 1 {
+		t.Fatalf("bufferedBytes = %d, want <= 64", bufBytes)
+	}
+	if baseIdx == 0 {
+		t.Fatalf("expected baseIdx > 0 after ring-buffer trimming, got %d", baseIdx)
+	}
+
+	// Reattaching immediately after exit should still succeed and return the tail.
+	var tailOut bytes.Buffer
+	reCode, err := cli.Reattach(ctx, "exec-bounded", 0, &tailOut, io.Discard)
+	if err != nil || reCode != 7 {
+		t.Fatalf("Reattach = code %d, err %v; want 7, nil", reCode, err)
+	}
+	if !strings.HasSuffix(fullOut.String(), tailOut.String()) || tailOut.Len() == 0 {
+		t.Fatalf("Reattach tail %q is not a non-empty suffix of full output %q", tailOut.String(), fullOut.String())
+	}
+
+	// After CompletedExecRetention (150ms) elapses, the completed session must be
+	// evicted from s.execs and Reattach must return ErrExecNotFound.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_, rerr := cli.Reattach(ctx, "exec-bounded", 0, io.Discard, io.Discard)
+		if errors.Is(rerr, ErrExecNotFound) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("completed exec session was not evicted after CompletedExecRetention")
 }
