@@ -23,46 +23,29 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/ai-on-gke/grain/pkg/gitproxy"
 )
 
-func writeTestCredentialLadder(t *testing.T, patterns, tokens map[string]string) *gitproxy.CredentialSet {
-	t.Helper()
-	dir := t.TempDir()
-	if patterns != nil {
-		data, err := json.Marshal(patterns)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "credentials.json"), data, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for name, token := range tokens {
-		if err := os.WriteFile(filepath.Join(dir, name+".token"), []byte(token+"\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	creds, err := gitproxy.LoadCredentialSet(dir)
-	if err != nil {
-		t.Fatalf("LoadCredentialSet: %v", err)
-	}
-	// The deployment's git connections, spelled as the patterns map:
-	// "owner/repo", then "owner/*", then "*".
-	creds.SetConnections(func(owner, repo string) (string, bool) {
-		for _, p := range []string{owner + "/" + repo, owner + "/*", "*"} {
-			if name, ok := patterns[p]; ok && name != "" {
-				return name, true
+type testCredentialLadder struct {
+	patterns map[string]string
+	tokens   map[string]string
+}
+
+func (c *testCredentialLadder) PackageToken(owner, repo string) (string, bool) {
+	for _, p := range []string{owner + "/" + repo, owner + "/*", "*"} {
+		if name, ok := c.patterns[p]; ok && name != "" {
+			if tok, ok := c.tokens[name]; ok && tok != "" {
+				return tok, true
 			}
 		}
-		return "", false
-	})
-	return creds
+	}
+	return "", false
+}
+
+func writeTestCredentialLadder(t *testing.T, patterns, tokens map[string]string) RegistryCredentials {
+	t.Helper()
+	return &testCredentialLadder{patterns: patterns, tokens: tokens}
 }
 
 func basicAuthHeader(username, password string) string {
