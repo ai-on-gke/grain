@@ -46,6 +46,64 @@ var transientErrorSubstrings = []string{
 	"the exec session ended before the command reported an exit status",
 	"flaky",
 	"intermittent",
+	"not reachable",
+}
+
+// IsDaemonServiceError reports whether text describes a failure to reach a
+// daemon-hosted local service (the git proxy on 127.0.0.1:9728 or the Actions
+// cache on 127.0.0.1:9758 / _apis/artifactcache/) that goes away while the
+// daemon is shutting down.
+func IsDaemonServiceError(text string) bool {
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "this daemon runs no git proxy") {
+		return true
+	}
+	if strings.Contains(lower, "127.0.0.1:9728") || strings.Contains(lower, "localhost:9728") {
+		if strings.Contains(lower, "connection reset") ||
+			strings.Contains(lower, "connection refused") ||
+			strings.Contains(lower, "not reachable") ||
+			strings.Contains(lower, "eof") ||
+			strings.Contains(lower, "unable to access") ||
+			strings.Contains(lower, "failed to connect") {
+			return true
+		}
+	}
+	if strings.Contains(lower, "actions cache") || strings.Contains(lower, "_apis/artifactcache") {
+		if strings.Contains(lower, "not reachable") ||
+			strings.Contains(lower, "connection reset") ||
+			strings.Contains(lower, "connection refused") ||
+			strings.Contains(lower, "eof") {
+			return true
+		}
+	}
+	return false
+}
+
+// JobFailedOnDaemonService reports whether result failed or errored with a
+// daemon-service error in its job error, step error, or step output.
+func JobFailedOnDaemonService(result workflows.JobRun) bool {
+	if IsDaemonServiceError(result.Error) {
+		return true
+	}
+	for _, step := range result.Steps {
+		if IsDaemonServiceError(step.Error) || IsDaemonServiceError(step.Output) {
+			return true
+		}
+	}
+	for _, att := range result.Attempts {
+		if IsDaemonServiceError(att.Error) {
+			return true
+		}
+		for _, step := range att.Steps {
+			if IsDaemonServiceError(step.Error) || IsDaemonServiceError(step.Output) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // IsTransientOrInfrastructureError reports whether text matches known

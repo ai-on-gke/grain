@@ -26,7 +26,7 @@ import (
 )
 
 // ChangeTarget names where a non-git task's changes live: a registered target
-// kind (such as "google3" for a CitC workspace) and its target-specific JSON
+// kind (such as a changelist workspace) and its target-specific JSON
 // specification. A task with a ChangeTarget has no git repository (Target ==
 // nil) and runs on the workspace-only (NoRepo) checkout path.
 type ChangeTarget struct {
@@ -107,7 +107,7 @@ func (ct ChangeTarget) MarshalYAML() (any, error) {
 }
 
 // UnmarshalYAML reads a ChangeTarget from either a {kind, spec} mapping or a
-// bare kind string (such as "google3").
+// bare kind string (such as "monorepo").
 func (ct *ChangeTarget) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind == yaml.ScalarNode {
 		kind := strings.TrimSpace(node.Value)
@@ -169,7 +169,7 @@ type ChangeTargetRegistration struct {
 	// nil/empty for the empty spec) or a validation error.
 	Validate func(spec json.RawMessage) (json.RawMessage, error)
 	// EnsureGrants returns grants with the target's implied capability grant
-	// attached (for example, citc#workspace on a google3 task) when none is
+	// attached (for example, a workspace capability on a changelist task) when none is
 	// present, or merges target spec fields into an existing grant.
 	EnsureGrants func(spec json.RawMessage, grants []Grant) ([]Grant, error)
 	// NeedsPersonApproval reports whether this target spec requires a human's
@@ -178,7 +178,7 @@ type ChangeTargetRegistration struct {
 	NeedsPersonApproval func(spec json.RawMessage) (bool, string)
 	// FilingCheck names a control tool of a capability server, and the
 	// arguments to call it with, that checks spec live when a task carrying
-	// it is filed (for example, that a google3 start_cl is still pending);
+	// it is filed (for example, that a start_cl is still pending);
 	// "" when spec needs no live check. The tool answers {ok, reason}. A
 	// filing whose daemon reaches no server with the tool is not refused:
 	// the capability's own mint checks again at dispatch.
@@ -196,14 +196,20 @@ var (
 	changeTargets   = map[string]ChangeTargetRegistration{}
 )
 
-// RegisterChangeTarget registers a ChangeTargetRegistration by Kind.
-func RegisterChangeTarget(reg ChangeTargetRegistration) {
+// RegisterChangeTarget registers a ChangeTargetRegistration by Kind and returns
+// a function that removes the registration (for tests).
+func RegisterChangeTarget(reg ChangeTargetRegistration) func() {
 	if strings.TrimSpace(reg.Kind) == "" {
 		panic("model.RegisterChangeTarget: empty Kind")
 	}
 	changeTargetsMu.Lock()
-	defer changeTargetsMu.Unlock()
 	changeTargets[reg.Kind] = reg
+	changeTargetsMu.Unlock()
+	return func() {
+		changeTargetsMu.Lock()
+		delete(changeTargets, reg.Kind)
+		changeTargetsMu.Unlock()
+	}
 }
 
 // LookupChangeTarget returns the registration for kind, if any.
@@ -238,16 +244,7 @@ func ValidateChangeTarget(ct *ChangeTarget) (*ChangeTarget, error) {
 	}
 	reg, ok := LookupChangeTarget(kind)
 	if !ok {
-		if kind != "google3" {
-			return nil, fmt.Errorf("unknown change target kind %q", kind)
-		}
-		// When core tests run without linking google/, still validate that
-		// Spec is a JSON object if provided.
-		norm, err := validateGenericSpecObject(ct.Spec)
-		if err != nil {
-			return nil, fmt.Errorf("%s target: %w", kind, err)
-		}
-		return &ChangeTarget{Kind: kind, Spec: norm}, nil
+		return nil, fmt.Errorf("unknown change target kind %q", kind)
 	}
 	var norm json.RawMessage
 	if reg.Validate != nil {

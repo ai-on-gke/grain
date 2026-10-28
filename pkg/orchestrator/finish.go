@@ -1744,13 +1744,17 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// workspace or a CL to continue is held for a person below.
 		var needsPersonWhy string
 		if ct, err := mcp.ProposedChangeTarget(p); err != nil || ct != nil {
+			kind := "change"
+			if ct != nil && ct.Kind != "" {
+				kind = ct.Kind
+			}
 			if err == nil {
 				proposal.ChangeTarget = ct
 				err = model.ValidateTaskChangeTarget(&proposal)
 			}
 			if err != nil {
 				proposal.ChangeTarget = nil
-				needsPersonWhy = fmt.Sprintf("grain could not use its google3 target (%v), so it was filed with no repo", err)
+				needsPersonWhy = fmt.Sprintf("grain could not use its %s target (%v), so it was filed with no repo", kind, err)
 			} else if needs, why := model.ChangeTargetNeedsPersonApproval(proposal.ChangeTarget); needs {
 				needsPersonWhy = why
 			}
@@ -2223,7 +2227,7 @@ func proposedTarget(ctx context.Context, store *model.Store, args map[string]any
 	if noRepo, _ := args["no_repo"].(bool); noRepo {
 		return nil, "", "", nil
 	}
-	if _, google3 := args["google3"]; google3 {
+	if ct, err := mcp.ProposedChangeTarget(args); err != nil || ct != nil {
 		return nil, "", "", nil
 	}
 
