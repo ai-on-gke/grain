@@ -78,6 +78,9 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
                                          Deployment memory and standing docs (memory / api:memory:write)
   grain release-notes (stats | publish --version <v> <body|--file f>)
                                          Release notes stats and publishing (release-notes)
+  grain cap list                         Capability tools this run's grants let the sandbox call
+  grain cap <server> <tool> [flags | --json '<args>']
+                                         Call one (--help lists its flags, generated from its input schema)
   grain quarantine <pkg> <test> --reason <why> [--no-follow-up]
                                          Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (quarantine-test)
   grain metrics [<section>]              grain's own measurements (self-debug)
@@ -162,6 +165,11 @@ ARGUMENTS & FLAGS:
 
 // sandboxCommandHelp is each command's --help.
 var sandboxCommandHelp = map[string]string{
+	"cap": "grain cap list [--json]\ngrain cap <server> [--help]\ngrain cap <server> <tool> --help\ngrain cap <server> <tool> [flags | --json '<args>']\n\n" +
+		"Call a tool of an external capability server granted to this run, from the sandbox. Only tools\n" +
+		"whose capability marks them sandbox-callable are here; a model-only tool is the agent's own MCP\n" +
+		"tool and the proxy refuses it. Each tool's flags are generated from its input schema.\n\n" +
+		"  grain cap list\n  grain cap widgets ping --help\n  grain cap widgets ping --host example.com --count 3\n  grain cap widgets ping --json '{\"host\":\"example.com\"}'\n",
 	"ls":              "grain ls <uri> [--glob <pat>]\n\nList a namespace directory.\n\n  grain ls ci://bwsalmon/grain\n  grain ls task://\n  grain ls src://pkg --glob '*_test.go'\n",
 	"read":            "grain read <uri> [--tail N] [--offset N --limit N]\n\nPrint a namespace file to stdout, whole: there is no size cap.\n\n  grain read task://1436/record.md\n  grain read ci://bwsalmon/grain/<run>/go/gotest.log --tail 4000\n",
 	"grep":            "grain grep <pattern> <uri> [-i] [-C N] [--glob <pat>]\n\nSearch a namespace file or subtree with an RE2 regular expression.\n\n  grain grep -- '--- FAIL' ci://bwsalmon/grain/<run>/go/gotest.log\n  grain grep -i -C 2 TODO src://pkg/ci --glob '*.go'\n",

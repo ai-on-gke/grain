@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
@@ -36,6 +37,8 @@ import (
 type fakeDataPlane struct {
 	names map[string]string
 	tools []string
+	// extra is merged into a tool's tools/list entry, by tool name.
+	extra map[string]map[string]any
 
 	mu    sync.Mutex
 	paths []string
@@ -68,7 +71,11 @@ func (f *fakeDataPlane) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if req.Method == "tools/list" {
 		var tools []map[string]any
 		for _, t := range f.tools {
-			tools = append(tools, map[string]any{"name": t, "inputSchema": map[string]any{"type": "object"}})
+			entry := map[string]any{"name": t, "inputSchema": map[string]any{"type": "object"}}
+			for k, v := range f.extra[t] {
+				entry[k] = v
+			}
+			tools = append(tools, entry)
 		}
 		result = map[string]any{"tools": tools}
 	}
@@ -223,4 +230,83 @@ func TestWireEndpointsNarratesEachToolCallUnderItsServersName(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the call was not narrated")
 	}
+}
+
+func TestWireEndpointsPartitionsToolsByDelivery(t *testing.T) {
+	fake := &fakeDataPlane{
+		names: map[string]string{"grain-task-1-1-0": "widgets", "grain-task-1-1-1": "gadgets"},
+		tools: []string{"opted_in", "opted_out", "silent"},
+		extra: map[string]map[string]any{
+			"opted_in":  {"annotations": map[string]any{"modelOnly": false}},
+			"opted_out": {"x-grain-model-only": true},
+		},
+	}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	pass := testPass(
+		&protocol.MintResponse{MCPEndpoint: "/runs/grain-task-1-1-0/mcp"},
+		&protocol.MintResponse{MCPEndpoint: "/runs/grain-task-1-1-1/mcp"},
+	)
+	// The first grant's method says nothing, so its silent tool keeps the
+	// external default, model-only; the second's opts its tools into the
+	// sandbox, which a tool's own modelOnly still overrides.
+	pass.Grants[1].MCPDelivery = protocol.DeliverySandbox
+	m := &passMaterialization{pass: pass}
+	defer m.Close()
+	err := m.wireEndpoints(context.Background(), func(string) (protocol.DataPlane, error) {
+		return protocol.DataPlane{Origin: srv.URL, Headers: map[string]string{"Authorization": "Bearer data-plane"}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := map[string]string{}
+	for _, s := range m.servers {
+		host[s.Name] = strings.Join(s.Tools, ",")
+	}
+	if want := map[string]string{"widgets": "opted_out,silent", "gadgets": "opted_out"}; !equalStringMaps(host, want) {
+		t.Errorf("model-only tools on the agent CLI = %v, want %v", host, want)
+	}
+	sandbox := map[string]string{}
+	for _, s := range m.capServers {
+		var names []string
+		for _, tool := range s.Tools {
+			if !tool.ModelOnly {
+				names = append(names, tool.Name)
+			}
+		}
+		sandbox[s.Name] = strings.Join(names, ",")
+	}
+	if want := map[string]string{"widgets": "opted_in", "gadgets": "opted_in,silent"}; !equalStringMaps(sandbox, want) {
+		t.Errorf("sandbox tools = %v, want %v", sandbox, want)
+	}
+	for _, want := range []string{"<capability-cli>", "- grain cap widgets opted_in\n", "- grain cap gadgets silent\n"} {
+		if !strings.Contains(m.promptSections, want) {
+			t.Errorf("prompt sections do not carry %q:\n%s", want, m.promptSections)
+		}
+	}
+	if strings.Contains(m.promptSections, "grain cap widgets silent") || strings.Contains(m.promptSections, "opted_out\n") {
+		t.Errorf("prompt sections name a model-only tool as a grain cap command:\n%s", m.promptSections)
+	}
+
+	registry := gitproxy.NewCapRegistry()
+	m.registerSandboxCapabilities(registry, gitproxy.CapRunKey("run-1"))
+	if got, ok := registry.Servers(gitproxy.CapRunKey("run-1")); !ok || len(got) != 2 {
+		t.Fatalf("registered servers = %v, %v", got, ok)
+	}
+	m.Close()
+	if _, ok := registry.Servers(gitproxy.CapRunKey("run-1")); ok {
+		t.Error("the run's sandbox tools are still on the proxy after the attempt closed")
+	}
+}
+
+func equalStringMaps(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }

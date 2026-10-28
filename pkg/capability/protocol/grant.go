@@ -93,6 +93,9 @@ type Grant struct {
 	// Releasable is copied from the method at admission, so that releasing
 	// a grant needs nothing but the grant.
 	Releasable bool
+	// MCPDelivery is copied from the method at admission too: the
+	// default delivery of the tools its endpoint serves (§5.2.6).
+	MCPDelivery string
 }
 
 // Equal is grant equality (§2.3.2): identical canonical references and
@@ -158,7 +161,7 @@ func normalizeOne(spec GrantSpec, lookup Lookup) (Grant, error) {
 		}
 		return Grant{}, fmt.Errorf("capability %s: %v", ref, err)
 	}
-	return Grant{Ref: ref, Args: args, Releasable: m.Releasable}, nil
+	return Grant{Ref: ref, Args: args, Releasable: m.Releasable, MCPDelivery: m.MCPDelivery}, nil
 }
 
 // personGranted is the methods only a person may grant

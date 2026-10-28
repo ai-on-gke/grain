@@ -138,6 +138,14 @@ type MethodDetail struct {
 	// Releasable is release_<method> being advertised: the method is
 	// stateful and its leases are released at teardown.
 	Releasable bool `json:"releasable"`
+	// Delivery is how the tools its grants' endpoints serve are
+	// delivered unless a tool says otherwise (docs/capabilities-spec.md
+	// §5.2.6): "sandbox", through grain cap, or "model_only", the
+	// default, on the agent's own MCP channel alone.
+	Delivery string `json:"delivery"`
+	// DeliveryDeclared says the method declared Delivery itself
+	// (annotations.mcpDelivery) rather than falling to the default.
+	DeliveryDeclared bool `json:"deliveryDeclared"`
 }
 
 // AttachFunc is protocol.Attach's signature; tests substitute their own.
@@ -719,7 +727,8 @@ func methodDetails(server *protocol.Server) []MethodDetail {
 	out := make([]MethodDetail, 0, len(server.Methods))
 	for _, name := range methodNames(server) {
 		m := server.Methods[name]
-		out = append(out, MethodDetail{Name: name, Description: m.Description, Args: m.ArgsSchema, Releasable: m.Releasable})
+		out = append(out, MethodDetail{Name: name, Description: m.Description, Args: m.ArgsSchema, Releasable: m.Releasable,
+			Delivery: protocol.DeliveryMode(protocol.ResolveModelOnly(nil, m.MCPDelivery)), DeliveryDeclared: m.MCPDelivery != ""})
 	}
 	return out
 }

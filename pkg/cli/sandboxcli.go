@@ -125,6 +125,7 @@ var sandboxCommands = map[string][]string{
 	"metrics":       nil, "health": nil, "log": nil, "playbooks": nil,
 	"issue": {"list", "read"},
 	"db":    {"query"},
+	"cap":   nil,
 }
 
 // isSandboxCommand reports whether args name a command sandbox mode serves.
@@ -195,6 +196,11 @@ func (c *sandboxCLI) run(args []string) error {
 		return nil
 	}
 	rest := args[1:]
+	if cmd == "cap" {
+		// grain cap <server> <tool>'s flags are the tool's own, and its
+		// --help the tool's.
+		return c.capCommand(rest)
+	}
 	if sandboxCommands[cmd] != nil {
 		if len(rest) == 0 || isHelpFlag(rest[0]) {
 			return c.help(cmd)

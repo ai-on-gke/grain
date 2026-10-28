@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -87,6 +88,10 @@ type passMaterialization struct {
 	endpoints      []capabilityEndpoint
 	servers        []agent.CapabilityMCPServer
 	promptSections string
+	// capServers are the grants' sandbox-callable tools (§5.2.6), and
+	// unregisterCap takes them off the sandbox proxy's /cap/ again.
+	capServers    []gitproxy.CapServer
+	unregisterCap func()
 	// narrator, set before wireEndpoints, is told of every tool call made
 	// through the endpoints; nil narrates nothing (a CI job's pass, which
 	// has no task row).

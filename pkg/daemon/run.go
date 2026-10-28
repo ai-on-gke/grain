@@ -1335,7 +1335,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// Where a capability grant's ports are forwarded through.
 			CapabilityPorts:    capabilityPorts,
 			CapabilityPortsURL: capabilityPortsURL,
-			GrantTools:         grantTools(grainSrcDir, SecretsDir(cfg.DataDir)),
+			// Where a run's sandbox-callable capability tools are
+			// registered for the proxy's /cap/ (grain cap).
+			CapabilitySandboxServers: SandboxCapabilities,
+			GrantTools:               grantTools(grainSrcDir, SecretsDir(cfg.DataDir)),
 			// Where a sandbox reaches this deployment's package
 			// cache -- asked per dispatch, and answering "" while the
 			// setting is off, so the switch in Settings reaches the next

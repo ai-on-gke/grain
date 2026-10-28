@@ -355,12 +355,18 @@ func dumpRowsOf(dir, table string) ([]map[string]any, bool, error) {
 	path := filepath.Join(dir, TablesDir, table+".json")
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return nil, false, nil
+			// settings/capabilities.yml may still speak for it.
+			return overlayCapabilities(dir, table, nil, false)
 		}
 		return nil, false, fmt.Errorf("staterepo: reading %s: %w", path, err)
 	}
 	rows, err := readRows(path)
-	return rows, true, err
+	if err != nil {
+		return nil, false, err
+	}
+	// The columns settings/capabilities.yml projects onto read as the
+	// file says (capabilities_file.go).
+	return overlayCapabilities(dir, table, rows, true)
 }
 
 // declDocument is one settings file, parsed: the entries in the order
@@ -532,7 +538,7 @@ func exportDeclarations(ctx context.Context, db querier, dir string) error {
 			return err
 		}
 	}
-	return nil
+	return exportCapabilities(ctx, db, dir)
 }
 
 // declDocumentFor renders one kind's whole file.
