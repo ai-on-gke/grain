@@ -19,7 +19,7 @@ import { formatDateTime } from "../time.js";
 // The guide this tab and Settings → Capabilities share
 // (docs/capability-servers-ui.md), which says how the two differ.
 const CAPABILITIES_GUIDE =
-  "https://github.com/bwsalmon/grain/blob/main/docs/capability-servers-ui.md#legacy-capabilities";
+  "https://github.com/ai-on-gke/grain/blob/main/docs/capability-servers-ui.md#legacy-capabilities";
 
 // chipHelp is what each chip on this tab means, shown as its tooltip
 // and, for the open capability, written out under it.

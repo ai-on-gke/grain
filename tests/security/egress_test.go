@@ -9,10 +9,10 @@ import (
 
 	"golang.org/x/net/dns/dnsmessage"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
 // A sandbox with network access "none" reaches this deployment's own

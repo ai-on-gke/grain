@@ -6,16 +6,16 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/capability/githubtoken"
-	"github.com/bwsalmon/grain/pkg/capability/packagepublish"
-	"github.com/bwsalmon/grain/pkg/capability/servers"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/k8s"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelexec"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/pkgcache"
-	"github.com/bwsalmon/grain/pkg/sandboximage"
+	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
+	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelexec"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/sandboximage"
 )
 
 // logSandboxCommitment is gone, with the arithmetic it printed

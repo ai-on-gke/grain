@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The kind tags a task can carry (docs/design/durable-tasks.md#DT-13):

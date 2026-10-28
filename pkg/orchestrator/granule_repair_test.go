@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // TestGuestDockerNetworkRepairScript runs the repair script against a

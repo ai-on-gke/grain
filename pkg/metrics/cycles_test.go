@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/metrics"
+	"github.com/ai-on-gke/grain/pkg/metrics"
 )
 
 // tick is one cycle as a daemon would report it: started d into the

@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 const CapabilityName = "deployment-health"

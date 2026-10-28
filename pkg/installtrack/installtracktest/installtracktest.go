@@ -7,7 +7,7 @@ package installtracktest
 import (
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 )
 
 const (

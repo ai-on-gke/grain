@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A pull request grain opens has to say what the change does, and the

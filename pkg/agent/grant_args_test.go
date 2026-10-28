@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // The arguments a forked mcpserver needs before it serves the self-debug

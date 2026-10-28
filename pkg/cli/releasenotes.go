@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/releasenotes"
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/releasenotes"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // releaseNotesCmd is `grain release-notes`: the per-version release

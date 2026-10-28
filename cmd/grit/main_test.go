@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/attest"
-	"github.com/bwsalmon/grain/pkg/grit/actions"
+	"github.com/ai-on-gke/grain/pkg/attest"
+	"github.com/ai-on-gke/grain/pkg/grit/actions"
 )
 
 func TestMappingsString(t *testing.T) {

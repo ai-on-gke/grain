@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/k8s"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
 // K8sConfig is what K8sSandboxes needs to create and reach one pod per

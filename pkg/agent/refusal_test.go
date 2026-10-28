@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // The bound is the point: this is a provider's own output, and a

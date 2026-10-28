@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A run's REST reads of a GitHub-on-Prem repository go through the host

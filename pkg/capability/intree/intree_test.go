@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets"
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets/gcpfake"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets/gcpfake"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
 )
 
 const controlToken = "control-plane-token-0123456789abcdef"

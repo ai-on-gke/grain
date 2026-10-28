@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // A task filed with "create a new branch" (grain/task-2317) targets the

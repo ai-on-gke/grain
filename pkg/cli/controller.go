@@ -24,13 +24,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
 
 	"github.com/pkg/browser"
 
-	"github.com/bwsalmon/grain/pkg/capability/githubsandbox"
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 )
 
 // manifestPermissions is what GitHub Apps registered through this
@@ -124,7 +124,7 @@ func controller(args []string) {
 func bootstrapGitHubApp(args []string) error {
 	fs := flag.NewFlagSet("grain controller bootstrap-github-app", flag.ExitOnError)
 	name := fs.String("name", "grain-sandbox", "name for the new GitHub App")
-	homepage := fs.String("url", "https://github.com/bwsalmon/grain", "homepage URL the App manifest requires")
+	homepage := fs.String("url", "https://github.com/ai-on-gke/grain", "homepage URL the App manifest requires")
 	dataDir := fs.String("data-dir", "", "root directory a colocated `grain daemon` was started with -- the App's credentials are written into <data-dir>/secrets, the same store `grain daemon` and `grain secrets` read and write (required)")
 	githubHost := fs.String("github-host", "github.com", "GitHub host to run the manifest flow against")
 	org := fs.String("org", "", "GitHub organization login to register the App under (empty registers under the signed-in account)")

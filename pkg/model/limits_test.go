@@ -3,7 +3,7 @@ package model_test
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The whole of the rule the three numbers make, as a table: a team's

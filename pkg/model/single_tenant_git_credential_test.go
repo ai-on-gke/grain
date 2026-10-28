@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Every store resolves every task's git credential through the

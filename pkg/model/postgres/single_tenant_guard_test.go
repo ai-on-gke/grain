@@ -4,9 +4,9 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/guardtest"
-	"github.com/bwsalmon/grain/pkg/model/postgres/postgrestest"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/guardtest"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 )
 
 // The single-tenant startup guard (docs/single-tenant-reset.md, stage 5)

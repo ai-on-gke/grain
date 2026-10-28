@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/gitrefs"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/gitrefs"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // reftableByDefault points HOME at a global config asking for reftable,

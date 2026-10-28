@@ -51,7 +51,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // vocabularyWarnings reads one table file's rows for words this build

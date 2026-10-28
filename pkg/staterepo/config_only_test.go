@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 func TestExportConfigLeavesOperationalRowsOnlyInSQLite(t *testing.T) {

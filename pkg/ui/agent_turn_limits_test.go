@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // An antigravity connection's model-turn limits are saved through the

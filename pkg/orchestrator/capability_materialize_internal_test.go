@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/portforward"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/capability/portforward"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // commandSandbox is a Sandbox that records every command run in it and

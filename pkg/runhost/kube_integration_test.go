@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/k8s"
 )
 
 // TestKubeRunHostSurvivesADaemonRoll is the Kubernetes half of the
@@ -45,8 +45,8 @@ func TestKubeRunHostSurvivesADaemonRoll(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	for _, b := range [][]string{
-		{"go", "build", "-o", filepath.Join(dir, "grain"), "github.com/bwsalmon/grain/cmd/grain"},
-		{"go", "test", "-c", "-o", filepath.Join(dir, "runhost.test"), "github.com/bwsalmon/grain/pkg/runhost"},
+		{"go", "build", "-o", filepath.Join(dir, "grain"), "github.com/ai-on-gke/grain/cmd/grain"},
+		{"go", "test", "-c", "-o", filepath.Join(dir, "runhost.test"), "github.com/ai-on-gke/grain/pkg/runhost"},
 	} {
 		cmd := exec.Command(b[0], b[1:]...)
 		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")

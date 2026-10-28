@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/cifault"
+	"github.com/ai-on-gke/grain/pkg/cifault"
 )
 
 var cacheStart = time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)

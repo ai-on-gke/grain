@@ -28,8 +28,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Load reads everything repo's tree declares.

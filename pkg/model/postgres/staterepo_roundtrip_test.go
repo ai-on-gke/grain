@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/postgres/postgrestest"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // The state repository's export and import, end to end on Postgres:

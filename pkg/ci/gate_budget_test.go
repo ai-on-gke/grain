@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // budgetGateBudget is a 16 vCPU / 32 GiB budget: four sandboxes of

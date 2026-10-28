@@ -44,7 +44,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/procgroup"
+	"github.com/ai-on-gke/grain/pkg/procgroup"
 )
 
 // MaxBuffer is how much of a session's output the Manager keeps. A

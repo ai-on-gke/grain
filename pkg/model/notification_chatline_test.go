@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The director's notification line is grain-authored, but a run wrote

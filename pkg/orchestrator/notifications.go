@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // reconcileNotifications is the per-cycle half of operator notifications

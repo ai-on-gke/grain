@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/console"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/console"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func TestMaterializeMovesNothingIntoASandbox(t *testing.T) {

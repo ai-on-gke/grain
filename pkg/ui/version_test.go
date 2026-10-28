@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 func TestVersionResponseFromCarriesTheWholeStamp(t *testing.T) {

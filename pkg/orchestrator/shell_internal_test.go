@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // fakeShellRunner is a sandboxRunner that answers with a fixed pair, and

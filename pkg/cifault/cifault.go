@@ -27,8 +27,8 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // FileLister is the read-only slice of pkg/github.Client this package

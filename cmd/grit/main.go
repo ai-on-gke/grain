@@ -18,8 +18,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/grit/actions"
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/grit/actions"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 type mappings map[string]string

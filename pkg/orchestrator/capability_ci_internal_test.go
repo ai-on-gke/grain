@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/portforward"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/portforward"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // ciMCPConfig is the mcp.json a CI job's sandbox was given.

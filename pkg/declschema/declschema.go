@@ -145,7 +145,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Context is one of the two places one of these things is written.

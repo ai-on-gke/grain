@@ -10,7 +10,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // testKey is a throwaway RSA key for signing/verifying test JWTs -- never

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/intree"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 type fakeCaller struct {

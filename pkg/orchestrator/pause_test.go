@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func baseNow() time.Time { return time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC) }

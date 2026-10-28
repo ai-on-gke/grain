@@ -3,7 +3,7 @@ package model_test
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A chat's tree: the chat at the root, uncounted; what it filed nested

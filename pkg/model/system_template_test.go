@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A document a person wrote is marked with nothing but the bare fact --

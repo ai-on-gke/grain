@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ServerGitRemote is the remote a git command grain runs on this host

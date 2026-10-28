@@ -3,8 +3,8 @@ package orchestrator_test
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // What grain CI asks so that it can spend the deployment's sandboxes on

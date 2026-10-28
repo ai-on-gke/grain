@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	capmodelproxy "github.com/bwsalmon/grain/pkg/capability/modelproxy"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelproxy"
+	capmodelproxy "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
 )
 
 // DefaultModelProxyPort is the model-proxy server's first data-plane port

@@ -3,7 +3,7 @@ package cli
 import (
 	"flag"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 )
 
 // localFlags defines the daemon's direct local-configuration flags, which

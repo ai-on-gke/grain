@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A template's `push:` (grain/task-2536): the refs beyond their own

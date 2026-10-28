@@ -131,7 +131,7 @@ $ go test -v ./pkg/access/... ./pkg/iapreconciler/...
 === RUN   TestHandlerAdminAuthorization
 --- PASS: TestHandlerAdminAuthorization (0.00s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/access	0.077s
+ok  	github.com/ai-on-gke/grain/pkg/access	0.077s
 
 === RUN   TestNormalizeMember
 --- PASS: TestNormalizeMember (0.00s)
@@ -160,7 +160,7 @@ ok  	github.com/bwsalmon/grain/pkg/access	0.077s
 === RUN   TestReconcileIAPMembers_ValidationErrors
 --- PASS: TestReconcileIAPMembers_ValidationErrors (0.00s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/iapreconciler	0.007s
+ok  	github.com/ai-on-gke/grain/pkg/iapreconciler	0.007s
 ```
 
 ```text
@@ -191,7 +191,7 @@ Removed access account user:alice@example.com
 Removed access account acc-55bb5b6a42254b2f
 --- PASS: TestCLIAccess (0.07s)
 PASS
-ok  	github.com/bwsalmon/grain/cmd/grain	0.086s
+ok  	github.com/ai-on-gke/grain/cmd/grain	0.086s
 ```
 
 ### 4.2 Package Cache & Playwright TLS Interception Suites
@@ -229,7 +229,7 @@ $ go test -v ./pkg/pkgcache/... -run "TestPlaywright|TestCA|TestTransparent"
 === RUN   TestTransparentConcurrentLoad
 --- PASS: TestTransparentConcurrentLoad (0.05s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/pkgcache	0.138s
+ok  	github.com/ai-on-gke/grain/pkg/pkgcache	0.138s
 ```
 
 ### 4.3 Frontend Vitest Unit Tests

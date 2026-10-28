@@ -38,10 +38,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/granule"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/sandboxaddr"
+	"github.com/ai-on-gke/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 )
 
 func TestGranuleBackendsWalkthroughOnRealVMs(t *testing.T) {

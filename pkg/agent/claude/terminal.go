@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // Asserted here rather than at the one call site that type-asserts for it

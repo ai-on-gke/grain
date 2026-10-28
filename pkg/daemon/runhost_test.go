@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent/claude"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/runhost"
+	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/runhost"
 )
 
 // TestNewRunHostGivesDockerRunHostsTheCredentialDirectoryAsHome: a docker

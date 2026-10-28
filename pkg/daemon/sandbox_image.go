@@ -6,9 +6,9 @@ import (
 	"log"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/sandboximage"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/sandboximage"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // granuleImageFlag is granule's own flag naming the image a VM's

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/readissues"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/readissues"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func TestSpecIsAGrantThatMintsNothing(t *testing.T) {

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Review threads somebody else opens on a grain-owned pull request -- a

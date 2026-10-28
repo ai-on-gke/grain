@@ -136,7 +136,7 @@ func (j *testJournal) release(t *testing.T) {
 // (this file's whole reason to exist) is printed underneath it and pushes
 // it out of view, and the "ok" lines of every package that finishes after
 // this one push it further. A line here lands immediately before
-// `FAIL github.com/bwsalmon/grain/pkg/upgrade`: if a reader can see that
+// `FAIL github.com/ai-on-gke/grain/pkg/upgrade`: if a reader can see that
 // this package is what failed, they can see which test did.
 //
 // Only tests that claimed the log are in it -- every test that runs an

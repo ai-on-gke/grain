@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent/codex"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func TestBackendCodexAuthUploadReplaceClear(t *testing.T) {

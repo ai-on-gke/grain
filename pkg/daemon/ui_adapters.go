@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/bwsalmon/grain/pkg/agent/codex"
-	"github.com/bwsalmon/grain/pkg/agent/credcheck"
-	"github.com/bwsalmon/grain/pkg/k8s"
-	"github.com/bwsalmon/grain/pkg/metrics"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/secrets"
-	"github.com/bwsalmon/grain/pkg/sysstat"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	"github.com/ai-on-gke/grain/pkg/agent/credcheck"
+	"github.com/ai-on-gke/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/metrics"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/sysstat"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // sandboxHealthAdapter adapts orchestrator's own SandboxHealth (a core

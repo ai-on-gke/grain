@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/forge"
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/forge"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The merge queue's own live states, written onto the task

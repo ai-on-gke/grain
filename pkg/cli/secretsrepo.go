@@ -15,10 +15,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/secretsrepo"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/secretsrepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 const secretsRepoUsage = `usage: grain secrets repo [-branch B] [-file F] [-token-file T] [URL]

@@ -41,9 +41,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/sandboximage"
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/sandboximage"
 )
 
 var defaultK8sSandboxImage = model.DefaultK8sSandboxImage

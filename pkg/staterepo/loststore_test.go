@@ -24,8 +24,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // A start with the tree intact and the store lost is a restore, and does

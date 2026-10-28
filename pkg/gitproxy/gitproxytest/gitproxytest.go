@@ -15,8 +15,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/authfix"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/authfix"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 )
 
 const (

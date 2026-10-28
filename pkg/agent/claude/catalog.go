@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent/credcheck"
+	"github.com/ai-on-gke/grain/pkg/agent/credcheck"
 )
 
 // Model is one model this deployment's Claude credential can ask for, as

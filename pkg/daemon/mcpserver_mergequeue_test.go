@@ -14,7 +14,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // mergeQueueDaemon answers the three reads daemonMergeQueue makes.

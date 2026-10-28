@@ -15,10 +15,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/capability/selfupgrade"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // TestRouteScopesAreTotal is the route table and the scope table held to

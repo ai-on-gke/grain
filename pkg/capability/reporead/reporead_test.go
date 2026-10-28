@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/reporead"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/reporead"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func TestRepoReadProviderSpec(t *testing.T) {

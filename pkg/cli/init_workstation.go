@@ -39,13 +39,13 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/bwsalmon/grain/pkg/capability/grainci"
-	"github.com/bwsalmon/grain/pkg/daemon"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/policy"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/policy"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 const initWorkstationUsage = `usage: grain init workstation [flags]
@@ -288,7 +288,7 @@ func renderWorkstationUnit(o workstationOptions) string {
 # Logs: journalctl --user -u grain -f
 [Unit]
 Description=Grain (single-tenant) daemon
-Documentation=https://github.com/bwsalmon/grain/blob/main/docs/quickstart.md
+Documentation=https://github.com/ai-on-gke/grain/blob/main/docs/quickstart.md
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=10min

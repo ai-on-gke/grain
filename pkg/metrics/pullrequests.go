@@ -31,7 +31,7 @@ package metrics
 // TaskTiming.FixTaskFiled) joined in memory to the census rows a run
 // writes about itself.
 
-import "github.com/bwsalmon/grain/pkg/model"
+import "github.com/ai-on-gke/grain/pkg/model"
 
 // FixTaskRate is one cohort's follow-through: how many of its runs
 // belonged to a task the merge queue later had to file a fix task for

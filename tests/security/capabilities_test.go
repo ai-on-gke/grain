@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/packagepublish"
-	"github.com/bwsalmon/grain/pkg/capability/registrypush"
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
+	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A capability is authority a run holds: a credential placed in its

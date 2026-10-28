@@ -7,8 +7,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // The deployment's provider connections (model.AgentBackend), one at a

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The merge predicate (grain/task-471, 1023): the whole of "may this change

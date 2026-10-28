@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	grainbackup "github.com/bwsalmon/grain/pkg/backup"
+	grainbackup "github.com/ai-on-gke/grain/pkg/backup"
 )
 
 func BackupService(ctx context.Context, gcsBucket, driveFolder, credentialsFile string) (grainbackup.Service, string, error) {

@@ -66,7 +66,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // How long a wait can run for, and the knobs that are not an agent's to

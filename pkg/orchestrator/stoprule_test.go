@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/dispatch"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/dispatch"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // A background run on a framework with no Stop hook of its own that ends

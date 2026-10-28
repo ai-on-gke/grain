@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ContainerNamePrefix is prepended to a sandbox's own name to make its

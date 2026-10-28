@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/designdoc"
+	"github.com/ai-on-gke/grain/pkg/designdoc"
 )
 
 func TestTrailer(t *testing.T) {

@@ -3,7 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 func newTestFramework(run runner, grain string, opts ...Option) *Framework {

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
 )
 
 // testEndpoint is a proxy whose deployment has one connection of its

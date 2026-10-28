@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func (p *printer) tasks(tasks []ui.Task) {

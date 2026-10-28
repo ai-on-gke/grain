@@ -7,8 +7,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/servers"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A built-in capability server may let any agent create a task workspace

@@ -10,18 +10,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/policy"
-	"github.com/bwsalmon/grain/pkg/runhost"
-	"github.com/bwsalmon/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/policy"
+	"github.com/ai-on-gke/grain/pkg/runhost"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 
-	"github.com/bwsalmon/grain/pkg/capability"
-	"github.com/bwsalmon/grain/pkg/capability/localscripts"
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/granule"
-	"github.com/bwsalmon/grain/pkg/iapreconciler"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelexec"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/capability"
+	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/iapreconciler"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelexec"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 type Config struct {

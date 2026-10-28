@@ -13,14 +13,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite"
-	"github.com/bwsalmon/grain/pkg/secretsrepo"
-	"github.com/bwsalmon/grain/pkg/staterepo"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/secretsrepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func bareSecretsRemote(t *testing.T) string {

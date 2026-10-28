@@ -43,8 +43,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
 )
 
 // CapabilityName is the grant id for one vendor's proxy -- the string

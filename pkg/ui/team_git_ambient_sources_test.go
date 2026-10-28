@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/gitproxy/gitproxytest"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/gitproxy/gitproxytest"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // The connection editor's command-backed forge comes from the registered

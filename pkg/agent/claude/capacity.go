@@ -1,6 +1,6 @@
 package claude
 
-import "github.com/bwsalmon/grain/pkg/agent"
+import "github.com/ai-on-gke/grain/pkg/agent"
 
 // agent/capacity.go has the reasoning all three frameworks share: a
 // provider that is overloaded right now refused this run for reasons

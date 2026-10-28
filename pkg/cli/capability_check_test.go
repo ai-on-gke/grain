@@ -16,13 +16,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpkey"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // noCredentials is a resolver with nothing in it -- a deployment where

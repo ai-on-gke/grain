@@ -35,7 +35,7 @@ A concise guide for capability authors is in [`docs/capabilities.md`](capabiliti
   2. **HTTP (`serverUrl`, `headers`)** — an **external capability server** running outside `grain` and `grain/config` (standalone process, `systemd` service, OCI container, sidecar, or remote HTTP service) that speaks Streamable HTTP MCP (JSON-RPC 2.0 over HTTP(S)) at `serverUrl` (for example, `"http://127.0.0.1:9802/mcp"` or `"https://cap.example.com/mcp"`).
 
 **`capability_id`**
-: The canonical `https://` URL (without query or fragment) that names a Capability Server in Grain's `mcpServers` configuration and in capability references (for example, `https://github.com/bwsalmon/grain/capabilities/gcp`). It is an opaque lookup key: Grain never connects to the `capability_id` URL itself (§3.2.1).
+: The canonical `https://` URL (without query or fragment) that names a Capability Server in Grain's `mcpServers` configuration and in capability references (for example, `https://github.com/ai-on-gke/grain/capabilities/gcp`). It is an opaque lookup key: Grain never connects to the `capability_id` URL itself (§3.2.1).
 
 **Capability Method (`#<method>`)**
 : A named capability referenced as `<capability_id>[#<method>]` (for example, `gcp-key`, `git-repo`, `model-proxy`, `self-debug`, or `skill`) and advertised by a Capability Server in `tools/list` as a mint tool named **`mint_<method>`** whose `inputSchema` accepts `{attempt_id, deadline, args}`; `inputSchema.properties.args` is the schema of the method's `with:` arguments. A stateful method also advertises a teardown tool **`release_<method>`** accepting `{attempt_id}`; a stateless method MAY omit it (§4.1.2).
@@ -125,7 +125,7 @@ A concise guide for capability authors is in [`docs/capabilities.md`](capabiliti
 
 ### 2.1 Grammar of `<capability_id>[#<method>]`
 
-2.1.1. In a Grainfile or task configuration, a capability reference is `<capability_id>[#<method>]` (for example, `https://github.com/bwsalmon/grain/capabilities/gcp#gcp-key`, or bare `https://github.com/bwsalmon/grain/capabilities/self-debug`) and MUST conform to:
+2.1.1. In a Grainfile or task configuration, a capability reference is `<capability_id>[#<method>]` (for example, `https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key`, or bare `https://github.com/ai-on-gke/grain/capabilities/self-debug`) and MUST conform to:
 
 ```abnf
 capability-ref = capability-id [ "#" method-name ]
@@ -157,17 +157,17 @@ DIGIT          = %x30-39 ; 0-9
 
 ```yaml
 capabilities:
-  - https://github.com/bwsalmon/grain/capabilities/self-debug
-  - capability: https://github.com/bwsalmon/grain/capabilities/gcp#gcp-key
+  - https://github.com/ai-on-gke/grain/capabilities/self-debug
+  - capability: https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key
     with:
       account: infra-staging
-  - capability: https://github.com/bwsalmon/grain/capabilities/github#git-repo
+  - capability: https://github.com/ai-on-gke/grain/capabilities/github#git-repo
     with:
       repo: bwsalmon/grain
       mode: write
       base: main
       root: true
-  - capability: https://github.com/bwsalmon/grain/capabilities/github#git-repo
+  - capability: https://github.com/ai-on-gke/grain/capabilities/github#git-repo
     with:
       repo: bwsalmon/silo
       mode: read
@@ -176,7 +176,7 @@ capabilities:
 
 2.2.2. `with:` values are committed to repositories and copied into task records; they MUST NOT carry secrets. A capability that needs a secret selects it by name (`account: infra-staging`) and keeps the material on the server.
 
-2.2.3. On the `grain` CLI, `-capability` accepts a bare reference or a reference followed by `=` and an inline JSON object (`-capability 'https://github.com/bwsalmon/grain/capabilities/gcp#gcp-key={"account":"infra-staging"}'`).
+2.2.3. On the `grain` CLI, `-capability` accepts a bare reference or a reference followed by `=` and an inline JSON object (`-capability 'https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key={"account":"infra-staging"}'`).
 
 ### 2.3 Canonical Grant Identity, Multi-Instance Grants, and Sub-Task Privilege Containment
 
@@ -219,7 +219,7 @@ Each `mcpServers` entry MUST specify either `command` (stdio) or `serverUrl` (HT
 ```json
 {
   "mcpServers": {
-    "https://github.com/bwsalmon/grain/capabilities/gcp": {
+    "https://github.com/ai-on-gke/grain/capabilities/gcp": {
       "command": "grain",
       "args": ["capability", "gcp"],
       "env": {

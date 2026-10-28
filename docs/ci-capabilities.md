@@ -92,7 +92,7 @@ equivalents are already in the binary, served by `grain capability <name>`:
 (`#model-proxy`, for the `<vendor>-proxy` capabilities), `git`
 (`#git-repo`, for repository access), `self-debug` and `skill`. In a
 `.grain/workflows` job they will be granted as references such as
-`https://github.com/bwsalmon/grain/capabilities/gcp#gcp-key` with `with:`
+`https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key` with `with:`
 arguments; the arguments, the environment each server reads its credential
 from, and what each mint places are in
 [docs/capabilities.md](capabilities.md#in-tree-capability-servers-grain-capability-name).

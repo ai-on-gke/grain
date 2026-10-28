@@ -7,7 +7,7 @@ package mcp
 import (
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func argString(args map[string]any, key string) (string, bool) {

@@ -1,6 +1,6 @@
 package ci
 
-import "github.com/bwsalmon/grain/pkg/workflows"
+import "github.com/ai-on-gke/grain/pkg/workflows"
 
 // The run record, its filters and the cache and artifact interfaces moved
 // to pkg/workflows with the parser (docs/design/grit-split.md, GS-2), so

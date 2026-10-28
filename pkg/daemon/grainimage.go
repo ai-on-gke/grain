@@ -1,8 +1,8 @@
 package daemon
 
 import (
-	"github.com/bwsalmon/grain/pkg/staterepo"
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // DefaultGrainImage is overwritten at link time. The value here is the

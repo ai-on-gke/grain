@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // grain/task-473: the config repository's branches are its own

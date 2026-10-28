@@ -30,9 +30,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
 // mirrorPaths is what the stand-in mirror holds: one object per

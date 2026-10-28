@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // The operator control the sentence about a red base branch never had

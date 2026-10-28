@@ -14,7 +14,7 @@ import (
 	iam "google.golang.org/api/iam/v1"
 	"google.golang.org/api/option"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // maxUserManagedKeys is GCP's own cap on user-managed keys per service

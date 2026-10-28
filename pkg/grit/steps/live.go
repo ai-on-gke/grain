@@ -31,7 +31,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/workflows"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // LiveOutputInterval is how often a step still running publishes what it

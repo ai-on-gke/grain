@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // errSecretsUnavailable is what every secrets handler reports when

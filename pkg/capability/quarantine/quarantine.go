@@ -3,7 +3,7 @@
 // and file follow-up repair tasks.
 package quarantine
 
-import "github.com/bwsalmon/grain/pkg/model"
+import "github.com/ai-on-gke/grain/pkg/model"
 
 // CapabilityName is the grant name ui.OfferedCapabilities lists as "test-quarantine".
 const CapabilityName = "test-quarantine"

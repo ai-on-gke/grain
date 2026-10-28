@@ -41,7 +41,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/bwsalmon/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 )
 
 // maxCommandLine is how much of a rendered invocation is logged.

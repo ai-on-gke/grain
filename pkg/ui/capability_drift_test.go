@@ -20,8 +20,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/githubtoken"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // capabilityIDs is the picker listing's ids, in table order.

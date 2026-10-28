@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 type stateResetNotice struct{}

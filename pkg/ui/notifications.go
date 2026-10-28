@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Operator notifications over the API (docs/design/durable-tasks.md,

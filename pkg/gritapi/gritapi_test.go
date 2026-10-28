@@ -3,7 +3,7 @@ package gritapi
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/treeid"
+	"github.com/ai-on-gke/grain/pkg/treeid"
 )
 
 func TestComputeRequestIDIsDeterministicAndOrderIndependentForJobs(t *testing.T) {

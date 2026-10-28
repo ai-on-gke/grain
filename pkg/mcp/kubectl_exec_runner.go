@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/kubectlgate"
-	"github.com/bwsalmon/grain/pkg/procgroup"
+	"github.com/ai-on-gke/grain/pkg/kubectlgate"
+	"github.com/ai-on-gke/grain/pkg/procgroup"
 )
 
 // KubectlExecRunner runs argv inside a sandbox pod's container through

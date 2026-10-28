@@ -56,8 +56,8 @@ import (
 
 	"google.golang.org/api/option"
 
-	"github.com/bwsalmon/grain/pkg/gcpsetup"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/gcpsetup"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // syncConfig is grain sync's -config file shape -- see this file's own

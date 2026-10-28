@@ -32,9 +32,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // builtBinaryScript is what the fake `make` below leaves at bin/grain: a

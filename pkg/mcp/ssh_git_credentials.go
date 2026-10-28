@@ -20,7 +20,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/kubectlgate"
+	"github.com/ai-on-gke/grain/pkg/kubectlgate"
 )
 
 // ConfigureGitCredentialsOverSSH writes .gitconfig and .git-credentials

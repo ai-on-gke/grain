@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Agents groups per-wake tool use, re-reads, and steward report checks by

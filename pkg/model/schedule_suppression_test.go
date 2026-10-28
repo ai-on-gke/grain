@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // dueSchedule re-reads the schedule after a firing has moved it on: the

@@ -69,7 +69,7 @@ Clone this repository on the target machine, then run the installer. This
 minimal example configures Codex and one target repository:
 
 ```bash
-git clone https://github.com/bwsalmon/grain.git
+git clone https://github.com/ai-on-gke/grain.git
 cd grain
 
 sudo \

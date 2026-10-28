@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
 // rootlessSandbox is a commandedSandbox that answers SandboxRootless the

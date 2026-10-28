@@ -48,7 +48,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 var (

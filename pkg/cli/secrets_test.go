@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // An operating key already in place must survive a mint-gemini-key run

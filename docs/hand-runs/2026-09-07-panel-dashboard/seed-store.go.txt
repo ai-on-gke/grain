@@ -19,10 +19,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite"
-	"github.com/bwsalmon/grain/pkg/systemlog"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 type merged struct {
@@ -258,7 +258,7 @@ func seed(ctx context.Context, store *model.Store, cfg ui.Config, rows []merged,
 		}
 		stored.Links = append(stored.Links, model.Link{
 			Kind:   model.LinkFixes,
-			Target: fmt.Sprintf("https://github.com/bwsalmon/grain/pull/%d", r.PR),
+			Target: fmt.Sprintf("https://github.com/ai-on-gke/grain/pull/%d", r.PR),
 		})
 		if err := store.PutTask(ctx, *stored); err != nil {
 			return err

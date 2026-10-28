@@ -4,10 +4,10 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite"
-	"github.com/bwsalmon/grain/pkg/model/sqlite/sqlitetest"
-	"github.com/bwsalmon/grain/pkg/model/v2baseline"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
+	"github.com/ai-on-gke/grain/pkg/model/v2baseline"
 )
 
 // A store grain 2.0.0 wrote, and a state repository it dumped, open in

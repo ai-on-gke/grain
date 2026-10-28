@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // initBareRepo creates the bare repository at path -- what the tests

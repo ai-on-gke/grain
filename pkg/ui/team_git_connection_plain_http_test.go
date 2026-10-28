@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // The single-tenant walkthrough's B8: a connection to a plain git host on

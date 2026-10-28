@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // Which image the deployment writes into the CI step of its own state

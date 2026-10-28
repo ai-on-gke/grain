@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // grain#2409: only what a proposal asked for by name, and its parent does

@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 var declaredRepo = model.RepoRef{Owner: "bwsalmon", Name: "grain"}

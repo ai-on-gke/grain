@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/authfix"
-	"github.com/bwsalmon/grain/pkg/authfix/authfixtest"
+	"github.com/ai-on-gke/grain/pkg/authfix"
+	"github.com/ai-on-gke/grain/pkg/authfix/authfixtest"
 )
 
 // A command-backed token source on a host whose credentials have lapsed:

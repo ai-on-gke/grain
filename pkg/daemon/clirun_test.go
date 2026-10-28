@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/whererun"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/whererun"
 )
 
 // inAContainer is cfg as a daemon in the release container with no grain

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/systemlog"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
 )
 
 // The real journalctl against this machine's real kernel journal, not a

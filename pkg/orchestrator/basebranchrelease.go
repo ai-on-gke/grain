@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/grainci"
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The publishing a merge sets off, which is no longer the verdict about

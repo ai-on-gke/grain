@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // StopHookSubcommand is the argv[1] cmd/grain matches to run ServeStopHook:

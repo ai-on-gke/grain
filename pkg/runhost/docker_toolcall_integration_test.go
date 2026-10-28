@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // TestRunHostCannotReachAContainerSandbox makes a real sandbox tool call
@@ -41,7 +41,7 @@ func TestRunHostCannotReachAContainerSandbox(t *testing.T) {
 		image = "debian:bookworm-slim"
 	}
 	bin := t.TempDir()
-	build := exec.Command("go", "build", "-o", filepath.Join(bin, "grain"), "github.com/bwsalmon/grain/cmd/grain")
+	build := exec.Command("go", "build", "-o", filepath.Join(bin, "grain"), "github.com/ai-on-gke/grain/cmd/grain")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("building grain: %v\n%s", err, out)

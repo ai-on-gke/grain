@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ghwebhook"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ghwebhook"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 const (

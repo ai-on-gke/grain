@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/github/githubsim"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // modelPoolServer is a deployment with two configured models, one of them

@@ -14,8 +14,8 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // This file turns the route table into MCP tools (docs/agent-api.md): one

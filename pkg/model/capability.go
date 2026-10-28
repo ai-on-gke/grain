@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // This file is docs/data-model.md's "Capabilities are an extension

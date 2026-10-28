@@ -15,8 +15,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // reachRefusal is the sentence a task is refused (or parked) with when

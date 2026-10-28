@@ -118,7 +118,7 @@ $ go test -v ./pkg/model -run "Test.*Team"
 === RUN   TestTeamRolesAndRBAC
 --- PASS: TestTeamRolesAndRBAC (0.08s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/model	0.578s
+ok  	github.com/ai-on-gke/grain/pkg/model	0.578s
 
 $ go test -v ./pkg/ui -run "Test.*Team"
 === RUN   TestTeamsEndpoints
@@ -146,7 +146,7 @@ $ go test -v ./pkg/ui -run "Test.*Team"
 === RUN   TestTeamCopyCredentials
 --- PASS: TestTeamCopyCredentials (0.04s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/ui	2.627s
+ok  	github.com/ai-on-gke/grain/pkg/ui	2.627s
 ```
 
 ### 2. UI Vitest Suite

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func (p *printer) repos(repos []ui.RepoSummary) {

@@ -43,8 +43,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/github/githubsim"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 )
 
 // The two files pkg/capability/githubsandbox's Materialize places in a

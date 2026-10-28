@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent/antigravity"
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // The live tests in this package stand a real daemon up, and a real

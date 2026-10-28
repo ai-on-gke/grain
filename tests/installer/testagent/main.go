@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent/custom"
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/agent/custom"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 func main() {

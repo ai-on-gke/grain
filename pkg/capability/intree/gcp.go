@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpkey"
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // GCPMinterKeyEnv is the environment variable the gcp server reads the

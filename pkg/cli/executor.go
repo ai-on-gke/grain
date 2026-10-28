@@ -19,10 +19,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/agent/codex"
-	"github.com/bwsalmon/grain/pkg/modelexec"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	"github.com/ai-on-gke/grain/pkg/modelexec"
 )
 
 // binaryFlag collects repeated -binary NAME=PATH flags.

@@ -13,10 +13,10 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
-	"github.com/bwsalmon/grain/pkg/agent/claude"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelproxy"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // vertexScope is the OAuth scope a Vertex AI call is authorized with --

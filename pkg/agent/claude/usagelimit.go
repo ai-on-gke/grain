@@ -10,7 +10,7 @@ import (
 	// time; pkg/model links the same database into the binary already.
 	_ "time/tzdata"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // A run that ends because the Claude Code account has no budget left in

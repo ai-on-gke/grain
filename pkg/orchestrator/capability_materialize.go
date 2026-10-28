@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/capability/portforward"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/capability/portforward"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // This file materializes a minted pass (capability_pass.go) into the

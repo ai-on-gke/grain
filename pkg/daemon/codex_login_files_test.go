@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent/codex"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
 )
 
 // TestCodexLoginFilesCoversEveryLoginARunCanShare: the refresher renews

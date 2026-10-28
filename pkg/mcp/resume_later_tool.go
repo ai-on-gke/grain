@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // resumeLaterTakenPrefix opens the last line of a resume_later result:

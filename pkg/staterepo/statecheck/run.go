@@ -7,8 +7,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // Options is what `grain state check` is asked beyond the directory.

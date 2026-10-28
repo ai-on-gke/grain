@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/postgres/postgrestest"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // A merged settings change applied to a daemon on Postgres keeps the

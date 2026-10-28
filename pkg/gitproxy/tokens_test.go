@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 func writeTokensFile(t *testing.T, dir string, tokens map[string]string) string {

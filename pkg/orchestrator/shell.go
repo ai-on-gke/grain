@@ -35,10 +35,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/gitrefs"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/procgroup"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/gitrefs"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/procgroup"
 )
 
 // ShellRequest is one script to run in a sandbox.

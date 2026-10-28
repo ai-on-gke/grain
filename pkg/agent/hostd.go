@@ -8,8 +8,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/authfix"
-	"github.com/bwsalmon/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/authfix"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
 // HostdHost runs one allowlisted agent CLI on the bare machine through

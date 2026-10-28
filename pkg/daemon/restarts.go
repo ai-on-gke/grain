@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/systemlog"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // restartWindow is how far back the count looks. Half an hour is long

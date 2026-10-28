@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/grainci"
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/portpick"
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/portpick"
 )
 
 // porter is who files a port: the merge queue, which is the one thing

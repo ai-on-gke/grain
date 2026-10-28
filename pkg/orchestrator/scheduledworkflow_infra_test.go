@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // A nightly on trunk is a release gate (docs/design/release-from-trunk.md,

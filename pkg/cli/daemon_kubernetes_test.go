@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/systemlog"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
 )
 
 // kubeConfig is a config that would start: everything -k8s-sandboxes

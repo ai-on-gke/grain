@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/policy"
+	"github.com/ai-on-gke/grain/pkg/policy"
 )
 
 // The local audit log (LocalAuditPath) is the workstation owner's record

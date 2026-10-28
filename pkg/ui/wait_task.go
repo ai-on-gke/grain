@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // waitOnRequest is POST /api/tasks/{id}/wait-on's body: the tasks the run

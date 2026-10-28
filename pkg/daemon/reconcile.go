@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // reapInterval is how often reconcile calls reapCapabilities. The resource

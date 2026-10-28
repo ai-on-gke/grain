@@ -228,7 +228,7 @@ standalone at any time:
 2. **Throwaway sandbox git-proxy clone and package-cache fetch (~30–60s)**:
    Boots one throwaway `k8s-granule` sandbox pod using
    `/var/lib/grain/kubeconfig` and verifies inside the guest VM that:
-   - `git -c http.proxy=<GIT_PROXY_URL> ls-remote https://github.com/bwsalmon/grain.git`
+   - `git -c http.proxy=<GIT_PROXY_URL> ls-remote https://github.com/ai-on-gke/grain.git`
      succeeds through the controller's git proxy.
    - `curl -fsSL --proxy <PACKAGE_CACHE_URL> https://proxy.golang.org`
      succeeds through the controller's package cache.

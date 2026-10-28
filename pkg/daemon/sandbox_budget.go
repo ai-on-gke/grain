@@ -4,10 +4,10 @@ import (
 	"context"
 	"log"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/sysstat"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/sysstat"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // defaultShaper is the sandbox-backend half of a changed sandbox-cpus or

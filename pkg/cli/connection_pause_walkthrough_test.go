@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent/codex"
-	"github.com/bwsalmon/grain/pkg/daemon"
-	"github.com/bwsalmon/grain/pkg/dispatch"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/dispatch"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // connectionPauseCodexStub is the provider boundary for the walkthrough

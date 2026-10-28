@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/dispatch"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/dispatch"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 var repairRepo = model.RepoRef{Owner: "acme", Name: "widgets"}

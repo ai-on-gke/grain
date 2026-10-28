@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // Where the run's prompt stopped quoting the task's conversation, which

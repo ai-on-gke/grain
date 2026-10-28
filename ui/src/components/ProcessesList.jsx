@@ -50,7 +50,7 @@ import { DeclaredChip } from "./Declared.jsx";
 import LastWorkflowRun from "./LastWorkflowRun.jsx";
 
 const DECLARATIONS_DOC =
-  "https://github.com/bwsalmon/grain/blob/main/docs/declarations.md";
+  "https://github.com/ai-on-gke/grain/blob/main/docs/declarations.md";
 
 // ProcessesList is the Processes page (docs/design/settings-panel.md §5):
 // one table of every schedule, workflow schedule, template, suite and

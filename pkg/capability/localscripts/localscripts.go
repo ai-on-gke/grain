@@ -24,8 +24,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/localexec"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/localexec"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // CapabilityPrefix starts every local-scripts capability ID.

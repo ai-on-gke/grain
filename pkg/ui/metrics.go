@@ -22,11 +22,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/apierror"
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/metrics"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/metrics"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // DefaultMetricsWindow is how far back a report reaches when the caller

@@ -29,7 +29,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // PipelineChange is one entry of the feed: what changed (ID, Kind), from

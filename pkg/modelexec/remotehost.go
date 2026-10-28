@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bwsalmon/grain/pkg/authfix"
+	"github.com/ai-on-gke/grain/pkg/authfix"
 	"io"
 	"io/fs"
 	"path/filepath"
@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // RemoteHost is one connected remote executor, seen as the host a Framework

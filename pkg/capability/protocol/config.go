@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
 // ServerConfig is one mcpServers entry (§3.1.1), keyed by capability_id in

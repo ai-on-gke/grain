@@ -104,7 +104,7 @@ workflow -- publishes unsigned and warns about it. Setting `REQUIRE_IMAGE_SIGNIN
   deployment refuses them. If the workflow is revived, there are two
   ways to sign. One is keyless signing with the workflow's own OIDC
   token (`id-token: write`), verified with
-  `--certificate-identity=https://github.com/bwsalmon/grain/.github/workflows/build-artifacts.yml@refs/heads/main`.
+  `--certificate-identity=https://github.com/ai-on-gke/grain/.github/workflows/build-artifacts.yml@refs/heads/main`.
   The other is a job restricted to a protected `image-signing`
   environment. Either needs the secrets test above to be revisited
   deliberately.

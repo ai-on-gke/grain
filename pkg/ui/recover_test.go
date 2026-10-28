@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/apierror"
 )
 
 // A handler panic answers with apierror's sanitized 500, and the panic

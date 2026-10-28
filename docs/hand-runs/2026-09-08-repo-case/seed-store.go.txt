@@ -31,8 +31,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
 
 // The five repositories are this deployment's own, and the two divergent
@@ -436,7 +436,7 @@ var subjects = []string{
 func transcriptOf(kb int) string {
 	line := "assistant: I read pkg/model/repo_case.go and the table list is data, not code.\n" +
 		"tool: run_command {\"command\":\"go test ./pkg/model/...\"}\n" +
-		"tool result: ok  github.com/bwsalmon/grain/pkg/model 12.418s\n"
+		"tool result: ok  github.com/ai-on-gke/grain/pkg/model 12.418s\n"
 	var b strings.Builder
 	for b.Len() < kb*1024 {
 		b.WriteString(line)

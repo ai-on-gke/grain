@@ -16,7 +16,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // localGitHTTPBackend serves bare repositories under projectRoot via git http-backend.

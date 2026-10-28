@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
-	"github.com/bwsalmon/grain/pkg/sandboximage"
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/sandboximage"
 )
 
 func TestSandboxImageCommandPrintsDefaultAndBase(t *testing.T) {

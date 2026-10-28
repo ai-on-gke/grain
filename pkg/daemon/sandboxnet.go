@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/modelproxy"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // SandboxPortBlockSize is how many ports the block reserves. A power of

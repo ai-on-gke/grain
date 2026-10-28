@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/intree"
-	"github.com/bwsalmon/grain/pkg/capability/portforward"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/portforward"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // localPlacementSandbox runs every command it is given on this machine, with the

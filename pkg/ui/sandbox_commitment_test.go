@@ -15,9 +15,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/granule"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // homeHost is the machine grain-home's own numbers were measured on: 4

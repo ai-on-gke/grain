@@ -37,10 +37,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github/githubsim"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // sandboxToken is what the sandbox's git holds, and botToken is what the

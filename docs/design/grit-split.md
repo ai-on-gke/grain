@@ -376,7 +376,7 @@ GS-2, so the 65 importing files move over in their own time.
 
 A test in the `lint` job, `pkg/grit/independence_test.go`, runs
 `go list -deps ./cmd/grit ./pkg/grit/...` and fails if any dependency
-under `github.com/bwsalmon/grain/` is outside an allowlist:
+under `github.com/ai-on-gke/grain/` is outside an allowlist:
 
 - `pkg/grit/...` and `cmd/grit`;
 - the neutral packages above;

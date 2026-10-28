@@ -15,7 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // The gchat server lets an agent post to Google Chat spaces the operator

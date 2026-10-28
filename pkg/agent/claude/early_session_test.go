@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // stallingRunner writes its first lines the way a live claude does --

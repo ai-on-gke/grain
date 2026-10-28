@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 func writeFakeClusterKubectl(t *testing.T, jsonOut string) string {

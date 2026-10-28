@@ -221,7 +221,7 @@ The complete walkthrough was executed in `tests/e2e/multitenant_capability_secur
     multitenant_capability_security_walkthrough_test.go:512: === ALL MULTI-TENANT CAPABILITY SECURITY & ISOLATION STEPS PASSED SUCCESSFULLY ===
 --- PASS: TestMultiTenantCapabilitySecurityWalkthrough (0.07s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	0.081s
+ok  	github.com/ai-on-gke/grain/tests/e2e	0.081s
 ```
 
 ---

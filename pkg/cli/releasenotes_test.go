@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/releasenotes"
+	"github.com/ai-on-gke/grain/pkg/releasenotes"
 )
 
 // The JSON an upgrade reads out of a target image: every version newer

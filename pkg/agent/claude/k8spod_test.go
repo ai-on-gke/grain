@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // A run on a -k8s-sandboxes deployment has no sandbox root, VM or

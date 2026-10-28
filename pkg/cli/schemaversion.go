@@ -20,7 +20,7 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func schemaVersionCmd(args []string) {

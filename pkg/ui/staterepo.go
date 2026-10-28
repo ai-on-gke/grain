@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/apierror"
 )
 
 // The controller-local configuration repository status and controls.

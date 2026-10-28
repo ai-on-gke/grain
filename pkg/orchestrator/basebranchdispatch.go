@@ -8,9 +8,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/grainci"
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The work that follows a base branch but is not a verdict about it

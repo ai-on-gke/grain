@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/agent/codex"
-	"github.com/bwsalmon/grain/pkg/agent/credcheck"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	"github.com/ai-on-gke/grain/pkg/agent/credcheck"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // The agent credentials this pane manages: one per agent.Framework grain

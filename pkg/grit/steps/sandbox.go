@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/workflows"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // Sandboxes builds the sandbox one CI job runs in and hands it over

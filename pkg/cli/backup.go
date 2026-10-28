@@ -13,10 +13,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/model/postgres"
-	grainsqlite "github.com/bwsalmon/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
+	grainsqlite "github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
 
 const backupUsage = `usage: grain backup -data-dir DIR [flags]

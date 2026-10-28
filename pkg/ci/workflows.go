@@ -3,8 +3,8 @@ package ci
 import (
 	"gopkg.in/yaml.v3"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/workflows"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // The workflow parser and planner moved to pkg/workflows, the neutral

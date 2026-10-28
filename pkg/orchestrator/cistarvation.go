@@ -3,8 +3,8 @@ package orchestrator
 import (
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/forge"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/forge"
 )
 
 // Grain CI starvation, read off the stall clock and the CI service.

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/k8s"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func TestPodNameForNamesTheRun(t *testing.T) {

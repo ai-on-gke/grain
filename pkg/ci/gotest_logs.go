@@ -136,7 +136,7 @@ func SortedPackageTestNames(pkgTests map[string]string) []string {
 }
 
 // NormalizeGoTestPackage converts a full Go module package import path (such as
-// "github.com/bwsalmon/grain/pkg/ci") into a repository-relative package path
+// "github.com/ai-on-gke/grain/pkg/ci") into a repository-relative package path
 // ("pkg/ci"), or "." for the module root.
 func NormalizeGoTestPackage(pkg string) string {
 	pkg = strings.TrimSpace(pkg)
@@ -145,7 +145,7 @@ func NormalizeGoTestPackage(pkg string) string {
 	if pkg == "" || pkg == "." {
 		return "."
 	}
-	const grainModulePrefix = "github.com/bwsalmon/grain"
+	const grainModulePrefix = "github.com/ai-on-gke/grain"
 	if pkg == grainModulePrefix {
 		return "."
 	}

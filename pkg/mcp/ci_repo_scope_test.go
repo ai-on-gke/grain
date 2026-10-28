@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
 // What a run may read CI about (grain/task-172).

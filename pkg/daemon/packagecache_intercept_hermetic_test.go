@@ -78,7 +78,7 @@ import (
 
 	"golang.org/x/net/dns/dnsmessage"
 
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // What the stand-in archive holds, under the names a real one would use:

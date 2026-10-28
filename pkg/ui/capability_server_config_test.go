@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/capability/servers"
-	"github.com/bwsalmon/grain/pkg/secrets"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 const configCap = "https://capabilities.example.com/cloud"

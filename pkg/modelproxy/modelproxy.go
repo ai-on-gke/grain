@@ -111,7 +111,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // Connection is the model connection a token forwards with: the id of

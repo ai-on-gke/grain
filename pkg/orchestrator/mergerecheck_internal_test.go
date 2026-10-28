@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The overlap rule's clauses, one at a time (mergerecheck.go,

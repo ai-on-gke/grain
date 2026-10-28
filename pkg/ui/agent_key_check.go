@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent/credcheck"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/agent/credcheck"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The agent-credential half of what capability_check.go already does for

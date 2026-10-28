@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/model/postgres"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
 )
 
 func TestParseDaemonArgsDatabaseFlags(t *testing.T) {

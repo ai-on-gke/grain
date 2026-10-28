@@ -17,7 +17,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/kubectlgate"
+	"github.com/ai-on-gke/grain/pkg/kubectlgate"
 )
 
 // PlaceFileOverSSH writes content to filePath on runner's remote host

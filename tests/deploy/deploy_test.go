@@ -30,8 +30,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/sandboximage"
-	"github.com/bwsalmon/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/sandboximage"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // The one name three files have to agree on: setup.sh's default, the
@@ -1561,7 +1561,7 @@ func TestTheSandboxReferenceIsStampedIntoTheGrainImage(t *testing.T) {
 
 	// The Makefile turns it into a linker stamp, and the Dockerfile
 	// forwards the build arg into that.
-	contains(t, read(t, "Makefile"), "-X github.com/bwsalmon/grain/pkg/daemon.DefaultSandboxImage=$(SANDBOX_IMAGE)")
+	contains(t, read(t, "Makefile"), "-X github.com/ai-on-gke/grain/pkg/daemon.DefaultSandboxImage=$(SANDBOX_IMAGE)")
 	contains(t, read(t, "Dockerfile"), "SANDBOX_IMAGE=${SANDBOX_IMAGE}")
 }
 
@@ -1606,7 +1606,7 @@ func TestTheGrainImageIsStampedWithItsOwnReference(t *testing.T) {
 	contains(t, script, `GRAIN_IMAGE_REF="$image"`)
 	contains(t, script, `GIT_REVISION="$commit"`)
 
-	contains(t, read(t, "Makefile"), "-X github.com/bwsalmon/grain/pkg/daemon.DefaultGrainImage=$(GRAIN_IMAGE_REF)")
+	contains(t, read(t, "Makefile"), "-X github.com/ai-on-gke/grain/pkg/daemon.DefaultGrainImage=$(GRAIN_IMAGE_REF)")
 	contains(t, read(t, "Makefile"), "--build-arg GIT_REVISION=$(GIT_REVISION)")
 	contains(t, read(t, "Dockerfile"), "GRAIN_IMAGE_REF=${GRAIN_IMAGE_REF}")
 	contains(t, read(t, "Dockerfile"), `LABEL org.opencontainers.image.revision="${GIT_REVISION}"`)

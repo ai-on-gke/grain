@@ -3,8 +3,8 @@ package ui
 import (
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/granule"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // HostCapacity is how much machine the sandboxes this deployment builds

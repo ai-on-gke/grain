@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/hostscriptcli"
+	"github.com/ai-on-gke/grain/pkg/hostscriptcli"
 )
 
 // hostScriptHelperEnv makes this test binary serve the host-script server

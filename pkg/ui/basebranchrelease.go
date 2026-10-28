@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A repository that has quietly stopped shipping, said out loud

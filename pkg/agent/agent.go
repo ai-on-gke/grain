@@ -16,11 +16,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/deploymenthealth"
-	"github.com/bwsalmon/grain/pkg/capability/grainlog"
-	"github.com/bwsalmon/grain/pkg/capability/selfdebug"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // RunConfig is what one agent run needs to start: a prompt and where its

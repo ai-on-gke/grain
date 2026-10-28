@@ -3,10 +3,10 @@ package orchestrator
 import (
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/dispatch"
-	"github.com/bwsalmon/grain/pkg/forge"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/dispatch"
+	"github.com/ai-on-gke/grain/pkg/forge"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Liveness by reason: the sub-cases of each state, and what grain does

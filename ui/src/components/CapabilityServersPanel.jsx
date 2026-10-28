@@ -38,7 +38,7 @@ import { DISCARD_PROMPT } from "./Overlay.jsx";
 // The operator's guide to this page (and the Capability policy card
 // below it).
 export const CAPABILITY_SERVERS_GUIDE =
-  "https://github.com/bwsalmon/grain/blob/main/docs/capability-servers-ui.md";
+  "https://github.com/ai-on-gke/grain/blob/main/docs/capability-servers-ui.md";
 
 // CapabilityServersPanel is the deployment's mcpServers
 // (docs/capabilities-spec.md §3.1): the capability servers grain attaches,

@@ -131,7 +131,7 @@ A dedicated test suite `TestGitHubIssueCorrelationAndAutoCloseWalkthrough` was i
     github_issue_correlation_walkthrough_test.go:390: === Step 9: Verify Task Issue Updates via UI API ===
 --- PASS: TestGitHubIssueCorrelationAndAutoCloseWalkthrough (2.14s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	2.160s
+ok  	github.com/ai-on-gke/grain/tests/e2e	2.160s
 ```
 
 ---

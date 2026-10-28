@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/authfix"
-	"github.com/bwsalmon/grain/pkg/authfix/authfixtest"
+	"github.com/ai-on-gke/grain/pkg/authfix"
+	"github.com/ai-on-gke/grain/pkg/authfix/authfixtest"
 )
 
 // A CLI that is itself a wrapper exec'ing something the host refuses

@@ -338,7 +338,7 @@ make security
 
 ## Security suite and CI
 
-- `make security` passed locally (`ok github.com/bwsalmon/grain/tests/security 147.667s`, exit 0).
+- `make security` passed locally (`ok github.com/ai-on-gke/grain/tests/security 147.667s`, exit 0).
   The `go` job runs it too, and no `.grain/baselines/` count was changed.
 - The fixes touch `pkg/relaysettings`, `pkg/daemon` and tests under `pkg/relay`/`pkg/ui`. The
   trust-boundary hold for security review is expected.

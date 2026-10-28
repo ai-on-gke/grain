@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/capabilitytest"
+	"github.com/ai-on-gke/grain/pkg/capability/capabilitytest"
 )
 
 // A capability registered from outside core is offered in the picker,

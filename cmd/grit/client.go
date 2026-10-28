@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/grit"
+	"github.com/ai-on-gke/grain/pkg/grit"
 )
 
 type scopeSlice []grit.ClientScope

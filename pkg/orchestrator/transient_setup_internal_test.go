@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // transientSetupDetail is run 831-35's own detail, the setup failure this

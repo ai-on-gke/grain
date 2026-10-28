@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // fakeDataPlane serves an attempt toolset at /runs/<attempt_id>/mcp for

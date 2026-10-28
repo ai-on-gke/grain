@@ -59,12 +59,12 @@ import (
 	"testing"
 	"time"
 
-	modelproxycap "github.com/bwsalmon/grain/pkg/capability/modelproxy"
-	"github.com/bwsalmon/grain/pkg/granule"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelproxy"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // liveUpstream stands in for a vendor's own API the way

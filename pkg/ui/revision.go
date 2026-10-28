@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Revisions are how an editor that saves a whole form -- ScheduleOverlay,

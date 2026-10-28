@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
 // mirrorFault is one deployment-wide fault as the daemon has already

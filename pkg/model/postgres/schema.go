@@ -1,7 +1,7 @@
 package postgres
 
 import (
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Statements returns the PostgreSQL DDL statements required to initialize

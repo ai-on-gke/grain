@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // aRow writes one row into a database, so that "empty" and "not empty"

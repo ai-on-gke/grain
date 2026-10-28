@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Model failover (docs/design/durable-tasks.md#DT-2): a run suspended

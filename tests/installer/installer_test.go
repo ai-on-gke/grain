@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/github/githubsim"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/secrets"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // deployment is one real setup.sh run, and everything it left behind.
@@ -250,7 +250,7 @@ func imageWithMissingSandbox(checkout, root, baseImage string) (string, func(), 
 	const missing = "127.0.0.1:1/private/grain-sandbox:missing"
 	binary := filepath.Join(root, "grain-with-missing-sandbox")
 	build := exec.Command("go", "build", "-o", binary,
-		"-ldflags", "-X github.com/bwsalmon/grain/pkg/cli.defaultK8sSandboxImage="+missing, "./cmd/grain")
+		"-ldflags", "-X github.com/ai-on-gke/grain/pkg/cli.defaultK8sSandboxImage="+missing, "./cmd/grain")
 	build.Dir = checkout
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {

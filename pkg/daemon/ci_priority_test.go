@@ -3,8 +3,8 @@ package daemon
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // A CI job's sandbox is the lowest class, so on a full Kubernetes cluster

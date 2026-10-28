@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
 )
 
 // TestLiveMintUseRelease runs a permission set against real GCP. It is

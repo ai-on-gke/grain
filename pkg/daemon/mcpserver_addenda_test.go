@@ -18,8 +18,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // addendaDaemon is a grain daemon as far as daemonAddenda is concerned:

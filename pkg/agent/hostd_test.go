@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
 func startHostd(t *testing.T) (hostd.Client, string) {

@@ -95,16 +95,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/model"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpkey"
-	"github.com/bwsalmon/grain/pkg/capability/geminikey"
-	"github.com/bwsalmon/grain/pkg/capability/githubsandbox"
-	modelproxycap "github.com/bwsalmon/grain/pkg/capability/modelproxy"
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
+	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
+	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
 )
 
 // hostileCapabilityPaths is every path a grain capability places material

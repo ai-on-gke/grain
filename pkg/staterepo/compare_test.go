@@ -25,7 +25,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // sameDatabase fails the test unless a and b hold exactly the same rows

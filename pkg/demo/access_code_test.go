@@ -3,7 +3,7 @@ package demo
 import (
 	"net/http"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // demoTestAccessCode is the access code the tests in this package give

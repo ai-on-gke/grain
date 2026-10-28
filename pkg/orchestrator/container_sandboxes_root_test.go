@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
 // noSudoRunner stands in for `docker exec` into the stock sandbox image,

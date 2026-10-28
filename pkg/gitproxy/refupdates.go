@@ -30,7 +30,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // RefUpdate is one command of a push: move Ref from Old to New. An

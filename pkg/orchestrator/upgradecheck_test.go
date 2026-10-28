@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/runhost"
-	"github.com/bwsalmon/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/runhost"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // upgradeDone is the status file a successful upgrade leaves behind: the

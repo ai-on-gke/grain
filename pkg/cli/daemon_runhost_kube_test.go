@@ -71,11 +71,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
-	"github.com/bwsalmon/grain/pkg/github/githubsim"
-	"github.com/bwsalmon/grain/pkg/k8s"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/runhost"
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
+	"github.com/ai-on-gke/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/runhost"
 )
 
 const (
@@ -175,8 +175,8 @@ func testDaemonRoll(t *testing.T, adopt bool) {
 	// the candidate which sandbox image it names and pull that.
 	dir := t.TempDir()
 	for _, b := range [][]string{
-		{"go", "build", "-ldflags", "-X github.com/bwsalmon/grain/pkg/cli.defaultK8sSandboxImage=" + image, "-o", filepath.Join(dir, "grain"), "github.com/bwsalmon/grain/cmd/grain"},
-		{"go", "test", "-c", "-o", filepath.Join(dir, "grain.test"), "github.com/bwsalmon/grain/pkg/cli"},
+		{"go", "build", "-ldflags", "-X github.com/ai-on-gke/grain/pkg/cli.defaultK8sSandboxImage=" + image, "-o", filepath.Join(dir, "grain"), "github.com/ai-on-gke/grain/cmd/grain"},
+		{"go", "test", "-c", "-o", filepath.Join(dir, "grain.test"), "github.com/ai-on-gke/grain/pkg/cli"},
 	} {
 		cmd := exec.Command(b[0], b[1:]...)
 		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")

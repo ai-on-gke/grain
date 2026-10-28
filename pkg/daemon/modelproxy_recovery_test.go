@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
 )
 
 // A daemon killed outright never revokes the tokens its live runs held,

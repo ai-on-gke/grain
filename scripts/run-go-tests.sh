@@ -100,7 +100,7 @@ if heartbeat_interval <= 0:
     heartbeat_interval = 20.0
 cmd = sys.argv[3:]
 
-MODULE_PREFIX = "github.com/bwsalmon/grain/"
+MODULE_PREFIX = "github.com/ai-on-gke/grain/"
 
 is_go_test_cmd = len(cmd) >= 2 and cmd[0] == "go" and cmd[1] == "test"
 verbose_mode = (not is_go_test_cmd) or any(
@@ -111,7 +111,7 @@ verbose_mode = (not is_go_test_cmd) or any(
 def short_pkg(pkg: str) -> str:
     if pkg.startswith(MODULE_PREFIX):
         return pkg[len(MODULE_PREFIX):]
-    if pkg == "github.com/bwsalmon/grain":
+    if pkg == "github.com/ai-on-gke/grain":
         return "."
     return pkg
 

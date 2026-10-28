@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // MergeGathering is what this deployment's gather holds have actually

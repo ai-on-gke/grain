@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // fixedHealthSandboxes is an orchestrator.Sandboxes whose Health is

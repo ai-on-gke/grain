@@ -15,7 +15,7 @@
 // task (model.Store.GitPushAnyRef) when a push names another ref.
 package gitpushanyref
 
-import "github.com/bwsalmon/grain/pkg/model"
+import "github.com/ai-on-gke/grain/pkg/model"
 
 // CapabilityName is the grant name: "git-push-any-ref".
 const CapabilityName = model.GitPushAnyRefCapability

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/secrets"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func releaseServer(t *testing.T, runner ci.Runner) (*ui.Server, *ui.Client, *model.Store) {

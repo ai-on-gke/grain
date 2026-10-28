@@ -21,7 +21,7 @@ package mcp
 import (
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/kubectlgate"
+	"github.com/ai-on-gke/grain/pkg/kubectlgate"
 )
 
 // execTransportMarker opens execTransportNotice, and is what

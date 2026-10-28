@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/kubectlgate"
+	"github.com/ai-on-gke/grain/pkg/kubectlgate"
 )
 
 func TestCreateAndApplyPodSkipClientSideValidation(t *testing.T) {

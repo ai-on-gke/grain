@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/attest"
-	"github.com/bwsalmon/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/attest"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
 // Backend is the execution boundary satisfied by both in-process `grit.Local`

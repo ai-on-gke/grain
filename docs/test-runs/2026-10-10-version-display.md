@@ -164,7 +164,7 @@ Output:
 === RUN   TestVersionCmd_Output
 --- PASS: TestVersionCmd_Output (0.00s)
 PASS
-ok  	github.com/bwsalmon/grain/cmd/grain	0.015s
+ok  	github.com/ai-on-gke/grain/cmd/grain	0.015s
 ```
 
 ---

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/gritapi"
+	"github.com/ai-on-gke/grain/pkg/gritapi"
 )
 
 // ClientScope binds a permission scope (`submit`, `read`, `cancel`,

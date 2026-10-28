@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/authfix"
+	"github.com/ai-on-gke/grain/pkg/authfix"
 )
 
 // LoginRedirectError is a request to a forge that was answered with a

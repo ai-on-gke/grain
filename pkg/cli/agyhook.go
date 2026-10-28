@@ -3,7 +3,7 @@ package cli
 import (
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 )
 
 // agyToolHook is the "agy-tool-hook" subcommand: agy's own PreToolUse

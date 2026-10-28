@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	grainsqlite "github.com/bwsalmon/grain/pkg/model/sqlite"
+	grainsqlite "github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
 
 type memoryDestination struct {

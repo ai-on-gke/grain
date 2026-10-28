@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 )
 
 // kubeGranuleConfig is a config that would start: everything

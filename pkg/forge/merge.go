@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // defaultMergeRefusalDeadline is how long the merge queue goes on asking

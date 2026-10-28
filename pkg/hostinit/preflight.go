@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // preflight checks every prerequisite platform depends on but will

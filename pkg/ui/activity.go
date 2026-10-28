@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // MaxActivityLength is how long a run's synopsis of itself may be, in

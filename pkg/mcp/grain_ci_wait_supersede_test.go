@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
 // supersedingRunner is a GrainCIRunner whose runs are read by id, so a

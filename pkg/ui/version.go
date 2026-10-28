@@ -3,7 +3,7 @@ package ui
 import (
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // versionResponse is GET /api/config's "version" object: which build of

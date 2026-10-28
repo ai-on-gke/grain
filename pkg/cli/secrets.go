@@ -32,11 +32,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpkey"
-	"github.com/bwsalmon/grain/pkg/capability/geminikey"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
+	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 const secretsUsage = `usage: grain secrets -data-dir DIR <command> [args]

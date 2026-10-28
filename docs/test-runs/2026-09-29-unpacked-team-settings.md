@@ -157,11 +157,11 @@ All Go integration and unit test suites passed with 100% success:
 ```bash
 $ go test -v ./pkg/ui -run "Team|GitHubCredential|CopyTeam"
 PASS
-ok  	github.com/bwsalmon/grain/pkg/ui	3.105s
+ok  	github.com/ai-on-gke/grain/pkg/ui	3.105s
 
 $ go test -v ./tests/e2e -run "Team|Track2"
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	58.149s
+ok  	github.com/ai-on-gke/grain/tests/e2e	58.149s
 ```
 
 ---

@@ -40,14 +40,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/agent/antigravity"
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/github/githubsim"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // syncedSim serializes every call into a *githubsim.Sim: the real Sim
@@ -169,7 +169,7 @@ func buildGrainCLI(t *testing.T) string {
 			return
 		}
 		grainCLIPath = filepath.Join(grainCLIDir, "grain")
-		cmd := exec.Command("go", "build", "-o", grainCLIPath, "github.com/bwsalmon/grain/cmd/grain")
+		cmd := exec.Command("go", "build", "-o", grainCLIPath, "github.com/ai-on-gke/grain/cmd/grain")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			grainCLIErr = fmt.Errorf("building grain CLI: %v\n%s", err, out)
 		}

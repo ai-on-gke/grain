@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/authfix"
-	"github.com/bwsalmon/grain/pkg/authfix/authfixtest"
+	"github.com/ai-on-gke/grain/pkg/authfix"
+	"github.com/ai-on-gke/grain/pkg/authfix/authfixtest"
 )
 
 func TestWrapUsesTheRegisteredClassifier(t *testing.T) {

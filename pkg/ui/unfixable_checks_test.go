@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/forge"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/forge"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func TestSetRepoUnfixableChecksStoresTheList(t *testing.T) {

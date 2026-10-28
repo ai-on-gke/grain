@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // A restart request is this daemon writing down, just before it brings

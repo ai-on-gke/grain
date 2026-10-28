@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/namespace"
 )
 
 // DefaultMaxNamespaceConcurrentRequests is the default per-sandbox concurrency

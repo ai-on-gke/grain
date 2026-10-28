@@ -75,7 +75,7 @@ All unit tests in `pkg/ci` and `pkg/mcp` as well as the comprehensive end-to-end
     mcp_diagnostics_and_quarantine_walkthrough_test.go:589: === Section 7: In-Flight Job Retry on Infrastructure Errors ===
 --- PASS: TestMCPDiagnosticsAndQuarantineWalkthrough (0.06s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	0.076s
+ok  	github.com/ai-on-gke/grain/tests/e2e	0.076s
 ```
 
 ### Unit Tests: `pkg/ci`, `pkg/mcp`
@@ -102,8 +102,8 @@ ok  	github.com/bwsalmon/grain/tests/e2e	0.076s
 === RUN   TestTestHistoryExtraction
 --- PASS: TestTestHistoryExtraction (0.00s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/ci	0.010s
-ok  	github.com/bwsalmon/grain/pkg/mcp	0.014s
+ok  	github.com/ai-on-gke/grain/pkg/ci	0.010s
+ok  	github.com/ai-on-gke/grain/pkg/mcp	0.014s
 ```
 
 ---

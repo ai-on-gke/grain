@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
 // A first verdict that names no job had nothing re-run, so a passing

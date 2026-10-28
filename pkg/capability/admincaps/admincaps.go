@@ -9,17 +9,17 @@
 package admincaps
 
 import (
-	"github.com/bwsalmon/grain/pkg/capability"
-	"github.com/bwsalmon/grain/pkg/capability/dbaccess"
-	"github.com/bwsalmon/grain/pkg/capability/deploymenthealth"
-	"github.com/bwsalmon/grain/pkg/capability/dispatchcontrol"
-	"github.com/bwsalmon/grain/pkg/capability/grainlog"
-	"github.com/bwsalmon/grain/pkg/capability/memory"
-	"github.com/bwsalmon/grain/pkg/capability/pipelinecontrol"
-	"github.com/bwsalmon/grain/pkg/capability/selfdebug"
-	"github.com/bwsalmon/grain/pkg/capability/selfrepair"
-	"github.com/bwsalmon/grain/pkg/capability/selfupgrade"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability"
+	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
+	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
+	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/memory"
+	"github.com/ai-on-gke/grain/pkg/capability/pipelinecontrol"
+	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
+	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // TeamScoped is the capabilities that a team other than an admin team

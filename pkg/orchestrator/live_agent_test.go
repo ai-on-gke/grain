@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 )
 
 // liveFramework builds the real agent/antigravity Framework the live
@@ -40,7 +40,7 @@ func liveFramework(t *testing.T, opts ...antigravity.Option) *antigravity.Framew
 func buildGrainBinary(t *testing.T) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "grain")
-	cmd := exec.Command("go", "build", "-o", out, "github.com/bwsalmon/grain/cmd/grain")
+	cmd := exec.Command("go", "build", "-o", out, "github.com/ai-on-gke/grain/cmd/grain")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("building the grain binary for agy's MCP server: %v\n%s", err, output)
 	}

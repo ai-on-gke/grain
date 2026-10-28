@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // runWaitLimit is the ceiling this package's tests wait under for

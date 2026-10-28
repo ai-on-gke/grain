@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // The thread codex names on its first event is reported as it arrives

@@ -27,7 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bwsalmon/grain/pkg/authfix"
+	"github.com/ai-on-gke/grain/pkg/authfix"
 	"io"
 	"io/fs"
 	"log"
@@ -36,7 +36,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/procgroup"
+	"github.com/ai-on-gke/grain/pkg/procgroup"
 )
 
 // Command is one CLI invocation: the binary, its arguments, what it reads

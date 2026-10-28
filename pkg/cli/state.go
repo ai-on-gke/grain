@@ -19,13 +19,13 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/postgres"
-	"github.com/bwsalmon/grain/pkg/secrets"
-	"github.com/bwsalmon/grain/pkg/staterepo"
-	"github.com/bwsalmon/grain/pkg/staterepo/statecheck"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo/statecheck"
 )
 
 const stateUsage = `usage: grain state -data-dir DIR <command> [args]

@@ -67,8 +67,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/kubectlgate"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/kubectlgate"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Window is the half-open interval [Since, Until) a Report covers.

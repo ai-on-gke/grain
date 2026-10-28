@@ -12,7 +12,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Authorizer decides whether a sandbox may perform action against

@@ -157,12 +157,12 @@ go test -v -race ./tests/e2e -run TestTeamPullRequestTokenWalkthrough
 # === RUN   TestTeamPullRequestTokenWalkthrough_Leg4_UI403Reads
 # --- PASS: TestTeamPullRequestTokenWalkthrough_Leg4_UI403Reads (1.81s)
 # PASS
-# ok  	github.com/bwsalmon/grain/tests/e2e	3.537s
+# ok  	github.com/ai-on-gke/grain/tests/e2e	3.537s
 
 # Security test suite
 make security
 # Output:
 # go vet ./...
 # go test -race -count=1 ./tests/security/...
-# ok  	github.com/bwsalmon/grain/tests/security	132.761s
+# ok  	github.com/ai-on-gke/grain/tests/security	132.761s
 ```

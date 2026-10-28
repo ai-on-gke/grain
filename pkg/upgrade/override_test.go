@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/installtrack"
-	"github.com/bwsalmon/grain/pkg/installtrack/installtracktest"
+	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/installtrack/installtracktest"
 )
 
 func TestParseImageOverride(t *testing.T) {

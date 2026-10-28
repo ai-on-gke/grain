@@ -159,7 +159,7 @@ if [ "$depth" -gt 0 ] && head="$(git -C "$src" rev-parse --verify -q 'HEAD^{comm
 	filemode = true
 	bare = false
 [remote "origin"]
-	url = https://github.com/bwsalmon/grain.git
+	url = https://github.com/ai-on-gke/grain.git
 	pushurl = grain-baked-source-is-read-only
 	fetch = +refs/heads/*:refs/remotes/origin/*
 EOF

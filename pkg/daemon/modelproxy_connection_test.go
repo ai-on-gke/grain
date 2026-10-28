@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	modelproxycap "github.com/bwsalmon/grain/pkg/capability/modelproxy"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelproxy"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // claudeVendorUpstream is a stand-in for api.anthropic.com that records

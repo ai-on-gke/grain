@@ -3,9 +3,9 @@ package antigravity
 import (
 	"context"
 	"fmt"
-	"github.com/bwsalmon/grain/pkg/authfix"
+	"github.com/ai-on-gke/grain/pkg/authfix"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 	"os"
 	"os/exec"
 	"regexp"

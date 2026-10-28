@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // PriorityReleaseGate (docs/design/release-from-trunk.md, RFT-2): the

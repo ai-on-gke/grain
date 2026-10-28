@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/capability/githubsandbox"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 func TestAPIHostRewritesGitHubDotComOnly(t *testing.T) {

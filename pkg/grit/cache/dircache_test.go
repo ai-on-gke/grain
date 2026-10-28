@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/workflows"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // aResult is a job that ran and succeeded -- the only kind of thing a

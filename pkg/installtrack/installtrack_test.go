@@ -4,8 +4,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/installtrack"
-	"github.com/bwsalmon/grain/pkg/installtrack/installtracktest"
+	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/installtrack/installtracktest"
 )
 
 func init() { installtracktest.Register() }

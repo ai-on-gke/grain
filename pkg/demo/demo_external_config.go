@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // externalConfigRepo is `grain demo -external-config-repo`: a deployment

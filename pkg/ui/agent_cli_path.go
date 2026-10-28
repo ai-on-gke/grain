@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // CheckCLIPath decides whether path -- a connection's CLIPath -- names a

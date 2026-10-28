@@ -7,8 +7,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // RepoReleaseSettings is the repository-owned release policy and the presence

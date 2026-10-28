@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 func openRepo(t *testing.T) *staterepo.Repo {

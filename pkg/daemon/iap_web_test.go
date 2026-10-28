@@ -14,7 +14,7 @@ import (
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/iap/v1"
 
-	"github.com/bwsalmon/grain/pkg/iapreconciler"
+	"github.com/ai-on-gke/grain/pkg/iapreconciler"
 )
 
 const (

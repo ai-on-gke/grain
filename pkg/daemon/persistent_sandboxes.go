@@ -6,10 +6,10 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/tunnel/hostport"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/tunnel/hostport"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // persistentSandboxes supervises this deployment's persistent sandboxes

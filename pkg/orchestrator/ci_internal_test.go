@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
 // What grain says about a run that could not get a job the environment it

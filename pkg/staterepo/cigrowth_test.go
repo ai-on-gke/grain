@@ -50,9 +50,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // A workflow shape, as the bytes each of its steps prints: one slice per
@@ -611,7 +611,7 @@ func ciText(rnd *rand.Rand, n int) string {
 	lines := []string{
 		"=== RUN   TestExportWritesAFileForEveryTableTheSchemaHas",
 		"--- PASS: TestSyncCommitsOnlyWhatChanged (0.04s)",
-		"ok  \tgithub.com/bwsalmon/grain/pkg/staterepo\t2.418s",
+		"ok  \tgithub.com/ai-on-gke/grain/pkg/staterepo\t2.418s",
 		"go: downloading github.com/mattn/go-sqlite3 v1.14.22",
 		"  vite v5.4.2 building for production...",
 		"    at Object.<anonymous> (/home/debian/work/ui/src/app.test.js:41:19)",

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/hosttop"
+	"github.com/ai-on-gke/grain/pkg/hosttop"
 )
 
 // One sample, not both, and macOS top spells the line that opens one

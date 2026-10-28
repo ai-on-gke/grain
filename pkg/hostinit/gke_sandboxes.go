@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/k8s"
 )
 
 // Defaults for `grain init -platform=gke-sandboxes`.
@@ -29,7 +29,7 @@ const (
 	DefaultGKESandboxesGuestImage      = "ghcr.io/bwsalmon/grain/guest:main"
 	DefaultGKESandboxesGitProxyURL     = "http://127.0.0.1:9728"
 	DefaultGKESandboxesPackageCacheURL = "http://127.0.0.1:9729"
-	DefaultGKESandboxesVerifyRepo      = "https://github.com/bwsalmon/grain.git"
+	DefaultGKESandboxesVerifyRepo      = "https://github.com/ai-on-gke/grain.git"
 	DefaultGKESandboxesTokenDuration   = "8760h"
 
 	gkeSandboxesVerifyPodName = "grain-init-gke-sandboxes-verify"

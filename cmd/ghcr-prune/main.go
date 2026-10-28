@@ -113,8 +113,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/packagepublish"
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 var (

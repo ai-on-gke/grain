@@ -4,7 +4,7 @@ import (
 	"context"
 	"slices"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // adoptableFrameworks is the frameworks whose runs this daemon can carry

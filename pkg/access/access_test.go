@@ -3,7 +3,7 @@ package access_test
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/access"
+	"github.com/ai-on-gke/grain/pkg/access"
 )
 
 func TestNormalizeAndValidateIdentifier(t *testing.T) {

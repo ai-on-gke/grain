@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/kubectlgate"
+	"github.com/ai-on-gke/grain/pkg/kubectlgate"
 )
 
 // kubeletDialTimeout is the API server failing to reach the pod's kubelet

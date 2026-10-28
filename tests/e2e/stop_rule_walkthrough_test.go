@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // promisingFramework ends its first turn on a promise and, resumed with

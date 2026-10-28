@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/metrics"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/metrics"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // finishedRun is one attempt that ended at d into the window, with the

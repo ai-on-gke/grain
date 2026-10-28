@@ -18,7 +18,7 @@ import { buildPath } from "../paths.js";
 import { lastRestartReason, stagingLink } from "../staging.js";
 
 const PERSISTENT_SANDBOXES_DOC =
-  "https://github.com/bwsalmon/grain/blob/main/docs/persistent-sandboxes.md";
+  "https://github.com/ai-on-gke/grain/blob/main/docs/persistent-sandboxes.md";
 
 // persistentStateColor is the chip colour for a persistent sandbox's state
 // (orchestrator.PersistentStarting and friends).

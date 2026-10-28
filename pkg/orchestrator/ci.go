@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/grainci"
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/cifault"
-	"github.com/bwsalmon/grain/pkg/forge"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/cifault"
+	"github.com/ai-on-gke/grain/pkg/forge"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Deps.CI is grain's own CI as this package takes it: ci.Runner, the

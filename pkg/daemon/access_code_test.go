@@ -1,6 +1,6 @@
 package daemon
 
-import "github.com/bwsalmon/grain/pkg/ui"
+import "github.com/ai-on-gke/grain/pkg/ui"
 
 // testAccessCode is the access code the tests in this package give a
 // server they reach over a real listener (httptest.NewServer). Such a

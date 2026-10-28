@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent/claude"
-	"github.com/bwsalmon/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
 // detachedEnv is what hostd_allowlist_content reads for a core-track

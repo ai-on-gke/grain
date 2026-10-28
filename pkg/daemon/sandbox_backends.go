@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/installtrack"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // podIPEnv is the environment variable a Kubernetes-backed deployment

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // ReviewedCLIVersion is deliberately exact, not a minimum version.

@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/staterepo"
-	"github.com/bwsalmon/grain/pkg/staterepo/statecheck"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo/statecheck"
 )
 
 // StateCheckSandboxes is ci.Sandboxes with one job answered by the daemon

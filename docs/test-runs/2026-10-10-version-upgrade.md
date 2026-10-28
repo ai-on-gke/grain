@@ -93,7 +93,7 @@ $ go test -v ./tests/container/ -run TestResolvePreviousVersionTag
     --- PASS: TestResolvePreviousVersionTag/tags_with_extra_whitespace_and_empty_lines (0.00s)
     --- PASS: TestResolvePreviousVersionTag/non-v_tags_ignored (0.00s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/container	0.004s
+ok  	github.com/ai-on-gke/grain/tests/container	0.004s
 ```
 
 ---
@@ -132,7 +132,7 @@ $ GRAIN_TEST_IMAGE=grain-e2e:test go test -v -timeout 10m ./tests/container/ -ru
     version_upgrade_test.go:43: testing upgrade from previous version v1.7.0 to current version image grain-e2e:test
 --- PASS: TestUpgradeFromPreviousVersion (6.89s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/container	6.891s
+ok  	github.com/ai-on-gke/grain/tests/container	6.891s
 ```
 
 ---
@@ -152,7 +152,7 @@ GRAIN_TEST_IMAGE=grain-e2e:test \
     version_upgrade_test.go:43: testing upgrade from previous version v1.7.0 to current version image grain-e2e:test
 --- PASS: TestUpgradeFromPreviousVersion (6.52s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/container	17.139s
+ok  	github.com/ai-on-gke/grain/tests/container	17.139s
 ```
 
 ---

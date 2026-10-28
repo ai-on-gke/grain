@@ -47,9 +47,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	cicli "github.com/bwsalmon/grain/pkg/ci/cli"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	cicli "github.com/ai-on-gke/grain/pkg/ci/cli"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func cmdCI(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {

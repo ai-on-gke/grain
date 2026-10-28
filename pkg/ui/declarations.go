@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // refuseDeclaredEdit refuses to change or delete a template, suite or

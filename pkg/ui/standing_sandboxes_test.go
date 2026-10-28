@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/grainlog"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func TestSandboxHealthReportsStandingSandboxes(t *testing.T) {

@@ -3,7 +3,7 @@ package claude
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // A Claude plan limit is the login's, shared by every model on it; a

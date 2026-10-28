@@ -68,9 +68,9 @@ FAIL`
 panic: runtime error: invalid memory address or nil pointer dereference [recovered]
 	panic: runtime error: invalid memory address or nil pointer dereference
 goroutine 19 [running]:
-github.com/bwsalmon/grain/pkg/ci.TestNilDeref(0xc00010c780)
+github.com/ai-on-gke/grain/pkg/ci.TestNilDeref(0xc00010c780)
 	/home/debian/work/pkg/ci/engine_test.go:88 +0x3c
-FAIL	github.com/bwsalmon/grain/pkg/ci	0.015s`
+FAIL	github.com/ai-on-gke/grain/pkg/ci	0.015s`
 		summary := ExtractFailureSummary(output)
 		if summary == nil || len(summary.Tests) != 1 {
 			t.Fatalf("expected 1 test failure, got %+v", summary)
@@ -256,7 +256,7 @@ func TestExtractFailureSummary_ANSIStrippingAndClean(t *testing.T) {
 		output := `=== RUN   TestPassing
 --- PASS: TestPassing (0.01s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/ci	0.123s`
+ok  	github.com/ai-on-gke/grain/pkg/ci	0.123s`
 		summary := ExtractFailureSummary(output)
 		if summary != nil && !summary.Empty() {
 			t.Errorf("expected nil or empty summary for passing output, got %+v", summary)
@@ -304,7 +304,7 @@ func TestExtractFailureSummary_RunGoTestsIntegration(t *testing.T) {
 	t.Run("run-go-tests.sh panic output with blank line and raw tail deduplicates and picks test location", func(t *testing.T) {
 		output := `[go test] --- FAIL: TestPanic (0.00s) [pkg/foo]
 panic: boom [recovered, repanicked] [pkg/foo]
-FAIL	github.com/bwsalmon/grain/pkg/foo	0.002s
+FAIL	github.com/ai-on-gke/grain/pkg/foo	0.002s
 [go test] done in 0s: 0 pkg ok, 1 pkg fail, 0 pkg skip (0 tests pass, 1 fail)
 
 === failing tests ===
@@ -318,7 +318,7 @@ testing.tRunner.func1()
 	/usr/local/go/src/testing/testing.go:1875 +0x358
 panic({0x58bd60?, 0x5c2dc0?})
 	/usr/local/go/src/runtime/panic.go:783 +0x120
-github.com/bwsalmon/grain/pkg/foo.TestPanic(0xc0000c8380?)
+github.com/ai-on-gke/grain/pkg/foo.TestPanic(0xc0000c8380?)
 	/home/debian/work/pkg/foo/panic_test.go:16 +0x2c
 testing.tRunner(0xc0000c8380, 0x5c2aa8)
 	/usr/local/go/src/testing/testing.go:1934 +0xe8
@@ -329,7 +329,7 @@ panic: boom [recovered, repanicked] [pkg/foo]
 goroutine 7 [running]:
 testing.tRunner.func1.2({0x58bd60, 0x5c2dc0})
 	/usr/local/go/src/testing/testing.go:1872 +0x23c
-github.com/bwsalmon/grain/pkg/foo.TestPanic(0xc0000c8380?)
+github.com/ai-on-gke/grain/pkg/foo.TestPanic(0xc0000c8380?)
 	/home/debian/work/pkg/foo/panic_test.go:16 +0x2c
 
 === last 200 lines of the raw run ===
@@ -340,9 +340,9 @@ panic: boom [recovered, repanicked]
 goroutine 7 [running]:
 testing.tRunner.func1.2({0x58bd60, 0x5c2dc0})
 	/usr/local/go/src/testing/testing.go:1872 +0x23c
-github.com/bwsalmon/grain/pkg/foo.TestPanic(0xc0000c8380?)
+github.com/ai-on-gke/grain/pkg/foo.TestPanic(0xc0000c8380?)
 	/home/debian/work/pkg/foo/panic_test.go:16 +0x2c
-FAIL	github.com/bwsalmon/grain/pkg/foo	0.002s`
+FAIL	github.com/ai-on-gke/grain/pkg/foo	0.002s`
 
 		summary := ExtractFailureSummary(output)
 		if summary == nil || summary.Empty() {
@@ -369,18 +369,18 @@ FAIL	github.com/bwsalmon/grain/pkg/foo	0.002s`
 	t.Run("run-go-tests.sh data race output extracts race location and avoids duplicate tests", func(t *testing.T) {
 		output := `[go test] --- FAIL: TestRace (0.01s) [pkg/foo]
 WARNING: DATA RACE [pkg/foo]
-FAIL	github.com/bwsalmon/grain/pkg/foo	0.015s
+FAIL	github.com/ai-on-gke/grain/pkg/foo	0.015s
 
 === failing tests ===
 --- FAIL: TestRace (0.01s) [pkg/foo]
 ==================
 WARNING: DATA RACE
 Write at 0x00c0000140b8 by goroutine 8:
-  github.com/bwsalmon/grain/pkg/foo.TestRace.func1()
+  github.com/ai-on-gke/grain/pkg/foo.TestRace.func1()
       /home/debian/work/pkg/foo/race_test.go:11 +0x34
 
 Previous write at 0x00c0000140b8 by main goroutine:
-  github.com/bwsalmon/grain/pkg/foo.TestRace()
+  github.com/ai-on-gke/grain/pkg/foo.TestRace()
       /home/debian/work/pkg/foo/race_test.go:13 +0x8c
   testing.tRunner()
       /usr/local/go/src/testing/testing.go:1934 +0x21c
@@ -390,7 +390,7 @@ Previous write at 0x00c0000140b8 by main goroutine:
 === data races ===
 WARNING: DATA RACE [pkg/foo]
 Write at 0x00c0000140b8 by goroutine 8:
-  github.com/bwsalmon/grain/pkg/foo.TestRace.func1()
+  github.com/ai-on-gke/grain/pkg/foo.TestRace.func1()
       /home/debian/work/pkg/foo/race_test.go:11 +0x34
 
 === last 200 lines of the raw run ===
@@ -398,7 +398,7 @@ Write at 0x00c0000140b8 by goroutine 8:
 ==================
 WARNING: DATA RACE
 Write at 0x00c0000140b8 by goroutine 8:
-  github.com/bwsalmon/grain/pkg/foo.TestRace.func1()
+  github.com/ai-on-gke/grain/pkg/foo.TestRace.func1()
       /home/debian/work/pkg/foo/race_test.go:11 +0x34
 ==================
     testing.go:1712: race detected during execution of test

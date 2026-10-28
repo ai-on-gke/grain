@@ -23,7 +23,7 @@ import (
 	"strings"
 	"sync"
 
-	releases "github.com/bwsalmon/grain/docs/releases"
+	releases "github.com/ai-on-gke/grain/docs/releases"
 )
 
 // Version is one release's entry in the list: what it is called and,

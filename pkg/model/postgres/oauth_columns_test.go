@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // setOAuthColumns writes grain_config's Google OAuth client id and

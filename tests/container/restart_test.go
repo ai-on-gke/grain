@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ui"
-	"github.com/bwsalmon/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 func TestAnMCPServerCallInFlightSurvivesADaemonRestart(t *testing.T) {

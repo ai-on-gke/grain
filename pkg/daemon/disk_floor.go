@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/sysstat"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/sysstat"
 )
 
 // diskWatch is where a deployment's free disk is read for an admission:

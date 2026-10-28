@@ -20,8 +20,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/kubectlgate"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/kubectlgate"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // UnmatchedFailure is one failed run whose text matched none of grain's

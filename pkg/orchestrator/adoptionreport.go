@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/runhost"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/runhost"
 )
 
 // AdoptionReport is what this daemon's startup adoption pass did with the

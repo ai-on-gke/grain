@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // docs/agy-surface.md is a capture of what a real agy said about itself

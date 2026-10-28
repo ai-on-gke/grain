@@ -26,7 +26,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ComposedField is one field of one composed task: its value, rendered

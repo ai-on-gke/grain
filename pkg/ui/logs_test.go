@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/grainlog"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // fakeLogSource is a pointer type so that asked survives the call: the

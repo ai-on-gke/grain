@@ -16,7 +16,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // A single-tenant daemon (-tenancy=single, Track 1.1) keeps no accounts.

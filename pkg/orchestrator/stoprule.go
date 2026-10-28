@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // continueStoppedRun is the stop rule's fallback (agent.DecideStop) for a

@@ -479,8 +479,8 @@ find_or_download_grain() {
     download_urls+=("${GRAIN_URL%/}/install/${OS}/${ARCH}")
   fi
   download_urls+=(
-    "https://github.com/bwsalmon/grain/releases/latest/download/${bin_name}"
-    "https://github.com/bwsalmon/grain/releases/latest/download/${bin_name}.tar.gz"
+    "https://github.com/ai-on-gke/grain/releases/latest/download/${bin_name}"
+    "https://github.com/ai-on-gke/grain/releases/latest/download/${bin_name}.tar.gz"
   )
 
   # Stage downloads inside install_dir so the final rename onto target_bin

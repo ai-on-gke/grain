@@ -19,9 +19,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/redact"
-	"github.com/bwsalmon/grain/pkg/safepath"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/safepath"
 )
 
 const (

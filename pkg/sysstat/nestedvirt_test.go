@@ -3,7 +3,7 @@ package sysstat_test
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/sysstat"
+	"github.com/ai-on-gke/grain/pkg/sysstat"
 )
 
 // Against the real /sys/module, which is why this asserts a set rather

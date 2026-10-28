@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 )
 
 // serveCapabilityIfForked is TestMain's first act: a test that attaches

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // An adopted run's clock keeps the deadline the previous daemon set and

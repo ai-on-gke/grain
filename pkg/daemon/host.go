@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/grainlog"
-	"github.com/bwsalmon/grain/pkg/hosttop"
-	"github.com/bwsalmon/grain/pkg/k8s"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/sysstat"
-	"github.com/bwsalmon/grain/pkg/systemlog"
-	"github.com/bwsalmon/grain/pkg/ui"
-	"github.com/bwsalmon/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/hosttop"
+	"github.com/ai-on-gke/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/sysstat"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
+	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // hostAction passes a host-power action through on a deployment that

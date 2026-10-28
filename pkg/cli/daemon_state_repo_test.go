@@ -20,13 +20,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/staterepo"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func TestDaemonPushesItsDatabaseToTheStateRepository(t *testing.T) {

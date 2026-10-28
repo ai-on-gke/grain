@@ -372,7 +372,7 @@ func TestEvaluateQuarantineWithRunGoTestsMultiLineAndPanicOutput(t *testing.T) {
 	raw := `[go test] --- FAIL: TestFlakyMultiLog (0.02s) [pkg/foo]
 [go test] --- FAIL: TestFlakyPanic (0.01s) [pkg/foo]
 panic: flaky boom [recovered, repanicked] [pkg/foo]
-FAIL	github.com/bwsalmon/grain/pkg/foo	0.030s
+FAIL	github.com/ai-on-gke/grain/pkg/foo	0.030s
 
 === failing tests ===
 --- FAIL: TestFlakyMultiLog (0.02s) [pkg/foo]
@@ -382,14 +382,14 @@ FAIL	github.com/bwsalmon/grain/pkg/foo	0.030s
 panic: flaky boom [recovered, repanicked]
 
 goroutine 9 [running]:
-github.com/bwsalmon/grain/pkg/foo.TestFlakyPanic(0xc0000c8380?)
+github.com/ai-on-gke/grain/pkg/foo.TestFlakyPanic(0xc0000c8380?)
 	/home/debian/work/pkg/foo/flaky_test.go:30 +0x2c
 
 === panics ===
 panic: flaky boom [recovered, repanicked] [pkg/foo]
 
 goroutine 9 [running]:
-github.com/bwsalmon/grain/pkg/foo.TestFlakyPanic(0xc0000c8380?)
+github.com/ai-on-gke/grain/pkg/foo.TestFlakyPanic(0xc0000c8380?)
 	/home/debian/work/pkg/foo/flaky_test.go:30 +0x2c
 
 === last 200 lines of the raw run ===
@@ -400,7 +400,7 @@ github.com/bwsalmon/grain/pkg/foo.TestFlakyPanic(0xc0000c8380?)
     flaky_test.go:12: first log line
     flaky_test.go:18: second error line
 --- FAIL: TestFlakyMultiLog (0.02s)
-FAIL	github.com/bwsalmon/grain/pkg/foo	0.030s`
+FAIL	github.com/ai-on-gke/grain/pkg/foo	0.030s`
 
 	summary := ExtractFailureSummary(raw)
 	if summary == nil {

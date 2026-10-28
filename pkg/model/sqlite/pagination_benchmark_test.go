@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func populate20kTasksAndObservations(tb testing.TB, totalTasks int) (*model.Store, *sql.DB, context.Context) {

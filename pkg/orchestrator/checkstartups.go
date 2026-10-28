@@ -71,9 +71,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/bwsalmon/grain/pkg/forge"
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/forge"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // repoFinder is one reconciler cycle's memory of what it has concluded

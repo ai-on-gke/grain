@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // frameworkSwitchNote is what an interactive task's conversation is told

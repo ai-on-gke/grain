@@ -39,8 +39,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/gitrefs"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/gitrefs"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Remote is how one repository is reached: a URL git can fetch from and

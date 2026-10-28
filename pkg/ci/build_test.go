@@ -7,7 +7,7 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // The stamp a test deployment claims to be running. A real one reads

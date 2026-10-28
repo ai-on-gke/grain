@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 )
 
 // ImageConfig, set on Config.Image, makes an Upgrader upgrade a

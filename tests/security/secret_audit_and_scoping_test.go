@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite/sqlitetest"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // resolveAuditedSecret resolves a secret on behalf of a task of team-sec

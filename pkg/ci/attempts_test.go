@@ -14,23 +14,23 @@ func TestRetriedJobKeepsAttempt1LogsAndPerTestOutputAcrossStores(t *testing.T) {
 	ctx := context.Background()
 
 	attempt1GotestLog := strings.Join([]string{
-		"=== PACKAGE github.com/bwsalmon/grain/pkg/ci",
+		"=== PACKAGE github.com/ai-on-gke/grain/pkg/ci",
 		"=== RUN   TestPassOnAttempt1",
 		"--- PASS: TestPassOnAttempt1 (0.01s)",
 		"=== RUN   TestFlakyOnAttempt1",
 		"    flaky_test.go:42: expected 200, got 500 on first attempt",
 		"--- FAIL: TestFlakyOnAttempt1 (0.12s)",
-		"FAIL\tgithub.com/bwsalmon/grain/pkg/ci\t0.130s",
+		"FAIL\tgithub.com/ai-on-gke/grain/pkg/ci\t0.130s",
 	}, "\n") + "\n"
 
 	attempt2GotestLog := strings.Join([]string{
-		"=== PACKAGE github.com/bwsalmon/grain/pkg/ci",
+		"=== PACKAGE github.com/ai-on-gke/grain/pkg/ci",
 		"=== RUN   TestPassOnAttempt1",
 		"--- PASS: TestPassOnAttempt1 (0.01s)",
 		"=== RUN   TestFlakyOnAttempt1",
 		"    flaky_test.go:42: retry succeeded cleanly",
 		"--- PASS: TestFlakyOnAttempt1 (0.02s)",
-		"ok  \tgithub.com/bwsalmon/grain/pkg/ci\t0.030s",
+		"ok  \tgithub.com/ai-on-gke/grain/pkg/ci\t0.030s",
 	}, "\n") + "\n"
 
 	wrapGoTestLog := func(raw string) string {
@@ -58,12 +58,12 @@ func TestRetriedJobKeepsAttempt1LogsAndPerTestOutputAcrossStores(t *testing.T) {
 			if stepRuns == 1 {
 				return CommandResult{
 					ExitCode: 1,
-					Output:   "=== per-package results ===\n  FAIL  github.com/bwsalmon/grain/pkg/ci  (0.1s)\n=== failing tests ===\n  --- FAIL: github.com/bwsalmon/grain/pkg/ci TestFlakyOnAttempt1\n      flaky_test.go:42: expected 200, got 500 on first attempt\n",
+					Output:   "=== per-package results ===\n  FAIL  github.com/ai-on-gke/grain/pkg/ci  (0.1s)\n=== failing tests ===\n  --- FAIL: github.com/ai-on-gke/grain/pkg/ci TestFlakyOnAttempt1\n      flaky_test.go:42: expected 200, got 500 on first attempt\n",
 				}, nil
 			}
 			return CommandResult{
 				ExitCode: 0,
-				Output:   "=== per-package results ===\n  ok    github.com/bwsalmon/grain/pkg/ci  (0.0s)\n",
+				Output:   "=== per-package results ===\n  ok    github.com/ai-on-gke/grain/pkg/ci  (0.0s)\n",
 			}, nil
 		},
 	}
@@ -111,7 +111,7 @@ func TestRetriedJobKeepsAttempt1LogsAndPerTestOutputAcrossStores(t *testing.T) {
 		if att2.Conclusion != ConclusionSuccess {
 			t.Errorf("%s: attempt 2 conclusion = %q, want %q", label, att2.Conclusion, ConclusionSuccess)
 		}
-		if len(att2.Steps) != 1 || !strings.Contains(att2.Steps[0].Output, "ok    github.com/bwsalmon/grain/pkg/ci") {
+		if len(att2.Steps) != 1 || !strings.Contains(att2.Steps[0].Output, "ok    github.com/ai-on-gke/grain/pkg/ci") {
 			t.Errorf("%s: attempt 2 step output = %+v", label, att2.Steps)
 		}
 		testLog2, ok := LookupAttemptGoTest(att2, "pkg/ci", "TestFlakyOnAttempt1")

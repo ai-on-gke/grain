@@ -50,8 +50,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/statemachine"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/statemachine"
 )
 
 // DefaultIdleTTL is how long a serving sandbox is held with nothing to

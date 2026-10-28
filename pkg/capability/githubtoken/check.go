@@ -65,8 +65,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // apiVersion pins every request against GitHub's own dated REST

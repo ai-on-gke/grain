@@ -72,32 +72,32 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/actionscache"
+	"github.com/ai-on-gke/grain/pkg/actionscache"
 
 	// The capability half of the model proxies, aliased because the
 	// package it mints into (pkg/modelproxy, imported by
 	// pkg/cli/modelproxy.go) has the same name -- one is the proxies,
 	// the other is the grants that hand a run a token for one.
 
-	"github.com/bwsalmon/grain/pkg/capability/grainci"
-	"github.com/bwsalmon/grain/pkg/capability/localscripts"
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/granule"
-	"github.com/bwsalmon/grain/pkg/hostd"
-	"github.com/bwsalmon/grain/pkg/k8s"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/postgres"
-	"github.com/bwsalmon/grain/pkg/modelexec"
-	"github.com/bwsalmon/grain/pkg/modelproxy"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/pkgcache"
-	"github.com/bwsalmon/grain/pkg/secrets"
-	"github.com/bwsalmon/grain/pkg/ui"
-	"github.com/bwsalmon/grain/pkg/upgrade"
-	"github.com/bwsalmon/grain/pkg/whererun"
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
+	"github.com/ai-on-gke/grain/pkg/modelexec"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/whererun"
 )
 
 func runDaemonCommand(args []string) {

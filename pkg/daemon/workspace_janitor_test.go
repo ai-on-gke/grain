@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
 )
 
 type janitorRegistry struct {

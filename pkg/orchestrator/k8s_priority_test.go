@@ -3,8 +3,8 @@ package orchestrator
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/k8s"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Every kind of sandbox pod runs at its own class -- the ordering that

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/localscripts"
-	"github.com/bwsalmon/grain/pkg/localexec"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
+	"github.com/ai-on-gke/grain/pkg/localexec"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // LocalScriptsFlags is the forked mcpserver's -local-scripts list: one

@@ -40,8 +40,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // liveAgentTestEnv is the same opt-in tests/e2e and agent/claude read --
@@ -597,7 +597,7 @@ func refuseWithRateLimit(w http.ResponseWriter) {
 func buildGrainBinary(t *testing.T) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "grain")
-	cmd := exec.Command("go", "build", "-o", out, "github.com/bwsalmon/grain/cmd/grain")
+	cmd := exec.Command("go", "build", "-o", out, "github.com/ai-on-gke/grain/cmd/grain")
 	cmd.Dir = repoRoot(t)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("building cmd/grain: %v\n%s", err, output)

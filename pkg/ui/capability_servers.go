@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/intree"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/capability/servers"
-	"github.com/bwsalmon/grain/pkg/hostd"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The deployment's capability servers: grain_config.mcp_servers, keyed by

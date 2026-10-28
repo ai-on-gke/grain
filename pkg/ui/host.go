@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/bwsalmon/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/apierror"
 )
 
 // errRebootUnavailable is what handleRebootHost reports when

@@ -2,7 +2,7 @@
 // can read GitHub issues and comments via MCP tools (list_issues, read_issue).
 package readissues
 
-import "github.com/bwsalmon/grain/pkg/model"
+import "github.com/ai-on-gke/grain/pkg/model"
 
 // CapabilityName is the grant name ui.OfferedCapabilities lists as "read-issues".
 const CapabilityName = "read-issues"

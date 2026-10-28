@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/checkpost"
+	"github.com/ai-on-gke/grain/pkg/checkpost"
 )
 
 func TestUsage(t *testing.T) {

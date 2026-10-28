@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/metrics"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/metrics"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Runs whose setup the cluster's exec tunnel failed -- retried as a setup

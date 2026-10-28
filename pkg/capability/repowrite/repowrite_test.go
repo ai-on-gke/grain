@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/repowrite"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func TestRepoWriteProviderSpec(t *testing.T) {

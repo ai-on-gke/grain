@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/cifault"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/cifault"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // fakeStore is cifault.Store with its answers written down: which pull

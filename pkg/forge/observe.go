@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // Observation is everything the forge has to say about one pull request

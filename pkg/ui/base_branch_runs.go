@@ -8,7 +8,7 @@ import (
 
 	"net/http"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Running a base branch's own check by hand (grain/task-480).

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // grain/task-322: a task that names no zone of its own -- one nobody

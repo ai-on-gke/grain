@@ -138,15 +138,15 @@ All 8 specific validation scenarios mandated by `docs/test-plans/2026-09-30.md Â
 === CONT  TestCrossTeamTaskReassignmentAndDynamicSlugWalkthrough
 --- PASS: TestCrossTeamTaskReassignmentAndDynamicSlugWalkthrough (0.08s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/ui	0.094s
+ok  	github.com/ai-on-gke/grain/pkg/ui	0.094s
 ```
 
 ### Full Repository Test Suite
 ```
-ok  	github.com/bwsalmon/grain/cmd/grain	22.326s
-ok  	github.com/bwsalmon/grain/pkg/model	4.027s
-ok  	github.com/bwsalmon/grain/pkg/orchestrator	112.182s
-ok  	github.com/bwsalmon/grain/pkg/ui	52.071s
-ok  	github.com/bwsalmon/grain/tests/e2e	109.836s
+ok  	github.com/ai-on-gke/grain/cmd/grain	22.326s
+ok  	github.com/ai-on-gke/grain/pkg/model	4.027s
+ok  	github.com/ai-on-gke/grain/pkg/orchestrator	112.182s
+ok  	github.com/ai-on-gke/grain/pkg/ui	52.071s
+ok  	github.com/ai-on-gke/grain/tests/e2e	109.836s
 All packages PASS (0 failures across the entire repository).
 ```

@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/secretsrepo"
+	"github.com/ai-on-gke/grain/pkg/secretsrepo"
 )
 
 // bareRemote is the remote every test here pushes to: a real bare

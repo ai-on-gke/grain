@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // ProxyActivityRecorder is where the proxy reports what a sandbox's live

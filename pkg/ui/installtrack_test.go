@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/installtrack"
-	"github.com/bwsalmon/grain/pkg/installtrack/installtracktest"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/installtrack/installtracktest"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func init() { installtracktest.Register() }

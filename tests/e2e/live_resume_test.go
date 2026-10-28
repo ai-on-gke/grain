@@ -62,7 +62,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 )
 
 func TestLiveAgyResumesAConversationAcrossExecs(t *testing.T) {

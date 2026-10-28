@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // listen binds a data-plane listener on a loopback address and serves h

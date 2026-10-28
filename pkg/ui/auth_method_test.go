@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // serveFrom sends one request to srv as if it arrived from remoteAddr.

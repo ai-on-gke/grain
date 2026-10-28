@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent/antigravity"
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // The "agy-tool-hook" subcommand is the whole of what agy sees of

@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/secretsrepo"
+	"github.com/ai-on-gke/grain/pkg/secretsrepo"
 )
 
 func TestFileNameNamesGrainAndTheStateRepository(t *testing.T) {

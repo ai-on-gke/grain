@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ModelDiscoveryInterval is how often RunModelDiscovery asks every

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent/antigravity"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The connection a run is dispatched onto decides its model-turn limits:

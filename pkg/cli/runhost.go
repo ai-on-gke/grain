@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/runhost"
+	"github.com/ai-on-gke/grain/pkg/runhost"
 )
 
 // runHostCmd is "grain runhost exec": a run host's entrypoint

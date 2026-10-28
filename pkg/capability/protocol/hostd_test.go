@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
 // startTestHostd serves a real grain hostd whose allowlist offers this

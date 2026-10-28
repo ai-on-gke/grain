@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // createLine is the "vm create" the fake granule recorded, which is

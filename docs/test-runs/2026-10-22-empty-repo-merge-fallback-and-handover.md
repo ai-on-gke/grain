@@ -154,7 +154,7 @@ $ go test -v ./pkg/mcp -run TestOpenPullRequest
 === RUN   TestOpenPullRequestPropagatesOrchestratorErrorsAsToolErrors
 --- PASS: TestOpenPullRequestPropagatesOrchestratorErrorsAsToolErrors (0.00s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/mcp	0.025s
+ok  	github.com/ai-on-gke/grain/pkg/mcp	0.025s
 
 $ go test -v ./tests/e2e -run "TestWalkthrough(EmptyRepo|MergePullRequest|MultiAttempt|AntigravityResumed|PackageRegistry)|TestMCPServerOpensAPullRequestOverStdio"
 --- PASS: TestWalkthroughPackageRegistryCredentialChecks (2.11s)
@@ -172,5 +172,5 @@ $ go test -v ./tests/e2e -run "TestWalkthrough(EmptyRepo|MergePullRequest|MultiA
     --- PASS: TestWalkthroughEmptyRepoBootstrapToNormalPRFlow/open_pull_request_mid_run_initializes_main_and_closes_task (3.30s)
 --- PASS: TestMCPServerOpensAPullRequestOverStdio (3.57s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	5.717s
+ok  	github.com/ai-on-gke/grain/tests/e2e	5.717s
 ```

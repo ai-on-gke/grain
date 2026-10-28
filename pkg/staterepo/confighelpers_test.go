@@ -30,8 +30,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // configTables is every table the repository carries and a restore

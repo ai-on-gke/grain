@@ -45,10 +45,10 @@ Comprehensive test run, architectural verification, and end-to-end walkthrough f
 ### 1. Go Unit & Integration Tests
 Ran `go test ./pkg/... ./cmd/...`:
 ```
-ok   github.com/bwsalmon/grain/pkg/access         (cached)
-ok   github.com/bwsalmon/grain/pkg/iapreconciler  (cached)
-ok   github.com/bwsalmon/grain/pkg/ui             36.109s
-ok   github.com/bwsalmon/grain/cmd/grain          19.287s
+ok   github.com/ai-on-gke/grain/pkg/access         (cached)
+ok   github.com/ai-on-gke/grain/pkg/iapreconciler  (cached)
+ok   github.com/ai-on-gke/grain/pkg/ui             36.109s
+ok   github.com/ai-on-gke/grain/cmd/grain          19.287s
 All package tests passed successfully.
 ```
 

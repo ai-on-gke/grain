@@ -3,7 +3,7 @@ package daemon
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
 // A trunk release gate's own floor (ci.Request.Priority, RFT-2) survives

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 )
 
 func writeTestCredentialLadder(t *testing.T, patterns, tokens map[string]string) *gitproxy.CredentialSet {

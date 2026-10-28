@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/procgroup"
+	"github.com/ai-on-gke/grain/pkg/procgroup"
 )
 
 // Server is a running hostd.

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // CanonicalIDPrefix is the namespace of the built-in servers' canonical

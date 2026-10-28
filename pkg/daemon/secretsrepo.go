@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/secretsrepo"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/secretsrepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // secretsRepoDir is the working tree, under -data-dir beside the secrets

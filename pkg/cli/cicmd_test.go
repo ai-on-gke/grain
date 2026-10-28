@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	cicli "github.com/bwsalmon/grain/pkg/ci/cli"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	cicli "github.com/ai-on-gke/grain/pkg/ci/cli"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // instant is a time as a ci.Run carries one: its timestamps are

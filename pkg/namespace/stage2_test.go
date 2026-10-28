@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
 type stubTaskProvider struct {

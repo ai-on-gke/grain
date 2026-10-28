@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // noteContention records one thing the merge queue had to do over again

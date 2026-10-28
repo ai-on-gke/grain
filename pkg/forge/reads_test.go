@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 var readStart = time.Date(2026, 9, 17, 4, 11, 0, 0, time.UTC)

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 const accessCodeUsage = `usage: grain access-code [-data-dir DIR] [show|rotate]

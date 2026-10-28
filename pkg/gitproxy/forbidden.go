@@ -22,7 +22,7 @@ package gitproxy
 import (
 	"sync/atomic"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ForbiddenSet holds the repos no sandbox may reach, for reading by the

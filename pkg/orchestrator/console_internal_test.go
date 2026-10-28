@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	consolecap "github.com/bwsalmon/grain/pkg/capability/console"
-	"github.com/bwsalmon/grain/pkg/console"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
+	"github.com/ai-on-gke/grain/pkg/console"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // headlessFramework is an agent.Framework and nothing more -- the shape

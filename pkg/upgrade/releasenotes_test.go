@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/releasenotes"
+	"github.com/ai-on-gke/grain/pkg/releasenotes"
 )
 
 // notesJSON is what `grain release-notes --json` prints for a build of

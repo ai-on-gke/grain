@@ -17,10 +17,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/safepath"
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/safepath"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // bakedHistoryMarker is the file scripts/export-source.sh leaves in the

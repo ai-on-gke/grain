@@ -47,10 +47,10 @@ import (
 	"io"
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 const repoCaseUsage = `usage: grain repo-case [-data-dir DIR] [-default-target owner/name] [-apply]

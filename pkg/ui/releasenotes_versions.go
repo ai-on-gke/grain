@@ -5,9 +5,9 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/bwsalmon/grain/pkg/releasenotes"
-	"github.com/bwsalmon/grain/pkg/upgrade"
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/releasenotes"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // releaseVersions is GET /api/release-notes/versions' answer: every

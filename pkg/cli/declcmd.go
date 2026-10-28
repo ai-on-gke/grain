@@ -46,7 +46,7 @@ package cli
 import (
 	"context"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
 	"flag"
 	"fmt"
@@ -56,9 +56,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/repodecl"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/repodecl"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // cmdDeclarations dispatches `grain declarations`. There is one verb,

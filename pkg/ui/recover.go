@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"runtime/debug"
 
-	"github.com/bwsalmon/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/apierror"
 )
 
 // serveRecovered runs next and turns a panic in it into the same

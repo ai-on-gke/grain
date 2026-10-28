@@ -1,6 +1,6 @@
 package gcpsets
 
-import "github.com/bwsalmon/grain/pkg/capability/gcpkey"
+import "github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 
 // LegacyAccount is one -account of the gcp server before permission sets:
 // a fixed pool of Count agent accounts named after Email.

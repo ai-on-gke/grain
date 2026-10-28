@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // tokenCaller is a server whose configure schema declares the

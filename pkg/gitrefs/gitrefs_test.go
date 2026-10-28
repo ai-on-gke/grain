@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/gitrefs"
+	"github.com/ai-on-gke/grain/pkg/gitrefs"
 )
 
 func git(t *testing.T, dir string, args ...string) {

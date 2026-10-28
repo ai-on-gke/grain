@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/hostscriptcli"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/hostscriptcli"
 )
 
 // hostScriptEnviron is the server's own environment in these tests.

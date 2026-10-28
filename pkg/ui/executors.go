@@ -19,10 +19,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/bwsalmon/grain/pkg/apierror"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelexec"
-	"github.com/bwsalmon/grain/pkg/tunnel/wsupgrade"
+	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelexec"
+	"github.com/ai-on-gke/grain/pkg/tunnel/wsupgrade"
 )
 
 //go:embed executor_install.sh

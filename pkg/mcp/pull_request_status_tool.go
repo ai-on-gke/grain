@@ -3,8 +3,8 @@ package mcp
 import (
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // annotateChecksWithAttribution classifies failing check runs by comparing them

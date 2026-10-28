@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // adoptedStream is a codex run's whole `codex exec --json` stream as

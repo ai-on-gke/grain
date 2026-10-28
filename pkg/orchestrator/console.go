@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	consolecap "github.com/bwsalmon/grain/pkg/capability/console"
-	"github.com/bwsalmon/grain/pkg/console"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
+	"github.com/ai-on-gke/grain/pkg/console"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // DefaultMaxConsoleRuntime is Config.maxConsoleRuntime's fallback: how

@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // How the task CLI finds and reaches its daemon (grain/task-3688).

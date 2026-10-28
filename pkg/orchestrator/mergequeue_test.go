@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/github/githubsim"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // A conflicted queue head is not handed to a new task on a new branch
@@ -733,7 +733,7 @@ func TestSyncPullRequestsPutsTheFailingJobsOwnLogIntoTheRepairComment(t *testing
 		{Name: "go", Conclusion: "failure", Log: "" +
 			"2026-01-02T03:04:05.1234567Z --- FAIL: TestQueueHead (0.01s)\n" +
 			"2026-01-02T03:04:05.1234567Z     sync_test.go:42: got 3, want 4\n" +
-			"2026-01-02T03:04:05.1234567Z FAIL\tgithub.com/bwsalmon/grain/pkg/orchestrator\n"},
+			"2026-01-02T03:04:05.1234567Z FAIL\tgithub.com/ai-on-gke/grain/pkg/orchestrator\n"},
 		{Name: "terraform", Conclusion: "success", Log: "terraform: no changes\n"},
 	}
 

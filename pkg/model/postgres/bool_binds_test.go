@@ -35,7 +35,7 @@ func TestEveryBoolBindNamesABooleanColumn(t *testing.T) {
 	}
 	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 		packages.NeedTypes | packages.NeedTypesInfo, Dir: "."}
-	pkgs, err := packages.Load(cfg, "github.com/bwsalmon/grain/pkg/model")
+	pkgs, err := packages.Load(cfg, "github.com/ai-on-gke/grain/pkg/model")
 	if err != nil {
 		t.Fatalf("loading pkg/model: %v", err)
 	}

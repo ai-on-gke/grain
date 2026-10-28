@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/k8s"
-	"github.com/bwsalmon/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
 const testCAPEM = "-----BEGIN CERTIFICATE-----\ngrain\n-----END CERTIFICATE-----\n"

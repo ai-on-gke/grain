@@ -18,8 +18,8 @@ package cli
 // ci_hostile_test.go exercises that default with a hostile workflow.
 
 import (
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 )
 
 // ciGate is the whole of ci.Runner, which is what the UI/API server and

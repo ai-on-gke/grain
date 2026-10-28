@@ -21,15 +21,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/portforward"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/hostd"
-	"github.com/bwsalmon/grain/pkg/hostscriptcli"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/portforward"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/hostscriptcli"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ID is the capability id the probe attaches the entry under.
-const ID = "https://github.com/bwsalmon/grain/capabilities/host-script"
+const ID = "https://github.com/ai-on-gke/grain/capabilities/host-script"
 
 // Report is what the probe prints.
 type Report struct {

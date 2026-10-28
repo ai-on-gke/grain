@@ -3,6 +3,6 @@
 // registrations linked in (google/README.md).
 package main
 
-import "github.com/bwsalmon/grain/pkg/cli"
+import "github.com/ai-on-gke/grain/pkg/cli"
 
 func main() { cli.Main() }

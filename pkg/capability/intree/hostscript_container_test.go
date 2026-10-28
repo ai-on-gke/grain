@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/hostscriptcli"
+	"github.com/ai-on-gke/grain/pkg/hostscriptcli"
 )
 
 // hostScriptSandboxImage stands in for a sandbox image with no grain in

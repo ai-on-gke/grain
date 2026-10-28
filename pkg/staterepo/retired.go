@@ -3,7 +3,7 @@ package staterepo
 import (
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The startup guard's questions about schema this build no longer has,

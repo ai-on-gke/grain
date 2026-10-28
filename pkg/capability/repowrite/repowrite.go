@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Provider is the capability provider for one repository's write access in CI.

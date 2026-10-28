@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // A refusal grain has a marker for pauses the credential it came from

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/kubectlgate"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/kubectlgate"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // consoleSessionPrincipal is what grain acts as when it is keeping a

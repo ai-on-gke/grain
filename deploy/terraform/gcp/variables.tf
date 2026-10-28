@@ -480,7 +480,7 @@ variable "deployer_member" {
 variable "grain_repo_url" {
   type        = string
   description = "Clone URL for grain itself."
-  default     = "https://github.com/bwsalmon/grain"
+  default     = "https://github.com/ai-on-gke/grain"
 }
 
 variable "grain_ref" {

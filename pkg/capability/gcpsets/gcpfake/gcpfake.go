@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpkey"
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
 )
 
 // Cloud is the fake GCP. It is also a gcpsets.Connector: every admin

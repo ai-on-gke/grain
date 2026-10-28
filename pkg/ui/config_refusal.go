@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // ConfigManagedExternallyCode is the stable code of the refusal a
@@ -23,7 +23,7 @@ import (
 const ConfigManagedExternallyCode = "config_managed_externally"
 
 // configRepoDocs is where the refusal points for the whole story.
-const configRepoDocs = "https://github.com/bwsalmon/grain/blob/main/docs/external-config-repo.md"
+const configRepoDocs = "https://github.com/ai-on-gke/grain/blob/main/docs/external-config-repo.md"
 
 // externalConfigRepoError is that refusal (checkSettingsWritable).
 //

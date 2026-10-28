@@ -15,7 +15,7 @@
 // Only a person may grant it (model.IsPersonOnlyGrant).
 package durable
 
-import "github.com/bwsalmon/grain/pkg/model"
+import "github.com/ai-on-gke/grain/pkg/model"
 
 // CapabilityName is the grant name: "durable".
 const CapabilityName = model.DurableCapability

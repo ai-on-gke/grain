@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/k8s"
 )
 
 // An upgrade makes sure the PriorityClasses sandbox pods name exist --

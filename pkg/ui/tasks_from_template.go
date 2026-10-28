@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // FromTemplateRequest is the body of POST /api/tasks/from-template: one

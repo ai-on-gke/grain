@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/capability/teambroadcast"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 type teamNotFoundError struct{ ID string }

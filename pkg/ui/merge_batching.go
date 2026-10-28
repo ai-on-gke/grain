@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // MergeBatching is what this deployment's merge batches have actually

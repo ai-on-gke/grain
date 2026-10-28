@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/grit/actions"
+	"github.com/ai-on-gke/grain/pkg/grit/actions"
 	"gopkg.in/yaml.v3"
 )
 

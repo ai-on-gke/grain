@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // Synthetic model responses exercise the REAL CLI dispatcher and Grain's

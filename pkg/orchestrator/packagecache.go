@@ -26,8 +26,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/kubectlgate"
-	"github.com/bwsalmon/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/kubectlgate"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
 // SandboxCommander is implemented by a Sandbox this process can run a

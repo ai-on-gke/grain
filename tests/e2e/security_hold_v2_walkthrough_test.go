@@ -7,11 +7,11 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent/antigravity"
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/trustboundary"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/trustboundary"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // The security hold v2 walkthrough: docs/test-plans/2026-10-02.md §3, on

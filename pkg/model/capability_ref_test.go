@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 const testGCP = "https://github.com/bwsalmon/grain/capabilities/gcp"

@@ -66,7 +66,7 @@ After the fix, both prompts carry a sentence saying why (see Fixes), and both ca
 
 | Call | Result |
 |---|---|
-| `read_grain_source("go.mod")` | ok, 2659 bytes, `module github.com/bwsalmon/grain…` |
+| `read_grain_source("go.mod")` | ok, 2659 bytes, `module github.com/ai-on-gke/grain…` |
 | `read_grain_source("/go.mod")` | ok, same 2659 bytes |
 | `read_grain_source("//go.mod")` | ok, same |
 | `read_grain_source("/../go.mod")` | ok, same (cleaned to `go.mod`, still inside the root) |

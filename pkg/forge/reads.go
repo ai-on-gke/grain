@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // defaultUnreadableDeadline is how long reads of one pull request have to

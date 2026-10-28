@@ -28,7 +28,7 @@ agent or the UI can act on:
     }
   ],
   "access": {"canWrite": false, "need": "a writes: grant on acme/grain-config (base main)"},
-  "docs": "https://github.com/bwsalmon/grain/blob/main/docs/external-config-repo.md",
+  "docs": "https://github.com/ai-on-gke/grain/blob/main/docs/external-config-repo.md",
   "error": "settings are read-only because ... Commit this change to settings/schedules.yml instead: ..."
 }
 ```

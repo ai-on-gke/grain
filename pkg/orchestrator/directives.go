@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // directiveRe matches one `/name value` line, optionally indented, with

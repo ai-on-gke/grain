@@ -24,7 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/bwsalmon/grain/pkg/authfix"
+	"github.com/ai-on-gke/grain/pkg/authfix"
 	"log"
 	"net/http"
 	"net/url"
@@ -36,10 +36,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/procgroup"
-	"github.com/bwsalmon/grain/pkg/whererun"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/procgroup"
+	"github.com/ai-on-gke/grain/pkg/whererun"
 )
 
 // AuthTypeAmbient is AuthType's answer for an ambient credential.

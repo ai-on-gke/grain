@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // fakeGHE is a GitHub Enterprise stand-in: the App token exchange under

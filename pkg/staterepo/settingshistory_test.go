@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 func TestSettingsChangesSaysWhichParameterMovedAndWhen(t *testing.T) {

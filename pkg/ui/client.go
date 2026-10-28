@@ -14,12 +14,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/admincaps"
-	"github.com/bwsalmon/grain/pkg/capability/grainci"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/cifault"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/cifault"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Client is the model code the server wraps: reading and writing tasks in

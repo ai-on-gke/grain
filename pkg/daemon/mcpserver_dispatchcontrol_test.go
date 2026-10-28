@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/dispatchcontrol"
-	"github.com/bwsalmon/grain/pkg/capability/pipelinecontrol"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
+	"github.com/ai-on-gke/grain/pkg/capability/pipelinecontrol"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // A run holding both pipeline-control and dispatch-control is served

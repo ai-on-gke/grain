@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func requiredNoDefault(t *testing.T, c *ui.Client, ctx context.Context) ui.Template {

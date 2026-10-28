@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 const genericAgyFailure = `{"event":"result","result":{"status":"ERROR","error":"Agent execution terminated due to error."}}`

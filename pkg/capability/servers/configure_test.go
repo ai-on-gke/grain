@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // configCaller is a server advertising configure (§4.5) with a secret

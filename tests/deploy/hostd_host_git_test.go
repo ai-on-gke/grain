@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
 // hostGitEnv is what hostd_allowlist_content reads for a Google-track

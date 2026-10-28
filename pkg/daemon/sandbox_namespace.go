@@ -37,14 +37,14 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/bwsalmon/grain/pkg/capability/dbaccess"
-	"github.com/bwsalmon/grain/pkg/capability/deploymenthealth"
-	"github.com/bwsalmon/grain/pkg/capability/grainlog"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/namespace"
-	"github.com/bwsalmon/grain/pkg/staterepo"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
+	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // LiveAPI is grain's own API handler (ui.Server) as an http.RoundTripper,

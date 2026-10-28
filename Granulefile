@@ -27,7 +27,7 @@ RUN CGO_ENABLED=0 go build -o /out/grain-connect /tmp/grain-connect/main.go \
 # this image's inputs (scripts/granule/guest-inputs.sh).
 COPY pkg/hostscriptcli /src/pkg/hostscriptcli
 COPY cmd/grain-sandbox /src/cmd/grain-sandbox
-RUN cd /src && printf 'module github.com/bwsalmon/grain\n\ngo 1.26\n' > go.mod \
+RUN cd /src && printf 'module github.com/ai-on-gke/grain\n\ngo 1.26\n' > go.mod \
     && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/grain ./cmd/grain-sandbox \
     && chmod 0755 /out/grain
 

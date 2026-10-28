@@ -268,7 +268,7 @@ Register capability servers in `grain/config` (or through the Settings UI / CLI:
 ```json
 {
   "mcpServers": {
-    "https://github.com/bwsalmon/grain/capabilities/gcp": {
+    "https://github.com/ai-on-gke/grain/capabilities/gcp": {
       "command": "grain",
       "args": ["capability", "gcp"],
       "config": {

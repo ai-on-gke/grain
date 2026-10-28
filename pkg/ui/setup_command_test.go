@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func TestSetRepoSetupCommandStoresAndTrimsIt(t *testing.T) {

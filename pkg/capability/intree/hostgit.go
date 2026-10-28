@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/bwsalmon/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 )
 
 // host-git is not a grant: it has no mint_ method and no sandbox ever

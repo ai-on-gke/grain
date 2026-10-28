@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // A capability grant's mcp_endpoint is proxied by grain on a loopback

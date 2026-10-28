@@ -36,7 +36,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/checkpost"
+	"github.com/ai-on-gke/grain/pkg/checkpost"
 )
 
 // pruneInterval is how often expired verdicts are swept. An hour against

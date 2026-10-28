@@ -1,7 +1,7 @@
 package forge
 
 import (
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // HealthFrom computes a Health from a fresh GitHub read, the pure

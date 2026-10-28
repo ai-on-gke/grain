@@ -19,17 +19,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/hostd"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
-	"github.com/bwsalmon/grain/pkg/systemlog"
-	"github.com/bwsalmon/grain/pkg/ui"
-	"github.com/bwsalmon/grain/pkg/version"
-	"github.com/bwsalmon/grain/pkg/whererun"
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
+	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/whererun"
 )
 
 // Options is `grain demo`'s flags, parsed and checked: each field is the
@@ -1743,7 +1743,7 @@ func writeDemoLog(path string) error {
 // the server left out.
 func demoCapabilityAudit(taskID string, ago func(time.Duration) time.Time) []model.CapabilityAuditRecord {
 	attemptID := "demo-" + taskID + "-1-0"
-	grant := "https://github.com/bwsalmon/grain/capabilities/host-script#host-script"
+	grant := "https://github.com/ai-on-gke/grain/capabilities/host-script#host-script"
 	record := func(at time.Time, fields string) model.CapabilityAuditRecord {
 		return model.CapabilityAuditRecord{Grant: grant, AttemptID: attemptID, At: at,
 			Record: `{"time":"` + at.UTC().Format(time.RFC3339) + `","attempt_id":"` + attemptID + `",` + fields + `}`}

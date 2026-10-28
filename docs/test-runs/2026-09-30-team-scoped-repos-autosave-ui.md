@@ -38,7 +38,7 @@ This document details the complete end-to-end walkthrough verification of **Team
 
 ### 2.1 Build Stamp Surfacing Architecture
 The application build version is stamped during compilation using Go `-ldflags`:
-- `-X github.com/bwsalmon/grain/pkg/version.Release=v1.2.0`
+- `-X github.com/ai-on-gke/grain/pkg/version.Release=v1.2.0`
 - `pkg/version.Get()` returns an `Info` struct with fields `Release`, `Commit`, and `Time`.
 - `pkg/ui/config.go` exposes `version` in `/api/config`.
 - `Sidebar.jsx` parses `config.version` using `buildStampLabel` and `buildStampTitle`, rendering:

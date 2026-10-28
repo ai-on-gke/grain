@@ -111,7 +111,7 @@ $ go test -v -run TestTeamGitCredentialsAndIdentityWalkthrough ./tests/e2e
     team_git_credentials_walkthrough_test.go:392: Per-Team Git Credentials & Identity Walkthrough completed successfully!
 --- PASS: TestTeamGitCredentialsAndIdentityWalkthrough (6.46s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	6.488s
+ok  	github.com/ai-on-gke/grain/tests/e2e	6.488s
 ```
 
 ### 2. Full End-to-End Suite (`tests/e2e`)
@@ -119,7 +119,7 @@ ok  	github.com/bwsalmon/grain/tests/e2e	6.488s
 $ go test -v ./tests/e2e
 ...
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	62.424s
+ok  	github.com/ai-on-gke/grain/tests/e2e	62.424s
 ```
 
 ### 3. Playwright Teams UI Walkthrough (`ui/e2e/teams-walkthrough.spec.js`)

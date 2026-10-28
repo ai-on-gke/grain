@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/capability/durable"
-	"github.com/bwsalmon/grain/pkg/capability/selfdebug"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/capability/durable"
+	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // TestNoDispatchCodeAsksIsConsoleSession enforces DT-7: Task.IsConsoleSession

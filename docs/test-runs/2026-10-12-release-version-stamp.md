@@ -118,7 +118,7 @@ rebuild with the same CA copy was clean.
 Reproduction (deterministic, no docker):
 
 ```sh
-git clone -q --branch v1.8.0 https://github.com/bwsalmon/grain /tmp/v180 && cd /tmp/v180
+git clone -q --branch v1.8.0 https://github.com/ai-on-gke/grain /tmp/v180 && cd /tmp/v180
 sed -i 's/^\(RUN make build .*\)$/ARG RELEASE=\n\1 RELEASE=${RELEASE}/' Dockerfile
 git status --porcelain     # " M Dockerfile" -> go build stamps vcs.modified=true
 ```

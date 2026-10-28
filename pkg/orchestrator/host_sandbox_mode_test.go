@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // A host sandbox's directory holds a checkout that may be private, so

@@ -92,12 +92,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/agent/antigravity"
-	"github.com/bwsalmon/grain/pkg/agent/claude"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/gitrefs"
-	"github.com/bwsalmon/grain/pkg/hostscriptcli"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/gitrefs"
+	"github.com/ai-on-gke/grain/pkg/hostscriptcli"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // Main dispatches on argv[1] before parsing anything else: "daemon",

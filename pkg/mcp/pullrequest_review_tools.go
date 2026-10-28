@@ -27,7 +27,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // PullRequestCommenter is what reply_to_pull_request_comment and

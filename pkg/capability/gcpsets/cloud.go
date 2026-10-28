@@ -19,7 +19,7 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/api/storage/v1"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpkey"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 )
 
 // ServiceAccount is one service account as Cloud lists it.

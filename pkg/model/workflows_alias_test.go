@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/workflows"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // pkg/workflows restates LifecycleImageEnv because it may not import this

@@ -23,8 +23,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/hostscriptcli"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/hostscriptcli"
 )
 
 // The host-script server (docs/capabilities.md, "Host scripts") runs

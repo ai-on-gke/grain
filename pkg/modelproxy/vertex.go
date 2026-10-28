@@ -33,7 +33,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // VertexAnthropicVersion is the anthropic_version Vertex AI requires in

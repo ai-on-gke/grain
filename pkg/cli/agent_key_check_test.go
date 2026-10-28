@@ -17,10 +17,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/agent/credcheck"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/agent/credcheck"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // stubGemini answers Google's model listing and records the key it was

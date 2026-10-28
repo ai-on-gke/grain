@@ -3,7 +3,7 @@ package ui
 import (
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // This file is the vocabulary of the agent API (docs/agent-api.md): the

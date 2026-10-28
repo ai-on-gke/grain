@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/hosttop"
+	"github.com/ai-on-gke/grain/pkg/hosttop"
 )
 
 func requireTop(t *testing.T) {

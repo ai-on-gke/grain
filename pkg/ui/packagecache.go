@@ -29,7 +29,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/apierror"
 )
 
 // PackageCacheStats is one ecosystem's share of the cache, as the

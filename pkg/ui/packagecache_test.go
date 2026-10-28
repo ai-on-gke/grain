@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // fakePackageCache stands in for the daemon's own cache: it remembers

@@ -112,7 +112,7 @@ This test run documents the end-to-end verification, architecture proof, and ope
     --- PASS: TestTrack2TeamSettingsGitHubTokensAndRoleGovernanceWalkthrough/6._Multi-Key_GitHub_Token_Management_&_Pattern_Matching (0.02s)
     --- PASS: TestTrack2TeamSettingsGitHubTokensAndRoleGovernanceWalkthrough/7._Write-Only_Credential_Verification (0.02s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	0.137s
+ok  	github.com/ai-on-gke/grain/tests/e2e	0.137s
 ```
 
 ### 3.2 Playwright Browser Walkthrough Suite (`ui/e2e`)

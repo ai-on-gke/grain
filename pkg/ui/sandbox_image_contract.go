@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/sandboximage"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/sandboximage"
 )
 
 // sandboxImageFields are the Settings fields about the custom sandbox

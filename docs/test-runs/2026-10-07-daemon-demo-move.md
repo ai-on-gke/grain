@@ -94,9 +94,9 @@ make build SANDBOX_IMAGE=ghcr.io/bwsalmon/grain/guest:sha-dafd697@$D \
 
 These are the same three variables `scripts/release-images.sh` passes to `make image`, which the Dockerfile turns into `make build`. The link line carried:
 
-- `-X github.com/bwsalmon/grain/pkg/daemon.DefaultSandboxImage=…`
+- `-X github.com/ai-on-gke/grain/pkg/daemon.DefaultSandboxImage=…`
 - `-X main.defaultK8sSandboxImage=…` (still in `cmd/grain/sandboximage.go`; it did not move)
-- `-X github.com/bwsalmon/grain/pkg/daemon.DefaultGrainImage=…`
+- `-X github.com/ai-on-gke/grain/pkg/daemon.DefaultGrainImage=…`
 
 | Command | `bin/grain` (stamped) | `go run ./cmd/grain` (unstamped) |
 |---|---|---|

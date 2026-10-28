@@ -81,23 +81,23 @@ func TestRunGoTestsStreamsLiveProgressAndHeartbeatsIncrementally(t *testing.T) {
 	t.Parallel()
 	stubDir := writeGoStub(t, `
 cat <<'JSON'
-{"Action":"start","Package":"github.com/bwsalmon/grain/pkg/fast"}
-{"Action":"run","Package":"github.com/bwsalmon/grain/pkg/fast","Test":"TestFast"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/fast","Test":"TestFast","Output":"=== RUN   TestFast\n"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/fast","Test":"TestFast","Output":"--- PASS: TestFast (0.01s)\n"}
-{"Action":"pass","Package":"github.com/bwsalmon/grain/pkg/fast","Test":"TestFast"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/fast","Output":"ok  \tgithub.com/bwsalmon/grain/pkg/fast\t0.012s\n"}
-{"Action":"pass","Package":"github.com/bwsalmon/grain/pkg/fast"}
-{"Action":"start","Package":"github.com/bwsalmon/grain/pkg/ui"}
-{"Action":"run","Package":"github.com/bwsalmon/grain/pkg/ui","Test":"TestSlowDashboard"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/ui","Test":"TestSlowDashboard","Output":"=== RUN   TestSlowDashboard\n"}
+{"Action":"start","Package":"github.com/ai-on-gke/grain/pkg/fast"}
+{"Action":"run","Package":"github.com/ai-on-gke/grain/pkg/fast","Test":"TestFast"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/fast","Test":"TestFast","Output":"=== RUN   TestFast\n"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/fast","Test":"TestFast","Output":"--- PASS: TestFast (0.01s)\n"}
+{"Action":"pass","Package":"github.com/ai-on-gke/grain/pkg/fast","Test":"TestFast"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/fast","Output":"ok  \tgithub.com/ai-on-gke/grain/pkg/fast\t0.012s\n"}
+{"Action":"pass","Package":"github.com/ai-on-gke/grain/pkg/fast"}
+{"Action":"start","Package":"github.com/ai-on-gke/grain/pkg/ui"}
+{"Action":"run","Package":"github.com/ai-on-gke/grain/pkg/ui","Test":"TestSlowDashboard"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/ui","Test":"TestSlowDashboard","Output":"=== RUN   TestSlowDashboard\n"}
 JSON
 sleep 0.45
 cat <<'JSON'
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/ui","Test":"TestSlowDashboard","Output":"--- PASS: TestSlowDashboard (0.45s)\n"}
-{"Action":"pass","Package":"github.com/bwsalmon/grain/pkg/ui","Test":"TestSlowDashboard"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/ui","Output":"ok  \tgithub.com/bwsalmon/grain/pkg/ui\t0.455s\n"}
-{"Action":"pass","Package":"github.com/bwsalmon/grain/pkg/ui"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/ui","Test":"TestSlowDashboard","Output":"--- PASS: TestSlowDashboard (0.45s)\n"}
+{"Action":"pass","Package":"github.com/ai-on-gke/grain/pkg/ui","Test":"TestSlowDashboard"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/ui","Output":"ok  \tgithub.com/ai-on-gke/grain/pkg/ui\t0.455s\n"}
+{"Action":"pass","Package":"github.com/ai-on-gke/grain/pkg/ui"}
 JSON
 `)
 
@@ -140,13 +140,13 @@ JSON
 
 		var fastAt, heartbeatAt, slowAt time.Time
 		for _, l := range lines {
-			if strings.HasPrefix(l.text, "ok  \tgithub.com/bwsalmon/grain/pkg/fast") && fastAt.IsZero() {
+			if strings.HasPrefix(l.text, "ok  \tgithub.com/ai-on-gke/grain/pkg/fast") && fastAt.IsZero() {
 				fastAt = l.at
 			}
 			if strings.HasPrefix(l.text, "[go test +") && strings.Contains(l.text, "pkg/ui:TestSlowDashboard") && heartbeatAt.IsZero() {
 				heartbeatAt = l.at
 			}
-			if strings.HasPrefix(l.text, "ok  \tgithub.com/bwsalmon/grain/pkg/ui") && slowAt.IsZero() {
+			if strings.HasPrefix(l.text, "ok  \tgithub.com/ai-on-gke/grain/pkg/ui") && slowAt.IsZero() {
 				slowAt = l.at
 			}
 		}
@@ -179,16 +179,16 @@ func TestRunGoTestsStaysCompactOnNoisyPassingRun(t *testing.T) {
 	stubDir := writeGoStub(t, `
 python3 - <<'PY'
 import json, sys
-print(json.dumps({"Action":"start","Package":"github.com/bwsalmon/grain/cmd/grain"}))
-print(json.dumps({"Action":"run","Package":"github.com/bwsalmon/grain/cmd/grain","Test":"TestNoisyCLI"}))
-print(json.dumps({"Action":"output","Package":"github.com/bwsalmon/grain/cmd/grain","Test":"TestNoisyCLI","Output":"=== RUN   TestNoisyCLI\n"}))
+print(json.dumps({"Action":"start","Package":"github.com/ai-on-gke/grain/cmd/grain"}))
+print(json.dumps({"Action":"run","Package":"github.com/ai-on-gke/grain/cmd/grain","Test":"TestNoisyCLI"}))
+print(json.dumps({"Action":"output","Package":"github.com/ai-on-gke/grain/cmd/grain","Test":"TestNoisyCLI","Output":"=== RUN   TestNoisyCLI\n"}))
 noisy = "noisy cli stdout dump line with plenty of characters to exceed 256 KiB when repeated 4000 times\n"
 for i in range(4000):
-    print(json.dumps({"Action":"output","Package":"github.com/bwsalmon/grain/cmd/grain","Test":"TestNoisyCLI","Output":f"{i}: {noisy}"}))
-print(json.dumps({"Action":"output","Package":"github.com/bwsalmon/grain/cmd/grain","Test":"TestNoisyCLI","Output":"--- PASS: TestNoisyCLI (0.10s)\n"}))
-print(json.dumps({"Action":"pass","Package":"github.com/bwsalmon/grain/cmd/grain","Test":"TestNoisyCLI"}))
-print(json.dumps({"Action":"output","Package":"github.com/bwsalmon/grain/cmd/grain","Output":"ok  \tgithub.com/bwsalmon/grain/cmd/grain\t0.105s\n"}))
-print(json.dumps({"Action":"pass","Package":"github.com/bwsalmon/grain/cmd/grain"}))
+    print(json.dumps({"Action":"output","Package":"github.com/ai-on-gke/grain/cmd/grain","Test":"TestNoisyCLI","Output":f"{i}: {noisy}"}))
+print(json.dumps({"Action":"output","Package":"github.com/ai-on-gke/grain/cmd/grain","Test":"TestNoisyCLI","Output":"--- PASS: TestNoisyCLI (0.10s)\n"}))
+print(json.dumps({"Action":"pass","Package":"github.com/ai-on-gke/grain/cmd/grain","Test":"TestNoisyCLI"}))
+print(json.dumps({"Action":"output","Package":"github.com/ai-on-gke/grain/cmd/grain","Output":"ok  \tgithub.com/ai-on-gke/grain/cmd/grain\t0.105s\n"}))
+print(json.dumps({"Action":"pass","Package":"github.com/ai-on-gke/grain/cmd/grain"}))
 PY
 `)
 
@@ -209,7 +209,7 @@ PY
 		t.Errorf("passing stdout included the raw 200-line tail, which belongs only on failure:\n%s", out)
 	}
 	for _, want := range []string{
-		"ok  \tgithub.com/bwsalmon/grain/cmd/grain\t0.105s",
+		"ok  \tgithub.com/ai-on-gke/grain/cmd/grain\t0.105s",
 		"=== failing tests ===",
 		"=== panics ===",
 		"=== data races ===",
@@ -229,7 +229,7 @@ func TestRunGoTestsSurfacesFailuresPanicsRacesAndPreservesExitStatus(t *testing.
 	stubDir := writeGoStub(t, `
 python3 - <<'PY'
 import json, sys
-pkg = "github.com/bwsalmon/grain/cmd/grain"
+pkg = "github.com/ai-on-gke/grain/cmd/grain"
 print(json.dumps({"Action":"start","Package":pkg}))
 print(json.dumps({"Action":"run","Package":pkg,"Test":"TestChattyPass"}))
 print(json.dumps({"Action":"output","Package":pkg,"Test":"TestChattyPass","Output":"=== RUN   TestChattyPass\n"}))
@@ -244,12 +244,12 @@ print(json.dumps({"Action":"output","Package":pkg,"Test":"TestBrokenFeature","Ou
 print(json.dumps({"Action":"output","Package":pkg,"Test":"TestBrokenFeature","Output":"==================\n"}))
 print(json.dumps({"Action":"output","Package":pkg,"Test":"TestBrokenFeature","Output":"WARNING: DATA RACE\n"}))
 print(json.dumps({"Action":"output","Package":pkg,"Test":"TestBrokenFeature","Output":"Write at 0x00c000123456 by goroutine 17:\n"}))
-print(json.dumps({"Action":"output","Package":pkg,"Test":"TestBrokenFeature","Output":"  github.com/bwsalmon/grain/cmd/grain.TestBrokenFeature.func1()\n"}))
+print(json.dumps({"Action":"output","Package":pkg,"Test":"TestBrokenFeature","Output":"  github.com/ai-on-gke/grain/cmd/grain.TestBrokenFeature.func1()\n"}))
 print(json.dumps({"Action":"output","Package":pkg,"Test":"TestBrokenFeature","Output":"panic: unexpected nil pointer in handler\n"}))
 print(json.dumps({"Action":"output","Package":pkg,"Test":"TestBrokenFeature","Output":"goroutine 17 [running]:\n"}))
 print(json.dumps({"Action":"output","Package":pkg,"Test":"TestBrokenFeature","Output":"--- FAIL: TestBrokenFeature (0.03s)\n"}))
 print(json.dumps({"Action":"fail","Package":pkg,"Test":"TestBrokenFeature"}))
-print(json.dumps({"Action":"output","Package":pkg,"Output":"FAIL\tgithub.com/bwsalmon/grain/cmd/grain\t0.080s\n"}))
+print(json.dumps({"Action":"output","Package":pkg,"Output":"FAIL\tgithub.com/ai-on-gke/grain/cmd/grain\t0.080s\n"}))
 print(json.dumps({"Action":"fail","Package":pkg}))
 sys.exit(1)
 PY
@@ -294,7 +294,7 @@ PY
 	}
 
 	pkgSection := between(t, out, "=== per-package results ===\n", "=== last 200 lines of the raw run ===")
-	if !strings.Contains(pkgSection, "FAIL\tgithub.com/bwsalmon/grain/cmd/grain\t0.080s") {
+	if !strings.Contains(pkgSection, "FAIL\tgithub.com/ai-on-gke/grain/cmd/grain\t0.080s") {
 		t.Errorf("=== per-package results === section missing package failure line:\n%s", pkgSection)
 	}
 }
@@ -335,14 +335,14 @@ func TestRunGoTestsSurfacesSkipDiagnosticsInVerboseAndBinaryModes(t *testing.T) 
 	t.Parallel()
 	stubDir := writeGoStub(t, `
 cat <<'JSON'
-{"Action":"start","Package":"github.com/bwsalmon/grain/pkg/orchestrator"}
-{"Action":"run","Package":"github.com/bwsalmon/grain/pkg/orchestrator","Test":"TestPackageCachePullsThroughARealDockerd"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/orchestrator","Test":"TestPackageCachePullsThroughARealDockerd","Output":"=== RUN   TestPackageCachePullsThroughARealDockerd\n"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/orchestrator","Test":"TestPackageCachePullsThroughARealDockerd","Output":"    packagecache_real_test.go:88: docker daemon is not reachable on this host\n"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/orchestrator","Test":"TestPackageCachePullsThroughARealDockerd","Output":"--- SKIP: TestPackageCachePullsThroughARealDockerd (0.01s)\n"}
-{"Action":"skip","Package":"github.com/bwsalmon/grain/pkg/orchestrator","Test":"TestPackageCachePullsThroughARealDockerd"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/orchestrator","Output":"ok  \tgithub.com/bwsalmon/grain/pkg/orchestrator\t0.015s\n"}
-{"Action":"pass","Package":"github.com/bwsalmon/grain/pkg/orchestrator"}
+{"Action":"start","Package":"github.com/ai-on-gke/grain/pkg/orchestrator"}
+{"Action":"run","Package":"github.com/ai-on-gke/grain/pkg/orchestrator","Test":"TestPackageCachePullsThroughARealDockerd"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/orchestrator","Test":"TestPackageCachePullsThroughARealDockerd","Output":"=== RUN   TestPackageCachePullsThroughARealDockerd\n"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/orchestrator","Test":"TestPackageCachePullsThroughARealDockerd","Output":"    packagecache_real_test.go:88: docker daemon is not reachable on this host\n"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/orchestrator","Test":"TestPackageCachePullsThroughARealDockerd","Output":"--- SKIP: TestPackageCachePullsThroughARealDockerd (0.01s)\n"}
+{"Action":"skip","Package":"github.com/ai-on-gke/grain/pkg/orchestrator","Test":"TestPackageCachePullsThroughARealDockerd"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/orchestrator","Output":"ok  \tgithub.com/ai-on-gke/grain/pkg/orchestrator\t0.015s\n"}
+{"Action":"pass","Package":"github.com/ai-on-gke/grain/pkg/orchestrator"}
 JSON
 `)
 
@@ -373,7 +373,7 @@ func TestRunGoTestsPreservesTailDiagnosticsAndIsolatesConcurrentFailingTests(t *
 python3 - <<'PY'
 import json, sys
 
-pkg = "github.com/bwsalmon/grain/pkg/hostinit"
+pkg = "github.com/ai-on-gke/grain/pkg/hostinit"
 print(json.dumps({"Action":"start","Package":pkg}))
 print(json.dumps({"Action":"run","Package":pkg,"Test":"TestNoisyFailure"}))
 print(json.dumps({"Action":"output","Package":pkg,"Test":"TestNoisyFailure","Output":"=== RUN   TestNoisyFailure\n"}))
@@ -389,7 +389,7 @@ print(json.dumps({"Action":"output","Package":pkg,"Test":"TestOtherParallelFailu
 print(json.dumps({"Action":"output","Package":pkg,"Test":"TestOtherParallelFailure","Output":"    other_test.go:202: distinct failure in second test\n"}))
 print(json.dumps({"Action":"output","Package":pkg,"Test":"TestOtherParallelFailure","Output":"--- FAIL: TestOtherParallelFailure (0.04s)\n"}))
 print(json.dumps({"Action":"fail","Package":pkg,"Test":"TestOtherParallelFailure"}))
-print(json.dumps({"Action":"output","Package":pkg,"Output":"FAIL\tgithub.com/bwsalmon/grain/pkg/hostinit\t0.090s\n"}))
+print(json.dumps({"Action":"output","Package":pkg,"Output":"FAIL\tgithub.com/ai-on-gke/grain/pkg/hostinit\t0.090s\n"}))
 print(json.dumps({"Action":"fail","Package":pkg}))
 sys.exit(1)
 PY
@@ -424,10 +424,10 @@ func TestRunGoTestsSurfacesIncompleteInFlightTestOnAbruptFailure(t *testing.T) {
 	t.Parallel()
 	stubDir := writeGoStub(t, `
 cat <<'JSON'
-{"Action":"start","Package":"github.com/bwsalmon/grain/pkg/orchestrator"}
-{"Action":"run","Package":"github.com/bwsalmon/grain/pkg/orchestrator","Test":"TestAbruptExit"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/orchestrator","Test":"TestAbruptExit","Output":"=== RUN   TestAbruptExit\n"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/orchestrator","Test":"TestAbruptExit","Output":"    reconcile_test.go:99: waiting for condition before crash\n"}
+{"Action":"start","Package":"github.com/ai-on-gke/grain/pkg/orchestrator"}
+{"Action":"run","Package":"github.com/ai-on-gke/grain/pkg/orchestrator","Test":"TestAbruptExit"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/orchestrator","Test":"TestAbruptExit","Output":"=== RUN   TestAbruptExit\n"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/orchestrator","Test":"TestAbruptExit","Output":"    reconcile_test.go:99: waiting for condition before crash\n"}
 JSON
 exit 2
 `)
@@ -454,18 +454,18 @@ func TestRunGoTestsRaceBoundaryAndRepeatedTestFailures(t *testing.T) {
 	t.Parallel()
 	stubDir := writeGoStub(t, `
 cat <<'JSON'
-{"Action":"start","Package":"github.com/bwsalmon/grain/pkg/ci"}
-{"Action":"run","Package":"github.com/bwsalmon/grain/pkg/ci","Test":"TestRace"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/ci","Test":"TestRace","Output":"=== RUN   TestRace\n==================\nWARNING: DATA RACE\nWrite at 0x00c0000140b8 by goroutine 8:\n  github.com/bwsalmon/grain/pkg/ci.TestRace.func1()\n      /work/pkg/ci/race_test.go:11 +0x34\n==================\n    testing.go:1712: race detected during execution of test\n--- FAIL: TestRace (0.01s)\n"}
-{"Action":"fail","Package":"github.com/bwsalmon/grain/pkg/ci","Test":"TestRace"}
-{"Action":"run","Package":"github.com/bwsalmon/grain/pkg/ci","Test":"TestRepeat"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/ci","Test":"TestRepeat","Output":"=== RUN   TestRepeat\n    repeat_test.go:10: failure one\n"}
-{"Action":"fail","Package":"github.com/bwsalmon/grain/pkg/ci","Test":"TestRepeat"}
-{"Action":"run","Package":"github.com/bwsalmon/grain/pkg/ci","Test":"TestRepeat"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/ci","Test":"TestRepeat","Output":"=== RUN   TestRepeat\n    repeat_test.go:10: failure two\n"}
-{"Action":"fail","Package":"github.com/bwsalmon/grain/pkg/ci","Test":"TestRepeat"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/ci","Output":"FAIL\tgithub.com/bwsalmon/grain/pkg/ci\t0.020s\n"}
-{"Action":"fail","Package":"github.com/bwsalmon/grain/pkg/ci"}
+{"Action":"start","Package":"github.com/ai-on-gke/grain/pkg/ci"}
+{"Action":"run","Package":"github.com/ai-on-gke/grain/pkg/ci","Test":"TestRace"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/ci","Test":"TestRace","Output":"=== RUN   TestRace\n==================\nWARNING: DATA RACE\nWrite at 0x00c0000140b8 by goroutine 8:\n  github.com/ai-on-gke/grain/pkg/ci.TestRace.func1()\n      /work/pkg/ci/race_test.go:11 +0x34\n==================\n    testing.go:1712: race detected during execution of test\n--- FAIL: TestRace (0.01s)\n"}
+{"Action":"fail","Package":"github.com/ai-on-gke/grain/pkg/ci","Test":"TestRace"}
+{"Action":"run","Package":"github.com/ai-on-gke/grain/pkg/ci","Test":"TestRepeat"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/ci","Test":"TestRepeat","Output":"=== RUN   TestRepeat\n    repeat_test.go:10: failure one\n"}
+{"Action":"fail","Package":"github.com/ai-on-gke/grain/pkg/ci","Test":"TestRepeat"}
+{"Action":"run","Package":"github.com/ai-on-gke/grain/pkg/ci","Test":"TestRepeat"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/ci","Test":"TestRepeat","Output":"=== RUN   TestRepeat\n    repeat_test.go:10: failure two\n"}
+{"Action":"fail","Package":"github.com/ai-on-gke/grain/pkg/ci","Test":"TestRepeat"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/ci","Output":"FAIL\tgithub.com/ai-on-gke/grain/pkg/ci\t0.020s\n"}
+{"Action":"fail","Package":"github.com/ai-on-gke/grain/pkg/ci"}
 JSON
 exit 1
 `)
@@ -498,22 +498,22 @@ func TestRunGoTestsAppendsAcrossMultipleStepsInJob(t *testing.T) {
 
 	stubDir1 := writeGoStub(t, `
 cat <<'JSON'
-{"Action":"start","Package":"github.com/bwsalmon/grain/pkg/unit"}
-{"Action":"run","Package":"github.com/bwsalmon/grain/pkg/unit","Test":"TestUnitStep"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/unit","Test":"TestUnitStep","Output":"=== RUN   TestUnitStep\n--- PASS: TestUnitStep (0.01s)\n"}
-{"Action":"pass","Package":"github.com/bwsalmon/grain/pkg/unit","Test":"TestUnitStep"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/pkg/unit","Output":"ok  \tgithub.com/bwsalmon/grain/pkg/unit\t0.010s\n"}
-{"Action":"pass","Package":"github.com/bwsalmon/grain/pkg/unit"}
+{"Action":"start","Package":"github.com/ai-on-gke/grain/pkg/unit"}
+{"Action":"run","Package":"github.com/ai-on-gke/grain/pkg/unit","Test":"TestUnitStep"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/unit","Test":"TestUnitStep","Output":"=== RUN   TestUnitStep\n--- PASS: TestUnitStep (0.01s)\n"}
+{"Action":"pass","Package":"github.com/ai-on-gke/grain/pkg/unit","Test":"TestUnitStep"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/pkg/unit","Output":"ok  \tgithub.com/ai-on-gke/grain/pkg/unit\t0.010s\n"}
+{"Action":"pass","Package":"github.com/ai-on-gke/grain/pkg/unit"}
 JSON
 `)
 	stubDir2 := writeGoStub(t, `
 cat <<'JSON'
-{"Action":"start","Package":"github.com/bwsalmon/grain/tests/e2e"}
-{"Action":"run","Package":"github.com/bwsalmon/grain/tests/e2e","Test":"TestE2EStep"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/tests/e2e","Test":"TestE2EStep","Output":"=== RUN   TestE2EStep\n    e2e_test.go:42: e2e assertion failed\n--- FAIL: TestE2EStep (0.02s)\n"}
-{"Action":"fail","Package":"github.com/bwsalmon/grain/tests/e2e","Test":"TestE2EStep"}
-{"Action":"output","Package":"github.com/bwsalmon/grain/tests/e2e","Output":"FAIL\tgithub.com/bwsalmon/grain/tests/e2e\t0.020s\n"}
-{"Action":"fail","Package":"github.com/bwsalmon/grain/tests/e2e"}
+{"Action":"start","Package":"github.com/ai-on-gke/grain/tests/e2e"}
+{"Action":"run","Package":"github.com/ai-on-gke/grain/tests/e2e","Test":"TestE2EStep"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/tests/e2e","Test":"TestE2EStep","Output":"=== RUN   TestE2EStep\n    e2e_test.go:42: e2e assertion failed\n--- FAIL: TestE2EStep (0.02s)\n"}
+{"Action":"fail","Package":"github.com/ai-on-gke/grain/tests/e2e","Test":"TestE2EStep"}
+{"Action":"output","Package":"github.com/ai-on-gke/grain/tests/e2e","Output":"FAIL\tgithub.com/ai-on-gke/grain/tests/e2e\t0.020s\n"}
+{"Action":"fail","Package":"github.com/ai-on-gke/grain/tests/e2e"}
 JSON
 exit 1
 `)
@@ -549,9 +549,9 @@ exit 1
 	}
 	rawLog := string(rawBytes)
 	for _, want := range []string{
-		"=== PACKAGE github.com/bwsalmon/grain/pkg/unit",
+		"=== PACKAGE github.com/ai-on-gke/grain/pkg/unit",
 		"--- PASS: TestUnitStep (0.01s)",
-		"=== PACKAGE github.com/bwsalmon/grain/tests/e2e",
+		"=== PACKAGE github.com/ai-on-gke/grain/tests/e2e",
 		"e2e_test.go:42: e2e assertion failed",
 		"--- FAIL: TestE2EStep (0.02s)",
 	} {

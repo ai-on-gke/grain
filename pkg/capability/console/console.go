@@ -32,7 +32,7 @@
 package console
 
 import (
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // CapabilityName is the grant id, and the string ui.OfferedCapabilities,

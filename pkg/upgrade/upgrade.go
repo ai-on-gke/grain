@@ -60,7 +60,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // Phase is where an upgrade (or the deployment's last one) stands.

@@ -63,7 +63,7 @@ $ go test -v -run 'TestCIJobCache|TestApplySandboxImage|TestCIRun|TestK8sGranule
 2026/10/27 16:44:41 ci: adoption: 1 job(s) adopted across 1 run(s), 0 lost (0 run(s) marked interrupted)
 --- PASS: TestK8sGranuleCISandboxesSurviveDaemonRestartAndSparePodFromReap (0.52s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/daemon	0.966s
+ok  	github.com/ai-on-gke/grain/pkg/daemon	0.966s
 ```
 
 ### Verification Checklist

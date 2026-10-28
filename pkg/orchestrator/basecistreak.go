@@ -5,8 +5,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // # Red on a moving tip (grain/task-1034)

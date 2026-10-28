@@ -2,7 +2,7 @@ package model
 
 import (
 	"fmt"
-	"github.com/bwsalmon/grain/pkg/workflows"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 	"time"
 )
 

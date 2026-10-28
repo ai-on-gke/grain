@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func TestScheduledWorkflowRunRoundTrips(t *testing.T) {

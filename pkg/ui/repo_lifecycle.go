@@ -19,7 +19,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Lifecycles is what this package needs of a lifecycle registry

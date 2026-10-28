@@ -12,13 +12,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelexec"
-	"github.com/bwsalmon/grain/pkg/namespace"
-	"github.com/bwsalmon/grain/pkg/redact"
-	"github.com/bwsalmon/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelexec"
+	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 type daemonNamespaceCIStore struct {

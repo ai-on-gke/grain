@@ -126,7 +126,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Dispatch is one decision a cycle made: task TaskID was started as its

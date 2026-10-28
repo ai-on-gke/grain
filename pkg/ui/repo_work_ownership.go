@@ -29,7 +29,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Work item kinds, as RepoWorkItem.Kind reports them. They are what a

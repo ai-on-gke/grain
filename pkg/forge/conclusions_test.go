@@ -3,7 +3,7 @@ package forge
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // Every conclusion a completed check run can carry, and what HealthFrom

@@ -704,7 +704,7 @@ if [ "$dry_run" = true ]; then
   case "$phase" in
     build | all)
       if [ -n "$build_version" ]; then
-        echo "release-images.sh: [dry-run] version: $build_version, stamped into both daemon binaries as -X github.com/bwsalmon/grain/pkg/version.Release=$build_version and labelled onto $grain and $google_grain as org.opencontainers.image.version=$build_version"
+        echo "release-images.sh: [dry-run] version: $build_version, stamped into both daemon binaries as -X github.com/ai-on-gke/grain/pkg/version.Release=$build_version and labelled onto $grain and $google_grain as org.opencontainers.image.version=$build_version"
       else
         echo "release-images.sh: [dry-run] version: none; both daemon images would report themselves unversioned"
       fi

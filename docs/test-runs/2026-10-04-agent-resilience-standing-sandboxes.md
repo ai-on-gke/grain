@@ -183,4 +183,4 @@ See step 3. Connections shows the paused framework's connection as `active`, and
   - The run took 16m32s.
 - Neither known flake (`RepoPage.test.jsx`, `team_declarations_ci_walkthrough.spec.js:229`) recurred.
 - The only commit after that run adds this verdict to this report.
-- `make security` passed locally (`ok github.com/bwsalmon/grain/tests/security 113.240s`).
+- `make security` passed locally (`ok github.com/ai-on-gke/grain/tests/security 113.240s`).

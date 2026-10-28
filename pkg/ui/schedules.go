@@ -3,13 +3,13 @@ package ui
 import (
 	"context"
 	"fmt"
-	"github.com/bwsalmon/grain/pkg/schedulefilter"
+	"github.com/ai-on-gke/grain/pkg/schedulefilter"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // scheduleNotFoundError marks a schedule ID with no schedule behind it --

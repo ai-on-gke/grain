@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/api/googleapi"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The IAM API meters key creation and deletion against one per-project

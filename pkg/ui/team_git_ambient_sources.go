@@ -3,7 +3,7 @@ package ui
 import (
 	"net/http"
 
-	"github.com/bwsalmon/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 )
 
 // GitAmbientSource is one registered ambient source as the connection

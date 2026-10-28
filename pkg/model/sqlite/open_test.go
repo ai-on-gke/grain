@@ -14,7 +14,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
 
 func TestOpenSetsPragmasOnEveryConnection(t *testing.T) {

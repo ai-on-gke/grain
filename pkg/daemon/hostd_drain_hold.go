@@ -5,8 +5,8 @@ import (
 	"log"
 	"slices"
 
-	"github.com/bwsalmon/grain/pkg/hostd"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // hostdDrainHold is why a run on frameworks has to wait because its CLI

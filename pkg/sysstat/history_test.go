@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/sysstat"
+	"github.com/ai-on-gke/grain/pkg/sysstat"
 )
 
 func TestHistoryFoldsReadingsIntoTheHourTheyWereTakenIn(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model/sqlite/sqlitetest"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 )
 
 func TestSnapshotSettingsAndPruning(t *testing.T) {

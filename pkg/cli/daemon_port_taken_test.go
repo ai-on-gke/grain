@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
 )
 
 func TestAGitProxyPortTakenFailsOnlyTheGitProxy(t *testing.T) {

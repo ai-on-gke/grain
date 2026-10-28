@@ -257,13 +257,13 @@ func TestReadFileReadsTheStampedVersionOutOfTheFilesOwnLdflags(t *testing.T) {
 	Release = "v2.2.0-rc.1.48+6f65669"
 
 	bi := stamp(
-		debug.BuildSetting{Key: "-ldflags", Value: "-X github.com/bwsalmon/grain/pkg/version.Release=v2.3.0-dev.114+8e1a209 -X github.com/bwsalmon/grain/pkg/daemon.DefaultGrainImage=x"},
+		debug.BuildSetting{Key: "-ldflags", Value: "-X github.com/ai-on-gke/grain/pkg/version.Release=v2.3.0-dev.114+8e1a209 -X github.com/ai-on-gke/grain/pkg/daemon.DefaultGrainImage=x"},
 		debug.BuildSetting{Key: "vcs.revision", Value: "8e1a209040ea9d32d432256b3c7796bfc297d289"},
 	)
 	if got := infoFromStamp("", bi, true); got.Release != "v2.3.0-dev.114+8e1a209" || got.Unversioned {
 		t.Errorf("the file's own stamp = %+v, want v2.3.0-dev.114+8e1a209, versioned", got)
 	}
-	if got := stampedRelease(stamp(debug.BuildSetting{Key: "-ldflags", Value: "-X=github.com/bwsalmon/grain/pkg/version.Release=v2.2.0"})); got != "v2.2.0" {
+	if got := stampedRelease(stamp(debug.BuildSetting{Key: "-ldflags", Value: "-X=github.com/ai-on-gke/grain/pkg/version.Release=v2.2.0"})); got != "v2.2.0" {
 		t.Errorf("stampedRelease of -X=... = %q, want v2.2.0", got)
 	}
 }

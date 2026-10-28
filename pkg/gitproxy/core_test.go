@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 var gitHeaders = map[string]string{"User-Agent": "git/2.39.2", "Accept": "*/*"}

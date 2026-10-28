@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
 // grain hostd -status is what setup.sh's readiness report says about a

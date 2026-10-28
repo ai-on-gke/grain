@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/attest"
-	"github.com/bwsalmon/grain/pkg/gritapi"
+	"github.com/ai-on-gke/grain/pkg/attest"
+	"github.com/ai-on-gke/grain/pkg/gritapi"
 	_ "modernc.org/sqlite"
 )
 

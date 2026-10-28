@@ -40,7 +40,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // Flags precede the positional argument here, as they do on every other

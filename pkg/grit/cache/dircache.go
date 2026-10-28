@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/workflows"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // DirCache is the Cache pkg/ci was designed against, as one file per key

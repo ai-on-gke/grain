@@ -32,7 +32,7 @@ var ciBuilders = map[string]string{
 // the tree used to reach past that, and is what this test exists to keep
 // out.
 func TestOnlyBuildersNameTheCIService(t *testing.T) {
-	uses := namedOutside(t, "github.com/bwsalmon/grain/pkg/ci", "Service", "pkg/ci/")
+	uses := namedOutside(t, "github.com/ai-on-gke/grain/pkg/ci", "Service", "pkg/ci/")
 	var offending []string
 	for _, use := range uses {
 		if _, ok := ciBuilders[use.file]; !ok {
@@ -64,7 +64,7 @@ func TestOnlyBuildersNameTheCIService(t *testing.T) {
 func TestOnlyTheDaemonNamesThePackageCache(t *testing.T) {
 	var offending []string
 	for _, name := range []string{"Cache", "NewCache", "Writer"} {
-		for _, use := range namedOutside(t, "github.com/bwsalmon/grain/pkg/pkgcache", name, "pkg/pkgcache/") {
+		for _, use := range namedOutside(t, "github.com/ai-on-gke/grain/pkg/pkgcache", name, "pkg/pkgcache/") {
 			if use.file != "pkg/daemon/packagecache.go" {
 				offending = append(offending, use.String())
 			}

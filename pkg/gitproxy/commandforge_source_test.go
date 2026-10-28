@@ -15,8 +15,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/github"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 const depotHost = "depot.code.forge.test"

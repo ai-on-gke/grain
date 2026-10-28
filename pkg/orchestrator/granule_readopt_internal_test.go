@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/sandboxaddr"
+	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 )
 
 // A daemon readopting a granule VM on a deployment that allocates

@@ -25,14 +25,14 @@ package agent
 import (
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/capability/bootstrap"
-	"github.com/bwsalmon/grain/pkg/capability/dbaccess"
-	"github.com/bwsalmon/grain/pkg/capability/deploymenthealth"
-	"github.com/bwsalmon/grain/pkg/capability/dispatchcontrol"
-	"github.com/bwsalmon/grain/pkg/capability/grainlog"
-	"github.com/bwsalmon/grain/pkg/capability/pipelinecontrol"
-	"github.com/bwsalmon/grain/pkg/capability/selfupgrade"
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
+	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
+	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
+	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/pipelinecontrol"
+	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // PublishedToolNames names the exact tools pkg/cli/mcpserver.go may

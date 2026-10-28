@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/procgroup"
+	"github.com/ai-on-gke/grain/pkg/procgroup"
 )
 
 // Detached processes (protocol 2): a host CLI or capability server that

@@ -1,8 +1,8 @@
 package intree
 
 import (
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
 // init hands hostd this build's own entries, for MissingEntryHelp.

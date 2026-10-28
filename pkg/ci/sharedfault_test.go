@@ -102,9 +102,9 @@ func TestSharedFaultsKeepsBranchesApartWhenTheyFailDifferently(t *testing.T) {
 	now := time.Date(2026, 9, 18, 17, 0, 0, 0, time.UTC)
 	runs := []Run{
 		failedRun("r1", "grain/task-238", "aaaaaaa1", now.Add(-5*time.Minute), "go", "go test ./...",
-			"--- FAIL: TestQueueOrdersByPriority\n    queue_test.go:112: want 3 tasks, got 2\nFAIL\tgithub.com/bwsalmon/grain/pkg/dispatch\t2.1s"),
+			"--- FAIL: TestQueueOrdersByPriority\n    queue_test.go:112: want 3 tasks, got 2\nFAIL\tgithub.com/ai-on-gke/grain/pkg/dispatch\t2.1s"),
 		failedRun("r2", "grain/task-246", "bbbbbbb2", now.Add(-6*time.Minute), "go", "go test ./...",
-			"--- FAIL: TestSandboxBudgetHoldsAJob\n    gate_test.go:44: want admitted, got held\nFAIL\tgithub.com/bwsalmon/grain/pkg/ci\t3.4s"),
+			"--- FAIL: TestSandboxBudgetHoldsAJob\n    gate_test.go:44: want admitted, got held\nFAIL\tgithub.com/ai-on-gke/grain/pkg/ci\t3.4s"),
 	}
 	if got := SharedFaults(runs, now, 0); len(got) != 0 {
 		t.Fatalf("two different test failures were called one fault: %+v", got)

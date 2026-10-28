@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // LiveSandbox describes one live sandbox held by a backend right now, read from

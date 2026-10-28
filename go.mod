@@ -1,4 +1,4 @@
-module github.com/bwsalmon/grain
+module github.com/ai-on-gke/grain
 
 go 1.26.6
 

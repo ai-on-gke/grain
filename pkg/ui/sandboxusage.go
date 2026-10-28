@@ -16,7 +16,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // SandboxLifetime is the whole of that answer: a total, and the kinds it

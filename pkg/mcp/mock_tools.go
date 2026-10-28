@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ProposalFiler persists an interactive proposal while its run is still live.

@@ -9,7 +9,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The named GitHub tokens half of Settings (grain/task-137).

@@ -15,8 +15,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ActingTaskHeader names the task whose run is making a request through

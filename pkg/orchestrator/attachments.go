@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // AttachmentsDir is where a dispatched run finds every file its task or

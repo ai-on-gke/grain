@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
 // cacheRecordingSandboxes is a host backend whose sandboxes also take

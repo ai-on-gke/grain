@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // headInCIBeforeGreen is a lane of two: t1 at the front with its grain CI

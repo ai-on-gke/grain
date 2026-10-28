@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/dbaccess"
-	"github.com/bwsalmon/grain/pkg/model/postgres/postgrestest"
+	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 	_ "modernc.org/sqlite"
 )
 

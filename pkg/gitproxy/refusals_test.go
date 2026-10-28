@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/github/githubsim"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 )
 
 // upstreamHeaders is what GitHub sends with these refusals -- kept on

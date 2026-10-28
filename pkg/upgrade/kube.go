@@ -39,7 +39,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/k8s"
 )
 
 // KubeConfig, set on Config.Kube, makes an Upgrader upgrade a

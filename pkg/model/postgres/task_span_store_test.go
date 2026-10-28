@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // TaskSpans is what GET /api/tasks draws every row's timeline from, so a

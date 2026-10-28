@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
 // A runs page is only reused for the shared fault list when it is the

@@ -41,13 +41,10 @@ export default async function globalSetup() {
       "-tags",
       "grain_e2e",
       "-ldflags",
-      "-X github.com/bwsalmon/grain/pkg/version.Release=v1.2.0",
+      "-X github.com/ai-on-gke/grain/pkg/version.Release=v1.2.0",
       "-o",
       bin,
-      // The Google-linked grain, the build this suite has always run:
-      // corp-research-capability-walkthrough.spec.js needs the capability
-      // google/capability/corpresearch registers (google/README.md).
-      "./google/cmd/grain",
+      "./cmd/grain",
     ],
     {
       cwd: root,

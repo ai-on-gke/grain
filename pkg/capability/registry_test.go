@@ -4,10 +4,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability"
-	"github.com/bwsalmon/grain/pkg/capability/admincaps"
-	"github.com/bwsalmon/grain/pkg/capability/capabilitytest"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability"
+	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
+	"github.com/ai-on-gke/grain/pkg/capability/capabilitytest"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func TestRegisterProvider(t *testing.T) {

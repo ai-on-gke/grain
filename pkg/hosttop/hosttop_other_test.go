@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/hosttop"
+	"github.com/ai-on-gke/grain/pkg/hosttop"
 )
 
 // On a platform hosttop has no invocation for, Read refuses rather than

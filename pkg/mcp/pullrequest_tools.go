@@ -40,8 +40,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // PullRequestScope is the one branch pull_request_status reports on --

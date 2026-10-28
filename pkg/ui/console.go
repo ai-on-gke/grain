@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/console"
+	"github.com/ai-on-gke/grain/pkg/console"
 )
 
 // ConsoleSessions is implemented by whatever holds this deployment's live

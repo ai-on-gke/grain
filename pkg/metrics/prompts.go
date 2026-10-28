@@ -23,7 +23,7 @@ package metrics
 import (
 	"sort"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Prompts is how big the prompts this deployment handed its runs were.

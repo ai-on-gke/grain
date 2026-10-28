@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/metrics"
+	"github.com/ai-on-gke/grain/pkg/metrics"
 )
 
 // change is one settings change d into the window.

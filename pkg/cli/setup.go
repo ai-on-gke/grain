@@ -37,7 +37,7 @@ import (
 
 	"google.golang.org/api/option"
 
-	"github.com/bwsalmon/grain/pkg/gcpsetup"
+	"github.com/ai-on-gke/grain/pkg/gcpsetup"
 )
 
 func setupCmd(args []string) {

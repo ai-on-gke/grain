@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // IssueReader is the read-only GitHub operations needed for reading issues

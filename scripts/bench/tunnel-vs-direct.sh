@@ -33,7 +33,7 @@ prepare() {
   mkdir -p "$BENCH_DIR/git" "$BENCH_DIR/lists"
   # The git proxy's stand-in: a mirror of bwsalmon/grain, plus a copy whose
   # main is 100 commits behind so a fetch has something to bring in.
-  local origin="${GRAIN_REMOTE:-https://github.com/bwsalmon/grain.git}"
+  local origin="${GRAIN_REMOTE:-https://github.com/ai-on-gke/grain.git}"
   if [[ ! -d "$BENCH_DIR/git/grain.git" ]]; then
     git clone -q --mirror "$origin" "$BENCH_DIR/git/grain.git"
   fi

@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
 func newTestServer(t *testing.T, store ci.RunStore, srcDir string, redactor *redact.Redactor) *Server {
@@ -67,7 +67,7 @@ func TestRetriedJobAttemptsAndPerTestExtractionOverREST(t *testing.T) {
 						Output:     "attempt 2 cancelled mid-suite\n",
 					},
 				},
-				GoTestLog: "=== PACKAGE github.com/bwsalmon/grain/pkg/ci\n=== RUN   TestSomething\n",
+				GoTestLog: "=== PACKAGE github.com/ai-on-gke/grain/pkg/ci\n=== RUN   TestSomething\n",
 				Attempts: []ci.JobAttempt{
 					{
 						Attempt:    1,
@@ -80,13 +80,13 @@ func TestRetriedJobAttemptsAndPerTestExtractionOverREST(t *testing.T) {
 								Output:     "step summary: 1 package failed (pkg/ci)\n",
 							},
 						},
-						GoTestLog: "=== PACKAGE github.com/bwsalmon/grain/pkg/ci\n" +
+						GoTestLog: "=== PACKAGE github.com/ai-on-gke/grain/pkg/ci\n" +
 							"=== RUN   TestPassOnAttempt1\n" +
 							"--- PASS: TestPassOnAttempt1 (0.01s)\n" +
 							"=== RUN   TestFailOnAttempt1\n" +
 							"    attempts_test.go:42: expected Attempt 1 log to survive, got nil\n" +
 							"--- FAIL: TestFailOnAttempt1 (0.03s)\n" +
-							"FAIL\tgithub.com/bwsalmon/grain/pkg/ci\t0.04s\n",
+							"FAIL\tgithub.com/ai-on-gke/grain/pkg/ci\t0.04s\n",
 					},
 					{
 						Attempt:    2,
@@ -98,7 +98,7 @@ func TestRetriedJobAttemptsAndPerTestExtractionOverREST(t *testing.T) {
 								Output:     "attempt 2 cancelled mid-suite\n",
 							},
 						},
-						GoTestLog: "=== PACKAGE github.com/bwsalmon/grain/pkg/ci\n=== RUN   TestSomething\n",
+						GoTestLog: "=== PACKAGE github.com/ai-on-gke/grain/pkg/ci\n=== RUN   TestSomething\n",
 					},
 				},
 			},

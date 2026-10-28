@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpkey"
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // GCPSetAccounts is the existing service accounts each of a gcp entry's

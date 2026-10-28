@@ -207,13 +207,10 @@ ARG GRAIN_IMAGE_REF=
 # candidate is its rc. `release-images.sh promote` rebuilds a promoted
 # release with RELEASE=vX.Y.Z, so `latest` reports the release it is.
 ARG RELEASE=
-# MAIN_GRAIN is the main bin/grain is built from: ./google/cmd/grain, the
-# Google build, by default and as every image before the split was, or
-# ./cmd/grain for core grain. scripts/release-images.sh builds this
-# Dockerfile once with each, as ghcr.io/bwsalmon/grain/google-grain and
-# ghcr.io/bwsalmon/grain/grain; the Makefile's MAIN_grain says why there
-# are two.
-ARG MAIN_GRAIN=./google/cmd/grain
+# MAIN_GRAIN is the main bin/grain is built from: ./cmd/grain, core
+# grain, unless a build with a main of its own says otherwise (the
+# Makefile's MAIN_grain).
+ARG MAIN_GRAIN=./cmd/grain
 RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_IMAGE=${K8S_SANDBOX_IMAGE} GRAIN_IMAGE_REF=${GRAIN_IMAGE_REF} RELEASE=${RELEASE} MAIN_grain=${MAIN_GRAIN}
 
 # granule only -- not `granule` or `granule-mem-agent`, which run inside
@@ -323,7 +320,7 @@ FROM ${RUNTIME_IMAGE}
 # the *account's* packages rather than in this repository's own list, and
 # the repo's access settings do not govern it. This image had no label at
 # all until now, which is why its packages have never shown up here.
-LABEL org.opencontainers.image.source="https://github.com/bwsalmon/grain" \
+LABEL org.opencontainers.image.source="https://github.com/ai-on-gke/grain" \
       org.opencontainers.image.title="grain" \
       org.opencontainers.image.description="The grain daemon and every binary it shells out to, in one image."
 

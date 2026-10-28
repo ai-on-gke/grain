@@ -24,10 +24,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/hostinit"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/hostinit"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // absDataDir is dataDir made absolute, as hostinit does with it, so the

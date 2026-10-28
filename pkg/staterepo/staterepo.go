@@ -48,7 +48,7 @@ import (
 	stdsync "sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/gitrefs"
+	"github.com/ai-on-gke/grain/pkg/gitrefs"
 )
 
 // DefaultBranch is the branch a state repository lives on when Config

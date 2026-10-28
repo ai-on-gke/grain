@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
 
 // cancelsAfterFirstCheck is a context that is live the first time anybody

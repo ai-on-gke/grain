@@ -3,7 +3,7 @@ package ci
 import (
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // StorageBoundsFrom reads the seven stored settings as this package reads

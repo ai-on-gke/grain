@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // WorkTree is GET /api/tasks/{id}/tree's body: the tree of work task id

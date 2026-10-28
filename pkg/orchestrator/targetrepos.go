@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // reconcileTargetRepos is this boundary's last look: it parks every task

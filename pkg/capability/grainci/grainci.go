@@ -44,7 +44,7 @@ package grainci
 import (
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // CapabilityName is the grant id a task's model.Grant names it by.

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/metrics"
+	"github.com/ai-on-gke/grain/pkg/metrics"
 )
 
 // rollup is one hour of host pressure, d into the window.

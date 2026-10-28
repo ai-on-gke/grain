@@ -23,8 +23,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/agent/sessionstore"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
 )
 
 // withSessionsIn is a Framework whose runs keep their HOMEs under dir --

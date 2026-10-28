@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github/githubsim"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 )
 
 func reachFixture(t *testing.T) (*gitproxy.Reach, *gitproxy.CredentialSet, *githubsim.Sim, *time.Time) {

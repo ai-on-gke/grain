@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/namespace"
 )
 
 // namespace_tasks.go serves the sandbox namespace's task:// root

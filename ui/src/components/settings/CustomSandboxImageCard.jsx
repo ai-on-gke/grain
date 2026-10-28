@@ -2,7 +2,7 @@ import { Alert, Box, Link, TextField, Typography } from "@mui/material";
 import SettingsCard from "./SettingsCard.jsx";
 
 export const SANDBOX_CONTRACT_DOC =
-  "https://github.com/bwsalmon/grain/blob/main/docs/sandbox-image-contract.md";
+  "https://github.com/ai-on-gke/grain/blob/main/docs/sandbox-image-contract.md";
 
 const VM_BACKENDS = new Set(["granule", "kubernetes-granule"]);
 

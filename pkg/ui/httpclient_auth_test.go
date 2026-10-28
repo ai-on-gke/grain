@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/bwsalmon/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
 func TestHTTPClient_StaticTokenHeader(t *testing.T) {

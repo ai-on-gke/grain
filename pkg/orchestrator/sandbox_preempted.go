@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/k8s"
 )
 
 // SandboxPreemptionReporter is implemented by a Sandbox the platform can

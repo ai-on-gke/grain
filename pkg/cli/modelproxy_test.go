@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	modelproxycap "github.com/bwsalmon/grain/pkg/capability/modelproxy"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelproxy"
-	"github.com/bwsalmon/grain/pkg/secrets"
+	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // startTestModelProxies starts one vendor proxy per vendor for this test

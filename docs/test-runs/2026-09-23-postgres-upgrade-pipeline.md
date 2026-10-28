@@ -148,12 +148,12 @@ All test suites across the repository executed and passed:
 
 ```
 === Package Test Summary ===
-PASS: github.com/bwsalmon/grain/pkg/model/postgres       (3.067s - 34 tests)
-PASS: github.com/bwsalmon/grain/pkg/staterepo            (70.732s - 28 tests)
-PASS: github.com/bwsalmon/grain/pkg/ui                   (120.354s - 64 tests)
-PASS: github.com/bwsalmon/grain/cmd/grain                (45.852s - 22 tests)
-PASS: github.com/bwsalmon/grain/pkg/model/sqlite         (34.478s - 31 tests)
-PASS: github.com/bwsalmon/grain/pkg/model/sqlite/sqlitetest (0.368s)
+PASS: github.com/ai-on-gke/grain/pkg/model/postgres       (3.067s - 34 tests)
+PASS: github.com/ai-on-gke/grain/pkg/staterepo            (70.732s - 28 tests)
+PASS: github.com/ai-on-gke/grain/pkg/ui                   (120.354s - 64 tests)
+PASS: github.com/ai-on-gke/grain/cmd/grain                (45.852s - 22 tests)
+PASS: github.com/ai-on-gke/grain/pkg/model/sqlite         (34.478s - 31 tests)
+PASS: github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest (0.368s)
 ```
 
 **Walkthrough Integration Test**: `TestPostgresComprehensiveWalkthrough` in `pkg/model/postgres/upgrade_test.go` PASSED in 3.06s.

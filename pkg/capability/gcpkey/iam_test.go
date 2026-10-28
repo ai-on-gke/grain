@@ -27,7 +27,7 @@ import (
 	iam "google.golang.org/api/iam/v1"
 	"google.golang.org/api/option"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // testAccount is the resource name every call below is made against, in

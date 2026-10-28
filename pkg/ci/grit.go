@@ -1,10 +1,10 @@
 package ci
 
 import (
-	gritartifacts "github.com/bwsalmon/grain/pkg/grit/artifacts"
-	gritcache "github.com/bwsalmon/grain/pkg/grit/cache"
-	gritsteps "github.com/bwsalmon/grain/pkg/grit/steps"
-	"github.com/bwsalmon/grain/pkg/workflows"
+	gritartifacts "github.com/ai-on-gke/grain/pkg/grit/artifacts"
+	gritcache "github.com/ai-on-gke/grain/pkg/grit/cache"
+	gritsteps "github.com/ai-on-gke/grain/pkg/grit/steps"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // The job cache and artifact store implementations moved to grit

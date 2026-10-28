@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/memory"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/memory"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Memory is one scope's memory as the API reports it: what grain has

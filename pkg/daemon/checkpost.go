@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/checkpost"
-	"github.com/bwsalmon/grain/pkg/forge"
-	"github.com/bwsalmon/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/checkpost"
+	"github.com/ai-on-gke/grain/pkg/forge"
+	"github.com/ai-on-gke/grain/pkg/granule"
 )
 
 // checkpostSecretEnv is where the daemon reads the secret it signs reads

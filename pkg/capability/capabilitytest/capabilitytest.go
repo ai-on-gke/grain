@@ -7,8 +7,8 @@ package capabilitytest
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ID, Name and Description are the made-up capability's.

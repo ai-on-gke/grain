@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/namespace"
-	"github.com/bwsalmon/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
 func findToolByName(t *testing.T, tools []Tool, name string) Tool {
@@ -30,7 +30,7 @@ func TestNamespaceMCPToolsLsReadGrepAndElisionCap(t *testing.T) {
 	finished := time.Now()
 	bigLog := "=== RUN   TestFlaky\n    flaky_test.go:19: attempt 1 failed\n" +
 		strings.Repeat("    flaky_test.go:20: diagnostic line padding to exceed tool cap\n", 40) +
-		"--- FAIL: TestFlaky (0.05s)\nFAIL\tgithub.com/bwsalmon/grain/pkg/ci\t0.100s\n"
+		"--- FAIL: TestFlaky (0.05s)\nFAIL\tgithub.com/ai-on-gke/grain/pkg/ci\t0.100s\n"
 
 	ciStore.Put(ci.Run{
 		ID:         "run-796",
@@ -120,7 +120,7 @@ func TestNamespaceMCPToolsLsReadGrepAndElisionCap(t *testing.T) {
 	// 2. grain_grep on attempt 1 per-test output
 	grepTool := findToolByName(t, tools, "grain_grep")
 	res = grepTool.Handler(ctx, map[string]any{
-		"path":    "ci://bwsalmon/grain/run-796/go/attempts/1/tests/github.com/bwsalmon/grain/pkg/ci/TestFlaky.log",
+		"path":    "ci://bwsalmon/grain/run-796/go/attempts/1/tests/github.com/ai-on-gke/grain/pkg/ci/TestFlaky.log",
 		"pattern": "attempt 1 failed",
 	})
 	if res.IsError {
@@ -167,7 +167,7 @@ func TestNamespaceGrainCopyOnHostGranuleAndDockerBackends(t *testing.T) {
 					{
 						Name:       "Test",
 						Conclusion: ci.ConclusionFailure,
-						Output:     "=== RUN   TestCopy\n    copy_test.go:9: failed\n--- FAIL: TestCopy (0.01s)\nFAIL\tgithub.com/bwsalmon/grain/pkg/copy\t0.02s\n",
+						Output:     "=== RUN   TestCopy\n    copy_test.go:9: failed\n--- FAIL: TestCopy (0.01s)\nFAIL\tgithub.com/ai-on-gke/grain/pkg/copy\t0.02s\n",
 					},
 				},
 			},
@@ -236,7 +236,7 @@ func TestNamespaceGrainCopyOnHostGranuleAndDockerBackends(t *testing.T) {
 
 			// Copy a single per-test CI log into the sandbox
 			res := copyTool.Handler(ctx, map[string]any{
-				"path": "ci://bwsalmon/grain/run-copy/go/tests/github.com/bwsalmon/grain/pkg/copy/TestCopy.log",
+				"path": "ci://bwsalmon/grain/run-copy/go/tests/github.com/ai-on-gke/grain/pkg/copy/TestCopy.log",
 				"dest": "logs/TestCopy.log",
 			})
 			if res.IsError {

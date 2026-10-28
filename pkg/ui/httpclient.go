@@ -24,9 +24,9 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/api/idtoken"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/modelexec"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/modelexec"
 )
 
 // HTTPClient is Client's method surface (bwsalmon/agents#363) spoken over

@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // maxBody bounds the one request body the listener reads.

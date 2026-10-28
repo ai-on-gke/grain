@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // listWith is one GET /api/tasks carrying the If-None-Match a poller

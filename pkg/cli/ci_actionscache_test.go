@@ -9,12 +9,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/actionscache"
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/grit/actions"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/actionscache"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/grit/actions"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // commandingSandbox is a fakeSandbox that also answers the direct

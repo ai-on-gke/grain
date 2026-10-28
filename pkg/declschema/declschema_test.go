@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/declschema"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/declschema"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A field added to model.Template, model.Suite or model.Schedule has to

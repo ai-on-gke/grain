@@ -59,7 +59,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // UnattributedCause is what a wait nothing attributed is counted under:

@@ -2,13 +2,13 @@ package ui
 
 import (
 	"context"
-	"github.com/bwsalmon/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"net/http"
 	"sort"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The deployment's capability policy (grain_config.capability_policy,

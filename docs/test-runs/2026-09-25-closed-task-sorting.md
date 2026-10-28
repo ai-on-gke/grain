@@ -147,14 +147,14 @@ go test -v ./pkg/ui -run TestListTasksOrdersClosedTasks
 === RUN   TestListOrdersClosedTasksWithFilterAndTieBreak
 --- PASS: TestListOrdersClosedTasksWithFilterAndTieBreak (0.07s)
 PASS
-ok  	github.com/bwsalmon/grain/cmd/grain	0.159s
+ok  	github.com/ai-on-gke/grain/cmd/grain	0.159s
 
 === RUN   TestListTasksOrdersClosedTasksNewestFirst
 === RUN   TestListTasksOrdersClosedTasksTieBreakerAndTeamScoping
 --- PASS: TestListTasksOrdersClosedTasksTieBreakerAndTeamScoping (0.11s)
 --- PASS: TestListTasksOrdersClosedTasksNewestFirst (0.11s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/ui	0.123s
+ok  	github.com/ai-on-gke/grain/pkg/ui	0.123s
 ```
 
 ### 3.3 Vitest Frontend Suite
@@ -178,8 +178,8 @@ go test ./cmd/... ./pkg/...
 
 **Output:**
 ```text
-ok  	github.com/bwsalmon/grain/cmd/grain	21.255s
-ok  	github.com/bwsalmon/grain/pkg/ui	38.257s
+ok  	github.com/ai-on-gke/grain/cmd/grain	21.255s
+ok  	github.com/ai-on-gke/grain/pkg/ui	38.257s
 ... (all 60+ packages PASS)
 ```
 

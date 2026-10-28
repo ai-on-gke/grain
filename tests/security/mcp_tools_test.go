@@ -17,21 +17,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/bootstrap"
-	"github.com/bwsalmon/grain/pkg/capability/dbaccess"
-	"github.com/bwsalmon/grain/pkg/capability/deploymenthealth"
-	"github.com/bwsalmon/grain/pkg/capability/grainci"
-	"github.com/bwsalmon/grain/pkg/capability/grainlog"
-	"github.com/bwsalmon/grain/pkg/capability/memory"
-	"github.com/bwsalmon/grain/pkg/capability/quarantine"
-	"github.com/bwsalmon/grain/pkg/capability/readissues"
-	"github.com/bwsalmon/grain/pkg/capability/releasenotes"
-	"github.com/bwsalmon/grain/pkg/capability/selfdebug"
-	"github.com/bwsalmon/grain/pkg/capability/selfupgrade"
-	"github.com/bwsalmon/grain/pkg/capability/teambroadcast"
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
+	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
+	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/memory"
+	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
+	"github.com/ai-on-gke/grain/pkg/capability/readissues"
+	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
+	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
+	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A sandbox's tools are its authority: whatever its MCP server publishes,
@@ -172,13 +172,9 @@ func grainBinary(t *testing.T) string {
 			return
 		}
 		grainBinaryPath = filepath.Join(dir, "grain")
-		// The main the Makefile ships (MAIN_grain): google/cmd/grain, core
-		// grain with the Google registrations linked in, so the tools and
+		// The main the Makefile ships (MAIN_grain), so the tools and
 		// grants checked here are those of the binary deployments run.
-		// Before pkg/cli existed, cmd/grain linked the same registrations
-		// by default; building core cmd/grain here would have dropped them
-		// from this suite without saying so.
-		out, err := exec.Command("go", "build", "-o", grainBinaryPath, "github.com/bwsalmon/grain/google/cmd/grain").CombinedOutput()
+		out, err := exec.Command("go", "build", "-o", grainBinaryPath, "github.com/ai-on-gke/grain/cmd/grain").CombinedOutput()
 		if err != nil {
 			grainBinaryErr = fmt.Errorf("building grain: %v\n%s", err, out)
 		}

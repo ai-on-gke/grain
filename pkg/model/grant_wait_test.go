@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A task_grant_wait row is derived from a task's grants and target, so

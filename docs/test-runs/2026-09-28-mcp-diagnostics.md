@@ -106,8 +106,8 @@ All automated unit tests in `pkg/mcp`, `pkg/ci`, and end-to-end walkthrough veri
 === RUN   TestEngineQuarantineNonBlockingExecution
 --- PASS: TestEngineQuarantineNonBlockingExecution (0.00s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/mcp	16.120s
-ok  	github.com/bwsalmon/grain/pkg/ci	19.537s
+ok  	github.com/ai-on-gke/grain/pkg/mcp	16.120s
+ok  	github.com/ai-on-gke/grain/pkg/ci	19.537s
 ```
 
 ### 2. End-to-End Walkthrough Test Results (`tests/e2e`)
@@ -123,87 +123,87 @@ ok  	github.com/bwsalmon/grain/pkg/ci	19.537s
     mcp_diagnostics_and_quarantine_walkthrough_test.go:374: === Section 4C: Mixed Failure Blocking Verification ===
 --- PASS: TestMCPDiagnosticsAndQuarantineWalkthrough (0.05s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	0.058s
+ok  	github.com/ai-on-gke/grain/tests/e2e	0.058s
 ```
 
 ### 3. Full Repository Test Suite
 ```
-ok  	github.com/bwsalmon/grain/pkg/access	0.080s
-ok  	github.com/bwsalmon/grain/pkg/actionscache	9.864s
-ok  	github.com/bwsalmon/grain/pkg/agent	0.015s
-ok  	github.com/bwsalmon/grain/pkg/agent/antigravity	0.931s
-ok  	github.com/bwsalmon/grain/pkg/agent/claude	0.037s
-ok  	github.com/bwsalmon/grain/pkg/agent/codex	0.026s
-ok  	github.com/bwsalmon/grain/pkg/agent/credcheck	0.005s
-ok  	github.com/bwsalmon/grain/pkg/agent/custom	0.050s
-ok  	github.com/bwsalmon/grain/pkg/agent/sessionstore	0.008s
-ok  	github.com/bwsalmon/grain/pkg/backup	0.222s
-ok  	github.com/bwsalmon/grain/pkg/capability/bootstrap	0.010s
-ok  	github.com/bwsalmon/grain/pkg/capability/console	0.008s
-ok  	github.com/bwsalmon/grain/pkg/capability/deploymenthealth	0.007s
-ok  	github.com/bwsalmon/grain/pkg/capability/gcpkey	0.020s
-ok  	github.com/bwsalmon/grain/pkg/capability/geminikey	0.027s
-ok  	github.com/bwsalmon/grain/pkg/capability/githubsandbox	1.101s
-ok  	github.com/bwsalmon/grain/pkg/capability/githubtoken	0.013s
-ok  	github.com/bwsalmon/grain/pkg/capability/grainci	0.005s
-ok  	github.com/bwsalmon/grain/pkg/capability/grainlog	0.014s
-ok  	github.com/bwsalmon/grain/pkg/capability/memory	0.007s
-ok  	github.com/bwsalmon/grain/pkg/capability/modelproxy	0.007s
-ok  	github.com/bwsalmon/grain/pkg/capability/packagepublish	0.006s
-ok  	github.com/bwsalmon/grain/pkg/capability/pipelinecontrol	0.011s
-ok  	github.com/bwsalmon/grain/pkg/capability/quarantine	0.007s
-ok  	github.com/bwsalmon/grain/pkg/capability/registrypush	0.020s
-ok  	github.com/bwsalmon/grain/pkg/capability/releasenotes	0.017s
-ok  	github.com/bwsalmon/grain/pkg/capability/reporead	0.005s
-ok  	github.com/bwsalmon/grain/pkg/capability/repowrite	0.006s
-ok  	github.com/bwsalmon/grain/pkg/capability/selfdebug	0.004s
-ok  	github.com/bwsalmon/grain/pkg/capability/selfrepair	0.744s
-ok  	github.com/bwsalmon/grain/pkg/capability/selfupgrade	0.003s
-ok  	github.com/bwsalmon/grain/pkg/checkpost	0.171s
-ok  	github.com/bwsalmon/grain/pkg/ci	19.537s
-ok  	github.com/bwsalmon/grain/pkg/cifault	0.004s
-ok  	github.com/bwsalmon/grain/pkg/console	0.063s
-ok  	github.com/bwsalmon/grain/pkg/declschema	0.008s
-ok  	github.com/bwsalmon/grain/pkg/dispatch	8.820s
-ok  	github.com/bwsalmon/grain/pkg/forge	0.122s
-ok  	github.com/bwsalmon/grain/pkg/gcpsetup	0.007s
-ok  	github.com/bwsalmon/grain/pkg/github	3.528s
-ok  	github.com/bwsalmon/grain/pkg/github/githubsim	1.991s
-ok  	github.com/bwsalmon/grain/pkg/gitproxy	5.630s
-ok  	github.com/bwsalmon/grain/pkg/granule	0.006s
-ok  	github.com/bwsalmon/grain/pkg/grit	0.002s
-ok  	github.com/bwsalmon/grain/pkg/hosttop	1.328s
-ok  	github.com/bwsalmon/grain/pkg/iapreconciler	0.005s
-ok  	github.com/bwsalmon/grain/pkg/k8s	0.024s
-ok  	github.com/bwsalmon/grain/pkg/lifecycle	0.714s
-ok  	github.com/bwsalmon/grain/pkg/mcp	16.120s
-ok  	github.com/bwsalmon/grain/pkg/metrics	0.012s
-ok  	github.com/bwsalmon/grain/pkg/model	3.935s
-ok  	github.com/bwsalmon/grain/pkg/model/postgres	0.610s
-ok  	github.com/bwsalmon/grain/pkg/model/sqlite	15.030s
-ok  	github.com/bwsalmon/grain/pkg/model/sqlite/sqlitetest	0.170s
-ok  	github.com/bwsalmon/grain/pkg/modelexec	10.285s
-ok  	github.com/bwsalmon/grain/pkg/modelproxy	0.015s
-ok  	github.com/bwsalmon/grain/pkg/orchestrator	65.426s
-ok  	github.com/bwsalmon/grain/pkg/pkgcache	12.177s
-ok  	github.com/bwsalmon/grain/pkg/procgroup	0.044s
-ok  	github.com/bwsalmon/grain/pkg/relay	5.461s
-ok  	github.com/bwsalmon/grain/pkg/repodecl	0.040s
-ok  	github.com/bwsalmon/grain/pkg/sandboximage	0.118s
-ok  	github.com/bwsalmon/grain/pkg/secrets	0.037s
-ok  	github.com/bwsalmon/grain/pkg/secretsrepo	1.035s
-ok  	github.com/bwsalmon/grain/pkg/statemachine	11.198s
-ok  	github.com/bwsalmon/grain/pkg/staterepo	23.995s
-ok  	github.com/bwsalmon/grain/pkg/sysstat	0.103s
-ok  	github.com/bwsalmon/grain/pkg/systemlog	0.234s
-ok  	github.com/bwsalmon/grain/pkg/tunnel	5.462s
-ok  	github.com/bwsalmon/grain/pkg/tunnel/connector	0.283s
-ok  	github.com/bwsalmon/grain/pkg/tunnel/gateway	0.019s
-ok  	github.com/bwsalmon/grain/pkg/tunnel/mux	5.592s
-ok  	github.com/bwsalmon/grain/pkg/ui	38.107s
-ok  	github.com/bwsalmon/grain/pkg/upgrade	8.030s
-ok  	github.com/bwsalmon/grain/pkg/version	0.006s
-ok  	github.com/bwsalmon/grain/tests/e2e	74.552s
+ok  	github.com/ai-on-gke/grain/pkg/access	0.080s
+ok  	github.com/ai-on-gke/grain/pkg/actionscache	9.864s
+ok  	github.com/ai-on-gke/grain/pkg/agent	0.015s
+ok  	github.com/ai-on-gke/grain/pkg/agent/antigravity	0.931s
+ok  	github.com/ai-on-gke/grain/pkg/agent/claude	0.037s
+ok  	github.com/ai-on-gke/grain/pkg/agent/codex	0.026s
+ok  	github.com/ai-on-gke/grain/pkg/agent/credcheck	0.005s
+ok  	github.com/ai-on-gke/grain/pkg/agent/custom	0.050s
+ok  	github.com/ai-on-gke/grain/pkg/agent/sessionstore	0.008s
+ok  	github.com/ai-on-gke/grain/pkg/backup	0.222s
+ok  	github.com/ai-on-gke/grain/pkg/capability/bootstrap	0.010s
+ok  	github.com/ai-on-gke/grain/pkg/capability/console	0.008s
+ok  	github.com/ai-on-gke/grain/pkg/capability/deploymenthealth	0.007s
+ok  	github.com/ai-on-gke/grain/pkg/capability/gcpkey	0.020s
+ok  	github.com/ai-on-gke/grain/pkg/capability/geminikey	0.027s
+ok  	github.com/ai-on-gke/grain/pkg/capability/githubsandbox	1.101s
+ok  	github.com/ai-on-gke/grain/pkg/capability/githubtoken	0.013s
+ok  	github.com/ai-on-gke/grain/pkg/capability/grainci	0.005s
+ok  	github.com/ai-on-gke/grain/pkg/capability/grainlog	0.014s
+ok  	github.com/ai-on-gke/grain/pkg/capability/memory	0.007s
+ok  	github.com/ai-on-gke/grain/pkg/capability/modelproxy	0.007s
+ok  	github.com/ai-on-gke/grain/pkg/capability/packagepublish	0.006s
+ok  	github.com/ai-on-gke/grain/pkg/capability/pipelinecontrol	0.011s
+ok  	github.com/ai-on-gke/grain/pkg/capability/quarantine	0.007s
+ok  	github.com/ai-on-gke/grain/pkg/capability/registrypush	0.020s
+ok  	github.com/ai-on-gke/grain/pkg/capability/releasenotes	0.017s
+ok  	github.com/ai-on-gke/grain/pkg/capability/reporead	0.005s
+ok  	github.com/ai-on-gke/grain/pkg/capability/repowrite	0.006s
+ok  	github.com/ai-on-gke/grain/pkg/capability/selfdebug	0.004s
+ok  	github.com/ai-on-gke/grain/pkg/capability/selfrepair	0.744s
+ok  	github.com/ai-on-gke/grain/pkg/capability/selfupgrade	0.003s
+ok  	github.com/ai-on-gke/grain/pkg/checkpost	0.171s
+ok  	github.com/ai-on-gke/grain/pkg/ci	19.537s
+ok  	github.com/ai-on-gke/grain/pkg/cifault	0.004s
+ok  	github.com/ai-on-gke/grain/pkg/console	0.063s
+ok  	github.com/ai-on-gke/grain/pkg/declschema	0.008s
+ok  	github.com/ai-on-gke/grain/pkg/dispatch	8.820s
+ok  	github.com/ai-on-gke/grain/pkg/forge	0.122s
+ok  	github.com/ai-on-gke/grain/pkg/gcpsetup	0.007s
+ok  	github.com/ai-on-gke/grain/pkg/github	3.528s
+ok  	github.com/ai-on-gke/grain/pkg/github/githubsim	1.991s
+ok  	github.com/ai-on-gke/grain/pkg/gitproxy	5.630s
+ok  	github.com/ai-on-gke/grain/pkg/granule	0.006s
+ok  	github.com/ai-on-gke/grain/pkg/grit	0.002s
+ok  	github.com/ai-on-gke/grain/pkg/hosttop	1.328s
+ok  	github.com/ai-on-gke/grain/pkg/iapreconciler	0.005s
+ok  	github.com/ai-on-gke/grain/pkg/k8s	0.024s
+ok  	github.com/ai-on-gke/grain/pkg/lifecycle	0.714s
+ok  	github.com/ai-on-gke/grain/pkg/mcp	16.120s
+ok  	github.com/ai-on-gke/grain/pkg/metrics	0.012s
+ok  	github.com/ai-on-gke/grain/pkg/model	3.935s
+ok  	github.com/ai-on-gke/grain/pkg/model/postgres	0.610s
+ok  	github.com/ai-on-gke/grain/pkg/model/sqlite	15.030s
+ok  	github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest	0.170s
+ok  	github.com/ai-on-gke/grain/pkg/modelexec	10.285s
+ok  	github.com/ai-on-gke/grain/pkg/modelproxy	0.015s
+ok  	github.com/ai-on-gke/grain/pkg/orchestrator	65.426s
+ok  	github.com/ai-on-gke/grain/pkg/pkgcache	12.177s
+ok  	github.com/ai-on-gke/grain/pkg/procgroup	0.044s
+ok  	github.com/ai-on-gke/grain/pkg/relay	5.461s
+ok  	github.com/ai-on-gke/grain/pkg/repodecl	0.040s
+ok  	github.com/ai-on-gke/grain/pkg/sandboximage	0.118s
+ok  	github.com/ai-on-gke/grain/pkg/secrets	0.037s
+ok  	github.com/ai-on-gke/grain/pkg/secretsrepo	1.035s
+ok  	github.com/ai-on-gke/grain/pkg/statemachine	11.198s
+ok  	github.com/ai-on-gke/grain/pkg/staterepo	23.995s
+ok  	github.com/ai-on-gke/grain/pkg/sysstat	0.103s
+ok  	github.com/ai-on-gke/grain/pkg/systemlog	0.234s
+ok  	github.com/ai-on-gke/grain/pkg/tunnel	5.462s
+ok  	github.com/ai-on-gke/grain/pkg/tunnel/connector	0.283s
+ok  	github.com/ai-on-gke/grain/pkg/tunnel/gateway	0.019s
+ok  	github.com/ai-on-gke/grain/pkg/tunnel/mux	5.592s
+ok  	github.com/ai-on-gke/grain/pkg/ui	38.107s
+ok  	github.com/ai-on-gke/grain/pkg/upgrade	8.030s
+ok  	github.com/ai-on-gke/grain/pkg/version	0.006s
+ok  	github.com/ai-on-gke/grain/tests/e2e	74.552s
 ```
 
 ---

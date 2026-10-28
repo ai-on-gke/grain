@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/agent/claude"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/secrets"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // claudeModelLister is startUIServer's ui.Config.ClaudeModels: what the

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/apierror"
-	"github.com/bwsalmon/grain/pkg/model/postgres"
+	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
 )
 
 type databaseStatusResponse struct {

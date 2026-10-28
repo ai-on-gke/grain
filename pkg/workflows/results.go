@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // Conclusion is how a run, a job or a step ended -- GitHub's own word

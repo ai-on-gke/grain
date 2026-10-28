@@ -9,9 +9,9 @@ import (
 
 	"golang.org/x/oauth2/google"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets"
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets/gcpfake"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets/gcpfake"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 const proj = "grain-test-proj"

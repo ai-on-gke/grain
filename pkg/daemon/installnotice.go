@@ -9,9 +9,9 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
-	"github.com/bwsalmon/grain/pkg/whererun"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/whererun"
 )
 
 // A host-mode install -- the daemon as a plain systemd service on the
@@ -31,7 +31,7 @@ import (
 var hostModeUnitPath = "/etc/systemd/system/grain-daemon.service"
 
 // hostModeDocsURL is the migration's own section of the design doc.
-const hostModeDocsURL = "https://github.com/bwsalmon/grain/blob/main/docs/design/cli-run-location.md#migrating-a-host-mode-install"
+const hostModeDocsURL = "https://github.com/ai-on-gke/grain/blob/main/docs/design/cli-run-location.md#migrating-a-host-mode-install"
 
 // hostModeMigrateCommand is what migrates the install.
 const hostModeMigrateCommand = "sudo ./scripts/setup.sh (or ./google/scripts/cloudtop-install.sh on a Cloudtop)"

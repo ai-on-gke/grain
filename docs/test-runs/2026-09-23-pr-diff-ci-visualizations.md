@@ -127,7 +127,7 @@ Evaluated UI behavior on simulated mobile (390×844) and tablet (820×1180) view
 ```
 go test ./pkg/ui/... -count=1
 PASS
-ok  	github.com/bwsalmon/grain/pkg/ui	2.184s
+ok  	github.com/ai-on-gke/grain/pkg/ui	2.184s
 ```
 
 ## Summary

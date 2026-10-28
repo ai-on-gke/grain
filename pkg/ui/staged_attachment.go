@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // StagedAttachment is POST /api/tasks/{id}/staged-attachments' answer.

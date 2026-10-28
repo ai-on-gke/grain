@@ -3,7 +3,7 @@ package sqlite_test
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A row written before RepoConfig.Work had columns of its own carried

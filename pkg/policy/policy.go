@@ -26,7 +26,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Policy is one workstation's local policy, as grain_policy.yml writes

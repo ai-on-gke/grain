@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/hostscriptcli"
+	"github.com/ai-on-gke/grain/pkg/hostscriptcli"
 )
 
 const usage = `usage: grain host-script <name> [arguments...]   run a granted host script (grain host-script --list)

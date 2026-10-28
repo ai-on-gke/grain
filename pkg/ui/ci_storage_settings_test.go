@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func TestUpdateSettingsRoundTripsTheCIStorageBounds(t *testing.T) {

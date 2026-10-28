@@ -3,7 +3,7 @@ package model_test
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The three layers, and the two different rules they compose by: a repo

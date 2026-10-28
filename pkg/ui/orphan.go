@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // PullRequestComments is implemented by whatever can post grain's own

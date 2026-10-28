@@ -30,7 +30,7 @@ Ran existing Withheld test to verify setup:
 ```bash
 GRAIN_REQUIRE_POSTGRES=1 go test -v -count=1 ./pkg/model/postgres/ -run TestApplyingSettingsKeepsTheGoogleOAuthClientSecret
 # PASS: TestApplyingSettingsKeepsTheGoogleOAuthClientSecret (2.28s)
-# ok   github.com/bwsalmon/grain/pkg/model/postgres 2.420s
+# ok   github.com/ai-on-gke/grain/pkg/model/postgres 2.420s
 ```
 
 ---
@@ -156,7 +156,7 @@ the tests run directly in the `postgres` CI job with `GRAIN_REQUIRE_POSTGRES=1`.
 Full test suite execution:
 ```bash
 GRAIN_REQUIRE_POSTGRES=1 go test -count=1 ./pkg/model/postgres/...
-# ok   github.com/bwsalmon/grain/pkg/model/postgres 50.037s
+# ok   github.com/ai-on-gke/grain/pkg/model/postgres 50.037s
 ```
 Duration was ~50 seconds, comfortably well below the 20-minute job timeout.
 All `pkg/staterepo/...` tests also pass cleanly.

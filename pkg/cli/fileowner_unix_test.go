@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // foreignTokenFile is a file this test cannot read that another account

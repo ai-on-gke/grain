@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // liveAgentTestEnv is the opt-in that makes this file's gates loud, and
@@ -110,7 +110,7 @@ func TestLiveRunEndToEnd(t *testing.T) {
 func buildGrainBinary(t *testing.T) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "grain")
-	cmd := exec.Command("go", "build", "-o", out, "github.com/bwsalmon/grain/cmd/grain")
+	cmd := exec.Command("go", "build", "-o", out, "github.com/ai-on-gke/grain/cmd/grain")
 	cmd.Dir = repoRoot(t)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("building cmd/grain: %v\n%s", err, output)

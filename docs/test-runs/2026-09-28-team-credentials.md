@@ -181,7 +181,7 @@ This test run documents the end-to-end verification and architectural proof for 
 === RUN   TestTeamCopyCredentials
 --- PASS: TestTeamCopyCredentials (0.06s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/ui	0.58s
+ok  	github.com/ai-on-gke/grain/pkg/ui	0.58s
 ```
 
 ### 2. Git Proxy Authorization & Isolation Suite (`pkg/gitproxy`)
@@ -203,7 +203,7 @@ ok  	github.com/bwsalmon/grain/pkg/ui	0.58s
 === RUN   TestStressGitProxyHighConcurrency
 --- PASS: TestStressGitProxyHighConcurrency (3.10s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/gitproxy	5.38s
+ok  	github.com/ai-on-gke/grain/pkg/gitproxy	5.38s
 ```
 
 ### 3. Store Credential Resolution Suite (`pkg/model/sqlite`)
@@ -213,7 +213,7 @@ ok  	github.com/bwsalmon/grain/pkg/gitproxy	5.38s
 === RUN   TestGitCredentialOverrideExplicitGrantPrecedesTeamCredential
 --- PASS: TestGitCredentialOverrideExplicitGrantPrecedesTeamCredential (0.01s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/model/sqlite	1.12s
+ok  	github.com/ai-on-gke/grain/pkg/model/sqlite	1.12s
 ```
 
 ### 4. Frontend Component Vitest Suite (`ui/src/components`)

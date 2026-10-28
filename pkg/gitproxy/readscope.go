@@ -42,7 +42,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ReadScopes is the registry: which sandbox may fetch which

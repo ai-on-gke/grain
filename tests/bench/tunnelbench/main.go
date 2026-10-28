@@ -39,7 +39,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/tunnel/mux"
+	"github.com/ai-on-gke/grain/pkg/tunnel/mux"
 )
 
 func main() {

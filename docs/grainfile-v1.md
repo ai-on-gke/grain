@@ -60,11 +60,11 @@ recipient: /
 requestor: Platform Team <platform@example.com>
 not_before: "2026-10-25T09:00:00+02:00"
 capabilities:
-  - https://github.com/bwsalmon/grain/capabilities/self-debug
-  - capability: https://github.com/bwsalmon/grain/capabilities/gcp#gcp-key
+  - https://github.com/ai-on-gke/grain/capabilities/self-debug
+  - capability: https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key
     with:
       account: infra-staging
-  - capability: https://github.com/bwsalmon/grain/capabilities/github#git-repo
+  - capability: https://github.com/ai-on-gke/grain/capabilities/github#git-repo
     with:
       repo: bwsalmon/grain
       mode: write
@@ -85,7 +85,7 @@ grainfile: v1
 title: Security review and CI failure triage
 gate: true
 capabilities:
-  - https://github.com/bwsalmon/grain/capabilities/self-debug
+  - https://github.com/ai-on-gke/grain/capabilities/self-debug
 references:
   - /docs/security-checklist.md
 when:

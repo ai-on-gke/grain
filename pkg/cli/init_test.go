@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/hostinit"
+	"github.com/ai-on-gke/grain/pkg/hostinit"
 )
 
 // TestInitExitCodeDistinguishesTheThreeOutcomes is the contract a caller

@@ -33,10 +33,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
-	"github.com/bwsalmon/grain/pkg/github/githubsim"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/runhost"
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/runhost"
 )
 
 // runHostTestImage builds the run-host image: debian:bookworm-slim with
@@ -48,7 +48,7 @@ func runHostTestImage(t *testing.T) string {
 		base = "debian:bookworm-slim"
 	}
 	ctxDir := t.TempDir()
-	build := exec.Command("go", "build", "-o", filepath.Join(ctxDir, "grain"), "github.com/bwsalmon/grain/cmd/grain")
+	build := exec.Command("go", "build", "-o", filepath.Join(ctxDir, "grain"), "github.com/ai-on-gke/grain/cmd/grain")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("building grain: %v\n%s", err, out)

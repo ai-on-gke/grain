@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // TestEscapeHatchToolCallsAreRecordedUnderTheirBareNames is

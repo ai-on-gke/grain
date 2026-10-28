@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ghwebhook"
+	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 )
 
 func TestGitHubWebhookConsumerPollsGatewayInvalidatesRepoAndPersistsCursor(t *testing.T) {

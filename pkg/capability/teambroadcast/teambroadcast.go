@@ -21,7 +21,7 @@
 // store.
 package teambroadcast
 
-import "github.com/bwsalmon/grain/pkg/model"
+import "github.com/ai-on-gke/grain/pkg/model"
 
 // CapabilityName is the grant name: "team-broadcast".
 const CapabilityName = "team-broadcast"

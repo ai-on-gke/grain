@@ -39,7 +39,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/bwsalmon/grain/pkg/safepath"
+	"github.com/ai-on-gke/grain/pkg/safepath"
 )
 
 // DefaultAllowlistPath is where the installer writes the allowlist.

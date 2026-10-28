@@ -160,7 +160,7 @@ flowchart TD
       --- PASS: TestReleaseQualification/QualificationTemplatesAndSchedules (0.00s)
       --- PASS: TestReleaseQualification/SymmetricalCrossBranchPortingAndRCLifecycle (0.20s)
   PASS
-  ok  	github.com/bwsalmon/grain/tests/deploy	0.210s
+  ok  	github.com/ai-on-gke/grain/tests/deploy	0.210s
   ```
 
 ---

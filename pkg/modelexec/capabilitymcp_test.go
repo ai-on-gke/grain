@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // TestCapabilityMCPCarriedOverTheExecutorStream is §5.2.4's last

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 var _ ui.StateRepoManager = (*externalConfigRepo)(nil)

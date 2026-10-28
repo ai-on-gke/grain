@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/namespace"
-	"github.com/bwsalmon/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
 type fakeNamespaceScopes struct {
@@ -52,7 +52,7 @@ func TestGitProxyNamespaceAuthAndGrantScoping(t *testing.T) {
 					{
 						Name:       "Test",
 						Conclusion: ci.ConclusionFailure,
-						Output:     "=== RUN   TestWidget\n    widget_test.go:11: boom token=ghp_1234567890abcdefghijklmnopqrstuvwx\n--- FAIL: TestWidget (0.01s)\nFAIL\tgithub.com/bwsalmon/grain/pkg/widget\t0.020s\n",
+						Output:     "=== RUN   TestWidget\n    widget_test.go:11: boom token=ghp_1234567890abcdefghijklmnopqrstuvwx\n--- FAIL: TestWidget (0.01s)\nFAIL\tgithub.com/ai-on-gke/grain/pkg/widget\t0.020s\n",
 					},
 				},
 			},
@@ -176,7 +176,7 @@ func TestGitProxyNamespaceAuthAndGrantScoping(t *testing.T) {
 	if err := mcp.ConfigureGitCredentials(sandboxHome, srv.URL, "tok-ci", mcp.GitIdentity{Name: "grain", Email: "grain@localhost"}); err != nil {
 		t.Fatalf("ConfigureGitCredentials: %v", err)
 	}
-	cmd := exec.Command("curl", "-sf", srv.URL+"/fs/ci/bwsalmon/grain/run-900/go/tests/github.com/bwsalmon/grain/pkg/widget/TestWidget.log")
+	cmd := exec.Command("curl", "-sf", srv.URL+"/fs/ci/bwsalmon/grain/run-900/go/tests/github.com/ai-on-gke/grain/pkg/widget/TestWidget.log")
 	cmd.Env = []string{
 		"HOME=" + sandboxHome,
 		"PATH=" + os.Getenv("PATH"),

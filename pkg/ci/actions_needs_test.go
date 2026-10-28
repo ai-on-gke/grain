@@ -7,7 +7,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/bwsalmon/grain/pkg/grit/actions"
+	"github.com/ai-on-gke/grain/pkg/grit/actions"
 )
 
 // granuleCI is the shape that cost gke-labs/granule its gate: an

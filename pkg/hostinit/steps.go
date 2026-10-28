@@ -18,10 +18,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/gitproxy"
-	"github.com/bwsalmon/grain/pkg/safepath"
-	"github.com/bwsalmon/grain/pkg/upgrade"
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/safepath"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // shQuote wraps s in single quotes for a Step.Command an operator copies

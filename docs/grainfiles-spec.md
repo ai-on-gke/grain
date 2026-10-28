@@ -251,21 +251,21 @@ A **deployment identity** is a reference (§8.1) naming the git repository or fo
 
 - **Capability model:** A capability is provided by an operator-run capability server and requested by reference; the reference grammar, the `with:` argument validation, the single-method shorthand (omitting `#<method>` when the server's last path segment names it), and the sub-task privilege rules are specified normatively in [`docs/capabilities-spec.md`](capabilities-spec.md) §2 and summarised in [`docs/capabilities.md`](capabilities.md). A Grainfile linter validates the reference syntax and entry shape below; argument validation against the server's schema happens in the executing deployment.
 - **Entry forms (GF020):** On both `.task.grain.md` and `.process.grain.md`, `capabilities` is an optional list where each entry is either:
-  1. A string `<capability_id>[#<method>]` when no arguments are passed (e.g. `https://github.com/bwsalmon/grain/capabilities/self-debug` or `https://github.com/bwsalmon/grain/capabilities/gcp#gcp-key`), or
+  1. A string `<capability_id>[#<method>]` when no arguments are passed (e.g. `https://github.com/ai-on-gke/grain/capabilities/self-debug` or `https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key`), or
   2. An object `{capability: "<capability_id>[#<method>]", with: {<args>}}` when passing structured arguments to the capability method (`with` must be a mapping when present, and unknown keys on the entry object are rejected with `GF020`):
      ```yaml
      capabilities:
-       - https://github.com/bwsalmon/grain/capabilities/self-debug
-       - capability: https://github.com/bwsalmon/grain/capabilities/gcp#gcp-key
+       - https://github.com/ai-on-gke/grain/capabilities/self-debug
+       - capability: https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key
          with:
            account: infra-staging
-       - capability: https://github.com/bwsalmon/grain/capabilities/github#git-repo
+       - capability: https://github.com/ai-on-gke/grain/capabilities/github#git-repo
          with:
            repo: bwsalmon/grain
            mode: write
            base: main
            root: true
-       - capability: https://github.com/bwsalmon/grain/capabilities/github#git-repo
+       - capability: https://github.com/ai-on-gke/grain/capabilities/github#git-repo
          with:
            repo: bwsalmon/silo
            mode: read
@@ -308,8 +308,8 @@ title: Add version header to the widget binary schema
 requestor: Bruce Salmon <bsalmon@google.com>
 recipient: https://github.com/acme/grain-eu
 capabilities:
-  - https://github.com/bwsalmon/grain/capabilities/self-debug
-  - capability: https://github.com/bwsalmon/grain/capabilities/gcp#gcp-key
+  - https://github.com/ai-on-gke/grain/capabilities/self-debug
+  - capability: https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key
     with:
       account: infra-staging
 references:

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func pipelineStewardSchedule(t *testing.T, ctx context.Context, store *model.Store) model.Schedule {

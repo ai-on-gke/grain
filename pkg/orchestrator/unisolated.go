@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/policy"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/policy"
 )
 
 // unisolatedSandboxes is implemented by a Sandboxes backend that isolates

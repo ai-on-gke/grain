@@ -27,9 +27,9 @@ import (
 // second thread), so importing it would drag pkg/model in behind it.
 // When CI owns its own run store this entry is the one to revisit.
 var forbidden = map[string]string{
-	"github.com/bwsalmon/grain/pkg/model":        "the task model: a forge that can read a task will eventually write one",
-	"github.com/bwsalmon/grain/pkg/orchestrator": "the task loop; the direction is tasks -> forge, never back",
-	"github.com/bwsalmon/grain/pkg/ci":           "reaches pkg/model for its run store, so it would drag the task model in",
+	"github.com/ai-on-gke/grain/pkg/model":        "the task model: a forge that can read a task will eventually write one",
+	"github.com/ai-on-gke/grain/pkg/orchestrator": "the task loop; the direction is tasks -> forge, never back",
+	"github.com/ai-on-gke/grain/pkg/ci":           "reaches pkg/model for its run store, so it would drag the task model in",
 }
 
 // TestForgeDoesNotDependOnTasks walks this package's imports, transitively
@@ -37,7 +37,7 @@ var forbidden = map[string]string{
 // forbidden -- because "pkg/forge imports pkg/model" is not the useful
 // half of the message when the import is three packages deep.
 func TestForgeDoesNotDependOnTasks(t *testing.T) {
-	const root = "github.com/bwsalmon/grain/pkg/forge"
+	const root = "github.com/ai-on-gke/grain/pkg/forge"
 	const module = "github.com/bwsalmon/grain/"
 
 	seen := map[string]bool{}

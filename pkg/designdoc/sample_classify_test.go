@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/designdoc"
+	"github.com/ai-on-gke/grain/pkg/designdoc"
 )
 
 // docs/test-plans/2026-10-05.md §1 step 5: this repository's own sample

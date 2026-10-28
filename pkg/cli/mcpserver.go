@@ -149,9 +149,9 @@ import (
 	"net"
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // grantedTools is every tool the grants this run holds are worth, and

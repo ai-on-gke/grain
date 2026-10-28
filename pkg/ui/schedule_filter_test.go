@@ -12,7 +12,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func TestTheSchedulesAPIAnswersTheProcessesPagesFilter(t *testing.T) {

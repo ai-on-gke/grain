@@ -74,8 +74,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/mcp"
-	"github.com/bwsalmon/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
 // TestPackageCachePullsThroughARealDockerd is the whole of it: configure,

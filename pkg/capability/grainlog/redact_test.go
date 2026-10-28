@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 )
 
 // A value this host actually holds is cut out and named, whatever shape

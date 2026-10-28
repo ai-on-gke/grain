@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/ci"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func putOldTask(t *testing.T, ctx context.Context, store *model.Store, id string, links []model.Link) time.Time {

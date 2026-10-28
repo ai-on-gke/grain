@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // The browser e2e suite (ui/e2e/global-setup.js) builds grain with the

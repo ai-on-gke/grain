@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // Every attach is given the deployment's identity, and a server attached

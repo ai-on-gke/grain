@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 const hideTestAccessCode = "WXYZ-2345-ABCD-EFGH-IJKL-MNOP-QRST-UV67"

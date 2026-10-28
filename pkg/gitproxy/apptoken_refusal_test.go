@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // newAppProxy is newTestProxy with the "bot" credential replaced by an

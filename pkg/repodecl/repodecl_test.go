@@ -10,8 +10,8 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/repodecl"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/repodecl"
 )
 
 var repo = model.RepoRef{Owner: "bwsalmon", Name: "grain"}

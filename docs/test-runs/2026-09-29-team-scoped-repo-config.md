@@ -168,18 +168,18 @@ When an agent sandbox is bootstrapped for task $T$ on repository $R$ belonging t
     team_scoped_repo_config_walkthrough_test.go:537: === Team-Scoped Repository Architecture & Declarative Config Walkthrough Succeeded ===
 --- PASS: TestTeamScopedRepoConfigAndDeclarativeSyncWalkthrough (3.68s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	3.697s
+ok  	github.com/ai-on-gke/grain/tests/e2e	3.697s
 ```
 
 ### 4.2 Core Go Package Test Suites
 ```text
-ok  	github.com/bwsalmon/grain/pkg/model	4.500s
-ok  	github.com/bwsalmon/grain/pkg/model/sqlite	17.762s
-ok  	github.com/bwsalmon/grain/pkg/gitproxy	8.439s
-ok  	github.com/bwsalmon/grain/pkg/repodecl	0.037s
-ok  	github.com/bwsalmon/grain/pkg/staterepo	24.197s
-ok  	github.com/bwsalmon/grain/pkg/ui	44.680s
-ok  	github.com/bwsalmon/grain/pkg/orchestrator	52.912s
+ok  	github.com/ai-on-gke/grain/pkg/model	4.500s
+ok  	github.com/ai-on-gke/grain/pkg/model/sqlite	17.762s
+ok  	github.com/ai-on-gke/grain/pkg/gitproxy	8.439s
+ok  	github.com/ai-on-gke/grain/pkg/repodecl	0.037s
+ok  	github.com/ai-on-gke/grain/pkg/staterepo	24.197s
+ok  	github.com/ai-on-gke/grain/pkg/ui	44.680s
+ok  	github.com/ai-on-gke/grain/pkg/orchestrator	52.912s
 ```
 
 ### 4.3 UI Vitest Suite

@@ -21,9 +21,9 @@ import (
 	"flag"
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // cmdMetrics asks for a report over a span and a scope: -window (or

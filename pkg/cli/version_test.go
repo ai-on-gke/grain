@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/installtrack"
-	"github.com/bwsalmon/grain/pkg/installtrack/installtracktest"
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/installtrack/installtracktest"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 func TestFormatVersion(t *testing.T) {

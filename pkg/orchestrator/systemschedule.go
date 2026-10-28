@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // systemScheduleTimeOfDay is when a schedule grain seeds for itself

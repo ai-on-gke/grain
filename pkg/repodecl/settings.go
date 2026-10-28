@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // LoadSettings reads the one repository settings declaration tree holds.

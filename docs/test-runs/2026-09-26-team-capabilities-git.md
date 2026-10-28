@@ -71,12 +71,12 @@ All unit tests and end-to-end walkthrough verification suites passed cleanly.
 === RUN   TestPackagePublishAuthorizedTeams
 --- PASS: TestPackagePublishAuthorizedTeams (0.00s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/capability/packagepublish	0.004s
+ok  	github.com/ai-on-gke/grain/pkg/capability/packagepublish	0.004s
 
 === RUN   TestGCPKeyAuthorizedTeams
 --- PASS: TestGCPKeyAuthorizedTeams (0.00s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/capability/gcpkey	0.014s
+ok  	github.com/ai-on-gke/grain/pkg/capability/gcpkey	0.014s
 ```
 
 ### 2. End-to-End Walkthrough Test Run
@@ -126,7 +126,7 @@ $ go test -v ./tests/e2e -run TestTrack5CapabilityScopingCredentialIsolationAndG
     track5_team_capabilities_git_identity_test.go:520: Track 5 walkthrough successfully completed!
 --- PASS: TestTrack5CapabilityScopingCredentialIsolationAndGitIdentityWalkthrough (14.06s)
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	14.082s
+ok  	github.com/ai-on-gke/grain/tests/e2e	14.082s
 ```
 
 ### 3. Full Repository Test Suite

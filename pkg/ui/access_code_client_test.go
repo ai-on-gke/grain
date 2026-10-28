@@ -1,6 +1,6 @@
 package ui_test
 
-import "github.com/bwsalmon/grain/pkg/ui"
+import "github.com/ai-on-gke/grain/pkg/ui"
 
 // testAccessCode is the access code the tests in this directory give a
 // server they reach over a real listener (httptest.NewServer). Such a

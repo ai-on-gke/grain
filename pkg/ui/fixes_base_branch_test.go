@@ -4,8 +4,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // grain/task-3451: a task filed with "This fixes a red <base>" carries the

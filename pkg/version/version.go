@@ -28,12 +28,12 @@ import (
 )
 
 // Release is stamped into the binary at build time via -ldflags -X
-// (e.g. -X github.com/bwsalmon/grain/pkg/version.Release=v1.2.0).
+// (e.g. -X github.com/ai-on-gke/grain/pkg/version.Release=v1.2.0).
 var Release string
 
 // Edition is the build edition or variant (e.g. "google"), stamped into the
 // binary at build time via -ldflags -X
-// (e.g. -X github.com/bwsalmon/grain/pkg/version.Edition=google) or
+// (e.g. -X github.com/ai-on-gke/grain/pkg/version.Edition=google) or
 // registered via RegisterEdition. Empty for core/open-source builds.
 var Edition string
 
@@ -139,7 +139,7 @@ func ReadFile(path string) (Info, error) {
 }
 
 // releaseVar is the symbol the build's -ldflags stamp Release through.
-const releaseVar = "github.com/bwsalmon/grain/pkg/version.Release="
+const releaseVar = "github.com/ai-on-gke/grain/pkg/version.Release="
 
 // stampedRelease is the Release a build's own -ldflags stamped, read back
 // out of its build info ("-ldflags" is one of the settings `go build`

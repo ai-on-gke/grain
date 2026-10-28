@@ -4,9 +4,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/capability"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // Core grain turns nothing on by default: everything this binary links

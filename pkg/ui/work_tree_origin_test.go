@@ -3,7 +3,7 @@ package ui_test
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A task from before origins existed, filed part way down a tree, is

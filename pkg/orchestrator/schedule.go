@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // reconcileSchedule fires every schedule whose interval has come due --

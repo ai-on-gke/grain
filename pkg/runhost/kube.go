@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/k8s"
 )
 
 // The Kubernetes driver: one pod per run, created, listed and deleted

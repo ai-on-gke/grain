@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/installtrack"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // ErrImageNotFound is returned by CheckImageManifest when a container registry

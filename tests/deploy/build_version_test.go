@@ -280,7 +280,7 @@ func TestMakefileStampsTheBuildVersion(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	want := "-X github.com/bwsalmon/grain/pkg/version.Release=v2.2.0-rc.2.2+" + tips["old-candidate"][:7]
+	want := "-X github.com/ai-on-gke/grain/pkg/version.Release=v2.2.0-rc.2.2+" + tips["old-candidate"][:7]
 	if got := ask(); !strings.Contains(got, want) {
 		t.Errorf("the Makefile's LDFLAGS = %q, want them to carry %q", got, want)
 	}
@@ -329,7 +329,7 @@ func TestReleaseImagesDryRunNamesTheBuildVersionOfEachBranch(t *testing.T) {
 			}
 			short := tc.commit[:7]
 			containsRun(t, out, "[dry-run] version: "+tc.want+", stamped into both daemon binaries as "+
-				"-X github.com/bwsalmon/grain/pkg/version.Release="+tc.want+
+				"-X github.com/ai-on-gke/grain/pkg/version.Release="+tc.want+
 				" and labelled onto ghcr.io/bwsalmon/grain/grain:sha-"+short+
 				" and ghcr.io/bwsalmon/grain/google-grain:sha-"+short+
 				" as org.opencontainers.image.version="+tc.want)

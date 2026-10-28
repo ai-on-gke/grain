@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 )
 
 // A sandbox whose run is still live keeps authenticating to the git proxy

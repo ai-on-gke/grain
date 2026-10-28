@@ -57,7 +57,7 @@ console messages, page errors, dialog confirmations, and HTTP interactions.
 To advance and qualify suite runs through realistic multi-pass and error states without
 requiring live agent VMs or GitHub credentials:
 - An ephemeral Go helper (`suitestub`) interacting directly with the demo instance's
-  embedded SQLite database through `github.com/bwsalmon/grain/pkg/model`.
+  embedded SQLite database through `github.com/ai-on-gke/grain/pkg/model`.
 - **Pass 1 Task Progression:** `store.StartRun` and `store.FinishRun` to advance pass 1
   task instances to `success` or `error` outcomes.
 - **Next Pass Triggering:** `store.FireNextPass` to transition the active suite run to

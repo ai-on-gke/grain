@@ -3,7 +3,7 @@ package model_test
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // TestSecretResolutionIsAudited: a task's resolution shows on the

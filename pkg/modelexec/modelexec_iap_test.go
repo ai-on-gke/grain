@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // mockIAPProxy creates a TCP listener simulating a GCP IAP / HTTPS proxy that accepts

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite/sqlitetest"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 )
 
 // stubDeclaredPush is a BranchLookup whose run was filed from a template

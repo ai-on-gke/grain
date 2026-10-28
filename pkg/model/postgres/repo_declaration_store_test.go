@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/postgres/postgrestest"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 )
 
 var declaring = model.RepoRef{Owner: "bwsalmon", Name: "grain"}

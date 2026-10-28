@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // MergeBatch is one speculative merge in flight (model.MergeBatch) as the

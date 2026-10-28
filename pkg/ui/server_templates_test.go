@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func TestTemplatesCreateListUpdateDelete(t *testing.T) {

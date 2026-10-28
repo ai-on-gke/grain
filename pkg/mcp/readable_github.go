@@ -37,7 +37,7 @@ package mcp
 // logsUnreadable's sentence about job logs both depend on that, and both
 // are read through this wrapper.
 
-import "github.com/bwsalmon/grain/pkg/github"
+import "github.com/ai-on-gke/grain/pkg/github"
 
 // readableErrors returns client with every GitHub refusal it reports
 // rendered as GitHub's own sentence.

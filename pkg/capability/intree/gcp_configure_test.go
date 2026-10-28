@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets"
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets/gcpfake"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets/gcpfake"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 const testMinterKey = `{"type":"service_account","client_email":"minter@grain-test-proj.iam.gserviceaccount.com"}`

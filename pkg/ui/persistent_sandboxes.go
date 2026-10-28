@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // PersistentSandboxes is the daemon's persistent sandbox supervisor, as

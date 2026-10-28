@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 // Every tool pkg/cli/mcpserver.go can register has to be named, or the

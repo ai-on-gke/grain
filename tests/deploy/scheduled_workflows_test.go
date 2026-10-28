@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/packagepublish"
-	"github.com/bwsalmon/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
+	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
 // Grain reads a cron under .grain/workflows as a task schedule of its own

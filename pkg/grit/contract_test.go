@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/attest"
-	"github.com/bwsalmon/grain/pkg/gritapi"
-	"github.com/bwsalmon/grain/pkg/pkgcache"
-	"github.com/bwsalmon/grain/pkg/treeid"
+	"github.com/ai-on-gke/grain/pkg/attest"
+	"github.com/ai-on-gke/grain/pkg/gritapi"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/treeid"
 )
 
 type memCursor struct {

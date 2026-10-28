@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/procgroup"
-	"github.com/bwsalmon/grain/pkg/redact"
-	"github.com/bwsalmon/grain/pkg/safepath"
+	"github.com/ai-on-gke/grain/pkg/procgroup"
+	"github.com/ai-on-gke/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/safepath"
 )
 
 // NewSandboxTools returns the four tools v1 runs over SSH against a real

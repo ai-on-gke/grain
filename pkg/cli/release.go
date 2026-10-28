@@ -5,8 +5,8 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // cmdRelease is `grain release approve|reject vX.Y.0`: a person's answer

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/granule"
 )
 
 var (

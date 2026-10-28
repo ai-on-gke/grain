@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // PauseOptions is what a caller chose at the moment of pausing.

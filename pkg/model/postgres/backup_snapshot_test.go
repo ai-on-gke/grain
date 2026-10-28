@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/backup"
-	"github.com/bwsalmon/grain/pkg/model/postgres/postgrestest"
+	"github.com/ai-on-gke/grain/pkg/backup"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 )
 
 type dummyDestination struct{}

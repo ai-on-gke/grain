@@ -69,7 +69,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // SystemScheduleEdit is one of grain's own schedules that a merged

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 var gateTime = time.Date(2026, 9, 18, 15, 0, 0, 0, time.UTC)

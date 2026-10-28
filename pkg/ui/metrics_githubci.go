@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/metrics"
+	"github.com/ai-on-gke/grain/pkg/metrics"
 )
 
 // MetricsGitHubCI is the CI beside grain's own over the window: GitHub

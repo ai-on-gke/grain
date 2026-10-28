@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // QualificationItem is one entry in a repo's qualification plan, over the

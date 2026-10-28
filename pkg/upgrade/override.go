@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 )
 
 // imageRefPattern is the character set an image reference may use: the

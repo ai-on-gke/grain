@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent/claude"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // demoModelCatalog is -model-catalog's ui.Config.ClaudeModels: the

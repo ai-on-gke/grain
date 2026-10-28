@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/bwsalmon/grain/pkg/apierror"
-	"github.com/bwsalmon/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 )
 
 // LogSource is one named stream of recent log lines the UI's System

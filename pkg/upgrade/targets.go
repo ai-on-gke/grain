@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // AnyBranchPattern, given as one of Config.AllowedBranches, matches every

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/forge"
+	"github.com/ai-on-gke/grain/pkg/forge"
 )
 
 // clientAgainst wires a real Client to a real Server, because everything

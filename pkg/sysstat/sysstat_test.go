@@ -27,7 +27,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/sysstat"
+	"github.com/ai-on-gke/grain/pkg/sysstat"
 )
 
 // hasReadings skips a test on a platform this package has no

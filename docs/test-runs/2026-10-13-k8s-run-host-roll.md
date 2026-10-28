@@ -41,7 +41,7 @@ stands in for the store's spool cursor.
         ADOPTED-OK: 120 lines, 7 read by the first daemon and 113 by this one
 --- PASS: TestKubeRunHostSurvivesADaemonRoll (50.44s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/runhost	50.441s
+ok  	github.com/ai-on-gke/grain/pkg/runhost	50.441s
 ```
 
 - The first daemon pod started run pod

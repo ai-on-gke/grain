@@ -75,7 +75,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/gitrefs"
+	"github.com/ai-on-gke/grain/pkg/gitrefs"
 )
 
 // DefaultBranch is the branch the ciphertext lives on when Config does

@@ -14,9 +14,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/bwsalmon/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
 // checkPackageCacheUpstreams reports what is wrong with the mirrors a

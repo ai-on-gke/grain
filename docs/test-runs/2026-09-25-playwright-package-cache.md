@@ -133,7 +133,7 @@ Comprehensive test run and end-to-end verification for Transparent Package Cache
 === RUN   TestPlaywrightDNSInterception
 --- PASS: TestPlaywrightDNSInterception (0.00s)
 PASS
-ok  	github.com/bwsalmon/grain/pkg/pkgcache	0.018s
+ok  	github.com/ai-on-gke/grain/pkg/pkgcache	0.018s
 ```
 
 ---

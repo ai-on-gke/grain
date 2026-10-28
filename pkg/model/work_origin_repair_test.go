@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/model/sqlite/sqlitetest"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 )
 
 // fileWithOrigin files task id as parent's proposal (or nobody's, for

@@ -54,7 +54,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // SandboxKeyPath is where the minted key lands in the sandbox --

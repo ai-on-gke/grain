@@ -25,9 +25,9 @@ import (
 
 	"google.golang.org/api/idtoken"
 
-	"github.com/bwsalmon/grain/pkg/procgroup"
-	"github.com/bwsalmon/grain/pkg/tunnel/mux"
-	"github.com/bwsalmon/grain/pkg/tunnel/wsupgrade"
+	"github.com/ai-on-gke/grain/pkg/procgroup"
+	"github.com/ai-on-gke/grain/pkg/tunnel/mux"
+	"github.com/ai-on-gke/grain/pkg/tunnel/wsupgrade"
 )
 
 // Daemon is the remote executor side: it runs on a host separate from the Grain

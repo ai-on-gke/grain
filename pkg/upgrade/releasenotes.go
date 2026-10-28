@@ -30,8 +30,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/releasenotes"
-	"github.com/bwsalmon/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/releasenotes"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // NotInThisBuild is what the pane says for a target with no notes to

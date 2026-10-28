@@ -46,7 +46,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github"
 )
 
 // baseComparisonPointer is what pull_request_status and wait_for_checks

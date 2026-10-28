@@ -19,11 +19,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/imagesigning"
-	"github.com/bwsalmon/grain/pkg/capability/packagepublish"
-	"github.com/bwsalmon/grain/pkg/capability/registrypush"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
+	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
+	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // ciOnlyIDs is the capabilities this whole file is about, named from the

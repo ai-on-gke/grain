@@ -6,7 +6,7 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // cmdGCPKey is `grain gcp-key`: the deployment's named GCP keys, each

@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/bwsalmon/grain/pkg/attest"
+	"github.com/ai-on-gke/grain/pkg/attest"
 )
 
 // verify is `grit verify -key KEY.pem [-tree SHA256 -git-tree ID

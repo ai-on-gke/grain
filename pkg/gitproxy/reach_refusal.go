@@ -15,7 +15,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // TeamCredentials is which named credential a team uses for a

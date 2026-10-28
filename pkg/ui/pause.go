@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // AgentPause is implemented by the dispatch gate an agent's own usage

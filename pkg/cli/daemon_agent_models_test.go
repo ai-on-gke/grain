@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 )
 
 // stubAgy writes an executable that answers `agy models` and `agy --help`

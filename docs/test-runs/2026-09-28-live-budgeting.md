@@ -113,7 +113,7 @@ Key findings confirmed:
     live_budget_ledger_stress_test.go:276: Team team-beta: MaxCIJobs limit = 4, peak concurrent CI jobs observed = 2
     live_budget_ledger_stress_test.go:276: Team team-gamma: MaxCIJobs limit = 2, peak concurrent CI jobs observed = 2
 PASS
-ok  	github.com/bwsalmon/grain/tests/e2e	3.421s
+ok  	github.com/ai-on-gke/grain/tests/e2e	3.421s
 ```
 
 ---

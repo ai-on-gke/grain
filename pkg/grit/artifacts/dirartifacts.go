@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/workflows"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // DirArtifacts is the ArtifactStore a deployment gets: one directory per

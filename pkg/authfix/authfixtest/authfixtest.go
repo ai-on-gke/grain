@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/authfix"
+	"github.com/ai-on-gke/grain/pkg/authfix"
 )
 
 // Reason is what the made-up host says when it refuses a binary.

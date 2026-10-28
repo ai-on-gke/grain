@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpkey"
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets"
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets/gcpfake"
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets/gcpfake"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 func TestAccountIDIsPrefixDeploymentSetAndNumber(t *testing.T) {

@@ -39,7 +39,7 @@ package forge
 // of the whole mechanism is "grain goes back to polling", which is
 // merely expensive.
 
-import "github.com/bwsalmon/grain/pkg/github"
+import "github.com/ai-on-gke/grain/pkg/github"
 
 // Verdicts is somewhere other than the forge that knows how a commit's
 // checks ended.

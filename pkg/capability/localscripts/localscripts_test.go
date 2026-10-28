@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/localexec"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/localexec"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // stateRepo writes a declaration named name into a new state repository

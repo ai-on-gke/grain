@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func declareGoal(t *testing.T, ctx context.Context, store *model.Store, id string, d model.GoalDecl, at time.Time) {

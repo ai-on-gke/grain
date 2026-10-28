@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/actionscache"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/actionscache"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // actionsCache is this process's cache: the store, the live token

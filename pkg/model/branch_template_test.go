@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func TestFormatBranchName(t *testing.T) {

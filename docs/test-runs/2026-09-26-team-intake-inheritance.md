@@ -108,10 +108,10 @@ Test Files  147 passed (147)
 
 ### 4. Backend Go Test Suites
 ```
-ok  github.com/bwsalmon/grain/pkg/ui           39.083s
-ok  github.com/bwsalmon/grain/pkg/orchestrator 44.586s
-ok  github.com/bwsalmon/grain/pkg/dispatch      6.165s
-ok  github.com/bwsalmon/grain/pkg/model         4.218s
+ok  github.com/ai-on-gke/grain/pkg/ui           39.083s
+ok  github.com/ai-on-gke/grain/pkg/orchestrator 44.586s
+ok  github.com/ai-on-gke/grain/pkg/dispatch      6.165s
+ok  github.com/ai-on-gke/grain/pkg/model         4.218s
 ```
 
 ---

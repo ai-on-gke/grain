@@ -62,23 +62,17 @@ RELEASE := $(shell bash scripts/build-version.sh 2>/dev/null)
 endif
 EDITION ?=
 
-# The main bin/grain is built from. cmd/grain is core grain alone, and
-# google/cmd/grain is the same command (pkg/cli) with the Google-internal
-# registrations linked in (google/README.md). Every image and installer
-# built out of this Makefile shipped the Google-linked grain before the
-# two mains existed, and still does until they are pointed at the main
-# they want (google/README.md's split plan, step 3): MAIN_grain=./cmd/grain
-# builds core grain here. `make image` passes it on to the Dockerfile as
-# MAIN_GRAIN, which is how scripts/release-images.sh builds both of its
-# daemon images, ghcr.io/bwsalmon/grain/grain from ./cmd/grain and
-# ghcr.io/bwsalmon/grain/google-grain from ./google/cmd/grain.
-MAIN_grain ?= ./google/cmd/grain
+# The main bin/grain is built from: cmd/grain, core grain. A build that
+# links registrations of its own into the same command (pkg/cli) has a
+# main of its own and names it here. `make image` passes it on to the
+# Dockerfile as MAIN_GRAIN.
+MAIN_grain ?= ./cmd/grain
 LDFLAGS := $(strip \
-	$(if $(RELEASE),-X github.com/bwsalmon/grain/pkg/version.Release=$(RELEASE),) \
-	$(if $(EDITION),-X github.com/bwsalmon/grain/pkg/version.Edition=$(EDITION),) \
-	$(if $(SANDBOX_IMAGE),-X github.com/bwsalmon/grain/pkg/daemon.DefaultSandboxImage=$(SANDBOX_IMAGE),) \
-	$(if $(K8S_SANDBOX_IMAGE),-X github.com/bwsalmon/grain/pkg/cli.defaultK8sSandboxImage=$(K8S_SANDBOX_IMAGE),) \
-	$(if $(GRAIN_IMAGE_REF),-X github.com/bwsalmon/grain/pkg/daemon.DefaultGrainImage=$(GRAIN_IMAGE_REF),))
+	$(if $(RELEASE),-X github.com/ai-on-gke/grain/pkg/version.Release=$(RELEASE),) \
+	$(if $(EDITION),-X github.com/ai-on-gke/grain/pkg/version.Edition=$(EDITION),) \
+	$(if $(SANDBOX_IMAGE),-X github.com/ai-on-gke/grain/pkg/daemon.DefaultSandboxImage=$(SANDBOX_IMAGE),) \
+	$(if $(K8S_SANDBOX_IMAGE),-X github.com/ai-on-gke/grain/pkg/cli.defaultK8sSandboxImage=$(K8S_SANDBOX_IMAGE),) \
+	$(if $(GRAIN_IMAGE_REF),-X github.com/ai-on-gke/grain/pkg/daemon.DefaultGrainImage=$(GRAIN_IMAGE_REF),))
 
 # --- Containerised build ----------------------------------------------
 #

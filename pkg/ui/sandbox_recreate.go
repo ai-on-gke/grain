@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/bwsalmon/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/apierror"
 )
 
 // SandboxRecreation is one run's rebuilt sandbox as

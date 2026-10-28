@@ -13,8 +13,8 @@ package orchestrator_test
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/lifecycle"
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/lifecycle"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // A serving sandbox is something a registry can serve a version from.

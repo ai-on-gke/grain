@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 func TestCapabilityServersAreConfiguredAllowedAndAdmitted(t *testing.T) {

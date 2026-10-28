@@ -10,8 +10,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 const capabilityServersUsage = `usage: grain capability-servers <list|add|remove|enable|disable|bind-secret> [args]

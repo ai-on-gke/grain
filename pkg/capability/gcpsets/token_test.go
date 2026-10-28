@@ -14,7 +14,7 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 
-	"github.com/bwsalmon/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
 )
 
 // googleFake is Google's token endpoint and enough of IAM to list a

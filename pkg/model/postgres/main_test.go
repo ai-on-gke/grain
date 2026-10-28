@@ -3,7 +3,7 @@ package postgres_test
 import (
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/model/postgres/postgrestest"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 )
 
 // TestMain stops the embedded server postgrestest may have started, so it

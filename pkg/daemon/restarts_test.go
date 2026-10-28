@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/systemlog"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
 )
 
 // fakeJournal stands in for pkg/systemlog.Journalctl -- the lines a

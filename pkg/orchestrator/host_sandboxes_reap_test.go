@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 func TestHostSandboxesReapOrphansRemovesWhatAPreviousProcessLeft(t *testing.T) {

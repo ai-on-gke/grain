@@ -61,7 +61,7 @@ var packageResolvingSubcommands = map[string]bool{
 // and `/tmp/grain-connect/main.go` have no dotted host at their head and
 // do not match, which is the point -- those are directory and file
 // targets, and they are not what can go missing from the module graph.
-// Neither does the `github.com/bwsalmon/grain/pkg/version.Commit=abc123`
+// Neither does the `github.com/ai-on-gke/grain/pkg/version.Commit=abc123`
 // inside an -ldflags -X, because `=` is not in the alphabet and the match
 // has to cover the whole word.
 // A `/...` wildcard is trimmed before the match rather than spelled as
@@ -407,7 +407,7 @@ func TestTheGoCommandScannerFindsATargetInEveryFormTheTreeUsesOne(t *testing.T) 
 		want: nil,
 	}, {
 		name: "an -ldflags -X names a package but does not build it",
-		text: `go build -ldflags "-X github.com/bwsalmon/grain/pkg/version.Commit=abc123" ./cmd/grain`,
+		text: `go build -ldflags "-X github.com/ai-on-gke/grain/pkg/version.Commit=abc123" ./cmd/grain`,
 		want: nil,
 	}, {
 		name: "a comment about a build is not a build",

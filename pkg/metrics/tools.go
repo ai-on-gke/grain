@@ -26,7 +26,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Counts summarises a series of plain numbers -- calls in a run, pushes

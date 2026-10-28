@@ -2,13 +2,13 @@ package ui_test
 
 import (
 	"context"
-	"github.com/bwsalmon/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/capability/protocol"
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 const usageWorkflow = `name: deploy

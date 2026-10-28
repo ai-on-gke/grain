@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/grain/pkg/designdoc"
+	"github.com/ai-on-gke/grain/pkg/designdoc"
 )
 
 const docPath = "docs/design/foo/README.md"

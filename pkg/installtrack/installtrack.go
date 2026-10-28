@@ -18,7 +18,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Track identifies which release/repository track a Grain deployment belongs to.

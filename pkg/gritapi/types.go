@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/attest"
-	"github.com/bwsalmon/grain/pkg/treeid"
+	"github.com/ai-on-gke/grain/pkg/attest"
+	"github.com/ai-on-gke/grain/pkg/treeid"
 )
 
 // ClientHeader is the HTTP header carrying `<id>.<secret>` client tokens

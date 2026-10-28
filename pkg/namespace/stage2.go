@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/safepath"
+	"github.com/ai-on-gke/grain/pkg/safepath"
 )
 
 // RefuseCapability returns an ErrForbidden error with the actionable refusal

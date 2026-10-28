@@ -7,7 +7,7 @@ The `host-script` capability server runs bash scripts that you, the operator, wr
 In **Settings → Capabilities → Capability servers**, add a stdio server:
 
 ```json
-"https://github.com/bwsalmon/grain/capabilities/host-script": {
+"https://github.com/ai-on-gke/grain/capabilities/host-script": {
   "command": "grain",
   "args": ["capability", "host-script"],
   "env": { "DEPLOY_TOKEN": "$secret:deploy-token" }
@@ -94,7 +94,7 @@ A test runs in a throwaway grant the server mints and releases around the call, 
 
 ## 4. Grant it
 
-Grant `https://github.com/bwsalmon/grain/capabilities/host-script#host-script` with `with: {script: deploy}`. The grant form offers the configured names as a choice. A task may hold several such grants, one per script. In the sandbox:
+Grant `https://github.com/ai-on-gke/grain/capabilities/host-script#host-script` with `with: {script: deploy}`. The grant form offers the configured names as a choice. A task may hold several such grants, one per script. In the sandbox:
 
 ```console
 $ grain host-script --list

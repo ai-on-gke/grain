@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // SandboxSnapshot is one live sandbox's status, as GET /api/sandboxes

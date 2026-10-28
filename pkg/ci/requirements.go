@@ -3,8 +3,8 @@ package ci
 import (
 	"strings"
 
-	"github.com/bwsalmon/grain/pkg/model"
-	"github.com/bwsalmon/grain/pkg/workflows"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // What a job requires and what it is given moved to pkg/workflows

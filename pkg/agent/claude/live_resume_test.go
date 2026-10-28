@@ -77,7 +77,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 func TestLiveClaudeResumesASessionAcrossExecs(t *testing.T) {

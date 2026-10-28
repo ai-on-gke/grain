@@ -7,8 +7,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/capability/servers"
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // changeTargetCheckTimeout bounds one filing-time live check of a change

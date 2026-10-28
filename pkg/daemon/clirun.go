@@ -34,7 +34,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // CLIRunResolution is where one framework's CLI runs, and why.

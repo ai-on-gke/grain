@@ -1052,7 +1052,7 @@ export function SandboxBudgetPanel({ budget, overcommit, reconciliation }) {
 }
 
 const STANDING_SANDBOXES_DOC =
-  "https://github.com/bwsalmon/grain/blob/main/docs/repo-controllers-and-environments.md#3-long-running-standing-sandbox-hosting";
+  "https://github.com/ai-on-gke/grain/blob/main/docs/repo-controllers-and-environments.md#3-long-running-standing-sandbox-hosting";
 
 // StandingSandboxesPanel is the standing sandboxes grain/config declares
 // and the daemon keeps running (standingSandboxes on GET /api/sandboxes):

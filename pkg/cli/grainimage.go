@@ -33,7 +33,7 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/bwsalmon/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 )
 
 func grainImageCmd(args []string) {

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ran starts an attempt at `at` and, when finished is non-nil, ends it

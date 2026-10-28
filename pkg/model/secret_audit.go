@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bwsalmon/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // SecretAuditEntry records one resolution of a secret in the deployment.
