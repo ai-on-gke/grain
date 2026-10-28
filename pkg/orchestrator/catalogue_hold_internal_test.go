@@ -15,6 +15,7 @@
 package orchestrator
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,22 @@ func TestRelayedProposalHoldsARequiresPersonGrant(t *testing.T) {
 		t.Fatalf("a proposal holding a requires_person grant was approved by %+v", got.Approval.Actor)
 	}
 	if !strings.Contains(got.Body, "requires_person") {
+		t.Fatalf("body %q does not say why it waits for a person", got.Body)
+	}
+	// A grant the run asked for that the catalogue refuses is kept, and
+	// waits for a person too: dispatch re-judges only refusals, so a
+	// catalogue loosened later must not let it run on its proposer's
+	// permission.
+	got = relay(t, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"self-debug": {Restrictions: &model.CapabilityRestrictions{Kinds: model.Patterns{}}},
+	}})
+	if got.Approval != nil {
+		t.Fatalf("a proposal asking for a grant the catalogue refuses was approved by %+v", got.Approval.Actor)
+	}
+	if !slices.ContainsFunc(got.Grants, func(g model.Grant) bool { return g.Capability == "self-debug" }) {
+		t.Fatalf("the refused grant the run asked for was dropped rather than kept for dispatch to hold: %+v", got.Grants)
+	}
+	if !strings.Contains(got.Body, "refuses") {
 		t.Fatalf("body %q does not say why it waits for a person", got.Body)
 	}
 }
