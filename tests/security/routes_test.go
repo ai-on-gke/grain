@@ -421,9 +421,10 @@ var routeAuthorization = map[string]authLevel{
 	// binaries are fetched by a machine with nothing but curl, and the
 	// connection authenticates with an executor token in its own
 	// handshake, after the upgrade -- not with a principal.
-	"GET /api/executors":              trusted,
-	"GET /api/executors/install.sh":   public,
-	"GET /install-executor.sh":        public,
+	"GET /api/executors":                  trusted,
+	"GET /api/model-servers/install.sh":   public,
+	"GET /api/executors/install.sh":       public,
+	"GET /install-executor.sh":            public,
 	"GET /api/executors/bin/{binary}": public,
 	"GET /install/{os}/{arch}":        public,
 	"GET /_grain/executor":            public,

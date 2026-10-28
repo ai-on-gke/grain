@@ -303,9 +303,9 @@ test.describe("2026-10-22 UI fixes, together on one tip", () => {
     );
     await page.goto("/system/sandboxes");
     await expect(
-      page.getByText(/Connected executors could not be read/),
+      page.getByText(/Model servers could not be read/),
     ).toBeVisible();
-    await expect(page.getByText("No remote executors connected.")).toHaveCount(
+    await expect(page.getByText("No model servers connected.")).toHaveCount(
       0,
     );
     await expect(

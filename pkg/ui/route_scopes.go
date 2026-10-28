@@ -331,6 +331,7 @@ var routeScopes = map[string]APIScope{
 	"POST /api/pipeline-pause":                                             "dispatch:write",
 	"DELETE /api/pipeline-pause":                                           "dispatch:write",
 	"GET /api/executors":                                                   "deployment:read",
+	"GET /api/model-servers/install.sh":                                    "internal",
 	"GET /api/executors/install.sh":                                        "internal",
 	"GET /install-executor.sh":                                             "internal",
 	"GET /api/executors/bin/{binary}":                                      "internal",

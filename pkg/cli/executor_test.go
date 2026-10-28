@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -22,6 +23,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"flag"
 	"io"
 	"math/big"
 	"net"
@@ -37,6 +39,32 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/modelexec"
 )
+
+func TestModelServerUsageAndAliases(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	fs := flag.NewFlagSet("grain model-server", flag.ContinueOnError)
+	fs.SetOutput(&buf)
+	writeExecutorUsage(fs)
+	out := buf.String()
+	for _, want := range []string{
+		"Usage: grain model-server [flags]",
+		"grain executor [flags] (alias)",
+		"grain modelexec [flags] (alias)",
+		"./scripts/run-model-server.sh",
+		"/api/model-servers/install.sh",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("writeExecutorUsage missing %q in:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(usage, "grain model-server [flags]") {
+		t.Errorf("CLI usage missing 'grain model-server [flags]':\n%s", usage)
+	}
+	if !strings.Contains(usage, "aliases: executor, modelexec") {
+		t.Errorf("CLI usage missing 'aliases: executor, modelexec':\n%s", usage)
+	}
+}
 
 func TestExecutorSubcommandIntegration(t *testing.T) {
 	t.Parallel()
