@@ -114,7 +114,7 @@ func contain(list []string, want string) bool {
 func TestTheExportCarriesTrackedSourceAndNothingElse(t *testing.T) {
 	src := t.TempDir()
 	gitIn(t, src, "init", "-q", ".")
-	write(t, src, "go.mod", "module github.com/bwsalmon/grain\n")
+	write(t, src, "go.mod", "module github.com/ai-on-gke/grain\n")
 	write(t, src, "cmd/grain/main.go", "package main\n")
 	gitIn(t, src, "add", ".")
 	gitIn(t, src, "commit", "-q", "-m", "source")
@@ -163,7 +163,7 @@ func TestTheExportBakesAShallowHistoryOfItsOwn(t *testing.T) {
 	src := t.TempDir()
 	gitIn(t, src, "init", "-q", ".")
 	for i := 0; i < 5; i++ {
-		write(t, src, "go.mod", fmt.Sprintf("module github.com/bwsalmon/grain // %d\n", i))
+		write(t, src, "go.mod", fmt.Sprintf("module github.com/ai-on-gke/grain // %d\n", i))
 		gitIn(t, src, "add", ".")
 		date := fmt.Sprintf("@%d +0000", 1700000000+i)
 		cmd := exec.Command("git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", fmt.Sprint("commit ", i))
@@ -172,7 +172,7 @@ func TestTheExportBakesAShallowHistoryOfItsOwn(t *testing.T) {
 			t.Fatalf("git commit: %v\n%s", err, out)
 		}
 	}
-	gitIn(t, src, "remote", "add", "origin", "https://x-access-token:ghs_secret@github.com/bwsalmon/grain.git")
+	gitIn(t, src, "remote", "add", "origin", "https://x-access-token:ghs_secret@github.com/ai-on-gke/grain.git")
 	gitIn(t, src, "branch", "other")
 	gitIn(t, src, "tag", "v1")
 
@@ -225,7 +225,7 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 func TestTheExportIsTheWorkingTreeRatherThanTheCommit(t *testing.T) {
 	src := t.TempDir()
 	gitIn(t, src, "init", "-q", ".")
-	write(t, src, "go.mod", "module github.com/bwsalmon/grain\n")
+	write(t, src, "go.mod", "module github.com/ai-on-gke/grain\n")
 	write(t, src, "pkg/version/version.go", "package version // committed\n")
 	write(t, src, "docs/gone.md", "removed since\n")
 	gitIn(t, src, "add", ".")
@@ -260,7 +260,7 @@ func TestTheExportIsTheWorkingTreeRatherThanTheCommit(t *testing.T) {
 // list anybody chose.
 func TestADirectoryWithNoRepositoryFallsBackToACopyAndSaysSo(t *testing.T) {
 	src := t.TempDir()
-	write(t, src, "go.mod", "module github.com/bwsalmon/grain\n")
+	write(t, src, "go.mod", "module github.com/ai-on-gke/grain\n")
 	write(t, src, "bin/grain", "a build output")
 	write(t, src, "ui/node_modules/vite/index.js", "a package manager's tree")
 
@@ -292,7 +292,7 @@ func TestADirectoryWithNoRepositoryFallsBackToACopyAndSaysSo(t *testing.T) {
 // arrive before a deployment's start timeout does.
 func TestAnOversizedExportFailsTheBuildAndNamesWhatIsInIt(t *testing.T) {
 	src := t.TempDir()
-	write(t, src, "go.mod", "module github.com/bwsalmon/grain\n")
+	write(t, src, "go.mod", "module github.com/ai-on-gke/grain\n")
 	write(t, src, "cache/blob", strings.Repeat("x", 3<<20))
 
 	_, out, err := exportSource(t, src, "GRAIN_SOURCE_EXPORT_MAX_MB=1")
@@ -363,7 +363,7 @@ func unreadableByOthers(t *testing.T, dir string) []string {
 func TestTheExportIsReadableByAnAccountThatDidNotBuildIt(t *testing.T) {
 	src := t.TempDir()
 	gitIn(t, src, "init", "-q", ".")
-	write(t, src, "go.mod", "module github.com/bwsalmon/grain\n")
+	write(t, src, "go.mod", "module github.com/ai-on-gke/grain\n")
 	write(t, src, "pkg/capability/selfdebug/selfdebug.go", "package selfdebug\n")
 	write(t, src, "docs/agent-ergonomics.md", "# ergonomics\n")
 	write(t, src, "scripts/setup.sh", "#!/usr/bin/env bash\n")
@@ -416,7 +416,7 @@ func TestTheExportIsReadableByAnAccountThatDidNotBuildIt(t *testing.T) {
 // that make the tree unreadable to the account the daemon runs as.
 func TestTheFallbackCopyIsReadableToo(t *testing.T) {
 	src := t.TempDir()
-	write(t, src, "go.mod", "module github.com/bwsalmon/grain\n")
+	write(t, src, "go.mod", "module github.com/ai-on-gke/grain\n")
 	write(t, src, "pkg/orchestrator/run.go", "package orchestrator\n")
 	if err := os.Chmod(filepath.Join(src, "pkg", "orchestrator"), 0o700); err != nil {
 		t.Fatal(err)

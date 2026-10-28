@@ -52,7 +52,7 @@ var forbidden = map[string]string{
 // half of the message when the import is three packages deep.
 func TestForgeDoesNotDependOnTasks(t *testing.T) {
 	const root = "github.com/ai-on-gke/grain/pkg/forge"
-	const module = "github.com/bwsalmon/grain/"
+	const module = "github.com/ai-on-gke/grain/"
 
 	seen := map[string]bool{}
 	var walk func(path string, from []string)

@@ -27,7 +27,7 @@ import (
 	"testing"
 )
 
-const module = "github.com/bwsalmon/grain/"
+const module = "github.com/ai-on-gke/grain/"
 
 // gritAllowed is every package of this module that grit -- cmd/grit and
 // pkg/grit/... -- may link (docs/design/grit-split.md, "The import

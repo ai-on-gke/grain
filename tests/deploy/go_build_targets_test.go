@@ -53,7 +53,7 @@ import (
 
 // mainModule is this repository's own module path. A target under it is
 // resolved from the checkout and needs no requirement at all.
-const mainModule = "github.com/bwsalmon/grain"
+const mainModule = "github.com/ai-on-gke/grain"
 
 // packageResolvingSubcommands are the go subcommands whose arguments can
 // be import paths, and which therefore fail on a module go.mod does not

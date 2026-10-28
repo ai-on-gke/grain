@@ -1007,7 +1007,7 @@ func TestEveryBuildPathAgreesTheModuleRootIsTheRepositoryRoot(t *testing.T) {
 // keeps the inherited label.
 func TestBothPublishedImagesClaimThisRepository(t *testing.T) {
 	if !strings.Contains(read(t, "Dockerfile"),
-		`org.opencontainers.image.source="https://github.com/bwsalmon/grain"`) {
+		`org.opencontainers.image.source="https://github.com/ai-on-gke/grain"`) {
 		t.Error("the grain image does not claim this repository")
 	}
 }

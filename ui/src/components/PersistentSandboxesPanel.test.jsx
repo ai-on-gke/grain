@@ -129,7 +129,7 @@ describe("PersistentSandboxesPanel", () => {
     });
     expect(docsLink).toHaveAttribute(
       "href",
-      "https://github.com/bwsalmon/grain/blob/main/docs/persistent-sandboxes.md",
+      "https://github.com/ai-on-gke/grain/blob/main/docs/persistent-sandboxes.md",
     );
   });
 
