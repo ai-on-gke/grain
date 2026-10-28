@@ -677,4 +677,3 @@ func (s SandboxAccessSpec) ServerTLSConfig() (*tls.Config, error) {
 		MinVersion:   tls.VersionTLS13,
 	}, nil
 }
-
