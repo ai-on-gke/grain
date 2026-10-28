@@ -164,7 +164,7 @@ func (s *Server) release(id, why string) {
 // spool, and the connection is attached to it from cursor zero, with
 // stdin. When the connection drops the process carries on until it ends
 // or reaches its deadline; only its stdin is closed.
-func (s *Server) startDetached(ctx context.Context, conn *net.UnixConn, req *Request, spec *Spec) {
+func (s *Server) startDetached(ctx context.Context, conn net.Conn, req *Request, spec *Spec) {
 	deadline := time.Now().Add(spec.MaxDuration)
 	if !req.Deadline.IsZero() && req.Deadline.Before(deadline) {
 		deadline = req.Deadline
@@ -278,7 +278,7 @@ func writeExitFile(dir string, e Exit) error {
 //
 // The connection going away, or a newer attach superseding this one,
 // ends the stream and leaves the process running.
-func (s *Server) attach(conn *net.UnixConn, p *proc, cur Cursor, stdin io.WriteCloser) {
+func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser) {
 	s.mu.Lock()
 	p.attachGen++
 	gen := p.attachGen
@@ -381,7 +381,7 @@ func (s *Server) attach(conn *net.UnixConn, p *proc, cur Cursor, stdin io.WriteC
 // control reads a detached process's connection: stdin, its close, and
 // signals, until the connection ends. stdin is closed then -- input that
 // arrives while no daemon is attached is not kept.
-func (s *Server) control(conn *net.UnixConn, info Process, stdin io.WriteCloser) {
+func (s *Server) control(conn net.Conn, info Process, stdin io.WriteCloser) {
 	var once sync.Once
 	stdinCh := make(chan []byte, stdinBuffer)
 	closeStdin := func() {}

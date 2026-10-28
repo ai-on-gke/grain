@@ -79,6 +79,29 @@ export function locationsFor(r, current) {
   }));
 }
 
+// HostdWhere is where grain hostd is, after "grain hostd is up": at its
+// socket, or -- for one on another machine that dials in to this daemon
+// (grain hostd -server) -- the host it connected from.
+function HostdWhere({ executor }) {
+  if (!executor.remote) {
+    return (
+      <>
+        {" "}
+        at <code>{executor.socket}</code>
+      </>
+    );
+  }
+  const host = executor.hostd?.remote?.host;
+  return host ? (
+    <>
+      {" "}
+      on <code>{host}</code>, connected to this daemon
+    </>
+  ) : (
+    " and connected to this daemon"
+  );
+}
+
 // HostExecutorNotice says what "host" means for this deployment when it
 // is not the bare machine: why there is no host to run on (Kubernetes, or
 // a container with no grain hostd), or whether grain hostd answers.
@@ -104,7 +127,8 @@ export function HostExecutorNotice({ executor }) {
     // carry on either way.
     return (
       <Alert severity="warning" data-testid="cli-run-hostd-status">
-        grain hostd is up at <code>{executor.socket}</code>
+        grain hostd is up
+        <HostdWhere executor={executor} />
         {build}, but{" "}
         {hostd.updating
           ? "it is updating: new host runs wait until it is back, and runs already going carry on."
@@ -118,9 +142,41 @@ export function HostExecutorNotice({ executor }) {
       : ", offering nothing";
     return (
       <Alert severity="success" data-testid="cli-run-hostd-status">
-        grain hostd is up at <code>{executor.socket}</code>
+        grain hostd is up
+        <HostdWhere executor={executor} />
         {build}
         {offers}. Host runs go through it.
+      </Alert>
+    );
+  }
+  if (executor.remote && !hostd?.remote?.connected) {
+    // A hostd on another machine dials in (hostd -server); none has, or
+    // the one that did has dropped and not yet reconnected.
+    return (
+      <Alert severity="warning" data-testid="cli-run-hostd-status">
+        This daemon takes a grain hostd that dials in to it, but none is
+        connected. On the host, run{" "}
+        <code>
+          grain hostd -server &lt;this daemon&apos;s URL&gt; -token-file &lt;the
+          hostd token&gt;
+        </code>
+        . A CLI set to host fails its runs until it connects.
+      </Alert>
+    );
+  }
+  if (executor.remote) {
+    const host = hostd.remote.host;
+    return (
+      <Alert severity="warning" data-testid="cli-run-hostd-status">
+        grain hostd is connected
+        {host ? (
+          <>
+            {" "}
+            from <code>{host}</code>
+          </>
+        ) : null}{" "}
+        but is not answering{hostd.error ? ` (${hostd.error})` : ""}. A CLI set
+        to host fails its runs until it does.
       </Alert>
     );
   }

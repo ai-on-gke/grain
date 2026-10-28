@@ -69,12 +69,15 @@ func (s *Server) handleExecutorInstallScript(w http.ResponseWriter, r *http.Requ
 // single-tenant daemon serves them without its access code
 // (singleTenantOpenRoute) -- and does not count the executor or IAP
 // token pkg/modelexec sends as a bearer as a guess at it.
+//
+// /api/hostd/connect is a grain hostd dialing in the same way, let in
+// only for the hostd token it presents (hostd.Remote.ServeHTTP).
 func executorBootstrapRoute(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
 	switch r.URL.Path {
-	case "/_grain/executor", "/api/executors/connect", "/api/executors/stream",
+	case "/_grain/executor", "/api/executors/connect", "/api/executors/stream", "/api/hostd/connect",
 		"/install-executor.sh", "/api/executors/install.sh":
 		return true
 	}
@@ -164,6 +167,18 @@ func (s *Server) handleExecutorConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.tasks.Config.ExecutorServer.HandleConn(r.Context(), wrappedConn)
+}
+
+// handleHostdConnect hands a grain hostd's upgrade of /api/hostd/connect
+// to Config.HostdRemote, which authenticates it with the hostd token and
+// serves the session host CLIs and run: host capability servers start
+// over.
+func (s *Server) handleHostdConnect(w http.ResponseWriter, r *http.Request) {
+	if s.tasks == nil || s.tasks.Config.HostdRemote == nil {
+		writeError(w, http.StatusServiceUnavailable, apierror.Public("this daemon takes no grain hostd dialing in: start it with -hostd-token-file"))
+		return
+	}
+	s.tasks.Config.HostdRemote.ServeHTTP(w, r)
 }
 
 // ExecutorServer is the daemon side of remote execution that

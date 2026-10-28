@@ -16,9 +16,11 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -27,7 +29,9 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
@@ -35,7 +39,9 @@ import (
 // container-mode daemon starts allowlisted host CLIs and capability
 // servers through (pkg/hostd). It runs on the bare machine as the user
 // grain was installed for, never as root, and opens no store and no
-// network port.
+// network port. With -server it also dials out to a daemon that cannot
+// reach its socket -- one in a GKE cluster -- and serves that daemon
+// over the connection (hostd.Server.Remote).
 func hostdCmd(args []string) {
 	fs := flag.NewFlagSet("hostd", flag.ExitOnError)
 	socket := fs.String("socket", hostd.DefaultSocketPath, "the unix socket to listen on (mode 0600); bind mount it into the daemon's container at the same path")
@@ -55,6 +61,14 @@ func hostdCmd(args []string) {
 		"only reported when it differs from the default. Run as root on the host, by grain-hostd.service before each start and by the upgrade step; "+
 		"hostd re-reads the allowlist on every request, so nothing needs restarting")
 	command := fs.String("command", hostd.DefaultGrainCommand, "with -ensure-builtins: the grain binary on the host the added entries run")
+	server := fs.String("server", "", "the URL of a grain daemon this host cannot share a socket with (https://grain.example.com, http://127.0.0.1:4242): "+
+		"hostd keeps a connection open to its "+hostd.RemotePath+" and serves the daemon over it, as well as listening on -socket (set -socket= for no local listener)")
+	tokenFile := fs.String("token-file", "", "with -server: the file holding the shared hostd token the daemon takes (its -hostd-token-file); "+
+		"$GRAIN_HOSTD_TOKEN or $GRAIN_TOKEN when unset")
+	iapAudience := fs.String("iap-audience", "", "with -server: the OAuth client ID of the GCP Identity-Aware Proxy in front of the daemon, to send its OIDC token")
+	useTLS := fs.Bool("tls", false, "with -server: dial over TLS even for an http:// URL (an https:// one always is)")
+	caFile := fs.String("ca-file", "", "with -server: PEM file of the certificate authority to verify the daemon's certificate against. Implies -tls")
+	serverName := fs.String("tls-server-name", "", "with -server: server name to verify the daemon's certificate against when it differs from the -server host. Implies -tls")
 	build := fs.Bool("build", false, "print this binary's build and exit: what a hostd asks of the version its current link names")
 	_ = fs.Parse(args)
 
@@ -118,6 +132,15 @@ func hostdCmd(args []string) {
 		}
 		return
 	}
+	var remote *hostd.Dialer
+	if *server != "" {
+		d, err := hostdDialer(*server, *tokenFile, *iapAudience, *useTLS, *caFile, *serverName)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "grain hostd: "+err.Error())
+			os.Exit(2)
+		}
+		remote = d
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 	srv := &hostd.Server{
@@ -127,6 +150,9 @@ func hostdCmd(args []string) {
 		DisconnectGrace: *grace,
 		Build:           version.Get().Release,
 		CurrentLink:     hostd.CurrentLinkFor(os.Args[0]),
+	}
+	if remote != nil {
+		srv.Remote = remote.Dial
 	}
 	usr1 := make(chan os.Signal, 1)
 	signal.Notify(usr1, syscall.SIGUSR1)
@@ -139,6 +165,44 @@ func hostdCmd(args []string) {
 		fmt.Fprintln(os.Stderr, "grain hostd: "+err.Error())
 		os.Exit(1)
 	}
+}
+
+// hostdDialer is -server's way out to the daemon: the shared token from
+// -token-file or the environment, IAP's OIDC token when -iap-audience
+// names one, and TLS as grain executor's flags set it.
+func hostdDialer(server, tokenFile, iapAudience string, useTLS bool, caFile, serverName string) (*hostd.Dialer, error) {
+	var token string
+	if tokenFile != "" {
+		t, err := daemon.ReadTokenFile(tokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading -token-file: %w", err)
+		}
+		token = t
+	}
+	for _, env := range []string{"GRAIN_HOSTD_TOKEN", "GRAIN_TOKEN"} {
+		if token == "" {
+			token = strings.TrimSpace(os.Getenv(env))
+		}
+	}
+	if token == "" {
+		return nil, errors.New("-server needs the shared hostd token the daemon takes: -token-file, or $GRAIN_HOSTD_TOKEN")
+	}
+	host, _ := os.Hostname()
+	d := &hostd.Dialer{Server: server, Token: token, Host: host, Build: version.Get().Release}
+	if useTLS || caFile != "" || serverName != "" {
+		cfg, err := executorClientTLS(caFile, serverName)
+		if err != nil {
+			return nil, err
+		}
+		d.TLS = cfg
+	}
+	if iapAudience != "" {
+		d.IDToken = modelexec.NewIAPTokenProvider(iapAudience).Token
+	}
+	if _, err := url.Parse(server); err != nil || !strings.Contains(server, "://") {
+		return nil, fmt.Errorf("-server %q is not a URL like https://grain.example.com", server)
+	}
+	return d, nil
 }
 
 // ensureHostdBuiltins is -ensure-builtins: hostd.EnsureBuiltins with this

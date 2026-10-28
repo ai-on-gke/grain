@@ -151,6 +151,8 @@ Usage of grain daemon:
     	dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, -executor-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed
   -hostd-socket string
     	grain hostd's unix socket, for a daemon in a container whose host CLIs run through hostd; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host
+  -hostd-token-file string
+    	file holding the shared token a grain hostd on another machine dials in to /api/hostd/connect with (grain hostd -server <this daemon's URL> -token-file ...): its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset; neither means no hostd may dial in
   -iap-backend-service string
     	GCP Compute backend service name for dynamic IAP IAM reconciliation; empty disables IAP reconciliation (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -iap-resource string

@@ -682,6 +682,7 @@ var singleTenantOpenRoutes = map[string]string{
 	"GET /_grain/executor":               "remote execution",
 	"GET /api/executors/connect":         "remote execution",
 	"GET /api/executors/stream":          "remote execution",
+	"GET /api/hostd/connect":             "a grain hostd dialing in, with the hostd token",
 }
 
 // singleTenantGatedPublicRoutes are the public routes a single-tenant

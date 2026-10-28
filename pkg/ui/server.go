@@ -580,6 +580,8 @@ func (s *Server) routes() {
 	s.route("GET /_grain/executor", s.handleExecutorConnect)
 	s.route("GET /api/executors/connect", s.handleExecutorConnect)
 	s.route("GET /api/executors/stream", s.handleExecutorConnect)
+	// A grain hostd on another machine dialing in (hostd -server).
+	s.route("GET /api/hostd/connect", s.handleHostdConnect)
 
 	static, err := fs.Sub(staticFS, "static")
 	if err != nil {

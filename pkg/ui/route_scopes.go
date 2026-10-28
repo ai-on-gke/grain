@@ -338,4 +338,5 @@ var routeScopes = map[string]APIScope{
 	"GET /_grain/executor":                                                 "internal",
 	"GET /api/executors/connect":                                           "internal",
 	"GET /api/executors/stream":                                            "internal",
+	"GET /api/hostd/connect":                                               "internal",
 }
