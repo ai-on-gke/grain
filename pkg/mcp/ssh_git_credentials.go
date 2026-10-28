@@ -54,7 +54,9 @@ import (
 // the first file's byte length, which `dd bs=1 count=N` reads exactly
 // (a bigger block size could read past the boundary on a pipe).
 func ConfigureGitCredentialsOverSSH(runner remoteRunner, remoteURL, token string, identity GitIdentity) error {
-	credentials, gitconfig, err := gitCredentialFiles(remoteURL, token, identity)
+	baseIdentity := identity
+	baseIdentity.SigningKey = ""
+	credentials, gitconfig, err := gitCredentialFiles(remoteURL, token, baseIdentity)
 	if err != nil {
 		return err
 	}
@@ -63,12 +65,21 @@ func ConfigureGitCredentialsOverSSH(runner remoteRunner, remoteURL, token string
 		return err
 	}
 	stdin := credentials + gitconfig + netrc
+	script := gitCredentialsScript(len(credentials), len(gitconfig), len(netrc))
+	if identity.OrDefault().SigningKey != "" {
+		pubKey, allowedSigners, signScript, err := GitSigningFiles(remoteURL, identity, "")
+		if err != nil {
+			return err
+		}
+		stdin += pubKey + allowedSigners + signScript
+		script = gitCredentialsWithSigningScript(len(credentials), len(gitconfig), len(netrc), len(pubKey), len(allowedSigners), len(signScript))
+	}
 	// The script overwrites every file outright, so a session the
 	// transport cut off part-way is run again rather than failing the
 	// sandbox: a second run leaves exactly what one clean run would.
 	ctx := context.Background()
 	_, stderr, exitCode := kubectlgate.RetryIdempotent(ctx, func() (string, string, int) {
-		return runner.Run(ctx, []string{"sh", "-c", gitCredentialsScript(len(credentials), len(gitconfig), len(netrc))}, stdin)
+		return runner.Run(ctx, []string{"sh", "-c", script}, stdin)
 	})
 	if exitCode != 0 {
 		return fmt.Errorf("gitcredentials: writing remote .git-credentials and .gitconfig: %s", strings.TrimSpace(stderr))
@@ -104,4 +115,15 @@ func gitCredentialsScript(credentialsLen, gitconfigLen, netrcLen int) string {
 		"chmod -- 600 .git-credentials.netrc && " +
 		`printf 'netrc-optional\nnetrc-file = "%s/.git-credentials.netrc"\n' "$PWD" > .curlrc && ` +
 		"chmod -- 600 .curlrc"
+}
+
+func gitCredentialsWithSigningScript(credentialsLen, gitconfigLen, netrcLen, pubKeyLen, allowedSignersLen, signScriptLen int) string {
+	return gitCredentialsScript(credentialsLen, gitconfigLen, netrcLen) + " && " +
+		"dd of=.git-signing-key.pub bs=1 count=" + strconv.Itoa(pubKeyLen) + " status=none && " +
+		"chmod -- 600 .git-signing-key.pub && " +
+		"dd of=.git-allowed-signers bs=1 count=" + strconv.Itoa(allowedSignersLen) + " status=none && " +
+		"chmod -- 600 .git-allowed-signers && " +
+		"dd of=.git-ssh-sign bs=1 count=" + strconv.Itoa(signScriptLen) + " status=none && " +
+		"chmod -- 700 .git-ssh-sign && " +
+		`printf '[gpg]\n\tformat = ssh\n[gpg "ssh"]\n\tprogram = %s/.git-ssh-sign\n\tallowedSignersFile = %s/.git-allowed-signers\n[user]\n\tsigningkey = %s/.git-signing-key.pub\n[commit]\n\tgpgsign = true\n[tag]\n\tgpgSign = true\n' "$PWD" "$PWD" "$PWD" >> .gitconfig`
 }

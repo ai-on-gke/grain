@@ -79,8 +79,9 @@ const (
 // where `git commit` fails outright -- so the fallback belongs where the
 // file is written, not at each caller that happens to remember it.
 type GitIdentity struct {
-	Name  string
-	Email string
+	Name       string
+	Email      string
+	SigningKey string
 }
 
 // OrDefault fills each half this identity leaves empty from grain's own
@@ -97,7 +98,7 @@ type GitIdentity struct {
 // one), and it catches it as a mangled name rather than as a sandbox
 // whose git config no longer parses.
 func (i GitIdentity) OrDefault() GitIdentity {
-	i.Name, i.Email = oneLine(i.Name), oneLine(i.Email)
+	i.Name, i.Email, i.SigningKey = oneLine(i.Name), oneLine(i.Email), oneLine(i.SigningKey)
 	if i.Name == "" {
 		i.Name = DefaultGitIdentityName
 	}
@@ -124,7 +125,7 @@ func oneLine(s string) string {
 // using token as the password half of HTTP Basic auth, and commits as
 // identity (or as DefaultGitIdentity, for an identity left empty).
 func ConfigureGitCredentials(root, remoteURL, token string, identity GitIdentity) error {
-	line, gitconfig, err := gitCredentialFiles(remoteURL, token, identity)
+	line, gitconfig, err := GitCredentialFilesInDir(remoteURL, token, identity, root)
 	if err != nil {
 		return err
 	}
@@ -154,6 +155,25 @@ func ConfigureGitCredentials(root, remoteURL, token string, identity GitIdentity
 	curlrcPath := filepath.Join(root, ".curlrc")
 	if err := os.WriteFile(curlrcPath, []byte(curlrc), 0o600); err != nil {
 		return fmt.Errorf("gitcredentials: writing %s: %w", curlrcPath, err)
+	}
+
+	if identity.OrDefault().SigningKey != "" {
+		pubKey, allowedSigners, signScript, err := GitSigningFiles(remoteURL, identity, root)
+		if err != nil {
+			return err
+		}
+		signingKeyPath := filepath.Join(root, ".git-signing-key.pub")
+		if err := os.WriteFile(signingKeyPath, []byte(pubKey), 0o600); err != nil {
+			return fmt.Errorf("gitcredentials: writing %s: %w", signingKeyPath, err)
+		}
+		allowedSignersPath := filepath.Join(root, ".git-allowed-signers")
+		if err := os.WriteFile(allowedSignersPath, []byte(allowedSigners), 0o600); err != nil {
+			return fmt.Errorf("gitcredentials: writing %s: %w", allowedSignersPath, err)
+		}
+		signScriptPath := filepath.Join(root, ".git-ssh-sign")
+		if err := os.WriteFile(signScriptPath, []byte(signScript), 0o700); err != nil {
+			return fmt.Errorf("gitcredentials: writing %s: %w", signScriptPath, err)
+		}
 	}
 	return nil
 }
@@ -213,6 +233,13 @@ func CurlCredentialFiles(remoteURL, token, homeDir string) (netrc, curlrc string
 // this line is what protects the transports that have no environment of
 // grain's to rely on (a run_command inside a VM, say).
 func GitCredentialFiles(remoteURL, token string, identity GitIdentity) (credentials, gitconfig string, err error) {
+	return GitCredentialFilesInDir(remoteURL, token, identity, "")
+}
+
+// GitCredentialFilesInDir renders .git-credentials and .gitconfig, using
+// homeDir as the directory for SSH signing helper files when identity.SigningKey
+// is set (or "~" when homeDir is empty).
+func GitCredentialFilesInDir(remoteURL, token string, identity GitIdentity, homeDir string) (credentials, gitconfig string, err error) {
 	parsed, err := url.Parse(remoteURL)
 	if err != nil {
 		return "", "", fmt.Errorf("gitcredentials: parsing %q: %w", remoteURL, err)
@@ -230,7 +257,90 @@ func GitCredentialFiles(remoteURL, token string, identity GitIdentity) (credenti
 		"[credential]\n\thelper =\n\thelper = store\n[user]\n\tname = %s\n\temail = %s\n",
 		id.Name, id.Email,
 	)
+	if id.SigningKey != "" {
+		dir := homeDir
+		if dir == "" {
+			dir = "~"
+		}
+		gitconfig += fmt.Sprintf(
+			"[gpg]\n\tformat = ssh\n[gpg \"ssh\"]\n\tprogram = %s/.git-ssh-sign\n\tallowedSignersFile = %s/.git-allowed-signers\n[user]\n\tsigningkey = %s/.git-signing-key.pub\n[commit]\n\tgpgsign = true\n[tag]\n\tgpgSign = true\n",
+			dir, dir, dir,
+		)
+	}
 	return credentials, gitconfig, nil
+}
+
+// GitSigningFiles renders the public key file (.git-signing-key.pub),
+// allowed-signers file (.git-allowed-signers), and gpg.ssh.program wrapper
+// script (.git-ssh-sign) for an identity with SigningKey set.
+func GitSigningFiles(remoteURL string, identity GitIdentity, homeDir string) (signingKeyPub, allowedSigners, sshSignScript string, err error) {
+	parsed, err := url.Parse(remoteURL)
+	if err != nil {
+		return "", "", "", fmt.Errorf("gitcredentials: parsing %q: %w", remoteURL, err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", "", "", fmt.Errorf("gitcredentials: %q is not an absolute URL", remoteURL)
+	}
+	id := identity.OrDefault()
+	signingKeyPub = id.SigningKey + "\n"
+	allowedSigners = fmt.Sprintf("%s %s\n", id.Email, id.SigningKey)
+	signURL := fmt.Sprintf("%s://%s/_grain/git-sign", parsed.Scheme, parsed.Host)
+	netrcPath := `$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/.git-credentials.netrc`
+	if homeDir != "" {
+		netrcPath = filepath.Join(homeDir, ".git-credentials.netrc")
+	}
+	sshSignScript = fmt.Sprintf(`#!/bin/sh
+set -e
+is_sign=0
+end_opts=0
+prev=""
+buf_file=""
+for arg in "$@"; do
+  if [ "$end_opts" = 1 ]; then
+    if [ "$is_sign" = 1 ]; then
+      buf_file="$arg"
+    fi
+    continue
+  fi
+  if [ "$prev" = "-Y" ] && [ "$arg" = "sign" ]; then
+    is_sign=1
+    prev=""
+    continue
+  fi
+  case "$prev" in
+    -Y|-n|-f|-O)
+      prev=""
+      continue
+      ;;
+  esac
+  case "$arg" in
+    --)
+      end_opts=1
+      ;;
+    -Y|-n|-f|-O)
+      prev="$arg"
+      ;;
+    -Ysign)
+      is_sign=1
+      ;;
+    -*)
+      ;;
+    *)
+      if [ "$is_sign" = 1 ]; then
+        buf_file="$arg"
+      fi
+      ;;
+  esac
+done
+if [ "$is_sign" = 1 ]; then
+  if [ -n "$buf_file" ]; then
+    exec curl -fsSL --netrc-file "%s" --data-binary @"$buf_file" -o "${buf_file}.sig" "%s"
+  fi
+  exec curl -fsSL --netrc-file "%s" --data-binary @- "%s"
+fi
+exec ssh-keygen "$@"
+`, netrcPath, signURL, netrcPath, signURL)
+	return signingKeyPub, allowedSigners, sshSignScript, nil
 }
 
 func gitCredentialFiles(remoteURL, token string, identity GitIdentity) (credentials, gitconfig string, err error) {

@@ -240,3 +240,46 @@ func TestPortRefusesToPushToThePair(t *testing.T) {
 		t.Error("validate accepted a symbolic head")
 	}
 }
+
+func TestPortUsesRemoteCommitterIdentityAndSSHSigningKey(t *testing.T) {
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("ssh-keygen not installed")
+	}
+	f := newFixture(t)
+	head, commits := f.change(map[string]string{"signed.txt": "signed port\n"}, "feat: signed change")
+
+	keyDir := t.TempDir()
+	keyPath := filepath.Join(keyDir, "id_ed25519")
+	if out, err := exec.Command("ssh-keygen", "-t", "ed25519", "-N", "", "-C", "alice@corp.example.com", "-f", keyPath, "-q").CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v: %s", err, out)
+	}
+
+	p := &Porter{
+		Dir: t.TempDir(),
+		Remote: func(context.Context, model.RepoRef, string) (Remote, error) {
+			return Remote{
+				URL:            f.remote,
+				CommitterName:  "Alice Developer",
+				CommitterEmail: "alice@corp.example.com",
+				SigningKey:     keyPath + ".pub",
+			}, nil
+		},
+	}
+
+	res, err := p.Port(context.Background(), request(head, commits))
+	if err != nil {
+		t.Fatalf("Port() error: %v", err)
+	}
+	if res.Outcome != Picked || len(res.Picked) != 1 {
+		t.Fatalf("Port() result = %+v, want 1 picked commit", res)
+	}
+
+	committer := f.git(f.remote, "log", "-1", "--format=%cn <%ce>", res.Head)
+	if committer != "Alice Developer <alice@corp.example.com>" {
+		t.Errorf("committer = %q, want %q", committer, "Alice Developer <alice@corp.example.com>")
+	}
+	rawCommit := f.git(f.remote, "cat-file", "commit", res.Head)
+	if !strings.Contains(rawCommit, "gpgsig -----BEGIN SSH SIGNATURE-----") {
+		t.Errorf("ported commit missing SSH signature header:\n%s", rawCommit)
+	}
+}

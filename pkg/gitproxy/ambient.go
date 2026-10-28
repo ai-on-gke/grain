@@ -558,6 +558,29 @@ func (c *CredentialSet) ambientFile(name string) string {
 	return filepath.Join(c.dir, name+".ambient.json")
 }
 
+// PrimaryAmbientCredential returns the name of an ambient credential in c
+// when one exists.
+func (c *CredentialSet) PrimaryAmbientCredential() string {
+	if c == nil || c.dir == "" {
+		return ""
+	}
+	entries, err := os.ReadDir(c.dir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if name, ok := strings.CutSuffix(e.Name(), ".ambient.json"); ok && name != "" {
+			if c.IsAmbient(name) {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
 // IsAmbient reports whether name is backed by a <name>.ambient.json file.
 func (c *CredentialSet) IsAmbient(name string) bool {
 	if namesOneFile(name) != nil {
@@ -912,6 +935,9 @@ func AmbientHome() string { return ambientHome() }
 // and a directory somebody else owns is not this account's home whatever it
 // is called.
 func ambientHome() string {
+	if h := os.Getenv("GRAIN_TEST_AMBIENT_HOME"); h != "" {
+		return h
+	}
 	u, err := userCurrent()
 	if err != nil {
 		return ""

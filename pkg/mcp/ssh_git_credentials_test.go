@@ -219,3 +219,46 @@ func TestConfigureGitCredentialsOverSSHGivesUpAfterMaxAttempts(t *testing.T) {
 		t.Errorf("round trips = %d, want %d", runner.calls, kubectlgate.MaxAttempts)
 	}
 }
+
+func TestConfigureGitCredentialsOverSSHWithSigningKeyWritesSigningFilesInOneRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	runner := &countingRunner{inner: localExecRunner{dir: home}}
+	pubKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockKey olive@example.com"
+	id := GitIdentity{Name: "Olive Signer", Email: "olive@example.com", SigningKey: pubKey}
+	if err := ConfigureGitCredentialsOverSSH(runner, "http://127.0.0.1:9728/owner/repo.git", "tok", id); err != nil {
+		t.Fatal(err)
+	}
+	if runner.calls != 1 {
+		t.Errorf("round trips = %d, want 1", runner.calls)
+	}
+	gitconfigBytes, err := os.ReadFile(filepath.Join(home, ".gitconfig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitconfig := string(gitconfigBytes)
+	for _, want := range []string{
+		"[gpg]\n\tformat = ssh\n",
+		"program = " + home + "/.git-ssh-sign",
+		"allowedSignersFile = " + home + "/.git-allowed-signers",
+		"signingkey = " + home + "/.git-signing-key.pub",
+		"gpgsign = true",
+		"gpgSign = true",
+	} {
+		if !strings.Contains(gitconfig, want) {
+			t.Errorf(".gitconfig missing %q, got:\n%s", want, gitconfig)
+		}
+	}
+	for name, wantMode := range map[string]os.FileMode{
+		".git-signing-key.pub": 0o600,
+		".git-allowed-signers": 0o600,
+		".git-ssh-sign":        0o700,
+	} {
+		info, err := os.Stat(filepath.Join(home, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != wantMode {
+			t.Errorf("%s mode = %v, want %o", name, info.Mode().Perm(), wantMode)
+		}
+	}
+}

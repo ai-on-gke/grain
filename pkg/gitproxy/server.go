@@ -43,6 +43,10 @@ func NewHandler(proxy *GitProxy) http.Handler {
 			proxy.ServeCLIHTTP(w, r)
 			return
 		}
+		if isGitSignPath(r.URL.Path) {
+			proxy.ServeGitSignHTTP(w, r)
+			return
+		}
 		var body io.Reader
 		if r.ContentLength != 0 {
 			body = r.Body

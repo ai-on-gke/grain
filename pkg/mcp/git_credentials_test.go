@@ -202,3 +202,44 @@ func TestConfigureGitCredentialsRejectsAMalformedRemoteURL(t *testing.T) {
 		t.Fatal("expected an error for a remote URL with no scheme or host")
 	}
 }
+
+func TestConfigureGitCredentialsWithSigningKeyWritesSigningFilesAndConfig(t *testing.T) {
+	root := t.TempDir()
+	pubKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockKey olive@example.com"
+	id := GitIdentity{Name: "Olive Signer", Email: "olive@example.com", SigningKey: pubKey}
+	if err := ConfigureGitCredentials(root, "http://127.0.0.1:9728/owner/repo.git", "tok", id); err != nil {
+		t.Fatal(err)
+	}
+	gitconfigBytes, err := os.ReadFile(filepath.Join(root, ".gitconfig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitconfig := string(gitconfigBytes)
+	for _, want := range []string{
+		"[gpg]\n\tformat = ssh\n",
+		"[gpg \"ssh\"]\n\tprogram = " + root + "/.git-ssh-sign\n\tallowedSignersFile = " + root + "/.git-allowed-signers\n",
+		"[user]\n\tsigningkey = " + root + "/.git-signing-key.pub\n",
+		"[commit]\n\tgpgsign = true\n",
+		"[tag]\n\tgpgSign = true\n",
+	} {
+		if !strings.Contains(gitconfig, want) {
+			t.Errorf(".gitconfig missing %q, got:\n%s", want, gitconfig)
+		}
+	}
+	gotPub, err := os.ReadFile(filepath.Join(root, ".git-signing-key.pub"))
+	if err != nil || string(gotPub) != pubKey+"\n" {
+		t.Fatalf(".git-signing-key.pub = %q, %v", gotPub, err)
+	}
+	gotAllowed, err := os.ReadFile(filepath.Join(root, ".git-allowed-signers"))
+	if err != nil || string(gotAllowed) != "olive@example.com "+pubKey+"\n" {
+		t.Fatalf(".git-allowed-signers = %q, %v", gotAllowed, err)
+	}
+	info, err := os.Stat(filepath.Join(root, ".git-ssh-sign"))
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf(".git-ssh-sign mode = %v, %v; want 0700", info, err)
+	}
+	scriptBytes, _ := os.ReadFile(filepath.Join(root, ".git-ssh-sign"))
+	if !strings.Contains(string(scriptBytes), "http://127.0.0.1:9728/_grain/git-sign") {
+		t.Errorf(".git-ssh-sign lacks sign URL:\n%s", scriptBytes)
+	}
+}

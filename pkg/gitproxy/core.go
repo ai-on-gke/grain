@@ -218,7 +218,7 @@ func (p *GitProxy) Handle(ctx context.Context, method, path, query string, heade
 // send a body, so reading it first would let any of them make the
 // controller hold as much as they cared to send. nil is no body.
 func (p *GitProxy) HandleRequest(ctx context.Context, method, path, query string, headers map[string]string, body io.Reader) ProxyResponse {
-	if isNamespacePath(path) || isCLIPath(path) {
+	if isNamespacePath(path) || isCLIPath(path) || isGitSignPath(path) {
 		return p.handleNamespaceRequest(ctx, method, path, query, headers, body)
 	}
 	req, ok := ParsePath(path)

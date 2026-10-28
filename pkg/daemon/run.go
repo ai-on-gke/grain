@@ -1312,7 +1312,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// The mechanical first attempt at a port, through the git
 			// proxy started above (porter.go); nil files every port as
 			// an agent task.
-			Porter: NewPorter(cfg.DataDir, proxyURL, store, tokens),
+			Porter: NewPorter(cfg.DataDir, proxyURL, store, tokens, live.gitHubCredentials()),
 			// nil on a deployment with no reporting service, which
 			// leaves the merge queue reading checks exactly as it always
 			// did (checkpostClient, and forge.Verdicts).

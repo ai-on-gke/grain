@@ -43,9 +43,16 @@ import (
 //
 // A deployment with no proxy URL or no token store gets nil, which files
 // every port as an agent task as before.
-func NewPorter(dataDir, proxyURL string, store *model.Store, tokens *gitproxy.SandboxTokenStore) orchestrator.Porter {
+func NewPorter(dataDir, proxyURL string, store *model.Store, tokens *gitproxy.SandboxTokenStore, creds ...*gitproxy.CredentialSet) orchestrator.Porter {
 	if proxyURL == "" || tokens == nil {
 		return nil
+	}
+	var credSet *gitproxy.CredentialSet
+	if len(creds) > 0 {
+		credSet = creds[0]
+	}
+	if credSet == nil && dataDir != "" {
+		credSet, _ = gitproxy.LoadCredentialSet(filepath.Join(dataDir, "secrets", "github"))
 	}
 	return &portpick.Porter{
 		Dir:            filepath.Join(dataDir, "port-cache"),
@@ -69,10 +76,29 @@ func NewPorter(dataDir, proxyURL string, store *model.Store, tokens *gitproxy.Sa
 			if team != "" {
 				CiSandboxTeams.Grant(identity, team)
 			}
+			var committerName, committerEmail, signingKey string
+			if resolveID := credentialGitIdentity(credSet, store); resolveID != nil {
+				if id, ok := resolveID(ctx, taskID, &repo); ok {
+					committerName = id.Name
+					committerEmail = id.Email
+					signingKey = id.SigningKey
+				}
+			} else if credSet != nil {
+				if credName := credSet.PrimaryAmbientCredential(); credName != "" {
+					if cid, err := credSet.CredentialGitIdentity(credName); err == nil {
+						committerName = cid.Name
+						committerEmail = cid.Email
+						signingKey = cid.SigningKey
+					}
+				}
+			}
 			log.Printf("porter: %s may fetch and push %s through the git proxy for this port (team %q)", identity, repo, team)
 			return portpick.Remote{
-				URL:   orchestrator.CloneURL(proxyURL, repo),
-				Token: token,
+				URL:            orchestrator.CloneURL(proxyURL, repo),
+				Token:          token,
+				CommitterName:  committerName,
+				CommitterEmail: committerEmail,
+				SigningKey:     signingKey,
 				Release: func() {
 					CiWriteScopes.Drop(identity)
 					if team != "" {

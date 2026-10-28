@@ -16,6 +16,8 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -75,5 +77,72 @@ func TestNewPorterMintsAndRevokesAnIdentityPerAttempt(t *testing.T) {
 	}
 	if _, ok := known.Authenticate(remote.Token); ok {
 		t.Error("the attempt's token still authenticates after release")
+	}
+}
+
+func TestNewPorterPropagatesAmbientCommitIdentityAndSigningKey(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("ssh-keygen not installed")
+	}
+
+	fakeHome := t.TempDir()
+	t.Setenv("GRAIN_TEST_AMBIENT_HOME", fakeHome)
+	sshDir := filepath.Join(fakeHome, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(sshDir, "auto_init_ed25519")
+	if out, err := exec.Command("ssh-keygen", "-t", "ed25519", "-N", "", "-C", "alice@corp.example.com", "-f", keyPath, "-q").CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v: %s", err, out)
+	}
+	pubRaw, err := os.ReadFile(keyPath + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubLine := strings.TrimSpace(string(pubRaw))
+
+	gitConfig := "[user]\n\tname = Alice Developer\n\temail = alice@corp.example.com\n\tsigningkey = ~/.ssh/auto_init_ed25519.pub\n[gpg]\n\tformat = ssh\n[commit]\n\tgpgsign = true\n"
+	if err := os.WriteFile(filepath.Join(fakeHome, ".gitconfig"), []byte(gitConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	secretsDir := filepath.Join(dir, "secrets", "github")
+	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(secretsDir, "op.ambient.json"), []byte(`{"from":"gh"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	creds, err := gitproxy.LoadCredentialSet(secretsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tokenPath := filepath.Join(dir, "sandbox-tokens.json")
+	tokens := gitproxy.NewSandboxTokenStore(tokenPath)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	porter, ok := NewPorter(dir, "http://127.0.0.1:9/", nil, tokens, creds).(*portpick.Porter)
+	if !ok {
+		t.Fatal("NewPorter did not build a portpick.Porter")
+	}
+	remote, err := porter.Remote(context.Background(), repo, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remote.Release()
+
+	if remote.CommitterName != "Alice Developer" {
+		t.Errorf("CommitterName = %q, want %q", remote.CommitterName, "Alice Developer")
+	}
+	if remote.CommitterEmail != "alice@corp.example.com" {
+		t.Errorf("CommitterEmail = %q, want %q", remote.CommitterEmail, "alice@corp.example.com")
+	}
+	if remote.SigningKey != pubLine {
+		t.Errorf("SigningKey = %q, want %q", remote.SigningKey, pubLine)
 	}
 }
