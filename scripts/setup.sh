@@ -3996,6 +3996,16 @@ install_hostd_version() {
   # lacks it, since a detached run adopted across an upgrade may be
   # executing the copy already here.
   if [ -n "\$stage" ]; then
+    # A version an older extractor populated before codex was wrapped
+    # has the real binary at codex and no codex.bin beside it. Before the
+    # copies below, which would otherwise put codex.bin in and leave the
+    # unwrapped codex where the wrapper belongs.
+    if [ -x "\$dir/\$version/codex" ] && [ ! -x "\$dir/\$version/codex.bin" ] && [ -f "\$stage/codex.bin" ]; then
+      mv -f "\$dir/\$version/codex" "\$dir/\$version/codex.bin"
+      cp "\$stage/codex" "\$dir/\$version/codex.new"
+      chmod 0755 "\$dir/\$version/codex.new"
+      mv -f "\$dir/\$version/codex.new" "\$dir/\$version/codex"
+    fi
     for name in ${HOSTD_IMAGE_CLIS[*]:-claude codex codex-code-mode-host kubectl} codex.bin; do
       if [ -f "\$stage/\$name" ] && [ ! -x "\$dir/\$version/\$name" ]; then
         cp "\$stage/\$name" "\$dir/\$version/\$name.new"
@@ -4003,14 +4013,6 @@ install_hostd_version() {
         mv -f "\$dir/\$version/\$name.new" "\$dir/\$version/\$name"
       fi
     done
-    # A version an older extractor populated before codex was wrapped
-    # has the real binary at codex and no codex.bin beside it.
-    if [ -x "\$dir/\$version/codex" ] && [ ! -x "\$dir/\$version/codex.bin" ] && [ -f "\$stage/codex.bin" ]; then
-      mv -f "\$dir/\$version/codex" "\$dir/\$version/codex.bin"
-      cp "\$stage/codex" "\$dir/\$version/codex.new"
-      chmod 0755 "\$dir/\$version/codex.new"
-      mv -f "\$dir/\$version/codex.new" "\$dir/\$version/codex"
-    fi
     touch "\$dir/\$version/${HOSTD_CLIS_MARKER:-.clis}"
   fi
   previous="\$(readlink "\$dir/current" 2>/dev/null || true)"

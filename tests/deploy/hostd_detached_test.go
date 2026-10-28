@@ -293,6 +293,22 @@ esac
 		t.Errorf("a version's claude was written over: %q", got)
 	}
 
+	// A version an older extractor installed before codex was wrapped has
+	// the real codex at codex and no codex.bin: the real one moves to
+	// codex.bin and the wrapper takes its place, rather than the wrapper
+	// being skipped because codex.bin was copied in beside it.
+	if err := os.Remove(filepath.Join(versions, "aaaaaaaaaaaa", "codex.bin")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(versions, "aaaaaaaaaaaa", "codex"), []byte("#!/bin/sh\necho old codex\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run("sha256:aaaaaaaaaaaa1")
+	contains(t, read(filepath.Join(versions, "aaaaaaaaaaaa", "codex")), "codex-detached")
+	if got := read(filepath.Join(versions, "aaaaaaaaaaaa", "codex.bin")); got != "#!/bin/sh\necho old codex\n" {
+		t.Errorf("an older version's codex was not moved to codex.bin: %q", got)
+	}
+
 	// An upgrade is a new directory and a moved link: the old version's
 	// claude is still there for the run that is executing it.
 	run("sha256:bbbbbbbbbbbb2")
