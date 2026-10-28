@@ -672,7 +672,7 @@ select_rc() {
 # the git proxy tunnel only sends the tag delta rather than a full pack, and
 # retrying transient tunnel drops.
 fetch_promote_tag_into() {
-  local work="$1" url attempt
+  local work="$1" depth="${2:-1}" url attempt
   url="$(git -C "$repo_root" remote get-url "$remote" 2>/dev/null || printf '%s' "$remote")"
   git -C "$work" init -q
   if [ "$remote" = "origin" ] && [ -d "$repo_root/.git/objects" ]; then
@@ -680,7 +680,7 @@ fetch_promote_tag_into() {
     printf '%s\n' "$repo_root/.git/objects" >"$work/.git/objects/info/alternates"
   fi
   for attempt in 1 2 3; do
-    if git -C "$work" fetch -q --depth 1 --no-tags "$url" "refs/tags/$promote_tag"; then
+    if git -C "$work" fetch -q --depth "$depth" --no-tags "$url" "refs/tags/$promote_tag"; then
       return 0
     fi
     [ "$attempt" -lt 3 ] && sleep "$attempt"
@@ -689,19 +689,30 @@ fetch_promote_tag_into() {
 }
 
 # Whether $promote_tag's own Dockerfile takes MAIN_GRAIN, which is what
-# says the release job built both daemon images for it; asked of a
+# says the release job built after the two-daemon split; asked of a
 # shallow fetch of the tag, since this job's checkout is main or
-# candidate's head rather than the release.
+# candidate's head rather than the release. Also sets has_google_daemon
+# (whether the tag tree contains $google_main) and promote_is_root_commit
+# (whether the tag is a root or initial cutover commit).
 release_builds_two_daemons() {
   local work answer=1
+  has_google_daemon=false
+  promote_is_root_commit=false
   work="$(mktemp -d)"
-  if ! fetch_promote_tag_into "$work"; then
+  if ! fetch_promote_tag_into "$work" 2; then
     rm -rf "$work"
     echo "release-images.sh: could not fetch $promote_tag from $remote to see which daemon images it builds" >&2
     exit 1
   fi
   if git -C "$work" show FETCH_HEAD:Dockerfile 2>/dev/null | grep -q '^ARG MAIN_GRAIN='; then
     answer=0
+    if git -C "$work" cat-file -e "FETCH_HEAD:$google_main" 2>/dev/null; then
+      has_google_daemon=true
+    fi
+  fi
+  if ! git -C "$work" rev-parse --verify -q "FETCH_HEAD^" >/dev/null 2>&1 ||
+     ! git -C "$work" cat-file -e "FETCH_HEAD^:Dockerfile" 2>/dev/null; then
+    promote_is_root_commit=true
   fi
   rm -rf "$work"
   return "$answer"
@@ -747,7 +758,9 @@ if [ "$dry_run" = true ]; then
       [ "$promote_latest" = true ] && targets="$targets and latest"
       echo "release-images.sh: [dry-run] phase 'promote': would retag $root/{guest,k8s-sandbox}:sha-${promote_commit:0:7} as $targets"
       if release_builds_two_daemons; then
-        for daemon in "grain $core_main" "google-grain $google_main"; do
+        dry_daemons=("grain $core_main")
+        [ "$has_google_daemon" = true ] && dry_daemons+=("google-grain $google_main")
+        for daemon in "${dry_daemons[@]}"; do
           read -r image main <<< "$daemon"
           echo "release-images.sh: [dry-run] and rebuild $root/$image:sha-${promote_commit:0:7} from $promote_commit ($main) with RELEASE=$promote_tag as $targets, unless $root/$image:$promote_tag already reports $promote_tag"
           echo "release-images.sh: [dry-run] and point $root/$image:sha-${promote_commit:0:7} at the stamped $root/$image:$promote_tag"
@@ -1378,7 +1391,11 @@ publish_release() {
   local split=false
   if release_builds_two_daemons; then
     split=true
-    daemons=("grain $core_main" "google-grain $google_main")
+    if [ "$has_google_daemon" = true ]; then
+      daemons=("grain $core_main" "google-grain $google_main")
+    else
+      daemons=("grain $core_main")
+    fi
   else
     echo "release-images.sh: $promote_tag predates the two daemon images (its Dockerfile takes no MAIN_GRAIN), so its grain image is the Google build: google-grain:$promote_tag will be a retag of it"
     daemons=("grain ")
@@ -1411,6 +1428,23 @@ publish_release() {
       stamped+=("$image")
     fi
   done
+  if [ "$promote_is_root_commit" = true ] &&
+      { ! image_exists "$root/guest:sha-$promoted_short" ||
+        ! image_exists "$root/k8s-sandbox:sha-$promoted_short" ||
+        { [[ " ${stamped[*]} " != *" grain "* ]] && ! image_exists "$root/grain:sha-$promoted_short"; }; } &&
+      image_exists "$root/guest:main" &&
+      image_exists "$root/k8s-sandbox:main" &&
+      image_exists "$root/grain:main"; then
+    echo "release-images.sh: $promote_tag ($promote_commit) is the initial cutover commit and has no sha-$promoted_short images; seeding from :main"
+    for image in guest k8s-sandbox grain; do
+      retag_image "$root/$image:main" "$root/$image:sha-$promoted_short"
+    done
+    for image in guest-base k8s-sandbox-base; do
+      if image_exists "$root/$image:main"; then
+        retag_image "$root/$image:main" "$root/$image:sha-$promoted_short"
+      fi
+    done
+  fi
   for image in guest k8s-sandbox "${daemons[@]%% *}"; do
     if [[ " ${stamped[*]} " == *" $image "* ]]; then
       continue
@@ -1475,7 +1509,11 @@ publish_release() {
       retag_image "$root/grain:$promote_tag" "$root/google-grain:$tag"
     done
   fi
-  echo "release-images.sh: $root/{guest,k8s-sandbox}:sha-$promoted_short are now also ${targets[*]}, and $root/{grain,google-grain}:$promote_tag are $promote_commit stamped $promote_tag, as are their sha-$promoted_short$([ "${#targets[@]}" -le 1 ] || echo " and ${targets[*]:1}")"
+  if [ "$split" = true ] && [ "$has_google_daemon" != true ]; then
+    echo "release-images.sh: $root/{guest,k8s-sandbox}:sha-$promoted_short are now also ${targets[*]}, and $root/grain:$promote_tag is $promote_commit stamped $promote_tag, as is its sha-$promoted_short$([ "${#targets[@]}" -le 1 ] || echo " and ${targets[*]:1}")"
+  else
+    echo "release-images.sh: $root/{guest,k8s-sandbox}:sha-$promoted_short are now also ${targets[*]}, and $root/{grain,google-grain}:$promote_tag are $promote_commit stamped $promote_tag, as are their sha-$promoted_short$([ "${#targets[@]}" -le 1 ] || echo " and ${targets[*]:1}")"
+  fi
 }
 
 # Stage a pending release: the commit vX.Y.0-pending names, published as
@@ -1491,13 +1529,16 @@ pending_images() {
 # Mark a pending release a person rejected: <image>:vX.Y.0-rejected
 # beside every image it was staged as. Nothing that resolves moves.
 discard_pending() {
-  local image marked=()
+  local image images=(grain guest k8s-sandbox) marked=()
+  if [ -d "$repo_root/google/cmd/grain" ]; then
+    images=(grain google-grain guest k8s-sandbox)
+  fi
   if ! [[ "$pending_request" =~ $release_tag_pattern ]]; then
     echo "release-images.sh: $pending_request is not a release tag (vX.Y.Z)" >&2
     return 1
   fi
   ensure_direct_registry_route "$registry"
-  for image in grain google-grain guest k8s-sandbox; do
+  for image in "${images[@]}"; do
     if image_exists "$root/$image:$pending_request-pending"; then
       retag_image "$root/$image:$pending_request-pending" "$root/$image:$pending_request-rejected"
       marked+=("$image")
@@ -1511,13 +1552,16 @@ discard_pending() {
 # touched. An image the rc was never published as has nothing to mark,
 # and is said so; a deployment never ran it.
 discard_rc() {
-  local image marked=() unpublished=()
+  local image images=(grain guest k8s-sandbox) marked=() unpublished=()
+  if [ -d "$repo_root/google/cmd/grain" ]; then
+    images=(grain google-grain guest k8s-sandbox)
+  fi
   if ! [[ "$rc_request" =~ $rc_tag_pattern ]]; then
     echo "release-images.sh: $rc_request is not a release candidate tag (vX.Y.0-rc.N)" >&2
     return 1
   fi
   ensure_direct_registry_route "$registry"
-  for image in grain google-grain guest k8s-sandbox; do
+  for image in "${images[@]}"; do
     if image_exists "$root/$image:$rc_request"; then
       retag_image "$root/$image:$rc_request" "$root/$image:$rc_request-discarded"
       marked+=("$image")
@@ -1647,6 +1691,10 @@ rebuild_release_grain() {
   # does not -- the Makefile's GO_VERSION rule, which says why.
   go_version="$(sed -n 's/^toolchain[[:space:]]\{1,\}go//p' "$work/go.mod")"
   [ -n "$go_version" ] || go_version="$(sed -n 's/^go[[:space:]]\{1,\}//p' "$work/go.mod")"
+  local source_label=()
+  if [ "$registry" = "ghcr.io" ]; then
+    source_label=(--label org.opencontainers.image.source="https://github.com/${RELEASE_IMAGE_REPO,,}")
+  fi
   (
     cd "$work"
     docker build \
@@ -1658,6 +1706,7 @@ rebuild_release_grain() {
       --build-arg K8S_SANDBOX_IMAGE="$k8s_ref" \
       --build-arg GRAIN_IMAGE_REF="$image_ref" \
       --build-arg GIT_REVISION="$promote_commit" \
+      "${source_label[@]}" \
       --build-arg RELEASE="${stamp_tag:-$promote_tag}" \
       --label org.opencontainers.image.version="${stamp_tag:-$promote_tag}" \
       -t "$target" -f Dockerfile .

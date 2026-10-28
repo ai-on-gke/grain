@@ -56,6 +56,12 @@ func releaseRepo(t *testing.T) (string, map[string]string) {
 const splitDockerfile = "FROM scratch\nARG GRAIN_IMAGE_REF=\nARG RELEASE=\nARG MAIN_GRAIN=./google/cmd/grain\n" +
 	oldMakeBuild + " RELEASE=${RELEASE} MAIN_grain=${MAIN_GRAIN}\n"
 
+// postSplitDockerfile is the Dockerfile of a post-split single-daemon
+// repository (ai-on-gke/grain): it takes MAIN_GRAIN=./cmd/grain, and the
+// tree has no google/cmd/grain directory.
+const postSplitDockerfile = "FROM scratch\nARG GRAIN_IMAGE_REF=\nARG RELEASE=\nARG MAIN_GRAIN=./cmd/grain\n" +
+	oldMakeBuild + " RELEASE=${RELEASE} MAIN_grain=${MAIN_GRAIN}\n"
+
 // releaseRepoWithDockerfile is releaseRepo with the release's Dockerfile
 // given.
 func releaseRepoWithDockerfile(t *testing.T, dockerfile string) (string, map[string]string) {
@@ -88,6 +94,14 @@ func releaseRepoWithDockerfile(t *testing.T, dockerfile string) (string, map[str
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	if strings.Contains(dockerfile, "./google/cmd/grain") {
+		if err := os.MkdirAll(filepath.Join(dir, "google", "cmd", "grain"), 0o755); err != nil {
+			t.Fatalf("creating google/cmd/grain: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "google", "cmd", "grain", "main.go"), []byte("package main\n"), 0o644); err != nil {
+			t.Fatalf("writing google/cmd/grain/main.go: %v", err)
 		}
 	}
 	git("add", ".")
@@ -621,4 +635,84 @@ func TestPromoteIgnoresAPendingBuildOfAnotherCommit(t *testing.T) {
 		t.Errorf("promote shipped another commit's pending build:\n%s", docker)
 	}
 	containsRun(t, docker, "-t ghcr.io/bwsalmon/grain/grain:v1.5.0")
+}
+
+// A release cut in the post-split single-daemon repository (ai-on-gke/grain)
+// has ARG MAIN_GRAIN=./cmd/grain in its Dockerfile and no google/cmd/grain
+// directory in its tree: promotion only requires and promotes grain, guest,
+// and k8s-sandbox, and never asks for, builds, or retags google-grain.
+func TestPromotePostSplitSingleDaemonRelease(t *testing.T) {
+	remote, commits := releaseRepoWithDockerfile(t, postSplitDockerfile)
+	short := commits["released"][:7]
+
+	out, docker, err := promoteRun(t, remote, []string{"--dry-run", "promote"}, nil)
+	if err != nil {
+		t.Fatalf("promote --dry-run failed: %v\n%s", err, out)
+	}
+	containsRun(t, out, "and rebuild ghcr.io/bwsalmon/grain/grain:sha-"+short+" from "+commits["released"]+" (./cmd/grain)")
+	containsRun(t, out, "and point ghcr.io/bwsalmon/grain/grain:sha-"+short+" at the stamped ghcr.io/bwsalmon/grain/grain:v1.5.0")
+	if strings.Contains(out, "google-grain:sha-"+short) || strings.Contains(out, "google-grain:v1.5.0") || strings.Contains(out, "predates the two daemon images") {
+		t.Errorf("dry-run promote of a post-split single-daemon release mentioned google-grain or pre-split retagging:\n%s", out)
+	}
+	if docker != "" {
+		t.Errorf("a dry run asked docker for something:\n%s", docker)
+	}
+
+	env := publishEnv(stubAnswers(t, short, "", "v1.5.0"))
+	env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/google-grain:sha-" + short
+	out, docker, err = promoteRun(t, remote, []string{"promote"}, env)
+	if err != nil {
+		t.Fatalf("promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
+	}
+	for _, image := range []string{"guest", "k8s-sandbox", "grain"} {
+		containsRun(t, docker, "buildx imagetools inspect ghcr.io/bwsalmon/grain/"+image+":sha-"+short)
+	}
+	containsRun(t, docker, "--build-arg MAIN_GRAIN=./cmd/grain ")
+	containsRun(t, docker, "--label org.opencontainers.image.source=https://github.com/bwsalmon/grain ")
+	containsRun(t, docker, "--build-arg RELEASE=v1.5.0 --label org.opencontainers.image.version=v1.5.0 -t ghcr.io/bwsalmon/grain/grain:v1.5.0")
+	containsRun(t, docker, "push ghcr.io/bwsalmon/grain/grain:v1.5.0")
+	containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/grain:latest ghcr.io/bwsalmon/grain/grain:v1.5.0")
+	containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/grain:sha-"+short+" ghcr.io/bwsalmon/grain/grain:v1.5.0")
+	if strings.Contains(docker, "google-grain") || strings.Contains(out, "google-grain") {
+		t.Errorf("promote of a post-split single-daemon release touched google-grain:\nout:\n%s\ndocker:\n%s", out, docker)
+	}
+}
+
+// Promoting the root cutover commit (whose sha-<short> tags were never
+// published because the initial tag predates the release workflow fix)
+// seeds missing :sha-<short> tags from :main when :main exists, then
+// rebuilds and promotes the release cleanly from the tag's own tree.
+func TestPromoteSeedsMissingShaTagsFromMainForRootCutoverCommit(t *testing.T) {
+	remote, commits := releaseRepoWithDockerfile(t, postSplitDockerfile)
+	short := commits["old"][:7]
+
+	path := stubAnswers(t, short, "", "v1.4.0")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedCheck := `case "$*" in
+  "buildx imagetools inspect ghcr.io/bwsalmon/grain/"*":sha-` + short + `")
+    grep -qF -- "--tag $4 " "$DOCKER_STUB_LOG" || exit 1
+    ;;
+`
+	script := strings.Replace(string(body), "case \"$*\" in\n", seedCheck, 1)
+	if err := os.WriteFile(path, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, docker, err := promoteRun(t, remote, []string{"promote", "v1.4.0"}, publishEnv(path))
+	if err != nil {
+		t.Fatalf("promote v1.4.0 failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
+	}
+	containsRun(t, out, "seeding from :main")
+	for _, image := range []string{"guest", "k8s-sandbox", "grain", "guest-base", "k8s-sandbox-base"} {
+		containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/"+image+":sha-"+short+" ghcr.io/bwsalmon/grain/"+image+":main")
+	}
+	containsRun(t, docker, "--label org.opencontainers.image.source=https://github.com/bwsalmon/grain ")
+	containsRun(t, docker, "--build-arg RELEASE=v1.4.0 --label org.opencontainers.image.version=v1.4.0 -t ghcr.io/bwsalmon/grain/grain:v1.4.0")
+	containsRun(t, docker, "push ghcr.io/bwsalmon/grain/grain:v1.4.0")
+	if strings.Contains(docker, "google-grain") {
+		t.Errorf("promote of a post-split root cutover commit touched google-grain:\n%s", docker)
+	}
 }
