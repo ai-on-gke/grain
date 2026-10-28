@@ -13,10 +13,10 @@ Design docs, specs and task grainfiles carry **no contributor lists**. Central d
 Instead, every PR has a **contributor set**. That covers every design-folder PR (design, spec, tasks, clarification, playbook) and every implementation PR. Grain derives the set from the PR itself:
 
 - the authors of its commits, and every `Co-authored-by:` trailer on them;
-- reviewers whose comments led to a change, meaning a commit pushed after the comment that addresses its thread;
+- reviewers whose comments led to a change, meaning a commit pushed after the comment that addresses its thread. A review that only approves, without changing anything, does not count;
 - anything added with the commands below.
 
-Grain shows the set in a **Contributors** section of the PR description and keeps it up to date as commits and comments arrive.
+Grain shows the set in a **Contributors** section of the PR description and keeps it up to date as commits and comments arrive. Where a role is obvious, grain shows it next to the name: `author` for commit authors, `editor` for someone who pushed to another person's PR, and `reviewer` for someone whose comments changed the PR. Roles are never required.
 
 ## Adding and removing contributors by comment
 
@@ -26,6 +26,7 @@ Anyone with write access to the repository can adjust a PR's set with a PR comme
 /contributors add Jane Doe <jane@example.com>
 /contributors add @janedoe
 /contributors remove @janedoe
+/contributors add --quality-by @oncall-handle
 ```
 
 `remove` only removes names that were added by hand. Derived contributors (commit authors, trailers, reviewers whose comments changed the PR) can't be removed this way, so a typo can't undo real credit. Grain replies on the comment with the resulting set and updates the description. Commands from people without write access, and commands from agents, get a reply explaining why they were ignored.
@@ -43,11 +44,15 @@ Each stage's PR records the PR it derives from:
 - Sub-tasks an agent decomposes a task into (`propose_task`, recorded as `LinkProposedBy`) inherit their parent's chain automatically, so an agent can't drop it by forgetting to copy it.
 - An implementation PR's contributors are the **union** of the sets along its chain (design PR → spec PR → tasks PR → itself), plus the contributors of every task that pushed to it. That includes fixes, review responses and clarification-driven changes, not just the task that opened it. Entries are de-duplicated by email and kept in chain order.
 
-A clarification PR is a design-folder PR like any other. Its contributors flow down to whatever spec and tasks PRs it triggers.
+A clarification PR is a design-folder PR like any other. Its contributors flow down to whatever spec and tasks PRs it triggers. Work filed later from a bug or issue that cites a design PR is credited to the bug's contributors: whoever filed the issue or PR, commented on it substantively, or tagged it into the pipeline. It is not credited to the cited design's contributors.
 
 ## Edits to existing documents
 
-An edit to an approved design is a new design PR. The spec and tasks PRs it triggers derive from **that** PR, so their chain points at the edit's PRs, not the original design's. The people who made the edit get the credit, and a central doc's long history isn't re-credited on every downstream change. The edit's description still links the earlier design PRs for context.
+An edit to an approved design is a new design PR. The spec and tasks PRs it triggers derive from **that** PR, so their chain points at the edit's PRs, not the original design's. The people who made the edit get the credit, and a central doc's long history isn't re-credited on every downstream change. A design's earlier PR contributors are **not** credited on edit-driven PRs: a trailer means "contributed to this change". The edit's description still links the earlier design PRs for context.
+
+## Quality by (optional)
+
+A repo or team can enable a separate **Quality by** credit for the person who managed the backlog. That person is the team's grain on-call or backlog manager who was responsible for the task while it ran. Grain prefers whoever actually acted on the task: approved it, unblocked it, retried it, or answered its escalation. If nobody did, grain uses whoever held the on-call or backlog role during the task's lifetime. Grain records this on the task, and there can be more than one person. The PR description shows it as a "Quality by" line in the Contributors section. The merge commit carries a `Quality-by: Name <email>` trailer, in the style of git's `Reviewed-by:` and `Acked-by:`. It is not `Co-authored-by:`, because these people didn't author the change. `/contributors add|remove --quality-by` adjusts the entry.
 
 ## The merge commit
 
@@ -55,17 +60,10 @@ Grain composes the squash or merge message itself rather than relying on agents 
 
 ## Making sure it happens
 
-- **Merge-queue check.** Before merging, grain checks the PR description and the final commit message against the chain union, and repairs them if anything is missing.
+- **Merge-queue check.** Before merging, grain checks the PR description and the final commit message against the chain union, and repairs them if anything is missing. When Quality by is enabled, the check also covers the `Quality-by:` trailers.
 - **Derivation check.** A spec or tasks PR without a `Derived from:` link fails a check. So does a tasks PR whose link doesn't resolve to a merged spec PR.
 - **Post-merge audit.** A merged commit that still lacks a trailer for a contributor in its union is reported to the team's on-call chat.
 - **Durable record.** When a task completes, its completion note in the design folder links the implementation PR(s). The contributors are visible there, outside grain's DB.
-
-## Open questions
-
-- Should reviewers who only approved, without changing anything, count? Proposed: no; `/contributors add` covers the exceptions.
-- Should a design's earlier PR contributors also be credited on edit-driven PRs? Proposed: no. Trailers should mean "contributed to this change".
-- Should roles (`author`, `editor`, `reviewer`) be recorded in the Contributors section? Proposed: derive them where obvious, but never require them.
-- Should contributors flow to work filed later from bugs or issues that cite a design PR?
 
 ## Follow-up work
 
@@ -73,4 +71,5 @@ Grain composes the squash or merge message itself rather than relying on agents 
 2. `/contributors add|remove` command handling, with write-access checks and replies.
 3. `Derived from:` links on spec and tasks PRs; link imported tasks to their tasks PR; inherit the chain over `LinkProposedBy`.
 4. Compose merge messages with `Co-authored-by:` trailers from the chain union, recomputed at merge.
-5. Merge-queue and derivation checks, the post-merge audit to on-call chat, and completion notes that link implementation PRs.
+5. Optional Quality by: record acting on-call and backlog managers on tasks, write `Quality-by:` trailers, and add a per-repo or per-team setting.
+6. Merge-queue and derivation checks, the post-merge audit to on-call chat, and completion notes that link implementation PRs.
