@@ -641,3 +641,64 @@ func TestExternalAgentExternalConfigRepoGuidance(t *testing.T) {
 		t.Fatalf("expected 409 config_managed_externally with patch, got %+v", res)
 	}
 }
+
+// TestExternalAgentTemplateWithinCredential: a template an external agent
+// names -- the one a task is filed from (templateId) or the review filed
+// approved and auto-merge once it is done (reviewTemplateId) -- may carry
+// no grant and no repository beyond the credential's own, exactly as an
+// in-grain agent is held to its task's (TestAgentAPIReviewTemplateWithinGrants).
+func TestExternalAgentTemplateWithinCredential(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	seedAPITask(t, client, "102", "acme/widgets")
+	ref, _ := model.ParseRepo("acme/widgets")
+	gadgets, _ := model.ParseRepo("acme/gadgets")
+	for _, tmpl := range []model.Template{
+		{ID: "tpl-upgrade", Name: "upgrade", Title: "upgrade", Grants: []model.Grant{{Capability: "api:deployment:upgrade", Via: model.GrantByLabel}}},
+		{ID: "tpl-writes", Name: "writes", Title: "writes", Writes: []model.WriteTarget{{Repo: gadgets}}},
+		{ID: "tpl-reads", Name: "reads", Title: "reads", Reads: []model.RepoRef{gadgets}},
+		{ID: "tpl-other", Name: "other", Title: "other", Grants: []model.Grant{{Capability: "github-app", Via: model.GrantByLabel}}},
+		{ID: "tpl-plain", Name: "plain", Title: "plain"},
+		{ID: model.DefaultReviewTemplateID(ref), Name: "default review", Title: "review",
+			Grants: []model.Grant{{Capability: "api:deployment:upgrade", Via: model.GrantByLabel}}},
+	} {
+		if err := client.Store.PutTemplate(ctx, tmpl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "template-agent",
+		Scopes: []string{"tasks:read", "tasks:write"},
+		Repos:  []string{"acme/widgets"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, body string) (int, string) {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+issued.Token)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(ui.ActingReasonHeader, "testing")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	for _, id := range []string{"tpl-upgrade", "tpl-writes", "tpl-reads", "tpl-other"} {
+		for _, c := range []struct{ method, path, body string }{
+			{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","reviewTemplateId":"` + id + `"}`},
+			{http.MethodPatch, "/api/tasks/102", `{"reviewTemplateId":"` + id + `"}`},
+			{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","templateId":"` + id + `"}`},
+		} {
+			if code, resp := call(c.method, c.path, c.body); code != http.StatusForbidden {
+				t.Errorf("%s %s with %s answered an external agent %d: %s", c.method, c.path, c.body, code, resp)
+			}
+		}
+	}
+	for _, id := range []string{"tpl-plain", model.DefaultReviewTemplateID(ref)} {
+		if code, resp := call(http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","reviewTemplateId":"`+id+`"}`); code >= 300 {
+			t.Errorf("reviewTemplateId %s was refused: %d %s", id, code, resp)
+		}
+	}
+}

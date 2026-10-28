@@ -935,7 +935,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	if err := s.checkExternalTokenRotationEscalation(ctx, held, pattern, r.PathValue("id")); err != nil {
 		return call, err
 	}
-	if err := s.externalAgentFilingEscalation(ctx, tok, set, pattern, scope, call.repo, body); err != nil {
+	if err := s.externalAgentFilingEscalation(ctx, tok, held, set, pattern, scope, call.repo, body); err != nil {
 		return call, err
 	}
 	return call, nil
@@ -1100,7 +1100,7 @@ func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgen
 	return nil
 }
 
-func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.ExternalAgentToken, set APIGrantSet,
+func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.ExternalAgentToken, held []string, set APIGrantSet,
 	pattern string, scope APIScope, repo string, body []byte) error {
 	if pattern == "POST /api/tasks/{id}/submit" {
 		return errAgentAutoMerge
@@ -1175,11 +1175,32 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if err != nil || tmpl == nil {
 				continue
 			}
+			if err := externalTemplateWithin(tok, held, *tmpl, allowedRepo); err != nil {
+				return err
+			}
 			if tmpl.AutoMerge {
 				return fmt.Errorf("template %s is auto-merge: %w", tmpl.ID, errAgentAutoMerge)
 			}
 			if tmpl.Target != nil && !set.Allows(scope, tmpl.Target.String()) {
 				return fmt.Errorf("template %s files against %s, which the external agent's %s does not reach", tmpl.ID, tmpl.Target, scope)
+			}
+		case "reviewtemplateid":
+			// A review is filed approved and auto-merge, so its template
+			// is held to the credential's own grants exactly as an
+			// in-grain agent's is to its task's (ReviewTemplateWithinTask).
+			var id string
+			if json.Unmarshal(raw, &id) != nil || strings.TrimSpace(id) == "" {
+				continue
+			}
+			tmpl, err := s.tasks.Store.GetTemplate(ctx, strings.TrimSpace(id))
+			if err != nil || tmpl == nil {
+				continue
+			}
+			if r, err := model.ParseRepo(repo); err == nil && tmpl.ID == model.DefaultReviewTemplateID(r) {
+				continue
+			}
+			if err := externalTemplateWithin(tok, held, *tmpl, allowedRepo); err != nil {
+				return err
 			}
 		case "repo":
 			var to string
@@ -1189,6 +1210,32 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if !set.Allows(scope, strings.TrimSpace(to)) {
 				return fmt.Errorf("the external agent's %s does not reach %s", scope, strings.TrimSpace(to))
 			}
+		}
+	}
+	return nil
+}
+
+// externalTemplateWithin is model.TemplateWithinTask for an external agent
+// credential: a template it names may grant only what the credential itself
+// holds, never a grant only a person may give, and push or read access only
+// to repositories the credential covers.
+func externalTemplateWithin(tok *model.ExternalAgentToken, held []string, tmpl model.Template, allowedRepo func(string) bool) error {
+	for _, g := range tmpl.Grants {
+		if model.IsPersonOnlyGrant(g.Capability) {
+			return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
+		}
+		if !slices.Contains(held, g.Capability) {
+			return fmt.Errorf("template %s grants %s, which external agent %q does not hold", tmpl.ID, g.Capability, tok.Name)
+		}
+	}
+	for _, w := range tmpl.Writes {
+		if !allowedRepo(w.Repo.String()) {
+			return fmt.Errorf("template %s grants push access to %s, which external agent %q's credential does not cover", tmpl.ID, w.Repo, tok.Name)
+		}
+	}
+	for _, r := range tmpl.Reads {
+		if !allowedRepo(r.String()) {
+			return fmt.Errorf("template %s grants read access to %s, which external agent %q's credential does not cover", tmpl.ID, r, tok.Name)
 		}
 	}
 	return nil
