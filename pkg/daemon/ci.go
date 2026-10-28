@@ -59,6 +59,13 @@ import (
 // existed.
 var CiReadScopes = gitproxy.NewReadScopes()
 
+// SandboxCapabilities is the registry of capability tools a sandbox may
+// call through the proxy's /cap/<server>/mcp (grain cap,
+// docs/capabilities-spec.md §5.2.6): filled by each agent run's and CI
+// job's capability pass for as long as it is materialized, and read by
+// the proxy BuildProxy wires.
+var SandboxCapabilities = gitproxy.NewCapRegistry()
+
 // ciWriteScopes is the registry of write git scopes CI jobs hold while they run
 // (gitproxy.WriteScopes).
 var CiWriteScopes = gitproxy.NewWriteScopes()
@@ -389,6 +396,13 @@ type CiGrantReservations struct {
 	Ports        *portforward.Relay
 	PortsURL     string
 	SetupTimeout time.Duration
+	// CapServers, ProxyURL and ProxyToken carry a job's sandbox-callable
+	// capability tools through the sandbox proxy's /cap/<server>/mcp
+	// (orchestrator.CIPassOptions); nil CapServers forwards each endpoint
+	// over Ports instead.
+	CapServers *gitproxy.CapRegistry
+	ProxyURL   string
+	ProxyToken func(sandbox string) (string, error)
 	// Now and Sleep are the clock a pass's retries are timed against;
 	// nil is the real one.
 	Now   func() time.Time
@@ -2431,6 +2445,9 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 	}
 	if store != nil {
 		grantReservations.Config = store.GetConfig
+	}
+	if tokens != nil && proxyURL != "" {
+		grantReservations.CapServers, grantReservations.ProxyURL, grantReservations.ProxyToken = SandboxCapabilities, proxyURL, tokens.EnsureToken
 	}
 	jobSandboxes := CiSandboxes{
 		Capabilities: capabilities, Credentials: capabilityCredentials, Sandboxes: sandboxes,

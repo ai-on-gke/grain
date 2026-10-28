@@ -185,6 +185,9 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 		WaitCredit:      waitCreditAdapter{runWaitCredits},
 		API:             LiveAPI,
 		ShutdownStarted: shutdownStarted,
+		// External capability tools a run or CI job may call from its
+		// sandbox under /cap/<server>/mcp (grain cap).
+		CapServers: SandboxCapabilities,
 		// The scopes that belong to a sandbox rather than to a task --
 		// grain CI's job sandboxes, which have no task to be resolved
 		// through (pkg/cli/ci.go's ciReadScopes and ciWriteScopes). Wired whether or not

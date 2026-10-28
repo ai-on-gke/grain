@@ -60,6 +60,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/console"
 	"github.com/ai-on-gke/grain/pkg/forge"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
@@ -387,6 +388,11 @@ type Config struct {
 	// grants return ports.
 	CapabilityPorts    *portforward.Relay
 	CapabilityPortsURL string
+	// CapabilitySandboxServers is where a run's sandbox-callable
+	// capability tools are registered for the sandbox proxy's /cap/
+	// (grain cap, docs/capabilities-spec.md §5.2.6). Nil reaches none of
+	// them from the sandbox; model-only tools are unaffected.
+	CapabilitySandboxServers *gitproxy.CapRegistry
 	// CapabilitySetupTimeout bounds each capability setup command
 	// (docs/capabilities-spec.md §5.5.3); zero is
 	// DefaultCapabilitySetupTimeout.

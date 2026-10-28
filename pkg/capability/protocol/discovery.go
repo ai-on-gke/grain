@@ -32,15 +32,71 @@ type Tool struct {
 	Title       string         `json:"title,omitempty"`
 	Description string         `json:"description,omitempty"`
 	InputSchema map[string]any `json:"inputSchema"`
-	// Annotations are MCP's hints about the tool; grain reads only their
+	// Annotations are MCP's hints about the tool; grain reads their
 	// title, to say on a task's row what a call is doing
-	// (EndpointRoster.Labels).
+	// (EndpointRoster.Labels), and grain's own delivery keys (§5.2.6).
 	Annotations *ToolAnnotations `json:"annotations,omitempty"`
+	// XGrainModelOnly and XGrainMCPDelivery are the top-level spellings
+	// of annotations.modelOnly and annotations.mcpDelivery, for a server
+	// whose framework will not let it set annotations of its own.
+	XGrainModelOnly   *bool  `json:"x-grain-model-only,omitempty"`
+	XGrainMCPDelivery string `json:"x-grain-mcp-delivery,omitempty"`
 }
 
 // ToolAnnotations is the part of a tool's MCP annotations grain reads.
 type ToolAnnotations struct {
 	Title string `json:"title,omitempty"`
+	// ModelOnly, on a tool of an attempt's /runs/<attempt_id>/mcp, says
+	// whether the tool is reachable only from the model's own MCP channel
+	// (true) or also from inside the sandbox, through grain cap (false).
+	ModelOnly *bool `json:"modelOnly,omitempty"`
+	// MCPDelivery, on a mint_<method>, is the default for every tool its
+	// endpoint serves: DeliverySandbox or DeliveryModelOnly.
+	MCPDelivery string `json:"mcpDelivery,omitempty"`
+}
+
+// The delivery modes of a capability tool (docs/capabilities-spec.md
+// §5.2.6): reachable from the sandbox through grain cap, or only from the
+// model's own MCP channel.
+const (
+	DeliverySandbox   = "sandbox"
+	DeliveryModelOnly = "model_only"
+)
+
+// DeclaredModelOnly is what t says of itself: annotations.modelOnly, else
+// x-grain-model-only, else nil for a tool that says neither.
+func (t Tool) DeclaredModelOnly() *bool {
+	if t.Annotations != nil && t.Annotations.ModelOnly != nil {
+		return t.Annotations.ModelOnly
+	}
+	return t.XGrainModelOnly
+}
+
+// declaredDelivery is a mint_ tool's mcpDelivery, either spelling.
+func (t Tool) declaredDelivery() string {
+	if t.Annotations != nil && t.Annotations.MCPDelivery != "" {
+		return t.Annotations.MCPDelivery
+	}
+	return t.XGrainMCPDelivery
+}
+
+// ResolveModelOnly is the precedence of §5.2.6: a tool's own modelOnly
+// wins; else its method's mcpDelivery; else true, since an external
+// capability server's tools stay on the model's channel until their
+// author opts them into the sandbox.
+func ResolveModelOnly(declared *bool, methodDelivery string) bool {
+	if declared != nil {
+		return *declared
+	}
+	return methodDelivery != DeliverySandbox
+}
+
+// DeliveryMode names what ResolveModelOnly decided.
+func DeliveryMode(modelOnly bool) string {
+	if modelOnly {
+		return DeliveryModelOnly
+	}
+	return DeliverySandbox
 }
 
 // MethodInfo is one capability method a server advertises.
@@ -53,6 +109,10 @@ type MethodInfo struct {
 	// Releasable says the server advertises release_<Name>; a method
 	// without it is stateless and its teardown is a no-op (§4.1.2).
 	Releasable bool
+	// MCPDelivery is the mint tool's annotations.mcpDelivery: the
+	// delivery of every tool its endpoint serves that does not say for
+	// itself (§5.2.6). Empty is model-only.
+	MCPDelivery string
 }
 
 // Discover reads a server's methods out of its tools/list (§4.1.2). Tools
@@ -78,7 +138,11 @@ func Discover(tools []Tool) (map[string]*MethodInfo, error) {
 			if err != nil {
 				return nil, err
 			}
-			methods[name] = &MethodInfo{Name: name, Description: t.Description, ArgsSchema: args}
+			delivery := t.declaredDelivery()
+			if delivery != "" && delivery != DeliverySandbox && delivery != DeliveryModelOnly {
+				return nil, fmt.Errorf("tool %q: annotations.mcpDelivery %q is neither %q nor %q", t.Name, truncate(delivery, 40), DeliverySandbox, DeliveryModelOnly)
+			}
+			methods[name] = &MethodInfo{Name: name, Description: t.Description, ArgsSchema: args, MCPDelivery: delivery}
 		case strings.HasPrefix(t.Name, releasePrefix):
 			name := strings.TrimPrefix(t.Name, releasePrefix)
 			if seenRelease[name] {
