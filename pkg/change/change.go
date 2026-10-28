@@ -211,6 +211,19 @@ func Register(p Provider) {
 	}
 }
 
+// Unregister removes the provider for kind, and its Opener. For tests,
+// which register fakes into this process-wide registry.
+func Unregister(kind model.LinkKind) {
+	mu.Lock()
+	defer mu.Unlock()
+	if p, ok := providers[kind]; ok {
+		if o, ok := p.(Opener); ok {
+			delete(openers, o.TargetKind())
+		}
+	}
+	delete(providers, kind)
+}
+
 // Lookup is the provider registered for kind.
 func Lookup(kind model.LinkKind) (Provider, bool) {
 	mu.RLock()

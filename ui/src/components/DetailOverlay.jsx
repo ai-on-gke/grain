@@ -14,6 +14,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import ClChip from "./ClChip.jsx";
+import PresubmitBadge from "./PresubmitBadge.jsx";
 import { processPath } from "../paths.js";
 import LinkedNote from "../linkedNote.jsx";
 import { Alert, Button, Chip, Link, Typography } from "@mui/material";
@@ -337,6 +338,12 @@ export default function DetailOverlay({
                   <Fragment key={`changelist-${cl}`}>
                     {" "}
                     · <ClChip cl={cl} primary={i === 0} />
+                    {i === 0 && t.presubmit && (
+                      <>
+                        {" "}
+                        <PresubmitBadge presubmit={t.presubmit} />
+                      </>
+                    )}
                   </Fragment>
                 ))}
                 {/* Provenance links and the tree of work this task belongs
