@@ -164,7 +164,11 @@ func TestReleaseImagesDiscardRCMarksWithoutMovingTheChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discard-rc failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
 	}
-	for _, image := range []string{"grain", "google-grain", "guest"} {
+	expectedImages := []string{"grain", "guest"}
+	if _, err := exec.Command("test", "-d", filepath.Join(repoRoot(t), "google", "cmd", "grain")).CombinedOutput(); err == nil {
+		expectedImages = []string{"grain", "google-grain", "guest"}
+	}
+	for _, image := range expectedImages {
 		containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/"+image+":v1.6.0-rc.1-discarded ghcr.io/bwsalmon/grain/"+image+":v1.6.0-rc.1")
 	}
 	containsRun(t, out, "never published as k8s-sandbox")
