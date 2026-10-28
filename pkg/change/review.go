@@ -151,3 +151,24 @@ func WaitingDrafts(taskID string) (int, string) {
 	defer draftsMu.RUnlock()
 	return drafts[taskID].Waiting()
 }
+
+// PublishRun publishes the drafts run attemptID left on task's CLs, when
+// that run ends, and remembers what stayed unpublished for the Publish
+// replies button. A provider without a Publisher, a task with no CL, or a
+// kind blocked on expired credentials has nothing to publish.
+func PublishRun(ctx context.Context, task model.Task, attemptID string) (PublishResult, error) {
+	p, target := ReviewOf(task)
+	if p == nil || target == "" {
+		return PublishResult{}, nil
+	}
+	pub, ok := p.(Publisher)
+	if !ok || HealthOf(targetKind(p)).Blocked != "" {
+		return PublishResult{}, nil
+	}
+	res, err := pub.PublishRun(ctx, task, attemptID)
+	if err != nil {
+		return PublishResult{}, err
+	}
+	RememberPublish(task.ID, res)
+	return res, nil
+}

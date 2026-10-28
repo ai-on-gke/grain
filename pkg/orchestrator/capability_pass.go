@@ -28,6 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -130,6 +131,7 @@ func (h *CapabilityPasses) Release(ctx context.Context, runID string) []protocol
 // own logs still hold every record. The CLs the records say are the
 // task's own are linked to taskID (recordTaskChangelists).
 func releaseRunCapabilities(ctx context.Context, deps Deps, taskID, runID string) {
+	publishRunReplies(ctx, deps, taskID, runID)
 	audits := deps.capabilityPasses().Release(ctx, runID)
 	records := capabilityAuditRecords(audits, deps.Config.now())
 	if len(records) == 0 || deps.Store == nil {
@@ -140,6 +142,29 @@ func releaseRunCapabilities(ctx context.Context, deps Deps, taskID, runID string
 	}
 	if err := recordTaskChangelists(ctx, deps.Store, taskID, records); err != nil {
 		log.Printf("orchestrator: run %s: linking task %s to its CLs: %v", runID, taskID, err)
+	}
+}
+
+// publishRunReplies publishes the draft replies runID left on its task's
+// CLs (google3-cls.md §5): a run's answers to its reviewers are drafts
+// until it ends, so a reviewer reads one run's replies together. What
+// stays unpublished -- a reviewer policy that publishes only CLs grain
+// mailed, say -- is left for a person's Publish replies.
+func publishRunReplies(ctx context.Context, deps Deps, taskID, runID string) {
+	if deps.Store == nil {
+		return
+	}
+	task, err := deps.Store.GetTask(ctx, taskID)
+	if err != nil || task == nil || change.Primary(*task) == "" {
+		return
+	}
+	res, err := change.PublishRun(ctx, *task, runID)
+	if err != nil {
+		log.Printf("orchestrator: run %s: publishing its CL replies: %v", runID, err)
+		return
+	}
+	if n, reason := res.Waiting(); n > 0 {
+		log.Printf("orchestrator: run %s: %d CL repl(ies) left as drafts for Publish replies: %s", runID, n, reason)
 	}
 }
 

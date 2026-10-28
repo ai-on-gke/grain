@@ -277,6 +277,11 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/delivered", s.handleRecordDelivered)
 	s.route("POST /api/tasks/{id}/wait-credit", s.handleCreditWait)
 	s.route("POST /api/tasks/{id}/change-checks", s.handleChangeChecks)
+	// A CL's review loop: a run's draft replies (internal), and a
+	// person's Publish replies and Mail (change_review.go).
+	s.route("POST /api/tasks/{id}/change-review", s.handleChangeReview)
+	s.route("POST /api/tasks/{id}/change-publish", s.handlePublishReplies)
+	s.route("POST /api/tasks/{id}/change-mail", s.handleMailChange)
 	// The wait_for_task tool, from inside the run that is waiting: check
 	// and describe the tasks it names, or park its own task on them as
 	// depends-on links (wait_task.go).
