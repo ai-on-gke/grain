@@ -266,15 +266,17 @@ func PlanBuild(ctx context.Context, f *File, opts BuildOptions) (*BuildPlan, err
 
 			packedFrom := expand(resolvePackedFrom(f, stage.Index, ref), vars)
 			packOptsGuest := guestpack.Options{
-				From:         packFrom,
-				PackedFrom:   packedFrom,
-				Tag:          tag,
-				KonturImage:  konturImage,
-				PackerImage:  packerImage,
-				Variant:      variant,
-				DiskExtraMB:  opts.DiskExtraMB + parts.extraDiskMB + packOpts.diskExtraMB,
-				ExposedPorts: cfg.ExposedPorts,
-				Volumes:      append(slices.Clone(cfg.Volumes), parts.volumes...),
+				From:           packFrom,
+				PackedFrom:     packedFrom,
+				Tag:            tag,
+				KonturImage:    konturImage,
+				PackerImage:    packerImage,
+				Variant:        variant,
+				DiskExtraMB:    opts.DiskExtraMB + parts.extraDiskMB + packOpts.diskExtraMB,
+				StorageBackend: parts.settings["CHV_STORAGE_BACKEND"],
+				ExtentSizeMB:   settingInt(parts.settings, "CHV_EXTENT_SIZE_MB"),
+				ExposedPorts:   cfg.ExposedPorts,
+				Volumes:        append(slices.Clone(cfg.Volumes), parts.volumes...),
 			}
 			spec, specFile, specJSON, err := packWorkload(cfg, packedFrom, stage.Index)
 			if err != nil {
@@ -351,14 +353,16 @@ func PlanBuild(ctx context.Context, f *File, opts BuildOptions) (*BuildPlan, err
 			w(``)
 
 			packStages, err := guestpack.PackStages(guestpack.Options{
-				From:        containerStageName,
-				PackedFrom:  ref,
-				Tag:         tag,
-				KonturImage: konturImage,
-				PackerImage: packerImage,
-				Variant:     opts.Variant,
-				DiskExtraMB: opts.DiskExtraMB + parts.extraDiskMB,
-				Volumes:     parts.volumes,
+				From:           containerStageName,
+				PackedFrom:     ref,
+				Tag:            tag,
+				KonturImage:    konturImage,
+				PackerImage:    packerImage,
+				Variant:        opts.Variant,
+				DiskExtraMB:    opts.DiskExtraMB + parts.extraDiskMB,
+				StorageBackend: parts.settings["CHV_STORAGE_BACKEND"],
+				ExtentSizeMB:   settingInt(parts.settings, "CHV_EXTENT_SIZE_MB"),
+				Volumes:        parts.volumes,
 			})
 			if err != nil {
 				return nil, err
@@ -444,15 +448,17 @@ func PlanBuild(ctx context.Context, f *File, opts BuildOptions) (*BuildPlan, err
 
 			packedFrom := expand(resolvePackedFrom(f, stage.Index, stage.Ref), vars)
 			packOptsGuest := guestpack.Options{
-				From:         containerStageName,
-				PackedFrom:   packedFrom,
-				Tag:          tag,
-				KonturImage:  konturImage,
-				PackerImage:  packerImage,
-				Variant:      variant,
-				DiskExtraMB:  opts.DiskExtraMB + parts.extraDiskMB + packOpts.diskExtraMB,
-				ExposedPorts: cfg.ExposedPorts,
-				Volumes:      append(slices.Clone(cfg.Volumes), parts.volumes...),
+				From:           containerStageName,
+				PackedFrom:     packedFrom,
+				Tag:            tag,
+				KonturImage:    konturImage,
+				PackerImage:    packerImage,
+				Variant:        variant,
+				DiskExtraMB:    opts.DiskExtraMB + parts.extraDiskMB + packOpts.diskExtraMB,
+				StorageBackend: parts.settings["CHV_STORAGE_BACKEND"],
+				ExtentSizeMB:   settingInt(parts.settings, "CHV_EXTENT_SIZE_MB"),
+				ExposedPorts:   cfg.ExposedPorts,
+				Volumes:        append(slices.Clone(cfg.Volumes), parts.volumes...),
 			}
 			spec, specFile, specJSON, err := packWorkload(cfg, packedFrom, stage.Index)
 			if err != nil {
@@ -702,14 +708,16 @@ depend() {
 
 		// Pack stages
 		packOpts := guestpack.Options{
-			From:        wrappedGuestStage,
-			PackedFrom:  guestImage,
-			Tag:         tag,
-			KonturImage: konturImage,
-			PackerImage: packerImage,
-			Variant:     opts.Variant,
-			DiskExtraMB: opts.DiskExtraMB + parts.extraDiskMB,
-			Volumes:     parts.volumes,
+			From:           wrappedGuestStage,
+			PackedFrom:     guestImage,
+			Tag:            tag,
+			KonturImage:    konturImage,
+			PackerImage:    packerImage,
+			Variant:        opts.Variant,
+			DiskExtraMB:    opts.DiskExtraMB + parts.extraDiskMB,
+			StorageBackend: parts.settings["CHV_STORAGE_BACKEND"],
+			ExtentSizeMB:   settingInt(parts.settings, "CHV_EXTENT_SIZE_MB"),
+			Volumes:        parts.volumes,
 		}
 		packStages, err := guestpack.PackStages(packOpts)
 		if err != nil {
@@ -760,6 +768,14 @@ depend() {
 func writeSettings(w func(string, ...any), settings map[string]string) {
 	keys := make([]string, 0, len(settings))
 	for k := range settings {
+		// PackStages already emits CHV_EXTENT_SIZE_MB (when > 0) and
+		// CHV_STORAGE_BACKEND (when "extents"), so avoid duplicating them.
+		if k == "CHV_EXTENT_SIZE_MB" && settingInt(settings, "CHV_EXTENT_SIZE_MB") > 0 {
+			continue
+		}
+		if k == "CHV_STORAGE_BACKEND" && settings[k] == "extents" {
+			continue
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)

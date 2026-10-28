@@ -26,19 +26,19 @@
 #            still deletes itself at --max-run-duration.
 #
 # Environment:
-#   GCE_PROJECT       project to create the VM in (default: the active gcloud
-#                     project, else the service-account key's project_id)
+#   GCE_PROJECT       project to create the VM in (default: the service-account
+#                     key's project_id, else the active gcloud project)
 #   GCE_ZONE          zone (default us-central1-a)
-#   GCE_MACHINE_TYPE  machine type (default e2-standard-8)
+#   GCE_MACHINE_TYPE  machine type (default e2-standard-16)
 #   GCE_DISK_GB       boot disk size (default 100)
 #   GCE_IMAGE_FAMILY  boot image family (default debian-12)
 #   GCE_IMAGE_PROJECT project of that family (default debian-cloud)
 #   GCE_NETWORK       VPC network (default "default"); it has to let this
 #                     machine reach the VM's external address on port 22
 #   GCE_MAX_RUN       --max-run-duration for the VM (default 2h)
-#   GCE_KEY_FILE      service-account key to activate when gcloud has no
-#                     active account (default $GOOGLE_APPLICATION_CREDENTIALS,
-#                     else /home/debian/.gcp-service-account.json)
+#   GCE_KEY_FILE      service-account key to activate when present (default
+#                     $GOOGLE_APPLICATION_CREDENTIALS, else
+#                     /home/debian/.gcp-service-account.json)
 
 set -euo pipefail
 
@@ -56,7 +56,7 @@ done
 [[ ${#images[@]} -gt 0 ]] || images=(guests)
 
 zone=${GCE_ZONE:-us-central1-a}
-machine_type=${GCE_MACHINE_TYPE:-e2-standard-8}
+machine_type=${GCE_MACHINE_TYPE:-e2-standard-16}
 disk_gb=${GCE_DISK_GB:-100}
 image_family=${GCE_IMAGE_FAMILY:-debian-12}
 image_project=${GCE_IMAGE_PROJECT:-debian-cloud}
@@ -73,18 +73,21 @@ for cmd in gcloud ssh ssh-keygen tar git; do
   command -v "$cmd" >/dev/null || die "missing required command: $cmd"
 done
 
-# Credentials. A machine that is already logged in keeps its login; one
-# that is not (a CI runner, a fresh sandbox) gets the service-account key.
+# Credentials. A service-account key at $key_file is always activated when
+# present: on a GKE-hosted grain sandbox the GCE metadata server is reachable
+# and reports the node's own restricted service account as ACTIVE, which
+# lacks compute scope. Without a key file, an existing gcloud login is used.
 key_file=${GCE_KEY_FILE:-${GOOGLE_APPLICATION_CREDENTIALS:-/home/debian/.gcp-service-account.json}}
-if [[ -z $(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null) ]]; then
-  [[ -r $key_file ]] || die "gcloud has no active account and there is no service-account key at $key_file (set GCE_KEY_FILE)"
-  gcloud auth activate-service-account --key-file="$key_file" --quiet >/dev/null 2>&1 ||
+if [[ -r $key_file ]]; then
+  if ! out=$(gcloud auth activate-service-account --key-file="$key_file" --quiet 2>&1); then
+    printf '%s\n' "$out" >&2
     die "could not activate the service-account key at $key_file"
+  fi
+  project=${GCE_PROJECT:-$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project_id"])' "$key_file")}
+elif [[ -z $(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null) ]]; then
+  die "gcloud has no active account and there is no service-account key at $key_file (set GCE_KEY_FILE)"
 fi
-project=${GCE_PROJECT:-$(gcloud config get-value project 2>/dev/null || true)}
-if [[ -z $project && -r $key_file ]]; then
-  project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project_id"])' "$key_file")
-fi
+project=${project:-${GCE_PROJECT:-$(gcloud config get-value project 2>/dev/null || true)}}
 [[ -n $project ]] || die "no GCP project: set GCE_PROJECT"
 gc=(gcloud --project "$project" --quiet)
 
@@ -127,7 +130,7 @@ ip=$("${gc[@]}" compute instances create "$name" \
   --image-family "$image_family" \
   --image-project "$image_project" \
   --boot-disk-size "${disk_gb}GB" \
-  --boot-disk-type pd-balanced \
+  --boot-disk-type pd-ssd \
   --network "$network" \
   --no-service-account --no-scopes \
   --max-run-duration "$max_run" \
@@ -156,14 +159,16 @@ vm 'echo "vm: $(. /etc/os-release && echo "$PRETTY_NAME"), kernel $(uname -r), $
 log "installing docker and git"
 vm 'set -euo pipefail
   apt() { sudo DEBIAN_FRONTEND=noninteractive apt-get "$@"; }
-  apt update -qq
-  apt install -y -qq ca-certificates curl git >/dev/null
+  if ! command -v curl >/dev/null; then
+    apt update -qq
+    apt install -y -qq ca-certificates curl >/dev/null
+  fi
   sudo install -m 0755 -d /etc/apt/keyrings
   sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" |
     sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
   apt update -qq
-  apt install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin >/dev/null
+  apt install -y -qq ca-certificates curl git docker-ce docker-ce-cli containerd.io docker-buildx-plugin >/dev/null
   sudo usermod -aG docker "$USER"
   docker --version'
 

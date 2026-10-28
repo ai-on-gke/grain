@@ -90,6 +90,11 @@ func TestPresentAndCheck(t *testing.T) {
 			wantDisk: true,
 		},
 		{
+			name:     "extent disk manifest only",
+			files:    []string{DiskExtentsManifest},
+			wantDisk: true,
+		},
+		{
 			name:       "disk and its own kernel pair",
 			files:      []string{DiskImage, GuestKernel, GuestInitramfs},
 			wantDisk:   true,

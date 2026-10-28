@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/bwsalmon/granule/pkg/config"
+	"github.com/bwsalmon/granule/pkg/extents"
+	"github.com/bwsalmon/granule/pkg/guestimage"
 )
 
 // killGrace bounds how long the runtime waits after a forced vmm.shutdown
@@ -27,6 +29,9 @@ type Runner struct {
 	cfg config.Config
 	cmd *exec.Cmd
 	api *APIClient
+
+	extentServers []*extents.Server
+	extentStores  []*extents.Store
 
 	// restored records whether Start booted by restoring cfg.SnapshotPath
 	// (see BuildArgs and SnapshotExists) rather than booting fresh. Only
@@ -67,8 +72,12 @@ func (r *Runner) Start(stdout, stderr io.Writer) error {
 	}
 
 	r.restored = SnapshotExists(r.cfg.SnapshotPath)
+	if err := r.startExtentServers(); err != nil {
+		return err
+	}
 	args, err := BuildArgs(r.cfg)
 	if err != nil {
+		r.closeExtentServers()
 		return err
 	}
 	log.Printf("starting: %s", String(r.cfg.BinaryPath, args))
@@ -79,6 +88,7 @@ func (r *Runner) Start(stdout, stderr io.Writer) error {
 	cmd.Stdin = nil
 
 	if err := startWithUmask(cmd, vmmUmask); err != nil {
+		r.closeExtentServers()
 		return fmt.Errorf("starting %s: %w", r.cfg.BinaryPath, err)
 	}
 	r.cmd = cmd
@@ -86,10 +96,78 @@ func (r *Runner) Start(stdout, stderr io.Writer) error {
 
 	go func() {
 		r.exitErr = cmd.Wait()
+		r.closeExtentServers()
 		close(r.done)
 	}()
 
 	return nil
+}
+
+func (r *Runner) startExtentServers() error {
+	for i := range r.cfg.Disks {
+		d := &r.cfg.Disks[i]
+		if d.VhostUserSocket == "" && !extents.IsExtentDir(d.Path) && r.cfg.StorageBackend != config.StorageBackendExtents {
+			continue
+		}
+		if _, err := os.Stat(d.Path); err != nil {
+			continue
+		}
+		sock := d.VhostUserSocket
+		if sock == "" {
+			sock = guestimage.VhostBlkSocket
+		}
+		if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
+			sock = filepath.Join(filepath.Dir(r.cfg.APISocket), fmt.Sprintf("vhost-blk-%d.sock", i))
+		}
+		d.VhostUserSocket = sock
+
+		var opts extents.Options
+		if extents.IsExtentDir(d.Path) {
+			opts = extents.Options{
+				Dir:             d.Path,
+				BasePath:        d.BasePath,
+				ExtentSizeBytes: uint64(r.cfg.ExtentSizeMB) << 20,
+				ReadOnly:        d.ReadOnly,
+			}
+		} else {
+			opts = extents.Options{
+				Dir:             filepath.Join(filepath.Dir(r.cfg.APISocket), fmt.Sprintf("extents-disk-%d", i)),
+				BasePath:        d.Path,
+				ExtentSizeBytes: uint64(r.cfg.ExtentSizeMB) << 20,
+				ReadOnly:        d.ReadOnly,
+			}
+		}
+		st, err := extents.Open(opts)
+		if err != nil {
+			r.closeExtentServers()
+			return fmt.Errorf("opening extent store for disk %d (%s): %w", i, d.Path, err)
+		}
+		numQueues := d.NumQueues
+		if numQueues == 0 {
+			numQueues = r.cfg.DiskNumQueues
+		}
+		srv, err := extents.NewServer(st, sock, numQueues)
+		if err != nil {
+			_ = st.Close()
+			r.closeExtentServers()
+			return fmt.Errorf("starting vhost-user-blk server on %s: %w", sock, err)
+		}
+		srv.Start()
+		r.extentStores = append(r.extentStores, st)
+		r.extentServers = append(r.extentServers, srv)
+	}
+	return nil
+}
+
+func (r *Runner) closeExtentServers() {
+	for _, srv := range r.extentServers {
+		_ = srv.Close()
+	}
+	r.extentServers = nil
+	for _, st := range r.extentStores {
+		_ = st.Close()
+	}
+	r.extentStores = nil
 }
 
 // vmmUmask is the umask cloud-hypervisor runs under. Everything it
@@ -131,6 +209,11 @@ func (r *Runner) Restored() bool {
 // on exactly as if Suspend had never been called. It only leaves behind
 // a checkpoint for the *next* granule run to pick up.
 func (r *Runner) Suspend(ctx context.Context) error {
+	for _, st := range r.extentStores {
+		if err := st.Flush(); err != nil {
+			return fmt.Errorf("flushing extent store before snapshot: %w", err)
+		}
+	}
 	overlayPath := ""
 	if r.cfg.DiskMode == config.DiskModeOverlay {
 		overlayPath = r.cfg.OverlayPath
@@ -183,7 +266,12 @@ func TakeSnapshot(ctx context.Context, api *APIClient, snapshotPath, overlayPath
 	// while the VM is paused and it is not being written, and
 	// RestoreDiskOverlay puts it back before the next boot restores.
 	if overlayPath != "" {
-		if _, err := os.Stat(overlayPath); err == nil {
+		if extents.IsExtentDir(overlayPath) {
+			if err := extents.CopyExtentDir(overlayPath, filepath.Join(tmp, SnapshotDiskOverlayName)); err != nil {
+				os.RemoveAll(tmp)
+				return fmt.Errorf("saving the guest's extent overlay into the snapshot: %w", err)
+			}
+		} else if _, err := os.Stat(overlayPath); err == nil {
 			if err := copyFile(overlayPath, filepath.Join(tmp, SnapshotDiskOverlayName)); err != nil {
 				os.RemoveAll(tmp)
 				return fmt.Errorf("saving the guest's disk overlay into the snapshot: %w", err)
@@ -262,6 +350,19 @@ func RestoreDiskOverlay(snapshotPath, dst string) (bool, error) {
 	}
 
 	tmp := dst + ".restoring"
+	if extents.IsExtentDir(src) {
+		_ = os.RemoveAll(tmp)
+		if err := extents.CopyExtentDir(src, tmp); err != nil {
+			_ = os.RemoveAll(tmp)
+			return false, fmt.Errorf("restoring the extent disk overlay saved at %s: %w", src, err)
+		}
+		_ = os.RemoveAll(dst)
+		if err := os.Rename(tmp, dst); err != nil {
+			_ = os.RemoveAll(tmp)
+			return false, fmt.Errorf("putting the restored extent disk overlay at %s: %w", dst, err)
+		}
+		return true, nil
+	}
 	if err := copyFile(src, tmp); err != nil {
 		os.Remove(tmp)
 		return false, fmt.Errorf("restoring the disk overlay saved at %s: %w", src, err)

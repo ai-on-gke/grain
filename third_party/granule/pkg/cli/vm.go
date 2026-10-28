@@ -73,7 +73,7 @@ func runVM(ctx context.Context, args []string, stdin io.Reader, stdout, stderr i
 	case "list":
 		return runVMList(ctx, rest, stdout, stderr)
 	case "forward":
-		return runForward(ctx, rest, stderr)
+		return runLegacyForward(ctx, rest, stderr)
 	default:
 		return fmt.Errorf("vm: unknown subcommand %q", cmd)
 	}
@@ -99,6 +99,7 @@ type vmFlags struct {
 	diskNumQueues    *int
 	diskIOThreads    *bool
 	diskIOEngine     *string
+	storageBackend   *string
 	kernel           *string
 	initramfs        *string
 	firmware         *string
@@ -158,6 +159,7 @@ func registerVMFlags(fs *flag.FlagSet, d vmspec.VMSpec) *vmFlags {
 	v.diskNumQueues = fs.Int("disk-num-queues", d.DiskNumQueues, "number of virtio-blk queues (multi-queue); 0 means hypervisor default")
 	v.diskIOThreads = fs.Bool("disk-iothreads", d.DiskIOThreads, "dedicated host iothreads for block device eventfd servicing")
 	v.diskIOEngine = fs.String("disk-io-engine", d.DiskIOEngine, "host asynchronous I/O backend: \"io_uring\", \"epoll\" or \"sync\"")
+	v.storageBackend = fs.String("storage-backend", d.StorageBackend, "disk storage backend: \"standard\" (qcow2 overlay / flat disk.img) or \"extents\" (N-MiB extent directory over vhost-user-blk)")
 	v.kernel = fs.String("kernel", d.Kernel, "path to a kernel for direct boot, as seen inside the container (mutually exclusive with -firmware)")
 	v.initramfs = fs.String("initramfs", d.Initramfs, "path to an initramfs, used with -kernel")
 	v.firmware = fs.String("firmware", d.Firmware, "path to firmware for firmware boot, as seen inside the container (mutually exclusive with -kernel)")
@@ -339,6 +341,7 @@ func (v *vmFlags) toSpec(name string) vmspec.VMSpec {
 		DiskNumQueues:                 *v.diskNumQueues,
 		DiskIOThreads:                 *v.diskIOThreads,
 		DiskIOEngine:                  *v.diskIOEngine,
+		StorageBackend:                *v.storageBackend,
 		Kernel:                        *v.kernel,
 		Initramfs:                     *v.initramfs,
 		Firmware:                      *v.firmware,

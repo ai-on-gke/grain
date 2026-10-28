@@ -767,6 +767,14 @@ func attachTTY(f *os.File, writeFrame func(byte, []byte) error) (restore func(),
 	}, nil
 }
 
+// Dial opens a connection to the guest's granule-agent, retrying while
+// the VM boots exactly as a session does, for callers that speak to the
+// agent themselves rather than through Run -- the shim's forward-stdio
+// mode, which writes its own execwire.Request.
+func Dial(ctx context.Context, cfg Config) (net.Conn, error) {
+	return dialWithRetry(ctx, cfg)
+}
+
 // dialWithRetry keeps trying to reach granule-agent until it succeeds,
 // ctx is cancelled, or cfg.ConnectTimeout elapses. Both halves can fail
 // for the same ordinary reason -- the VM is still booting -- so both are

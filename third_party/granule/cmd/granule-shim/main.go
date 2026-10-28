@@ -63,11 +63,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/bwsalmon/granule/pkg/config"
+	"github.com/bwsalmon/granule/pkg/extents"
 	"github.com/bwsalmon/granule/pkg/guestcp"
 	"github.com/bwsalmon/granule/pkg/guestexec"
 	"github.com/bwsalmon/granule/pkg/guestimage"
@@ -115,6 +117,11 @@ func main() {
 		if err := runForward(os.Args[2:]); err != nil {
 			log.Fatalf("%v", err)
 		}
+	case "forward-stdio":
+		log.SetPrefix("granule: forward-stdio: ")
+		if err := runForwardStdio(os.Args[2:]); err != nil {
+			log.Fatalf("%v", err)
+		}
 	case "resize":
 		log.SetPrefix("granule: resize: ")
 		if err := runResize(os.Args[2:]); err != nil {
@@ -149,6 +156,11 @@ func main() {
 		if err := runWrap(os.Args[2:]); err != nil {
 			log.Fatalf("%v", err)
 		}
+	case "extents":
+		log.SetPrefix("granule: extents: ")
+		if err := runExtents(os.Args[2:]); err != nil {
+			log.Fatalf("%v", err)
+		}
 	case "sleep":
 		// A bare "select {}" here would make Go's deadlock detector kill
 		// the process immediately (nothing else could ever wake the sole
@@ -160,7 +172,7 @@ func main() {
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 		<-sigCh
 	default:
-		log.Fatalf("granule: unknown mode %q (want \"run\", \"netshim\", \"exec\", \"cp\", \"forward\", \"resize\", \"ready\", \"snapshot\", \"wrap\" or \"sleep\")", mode)
+		log.Fatalf("granule: unknown mode %q (want \"run\", \"netshim\", \"exec\", \"cp\", \"forward-stdio\", \"resize\", \"ready\", \"snapshot\", \"wrap\" or \"sleep\")", mode)
 	}
 }
 
@@ -169,6 +181,14 @@ func main() {
 // used to. Its own stdout/stderr become the VM's serial console output,
 // so "kubectl logs" on the container is the VM's console.
 func runVM() error {
+	// First, so the per-sandbox access token is out of this process's
+	// environment (and its token file unlinked) before anything that
+	// could inherit or expose it starts: cloud-hypervisor, the setup
+	// script, the memory agent. See access.go.
+	access, err := accessFromEnv()
+	if err != nil {
+		return err
+	}
 	cfg, err := config.FromEnv()
 	if err != nil {
 		return err
@@ -258,6 +278,12 @@ func runVM() error {
 		log.Printf("writable disk sized to %d MiB; the guest grows its own filesystem into it", cfg.DiskSizeMB)
 	}
 
+	// Whatever dials this sandbox's access listener (granule relay, an
+	// in-cluster controller) or receives its dial-out is kept out of the
+	// guest's reach by netshim; see docs/sandbox-access-api.md, 5.1.
+	if err := exportNetshimAccess(access); err != nil {
+		return err
+	}
 	if err := configureNetwork(&cfg, netshim.Setup, netshim.Discover); err != nil {
 		return err
 	}
@@ -314,6 +340,10 @@ func runVM() error {
 
 	if cfg.MemAgent {
 		startMemAgent(ctx, cfg)
+	}
+	if err := startAccess(ctx, access, cfg); err != nil {
+		runner.Shutdown(context.Background())
+		return fmt.Errorf("starting the sandbox access API: %w", err)
 	}
 
 	// Its own context rather than ctx: the guest's last output is still
@@ -1044,9 +1074,47 @@ func runSnapshot(args []string) error {
 		return fmt.Errorf("waiting for cloud-hypervisor API socket: %w", err)
 	}
 
-	if err := hypervisor.TakeSnapshot(ctx, api, *path, *overlay, *resume); err != nil {
+	overlayPath := *overlay
+	if overlayPath == guestimage.Overlay {
+		if _, err := os.Stat(overlayPath); os.IsNotExist(err) && extents.IsExtentDir(guestimage.OverlayExtents) {
+			overlayPath = guestimage.OverlayExtents
+		}
+	}
+
+	if err := hypervisor.TakeSnapshot(ctx, api, *path, overlayPath, *resume); err != nil {
 		return fmt.Errorf("snapshotting VM: %w", err)
 	}
 	log.Printf("captured VM snapshot to %s", *path)
 	return nil
+}
+
+// runExtents splits a flat raw disk image into an N-MiB extent directory or
+// flattens an extent directory back into a flat raw disk image.
+func runExtents(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: granule-shim extents <split|flatten> ...")
+	}
+	switch args[0] {
+	case "split":
+		if len(args) < 3 || len(args) > 4 {
+			return fmt.Errorf("usage: granule-shim extents split <flat-image> <dst-extents-dir> [extent-size-mb]")
+		}
+		extentSizeBytes := uint64(extents.DefaultExtentSizeMB) * 1024 * 1024
+		if len(args) == 4 && args[3] != "" {
+			mb, err := strconv.Atoi(args[3])
+			if err != nil || mb <= 0 {
+				return fmt.Errorf("extent-size-mb must be a positive integer, got %q", args[3])
+			}
+			extentSizeBytes = uint64(mb) * 1024 * 1024
+		}
+		_, err := extents.SplitFromFlat(args[1], args[2], extentSizeBytes)
+		return err
+	case "flatten":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: granule-shim extents flatten <src-extents-dir> <dst-flat-image>")
+		}
+		return extents.FlattenToFlat(args[1], args[2])
+	default:
+		return fmt.Errorf("unknown extents subcommand %q (want \"split\" or \"flatten\")", args[0])
+	}
 }

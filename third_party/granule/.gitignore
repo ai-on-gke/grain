@@ -27,3 +27,4 @@ __pycache__/
 # and one in a commit is a run of test/granulefiles/run.sh that a `git
 # add -A` happened to catch mid-build.
 .granule-build-*/
+experimental/vhost-user-extents-rs/target/

@@ -484,6 +484,8 @@ tree took keeps disk chains short enough that it is not yet paid for.
 recording a backing file and an L1 table. Superseded in favor of flat multi-extent
 VMDKs with opportunistic reflink cloning, which eliminate cluster allocation overhead
 and table serialization while preserving $O(1)$ extent cloning on reflink filesystems.
+For the layering half of the argument -- a derived image that ships only what it
+changed -- see the optional extent backend, `docs/extent-storage-design.md`.
 
 A packed raw `disk.img` with `image_type=raw` has no backing file at all, so the mitigation stays
 on however untrusted the source -- the cheap path is also the safe one,

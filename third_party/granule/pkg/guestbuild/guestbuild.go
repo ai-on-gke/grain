@@ -208,6 +208,12 @@ type Options struct {
 	// DiskIOEngine configures the host asynchronous I/O backend (CHV_DISK_IO_ENGINE: "io_uring", "epoll", or "sync").
 	DiskIOEngine string
 
+	// StorageBackend selects the VM disk storage backend ("standard" or "extents").
+	StorageBackend string
+
+	// ExtentSizeMB configures the extent size in MiB (CHV_EXTENT_SIZE_MB).
+	ExtentSizeMB int
+
 	// Place are files to write into the *container* between the guest
 	// powering off and the commit, as path -> contents. Not into the
 	// guest: these are the parts of the guest half that live beside the
@@ -485,6 +491,12 @@ func Build(ctx context.Context, opts Options) error {
 	}
 	if opts.DiskIOEngine != "" {
 		changes = append(changes, "ENV CHV_DISK_IO_ENGINE="+opts.DiskIOEngine)
+	}
+	if opts.StorageBackend != "" {
+		changes = append(changes, "ENV CHV_STORAGE_BACKEND="+opts.StorageBackend)
+	}
+	if opts.ExtentSizeMB > 0 {
+		changes = append(changes, fmt.Sprintf("ENV CHV_EXTENT_SIZE_MB=%d", opts.ExtentSizeMB))
 	}
 	if err := s.Commit(ctx, opts.Tag, changes...); err != nil {
 		return fail("committing the provisioned guest: %w", err)

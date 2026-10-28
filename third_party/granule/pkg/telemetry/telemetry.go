@@ -168,17 +168,51 @@ type NetworkHTTPStats struct {
 	Errors    int     `json:"errors"`
 }
 
-// StorageBenchmarkSummary represents the storage module telemetry map.
-type StorageBenchmarkSummary map[string]StorageBenchmarkItem
+// StorageBenchmarkSummary is storage/summary_storage_benchmark.json, as
+// benchmarks/storage/run_storage_benchmark.py --live writes it. Every map
+// is keyed by storage backend ("host", "flat", "qcow_2m",
+// "extents_overlay_16", ...).
+type StorageBenchmarkSummary struct {
+	Meta map[string]interface{} `json:"meta"`
+	// Fio is backend -> workload ("seq_write", "rand_read", ...) -> result.
+	Fio     map[string]map[string]StorageFioResult `json:"fio"`
+	Startup map[string]StorageStartup              `json:"startup"`
+	OCI     map[string]StorageOCILayer             `json:"oci"`
+	Errors  map[string]string                      `json:"errors"`
+}
 
-// StorageBenchmarkItem represents one storage workload across environments.
-type StorageBenchmarkItem struct {
-	Name    string                 `json:"name"`
-	Host    map[string]interface{} `json:"host,omitempty"`
-	Flat    map[string]interface{} `json:"flat,omitempty"`
-	Vmdk    map[string]interface{} `json:"vmdk,omitempty"`
-	Qcow64k map[string]interface{} `json:"qcow_64k,omitempty"`
-	Qcow2m  map[string]interface{} `json:"qcow_2m,omitempty"`
+// StorageFioResult is one fio workload's group-reported result.
+type StorageFioResult struct {
+	Read   StorageFioSide `json:"read"`
+	Write  StorageFioSide `json:"write"`
+	UsrCPU float64        `json:"usr_cpu"`
+	SysCPU float64        `json:"sys_cpu"`
+}
+
+// StorageFioSide is the read or write half of a fio result.
+type StorageFioSide struct {
+	BandwidthMBs float64 `json:"bw_mbs"`
+	IOPS         float64 `json:"iops"`
+	MeanUs       float64 `json:"mean_us"`
+	P50Us        float64 `json:"p50_us"`
+	P95Us        float64 `json:"p95_us"`
+	P99Us        float64 `json:"p99_us"`
+}
+
+// StorageStartup is docker run (cold) or docker start (warm) to granule ready.
+type StorageStartup struct {
+	ColdMs  float64 `json:"cold_ms"`
+	ColdMs2 float64 `json:"cold_ms_2,omitempty"`
+	WarmMs  float64 `json:"warm_ms,omitempty"`
+}
+
+// StorageOCILayer is the layer docker commit makes of a small guest change.
+type StorageOCILayer struct {
+	GuestWriteMiB float64  `json:"guest_write_mib"`
+	LayerMiB      float64  `json:"layer_mib"`
+	CommitMs      float64  `json:"commit_ms"`
+	ChangedFiles  int      `json:"changed_files"`
+	ChangedSample []string `json:"changed_sample,omitempty"`
 }
 
 // MicrobenchmarksSummary represents microbenchmark results.
@@ -280,7 +314,7 @@ func LoadNetworkSummary(path string) (*NetworkBenchmarkSummary, error) {
 }
 
 // LoadStorageSummary loads storage/summary_storage_benchmark.json.
-func LoadStorageSummary(path string) (StorageBenchmarkSummary, error) {
+func LoadStorageSummary(path string) (*StorageBenchmarkSummary, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read storage summary: %w", err)
@@ -289,7 +323,7 @@ func LoadStorageSummary(path string) (StorageBenchmarkSummary, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal storage summary: %w", err)
 	}
-	return s, nil
+	return &s, nil
 }
 
 // LoadMicrobenchmarksSummary loads microbenchmarks/microbenchmarks_summary.json.

@@ -749,3 +749,32 @@ func TestDefaultPackerImageMatchesDockerfile(t *testing.T) {
 	}
 	t.Fatal("no `FROM <image> AS guest-image` in the Dockerfile")
 }
+
+func TestDockerfile_StorageBackendExtents(t *testing.T) {
+	df, err := Dockerfile(Options{
+		From:           "ghcr.io/example/my-guest-rootfs:v1",
+		Tag:            "my-guest:extents",
+		StorageBackend: "extents",
+		ExtentSizeMB:   16,
+	})
+	if err != nil {
+		t.Fatalf("Dockerfile: %v", err)
+	}
+	for _, want := range []string{
+		"GRANULE_STORAGE_BACKEND=extents GRANULE_EXTENT_SIZE_MB=16",
+		`ENV CHV_STORAGE_BACKEND="extents"`,
+		`ENV CHV_EXTENT_SIZE_MB="16"`,
+	} {
+		if !strings.Contains(df, want) {
+			t.Errorf("Dockerfile missing %q:\n%s", want, df)
+		}
+	}
+
+	if _, err := Dockerfile(Options{
+		From:           "ghcr.io/example/my-guest-rootfs:v1",
+		Tag:            "my-guest:bad",
+		StorageBackend: "bogus",
+	}); err == nil {
+		t.Errorf("expected error for unknown storage backend")
+	}
+}

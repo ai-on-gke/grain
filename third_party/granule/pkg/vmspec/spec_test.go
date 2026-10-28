@@ -390,13 +390,14 @@ func TestResolveSettings(t *testing.T) {
 				"CHV_EXTENT_SIZE_MB=128",
 				"CHV_DISK_NUM_QUEUES=4",
 				"CHV_DISK_IO_ENGINE=io_uring",
+				"CHV_STORAGE_BACKEND=extents",
 				"CHV_DISK_IOTHREADS=on",
 			},
 			want: VMSpec{
 				CPUs: DefaultCPUs, MemoryMB: DefaultMemoryMB,
 				Cmdline: "quiet", ShutdownTimeout: "45s",
 				DiskSizeMB: 2048, ExtentSizeMB: 128, DiskNumQueues: 4,
-				DiskIOEngine: "io_uring", DiskIOThreads: true,
+				DiskIOEngine: "io_uring", StorageBackend: "extents", DiskIOThreads: true,
 			},
 			about: "every setting granule passes to the VM container explicitly, not just the sizing",
 		},
@@ -660,6 +661,20 @@ func TestValidate_ExtentSizeMB(t *testing.T) {
 	s.ExtentSizeMB = -1
 	if err := s.Validate(); err == nil {
 		t.Error("Validate() = nil for a negative extent size, want an error")
+	}
+
+	s = baseSpec()
+	s.DiskMode = config.DiskModePersistent
+	s.StorageBackend = config.StorageBackendExtents
+	s.ExtentSizeMB = 64
+	if err := s.Validate(); err != nil {
+		t.Errorf("Validate() error = %v, want extent size accepted in persistent mode with storage-backend=extents", err)
+	}
+
+	s = baseSpec()
+	s.StorageBackend = "invalid-backend"
+	if err := s.Validate(); err == nil {
+		t.Error("Validate() = nil for invalid storage-backend, want an error")
 	}
 }
 

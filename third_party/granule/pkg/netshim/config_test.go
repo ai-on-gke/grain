@@ -9,7 +9,7 @@ import (
 
 func clearEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{envVM, envBridge, envControlCIDR, envExternalIface, envTapOwner, envIPv6} {
+	for _, k := range []string{envVM, envBridge, envControlCIDR, envExternalIface, envTapOwner, envIPv6, envControllerIPs} {
 		os.Unsetenv(k)
 	}
 }
@@ -396,6 +396,25 @@ func TestFromEnv_IPv6(t *testing.T) {
 	t.Setenv(envIPv6, "on")
 	if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), envIPv6) {
 		t.Errorf("%s=on: FromEnv() error = %v, want one naming %s", envIPv6, err, envIPv6)
+	}
+	clearEnv(t)
+}
+
+func TestFromEnv_ControllerIPs(t *testing.T) {
+	clearEnv(t)
+	t.Setenv(envControllerIPs, "10.96.42.10, fd00:10:96::2a, 10.96.42.10, ::ffff:10.96.42.11")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if got, want := JoinIPs(cfg.ControllerIPs), "10.96.42.10 fd00:10:96::2a 10.96.42.11"; got != want {
+		t.Errorf("ControllerIPs = %q, want %q", got, want)
+	}
+
+	clearEnv(t)
+	t.Setenv(envControllerIPs, "not-an-ip")
+	if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), envControllerIPs) {
+		t.Errorf("invalid %s: FromEnv() error = %v, want error naming %s", envControllerIPs, err, envControllerIPs)
 	}
 	clearEnv(t)
 }

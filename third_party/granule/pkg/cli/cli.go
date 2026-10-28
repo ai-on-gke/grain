@@ -35,12 +35,15 @@ Usage:
   granule vm update <name> [flags]            change a VM's settings and re-submit it
   granule vm delete <name>                    remove a VM
   granule vm list [-status]                   list VMs granule knows about
-  granule forward [-L spec] [-R spec] <name>  forward TCP ports between this host and a VM guest
+  granule forward <vm|pod/name> [flags]       forward ports into/out of a guest over the exec channel, not its network
+  granule relay [flags]                       relay off-cluster controllers to sandbox pods' access listeners
   granule guest build [flags]                 build a bootable guest from a Dockerfile (-setup: boot one and provision it instead)
   granule guest pack [flags]                  pack a guest rootfs image into a bootable granule image
   granule guest rebase [flags]                make an existing guest image's granule half current
   granule guest verify [flags]                boot a guest image, run checks in it, print a verdict
   granule guest flatten [flags]               replay qcow2 layers against a flat file and generate a single layer
+  granule guest split [flags]                 split a raw guest disk into N-MiB extents, rewriting only changed ones
+  granule guest assemble [flags]              assemble an extent directory back into one flat raw disk
   granule granulefile check [flags]            validate a Granule and report, building nothing
   granule granulefile build [flags]            build a Granule into a container or VM image
 
@@ -65,14 +68,16 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	switch cmd {
 	case "vm":
 		err = runVM(ctx, rest, stdin, stdout, stderr)
-	case "forward":
-		err = runForward(ctx, rest, stderr)
 	case "guest":
 		err = runGuest(ctx, rest, stdout, stderr)
 	case "granulefile":
 		err = runGranule(ctx, rest, stdin, stdout, stderr)
 	case "doctor":
 		err = runDoctor(ctx, rest, stdout, stderr)
+	case "forward":
+		err = runForward(ctx, rest, stdout, stderr)
+	case "relay":
+		err = runRelay(ctx, rest, stdout, stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0

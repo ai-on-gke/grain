@@ -201,7 +201,31 @@ elif ! (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -o "$W/granule-shim" ./cm
 fi
 chmod 0755 "$W/granule-shim"
 
-if ! docker pull -q "$GRANULE_IMAGE" >/dev/null; then
+# In a grain K8s sandbox, grain configures the authenticated GHCR package
+# cache mirror at http://127.0.0.1:9729/v2/ghcr in
+# /etc/docker/certs.d/ghcr.io/hosts.toml, which classic dockerd (without the
+# containerd snapshotter) ignores while registry-mirrors only covers
+# docker.io. Pull ghcr.io/* through 127.0.0.1:9729/ghcr/* when that mirror is
+# present or when a direct pull of ghcr.io/* fails.
+pull_granule_image() {
+  local mirror_ref="127.0.0.1:9729/ghcr/${GRANULE_IMAGE#ghcr.io/}"
+  if [[ $GRANULE_IMAGE == ghcr.io/* ]] && grep -q '127.0.0.1:9729/v2/ghcr' /etc/docker/certs.d/ghcr.io/hosts.toml 2>/dev/null; then
+    if docker pull -q "$mirror_ref" >/dev/null && docker tag "$mirror_ref" "$GRANULE_IMAGE"; then
+      return 0
+    fi
+  fi
+  if docker pull -q "$GRANULE_IMAGE" >/dev/null; then
+    return 0
+  fi
+  if [[ $GRANULE_IMAGE == ghcr.io/* ]]; then
+    if docker pull -q "$mirror_ref" >/dev/null && docker tag "$mirror_ref" "$GRANULE_IMAGE"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+if ! pull_granule_image; then
   fail "pull $GRANULE_IMAGE"
   summary
   exit

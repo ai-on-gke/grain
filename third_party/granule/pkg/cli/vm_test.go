@@ -153,6 +153,36 @@ func TestVMLifecycle(t *testing.T) {
 	}
 }
 
+func TestVMCreate_StorageBackend(t *testing.T) {
+	withFakeDocker(t)
+	stateDir := filepath.Join(t.TempDir(), "state")
+	calls := callLog(t)
+
+	_, stderr, err := runVMArgs(t, "create", "extvm",
+		"--disk", "/images/disk.img",
+		"--storage-backend", "extents",
+		"--extent-size-mb", "32",
+		"--state-dir", stateDir,
+	)
+	if err != nil {
+		t.Fatalf("create error = %v, stderr = %s", err, stderr)
+	}
+	call := vmContainerCall(t, calls())
+	if !strings.Contains(call, "CHV_STORAGE_BACKEND=extents") {
+		t.Errorf("VM container missing CHV_STORAGE_BACKEND=extents:\n%s", call)
+	}
+	if !strings.Contains(call, "CHV_EXTENT_SIZE_MB=32") {
+		t.Errorf("VM container missing CHV_EXTENT_SIZE_MB=32:\n%s", call)
+	}
+	saved, err := vmspec.Load(stateDir, "extvm")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if saved.StorageBackend != config.StorageBackendExtents || saved.ExtentSizeMB != 32 {
+		t.Errorf("saved = %+v, want StorageBackend=extents ExtentSizeMB=32", saved)
+	}
+}
+
 // TestVMCreate_DeprecatedFlags covers the flags that outlived what they
 // configured: the NAT mode's, and -static-pod-path from the static pod
 // backend. A caller's existing "vm create" line keeps working (the values

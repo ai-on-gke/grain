@@ -114,8 +114,13 @@ func TestIngestAllTelemetryResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load storage summary: %v", err)
 	}
-	if len(storageSum) == 0 {
+	if len(storageSum.Fio) == 0 {
 		t.Errorf("expected storage benchmark entries, got 0")
+	}
+	for backend, workloads := range storageSum.Fio {
+		if r, ok := workloads["rand_read"]; ok && r.Read.IOPS <= 0 {
+			t.Errorf("storage backend %s: invalid random read IOPS %.0f", backend, r.Read.IOPS)
+		}
 	}
 
 	// 6. Microbenchmarks Summary

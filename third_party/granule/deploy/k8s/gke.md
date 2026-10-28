@@ -167,6 +167,76 @@ to settle unhappily, a spliced guest that could not exchange packets
 with other pods on GKE's own CNI, and which a later pass has since
 measured working in both directions.
 
+## 5. Forward ports without a Service: `granule forward`
+
+A caller can reach a guest, and a guest can reach a caller, without
+the two sharing a network. `granule forward` tunnels TCP over the same
+`kubectl exec` stream used in the previous section:
+
+```sh
+# Inside the guest, 127.0.0.1:9728 reaches 127.0.0.1:9728 on the machine
+# running this. That machine accepts no inbound connections.
+# On the other side, a free local port reaches the guest's 127.0.0.1:7000.
+granule forward pod/granule-gke-example -c web \
+  -R 9728=127.0.0.1:9728 -L 127.0.0.1:0=7000 -json -reconnect
+# {"bindings":[{"direction":"local","listen":"127.0.0.1:38211","target":"7000"},
+#              {"direction":"remote","listen":"127.0.0.1:9728","target":"127.0.0.1:9728"}]}
+```
+
+What this runs is
+`kubectl exec -i granule-gke-example -c web -- granule forward-stdio`.
+The VM container relays that stdio stream to `granule-agent` over vsock,
+and the agent holds the guest-side listener on the guest's loopback. So:
+
+- **It works on the networkless pod above**, `gke-pod-example.yaml`. A
+  guest with no NIC can still reach a service on the caller's side
+  through a loopback port.
+- **It touches nothing in the guest's networking.** The guest's NIC,
+  routes, DNS, egress and NetworkPolicy stay whatever the manifest and the
+  cluster made them. A forwarded port is not on the pod network, so no
+  Service, LoadBalancer or firewall rule is involved, and NetworkPolicy
+  neither allows nor blocks it.
+- **It needs `pods/exec` on the pod and nothing more**, the same RBAC as
+  `kubectl exec ... -- granule exec`. Anyone holding that RBAC can already
+  run commands in the guest as root, so they can forward. There is no
+  separate authentication.
+- **Throughput is the API server's.** Every byte goes through the API
+  server and the kubelet's exec streaming. Measured on GKE against
+  `granule-gke-example` (see "Validated" below), a guest `wget` of a
+  200 MiB file from a caller-side server through `-R` ran at 1.2 MB/s
+  (200 MiB in 170.1 s, bounded by `kubectl exec -i`'s stdin path, which
+  measured 0.9 MB/s raw), while a caller reading 200 MiB from a guest
+  listener through `-L` ran at 4.7 MB/s (200 MiB in 45.0 s, over
+  `kubectl exec`'s stdout), and sequential HTTP GETs inside the guest
+  took 82.5 ms per request. That suits control traffic, git, package
+  fetches and an MCP server in the guest. Do not put bulk data paths on
+  it.
+- **Streams drop.** The API server and the kubelet end exec streams on
+  control-plane upgrades and idle timeouts. With `-reconnect`, `granule
+  forward` redials with backoff and asks for the guest-side listeners
+  again at the addresses it first reported. Connections open at the time
+  of the drop are lost. A keepalive every 15 seconds keeps an idle stream
+  from looking idle, and also detects one that has died silently.
+
+A program that would rather embed this than supervise a process uses
+`pkg/guestforward` directly. `guestforward.KubectlExec` builds the same
+`kubectl exec` command, and any `Transport` that runs `granule
+forward-stdio` in the VM container works, including a client-go
+`remotecommand` stream. See the README section "Forwarding ports over
+the exec channel".
+
+`test/forward-e2e.sh` checks both directions against a real VM, on
+Docker or on a pod. `pkg/guestforward`'s Docker test covers the transport
+in CI, but it uses a stand-in for the guest, so the vsock hop to a real
+agent is only exercised by this script. It has been run against both
+`gke-pod-example.yaml` (`CHV_NET_MODE=none`) and
+`gke-pod-exec-example.yaml` on GKE, as well as on Docker, in both
+directions and across a reconnect (see "Validated" below):
+
+```sh
+test/forward-e2e.sh pod/granule-gke-example -c web
+```
+
 ## Privileges
 
 None of the manifests here is privileged. What each holds instead, all
@@ -509,6 +579,44 @@ and pushed to Artifact Registry.
   form round-trips a directory, stdout and stderr stay separate with no
   CRLF rewriting, and dropping `-i` does exactly what the README warns:
   exit 0 and a 0-byte file in the guest.
+- **Section 5's `granule forward` through `kubectl exec -i`** (run on GKE
+  1.36.4-gke.1495002, one `n2-standard-8` `COS_CONTAINERD` node with
+  `--enable-nested-virtualization`, kernel `6.12.105+`,
+  `containerd://2.2.7`, Alpine guest built from `main` with
+  `GUEST_DISTRO=alpine`):
+  - `test/forward-e2e.sh pod/granule-gke-example -c web` and
+    `test/forward-e2e.sh pod/granule-gke-exec-example -c web` both pass
+    (`guest -> caller` over `-R` and `caller -> guest` over `-L`). On
+    `granule-gke-example` (`CHV_NET_MODE=none`), `ip -o addr` in the
+    guest shows only `lo` (`127.0.0.1/8` and `::1/128`, brought up by the
+    OpenRC `loopback` service `pack-guest` enables), confirming the
+    guest-side listener and both directions need no NIC.
+  - **Throughput and latency**: a guest `wget` of a 200 MiB (209.7 MB)
+    file from a caller-side HTTP server through `-R` took 170.10 s
+    (1.18 MiB/s / 1.23 MB/s; a 50 MiB check took 41.65 s, 1.20 MiB/s /
+    1.26 MB/s). The bottleneck in that direction is `kubectl exec -i`'s
+    stdin path through the API server and kubelet: raw
+    `dd bs=1M count=50 | kubectl exec -i ... -- granule exec -- sh -c 'cat >/dev/null'`
+    without `granule forward` took 58.69 s (0.85 MiB/s / 0.89 MB/s). In
+    the reverse data direction -- a caller reading 200 MiB from a guest
+    listener through `-L`, where bytes travel on `kubectl exec`'s stdout
+    (10.79 MiB/s / 11.32 MB/s raw) -- the transfer took 44.97 s
+    (4.45 MiB/s / 4.66 MB/s). Twenty sequential HTTP GETs inside the
+    guest through `-R` completed in 1.650 s (82.5 ms per request).
+  - **`-reconnect` recovery**: killing the child
+    `kubectl exec -i granule-gke-example -c web -- granule forward-stdio`
+    process (`kill -9`) logged
+    `transport to the guest ended: ... signal: killed: EOF; reconnecting`
+    followed by `granule: forward: reconnected`, and both `-L` (on the
+    same local port) and `-R` (at `127.0.0.1:18080` in the guest)
+    answered again within 1.81 s. Force-deleting the in-cluster
+    control-plane tunnel pod
+    (`kubectl -n kube-system delete pod -l k8s-app=konnectivity-agent --grace-period=0 --force`,
+    the pod carrying `pods/exec` from the GKE-managed API server to the
+    kubelet) left the client-side stream open but silent; the 15 s
+    keepalive caught it (`nothing heard from the far end for 59s
+    (keepalive timeout); reconnecting`), redialed through the replacement
+    `konnectivity-agent` pod, and restored both `-L` and `-R` in 60.09 s.
 - **Flow 2's GKE half**: a `granule guest build` image built
   off-cluster, pushed, and named in the manifest with nothing else
   changed -- `systemctl is-active nginx` answers `active` in the pod.

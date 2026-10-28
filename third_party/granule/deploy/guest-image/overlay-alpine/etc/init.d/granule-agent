@@ -10,8 +10,12 @@ pidfile="/run/${RC_SVCNAME}.pid"
 # off SSH is that a guest whose networking had not come up was a guest
 # granule could not get into to find out why, so this answers before
 # anything that could go wrong with the network has had the chance to.
+# It is ordered after loopback (in this same boot runlevel) so 127.0.0.1
+# is already up when "granule forward" opens a loopback listener the
+# moment the agent first answers on vsock.
 depend() {
 	need localmount
+	after loopback
 	before net
 }
 

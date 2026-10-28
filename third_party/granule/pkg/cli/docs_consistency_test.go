@@ -32,6 +32,8 @@ var allSubcommands = []struct {
 	{"guest", "rebase", "-boot"},
 	{"guest", "verify", "-checks"},
 	{"guest", "flatten", "-base"},
+	{"guest", "split", "-extent-size-mb"},
+	{"guest", "assemble", "-verify"},
 	{"granulefile", "check", "-level"},
 	{"granulefile", "build", "-guest-image"},
 }

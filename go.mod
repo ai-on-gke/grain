@@ -5,6 +5,7 @@ go 1.26.6
 toolchain go1.26.10
 
 require (
+	cloud.google.com/go/compute/metadata v0.9.0
 	github.com/bwsalmon/granule v0.0.0-20260921040231-1d6b7e1fad96
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/jackc/pgx/v5 v5.11.0
@@ -22,7 +23,6 @@ require (
 require (
 	cloud.google.com/go/auth v0.18.2 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
-	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

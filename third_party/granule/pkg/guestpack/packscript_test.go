@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bwsalmon/granule/pkg/extents"
 	"github.com/bwsalmon/granule/pkg/guestimage"
 )
 
@@ -1343,5 +1344,100 @@ func TestGranuleDeclareReadyCustomCondition(t *testing.T) {
 	}
 	if _, err := os.Stat(readyPath); err != nil {
 		t.Fatalf("ready file was not created: %v", err)
+	}
+}
+
+// TestPackGuestEnablesOpenRCLoopback: an Alpine guest with no network
+// gets no ip= on its kernel command line, and ip= was the only thing that
+// ever brought its lo up -- OpenRC leaves that to a "loopback" service an
+// Alpine container rootfs ships unenabled. Without it the guest has no
+// 127.0.0.1, and `granule forward` has nowhere to put the loopback
+// listeners it exists to hold in exactly that guest. A rootfs that
+// already enables it somewhere is left as it is.
+func TestPackGuestEnablesOpenRCLoopback(t *testing.T) {
+	requireMke2fs(t)
+	partsDir := parts(t)
+
+	t.Run("left off", func(t *testing.T) {
+		root := rootfs(t, "alpine")
+		write(t, filepath.Join(root, "etc/init.d/loopback"), "#!/sbin/openrc-run\n")
+		if out, _, err := pack(t, root, partsDir); err != nil {
+			t.Fatalf("pack-guest: %v\n%s", err, out)
+		}
+		if target, err := os.Readlink(filepath.Join(root, "etc/runlevels/boot/loopback")); err != nil || target != "/etc/init.d/loopback" {
+			t.Fatalf("loopback not enabled in the boot runlevel: %q, %v", target, err)
+		}
+		// Both loopback and granule-agent sit in the boot runlevel;
+		// granule-agent must order itself after loopback (while still
+		// starting before net) so 127.0.0.1 is already up the instant
+		// the agent first answers a "granule forward" on vsock.
+		agentInit := filepath.Join(root, "etc/init.d/granule-agent")
+		dependCmd := exec.Command("/bin/sh", "-c", `
+			need() { echo "need $*"; }
+			after() { echo "after $*"; }
+			before() { echo "before $*"; }
+			. "$1"
+			depend
+		`, "sh", agentInit)
+		dependOut, err := dependCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("evaluating depend() of %s: %v\n%s", agentInit, err, dependOut)
+		}
+		gotDepend := string(dependOut)
+		for _, want := range []string{"need localmount", "after loopback", "before net"} {
+			if !strings.Contains(gotDepend, want+"\n") {
+				t.Fatalf("granule-agent depend() missing %q:\n%s", want, gotDepend)
+			}
+		}
+	})
+
+	t.Run("already on", func(t *testing.T) {
+		root := rootfs(t, "alpine")
+		write(t, filepath.Join(root, "etc/init.d/loopback"), "#!/sbin/openrc-run\n")
+		enable(t, filepath.Join(root, "etc/runlevels/sysinit/loopback"), "/etc/init.d/loopback")
+		if out, _, err := pack(t, root, partsDir); err != nil {
+			t.Fatalf("pack-guest: %v\n%s", err, out)
+		}
+		if _, err := os.Lstat(filepath.Join(root, "etc/runlevels/boot/loopback")); err == nil {
+			t.Fatal("loopback enabled a second time beside the rootfs's own")
+		}
+	})
+
+	t.Run("debian untouched", func(t *testing.T) {
+		root := rootfs(t, "debian")
+		if out, _, err := pack(t, root, partsDir); err != nil {
+			t.Fatalf("pack-guest: %v\n%s", err, out)
+		}
+		if _, err := os.Lstat(filepath.Join(root, "etc/runlevels/boot/loopback")); err == nil {
+			t.Fatal("a systemd guest got an OpenRC runlevel")
+		}
+	})
+}
+
+func TestPackGuestExtentsBackend(t *testing.T) {
+	requireMke2fs(t)
+	partsDir := parts(t)
+	root := rootfs(t, "debian")
+
+	out, stagingRoot, err := pack(t, root, partsDir, "GRANULE_STORAGE_BACKEND=extents", "GRANULE_EXTENT_SIZE_MB=16")
+	if err != nil {
+		t.Fatalf("pack-guest with extents backend failed: %v\n%s", err, out)
+	}
+	if err := guestimage.Check(stagingRoot); err != nil {
+		t.Fatalf("guestimage.Check failed on extent-packed guest: %v", err)
+	}
+	extDir := guestimage.Under(stagingRoot, guestimage.DiskExtents)
+	if !extents.IsExtentDir(extDir) {
+		t.Fatalf("expected %s to be a valid extent directory", extDir)
+	}
+	m, err := extents.ReadManifest(extDir)
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if m.ExtentSizeBytes != 16*1024*1024 {
+		t.Fatalf("ExtentSizeBytes = %d, want %d", m.ExtentSizeBytes, 16*1024*1024)
+	}
+	if m.VirtualSizeBytes < 64*1024*1024 {
+		t.Fatalf("VirtualSizeBytes = %d, want >= 64MiB", m.VirtualSizeBytes)
 	}
 }

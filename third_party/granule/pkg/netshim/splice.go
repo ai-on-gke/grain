@@ -90,6 +90,35 @@ func splice(a, b netlink.Link) error {
 // a v6-only identity gets no IPv4 or ARP rules, so all of that is
 // dropped.
 func spliceGuest(ext, tap netlink.Link, id Identity) error {
+	return spliceGuestWithControllers(ext, tap, id, nil)
+}
+
+// spliceGuestWithControllers is spliceGuest with optional controller IP
+// isolation. When controllers is non-empty:
+//
+//   - On tap ingress (frames sent by the guest), the highest-priority filters
+//     drop (TC_ACT_SHOT) any IPv4, ARP, or IPv6 frame targeting a controller
+//     IP, before any of the guest's own allow rules run. The guest therefore
+//     cannot reach the controller even when it has open egress on ext.
+//   - On ext ingress (frames arriving from the network), the highest-priority
+//     filters pass (TC_ACT_OK) any IPv4, ARP, or IPv6 frame originating from a
+//     controller IP to this namespace's own kernel stack (where the pod-side
+//     wrapper's dial-out socket lives) rather than redirecting it to tap, and
+//     mirror ARP replies / IPv6 neighbour advertisements to tap while also
+//     passing them to the local stack so both ends can resolve on-link L2
+//     neighbours (such as the default gateway).
+func spliceGuestWithControllers(ext, tap netlink.Link, id Identity, controllers []net.IP) error {
+	return spliceGuestWithAccess(ext, tap, id, controllers, nil)
+}
+
+// spliceGuestWithAccess is spliceGuestWithControllers that also keeps the
+// sandbox access listener's TCP ports (Config.AccessPorts) in the pod's own
+// stack: any TCP segment arriving on ext addressed to one of those ports is
+// passed to the namespace (where granule-shim listens) rather than
+// redirected to the guest, whatever address it came from. That is what lets
+// granule relay and in-cluster controllers, whose pod IPs are not known in
+// advance, dial a sandbox whose guest owns the rest of the pod's traffic.
+func spliceGuestWithAccess(ext, tap netlink.Link, id Identity, controllers []net.IP, accessPorts []uint16) error {
 	mac := id.MAC
 	ip4 := id.IP.To4()
 	var ip6 net.IP
@@ -104,13 +133,16 @@ func spliceGuest(ext, tap netlink.Link, id Identity) error {
 	if err := addIngressQdisc(ext); err != nil {
 		return err
 	}
-	if err := addRedirectFilter(ext, tap); err != nil {
+	if err := addExtFiltersWithAccess(ext, tap, controllers, accessPorts); err != nil {
 		return err
 	}
 	if err := addIngressQdisc(tap); err != nil {
 		return err
 	}
 	var rules []guardRule
+	if len(controllers) > 0 {
+		rules = append(rules, controllerDropRules(controllers)...)
+	}
 	if ip4 != nil {
 		rules = append(rules, ipv4GuardRules(mac, ip4)...)
 	}
@@ -122,6 +154,231 @@ func spliceGuest(ext, tap netlink.Link, id Identity) error {
 		rules = append(rules, ipv6GuardRules(mac, ip6, ll6)...)
 	}
 	return addGuardFilters(tap, ext, rules)
+}
+
+// controllerDropRules returns the high-priority drop rules installed on tap
+// ingress so a guest cannot send packets or ARP/NDP queries to any controller
+// IP, even when the guest has open egress.
+func controllerDropRules(controllers []net.IP) []guardRule {
+	addrAt6 := func(off int32, a net.IP) []netlink.TcU32Key {
+		var k []netlink.TcU32Key
+		for i := int32(0); i < 16; i += 4 {
+			k = append(k, netlink.TcU32Key{Off: off + i, Val: be32(a[i : i+4]), Mask: 0xffffffff})
+		}
+		return k
+	}
+	var rules []guardRule
+	for _, cip := range controllers {
+		if cip4 := cip.To4(); cip4 != nil {
+			rules = append(rules,
+				guardRule{
+					what:     "IPv4 to controller " + cip4.String(),
+					protocol: unix.ETH_P_IP,
+					keys:     []netlink.TcU32Key{{Off: 16, Val: be32(cip4), Mask: 0xffffffff}},
+					drop:     true,
+				},
+				guardRule{
+					what:     "ARP for controller " + cip4.String(),
+					protocol: unix.ETH_P_ARP,
+					keys:     []netlink.TcU32Key{{Off: 24, Val: be32(cip4), Mask: 0xffffffff}},
+					drop:     true,
+				},
+			)
+		} else if cip6 := cip.To16(); cip6 != nil {
+			rules = append(rules,
+				guardRule{
+					what:     "IPv6 to controller " + cip6.String(),
+					protocol: unix.ETH_P_IPV6,
+					keys:     addrAt6(24, cip6),
+					drop:     true,
+				},
+				guardRule{
+					what:     "ICMPv6 NS for controller " + cip6.String(),
+					protocol: unix.ETH_P_IPV6,
+					keys: keys(
+						[]netlink.TcU32Key{
+							{Off: 4, Val: uint32(ipv6ICMP) << 8, Mask: 0x0000ff00},
+							{Off: 40, Val: uint32(icmp6NeighSolicit) << 24, Mask: 0xff000000},
+						},
+						addrAt6(48, cip6),
+					),
+					drop: true,
+				},
+			)
+		}
+	}
+	return rules
+}
+
+// addExtFilters installs the ingress filters on ext. With no controllers it is
+// a single unconditional redirect to tap. With controllers, frames from any
+// controller IP are passed to the local namespace stack (TC_ACT_OK) so the
+// guest never receives them, and ARP replies / IPv6 NAs are mirrored to tap
+// while also passing to the local stack so both the wrapper and the guest can
+// resolve their gateway.
+func addExtFilters(ext, tap netlink.Link, controllers []net.IP) error {
+	return addExtFiltersWithAccess(ext, tap, controllers, nil)
+}
+
+// addExtFiltersWithAccess is addExtFilters plus a pass rule per access
+// port: IPv4 (with a plain 20-byte header) and IPv6 TCP segments whose
+// destination port is an access port go to the local stack. A segment that
+// carries IPv4 options or IPv6 extension headers falls through to the
+// guest, which only means that connection fails.
+func addExtFiltersWithAccess(ext, tap netlink.Link, controllers []net.IP, accessPorts []uint16) error {
+	if len(controllers) == 0 && len(accessPorts) == 0 {
+		return addRedirectFilter(ext, tap)
+	}
+	addrAt6 := func(off int32, a net.IP) []netlink.TcU32Key {
+		var k []netlink.TcU32Key
+		for i := int32(0); i < 16; i += 4 {
+			k = append(k, netlink.TcU32Key{Off: off + i, Val: be32(a[i : i+4]), Mask: 0xffffffff})
+		}
+		return k
+	}
+	passActions := func() []netlink.Action {
+		return []netlink.Action{&netlink.GenericAction{
+			ActionAttrs: netlink.ActionAttrs{Action: netlink.TC_ACT_OK},
+		}}
+	}
+	mirrorAndPassActions := func() []netlink.Action {
+		return []netlink.Action{
+			&netlink.MirredAction{
+				ActionAttrs:  netlink.ActionAttrs{Action: netlink.TC_ACT_PIPE},
+				MirredAction: netlink.TCA_EGRESS_MIRROR,
+				Ifindex:      tap.Attrs().Index,
+			},
+			&netlink.GenericAction{
+				ActionAttrs: netlink.ActionAttrs{Action: netlink.TC_ACT_OK},
+			},
+		}
+	}
+
+	type extRule struct {
+		what     string
+		protocol uint16
+		keys     []netlink.TcU32Key
+		actions  []netlink.Action
+	}
+	var rules []extRule
+	hasV4, hasV6 := false, false
+	for _, cip := range controllers {
+		if cip4 := cip.To4(); cip4 != nil {
+			hasV4 = true
+			rules = append(rules,
+				extRule{
+					what:     "IPv4 from controller " + cip4.String(),
+					protocol: unix.ETH_P_IP,
+					keys:     []netlink.TcU32Key{{Off: 12, Val: be32(cip4), Mask: 0xffffffff}},
+					actions:  passActions(),
+				},
+				extRule{
+					what:     "ARP from controller " + cip4.String(),
+					protocol: unix.ETH_P_ARP,
+					keys: []netlink.TcU32Key{
+						{Off: 12, Val: be16(cip4[0:2]), Mask: 0x0000ffff},
+						{Off: 16, Val: be16(cip4[2:4]) << 16, Mask: 0xffff0000},
+					},
+					actions: passActions(),
+				},
+			)
+		} else if cip6 := cip.To16(); cip6 != nil {
+			hasV6 = true
+			rules = append(rules,
+				extRule{
+					what:     "IPv6 from controller " + cip6.String(),
+					protocol: unix.ETH_P_IPV6,
+					keys:     addrAt6(8, cip6),
+					actions:  passActions(),
+				},
+			)
+		}
+	}
+	for _, port := range accessPorts {
+		hasV4, hasV6 = true, true
+		rules = append(rules,
+			extRule{
+				what:     fmt.Sprintf("IPv4 TCP to access port %d", port),
+				protocol: unix.ETH_P_IP,
+				keys: []netlink.TcU32Key{
+					// Version 4, IHL 5 (byte 0); protocol TCP (byte 9).
+					{Off: 0, Val: 0x45000000, Mask: 0xff000000},
+					{Off: 8, Val: uint32(unix.IPPROTO_TCP) << 16, Mask: 0x00ff0000},
+					// TCP destination port, bytes 22..23.
+					{Off: 20, Val: uint32(port), Mask: 0x0000ffff},
+				},
+				actions: passActions(),
+			},
+			extRule{
+				what:     fmt.Sprintf("IPv6 TCP to access port %d", port),
+				protocol: unix.ETH_P_IPV6,
+				keys: []netlink.TcU32Key{
+					// Next header TCP (byte 6).
+					{Off: 4, Val: uint32(unix.IPPROTO_TCP) << 8, Mask: 0x0000ff00},
+					// TCP destination port, bytes 42..43.
+					{Off: 40, Val: uint32(port), Mask: 0x0000ffff},
+				},
+				actions: passActions(),
+			},
+		)
+	}
+	if hasV4 {
+		// Mirror non-controller ARP replies (opcode 2 at bytes 6..7) to tap and
+		// pass them to the local stack so both the guest and the pod stack can
+		// resolve the gateway MAC.
+		rules = append(rules, extRule{
+			what:     "ARP replies to tap and host",
+			protocol: unix.ETH_P_ARP,
+			keys:     []netlink.TcU32Key{{Off: 4, Val: 0x00000002, Mask: 0x0000ffff}},
+			actions:  mirrorAndPassActions(),
+		})
+	}
+	if hasV6 {
+		// Mirror ICMPv6 Neighbour Advertisements (type 136) to tap and pass
+		// them to the local stack so both can resolve the IPv6 gateway MAC.
+		rules = append(rules, extRule{
+			what:     "ICMPv6 NA to tap and host",
+			protocol: unix.ETH_P_IPV6,
+			keys: []netlink.TcU32Key{
+				{Off: 4, Val: uint32(ipv6ICMP) << 8, Mask: 0x0000ff00},
+				{Off: 40, Val: uint32(icmp6NeighAdvert) << 24, Mask: 0xff000000},
+			},
+			actions: mirrorAndPassActions(),
+		})
+	}
+
+	for i, r := range rules {
+		filter := &netlink.U32{
+			FilterAttrs: netlink.FilterAttrs{
+				LinkIndex: ext.Attrs().Index,
+				Parent:    netlink.MakeHandle(0xffff, 0),
+				Priority:  uint16(i + 1),
+				Protocol:  r.protocol,
+			},
+			Sel: &netlink.TcU32Sel{
+				Flags: netlink.TC_U32_TERMINAL,
+				Keys:  r.keys,
+			},
+			Actions: r.actions,
+		}
+		if err := netlink.FilterAdd(filter); err != nil {
+			return fmt.Errorf("installing %s filter on %s: %w", r.what, ext.Attrs().Name, err)
+		}
+	}
+
+	redirect := &netlink.U32{
+		FilterAttrs: netlink.FilterAttrs{
+			LinkIndex: ext.Attrs().Index,
+			Parent:    netlink.MakeHandle(0xffff, 0),
+			Priority:  uint16(len(rules) + 1),
+			Protocol:  unix.ETH_P_ALL,
+		},
+		Actions: []netlink.Action{netlink.NewMirredAction(tap.Attrs().Index)},
+	}
+	if err := netlink.FilterAdd(redirect); err != nil {
+		return fmt.Errorf("redirecting %s to %s: %w", ext.Attrs().Name, tap.Attrs().Name, err)
+	}
+	return nil
 }
 
 // guardRule is one of addGuardFilters' filters: frames of protocol that

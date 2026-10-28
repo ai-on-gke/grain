@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bwsalmon/granule/pkg/extents"
 	"github.com/bwsalmon/granule/pkg/qcow2"
 )
 
@@ -502,7 +503,7 @@ func TestGuest_UnknownSubcommandNamesTheOnesThereAre(t *testing.T) {
 	if code := Run(context.Background(), []string{"guest"}, strings.NewReader(""), &stdout, &stderr); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(stderr.String(), "(build, pack, rebase, verify, flatten)") {
+	if !strings.Contains(stderr.String(), "(build, pack, rebase, verify, flatten, split, assemble)") {
 		t.Errorf("stderr does not list the subcommands:\n%s", stderr.String())
 	}
 }
@@ -530,6 +531,60 @@ func TestGuestFlatten_CLI(t *testing.T) {
 	}
 	if _, err := os.Stat(dstRaw); err != nil {
 		t.Fatalf("flattened output raw missing: %v", err)
+	}
+}
+
+func TestGuestFlatten_ExtentStore(t *testing.T) {
+	dir := t.TempDir()
+	flatIn := filepath.Join(dir, "in.raw")
+	const size = 2 * 1024 * 1024
+	data := make([]byte, size)
+	copy(data[:16], []byte("EXTENT-ROOTFS-OK"))
+	if err := os.WriteFile(flatIn, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extDir := filepath.Join(dir, "disk.extents")
+	if _, err := extents.SplitFromFlat(flatIn, extDir, 1024*1024); err != nil {
+		t.Fatal(err)
+	}
+	dstRaw := filepath.Join(dir, "flattened.raw")
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"guest", "flatten", extDir, dstRaw}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("guest flatten failed with exit code %d, stderr: %s", code, stderr.String())
+	}
+	got, err := os.ReadFile(dstRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("flattened output mismatch (len=%d)", len(got))
+	}
+}
+
+func TestGuestPack_StorageBackendExtents(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"guest", "pack",
+		"-from", "ghcr.io/example/guest-rootfs:v7",
+		"-t", "example/guest:packed",
+		"-storage-backend", "extents",
+		"-extent-size-mb", "16",
+		"-print-dockerfile",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"GRANULE_STORAGE_BACKEND=extents",
+		"GRANULE_EXTENT_SIZE_MB=16",
+		`ENV CHV_STORAGE_BACKEND="extents"`,
+		`ENV CHV_EXTENT_SIZE_MB="16"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("printed Dockerfile missing %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -562,5 +617,35 @@ func TestGuestRebase_RootfsAndBootAreExclusive(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "-rootfs and -boot") {
 		t.Errorf("stderr does not say the two forms are exclusive:\n%s", stderr.String())
+	}
+}
+
+func TestGuestSplitAndAssemble_CLI(t *testing.T) {
+	dir := t.TempDir()
+	disk := make([]byte, 3<<20)
+	copy(disk[2<<20:], "last extent")
+	src := filepath.Join(dir, "disk.img")
+	if err := os.WriteFile(src, disk, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extents := filepath.Join(dir, "disk.extents")
+	var stdout, stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"guest", "split", "-extent-size-mb", "1", src, extents}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("guest split exit code = %d:\n%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "1 written, 0 unchanged, 2 holes") {
+		t.Errorf("guest split output = %q", stdout.String())
+	}
+	out := filepath.Join(dir, "assembled.img")
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"guest", "assemble", "-verify", extents, out}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("guest assemble exit code = %d:\n%s", code, stderr.String())
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, disk) {
+		t.Error("assembled disk does not match the source")
 	}
 }

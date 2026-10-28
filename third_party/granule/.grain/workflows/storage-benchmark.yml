@@ -1,0 +1,46 @@
+name: Storage benchmark
+
+# Runs benchmarks/storage/gce-bench.sh: the storage backend comparison
+# (native host, flat disk.img, QCOW2, boot-assembled and vhost-user-blk
+# extents) on a dedicated n2-standard-16 GCE VM, so the numbers are not
+# shared with whatever else a sandbox or cluster node is doing. The
+# results are printed between STORAGE-BENCH-* markers in the job log;
+# benchmarks/results/storage/ holds the last set that was checked in.
+#
+# On demand only: a run builds the guest from scratch and benchmarks nine
+# backends, about 35 minutes of a 16-vCPU VM (5 to build the guest, 5 to
+# derive the extent images, 20 to benchmark). Like
+# gce-build.yml it holds the gcp-key capability, so it has no
+# pull_request trigger.
+on:
+  workflow_dispatch:
+
+jobs:
+  storage-benchmark:
+    name: storage benchmark on a dedicated GCE VM
+    # No runs-on and no actions/checkout: the shape grain runs natively in
+    # the checkout, which is what lets it hand the job a capability (see
+    # gce-build.yml).
+    capabilities:
+      - https://grain.dev/capabilities/gcp#gcp-key
+    timeout-minutes: 45
+    steps:
+      - name: install gcloud if the runner has none
+        run: |
+          set -euo pipefail
+          if command -v gcloud >/dev/null; then
+            gcloud --version | head -n 1
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-transport-https ca-certificates curl gnupg openssh-client
+          curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg |
+            sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" |
+            sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq google-cloud-cli
+          gcloud --version | head -n 1
+
+      - name: storage benchmark on a dedicated GCE VM
+        run: benchmarks/storage/gce-bench.sh

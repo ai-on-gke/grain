@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bwsalmon/granule/pkg/containerspec"
+	"github.com/bwsalmon/granule/pkg/extents"
 	"github.com/bwsalmon/granule/pkg/guestimage"
 	"github.com/bwsalmon/granule/pkg/qcow2"
 )
@@ -21,7 +22,7 @@ import (
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{
-		envDiskImage, envDiskReadonly, envDiskMode, envDiskOverlayPath, envDiskSizeMB, envExtentSizeMB, envDiskExtentSizeMB, envExtraDisks, envKernel, envInitramfs,
+		envDiskImage, envDiskReadonly, envDiskMode, envDiskOverlayPath, envDiskSizeMB, envExtentSizeMB, envDiskExtentSizeMB, envStorageBackend, envExtraDisks, envKernel, envInitramfs,
 		envFirmware, envCmdline, envCPUs, envCPUsMax, envMemoryMB, envMemoryMaxMB,
 		envMemoryHotplug, envMemoryShared, envNet,
 		envAPISocket, envBinaryPath, envExtraArgs, envShutdownTimeout,
@@ -1246,6 +1247,68 @@ func TestFromEnv_Filesystems(t *testing.T) {
 	}
 	if cfg.Filesystems[1].Tag != "mydata" || cfg.Filesystems[1].SharedDir != "/data" || !cfg.Filesystems[1].ReadOnly {
 		t.Errorf("Filesystem[1] = %+v, unexpected", cfg.Filesystems[1])
+	}
+}
+
+func TestFromEnv_StorageBackendExtents(t *testing.T) {
+	clearEnv(t)
+	tmp := t.TempDir()
+	extDir := filepath.Join(tmp, "disk.extents")
+	if _, err := extents.Init(extDir, 128<<20, 16<<20); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envDiskImage, extDir)
+	t.Setenv(envKernel, writeTempFile(t, "vmlinux"))
+	t.Setenv(envStorageBackend, StorageBackendExtents)
+	t.Setenv(envDiskMode, DiskModePersistent)
+	t.Setenv(envExtentSizeMB, "16")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if cfg.StorageBackend != StorageBackendExtents {
+		t.Errorf("StorageBackend = %q, want %q", cfg.StorageBackend, StorageBackendExtents)
+	}
+	if cfg.Disks[0].VhostUserSocket != guestimage.VhostBlkSocket {
+		t.Errorf("VhostUserSocket = %q, want %q", cfg.Disks[0].VhostUserSocket, guestimage.VhostBlkSocket)
+	}
+}
+
+func TestPrepareOverlay_StorageBackendExtents(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "disk.img")
+	if err := os.WriteFile(source, make([]byte, 4<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overlay := filepath.Join(dir, "overlay", "disk.extents")
+
+	cfg := Config{
+		StorageBackend: StorageBackendExtents,
+		DiskMode:       DiskModeOverlay,
+		OverlayPath:    overlay,
+		DiskSizeMB:     64,
+		ExtentSizeMB:   16,
+		Disks:          []Disk{{Path: source}},
+	}
+	if err := cfg.PrepareOverlay(); err != nil {
+		t.Fatalf("PrepareOverlay() error = %v", err)
+	}
+	if cfg.Disks[0].Path != overlay {
+		t.Errorf("Disks[0].Path = %q, want %q", cfg.Disks[0].Path, overlay)
+	}
+	if cfg.Disks[0].BasePath != source {
+		t.Errorf("Disks[0].BasePath = %q, want %q", cfg.Disks[0].BasePath, source)
+	}
+	if cfg.Disks[0].VhostUserSocket != guestimage.VhostBlkSocket {
+		t.Errorf("Disks[0].VhostUserSocket = %q, want %q", cfg.Disks[0].VhostUserSocket, guestimage.VhostBlkSocket)
+	}
+	vsize, err := extents.VirtualSize(overlay)
+	if err != nil {
+		t.Fatalf("extents.VirtualSize() error = %v", err)
+	}
+	if want := int64(64) << 20; vsize != want {
+		t.Errorf("overlay virtual size = %d, want %d", vsize, want)
 	}
 }
 

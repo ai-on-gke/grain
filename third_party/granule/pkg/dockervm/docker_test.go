@@ -411,6 +411,27 @@ func TestCreate_NoControlLink(t *testing.T) {
 	}
 }
 
+func TestCreate_StorageBackend(t *testing.T) {
+	d, calls := testDocker(t)
+	spec := testSpec()
+	spec.StorageBackend = "extents"
+	spec.ExtentSizeMB = 64
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if err := Create(context.Background(), d, spec, &strings.Builder{}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	got := calls()
+	vmCall := got[len(got)-1]
+	if !containsArg(vmCall, "CHV_STORAGE_BACKEND=extents") {
+		t.Errorf("VM call = %v, missing CHV_STORAGE_BACKEND=extents", vmCall)
+	}
+	if !containsArg(vmCall, "CHV_EXTENT_SIZE_MB=64") {
+		t.Errorf("VM call = %v, missing CHV_EXTENT_SIZE_MB=64", vmCall)
+	}
+}
+
 // GuestUser has to reach the VM container, because both halves of it are
 // read there: "granule run" puts it on the guest's kernel command line so
 // the generated key is authorized for that account, and "granule exec" --

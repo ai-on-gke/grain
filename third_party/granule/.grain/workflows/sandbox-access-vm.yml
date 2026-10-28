@@ -1,0 +1,31 @@
+name: sandbox access VM
+
+# Its own file for the same reason as rootless-vm.yml: it needs /dev/kvm,
+# so it names no runner and grain runs it natively in a sandbox of its own.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # test/sandbox-access-vm.sh boots a real guest under this tree's
+  # granule-shim with GRANULE_ACCESS_LISTEN=tcp://..., in a user + network
+  # namespace laid out like a pod, and drives the sandbox access API from a
+  # peer namespace: refusals, exec, a batched file put, and reattach after a
+  # dropped connection, both directly and through granule relay. It also
+  # proves the guest, which owns the pod's address with open egress, cannot
+  # reach the listener or see the token. docs/sandbox-access-api.md (5.1)
+  # and docs/sandbox-relay.md are what it verifies.
+  #
+  # cloud-hypervisor, the kernel and the alpine guest come from the
+  # published ghcr.io/gke-labs/granule/alpine image, as in rootless-vm.yml.
+  sandbox-access-vm:
+    name: sandbox access VM
+    timeout-minutes: 20
+    sandbox:
+      cpus: 4
+      memory-mb: 8192
+      disk-gb: 30
+    steps:
+      - name: test/sandbox-access-vm.sh
+        run: test/sandbox-access-vm.sh
