@@ -201,6 +201,31 @@ func IsDangerousAPIScope(scope APIScope) bool {
 	return ok && info.Dangerous
 }
 
+// sandboxModelOnlyScopes are non-dangerous scopes that remain model-only
+// (never reachable via the sandbox proxy credential / X-Grain-Channel: sandbox-cli).
+var sandboxModelOnlyScopes = map[APIScope]bool{
+	"dispatch:write": true,
+	"repos:write":    true,
+	"sessions:write": true,
+}
+
+// IsSandboxDeniedAPIScope reports whether scope is refused on the sandbox
+// proxy channel (X-Grain-Channel: sandbox-cli): every Dangerous scope, plus
+// model-only scopes (dispatch:write, repos:write, sessions:write, and any
+// deployment:* scope other than deployment:read).
+func IsSandboxDeniedAPIScope(scope APIScope) bool {
+	if scope == "" || scope == APIScopeInternal {
+		return true
+	}
+	if IsDangerousAPIScope(scope) || sandboxModelOnlyScopes[scope] {
+		return true
+	}
+	if strings.HasPrefix(string(scope), "deployment:") && scope != "deployment:read" {
+		return true
+	}
+	return false
+}
+
 // ExpandAPIPreset is a preset's scopes, or a scope on its own, or
 // nothing for a name that is neither.
 func ExpandAPIPreset(name string) []APIScope {
@@ -315,6 +340,17 @@ type APIGrantSet struct {
 // Names that are not api grants are ignored; an api grant that does not
 // parse grants nothing.
 func APIGrantsOf(names []string) APIGrantSet {
+	return apiGrantsOf(names, false)
+}
+
+// SandboxAPIGrantsOf is APIGrantsOf for requests arriving on the sandbox
+// proxy channel (X-Grain-Channel: sandbox-cli): scope sets with
+// RequiresPerson and scopes refused on the sandbox channel are excluded.
+func SandboxAPIGrantsOf(names []string) APIGrantSet {
+	return apiGrantsOf(names, true)
+}
+
+func apiGrantsOf(names []string, sandboxChannel bool) APIGrantSet {
 	set := APIGrantSet{scopes: map[APIScope][]string{}, all: map[APIScope]bool{}}
 	for _, name := range names {
 		if preset, ok := apiAliasCapabilities[name]; ok {
@@ -324,9 +360,15 @@ func APIGrantsOf(names []string) APIGrantSet {
 		if !ok || err != nil {
 			continue
 		}
+		if sandboxChannel && g.RequiresPerson {
+			continue
+		}
 		for _, scope := range g.Scopes {
 			for _, repo := range g.reposOf(scope) {
 				for _, s := range append([]APIScope{scope}, impliedAPIScopes[scope]...) {
+					if sandboxChannel && IsSandboxDeniedAPIScope(s) {
+						continue
+					}
 					if repo == "" {
 						set.all[s] = true
 						continue

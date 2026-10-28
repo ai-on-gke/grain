@@ -499,6 +499,9 @@ func (c *Client) requireMemoryGrant(ctx context.Context, id string) error {
 			return nil
 		}
 	}
+	if APIGrantsOf(grantNames(task.Grants)).Allows("memory:write", "") {
+		return nil
+	}
 	return forbiddenErrorf("task %s does not hold the %q capability, so its run may not write memory", id, memory.CapabilityName)
 }
 

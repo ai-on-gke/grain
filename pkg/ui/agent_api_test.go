@@ -678,3 +678,70 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 		t.Fatalf("PUT /api/settings re-adding unheld gcp-key answered %d, want 403", code)
 	}
 }
+
+func asSandboxAgent(t *testing.T, srv *ui.Server, id, runID, method, path, body, reason string) (int, string) {
+	t.Helper()
+	headers := map[string]string{
+		ui.ActingTaskHeader: id,
+		ui.ActingRunHeader:  runID,
+		ui.ChannelHeader:    ui.SandboxCLIChannel,
+		"Content-Type":      "application/json",
+	}
+	if reason != "" {
+		headers[ui.ActingReasonHeader] = reason
+	}
+	rec := doWithHeaders(t, srv, method, path, body, headers)
+	return rec.Code, rec.Body.String()
+}
+
+func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalation(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets",
+		"api:tasks:read", "api:tasks:write", "api:tasks:admin",
+		"api:merge:write", "api:merge:force",
+		"api:settings:write", "api:connections:write", "api:secrets:write",
+		"api:capabilities:admin", "api:deployment:restart", "api:dispatch:write",
+		"api:repos:write", "api:sessions:write", "api:memory:write", "self-debug")
+	seedAPITask(t, client, "2", "acme/widgets")
+
+	// Non-dangerous read and comment write succeed over sandbox-cli.
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodGet, "/api/tasks/2", "", ""); code != http.StatusOK {
+		t.Fatalf("GET /api/tasks/2 over sandbox-cli: %d %s", code, resp)
+	}
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, "/api/tasks/2/comments",
+		`{"body":"note from sandbox cli"}`, ""); code != http.StatusCreated && code != http.StatusOK {
+		t.Fatalf("POST /api/tasks/2/comments over sandbox-cli: %d %s", code, resp)
+	}
+
+	// Dangerous and model-only scopes are refused with HTTP 403 even when the task holds them.
+	for _, tc := range []struct {
+		method, path, body string
+	}{
+		{http.MethodPost, "/api/tasks/2/approve", `{}`},
+		{http.MethodPut, "/api/settings", `{"maxConcurrent":2}`},
+		{http.MethodPost, "/api/tasks/2/run-now", `{}`},
+		{http.MethodPut, "/api/repos/acme/widgets/settings", `{"autoMerge":false}`},
+		{http.MethodPost, "/api/deployment/git-connections", `{"id":"c1"}`},
+		{http.MethodPost, "/api/tasks/2/force-merge", `{}`},
+		{http.MethodPut, "/api/tasks/2/secret", `{"value":"s"}`},
+	} {
+		code, resp := asSandboxAgent(t, srv, "1", "run-1", tc.method, tc.path, tc.body, "testing sandbox gate")
+		if code != http.StatusForbidden || !strings.Contains(resp, "not permitted on the sandbox-cli channel") {
+			t.Errorf("%s %s over sandbox-cli: got %d %s, want 403 refusing dangerous/model-only scope", tc.method, tc.path, code, resp)
+		}
+	}
+
+	// Capability attachment and supersedes escalation via tasks:write are refused on sandbox-cli.
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPatch, "/api/tasks/2",
+		`{"capabilities":["self-debug"]}`, "escalate"); code != http.StatusForbidden || !strings.Contains(resp, "capabilities") {
+		t.Errorf("PATCH /api/tasks/2 capabilities over sandbox-cli: %d %s, want 403", code, resp)
+	}
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, "/api/tasks/2/capabilities",
+		`{"capability":"self-debug"}`, "escalate"); code != http.StatusForbidden || !strings.Contains(resp, "capabilities") {
+		t.Errorf("POST /api/tasks/2/capabilities over sandbox-cli: %d %s, want 403", code, resp)
+	}
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, "/api/tasks",
+		`{"title":"dup","description":"b","repo":"acme/widgets","supersedes":"2"}`, "supersede"); code != http.StatusForbidden || !strings.Contains(resp, "supersedes is not permitted") {
+		t.Errorf("POST /api/tasks with supersedes over sandbox-cli: %d %s, want 403", code, resp)
+	}
+}

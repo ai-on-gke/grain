@@ -48,6 +48,22 @@ const ActingTaskHeader = "X-Grain-Acting-Task"
 // under a dangerous scope, and every DELETE, is refused without one.
 const ActingReasonHeader = "X-Grain-Acting-Reason"
 
+// ChannelHeader names the channel an agent API request arrived on:
+// "sandbox-cli" when forwarded by the sandbox proxy (127.0.0.1:9728).
+const ChannelHeader = "X-Grain-Channel"
+
+// SandboxCLIChannel is the ChannelHeader value the sandbox proxy sets on
+// requests forwarded from inside a sandbox.
+const SandboxCLIChannel = "sandbox-cli"
+
+// ActingRunHeader optionally carries the live run ID resolved by the sandbox proxy.
+const ActingRunHeader = "X-Grain-Acting-Run"
+
+// IsSandboxDeniedScope reports whether scope is refused on the sandbox CLI channel.
+func IsSandboxDeniedScope(scope APIScope) bool {
+	return model.IsSandboxDeniedAPIScope(scope)
+}
+
 // maxAgentAPIBody bounds how much of a request body the gate reads to
 // find the repository and the capabilities it names; the handler reads
 // the same bytes again after.
@@ -101,6 +117,8 @@ const agentMessagesRoute = "POST /api/tasks/{id}/agent-messages"
 // agentCall is one authorized call, for recordAgentCall.
 type agentCall struct {
 	taskID     string
+	runID      string
+	channel    string
 	pattern    string
 	scope      APIScope
 	repo       string
@@ -168,7 +186,7 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next(rec, r)
-		s.recordAgentCall(r.Context(), call, rec.status)
+		s.recordAgentCall(r.Context(), call, rec.status, rec.bytes)
 	}
 }
 
@@ -176,10 +194,19 @@ var errNoAgentAPI = errors.New("this server has no task store, so it cannot chec
 
 // authorizeAgentCall decides whether taskID's run may make this call.
 func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APIScope, taskID string) (agentCall, error) {
-	call := agentCall{taskID: taskID, pattern: pattern, scope: scope,
-		reason: strings.TrimSpace(r.Header.Get(ActingReasonHeader))}
+	call := agentCall{
+		taskID:  taskID,
+		runID:   strings.TrimSpace(r.Header.Get(ActingRunHeader)),
+		channel: strings.TrimSpace(r.Header.Get(ChannelHeader)),
+		pattern: pattern,
+		scope:   scope,
+		reason:  strings.TrimSpace(r.Header.Get(ActingReasonHeader)),
+	}
 	if scope == "" || scope == scopeInternal {
 		return call, fmt.Errorf("%s is not part of the agent API (docs/agent-api.md)", pattern)
+	}
+	if call.channel == SandboxCLIChannel && IsSandboxDeniedScope(scope) {
+		return call, fmt.Errorf("%s requires scope %s, which is not permitted on the %s channel", pattern, scope, SandboxCLIChannel)
 	}
 	if s.tasks == nil || s.tasks.Store == nil {
 		return call, errNoAgentAPI
@@ -190,8 +217,14 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		return call, fmt.Errorf("acting task %s could not be read: %v", taskID, err)
 	}
 	held := grantNames(acting.Grants)
-	set := APIGrantsOf(held)
-	if !set.Has(scope) {
+	var set APIGrantSet
+	if call.channel == SandboxCLIChannel {
+		set = model.SandboxAPIGrantsOf(held)
+	} else {
+		set = APIGrantsOf(held)
+	}
+	capAllowed := agentCapabilityAllowsRoute(held, set, pattern, scope)
+	if !set.Has(scope) && !capAllowed {
 		return call, fmt.Errorf("task %s holds no api grant for scope %s, which %s needs: "+
 			"ask a person to grant api:%s or a preset that includes it (docs/agent-api.md)", taskID, scope, pattern, scope)
 	}
@@ -207,12 +240,17 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if err != nil {
 		return call, err
 	}
-	if !set.Allows(scope, call.repo) {
+	if !set.Allows(scope, call.repo) && !capAllowed {
 		if call.repo == "" {
 			return call, fmt.Errorf("task %s holds %s only for some repositories, and %s does not name one it reaches",
 				taskID, scope, pattern)
 		}
 		return call, fmt.Errorf("task %s holds %s, but not on %s", taskID, scope, call.repo)
+	}
+	if call.channel == SandboxCLIChannel {
+		if err := sandboxChannelGuard(pattern, body); err != nil {
+			return call, err
+		}
 	}
 	if (IsDangerousAPIScope(scope) || method == http.MethodDelete) && call.reason == "" {
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
@@ -227,6 +265,61 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		return call, err
 	}
 	return call, nil
+}
+
+// agentCapabilityAllowsRoute reports whether a non-API capability grant ("memory",
+// "release-notes") or related API scope ("releases:write") authorizes pattern.
+func agentCapabilityAllowsRoute(held []string, set APIGrantSet, pattern string, scope APIScope) bool {
+	path := pathOf(pattern)
+	if path == "/api/memory" || strings.HasPrefix(path, "/api/memory/") {
+		if (scope == "memory:read" || scope == "memory:write") && slices.Contains(held, "memory") {
+			return true
+		}
+	}
+	if path == "/api/release-notes" || strings.HasPrefix(path, "/api/release-notes/") {
+		if slices.Contains(held, "release-notes") || set.Allows("releases:write", "") {
+			return true
+		}
+		if scope == "memory:read" && set.Allows("releases:read", "") {
+			return true
+		}
+	}
+	return false
+}
+
+// sandboxChannelGuard enforces the additional restrictions required when an
+// agent API route is called over X-Grain-Channel: sandbox-cli.
+func sandboxChannelGuard(pattern string, body []byte) error {
+	switch pattern {
+	case "POST /api/tasks/{id}/messages",
+		"POST /api/tasks/{id}/park-until",
+		"POST /api/tasks/{id}/resume-later":
+		return fmt.Errorf("%s is a model-only control action and cannot be called from the sandbox CLI", pattern)
+	case "POST /api/tasks/{id}/wait-on":
+		var req struct {
+			Park bool `json:"park"`
+		}
+		if len(body) > 0 && json.Unmarshal(body, &req) == nil && req.Park {
+			return errors.New("parking a run (park: true) is a model-only control action; grain task wait supports blocking waits only")
+		}
+	case "PATCH /api/tasks/{id}", "POST /api/tasks/{id}/capabilities":
+		if len(grantsInBody(pattern, body)) > 0 {
+			return errors.New("attaching capabilities to an existing task is not permitted from the sandbox CLI")
+		}
+	case "POST /api/tasks":
+		var fields map[string]json.RawMessage
+		if len(body) > 0 && json.Unmarshal(body, &fields) == nil {
+			for k, raw := range fields {
+				if strings.EqualFold(k, "supersedes") {
+					var sup string
+					if json.Unmarshal(raw, &sup) == nil && strings.TrimSpace(sup) != "" {
+						return errors.New("supersedes is not permitted on the sandbox credential; use the propose_task control tool")
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // agentRails are the self-protection rails: a run cannot end or orphan
@@ -757,11 +850,31 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 }
 
 // recordAgentCall writes the attribution: a line in the daemon's journal
-// for every call, and, for a change to another task, a note in that
-// task's conversation signed as grain on the acting run's behalf.
-func (s *Server) recordAgentCall(ctx context.Context, call agentCall, status int) {
-	log.Printf("grain api: {agent, %s} %s scope=%s repo=%q reason=%q -> %d",
-		call.taskID, call.pattern, call.scope, call.repo, call.reason, status)
+// for every call, a row in task_run_api_call for the active run, and, for
+// a change to another task, a note in that task's conversation signed as
+// grain on the acting run's behalf.
+func (s *Server) recordAgentCall(ctx context.Context, call agentCall, status int, resultBytes int64) {
+	if call.channel != "" {
+		log.Printf("grain api: {agent, %s} %s scope=%s repo=%q channel=%q reason=%q -> %d",
+			call.taskID, call.pattern, call.scope, call.repo, call.channel, call.reason, status)
+	} else {
+		log.Printf("grain api: {agent, %s} %s scope=%s repo=%q reason=%q -> %d",
+			call.taskID, call.pattern, call.scope, call.repo, call.reason, status)
+	}
+	if s.tasks != nil && s.tasks.Store != nil {
+		bgCtx := context.WithoutCancel(ctx)
+		runID := call.runID
+		if runID == "" {
+			runID = s.tasks.Store.ActiveRunID(bgCtx, call.taskID)
+		}
+		if runID != "" && call.channel == SandboxCLIChannel {
+			tool := routeToolName(call.pattern)
+			_ = s.tasks.Store.RecordProxyToolCall(bgCtx, runID, tool, resultBytes, status >= 400)
+			if status < 400 {
+				_ = s.tasks.Store.RecordProxyAPICall(bgCtx, runID, tool, call.targetTask, resultBytes)
+			}
+		}
+	}
 	method, _, _ := strings.Cut(call.pattern, " ")
 	if method == http.MethodGet || status >= 300 || call.targetTask == "" || call.targetTask == call.taskID ||
 		call.pattern == agentMessagesRoute {
@@ -782,6 +895,15 @@ func (s *Server) recordAgentCall(ctx context.Context, call agentCall, status int
 	if err != nil {
 		log.Printf("grain api: recording {agent, %s}'s %s on task %s: %v", call.taskID, call.pattern, call.targetTask, err)
 	}
+}
+
+func routeToolName(pattern string) string {
+	for _, r := range AgentAPIRoutes() {
+		if r.Pattern == pattern {
+			return r.Tool
+		}
+	}
+	return pattern
 }
 
 // taskRepo is the repository a task's runs push to, or "" for a task
@@ -828,15 +950,22 @@ func pathOf(pattern string) string {
 
 var pathParam = regexp.MustCompile(`\{([A-Za-z]+)(\.\.\.)?\}`)
 
-// statusRecorder remembers the status a handler wrote.
+// statusRecorder remembers the status and byte count a handler wrote.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+	bytes  int64
 }
 
 func (s *statusRecorder) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	n, err := s.ResponseWriter.Write(b)
+	s.bytes += int64(n)
+	return n, err
 }
 
 func (s *statusRecorder) Flush() {

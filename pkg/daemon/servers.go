@@ -179,6 +179,7 @@ func StartGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 		// credit their waits earn (sandbox_cli.go).
 		CLIActions: sandboxCLIGate{},
 		WaitCredit: waitCreditAdapter{runWaitCredits},
+		API:        LiveAPI,
 		// The scopes that belong to a sandbox rather than to a task --
 		// grain CI's job sandboxes, which have no task to be resolved
 		// through (pkg/cli/ci.go's ciReadScopes and ciWriteScopes). Wired whether or not

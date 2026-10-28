@@ -37,7 +37,10 @@ type SandboxCLIActions struct {
 	Client *Client
 }
 
-var _ gitproxy.CLIActions = SandboxCLIActions{}
+var (
+	_ gitproxy.CLIActions     = SandboxCLIActions{}
+	_ gitproxy.CLITaskActions = SandboxCLIActions{}
+)
 
 // PullRequestReviewActions is what grain pr reply and grain pr resolve
 // need on top of Config.PullRequests: answering and resolving review
@@ -192,4 +195,183 @@ func sameTarget(a, b *model.RepoRef) bool {
 		return false
 	}
 	return strings.EqualFold(a.String(), b.String())
+}
+
+func (a SandboxCLIActions) NotifyOperator(ctx context.Context, taskID string, req gitproxy.CLINotifyRequest) (gitproxy.CLINotifyResult, error) {
+	resp, err := a.Client.AgentNotify(ctx, taskID, RaiseNotificationRequest{
+		Subject:    req.Subject,
+		Title:      req.Title,
+		Body:       req.Body,
+		Severity:   req.Severity,
+		Task:       req.Task,
+		ClearsWhen: req.ClearsWhen,
+	})
+	if err != nil {
+		return gitproxy.CLINotifyResult{}, cliActionError(err)
+	}
+	n := resp.Notification
+	return gitproxy.CLINotifyResult{
+		ID:       n.ID,
+		Subject:  n.Subject,
+		Severity: string(n.Severity),
+		Count:    n.RaiseCount,
+		New:      resp.New,
+	}, nil
+}
+
+func (a SandboxCLIActions) MessageTask(ctx context.Context, callerTaskID, targetTaskID, body string) (int64, error) {
+	msg, err := a.Client.PostTaskNote(ctx, targetTaskID, callerTaskID, body)
+	if err != nil {
+		return 0, cliActionError(err)
+	}
+	return msg.ID, nil
+}
+
+func (a SandboxCLIActions) CheckWaitTargets(ctx context.Context, callerTaskID string, ids []string) ([]model.WaitTarget, error) {
+	targets, err := a.Client.WaitOn(ctx, callerTaskID, ids, false)
+	if err != nil {
+		return nil, cliActionError(err)
+	}
+	return targets, nil
+}
+
+func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID string, req gitproxy.CLIProposeRequest) (gitproxy.CLIProposeResult, error) {
+	parent, err := a.Client.Store.GetTask(ctx, callerTaskID)
+	if err != nil {
+		return gitproxy.CLIProposeResult{}, cliActionError(err)
+	}
+	if parent == nil {
+		return gitproxy.CLIProposeResult{}, fmt.Errorf("%w: no task %s", namespace.ErrNotFound, callerTaskID)
+	}
+	repo, base := "", ""
+	if !req.NoRepo && parent.Target != nil {
+		repo = parent.Target.String()
+		base = parent.Base
+	}
+	if req.Repo != "" {
+		repo = req.Repo
+		base = ""
+		for _, w := range parent.Writes {
+			if strings.EqualFold(w.Repo.String(), req.Repo) {
+				base = w.Base
+				break
+			}
+		}
+	}
+	if req.Branch != "" {
+		base = req.Branch
+	}
+	var deps []string
+	for _, dep := range req.DependsOn {
+		dep = strings.TrimPrefix(strings.TrimSpace(dep), "#")
+		if dep != "" {
+			deps = append(deps, dep)
+		}
+	}
+	var fields map[string]CustomFieldValue
+	if len(req.CustomFields) > 0 {
+		fields = make(map[string]CustomFieldValue, len(req.CustomFields))
+		for k, v := range req.CustomFields {
+			fields[k] = CustomFieldValue(v)
+		}
+	}
+	var caps *[]string
+	if len(req.Capabilities) > 0 {
+		c := append([]string(nil), req.Capabilities...)
+		caps = &c
+	}
+	key := strings.TrimSpace(req.ID)
+	if key == "" {
+		key = fmt.Sprintf("cli:%s:%s", runID, req.Title)
+	}
+	created, err := a.Client.CreateTask(ctx, CreateTaskRequest{
+		Title:           req.Title,
+		Description:     req.Body,
+		Repo:            repo,
+		NoRepo:          req.NoRepo,
+		Base:            base,
+		AutoMerge:       false,
+		HoldForApproval: true,
+		Supersedes:      "",
+		DependsOn:       deps,
+		CustomFields:    fields,
+		Reads:           req.Reads,
+		ProposedBy:      callerTaskID,
+		ProposalKey:     key,
+		Capabilities:    caps,
+		FixesBaseBranch: req.FixesBaseBranch,
+		NoPort:          req.NoPort,
+		Origin:          req.Origin,
+		DeferredUntil:   req.NotBefore,
+	})
+	if err != nil {
+		return gitproxy.CLIProposeResult{}, cliActionError(err)
+	}
+	return gitproxy.CLIProposeResult{
+		ID:              created.ID,
+		URL:             "/tasks/" + created.ID,
+		HoldForApproval: true,
+		AutoMerge:       false,
+		Queued:          false,
+		Held:            true,
+		ApprovalNote:    created.ApprovalNote,
+	}, nil
+}
+
+// SandboxAPIRoutes returns the non-dangerous agent API routes reachable by
+// grants on the sandbox CLI channel, optionally filtered by scopeFilter.
+func SandboxAPIRoutes(grants []string, scopeFilter string) []APIRoute {
+	set := model.SandboxAPIGrantsOf(grants)
+	var out []APIRoute
+	for _, r := range AgentAPIRoutes() {
+		if IsSandboxDeniedScope(r.Scope) {
+			continue
+		}
+		if scopeFilter != "" && !strings.EqualFold(string(r.Scope), scopeFilter) {
+			continue
+		}
+		if !set.Has(r.Scope) && !sandboxGrantCoversRoute(grants, r.Pattern) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+func sandboxGrantCoversRoute(grants []string, pattern string) bool {
+	for _, g := range grants {
+		switch strings.TrimSpace(g) {
+		case "memory":
+			if pattern == "PUT /api/memory" || pattern == "PUT /api/memory/documents/{name}" ||
+				pattern == "GET /api/memory" || pattern == "GET /api/memory/documents" || pattern == "GET /api/memory/documents/{name}" {
+				return true
+			}
+		case "release-notes":
+			if pattern == "PUT /api/release-notes" || pattern == "GET /api/release-notes" || pattern == "GET /api/release-notes/stats" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (a SandboxCLIActions) ListAPIRoutes(ctx context.Context, callerTaskID string, grants []string, scopeFilter string) ([]gitproxy.CLIAPIRoute, error) {
+	if len(grants) == 0 && a.Client != nil && a.Client.Store != nil && callerTaskID != "" {
+		if t, err := a.Client.Store.GetTask(ctx, callerTaskID); err == nil && t != nil {
+			grants = grantNames(t.Grants)
+		}
+	}
+	routes := SandboxAPIRoutes(grants, scopeFilter)
+	out := make([]gitproxy.CLIAPIRoute, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, gitproxy.CLIAPIRoute{
+			Method:      r.Method,
+			Path:        r.Path,
+			Scope:       string(r.Scope),
+			Tool:        r.Tool,
+			Description: r.Description,
+			NeedsReason: r.NeedsReason,
+		})
+	}
+	return out, nil
 }

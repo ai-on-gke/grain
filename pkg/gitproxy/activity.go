@@ -29,6 +29,7 @@ package gitproxy
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -45,6 +46,12 @@ type ProxyActivityRecorder interface {
 	RecordProxyToolCall(ctx context.Context, runID, tool string, resultBytes int64, errored bool) error
 }
 
+// ProxyAPICallRecorder is an optional extension of ProxyActivityRecorder that
+// records each served proxy call in task_run_api_call. Implemented by *model.Store.
+type ProxyAPICallRecorder interface {
+	RecordProxyAPICall(ctx context.Context, runID, tool string, targetIDs []string, resultBytes int64) error
+}
+
 // proxyActivityRepeatWindow is how long a phrase just written is trusted
 // to still be on the row, matching pkg/mcp's toolActivityRepeatWindow: a
 // shell loop reading fifty files writes the row once, not fifty times.
@@ -57,13 +64,38 @@ type RouteActivity struct {
 	Tool string
 	// Phrase is the run's activity row while the request is served.
 	Phrase string
+	// Targets are the task or CI run IDs touched by the request, recorded in
+	// task_run_api_call.
+	Targets []string
 }
 
 // NamespaceRouteActivity names a /fs/<scheme>/<path> request after the MCP
 // tool it stands in for.
 func NamespaceRouteActivity(path string, query url.Values) RouteActivity {
 	tool := namespaceRouteTool(path, query)
-	return RouteActivity{Tool: tool, Phrase: mcp.ToolActivityNote(tool)}
+	return RouteActivity{
+		Tool:    tool,
+		Phrase:  mcp.ToolActivityNote(tool),
+		Targets: namespaceRouteTargets(path),
+	}
+}
+
+func namespaceRouteTargets(path string) []string {
+	rest := strings.Trim(strings.TrimPrefix(path, "/fs"), "/")
+	scheme, rel, _ := strings.Cut(rest, "/")
+	rel = strings.Trim(rel, "/")
+	switch scheme {
+	case "task":
+		if id, _, _ := strings.Cut(rel, "/"); id != "" {
+			return []string{id}
+		}
+	case "ci":
+		parts := strings.Split(rel, "/")
+		if len(parts) >= 3 && parts[2] != "" {
+			return []string{parts[2]}
+		}
+	}
+	return nil
 }
 
 func namespaceRouteTool(path string, query url.Values) string {
@@ -175,12 +207,25 @@ func (p *GitProxy) noteActivity(ctx context.Context, taskID, phrase string) {
 
 // recordToolCall counts one served request against the live attempt.
 func (p *GitProxy) recordToolCall(ctx context.Context, runID, tool string, w *countingResponseWriter) {
-	if p.Activity == nil || runID == "" || tool == "" {
+	p.recordRouteCall(ctx, runID, RouteActivity{Tool: tool}, w)
+}
+
+// recordRouteCall counts one served request against the live attempt in
+// task_run_tool, task_run_api_call, and systemlog.
+func (p *GitProxy) recordRouteCall(ctx context.Context, runID string, act RouteActivity, w *countingResponseWriter) {
+	if p.Activity == nil || runID == "" || act.Tool == "" {
 		return
 	}
+	errored := w.statusCode() >= 400
+	log.Printf("grain: sandbox proxy call run %s -> %s (status %d, %d bytes)", runID, act.Tool, w.statusCode(), w.bytes)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = p.Activity.RecordProxyToolCall(ctx, runID, tool, w.bytes, w.statusCode() >= 400)
+	_ = p.Activity.RecordProxyToolCall(ctx, runID, act.Tool, w.bytes, errored)
+	if !errored {
+		if apiRec, ok := p.Activity.(ProxyAPICallRecorder); ok {
+			_ = apiRec.RecordProxyAPICall(ctx, runID, act.Tool, act.Targets, w.bytes)
+		}
+	}
 }
 
 // countingResponseWriter counts the body bytes and captures the status of
