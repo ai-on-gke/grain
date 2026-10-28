@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -235,4 +236,133 @@ func reviewCommentsFingerprint(comments []github.ReviewComment) string {
 		b.WriteByte(',')
 	}
 	return b.String()
+}
+
+// SyncChangeThreads is SyncReviewThreads for a task whose change is a CL
+// (google3-cls.md §5, G3-5): it asks the registered change.Provider for
+// each linked CL's new threads -- the provider leaves out the operator's
+// own, bots', resolved ones and every one already recorded -- records
+// each as model.LinkCLThread, and only then asks for one run for the
+// batch. A task waiting on Submit, on a reply or finished gets that run;
+// a running one is told in an addendum (model.CLThreadsPrincipal) and
+// deals with them before it ends. Any other state -- queued, parked,
+// closed -- is left until it is one of those.
+func SyncChangeThreads(ctx context.Context, store *model.Store, now time.Time) error {
+	if _, ok := change.Lookup(model.LinkChangelist); !ok {
+		return nil
+	}
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		return fmt.Errorf("orchestrator: listing tasks for CL review threads: %w", err)
+	}
+	var errs []error
+	for _, task := range tasks {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		if change.Primary(task) == "" || isReviewTask(task) {
+			continue
+		}
+		state, err := store.State(ctx, task.ID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("orchestrator: reading %s's state: %w", task.ID, err))
+			continue
+		}
+		switch state {
+		case model.StateAwaitingSubmit, model.StateAwaitingReply, model.StateCompleted, model.StateRunning:
+		default:
+			continue
+		}
+		if err := sendRunForChangeThreads(ctx, store, task, state, now); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func sendRunForChangeThreads(ctx context.Context, store *model.Store, task model.Task, state model.State, now time.Time) error {
+	seen := map[string]bool{}
+	for _, l := range task.Links {
+		if l.Kind == model.LinkCLThread {
+			seen[l.Target] = true
+		}
+	}
+	var fresh []change.Thread
+	for _, l := range task.Links {
+		if l.Kind != model.LinkChangelist {
+			continue
+		}
+		threads, err := change.ThreadsOf(ctx, task, l.Kind, l.Target, nil, now)
+		if err != nil {
+			// Best effort, every cycle: the next one asks again.
+			log.Printf("orchestrator: reading review threads on %s: %v", l.Target, err)
+			continue
+		}
+		for _, th := range threads {
+			if th.ID == "" || th.Resolved || seen[th.ID] {
+				continue
+			}
+			seen[th.ID] = true
+			fresh = append(fresh, th)
+		}
+	}
+	if len(fresh) == 0 {
+		return nil
+	}
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		for _, th := range fresh {
+			t.Links = append(t.Links, model.Link{Kind: model.LinkCLThread, Target: th.ID})
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("orchestrator: recording the CL review threads on %s: %w", task.ID, err)
+	}
+	if state != model.StateRunning {
+		if err := store.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
+			o.CompletedAt = nil
+			o.RetryRequestedAt = &now
+		}); err != nil {
+			return fmt.Errorf("orchestrator: queueing %s for its CL review threads: %w", task.ID, err)
+		}
+		log.Printf("orchestrator: %d new review thread(s) on %s; sending %s another run", len(fresh), change.Primary(task), task.ID)
+	}
+	if _, err := store.AddComment(ctx, model.Comment{
+		TaskID:    task.ID,
+		Author:    model.Attribution{Actor: model.CLThreadsPrincipal},
+		Body:      changeThreadsNote(fresh, state == model.StateRunning),
+		CreatedAt: now,
+	}); err != nil {
+		return fmt.Errorf("orchestrator: commenting on %s: %w", task.ID, err)
+	}
+	return nil
+}
+
+// changeThreadsNote is what the run sent for new CL threads reads first.
+// The bodies are the provider's, already wrapped as external input.
+func changeThreadsNote(threads []change.Thread, running bool) string {
+	var b strings.Builder
+	if running {
+		fmt.Fprintf(&b, "%s opened on this task's CL while this run is going; deal with %s before you finish:\n\n",
+			countOf(len(threads), "new review thread"), pronounFor(len(threads)))
+	} else {
+		fmt.Fprintf(&b, "%s opened on this task's CL, so this task is back in the queue to deal with %s:\n\n",
+			countOf(len(threads), "new review thread"), pronounFor(len(threads)))
+	}
+	for _, th := range threads {
+		body := strings.ReplaceAll(strings.TrimSpace(th.Body), "\n", "\n  ")
+		fmt.Fprintf(&b, "- thread %s by %s -- %s\n", th.ID, userOrUnknownAuthor(th.Author), body)
+	}
+	b.WriteString("\nFor each one: fix it -- upload the fix with open_pull_request -- or, where it is " +
+		"wrong or out of scope, answer it with the reason (reply_to_pull_request_comment with its " +
+		"thread_id). Then mark it resolved (resolve_review_thread). Replies are saved as drafts on " +
+		"the CL and published when this run ends. Leave nothing you could have fixed as a reply.")
+	return b.String()
+}
+
+func userOrUnknownAuthor(author string) string {
+	if author == "" {
+		return "someone"
+	}
+	return author
 }
