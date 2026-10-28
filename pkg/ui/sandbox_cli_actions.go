@@ -338,10 +338,13 @@ func SandboxAPIRoutes(grants []string, scopeFilter string) []APIRoute {
 		if IsSandboxDeniedScope(r.Scope) {
 			continue
 		}
+		if sandboxChannelGuard(r.Pattern, nil) != nil {
+			continue
+		}
 		if scopeFilter != "" && !strings.EqualFold(string(r.Scope), scopeFilter) {
 			continue
 		}
-		if !agentCapabilityAllowsRoute(grants, set, r.Pattern, r.Scope) {
+		if !set.Has(r.Scope) && !agentCapabilityAllowsRoute(grants, set, r.Pattern, r.Scope) {
 			continue
 		}
 		out = append(out, r)

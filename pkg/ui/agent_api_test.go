@@ -796,7 +796,8 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 		t.Errorf("Step 2 links = %v, want LinkDependsOn -> %s", stored2.Links, p1.ID)
 	}
 
-	// SandboxAPIRoutes includes PUT /api/memory/documents when holding "memory".
+	// SandboxAPIRoutes includes PUT /api/memory/documents when holding "memory",
+	// includes granted non-dangerous API routes, and excludes model-only routes.
 	memRoutes := ui.SandboxAPIRoutes([]string{"memory"}, "")
 	hasDocWrite := false
 	for _, r := range memRoutes {
@@ -806,5 +807,19 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 	}
 	if !hasDocWrite {
 		t.Errorf("SandboxAPIRoutes([memory]) missing PUT /api/memory/documents: %+v", memRoutes)
+	}
+	taskRoutes := ui.SandboxAPIRoutes([]string{"api:tasks:read", "api:tasks:write", "api:tasks:admin"}, "")
+	hasListTasks := false
+	for _, r := range taskRoutes {
+		if r.Pattern == "GET /api/tasks" {
+			hasListTasks = true
+		}
+		if r.Scope == "tasks:admin" || r.Pattern == "POST /api/tasks/{id}/messages" ||
+			r.Pattern == "POST /api/tasks/{id}/park-until" || r.Pattern == "POST /api/tasks/{id}/resume-later" {
+			t.Errorf("SandboxAPIRoutes included denied or model-only route %s (scope %s)", r.Pattern, r.Scope)
+		}
+	}
+	if !hasListTasks {
+		t.Errorf("SandboxAPIRoutes([api:tasks:read ...]) missing GET /api/tasks: %+v", taskRoutes)
 	}
 }
