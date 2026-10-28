@@ -32,6 +32,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/iapreconciler"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelexec"
@@ -331,6 +332,12 @@ type Config struct {
 	// (hostexec.go).
 	HostdSocket string
 	HostExec    *HostExecutor
+	// HostdRemote is set by -hostd-token-file (or $GRAIN_HOSTD_TOKEN):
+	// the session of a grain hostd on another machine that dials in to
+	// /api/hostd/connect with that token (hostd -server), through which
+	// host CLIs and run: host capability servers start where the daemon
+	// has no hostd socket of its own -- on Kubernetes, say.
+	HostdRemote *hostd.Remote
 
 	// modelProxyUnrestricted is -model-proxy-unrestricted: the model
 	// proxies forward every vendor path rather than only the

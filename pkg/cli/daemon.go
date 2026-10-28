@@ -140,7 +140,7 @@ func runDaemonCommand(args []string) {
 		// An ambient git credential's gh (or a registered source's tool) runs on the host too,
 		// through hostd's host-git capability server, when its allowlist
 		// offers one (pkg/gitproxy/hostgit.go).
-		gitproxy.UseHostGit(&gitproxy.HostGitClient{Hostd: hostd.Client{Socket: hostExec.Socket}, Stderr: os.Stderr})
+		gitproxy.UseHostGit(&gitproxy.HostGitClient{Hostd: hostExec.HostdClient(), Stderr: os.Stderr})
 	}
 
 	if err := checkConfig(cfg); err != nil {
@@ -372,6 +372,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	hostdSocket := fs.String("hostd-socket", "", "grain hostd's unix socket, for a daemon in a container whose host "+
 		"CLIs run through hostd; empty uses "+hostd.DefaultSocketPath+" when its directory is mounted into the container. "+
 		"Refused on Kubernetes, which has no host")
+	hostdTokenFile := fs.String("hostd-token-file", "", "file holding the shared token a grain hostd on another machine dials in to "+
+		hostd.RemotePath+" with (grain hostd -server <this daemon's URL> -token-file ...): its host CLIs and run: host capability "+
+		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset; neither means no hostd may dial in")
 	openAIAPIKeyFile := fs.String("openai-api-key-file", "", "file holding the OpenAI API key the agent "+
 		"authenticates as, passed to the codex subprocess as OPENAI_API_KEY. Optional, and the exact "+
 		"counterpart of the two files above: the UI stores one as the "+
@@ -1283,8 +1286,28 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		K8sGranuleSandboxes: *k8sGranuleSandboxes, K8sGranuleImage: *k8sGranuleImage,
 		SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
+	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile); err != nil {
+		return cfg, fs, unknownFlags, err
+	}
 	cfg, err = local(cfg, passed)
 	return cfg, fs, unknownFlags, err
+}
+
+// hostdRemote is the acceptor for a grain hostd dialing in with the token
+// in tokenFile, or $GRAIN_HOSTD_TOKEN; nil when neither names one.
+func hostdRemote(tokenFile string) (*hostd.Remote, error) {
+	token := strings.TrimSpace(os.Getenv("GRAIN_HOSTD_TOKEN"))
+	if tokenFile != "" {
+		t, err := daemon.ReadTokenFile(tokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading -hostd-token-file: %w", err)
+		}
+		token = t
+	}
+	if token == "" {
+		return nil, nil
+	}
+	return &hostd.Remote{Token: token, Logf: log.Printf}, nil
 }
 
 // checkConfig is every "these flags cannot be started with" rule daemon()

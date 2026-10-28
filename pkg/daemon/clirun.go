@@ -327,7 +327,7 @@ func (c Config) resolveContainerised(ctx context.Context, r *CLIRunResolution, e
 		if ok, why := exec.runsOnHost(r.Framework); !ok {
 			r.HostUnavailable = why
 		} else {
-			offered, r.HostUnavailable = hostdOffersCLI(ctx, exec.Socket, cliBinaryName(r.Framework))
+			offered, r.HostUnavailable = hostdOffersCLI(ctx, exec, cliBinaryName(r.Framework))
 		}
 	}
 	switch location {
@@ -337,7 +337,7 @@ func (c Config) resolveContainerised(ctx context.Context, r *CLIRunResolution, e
 		ok, why := exec.runsOnHost(r.Framework)
 		if ok {
 			r.Location, r.Via, r.HostPath, r.Entry = model.CLIRunHost, ViaHostd, offered, cliBinaryName(r.Framework)
-			r.Reason = "host " + from + ": through grain hostd at " + exec.Socket + ", as its allowlist entry \"" + cliBinaryName(r.Framework) + "\""
+			r.Reason = "host " + from + ": through grain hostd " + exec.hostdWhere() + ", as its allowlist entry \"" + cliBinaryName(r.Framework) + "\""
 			// Allowed only for an entry hostd offers: otherwise the run
 			// fails, saying which of the two is missing.
 			r.Err = r.HostUnavailable
@@ -363,7 +363,7 @@ func (c Config) resolveDetached(ctx context.Context, r *CLIRunResolution, exec H
 	if ok, no := exec.runsDetached(r.Framework); !ok {
 		why = no
 	} else {
-		path, why = hostdOffersCLI(ctx, exec.Socket, entry)
+		path, why = hostdOffersCLI(ctx, exec, entry)
 	}
 	if why != "" {
 		r.Reason = "detached " + from + ", but " + why
@@ -373,7 +373,7 @@ func (c Config) resolveDetached(ctx context.Context, r *CLIRunResolution, exec H
 		return
 	}
 	r.Location, r.Via, r.HostPath, r.Entry = model.CLIRunDetached, ViaHostd, path, entry
-	r.Reason = "detached " + from + ": the image's CLI with the deployment's login, through grain hostd at " + exec.Socket +
+	r.Reason = "detached " + from + ": the image's CLI with the deployment's login, through grain hostd " + exec.hostdWhere() +
 		" as its allowlist entry \"" + entry + "\", so it outlives a daemon upgrade"
 }
 
