@@ -538,6 +538,13 @@ export default function ModelsSection({ config, onSaved, showError }) {
         />
       </SettingsCard>
       <SettingsCard title="Where each agent CLI runs" anchor="cli-run">
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Model servers (<code>grain model-server</code>) run agent model CLIs (
+          <code>agy</code>, <code>claude</code>, <code>codex</code>) on a remote
+          host with local ambient credentials and connect outbound to{" "}
+          <code>grain</code>; see Settings &rarr; Executors for join tokens and
+          System &rarr; Sandboxes for connected model servers.
+        </Typography>
         <CLIRunLocations showError={showError} onSaved={onSaved} />
       </SettingsCard>
     </>

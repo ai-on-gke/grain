@@ -40,6 +40,8 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	signingKey := fs.String("signing-key", "", "ECDSA P-256 PEM private key path (defaults to <data-dir>/attest.key)")
 	pkgCacheDir := fs.String("pkg-cache-dir", "", "package cache directory (defaults to <data-dir>/pkgcache)")
 	pkgCacheMaxBytes := fs.Int64("pkg-cache-max-bytes", 10<<30, "package cache maximum bytes")
+	grainURL := fs.String("grain-url", "", "optional grain base URL for reverse-tunnel /v1/session mode")
+	clientToken := fs.String("client-token", "", "client token (<id>.<secret>) for -grain-url reverse-tunnel mode")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -81,6 +83,28 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = loc.Close() }()
 
+	srv := grit.NewServer(grit.ServerConfig{Local: loc})
+
+	if *grainURL != "" {
+		go func() {
+			for {
+				if ctx.Err() != nil {
+					return
+				}
+				_ = grit.DialSession(ctx, grit.SessionDialConfig{
+					GrainURL:    *grainURL,
+					ClientToken: *clientToken,
+					Server:      srv,
+				})
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+		}()
+	}
+
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		fmt.Fprintf(stderr, "grit serve: listen %s: %v\n", *listen, err)
@@ -91,7 +115,7 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "grit serve listening on %s (epoch %s, key %s)\n", ln.Addr().String(), loc.Store().Epoch(), signer.KeyID())
 
 	httpSrv := &http.Server{
-		Handler:           grit.NewServer(grit.ServerConfig{Local: loc}),
+		Handler:           srv,
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 	errCh := make(chan error, 1)

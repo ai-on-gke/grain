@@ -181,7 +181,7 @@ func Run(ctx context.Context, cfg Config) error {
 	cfg.hostdRuns = newHostdRuns(cfg, store)
 	// And the upgrade protocol's hold on them: flushed before an
 	// upgrade's restart, reported on by the check after it.
-	cfg.runHostUpgrade = newRunHostUpgrade(cfg.RunHost, cfg.hostdRuns, cfg.Ci)
+	cfg.runHostUpgrade = newRunHostUpgrade(cfg.RunHost, cfg.hostdRuns, cfg.Ci).withStopping(cfg.shutdownStarted)
 
 	// The state repository is opened and loaded into the database before
 	// anything reads a row out of it: what is in the repository is what
@@ -690,7 +690,7 @@ func Run(ctx context.Context, cfg Config) error {
 		log.Printf("grain daemon: the package cache is serving at %s, holding at most %d GiB under %s",
 			pkgCache.Url, cfg.PackageCacheGB, pkgCache.dir)
 	}
-	defer stopPackageCache(context.Background())
+	defer stopWithGrace(stopPackageCache)
 	// A Kubernetes sandbox pod gets its cache configuration under /etc
 	// when it is built, since nothing can write it there afterwards --
 	// so it asks the same two questions each dispatch does, per pod.
@@ -729,7 +729,7 @@ func Run(ctx context.Context, cfg Config) error {
 			"(%d entries, %d MiB, carried over from before this restart): %s",
 			actionsCache.Url, stats.MaxBytes>>30, actionsCache.cache.Dir(), stats.Entries, stats.Bytes>>20, used)
 	}
-	defer stopActionsCache(context.Background())
+	defer stopWithGrace(stopActionsCache)
 
 	// The other proxies a sandbox can see, on the same fabric as the git
 	// proxy: a run holding the claude-proxy, openai-proxy or gemini-proxy
@@ -761,7 +761,7 @@ func Run(ctx context.Context, cfg Config) error {
 				cfg.restartGaps.Down(modelProxyGapService(vendor))
 			}
 		}
-		stopModelProxies(context.Background())
+		stopWithGrace(stopModelProxies)
 	}()
 	if err != nil {
 		log.Printf("grain daemon: not serving every model proxy: %v -- a task granted the capability "+
@@ -808,7 +808,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("starting remote executor listener: %w", err)
 	}
-	defer stopExecutor(context.Background())
+	defer stopWithGrace(stopExecutor)
 	cfg.executorServer = execSrv
 	cfg.executorListenAddr = execAddr
 	if live != nil {
@@ -840,7 +840,7 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.restartGaps.Up(upgrade.ServiceAPI)
 		defer func() {
 			cfg.restartGaps.Down(upgrade.ServiceAPI)
-			stopUI(context.Background())
+			stopWithGrace(stopUI)
 		}()
 
 		done := make(chan struct{})
@@ -960,7 +960,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		ActiveGrainImage:   DefaultGrainImage,
 	}))
 
-	proxyURL, proxyHandler, stopProxy, err := StartGitProxy(cfg.DataDir, store, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden)
+	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
 	if err != nil {
 		// Fatal to this loop, and only to it: every dispatch and every CI
 		// job clones through this proxy, so there is nothing to reconcile
@@ -972,7 +972,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	cfg.restartGaps.Up(upgrade.ServiceGitProxy)
 	defer func() {
 		cfg.restartGaps.Down(upgrade.ServiceGitProxy)
-		stopProxy(context.Background())
+		stopWithGrace(stopProxy)
 	}()
 	cfg.gitProxyHandler = proxyHandler
 
@@ -990,7 +990,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		log.Printf("grain daemon: starting the capability port relay: %v -- runs whose capability grants forward ports will be refused", err)
 	} else {
 		capabilityPortsURL = endpoint.URL
-		defer stopRelay(context.Background())
+		defer stopWithGrace(stopRelay)
 	}
 
 	// The listener a CI job holding api grants (release-gate-read among
@@ -1002,7 +1002,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			"(%s among them) will be refused", err, model.ReleaseGateReadCapability)
 	} else {
 		CIAPI.SetURL(endpoint.URL)
-		defer stopGate(context.Background())
+		defer stopWithGrace(stopGate)
 	}
 
 	// Built per dispatch now rather than here (agentFrameworks' own doc
@@ -1170,26 +1170,32 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		AgentShape: cfg.AgentShape(),
 	})
 	if cfg.Ci {
-		ciProviders := func() *model.CapabilityRegistry {
-			return newCapabilityRegistryWithStore(store, live.Current().LocalScriptsConfig(), CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
+		if strings.TrimSpace(cfg.GritURL) != "" {
+			gritRunner := BuildGritBackendRunner(ctx, cfg, live.ciRetention, store)
+			LiveCI.Store(gritRunner)
+			log.Printf("grain daemon: grain CI is wired to remote grit server at %s", cfg.GritURL)
+		} else {
+			ciProviders := func() *model.CapabilityRegistry {
+				return newCapabilityRegistryWithStore(store, live.Current().LocalScriptsConfig(), CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
+			}
+			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live))
+			ciService.SandboxImage = live.CurrentSandboxImage
+			// A trusted release runs only from a branch the repository has
+			// reviewed into, whoever asked for it (grain/task-949).
+			ciService.ReleaseRefRefusal = CiReleaseRefRefusal(store, githubClient)
+			// The attached capability servers a job's capability references
+			// are minted through, the same ones a task's are.
+			WithCICapabilityServers(ciService, func() orchestrator.CapabilityServers { return capabilityServerLookup(live) })
+			// And the relay their ports and mcp_endpoints reach a job's
+			// sandbox through, the same one a task's do.
+			WithCICapabilityPorts(ciService, capabilityPorts, capabilityPortsURL)
+			LiveCI.Store(ciService)
+			defer ciService.Detach()
+			log.Printf("grain daemon: grain CI is on for repos whose CI mode is \"Use Grain CI\" (Settings -> Repos); "+
+				"attaching the %q capability alone does not turn it on. How many jobs run at once is "+
+				"bounded by %s",
+				grainci.CapabilityName, BudgetSentence(cfg.Limits(), KubernetesSandboxes(cfg)))
 		}
-		ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live))
-		ciService.SandboxImage = live.CurrentSandboxImage
-		// A trusted release runs only from a branch the repository has
-		// reviewed into, whoever asked for it (grain/task-949).
-		ciService.ReleaseRefRefusal = CiReleaseRefRefusal(store, githubClient)
-		// The attached capability servers a job's capability references
-		// are minted through, the same ones a task's are.
-		WithCICapabilityServers(ciService, func() orchestrator.CapabilityServers { return capabilityServerLookup(live) })
-		// And the relay their ports and mcp_endpoints reach a job's
-		// sandbox through, the same one a task's do.
-		WithCICapabilityPorts(ciService, capabilityPorts, capabilityPortsURL)
-		LiveCI.Store(ciService)
-		defer ciService.Detach()
-		log.Printf("grain daemon: grain CI is on for repos whose CI mode is \"Use Grain CI\" (Settings -> Repos); "+
-			"attaching the %q capability alone does not turn it on. How many jobs run at once is "+
-			"bounded by %s",
-			grainci.CapabilityName, BudgetSentence(cfg.Limits(), KubernetesSandboxes(cfg)))
 	}
 	// The tokens those runs held came back with the registry's file
 	// (modelproxy.Tokens.PersistTo); the runs did not.
@@ -1575,6 +1581,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// that then left this process running (runHostUpgrade.resume): the
 	// runs are this daemon's to adopt back, from the cursors it wrote.
 	cfg.runHostUpgrade.setReadopt(func() {
+		if ctx.Err() != nil {
+			return
+		}
 		again, _, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRuns, sandboxes)
 		if err != nil {
 			log.Printf("grain daemon: %v", err)
@@ -1599,6 +1608,20 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// wait for work still to be done.
 	DrainInFlight(inFlight)
 	return nil
+}
+
+// shutdownServerGrace bounds how long a deferred HTTP listener shutdown
+// waits after DrainInFlight for idle or straggling in-flight connections
+// (such as an adopted sandbox's still-open port-forward tunnel) to close.
+const shutdownServerGrace = 10 * time.Second
+
+func stopWithGrace(stop func(context.Context) error) {
+	if stop == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownServerGrace)
+	defer cancel()
+	_ = stop(ctx)
 }
 
 // shutdownDrain bounds how long the daemon waits, after its reconcile

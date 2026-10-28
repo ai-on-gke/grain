@@ -42,7 +42,7 @@ const singleTenantProxiedRefusal = "this daemon is single-tenant: it keeps no ac
 // is already the trusted source it would be judged as. A plaintext
 // identity header names nobody at all (identifyCaller).
 func singleTenantRefusesIdentity(r *http.Request) bool {
-	if !strings.HasPrefix(r.URL.Path, "/api/") {
+	if !strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/mcp" {
 		return false
 	}
 	p, method, ok := identifyCaller(r)

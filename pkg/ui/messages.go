@@ -313,13 +313,20 @@ func (c *Client) PostMessageToAgent(ctx context.Context, from, to, body string, 
 	if target == nil {
 		return Message{}, &NotFoundError{ID: to}
 	}
-	sender, err := c.Store.GetTask(ctx, from)
-	if err != nil {
-		return Message{}, err
-	}
-	signature := "task " + from
-	if sender != nil && strings.TrimSpace(sender.Title) != "" {
-		signature = fmt.Sprintf("task %s (%s)", from, strings.TrimSpace(sender.Title))
+	var signature, authorLabel string
+	if strings.HasPrefix(from, "external:") {
+		signature = fmt.Sprintf("external agent %s (%s)", strings.TrimPrefix(from, "external:"), from)
+		authorLabel = from
+	} else {
+		sender, err := c.Store.GetTask(ctx, from)
+		if err != nil {
+			return Message{}, err
+		}
+		signature = "task " + from
+		if sender != nil && strings.TrimSpace(sender.Title) != "" {
+			signature = fmt.Sprintf("task %s (%s)", from, strings.TrimSpace(sender.Title))
+		}
+		authorLabel = "task " + from
 	}
 	now := c.now()
 	attachments, err := decodeAttachments(uploads, now)
@@ -353,7 +360,7 @@ func (c *Client) PostMessageToAgent(ctx context.Context, from, to, body string, 
 	}
 	return Message{
 		ID:          commentID,
-		Author:      "task " + from,
+		Author:      authorLabel,
 		AuthorKind:  string(model.PrincipalAgent),
 		Body:        signed,
 		At:          now,
@@ -372,7 +379,7 @@ func (s *Server) handleMessageTaskAgent(w http.ResponseWriter, r *http.Request) 
 	}
 	var from string
 	if call, ok := agentCallFromContext(r.Context()); ok {
-		from = call.taskID
+		from = call.principalID()
 	}
 	message, err := s.tasks.PostMessageToAgent(r.Context(), from, r.PathValue("id"), req.Body, req.Attachments)
 	if err != nil {

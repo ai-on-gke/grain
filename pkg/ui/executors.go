@@ -78,7 +78,7 @@ func executorBootstrapRoute(r *http.Request) bool {
 	}
 	switch r.URL.Path {
 	case "/_grain/executor", "/api/executors/connect", "/api/executors/stream", "/api/hostd/connect",
-		"/install-executor.sh", "/api/executors/install.sh":
+		"/install-executor.sh", "/api/executors/install.sh", "/api/model-servers/install.sh":
 		return true
 	}
 	if name, ok := strings.CutPrefix(r.URL.Path, "/api/executors/bin/"); ok {

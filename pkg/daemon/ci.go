@@ -39,6 +39,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/grit/actions"
+	"github.com/ai-on-gke/grain/pkg/gritapi"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -3027,3 +3028,24 @@ func deployedImages(configCheckImage func() string) []string {
 // ciClusterFullRetry is how long a CI job whose pod the cluster had no
 // room for waits before asking again.
 var ciClusterFullRetry = 15 * time.Second
+
+// BuildGritBackendRunner constructs a `ci.BackendRunner` connected to a remote
+// `grit serve` endpoint (`cfg.GritURL`) and starts its background `/v1/events`
+// consumer loop.
+func BuildGritBackendRunner(ctx context.Context, cfg Config, retention func() ci.StoredRunRetention, store *model.Store) *ci.BackendRunner {
+	stateDir := filepath.Join(cfg.DataDir, "state")
+	cursor := ci.NewFileCursorStore(filepath.Join(stateDir, "grit-cursor.json"))
+	client := gritapi.NewClient(gritapi.ClientConfig{
+		BaseURL:     cfg.GritURL,
+		ClientToken: cfg.GritClientToken,
+		Cursor:      cursor,
+	})
+	runner := ci.NewBackendRunner(ci.BackendRunnerConfig{
+		Backend:  client,
+		Store:    buildCIRunStore(ctx, store, retention),
+		Cursor:   cursor,
+		StateDir: stateDir,
+	})
+	go runner.RunConsumer(ctx, 250*time.Millisecond)
+	return runner
+}

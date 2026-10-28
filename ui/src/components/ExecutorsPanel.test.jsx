@@ -200,7 +200,7 @@ describe("ExecutorsPanel", () => {
     expect(
       screen.getByDisplayValue("gxt_abcdef1234567890abcdef1234567890"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/grain executor --token/)).toBeInTheDocument();
+    expect(screen.getByText(/grain model-server --token/)).toBeInTheDocument();
 
     // Close generated token dialog
     const doneBtn = screen.getByRole("button", { name: /done/i });

@@ -264,6 +264,7 @@ func TestExecutorBootstrapRoute(t *testing.T) {
 		"/api/hostd/connect":                    true,
 		"/install-executor.sh":                  true,
 		"/api/executors/install.sh":             true,
+		"/api/model-servers/install.sh":         true,
 		"/api/executors/bin/grain-linux-amd64":  true,
 		"/install/linux/amd64":                  true,
 		"/install/linux/amd64.sha256":           true,
