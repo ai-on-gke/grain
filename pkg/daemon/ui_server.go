@@ -477,6 +477,11 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 			}
 			return nil
 		},
+		// The Settings pane's sandbox image check reads labels the way
+		// the daemon's own startup check does: local docker first, then
+		// the registry (FetchImageLabels), Google-authenticated for an
+		// image on Artifact Registry or GCR.
+		InspectImageLabels: sandboxImageLabels(),
 	}
 	var localRepoComparer ui.RepoComparer
 	if comparer, ok := stateRepo.(ui.RepoComparer); ok {

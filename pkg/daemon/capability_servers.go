@@ -124,6 +124,9 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		// 5 minutes until it clears.
 		change.Bind(changeControl{reg: reg})
 		go change.Watch(ctx, store)
+		// Every live CL is handed to its provider's poller once a minute,
+		// for the task view's presubmit badge (changelists.md §3).
+		go orchestrator.PollChanges(ctx, store)
 	}
 	return reg
 }

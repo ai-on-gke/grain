@@ -55,7 +55,10 @@ var errSandboxCLIUnwired = errors.New("this daemon's UI/API server is not runnin
 // holds when a request arrives.
 type sandboxCLIGate struct{}
 
-var _ gitproxy.CLIActions = sandboxCLIGate{}
+var (
+	_ gitproxy.CLIActions     = sandboxCLIGate{}
+	_ gitproxy.CLITaskActions = sandboxCLIGate{}
+)
 
 func (sandboxCLIGate) actions() (ui.SandboxCLIActions, error) {
 	client := liveSandboxCLI.Load()
@@ -111,6 +114,46 @@ func (g sandboxCLIGate) RevertInfo(ctx context.Context, taskID, target string, a
 		return gitproxy.RevertInfo{}, err
 	}
 	return a.RevertInfo(ctx, taskID, target, anyTask)
+}
+
+func (g sandboxCLIGate) NotifyOperator(ctx context.Context, taskID string, req gitproxy.CLINotifyRequest) (gitproxy.CLINotifyResult, error) {
+	a, err := g.actions()
+	if err != nil {
+		return gitproxy.CLINotifyResult{}, err
+	}
+	return a.NotifyOperator(ctx, taskID, req)
+}
+
+func (g sandboxCLIGate) MessageTask(ctx context.Context, callerTaskID, targetTaskID, body string) (int64, error) {
+	a, err := g.actions()
+	if err != nil {
+		return 0, err
+	}
+	return a.MessageTask(ctx, callerTaskID, targetTaskID, body)
+}
+
+func (g sandboxCLIGate) CheckWaitTargets(ctx context.Context, callerTaskID string, ids []string) ([]model.WaitTarget, error) {
+	a, err := g.actions()
+	if err != nil {
+		return nil, err
+	}
+	return a.CheckWaitTargets(ctx, callerTaskID, ids)
+}
+
+func (g sandboxCLIGate) ProposeTask(ctx context.Context, callerTaskID, runID string, req gitproxy.CLIProposeRequest) (gitproxy.CLIProposeResult, error) {
+	a, err := g.actions()
+	if err != nil {
+		return gitproxy.CLIProposeResult{}, err
+	}
+	return a.ProposeTask(ctx, callerTaskID, runID, req)
+}
+
+func (g sandboxCLIGate) ListAPIRoutes(ctx context.Context, callerTaskID string, grants []string, scopeFilter string) ([]gitproxy.CLIAPIRoute, error) {
+	a, err := g.actions()
+	if err != nil {
+		return nil, err
+	}
+	return a.ListAPIRoutes(ctx, callerTaskID, grants, scopeFilter)
 }
 
 // CreditCLIWait is gitproxy.CLIWaitCreditor over the same registry

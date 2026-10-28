@@ -1483,6 +1483,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			UpgradeUnchanged:   upgradeUnchanged(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
 		},
+		MintSandboxGrant:   tokens.EnsureGrant,
 		MintSandboxToken:   tokens.EnsureToken,
 		RevokeSandboxToken: tokens.Revoke,
 		// Kept fresh for as long as each run holds its sandbox, so a run

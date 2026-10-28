@@ -136,3 +136,107 @@ makes this argument in full for the design it covers (`k8s-container`);
 [k8s-granule-design.md](k8s-granule-design.md) restates it symmetrically
 for the row covered here, and settles the rest of what this platform
 needs now that it, too, has a design rather than only a reserved name.
+
+## Migrating a local install to GKE
+
+`scripts/migrate-local-to-gke.sh` moves an existing local install onto
+GKE. A local install is `linux-kvm` or `linux-container`, set up by
+`grain init` or `scripts/setup.sh`: a data directory under
+`/var/lib/grain`, `grain-daemon.service`, `grain-hostd.service` and
+`/etc/grain/hostd.yaml`. After the migration the controller runs in a
+cluster on the `k8s-granule` backend
+(`deploy/kubernetes/grain-granule.yaml`), and `grain hostd` keeps
+running on the host and dials out to it. So does a `grain
+model-server`, for host-bound CLIs such as `agy` on a Cloudtop. It is
+the same deployment, with the same store, history, secrets key,
+installation id and state repository; only the place the controller
+runs has changed.
+
+It differs from [`scripts/deploy-gke.sh`](deploy-gke.md), which builds a
+new deployment behind Cloud SQL, a Gateway and IAP. This script keeps
+the store the local daemon already has: SQLite moves onto the
+`grain-data` PVC, and a Postgres recorded in `db-config.json` is reached
+from the cluster instead. It also copies the whole data directory,
+where `deploy-gke.sh` copies only part of it.
+
+```sh
+sudo scripts/migrate-local-to-gke.sh --dry-run \
+  --cluster grain-sandboxes --project my-proj --location us-central1-a
+sudo scripts/migrate-local-to-gke.sh \
+  --cluster grain-sandboxes --project my-proj --location us-central1-a
+```
+
+The stages are below. Every one is idempotent, so a re-run after a
+failure picks up where the last run stopped:
+
+1. **Preflight.** The data directory must hold `store/grain.db` or
+   `db-config.json`, and `secrets/secrets.key`. It warns when
+   `installation-id` or `state-repo` is missing. `grain-hostd.service`
+   and its allowlist must exist. The controller image, the packed
+   guest for `-k8s-granule-image` and the default target repository
+   are read from the local `grain-daemon.service` unless flags give
+   them.
+2. **Cluster.** The script needs an admin kubeconfig: `--kubeconfig`,
+   or one that `--cluster/--project/--location` fetch with `gcloud`.
+   With `--provision` it first runs `grain init -platform=gke-sandboxes`.
+   `gke-sandboxes`' own `/var/lib/grain/kubeconfig` is not enough on
+   its own: it is a least-privilege ServiceAccount that can create
+   sandbox pods but not a PVC, a Secret or a Deployment, and the script
+   says so. The namespace is created and labelled
+   `pod-security.kubernetes.io/enforce=privileged` if needed, and the
+   `granule-device-plugin` DaemonSet must already be in `kube-system`.
+   The RBAC and PriorityClasses come with the manifest.
+3. **Drain and stop.** `grain pause -set` stops new dispatch, and
+   `--drain-wait` gives in-flight runs time to finish. Then
+   `grain-daemon.service` is stopped, disabled and **masked**, and a
+   `grain-daemon` container is removed. Masking means a reboot or a
+   re-run of `setup.sh` cannot start a second controller against the
+   same state repository. A `tar.gz` of the data directory goes to
+   `/var/backups/grain/grain-data-<UTC timestamp>.tar.gz`.
+4. **State and secrets.** `Secret/grain-migration` carries
+   `secrets.key` and the shared token (`/etc/grain/hostd.token`,
+   created if missing). The rendered manifest is applied at `replicas:
+   0`, which creates the PVC without letting the controller write an
+   empty store into it first. A transfer pod (uid 1000, the controller
+   image by default) receives the data directory as a `tar` stream, so
+   every file lands owned by uid 1000. `/data/.migrated-from-local`
+   marks the copy as done, and a re-run skips it; `--recopy` copies
+   again and is refused while the controller runs. The rendered
+   manifest also adds `-hostd-token-file`, `-executor-addr=:4243` and
+   `-executor-token-file`, all pointing at the Secret's token.
+5. **Controller.** The script scales `Deployment/grain` to 1 and waits
+   for `kubectl rollout status`.
+6. **This host.** By default `grain-gke-forward.service` runs `kubectl
+   port-forward svc/grain` to `127.0.0.1:4280` as hostd's user;
+   `--server-url` names a Gateway/IAP URL to use instead. A drop-in,
+   `grain-hostd.service.d/gke.conf`, re-runs hostd's own `ExecStart`
+   with `-server <url> -token-file /etc/grain/hostd.token`. The
+   allowlist, its built-in capability servers (`grain-gcp`,
+   `grain-host-script`, `grain-gchat`, ...) and the local socket stay
+   as they were. When `agy` is installed (or with `--model-server
+   yes`), `grain-model-server.service` runs `grain model-server
+   -server <url> -token-file ...`, using the same token.
+7. **Readiness.** There is no `/api/healthz`, so the script polls
+   `/api/auth/access-code`, the pod's own readiness probe. It
+   authenticates with the migrated `local-api-token`, which the
+   controller accepts over the port-forward because the request reaches
+   it on loopback. It sets `sandboxBackend=kubernetes-granule` through
+   `PUT /api/settings`. Without that, the stored local backend stays
+   in the database: the controller falls back to its flags on every
+   start and says so. The script then waits until every `run: host`
+   server in `/api/capability-servers` is `attached` and this host
+   appears in `/api/executors`, and finally lifts the dispatch pause.
+
+`--rollback` reverses this. It scales `Deployment/grain` to 0, then
+copies the PVC back into the data directory and moves the local copy
+aside to `<data-dir>.pre-rollback-<timestamp>`; `--no-sync-back` skips
+the copy. It removes the drop-in, the forward unit and the model-server
+unit, restarts hostd on its socket, unmasks and starts
+`grain-daemon.service`, and lifts the pause.
+
+`scripts/migrate-local-to-gke_test.sh` runs every stage against a local
+install laid out in a scratch directory and stubbed `kubectl`,
+`systemctl`, `curl`, `docker` and `grain`.
+`tests/deploy/migrate_local_to_gke_test.go` runs that suite in CI. It
+also decodes the manifest the migration renders, checking it against
+`grain-granule.yaml`'s objects and `grain daemon`'s own flags.

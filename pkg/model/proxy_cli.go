@@ -54,7 +54,7 @@ func (s *Store) RecordProxyCheckWait(ctx context.Context, runID, verdict string,
 	if waited < 0 {
 		waited = 0
 	}
-	wait := RunCheckWait{RunID: runID, Verdict: verdict, Waited: waited}
+	wait := RunCheckWait{RunID: runID, Verdict: verdict, Waited: waited, Provider: CIProviderGrain}
 	s.proxyToolsMu.Lock()
 	if s.proxyCheckWaits == nil {
 		s.proxyCheckWaits = make(map[string][]RunCheckWait)
@@ -69,9 +69,9 @@ func (s *Store) RecordProxyCheckWait(ctx context.Context, runID, verdict string,
 			return err
 		}
 		_, err := tx.ExecContext(ctx,
-			"INSERT INTO `task_run_check_wait` (`run_id`,`seq`,`verdict`,`waited_ms`,`pushes_before`) "+
-				"VALUES (?,?,?,?,?)",
-			runID, seq.Int64+1, verdict, waited.Milliseconds(), 0)
+			"INSERT INTO `task_run_check_wait` (`run_id`,`seq`,`verdict`,`waited_ms`,`pushes_before`,`provider`) "+
+				"VALUES (?,?,?,?,?,?)",
+			runID, seq.Int64+1, verdict, waited.Milliseconds(), 0, CIProviderGrain)
 		return err
 	})
 }
@@ -128,4 +128,133 @@ func (s *Store) TakeProxyToolCalls(runID string) []ProxyToolCall {
 	calls := s.proxyCalls[runID]
 	delete(s.proxyCalls, runID)
 	return calls
+}
+
+// RecordProxyAPICall records one audited proxy/API/capability call in
+// task_run_api_call immediately and holds it in memory so end-of-run
+// RecordBatchRunTelemetry merges it with any MCP tool calls.
+func (s *Store) RecordProxyAPICall(ctx context.Context, runID, tool, targetIDs string, resultBytes int64) error {
+	runID, tool = strings.TrimSpace(runID), strings.TrimSpace(tool)
+	if s == nil || runID == "" || tool == "" {
+		return nil
+	}
+	if resultBytes < 0 {
+		resultBytes = 0
+	}
+	now := time.Now().UTC()
+	call := RunAPICall{
+		RunID:       runID,
+		Tool:        tool,
+		TargetIDs:   strings.TrimSpace(targetIDs),
+		ResultBytes: resultBytes,
+		At:          now,
+	}
+	s.proxyToolsMu.Lock()
+	if s.proxyAPICalls == nil {
+		s.proxyAPICalls = make(map[string][]RunAPICall)
+	}
+	s.proxyAPICalls[runID] = append(s.proxyAPICalls[runID], call)
+	s.proxyToolsMu.Unlock()
+
+	return s.write(ctx, "record proxy API call "+tool+" for run "+runID, func(tx *sql.Tx) error {
+		var seq sql.NullInt64
+		if err := tx.QueryRowContext(ctx,
+			"SELECT MAX(`seq`) FROM `task_run_api_call` WHERE `run_id` = ?", runID).Scan(&seq); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx,
+			"INSERT INTO `task_run_api_call` (`run_id`,`seq`,`tool`,`target_ids`,`result_bytes`,`at`) "+
+				"VALUES (?,?,?,?,?,?)",
+			runID, seq.Int64+1, call.Tool, call.TargetIDs, call.ResultBytes, call.At)
+		return err
+	})
+}
+
+func (s *Store) mergeWithProxyAPICalls(runID string, calls []RunAPICall) []RunAPICall {
+	if s == nil {
+		return calls
+	}
+	s.proxyToolsMu.Lock()
+	extra := append([]RunAPICall(nil), s.proxyAPICalls[runID]...)
+	s.proxyToolsMu.Unlock()
+	if len(extra) == 0 {
+		return calls
+	}
+	out := append([]RunAPICall(nil), calls...)
+	seq := 0
+	for _, c := range calls {
+		seq = max(seq, c.Seq)
+	}
+	for _, c := range extra {
+		seq++
+		c.Seq = seq
+		out = append(out, c)
+	}
+	return out
+}
+
+// ActiveRunID returns the ID of taskID's currently live run, or "" if none is live.
+func (s *Store) ActiveRunID(ctx context.Context, taskID string) string {
+	taskID = strings.TrimSpace(taskID)
+	if s == nil || taskID == "" {
+		return ""
+	}
+	var runID string
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT `id` FROM `task_run` WHERE `task_id` = ? AND `finished_at` IS NULL "+
+			"ORDER BY `started_at` DESC LIMIT 1", taskID).Scan(&runID); err != nil {
+		return ""
+	}
+	return runID
+}
+
+// WriteTaskHandover writes or replaces the standing handover summary for taskID.
+// When called more than once during the same live run, the existing handover
+// comment written in that run is updated in place so the last call in a run wins.
+func (s *Store) WriteTaskHandover(ctx context.Context, taskID, runID, body string) error {
+	taskID = strings.TrimSpace(taskID)
+	runID = strings.TrimSpace(runID)
+	body = strings.TrimSpace(body)
+	if s == nil || taskID == "" || body == "" {
+		return nil
+	}
+	existing, err := s.Comments(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	var runStart time.Time
+	if runID != "" {
+		_ = s.db.QueryRowContext(ctx,
+			"SELECT `started_at` FROM `task_run` WHERE `id` = ?", runID).Scan(&runStart)
+	}
+	for i := len(existing) - 1; i >= 0; i-- {
+		if existing[i].Handover {
+			if strings.TrimSpace(existing[i].Body) == body {
+				return nil
+			}
+			if !runStart.IsZero() && !existing[i].CreatedAt.Before(runStart) {
+				targetID := existing[i].ID
+				now := time.Now().UTC()
+				return s.write(ctx, "update handover on task "+taskID, func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(ctx,
+						"UPDATE `task_comment` SET `body` = ?, `created_at` = ? WHERE `id` = ?",
+						body, now, targetID)
+					return err
+				})
+			}
+			break
+		}
+	}
+	agentPrincipal := Principal{Kind: PrincipalAgent, ID: taskID}
+	_, err = s.AddComment(ctx, Comment{
+		TaskID: taskID,
+		Author: Attribution{
+			Actor:      Principal{Kind: PrincipalAutomation, ID: "grain"},
+			OnBehalfOf: &agentPrincipal,
+		},
+		Body:      body,
+		CreatedAt: time.Now().UTC(),
+		Handover:  true,
+	})
+	return err
 }

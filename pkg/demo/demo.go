@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -1405,6 +1406,46 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		o.CompletedAt = &clDone
 	}); err != nil {
 		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	// Its primary CL's presubmit failed; four more CL tasks show the
+	// badge's other states (changelists.md §3). What a poll would have
+	// recorded is remembered directly: the demo has no provider to poll.
+	change.Remember(change.Observation{Target: "cl/612400001", Health: change.HealthFailing,
+		Presubmit: change.PresubmitFailed, Snapshot: 3, Checks: []change.Check{
+			{Name: "//devtools/grain/retry:budget_test", State: "failed"},
+			{Name: "//devtools/grain/retry:lint", State: "failed"},
+			{Name: "//devtools/grain/retry:build", State: "passed"},
+		}})
+	for i, seed := range []struct {
+		title, cl, presubmit string
+		health               change.Health
+	}{
+		{"Move the depot retry budget behind a flag", "cl/612400101", change.PresubmitPassed, change.HealthOK},
+		{"Add a TAP project for the retry budget", "cl/612400102", change.PresubmitRunning, change.HealthPending},
+		{"Document the depot retry budget", "cl/612400103", change.PresubmitNotRun, change.HealthPending},
+		{"Trim the retry budget's BUILD deps", "cl/612400104", change.PresubmitUnknown, change.HealthUnknown},
+	} {
+		at := ago(time.Duration(24-i) * time.Hour)
+		seeded, err := create(at, ui.CreateTaskRequest{
+			Title: seed.title, Approved: true, NoRepo: clTarget == nil, ChangeTarget: clTarget,
+			Description: "A changelist task whose CL's presubmit is " + seed.presubmit + ".",
+		})
+		if err != nil {
+			return fmt.Errorf("seeding a changelist task: %w", err)
+		}
+		if err := store.UpdateTask(ctx, seeded.ID, func(t *model.Task) error {
+			t.Links = append(t.Links, model.Link{Kind: model.LinkChangelist, Target: seed.cl})
+			return nil
+		}); err != nil {
+			return fmt.Errorf("seeding a changelist task: %w", err)
+		}
+		done := at.Add(30 * time.Minute)
+		if err := store.ObserveField(ctx, seeded.ID, done, func(o *model.Observation) {
+			o.CompletedAt = &done
+		}); err != nil {
+			return fmt.Errorf("seeding a changelist task: %w", err)
+		}
+		change.Remember(change.Observation{Target: seed.cl, Health: seed.health, Presubmit: seed.presubmit, Snapshot: 1})
 	}
 
 	return nil

@@ -280,7 +280,10 @@ import "strconv"
 // `external_agent_token` and `external_agent_token_sequence` tables for
 // scoped external-agent credentials served over `/mcp`
 // (model.ExternalAgentToken, docs/agent-api.md).
-const SchemaVersion = 59
+//
+// 60 adds `provider` to `task_run_check_wait`, labelling each recorded CI
+// wait with the CI it was on (grain, github, tap).
+const SchemaVersion = 60
 
 // externalAgentTokenTable and externalAgentTokenSequenceTable are named
 // once for Tables and for the migration that adds them.
@@ -975,6 +978,7 @@ var Tables = []string{
   ` + "`verdict`" + `       TEXT     NOT NULL,
   ` + "`waited_ms`" + `     INTEGER  NOT NULL,
   ` + "`pushes_before`" + ` INTEGER  NOT NULL,
+  ` + "`provider`" + `      TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
 )`,
 

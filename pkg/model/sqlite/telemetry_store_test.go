@@ -51,7 +51,7 @@ func TestRunTelemetryRoundTrips(t *testing.T) {
 		},
 		CheckWaits: []model.RunCheckWait{
 			{Seq: 0, Verdict: "failed", Waited: 4 * time.Minute, PushesBefore: 1},
-			{Seq: 1, Verdict: "passed", Waited: 9 * time.Minute, PushesBefore: 2},
+			{Seq: 1, Verdict: "passed", Waited: 9 * time.Minute, PushesBefore: 2, Provider: model.CIProviderTAP},
 		},
 	})
 	if err != nil {
@@ -101,6 +101,11 @@ func TestRunTelemetryRoundTrips(t *testing.T) {
 	}
 	if got := waits[1]; got.Seq != 1 || got.Verdict != "passed" || got.Waited != 9*time.Minute || got.PushesBefore != 2 {
 		t.Errorf("second wait = %+v", got)
+	}
+	// The provider label round-trips; a row written without one reads
+	// back as the GitHub wait it was.
+	if waits[1].Provider != model.CIProviderTAP || waits[0].CIProviderOf() != model.CIProviderGitHub {
+		t.Errorf("providers = %q, %q; want tap and an unlabelled github", waits[1].Provider, waits[0].Provider)
 	}
 }
 

@@ -72,9 +72,13 @@ func TestSeedDemoCoversEveryState(t *testing.T) {
 		model.StateCompleted, model.StateDeferred, model.StateClosed,
 	}
 	got := map[model.State]int{}
+	presubmits := map[string]bool{}
 	for _, task := range tasks {
 		got[task.State]++
-		// The one changelist task (a CitC workspace, no repo) aside.
+		if task.Presubmit != nil {
+			presubmits[task.Presubmit.State] = true
+		}
+		// The changelist tasks (a CitC workspace, no repo) aside.
 		if task.Repo != repo.String() && len(task.Changelists) == 0 {
 			t.Errorf("task %s repo = %q, want %q", task.ID, task.Repo, repo.String())
 		}
@@ -87,6 +91,12 @@ func TestSeedDemoCoversEveryState(t *testing.T) {
 			if _, err := model.ParsePullRequestRef(task.PullRequest); err != nil {
 				t.Errorf("task %s pull request %q: %v", task.ID, task.PullRequest, err)
 			}
+		}
+	}
+	// Every presubmit badge state has a CL task to show it on.
+	for _, state := range []string{"passed", "failed", "running", "not_run", "unknown"} {
+		if !presubmits[state] {
+			t.Errorf("no seeded changelist task shows presubmit %q", state)
 		}
 	}
 	for _, state := range want {

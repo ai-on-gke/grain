@@ -18,6 +18,7 @@ package metrics_test
 // share an outcome word, and the CI loop.
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -383,5 +384,43 @@ func TestRedCIMeasuresHowCIFixingRunsWorked(t *testing.T) {
 	want := metrics.RedCI{FixingRuns: 3, Narrowed: 2, NarrowedShare: 2.0 / 3, Selective: 1, SelectiveShare: 1.0 / 3}
 	if got != want {
 		t.Errorf("RedCI = %+v, want %+v", got, want)
+	}
+}
+
+// TAP waits (a changelist task's presubmit) are counted under their own
+// provider, beside grain's and GitHub's, and never folded into the CI
+// loop's totals over pull requests.
+func TestChecksLabelsWaitsByProviderAndKeepsTAPBeside(t *testing.T) {
+	rep := metrics.Compute(metrics.Input{
+		Window: win,
+		Runs: []model.RunTiming{
+			finishedRun("r1", 10*time.Hour, "succeeded", ""),
+			finishedRun("r2", 20*time.Hour, "succeeded", ""),
+		},
+		CheckWaits: []model.RunCheckWait{
+			{RunID: "r1", Seq: 0, Verdict: "failed", Waited: 4 * time.Minute, PushesBefore: 1},
+			{RunID: "r1", Seq: 1, Verdict: "passed", Waited: 2 * time.Minute, PushesBefore: 2, Provider: model.CIProviderGrain},
+			{RunID: "r2", Seq: 0, Verdict: "timed_out", Waited: 30 * time.Minute, Provider: model.CIProviderTAP},
+			{RunID: "r2", Seq: 1, Verdict: "passed", Waited: 20 * time.Minute, Provider: model.CIProviderTAP},
+		},
+	})
+	ci := rep.Checks
+	if ci.Waits != 2 || ci.Runs != 1 || ci.Blocked.Max != 4*time.Minute {
+		t.Errorf("Checks = %d waits over %d runs, max %s; want TAP's waits left out of the totals",
+			ci.Waits, ci.Runs, ci.Blocked.Max)
+	}
+	var got []string
+	for _, p := range ci.ByProvider {
+		got = append(got, p.Provider)
+	}
+	if want := []string{"grain", "github", "tap"}; !slices.Equal(got, want) {
+		t.Fatalf("ByProvider = %v, want %v", got, want)
+	}
+	tap := ci.ByProvider[2]
+	if tap.Waits != 2 || tap.Runs != 1 || tap.Verdicts["passed"] != 1 || tap.Verdicts["timed_out"] != 1 || tap.Blocked.Max != 30*time.Minute {
+		t.Errorf("tap = %+v", tap)
+	}
+	if gh := ci.ByProvider[1]; gh.Waits != 1 || gh.Verdicts["failed"] != 1 {
+		t.Errorf("github = %+v, want the unlabelled row counted as github", gh)
 	}
 }

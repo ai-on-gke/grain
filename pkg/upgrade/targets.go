@@ -40,6 +40,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
@@ -449,11 +450,15 @@ var registryClient = &http.Client{Timeout: 15 * time.Second}
 // answers a pull-scoped token to anybody, which is all a tag list needs,
 // and the pull credentials scripts/setup.sh gives docker are docker's,
 // not this process's. A private registry therefore lists nothing, and
-// the pane says so and still takes a typed version.
+// the pane says so and still takes a typed version. The exception is
+// Artifact Registry and GCR, which take this host's own Google access
+// token when it has one (registryauth.TokenFor) -- the same credential
+// setup.sh logs docker in with.
 func ListRegistryTags(ctx context.Context, repository string) ([]string, error) {
 	host, name := registryLocation(repository)
 	next := "https://" + host + "/v2/" + name + "/tags/list?n=1000"
-	token := ""
+	token := registryauth.TokenFor(ctx, host)
+	exchanged := false
 	var tags []string
 	for page := 0; next != "" && page < 20; page++ {
 		resp, err := registryGet(ctx, next, token)
@@ -468,7 +473,8 @@ func ListRegistryTags(ctx context.Context, repository string) ([]string, error) 
 		if err != nil {
 			return nil, err
 		}
-		if resp.StatusCode == http.StatusUnauthorized && token == "" {
+		if resp.StatusCode == http.StatusUnauthorized && !exchanged {
+			exchanged = true
 			challenge := resp.Header.Get("WWW-Authenticate")
 			resp.Body.Close()
 			if token, err = registryToken(ctx, challenge); err != nil {
