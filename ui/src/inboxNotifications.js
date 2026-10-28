@@ -78,7 +78,7 @@ export function taskReason(t) {
   if (t.state === "awaiting_submit" && t.reviewQuestions)
     return { id: "review_questions", text: "has review questions for you" };
   // A CL nobody has mailed to a reviewer yet is the owner's to Mail
-  // before anybody can review it (google3-cls.md §5).
+  // before anybody can review it (changelists.md §5).
   if (t.state === "awaiting_submit" && t.clReview?.needsMailing)
     return { id: "needs_mailing", text: "needs mailing" };
   if (t.state === "awaiting_submit")

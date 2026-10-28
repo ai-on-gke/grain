@@ -623,6 +623,9 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 	if pattern == "POST /api/tasks/{id}/submit" {
 		return errAgentAutoMerge
 	}
+	if personOnlyChangeReview[pattern] {
+		return errAgentChangeReview
+	}
 	if len(body) == 0 {
 		return nil
 	}
@@ -735,6 +738,17 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 // so no scope hands it to an agent.
 var errAgentAutoMerge = errors.New("an agent cannot turn on auto-merge or submit work: " +
 	"letting a change merge unreviewed is a person's decision (docs/agent-api.md)")
+
+// personOnlyChangeReview is a CL's Mail and Publish replies: who reads a
+// change, and when they read a run's replies, is the person's call
+// (changelists.md §5), never an agent's.
+var personOnlyChangeReview = map[string]bool{
+	"POST /api/tasks/{id}/change-mail":    true,
+	"POST /api/tasks/{id}/change-publish": true,
+}
+
+var errAgentChangeReview = errors.New("an agent cannot mail a CL or publish its replies: " +
+	"who reviews a change, and when, is a person's decision")
 
 // agentMayWrite reports whether the acting task's own runs may push to
 // repo: its target, or a repository its writes name.
@@ -1104,6 +1118,9 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 	pattern string, scope APIScope, repo string, body []byte) error {
 	if pattern == "POST /api/tasks/{id}/submit" {
 		return errAgentAutoMerge
+	}
+	if personOnlyChangeReview[pattern] {
+		return errAgentChangeReview
 	}
 	if len(body) == 0 {
 		return nil
