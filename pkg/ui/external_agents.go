@@ -149,6 +149,19 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 	if req.MaxConcurrent < 0 {
 		return IssuedExternalAgentToken{}, validationErrorf("maxConcurrent must be non-negative")
 	}
+	// The name is the agent's identity (external:<name>) in the journal,
+	// in task conversations and in who may lift a pause it set, so two
+	// credentials may not share one -- a revoked one included, until it
+	// is deleted.
+	existing, err := c.Store.ListExternalAgentTokens(ctx)
+	if err != nil {
+		return IssuedExternalAgentToken{}, err
+	}
+	for _, t := range existing {
+		if strings.EqualFold(t.Name, name) {
+			return IssuedExternalAgentToken{}, validationErrorf("an external agent credential named %q already exists", name)
+		}
+	}
 	now := c.now()
 	var expiresAt *time.Time
 	if req.ExpiresAt != nil {

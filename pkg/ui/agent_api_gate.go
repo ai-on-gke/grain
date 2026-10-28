@@ -1112,17 +1112,16 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 	if json.Unmarshal(body, &fields) != nil {
 		return nil
 	}
+	// A repository the work may push to or read is one the credential's
+	// own scope for this call reaches: tok.Repos alone is not enough,
+	// since a credential with no repos list may still hold its scopes
+	// only on named repositories (tasks:write@owner/name).
 	allowedRepo := func(r string) bool {
 		r = strings.TrimSpace(r)
 		if r == "" {
 			return true
 		}
-		if len(tok.Repos) == 0 {
-			return true
-		}
-		return slices.ContainsFunc(tok.Repos, func(allowed string) bool {
-			return strings.EqualFold(allowed, r)
-		})
+		return set.Allows(scope, r)
 	}
 	for key, raw := range fields {
 		switch strings.ToLower(key) {

@@ -702,3 +702,66 @@ func TestExternalAgentTemplateWithinCredential(t *testing.T) {
 		}
 	}
 }
+
+// TestExternalAgentRepoScopedGrantsHoldFiledWork checks that a credential
+// with no repos list whose scopes are each held on one repository
+// (tasks:write@owner/name) cannot file work that pushes to or reads another
+// repository: what the filed work may reach is what the credential's scope
+// reaches, not "every repository" for want of a repos list.
+func TestExternalAgentRepoScopedGrantsHoldFiledWork(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	gadgets, _ := model.ParseRepo("acme/gadgets")
+	if err := client.Store.PutTemplate(ctx, model.Template{ID: "tpl-writes", Name: "writes", Title: "writes",
+		Writes: []model.WriteTarget{{Repo: gadgets}}}); err != nil {
+		t.Fatal(err)
+	}
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "scoped-agent",
+		Scopes: []string{"tasks:read@acme/widgets", "tasks:write@acme/widgets"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issued.Repos) != 0 {
+		t.Fatalf("credential repos = %v, want none (the restriction is on its scopes)", issued.Repos)
+	}
+	call := func(body string) (int, string) {
+		req := httptest.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+issued.Token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	for _, body := range []string{
+		`{"title":"x","repo":"acme/widgets","writes":[{"repo":"acme/gadgets"}]}`,
+		`{"title":"x","repo":"acme/widgets","reads":["acme/gadgets"]}`,
+		`{"title":"x","repo":"acme/widgets","templateId":"tpl-writes"}`,
+		`{"title":"x","repo":"acme/gadgets"}`,
+	} {
+		if code, resp := call(body); code != http.StatusForbidden {
+			t.Errorf("filing %s answered %d, want 403: %s", body, code, resp)
+		}
+	}
+	if code, resp := call(`{"title":"x","repo":"acme/widgets"}`); code >= 300 {
+		t.Errorf("filing work on the credential's own repository was refused: %d %s", code, resp)
+	}
+}
+
+// TestExternalAgentCredentialNamesAreUnique checks that a second credential
+// cannot take a name already in use: the name is the agent's identity.
+func TestExternalAgentCredentialNamesAreUnique(t *testing.T) {
+	_, client := testServer(t)
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	req := ui.CreateExternalAgentTokenRequest{Name: "ops-laptop", Scopes: []string{"tasks:read"}}
+	if _, err := client.CreateExternalAgentToken(humanCtx, req); err != nil {
+		t.Fatal(err)
+	}
+	req.Name = "OPS-laptop"
+	if _, err := client.CreateExternalAgentToken(humanCtx, req); err == nil {
+		t.Fatal("a second credential named ops-laptop was issued")
+	}
+}
