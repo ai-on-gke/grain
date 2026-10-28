@@ -243,7 +243,7 @@ func TestTheImageCarriesItsOwnSource(t *testing.T) {
 	const root = "/usr/local/share/grain/src"
 	script := `set -e
 test -f ` + root + `/go.mod
-grep -q "^module github.com/bwsalmon/grain$" ` + root + `/go.mod
+grep -q "^module github.com/ai-on-gke/grain$" ` + root + `/go.mod
 test -d ` + root + `/cmd/grain
 test -d ` + root + `/pkg/capability/selfdebug
 for excluded in .git bin ui/node_modules; do
