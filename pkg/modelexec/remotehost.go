@@ -91,14 +91,42 @@ func (h *RemoteHost) GitProxyURL() string { return h.conn.gitProxyURL }
 
 // ConfigureGitCredentials writes .gitconfig and .git-credentials in dir on the remote host.
 func (h *RemoteHost) ConfigureGitCredentials(ctx context.Context, dir, remoteURL, token string, identity mcp.GitIdentity) error {
-	creds, gitconfig, err := mcp.GitCredentialFiles(remoteURL, token, identity)
+	creds, gitconfig, err := mcp.GitCredentialFilesInDir(remoteURL, token, identity, dir)
 	if err != nil {
 		return err
 	}
 	if err := h.WriteFile(ctx, filepath.Join(dir, ".git-credentials"), []byte(creds), 0600); err != nil {
 		return err
 	}
-	return h.WriteFile(ctx, filepath.Join(dir, ".gitconfig"), []byte(gitconfig), 0600)
+	if err := h.WriteFile(ctx, filepath.Join(dir, ".gitconfig"), []byte(gitconfig), 0600); err != nil {
+		return err
+	}
+	if identity.OrDefault().SigningKey != "" {
+		netrc, curlrc, err := mcp.CurlCredentialFiles(remoteURL, token, dir)
+		if err != nil {
+			return err
+		}
+		pubKey, allowedSigners, signScript, err := mcp.GitSigningFiles(remoteURL, identity, dir)
+		if err != nil {
+			return err
+		}
+		if err := h.WriteFile(ctx, filepath.Join(dir, ".git-credentials.netrc"), []byte(netrc), 0600); err != nil {
+			return err
+		}
+		if err := h.WriteFile(ctx, filepath.Join(dir, ".curlrc"), []byte(curlrc), 0600); err != nil {
+			return err
+		}
+		if err := h.WriteFile(ctx, filepath.Join(dir, ".git-signing-key.pub"), []byte(pubKey), 0600); err != nil {
+			return err
+		}
+		if err := h.WriteFile(ctx, filepath.Join(dir, ".git-allowed-signers"), []byte(allowedSigners), 0600); err != nil {
+			return err
+		}
+		if err := h.WriteFile(ctx, filepath.Join(dir, ".git-ssh-sign"), []byte(signScript), 0700); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // MkdirTemp implements agent.Host.

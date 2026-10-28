@@ -68,6 +68,6 @@ func credentialGitIdentity(creds *gitproxy.CredentialSet, store *model.Store) or
 				taskID, name, err)
 			return mcp.GitIdentity{}, false
 		}
-		return mcp.GitIdentity{Name: id.Name, Email: id.Email}, !id.Empty()
+		return mcp.GitIdentity{Name: id.Name, Email: id.Email, SigningKey: id.SigningKey}, !id.Empty() || id.SigningKey != ""
 	}
 }

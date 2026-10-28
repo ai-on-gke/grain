@@ -54,6 +54,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/gitrefs"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -65,6 +66,15 @@ import (
 type Remote struct {
 	URL   string
 	Token string
+	// CommitterName and CommitterEmail, when set, override Porter.CommitterName
+	// and Porter.CommitterEmail for this attempt (e.g. from the resolved
+	// credential's CommitIdentity).
+	CommitterName  string
+	CommitterEmail string
+	// SigningKey, when set, is the SSH public key line (e.g. "ssh-ed25519 AAAA...")
+	// to sign cherry-picked commits with via the git proxy's /_grain/git-sign
+	// endpoint (or host ssh-keygen).
+	SigningKey string
 	// Release, if set, is called once the attempt is done with the
 	// remote: where a credential minted for this one attempt (the
 	// daemon's git-proxy identity) is revoked.
@@ -193,7 +203,14 @@ func (p *Porter) Port(ctx context.Context, req Request) (Result, error) {
 	lock.Lock()
 	defer lock.Unlock()
 
-	g := &gitRunner{remote: remote, name: p.CommitterName, email: p.CommitterEmail}
+	name, email := p.CommitterName, p.CommitterEmail
+	if remote.CommitterName != "" {
+		name = remote.CommitterName
+	}
+	if remote.CommitterEmail != "" {
+		email = remote.CommitterEmail
+	}
+	g := &gitRunner{remote: remote, name: name, email: email}
 	g.dir = filepath.Join(p.Dir, safeName(req.Repo.Owner), safeName(req.Repo.Name)+".git")
 	if err := g.ensureCache(ctx); err != nil {
 		return Result{}, err
@@ -244,6 +261,16 @@ func (p *Porter) Port(ctx context.Context, req Request) (Result, error) {
 	}()
 	if _, err := g.run(ctx, "", "worktree", "add", "--detach", "--quiet", "--end-of-options", work, targetRef); err != nil {
 		return Result{}, fmt.Errorf("portpick: checking out %s: %w", req.Target, err)
+	}
+	if strings.TrimSpace(remote.SigningKey) != "" {
+		signDir, err := os.MkdirTemp(p.Dir, "sign-")
+		if err != nil {
+			return Result{}, fmt.Errorf("portpick: %w", err)
+		}
+		defer os.RemoveAll(signDir)
+		if err := g.configureSigning(signDir); err != nil {
+			return Result{}, fmt.Errorf("portpick: configuring commit signing: %w", err)
+		}
 	}
 
 	for _, sha := range todo {
@@ -361,7 +388,7 @@ func (g *gitRunner) namedByFooter(ctx context.Context, targetRef, sha string) (s
 // Backported-from footer. A conflict is aborted and reported; a pick
 // that changes nothing is skipped and reported as empty.
 func (g *gitRunner) pick(ctx context.Context, work, sha string) (string, *Conflict, bool, error) {
-	if _, err := g.run(ctx, work, "cherry-pick", "-x", "--allow-empty-message", "--end-of-options", sha); err != nil {
+	if _, err := g.run(ctx, work, "cherry-pick", "--no-gpg-sign", "-x", "--allow-empty-message", "--end-of-options", sha); err != nil {
 		unmerged, _ := g.run(ctx, work, "diff", "--name-only", "--diff-filter=U")
 		paths := strings.Fields(unmerged)
 		if len(paths) == 0 {
@@ -465,6 +492,58 @@ type gitRunner struct {
 	dir         string
 	remote      Remote
 	name, email string
+	signDir     string
+}
+
+func (g *gitRunner) committer() (string, string) {
+	name, email := g.name, g.email
+	if name == "" {
+		name = "grain"
+	}
+	if email == "" {
+		email = "grain@users.noreply.github.com"
+	}
+	return name, email
+}
+
+func (g *gitRunner) configureSigning(signDir string) error {
+	name, email := g.committer()
+	id := mcp.GitIdentity{
+		Name:       name,
+		Email:      email,
+		SigningKey: strings.TrimSpace(g.remote.SigningKey),
+	}
+	if strings.HasPrefix(g.remote.URL, "http://") || strings.HasPrefix(g.remote.URL, "https://") {
+		if err := mcp.ConfigureGitCredentials(signDir, g.remote.URL, g.remote.Token, id); err != nil {
+			return err
+		}
+		g.signDir = signDir
+		return nil
+	}
+	id = id.OrDefault()
+	pubPath := filepath.Join(signDir, ".git-signing-key.pub")
+	pubKeyLine := id.SigningKey
+	if info, err := os.Stat(id.SigningKey); err == nil && !info.IsDir() {
+		pubPath = id.SigningKey
+		if raw, rerr := os.ReadFile(pubPath); rerr == nil {
+			pubKeyLine = strings.TrimSpace(string(raw))
+		}
+	} else if err := os.WriteFile(pubPath, []byte(id.SigningKey+"\n"), 0o600); err != nil {
+		return err
+	}
+	allowedPath := filepath.Join(signDir, ".git-allowed-signers")
+	if err := os.WriteFile(allowedPath, []byte(fmt.Sprintf("%s %s\n", id.Email, pubKeyLine)), 0o600); err != nil {
+		return err
+	}
+	gitconfig := fmt.Sprintf(
+		"[user]\n\tname = %s\n\temail = %s\n\tsigningkey = %s\n[gpg]\n\tformat = ssh\n[gpg \"ssh\"]\n\tallowedSignersFile = %s\n[commit]\n\tgpgsign = true\n[tag]\n\tgpgSign = true\n",
+		id.Name, id.Email, pubPath, allowedPath,
+	)
+	if err := os.WriteFile(filepath.Join(signDir, ".gitconfig"), []byte(gitconfig), 0o600); err != nil {
+		return err
+	}
+	g.signDir = signDir
+	return nil
 }
 
 func (g *gitRunner) ensureCache(ctx context.Context) error {
@@ -485,7 +564,11 @@ func (g *gitRunner) run(ctx context.Context, work string, args ...string) (strin
 }
 
 func (g *gitRunner) runInput(ctx context.Context, work, input string, args ...string) (string, error) {
-	full := []string{"-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"}
+	gpgSign := "commit.gpgSign=false"
+	if g.signDir != "" {
+		gpgSign = "commit.gpgSign=true"
+	}
+	full := []string{"-c", "core.hooksPath=/dev/null", "-c", gpgSign}
 	if work != "" {
 		full = append(full, "-C", work)
 	} else {
@@ -506,24 +589,27 @@ func (g *gitRunner) runInput(ctx context.Context, work, input string, args ...st
 }
 
 func (g *gitRunner) env() []string {
-	name, email := g.name, g.email
-	if name == "" {
-		name = "grain"
-	}
-	if email == "" {
-		email = "grain@users.noreply.github.com"
+	name, email := g.committer()
+	home := os.TempDir()
+	globalCfg := os.DevNull
+	if g.signDir != "" {
+		home = g.signDir
+		globalCfg = filepath.Join(g.signDir, ".gitconfig")
 	}
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + os.TempDir(),
+		"HOME=" + home,
 		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_CONFIG_GLOBAL=" + globalCfg,
 		gitrefs.EnvEntry(),
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_ASKPASS=",
 		"LC_ALL=C",
 		"GIT_COMMITTER_NAME=" + name,
 		"GIT_COMMITTER_EMAIL=" + email,
+	}
+	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+		env = append(env, "SSH_AUTH_SOCK="+sock)
 	}
 	if g.remote.Token != "" {
 		auth := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + g.remote.Token))

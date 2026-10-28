@@ -35,20 +35,24 @@ package gitproxy
 // grain's own default (orchestrator.runGitIdentity).
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-// CommitIdentity is a git user.name and user.email, either half of
-// which may be empty: the shape AmbientGitIdentity answers in, kept
+// CommitIdentity is a git user.name, user.email, and optional SSH SigningKey,
+// any of which may be empty: the shape AmbientGitIdentity answers in, kept
 // apart from mcp.GitIdentity only so this package need not import mcp.
 type CommitIdentity struct {
-	Name  string
-	Email string
+	Name       string
+	Email      string
+	SigningKey string
 }
 
 // Empty reports whether neither half is set.
@@ -124,17 +128,244 @@ func readHostGitIdentity() CommitIdentity {
 	if err != nil {
 		return CommitIdentity{}
 	}
-	get := func(key string) string {
-		stdout, _, err := runHostTool(ambientEnv(), "", path, "config", "--global", "--get", key)
+	env := ambientEnv()
+	getRaw := func(key string) string {
+		stdout, _, err := runHostTool(env, "", path, "config", "--global", "--get", key)
 		if err != nil {
 			// Exit 1 is git's answer for a key that is not set, and a
 			// timeout or a missing git is an identity the host does not
 			// have either way.
 			return ""
 		}
-		return oneLine(stdout)
+		return strings.TrimRight(stdout, "\r\n")
 	}
-	return CommitIdentity{Name: get("user.name"), Email: get("user.email")}
+	get := func(key string) string {
+		return oneLine(getRaw(key))
+	}
+	id := CommitIdentity{Name: get("user.name"), Email: get("user.email")}
+	if strings.EqualFold(get("gpg.format"), "ssh") && !strings.EqualFold(get("commit.gpgsign"), "false") {
+		if rawKey := strings.TrimSpace(getRaw("user.signingkey")); rawKey != "" {
+			id.SigningKey = resolveHostSSHSigningPublicKey(env, rawKey)
+		}
+	}
+	return id
+}
+
+// validateSSHPublicKeyLine validates that s is a single-line SSH public key
+// (e.g. "ssh-ed25519 AAAA...") with no control characters or line breaks.
+func validateSSHPublicKeyLine(s string) string {
+	s = strings.TrimRight(s, "\r\n")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	fields := strings.Fields(s)
+	if len(fields) < 2 {
+		return ""
+	}
+	keyType := fields[0]
+	if !strings.HasPrefix(keyType, "ssh-") && !strings.HasPrefix(keyType, "ecdsa-") && !strings.HasPrefix(keyType, "sk-") {
+		return ""
+	}
+	return strings.Join(fields, " ")
+}
+
+func extractInlineSSHPublicKey(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if rest, ok := strings.CutPrefix(raw, "key::"); ok {
+		return validateSSHPublicKeyLine(rest), true
+	}
+	if strings.HasPrefix(raw, "ssh-") || strings.HasPrefix(raw, "ecdsa-") || strings.HasPrefix(raw, "sk-") {
+		return validateSSHPublicKeyLine(raw), true
+	}
+	return "", false
+}
+
+func homeFromEnv(env []string) string {
+	for i := len(env) - 1; i >= 0; i-- {
+		if h, ok := strings.CutPrefix(env[i], "HOME="); ok && h != "" {
+			return h
+		}
+	}
+	return ambientHome()
+}
+
+func expandHostKeyPath(env []string, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if rest, ok := strings.CutPrefix(raw, "~/"); ok {
+		if home := homeFromEnv(env); home != "" {
+			return filepath.Join(home, rest)
+		}
+	}
+	return raw
+}
+
+func resolveHostSSHSigningPublicKey(env []string, raw string) string {
+	for _, r := range raw {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	if inline, ok := extractInlineSSHPublicKey(raw); ok {
+		return inline
+	}
+	keyPath := expandHostKeyPath(env, raw)
+	if keyPath == "" {
+		return ""
+	}
+	if strings.HasSuffix(keyPath, ".pub") {
+		if data, err := os.ReadFile(keyPath); err == nil {
+			if pub := validateSSHPublicKeyLine(string(data)); pub != "" {
+				return pub
+			}
+		}
+		privPath := strings.TrimSuffix(keyPath, ".pub")
+		return deriveSSHPublicKeyFromPrivate(env, privPath)
+	}
+	if data, err := os.ReadFile(keyPath + ".pub"); err == nil {
+		if pub := validateSSHPublicKeyLine(string(data)); pub != "" {
+			return pub
+		}
+	}
+	if data, err := os.ReadFile(keyPath); err == nil {
+		if pub := validateSSHPublicKeyLine(string(data)); pub != "" {
+			return pub
+		}
+	}
+	return deriveSSHPublicKeyFromPrivate(env, keyPath)
+}
+
+func deriveSSHPublicKeyFromPrivate(env []string, privPath string) string {
+	if _, err := os.Stat(privPath); err != nil {
+		return ""
+	}
+	keygen, err := exec.LookPath("ssh-keygen")
+	if err != nil {
+		return ""
+	}
+	stdout, _, err := runHostTool(env, "", keygen, "-y", "-f", privPath)
+	if err != nil {
+		return ""
+	}
+	return validateSSHPublicKeyLine(stdout)
+}
+
+// MaxGitSignPayloadBytes bounds the commit or tag buffer that may be
+// signed via SignGitPayload or /_grain/git-sign (1 MiB).
+const MaxGitSignPayloadBytes = 1 << 20
+
+// signHostGitPayload signs payload in namespace ("git") using the host
+// account's configured SSH signing key (`ssh-keygen -Y sign -n git -f <key> -q`).
+func signHostGitPayload(namespace string, payload []byte) ([]byte, error) {
+	if namespace != "git" {
+		return nil, fmt.Errorf("unsupported signing namespace %q: only \"git\" is permitted", namespace)
+	}
+	if len(payload) == 0 {
+		return nil, errors.New("signing payload is empty")
+	}
+	if len(payload) > MaxGitSignPayloadBytes {
+		return nil, fmt.Errorf("signing payload exceeds %d bytes", MaxGitSignPayloadBytes)
+	}
+	if c := activeHostGit(); c != nil {
+		return c.sign(context.Background(), namespace, payload)
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		return nil, fmt.Errorf("git is not installed for %s", ambientAccount())
+	}
+	keygenPath, err := exec.LookPath("ssh-keygen")
+	if err != nil {
+		return nil, fmt.Errorf("ssh-keygen is not installed for %s", ambientAccount())
+	}
+	env := ambientEnv()
+	getRaw := func(key string) string {
+		stdout, _, err := runHostTool(env, "", gitPath, "config", "--global", "--get", key)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimRight(stdout, "\r\n")
+	}
+	if !strings.EqualFold(oneLine(getRaw("gpg.format")), "ssh") {
+		return nil, errors.New("host git config does not have gpg.format = ssh")
+	}
+	rawKey := strings.TrimSpace(getRaw("user.signingkey"))
+	if rawKey == "" {
+		return nil, errors.New("host git config has no user.signingkey configured")
+	}
+	for _, r := range rawKey {
+		if r < 0x20 || r == 0x7f {
+			return nil, errors.New("host git user.signingkey contains control characters")
+		}
+	}
+	var keyFile string
+	if inline, ok := extractInlineSSHPublicKey(rawKey); ok {
+		if inline == "" {
+			return nil, errors.New("host git user.signingkey is not a valid SSH public key")
+		}
+		tmp, err := os.CreateTemp("", "grain-signing-key-*.pub")
+		if err != nil {
+			return nil, fmt.Errorf("creating temporary signing key file: %w", err)
+		}
+		tmpName := tmp.Name()
+		defer os.Remove(tmpName)
+		if _, err := tmp.WriteString(inline + "\n"); err != nil {
+			tmp.Close()
+			return nil, fmt.Errorf("writing temporary signing key file: %w", err)
+		}
+		if err := tmp.Close(); err != nil {
+			return nil, fmt.Errorf("closing temporary signing key file: %w", err)
+		}
+		keyFile = tmpName
+	} else {
+		keyFile = expandHostKeyPath(env, rawKey)
+	}
+	stdout, stderr, err := runHostTool(env, string(payload), keygenPath, "-Y", "sign", "-n", "git", "-f", keyFile, "-q")
+	if err != nil && strings.HasSuffix(keyFile, ".pub") {
+		privFile := strings.TrimSuffix(keyFile, ".pub")
+		if _, serr := os.Stat(privFile); serr == nil {
+			stdout, stderr, err = runHostTool(env, string(payload), keygenPath, "-Y", "sign", "-n", "git", "-f", privFile, "-q")
+		}
+	}
+	if err != nil {
+		msg := strings.TrimSpace(stderr)
+		if msg != "" {
+			return nil, fmt.Errorf("ssh-keygen -Y sign failed: %s (%w)", msg, err)
+		}
+		return nil, fmt.Errorf("ssh-keygen -Y sign failed: %w", err)
+	}
+	if !strings.Contains(stdout, "-----BEGIN SSH SIGNATURE-----") || !strings.Contains(stdout, "-----END SSH SIGNATURE-----") {
+		return nil, errors.New("ssh-keygen -Y sign did not produce an SSH signature block")
+	}
+	return []byte(stdout), nil
+}
+
+// SignGitPayload signs a commit or tag payload on the host for ambient
+// credential credName.
+func (c *CredentialSet) SignGitPayload(ctx context.Context, credName, namespace string, payload []byte) ([]byte, error) {
+	if c == nil || !c.IsAmbient(credName) {
+		return nil, fmt.Errorf("%q is not an ambient credential", credName)
+	}
+	if err := AmbientAvailable(); err != nil {
+		return nil, err
+	}
+	if namespace != "git" {
+		return nil, fmt.Errorf("unsupported signing namespace %q: only \"git\" is permitted", namespace)
+	}
+	if len(payload) == 0 {
+		return nil, errors.New("signing payload is empty")
+	}
+	if len(payload) > MaxGitSignPayloadBytes {
+		return nil, fmt.Errorf("signing payload exceeds %d bytes", MaxGitSignPayloadBytes)
+	}
+	if hg := activeHostGit(); hg != nil {
+		return hg.sign(ctx, namespace, payload)
+	}
+	return signHostGitPayload(namespace, payload)
 }
 
 // oneLine is s trimmed with any line break folded to a space, the shape

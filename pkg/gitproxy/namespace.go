@@ -184,9 +184,12 @@ func (p *GitProxy) handleNamespaceRequest(ctx context.Context, method, path, que
 		req.Header.Set(k, v)
 	}
 	rec := httptest.NewRecorder()
-	if isCLIPath(path) {
+	switch {
+	case isCLIPath(path):
 		p.ServeCLIHTTP(rec, req)
-	} else {
+	case isGitSignPath(path):
+		p.ServeGitSignHTTP(rec, req)
+	default:
 		p.ServeNamespaceHTTP(rec, req)
 	}
 	respHeaders := make(map[string]string, len(rec.Header()))

@@ -89,7 +89,9 @@ func (c *CredentialSet) credentialGitIdentity(name string, depth int) (CommitIde
 		if !paired || depth > 0 {
 			return CommitIdentity{}, fmt.Errorf("SSH key credential %q has no API credential paired with it to say who it is", name)
 		}
-		return c.credentialGitIdentity(api.Name, depth+1)
+		id, err := c.credentialGitIdentity(api.Name, depth+1)
+		id.SigningKey = ""
+		return id, err
 	}
 	h := c.HostOf(name)
 	if h.Kind == model.GitHostGit {

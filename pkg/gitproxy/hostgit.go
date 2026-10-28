@@ -74,6 +74,7 @@ const (
 	hostGitToolPackageToken = "package_token"
 	hostGitToolForge        = "forge_request"
 	hostGitToolIdentity     = "git_identity"
+	hostGitToolSign         = "git_sign"
 )
 
 // hostGitMaxBody bounds one forge response the server carries back over
@@ -199,16 +200,33 @@ func (c *HostGitClient) packageToken(source, host, registry string) (string, err
 }
 
 func (c *HostGitClient) identity() (CommitIdentity, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*ambientCommandTimeout+hostGitStartSlack)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*ambientCommandTimeout+hostGitStartSlack)
 	defer cancel()
 	var res struct {
-		Name  string `json:"name"`
-		Email string `json:"email"`
+		Name       string `json:"name"`
+		Email      string `json:"email"`
+		SigningKey string `json:"signing_key"`
 	}
 	if err := c.call(ctx, hostGitToolIdentity, map[string]any{}, &res); err != nil {
 		return CommitIdentity{}, err
 	}
-	return CommitIdentity{Name: res.Name, Email: res.Email}, nil
+	return CommitIdentity{Name: res.Name, Email: res.Email, SigningKey: res.SigningKey}, nil
+}
+
+func (c *HostGitClient) sign(ctx context.Context, namespace string, payload []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*ambientCommandTimeout+hostGitStartSlack)
+	defer cancel()
+	var res struct {
+		Signature string `json:"signature"`
+	}
+	args := map[string]any{
+		"namespace": namespace,
+		"payload":   base64.StdEncoding.EncodeToString(payload),
+	}
+	if err := c.call(ctx, hostGitToolSign, args, &res); err != nil {
+		return nil, err
+	}
+	return []byte(res.Signature), nil
 }
 
 // hostGitForgeResult is forge_request's answer: the response, or the
@@ -336,11 +354,32 @@ func ServeHostGit(s *protocol.CapabilityServer) error {
 		}); err != nil {
 		return err
 	}
-	if err := s.HandleTool(hostGitToolIdentity, "Read the host account's global git user.name and user.email.",
+	if err := s.HandleTool(hostGitToolIdentity, "Read the host account's global git user.name, user.email, and SSH signing public key.",
 		map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 		func(ctx context.Context, args map[string]any) ([]byte, error) {
 			id := readHostGitIdentity()
-			return hostGitAnswer(map[string]any{"name": id.Name, "email": id.Email}, nil)
+			return hostGitAnswer(map[string]any{"name": id.Name, "email": id.Email, "signing_key": id.SigningKey}, nil)
+		}); err != nil {
+		return err
+	}
+	if err := s.HandleTool(hostGitToolSign, "Sign a git commit or tag payload with the host account's configured SSH signing key.",
+		map[string]any{
+			"type":     "object",
+			"required": []any{"namespace", "payload"},
+			"properties": map[string]any{
+				"namespace": map[string]any{"type": "string", "pattern": `^git$`},
+				"payload":   map[string]any{"type": "string", "maxLength": 1500000},
+			},
+			"additionalProperties": false,
+		},
+		func(ctx context.Context, args map[string]any) ([]byte, error) {
+			ns, _ := args["namespace"].(string)
+			raw, err := base64.StdEncoding.DecodeString(fmt.Sprint(args["payload"]))
+			if err != nil {
+				return nil, fmt.Errorf("git_sign: payload: %v", err)
+			}
+			sig, err := signHostGitPayload(ns, raw)
+			return hostGitAnswer(map[string]any{"signature": string(sig)}, err)
 		}); err != nil {
 		return err
 	}

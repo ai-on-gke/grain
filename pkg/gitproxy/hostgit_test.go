@@ -223,3 +223,28 @@ func mustSource(t *testing.T, name string) AmbientCommandSource {
 	}
 	return src
 }
+
+func TestHostGitIdentityAndSignThroughHostd(t *testing.T) {
+	homeDir, wantPub := setupFakeHostSSHSigning(t)
+	allow := fmt.Sprintf("capabilities:\n  host-git:\n    command: %%s\n    set_env: {%s: \"1\", GRAIN_TEST_AMBIENT_HOME: %q}\n", hostGitServerEnv, homeDir)
+	startHostGitHostd(t, allow)
+
+	c, _ := ambientSet(t)
+	if err := c.SetAmbient("op", "", "gh"); err != nil {
+		t.Fatal(err)
+	}
+
+	id := c.HostGitIdentity()
+	if id.Name != "Olive Signer" || id.Email != "olive@example.com" || id.SigningKey != wantPub {
+		t.Fatalf("HostGitIdentity through hostd = %+v, want SigningKey=%q", id, wantPub)
+	}
+
+	payload := []byte("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor Olive Signer <olive@example.com> 1700000000 +0000\ncommitter Olive Signer <olive@example.com> 1700000000 +0000\n\nsigned via hostd\n")
+	sig, err := c.SignGitPayload(context.Background(), "op", "git", payload)
+	if err != nil {
+		t.Fatalf("SignGitPayload through hostd: %v", err)
+	}
+	if !strings.Contains(string(sig), "-----BEGIN SSH SIGNATURE-----") {
+		t.Fatalf("signature = %q, want SSH signature block", sig)
+	}
+}
