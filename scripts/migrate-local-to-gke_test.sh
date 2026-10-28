@@ -199,7 +199,10 @@ esac
 EOF
 
 for tool in grain gcloud chown; do
-  printf '#!/usr/bin/env bash\necho "%s $*" >>"$STUB/calls.log"\n' "$tool" >"$stubs/$tool"
+  cat >"$stubs/$tool" <<STUB
+#!/usr/bin/env bash
+echo "$tool \$*" >>"\$STUB/calls.log"
+STUB
 done
 
 cat >"$stubs/install" <<'EOF'
@@ -302,10 +305,11 @@ check "no secrets.key is refused" 1 "no secrets.key"
 truth "and the daemon was not touched" test -f "$work/stub/units/grain-daemon.service.active"
 
 fresh
+touch "$work/host/var/lib/grain/kubeconfig"
 status=0
 out="$(env PATH="$stubs:$PATH" STUB="$work/stub" GRAIN_ROOT_DIR="$work/host/var/lib/grain" \
   GRAIN_ETC_DIR="$work/host/etc/grain" GRAIN_SYSTEMD_DIR="$sysd" GRAIN_MIGRATE_SKIP_ROOT_CHECK=1 \
-  bash -c 'touch "$GRAIN_ROOT_DIR/kubeconfig"; bash "$0"' "$script" 2>&1)" || status=$?
+  bash "$script" 2>&1)" || status=$?
 check "gke-sandboxes' least-privilege kubeconfig alone is refused" 1 "least-privilege kubeconfig" "--cluster/--project/--location"
 
 fresh
