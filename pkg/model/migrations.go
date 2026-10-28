@@ -326,6 +326,13 @@ var Migrations = []Migration{
 			externalAgentTokenSequenceTable,
 		},
 	},
+	{
+		Version:     60,
+		Description: "label each recorded CI wait with the CI that answered it (grain, github, tap)",
+		Statements: []string{
+			"ALTER TABLE `task_run_check_wait` ADD COLUMN `provider` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

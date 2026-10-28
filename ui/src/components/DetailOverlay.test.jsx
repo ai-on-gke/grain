@@ -1226,6 +1226,7 @@ describe("DetailOverlay", () => {
       noPort: true,
       googleChatSpace: "spaces/AAAA",
       changelists: ["cl/123456"],
+      presubmit: { state: "failed", failing: ["//foo:bar_test"], snapshot: 3 },
     };
 
     rerender(
@@ -1250,6 +1251,14 @@ describe("DetailOverlay", () => {
       "href",
       "http://cl/123456",
     );
+    // Beside the primary CL, its presubmit badge naming the failing check.
+    expect(screen.getByTestId("presubmit-badge")).toHaveAttribute(
+      "data-state",
+      "failed",
+    );
+    expect(
+      screen.getByText("presubmit failed: //foo:bar_test"),
+    ).toBeInTheDocument();
 
     // Provenance links start collapsed behind the toggle.
     const toggle = screen.getByRole("button", { name: /Provenance/ });
