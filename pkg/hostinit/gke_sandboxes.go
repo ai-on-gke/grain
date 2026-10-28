@@ -553,6 +553,14 @@ spec:
             - name: relay
               containerPort: 8443
               protocol: TCP
+          # The relay is reachable from outside the cluster and only
+          # forwards streams: it needs no capability, and must never
+          # gain one, in a namespace whose pod-security level is
+          # privileged for the sandboxes beside it.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: relay-tls
               mountPath: /etc/granule-relay/tls

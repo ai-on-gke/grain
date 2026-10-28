@@ -494,6 +494,8 @@ func TestGKESandboxesFreshClusterCreationAndVerification(t *testing.T) {
 		"- -selector=granule.gke.io/sandbox=true",
 		"- -name-label=granule.gke.io/sandbox-name",
 		"- -sandbox-port=7443",
+		"allowPrivilegeEscalation: false",
+		`drop: ["ALL"]`,
 		"kind: Service",
 		"type: LoadBalancer",
 		"kind: NetworkPolicy",
