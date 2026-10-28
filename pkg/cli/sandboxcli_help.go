@@ -158,7 +158,6 @@ ARGUMENTS & FLAGS:
   --nothing-needed-action <close|ack>
                                Whether nothing_needed closes the task (default) or leaves it for ack.
   --goal <json>                Goal spec JSON: {"kind":"base-green|pr-merged|tasks-closed|person-closes|pipeline-healthy","spec":{...},"on_met":"close|rest","on_limit":"hold|notify"}.
-  --google3 <json>             Google3 CitC spec JSON: {"workspace":"...","start_cl":123,"sync_to":"head"}.
 `
 
 // sandboxCommandHelp is each command's --help.
