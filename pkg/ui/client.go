@@ -31,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -2044,6 +2045,13 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		return Task{}, err
 	}
 	var proposedBy *model.Task
+	if req.ProposedBy != "" && req.Capabilities != nil {
+		// A review grant is grain's to give, on a review it files itself
+		// (orchestrator.SyncCLReviews), never an agent's to ask for.
+		if err := model.RefuseReviewOfGrants(*req.Capabilities); err != nil {
+			return Task{}, validationErrorf("%v", err)
+		}
+	}
 	if req.ProposedBy != "" {
 		parent, err := c.Store.GetTask(ctx, req.ProposedBy)
 		if err != nil {
@@ -4745,6 +4753,17 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 	}
 	if pending := model.PendingApprovals(*task); len(pending) > 0 && !task.AutoMerge {
 		return c.submitWithApprovals(ctx, *task, pending)
+	}
+	// A CL whose provider gates Submit on its required reviews
+	// (change.ReviewGate) is submitted only once they have passed on its
+	// current snapshot.
+	if ok, reason, err := change.GateSubmit(ctx, *task); err != nil {
+		return fmt.Errorf("checking whether %s may be submitted: %w", id, err)
+	} else if !ok {
+		if reason == "" {
+			reason = "its required reviews have not passed on the current snapshot"
+		}
+		return validationErrorf("%s cannot be submitted yet: %s", id, reason)
 	}
 	now, head := c.now(), c.submittedHead(ctx, *task)
 	if err := c.mutate(ctx, id, func(task *model.Task) error {
