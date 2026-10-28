@@ -3,9 +3,9 @@
 #   1. grain-sandbox-network-none: restricts `grain.dev/network: none` sandbox
 #      pods to zero ingress and egress only to the grain daemon pod (proxies,
 #      package cache, and the sandbox-access acceptor on 7443).
-#   2. grain-sandbox-egress: selects every sandbox pod (`app.kubernetes.io/managed-by: grain`,
+#   2. grain-sandbox-egress: selects every networked sandbox pod (`app.kubernetes.io/managed-by: grain`,
 #      `app.kubernetes.io/component: sandbox`, the labels `pkg/k8s.Manifest` stamps on every
-#      sandbox pod). Empty ingress (nothing dials a sandbox pod). Separate egress rules for:
+#      sandbox pod, and not `grain.dev/network: none`). Empty ingress (nothing dials a sandbox pod). Separate egress rules for:
 #        - the wrapper's dial-out mTLS channel to `grain-access:7443`;
 #        - the guest's proxy/package-cache traffic to `grain-sandbox`;
 #        - cluster DNS;
@@ -59,6 +59,18 @@ spec:
           port: 9745
         - protocol: TCP
           port: 9746
+    # kube-dns, so the wrapper can resolve grain-access for its dial-out
+    # channel (grain-sandbox-egress, which carries the same rule for
+    # networked sandboxes, does not select these pods).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -68,10 +80,19 @@ metadata:
   labels:
     app.kubernetes.io/name: grain
 spec:
+  # NetworkPolicies are additive, so this policy must not select
+  # `grain.dev/network: none` pods: if it did, its open-internet rule
+  # (Rule 4) would be OR-ed into grain-sandbox-network-none and give
+  # those pods the network that policy withholds. NotIn also matches
+  # pods with no grain.dev/network label at all.
   podSelector:
     matchLabels:
       app.kubernetes.io/managed-by: grain
       app.kubernetes.io/component: sandbox
+    matchExpressions:
+      - key: grain.dev/network
+        operator: NotIn
+        values: ["none"]
   policyTypes:
     - Ingress
     - Egress
