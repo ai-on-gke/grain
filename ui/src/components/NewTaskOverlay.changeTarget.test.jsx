@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The "google3 (CitC)" choice in the repo picker
-// (google/docs/design/google3-cls.md#G3-1): offered only where the
-// binary registers the google3 change target, and filed as one -- no
-// repo, no branch, never auto-merged.
+// A registered non-git change target choice in the repo picker: offered
+// only where the binary registers the change target kind, and filed as
+// one -- no repo, no branch, never auto-merged.
 //
 // Part of the NewTaskOverlay suite -- see NewTaskOverlay.test.jsx.
 
@@ -39,29 +38,29 @@ function renderForm(config) {
   );
 }
 
-describe("NewTaskOverlay google3", () => {
+describe("NewTaskOverlay changeTargets", () => {
   afterEach(() => api.mockClear());
 
-  it("does not offer google3 where the binary has not registered it", () => {
+  it("does not offer a change target where the binary has not registered it", () => {
     renderForm({ capabilities: [], targetRepos: ["acme/widgets"] });
     expect(
-      screen.queryByRole("option", { name: /google3 \(CitC\)/ }),
+      screen.queryByRole("option", { name: /changelist in a/ }),
     ).not.toBeInTheDocument();
   });
 
-  it("files a google3 pick as a google3 change target with no repo, branch or auto-merge", async () => {
+  it("files a change target pick with no repo, branch or auto-merge", async () => {
     const user = userEvent.setup();
     renderForm({
       capabilities: [],
       targetRepos: ["acme/widgets"],
-      changeTargets: ["google3"],
+      changeTargets: ["monorepo"],
       autoMergeByDefault: true,
     });
 
     await user.type(screen.getByLabelText(/Title/), "Fix the frobnicator");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "google3");
-    expect(screen.getByTestId("google3-note")).toHaveTextContent(
-      "google3 CL in this task's own CitC workspace",
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "monorepo");
+    expect(screen.getByTestId("change-target-note")).toHaveTextContent(
+      "monorepo changelist in this task's own workspace",
     );
     expect(
       screen.queryByRole("checkbox", { name: /Auto-merge/ }),
@@ -71,23 +70,23 @@ describe("NewTaskOverlay google3", () => {
 
     const post = api.mock.calls.find(([, opts]) => opts?.method === "POST");
     const payload = JSON.parse(post[1].body);
-    expect(payload.changeTarget).toEqual({ kind: "google3" });
+    expect(payload.changeTarget).toEqual({ kind: "monorepo" });
     expect(payload.noRepo).toBe(false);
     expect(payload.repo).toBe("");
     expect(payload.base).toBe("");
     expect(payload.autoMerge).toBe(false);
   });
 
-  it("drops the google3 choice when a repo is picked after it", async () => {
+  it("drops the change target choice when a repo is picked after it", async () => {
     const user = userEvent.setup();
     renderForm({
       capabilities: [],
       targetRepos: ["acme/widgets"],
-      changeTargets: ["google3"],
+      changeTargets: ["monorepo"],
     });
 
     await user.type(screen.getByLabelText(/Title/), "Back to git");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "google3");
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "monorepo");
     await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 

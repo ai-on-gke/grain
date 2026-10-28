@@ -140,8 +140,8 @@ type ProposedTask struct {
 	// task with no repository target,
 	// task that will not clone or push a branch.
 	NoRepo bool
-	// ChangeTarget is propose_task's `google3` argument: a task whose
-	// change is a google3 CL rather than a git branch (model.ChangeTarget).
+	// ChangeTarget is propose_task's registered change-target argument: a task
+	// whose change is in a non-git workspace rather than a git branch (model.ChangeTarget).
 	ChangeTarget *model.ChangeTarget
 	// AtFront is whether this task joins the front of the backlog ahead
 	// of already queued work.
@@ -867,7 +867,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 		InputSchema: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
-			"properties": map[string]any{
+			"properties": withProposeChangeTargetProperties(map[string]any{
 				"id": map[string]any{
 					"type": "string",
 					"description": "A short local name for this proposal, used only " +
@@ -1095,21 +1095,6 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 						"Leave it out otherwise: a proposal inherits the origin of the task that " +
 						"filed it, and one that already has a GitHub origin keeps it.",
 				},
-				"google3": map[string]any{
-					"type": "object",
-					"description": "Files this task against google3 rather than a git repository: its change is a CL " +
-						"made in a CitC workspace, with no clone and no branch. workspace names an existing workspace " +
-						"of the operator's (left out, the task's own is created for it); start_cl a pending CL of the " +
-						"operator's to continue; sync_to \"head\" or a CL number. Naming a workspace or a start_cl " +
-						"files the task for a person to approve. Cannot be combined with repo, branch, writes, no_repo, " +
-						"fixes_base_branch, auto_merge or a base-green goal; reads are still allowed.",
-					"properties": map[string]any{
-						"workspace": map[string]any{"type": "string"},
-						"start_cl":  map[string]any{"type": "integer"},
-						"sync_to":   map[string]any{"type": "string"},
-					},
-					"additionalProperties": false,
-				},
 				"no_repo": map[string]any{
 					"type": "boolean",
 					"description": "Files this task with no repository at all -- a standalone task " +
@@ -1189,7 +1174,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 						"Leave it out (or false) for the default: queued when your " +
 						"permission covers it, unapproved otherwise.",
 				},
-			},
+			}),
 			"required": []string{"title", "body"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) Result {
@@ -1209,7 +1194,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				return Result{Text: err.Error(), IsError: true}
 			}
 			if changeTarget != nil {
-				if refusal := google3Refusal(args); refusal != "" {
+				if refusal := changeTargetRefusal(changeTarget.Kind, args); refusal != "" {
 					return Result{Text: refusal, IsError: true}
 				}
 			}
