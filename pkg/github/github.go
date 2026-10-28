@@ -234,14 +234,20 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, scheme+"://"+t.Host+t.PathPrefix+path, bodyReader)
+	fullPath := t.PathPrefix + path
+	if t.PathPrefix != "" && (path == t.PathPrefix || strings.HasPrefix(path, t.PathPrefix+"/")) {
+		fullPath = path
+	}
+	req, err := http.NewRequest(method, scheme+"://"+t.Host+fullPath, bodyReader)
 	if err != nil {
 		return ApiResponse{}, err
 	}
 	for k, v := range headers {
-		// The caller label is grain's own bookkeeping (budget.go), and
-		// GitHub has no business seeing it.
-		if http.CanonicalHeaderKey(k) == CallerHeader {
+		// The caller and repo labels are grain's own bookkeeping
+		// (budget.go, pkg/daemon's forgeRouter), and GitHub has no
+		// business seeing them.
+		switch http.CanonicalHeaderKey(k) {
+		case CallerHeader, RepoHeader:
 			continue
 		}
 		req.Header.Set(k, v)
@@ -1471,7 +1477,10 @@ func failedConclusion(conclusion string) bool {
 //
 // GitHub paginates via a full Link header URL rather than an opaque
 // cursor; Transport.Request takes a path against a fixed host, so only
-// the path and query survive the hop.
+// the path and query survive the hop. On a GitHub Enterprise Server the
+// Link URL's path begins with /api/v3/, which comes off here so a
+// RealTransport with PathPrefix "/api/v3" does not put a second one in
+// front of it.
 func nextPagePath(linkHeader string) string {
 	if linkHeader == "" {
 		return ""
@@ -1493,10 +1502,14 @@ func nextPagePath(linkHeader string) string {
 		// EscapedPath, not Path: a segment the first request escaped (a
 		// ref with a slash in it, sent as %2F) must reach the next page
 		// still escaped, or page two asks for a different resource.
-		if u.RawQuery != "" {
-			return u.EscapedPath() + "?" + u.RawQuery
+		path := u.EscapedPath()
+		if strings.HasPrefix(path, "/api/v3/") {
+			path = strings.TrimPrefix(path, "/api/v3")
 		}
-		return u.EscapedPath()
+		if u.RawQuery != "" {
+			return path + "?" + u.RawQuery
+		}
+		return path
 	}
 	return ""
 }
@@ -1579,6 +1592,9 @@ func (c *RESTClient) headers(owner, repo string, jsonBody bool) map[string]strin
 	}
 	if c.Caller != "" {
 		headers[CallerHeader] = c.Caller
+	}
+	if owner != "" && repo != "" {
+		headers[RepoHeader] = owner + "/" + repo
 	}
 	return headers
 }

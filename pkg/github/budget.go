@@ -58,6 +58,13 @@ import (
 // reading the same resource share one cached answer.
 const CallerHeader = "X-Grain-Caller"
 
+// RepoHeader carries the owner/repo a RESTClient call is about to the
+// transport, so a router underneath (pkg/daemon's forgeRouter) still
+// knows which repository a follow-up request whose path does not begin
+// with /repos/ (such as a Link-header page under /repositories/<id>/...)
+// belongs to. Like CallerHeader, RealTransport strips it before sending.
+const RepoHeader = "X-Grain-Repo"
+
 // Unattributed is the label a request with none is charged to. A row of
 // it in the metrics is a call site somebody has not labelled yet.
 const Unattributed = "unattributed"
