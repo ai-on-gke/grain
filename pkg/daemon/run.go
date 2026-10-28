@@ -1578,6 +1578,12 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		"go at once is bounded by this deployment's sandbox budget: %s",
 		cfg.PollInterval, BudgetSentence(cfg.Limits(), KubernetesSandboxes(cfg)))
 	reconcile(ctx, deps, live)
+	// Detach in-flight CI runs as soon as reconcile stops rather than waiting
+	// for DrainInFlight to finish, so CI stops starting new jobs or retries
+	// while the daemon unwinds.
+	if ciService := LiveCI.embedded(); ciService != nil {
+		ciService.Detach()
+	}
 	// reconcile only returns once ctx is done, which is also what tells
 	// every live run to wind up -- so this is the shutdown drain, not a
 	// wait for work still to be done.

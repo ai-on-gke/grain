@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // DefaultStoredRunHistory is how many finished runs a StoredRunStore
@@ -711,8 +712,7 @@ func (s *StoredRunStore) Live(key Key) (Run, bool) {
 // running it stopped before it concluded. It is prose rather than a
 // sentinel because the thing that reads it is a person looking at the
 // run; the fact a *caller* acts on is Run.Interrupted.
-const InterruptedRunError = "this run was interrupted: the grain daemon running it stopped before " +
-	"it finished, so its jobs were never concluded"
+const InterruptedRunError = workflows.InterruptedRunError
 
 // LiveRuns returns every stored run that has not concluded yet, with its jobs
 // and steps.

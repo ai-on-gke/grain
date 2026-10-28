@@ -105,9 +105,11 @@ const (
 
 var (
 	ConcludeRun                      = gritengine.ConcludeRun
+	IsDaemonServiceError             = gritengine.IsDaemonServiceError
 	IsDetaching                      = gritengine.IsDetaching
 	IsJobRetryEligible               = gritengine.IsJobRetryEligible
 	IsTransientOrInfrastructureError = gritengine.IsTransientOrInfrastructureError
+	JobFailedOnDaemonService         = gritengine.JobFailedOnDaemonService
 	NewJobRun                        = gritengine.NewJobRun
 	SandboxName                      = gritengine.SandboxName
 	SortJobRuns                      = gritengine.SortJobRuns
