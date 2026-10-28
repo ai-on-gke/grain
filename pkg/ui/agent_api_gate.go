@@ -268,7 +268,11 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 }
 
 // agentCapabilityAllowsRoute reports whether a non-API capability grant ("memory",
-// "release-notes") or related API scope ("releases:write") authorizes pattern.
+// "release-notes") authorizes pattern, or releases:read lets a release
+// manager read (never write) the release notes. Writing them stays with
+// the release-notes capability and memory:write: releases:write is a
+// per-repository release scope, and the weekly notes are the
+// deployment's own.
 func agentCapabilityAllowsRoute(held []string, set APIGrantSet, pattern string, scope APIScope) bool {
 	path := pathOf(pattern)
 	if path == "/api/memory" || strings.HasPrefix(path, "/api/memory/") {
@@ -277,7 +281,7 @@ func agentCapabilityAllowsRoute(held []string, set APIGrantSet, pattern string, 
 		}
 	}
 	if path == "/api/release-notes" || strings.HasPrefix(path, "/api/release-notes/") {
-		if slices.Contains(held, "release-notes") || set.Allows("releases:write", "") {
+		if slices.Contains(held, "release-notes") {
 			return true
 		}
 		if scope == "memory:read" && set.Allows("releases:read", "") {

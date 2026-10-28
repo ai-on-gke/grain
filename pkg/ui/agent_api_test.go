@@ -823,3 +823,27 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 		t.Errorf("SandboxAPIRoutes([api:tasks:read ...]) missing GET /api/tasks: %+v", taskRoutes)
 	}
 }
+
+// TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes pins that the
+// release-manager scope reads the deployment's weekly release notes but
+// cannot write them: writing stays with the release-notes capability
+// (and memory:write), on either channel.
+func TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:releases:read", "api:releases:write")
+	body := `{"period":"2026-W43","title":"t","text":"x"}`
+	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
+		t.Errorf("api:releases:write wrote release notes: %d %s, want 403", code, resp)
+	}
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
+		t.Errorf("api:releases:write wrote release notes over sandbox-cli: %d %s, want 403", code, resp)
+	}
+	if code, resp := asAgent(t, srv, "1", http.MethodGet, "/api/release-notes", "", ""); code == http.StatusForbidden {
+		t.Errorf("api:releases:read was refused reading release notes: %d %s", code, resp)
+	}
+	for _, r := range ui.SandboxAPIRoutes([]string{"api:releases:write"}, "") {
+		if r.Pattern == "PUT /api/release-notes" {
+			t.Errorf("SandboxAPIRoutes([api:releases:write]) lists PUT /api/release-notes")
+		}
+	}
+}
