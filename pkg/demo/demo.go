@@ -1373,6 +1373,39 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err := seedDemoNotifications(ctx, store, darkMode.ID, ago); err != nil {
 		return err
 	}
+	// A changelist task: its change is two CLs in a workspace rather than
+	// a pull request, the first its primary. Finished and unsubmitted, it
+	// reads awaiting_submit, so the task view and the inbox both draw its
+	// CL chip. Seeded last, so every task id above stays what the demo
+	// tests pin.
+	var clTarget *model.ChangeTarget
+	if kinds := model.ChangeTargetKinds(); len(kinds) > 0 {
+		clTarget = &model.ChangeTarget{Kind: kinds[0]}
+	}
+	clTask, err := create(ago(26*time.Hour), ui.CreateTaskRequest{
+		Title:        "Port the retry budget to the depot",
+		Description:  "Mirror grain's retry budget in //devtools/grain/retry and split the BUILD changes into their own CL.",
+		Approved:     true,
+		NoRepo:       clTarget == nil,
+		ChangeTarget: clTarget,
+	})
+	if err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	if err := store.UpdateTask(ctx, clTask.ID, func(t *model.Task) error {
+		t.Links = append(t.Links,
+			model.Link{Kind: model.LinkChangelist, Target: "cl/612400001"},
+			model.Link{Kind: model.LinkChangelist, Target: "cl/612400017"})
+		return nil
+	}); err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	clDone := ago(25 * time.Hour)
+	if err := store.ObserveField(ctx, clTask.ID, clDone, func(o *model.Observation) {
+		o.CompletedAt = &clDone
+	}); err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
 
 	return nil
 }

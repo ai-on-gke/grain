@@ -232,6 +232,10 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// decides it rather than a literal here.
 		Logs:        LogSources(cfg),
 		LogRedactor: logRedactor(SecretsDir(cfg.DataDir)),
+		// The deployment's external UI base, for the one absolute link
+		// grain writes (Grain-Task: in a changelist CL's description); unset
+		// leaves that line out rather than writing localhost.
+		ExternalBase: os.Getenv(ExternalBaseEnv),
 		// liveTranscriptDir reads back whatever the Framework driving a
 		// still-running attempt has mirrored so far into
 		// transcriptDir/<runID> (transcriptDir's own doc comment on the

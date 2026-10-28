@@ -294,3 +294,32 @@ func TestTheLineageOfAnOriginlessFiledTaskNamesItsTreesRoot(t *testing.T) {
 		t.Errorf("lineage does not name task 20 as the origin:\n%s", section)
 	}
 }
+
+// A changelist task in a GitHub origin's tree lists its CLs, as cl/N with
+// their status, the way a pull request is listed.
+func TestTheOriginCommentListsAGoogle3TasksCLs(t *testing.T) {
+	store, ctx := openTreeStore(t)
+	origin := model.GitHubOrigin(widgets, 5)
+	fileTreeTask(t, ctx, store, "10", "", "Plan the design doc", origin)
+	task := model.Task{
+		ID: "14", Intent: model.IntentImplement, Title: "Port it to the depot",
+		Origin:       model.Origin{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect},
+		Binding:      model.BindingDirective,
+		ChangeTarget: &model.ChangeTarget{Kind: "changelist"},
+		Links: []model.Link{{Kind: model.LinkProposedBy, Target: "10"},
+			{Kind: model.LinkChangelist, Target: "cl/612345678"}, {Kind: model.LinkChangelist, Target: "cl/612345690"}},
+	}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	client := &treeClient{bodies: map[int]string{}}
+	if err := syncWorkTree(ctx, store, client, origin, time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.created) != 1 {
+		t.Fatalf("created %d comments", len(client.created))
+	}
+	if want := "  - [ ] task 14: Port it to the depot (cl-pending cl/612345678, cl/612345690)\n"; !strings.Contains(client.created[0], want) {
+		t.Errorf("comment lacks %q:\n%s", want, client.created[0])
+	}
+}

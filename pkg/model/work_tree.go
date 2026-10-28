@@ -16,6 +16,7 @@ package model
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strconv"
 )
@@ -42,7 +43,51 @@ const (
 	TreeStatusMerged   = "merged"
 	TreeStatusClosed   = "closed"
 	TreeStatusDone     = "done"
+
+	// A changelist task's CL (LinkChangelist), counted as a pull request is:
+	// pending, mailed and lgtm as TreeStatusPROpen (not done), submitted
+	// as TreeStatusMerged and abandoned as TreeStatusClosed (done).
+	// Mailed and lgtm need a provider's observation (changelists.md S4);
+	// until one is recorded a live CL reads pending.
+	TreeStatusCLPending   = "cl-pending"
+	TreeStatusCLMailed    = "cl-mailed"
+	TreeStatusCLLGTM      = "cl-lgtm"
+	TreeStatusCLSubmitted = "cl-submitted"
+	TreeStatusCLAbandoned = "cl-abandoned"
 )
+
+// TreeStatusIsDone reports whether a tree status counts toward "n of m
+// done" -- the same answer WorkTreeStatus gives with it.
+func TreeStatusIsDone(status string) bool {
+	switch status {
+	case TreeStatusMerged, TreeStatusClosed, TreeStatusDone, TreeStatusCLSubmitted, TreeStatusCLAbandoned:
+		return true
+	}
+	return false
+}
+
+// TaskChangelists are the changelist CLs that are task's change, primary
+// first.
+func TaskChangelists(task Task) []string {
+	var out []string
+	for _, l := range task.Links {
+		if l.Kind == LinkChangelist && !slices.Contains(out, l.Target) {
+			out = append(out, l.Target)
+		}
+	}
+	return out
+}
+
+// taskSubmittedCL reports whether a CL of task's has been recorded
+// submitted (LinkChangelistSubmitted).
+func taskSubmittedCL(task Task) bool {
+	for _, l := range task.Links {
+		if l.Kind == LinkChangelistSubmitted {
+			return true
+		}
+	}
+	return false
+}
 
 // WorkTreeNode is one task as a tree draws it.
 type WorkTreeNode struct {
@@ -53,6 +98,9 @@ type WorkTreeNode struct {
 	// PullRequest is the pull request the task's work was opened as, nil
 	// for none (TaskPullRequest).
 	PullRequest *PullRequestRef
+	// Changelists are the changelist CLs that are the task's change, primary
+	// first (TaskChangelists).
+	Changelists []string
 	// Done is whether the task counts toward the tree's "n of m done".
 	Done bool
 	// Root marks the grain task a task origin names: the tree's root,
@@ -102,6 +150,15 @@ func (s *Store) WorkTreeStatus(ctx context.Context, task Task) (string, bool, er
 		return "", false, err
 	}
 	pr := TaskPullRequest(task)
+	if cls := TaskChangelists(task); len(cls) > 0 && pr == nil {
+		switch {
+		case taskSubmittedCL(task):
+			return TreeStatusCLSubmitted, true, nil
+		case state == StateClosed:
+			return TreeStatusCLAbandoned, true, nil
+		}
+		return TreeStatusCLPending, false, nil
+	}
 	switch {
 	case obs != nil && obs.PrMergedAt != nil:
 		return TreeStatusMerged, true, nil
@@ -201,7 +258,7 @@ func (s *Store) WorkTree(ctx context.Context, origin WorkOrigin, include func(Ta
 		if err != nil {
 			return nil, err
 		}
-		n := &WorkTreeNode{Task: t, Status: status, PullRequest: TaskPullRequest(t), Done: done, Root: t.ID == rootID}
+		n := &WorkTreeNode{Task: t, Status: status, PullRequest: TaskPullRequest(t), Changelists: TaskChangelists(t), Done: done, Root: t.ID == rootID}
 		nodes[t.ID] = n
 		if n.Root {
 			continue

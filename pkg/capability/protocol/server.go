@@ -201,6 +201,22 @@ func (s *Server) HasControlTool(name string) bool {
 	return slices.Contains(s.ControlTools, name)
 }
 
+// DataPlaneToken is the bearer token the server's data plane takes: the
+// DataPlaneTokenConfig its configuration gave it, or the one its data
+// plane's own Authorization header carries. A daemon-only control tool
+// that is authenticated by that token (ObserveTool) is called with it.
+func (s *Server) DataPlaneToken() string {
+	if s.configuredToken != "" {
+		return s.configuredToken
+	}
+	if s.dataPlaneErr == nil && s.dataPlane.Headers != nil {
+		if a := s.dataPlane.Headers["Authorization"]; strings.HasPrefix(a, "Bearer ") {
+			return strings.TrimPrefix(a, "Bearer ")
+		}
+	}
+	return ""
+}
+
 // CallTool calls one of the server's control-plane tools (ControlTools)
 // and returns its result's text. A method's mint_ and release_ tools and
 // configure are not called this way: Mint, Release and ApplyConfig are.

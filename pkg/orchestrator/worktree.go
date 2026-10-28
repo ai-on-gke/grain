@@ -66,7 +66,17 @@ func taskStatus(ctx context.Context, store *model.Store, task model.Task) (strin
 	if err != nil {
 		return "", false, err
 	}
-	return statusWithLink(status, model.TaskPullRequest(task)), done, nil
+	return withChangelists(statusWithLink(status, model.TaskPullRequest(task)), model.TaskChangelists(task)), done, nil
+}
+
+// withChangelists is a tree status with a changelist task's CLs after it,
+// as cl/N in plain text (changelists.md §2.2): the go/ link resolves
+// only inside Google, and grain never comments on Critique for progress.
+func withChangelists(status string, cls []string) string {
+	if len(cls) == 0 {
+		return status
+	}
+	return status + " " + strings.Join(cls, ", ")
 }
 
 // statusWithLink is a tree status as GitHub markdown: the pull request a
@@ -282,7 +292,7 @@ func renderWorkTree(ctx context.Context, store *model.Store, origin model.WorkOr
 				check = "x"
 			}
 			fmt.Fprintf(&b, "%s- [%s] task %s: %s (%s)\n", strings.Repeat("  ", depth), check, n.Task.ID,
-				treeTitle(n.Task.Title), statusWithLink(n.Status, n.PullRequest))
+				treeTitle(n.Task.Title), withChangelists(statusWithLink(n.Status, n.PullRequest), n.Changelists))
 			walk(n.Children, depth+1)
 		}
 	}
