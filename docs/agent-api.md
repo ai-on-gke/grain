@@ -489,6 +489,15 @@ To tell another task's running agent something, use
   question the target is parked on, and never queues a dispatch. The
   target's state is the same afterwards.
 
+It is refused on the caller's own task.
+
+Two other routes look like they do this, but don't:
+
+| Route | What it does |
+|---|---|
+| `POST /api/tasks/{id}/messages` | The caller's own chat with the person watching its own task; parks that task. Refused on any other task. |
+| `POST /api/tasks/{id}/comments` | A note on the target's conversation. It lifts any question the target is parked on, as a reply does, and leaves a second, audit note naming the call. |
+
 ## External agents
 
 An external agent -- one not running as a grain task in a grain sandbox
@@ -695,16 +704,6 @@ task" behave as follows:
   credential takes effect on the next request without restarting the
   daemon, and `POST /api/external-agents/tokens/revoke-all` revokes every
   active external credential at once.
-
-
-It is refused on the caller's own task.
-
-Two other routes look like they do this, but don't:
-
-| Route | What it does |
-|---|---|
-| `POST /api/tasks/{id}/messages` | The caller's own chat with the person watching its own task; parks that task. Refused on any other task. |
-| `POST /api/tasks/{id}/comments` | A note on the target's conversation. It lifts any question the target is parked on, as a reply does, and leaves a second, audit note naming the call. |
 
 ## Example: auditing CI runs
 
