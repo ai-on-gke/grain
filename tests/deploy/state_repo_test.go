@@ -184,3 +184,14 @@ func TestASchemaChangeMigratesBeforeItWillEverResetTheStore(t *testing.T) {
 	// And setup.sh's word is the one cmd/grain answers to.
 	contains(t, read(t, "pkg", "cli", "state.go"), `case "prepare-upgrade":`)
 }
+
+// Beside grain hostd, grain_cli runs the extracted binary on the host,
+// which needs git in PATH to initialize state-repo. On a minimal host
+// with no git installed (such as the clean Debian Trixie e2e host),
+// configure_state_repo uses run-image.sh so the deployment image's git
+// initializes state-repo as the service account before the daemon starts.
+func TestConfigureStateRepoUsesTheImageWhenTheHostLacksGit(t *testing.T) {
+	cfgRepo := body(t, setupCode(t), "configure_state_repo() {")
+	contains(t, cfgRepo, "! command -v git >/dev/null 2>&1")
+	contains(t, cfgRepo, `/usr/local/lib/grain/run-image.sh -- state -data-dir "$GRAIN_DATA_DIR" status`)
+}

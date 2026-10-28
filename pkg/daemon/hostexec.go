@@ -403,6 +403,33 @@ func (c Config) cliHostdHost(r CLIRunResolution) (agent.Host, error) {
 // a wedged hostd costs a resolution seconds rather than a dispatch.
 const hostdOffersTimeout = 3 * time.Second
 
+type hostdOffersCacheKey struct{}
+
+type hostdSocketEntry struct {
+	once      sync.Once
+	offers    []hostd.Offer
+	err       error
+	helloOnce sync.Once
+	mismatch  string
+}
+
+type hostdOffersCache struct {
+	mu      sync.Mutex
+	sockets map[string]*hostdSocketEntry
+}
+
+// withHostdOffersCache attaches a per-resolution cache of hostd's Offers
+// and Hello responses to ctx so resolving all frameworks in one pass does
+// not dial the same socket repeatedly.
+func withHostdOffersCache(ctx context.Context) context.Context {
+	if ctx.Value(hostdOffersCacheKey{}) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, hostdOffersCacheKey{}, &hostdOffersCache{
+		sockets: map[string]*hostdSocketEntry{},
+	})
+}
+
 // hostdOffersCLI is the path on the host the hostd at socket runs for its
 // cli entry named entry, with why "" -- or, when hostd does not answer or
 // its allowlist offers no such entry, why not.
@@ -412,6 +439,43 @@ func hostdOffersCLI(ctx context.Context, socket, entry string) (path, why string
 
 // hostdOffers is hostdOffersCLI for an entry of any kind.
 func hostdOffers(ctx context.Context, socket string, kind hostd.Kind, entry string) (path, why string) {
+	if cache, ok := ctx.Value(hostdOffersCacheKey{}).(*hostdOffersCache); ok && cache != nil {
+		cache.mu.Lock()
+		se, ok := cache.sockets[socket]
+		if !ok {
+			se = &hostdSocketEntry{}
+			cache.sockets[socket] = se
+		}
+		cache.mu.Unlock()
+		se.once.Do(func() {
+			octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
+			defer cancel()
+			se.offers, se.err = hostd.Client{Socket: socket}.Offers(octx)
+		})
+		if se.err != nil {
+			return "", se.err.Error()
+		}
+		for _, o := range se.offers {
+			if o.Kind == kind && o.Name == entry {
+				if kind != hostd.KindCLI {
+					return o.Path, ""
+				}
+				se.helloOnce.Do(func() {
+					octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
+					defer cancel()
+					var st HostdStatus
+					if why := hostdHello(octx, socket, &st); st.Mismatch != "" {
+						se.mismatch = why
+					}
+				})
+				if se.mismatch != "" {
+					return o.Path, se.mismatch
+				}
+				return o.Path, ""
+			}
+		}
+		return "", fmt.Sprintf("grain hostd answers, but its allowlist (%s) offers no %s entry %q", hostd.DefaultAllowlistPath, kind, entry)
+	}
 	octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
 	defer cancel()
 	offers, err := hostd.Client{Socket: socket}.Offers(octx)
