@@ -122,6 +122,7 @@ var settingsAppliedLive = map[string]string{
 		"(reconcileAutoUpgrade)",
 	"taskBranchTemplate": "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
 	"deploymentId":       "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
+	"externalAgentApi":   "pkg/ui, which reads grain_config per request (authenticateExternalAgent)",
 }
 
 func TestEverySettingIsEitherAppliedLiveOrRestartOnly(t *testing.T) {

@@ -182,6 +182,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		SandboxMemoryOvercommit: ptr(1.5),
 		SandboxDiskOvercommit:   ptr(4.0),
 		SandboxOvercommit:       &model.OvercommitSettings{Mode: model.OvercommitAuto, CPUMax: 4},
+		ExternalAgentAPI:        ptr(true),
 		SandboxMemoryReserveMB:  ptr(4096),
 		SandboxDiskFloorShare:   ptr(0.2),
 		SandboxDiskFloorMinMB:   ptr(8192),

@@ -147,11 +147,11 @@ export default function ExecutorsPanel({ showError, canManage = true }) {
         sx={{ mb: 2 }}
       >
         <Box>
-          <Typography variant="subtitle2">Remote Executors</Typography>
+          <Typography variant="subtitle2">Model servers</Typography>
           <Typography variant="body2" color="text.secondary">
-            Manage authentication credentials for remote executor worker
-            daemons. Tokens can be revoked at any time to immediately disconnect
-            running workers.
+            Manage authentication credentials for remote model server worker
+            daemons (<code>grain model-server</code>). Tokens can be revoked at
+            any time to immediately disconnect running workers.
           </Typography>
         </Box>
         {allowed && (
@@ -375,11 +375,11 @@ export default function ExecutorsPanel({ showError, canManage = true }) {
 
             <Box sx={{ mt: 1 }}>
               <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-                Connect an Executor
+                Connect a Model Server
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                Run the grain executor daemon on your remote machine using this
-                token:
+                Run the grain model-server daemon on your remote machine using
+                this token:
               </Typography>
               <Box
                 component="pre"
@@ -394,7 +394,7 @@ export default function ExecutorsPanel({ showError, canManage = true }) {
                   m: 0,
                 }}
               >
-                {`grain executor --token ${createdToken?.token || "<token>"} --server <server-addr:port>`}
+                {`grain model-server --token ${createdToken?.token || "<token>"} --server <server-addr:port>`}
               </Box>
             </Box>
           </Stack>
