@@ -21,10 +21,11 @@
 # grain model-server -- dialing out to it.
 #
 # docs/grain-init-platforms.md ("Migrating a local install to GKE") says
-# what each stage does and why; docs/k8s-granule-design.md §8 covers the
-# manifest changes. Every stage is idempotent: re-running after a
-# failure picks up where the last run stopped, and a stage whose work is
-# already done says so and moves on.
+# what each stage does and why; docs/k8s-granule-design.md ("Migrating a
+# local install onto this platform") covers the manifest changes. Every
+# stage is idempotent: re-running after a failure picks up where the
+# last run stopped, and a stage whose work is already done says so and
+# moves on.
 #
 # Unlike scripts/deploy-gke.sh (Cloud SQL, Gateway + IAP, a GCS-staged
 # partial copy), this keeps the store as it is -- SQLite on the
