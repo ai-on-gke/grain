@@ -14,65 +14,16 @@
 
 package model
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/ai-on-gke/grain/pkg/workflows"
+)
 
 // Commitment is how much of a machine one sandbox takes out of it while
 // it exists: the two dimensions of a sandbox shape that are really
 // shared, in the units the shape itself is written in.
-//
-// Disk is here as the size a sandbox's disk is promised (DiskGB), not as
-// what it occupies: a sandbox VM's disk is an overlay that grows as it is
-// written rather than a slice taken out of the host when the VM is
-// created, so the sum is held against the volume times
-// Budget.DiskOvercommit -- a ratio well above one -- rather than against
-// the volume itself, which would refuse work on a host with plenty of
-// room. What actually fills that volume is what the runs write, and
-// bounding *that* is a floor under the free space -- Budget.DiskFloor,
-// which grain/task-173 filed separately and grain/task-196 built.
-type Commitment struct {
-	// CPUs is vCPU, the same number a sandbox shape asks for.
-	CPUs int
-	// MemoryMB is MiB, likewise.
-	MemoryMB int
-	// DiskGB is GiB of sandbox disk, likewise. Zero for a shape whose
-	// disk nobody sized, which commits none.
-	DiskGB int
-}
-
-// IsZero reports whether this commits nothing at all -- what a job that
-// named no shape carries, and what a caller with no shape to charge
-// passes.
-func (c Commitment) IsZero() bool { return c.CPUs == 0 && c.MemoryMB == 0 && c.DiskGB == 0 }
-
-// Plus is the two commitments held at once.
-func (c Commitment) Plus(o Commitment) Commitment {
-	return Commitment{CPUs: c.CPUs + o.CPUs, MemoryMB: c.MemoryMB + o.MemoryMB, DiskGB: c.DiskGB + o.DiskGB}
-}
-
-// Minus is c with o given back, floored at nothing: a ledger that has
-// released more than it took is a bug, and reporting negative capacity
-// to the admission arithmetic would turn it into an overcommitment.
-func (c Commitment) Minus(o Commitment) Commitment {
-	return Commitment{CPUs: max(c.CPUs-o.CPUs, 0), MemoryMB: max(c.MemoryMB-o.MemoryMB, 0), DiskGB: max(c.DiskGB-o.DiskGB, 0)}
-}
-
-// Times is n sandboxes of this shape.
-func (c Commitment) Times(n int) Commitment {
-	if n <= 0 {
-		return Commitment{}
-	}
-	return Commitment{CPUs: c.CPUs * n, MemoryMB: c.MemoryMB * n, DiskGB: c.DiskGB * n}
-}
-
-// String is the shape as an operator sizing a host reads it. Disk is
-// named only when the shape has some, so a shape nobody sized a disk for
-// reads as it always has.
-func (c Commitment) String() string {
-	if c.DiskGB > 0 {
-		return fmt.Sprintf("%d vCPU / %s GiB / %d GiB disk", c.CPUs, gib(c.MemoryMB), c.DiskGB)
-	}
-	return fmt.Sprintf("%d vCPU / %s GiB", c.CPUs, gib(c.MemoryMB))
-}
+type Commitment = workflows.Commitment
 
 // Budget is how much machine this deployment is willing to commit to
 // sandboxes at once -- the total that was missing when every limit grain

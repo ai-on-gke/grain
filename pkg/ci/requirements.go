@@ -33,19 +33,8 @@ var (
 	unmetRequirementsError = workflows.UnmetRequirementsError
 )
 
-// JobCapabilities is the capabilities a sandbox for job is handed out of
-// provided (the run's Request.Capabilities): jobCapabilities under this
-// engine's ExplicitOnlyCapability, the same narrowing runJob applies to
-// the SandboxRequest it acquires a job's sandbox with. Whatever re-wires
-// a job's sandbox outside runJob -- a restarted daemon readopting it --
-// grants from this rather than from the run's whole set, so a job holds
-// after a restart exactly what it was given before one.
-func (e *Engine) JobCapabilities(job Job, provided []string) []string {
-	return jobCapabilities(job, provided, e.ExplicitOnlyCapability)
-}
-
 // JobSecrets is jobSecrets for a caller outside this package, for the
-// same reason JobCapabilities is.
+// same reason Engine.JobCapabilities is.
 func JobSecrets(job Job, provided []string) []string { return jobSecrets(job, provided) }
 
 // declaredOnly reports whether id is granted by a job declaring it,

@@ -88,6 +88,7 @@ var (
 	PlanRun                   = workflows.PlanRun
 	PlanRunIn                 = workflows.PlanRunIn
 	RunEnv                    = workflows.RunEnv
+	SandboxCommitment         = workflows.SandboxCommitment
 	ValidateReleaseSecretName = workflows.ValidateReleaseSecretName
 	WorkflowEvent             = workflows.WorkflowEvent
 	RemovedGateJobs           = workflows.RemovedGateJobs
@@ -120,17 +121,3 @@ func runEnv(req Request, workflow, jobID string) map[string]string {
 }
 
 func guestCacheKey(repo string, files []TreeFile) Key { return workflows.GuestCacheKey(repo, files) }
-
-// SandboxCommitment is what a sandbox of this shape takes out of the
-// host while it exists -- what the deployment's gate holds against its
-// resource budget (model.Budget, grain/task-173). It was
-// SandboxSpec.Commitment before SandboxSpec moved to pkg/workflows,
-// which may not import pkg/model.
-//
-// Disk is carried as the size promised, which the budget holds against
-// the volume times its disk overcommit ratio rather than the volume
-// itself: a shape's disk is an overlay that grows as it is written.
-// model.Commitment says the same in more detail.
-func SandboxCommitment(s SandboxSpec) model.Commitment {
-	return model.Commitment{CPUs: s.CPUs, MemoryMB: s.MemoryMB, DiskGB: s.DiskGB}
-}

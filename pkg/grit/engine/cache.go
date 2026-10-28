@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ci
+package engine
 
 import (
 	"context"
+
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // noCache is what an Engine with no Cache uses, so the engine has one
 // code path rather than a nil check at each of the two call sites.
 type noCache struct{}
 
-func (noCache) Lookup(context.Context, Key) (JobRun, bool, error) { return JobRun{}, false, nil }
-func (noCache) Save(context.Context, Key, JobRun) error           { return nil }
+func (noCache) Lookup(context.Context, workflows.Key) (workflows.JobRun, bool, error) {
+	return workflows.JobRun{}, false, nil
+}
+func (noCache) Save(context.Context, workflows.Key, workflows.JobRun) error { return nil }

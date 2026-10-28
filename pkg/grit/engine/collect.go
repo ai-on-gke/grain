@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ci
+package engine
 
 import (
 	"context"
@@ -20,6 +20,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	gritsteps "github.com/ai-on-gke/grain/pkg/grit/steps"
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // Collecting a job's artifacts: the script the sandbox is asked to run,
@@ -78,12 +81,12 @@ const (
 // dangerous: the paths are checked at parse (validArtifactPath refuses
 // quotes, globs, `$`, `..` and absolute paths), and they reach tar
 // through a file of names rather than through the command line.
-func artifactScript(spec ArtifactSpec, maxBytes int64) string {
+func artifactScript(spec workflows.ArtifactSpec, maxBytes int64) string {
 	var b strings.Builder
 	b.WriteString("set +e\n")
 	b.WriteString("grain_ci_tmp=$(mktemp -d 2>/dev/null)\n")
 	b.WriteString("if [ -z \"$grain_ci_tmp\" ]; then grain_ci_tmp=/tmp/grain-ci-artifact.$$; mkdir -p \"$grain_ci_tmp\"; fi\n")
-	b.WriteString("grain_ci_out=$grain_ci_tmp/artifact" + ArtifactExt + "\n")
+	b.WriteString("grain_ci_out=$grain_ci_tmp/artifact" + workflows.ArtifactExt + "\n")
 	b.WriteString("grain_ci_list=$grain_ci_tmp/paths\n")
 	b.WriteString(": > \"$grain_ci_list\"\n")
 	for _, path := range spec.Paths {
@@ -133,8 +136,8 @@ func artifactScript(spec ArtifactSpec, maxBytes int64) string {
 // trace somebody wants most is very often the one that ran past its
 // timeout, and a collection under an expired context would fail for
 // every one of them.
-func (e *Engine) collectArtifacts(ctx context.Context, runID string, pj PlannedJob, sandbox Sandbox, result *JobRun) {
-	if e.Artifacts == nil || len(pj.Job.Artifacts) == 0 || result.Conclusion == ConclusionSuccess {
+func (e *Engine) collectArtifacts(ctx context.Context, runID string, pj workflows.PlannedJob, sandbox gritsteps.Sandbox, result *workflows.JobRun) {
+	if e.Artifacts == nil || len(pj.Job.Artifacts) == 0 || result.Conclusion == workflows.ConclusionSuccess {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), artifactCollectionTimeout)
@@ -145,7 +148,7 @@ func (e *Engine) collectArtifacts(ctx context.Context, runID string, pj PlannedJ
 		switch {
 		case record.Stored:
 			e.log("ci: run %s: job %s: kept %s (%s) from %s",
-				runID, pj.ID, spec.Name, humanBytes(record.Bytes), strings.Join(spec.Paths, ", "))
+				runID, pj.ID, spec.Name, workflows.HumanBytes(record.Bytes), strings.Join(spec.Paths, ", "))
 		default:
 			e.log("ci: run %s: job %s: %s was not kept: %s", runID, pj.ID, spec.Name, record.Note)
 		}
@@ -156,11 +159,11 @@ func (e *Engine) collectArtifacts(ctx context.Context, runID string, pj PlannedJ
 // write it down. It always returns a record -- an artifact that could
 // not be collected is an artifact with a note saying why, which is what
 // a reader who goes looking for it has to be told.
-func (e *Engine) collectArtifact(ctx context.Context, runID string, pj PlannedJob, spec ArtifactSpec, sandbox Sandbox) Artifact {
-	ref := ArtifactRef{Run: runID, Job: pj.Job.ID, Name: spec.Name}
-	record := Artifact{Run: ref.Run, Job: ref.Job, Name: ref.Name}
+func (e *Engine) collectArtifact(ctx context.Context, runID string, pj workflows.PlannedJob, spec workflows.ArtifactSpec, sandbox gritsteps.Sandbox) workflows.Artifact {
+	ref := workflows.ArtifactRef{Run: runID, Job: pj.Job.ID, Name: spec.Name}
+	record := workflows.Artifact{Run: ref.Run, Job: ref.Job, Name: ref.Name}
 
-	out, err := sandbox.Exec(ctx, Command{
+	out, err := sandbox.Exec(ctx, gritsteps.Command{
 		Script:  artifactScript(spec, e.Artifacts.MaxArtifactBytes()),
 		Timeout: artifactCollectionTimeout,
 	})
@@ -168,7 +171,7 @@ func (e *Engine) collectArtifact(ctx context.Context, runID string, pj PlannedJo
 		// The transport, not the script: the machine is gone, which is
 		// commonly *why* the job failed. Nothing to do but say so where
 		// the reader looking for the file will see it.
-		record.Note = ArtifactNote("collecting it from the sandbox failed: %v", err)
+		record.Note = workflows.ArtifactNote("collecting it from the sandbox failed: %v", err)
 		return record
 	}
 
@@ -179,7 +182,7 @@ func (e *Engine) collectArtifact(ctx context.Context, runID string, pj PlannedJo
 	}
 	saved, err := e.Artifacts.Save(ctx, ref, body)
 	if err != nil {
-		record.Note = ArtifactNote("keeping it failed: %v", err)
+		record.Note = workflows.ArtifactNote("keeping it failed: %v", err)
 		return record
 	}
 	return saved
@@ -192,39 +195,39 @@ func (e *Engine) collectArtifact(ctx context.Context, runID string, pj PlannedJo
 // output of a command in a sandbox is not a format anybody controls
 // end to end -- a transport may frame it, a shell may prepend to it --
 // so the rule here is to find the framing and trust nothing outside it.
-func decodeArtifact(output string, spec ArtifactSpec, maxBytes int64) ([]byte, string) {
+func decodeArtifact(output string, spec workflows.ArtifactSpec, maxBytes int64) ([]byte, string) {
 	status, ok := artifactStatus(output)
 	if !ok {
-		return nil, ArtifactNote("the sandbox did not answer the collection script (its output was %d bytes)", len(output))
+		return nil, workflows.ArtifactNote("the sandbox did not answer the collection script (its output was %d bytes)", len(output))
 	}
 	verb, rest, _ := strings.Cut(status, " ")
 	switch verb {
 	case "none":
-		return nil, ArtifactNote("nothing matched %s, so there was nothing to keep", strings.Join(spec.Paths, ", "))
+		return nil, workflows.ArtifactNote("nothing matched %s, so there was nothing to keep", strings.Join(spec.Paths, ", "))
 	case "big":
-		return nil, ArtifactNote("%s of %s is over the %s a single artifact may be, so it was not copied out of the sandbox",
-			humanBytes(parseArtifactSize(rest)), strings.Join(spec.Paths, ", "), humanBytes(maxBytes))
+		return nil, workflows.ArtifactNote("%s of %s is over the %s a single artifact may be, so it was not copied out of the sandbox",
+			workflows.HumanBytes(parseArtifactSize(rest)), strings.Join(spec.Paths, ", "), workflows.HumanBytes(maxBytes))
 	case "fail":
-		return nil, ArtifactNote("archiving %s in the sandbox failed: %s", strings.Join(spec.Paths, ", "), rest)
+		return nil, workflows.ArtifactNote("archiving %s in the sandbox failed: %s", strings.Join(spec.Paths, ", "), rest)
 	case "ok":
 	default:
-		return nil, ArtifactNote("the collection script answered %q, which this build does not understand", status)
+		return nil, workflows.ArtifactNote("the collection script answered %q, which this build does not understand", status)
 	}
 
 	_, after, found := strings.Cut(output, artifactBeginMarker+"\n")
 	if !found {
-		return nil, ArtifactNote("the sandbox reported an archive of %s but sent none", rest)
+		return nil, workflows.ArtifactNote("the sandbox reported an archive of %s but sent none", rest)
 	}
 	encoded, _, found := strings.Cut(after, artifactEndMarker)
 	if !found {
-		return nil, ArtifactNote("the sandbox stopped sending the archive part way through (%d bytes of it arrived)", len(after))
+		return nil, workflows.ArtifactNote("the sandbox stopped sending the archive part way through (%d bytes of it arrived)", len(after))
 	}
 	body, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(encoded), ""))
 	if err != nil {
-		return nil, ArtifactNote("what the sandbox sent is not the archive it said it was: %v", err)
+		return nil, workflows.ArtifactNote("what the sandbox sent is not the archive it said it was: %v", err)
 	}
 	if want := parseArtifactSize(rest); want > 0 && int64(len(body)) != want {
-		return nil, ArtifactNote("the archive arrived as %d bytes where the sandbox made %d of it", len(body), want)
+		return nil, workflows.ArtifactNote("the archive arrived as %d bytes where the sandbox made %d of it", len(body), want)
 	}
 	return body, ""
 }
@@ -253,13 +256,13 @@ func parseArtifactSize(s string) int64 {
 }
 
 const (
-	goTestLogStatusMarker      = "grain-ci-gotest:"
-	goTestLogBeginMarker       = "grain-ci-gotest-begin"
-	goTestLogEndMarker         = "grain-ci-gotest-end"
+	GoTestLogStatusMarker      = "grain-ci-gotest:"
+	GoTestLogBeginMarker       = "grain-ci-gotest-begin"
+	GoTestLogEndMarker         = "grain-ci-gotest-end"
 	maxCollectedGoTestLogBytes = 4 << 20 // 4 MiB
 )
 
-func jobUsesGoTestLog(job Job, steps []StepRun) bool {
+func jobUsesGoTestLog(job workflows.Job, steps []workflows.StepRun) bool {
 	for _, step := range job.Steps {
 		if strings.Contains(step.Run, "run-go-tests.sh") ||
 			strings.Contains(step.Run, "gotest.log") ||
@@ -284,26 +287,26 @@ func goTestLogScript(maxBytes int64) string {
 	b.WriteString("  grain_gotest_file=\"gotest.log\"\n")
 	b.WriteString("fi\n")
 	b.WriteString("if [ ! -s \"$grain_gotest_file\" ]; then\n")
-	b.WriteString("  echo '" + goTestLogStatusMarker + "none'\n")
+	b.WriteString("  echo '" + GoTestLogStatusMarker + "none'\n")
 	b.WriteString("  exit 0\n")
 	b.WriteString("fi\n")
 	b.WriteString("grain_gotest_size=$(wc -c < \"$grain_gotest_file\" 2>/dev/null | tr -d ' \\t\\n\\r')\n")
-	b.WriteString("echo \"" + goTestLogStatusMarker + "ok $grain_gotest_size\"\n")
+	b.WriteString("echo \"" + GoTestLogStatusMarker + "ok $grain_gotest_size\"\n")
 	b.WriteString("exec 2>/dev/null\n")
-	b.WriteString("echo '" + goTestLogBeginMarker + "'\n")
+	b.WriteString("echo '" + GoTestLogBeginMarker + "'\n")
 	b.WriteString("tail -c " + strconv.FormatInt(maxBytes, 10) + " \"$grain_gotest_file\" | base64\n")
-	b.WriteString("echo '" + goTestLogEndMarker + "'\n")
+	b.WriteString("echo '" + GoTestLogEndMarker + "'\n")
 	b.WriteString("exit 0\n")
 	return b.String()
 }
 
-func (e *Engine) collectGoTestLog(ctx context.Context, runID string, pj PlannedJob, sandbox Sandbox, result *JobRun) {
+func (e *Engine) collectGoTestLog(ctx context.Context, runID string, pj workflows.PlannedJob, sandbox gritsteps.Sandbox, result *workflows.JobRun) {
 	if sandbox == nil || result.GoTestLog != "" || !jobUsesGoTestLog(pj.Job, result.Steps) {
 		return
 	}
 	collectCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), artifactCollectionTimeout)
 	defer cancel()
-	out, err := sandbox.Exec(collectCtx, Command{
+	out, err := sandbox.Exec(collectCtx, gritsteps.Command{
 		Script:  goTestLogScript(maxCollectedGoTestLogBytes),
 		Timeout: artifactCollectionTimeout,
 	})
@@ -320,18 +323,18 @@ func decodeGoTestLog(output string) string {
 	status, found := "", false
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
-		if after, ok := strings.CutPrefix(line, goTestLogStatusMarker); ok {
+		if after, ok := strings.CutPrefix(line, GoTestLogStatusMarker); ok {
 			status, found = after, true
 		}
 	}
 	if !found || !strings.HasPrefix(status, "ok") {
 		return ""
 	}
-	_, after, ok := strings.Cut(output, goTestLogBeginMarker+"\n")
+	_, after, ok := strings.Cut(output, GoTestLogBeginMarker+"\n")
 	if !ok {
 		return ""
 	}
-	encoded, _, ok := strings.Cut(after, goTestLogEndMarker)
+	encoded, _, ok := strings.Cut(after, GoTestLogEndMarker)
 	if !ok {
 		return ""
 	}
