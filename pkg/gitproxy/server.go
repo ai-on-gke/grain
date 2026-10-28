@@ -161,8 +161,9 @@ type BuildConfig struct {
 	CLI CLIBackend
 	// CLIActions and WaitCredit are GitProxy's own: what the acting /cli/
 	// routes act through, and what credits their waits.
-	CLIActions CLIActions
-	WaitCredit CLIWaitCreditor
+	CLIActions      CLIActions
+	WaitCredit      CLIWaitCreditor
+	ShutdownStarted <-chan struct{}
 }
 
 // BuildProxy wires the real files under DataDir plus the live model store
@@ -248,5 +249,6 @@ func BuildProxy(cfg BuildConfig) (*GitProxy, error) {
 		Activity:            activity,
 		CLIActions:          cfg.CLIActions,
 		WaitCredit:          cfg.WaitCredit,
+		ShutdownStarted:     cfg.ShutdownStarted,
 	}, nil
 }

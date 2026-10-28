@@ -140,6 +140,11 @@ type GitProxy struct {
 	// /cli/ci/run-job block back to the run's wall-clock deadline.
 	WaitCredit CLIWaitCreditor
 	cliWaits   cliWaitLedger
+	// ShutdownStarted, when set, is closed as the daemon begins to stop:
+	// a blocking /cli/ci/wait or /cli/ci/run-job ends its slice at once
+	// and hands back ResumeRunID rather than holding the proxy's
+	// graceful shutdown until the slice expires.
+	ShutdownStarted <-chan struct{}
 }
 
 // pushSpoolThreshold returns the threshold above which push bodies spool to disk.

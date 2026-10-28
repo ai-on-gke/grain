@@ -351,3 +351,51 @@ func TestCLIActionsUnwiredAnswer501(t *testing.T) {
 		t.Errorf("unwired pr open: %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestCLIWaitEndsRunningWhenDaemonShutdownStarts(t *testing.T) {
+	defer gitproxy.SetCLIWaitIntervals(5*time.Millisecond, 10*time.Millisecond)()
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-ci": "tok-ci"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown := make(chan struct{})
+	actions := &fakeCLIActions{runs: map[string]ci.Run{}, finishAt: -1}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: ci.NewRunStore(10)},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-ci": {TaskID: "7", RunID: "run-a", TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
+				MayReadCI: true, AllowedRepos: map[string]bool{"bwsalmon/grain": true}},
+		}},
+		CLIActions:      actions,
+		ShutdownStarted: shutdown,
+	}
+	h := gitproxy.NewHandler(proxy)
+
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		close(shutdown)
+	}()
+
+	start := time.Now()
+	rec := send(h, http.MethodPost, "tok-ci", "/cli/ci/wait", `{"timeout_seconds":60}`)
+	elapsed := time.Since(start)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("wait: %d %s", rec.Code, rec.Body)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("wait took %s after ShutdownStarted closed, want immediate return", elapsed)
+	}
+	var resp gitproxy.CLIWaitResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != "running" || resp.ResumeRunID != "run-new" {
+		t.Errorf("answer = %+v, want status=running with resume_run_id=run-new", resp)
+	}
+}
