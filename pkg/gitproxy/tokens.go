@@ -76,12 +76,19 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-// tokenRecord is the on-disk and in-memory representation of a token.
-type tokenRecord struct {
+// Grant is a per-attempt sandbox credential issued for one sandbox run.
+// When TaskID and Attempt are bound at token issuance, the proxy refuses the
+// token if the sandbox is later running a different task or a newer attempt.
+type Grant struct {
 	Sandbox string    `json:"sandbox,omitempty"`
+	TaskID  string    `json:"taskId,omitempty"`
+	Attempt int       `json:"attempt,omitempty"`
 	Token   string    `json:"token"`
 	Expires time.Time `json:"expires,omitempty"`
 }
+
+// tokenRecord is the on-disk and in-memory representation of a token.
+type tokenRecord = Grant
 
 // tokenKeyPath is the dedicated key sandbox-tokens.json is sealed with:
 // sandbox-tokens.key, beside the file it seals.
@@ -396,44 +403,70 @@ func (t *SandboxTokens) now() time.Time {
 // changed since it was read) re-reads the file before answering whenever it
 // has changed since it was last read (see the type's own doc comment).
 func (t *SandboxTokens) Authenticate(token string) (string, bool) {
+	g, ok := t.AuthenticateGrant(token)
+	if !ok {
+		return "", false
+	}
+	return g.Sandbox, true
+}
+
+// AuthenticateGrant returns the full Grant owning this token (including any
+// bound TaskID and Attempt), and false if the token is unknown or expired.
+func (t *SandboxTokens) AuthenticateGrant(token string) (Grant, bool) {
 	if info, statted := statTokenFile(t.path); statted {
 		t.mu.RLock()
-		sandbox, ok := t.lookupLocked(token)
+		grant, ok := t.lookupGrantLocked(token)
 		unchanged := t.version.unchanged(info)
 		t.mu.RUnlock()
 		if unchanged {
-			return sandbox, ok
+			return grant, ok
 		}
 	}
-	return t.reloadAndLookup(token)
+	return t.reloadAndLookupGrant(token)
 }
 
 // lookupLocked answers for token from the cached map. The caller holds
 // t.mu.
 func (t *SandboxTokens) lookupLocked(token string) (string, bool) {
-	rec, ok := t.byToken[token]
+	g, ok := t.lookupGrantLocked(token)
 	if !ok {
 		return "", false
 	}
-	if !rec.Expires.IsZero() && t.now().After(rec.Expires) {
-		return "", false
+	return g.Sandbox, true
+}
+
+func (t *SandboxTokens) lookupGrantLocked(token string) (Grant, bool) {
+	rec, ok := t.byToken[token]
+	if !ok {
+		return Grant{}, false
 	}
-	return rec.Sandbox, true
+	if !rec.Expires.IsZero() && t.now().After(rec.Expires) {
+		return Grant{}, false
+	}
+	return rec, true
 }
 
 // reloadAndLookup re-reads the file and answers for token, both under one
 // hold of the write lock. It stats the file again once it holds the lock,
 // so callers queued behind one reload do not each repeat it.
 func (t *SandboxTokens) reloadAndLookup(token string) (string, bool) {
+	g, ok := t.reloadAndLookupGrant(token)
+	if !ok {
+		return "", false
+	}
+	return g.Sandbox, true
+}
+
+func (t *SandboxTokens) reloadAndLookupGrant(token string) (Grant, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if info, statted := statTokenFile(t.path); statted && t.version.unchanged(info) {
-		return t.lookupLocked(token)
+		return t.lookupGrantLocked(token)
 	}
 	if err := t.reloadLocked(); err != nil {
-		return "", false
+		return Grant{}, false
 	}
-	return t.lookupLocked(token)
+	return t.lookupGrantLocked(token)
 }
 
 // reload takes the write lock and re-reads the file -- LoadSandboxTokens'
@@ -505,29 +538,67 @@ func (s *SandboxTokenStore) ttl() time.Duration {
 // one recorded to disk. Idempotent per sandbox name, and safe to call
 // from several goroutines at once -- see the type's own doc comment.
 func (s *SandboxTokenStore) EnsureToken(sandbox string) (string, error) {
+	return s.EnsureGrant(sandbox, "", 0)
+}
+
+// EnsureGrant returns the sandbox's token bound to (taskID, attempt), reusing an
+// unexpired token only when its bound TaskID and Attempt match (or were unbound),
+// and minting a fresh token when the sandbox is starting a different task or attempt.
+func (s *SandboxTokenStore) EnsureGrant(sandbox, taskID string, attempt int) (string, error) {
+	g, err := s.Issue(sandbox, taskID, attempt)
+	if err != nil {
+		return "", err
+	}
+	return g.Token, nil
+}
+
+// Issue mints or reuses a per-attempt sandbox token Grant bound to (sandbox, taskID, attempt).
+func (s *SandboxTokenStore) Issue(sandbox, taskID string, attempt int) (Grant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tokens, err := readTokenFile(s.path, s.Key, s.KeyFile)
 	if err != nil {
-		return "", err
+		return Grant{}, err
 	}
 	now := s.now()
 	ttl := s.ttl()
 	if rec, ok := tokens[sandbox]; ok {
 		if rec.Expires.IsZero() || !now.After(rec.Expires) {
-			return rec.Token, nil
+			sameTask := taskID == "" || rec.TaskID == "" || rec.TaskID == taskID
+			sameAttempt := attempt == 0 || rec.Attempt == 0 || rec.Attempt == attempt
+			if sameTask && sameAttempt {
+				updated := false
+				if rec.TaskID == "" && taskID != "" {
+					rec.TaskID = taskID
+					updated = true
+				}
+				if rec.Attempt == 0 && attempt != 0 {
+					rec.Attempt = attempt
+					updated = true
+				}
+				if updated {
+					tokens[sandbox] = rec
+					if err := s.save(tokens); err != nil {
+						return Grant{}, err
+					}
+				}
+				return rec, nil
+			}
 		}
 	}
 	token, err := randomHex(32)
 	if err != nil {
-		return "", err
+		return Grant{}, err
 	}
-	tokens[sandbox] = tokenRecord{
+	grant := Grant{
 		Sandbox: sandbox,
+		TaskID:  taskID,
+		Attempt: attempt,
 		Token:   token,
 		Expires: now.Add(ttl),
 	}
-	return token, s.save(tokens)
+	tokens[sandbox] = grant
+	return grant, s.save(tokens)
 }
 
 // ErrNoSandboxToken is what RefreshToken reports for a sandbox holding

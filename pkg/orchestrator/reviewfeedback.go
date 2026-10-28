@@ -84,7 +84,7 @@ func withProxyReviewCalls(store *model.Store, runID string, result *agent.Result
 	}
 	var extra []agent.ToolCall
 	for _, c := range store.TakeProxyToolCalls(runID) {
-		if c.Tool == "add_review_comment" {
+		if c.Tool == "add_review_comment" || c.Tool == "write_handover" {
 			extra = append(extra, agent.ToolCall{Name: c.Tool, Arguments: c.Arguments})
 		}
 	}

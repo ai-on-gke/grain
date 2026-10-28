@@ -2200,7 +2200,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, validationErrorf("creator is required")
 		}
 	}
-	orderKey, err := c.Store.OrderKeyForNewTask(ctx, atFront || req.Interactive)
+	orderKey, err := c.Store.OrderKeyForNewTask(ctx, atFront || (req.Interactive && proposedBy == nil && c.actor(ctx).Kind != model.PrincipalAgent))
 	if err != nil {
 		return Task{}, err
 	}
@@ -2436,7 +2436,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// templateId (fromTemplate), and that must not turn propose_task into
 	// a way to approve its own work.
 	switch {
-	case req.Approved || (req.Interactive && proposedBy == nil):
+	case req.Approved || (req.Interactive && proposedBy == nil && c.actor(ctx).Kind != model.PrincipalAgent):
 		task.Approval = &model.Attribution{Actor: c.actor(ctx)}
 		task.ApprovedAt = &now
 	case sessionQueued:

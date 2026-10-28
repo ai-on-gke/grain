@@ -820,94 +820,23 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 	}
 	return Tool{
 		Name: "propose_task",
-		Description: "Propose a new task for the task queue -- for example, " +
-			"splitting follow-up work out of the task you were given, or " +
-			"flagging work you noticed is needed but is out of scope for " +
-			"this one. " + filing + ", linked back to this one, and normally " +
-			"filed unapproved: it sits in the queue as proposed, and a human has " +
-			"to approve it in grain's UI before it is ever dispatched -- proposing " +
-			"a task usually does not start it. The exception is a proposal your own " +
-			"task's permission already covers: if your task is an auto-merge job, " +
-			"one that lands on the same branch with no capability your task lacks " +
-			"is filed approved and is dispatched in its turn with nobody looking at " +
-			"it, and the same is true of every proposal from a standing chat session " +
-			"whose deployment has said that session may queue its own work. That " +
-			"permission is a ceiling, not an order: set hold_for_approval on any " +
-			"proposal a human should look at first and it is filed unapproved " +
-			"regardless. Either way, say in depends_on what it has to wait for -- and " +
-			"read what the call returns rather than assuming, since it says which of " +
-			"the two happened to the task you just filed, and why. Call this once " +
-			"per task you want to " +
-			"propose, and set `repo` on any whose work belongs in a " +
-			"repository other than the one you are running in -- a " +
-			"proposal is filed against your own repository by default, " +
-			"which is the wrong place for work that cannot land there. " +
-			"Give a short `id` if " +
-			"a later propose_task call in this same run should list this " +
-			"one in its own depends_on -- for example, to propose a small " +
-			"chain of tasks where the second can't start until the first " +
-			"is done. Say what the new task has to wait on in depends_on: " +
-			"the task you are working on now, when the follow-up only " +
-			"makes sense once this one's change has landed, and any " +
-			"earlier proposal in this same run it builds on. A proposal " +
-			"with no depends_on can be approved and dispatched alongside " +
-			"yours, so leaving one off is what puts two agents in the same " +
-			"code at once. A proposal that is a piece of the task you were " +
-			"given lands the way the whole of it would have, auto-merge " +
-			"included, so leave auto_merge alone for one of those; set it " +
-			"to false on a proposal that is separate work and deserves a " +
-			"review of its own. If this proposal is a rewrite of a task " +
-			"that is already filed -- the same work, restated -- name that " +
-			"task in `supersedes` rather than leaving it in the queue for " +
-			"somebody to close by hand. If this deployment records fields of its " +
-			"own on a task -- your prompt lists the ones your task carries " +
-			"-- custom_fields is how a proposal says the same about " +
-			"itself, so work split out of the same job for the same " +
-			"customer is still filed as being for that customer.",
+		Description: "Propose a follow-up or out-of-scope task for the queue. " + filing +
+			", linked to this task: queued when your task's permission covers it, or held " +
+			"unapproved for human review (pass hold_for_approval: true to hold regardless). " +
+			"Set depends_on for tasks it must wait on, repo if the work belongs in another " +
+			"repository, or supersedes to replace an undispatched task. Run 'grain help propose' " +
+			"for full reference.",
 		InputSchema: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
 			"properties": withProposeChangeTargetProperties(map[string]any{
-				"id": map[string]any{
-					"type": "string",
-					"description": "A short local name for this proposal, used only " +
-						"so a later propose_task call in this same run can " +
-						"name it in its own depends_on -- not shown to the " +
-						"human and not the id the task is eventually filed " +
-						"under.",
-				},
-				"title": map[string]any{"type": "string"},
-				"body":  map[string]any{"type": "string"},
-				"branch": map[string]any{
-					"type": "string",
-					"description": "The base branch this proposal's work should target. " +
-						"Leave it out to target the repository's default branch (or the branch " +
-						"declared for this repository in your prompt). Name a branch here to " +
-						"target that specific branch.",
-				},
+				"id":     map[string]any{"type": "string"},
+				"title":  map[string]any{"type": "string"},
+				"body":   map[string]any{"type": "string"},
+				"branch": map[string]any{"type": "string"},
 				"repo": map[string]any{
-					"type": "string",
-					"description": "owner/name of the repository this proposal's work " +
-						"belongs in. Leave it out and the proposal is filed " +
-						"against the repository you are working in, which is " +
-						"the default and usually what you want -- but say it " +
-						"whenever the work belongs somewhere else, because a " +
-						"proposal filed against a repository the change " +
-						"cannot land in is one a human has to retarget by " +
-						"hand before they can approve it. A run reading a " +
-						"deployment's own state repository and proposing a " +
-						"change to the code that deployment runs names that " +
-						"code's repository here. Two kinds are accepted: a " +
-						"repository your own task declares (your prompt names " +
-						"them, with the branch work goes on in each), which " +
-						"is how work reaches a repository your sandbox cannot " +
-						"push to, and which is filed on that branch; and any " +
-						"other repository this deployment works in, filed on " +
-						"that repository's default branch. A repository this " +
-						"deployment has never worked in is filed against " +
-						"yours anyway, with a note saying what you asked for, " +
-						"so naming one costs the proposal nothing but a " +
-						"human's correction." + proposalRepoSentence(proposeRepos),
+					"type":        "string",
+					"description": "owner/name of target repository (defaults to yours)." + proposalRepoSentence(proposeRepos),
 				},
 				"custom_fields": map[string]any{
 					"type": "object",
@@ -920,90 +849,20 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 							},
 						},
 					},
-					"description": "Values for the fields this deployment records on " +
-						"its own tasks, keyed by field name -- the same names " +
-						"and the same spelling your own task's fields are " +
-						"listed under in your prompt. Use it to carry a fact " +
-						"about the work forward: a follow-up for the same " +
-						"customer, at the same priority, for the same team as " +
-						"the task you are working on. Leave it out when you " +
-						"have nothing to say; there are no required fields, " +
-						"and a value nobody asked for is worse than a blank. " +
-						"A name this deployment does not declare, or a value " +
-						"its declaration does not allow, is dropped and " +
-						"noted in the proposal's body rather than guessed at. " +
-						"One value is a string; a field your prompt lists as " +
-						"holding several takes an array of them.",
 				},
 				"depends_on": map[string]any{
 					"type":  "array",
 					"items": map[string]any{"type": "string"},
-					"description": "Existing task ids (the task you are working on " +
-						"now included), and/or ids given to earlier " +
-						"propose_task calls in this same run, that this task " +
-						"must wait on before it can start. Each one is filed " +
-						"as a real dependency: the proposal stays blocked " +
-						"until everything it names is done, even after a " +
-						"human approves it. Which is why an entry naming a " +
-						"task that never completes -- a standing chat " +
-						"session, whose conversation is the whole of it -- is " +
-						"dropped instead of filed, with a note in the " +
-						"proposal's body saying so: a dependency nothing can " +
-						"ever satisfy would keep this task out of the queue " +
-						"for good.",
 				},
 				"supersedes": map[string]any{
 					"type": "string",
-					"description": "The id of an existing task this proposal " +
-						"replaces -- a revision of work already filed, rather " +
-						"than new work. Filing it closes that task, records " +
-						"the reason as superseded by this one, and links the " +
-						"two, so a chain of revisions is legible from either " +
-						"end instead of living in a sentence at the top of " +
-						"each body. Use it whenever you re-file a task to " +
-						"change what it says: the one you replaced is " +
-						"otherwise left queued and dispatchable, and an agent " +
-						"can be put on a design you have already abandoned. " +
-						"Only a task that has never been dispatched can be " +
-						"superseded, and only one filed in the same " +
-						"repository as this proposal: one with an attempt " +
-						"behind it, a live run or a pull request open has work " +
-						"in it that closing would throw away, and that stays a " +
-						"human's decision. A task grain will not close this way " +
-						"is left open, with a note on this proposal saying why, " +
-						"and the proposal is filed regardless -- read what the " +
-						"call returns rather than assuming the old task is gone. " +
-						"Open tasks waiting on the superseded task (depends_on) " +
-						"are moved to wait on this proposal instead, except this " +
-						"proposal itself and any move that would make a cycle; " +
-						"the call's result says which moved.",
+					"description": "ID of a task in the same repository that has never been dispatched " +
+						"to replace; a dispatched task is left open.",
 				},
-				"auto_merge": map[string]any{
-					"type": "boolean",
-					"description": "Whether this proposal's own pull request should " +
-						"merge without human review. Defaults to whatever " +
-						"the task you are working on now does, which is what " +
-						"you want for a piece of that same task; pass false " +
-						"for separate work that deserves its own review. " +
-						"Passing true cannot grant more than your own task " +
-						"has -- if your task is not an auto-merge job, " +
-						"neither is anything you propose, and neither is a " +
-						"proposal that lands on a different branch than " +
-						"yours (a proposal is filed against the " +
-						"repository's default branch, so a task working " +
-						"against a base branch of its own passes on no " +
-						"auto-merge at all). A proposal naming a `repo` " +
-						"your task declares is judged on that " +
-						"repository's own declared branch instead, so it " +
-						"inherits auto-merge where your task has it; one " +
-						"naming any other repository inherits none, since " +
-						"nobody granted your task anything there.",
-				},
+				"auto_merge": map[string]any{"type": "boolean"},
 				"reads": map[string]any{
 					"type":  "array",
 					"items": map[string]any{"type": "string"},
-					"description": "Repositories this task is allowed to read but " +
-						"not push to (owner/name).",
 				},
 				"writes": map[string]any{
 					"type": "array",
@@ -1016,48 +875,19 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 						},
 						"required": []string{"repo"},
 					},
-					"description": "Extra repositories this task is allowed to land " +
-						"work in, with the base branch for each.",
 				},
-				"review_template_id": map[string]any{
-					"type": "string",
-					"description": "The ID of a pre-merge code review template to " +
-						"attach to this task.",
-				},
-				"sandbox_cpus": map[string]any{
-					"type": "integer",
-					"description": "Number of vCPUs for this task's sandbox VM (e.g. 2, 4, 8). " +
-						"0 or unset means use the deployment default.",
-				},
-				"sandbox_memory_mb": map[string]any{
-					"type": "integer",
-					"description": "Memory in MiB for this task's sandbox VM (e.g. 2048, 4096, 8192). " +
-						"0 or unset means use the deployment default.",
-				},
-				"sandbox_disk_gb": map[string]any{
-					"type": "integer",
-					"description": "Disk in GiB for this task's sandbox VM (e.g. 20, 40). " +
-						"0 or unset means use the deployment default.",
-				},
+				"review_template_id": map[string]any{"type": "string"},
+				"sandbox_cpus":       map[string]any{"type": "integer"},
+				"sandbox_memory_mb":  map[string]any{"type": "integer"},
+				"sandbox_disk_gb":    map[string]any{"type": "integer"},
 				"network_access": map[string]any{
 					"type": "string",
 					"enum": networkAccessEnum(),
-					"description": "How much of the internet this task's sandbox may reach: " +
-						"\"open\" (full access) or \"none\" (no outbound internet). " +
-						"Unset or empty means use the deployment default.",
 				},
 				"goal": map[string]any{
 					"type": "object",
-					"description": "A goal grain checks for the task, so that it ends when the goal is met " +
-						"rather than when its agent stops: {kind, spec, on_met, on_limit}. kind is base-green " +
-						"(spec {repo, branch, publishing}), pr-merged ({task} or {repo, number}), tasks-closed " +
-						"({tasks: [...], until: closed|merged}), person-closes ({}), cl-submitted ({task} or {cl}) or pipeline-healthy " +
-						"({repos?}). on_met is close (the default) or rest; on_limit is hold (the default) or " +
-						"notify -- what grain does when the task stops making progress towards it. An agent " +
-						"ending a goal task's run never completes it: the task rests until the goal is met, " +
-						"somebody posts to it, or a person closes it.",
 					"properties": map[string]any{
-						"kind":     map[string]any{"type": "string", "enum": []string{"base-green", "pr-merged", "tasks-closed", "person-closes", "pipeline-healthy", "cl-submitted"}},
+						"kind":     map[string]any{"type": "string", "enum": []string{"base-green", "pr-merged", "tasks-closed", "person-closes", "pipeline-healthy"}},
 						"spec":     map[string]any{"type": "object"},
 						"on_met":   map[string]any{"type": "string", "enum": []string{"close", "rest"}},
 						"on_limit": map[string]any{"type": "string", "enum": []string{"hold", "notify"}},
@@ -1067,54 +897,18 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				"nothing_needed_action": map[string]any{
 					"type": "string",
 					"enum": []any{"close", "ack"},
-					"description": "What happens if the proposed task's run ends on nothing_needed: " +
-						"\"close\" closes the task, \"ack\" leaves it for a human to acknowledge. " +
-						"Unset or empty means close.",
 				},
-				"no_port": map[string]any{
-					"type": "boolean",
-					"description": "Marks this task's change as belonging only on the branch it lands on -- " +
-						"a candidate-only release fix, a main-only feature that is not ready -- so it is " +
-						"not ported to the repository's other paired branches when it merges. " +
-						"A `Port: no` commit footer says the same from inside the change.",
-				},
-				"fixes_base_branch": map[string]any{
-					"type": "boolean",
-					"description": "Marks this task as fixing its base branch while that branch is red " +
-						"(\"de-flake tests\", \"fix main's go vet break\"). While a base branch is red grain " +
-						"makes other work targeting it wait on the branch's repair task; a task marked this " +
-						"way is never made to wait, counts as that repair once approved, and is declared with a " +
-						"base-green goal: grain closes it once the branch is green.",
-				},
-				"origin": map[string]any{
-					"type": "string",
-					"description": "The GitHub pull request or issue this work comes from " +
-						"(owner/repo#N, #N in this repository, or its URL), when you are a chat " +
-						"or a task whose own work has no GitHub origin and the request names one. " +
-						"grain lists every task with that origin in one progress comment on it. " +
-						"Leave it out otherwise: a proposal inherits the origin of the task that " +
-						"filed it, and one that already has a GitHub origin keeps it.",
-				},
-				"no_repo": map[string]any{
-					"type": "boolean",
-					"description": "Files this task with no repository at all -- a standalone task " +
-						"that will not clone or push a branch.",
-				},
-				"at_front": map[string]any{
-					"type": "boolean",
-					"description": "Whether this proposal should be placed at the front of the backlog " +
-						"ahead of already queued work, so it is dispatched next.",
-				},
-				"template_id": map[string]any{
-					"type":        "string",
-					"description": "The ID of an existing template to instantiate this task from.",
-				},
+				"no_port":           map[string]any{"type": "boolean"},
+				"fixes_base_branch": map[string]any{"type": "boolean"},
+				"origin":            map[string]any{"type": "string"},
+				"no_repo":           map[string]any{"type": "boolean"},
+				"at_front":          map[string]any{"type": "boolean"},
+				"template_id":       map[string]any{"type": "string"},
 				"template_fields": map[string]any{
 					"type": "object",
 					"additionalProperties": map[string]any{
 						"type": "string",
 					},
-					"description": "Values for the template's input fields, keyed by field name.",
 				},
 				"capabilities": map[string]any{
 					"type": "array",
@@ -1130,50 +924,11 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 							"additionalProperties": false,
 						},
 					}},
-					"description": "Capabilities to request for the proposed task (for example, " +
-						"\"self-debug\", \"gcp-key\", a capability reference " +
-						"\"https://.../capabilities/gcp#gcp-key\", or one with arguments as " +
-						"{\"capability\": \"https://...#gcp-key\", \"with\": {...}}). These will be attached to the " +
-						"proposed task upon filing. A proposal naming a capability your own " +
-						"task does not hold is always filed unapproved, for a human to " +
-						"approve, whatever permission your task has to queue its proposals.",
 				},
-				"model": map[string]any{
-					"type": "string",
-					"description": "The model or agent backend to run this task on (e.g. " +
-						"\"claude-sonnet-5\", \"gemini-3.1-pro\"). Leave it out to use the rotation.",
-				},
-				"agent_framework": map[string]any{
-					"type": "string",
-					"description": "The agent framework to run this task with (e.g. " +
-						"\"antigravity\", \"claude\", \"codex\"). Leave it out for this " +
-						"deployment's default or the framework the pinned model runs on.",
-				},
-				"not_before": map[string]any{
-					"type": "string",
-					"description": "Schedule this task for later: the earliest it may start, " +
-						"as a date (2026-10-14, meaning the start of that day in UTC) or an " +
-						"RFC 3339 time (2026-10-14T09:00:00Z). The task is filed deferred " +
-						"and picks itself back up at that time -- into the queue if it is " +
-						"approved, back to proposed if it is waiting for a human -- so it " +
-						"cannot be dispatched early. A date written only in the body holds " +
-						"nothing. Leave it out for a task that may start as soon as it is " +
-						"dispatched; a time already past is the same as leaving it out. " +
-						"With hold_for_approval it wakes back into proposed, still waiting " +
-						"for a human.",
-				},
-				"hold_for_approval": map[string]any{
-					"type": "boolean",
-					"description": "File this proposal unapproved, for a human to approve, " +
-						"even if your own task's permission would have queued it. Use it " +
-						"for anything the person should look at before it runs, and say " +
-						"in your reply which proposals you held and which you let queue. " +
-						"It can only hold work back, never queue what your permission " +
-						"does not cover, and it applies to this proposal alone -- what " +
-						"the held task proposes in turn follows the ordinary rules. " +
-						"Leave it out (or false) for the default: queued when your " +
-						"permission covers it, unapproved otherwise.",
-				},
+				"model":             map[string]any{"type": "string"},
+				"agent_framework":   map[string]any{"type": "string"},
+				"not_before":        map[string]any{"type": "string"},
+				"hold_for_approval": map[string]any{"type": "boolean"},
 			}),
 			"required": []string{"title", "body"},
 		},

@@ -461,7 +461,7 @@ func memoryDocumentFrom(d model.MemoryDocument) MemoryDocument {
 // access code is (docs/access-code.md) -- writes it by hand, and an
 // agent only from a task holding the memory capability, because it goes
 // into the prompt of every run this deployment dispatches.
-func (s *Server) memoryWriter(r *http.Request, id, kind string) (model.Principal, error) {
+func (s *Server) memoryWriter(r *http.Request, id, kind, repo string) (model.Principal, error) {
 	p, hasPrincipal := PrincipalFromContext(r.Context())
 	if hasPrincipal && p.Kind == model.PrincipalHuman {
 		return p, nil
@@ -475,7 +475,7 @@ func (s *Server) memoryWriter(r *http.Request, id, kind string) (model.Principal
 		by = p
 	}
 	if by.Kind == model.PrincipalAgent {
-		if err := s.tasks.requireMemoryGrant(r.Context(), by.ID); err != nil {
+		if err := s.tasks.requireMemoryGrant(r.Context(), by.ID, repo); err != nil {
 			return model.Principal{}, err
 		}
 	}
@@ -486,7 +486,7 @@ func (s *Server) memoryWriter(r *http.Request, id, kind string) (model.Principal
 // that task holds the memory capability. Every memory grant reaches
 // every scope: there is no team memory agent writing only its own
 // team's layer any more.
-func (c *Client) requireMemoryGrant(ctx context.Context, id string) error {
+func (c *Client) requireMemoryGrant(ctx context.Context, id, repo string) error {
 	if call, ok := agentCallFromContext(ctx); ok && call.external != nil {
 		if call.grants.Has("memory:write") {
 			return nil
@@ -504,6 +504,9 @@ func (c *Client) requireMemoryGrant(ctx context.Context, id string) error {
 		if g.Capability == memory.CapabilityName {
 			return nil
 		}
+	}
+	if APIGrantsOf(grantNames(task.Grants)).Allows("memory:write", strings.TrimSpace(repo)) {
+		return nil
 	}
 	return forbiddenErrorf("task %s does not hold the %q capability, so its run may not write memory", id, memory.CapabilityName)
 }
@@ -527,7 +530,7 @@ func (s *Server) handlePutMemory(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	by, err := s.memoryWriter(r, req.Author, req.AuthorKind)
+	by, err := s.memoryWriter(r, req.Author, req.AuthorKind, req.Repo)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -568,7 +571,7 @@ func (s *Server) handlePutMemoryDocument(w http.ResponseWriter, r *http.Request)
 	if !readJSON(w, r, &req) {
 		return
 	}
-	by, err := s.memoryWriter(r, req.Author, req.AuthorKind)
+	by, err := s.memoryWriter(r, req.Author, req.AuthorKind, req.Repo)
 	if err != nil {
 		writeClientError(w, err)
 		return

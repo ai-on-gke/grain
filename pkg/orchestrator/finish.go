@@ -270,7 +270,8 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// for review. It deliberately does not count as a comment: a closing
 	// note completes the task below, and a note whose whole purpose is
 	// that the task stays open and gets dispatched again must not.
-	if err := relayHandover(ctx, store, task, result, now); err != nil {
+	proxyResult := withProxyReviewCalls(store, runID, result)
+	if err := relayHandover(ctx, store, task, proxyResult, now); err != nil {
 		return err
 	}
 
@@ -278,7 +279,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// a review's findings are the whole product of the run that wrote
 	// them, and a run that reported what it found before parking on a
 	// question has said two things rather than one.
-	findings, err := relayReviewFeedback(ctx, store, client, appBot, task, withProxyReviewCalls(store, runID, result), now)
+	findings, err := relayReviewFeedback(ctx, store, client, appBot, task, proxyResult, now)
 	if err != nil {
 		return err
 	}

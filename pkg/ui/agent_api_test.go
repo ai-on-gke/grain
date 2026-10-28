@@ -16,6 +16,7 @@ package ui_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -23,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -679,5 +681,198 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	if code, _ := asAgent(t, srv, "1", http.MethodPut, "/api/settings",
 		`{"defaultCapabilities":["gemini-key","gcp-key"]}`, "re-add gcp-key"); code != http.StatusForbidden {
 		t.Fatalf("PUT /api/settings re-adding unheld gcp-key answered %d, want 403", code)
+	}
+}
+
+func asSandboxAgent(t *testing.T, srv *ui.Server, id, runID, method, path, body, reason string) (int, string) {
+	t.Helper()
+	headers := map[string]string{
+		ui.ActingTaskHeader: id,
+		ui.ActingRunHeader:  runID,
+		ui.ChannelHeader:    ui.SandboxCLIChannel,
+		"Content-Type":      "application/json",
+	}
+	if reason != "" {
+		headers[ui.ActingReasonHeader] = reason
+	}
+	rec := doWithHeaders(t, srv, method, path, body, headers)
+	return rec.Code, rec.Body.String()
+}
+
+func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalation(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets",
+		"api:tasks:read", "api:tasks:write", "api:tasks:admin",
+		"api:merge:write", "api:merge:force",
+		"api:settings:write", "api:connections:write", "api:secrets:write",
+		"api:capabilities:admin", "api:deployment:restart", "api:dispatch:write",
+		"api:repos:write", "api:sessions:write", "api:memory:write", "self-debug")
+	seedAPITask(t, client, "2", "acme/widgets")
+
+	// Non-dangerous read and comment write succeed over sandbox-cli.
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodGet, "/api/tasks/2", "", ""); code != http.StatusOK {
+		t.Fatalf("GET /api/tasks/2 over sandbox-cli: %d %s", code, resp)
+	}
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, "/api/tasks/2/comments",
+		`{"body":"note from sandbox cli"}`, ""); code != http.StatusCreated && code != http.StatusOK {
+		t.Fatalf("POST /api/tasks/2/comments over sandbox-cli: %d %s", code, resp)
+	}
+
+	// Dangerous and model-only scopes are refused with HTTP 403 even when the task holds them.
+	for _, tc := range []struct {
+		method, path, body string
+	}{
+		{http.MethodPost, "/api/tasks/2/approve", `{}`},
+		{http.MethodPut, "/api/settings", `{"maxConcurrent":2}`},
+		{http.MethodPost, "/api/tasks/2/run-now", `{}`},
+		{http.MethodPut, "/api/repos/acme/widgets/settings", `{"autoMerge":false}`},
+		{http.MethodPost, "/api/deployment/git-connections", `{"id":"c1"}`},
+		{http.MethodPost, "/api/tasks/2/force-merge", `{}`},
+		{http.MethodPut, "/api/tasks/2/secret", `{"value":"s"}`},
+	} {
+		code, resp := asSandboxAgent(t, srv, "1", "run-1", tc.method, tc.path, tc.body, "testing sandbox gate")
+		if code != http.StatusForbidden || !strings.Contains(resp, "not permitted on the sandbox-cli channel") {
+			t.Errorf("%s %s over sandbox-cli: got %d %s, want 403 refusing dangerous/model-only scope", tc.method, tc.path, code, resp)
+		}
+	}
+
+	// Capability attachment and supersedes escalation via tasks:write are refused on sandbox-cli.
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPatch, "/api/tasks/2",
+		`{"capabilities":["self-debug"]}`, "escalate"); code != http.StatusForbidden || !strings.Contains(resp, "capabilities") {
+		t.Errorf("PATCH /api/tasks/2 capabilities over sandbox-cli: %d %s, want 403", code, resp)
+	}
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, "/api/tasks/2/capabilities",
+		`{"capability":"self-debug"}`, "escalate"); code != http.StatusForbidden || !strings.Contains(resp, "capabilities") {
+		t.Errorf("POST /api/tasks/2/capabilities over sandbox-cli: %d %s, want 403", code, resp)
+	}
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, "/api/tasks",
+		`{"title":"dup","description":"b","repo":"acme/widgets","supersedes":"2"}`, "supersede"); code != http.StatusForbidden || !strings.Contains(resp, "supersedes is not permitted") {
+		t.Errorf("POST /api/tasks with supersedes over sandbox-cli: %d %s, want 403", code, resp)
+	}
+
+	// Agent filing escalation refuses proposalKey tag injection (even with tasks:admin)
+	// and refuses interactive auto-approval without tasks:admin.
+	seedAPITask(t, client, "3", "acme/widgets", "api:tasks:write")
+	if code, resp := asAgent(t, srv, "3", http.MethodPost, "/api/tasks",
+		`{"title":"chat","description":"b","repo":"acme/widgets","interactive":true}`, ""); code != http.StatusForbidden || !strings.Contains(resp, "tasks:admin") {
+		t.Errorf("POST /api/tasks with interactive=true without tasks:admin: %d %s, want 403", code, resp)
+	}
+	if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks",
+		`{"title":"tag-spoof","description":"b","repo":"acme/widgets","proposalKey":"console-session:director"}`, "spoof"); code != http.StatusForbidden || !strings.Contains(resp, "proposalKey") {
+		t.Errorf("POST /api/tasks with proposalKey by agent: %d %s, want 403", code, resp)
+	}
+
+	// SandboxCLIActions.ProposeTask hashes --id with a proposal: prefix (preventing system tag injection),
+	// resolves --depends-on <local-id> across calls in the same run, and defaults Base to "".
+	cliActions := ui.SandboxCLIActions{Client: client}
+	ctx := context.Background()
+	p1, err := cliActions.ProposeTask(ctx, "1", "run-1", gitproxy.CLIProposeRequest{
+		ID:    "console-session:director",
+		Title: "Step 1",
+		Body:  "First piece",
+	})
+	if err != nil {
+		t.Fatalf("ProposeTask step 1: %v", err)
+	}
+	stored1, err := client.Store.GetTask(ctx, p1.ID)
+	if err != nil || stored1 == nil {
+		t.Fatalf("GetTask(%s): %v, %v", p1.ID, stored1, err)
+	}
+	if slices.Contains(stored1.Tags, "console-session:director") {
+		t.Errorf("ProposeTask injected raw --id into task.Tags: %v", stored1.Tags)
+	}
+	if _, ok := model.ConsoleSessionIDOf(*stored1); ok {
+		t.Errorf("proposed task spoofed a standing console session via --id: %v", stored1.Tags)
+	}
+	p2, err := cliActions.ProposeTask(ctx, "1", "run-1", gitproxy.CLIProposeRequest{
+		Title:     "Step 2",
+		Body:      "Depends on step 1 by local ID",
+		DependsOn: []string{"console-session:director"},
+	})
+	if err != nil {
+		t.Fatalf("ProposeTask step 2: %v", err)
+	}
+	stored2, err := client.Store.GetTask(ctx, p2.ID)
+	if err != nil || stored2 == nil {
+		t.Fatalf("GetTask(%s): %v, %v", p2.ID, stored2, err)
+	}
+	if !slices.Contains(stored2.Links, model.Link{Kind: model.LinkDependsOn, Target: p1.ID}) {
+		t.Errorf("Step 2 links = %v, want LinkDependsOn -> %s", stored2.Links, p1.ID)
+	}
+
+	// SandboxAPIRoutes includes PUT /api/memory/documents when holding "memory",
+	// includes granted non-dangerous API routes, and excludes model-only routes.
+	memRoutes := ui.SandboxAPIRoutes([]string{"memory"}, "")
+	hasDocWrite := false
+	for _, r := range memRoutes {
+		if r.Pattern == "PUT /api/memory/documents" {
+			hasDocWrite = true
+		}
+	}
+	if !hasDocWrite {
+		t.Errorf("SandboxAPIRoutes([memory]) missing PUT /api/memory/documents: %+v", memRoutes)
+	}
+	taskRoutes := ui.SandboxAPIRoutes([]string{"api:tasks:read", "api:tasks:write", "api:tasks:admin"}, "")
+	hasListTasks := false
+	for _, r := range taskRoutes {
+		if r.Pattern == "GET /api/tasks" {
+			hasListTasks = true
+		}
+		if r.Scope == "tasks:admin" || r.Pattern == "POST /api/tasks/{id}/messages" ||
+			r.Pattern == "POST /api/tasks/{id}/park-until" || r.Pattern == "POST /api/tasks/{id}/resume-later" {
+			t.Errorf("SandboxAPIRoutes included denied or model-only route %s (scope %s)", r.Pattern, r.Scope)
+		}
+	}
+	if !hasListTasks {
+		t.Errorf("SandboxAPIRoutes([api:tasks:read ...]) missing GET /api/tasks: %+v", taskRoutes)
+	}
+}
+
+// TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes pins that the
+// release-manager scope reads the deployment's weekly release notes but
+// cannot write them: writing stays with the release-notes capability
+// (and memory:write), on either channel.
+func TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:releases:read", "api:releases:write")
+	body := `{"period":"2026-W43","title":"t","text":"x"}`
+	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
+		t.Errorf("api:releases:write wrote release notes: %d %s, want 403", code, resp)
+	}
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
+		t.Errorf("api:releases:write wrote release notes over sandbox-cli: %d %s, want 403", code, resp)
+	}
+	if code, resp := asAgent(t, srv, "1", http.MethodGet, "/api/release-notes", "", ""); code == http.StatusForbidden {
+		t.Errorf("api:releases:read was refused reading release notes: %d %s", code, resp)
+	}
+	for _, r := range ui.SandboxAPIRoutes([]string{"api:releases:write"}, "") {
+		if r.Pattern == "PUT /api/release-notes" {
+			t.Errorf("SandboxAPIRoutes([api:releases:write]) lists PUT /api/release-notes")
+		}
+	}
+}
+
+// TestAgentReleaseNoteWriteIsAttributedToTheAgent: a run that may write
+// the release notes (the release-notes capability) over the sandbox
+// channel is refused naming a person as their author, and a write that
+// names nobody is recorded as the acting run itself.
+func TestAgentReleaseNoteWriteIsAttributedToTheAgent(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "release-notes")
+	spoofed := `{"period":"2026-W43","title":"t","text":"x","author":"alice@example.com","authorKind":"human"}`
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPut, "/api/release-notes", spoofed, ""); code != http.StatusForbidden {
+		t.Errorf("an agent naming a person as the release notes' author: %d %s, want 403", code, resp)
+	}
+	body := `{"period":"2026-W43","title":"t","text":"x"}`
+	code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPut, "/api/release-notes", body, "")
+	if code != http.StatusOK {
+		t.Fatalf("release-notes capability writing release notes over sandbox-cli: %d %s, want 200", code, resp)
+	}
+	var note ui.ReleaseNote
+	if err := json.Unmarshal([]byte(resp), &note); err != nil {
+		t.Fatalf("decoding %s: %v", resp, err)
+	}
+	if note.UpdatedByKind != string(model.PrincipalAgent) || note.UpdatedBy != "1" {
+		t.Errorf("release note written by task 1 is attributed to %s %q, want agent \"1\"", note.UpdatedByKind, note.UpdatedBy)
 	}
 }
