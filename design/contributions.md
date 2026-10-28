@@ -1,5 +1,7 @@
 # Grain contribution processes
 
+Note: attribution will be handled in a second design.
+
 ## The design folder
 
 Each repo has a design folder with 5 classes of things in it:
@@ -10,7 +12,11 @@ Each repo has a design folder with 5 classes of things in it:
 4. **Playbook designs** - These are overall designs for background tasks like releases, nightly testing, etc.
 5. **Playbooks** - These are detailed definitions of tasks, schedules, etc in a grain specific format. These are also grainfiles or moral equivalents.
 
+Alternatively, all of the design material could live in a separate repo rather than in a folder in each repo; either layout could be supported.
+
 ## Process
+
+Wherever an agent opens a PR against the design folder (specifications, tasks, clarifications, playbooks), it should listen to that PR and respond to review comments by making updates to the doc PR.
 
 ### Design
 
