@@ -334,6 +334,24 @@ func (a *Acceptor) admit(leaf *x509.Certificate, hs sandbox.HandshakeRequest) (t
 	return notAfter, nil
 }
 
+// registerAdmitted registers an admitted connection's token with
+// granule's Acceptor, provided the sandbox still holds the credentials it
+// was admitted on. It holds a.mu across the check and the registration,
+// so a Revoke (or a re-Mint) that lands after admit cannot be undone by
+// registering the old token afterwards: either it ran first and this
+// refuses, or it runs after and its granule Revoke drops the slot this
+// registered.
+func (a *Acceptor) registerAdmitted(hs sandbox.HandshakeRequest, notAfter time.Time) error {
+	sum := sha256.Sum256([]byte(hs.Token))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	reg, ok := a.creds[hs.SandboxID]
+	if !ok || subtle.ConstantTimeCompare(sum[:], reg.hash[:]) != 1 {
+		return fmt.Errorf("credentials for sandbox %q were revoked", hs.SandboxID)
+	}
+	return a.inner.RegisterToken(hs.SandboxID, hs.Token, notAfter)
+}
+
 // admitListener is the net.Listener granule's Acceptor serves on. It
 // runs the TLS handshake and grain's admission itself, concurrently per
 // connection, and hands granule only the connections it admitted, with
@@ -420,7 +438,7 @@ func (l *admitListener) handle(ctx context.Context, raw net.Conn) {
 	// granule's Acceptor checks the token again, against the plain text
 	// it is given here; the wrapper has just shown it, so registering it
 	// now holds nothing grain did not already have in memory.
-	if err := l.a.inner.RegisterToken(hs.SandboxID, hs.Token, notAfter); err != nil {
+	if err := l.a.registerAdmitted(hs, notAfter); err != nil {
 		l.refuse(conn, err.Error(), true)
 		return
 	}

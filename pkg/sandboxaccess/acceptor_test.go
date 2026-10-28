@@ -363,3 +363,30 @@ func TestMintCapsLifeAndBindsIdentity(t *testing.T) {
 		t.Fatal("Mint accepted a sandbox name with a slash")
 	}
 }
+
+// A connection admitted just before its sandbox was revoked, or re-minted,
+// must not register the old token with granule afterwards: that would
+// bring a revoked sandbox's channel back up.
+func TestRevokeAfterAdmitIsNotUndone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, _ := newTestAcceptor(t, ctx, nil)
+	creds, err := a.Mint("sb-1", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := sandbox.HandshakeRequest{Version: sandbox.ProtocolVersion, SandboxID: "sb-1", Token: creds.Token}
+	notAfter := time.Now().Add(time.Hour)
+
+	if _, err := a.Mint("sb-1", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.registerAdmitted(hs, notAfter); err == nil {
+		t.Fatal("registerAdmitted accepted a token its sandbox was re-minted past")
+	}
+
+	a.Revoke("sb-1")
+	if err := a.registerAdmitted(hs, notAfter); err == nil {
+		t.Fatal("registerAdmitted accepted a revoked sandbox's token")
+	}
+}
