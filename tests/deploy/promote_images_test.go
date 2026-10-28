@@ -50,15 +50,8 @@ func releaseRepo(t *testing.T) (string, map[string]string) {
 	return releaseRepoWithDockerfile(t, "FROM scratch\nARG GRAIN_IMAGE_REF=\n"+oldMakeBuild+"\n")
 }
 
-// splitDockerfile is the build of a Dockerfile from after the two daemon
-// images: it takes MAIN_GRAIN, which is how a promotion tells that the
-// release job built both grain and google-grain for the release.
-const splitDockerfile = "FROM scratch\nARG GRAIN_IMAGE_REF=\nARG RELEASE=\nARG MAIN_GRAIN=./google/cmd/grain\n" +
-	oldMakeBuild + " RELEASE=${RELEASE} MAIN_grain=${MAIN_GRAIN}\n"
-
-// postSplitDockerfile is the Dockerfile of a post-split single-daemon
-// repository (ai-on-gke/grain): it takes MAIN_GRAIN=./cmd/grain, and the
-// tree has no google/cmd/grain directory.
+// postSplitDockerfile is the Dockerfile of the repository: it takes
+// MAIN_GRAIN=./cmd/grain.
 const postSplitDockerfile = "FROM scratch\nARG GRAIN_IMAGE_REF=\nARG RELEASE=\nARG MAIN_GRAIN=./cmd/grain\n" +
 	oldMakeBuild + " RELEASE=${RELEASE} MAIN_grain=${MAIN_GRAIN}\n"
 
@@ -94,14 +87,6 @@ func releaseRepoWithDockerfile(t *testing.T, dockerfile string) (string, map[str
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatalf("writing %s: %v", name, err)
-		}
-	}
-	if strings.Contains(dockerfile, "./google/cmd/grain") {
-		if err := os.MkdirAll(filepath.Join(dir, "google", "cmd", "grain"), 0o755); err != nil {
-			t.Fatalf("creating google/cmd/grain: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "google", "cmd", "grain", "main.go"), []byte("package main\n"), 0o644); err != nil {
-			t.Fatalf("writing google/cmd/grain/main.go: %v", err)
 		}
 	}
 	git("add", ".")
@@ -334,15 +319,8 @@ func TestPromoteRebuildsTheGrainImageWithTheReleaseStamped(t *testing.T) {
 		containsRun(t, docker, want)
 	}
 	containsRun(t, out, "predates ARG RELEASE")
-	// A release from before the two daemon images built only grain, and
-	// that grain is the Google build: google-grain is published as it,
-	// so a Google install has a google-grain:latest to pull.
-	containsRun(t, out, "predates the two daemon images")
-	for _, tag := range []string{"v1.5.0", "latest", "sha-" + short} {
-		containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/google-grain:"+tag+" ghcr.io/bwsalmon/grain/grain:v1.5.0")
-	}
-	if strings.Contains(docker, "MAIN_GRAIN") || strings.Contains(docker, "-t ghcr.io/bwsalmon/grain/google-grain") {
-		t.Errorf("promote of a release from before the split built a google-grain of its own, or asked its Dockerfile for a MAIN_GRAIN it does not take:\n%s", docker)
+	if strings.Contains(docker, "MAIN_GRAIN") || strings.Contains(docker, "google-grain") {
+		t.Errorf("promote of a release whose Dockerfile takes no MAIN_GRAIN asked for MAIN_GRAIN or touched google-grain:\n%s", docker)
 	}
 	if strings.Contains(docker, "--tag ghcr.io/bwsalmon/grain/grain:latest ghcr.io/bwsalmon/grain/grain:sha-") ||
 		strings.Contains(docker, "--tag ghcr.io/bwsalmon/grain/grain:v1.5.0 ") {
@@ -503,78 +481,27 @@ func TestOnlyThePromotionMovesLatest(t *testing.T) {
 	contains(t, text, "capabilities: [package-publish]")
 }
 
-// splitStubAnswers is stubAnswers for a release with both daemon images:
-// google-grain reports the google edition, as ./google/cmd/grain does,
-// and grain reports none.
-func splitStubAnswers(t *testing.T, short, label, release string) string {
-	t.Helper()
-	path := stubAnswers(t, short, label, release)
+// A release whose rebuild reports an edition (which core grain never sets)
+// is refused and nothing moves.
+func TestPromoteOfACoreGrainReportingAnEditionMovesNothing(t *testing.T) {
+	remote, commits := releaseRepoWithDockerfile(t, postSplitDockerfile)
+	short := commits["released"][:7]
+	path := stubAnswers(t, short, "", "v1.5.0")
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading the stub's answers: %v", err)
 	}
-	google := "case \"$*\" in\n" +
-		`  "run --rm ghcr.io/bwsalmon/grain/google-grain:"*" version --json") printf '{\n  "release": "%s",\n  "edition": "google"\n}\n' "` + release + `" ;;` + "\n"
-	text := strings.Replace(string(body), "case \"$*\" in\n", google, 1)
-	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+	withEdition := strings.Replace(string(body), `"release": "%s"\n}`, `"release": "%s",\n  "edition": "custom"\n}`, 1)
+	if err := os.WriteFile(path, []byte(withEdition), 0o644); err != nil {
 		t.Fatalf("writing the stub's answers: %v", err)
 	}
-	return path
-}
-
-// A release cut after the split has two daemon images, and promotion
-// rebuilds each from its own main -- grain from ./cmd/grain, google-grain
-// from ./google/cmd/grain -- stamps the release into both, and moves
-// vX.Y.Z, latest and sha-<short> on both (grain/task-4944).
-func TestPromoteRebuildsBothDaemonImages(t *testing.T) {
-	remote, commits := releaseRepoWithDockerfile(t, splitDockerfile)
-	short := commits["released"][:7]
-
-	out, docker, err := promoteRun(t, remote, []string{"--dry-run", "promote"}, nil)
-	if err != nil {
-		t.Fatalf("promote --dry-run failed: %v\n%s", err, out)
-	}
-	for _, image := range []string{"grain", "google-grain"} {
-		containsRun(t, out, "and rebuild ghcr.io/bwsalmon/grain/"+image+":sha-"+short)
-		containsRun(t, out, "and point ghcr.io/bwsalmon/grain/"+image+":sha-"+short+" at the stamped ghcr.io/bwsalmon/grain/"+image+":v1.5.0")
-	}
-	if docker != "" {
-		t.Errorf("a dry run asked docker for something:\n%s", docker)
-	}
-
-	out, docker, err = promoteRun(t, remote, []string{"promote"}, publishEnv(splitStubAnswers(t, short, "", "v1.5.0")))
-	if err != nil {
-		t.Fatalf("promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
-	}
-	for image, main := range map[string]string{"grain": "./cmd/grain", "google-grain": "./google/cmd/grain"} {
-		containsRun(t, docker, "buildx imagetools inspect ghcr.io/bwsalmon/grain/"+image+":sha-"+short)
-		containsRun(t, docker, "--build-arg MAIN_GRAIN="+main+" ")
-		containsRun(t, docker, "--build-arg RELEASE=v1.5.0 --label org.opencontainers.image.version=v1.5.0 -t ghcr.io/bwsalmon/grain/"+image+":v1.5.0")
-		containsRun(t, docker, "push ghcr.io/bwsalmon/grain/"+image+":v1.5.0")
-		containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/"+image+":latest ghcr.io/bwsalmon/grain/"+image+":v1.5.0")
-		containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/"+image+":sha-"+short+" ghcr.io/bwsalmon/grain/"+image+":v1.5.0")
-	}
-	if strings.Contains(out, "predates the two daemon images") {
-		t.Errorf("promote took a release whose Dockerfile takes MAIN_GRAIN for one from before the split:\n%s", out)
-	}
-	if strings.Contains(docker, "--tag ghcr.io/bwsalmon/grain/google-grain:latest ghcr.io/bwsalmon/grain/grain:") {
-		t.Errorf("promote published core grain as google-grain:\n%s", docker)
-	}
-}
-
-// A google-grain rebuild that does not report the google edition is core
-// grain under the Google name -- what a Dockerfile that dropped
-// MAIN_GRAIN would build -- and nothing moves.
-func TestPromoteOfAGoogleGrainThatIsNotTheGoogleBuildMovesNothing(t *testing.T) {
-	remote, commits := releaseRepoWithDockerfile(t, splitDockerfile)
-	short := commits["released"][:7]
-	out, docker, err := promoteRun(t, remote, []string{"promote"}, publishEnv(stubAnswers(t, short, "", "v1.5.0")))
+	out, docker, err := promoteRun(t, remote, []string{"promote"}, publishEnv(path))
 	if err == nil {
-		t.Fatalf("promote published a google-grain reporting no edition:\n%s", out)
+		t.Fatalf("promote published a core grain reporting an edition:\n%s", out)
 	}
-	containsRun(t, out, "should report edition google")
+	containsRun(t, out, "core grain, but reports an edition")
 	if strings.Contains(docker, ":latest") {
-		t.Errorf("promote moved latest although google-grain is not the Google build:\n%s", docker)
+		t.Errorf("promote moved latest although grain reported an edition:\n%s", docker)
 	}
 }
 

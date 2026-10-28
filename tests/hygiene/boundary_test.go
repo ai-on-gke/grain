@@ -45,17 +45,7 @@ var googleTokensExempt = []string{
 // from bwsalmon/grain before it was all moved out. The list may only
 // shrink: a file here that no longer says one fails the test until it is
 // taken off, so that it cannot quietly start again.
-var googleTokensPending = map[string]string{
-	// The installer's google install track and the tests that drive it.
-	"scripts/setup.sh":                          "google install track",
-	"tests/deploy/deploy_test.go":               "google install track",
-	"tests/deploy/hostd_builtins_test.go":       "google install track",
-	"tests/deploy/hostd_detached_test.go":       "google install track",
-	"tests/deploy/hostd_host_git_test.go":       "google install track",
-	"tests/deploy/image_channel_test.go":        "google install track",
-	"tests/deploy/root_writes_test.go":          "google install track",
-	"ui/e2e/hostd-missing-entry-layout.spec.js": "google install track",
-}
+var googleTokensPending = map[string]string{}
 
 func TestCoreSaysNoGoogleTokens(t *testing.T) {
 	root := repoRoot(t)

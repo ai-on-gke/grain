@@ -147,7 +147,7 @@ func run(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("ghcr-prune", flag.ContinueOnError)
 	owner := fs.String("owner", "", "account the packages belong to (default: from RELEASE_IMAGE_REPO or bwsalmon/grain)")
 	repo := fs.String("repo", "", "repository the packages are scoped to, and the first segment of their names (default: from RELEASE_IMAGE_REPO or bwsalmon/grain)")
-	packages := fs.String("packages", "grain,google-grain,guest,guest-base,k8s-sandbox,k8s-sandbox-base", "comma-separated package names, relative to the repository")
+	packages := fs.String("packages", "grain,guest,guest-base,k8s-sandbox,k8s-sandbox-base", "comma-separated package names, relative to the repository")
 	tokenFlag := fs.String("token", "", "GitHub token (default: GITHUB_TOKEN, PACKAGE_PUBLISH_TOKEN, GHCR_TOKEN, or placed CI capability tokens)")
 	// 48 hours -- and, on top of it, the most recent build of every
 	// branch that still exists, which is what a branch tag amounts to

@@ -435,7 +435,7 @@ func TestKubernetesGranuleIsOfferedAndRunnableInImageMode(t *testing.T) {
 		GranuleSSHUser:        "debian",
 		GranuleWorkspace:      "/home/debian",
 		GranuleGitProxyHost:   "172.18.0.1",
-		UpgradeImage:          "ghcr.io/bwsalmon/grain/google-grain:main",
+		UpgradeImage:          "ghcr.io/bwsalmon/grain/grain:main",
 		UpgradeImageRefFile:   "/var/lib/grain/data/image-ref",
 	}
 
@@ -489,7 +489,7 @@ func TestKubernetesModeVsKubernetesSandboxesPredicateSplit(t *testing.T) {
 
 	cfg := Config{
 		K8sGranuleSandboxes: true,
-		UpgradeImage:        "ghcr.io/bwsalmon/grain/google-grain",
+		UpgradeImage:        "ghcr.io/bwsalmon/grain/grain",
 	}
 	if !KubernetesSandboxes(cfg) {
 		t.Fatal("KubernetesSandboxes(cfg) = false for off-cluster K8sGranuleSandboxes, want true")
@@ -519,7 +519,7 @@ func TestSandboxBackendAvailableWithUpgradeImageOffClusterVsInPod(t *testing.T) 
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 
 	cfg := Config{
-		UpgradeImage: "ghcr.io/bwsalmon/grain/google-grain",
+		UpgradeImage: "ghcr.io/bwsalmon/grain/grain",
 	}
 	if !cfg.sandboxBackendAvailable(model.SandboxBackendKubernetesGranule) {
 		t.Fatal("sandboxBackendAvailable(kubernetes-granule) = false off-cluster with UpgradeImage set, want true")

@@ -591,7 +591,7 @@ type startUpgradeRequest struct {
 	Branch string `json:"branch"`
 	// Image, when set, is the image to pull instead of the branch's tag
 	// in the configured repository: a repository the branch's tag is
-	// pulled from ("ghcr.io/bwsalmon/grain/google-grain"), or a full
+	// pulled from ("ghcr.io/bwsalmon/grain/grain"), or a full
 	// `repo:tag` or `repo@sha256:...` reference. It must be in a
 	// repository this deployment may upgrade onto
 	// (installtrack.ValidateTargetRepository); a tag in it names the

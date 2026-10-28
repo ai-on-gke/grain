@@ -263,7 +263,7 @@ func TestTheDockerSocketIsOnlyMountedWhenSomethingNeedsIt(t *testing.T) {
 func resolveHostd(t *testing.T, env ...string) (out, hostd string) {
 	t.Helper()
 	out = runBash(t, logFn+shellFunction(t, "resolve_hostd")+`resolve_hostd; echo "HOSTD=$GRAIN_HOSTD"`,
-		append([]string{"GRAIN_USER=grain", "GRAIN_AGY_PATH=", "GOOGLE_AGY_CLI_PATH=/google/bin/agy", "HOSTD_AGY_PATH=",
+		append([]string{"GRAIN_USER=grain", "GRAIN_AGY_PATH=", "HOSTD_AGY_PATH=",
 			"GRAIN_CLAUDE_RUN=", "GRAIN_CODEX_RUN=", "GRAIN_AGY_RUN="}, env...)...)
 	for _, line := range strings.Split(out, "\n") {
 		if v, ok := strings.CutPrefix(line, "HOSTD="); ok {
@@ -275,21 +275,19 @@ func resolveHostd(t *testing.T, env ...string) (out, hostd string) {
 
 func TestHostdIsInstalledByDefaultOnEveryTrack(t *testing.T) {
 	contains(t, setupText(t), `GRAIN_HOSTD="${GRAIN_HOSTD:-auto}"`)
-	for _, track := range []string{"oss", "google"} {
-		out, hostd := resolveHostd(t, "GRAIN_HOSTD=auto", "GRAIN_INSTALL_TRACK="+track)
-		if hostd != "1" {
-			t.Errorf("track %s: auto settled on GRAIN_HOSTD=%q, want 1:\n%s", track, hostd, out)
-		}
-		contains(t, out, "GRAIN_HOSTD=0 leaves it out")
+	out, hostd := resolveHostd(t, "GRAIN_HOSTD=auto", "GRAIN_INSTALL_TRACK=oss")
+	if hostd != "1" {
+		t.Errorf("auto settled on GRAIN_HOSTD=%q, want 1:\n%s", hostd, out)
 	}
-	// Only the Google track's allowlist names agy; the core one is empty
-	// but installed, for an operator to add entries to.
-	out := runBash(t, logFn+shellFunction(t, "resolve_hostd")+`resolve_hostd; echo "AGY=[$HOSTD_AGY_PATH]"`,
-		"GRAIN_USER=grain", "GRAIN_AGY_PATH=", "HOSTD_AGY_PATH=", "GOOGLE_AGY_CLI_PATH=/google/bin/agy", "GRAIN_HOSTD=auto", "GRAIN_INSTALL_TRACK=oss")
+	contains(t, out, "GRAIN_HOSTD=0 leaves it out")
+	// Without GRAIN_AGY_PATH the allowlist names no agy; when GRAIN_AGY_PATH
+	// is set, HOSTD_AGY_PATH carries it into the allowlist.
+	out = runBash(t, logFn+shellFunction(t, "resolve_hostd")+`resolve_hostd; echo "AGY=[$HOSTD_AGY_PATH]"`,
+		"GRAIN_USER=grain", "GRAIN_AGY_PATH=", "HOSTD_AGY_PATH=", "GRAIN_HOSTD=auto")
 	contains(t, out, "AGY=[]")
 	out = runBash(t, logFn+shellFunction(t, "resolve_hostd")+`resolve_hostd; echo "AGY=[$HOSTD_AGY_PATH]"`,
-		"GRAIN_USER=grain", "GRAIN_AGY_PATH=", "HOSTD_AGY_PATH=", "GOOGLE_AGY_CLI_PATH=/google/bin/agy", "GRAIN_HOSTD=auto", "GRAIN_INSTALL_TRACK=google")
-	contains(t, out, "AGY=[/google/bin/agy]")
+		"GRAIN_USER=grain", "GRAIN_AGY_PATH=/opt/acme/bin/agy", "HOSTD_AGY_PATH=", "GRAIN_HOSTD=auto")
+	contains(t, out, "AGY=[/opt/acme/bin/agy]")
 	allow := runBash(t, shellFunction(t, "hostd_allowlist_content")+"hostd_allowlist_content", "HOSTD_AGY_PATH=")
 	contains(t, allow, "clis: {}")
 }
@@ -330,7 +328,7 @@ func TestTheReadinessReportSaysWhetherHostdIsInstalled(t *testing.T) {
 	dir := t.TempDir()
 	allow := filepath.Join(dir, "hostd.yaml")
 	content := runBash(t, shellFunction(t, "hostd_allowlist_content")+"hostd_allowlist_content",
-		"HOSTD_AGY_PATH=/google/bin/agy", "GRAIN_DATA_DIR=/d", "GRAIN_SANDBOX_DIR=/s", "HOSTD_PROXY_VARS=")
+		"HOSTD_AGY_PATH=/opt/acme/bin/agy", "GRAIN_DATA_DIR=/d", "GRAIN_SANDBOX_DIR=/s", "HOSTD_PROXY_VARS=")
 	if err := os.WriteFile(allow, []byte(content+"  corp-search:\n    command: /x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -3906,7 +3904,6 @@ func TestABranchTagAndItsCommitTagAreOneManifest(t *testing.T) {
 		`"$k8s_sandbox_base $root/k8s-sandbox-base:$branch"`,
 		`"$k8s_sandbox $root/k8s-sandbox:$branch"`,
 		`"$grain $root/grain:$branch"`,
-		`"$google_grain $root/google-grain:$branch"`,
 	} {
 		contains(t, script, pair)
 	}
@@ -4087,8 +4084,8 @@ func TestCloudSQLCapabilityIsConfigured(t *testing.T) {
 	contains(t, playbook, "-target=google_project_service.sqladmin")
 }
 
-// The walkthrough's install (task 5047, bug B): a Google-track container
-// install with hostd, GRAIN_AGY_PATH=/opt/fakeagy/agy GRAIN_AGY_RUN=host.
+// The walkthrough's install (task 5047, bug B): a container install with
+// hostd, GRAIN_AGY_PATH=/opt/fakeagy/agy GRAIN_AGY_RUN=host.
 // The readiness block names the binary hostd's allowlist runs on this
 // host, and where each CLI runs -- not the image's own agy.
 func TestTheReadinessReportNamesWhereEachCLIRunsAndHostdsAgy(t *testing.T) {
@@ -4109,7 +4106,7 @@ func TestTheReadinessReportNamesWhereEachCLIRunsAndHostdsAgy(t *testing.T) {
 		`for c in claude agy codex; do echo "$c: $(report_agent_cli "$c" "" X)"; done`
 	env := func(extra ...string) []string {
 		return append([]string{"HOSTD_ALLOWLIST=" + allow, "GRAIN_IMAGE_REF=img", "GRAIN_HOSTD=1",
-			"GRAIN_INSTALL_TRACK=google", "GRAIN_CLAUDE_RUN=", "GRAIN_CODEX_RUN=", "GRAIN_AGY_RUN="}, extra...)
+			"GRAIN_INSTALL_TRACK=oss", "GRAIN_CLAUDE_RUN=", "GRAIN_CODEX_RUN=", "GRAIN_AGY_RUN="}, extra...)
 	}
 
 	out := runBash(t, script, env("GRAIN_AGY_RUN=host")...)
@@ -4118,10 +4115,8 @@ func TestTheReadinessReportNamesWhereEachCLIRunsAndHostdsAgy(t *testing.T) {
 	contains(t, out, "claude: container: /usr/local/bin/claude (in img)")
 	contains(t, out, "codex: container: /usr/local/bin/codex (in img)")
 
-	// The Google build's own default puts agy on the host behind hostd.
-	contains(t, runBash(t, script, env()...), "agy: host, through grain hostd: "+agy)
-	// The core build's does not, and without hostd nothing is on the host.
-	contains(t, runBash(t, script, env("GRAIN_INSTALL_TRACK=oss")...), "agy: container: /usr/local/bin/agy (in img)")
+	// The core build's default keeps agy in the container, and without hostd nothing is on the host.
+	contains(t, runBash(t, script, env()...), "agy: container: /usr/local/bin/agy (in img)")
 	contains(t, runBash(t, script, env("GRAIN_HOSTD=0", "GRAIN_AGY_RUN=host")...), "agy: container: /usr/local/bin/agy (in img)")
 	// A host CLI hostd has no entry for, or one naming nothing runnable,
 	// is MISSING -- which the report's per-CLI warnings key on.
@@ -4130,7 +4125,7 @@ func TestTheReadinessReportNamesWhereEachCLIRunsAndHostdsAgy(t *testing.T) {
 	if err := os.Remove(agy); err != nil {
 		t.Fatal(err)
 	}
-	contains(t, runBash(t, script, env()...), "agy: host, through grain hostd: MISSING (its allowlist entry \"agy\" names "+agy)
+	contains(t, runBash(t, script, env("GRAIN_AGY_RUN=host")...), "agy: host, through grain hostd: MISSING (its allowlist entry \"agy\" names "+agy)
 
 	readiness := body(t, setupCode(t), "report_readiness() {")
 	contains(t, readiness, `status: $(hostd_status)`)

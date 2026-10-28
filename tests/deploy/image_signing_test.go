@@ -289,10 +289,9 @@ func TestTheReleaseStampsSandboxImagesByDigest(t *testing.T) {
 		`docker build -f Dockerfile.k8s-sandbox -t "$k8s_sandbox" .`,
 		`push_pinned "$guest"`,
 		`push_pinned "$k8s_sandbox"`,
-		// Both daemon images, core and Google, each built by
-		// build_daemon_image below once the sandboxes are pinned.
+		// The daemon image, built by build_daemon_image below once the
+		// sandboxes are pinned.
 		`build_daemon_image "$grain" "$core_main"`,
-		`build_daemon_image "$google_grain" "$google_main"`,
 	}
 	at := 0
 	for _, step := range order {

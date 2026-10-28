@@ -164,7 +164,7 @@ func TestKubernetesGranuleImageFlagDefaultsToDefaultSandboxImage(t *testing.T) {
 func TestKubernetesGranuleAcceptsUpgradeImageWithRefFile(t *testing.T) {
 	t.Parallel()
 	cfg := kubeGranuleConfig()
-	cfg.UpgradeImage = "ghcr.io/bwsalmon/grain/google-grain"
+	cfg.UpgradeImage = "ghcr.io/bwsalmon/grain/grain"
 	cfg.UpgradeImageRefFile = "/var/lib/grain/data/image-ref"
 	if err := checkConfig(cfg); err != nil {
 		t.Fatalf("checkConfig with -k8s-granule-sandboxes and -upgrade-image-ref-file: %v", err)

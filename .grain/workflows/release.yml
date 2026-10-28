@@ -186,9 +186,8 @@ jobs:
     steps:
       # Everything except the push: the guest (pulled from its
       # content-addressed cache on almost every commit), the Kubernetes
-      # sandbox image, the two daemon images (grain from ./cmd/grain and
-      # google-grain from ./google/cmd/grain), and the checks that each
-      # says which commit and which build it is.
+      # sandbox image, the daemon image (grain from ./cmd/grain), and the
+      # checks that it says which commit and which build it is.
       - name: Build the images
         run: bash ./scripts/release-images.sh build
 
@@ -208,15 +207,11 @@ jobs:
       # whose tests all skipped, so the log is read rather than trusted:
       # a skip here is a publish gated on a verdict that quietly does not
       # exist.
-      #
-      # Run once per daemon image -- grain, the core build, and
-      # google-grain, the Google build -- since both are about to be
-      # published and either is what some deployment will run.
       - name: Run the container e2e suite against what is about to be published
         run: |
           set -euo pipefail
           . "$RELEASE_IMAGES_STATE"
-          for image in "$RELEASE_IMAGE_GRAIN" ${RELEASE_IMAGE_GOOGLE_GRAIN:+"$RELEASE_IMAGE_GOOGLE_GRAIN"}; do
+          for image in "$RELEASE_IMAGE_GRAIN"; do
             echo "tests/container against $image"
             export GRAIN_TEST_IMAGE="$image"
             go test ./tests/container/... -count=1 -v -timeout 30m 2>&1 | tee /tmp/container.log

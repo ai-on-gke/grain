@@ -55,9 +55,9 @@ type ImageOverride struct {
 }
 
 // ParseImageOverride takes apart image, which is a repository
-// ("ghcr.io/bwsalmon/grain/google-grain"), a tagged reference
-// ("...google-grain:main"), a pinned one ("...google-grain@sha256:..."),
-// or both ("...google-grain:main@sha256:...").
+// ("ghcr.io/bwsalmon/grain/grain"), a tagged reference
+// ("...grain:main"), a pinned one ("...grain@sha256:..."),
+// or both ("...grain:main@sha256:...").
 func ParseImageOverride(image string) (ImageOverride, error) {
 	image = strings.TrimSpace(image)
 	if image == "" {
