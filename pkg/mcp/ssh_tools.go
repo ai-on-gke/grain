@@ -21,8 +21,6 @@ import (
 	"path"
 	"strings"
 	"time"
-
-	"github.com/bwsalmon/granule/pkg/sandbox"
 )
 
 // runCommandKillGrace is how long the guest-side `timeout` waits between
@@ -326,18 +324,11 @@ func sshWriteFileTool(runner remoteRunner, workspace string) Tool {
 				target, notice = retry, workspaceRetryNotice(fp, retry, workspace)
 			}
 
-			if bp, ok := runner.(batchFilePlacer); ok && strings.HasPrefix(target, "/") {
-				if err := bp.PutFiles(ctx, []sandbox.FileUpload{{
-					Path:    target,
-					Content: []byte(content),
-					Mode:    0o644,
-				}}); err != nil {
-					text := fmt.Sprintf("Error writing %s: %v", target, err)
-					return Result{Text: text, IsError: true}
-				}
-				return Result{Text: noticed(notice, fmt.Sprintf("Wrote %s", target))}
-			}
-
+			// Deliberately dd, even over a transport with PutFiles:
+			// PutFiles renames a fresh 0644 file into place, which
+			// would drop an existing script's execute bit and replace
+			// a symlink rather than write through it -- not what
+			// write_file does on any other backend, or edit_file here.
 			parent := path.Dir(target)
 			_, stderr, exitCode := runner.Run(ctx, []string{"mkdir", "-p", parent}, "")
 			if exitCode != 0 {

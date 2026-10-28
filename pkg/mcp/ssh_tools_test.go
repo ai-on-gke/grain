@@ -25,6 +25,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bwsalmon/granule/pkg/sandbox"
 )
 
 // localExecRunner implements remoteRunner by running argv on this machine
@@ -535,5 +537,53 @@ func TestSSHEditFileRefusesAnEmptyOldString(t *testing.T) {
 	}
 	if want := "     1\tabc"; res.Text() != want {
 		t.Errorf("read_file after the refused edit = %q, want %q", res.Text(), want)
+	}
+}
+
+// putFilesRunner is localExecRunner with granule's batched PutFiles
+// bolted on, standing in for GranuleSandboxRunner.
+type putFilesRunner struct {
+	localExecRunner
+	calls int
+}
+
+func (r *putFilesRunner) PutFiles(ctx context.Context, files []sandbox.FileUpload) error {
+	r.calls++
+	return errors.New("PutFiles called")
+}
+
+// TestSSHWriteFileKeepsDDOverPutFilesTransport pins write_file to dd on a
+// transport that also offers PutFiles: PutFiles renames a fresh file into
+// place at a fixed mode, which would drop an existing script's execute
+// bit -- not what write_file does on any other backend.
+func TestSSHWriteFileKeepsDDOverPutFilesTransport(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "run.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &putFilesRunner{localExecRunner: localExecRunner{dir: dir}}
+	var write Tool
+	for _, tool := range NewSSHSandboxTools(runner, dir) {
+		if tool.Name == "write_file" {
+			write = tool
+		}
+	}
+	res := write.Handler(context.Background(), map[string]any{"file_path": script, "content": "#!/bin/sh\necho hi\n"})
+	if res.IsError {
+		t.Fatalf("write_file: %s", res.Text)
+	}
+	if runner.calls != 0 {
+		t.Errorf("write_file called PutFiles %d times, want dd", runner.calls)
+	}
+	fi, err := os.Stat(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o755 {
+		t.Errorf("mode after write_file = %v, want 0755 kept", fi.Mode().Perm())
+	}
+	if got, _ := os.ReadFile(script); string(got) != "#!/bin/sh\necho hi\n" {
+		t.Errorf("content = %q", got)
 	}
 }
