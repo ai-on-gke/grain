@@ -275,7 +275,7 @@ import "strconv"
 // 58 adds `change_target_kind` and `change_target_spec` to `task` and
 // `template`: a task whose change is not a git branch, such as a changelist in a
 // workspace of a registered kind (Task.ChangeTarget).
-const SchemaVersion = 58
+const SchemaVersion = 59
 
 // gitHubCIJobTable is the `github_ci_job` table, named once for Tables and
 // for the migration that adds it.
@@ -944,6 +944,7 @@ var Tables = []string{
   ` + "`verdict`" + `       TEXT     NOT NULL,
   ` + "`waited_ms`" + `     INTEGER  NOT NULL,
   ` + "`pushes_before`" + ` INTEGER  NOT NULL,
+  ` + "`provider`" + `      TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
 )`,
 

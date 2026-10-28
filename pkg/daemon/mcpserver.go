@@ -45,6 +45,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
+	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -110,6 +111,32 @@ func (d DaemonPullRequests) OpenChange(ctx context.Context, summary, body string
 		})
 	}
 	return report, nil
+}
+
+// DaemonChangeChecks implements mcp.ChangeChecksReader by asking the
+// daemon (POST /api/tasks/{id}/change-checks), which reads the task's
+// primary change and answers through its registered change.Checks.
+type DaemonChangeChecks struct {
+	Client *ui.HTTPClient
+	TaskID string
+}
+
+func (d DaemonChangeChecks) ChangeChecksStatus(ctx context.Context) (change.ChecksReport, error) {
+	resp, err := d.Client.ChangeChecks(ctx, d.TaskID, ui.ChangeChecksRequest{Op: ui.ChangeChecksStatus})
+	return resp.Report, err
+}
+
+func (d DaemonChangeChecks) WaitChangeChecks(ctx context.Context, req change.ChecksWait) (change.ChecksReport, error) {
+	resp, err := d.Client.ChangeChecks(ctx, d.TaskID, ui.ChangeChecksRequest{
+		Op: ui.ChangeChecksWait, Jobs: req.Jobs,
+		TimeoutMS: req.Timeout.Milliseconds(), CreditedMS: req.Credited.Milliseconds(),
+	})
+	return resp.Report, err
+}
+
+func (d DaemonChangeChecks) ChangeCIRefusal(ctx context.Context, tool string) (string, error) {
+	resp, err := d.Client.ChangeChecks(ctx, d.TaskID, ui.ChangeChecksRequest{Op: ui.ChangeChecksRefusal, Tool: tool})
+	return resp.Refusal, err
 }
 
 // daemonSandbox implements mcp.SandboxRecreator by asking a running
@@ -2469,6 +2496,14 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 				registry.Register(mcp.NewGrainCIArtifactTools(
 					DaemonGrainCI{Client: client, TaskID: *taskID}, CiRepoScope(*prRepo, grants, taskDetail.DeploymentWide), *root, taskBranch)...)
 			}
+		}
+		// A task whose change is a CL has no pull request and no grain CI:
+		// pull_request_status and wait_for_checks answer from the CL's own
+		// presubmit through the registered change.Checks, and grain CI's
+		// retrigger_ci, run_ci_job and get_ci_log refuse in its words
+		// (changelists.md §3). Registered last, in place of those names.
+		if taskDetail.Task.ChangeTargetKind != "" || len(taskDetail.Task.Changelists) > 0 {
+			registry.Register(mcp.NewChangeChecksTools(DaemonChangeChecks{Client: client, TaskID: *taskID})...)
 		}
 		// Not a tool either: the same row, written the way that costs
 		// the run nothing. With a daemon to tell, every call this

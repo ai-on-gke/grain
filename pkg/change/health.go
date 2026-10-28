@@ -66,6 +66,10 @@ func notice(p Provider) Notice {
 	}
 }
 
+// HealthKind is the kind p's deployment health is recorded under
+// (HealthOf): its Opener's target kind, or its link kind.
+func HealthKind(p Provider) string { return targetKind(p) }
+
 func targetKind(p Provider) string {
 	if o, ok := p.(Opener); ok && o.TargetKind() != "" {
 		return o.TargetKind()

@@ -54,7 +54,7 @@ func (s *Store) RecordProxyCheckWait(ctx context.Context, runID, verdict string,
 	if waited < 0 {
 		waited = 0
 	}
-	wait := RunCheckWait{RunID: runID, Verdict: verdict, Waited: waited}
+	wait := RunCheckWait{RunID: runID, Verdict: verdict, Waited: waited, Provider: CIProviderGrain}
 	s.proxyToolsMu.Lock()
 	if s.proxyCheckWaits == nil {
 		s.proxyCheckWaits = make(map[string][]RunCheckWait)
@@ -69,9 +69,9 @@ func (s *Store) RecordProxyCheckWait(ctx context.Context, runID, verdict string,
 			return err
 		}
 		_, err := tx.ExecContext(ctx,
-			"INSERT INTO `task_run_check_wait` (`run_id`,`seq`,`verdict`,`waited_ms`,`pushes_before`) "+
-				"VALUES (?,?,?,?,?)",
-			runID, seq.Int64+1, verdict, waited.Milliseconds(), 0)
+			"INSERT INTO `task_run_check_wait` (`run_id`,`seq`,`verdict`,`waited_ms`,`pushes_before`,`provider`) "+
+				"VALUES (?,?,?,?,?,?)",
+			runID, seq.Int64+1, verdict, waited.Milliseconds(), 0, CIProviderGrain)
 		return err
 	})
 }

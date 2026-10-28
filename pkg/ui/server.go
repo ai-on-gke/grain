@@ -256,6 +256,7 @@ func (s *Server) routes() {
 	// (Observation.DeliveredCommentID).
 	s.route("POST /api/tasks/{id}/delivered", s.handleRecordDelivered)
 	s.route("POST /api/tasks/{id}/wait-credit", s.handleCreditWait)
+	s.route("POST /api/tasks/{id}/change-checks", s.handleChangeChecks)
 	// The wait_for_task tool, from inside the run that is waiting: check
 	// and describe the tasks it names, or park its own task on them as
 	// depends-on links (wait_task.go).
