@@ -569,7 +569,12 @@ args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do
   case "${args[i]}" in
     apply|create)
-      name=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["metadata"]["name"])')
+      read -r kind name < <(python3 -c 'import json,sys; m=json.load(sys.stdin); print(m["kind"], m["metadata"]["name"])')
+      if [ "$kind" = "Secret" ]; then
+        mkdir -p "$d/secrets"
+        echo "$name" > "$d/secrets/$name"
+        exit 0
+      fi
       mkdir -p "$d/pods" "$d/pod-$name"
       echo "$name" > "$d/pods/$name"
       exit 0
@@ -598,6 +603,10 @@ for ((i=0; i<${#args[@]}; i++)); do
       ;;
     delete)
       name="${args[i+2]}"
+      if [ "${args[i+1]}" = "secret" ]; then
+        rm -f "$d/secrets/$name"
+        exit 0
+      fi
       rm -f "$d/pods/$name"
       echo "$name" >> "$d/deleted"
       exit 0
@@ -656,6 +665,10 @@ jobs:
 			Image:        "ghcr.io/bwsalmon/grain/guest:sha-111@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203",
 			ReadyTimeout: 5 * time.Second,
 			Workspace:    ".",
+			// The fake kubectl above is the whole transport: pin it
+			// rather than letting the host (a pod, or one with a
+			// relay.json) pick direct or relay dialing.
+			TransportMode: orchestrator.GranuleTransportKubectlExec,
 		})
 	}
 

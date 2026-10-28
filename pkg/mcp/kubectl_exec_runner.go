@@ -551,7 +551,8 @@ func NewGranuleSandboxRunnerFromSpec(spec granule.SandboxAccessSpec, relayPool *
 		relayPool = granule.NewPersistentRelayPool(*spec.Relay)
 	}
 	return &GranuleSandboxRunner{
-		Pod: spec.PodName,
+		Pod:  spec.PodName,
+		User: spec.User,
 		Dial: func(ctx context.Context) (*sandbox.Client, error) {
 			switch spec.Mode {
 			case granule.AccessModeRelay:

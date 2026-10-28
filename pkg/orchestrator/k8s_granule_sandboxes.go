@@ -790,6 +790,12 @@ func (k *K8sGranuleSandboxes) podOptionsFor(name string, shape Shape, persist bo
 		},
 		PriorityClassName: k.priority.resolve(k.cfg.PriorityClasses.For(shape.Class), k.cfg.StrictPriorityClasses),
 	}
+	// The kubectl-exec fallback has no transport to poll granule health
+	// over (waitGuestHealth skips it), so "Ready" still has to mean "the
+	// guest answered" through the pod's own readiness probe.
+	if k.transportMode == GranuleTransportKubectlExec {
+		opts.ReadinessExec = GranuleReadinessExec
+	}
 
 	mode := string(k.transportMode)
 	if mode == "" || mode == string(GranuleTransportKubectlExec) {

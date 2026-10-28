@@ -63,11 +63,14 @@ get)
 	fi
 	;;
 create)
+	in=$(cat)
+	# A sandbox pod's access Secret is not what this fake refuses.
+	case "$in" in *'"kind":"Secret"'*) exit 0 ;; esac
 	if [ -f "$dir/refuse-create" ]; then
 		echo 'Error from server (Forbidden): priorityclasses.scheduling.k8s.io is forbidden: User "system:serviceaccount:grain:grain" cannot create resource "priorityclasses" in API group "scheduling.k8s.io" at the cluster scope' >&2
 		exit 1
 	fi
-	name=$(sed -n 's/^  name: //p' | head -n 1)
+	name=$(printf '%s\n' "$in" | sed -n 's/^  name: //p' | head -n 1)
 	touch "$dir/pc/$name"
 	exit 0
 	;;

@@ -27,6 +27,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,7 +96,11 @@ func TestGranulePodOptionsAreAlwaysPrivilegedWithKVM(t *testing.T) {
 	if !opts.NoCommand {
 		t.Error("NoCommand = false, want true: the image's own ENTRYPOINT boots the VM")
 	}
-	if len(opts.ReadinessExec) != 0 {
+	if k.TransportMode() == GranuleTransportKubectlExec {
+		if !slices.Equal(opts.ReadinessExec, GranuleReadinessExec) {
+			t.Errorf("ReadinessExec = %v, want %v under the kubectl-exec fallback, which has no transport to poll health over", opts.ReadinessExec, GranuleReadinessExec)
+		}
+	} else if len(opts.ReadinessExec) != 0 {
 		t.Errorf("ReadinessExec = %v, want empty (readiness now polls granule health over the transport)", opts.ReadinessExec)
 	}
 	if opts.SecretVolume == nil || opts.SecretVolume.MountPath != granule.DefaultAccessMountPath || opts.SecretVolume.Data["token"] == "" || opts.SecretVolume.Data["tls.crt"] == "" || opts.SecretVolume.Data["tls.key"] == "" {

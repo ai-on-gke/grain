@@ -1623,3 +1623,14 @@ func (c Config) LocalScriptsConfig() localscripts.Config {
 	}
 	return cfg
 }
+
+// k8sGranuleAccessDir is where -k8s-granule-sandboxes writes each pod's
+// access spec (token, CA, address) for forked `grain mcpserver`s and
+// Readopt: under dataDir, or "" (the orchestrator's own default) when
+// there is none.
+func k8sGranuleAccessDir(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	return filepath.Join(dataDir, "granule-access")
+}

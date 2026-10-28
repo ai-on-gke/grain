@@ -477,9 +477,36 @@ type SandboxAccessSpec struct {
 	Relay      *RelayConfig `json:"relay,omitempty"`
 }
 
-// WriteSandboxAccessSpec writes spec to path with mode 0600.
+// privateAccessDir creates dir (0700) if it is missing and refuses one
+// another account could write to. An access spec carries a sandbox's
+// bearer token and names the CA and address the controller trusts, so a
+// directory someone else pre-created (the default lives under the
+// shared os.TempDir) must not be able to hand the controller a spec of
+// its own or read the ones written there. Chmod doubles as the
+// ownership check: it fails for anyone but the directory's owner.
+func privateAccessDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("sandbox access directory %s is not a directory", dir)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("sandbox access directory %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+// WriteSandboxAccessSpec writes spec to path with mode 0600, in a
+// directory only this account may use.
 func WriteSandboxAccessSpec(path string, spec SandboxAccessSpec) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := privateAccessDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(spec, "", "  ")
@@ -487,11 +514,38 @@ func WriteSandboxAccessSpec(path string, spec SandboxAccessSpec) error {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
+	// Remove first so a leftover file (or a symlink planted in its
+	// place) cannot keep a wider mode or redirect the write.
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
-// ReadSandboxAccessSpec reads a SandboxAccessSpec from path.
+// ReadSandboxAccessSpec reads a SandboxAccessSpec from path, refusing a
+// symlink, a file group or other may access, or one in a directory they
+// may write to -- WriteSandboxAccessSpec never leaves any of those.
 func ReadSandboxAccessSpec(path string) (*SandboxAccessSpec, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("sandbox access spec %s is not a private regular file (mode %s)", path, fi.Mode())
+	}
+	if di, err := os.Stat(filepath.Dir(path)); err != nil {
+		return nil, err
+	} else if di.Mode().Perm()&0o022 != 0 {
+		return nil, fmt.Errorf("sandbox access spec %s is in a directory group or other may write to (mode %s)", path, di.Mode())
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
