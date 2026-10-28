@@ -712,7 +712,7 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if json.Unmarshal(raw, &on) == nil && on && !acting.AutoApproveProposals {
 				return errors.New("an agent cannot turn on autoApproveProposals, which its own task does not have")
 			}
-		case "approved":
+		case "approved", "interactive":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
 				return errors.New("an agent files work unapproved: approving it needs tasks:admin")
@@ -721,6 +721,11 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			var who string
 			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
 				return fmt.Errorf("an agent cannot name somebody else as the %s of work it files", key)
+			}
+		case "proposalkey":
+			var k string
+			if json.Unmarshal(raw, &k) == nil && strings.TrimSpace(k) != "" {
+				return errors.New("an agent cannot set proposalKey directly")
 			}
 		case "templateid":
 			var id string

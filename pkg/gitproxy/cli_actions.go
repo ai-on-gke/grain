@@ -1184,6 +1184,14 @@ func (p *GitProxy) serveQuarantine(w http.ResponseWriter, r *http.Request, scope
 	var followUpID string
 	if fileFollowUp {
 		if ta, ok := p.taskActions(); ok {
+			limitKey := scope.RunID
+			if limitKey == "" {
+				limitKey = fmt.Sprintf("task:%s#%d", scope.TaskIDStr, scope.Attempt)
+			}
+			if !p.cliProposals.take(limitKey) {
+				http.Error(w, fmt.Sprintf("this attempt has already filed %d proposals via the sandbox CLI, the per-attempt cap", MaxCLIProposalsPerAttempt), http.StatusTooManyRequests)
+				return
+			}
 			hold := true
 			auto := false
 			filed, err := ta.ProposeTask(r.Context(), scope.TaskIDStr, scope.RunID, CLIProposeRequest{

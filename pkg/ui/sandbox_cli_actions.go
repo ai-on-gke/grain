@@ -16,6 +16,8 @@ package ui
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -235,6 +237,15 @@ func (a SandboxCLIActions) CheckWaitTargets(ctx context.Context, callerTaskID st
 	return targets, nil
 }
 
+func sandboxProposalKey(callerTaskID, runID, localID, title string) string {
+	identity := strings.TrimSpace(localID)
+	if identity == "" {
+		identity = fmt.Sprintf("cli:%s:%s", runID, title)
+	}
+	sum := sha256.Sum256([]byte(callerTaskID + "\x00" + identity))
+	return "proposal:" + callerTaskID + ":" + hex.EncodeToString(sum[:])
+}
+
 func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID string, req gitproxy.CLIProposeRequest) (gitproxy.CLIProposeResult, error) {
 	parent, err := a.Client.Store.GetTask(ctx, callerTaskID)
 	if err != nil {
@@ -246,7 +257,6 @@ func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID 
 	repo, base := "", ""
 	if !req.NoRepo && parent.Target != nil {
 		repo = parent.Target.String()
-		base = parent.Base
 	}
 	if req.Repo != "" {
 		repo = req.Repo
@@ -264,9 +274,13 @@ func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID 
 	var deps []string
 	for _, dep := range req.DependsOn {
 		dep = strings.TrimPrefix(strings.TrimSpace(dep), "#")
-		if dep != "" {
-			deps = append(deps, dep)
+		if dep == "" {
+			continue
 		}
+		if existing, err := a.Client.Store.TaskWithTag(ctx, sandboxProposalKey(callerTaskID, runID, dep, "")); err == nil && existing != nil {
+			dep = existing.ID
+		}
+		deps = append(deps, dep)
 	}
 	var fields map[string]CustomFieldValue
 	if len(req.CustomFields) > 0 {
@@ -280,10 +294,7 @@ func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID 
 		c := append([]string(nil), req.Capabilities...)
 		caps = &c
 	}
-	key := strings.TrimSpace(req.ID)
-	if key == "" {
-		key = fmt.Sprintf("cli:%s:%s", runID, req.Title)
-	}
+	key := sandboxProposalKey(callerTaskID, runID, req.ID, req.Title)
 	created, err := a.Client.CreateTask(ctx, CreateTaskRequest{
 		Title:           req.Title,
 		Description:     req.Body,
@@ -330,29 +341,12 @@ func SandboxAPIRoutes(grants []string, scopeFilter string) []APIRoute {
 		if scopeFilter != "" && !strings.EqualFold(string(r.Scope), scopeFilter) {
 			continue
 		}
-		if !set.Has(r.Scope) && !sandboxGrantCoversRoute(grants, r.Pattern) {
+		if !agentCapabilityAllowsRoute(grants, set, r.Pattern, r.Scope) {
 			continue
 		}
 		out = append(out, r)
 	}
 	return out
-}
-
-func sandboxGrantCoversRoute(grants []string, pattern string) bool {
-	for _, g := range grants {
-		switch strings.TrimSpace(g) {
-		case "memory":
-			if pattern == "PUT /api/memory" || pattern == "PUT /api/memory/documents/{name}" ||
-				pattern == "GET /api/memory" || pattern == "GET /api/memory/documents" || pattern == "GET /api/memory/documents/{name}" {
-				return true
-			}
-		case "release-notes":
-			if pattern == "PUT /api/release-notes" || pattern == "GET /api/release-notes" || pattern == "GET /api/release-notes/stats" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (a SandboxCLIActions) ListAPIRoutes(ctx context.Context, callerTaskID string, grants []string, scopeFilter string) ([]gitproxy.CLIAPIRoute, error) {

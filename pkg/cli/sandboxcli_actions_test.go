@@ -34,6 +34,7 @@ import (
 type fakeActionProxy struct {
 	mu      sync.Mutex
 	bodies  map[string]map[string]any
+	headers map[string]http.Header
 	answers map[string]string
 }
 
@@ -43,6 +44,9 @@ func (f *fakeActionProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(raw, &body)
 	f.mu.Lock()
 	f.bodies[r.Method+" "+r.URL.Path] = body
+	if f.headers != nil {
+		f.headers[r.Method+" "+r.URL.Path] = r.Header.Clone()
+	}
 	answer, ok := f.answers[r.URL.Path]
 	f.mu.Unlock()
 	if !ok {
@@ -286,12 +290,19 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 		t.Errorf("task propose --auto-merge: %d %s", code, errOut)
 	}
 
-	// 5. grain api routes & grain api GET
+	// 5. grain api routes, grain api GET, & grain api DELETE --reason
+	proxy.headers = map[string]http.Header{}
 	if out, errOut, code := runActionCLI(t, srv, nil, "api", "routes"); code != 0 || !strings.Contains(out, "/api/tasks") {
 		t.Errorf("api routes: %d %s %s", code, out, errOut)
 	}
 	if out, errOut, code := runActionCLI(t, srv, nil, "api", "GET", "/api/tasks/9"); code != 0 || !strings.Contains(out, `"completed"`) {
 		t.Errorf("api GET: %d %s %s", code, out, errOut)
+	}
+	if out, errOut, code := runActionCLI(t, srv, nil, "api", "DELETE", "/api/tasks/9", "--reason", "cleanup"); code != 0 || !strings.Contains(out, `"completed"`) {
+		t.Errorf("api DELETE: %d %s %s", code, out, errOut)
+	}
+	if got := proxy.headers["DELETE /api/tasks/9"].Get("X-Grain-Acting-Reason"); got != "cleanup" {
+		t.Errorf("DELETE /api/tasks/9 X-Grain-Acting-Reason = %q, want cleanup", got)
 	}
 
 	// 6. memory write, memory doc-write (and memory doc write), release-notes, quarantine

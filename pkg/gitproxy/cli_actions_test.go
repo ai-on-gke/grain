@@ -113,8 +113,9 @@ func (f *fakeCreditor) CreditCLIWait(_ context.Context, taskID string, blocked t
 // arguments, as *model.Store does.
 type fullActivity struct {
 	fakeActivity
-	waits []string
-	calls []map[string]any
+	waits    []string
+	calls    []map[string]any
+	apiCalls []string
 }
 
 func (f *fullActivity) RecordProxyCheckWait(_ context.Context, runID, verdict string, _ time.Duration) error {
@@ -128,6 +129,13 @@ func (f *fullActivity) RecordProxyToolCallArgs(_ context.Context, runID, tool st
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, args)
+	return nil
+}
+
+func (f *fullActivity) RecordProxyAPICall(_ context.Context, runID, tool, targetIDs string, _ int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.apiCalls = append(f.apiCalls, runID+":"+tool+":"+targetIDs)
 	return nil
 }
 
@@ -411,7 +419,7 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 			Grants: []string{"quarantine-test", "api:tasks:read"},
 		},
 	}}
-	var apiHeaderChannel, apiHeaderTask, apiHeaderRun string
+	var apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderReason string
 	proxy := &gitproxy.GitProxy{
 		Tokens:          tokens,
 		Namespace:       &namespace.Server{CIStore: ci.NewRunStore(10)},
@@ -423,6 +431,7 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 			apiHeaderChannel = r.Header.Get("X-Grain-Channel")
 			apiHeaderTask = r.Header.Get("X-Grain-Acting-Task")
 			apiHeaderRun = r.Header.Get("X-Grain-Acting-Run")
+			apiHeaderReason = r.Header.Get("X-Grain-Acting-Reason")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		}),
@@ -483,10 +492,28 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 	if rec := send(h, http.MethodPost, tok2, "/cli/proposals", `{"title":"t","body":"b"}`); rec.Code != http.StatusTooManyRequests {
 		t.Errorf("proposal over cap: %d %s, want 429", rec.Code, rec.Body)
 	}
+	// Quarantine follow-up proposals share the same per-attempt proposal cap.
+	if rec := send(h, http.MethodPost, tok2, "/cli/quarantine", `{"test_name":"pkg/foo.TestBar","reason":"flake"}`); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("quarantine follow-up proposal over cap: %d %s, want 429", rec.Code, rec.Body)
+	}
 
-	// /api/ forwarding attaches X-Grain-Channel: sandbox-cli, X-Grain-Acting-Task, and X-Grain-Acting-Run.
-	if rec := send(h, http.MethodGet, tok2, "/api/tasks", ""); rec.Code != http.StatusOK ||
-		apiHeaderChannel != "sandbox-cli" || apiHeaderTask != "7" || apiHeaderRun != "run-2" {
-		t.Errorf("GET /api/tasks: code=%d channel=%q task=%q run=%q", rec.Code, apiHeaderChannel, apiHeaderTask, apiHeaderRun)
+	// /api/ forwarding attaches X-Grain-Channel: sandbox-cli, X-Grain-Acting-Task, and X-Grain-Acting-Run,
+	// and forwards X-Grain-Reason as X-Grain-Acting-Reason.
+	req := httptest.NewRequest(http.MethodDelete, "/api/tasks/9/comments/1", nil)
+	req.Header.Set("Authorization", basicAuthHeader(tok2))
+	req.Header.Set("X-Grain-Reason", "obsolete note")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK ||
+		apiHeaderChannel != "sandbox-cli" || apiHeaderTask != "7" || apiHeaderRun != "run-2" || apiHeaderReason != "obsolete note" {
+		t.Errorf("DELETE /api/tasks/9/comments/1: code=%d channel=%q task=%q run=%q reason=%q",
+			rec.Code, apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderReason)
+	}
+
+	act.mu.Lock()
+	apiCallCount := len(act.apiCalls)
+	act.mu.Unlock()
+	if apiCallCount == 0 {
+		t.Error("expected RecordProxyAPICall to record served proxy calls")
 	}
 }

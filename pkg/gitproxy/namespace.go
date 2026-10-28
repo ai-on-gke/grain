@@ -225,6 +225,9 @@ func (p *GitProxy) forwardToAPI(w http.ResponseWriter, r *http.Request, modelSco
 	in.RemoteAddr = ""
 	in.Host = "localhost"
 	reason := strings.TrimSpace(r.Header.Get("X-Grain-Acting-Reason"))
+	if reason == "" {
+		reason = strings.TrimSpace(r.Header.Get("X-Grain-Reason"))
+	}
 	for k := range in.Header {
 		if strings.EqualFold(k, "Authorization") || strings.HasPrefix(strings.ToLower(k), "x-grain-") {
 			in.Header.Del(k)

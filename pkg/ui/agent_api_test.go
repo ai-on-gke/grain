@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -743,5 +744,67 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, "/api/tasks",
 		`{"title":"dup","description":"b","repo":"acme/widgets","supersedes":"2"}`, "supersede"); code != http.StatusForbidden || !strings.Contains(resp, "supersedes is not permitted") {
 		t.Errorf("POST /api/tasks with supersedes over sandbox-cli: %d %s, want 403", code, resp)
+	}
+
+	// Agent filing escalation refuses proposalKey tag injection (even with tasks:admin)
+	// and refuses interactive auto-approval without tasks:admin.
+	seedAPITask(t, client, "3", "acme/widgets", "api:tasks:write")
+	if code, resp := asAgent(t, srv, "3", http.MethodPost, "/api/tasks",
+		`{"title":"chat","description":"b","repo":"acme/widgets","interactive":true}`, ""); code != http.StatusForbidden || !strings.Contains(resp, "tasks:admin") {
+		t.Errorf("POST /api/tasks with interactive=true without tasks:admin: %d %s, want 403", code, resp)
+	}
+	if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks",
+		`{"title":"tag-spoof","description":"b","repo":"acme/widgets","proposalKey":"console-session:director"}`, "spoof"); code != http.StatusForbidden || !strings.Contains(resp, "proposalKey") {
+		t.Errorf("POST /api/tasks with proposalKey by agent: %d %s, want 403", code, resp)
+	}
+
+	// SandboxCLIActions.ProposeTask hashes --id with a proposal: prefix (preventing system tag injection),
+	// resolves --depends-on <local-id> across calls in the same run, and defaults Base to "".
+	cliActions := ui.SandboxCLIActions{Client: client}
+	ctx := context.Background()
+	p1, err := cliActions.ProposeTask(ctx, "1", "run-1", gitproxy.CLIProposeRequest{
+		ID:    "console-session:director",
+		Title: "Step 1",
+		Body:  "First piece",
+	})
+	if err != nil {
+		t.Fatalf("ProposeTask step 1: %v", err)
+	}
+	stored1, err := client.Store.GetTask(ctx, p1.ID)
+	if err != nil || stored1 == nil {
+		t.Fatalf("GetTask(%s): %v, %v", p1.ID, stored1, err)
+	}
+	if slices.Contains(stored1.Tags, "console-session:director") {
+		t.Errorf("ProposeTask injected raw --id into task.Tags: %v", stored1.Tags)
+	}
+	if _, ok := model.ConsoleSessionIDOf(*stored1); ok {
+		t.Errorf("proposed task spoofed a standing console session via --id: %v", stored1.Tags)
+	}
+	p2, err := cliActions.ProposeTask(ctx, "1", "run-1", gitproxy.CLIProposeRequest{
+		Title:     "Step 2",
+		Body:      "Depends on step 1 by local ID",
+		DependsOn: []string{"console-session:director"},
+	})
+	if err != nil {
+		t.Fatalf("ProposeTask step 2: %v", err)
+	}
+	stored2, err := client.Store.GetTask(ctx, p2.ID)
+	if err != nil || stored2 == nil {
+		t.Fatalf("GetTask(%s): %v, %v", p2.ID, stored2, err)
+	}
+	if !slices.Contains(stored2.Links, model.Link{Kind: model.LinkDependsOn, Target: p1.ID}) {
+		t.Errorf("Step 2 links = %v, want LinkDependsOn -> %s", stored2.Links, p1.ID)
+	}
+
+	// SandboxAPIRoutes includes PUT /api/memory/documents when holding "memory".
+	memRoutes := ui.SandboxAPIRoutes([]string{"memory"}, "")
+	hasDocWrite := false
+	for _, r := range memRoutes {
+		if r.Pattern == "PUT /api/memory/documents" {
+			hasDocWrite = true
+		}
+	}
+	if !hasDocWrite {
+		t.Errorf("SandboxAPIRoutes([memory]) missing PUT /api/memory/documents: %+v", memRoutes)
 	}
 }

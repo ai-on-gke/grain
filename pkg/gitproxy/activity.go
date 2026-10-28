@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ProxyActivityRecorder is where the proxy reports what a sandbox's live
@@ -49,8 +50,13 @@ type ProxyActivityRecorder interface {
 // ProxyAPICallRecorder is an optional extension of ProxyActivityRecorder that
 // records each served proxy call in task_run_api_call. Implemented by *model.Store.
 type ProxyAPICallRecorder interface {
-	RecordProxyAPICall(ctx context.Context, runID, tool string, targetIDs []string, resultBytes int64) error
+	RecordProxyAPICall(ctx context.Context, runID, tool, targetIDs string, resultBytes int64) error
 }
+
+var (
+	_ ProxyActivityRecorder = (*model.Store)(nil)
+	_ ProxyAPICallRecorder  = (*model.Store)(nil)
+)
 
 // proxyActivityRepeatWindow is how long a phrase just written is trusted
 // to still be on the row, matching pkg/mcp's toolActivityRepeatWindow: a
@@ -223,7 +229,7 @@ func (p *GitProxy) recordRouteCall(ctx context.Context, runID string, act RouteA
 	_ = p.Activity.RecordProxyToolCall(ctx, runID, act.Tool, w.bytes, errored)
 	if !errored {
 		if apiRec, ok := p.Activity.(ProxyAPICallRecorder); ok {
-			_ = apiRec.RecordProxyAPICall(ctx, runID, act.Tool, act.Targets, w.bytes)
+			_ = apiRec.RecordProxyAPICall(ctx, runID, act.Tool, strings.Join(act.Targets, ","), w.bytes)
 		}
 	}
 }

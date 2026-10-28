@@ -356,6 +356,7 @@ func (c *sandboxCLI) doAPI(method, path string, rawBody []byte, reason string, w
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if strings.TrimSpace(reason) != "" {
+		req.Header.Set("X-Grain-Acting-Reason", strings.TrimSpace(reason))
 		req.Header.Set("X-Grain-Reason", strings.TrimSpace(reason))
 	}
 	if c.token != "" {
