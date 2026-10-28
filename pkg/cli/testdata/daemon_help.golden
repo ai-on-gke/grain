@@ -306,11 +306,11 @@ Usage of grain daemon:
   -run-host-image string
     	drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, docs/non-disruptive-upgrade.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox
   -sandbox-access-addr string
-    	k8s-granule only: address to run the sandbox-access acceptor on (":7443"), which every sandbox pod's wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, docs/design/grain-on-gke.md "Sandbox access"); empty leaves it off and builds pods as before
+    	k8s-granule only: address to run the sandbox-access acceptor on (":4244"), which every sandbox pod's wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, docs/design/grain-on-gke.md "Sandbox access"); empty leaves it off and builds pods as before
   -sandbox-access-ca-secret string
     	Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload Identity and generated into it on first start; empty keeps the CA in <data-dir>/sandbox-access-ca.pem
   -sandbox-access-dial string
-    	the address sandbox wrappers dial the acceptor at; empty is grain-access.<-k8s-namespace>.svc:7443, the Service deploy/kubernetes/grain-granule.yaml creates
+    	the address sandbox wrappers dial the acceptor at; empty is grain-access.<-k8s-namespace>.svc:4244, the Service deploy/kubernetes/grain-granule.yaml creates
   -sandbox-backend string
     	container, granule, kubernetes, kubernetes-granule, host or none: the same as -container-sandboxes, -granule-sandboxes, -k8s-sandboxes, -k8s-granule-sandboxes, -host-sandboxes or -disable-native-sandboxes
   -sandbox-cpu-overcommit float

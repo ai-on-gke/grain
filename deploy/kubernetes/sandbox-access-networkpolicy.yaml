@@ -16,7 +16,7 @@
 # requires a client certificate before any application byte. These
 # policies bound what the pod as a whole can reach.
 #
-# The wrapper's need (7443) and the guest's (the internet) are separate
+# The wrapper's need (4244) and the guest's (the internet) are separate
 # rules -- and here separate policies -- so a change to one cannot widen
 # the other without its own review.
 #
@@ -29,7 +29,7 @@
 #
 # networkpolicy.yaml's grain-sandbox-network-none policy needs no change
 # for the acceptor: its one egress peer is the grain pod on every port,
-# which already includes 7443. On this backend a network: none guest has
+# which already includes 4244. On this backend a network: none guest has
 # no NIC at all (CHV_NET_MODE=none), so that rule is the wrapper's.
 ---
 apiVersion: networking.k8s.io/v1
@@ -61,7 +61,7 @@ spec:
               app.kubernetes.io/name: grain
       ports:
         - protocol: TCP
-          port: 7443
+          port: 4244
     # DNS, to resolve grain-access.grain.svc (and, for open-network
     # guests, the internet's names).
     - to:
@@ -137,7 +137,7 @@ spec:
               app.kubernetes.io/component: sandbox
       ports:
         - protocol: TCP
-          port: 7443
+          port: 4244
     # The UI and API: only from the Gateway's proxy-only subnet and the
     # webhook receiver.
     - from:

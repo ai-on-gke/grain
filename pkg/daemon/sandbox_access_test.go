@@ -21,13 +21,22 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/ports"
+	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 )
 
+func TestSandboxAccessPortIsTheRegisteredOne(t *testing.T) {
+	if sandboxaccess.DefaultPort != ports.SandboxAccess {
+		t.Fatalf("sandboxaccess.DefaultPort = %d, ports.SandboxAccess = %d (docs/ports.md)", sandboxaccess.DefaultPort, ports.SandboxAccess)
+	}
+}
+
 func TestSandboxAccessDialDefaultsToTheService(t *testing.T) {
-	if got := sandboxAccessDial(Config{}, "grain"); got != "grain-access.grain.svc:7443" {
+	if got := sandboxAccessDial(Config{}, "grain"); got != "grain-access.grain.svc:4244" {
 		t.Fatalf("dial = %q", got)
 	}
-	if got := sandboxAccessDial(Config{SandboxAccessDial: "10.0.0.1:7443"}, "grain"); got != "10.0.0.1:7443" {
+	if got := sandboxAccessDial(Config{SandboxAccessDial: "10.0.0.1:4244"}, "grain"); got != "10.0.0.1:4244" {
 		t.Fatalf("dial = %q", got)
 	}
 }
@@ -53,7 +62,7 @@ func TestStartSandboxAccessKeepsOneCAInTheDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if access.Dial != "grain-access.grain.svc:7443" {
+	if access.Dial != "grain-access.grain.svc:4244" {
 		t.Fatalf("Dial = %q", access.Dial)
 	}
 	path := filepath.Join(dir, "sandbox-access-ca.pem")

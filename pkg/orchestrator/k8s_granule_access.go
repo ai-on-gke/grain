@@ -37,7 +37,7 @@ type SandboxAccessMinter interface {
 type K8sGranuleAccess struct {
 	// Acceptor mints and revokes credentials.
 	Acceptor SandboxAccessMinter
-	// Dial is the address wrappers dial: grain-access.<ns>.svc:7443.
+	// Dial is the address wrappers dial: grain-access.<ns>.svc:4244.
 	Dial string
 	// ControllerIPs are the acceptor's addresses as a guest would see
 	// them -- the grain-access Service's ClusterIP and the grain pod's own

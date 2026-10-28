@@ -59,8 +59,10 @@ import (
 )
 
 // DefaultPort is the acceptor's port: its own, on its own Service
-// (grain-access), serving nothing else.
-const DefaultPort = 7443
+// (grain-access), serving nothing else. It is pkg/ports.SandboxAccess
+// (docs/ports.md), repeated here so this package imports nothing of
+// grain's.
+const DefaultPort = 4244
 
 // handshakeTimeout bounds the TLS handshake plus the opening JSON line.
 const handshakeTimeout = 10 * time.Second
@@ -141,7 +143,7 @@ func New(cfg Config, ln net.Listener) (*Acceptor, error) {
 	return a, nil
 }
 
-// Listen is New over a fresh TCP listener on addr (":7443").
+// Listen is New over a fresh TCP listener on addr (":4244").
 func Listen(cfg Config, addr string) (*Acceptor, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

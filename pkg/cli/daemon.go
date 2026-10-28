@@ -991,11 +991,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"with -k8s-granule-sandboxes; no context-free default to pick, since nothing publishes a "+
 			"packed guest image under a stable tag yet -- docs/k8s-granule-design.md §4"+seedOnly)
 	sandboxAccessAddr := fs.String("sandbox-access-addr", "",
-		"k8s-granule only: address to run the sandbox-access acceptor on (\":7443\"), which every sandbox pod's "+
+		"k8s-granule only: address to run the sandbox-access acceptor on (\":4244\"), which every sandbox pod's "+
 			"wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, "+
 			"docs/design/grain-on-gke.md \"Sandbox access\"); empty leaves it off and builds pods as before")
 	sandboxAccessDial := fs.String("sandbox-access-dial", "",
-		"the address sandbox wrappers dial the acceptor at; empty is grain-access.<-k8s-namespace>.svc:7443, "+
+		"the address sandbox wrappers dial the acceptor at; empty is grain-access.<-k8s-namespace>.svc:4244, "+
 			"the Service deploy/kubernetes/grain-granule.yaml creates")
 	sandboxAccessCASecret := fs.String("sandbox-access-ca-secret", "",
 		"Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload "+

@@ -302,7 +302,7 @@ spec:
     app.kubernetes.io/name: grain
   ports:
     - name: sandbox-access
-      port: 7443
+      port: 4244
       targetPort: sandbox-access
 ---
 apiVersion: apps/v1
@@ -419,7 +419,7 @@ spec:
             # grain-access-<pod>. The CA is kept in
             # /data/sandbox-access-ca.pem unless
             # -sandbox-access-ca-secret names a Secret Manager secret.
-            - -sandbox-access-addr=:7443
+            - -sandbox-access-addr=:4244
           env:
             - name: GRAIN_POD_IP
               valueFrom:
@@ -440,7 +440,7 @@ spec:
             - name: http
               containerPort: 8080
             - name: sandbox-access
-              containerPort: 7443
+              containerPort: 4244
           readinessProbe:
             httpGet:
               path: /api/auth/access-code

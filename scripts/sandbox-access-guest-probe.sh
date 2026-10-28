@@ -27,9 +27,9 @@
 #
 # Inside an unprivileged user + network namespace laid out like a sandbox
 # pod (eth0 10.88.0.2, default route via 10.88.0.1), with a peer namespace
-# standing in for the cluster: 10.88.0.1 is the gateway, 10.88.1.1:7443
+# standing in for the cluster: 10.88.0.1 is the gateway, 10.88.1.1:4244
 # is grain's acceptor (pkg/sandboxaccess, run by its
-# TestVM_GuestCannotReachAcceptor) and 10.88.1.2:7443 a control listener.
+# TestVM_GuestCannotReachAcceptor) and 10.88.1.2:4244 a control listener.
 # granule-shim boots the guest with GRANULE_ACCESS_DIAL at the acceptor
 # and GRANULE_ACCESS_CONTROLLER_IPS naming it, as K8sGranuleSandboxes
 # sets them; the test then has the guest connect to both addresses. The
@@ -43,7 +43,7 @@ POD_IP=10.88.0.2
 GATEWAY_IP=10.88.0.1
 ACCEPTOR_IP=10.88.1.1
 CONTROL_IP=10.88.1.2
-PORT=7443
+PORT=4244
 
 PASSED=0 FAILED=0
 FAILURES=()

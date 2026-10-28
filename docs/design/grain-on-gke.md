@@ -157,13 +157,13 @@ cloudtop                       GKE Gateway (IAP)              GKE cluster, names
 --------                       -----------------              ----------------------------
 grain hostd  --dials out-->    /api/hostd/*      ------->     Deployment grain (1 replica)
  allowlist                     /*  (UI, API)     ------->       :8080  UI / API / hostd
- agy, gcp, gchat ...           /webhooks/github  ------->       :7443  sandbox-access acceptor
+ agy, gcp, gchat ...           /webhooks/github  ------->       :4244  sandbox-access acceptor
                                  (no IAP, to grain-webhook)     :...   git proxy, model proxy,
 browser      ------------->    /*                                      package cache
 
                                                               Service grain          -> :8080
                                                               Service grain-sandbox  -> proxies
-                                                              Service grain-access   -> :7443
+                                                              Service grain-access   -> :4244
 
                                                               sandbox pod
                                                                 wrapper --mTLS--> grain-access
@@ -295,7 +295,7 @@ These already run inside the grain process and are already advertised at
   still gets only what its own token allows.
 
 `Service/grain-access` is separate from `grain-sandbox` and exposes only
-the acceptor port (7443). That separation is what makes the egress rules
+the acceptor port (4244). That separation is what makes the egress rules
 in *Security* expressible.
 
 ### UI and API ingress
@@ -382,7 +382,7 @@ the prerequisite for either.
 ### The channel
 
 Granule's wrapper, in dial-out mode (#1456), connects to
-`grain-access.grain.svc:7443`. It holds one mTLS connection per
+`grain-access.grain.svc:4244`. It holds one mTLS connection per
 sandbox, multiplexed, carrying:
 
 - **exec**, with streaming stdin, stdout and stderr, a real exit code,
@@ -803,7 +803,7 @@ keep it from being a way in.
    - granule's wrapper installs a filter in the pod's network namespace,
      on the guest's tap or the inline datapath, that drops every
      guest-originated packet to `grain-access`'s ClusterIP and to the
-     grain pod's port 7443. The wrapper's own dial-out leaves from the
+     grain pod's port 4244. The wrapper's own dial-out leaves from the
      pod namespace's stack, not the guest's interface, so it is
      unaffected. This is a requirement on #1456. GKE-2 verifies it with
      a guest that tries to connect and must time out.
@@ -834,15 +834,15 @@ keep it from being a way in.
 3. **Dial-out only.** Nothing dials a sandbox pod. Two NetworkPolicies
    apply:
    - **`grain-sandbox-egress`** selects every sandbox pod. Its egress
-     allows `grain-sandbox`'s ports, `grain-access:7443`, DNS, and the
+     allows `grain-sandbox`'s ports, `grain-access:4244`, DNS, and the
      internet for open-network tasks. It denies the metadata server
      (`169.254.169.254/32`), the node and pod CIDRs other than grain's,
      and the GKE control plane. Its ingress is empty.
    - **`grain-access-ingress`** selects the grain pod. Its ingress
-     admits port 7443 only from pods labelled `app=grain-sandbox`, the
+     admits port 4244 only from pods labelled `app=grain-sandbox`, the
      guest-facing ports only from the same pods, and port 8080 only from
      the Gateway's proxy-only subnet and `grain-webhook`.
-   - The wrapper's egress requirement (7443) and the guest's (the
+   - The wrapper's egress requirement (4244) and the guest's (the
      proxies and the internet) are separate rules with separate
      comments, so a later change to one cannot widen the other without
      its own review. The in-pod filter in (2) is what actually separates
@@ -1137,7 +1137,7 @@ being vendored into `third_party/granule`.
   the mode, so turning it on needs no new pods.
 - Settle the inline-network question in *Security* (2) with granule
   (an in-pod drop, or a NAT mode), and verify it with a guest that must
-  fail to connect to 7443.
+  fail to connect to 4244.
 - Role: `secrets: create, delete`. The NetworkPolicies
   `grain-sandbox-egress` and `grain-access-ingress`.
 - Tests: the acceptor against granule's fake wrapper (admission,

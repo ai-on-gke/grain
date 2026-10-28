@@ -98,7 +98,7 @@ func TestK8sGranuleAcquireMintsAccessCredentialsIntoOwnedSecret(t *testing.T) {
 		},
 		Access: &K8sGranuleAccess{
 			Acceptor:      minter,
-			Dial:          "grain-access.grain.svc:7443",
+			Dial:          "grain-access.grain.svc:4244",
 			ControllerIPs: []string{"10.0.0.7", "10.4.0.12"},
 		},
 	})
@@ -167,7 +167,7 @@ func TestK8sGranuleAcquireMintsAccessCredentialsIntoOwnedSecret(t *testing.T) {
 		env[e["name"].(string)] = e["value"].(string)
 	}
 	want := map[string]string{
-		"GRANULE_ACCESS_DIAL":           "grain-access.grain.svc:7443",
+		"GRANULE_ACCESS_DIAL":           "grain-access.grain.svc:4244",
 		"GRANULE_ACCESS_SANDBOX_ID":     "901-1",
 		"GRANULE_ACCESS_TOKEN_FILE":     "/var/run/granule/access/token",
 		"GRANULE_ACCESS_CERT_FILE":      "/var/run/granule/access/tls.crt",
