@@ -970,10 +970,11 @@ type TerminalFramework interface {
 // KubePod is a Kubernetes sandbox pod as a forked "mcpserver" is told
 // about it (RunConfig.K8sPod). The zero value names no pod.
 type KubePod struct {
-	Namespace  string
-	Pod        string
-	Kubeconfig string
-	Granule    bool
+	Namespace         string
+	Pod               string
+	Kubeconfig        string
+	Granule           bool
+	GranuleAccessFile string
 	// Workspace is the directory the sandbox tools operate in inside it.
 	Workspace string
 }
@@ -986,6 +987,9 @@ func (p KubePod) MCPServerArgs() []string {
 	}
 	if p.Granule {
 		args = append(args, "-k8s-granule")
+	}
+	if p.GranuleAccessFile != "" {
+		args = append(args, "-k8s-granule-access-file", p.GranuleAccessFile)
 	}
 	return args
 }

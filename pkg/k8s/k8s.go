@@ -44,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -317,6 +318,37 @@ type PodOptions struct {
 	// prepared, whose manifest is then exactly what it was before this
 	// field existed.
 	Setup *Setup
+
+	// SecretVolume, when set, mounts a Secret into the sandbox container
+	// via a read-only projected volume at SecretVolume.MountPath. When
+	// SecretVolume.Data is non-empty, Create also creates that Secret
+	// before applying the pod manifest.
+	SecretVolume *SecretVolume
+
+	// Ports exposes TCP ports on the sandbox container.
+	Ports []ContainerPort
+}
+
+// SecretVolume mounts a Secret via a projected volume into the sandbox
+// container.
+type SecretVolume struct {
+	// Name is the Secret object name in the pod's namespace.
+	Name string
+	// MountPath is the directory in the sandbox container where the
+	// Secret's keys are mounted read-only.
+	MountPath string
+	// Data, when non-empty, causes Create to create Secret/Name with these
+	// stringData entries before creating the pod.
+	Data map[string]string
+}
+
+// AccessVolumeName is the pod volume name used for SecretVolume.
+const AccessVolumeName = "granule-access"
+
+// ContainerPort is a TCP port exposed by the sandbox container.
+type ContainerPort struct {
+	Name string
+	Port int
 }
 
 // Setup is an init container that leaves files for the sandbox container
@@ -454,6 +486,20 @@ func (c Client) Manifest(name string, shape PodShape, opts PodOptions) ([]byte, 
 	if len(opts.Env) > 0 {
 		container["env"] = envList(opts.Env)
 	}
+	if len(opts.Ports) > 0 {
+		ports := make([]any, 0, len(opts.Ports))
+		for _, p := range opts.Ports {
+			entry := map[string]any{
+				"containerPort": p.Port,
+				"protocol":      "TCP",
+			}
+			if p.Name != "" {
+				entry["name"] = p.Name
+			}
+			ports = append(ports, entry)
+		}
+		container["ports"] = ports
+	}
 	// No runAsUser beside it unless a caller asked for one, deliberately.
 	// Which uid a sandbox runs as is its image's own declaration -- USER
 	// agent, uid 1000, in the shipped Dockerfile.k8s-sandbox, and
@@ -499,6 +545,26 @@ func (c Client) Manifest(name string, shape PodShape, opts PodOptions) ([]byte, 
 			"hostPath": map[string]any{"path": dev, "type": "CharDevice"},
 		})
 		volumeMounts = append(volumeMounts, map[string]any{"name": volName, "mountPath": dev})
+	}
+	if opts.SecretVolume != nil && opts.SecretVolume.Name != "" && opts.SecretVolume.MountPath != "" {
+		volumes = append(volumes, map[string]any{
+			"name": AccessVolumeName,
+			"projected": map[string]any{
+				"defaultMode": 0o400,
+				"sources": []any{
+					map[string]any{
+						"secret": map[string]any{
+							"name": opts.SecretVolume.Name,
+						},
+					},
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, map[string]any{
+			"name":      AccessVolumeName,
+			"mountPath": opts.SecretVolume.MountPath,
+			"readOnly":  true,
+		})
 	}
 	var initContainers []any
 	if opts.Setup != nil {
@@ -637,6 +703,14 @@ func toAnySlice(ss []string) []any {
 	return out
 }
 
+// InKubernetesPod reports whether this process itself is running inside a
+// Kubernetes pod.
+func InKubernetesPod() bool {
+	return strings.TrimSpace(os.Getenv("GRAIN_POD_NAME")) != "" ||
+		strings.TrimSpace(os.Getenv("GRAIN_POD_IP")) != "" ||
+		strings.TrimSpace(os.Getenv("KUBERNETES_SERVICE_HOST")) != ""
+}
+
 // hostDeviceVolumeName derives a DNS-1123-safe volume name from a device
 // path -- "/dev/kvm" becomes "dev-kvm" -- so PodOptions.HostDevices needs
 // nothing from a caller beyond the path itself.
@@ -668,7 +742,15 @@ func (c Client) Create(ctx context.Context, name string, shape PodShape, opts Po
 	if err != nil {
 		return err
 	}
+	if opts.SecretVolume != nil && len(opts.SecretVolume.Data) > 0 {
+		if err := c.CreateSecret(ctx, opts.SecretVolume.Name, opts.SecretVolume.Data, opts.Labels); err != nil {
+			return fmt.Errorf("k8s: creating access secret for sandbox pod %q: %w", name, err)
+		}
+	}
 	if _, err := c.runInput(ctx, string(manifest), "apply", "--validate=false", "-f", "-"); err != nil {
+		if opts.SecretVolume != nil && len(opts.SecretVolume.Data) > 0 {
+			_ = c.DeleteSecret(ctx, opts.SecretVolume.Name)
+		}
 		if opts.PriorityClassName != "" && missingPriorityClass(err) {
 			return fmt.Errorf("k8s: creating sandbox pod %q: %w %q -- apply deploy/kubernetes/grain.yaml "+
 				"(or grain-granule.yaml), which defines grain's PriorityClasses, or clear the priority class "+
@@ -678,6 +760,79 @@ func (c Client) Create(ctx context.Context, name string, shape PodShape, opts Po
 		return fmt.Errorf("k8s: creating sandbox pod %q: %w", name, err)
 	}
 	return nil
+}
+
+// SecretManifest renders an Opaque Secret manifest with ManagedByLabel,
+// SandboxLabel, and optional extra labels.
+func (c Client) SecretManifest(name string, stringData map[string]string, extraLabels map[string]string) ([]byte, error) {
+	if name == "" {
+		return nil, fmt.Errorf("k8s: a sandbox secret needs a name")
+	}
+	labels := map[string]any{}
+	for k, v := range extraLabels {
+		labels[k] = v
+	}
+	labels[ManagedByLabel] = ManagedByValue
+	labels[SandboxLabel] = SandboxValue
+	if c.Instance != "" {
+		labels[InstanceLabel] = c.Instance
+	}
+	data := map[string]string{}
+	for k, v := range stringData {
+		data[k] = v
+	}
+	secret := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"type":       "Opaque",
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": c.NamespaceOrDefault(),
+			"labels":    labels,
+		},
+		"stringData": data,
+	}
+	return json.Marshal(secret)
+}
+
+// CreateSecret creates (or replaces) a per-sandbox Secret using
+// `kubectl delete --ignore-not-found` + `kubectl create -f -` so that the
+// grain ServiceAccount only needs `create` and `delete` on secrets and never
+// `get` or `list`.
+func (c Client) CreateSecret(ctx context.Context, name string, stringData map[string]string, extraLabels map[string]string) error {
+	manifest, err := c.SecretManifest(name, stringData, extraLabels)
+	if err != nil {
+		return err
+	}
+	_ = c.DeleteSecret(ctx, name)
+	if _, err := c.runInput(ctx, string(manifest), "create", "--validate=false", "-f", "-"); err != nil {
+		return fmt.Errorf("k8s: creating secret %q: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteSecret removes a per-sandbox Secret, ignoring NotFound.
+func (c Client) DeleteSecret(ctx context.Context, name string) error {
+	if name == "" {
+		return nil
+	}
+	if _, err := c.run(ctx, "delete", "secret", name, "--ignore-not-found"); err != nil {
+		return fmt.Errorf("k8s: deleting secret %q: %w", name, err)
+	}
+	return nil
+}
+
+// PodIP reads a pod's status.podIP.
+func (c Client) PodIP(ctx context.Context, name string) (string, error) {
+	out, err := c.run(ctx, "get", "pod", name, "-o", "jsonpath={.status.podIP}")
+	if err != nil {
+		return "", fmt.Errorf("k8s: reading podIP for %q: %w", name, err)
+	}
+	ip := strings.TrimSpace(out)
+	if ip == "" {
+		return "", fmt.Errorf("k8s: pod %q has no podIP assigned yet", name)
+	}
+	return ip, nil
 }
 
 // ErrNoPriorityClass is what Create wraps when the API server refuses a

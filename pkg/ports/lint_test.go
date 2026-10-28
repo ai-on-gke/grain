@@ -60,6 +60,7 @@ var allowlist = []allowed{
 	{8080, "cmd/checkpost/", "checkpost is a separate service whose deployment publishes :8080"},
 	{8080, "cmd/github-webhook/", "github-webhook is a separate gateway service whose deployment (deploy/kubernetes/github-webhook.yaml) publishes :8080"},
 	{8080, "pkg/cli/ghwebhook_flags.go", "-github-webhook-url's example names the github-webhook gateway service's :8080"},
+	{7443, "pkg/granule/", "granule listen mode's TCP port inside each kubernetes-granule sandbox pod (its own network namespace, never a host listener), which the relay and NetworkPolicy name"},
 	{41234, "pkg/demo/", "a remote executor's address in demo fixtures, not a listener"},
 }
 

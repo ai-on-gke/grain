@@ -17,14 +17,19 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/granule"
 	"github.com/ai-on-gke/grain/pkg/kubectlgate"
 	"github.com/ai-on-gke/grain/pkg/procgroup"
+	"github.com/bwsalmon/granule/pkg/sandbox"
 )
 
 // KubectlExecRunner runs argv inside a sandbox pod's container through
@@ -499,4 +504,344 @@ func execFailedBeforeContainer(stderr string) bool {
 	line = strings.TrimSpace(line)
 	return strings.HasPrefix(line, "Error from server") || strings.HasPrefix(line, "error: ") ||
 		strings.HasPrefix(line, "Unable to connect to the server")
+}
+
+// GranuleSandboxRunner drives a kubernetes-granule sandbox pod over granule's
+// multiplexed sandbox access protocol (either direct TCP/TLS Dial in-cluster
+// or DialRelay through granule relay out-of-cluster), replacing `kubectl exec`.
+type GranuleSandboxRunner struct {
+	// Pod is the sandbox pod name (and target name for granule relay).
+	Pod string
+
+	// User is the default guest user to run commands as when empty in the
+	// request ("debian" by default in granule's guest agent).
+	User string
+
+	// Workdir is the default working directory inside the guest when non-empty.
+	Workdir string
+
+	// Dial establishes or returns a multiplexed *sandbox.Client to the sandbox.
+	Dial func(ctx context.Context) (*sandbox.Client, error)
+
+	mu     sync.Mutex
+	client *sandbox.Client
+}
+
+// NewGranuleSandboxRunnerFromAccessFile creates a GranuleSandboxRunner from a
+// serialized granule.SandboxAccessSpec JSON file on disk.
+func NewGranuleSandboxRunnerFromAccessFile(path string, resolveIP func(context.Context, string) (string, error)) (*GranuleSandboxRunner, error) {
+	spec, err := granule.ReadSandboxAccessSpec(path)
+	if err != nil {
+		return nil, err
+	}
+	return NewGranuleSandboxRunnerFromSpec(*spec, nil, resolveIP)
+}
+
+// NewGranuleSandboxRunnerFromSpec creates a GranuleSandboxRunner from a
+// granule.SandboxAccessSpec, optionally sharing relayPool across sandboxes.
+func NewGranuleSandboxRunnerFromSpec(spec granule.SandboxAccessSpec, relayPool *granule.PersistentRelayPool, resolveIP func(context.Context, string) (string, error)) (*GranuleSandboxRunner, error) {
+	opts, err := spec.ClientOptions()
+	if err != nil {
+		return nil, err
+	}
+	if spec.Mode == granule.AccessModeRelay && relayPool == nil {
+		if spec.Relay == nil {
+			return nil, fmt.Errorf("sandbox %s uses relay mode but has no relay config", spec.PodName)
+		}
+		relayPool = granule.NewPersistentRelayPool(*spec.Relay)
+	}
+	return &GranuleSandboxRunner{
+		Pod:  spec.PodName,
+		User: spec.User,
+		Dial: func(ctx context.Context) (*sandbox.Client, error) {
+			switch spec.Mode {
+			case granule.AccessModeRelay:
+				return relayPool.Connect(ctx, spec.PodName, opts)
+			case granule.AccessModeDirect:
+				return granule.DialDirect(ctx, spec.PodName, spec.Port, spec.PodIP, resolveIP, opts)
+			default:
+				return nil, fmt.Errorf("unsupported granule access mode %q", spec.Mode)
+			}
+		},
+	}, nil
+}
+
+func (r *GranuleSandboxRunner) getClient(ctx context.Context) (*sandbox.Client, error) {
+	r.mu.Lock()
+	c := r.client
+	r.mu.Unlock()
+	if c != nil {
+		return c, nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.client != nil {
+		return r.client, nil
+	}
+	if r.Dial == nil {
+		return nil, fmt.Errorf("GranuleSandboxRunner for %s has no Dial function", r.Pod)
+	}
+	c, err := r.Dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	r.client = c
+	return c, nil
+}
+
+func (r *GranuleSandboxRunner) resetClient(old *sandbox.Client) {
+	r.mu.Lock()
+	if r.client == old {
+		r.client = nil
+	}
+	r.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+}
+
+// Close closes any cached sandbox client connection.
+func (r *GranuleSandboxRunner) Close() error {
+	r.mu.Lock()
+	c := r.client
+	r.client = nil
+	r.mu.Unlock()
+	if c != nil {
+		return c.Close()
+	}
+	return nil
+}
+
+// Health probes the sandbox wrapper and guest agent readiness.
+func (r *GranuleSandboxRunner) Health(ctx context.Context) (*sandbox.HealthInfo, error) {
+	c, err := r.getClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	info, err := c.Health(ctx)
+	if err == nil {
+		return info, nil
+	}
+	r.resetClient(c)
+	c, err = r.getClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.Health(ctx)
+}
+
+// OpenForwardStream opens a port-forwarding stream to the guest agent,
+// suitable for guestforward.Options.Transport.
+func (r *GranuleSandboxRunner) OpenForwardStream(ctx context.Context) (io.ReadWriteCloser, error) {
+	c, err := r.getClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	st, err := c.OpenForwardStream(ctx)
+	if err == nil {
+		return st, nil
+	}
+	r.resetClient(c)
+	c, err = r.getClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.OpenForwardStream(ctx)
+}
+
+// PlaceFile uploads a single file into the guest via PutFiles (tar-like
+// framed batch stream) and optionally marks it executable.
+func (r *GranuleSandboxRunner) PlaceFile(ctx context.Context, targetPath string, content []byte, executable bool) error {
+	mode := fs.FileMode(0o600)
+	if executable {
+		mode = 0o700
+	}
+	return r.PutFiles(ctx, []sandbox.FileUpload{{
+		Path:    targetPath,
+		Content: content,
+		Mode:    mode,
+	}})
+}
+
+// PutFiles uploads a batch of files to the guest in a single round-trip.
+func (r *GranuleSandboxRunner) PutFiles(ctx context.Context, files []sandbox.FileUpload) error {
+	if len(files) == 0 {
+		return nil
+	}
+	// Ensure parent directories exist when files are placed in nested paths.
+	dirs := uniqueParentDirs(files)
+	if len(dirs) > 0 {
+		argv := append([]string{"mkdir", "-p", "--"}, dirs...)
+		if _, stderr, code := r.Run(ctx, argv, ""); code != 0 {
+			return fmt.Errorf("creating parent directories in sandbox %s (exit %d): %s", r.Pod, code, strings.TrimSpace(stderr))
+		}
+	}
+	c, err := r.getClient(ctx)
+	if err != nil {
+		return err
+	}
+	if err := c.PutFiles(ctx, files); err != nil {
+		r.resetClient(c)
+		c, err2 := r.getClient(ctx)
+		if err2 != nil {
+			return err
+		}
+		return c.PutFiles(ctx, files)
+	}
+	return nil
+}
+
+func uniqueParentDirs(files []sandbox.FileUpload) []string {
+	seen := make(map[string]struct{}, len(files))
+	var out []string
+	for _, f := range files {
+		idx := strings.LastIndexByte(f.Path, '/')
+		if idx <= 0 {
+			continue
+		}
+		dir := f.Path[:idx]
+		if dir == "" || dir == "/" || dir == "/tmp" {
+			continue
+		}
+		if _, ok := seen[dir]; ok {
+			continue
+		}
+		seen[dir] = struct{}{}
+		out = append(out, dir)
+	}
+	return out
+}
+
+// Run executes argv in the guest and returns collected stdout, stderr, and exitCode.
+func (r *GranuleSandboxRunner) Run(ctx context.Context, argv []string, stdin string) (stdout, stderr string, exitCode int) {
+	return r.RunStream(ctx, argv, stdin, nil)
+}
+
+// RunAsRoot executes argv as root inside the guest.
+func (r *GranuleSandboxRunner) RunAsRoot(ctx context.Context, argv []string, stdin string) (stdout, stderr string, exitCode int) {
+	return r.runWithUser(ctx, "root", argv, stdin, nil)
+}
+
+// RunStream executes argv in the guest, streaming output to out as it arrives
+// and automatically reattaching if the underlying connection drops mid-command.
+func (r *GranuleSandboxRunner) RunStream(ctx context.Context, argv []string, stdin string, out io.Writer) (stdout, stderr string, exitCode int) {
+	return r.runWithUser(ctx, r.User, argv, stdin, out)
+}
+
+func (r *GranuleSandboxRunner) runWithUser(ctx context.Context, user string, argv []string, stdin string, out io.Writer) (stdout, stderr string, exitCode int) {
+	req := sandbox.ExecRequest{
+		Argv:    argv,
+		User:    user,
+		Workdir: r.Workdir,
+	}
+
+	var client *sandbox.Client
+	var proc *sandbox.ExecProcess
+	var startErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		client, startErr = r.getClient(ctx)
+		if startErr != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		proc, startErr = client.StartExec(ctx, req)
+		if startErr == nil {
+			break
+		}
+		r.resetClient(client)
+		if ctx.Err() != nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if startErr != nil {
+		return "", startErr.Error(), -1
+	}
+
+	outBuf, errBuf := newHeadTailBuffer(), newHeadTailBuffer()
+	live := newGatedLiveStream(out)
+	defer live.flush()
+
+	stdoutW := io.MultiWriter(outBuf, writerFunc(live.writeStdout))
+	stderrW := io.MultiWriter(errBuf, writerFunc(live.writeStderr))
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			killCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = proc.Kill(killCtx)
+			cancel()
+			_ = proc.Detach()
+		case <-done:
+		}
+	}()
+
+	if stdin != "" {
+		go func() {
+			_, _ = io.Copy(proc.Stdin(), strings.NewReader(stdin))
+			_ = proc.Stdin().Close()
+		}()
+	} else {
+		_ = proc.Stdin().Close()
+	}
+
+	execID := proc.ID()
+	code, n, waitErr := proc.Wait(stdoutW, stderrW)
+	if waitErr == nil {
+		return outBuf.String(), errBuf.String(), code
+	}
+
+	offset := n
+	for reattachAttempt := 0; reattachAttempt < 5 && errors.Is(waitErr, sandbox.ErrTransportCut) && ctx.Err() == nil; reattachAttempt++ {
+		// First try reattaching on the existing client (whose redial hook
+		// reconnects the session); if that fails, reset and redial via r.getClient.
+		reProc, rerr := client.StartReattach(ctx, execID, offset)
+		if rerr != nil {
+			if errors.Is(rerr, sandbox.ErrExecNotFound) {
+				waitErr = rerr
+				break
+			}
+			r.resetClient(client)
+			if reattachAttempt > 0 {
+				select {
+				case <-ctx.Done():
+					break
+				case <-time.After(time.Duration(reattachAttempt*50) * time.Millisecond):
+				}
+			}
+			var derr error
+			client, derr = r.getClient(ctx)
+			if derr != nil {
+				waitErr = derr
+				continue
+			}
+			reProc, rerr = client.StartReattach(ctx, execID, offset)
+			if rerr != nil {
+				waitErr = rerr
+				if errors.Is(rerr, sandbox.ErrExecNotFound) {
+					break
+				}
+				continue
+			}
+		}
+		var rn int64
+		code, rn, waitErr = reProc.Wait(stdoutW, stderrW)
+		offset += rn
+		if waitErr == nil {
+			return outBuf.String(), errBuf.String(), code
+		}
+	}
+
+	note := SessionCutOffNotice
+	if errStr := errBuf.String(); errStr != "" && !strings.HasSuffix(errStr, "\n") {
+		note = "\n" + note
+	}
+	_, _ = stderrW.Write([]byte(note + "\n"))
+	return outBuf.String(), errBuf.String(), -1
 }

@@ -28,11 +28,71 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/kubectlgate"
+	"github.com/bwsalmon/granule/pkg/sandbox"
 )
+
+// FilePlacement is one file in a batched placement (PlaceFilesOverSSH).
+type FilePlacement struct {
+	Path    string
+	Content []byte
+	Mode    string
+	Owner   string
+}
+
+type batchFilePlacer interface {
+	PutFiles(ctx context.Context, files []sandbox.FileUpload) error
+}
+
+func parsePlacementMode(mode string) fs.FileMode {
+	if mode == "" {
+		return 0o600
+	}
+	v, err := strconv.ParseUint(mode, 8, 32)
+	if err != nil || v == 0 {
+		return 0o600
+	}
+	return fs.FileMode(v)
+}
+
+// PlaceFilesOverSSH writes a batch of files to runner's remote host. When
+// runner supports granule's batched PutFiles protocol, all files are uploaded
+// in a single round-trip; otherwise each file is placed with PlaceFileOverSSH.
+func PlaceFilesOverSSH(ctx context.Context, runner remoteRunner, files []FilePlacement) error {
+	if len(files) == 0 {
+		return nil
+	}
+	if bp, ok := runner.(batchFilePlacer); ok {
+		uploads := make([]sandbox.FileUpload, 0, len(files))
+		allAbs := true
+		for _, f := range files {
+			if !strings.HasPrefix(f.Path, "/") {
+				allAbs = false
+				break
+			}
+			uploads = append(uploads, sandbox.FileUpload{
+				Path:    f.Path,
+				Content: f.Content,
+				Mode:    parsePlacementMode(f.Mode),
+				Owner:   f.Owner,
+			})
+		}
+		if allAbs {
+			return bp.PutFiles(ctx, uploads)
+		}
+	}
+	for _, f := range files {
+		if err := PlaceFileOverSSH(ctx, runner, f.Path, string(f.Content), f.Mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // PlaceFileOverSSH writes content to filePath on runner's remote host
 // with mode (an octal string, model.Placement.EffectiveMode's own shape),
@@ -51,6 +111,13 @@ import (
 // and truncates an existing file to the same end state -- so a re-place
 // over a leftover file cannot inherit a wider mode either.
 func PlaceFileOverSSH(ctx context.Context, runner remoteRunner, filePath, content, mode string) error {
+	if bp, ok := runner.(batchFilePlacer); ok && strings.HasPrefix(filePath, "/") {
+		return bp.PutFiles(ctx, []sandbox.FileUpload{{
+			Path:    filePath,
+			Content: []byte(content),
+			Mode:    parsePlacementMode(mode),
+		}})
+	}
 	// Each of the three steps is idempotent -- mkdir -p, an install over
 	// whatever is there, a dd that truncates -- so one the transport cut
 	// off is run again rather than failing the sandbox's setup.

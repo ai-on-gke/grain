@@ -298,6 +298,28 @@ func ForwardKubectl(ctx context.Context, cfg KubectlForwardConfig) error {
 	return nil
 }
 
+// ForwardStream runs the controller side of a multiplexed port-forward session
+// over a stream opened by openStream (for example, GranuleSandboxRunner.OpenForwardStream)
+// until ctx is cancelled or the stream closes.
+func ForwardStream(ctx context.Context, openStream func(context.Context) (io.ReadWriteCloser, error), cfg KubectlForwardConfig) error {
+	specs := cfg.internalSpecs()
+	if len(specs) == 0 {
+		return nil
+	}
+	st, err := openStream(ctx)
+	if err != nil {
+		return fmt.Errorf("granule: opening forward stream for %s: %w", cfg.Pod, err)
+	}
+	defer st.Close()
+	if err := forward.RunClient(ctx, st, st, specs, cfg.OnReady); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("granule: forward %s: %w", cfg.Pod, err)
+	}
+	return nil
+}
+
 // ServeForwardClient runs the controller side of a port-forward session over r
 // and w.
 func ServeForwardClient(ctx context.Context, r io.Reader, w io.Writer, remotes, locals []ForwardSpec, onReady func()) error {

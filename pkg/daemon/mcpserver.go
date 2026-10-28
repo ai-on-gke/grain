@@ -2090,6 +2090,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 	k8sNamespace := fs.String("k8s-namespace", "", "namespace of -k8s-pod; empty is kubectl's own default")
 	k8sKubeconfig := fs.String("k8s-kubeconfig", "", "kubeconfig path passed to kubectl when reaching -k8s-pod")
 	k8sGranule := fs.Bool("k8s-granule", false, "reach -k8s-pod's guest VM through `granule exec --` over `kubectl exec`")
+	k8sGranuleAccessFile := fs.String("k8s-granule-access-file", "", "path to a granule sandbox access spec JSON file used to reach -k8s-pod over direct TLS Dial or granule relay instead of `kubectl exec`")
 	granuleVM := fs.String("granule-vm", "",
 		"name of a granule-managed VM (bwsalmon/granule) to run the sandbox tools against over SSH, "+
 			"instead of a local directory (mutually exclusive with -sandbox-root)")
@@ -2282,6 +2283,19 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 	case *k8sPod != "":
 		if *workspace == "" {
 			return errors.New("grain mcpserver: -k8s-pod needs -workspace")
+		}
+		if *k8sGranuleAccessFile != "" {
+			kc := k8s.Client{
+				Kubeconfig: *k8sKubeconfig,
+				Namespace:  *k8sNamespace,
+			}
+			granuleRunner, err := mcp.NewGranuleSandboxRunnerFromAccessFile(*k8sGranuleAccessFile, kc.PodIP)
+			if err != nil {
+				return fmt.Errorf("grain mcpserver: -k8s-granule-access-file: %w", err)
+			}
+			defer granuleRunner.Close()
+			tools = mcp.NewSSHSandboxTools(granuleRunner, *workspace)
+			break
 		}
 		kubectlRunner := &mcp.KubectlExecRunner{
 			Kubeconfig: *k8sKubeconfig,

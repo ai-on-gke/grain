@@ -31,7 +31,7 @@ why that is by design, not an opportunity to converge later.
 | `linux-container` | `orchestrator.ContainerSandboxes` | container, shares the host's kernel | docker; explicitly *not* `/dev/kvm`, nested virt, or any guest image | kernel-level isolation between a sandbox and the host -- a sandbox escape reaches the host directly, which `linux-kvm`'s VM boundary does not allow | **implemented** -- the cheapest proof the table above generalises beyond one row: nothing here for `grain init` to build but the grain binary itself, so it comes up in well under a minute rather than `linux-kvm`'s ten-plus |
 | `k8s-container` | `orchestrator.K8sSandboxes` | pod, shares its node's kernel | a cluster with a node that can fit one sandbox pod (2 CPU / 8 GiB by default -- a smaller node leaves every run's pod Unschedulable, which fails the run after six minutes (`orchestrator.DefaultK8sUnschedulableTimeout`); init's "check a node can fit one sandbox pod" step reports it up front, naming the `sandboxCpus`/`sandboxMemoryMb`/`sandboxDiskGb` to lower), a pullable sandbox image, ReadWriteOnce storage, and -- for any team that ever dispatches a `network: none` task -- a NetworkPolicy-enforcing CNI | kernel-level isolation (same trade as `linux-container`, scheduled by a cluster instead of run on one box); pods must **never** be privileged -- that restriction is the whole point of keeping this separate from `k8s-granule` | **implemented** -- preflight and apply/provision live in `pkg/hostinit/k8s.go`; proven end to end against a real `kind` cluster, which is also where it found and fixed a pre-existing bug in `deploy/kubernetes/grain.yaml` itself (see that file's own `NET_BIND_SERVICE` comment) -- see [k8s-init-design.md](k8s-init-design.md) for the design and where the implementation diverges from it |
 | `k8s-granule` | `orchestrator.K8sGranuleSandboxes`, a privileged pod per run | VM, own kernel (cloud-hypervisor over `/dev/kvm`) | nested-virt-capable nodes, a real `/dev/kvm` inside the pod, and privileged pods **required** | the restriction `k8s-container` depends on (no privileged pods) -- a cluster cannot run both targets under one security policy, which is why these are two `Platform` values rather than two modes of one `-target=k8s` | **implemented** -- preflight and apply/provision live in `pkg/hostinit/k8s_granule.go`; the nested-virt check (the real test of this platform, not merely `/dev/kvm`'s existence) is proven against a real `kind` cluster with `/dev/kvm` mounted in and a locally built `third_party/granule` image, booting a VM and answering `granule ready` in about 11s, and on 10-05 end to end on `kind` with the published `ghcr.io/bwsalmon/grain/guest:latest` (exit 0). A node with no `/dev/kvm` at all is `[refused]` by name: sandbox and preflight pods mount it as a `CharDevice` hostPath, so the kubelet's `FailedMount` says so rather than creating an empty directory at `/dev/kvm` on the node -- see [k8s-granule-design.md](k8s-granule-design.md) for the design and its own "What building this actually settled" section for where the implementation diverges |
-| `gke-sandboxes` | `orchestrator.K8sGranuleSandboxes` driven by an off-cluster controller via `/var/lib/grain/kubeconfig` and `granule forward` | VM, own kernel (cloud-hypervisor over `/dev/kvm`) | `gcloud`, `kubectl`, `gke-gcloud-auth-plugin`, and a GCP sandbox project with nested virtualization enabled | running the controller itself as an in-cluster Deployment (the controller stays on its existing host while sandbox pods run on GKE Standard) | **implemented** -- idempotent and resumable GKE Standard cluster + nested-virt node pool + KVM device plugin + least-privilege `grain` ServiceAccount RBAC + `/var/lib/grain/kubeconfig` + verification live in `pkg/hostinit/gke_sandboxes.go`; see [k8s-init-design.md](k8s-init-design.md) |
+| `gke-sandboxes` | `orchestrator.K8sGranuleSandboxes` driven by an off-cluster controller via `/var/lib/grain/kubeconfig`, `granule relay` (`DialRelay`), and `granule forward` | VM, own kernel (cloud-hypervisor over `/dev/kvm`) | `gcloud`, `kubectl`, `gke-gcloud-auth-plugin`, and a GCP sandbox project with nested virtualization enabled | running the controller itself as an in-cluster Deployment (the controller stays on its existing host while sandbox pods run on GKE Standard) | **implemented** -- idempotent and resumable GKE Standard cluster + nested-virt node pool + KVM device plugin + least-privilege `grain` ServiceAccount RBAC + `/var/lib/grain/kubeconfig` + `Deployment/grain-sandbox-relay` + `Service/grain-sandbox-relay` (`LoadBalancer`) + `NetworkPolicy/granule-sandbox-access` + `/var/lib/grain/gke-sandboxes/relay.json` + verification live in `pkg/hostinit/gke_sandboxes.go`; see [k8s-init-design.md](k8s-init-design.md) |
 
 ## What has actually been run, and when
 
@@ -136,3 +136,48 @@ makes this argument in full for the design it covers (`k8s-container`);
 [k8s-granule-design.md](k8s-granule-design.md) restates it symmetrically
 for the row covered here, and settles the rest of what this platform
 needs now that it, too, has a design rather than only a reserved name.
+
+## Controller outside the cluster (`gke-sandboxes`)
+
+When `grain` runs outside the cluster (for example on a Cloudtop or a
+host VM) and dispatches `kubernetes-granule` sandbox pods into a GKE
+Standard cluster (`grain init -platform=gke-sandboxes`), the connection
+always runs **controller -> relay -> sandbox** (or **controller ->
+sandbox** directly when `grain` runs inside the cluster): sandboxes
+never dial back to the controller.
+
+- **Per-sandbox listen mode and Secret credentials**: Each sandbox pod
+  starts granule's sandbox access server in TCP listen mode on port
+  `7443` (`GRANULE_ACCESS_LISTEN=tcp://0.0.0.0:7443`), authenticated by
+  a per-sandbox bearer token and TLS keypair delivered via a per-pod
+  `Secret/<pod>-access` mounted read-only at `/var/run/granule/access`.
+  Each pod is labelled `granule.gke.io/sandbox=true` and
+  `granule.gke.io/sandbox-name=<pod>`.
+- **In-cluster vs. off-cluster transport**:
+  - When `grain` runs in a Kubernetes pod (`k8s.InKubernetesPod()`),
+    `K8sGranuleSandboxes` dials `<podIP>:7443` directly with granule's
+    `sandbox.Dial` client.
+  - When `grain` runs outside the cluster and
+    `/var/lib/grain/gke-sandboxes/relay.json` (or
+    `-k8s-granule-relay-addr`) is configured, `K8sGranuleSandboxes`
+    opens one shared outbound mTLS + token session to `granule relay`'s
+    LoadBalancer via `sandbox.DialRelay`. The relay resolves the sandbox
+    pod name to a pod IP (`get/list/watch pods` in the sandbox
+    namespace) and dials `<podIP>:7443`, while the controller completes
+    an end-to-end TLS + per-sandbox token handshake with the sandbox.
+  - When neither applies, `K8sGranuleSandboxes` falls back to `kubectl exec`.
+- **`Deployment/grain-sandbox-relay` and `NetworkPolicy/granule-sandbox-access`**:
+  `grain init -platform=gke-sandboxes` mints an mTLS CA, server and
+  client certificates, and a controller token under
+  `/var/lib/grain/gke-sandboxes/`, stores the server credentials in
+  `Secret/grain-sandbox-relay-tls`, and applies a 1-replica
+  `Deployment/grain-sandbox-relay`, a `Service/grain-sandbox-relay`
+  (`type: LoadBalancer`), and `NetworkPolicy/granule-sandbox-access`.
+  The NetworkPolicy selects `granule.gke.io/sandbox=true` pods and
+  denies all ingress except TCP port `7443` from `grain-sandbox-relay`
+  pods and in-cluster `grain` controller pods (blocking
+  sandbox-to-sandbox traffic). Once the LoadBalancer IP is assigned,
+  `grain init` writes `/var/lib/grain/gke-sandboxes/relay.json` and
+  verifies the setup by executing the git-proxy and package-cache checks
+  in a throwaway sandbox pod over the relay.
+

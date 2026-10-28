@@ -16,13 +16,18 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +39,10 @@ import (
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
+	granuleagent "github.com/bwsalmon/granule/pkg/agent"
+	"github.com/bwsalmon/granule/pkg/guestexec"
+	"github.com/bwsalmon/granule/pkg/relay"
+	"github.com/bwsalmon/granule/pkg/sandbox"
 )
 
 func TestGranulePodNameForNamesTheRun(t *testing.T) {
@@ -87,8 +96,27 @@ func TestGranulePodOptionsAreAlwaysPrivilegedWithKVM(t *testing.T) {
 	if !opts.NoCommand {
 		t.Error("NoCommand = false, want true: the image's own ENTRYPOINT boots the VM")
 	}
-	if len(opts.ReadinessExec) == 0 {
-		t.Error("ReadinessExec is empty, want a probe that waits on the guest answering")
+	if k.TransportMode() == GranuleTransportKubectlExec {
+		if !slices.Equal(opts.ReadinessExec, GranuleReadinessExec) {
+			t.Errorf("ReadinessExec = %v, want %v under the kubectl-exec fallback, which has no transport to poll health over", opts.ReadinessExec, GranuleReadinessExec)
+		}
+	} else if len(opts.ReadinessExec) != 0 {
+		t.Errorf("ReadinessExec = %v, want empty (readiness now polls granule health over the transport)", opts.ReadinessExec)
+	}
+	if opts.SecretVolume == nil || opts.SecretVolume.MountPath != granule.DefaultAccessMountPath || opts.SecretVolume.Data["token"] == "" || opts.SecretVolume.Data["tls.crt"] == "" || opts.SecretVolume.Data["tls.key"] == "" {
+		t.Errorf("SecretVolume = %+v, want per-pod Secret mounted at %s with token/tls.crt/tls.key", opts.SecretVolume, granule.DefaultAccessMountPath)
+	}
+	if len(opts.Ports) != 1 || opts.Ports[0].Port != granule.DefaultAccessPort {
+		t.Errorf("Ports = %+v, want granule-access port %d", opts.Ports, granule.DefaultAccessPort)
+	}
+	if opts.Env["GRANULE_ACCESS_LISTEN"] != granule.DefaultAccessListen {
+		t.Errorf("GRANULE_ACCESS_LISTEN = %q, want %q", opts.Env["GRANULE_ACCESS_LISTEN"], granule.DefaultAccessListen)
+	}
+	if opts.Env["GRANULE_ACCESS_TOKEN_FILE"] != granule.DefaultAccessMountPath+"/token" {
+		t.Errorf("GRANULE_ACCESS_TOKEN_FILE = %q, want %s/token", opts.Env["GRANULE_ACCESS_TOKEN_FILE"], granule.DefaultAccessMountPath)
+	}
+	if opts.Labels[granule.SandboxAccessLabel] != granule.SandboxAccessLabelValue {
+		t.Errorf("Labels[%s] = %q, want %q", granule.SandboxAccessLabel, opts.Labels[granule.SandboxAccessLabel], granule.SandboxAccessLabelValue)
 	}
 }
 
@@ -485,7 +513,7 @@ if [ -n "$1" ] && [ -f "` + phaseFile + `" ]; then
 fi
 for arg in "$@"; do
 	case "$arg" in
-		apply|delete)
+		apply|create|delete|exec)
 			exit 0
 			;;
 	esac
@@ -892,13 +920,15 @@ case "$verb" in
 		printf '%s|True|docker-pullable://example/granule@sha256:abc|\n' "$phase"
 		;;
 	delete)
-		n=$(cat "$d/fail-deletes" 2>/dev/null || echo 0)
-		if [ "$n" -gt 0 ]; then
-			echo $((n - 1)) >"$d/fail-deletes"
-			echo "Error from server (Timeout): the server was unable to return a response in the time allotted" >&2
-			exit 1
+		if [ -n "$name" ]; then
+			n=$(cat "$d/fail-deletes" 2>/dev/null || echo 0)
+			if [ "$n" -gt 0 ]; then
+				echo $((n - 1)) >"$d/fail-deletes"
+				echo "Error from server (Timeout): the server was unable to return a response in the time allotted" >&2
+				exit 1
+			fi
+			echo "$name" >>"$d/deleted"
 		fi
-		echo "$name" >>"$d/deleted"
 		;;
 esac
 exit 0
@@ -1103,5 +1133,356 @@ func TestK8sGranuleSandboxReleaseOutlivesACancelledContext(t *testing.T) {
 	}
 	if got := kubectl.takeDeleted(t); len(got) != 1 || got[0] != "grain-granule-784-1" {
 		t.Fatalf("Release on a cancelled context deleted %v, want grain-granule-784-1", got)
+	}
+}
+
+func TestK8sGranuleTransportSelection(t *testing.T) {
+	t.Parallel()
+	tTrue := true
+	tFalse := false
+
+	inPod := NewK8sGranuleSandboxes(K8sGranuleConfig{
+		Image:           "example/granule",
+		InPod:           &tTrue,
+		RelayConfigPath: "-",
+	})
+	if inPod.TransportMode() != GranuleTransportDirect {
+		t.Fatalf("in-pod TransportMode() = %q, want %q", inPod.TransportMode(), GranuleTransportDirect)
+	}
+
+	relayDir := t.TempDir()
+	relayPath := filepath.Join(relayDir, "relay.json")
+	if err := granule.SaveRelayConfig(relayPath, granule.RelayConfig{Addr: "127.0.0.1:8443", Token: "tok"}); err != nil {
+		t.Fatalf("SaveRelayConfig: %v", err)
+	}
+	withRelay := NewK8sGranuleSandboxes(K8sGranuleConfig{
+		Image:           "example/granule",
+		InPod:           &tFalse,
+		RelayConfigPath: relayPath,
+	})
+	if withRelay.TransportMode() != GranuleTransportRelay {
+		t.Fatalf("relay.json TransportMode() = %q, want %q", withRelay.TransportMode(), GranuleTransportRelay)
+	}
+	_ = withRelay.Close()
+
+	withFlag := NewK8sGranuleSandboxes(K8sGranuleConfig{
+		Image:           "example/granule",
+		InPod:           &tFalse,
+		RelayConfigPath: "-",
+		RelayAddr:       "203.0.113.10:443",
+	})
+	if withFlag.TransportMode() != GranuleTransportRelay {
+		t.Fatalf("-k8s-granule-relay-addr TransportMode() = %q, want %q", withFlag.TransportMode(), GranuleTransportRelay)
+	}
+	_ = withFlag.Close()
+
+	fallback := NewK8sGranuleSandboxes(K8sGranuleConfig{
+		Image:           "example/granule",
+		InPod:           &tFalse,
+		RelayConfigPath: "-",
+	})
+	if fallback.TransportMode() != GranuleTransportKubectlExec {
+		t.Fatalf("fallback TransportMode() = %q, want %q", fallback.TransportMode(), GranuleTransportKubectlExec)
+	}
+}
+
+type fakeSandboxCluster struct {
+	dir        string
+	kubectl    string
+	secretFile string
+
+	mu      sync.Mutex
+	srvAddr string
+	srvStop context.CancelFunc
+}
+
+func newFakeSandboxCluster(t *testing.T, guestDir string) *fakeSandboxCluster {
+	t.Helper()
+	dir := t.TempDir()
+	secretFile := filepath.Join(dir, "secret.json")
+	kubectl := filepath.Join(dir, "kubectl")
+	script := `#!/bin/sh
+for arg in "$@"; do
+	case "$arg" in
+		create)
+			cat > "` + secretFile + `"
+			exit 0
+			;;
+		apply|delete)
+			exit 0
+			;;
+		exec)
+			echo "unexpected kubectl exec in granule listen-mode test: $*" >&2
+			exit 99
+			;;
+	esac
+done
+printf 'Running|True|docker-pullable://example/granule@sha256:abc|\n'
+`
+	src := kubectl + ".src"
+	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
+		t.Fatalf("writing fake kubectl: %v", err)
+	}
+	if out, err := exec.Command("install", "-m", "0755", src, kubectl).CombinedOutput(); err != nil {
+		t.Fatalf("installing fake kubectl: %v: %s", err, out)
+	}
+	c := &fakeSandboxCluster{
+		dir:        dir,
+		kubectl:    kubectl,
+		secretFile: secretFile,
+	}
+	t.Cleanup(func() {
+		c.mu.Lock()
+		stop := c.srvStop
+		c.mu.Unlock()
+		if stop != nil {
+			stop()
+		}
+	})
+	return c
+}
+
+func (c *fakeSandboxCluster) ensureSandboxServer(t *testing.T, podName, guestDir string) string {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.srvAddr != "" {
+		return c.srvAddr
+	}
+	raw, err := os.ReadFile(c.secretFile)
+	if err != nil {
+		t.Fatalf("reading captured sandbox Secret: %v", err)
+	}
+	var sec struct {
+		StringData map[string]string `json:"stringData"`
+	}
+	if err := json.Unmarshal(raw, &sec); err != nil {
+		t.Fatalf("unmarshalling captured sandbox Secret: %v", err)
+	}
+	token := sec.StringData["token"]
+	certPEM := []byte(sec.StringData["tls.crt"])
+	keyPEM := []byte(sec.StringData["tls.key"])
+	if token == "" || len(certPEM) == 0 || len(keyPEM) == 0 {
+		t.Fatalf("captured Secret missing token/tls.crt/tls.key: %+v", sec.StringData)
+	}
+	srvCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("X509KeyPair from Secret: %v", err)
+	}
+
+	u, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := sandbox.NewServer(sandbox.ServerConfig{
+		SandboxID: podName,
+		Token:     token,
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{srvCert},
+			MinVersion:   tls.VersionTLS13,
+		},
+		Guest: guestexec.Config{
+			User: u.Username,
+		},
+		DialGuest: func(dialCtx context.Context) (net.Conn, error) {
+			if err := dialCtx.Err(); err != nil {
+				return nil, err
+			}
+			c1, c2 := net.Pipe()
+			go func() {
+				defer c2.Close()
+				_ = granuleagent.Serve(ctx, c2)
+			}()
+			return c1, nil
+		},
+	})
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		cancel()
+		t.Fatalf("Listen tcp: %v", err)
+	}
+	go func() {
+		_ = srv.Serve(ctx, tcpLn)
+	}()
+	c.srvAddr = tcpLn.Addr().String()
+	c.srvStop = func() {
+		cancel()
+		_ = tcpLn.Close()
+	}
+	return c.srvAddr
+}
+
+func TestK8sGranuleSandboxesDirectTransportEndToEnd(t *testing.T) {
+	t.Parallel()
+	guestDir := t.TempDir()
+	cluster := newFakeSandboxCluster(t, guestDir)
+	inPod := true
+
+	k := NewK8sGranuleSandboxes(K8sGranuleConfig{
+		Namespace:         "grain",
+		Kubectl:           cluster.kubectl,
+		Image:             "example/granule:latest",
+		Workspace:         guestDir,
+		InPod:             &inPod,
+		RelayConfigPath:   "-",
+		AccessDir:         t.TempDir(),
+		ReadyPollInterval: 10 * time.Millisecond,
+		PodIPResolver: func(ctx context.Context, podName string) (string, error) {
+			return cluster.ensureSandboxServer(t, podName, guestDir), nil
+		},
+	})
+	if k.TransportMode() != GranuleTransportDirect {
+		t.Fatalf("TransportMode() = %q, want %q", k.TransportMode(), GranuleTransportDirect)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	sb, err := k.Acquire(ctx, "1479-direct", Shape{})
+	if err != nil {
+		t.Fatalf("Acquire over Direct transport: %v", err)
+	}
+	defer sb.Release(ctx)
+
+	var streamed strings.Builder
+	res, err := sb.(SandboxShell).RunShell(ctx, ShellRequest{
+		Script: "printf 'direct-ok\\n'",
+		Output: &streamed,
+	})
+	if err != nil {
+		t.Fatalf("RunShell over Direct transport: %v", err)
+	}
+	if res.ExitCode != 0 || res.Output != "direct-ok\n" || streamed.String() != "direct-ok\n" {
+		t.Fatalf("RunShell = (%q, %d), streamed=%q; want direct-ok", res.Output, res.ExitCode, streamed.String())
+	}
+
+	targetFile := filepath.Join(guestDir, "nested", "placed.txt")
+	if err := sb.(SandboxPlacer).PlaceFile(ctx, targetFile, "hello-direct\n", "0640"); err != nil {
+		t.Fatalf("PlaceFile over Direct transport: %v", err)
+	}
+	gotBytes, err := os.ReadFile(targetFile)
+	if err != nil || string(gotBytes) != "hello-direct\n" {
+		t.Fatalf("placed file = (%q, %v), want hello-direct", string(gotBytes), err)
+	}
+}
+
+type fakePodResolver struct {
+	resolve func(ctx context.Context, target string) (string, error)
+}
+
+func (f fakePodResolver) Resolve(ctx context.Context, target string) (string, error) {
+	return f.resolve(ctx, target)
+}
+
+func TestK8sGranuleSandboxesRelayTransportEndToEnd(t *testing.T) {
+	t.Parallel()
+	guestDir := t.TempDir()
+	cluster := newFakeSandboxCluster(t, guestDir)
+	inPod := false
+
+	pkiDir := t.TempDir()
+	pki, err := granule.MintRelayPKI(pkiDir, "grain")
+	if err != nil {
+		t.Fatalf("MintRelayPKI: %v", err)
+	}
+	relaySrvTLS, err := pki.ServerTLSConfig()
+	if err != nil {
+		t.Fatalf("ServerTLSConfig: %v", err)
+	}
+
+	var sandboxPort atomic.Int32
+	relayLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen relay: %v", err)
+	}
+	defer relayLn.Close()
+
+	// Wrap relay.Server with a custom Dial that routes to the dynamic local port of our fake sandbox server.
+	relaySrv, err := relay.New(relay.Config{
+		Token:       pki.Token,
+		TLSConfig:   relaySrvTLS,
+		SandboxPort: granule.DefaultAccessPort,
+		Resolver: fakePodResolver{
+			resolve: func(ctx context.Context, target string) (string, error) {
+				addr := cluster.ensureSandboxServer(t, target, guestDir)
+				host, portStr, err := net.SplitHostPort(addr)
+				if err != nil {
+					return "", err
+				}
+				p, _ := strconv.Atoi(portStr)
+				sandboxPort.Store(int32(p))
+				return host, nil
+			},
+		},
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, _, _ := net.SplitHostPort(addr)
+			targetAddr := net.JoinHostPort(host, fmt.Sprintf("%d", sandboxPort.Load()))
+			var d net.Dialer
+			return d.DialContext(ctx, network, targetAddr)
+		},
+	})
+	if err != nil {
+		t.Fatalf("relay.New: %v", err)
+	}
+	relayCtx, relayCancel := context.WithCancel(context.Background())
+	defer relayCancel()
+	go func() {
+		_ = relaySrv.Serve(relayCtx, relayLn)
+	}()
+
+	relayConfigPath := filepath.Join(pkiDir, "relay.json")
+	if err := granule.SaveRelayConfig(relayConfigPath, granule.RelayConfig{
+		Addr:       relayLn.Addr().String(),
+		ServerName: granule.DefaultRelayServerName,
+		Token:      pki.Token,
+		CAFile:     pki.CAFile,
+		CertFile:   pki.ClientCert,
+		KeyFile:    pki.ClientKey,
+	}); err != nil {
+		t.Fatalf("SaveRelayConfig: %v", err)
+	}
+
+	k := NewK8sGranuleSandboxes(K8sGranuleConfig{
+		Namespace:         "grain",
+		Kubectl:           cluster.kubectl,
+		Image:             "example/granule:latest",
+		Workspace:         guestDir,
+		InPod:             &inPod,
+		RelayConfigPath:   relayConfigPath,
+		AccessDir:         t.TempDir(),
+		ReadyPollInterval: 10 * time.Millisecond,
+	})
+	defer k.Close()
+	if k.TransportMode() != GranuleTransportRelay {
+		t.Fatalf("TransportMode() = %q, want %q", k.TransportMode(), GranuleTransportRelay)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	sb, err := k.Acquire(ctx, "1479-relay", Shape{})
+	if err != nil {
+		t.Fatalf("Acquire over Relay transport: %v", err)
+	}
+	defer sb.Release(ctx)
+
+	var streamed strings.Builder
+	res, err := sb.(SandboxShell).RunShell(ctx, ShellRequest{
+		Script: "printf 'relay-ok\\n'",
+		Output: &streamed,
+	})
+	if err != nil {
+		t.Fatalf("RunShell over Relay transport: %v", err)
+	}
+	if res.ExitCode != 0 || res.Output != "relay-ok\n" || streamed.String() != "relay-ok\n" {
+		t.Fatalf("RunShell = (%q, %d), streamed=%q; want relay-ok", res.Output, res.ExitCode, streamed.String())
+	}
+
+	// Simulate relay session drop and verify transparent reconnect/reattach.
+	relaySrv.DropSessions()
+	stdout, stderr, code := sb.(SandboxCommander).RunInSandbox(ctx, []string{"sh", "-c", "printf 'after-drop'"}, "")
+	if code != 0 || stdout != "after-drop" {
+		t.Fatalf("RunInSandbox after relay DropSessions = (%q, %q, %d), want after-drop", stdout, stderr, code)
 	}
 }

@@ -203,7 +203,40 @@ func (m *passMaterialization) apply(ctx context.Context, sandbox Sandbox) error 
 	if err := m.startGuestForwarders(ctx, sandbox, commander); err != nil {
 		return err
 	}
-	for _, pl := range m.pass.Placements() {
+	placements := m.pass.Placements()
+	if gs, ok := sandbox.(*k8sGranuleSandbox); ok {
+		if _, ok := gs.runner.(*mcp.GranuleSandboxRunner); ok && len(placements) > 0 {
+			var batch []mcp.FilePlacement
+			var rootPlacements []protocol.Placement
+			for _, pl := range placements {
+				if pl.Owner != "" && pl.Owner != sandboxUser {
+					rootPlacements = append(rootPlacements, pl)
+					continue
+				}
+				data, err := pl.Decoded()
+				if err != nil {
+					return fmt.Errorf("placing %s: %w", pl.Path, err)
+				}
+				batch = append(batch, mcp.FilePlacement{
+					Path:    pl.Path,
+					Content: data,
+					Mode:    fmt.Sprintf("%04o", pl.FileMode()),
+				})
+			}
+			if len(batch) > 0 {
+				if err := gs.PlaceFiles(ctx, batch); err != nil {
+					return err
+				}
+			}
+			for _, pl := range rootPlacements {
+				if err := placeInSandbox(ctx, sandbox, commander, pl); err != nil {
+					return fmt.Errorf("placing %s: %w", pl.Path, err)
+				}
+			}
+			return m.runSetup(ctx, commander)
+		}
+	}
+	for _, pl := range placements {
 		if err := placeInSandbox(ctx, sandbox, commander, pl); err != nil {
 			return fmt.Errorf("placing %s: %w", pl.Path, err)
 		}

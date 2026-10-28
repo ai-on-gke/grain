@@ -490,10 +490,15 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		cpuOvercommit, memOvercommit := cfg.overcommitRatios()
 		sandboxes = orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{
-			Instance:           k8sInstance,
-			Namespace:          k8sNamespace,
-			Kubectl:            cfg.K8sKubectl,
-			Kubeconfig:         k8sKubeconfig,
+			Instance:   k8sInstance,
+			Namespace:  k8sNamespace,
+			Kubectl:    cfg.K8sKubectl,
+			Kubeconfig: k8sKubeconfig,
+			RelayAddr:  cfg.K8sGranuleRelayAddr,
+			// Per-sandbox access specs carry each pod's bearer token:
+			// keep them under grain's own data directory rather than the
+			// shared os.TempDir default.
+			AccessDir:          k8sGranuleAccessDir(cfg.DataDir),
 			Image:              k8sGranuleImage,
 			ServiceAccount:     cfg.K8sServiceAccount,
 			Workspace:          k8sWorkspace,

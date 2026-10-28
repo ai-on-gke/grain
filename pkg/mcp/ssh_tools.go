@@ -324,6 +324,11 @@ func sshWriteFileTool(runner remoteRunner, workspace string) Tool {
 				target, notice = retry, workspaceRetryNotice(fp, retry, workspace)
 			}
 
+			// Deliberately dd, even over a transport with PutFiles:
+			// PutFiles renames a fresh 0644 file into place, which
+			// would drop an existing script's execute bit and replace
+			// a symlink rather than write through it -- not what
+			// write_file does on any other backend, or edit_file here.
 			parent := path.Dir(target)
 			_, stderr, exitCode := runner.Run(ctx, []string{"mkdir", "-p", parent}, "")
 			if exitCode != 0 {

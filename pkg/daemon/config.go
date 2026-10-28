@@ -768,6 +768,9 @@ type Config struct {
 	// default does not extend here (nothing publishes a packed guest
 	// image yet).
 	K8sGranuleImage string
+	// K8sGranuleRelayAddr is the host:port of the `granule relay`
+	// LoadBalancer (-k8s-granule-relay-addr) for an off-cluster controller.
+	K8sGranuleRelayAddr string
 
 	// sandboxCPUs, sandboxMemoryMB and sandboxDiskGB are store-backed
 	// (model.Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB,
@@ -1621,4 +1624,15 @@ func (c Config) LocalScriptsConfig() localscripts.Config {
 		_ = cfg.ParseHost(v)
 	}
 	return cfg
+}
+
+// k8sGranuleAccessDir is where -k8s-granule-sandboxes writes each pod's
+// access spec (token, CA, address) for forked `grain mcpserver`s and
+// Readopt: under dataDir, or "" (the orchestrator's own default) when
+// there is none.
+func k8sGranuleAccessDir(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	return filepath.Join(dataDir, "granule-access")
 }

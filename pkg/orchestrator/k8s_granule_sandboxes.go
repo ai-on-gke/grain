@@ -38,9 +38,13 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,6 +99,22 @@ const DevKVM = "/dev/kvm"
 // nested-virt check uses.
 var GranuleReadinessExec = []string{"granule", "ready", "-timeout", "0"}
 
+// GranuleTransportMode selects how K8sGranuleSandboxes connects to sandbox pods.
+type GranuleTransportMode string
+
+const (
+	// GranuleTransportAuto selects Direct when running inside a Kubernetes pod,
+	// Relay when relay.json or -k8s-granule-relay-addr is configured, and
+	// KubectlExec otherwise.
+	GranuleTransportAuto GranuleTransportMode = ""
+	// GranuleTransportDirect dials podIP:7443 directly via granule's sandbox.Dial.
+	GranuleTransportDirect GranuleTransportMode = "direct"
+	// GranuleTransportRelay connects through granule relay via sandbox.DialRelay.
+	GranuleTransportRelay GranuleTransportMode = "relay"
+	// GranuleTransportKubectlExec uses `kubectl exec <pod> -- granule exec --` as a fallback.
+	GranuleTransportKubectlExec GranuleTransportMode = "kubectl-exec"
+)
+
 // K8sGranuleConfig is what K8sGranuleSandboxes needs to create and reach
 // one granule pod per run.
 type K8sGranuleConfig struct {
@@ -114,6 +134,28 @@ type K8sGranuleConfig struct {
 	// pkg/k8s.Client, mcp.KubectlExecRunner, and `granule forward`; empty
 	// leaves kubectl's own default discovery ($KUBECONFIG or in-cluster).
 	Kubeconfig string
+	// TransportMode overrides the startup transport choice (tests).
+	// When empty, K8sGranuleSandboxes selects Direct in-cluster, Relay when
+	// relay.json or RelayAddr is configured, and KubectlExec otherwise.
+	TransportMode GranuleTransportMode
+	// RelayAddr is the host:port of the `granule relay` LoadBalancer
+	// (-k8s-granule-relay-addr). When set, it overrides the address in
+	// RelayConfigPath.
+	RelayAddr string
+	// RelayConfigPath is the path to relay.json (granule.DefaultRelayConfigPath
+	// when empty; "-" disables reading the default file).
+	RelayConfigPath string
+	// RelayConfig provides an explicit relay configuration (tests).
+	RelayConfig *granule.RelayConfig
+	// InPod overrides k8s.InKubernetesPod() when non-nil (tests).
+	InPod *bool
+	// PodIPResolver overrides k.client.PodIP when resolving pod IPs in
+	// direct mode (tests).
+	PodIPResolver func(ctx context.Context, podName string) (string, error)
+	// AccessDir is the directory where per-sandbox access spec files are
+	// written so forked `grain mcpserver` subprocesses can connect over
+	// the same transport.
+	AccessDir string
 	// ForwardedPorts lists controller loopback ports to forward into each
 	// guest VM at 127.0.0.1:<port> via `granule forward` over `kubectl exec -i`.
 	ForwardedPorts []int
@@ -233,6 +275,12 @@ type K8sGranuleSandboxes struct {
 	// have (k8s_priority_classes.go).
 	priority k8sPriorityGuard
 
+	transportMode GranuleTransportMode
+	relayConfig   *granule.RelayConfig
+	relayPool     *granule.PersistentRelayPool
+	ca            *granule.SandboxCA
+	accessDir     string
+
 	mu sync.Mutex
 	// image is SetImage's replacement for cfg.Image (live_image.go).
 	image liveImage
@@ -242,6 +290,7 @@ type K8sGranuleSandboxes struct {
 	// building holds the pod names an Acquire or Rebuild is creating and
 	// waiting on -- K8sSandboxes.building, for the same reason.
 	building         map[string]bool
+	accessSpecs      map[string]granule.SandboxAccessSpec
 	defaults         Shape
 	cpuOvercommit    float64
 	memoryOvercommit float64
@@ -281,12 +330,24 @@ func NewK8sGranuleSandboxes(cfg K8sGranuleConfig) *K8sGranuleSandboxes {
 		Kubeconfig: cfg.Kubeconfig,
 		Namespace:  cfg.Namespace,
 	}
+	ca, _ := granule.NewSandboxCA()
+	accessDir := cfg.AccessDir
+	if accessDir == "" {
+		accessDir = filepath.Join(os.TempDir(), "grain-granule-access")
+	}
+	mode, relayCfg, relayPool := resolveGranuleTransport(cfg)
 	return &K8sGranuleSandboxes{
-		cfg:      cfg,
-		client:   client,
-		fit:      newFitChecker(client, cfg.NodeSelector),
-		live:     map[string]*k8sGranuleSandbox{},
-		building: map[string]bool{},
+		cfg:           cfg,
+		client:        client,
+		fit:           newFitChecker(client, cfg.NodeSelector),
+		transportMode: mode,
+		relayConfig:   relayCfg,
+		relayPool:     relayPool,
+		ca:            ca,
+		accessDir:     accessDir,
+		live:          map[string]*k8sGranuleSandbox{},
+		building:      map[string]bool{},
+		accessSpecs:   map[string]granule.SandboxAccessSpec{},
 		defaults: Shape{
 			CPUs: cfg.DefaultCPUs, MemoryMB: cfg.DefaultMemoryMB, DiskGB: cfg.DefaultDiskGB,
 			NetworkAccess: cfg.DefaultNetworkAccess,
@@ -295,6 +356,74 @@ func NewK8sGranuleSandboxes(cfg K8sGranuleConfig) *K8sGranuleSandboxes {
 		memoryOvercommit: cfg.MemoryOvercommit,
 		diskOvercommit:   cfg.DiskOvercommit,
 	}
+}
+
+func resolveGranuleTransport(cfg K8sGranuleConfig) (GranuleTransportMode, *granule.RelayConfig, *granule.PersistentRelayPool) {
+	resolveRelayCfg := func() *granule.RelayConfig {
+		var rc *granule.RelayConfig
+		if cfg.RelayConfig != nil {
+			cp := *cfg.RelayConfig
+			rc = &cp
+		} else if cfg.RelayConfigPath != "-" {
+			path := cfg.RelayConfigPath
+			if path == "" {
+				path = granule.DefaultRelayConfigPath
+			}
+			if loaded, err := granule.LoadRelayConfig(path); err == nil {
+				rc = loaded
+			}
+		}
+		if cfg.RelayAddr != "" {
+			if rc == nil {
+				rc = &granule.RelayConfig{}
+			}
+			rc.Addr = strings.TrimSpace(cfg.RelayAddr)
+		}
+		if rc != nil && strings.TrimSpace(rc.Addr) != "" {
+			return rc
+		}
+		return nil
+	}
+
+	switch cfg.TransportMode {
+	case GranuleTransportDirect:
+		return GranuleTransportDirect, nil, nil
+	case GranuleTransportRelay:
+		rc := resolveRelayCfg()
+		if rc != nil {
+			return GranuleTransportRelay, rc, granule.NewPersistentRelayPool(*rc)
+		}
+		return GranuleTransportRelay, nil, nil
+	case GranuleTransportKubectlExec:
+		return GranuleTransportKubectlExec, nil, nil
+	default:
+		inPod := false
+		if cfg.InPod != nil {
+			inPod = *cfg.InPod
+		} else {
+			inPod = k8s.InKubernetesPod()
+		}
+		if inPod {
+			return GranuleTransportDirect, nil, nil
+		}
+		if rc := resolveRelayCfg(); rc != nil {
+			return GranuleTransportRelay, rc, granule.NewPersistentRelayPool(*rc)
+		}
+		return GranuleTransportKubectlExec, nil, nil
+	}
+}
+
+// TransportMode returns the sandbox transport mode selected at startup.
+func (k *K8sGranuleSandboxes) TransportMode() GranuleTransportMode {
+	return k.transportMode
+}
+
+// Close closes any persistent relay session held by this backend.
+func (k *K8sGranuleSandboxes) Close() error {
+	if k.relayPool != nil {
+		return k.relayPool.Close()
+	}
+	return nil
 }
 
 // SetDefaultShape replaces the deployment-wide default the next Acquire
@@ -465,7 +594,7 @@ func (k *K8sGranuleSandboxes) Acquire(ctx context.Context, sandbox string, shape
 		k.deleteQuietly(ctx, name)
 		return nil, unschedulableOutcome(ctx, k.fit, name, k.podShape(resolved), err)
 	}
-	sb := &k8sGranuleSandbox{owner: k, name: sandbox, podName: name, shape: shape, runner: k.execRunner(name), startedAt: time.Now()}
+	sb := &k8sGranuleSandbox{owner: k, name: sandbox, podName: name, shape: shape, runner: k.sandboxRunnerFor(name), startedAt: time.Now()}
 	k.mu.Lock()
 	k.live[sandbox] = sb
 	k.mu.Unlock()
@@ -505,7 +634,7 @@ func (k *K8sGranuleSandboxes) Readopt(ctx context.Context, sandbox string) (Sand
 	if err := readoptPod(ctx, k.pods(), name); err != nil {
 		return nil, err
 	}
-	sb := &k8sGranuleSandbox{owner: k, name: sandbox, podName: name, runner: k.execRunner(name), startedAt: time.Now()}
+	sb := &k8sGranuleSandbox{owner: k, name: sandbox, podName: name, runner: k.sandboxRunnerFor(name), startedAt: time.Now()}
 	k.mu.Lock()
 	k.live[sandbox] = sb
 	k.mu.Unlock()
@@ -526,11 +655,16 @@ func (k *K8sGranuleSandboxes) create(ctx context.Context, name string, shape Sha
 	if err := k.client.Delete(ctx, name, true); err != nil {
 		return fmt.Errorf("orchestrator: deleting stale granule sandbox pod %q before rebuilding it: %w", name, err)
 	}
+	_ = k.client.DeleteSecret(ctx, granule.SandboxSecretName(name))
 	podShape := k.podShape(shape)
 	if err := admitPod(ctx, k.fit, name, podShape); err != nil {
 		return err
 	}
-	if err := k.priority.createPod(ctx, k.pods(), name, podShape, k.podOptions(shape), k.cfg.StrictPriorityClasses); err != nil {
+	opts, err := k.podOptionsFor(name, shape, true)
+	if err != nil {
+		return fmt.Errorf("orchestrator: preparing granule sandbox pod %q: %w", name, err)
+	}
+	if err := k.priority.createPod(ctx, k.pods(), name, podShape, opts, k.cfg.StrictPriorityClasses); err != nil {
 		return fmt.Errorf("orchestrator: creating granule sandbox pod %q: %w", name, err)
 	}
 	k.fit.Reserve(name, podShape.Requests())
@@ -560,13 +694,52 @@ func (k *K8sGranuleSandboxes) podShape(shape Shape) k8s.PodShape {
 	}
 }
 
+func (k *K8sGranuleSandboxes) ensureCA() (*granule.SandboxCA, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.ca == nil {
+		ca, err := granule.NewSandboxCA()
+		if err != nil {
+			return nil, err
+		}
+		k.ca = ca
+	}
+	if k.accessSpecs == nil {
+		k.accessSpecs = map[string]granule.SandboxAccessSpec{}
+	}
+	return k.ca, nil
+}
+
 // podOptions builds this backend's pod: always privileged, always
-// carrying /dev/kvm and a readiness probe that waits on the guest rather
-// than the container, never a Command override (the image's own
-// ENTRYPOINT boots the VM), and CHV_CPUS/CHV_MEMORY_MB/CHV_DISK_SIZE_MB/CHV_NET_MODE
-// derived from shape so the guest boots at the size the pod was actually
-// given rather than at whatever the image's own defaults happen to be.
+// carrying /dev/kvm, starting granule's sandbox server in TCP listen
+// mode on port 7443 with a per-sandbox token and TLS certificate
+// delivered through a projected Secret volume, never a Command override
+// (the image's own ENTRYPOINT boots the VM), and
+// CHV_CPUS/CHV_MEMORY_MB/CHV_DISK_SIZE_MB/CHV_NET_MODE derived from shape
+// so the guest boots at the size the pod was actually given rather than
+// at whatever the image's own defaults happen to be.
 func (k *K8sGranuleSandboxes) podOptions(shape Shape) k8s.PodOptions {
+	opts, err := k.podOptionsFor(GranulePodNamePrefix+"sandbox", shape, false)
+	if err != nil {
+		panic(err)
+	}
+	return opts
+}
+
+func (k *K8sGranuleSandboxes) podOptionsFor(name string, shape Shape, persist bool) (k8s.PodOptions, error) {
+	ca, err := k.ensureCA()
+	if err != nil {
+		return k8s.PodOptions{}, err
+	}
+	token, err := granule.MintToken()
+	if err != nil {
+		return k8s.PodOptions{}, err
+	}
+	certPEM, keyPEM, err := ca.IssueSandboxCert(name, name)
+	if err != nil {
+		return k8s.PodOptions{}, err
+	}
+
 	resolved := shape.orDefault(DefaultShape())
 	env := map[string]string{
 		"CHV_CPUS":         strconv.Itoa(resolved.CPUs),
@@ -574,27 +747,107 @@ func (k *K8sGranuleSandboxes) podOptions(shape Shape) k8s.PodOptions {
 		"CHV_DISK_SIZE_MB": strconv.Itoa(resolved.DiskGB * mibPerGiB),
 		"CHV_NET_MODE":     chvNetMode(resolved.NetworkAccess),
 		// granule-shim reads this as every exec session's default account.
-		"GRANULE_EXEC_USER": DefaultK8sGranuleGuestUser,
+		"GRANULE_EXEC_USER":            DefaultK8sGranuleGuestUser,
+		"GRANULE_ACCESS_LISTEN":        granule.DefaultAccessListen,
+		"GRANULE_ACCESS_SANDBOX_ID":    name,
+		"GRANULE_ACCESS_TOKEN_FILE":    granule.DefaultAccessMountPath + "/token",
+		"GRANULE_ACCESS_TLS_CERT_FILE": granule.DefaultAccessMountPath + "/tls.crt",
+		"GRANULE_ACCESS_TLS_KEY_FILE":  granule.DefaultAccessMountPath + "/tls.key",
 	}
 	for key, value := range k.cfg.Env {
 		env[key] = value
+	}
+	labels := map[string]string{
+		granule.SandboxAccessLabel: granule.SandboxAccessLabelValue,
+		granule.SandboxNameLabel:   name,
+	}
+	if resolved.NetworkAccess == model.NetworkNone {
+		labels[NetworkLabel] = NetworkNoneValue
+	} else {
+		labels[granule.SandboxNetworkAccessLabel] = granule.SandboxNetworkOpenValue
 	}
 	opts := k8s.PodOptions{
 		Image:          k.CurrentImage(),
 		ServiceAccount: k.cfg.ServiceAccount,
 		NoCommand:      true,
 		Env:            env,
+		Labels:         labels,
 		NodeSelector:   k.cfg.NodeSelector,
 		Privileged:     true,
 		HostDevices:    []string{DevKVM},
-		ReadinessExec:  GranuleReadinessExec,
-
+		Ports: []k8s.ContainerPort{
+			{Name: "granule-access", Port: granule.DefaultAccessPort},
+		},
+		SecretVolume: &k8s.SecretVolume{
+			Name:      granule.SandboxSecretName(name),
+			MountPath: granule.DefaultAccessMountPath,
+			Data: map[string]string{
+				"token":   token,
+				"tls.crt": string(certPEM),
+				"tls.key": string(keyPEM),
+				"ca.crt":  string(ca.CAPEM()),
+			},
+		},
 		PriorityClassName: k.priority.resolve(k.cfg.PriorityClasses.For(shape.Class), k.cfg.StrictPriorityClasses),
 	}
-	if resolved.NetworkAccess == model.NetworkNone {
-		opts.Labels = map[string]string{NetworkLabel: NetworkNoneValue}
+	// The kubectl-exec fallback has no transport to poll granule health
+	// over (waitGuestHealth skips it), so "Ready" still has to mean "the
+	// guest answered" through the pod's own readiness probe.
+	if k.transportMode == GranuleTransportKubectlExec {
+		opts.ReadinessExec = GranuleReadinessExec
 	}
-	return opts
+
+	mode := string(k.transportMode)
+	if mode == "" || mode == string(GranuleTransportKubectlExec) {
+		mode = granule.AccessModeDirect
+	}
+	spec := granule.SandboxAccessSpec{
+		Mode:       mode,
+		PodName:    name,
+		Namespace:  k.client.NamespaceOrDefault(),
+		Kubectl:    k.cfg.Kubectl,
+		Kubeconfig: k.cfg.Kubeconfig,
+		Port:       granule.DefaultAccessPort,
+		Token:      token,
+		CACertPEM:  string(ca.CAPEM()),
+		User:       env["GRANULE_EXEC_USER"],
+		Relay:      k.relayConfig,
+	}
+	k.mu.Lock()
+	k.accessSpecs[name] = spec
+	k.mu.Unlock()
+	if persist && k.transportMode != GranuleTransportKubectlExec {
+		if path := k.accessFilePath(name); path != "" {
+			if err := granule.WriteSandboxAccessSpec(path, spec); err != nil {
+				return k8s.PodOptions{}, err
+			}
+		}
+	}
+	return opts, nil
+}
+
+func (k *K8sGranuleSandboxes) accessFilePath(podName string) string {
+	dir := k.accessDir
+	if dir == "" {
+		dir = filepath.Join(os.TempDir(), "grain-granule-access")
+	}
+	return filepath.Join(dir, podName+".json")
+}
+
+func (k *K8sGranuleSandboxes) accessFileForPod(podName string) string {
+	if k.transportMode == GranuleTransportKubectlExec {
+		return ""
+	}
+	return k.accessFilePath(podName)
+}
+
+func (k *K8sGranuleSandboxes) cleanupAccessSpec(podName string) {
+	k.mu.Lock()
+	delete(k.accessSpecs, podName)
+	k.mu.Unlock()
+	if path := k.accessFilePath(podName); path != "" {
+		_ = os.Remove(path)
+	}
 }
 
 // chvNetMode is the granule-shim CHV_NET_MODE this backend boots a guest
@@ -622,17 +875,102 @@ func (k *K8sGranuleSandboxes) waitReady(ctx context.Context, name string) error 
 	if err := k.client.WaitReady(ctx, name, deadline, unschedulableTimeout(k.cfg.UnschedulableTimeout), k.cfg.ReadyPollInterval); err != nil {
 		return fmt.Errorf("orchestrator: waiting for granule sandbox pod %q: %w", name, err)
 	}
+	if err := k.waitGuestHealth(ctx, name, deadline); err != nil {
+		return fmt.Errorf("orchestrator: waiting for granule sandbox guest %q health: %w", name, err)
+	}
 	return nil
 }
 
-// execRunner builds the transport this backend's four tools, git
-// credential writes and capability placements all run over: `kubectl
-// exec <pod> -c sandbox -- granule exec -- <argv>`, which is
-// mcp.KubectlExecRunner's own `kubectl exec` taken one layer deeper,
-// into the guest over vsock, by its Through -- see this file's own
-// top-of-file comment for why K8sSandboxes' transport is the wrong
-// shape to reuse directly, and granuleExecPrefix for why it is Through
-// rather than a prefix on argv.
+func (k *K8sGranuleSandboxes) waitGuestHealth(ctx context.Context, name string, deadline time.Time) error {
+	if k.transportMode == GranuleTransportKubectlExec {
+		return nil
+	}
+	gr, ok := k.sandboxRunnerFor(name).(*mcp.GranuleSandboxRunner)
+	if !ok || gr == nil {
+		return nil
+	}
+	poll := k.cfg.ReadyPollInterval
+	if poll <= 0 {
+		poll = k8s.DefaultPollInterval
+	}
+	var lastErr error
+	for {
+		probeTimeout := min(10*time.Second, time.Until(deadline))
+		if probeTimeout <= 0 {
+			if lastErr != nil {
+				return lastErr
+			}
+			return context.DeadlineExceeded
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+		_, err := gr.Health(probeCtx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Now().Add(poll).After(deadline) {
+			return lastErr
+		}
+		timer := time.NewTimer(poll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (k *K8sGranuleSandboxes) resolvePodIP(ctx context.Context, podName string) (string, error) {
+	if k.cfg.PodIPResolver != nil {
+		return k.cfg.PodIPResolver(ctx, podName)
+	}
+	return k.client.PodIP(ctx, podName)
+}
+
+func (k *K8sGranuleSandboxes) lookupAccessSpec(name string) (granule.SandboxAccessSpec, bool) {
+	k.mu.Lock()
+	spec, ok := k.accessSpecs[name]
+	k.mu.Unlock()
+	if ok {
+		return spec, true
+	}
+	if path := k.accessFilePath(name); path != "" {
+		if loaded, err := granule.ReadSandboxAccessSpec(path); err == nil && loaded != nil {
+			k.mu.Lock()
+			if k.accessSpecs == nil {
+				k.accessSpecs = map[string]granule.SandboxAccessSpec{}
+			}
+			k.accessSpecs[name] = *loaded
+			k.mu.Unlock()
+			return *loaded, true
+		}
+	}
+	return granule.SandboxAccessSpec{}, false
+}
+
+func (k *K8sGranuleSandboxes) sandboxRunnerFor(name string) sandboxRunner {
+	if k.transportMode == GranuleTransportKubectlExec {
+		return k.execRunner(name)
+	}
+	spec, ok := k.lookupAccessSpec(name)
+	if !ok {
+		return k.execRunner(name)
+	}
+	r, err := mcp.NewGranuleSandboxRunnerFromSpec(spec, k.relayPool, k.resolvePodIP)
+	if err != nil {
+		return k.execRunner(name)
+	}
+	r.User = spec.User
+	return r
+}
+
+// execRunner builds the fallback `kubectl exec <pod> -c sandbox -- granule exec -- <argv>`
+// transport used when neither direct in-cluster dialing nor granule relay is configured.
 func (k *K8sGranuleSandboxes) execRunner(name string) *mcp.KubectlExecRunner {
 	return &mcp.KubectlExecRunner{
 		Kubectl:    k.cfg.Kubectl,
@@ -676,6 +1014,8 @@ func (k *K8sGranuleSandboxes) deleteQuietly(ctx context.Context, name string) {
 	defer cancel()
 	k.fit.Release(name)
 	_ = k.client.Delete(ctx, name, false)
+	_ = k.client.DeleteSecret(ctx, granule.SandboxSecretName(name))
+	k.cleanupAccessSpec(name)
 }
 
 // ReapOrphans is SweepOrphans at startup -- K8sSandboxes.ReapOrphans'
@@ -692,7 +1032,8 @@ func (k *K8sGranuleSandboxes) ReapOrphans(ctx context.Context) (int, error) {
 // with its own idea of what it holds. reconcileSandboxes runs it on
 // every tick, which is what reclaims a pod a Release could not delete.
 func (k *K8sGranuleSandboxes) SweepOrphans(ctx context.Context) (int, error) {
-	return sweepOrphanPods(ctx, k.pods(), &k.mu, func(pod string) bool {
+	var reapedPods []string
+	n, err := sweepOrphanPods(ctx, k.pods(), &k.mu, func(pod string) bool {
 		if k.building[pod] {
 			return true
 		}
@@ -701,8 +1042,14 @@ func (k *K8sGranuleSandboxes) SweepOrphans(ctx context.Context) (int, error) {
 				return true
 			}
 		}
+		reapedPods = append(reapedPods, pod)
 		return false
 	})
+	for _, pod := range reapedPods {
+		_ = k.client.DeleteSecret(ctx, granule.SandboxSecretName(pod))
+		k.cleanupAccessSpec(pod)
+	}
+	return n, err
 }
 
 // k8sGranuleSandbox is one run's pod.
@@ -728,22 +1075,24 @@ func (s *k8sGranuleSandbox) Name() string { return s.name }
 func (s *k8sGranuleSandbox) PodName() string { return s.podName }
 
 // KubePod implements podNamedSandbox so subprocess agent frameworks
-// (`grain mcpserver`) receive -k8s-pod, -k8s-kubeconfig, and -k8s-granule.
+// (`grain mcpserver`) receive -k8s-pod, -k8s-kubeconfig, -k8s-granule,
+// and -k8s-granule-access-file.
 func (s *k8sGranuleSandbox) KubePod() agent.KubePod {
 	return agent.KubePod{
-		Namespace:  s.owner.client.NamespaceOrDefault(),
-		Pod:        s.podName,
-		Workspace:  s.owner.cfg.Workspace,
-		Kubeconfig: s.owner.cfg.Kubeconfig,
-		Granule:    true,
+		Namespace:         s.owner.client.NamespaceOrDefault(),
+		Pod:               s.podName,
+		Workspace:         s.owner.cfg.Workspace,
+		Kubeconfig:        s.owner.cfg.Kubeconfig,
+		Granule:           true,
+		GranuleAccessFile: s.owner.accessFileForPod(s.podName),
 	}
 }
 
-// startForward starts a supervised `granule forward` session over
-// `kubectl exec -i` into s.podName, forwarding each configured controller
-// port from guest 127.0.0.1:<port> to controller 127.0.0.1:<port>, and
-// waits until a session reports its guest listeners bound -- so nothing
-// the caller runs in the guest next (the run's first git clone through
+// startForward starts a supervised `granule forward` session into
+// s.podName, forwarding each configured controller port from guest
+// 127.0.0.1:<port> to controller 127.0.0.1:<port>, and waits until a
+// session reports its guest listeners bound -- so nothing the caller
+// runs in the guest next (the run's first git clone through
 // 127.0.0.1:9728) can race the tunnel's startup. A session that fails
 // before it gets there is retried with the supervisor's own backoff
 // until ForwardReadyTimeout; the error is returned once that passes, ctx
@@ -758,7 +1107,13 @@ func (s *k8sGranuleSandbox) startForward(ctx context.Context) error {
 	cfg := s.owner.cfg
 	runner := cfg.ForwardRunner
 	if runner == nil {
-		runner = granule.ForwardKubectl
+		if gr, ok := s.runner.(*mcp.GranuleSandboxRunner); ok {
+			runner = func(fctx context.Context, fcfg granule.KubectlForwardConfig) error {
+				return granule.ForwardStream(fctx, gr.OpenForwardStream, fcfg)
+			}
+		} else {
+			runner = granule.ForwardKubectl
+		}
 	}
 	bo := forwardBackoff{
 		base:    positiveOr(cfg.ForwardBackoff, DefaultGranuleForwardBackoff),
@@ -889,7 +1244,7 @@ func (s *k8sGranuleSandbox) stopForward() {
 }
 
 // Tools implements Sandbox: the same four tools every remote backend
-// exposes, run over the granule-wrapped `kubectl exec` transport.
+// exposes, run over the configured sandbox transport.
 func (s *k8sGranuleSandbox) Tools(ctx context.Context) ([]mcp.Tool, error) {
 	return mcp.NewSSHSandboxTools(s.runner, s.owner.cfg.Workspace), nil
 }
@@ -912,12 +1267,20 @@ func (s *k8sGranuleSandbox) PlaceFile(ctx context.Context, path, content, mode s
 	return nil
 }
 
+// PlaceFiles places multiple files in a single batched operation when the
+// transport supports PutFiles, or sequentially otherwise.
+func (s *k8sGranuleSandbox) PlaceFiles(ctx context.Context, files []mcp.FilePlacement) error {
+	if err := mcp.PlaceFilesOverSSH(ctx, s.runner, files); err != nil {
+		return fmt.Errorf("orchestrator: placing files in granule sandbox pod %q: %w", s.podName, err)
+	}
+	return nil
+}
+
 // RunShell implements SandboxShell, granuleSandbox.RunShell's
-// counterpart over this backend's `kubectl exec ... granule exec`
-// transport. Without it a grain CI step here went through the
-// run_command tool instead, which clamps every command to run_command's
-// own ten-minute ceiling whatever the job's timeout-minutes said, and
-// reports nothing until the step ends.
+// counterpart over this backend's transport. Without it a grain CI step
+// here went through the run_command tool instead, which clamps every
+// command to run_command's own ten-minute ceiling whatever the job's
+// timeout-minutes said, and reports nothing until the step ends.
 func (s *k8sGranuleSandbox) RunShell(ctx context.Context, req ShellRequest) (ShellResult, error) {
 	var workspace string
 	if s.owner != nil {
@@ -931,6 +1294,14 @@ func (s *k8sGranuleSandbox) RunInSandbox(ctx context.Context, argv []string, std
 	return s.runner.Run(ctx, argv, stdin)
 }
 
+// RunAsRootInSandbox implements SandboxRootCommander.
+func (s *k8sGranuleSandbox) RunAsRootInSandbox(ctx context.Context, argv []string, stdin string) (string, string, int) {
+	if gr, ok := s.runner.(*mcp.GranuleSandboxRunner); ok {
+		return gr.RunAsRoot(ctx, argv, stdin)
+	}
+	return s.runner.Run(ctx, append([]string{"sudo", "-n", "--"}, argv...), stdin)
+}
+
 // Rebuild implements SandboxRebuilder: delete this run's pod and create
 // it again, at the same name and the same size, waiting for the
 // replacement's guest to answer ready before returning.
@@ -940,6 +1311,7 @@ func (s *k8sGranuleSandbox) Rebuild(ctx context.Context) error {
 	if err := s.owner.create(ctx, s.podName, s.shape.orDefault(s.owner.defaultShape())); err != nil {
 		return err
 	}
+	s.runner = s.owner.sandboxRunnerFor(s.podName)
 	if err := s.owner.waitReady(ctx, s.podName); err != nil {
 		return err
 	}
@@ -953,14 +1325,20 @@ func (s *k8sGranuleSandbox) Release(ctx context.Context) error {
 	delete(s.owner.live, s.name)
 	s.owner.mu.Unlock()
 	s.stopForward()
+	if closer, ok := s.runner.(io.Closer); ok {
+		_ = closer.Close()
+	}
 	s.owner.fit.Release(s.podName)
 	// Detached from ctx: a caller releasing because its run was cancelled
 	// or timed out hands in a context that is already done, and the pod
 	// has to go regardless -- the same reasoning deleteQuietly follows.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), k8sGranuleCleanupTimeout)
 	defer cancel()
-	if err := s.owner.client.Delete(ctx, s.podName, false); err != nil {
-		return fmt.Errorf("orchestrator: deleting granule sandbox pod %q: %w", s.podName, err)
+	podErr := s.owner.client.Delete(ctx, s.podName, false)
+	_ = s.owner.client.DeleteSecret(ctx, granule.SandboxSecretName(s.podName))
+	s.owner.cleanupAccessSpec(s.podName)
+	if podErr != nil {
+		return fmt.Errorf("orchestrator: deleting granule sandbox pod %q: %w", s.podName, podErr)
 	}
 	return nil
 }

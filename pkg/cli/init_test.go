@@ -345,8 +345,8 @@ func TestCmdInitGKESandboxesDryRun(t *testing.T) {
 	if code := initExitCode(res, err); code != 0 {
 		t.Fatalf("initExitCode = %d, want 0 (steps: %+v)", code, res.Steps)
 	}
-	if len(res.Steps) != 7 {
-		t.Fatalf("len(Steps) = %d, want 7: %+v", len(res.Steps), res.Steps)
+	if len(res.Steps) != 8 {
+		t.Fatalf("len(Steps) = %d, want 8: %+v", len(res.Steps), res.Steps)
 	}
 	for _, s := range res.Steps {
 		if s.Status != hostinit.StepWould {

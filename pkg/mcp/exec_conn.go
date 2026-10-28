@@ -54,6 +54,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/procgroup"
+	"github.com/bwsalmon/granule/pkg/sandbox"
 )
 
 // execConnStderrLimit bounds what is kept of a forwarder's stderr. It
@@ -91,6 +92,140 @@ func (r *KubectlExecRunner) DialStream(ctx context.Context, argv []string) (net.
 // where there is no VM and the exec goes straight into the container.
 func (r *ContainerExecRunner) DialStream(ctx context.Context, argv []string) (net.Conn, error) {
 	return dialExec(ctx, r.binary(), r.execArgs(argv, true), argv)
+}
+
+// DialStream opens a connection to something inside the guest by starting an
+// exec stream over the multiplexed granule sandbox access client.
+func (r *GranuleSandboxRunner) DialStream(ctx context.Context, argv []string) (net.Conn, error) {
+	if len(argv) == 0 {
+		return nil, errors.New("dial: no command to exec in the guest")
+	}
+	client, err := r.getClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("dial: connecting to sandbox %s: %w", r.Pod, err)
+	}
+	proc, err := client.StartExec(ctx, sandbox.ExecRequest{
+		Argv:    argv,
+		User:    r.User,
+		Workdir: r.Workdir,
+	})
+	if err != nil {
+		r.resetClient(client)
+		client, err = r.getClient(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("dial: reconnecting to sandbox %s: %w", r.Pod, err)
+		}
+		proc, err = client.StartExec(ctx, sandbox.ExecRequest{
+			Argv:    argv,
+			User:    r.User,
+			Workdir: r.Workdir,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("dial: starting exec in sandbox %s: %w", r.Pod, err)
+		}
+	}
+
+	toGuest, ourWrite, err := os.Pipe()
+	if err != nil {
+		_ = proc.Detach()
+		return nil, fmt.Errorf("dial: opening the stdin pipe: %w", err)
+	}
+	ourRead, fromGuest, err := os.Pipe()
+	if err != nil {
+		toGuest.Close()
+		ourWrite.Close()
+		_ = proc.Detach()
+		return nil, fmt.Errorf("dial: opening the stdout pipe: %w", err)
+	}
+
+	stderr := &boundedBuffer{limit: execConnStderrLimit}
+	drained := make(chan struct{})
+	go func() {
+		defer toGuest.Close()
+		_, _ = io.Copy(proc.Stdin(), toGuest)
+		_ = proc.Stdin().Close()
+	}()
+	go func() {
+		defer close(drained)
+		defer fromGuest.Close()
+		_, _, _ = proc.Wait(fromGuest, stderr)
+	}()
+
+	conn := &granuleExecConn{
+		proc:    proc,
+		in:      ourWrite,
+		out:     ourRead,
+		stderr:  stderr,
+		drained: drained,
+		addr:    execAddr(strings.Join(argv, " ")),
+	}
+	if err := ctx.Err(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+	return conn, nil
+}
+
+type granuleExecConn struct {
+	proc      *sandbox.ExecProcess
+	in        *os.File
+	out       *os.File
+	stderr    *boundedBuffer
+	drained   <-chan struct{}
+	addr      execAddr
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (c *granuleExecConn) Read(p []byte) (int, error) {
+	n, err := c.out.Read(p)
+	if err != nil {
+		return n, c.annotate("read", err)
+	}
+	return n, nil
+}
+
+func (c *granuleExecConn) Write(p []byte) (int, error) {
+	n, err := c.in.Write(p)
+	if err != nil {
+		return n, c.annotate("write", err)
+	}
+	return n, nil
+}
+
+func (c *granuleExecConn) annotate(op string, err error) error {
+	if c.drained != nil {
+		select {
+		case <-c.drained:
+		case <-time.After(diagnosticGrace):
+		}
+	}
+	if diagnostic := strings.TrimSpace(c.stderr.String()); diagnostic != "" {
+		return fmt.Errorf("%s %s: %w: %s", op, c.addr, err, diagnostic)
+	}
+	if errors.Is(err, io.EOF) {
+		return io.EOF
+	}
+	return fmt.Errorf("%s %s: %w", op, c.addr, err)
+}
+
+func (c *granuleExecConn) Close() error {
+	c.closeOnce.Do(func() {
+		c.closeErr = c.in.Close()
+		_ = c.proc.Detach()
+		if err := c.out.Close(); c.closeErr == nil && !errors.Is(err, os.ErrClosed) {
+			c.closeErr = err
+		}
+	})
+	return c.closeErr
+}
+
+func (c *granuleExecConn) LocalAddr() net.Addr                { return execAddr("grain") }
+func (c *granuleExecConn) RemoteAddr() net.Addr               { return c.addr }
+func (c *granuleExecConn) SetReadDeadline(t time.Time) error  { return c.out.SetReadDeadline(t) }
+func (c *granuleExecConn) SetWriteDeadline(t time.Time) error { return c.in.SetWriteDeadline(t) }
+func (c *granuleExecConn) SetDeadline(t time.Time) error {
+	return errors.Join(c.SetReadDeadline(t), c.SetWriteDeadline(t))
 }
 
 // dialExec starts local (docker, kubectl) with args and hands back its

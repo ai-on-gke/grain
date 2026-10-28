@@ -86,6 +86,9 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete"]
   # Read-only diagnostics, and nothing the daemon itself needs: events
   # (core and events.k8s.io) so `kubectl describe pod` and `get events`
   # show why a sandbox pod was not scheduled or was evicted, and pod
