@@ -16,6 +16,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -438,6 +439,28 @@ func TestNothingNeededIsRegisteredWithARequiredReason(t *testing.T) {
 	}
 	if got := sink.NothingNeeded(); got != "already fixed in abc123" {
 		t.Errorf("NothingNeeded() = %q, want the reason", got)
+	}
+}
+
+func TestProposeTaskSchemaIsCompactedAndPointsToHelp(t *testing.T) {
+	tool := toolNamed(t, NewMockTools(&MockSink{}, []string{"acme/widgets"}), "propose_task")
+	raw, err := json.Marshal(struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		InputSchema map[string]any `json:"inputSchema"`
+	}{
+		Name:        tool.Name,
+		Description: tool.Description,
+		InputSchema: tool.InputSchema,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > 3000 {
+		t.Errorf("propose_task serialized schema is %d bytes, want <= 3000 bytes (compacted from ~14.7 KB)", len(raw))
+	}
+	if !strings.Contains(tool.Description, "grain help propose") {
+		t.Errorf("propose_task description = %q, want reference to 'grain help propose'", tool.Description)
 	}
 }
 

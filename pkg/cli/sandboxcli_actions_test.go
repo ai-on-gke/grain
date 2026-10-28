@@ -34,6 +34,7 @@ import (
 type fakeActionProxy struct {
 	mu      sync.Mutex
 	bodies  map[string]map[string]any
+	headers map[string]http.Header
 	answers map[string]string
 }
 
@@ -43,6 +44,9 @@ func (f *fakeActionProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(raw, &body)
 	f.mu.Lock()
 	f.bodies[r.Method+" "+r.URL.Path] = body
+	if f.headers != nil {
+		f.headers[r.Method+" "+r.URL.Path] = r.Header.Clone()
+	}
 	answer, ok := f.answers[r.URL.Path]
 	f.mu.Unlock()
 	if !ok {
@@ -220,5 +224,107 @@ func TestSandboxGitRevertRevertsATaskMergeLocally(t *testing.T) {
 
 	if _, errOut, code := runActionCLI(t, srv, nil, "git", "revert", "--task", "43", "--reason", "x", "-C", dir); code != 1 || !strings.Contains(errOut, "no such route") {
 		t.Errorf("revert of a task the proxy does not know: %d %s", code, errOut)
+	}
+}
+
+func TestStage3SandboxCLICommands(t *testing.T) {
+	proxy := &fakeActionProxy{bodies: map[string]map[string]any{}, answers: map[string]string{
+		"/cli/status":              "Updated status: checking tests\n",
+		"/cli/handover":            "Recorded standing handover summary (12 bytes).\n",
+		"/cli/notify":              `{"id":4,"subject":"flake","severity":"warning","count":1,"new":true}`,
+		"/cli/tasks/9/notes":       "Left a note on task #9 (comment 12).\n",
+		"/cli/tasks/wait":          `{"status":"settled","until":"closed","summary":"[reached] task #9 (completed)\n","waited_ms":2000,"credit_used_ms":2000,"credit_cap_ms":2700000,"credit_live":true}`,
+		"/cli/proposals":           `{"id":"101","url":"/tasks/101","hold_for_approval":true,"auto_merge":false,"held":true}`,
+		"/cli/api-routes":          `[{"method":"GET","path":"/api/tasks","scope":"tasks:read","tool":"api_list_tasks"}]`,
+		"/api/tasks/9":             `{"id":"9","state":"completed"}`,
+		"/api/memory":              `{"text":"remember this"}`,
+		"/api/memory/documents":    `{"name":"arch","summary":"Arch","length":10}`,
+		"/api/release-notes/stats": `{"period":"2026-W43","pullRequestsMerged":5}`,
+		"/api/release-notes":       `{"period":"2026-W43","title":"v1.2","length":12}`,
+		"/cli/quarantine":          `{"task_id":"7","follow_up_task_id":"102"}`,
+	}}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	// 1. grain help propose & grain task propose --help
+	for _, args := range [][]string{{"help", "propose"}, {"task", "propose", "--help"}} {
+		out, errOut, code := runActionCLI(t, srv, nil, args...)
+		if code != 0 || !strings.Contains(out, "SURFACE & APPROVAL") || !strings.Contains(out, "--supersedes") {
+			t.Errorf("%v: code=%d out=%q err=%q", args, code, out, errOut)
+		}
+	}
+
+	// 2. status, handover write, notify, task message
+	if out, errOut, code := runActionCLI(t, srv, nil, "status", "checking", "tests"); code != 0 || !strings.Contains(out, "Updated status") {
+		t.Errorf("status: %d %s %s", code, out, errOut)
+	}
+	if out, errOut, code := runActionCLI(t, srv, nil, "handover", "write", "settled summary"); code != 0 || !strings.Contains(out, "Recorded standing handover") {
+		t.Errorf("handover write: %d %s %s", code, out, errOut)
+	}
+	if out, errOut, code := runActionCLI(t, srv, nil, "notify", "--subject", "flake", "--title", "Flake seen", "--body", "details"); code != 0 || !strings.Contains(out, `Raised warning notification "flake"`) {
+		t.Errorf("notify: %d %s %s", code, out, errOut)
+	}
+	if out, errOut, code := runActionCLI(t, srv, nil, "task", "message", "9", "hello from parent"); code != 0 || !strings.Contains(out, "Left a note on task #9") {
+		t.Errorf("task message: %d %s %s", code, out, errOut)
+	}
+
+	// 3. task wait (blocking allowed; --park refused)
+	if out, errOut, code := runActionCLI(t, srv, nil, "task", "wait", "9", "--until", "closed"); code != 0 || !strings.Contains(out, "[reached] task #9") {
+		t.Errorf("task wait: %d %s %s", code, out, errOut)
+	}
+	if _, errOut, code := runActionCLI(t, srv, nil, "task", "wait", "9", "--park"); code != 1 || !strings.Contains(errOut, "wait_for_task") {
+		t.Errorf("task wait --park: %d %s", code, errOut)
+	}
+
+	// 4. task propose (draft allowed; --supersedes and --auto-merge refused)
+	if out, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "Follow-up", "--body", "Do x", "--depends-on", "7,8"); code != 0 ||
+		!strings.Contains(out, "Proposed task #101") || !strings.Contains(out, "held for human approval") {
+		t.Errorf("task propose: %d %s %s", code, out, errOut)
+	}
+	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--supersedes", "5"); code != 1 ||
+		!strings.Contains(errOut, "propose_task") {
+		t.Errorf("task propose --supersedes: %d %s", code, errOut)
+	}
+	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--auto-merge"); code != 1 ||
+		!strings.Contains(errOut, "propose_task") {
+		t.Errorf("task propose --auto-merge: %d %s", code, errOut)
+	}
+
+	// 5. grain api routes, grain api GET, & grain api DELETE --reason
+	proxy.headers = map[string]http.Header{}
+	if out, errOut, code := runActionCLI(t, srv, nil, "api", "routes"); code != 0 || !strings.Contains(out, "/api/tasks") {
+		t.Errorf("api routes: %d %s %s", code, out, errOut)
+	}
+	if out, errOut, code := runActionCLI(t, srv, nil, "api", "GET", "/api/tasks/9"); code != 0 || !strings.Contains(out, `"completed"`) {
+		t.Errorf("api GET: %d %s %s", code, out, errOut)
+	}
+	if out, errOut, code := runActionCLI(t, srv, nil, "api", "DELETE", "/api/tasks/9", "--reason", "cleanup"); code != 0 || !strings.Contains(out, `"completed"`) {
+		t.Errorf("api DELETE: %d %s %s", code, out, errOut)
+	}
+	if got := proxy.headers["DELETE /api/tasks/9"].Get("X-Grain-Acting-Reason"); got != "cleanup" {
+		t.Errorf("DELETE /api/tasks/9 X-Grain-Acting-Reason = %q, want cleanup", got)
+	}
+
+	// 6. memory write, memory doc-write (and memory doc write), release-notes, quarantine
+	if out, errOut, code := runActionCLI(t, srv, nil, "memory", "write", "remember this"); code != 0 || !strings.Contains(out, "remember this") {
+		t.Errorf("memory write: %d %s %s", code, out, errOut)
+	}
+	if out, errOut, code := runActionCLI(t, srv, nil, "memory", "doc", "write", "arch", "doc body", "--summary", "Arch"); code != 0 || !strings.Contains(out, `"arch"`) {
+		t.Errorf("memory doc write: %d %s %s", code, out, errOut)
+	}
+	if out, errOut, code := runActionCLI(t, srv, nil, "release-notes", "stats", "2026-W43"); code != 0 || !strings.Contains(out, "2026-W43") {
+		t.Errorf("release-notes stats: %d %s %s", code, out, errOut)
+	}
+	if out, errOut, code := runActionCLI(t, srv, nil, "release-notes", "publish", "--version", "2026-W43", "--title", "v1.2", "shipped x"); code != 0 || !strings.Contains(out, "v1.2") {
+		t.Errorf("release-notes publish: %d %s %s", code, out, errOut)
+	}
+	qDir := t.TempDir()
+	if out, errOut, code := runActionCLI(t, srv, nil, "quarantine", "pkg/foo", "TestFlaky", "--reason", "timing flake", "-C", qDir); code != 0 ||
+		!strings.Contains(out, `Quarantined test "pkg/foo.TestFlaky"`) || !strings.Contains(out, "#102") {
+		t.Errorf("quarantine: %d %s %s", code, out, errOut)
+	}
+	qRaw, err := os.ReadFile(filepath.Join(qDir, ".grain", "quarantine.yml"))
+	if err != nil || !strings.Contains(string(qRaw), "pkg/foo.TestFlaky") || !strings.Contains(string(qRaw), "102") {
+		t.Errorf("quarantine.yml = %q, %v", qRaw, err)
 	}
 }

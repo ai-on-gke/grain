@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -138,8 +139,17 @@ type GitProxy struct {
 	CLIActions CLIActions
 	// WaitCredit, when set, credits the time /cli/ci/wait and
 	// /cli/ci/run-job block back to the run's wall-clock deadline.
-	WaitCredit CLIWaitCreditor
-	cliWaits   cliWaitLedger
+	WaitCredit   CLIWaitCreditor
+	cliWaits     cliWaitLedger
+	cliProposals cliProposalLimiter
+	// API, when set, serves /api/... requests from the sandbox, forwarded
+	// with X-Grain-Acting-Task, X-Grain-Acting-Run, and
+	// X-Grain-Channel: sandbox-cli so agentAPIGate enforces non-dangerous
+	// scope rules.
+	API http.Handler
+	// CapHandler, when set, serves external capability server requests under
+	// /cap/<server>/mcp.
+	CapHandler http.Handler
 	// ShutdownStarted, when set, is closed as the daemon begins to stop:
 	// a blocking /cli/ci/wait or /cli/ci/run-job ends its slice at once
 	// and hands back ResumeRunID rather than holding the proxy's
@@ -223,7 +233,7 @@ func (p *GitProxy) Handle(ctx context.Context, method, path, query string, heade
 // send a body, so reading it first would let any of them make the
 // controller hold as much as they cared to send. nil is no body.
 func (p *GitProxy) HandleRequest(ctx context.Context, method, path, query string, headers map[string]string, body io.Reader) ProxyResponse {
-	if isNamespacePath(path) || isCLIPath(path) || isGitSignPath(path) {
+	if isNamespacePath(path) || isCLIPath(path) || isAPIPath(path) || isCapPath(path) || isGitSignPath(path) {
 		return p.handleNamespaceRequest(ctx, method, path, query, headers, body)
 	}
 	req, ok := ParsePath(path)

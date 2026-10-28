@@ -46,12 +46,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 )
 
@@ -172,6 +174,141 @@ func (l *cliWaitLedger) add(runID string, d time.Duration) time.Duration {
 	return l.blocked[runID]
 }
 
+// MaxCLIProposalsPerAttempt caps how many unapproved proposals one sandbox
+// attempt may file through POST /cli/proposals.
+const MaxCLIProposalsPerAttempt = 10
+
+// CLINotifyRequest is POST /cli/notify's body.
+type CLINotifyRequest struct {
+	Subject    string                   `json:"subject"`
+	Title      string                   `json:"title"`
+	Body       string                   `json:"body,omitempty"`
+	Severity   string                   `json:"severity,omitempty"`
+	Task       string                   `json:"task,omitempty"`
+	ClearsWhen *model.NotificationClear `json:"clears_when,omitempty"`
+}
+
+// CLINotifyResult is POST /cli/notify's answer.
+type CLINotifyResult struct {
+	ID       int64  `json:"id"`
+	Subject  string `json:"subject"`
+	Severity string `json:"severity"`
+	Count    int    `json:"count"`
+	New      bool   `json:"new"`
+}
+
+// CLITaskWaitRequest is POST /cli/tasks/wait's body.
+type CLITaskWaitRequest struct {
+	IDs            []string `json:"ids"`
+	Until          string   `json:"until,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
+	Park           bool     `json:"park,omitempty"`
+	ResumeAt       string   `json:"resume_at,omitempty"`
+}
+
+// CLITaskWaitResponse is POST /cli/tasks/wait's answer.
+type CLITaskWaitResponse struct {
+	Status      string             `json:"status"`
+	Until       string             `json:"until"`
+	Targets     []model.WaitTarget `json:"targets"`
+	Summary     string             `json:"summary"`
+	WaitedMS    int64              `json:"waited_ms"`
+	CreditMS    int64              `json:"credit_used_ms"`
+	CreditCapMS int64              `json:"credit_cap_ms,omitempty"`
+	CreditLive  bool               `json:"credit_live"`
+}
+
+// CLIProposeRequest is POST /cli/proposals' body.
+type CLIProposeRequest struct {
+	ID              string              `json:"id,omitempty"`
+	Title           string              `json:"title"`
+	Body            string              `json:"body"`
+	Repo            string              `json:"repo,omitempty"`
+	Branch          string              `json:"branch,omitempty"`
+	NoRepo          bool                `json:"no_repo,omitempty"`
+	DependsOn       []string            `json:"depends_on,omitempty"`
+	Capabilities    []string            `json:"capabilities,omitempty"`
+	CustomFields    map[string][]string `json:"custom_fields,omitempty"`
+	NotBefore       *time.Time          `json:"not_before,omitempty"`
+	FixesBaseBranch bool                `json:"fixes_base_branch,omitempty"`
+	NoPort          bool                `json:"no_port,omitempty"`
+	Origin          string              `json:"origin,omitempty"`
+	Reads           []string            `json:"reads,omitempty"`
+	HoldForApproval *bool               `json:"hold_for_approval,omitempty"`
+	AutoMerge       *bool               `json:"auto_merge,omitempty"`
+	Supersedes      string              `json:"supersedes,omitempty"`
+}
+
+// CLIProposeResult is POST /cli/proposals' answer.
+type CLIProposeResult struct {
+	ID              string `json:"id"`
+	URL             string `json:"url"`
+	HoldForApproval bool   `json:"hold_for_approval"`
+	AutoMerge       bool   `json:"auto_merge"`
+	Queued          bool   `json:"queued"`
+	Held            bool   `json:"held"`
+	ApprovalNote    string `json:"approval_note,omitempty"`
+}
+
+// CLIQuarantineRequest is POST /cli/quarantine's body.
+type CLIQuarantineRequest struct {
+	TestName     string `json:"test_name"`
+	Reason       string `json:"reason"`
+	TTL          string `json:"ttl,omitempty"`
+	FileFollowUp *bool  `json:"file_follow_up,omitempty"`
+}
+
+// CLIQuarantineResult is POST /cli/quarantine's answer.
+type CLIQuarantineResult struct {
+	TaskID         string `json:"task_id"`
+	FollowUpTaskID string `json:"follow_up_task_id,omitempty"`
+}
+
+// CLIAPIRoute is one route returned by GET /cli/api-routes.
+type CLIAPIRoute struct {
+	Method      string `json:"method"`
+	Path        string `json:"path"`
+	Scope       string `json:"scope"`
+	Tool        string `json:"tool"`
+	Description string `json:"description"`
+	NeedsReason bool   `json:"needs_reason,omitempty"`
+}
+
+// CLITaskActions extends CLIActions with the Stage 3 collaboration, wait,
+// proposal, and API-discovery actions. Implemented by pkg/ui's
+// SandboxCLIActions and pkg/daemon's sandboxCLIGate.
+type CLITaskActions interface {
+	NotifyOperator(ctx context.Context, taskID string, req CLINotifyRequest) (CLINotifyResult, error)
+	MessageTask(ctx context.Context, callerTaskID, targetTaskID, body string) (int64, error)
+	CheckWaitTargets(ctx context.Context, callerTaskID string, ids []string) ([]model.WaitTarget, error)
+	ProposeTask(ctx context.Context, callerTaskID, runID string, req CLIProposeRequest) (CLIProposeResult, error)
+	ListAPIRoutes(ctx context.Context, callerTaskID string, grants []string, scopeFilter string) ([]CLIAPIRoute, error)
+}
+
+// proxyHandoverWriter writes a standing handover comment for a task run.
+// Implemented by *model.Store.
+type proxyHandoverWriter interface {
+	WriteTaskHandover(ctx context.Context, taskID, runID, body string) error
+}
+
+type cliProposalLimiter struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func (l *cliProposalLimiter) take(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.counts == nil {
+		l.counts = make(map[string]int)
+	}
+	if l.counts[key] >= MaxCLIProposalsPerAttempt {
+		return false
+	}
+	l.counts[key]++
+	return true
+}
+
 // cliActionRoutes are the routes this file serves, by method.
 var cliActionRoutes = map[string]string{
 	"ci/wait":           http.MethodPost,
@@ -181,6 +318,13 @@ var cliActionRoutes = map[string]string{
 	"pr/reply":          http.MethodPost,
 	"pr/resolve":        http.MethodPost,
 	"pr/review-comment": http.MethodPost,
+	"status":            http.MethodPost,
+	"handover":          http.MethodPost,
+	"notify":            http.MethodPost,
+	"tasks/wait":        http.MethodPost,
+	"proposals":         http.MethodPost,
+	"quarantine":        http.MethodPost,
+	"api-routes":        http.MethodGet,
 }
 
 func isRevertInfoRoute(route string) bool {
@@ -192,12 +336,24 @@ func isRevertInfoRoute(route string) bool {
 	return id != "" && tail == "revert-info"
 }
 
+func isTaskNotesRoute(route string) bool {
+	rest, ok := strings.CutPrefix(route, "tasks/")
+	if !ok {
+		return false
+	}
+	id, tail, _ := strings.Cut(rest, "/")
+	return id != "" && tail == "notes"
+}
+
 // serveCLIAction serves route when it is one of the acting routes, and
 // reports whether it was.
 func (p *GitProxy) serveCLIAction(w http.ResponseWriter, r *http.Request, scope namespace.Scope, route string) bool {
 	method, ok := cliActionRoutes[route]
 	if !ok && isRevertInfoRoute(route) {
 		method, ok = http.MethodGet, true
+	}
+	if !ok && isTaskNotesRoute(route) {
+		method, ok = http.MethodPost, true
 	}
 	if !ok {
 		return false
@@ -207,23 +363,31 @@ func (p *GitProxy) serveCLIAction(w http.ResponseWriter, r *http.Request, scope 
 		http.Error(w, fmt.Sprintf("/cli/%s takes %s", route, method), http.StatusMethodNotAllowed)
 		return true
 	}
-	if p.CLIActions == nil {
-		http.Error(w, "this deployment's sandbox proxy is not wired to act on tasks: use the MCP tools", http.StatusNotImplemented)
-		return true
-	}
 	if scope.TaskIDStr == "" {
 		http.Error(w, "forbidden: this sandbox has no task to act for", http.StatusForbidden)
 		return true
 	}
-	switch route {
-	case "ci/wait", "ci/run-job":
+	if route == "status" {
+		p.serveStatus(w, r, scope)
+		return true
+	}
+	if route == "handover" {
+		p.serveHandover(w, r, scope)
+		return true
+	}
+	if p.CLIActions == nil {
+		http.Error(w, "this deployment's sandbox proxy is not wired to act on tasks: use the MCP tools", http.StatusNotImplemented)
+		return true
+	}
+	switch {
+	case route == "ci/wait" || route == "ci/run-job":
 		p.serveCIWait(w, r, scope, route == "ci/run-job")
-	case "ci/retrigger":
+	case route == "ci/retrigger":
 		p.serveCIRetrigger(w, r, scope)
-	case "pr/open":
+	case route == "pr/open":
 		res, err := p.CLIActions.OpenPullRequest(r.Context(), scope.TaskIDStr)
 		writeActionResult(w, res, err)
-	case "pr/reply":
+	case route == "pr/reply":
 		var req struct {
 			Body      string `json:"body"`
 			CommentID int    `json:"comment_id"`
@@ -241,7 +405,7 @@ func (p *GitProxy) serveCLIAction(w http.ResponseWriter, r *http.Request, scope 
 		}
 		res, err := p.CLIActions.ReplyToPullRequestComment(r.Context(), scope.TaskIDStr, req.CommentID, req.Body)
 		writeActionResult(w, res, err)
-	case "pr/resolve":
+	case route == "pr/resolve":
 		var req struct {
 			ThreadID  string `json:"thread_id"`
 			CommentID int    `json:"comment_id"`
@@ -255,8 +419,21 @@ func (p *GitProxy) serveCLIAction(w http.ResponseWriter, r *http.Request, scope 
 		}
 		res, err := p.CLIActions.ResolveReviewThread(r.Context(), scope.TaskIDStr, strings.TrimSpace(req.ThreadID), req.CommentID)
 		writeActionResult(w, res, err)
-	case "pr/review-comment":
+	case route == "pr/review-comment":
 		p.serveReviewComment(w, r, scope)
+	case route == "notify":
+		p.serveNotify(w, r, scope)
+	case isTaskNotesRoute(route):
+		id := strings.TrimSuffix(strings.TrimPrefix(route, "tasks/"), "/notes")
+		p.serveTaskNotes(w, r, scope, id)
+	case route == "tasks/wait":
+		p.serveTasksWait(w, r, scope)
+	case route == "proposals":
+		p.serveProposals(w, r, scope)
+	case route == "quarantine":
+		p.serveQuarantine(w, r, scope)
+	case route == "api-routes":
+		p.serveAPIRoutes(w, r, scope)
 	default:
 		id := strings.TrimSuffix(strings.TrimPrefix(route, "tasks/"), "/revert-info")
 		info, err := p.CLIActions.RevertInfo(r.Context(), scope.TaskIDStr, id, scope.MayReadAllTasks)
@@ -655,4 +832,409 @@ func (p *GitProxy) serveReviewComment(w http.ResponseWriter, r *http.Request, sc
 		where = fmt.Sprintf("on %s:%d", path, req.Line)
 	}
 	fmt.Fprintf(w, "Recorded a review comment %s. It is relayed with this run's other findings when the run finishes.\n", where)
+}
+
+func (p *GitProxy) taskActions() (CLITaskActions, bool) {
+	ta, ok := p.CLIActions.(CLITaskActions)
+	return ta, ok && ta != nil
+}
+
+// serveStatus answers POST /cli/status (update_status).
+func (p *GitProxy) serveStatus(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	var req struct {
+		Status string `json:"status"`
+	}
+	if !readCLIJSON(w, r, &req) {
+		return
+	}
+	status := strings.TrimSpace(req.Status)
+	if status == "" {
+		http.Error(w, "status is required: grain status <one-line-note>", http.StatusBadRequest)
+		return
+	}
+	if strings.ContainsAny(status, "\r\n") || len(status) > 120 {
+		http.Error(w, "status must be a single line of at most 120 characters", http.StatusBadRequest)
+		return
+	}
+	if p.Activity == nil {
+		http.Error(w, "this deployment's sandbox proxy cannot record status: use the update_status tool", http.StatusNotImplemented)
+		return
+	}
+	now := time.Now()
+	p.activity.shouldWrite(scope.TaskIDStr, status, now)
+	if _, err := p.Activity.SetTaskActivity(r.Context(), scope.TaskIDStr, status, now); err != nil {
+		cliError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintf(w, "Updated status: %s\n", status)
+}
+
+// serveHandover answers POST /cli/handover (write_handover).
+func (p *GitProxy) serveHandover(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	var req struct {
+		Handover string `json:"handover"`
+	}
+	if !readCLIJSON(w, r, &req) {
+		return
+	}
+	handover := strings.TrimSpace(req.Handover)
+	if handover == "" {
+		http.Error(w, "handover text is required: grain handover write (<text> | --file <f> | -)", http.StatusBadRequest)
+		return
+	}
+	wrote := false
+	if hw, ok := p.Activity.(proxyHandoverWriter); ok {
+		if err := hw.WriteTaskHandover(r.Context(), scope.TaskIDStr, scope.RunID, handover); err != nil {
+			cliError(w, err)
+			return
+		}
+		wrote = true
+	}
+	if rec, ok := p.Activity.(proxyToolCallRecorder); ok && scope.RunID != "" {
+		if err := rec.RecordProxyToolCallArgs(r.Context(), scope.RunID, "write_handover", map[string]any{"handover": handover}); err != nil && !wrote {
+			cliError(w, err)
+			return
+		}
+		wrote = true
+	}
+	if !wrote {
+		http.Error(w, "this deployment's sandbox proxy cannot record handovers: use the write_handover tool", http.StatusNotImplemented)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintf(w, "Recorded standing handover summary (%d bytes).\n", len(handover))
+}
+
+// serveNotify answers POST /cli/notify (notify_operator).
+func (p *GitProxy) serveNotify(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	ta, ok := p.taskActions()
+	if !ok {
+		http.Error(w, "this deployment's sandbox proxy cannot raise notifications: use the notify_operator tool", http.StatusNotImplemented)
+		return
+	}
+	var req CLINotifyRequest
+	if !readCLIJSON(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Subject) == "" {
+		http.Error(w, "--subject is required: a short key for what this notification is about", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		http.Error(w, "--title is required: one line the operator reads first", http.StatusBadRequest)
+		return
+	}
+	res, err := ta.NotifyOperator(r.Context(), scope.TaskIDStr, req)
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	writeCLIJSON(w, http.StatusOK, res)
+}
+
+// serveTaskNotes answers POST /cli/tasks/<id>/notes (message_task).
+func (p *GitProxy) serveTaskNotes(w http.ResponseWriter, r *http.Request, scope namespace.Scope, targetID string) {
+	ta, ok := p.taskActions()
+	if !ok {
+		http.Error(w, "this deployment's sandbox proxy cannot message other tasks: use the message_task tool", http.StatusNotImplemented)
+		return
+	}
+	var req struct {
+		Body string `json:"body"`
+	}
+	if !readCLIJSON(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Body) == "" {
+		http.Error(w, "a message body is required", http.StatusBadRequest)
+		return
+	}
+	msgID, err := ta.MessageTask(r.Context(), scope.TaskIDStr, targetID, req.Body)
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintf(w, "Left a note on task #%s (comment %d).\n", model.NormalizeTaskID(targetID), msgID)
+}
+
+// serveTasksWait answers POST /cli/tasks/wait (wait_for_task blocking wait).
+func (p *GitProxy) serveTasksWait(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	ta, ok := p.taskActions()
+	if !ok {
+		http.Error(w, "this deployment's sandbox proxy cannot wait on tasks: use the wait_for_task tool", http.StatusNotImplemented)
+		return
+	}
+	var req CLITaskWaitRequest
+	if !readCLIJSON(w, r, &req) {
+		return
+	}
+	if req.Park || strings.TrimSpace(req.ResumeAt) != "" {
+		http.Error(w, "parking a task ends the run and is a model-only control operation: call the wait_for_task or resume_later MCP tool instead", http.StatusForbidden)
+		return
+	}
+	var ids []string
+	seen := map[string]bool{}
+	for _, raw := range req.IDs {
+		id := model.NormalizeTaskID(strings.TrimPrefix(strings.TrimSpace(raw), "#"))
+		if id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		http.Error(w, "name at least one task to wait on: grain task wait <id>...", http.StatusBadRequest)
+		return
+	}
+	until := strings.TrimSpace(req.Until)
+	switch until {
+	case "", "closed":
+		until = "closed"
+	case "merged":
+	default:
+		http.Error(w, fmt.Sprintf("until must be \"closed\" or \"merged\", not %q", until), http.StatusBadRequest)
+		return
+	}
+	untilMerged := until == "merged"
+	ctx := r.Context()
+
+	targets, err := ta.CheckWaitTargets(ctx, scope.TaskIDStr, ids)
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	if waitTargetsSettled(targets, untilMerged) {
+		writeCLIJSON(w, http.StatusOK, CLITaskWaitResponse{
+			Status:  "settled",
+			Until:   until,
+			Targets: targets,
+			Summary: describeWaitTargets(targets, untilMerged),
+		})
+		return
+	}
+
+	slice := DefaultCLIWaitSlice
+	if req.TimeoutSeconds > 0 {
+		slice = min(slice, time.Duration(req.TimeoutSeconds)*time.Second)
+	}
+	start := time.Now()
+	end := start.Add(slice)
+	if deadline, ok := ctx.Deadline(); ok {
+		if d := deadline.Add(-cliWaitDeadlineMargin); d.Before(end) {
+			end = d
+		}
+	}
+
+	phrase := mcp.ToolActivityNote("wait_for_task")
+	p.noteDeclaredWait(ctx, scope.TaskIDStr, phrase)
+
+	lastReport := start
+	var credit CLIWaitCredit
+	report := func(now time.Time) {
+		credit = p.creditCLIWait(ctx, scope, now.Sub(lastReport))
+		lastReport = now
+	}
+
+	poll := time.NewTicker(cliWaitPoll)
+	defer poll.Stop()
+	heartbeat := time.NewTicker(cliWaitHeartbeat)
+	defer heartbeat.Stop()
+	for !waitTargetsSettled(targets, untilMerged) {
+		remaining := time.Until(end)
+		if remaining <= 0 {
+			break
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-ctx.Done():
+		case <-poll.C:
+			if got, err := ta.CheckWaitTargets(ctx, scope.TaskIDStr, ids); err == nil {
+				targets = got
+			}
+		case now := <-heartbeat.C:
+			p.noteDeclaredWait(ctx, scope.TaskIDStr, phrase)
+			report(now)
+		case <-timer.C:
+		}
+		timer.Stop()
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	now := time.Now()
+	report(now)
+	waited := now.Sub(start)
+
+	status := "waiting"
+	if waitTargetsSettled(targets, untilMerged) {
+		status = "settled"
+	}
+	writeCLIJSON(w, http.StatusOK, CLITaskWaitResponse{
+		Status:      status,
+		Until:       until,
+		Targets:     targets,
+		Summary:     describeWaitTargets(targets, untilMerged),
+		WaitedMS:    waited.Milliseconds(),
+		CreditMS:    credit.Credited.Milliseconds(),
+		CreditCapMS: credit.Cap.Milliseconds(),
+		CreditLive:  credit.Live,
+	})
+}
+
+func waitTargetsSettled(targets []model.WaitTarget, untilMerged bool) bool {
+	for _, t := range targets {
+		if settled, _ := t.Settled(untilMerged); !settled {
+			return false
+		}
+	}
+	return true
+}
+
+func describeWaitTargets(targets []model.WaitTarget, untilMerged bool) string {
+	var b strings.Builder
+	for _, t := range targets {
+		settled, met := t.Settled(untilMerged)
+		switch {
+		case settled && met:
+			b.WriteString("[reached] ")
+		case settled:
+			b.WriteString("[will not reach it: closed without merging] ")
+		default:
+			b.WriteString("[still waiting] ")
+		}
+		b.WriteString(t.Describe())
+	}
+	return b.String()
+}
+
+// serveProposals answers POST /cli/proposals (grain task propose), enforcing
+// hold_for_approval=true, auto_merge=false, no supersedes, and a per-attempt
+// cap of 10 proposals on the sandbox credential.
+func (p *GitProxy) serveProposals(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	ta, ok := p.taskActions()
+	if !ok {
+		http.Error(w, "this deployment's sandbox proxy cannot file proposals: use the propose_task tool", http.StatusNotImplemented)
+		return
+	}
+	var req CLIProposeRequest
+	if !readCLIJSON(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Supersedes) != "" {
+		http.Error(w, "superseding an existing task is not permitted on the sandbox credential: use the propose_task MCP control tool instead", http.StatusForbidden)
+		return
+	}
+	if req.AutoMerge != nil && *req.AutoMerge {
+		http.Error(w, "auto_merge is not permitted on the sandbox credential: grain task propose always files unapproved with auto_merge=false; use the propose_task MCP control tool to inherit auto-merge", http.StatusForbidden)
+		return
+	}
+	if req.HoldForApproval != nil && !*req.HoldForApproval {
+		http.Error(w, "hold_for_approval=false is not permitted on the sandbox credential: grain task propose always holds proposals for human approval; use the propose_task MCP control tool to inherit auto-approval", http.StatusForbidden)
+		return
+	}
+	req.Title = strings.TrimSpace(req.Title)
+	req.Body = strings.TrimSpace(req.Body)
+	if req.Title == "" {
+		http.Error(w, "--title is required", http.StatusBadRequest)
+		return
+	}
+	if req.Body == "" {
+		http.Error(w, "--body (or --file) is required", http.StatusBadRequest)
+		return
+	}
+	limitKey := scope.RunID
+	if limitKey == "" {
+		limitKey = fmt.Sprintf("task:%s#%d", scope.TaskIDStr, scope.Attempt)
+	}
+	if !p.cliProposals.take(limitKey) {
+		http.Error(w, fmt.Sprintf("this attempt has already filed %d proposals via the sandbox CLI, the per-attempt cap", MaxCLIProposalsPerAttempt), http.StatusTooManyRequests)
+		return
+	}
+	hold := true
+	auto := false
+	req.HoldForApproval = &hold
+	req.AutoMerge = &auto
+	req.Supersedes = ""
+
+	res, err := ta.ProposeTask(r.Context(), scope.TaskIDStr, scope.RunID, req)
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	res.HoldForApproval = true
+	res.AutoMerge = false
+	writeCLIJSON(w, http.StatusOK, res)
+}
+
+// serveQuarantine answers POST /cli/quarantine (and POST /cap/quarantine).
+func (p *GitProxy) serveQuarantine(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	if !slices.Contains(scope.Grants, "test-quarantine") && !slices.Contains(scope.Grants, "quarantine-test") {
+		cliError(w, namespace.RefuseCapability("grain quarantine", "test-quarantine"))
+		return
+	}
+	var req CLIQuarantineRequest
+	if !readCLIJSON(w, r, &req) {
+		return
+	}
+	testName := strings.TrimSpace(req.TestName)
+	reason := strings.TrimSpace(req.Reason)
+	if testName == "" {
+		http.Error(w, "test_name is required: grain quarantine <test> --reason <why>", http.StatusBadRequest)
+		return
+	}
+	if reason == "" {
+		http.Error(w, "--reason is required: explain why the test is being quarantined", http.StatusBadRequest)
+		return
+	}
+	fileFollowUp := true
+	if req.FileFollowUp != nil {
+		fileFollowUp = *req.FileFollowUp
+	}
+	var followUpID string
+	if fileFollowUp {
+		if ta, ok := p.taskActions(); ok {
+			limitKey := scope.RunID
+			if limitKey == "" {
+				limitKey = fmt.Sprintf("task:%s#%d", scope.TaskIDStr, scope.Attempt)
+			}
+			if !p.cliProposals.take(limitKey) {
+				http.Error(w, fmt.Sprintf("this attempt has already filed %d proposals via the sandbox CLI, the per-attempt cap", MaxCLIProposalsPerAttempt), http.StatusTooManyRequests)
+				return
+			}
+			hold := true
+			auto := false
+			filed, err := ta.ProposeTask(r.Context(), scope.TaskIDStr, scope.RunID, CLIProposeRequest{
+				ID:              "quarantine-fix-" + strings.ToLower(strings.NewReplacer("/", "-", ".", "-", "_", "-").Replace(testName)),
+				Title:           fmt.Sprintf("fix(test): unquarantine and fix flaky test %s", testName),
+				Body:            fmt.Sprintf("Test `%s` was quarantined by task %s.\n\nReason: %s\n\nPlease investigate the root cause, fix the flake, and remove the entry from .grain/quarantine.yml.", testName, scope.TaskIDStr, reason),
+				Repo:            scope.TaskRepo,
+				Branch:          scope.TaskBase,
+				HoldForApproval: &hold,
+				AutoMerge:       &auto,
+			})
+			if err == nil {
+				followUpID = filed.ID
+			}
+		}
+	}
+	writeCLIJSON(w, http.StatusOK, CLIQuarantineResult{
+		TaskID:         scope.TaskIDStr,
+		FollowUpTaskID: followUpID,
+	})
+}
+
+// serveAPIRoutes answers GET /cli/api-routes.
+func (p *GitProxy) serveAPIRoutes(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	ta, ok := p.taskActions()
+	if !ok {
+		http.Error(w, "this deployment's sandbox proxy cannot list API routes", http.StatusNotImplemented)
+		return
+	}
+	routes, err := ta.ListAPIRoutes(r.Context(), scope.TaskIDStr, scope.Grants, strings.TrimSpace(r.URL.Query().Get("scope")))
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	writeCLIJSON(w, http.StatusOK, routes)
 }

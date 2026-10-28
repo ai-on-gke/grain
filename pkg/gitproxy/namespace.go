@@ -16,6 +16,8 @@ package gitproxy
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -88,22 +90,68 @@ func extractNamespaceAuthToken(header string) (string, bool) {
 // authenticateSandbox resolves r's proxy token to its sandbox, answering
 // 401 itself when it cannot.
 func (p *GitProxy) authenticateSandbox(w http.ResponseWriter, r *http.Request) (string, bool) {
+	grant, ok := p.authenticateSandboxGrant(w, r)
+	if !ok {
+		return "", false
+	}
+	return grant.Sandbox, true
+}
+
+// authenticateSandboxGrant resolves r's proxy token to its full Grant, answering
+// 401 itself when it cannot.
+func (p *GitProxy) authenticateSandboxGrant(w http.ResponseWriter, r *http.Request) (Grant, bool) {
 	token, hasToken := extractNamespaceAuthToken(r.Header.Get("Authorization"))
-	var sandbox string
+	var grant Grant
 	var ok bool
 	if hasToken && p.Tokens != nil {
-		sandbox, ok = p.Tokens.Authenticate(token)
+		grant, ok = p.Tokens.AuthenticateGrant(token)
 	}
 	if !hasToken || !ok {
 		w.Header().Set("WWW-Authenticate", `Basic realm="grain-git-proxy"`)
 		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return "", false
+		return Grant{}, false
 	}
-	return sandbox, true
+	return grant, true
+}
+
+// resolveSandboxScope resolves grant's sandbox to the live run's NamespaceScope
+// and verifies per-attempt token binding (TaskID and Attempt), answering 403 on
+// any mismatch.
+func (p *GitProxy) resolveSandboxScope(w http.ResponseWriter, r *http.Request, grant Grant) (model.NamespaceScope, bool) {
+	if p.NamespaceScopes == nil {
+		http.Error(w, "forbidden: no namespace scope configured", http.StatusForbidden)
+		return model.NamespaceScope{}, false
+	}
+	modelScope, live, err := p.NamespaceScopes.SandboxNamespaceScope(r.Context(), grant.Sandbox)
+	if err != nil {
+		http.Error(w, "failed to resolve sandbox namespace scope", http.StatusInternalServerError)
+		return model.NamespaceScope{}, false
+	}
+	if !live {
+		http.Error(w, "forbidden: no live task run on this sandbox", http.StatusForbidden)
+		return model.NamespaceScope{}, false
+	}
+	if grant.TaskID != "" && modelScope.TaskID != "" && grant.TaskID != modelScope.TaskID {
+		http.Error(w, fmt.Sprintf("forbidden: sandbox token belongs to task %s, not live task %s", grant.TaskID, modelScope.TaskID), http.StatusForbidden)
+		return model.NamespaceScope{}, false
+	}
+	if grant.Attempt > 0 && modelScope.Attempt > 0 && grant.Attempt != modelScope.Attempt {
+		http.Error(w, fmt.Sprintf("forbidden: sandbox token belongs to attempt %d, not current attempt %d", grant.Attempt, modelScope.Attempt), http.StatusForbidden)
+		return model.NamespaceScope{}, false
+	}
+	return modelScope, true
 }
 
 func isNamespacePath(path string) bool {
 	return path == "/fs" || strings.HasPrefix(path, "/fs/")
+}
+
+func isAPIPath(path string) bool {
+	return path == "/api" || strings.HasPrefix(path, "/api/")
+}
+
+func isCapPath(path string) bool {
+	return path == "/cap" || strings.HasPrefix(path, "/cap/")
 }
 
 // ServeNamespaceHTTP handles a GET or HEAD request under /fs/<scheme>/<path>,
@@ -114,28 +162,19 @@ func (p *GitProxy) ServeNamespaceHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "namespace not configured", http.StatusNotFound)
 		return
 	}
-	sandbox, ok := p.authenticateSandbox(w, r)
+	grant, ok := p.authenticateSandboxGrant(w, r)
 	if !ok {
 		return
 	}
 
-	if !p.nsLimiter.acquire(sandbox, p.MaxNamespaceConcurrency) {
+	if !p.nsLimiter.acquire(grant.Sandbox, p.MaxNamespaceConcurrency) {
 		http.Error(w, "too many concurrent /fs/ requests from this sandbox", http.StatusTooManyRequests)
 		return
 	}
-	defer p.nsLimiter.release(sandbox)
+	defer p.nsLimiter.release(grant.Sandbox)
 
-	if p.NamespaceScopes == nil {
-		http.Error(w, "forbidden: no namespace scope configured", http.StatusForbidden)
-		return
-	}
-	modelScope, live, err := p.NamespaceScopes.SandboxNamespaceScope(r.Context(), sandbox)
-	if err != nil {
-		http.Error(w, "failed to resolve sandbox namespace scope", http.StatusInternalServerError)
-		return
-	}
-	if !live {
-		http.Error(w, "forbidden: no live task run on this sandbox", http.StatusForbidden)
+	modelScope, ok := p.resolveSandboxScope(w, r, grant)
+	if !ok {
 		return
 	}
 
@@ -144,7 +183,163 @@ func (p *GitProxy) ServeNamespaceHTTP(w http.ResponseWriter, r *http.Request) {
 	p.noteActivity(r.Context(), modelScope.TaskID, act.Phrase)
 	cw := &countingResponseWriter{ResponseWriter: w}
 	p.Namespace.ServeHTTP(cw, r, scope)
-	p.recordToolCall(r.Context(), modelScope.RunID, act.Tool, cw)
+	p.recordRouteCall(r.Context(), modelScope.RunID, act, cw)
+}
+
+// ServeAPIHTTP handles a request under /api/..., authenticating with the
+// sandbox's per-attempt proxy token and forwarding to p.API (grain's UI/API
+// server) with X-Grain-Acting-Task, X-Grain-Acting-Run, and
+// X-Grain-Channel: sandbox-cli so agentAPIGate enforces non-dangerous scope
+// boundaries and records the call.
+func (p *GitProxy) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
+	if p == nil {
+		http.Error(w, "api not configured", http.StatusNotFound)
+		return
+	}
+	grant, ok := p.authenticateSandboxGrant(w, r)
+	if !ok {
+		return
+	}
+	if !p.nsLimiter.acquire(grant.Sandbox, p.MaxNamespaceConcurrency) {
+		http.Error(w, "too many concurrent requests from this sandbox", http.StatusTooManyRequests)
+		return
+	}
+	defer p.nsLimiter.release(grant.Sandbox)
+
+	modelScope, ok := p.resolveSandboxScope(w, r, grant)
+	if !ok {
+		return
+	}
+	if p.API == nil {
+		http.Error(w, "this deployment's sandbox proxy is not wired to the agent API", http.StatusNotImplemented)
+		return
+	}
+	p.forwardToAPI(w, r, modelScope, r.URL.Path)
+}
+
+func (p *GitProxy) forwardToAPI(w http.ResponseWriter, r *http.Request, modelScope model.NamespaceScope, targetPath string) {
+	// p.API answers as the deployment's own actor, and X-Grain-Acting-Task
+	// is the only thing that holds a forwarded request to a task's grants:
+	// agentAPIGate passes a request without one straight through. A live
+	// run with no task to act for is refused rather than forwarded bare.
+	if strings.TrimSpace(modelScope.TaskID) == "" {
+		http.Error(w, "forbidden: this sandbox has no task to act for", http.StatusForbidden)
+		return
+	}
+	in := r.Clone(r.Context())
+	in.URL.Path = targetPath
+	in.URL.RawPath = ""
+	in.RequestURI = in.URL.RequestURI()
+	in.RemoteAddr = ""
+	in.Host = "localhost"
+	reason := strings.TrimSpace(r.Header.Get("X-Grain-Acting-Reason"))
+	if reason == "" {
+		reason = strings.TrimSpace(r.Header.Get("X-Grain-Reason"))
+	}
+	for k := range in.Header {
+		if strings.EqualFold(k, "Authorization") || strings.HasPrefix(strings.ToLower(k), "x-grain-") {
+			in.Header.Del(k)
+		}
+	}
+	in.Header.Set("X-Grain-Acting-Task", modelScope.TaskID)
+	if modelScope.RunID != "" {
+		in.Header.Set("X-Grain-Acting-Run", modelScope.RunID)
+	}
+	in.Header.Set("X-Grain-Channel", "sandbox-cli")
+	if reason != "" {
+		in.Header.Set("X-Grain-Acting-Reason", reason)
+	}
+	phrase := fmt.Sprintf("calling agent API %s %s", r.Method, targetPath)
+	p.noteActivity(r.Context(), modelScope.TaskID, phrase)
+	p.API.ServeHTTP(w, in)
+}
+
+// ServeCapHTTP handles a request under /cap/..., authenticating with the
+// sandbox's per-attempt proxy token and auditing the call. Built-in capability
+// endpoints (/cap/memory, /cap/release-notes, /cap/quarantine) delegate to the
+// corresponding API or CLI routes; external capability servers delegate to
+// p.CapHandler when configured.
+func (p *GitProxy) ServeCapHTTP(w http.ResponseWriter, r *http.Request) {
+	if p == nil {
+		http.Error(w, "capability proxy not configured", http.StatusNotFound)
+		return
+	}
+	grant, ok := p.authenticateSandboxGrant(w, r)
+	if !ok {
+		return
+	}
+	if !p.nsLimiter.acquire(grant.Sandbox, p.MaxNamespaceConcurrency) {
+		http.Error(w, "too many concurrent requests from this sandbox", http.StatusTooManyRequests)
+		return
+	}
+	defer p.nsLimiter.release(grant.Sandbox)
+
+	modelScope, ok := p.resolveSandboxScope(w, r, grant)
+	if !ok {
+		return
+	}
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/cap"), "/")
+	srv, tail, _ := strings.Cut(rest, "/")
+	switch srv {
+	case "memory":
+		if p.API == nil {
+			http.Error(w, "this deployment's sandbox proxy is not wired to the agent API", http.StatusNotImplemented)
+			return
+		}
+		apiPath := "/api/memory"
+		if tail != "" {
+			apiPath += "/" + tail
+		}
+		p.forwardToAPI(w, r, modelScope, apiPath)
+		return
+	case "release-notes":
+		if p.API == nil {
+			http.Error(w, "this deployment's sandbox proxy is not wired to the agent API", http.StatusNotImplemented)
+			return
+		}
+		apiPath := "/api/release-notes"
+		if tail != "" {
+			apiPath += "/" + tail
+		}
+		p.forwardToAPI(w, r, modelScope, apiPath)
+		return
+	case "quarantine", "test-quarantine", "quarantine-test":
+		scope := toNamespaceScope(modelScope)
+		act := RouteActivity{Tool: "quarantine_test", Phrase: "quarantining a test"}
+		p.noteActivity(r.Context(), modelScope.TaskID, act.Phrase)
+		cw := &countingResponseWriter{ResponseWriter: w}
+		p.serveQuarantine(cw, r, scope)
+		p.recordRouteCall(r.Context(), modelScope.RunID, act, cw)
+		return
+	}
+
+	toolName := "cap_list"
+	phrase := "listing capability tools"
+	if srv != "" {
+		toolName = "cap__" + srv
+		phrase = fmt.Sprintf("calling capability %s", srv)
+	}
+	act := RouteActivity{Tool: toolName, Phrase: phrase}
+	p.noteActivity(r.Context(), modelScope.TaskID, act.Phrase)
+	cw := &countingResponseWriter{ResponseWriter: w}
+	if p.CapHandler != nil {
+		// The proxy token authenticates the sandbox to this proxy and to
+		// nothing else, and the X-Grain-* headers are the proxy's to set:
+		// neither is passed on to a capability server.
+		in := r.Clone(r.Context())
+		for k := range in.Header {
+			if strings.EqualFold(k, "Authorization") || strings.HasPrefix(strings.ToLower(k), "x-grain-") {
+				in.Header.Del(k)
+			}
+		}
+		p.CapHandler.ServeHTTP(cw, in)
+	} else if rest == "" && r.Method == http.MethodGet {
+		cw.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(cw).Encode(map[string]any{"servers": []any{}})
+	} else {
+		http.Error(cw, fmt.Sprintf("forbidden: capability server %q is not granted to this attempt or its tools are model-only", srv), http.StatusForbidden)
+	}
+	p.recordRouteCall(r.Context(), modelScope.RunID, act, cw)
 }
 
 func toNamespaceScope(modelScope model.NamespaceScope) namespace.Scope {
@@ -153,10 +348,12 @@ func toNamespaceScope(modelScope model.NamespaceScope) namespace.Scope {
 		TaskID:            taskID,
 		TaskIDStr:         modelScope.TaskID,
 		RunID:             modelScope.RunID,
+		Attempt:           modelScope.Attempt,
 		TaskRepo:          modelScope.TaskRepo,
 		TaskBranch:        modelScope.TaskBranch,
 		TaskBase:          modelScope.TaskBase,
 		ConfigRepo:        modelScope.ConfigRepo,
+		Grants:            modelScope.Grants,
 		MayReadCI:         modelScope.MayReadCI,
 		MayReadAllCI:      modelScope.MayReadAllCI,
 		AllowedRepos:      modelScope.AllowedRepos,
@@ -187,6 +384,10 @@ func (p *GitProxy) handleNamespaceRequest(ctx context.Context, method, path, que
 	switch {
 	case isCLIPath(path):
 		p.ServeCLIHTTP(rec, req)
+	case isAPIPath(path):
+		p.ServeAPIHTTP(rec, req)
+	case isCapPath(path):
+		p.ServeCapHTTP(rec, req)
 	case isGitSignPath(path):
 		p.ServeGitSignHTTP(rec, req)
 	default:
