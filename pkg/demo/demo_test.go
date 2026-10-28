@@ -74,6 +74,7 @@ func TestSeedDemoCoversEveryState(t *testing.T) {
 	got := map[model.State]int{}
 	presubmits := map[string]bool{}
 	reviews := map[string]bool{}
+	submits, behind := map[bool]bool{}, false
 	for _, task := range tasks {
 		got[task.State]++
 		if task.Presubmit != nil {
@@ -81,6 +82,10 @@ func TestSeedDemoCoversEveryState(t *testing.T) {
 		}
 		if task.CLReview != nil {
 			reviews[task.CLReview.State] = true
+		}
+		if s := task.CLSubmit; s != nil {
+			submits[s.CanSubmit] = true
+			behind = behind || (s.Behind && s.CanSync)
 		}
 		// The changelist tasks (a CitC workspace, no repo) aside.
 		if task.Repo != repo.String() && len(task.Changelists) == 0 {
@@ -102,6 +107,11 @@ func TestSeedDemoCoversEveryState(t *testing.T) {
 		if !presubmits[state] {
 			t.Errorf("no seeded changelist task shows presubmit %q", state)
 		}
+	}
+	// A CL's Submit both live and disabled, and one behind head to Sync
+	// (changelists.md §6-§7).
+	if !submits[true] || !submits[false] || !behind {
+		t.Errorf("seeded CL Submit states %v, behind %v: want a submittable CL, an unsubmittable one and one behind head", submits, behind)
 	}
 	// And every review badge state (changelists.md §5).
 	for _, state := range []string{"draft", "in_review", "changes_requested", "needs_approval", "approved"} {
