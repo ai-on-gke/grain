@@ -43,8 +43,11 @@ jobs:
     - name: Install dependencies
       run: go mod download
 
+    # License headers and the Google-name boundary (tests/hygiene).
     - name: Check Licenses
-      run: bash .agents/cleanup/add-missing-license-headers/scripts/checklicense.sh
+      run: go test -v ./tests/hygiene/...
 
-    - name: Go Test
-      run: go test -v ./...
+    # Grain's own suite runs on grain CI (.grain/workflows/tests.yml);
+    # this only checks that the module builds and vets.
+    - name: Go Build
+      run: go build ./... && go vet ./...
