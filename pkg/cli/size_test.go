@@ -29,6 +29,10 @@ import (
 // without a CLI in front (grain/task-2101).
 const maxCmdFileLines = 800
 
+// licenseHeaderLines is the Apache header at the top of every file, and
+// the blank line after it, which the limit does not count.
+const licenseHeaderLines = 14
+
 // oversizedCmdFiles are the files allowed past maxCmdFileLines, each with
 // the reason it is still here and the most lines it may grow to. Lower a
 // cap when a file shrinks; do not raise one to make room for logic.
@@ -58,7 +62,8 @@ func TestCmdGrainFilesStaySmall(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		lines := bytes.Count(data, []byte("\n"))
+		// The license header every file opens with is not logic.
+		lines := bytes.Count(data, []byte("\n")) - licenseHeaderLines
 		limit := maxCmdFileLines
 		if allowed, ok := oversizedCmdFiles[name]; ok {
 			seen[name] = true
