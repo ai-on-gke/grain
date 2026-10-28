@@ -334,7 +334,7 @@ FROM ${RUNTIME_IMAGE}
 # the *account's* packages rather than in this repository's own list, and
 # the repo's access settings do not govern it. This image had no label at
 # all until now, which is why its packages have never shown up here.
-LABEL org.opencontainers.image.source="https://github.com/ai-on-gke/grain" \
+LABEL org.opencontainers.image.source="https://github.com/bwsalmon/grain" \
       org.opencontainers.image.title="grain" \
       org.opencontainers.image.description="The grain daemon and every binary it shells out to, in one image."
 

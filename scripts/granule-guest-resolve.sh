@@ -206,9 +206,10 @@ mkdir -p "$logdir"
 # (scripts/release-images.sh) and every consumer to the same text,
 # because a key derived any other way misses for ever rather than
 # failing. GRAIN_CI_REPO is grain CI's spelling of GITHUB_REPOSITORY.
+RELEASE_IMAGE_REPO="${RELEASE_IMAGE_REPO:-bwsalmon/grain}"
 mapfile -t inputs < <(./scripts/granule/guest-inputs.sh guest)
 key="$(git rev-parse "${inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"
-cached="ghcr.io/${GRAIN_CI_REPO,,}/guest:inputs-${key}"
+cached="ghcr.io/${RELEASE_IMAGE_REPO,,}/guest:inputs-${key}"
 
 # What a failed attempt left behind, printed small. Kept in a variable as
 # well as printed, so that it can be printed a second time at the end of

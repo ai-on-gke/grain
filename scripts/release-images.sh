@@ -251,7 +251,10 @@ tag_may_move() (
   if [ -z "$tip" ]; then
     stay "$remote names no $ref, so whether $short is on it cannot be told"
   fi
-  if ! have "$held" || ! have "$commit"; then
+  if ! have "$held"; then
+    tip_rule "$target holds ${held:0:7}, which neither this checkout nor $remote's $ref has"
+  fi
+  if ! have "$commit"; then
     stay "$target holds ${held:0:7}, which neither this checkout nor $remote's $ref has, so whether $short is ahead of it cannot be told"
   fi
 
@@ -401,13 +404,14 @@ if [ -z "$GRAIN_CI_REPO" ] || [ -z "$GRAIN_CI_REF" ]; then
 fi
 export GRAIN_CI_REPO GRAIN_CI_COMMIT GRAIN_CI_REF
 
-repo="${GRAIN_CI_REPO,,}"
+RELEASE_IMAGE_REPO="${RELEASE_IMAGE_REPO:-bwsalmon/grain}"
+repo="${RELEASE_IMAGE_REPO,,}"
 commit="$GRAIN_CI_COMMIT"
 # The branch's moving tag: '/' becomes '..', exactly as pkg/upgrade's
 # TagForBranch resolves it (see there for why '..' and not '-', #2386).
 branch="${GRAIN_CI_REF//\//..}"
 short="${commit:0:7}"
-root="$registry/$repo"
+root="$registry/${RELEASE_IMAGE_REPO,,}"
 guest_base="$root/guest-base:sha-$short"
 guest="$root/guest:sha-$short"
 # The granule image the guest builds below are packed onto, built out of
@@ -438,11 +442,11 @@ google_main=./google/cmd/grain
 # drive, and tells the push which images to publish.
 state="${RELEASE_IMAGES_STATE:-/tmp/release-images.env}"
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${BASH_SOURCE[0]}" in
   */*) scripts_dir="${BASH_SOURCE[0]%/*}" ;;
   *) scripts_dir=. ;;
 esac
+repo_root="$(cd "$scripts_dir/.." && pwd)"
 # shellcheck source=scripts/grain-ci-host.sh
 . "$scripts_dir/grain-ci-host.sh"
 trap cleanup_ca EXIT INT TERM
@@ -954,7 +958,7 @@ resolve_guest() {
     # as this repository's, because everything built on it inherits the
     # vendored Dockerfile's org.opencontainers.image.source and GHCR files
     # a package by that label alone -- these images are pushed.
-    IMAGE="$granule_image" GUEST_SOURCE_REPO="https://github.com/$repo" \
+    IMAGE="$granule_image" GUEST_SOURCE_REPO="https://github.com/${RELEASE_IMAGE_REPO,,}" \
       ./scripts/granule/build-granule-image.sh
   fi
 
@@ -966,7 +970,7 @@ resolve_guest() {
     docker tag "$base_cache" "$guest_base"
   else
     if [ "$guest_hit" = true ]; then
-      IMAGE="$granule_image" GUEST_SOURCE_REPO="https://github.com/$repo" \
+      IMAGE="$granule_image" GUEST_SOURCE_REPO="https://github.com/${RELEASE_IMAGE_REPO,,}" \
         ./scripts/granule/build-granule-image.sh
     fi
     granulefile_build -f Granulefile.guest-base -t granule-guest-base:vendored
@@ -1148,7 +1152,11 @@ build_images() {
   # v2.2.0-rc.1.<n>+<sha7> on candidate). Never a bare vX.Y.Z here: that
   # is `promote`'s to stamp, by rebuilding.
   build_daemon_image "$grain" "$core_main"
-  build_daemon_image "$google_grain" "$google_main"
+  if [ -d "$repo_root/google/cmd/grain" ]; then
+    build_daemon_image "$google_grain" "$google_main"
+  else
+    google_grain=""
+  fi
 
   cat > "$state" <<EOF
 # Written by scripts/release-images.sh for $commit. The steps after the
@@ -1273,8 +1281,10 @@ publish_images() {
   # signed.
   push_image "$grain"
   sign_image "$grain"
-  push_image "$google_grain"
-  sign_image "$google_grain"
+  if [ -n "${google_grain:-}" ]; then
+    push_image "$google_grain"
+    sign_image "$google_grain"
+  fi
 
   # Immutable tags are published for every merge. Moving tags move forward
   # only: onto this commit when the commit the grain image's branch tag
@@ -1299,7 +1309,7 @@ publish_images() {
     "$k8s_sandbox_base $root/k8s-sandbox-base:$branch" \
     "$k8s_sandbox $root/k8s-sandbox:$branch" \
     "$grain $root/grain:$branch" \
-    "$google_grain $root/google-grain:$branch"; do
+    ${google_grain:+"$google_grain $root/google-grain:$branch"}; do
     read -r source target <<< "$pair"
     docker tag "$source" "$target"
     push_image "$target"
@@ -1732,7 +1742,7 @@ if [ "$phase" = push ]; then
   k8s_sandbox="$RELEASE_IMAGE_K8S_SANDBOX"
   grain="$RELEASE_IMAGE_GRAIN"
   google_grain="${RELEASE_IMAGE_GOOGLE_GRAIN:-}"
-  if [ -z "$google_grain" ]; then
+  if [ -d "$repo_root/google/cmd/grain" ] && [ -z "$google_grain" ]; then
     echo "release-images.sh: $state names no Google grain image -- it was written by a build older than the one publishing it; run \`build\` again" >&2
     exit 1
   fi

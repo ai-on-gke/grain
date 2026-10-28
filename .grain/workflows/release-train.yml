@@ -71,7 +71,7 @@ jobs:
     # package-publish publishes the rc and pending images. Signing is
     # optional, as in release.yml: a deployment without a signing key
     # still releases.
-    capabilities: ["repo-write:bwsalmon/grain", release-gate-read, package-publish]
+    capabilities: ["repo-write:ai-on-gke/grain", release-gate-read, package-publish]
     optional-capabilities: [image-signing]
     # A run can build two sets of daemon images -- the pending release's
     # and the next rc's -- each about as long as promote.yml's one

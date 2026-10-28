@@ -1007,8 +1007,12 @@ func TestEveryBuildPathAgreesTheModuleRootIsTheRepositoryRoot(t *testing.T) {
 // keeps the inherited label.
 func TestBothPublishedImagesClaimThisRepository(t *testing.T) {
 	if !strings.Contains(read(t, "Dockerfile"),
-		`org.opencontainers.image.source="https://github.com/ai-on-gke/grain"`) {
-		t.Error("the grain image does not claim this repository")
+		`org.opencontainers.image.source="https://github.com/bwsalmon/grain"`) {
+		t.Error("the grain image does not claim bwsalmon/grain")
+	}
+	if !strings.Contains(read(t, "Dockerfile.k8s-sandbox"),
+		`org.opencontainers.image.source="https://github.com/bwsalmon/grain"`) {
+		t.Error("the k8s-sandbox image does not claim bwsalmon/grain")
 	}
 }
 
@@ -3545,7 +3549,7 @@ func TestTheKVMSuiteReusesThePublishedGuestRatherThanRebuildingIt(t *testing.T) 
 
 	contains(t, resolve, "mapfile -t inputs < <(./scripts/granule/guest-inputs.sh guest)")
 	contains(t, resolve, `key="$(git rev-parse "${inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"`)
-	contains(t, resolve, `cached="ghcr.io/${GRAIN_CI_REPO,,}/guest:inputs-${key}"`)
+	contains(t, resolve, `cached="ghcr.io/${RELEASE_IMAGE_REPO,,}/guest:inputs-${key}"`)
 
 	// Two: a miss still builds one, and a hit reaches the suite under the
 	// local tag pkg/orchestrator/granule_docker_real_test.go expects.
@@ -3943,13 +3947,15 @@ func TestThePruneJobIsDeliberateAndOutOfBranchReach(t *testing.T) {
 	absent(t, read(t, "Dockerfile"), "ghcr-prune")
 }
 
-// In Grain CI sandboxes, GITHUB_REPOSITORY is unset and GRAIN_CI_REPO is
-// injected instead. cmd/ghcr-prune falls back to GRAIN_CI_REPO so scheduled
-// and dispatch prune workflows run without requiring explicit -owner and -repo flags.
+// In Grain CI sandboxes in ai-on-gke/grain, GRAIN_CI_REPO is ai-on-gke/grain
+// while OSS container images continue to be published under ghcr.io/bwsalmon/grain.
+// cmd/ghcr-prune defaults the image repository to RELEASE_IMAGE_REPO (bwsalmon/grain)
+// so release and dispatch prune workflows prune bwsalmon/grain's packages without
+// requiring explicit -owner and -repo flags.
 func TestThePruneCommandRecognizesGrainCIRepo(t *testing.T) {
 	pruneMain := read(t, "cmd", "ghcr-prune", "main.go")
-	contains(t, pruneMain, "GRAIN_CI_REPO")
-	contains(t, pruneMain, `repoEnv = os.Getenv("GRAIN_CI_REPO")`)
+	contains(t, pruneMain, "RELEASE_IMAGE_REPO")
+	contains(t, pruneMain, `"bwsalmon/grain"`)
 }
 
 func TestTheSandboxDiskTerraformAttachesIsTheOneTheHostMounts(t *testing.T) {

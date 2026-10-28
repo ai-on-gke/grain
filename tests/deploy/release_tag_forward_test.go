@@ -175,8 +175,9 @@ func TestAMovingTagThatHasDivergedOrIsUnknownStays(t *testing.T) {
 }
 
 // Where there is nothing to go backwards from -- the tag does not exist
-// yet -- or no way to read what it holds, the tip rule still answers,
-// and a release of the tip creates or moves it.
+// yet -- or no way to read what it holds, or the tag holds a pre-cutover
+// commit from an older repository history that git lacks, the tip rule
+// still answers, and a release of the tip creates or moves it.
 func TestAMissingTagIsCreatedFromTheTipOnly(t *testing.T) {
 	h := newForwardHistory(t)
 	notFound := "ERROR: ghcr.io/bwsalmon/grain/grain:main: not found"
@@ -188,6 +189,12 @@ func TestAMissingTagIsCreatedFromTheTipOnly(t *testing.T) {
 	}
 	if moved, out := forwardRun(t, h, h.newer, h.older, false, false); !moved {
 		t.Fatalf("with no buildx, a release of the tip did not move the tag:\n%s", out)
+	}
+	preCutover := strings.Repeat("ab", 20)
+	if moved, out := forwardRun(t, h, h.newer, preCutover, false, true); !moved {
+		t.Fatalf("a tag holding a pre-cutover commit git lacks did not move onto the branch tip:\n%s", out)
+	} else {
+		containsRun(t, out, "which neither this checkout nor origin's main has, and "+h.newer[:7]+" is still main's tip")
 	}
 }
 

@@ -186,22 +186,18 @@ func TestTheReportSaysWhatIsHoldingEachVersion(t *testing.T) {
 
 func TestRunResolvesRepoAndTokenFromEnvironmentAndPlacements(t *testing.T) {
 	tempDir := t.TempDir()
-	origSandboxRepo := sandboxRepoPath
 	origSandboxToken := sandboxTokenPath
 	origPublishToken := publishTokenPath
 	defer func() {
-		sandboxRepoPath = origSandboxRepo
 		sandboxTokenPath = origSandboxToken
 		publishTokenPath = origPublishToken
 	}()
 
-	sandboxRepoPath = filepath.Join(tempDir, ".github-sandbox-repo")
 	sandboxTokenPath = filepath.Join(tempDir, ".github-sandbox-token")
 	publishTokenPath = filepath.Join(tempDir, ".package-publish-token")
 
-	t.Run("fails when repo missing", func(t *testing.T) {
-		t.Setenv("GRAIN_CI_REPO", "")
-		t.Setenv("GITHUB_REPOSITORY", "")
+	t.Run("fails when RELEASE_IMAGE_REPO is malformed and flags missing", func(t *testing.T) {
+		t.Setenv("RELEASE_IMAGE_REPO", "invalid-no-slash")
 		t.Setenv("GITHUB_TOKEN", "fake-token")
 		var out bytes.Buffer
 		err := run([]string{"-apply=false"}, &out)
@@ -211,8 +207,8 @@ func TestRunResolvesRepoAndTokenFromEnvironmentAndPlacements(t *testing.T) {
 	})
 
 	t.Run("fails when token missing", func(t *testing.T) {
-		t.Setenv("GRAIN_CI_REPO", "bwsalmon/grain")
-		t.Setenv("GITHUB_REPOSITORY", "")
+		t.Setenv("RELEASE_IMAGE_REPO", "")
+		t.Setenv("GRAIN_CI_REPO", "ai-on-gke/grain")
 		t.Setenv("GITHUB_TOKEN", "")
 		var out bytes.Buffer
 		err := run([]string{"-apply=false"}, &out)
@@ -221,9 +217,9 @@ func TestRunResolvesRepoAndTokenFromEnvironmentAndPlacements(t *testing.T) {
 		}
 	})
 
-	t.Run("resolves repo from GRAIN_CI_REPO and token from sandboxTokenPath", func(t *testing.T) {
-		t.Setenv("GRAIN_CI_REPO", "acme/grain-test")
-		t.Setenv("GITHUB_REPOSITORY", "")
+	t.Run("defaults repo to bwsalmon/grain and resolves token from sandboxTokenPath", func(t *testing.T) {
+		t.Setenv("RELEASE_IMAGE_REPO", "")
+		t.Setenv("GRAIN_CI_REPO", "ai-on-gke/grain")
 		t.Setenv("GITHUB_TOKEN", "")
 		if err := os.WriteFile(sandboxTokenPath, []byte("ghs_test_token_123\n"), 0600); err != nil {
 			t.Fatal(err)
@@ -236,13 +232,10 @@ func TestRunResolvesRepoAndTokenFromEnvironmentAndPlacements(t *testing.T) {
 		}
 	})
 
-	t.Run("resolves repo from sandboxRepoPath and token from publishTokenPath", func(t *testing.T) {
-		t.Setenv("GRAIN_CI_REPO", "")
-		t.Setenv("GITHUB_REPOSITORY", "")
+	t.Run("resolves repo from RELEASE_IMAGE_REPO and token from publishTokenPath", func(t *testing.T) {
+		t.Setenv("RELEASE_IMAGE_REPO", "Acme/Grain-Test")
+		t.Setenv("GRAIN_CI_REPO", "ai-on-gke/grain")
 		t.Setenv("GITHUB_TOKEN", "")
-		if err := os.WriteFile(sandboxRepoPath, []byte("acme/grain-sandbox-repo\n"), 0600); err != nil {
-			t.Fatal(err)
-		}
 		if err := os.Remove(sandboxTokenPath); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
@@ -259,8 +252,8 @@ func TestRunResolvesRepoAndTokenFromEnvironmentAndPlacements(t *testing.T) {
 
 func TestResolveRepo(t *testing.T) {
 	t.Run("explicit flags override environment", func(t *testing.T) {
-		t.Setenv("GITHUB_REPOSITORY", "envowner/envrepo")
-		t.Setenv("GRAIN_CI_REPO", "grainowner/grainrepo")
+		t.Setenv("RELEASE_IMAGE_REPO", "envowner/envrepo")
+		t.Setenv("GRAIN_CI_REPO", "ai-on-gke/grain")
 		owner, repo, err := resolveRepo("flagowner", "flagrepo")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -270,21 +263,21 @@ func TestResolveRepo(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to GITHUB_REPOSITORY", func(t *testing.T) {
-		t.Setenv("GITHUB_REPOSITORY", "ghowner/ghrepo")
-		t.Setenv("GRAIN_CI_REPO", "grainowner/grainrepo")
+	t.Run("defaults to bwsalmon/grain when RELEASE_IMAGE_REPO is unset even if GRAIN_CI_REPO is ai-on-gke/grain", func(t *testing.T) {
+		t.Setenv("RELEASE_IMAGE_REPO", "")
+		t.Setenv("GRAIN_CI_REPO", "ai-on-gke/grain")
 		owner, repo, err := resolveRepo("", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if owner != "ghowner" || repo != "ghrepo" {
-			t.Errorf("got (%q, %q), want (%q, %q)", owner, repo, "ghowner", "ghrepo")
+		if owner != "bwsalmon" || repo != "grain" {
+			t.Errorf("got (%q, %q), want (%q, %q)", owner, repo, "bwsalmon", "grain")
 		}
 	})
 
-	t.Run("falls back to GRAIN_CI_REPO when GITHUB_REPOSITORY is unset", func(t *testing.T) {
-		t.Setenv("GITHUB_REPOSITORY", "")
-		t.Setenv("GRAIN_CI_REPO", "grainowner/grainrepo")
+	t.Run("resolves and lowercases RELEASE_IMAGE_REPO when set", func(t *testing.T) {
+		t.Setenv("RELEASE_IMAGE_REPO", "GrainOwner/GrainRepo")
+		t.Setenv("GRAIN_CI_REPO", "ai-on-gke/grain")
 		owner, repo, err := resolveRepo("", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -294,8 +287,8 @@ func TestResolveRepo(t *testing.T) {
 		}
 	})
 
-	t.Run("explicit flags work with neither environment variable set", func(t *testing.T) {
-		t.Setenv("GITHUB_REPOSITORY", "")
+	t.Run("explicit flags work with no environment variable set", func(t *testing.T) {
+		t.Setenv("RELEASE_IMAGE_REPO", "")
 		t.Setenv("GRAIN_CI_REPO", "")
 		owner, repo, err := resolveRepo("flagowner", "flagrepo")
 		if err != nil {
@@ -306,9 +299,8 @@ func TestResolveRepo(t *testing.T) {
 		}
 	})
 
-	t.Run("partial flag owner with fallback from GRAIN_CI_REPO", func(t *testing.T) {
-		t.Setenv("GITHUB_REPOSITORY", "")
-		t.Setenv("GRAIN_CI_REPO", "grainowner/grainrepo")
+	t.Run("partial flag owner with fallback from RELEASE_IMAGE_REPO", func(t *testing.T) {
+		t.Setenv("RELEASE_IMAGE_REPO", "grainowner/grainrepo")
 		owner, repo, err := resolveRepo("flagowner", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -318,9 +310,8 @@ func TestResolveRepo(t *testing.T) {
 		}
 	})
 
-	t.Run("partial flag repo with fallback from GRAIN_CI_REPO", func(t *testing.T) {
-		t.Setenv("GITHUB_REPOSITORY", "")
-		t.Setenv("GRAIN_CI_REPO", "grainowner/grainrepo")
+	t.Run("partial flag repo with fallback from RELEASE_IMAGE_REPO", func(t *testing.T) {
+		t.Setenv("RELEASE_IMAGE_REPO", "grainowner/grainrepo")
 		owner, repo, err := resolveRepo("", "flagrepo")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -330,12 +321,11 @@ func TestResolveRepo(t *testing.T) {
 		}
 	})
 
-	t.Run("errors when neither environment variable is set", func(t *testing.T) {
-		t.Setenv("GITHUB_REPOSITORY", "")
-		t.Setenv("GRAIN_CI_REPO", "")
+	t.Run("errors when RELEASE_IMAGE_REPO is malformed", func(t *testing.T) {
+		t.Setenv("RELEASE_IMAGE_REPO", "invalid")
 		_, _, err := resolveRepo("", "")
 		if err == nil {
-			t.Fatal("expected error when neither flag nor env var is set")
+			t.Fatal("expected error when RELEASE_IMAGE_REPO is not owner/repo")
 		}
 		if !strings.Contains(err.Error(), "-owner and -repo are required") {
 			t.Errorf("unexpected error message: %v", err)

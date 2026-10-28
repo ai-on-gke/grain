@@ -134,7 +134,6 @@ import (
 var (
 	sandboxTokenPath = "/home/debian/.github-sandbox-token"
 	publishTokenPath = "/home/debian/.package-publish-token"
-	sandboxRepoPath  = "/home/debian/.github-sandbox-repo"
 )
 
 func main() {
@@ -146,8 +145,8 @@ func main() {
 
 func run(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("ghcr-prune", flag.ContinueOnError)
-	owner := fs.String("owner", "", "account the packages belong to (default: from GITHUB_REPOSITORY or GRAIN_CI_REPO)")
-	repo := fs.String("repo", "", "repository the packages are scoped to, and the first segment of their names (default: from GITHUB_REPOSITORY or GRAIN_CI_REPO)")
+	owner := fs.String("owner", "", "account the packages belong to (default: from RELEASE_IMAGE_REPO or bwsalmon/grain)")
+	repo := fs.String("repo", "", "repository the packages are scoped to, and the first segment of their names (default: from RELEASE_IMAGE_REPO or bwsalmon/grain)")
 	packages := fs.String("packages", "grain,google-grain,guest,guest-base,k8s-sandbox,k8s-sandbox-base", "comma-separated package names, relative to the repository")
 	tokenFlag := fs.String("token", "", "GitHub token (default: GITHUB_TOKEN, PACKAGE_PUBLISH_TOKEN, GHCR_TOKEN, or placed CI capability tokens)")
 	// 48 hours -- and, on top of it, the most recent build of every
@@ -278,18 +277,14 @@ func resolveRepo(ownerFlag, repoFlag string) (string, string, error) {
 	owner := ownerFlag
 	repo := repoFlag
 	if owner == "" || repo == "" {
-		repoEnv := os.Getenv("GITHUB_REPOSITORY")
+		repoEnv := strings.TrimSpace(os.Getenv("RELEASE_IMAGE_REPO"))
 		if repoEnv == "" {
-			repoEnv = os.Getenv("GRAIN_CI_REPO")
+			repoEnv = "bwsalmon/grain"
 		}
-		if repoEnv == "" {
-			if b, err := os.ReadFile(sandboxRepoPath); err == nil {
-				repoEnv = strings.TrimSpace(string(b))
-			}
-		}
+		repoEnv = strings.ToLower(repoEnv)
 		o, r, ok := strings.Cut(repoEnv, "/")
 		if !ok || o == "" || r == "" {
-			return "", "", fmt.Errorf("-owner and -repo are required when GITHUB_REPOSITORY and GRAIN_CI_REPO are not set")
+			return "", "", fmt.Errorf("-owner and -repo are required when RELEASE_IMAGE_REPO is not in owner/repo format")
 		}
 		if owner == "" {
 			owner = o

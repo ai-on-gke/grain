@@ -318,6 +318,21 @@ func TestReleaseImagesDryRun(t *testing.T) {
 			}
 		})
 	}
+	t.Run("GRAIN_CI_REPO=ai-on-gke/grain publishes under ghcr.io/bwsalmon/grain", func(t *testing.T) {
+		out, docker, err := releaseImagesRun(t, "--dry-run", map[string]string{
+			"GRAIN_CI":      "true",
+			"GRAIN_CI_REPO": "ai-on-gke/grain",
+		})
+		if err != nil {
+			t.Fatalf("release-images.sh --dry-run failed: %v\nOutput:\n%s", err, out)
+		}
+		containsRun(t, out, "repository: ai-on-gke/grain")
+		containsRun(t, out, "registry: ghcr.io, root: ghcr.io/bwsalmon/grain")
+		containsRun(t, out, "guest=ghcr.io/bwsalmon/grain/guest:sha-0123456, k8s_sandbox=ghcr.io/bwsalmon/grain/k8s-sandbox:sha-0123456, grain=ghcr.io/bwsalmon/grain/grain:sha-0123456")
+		if docker != "" {
+			t.Errorf("docker was asked to do something during dry-run:\n%s", docker)
+		}
+	})
 }
 
 // An operator who names a registry and relies on an existing `docker

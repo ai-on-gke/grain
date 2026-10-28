@@ -52,7 +52,7 @@ jobs:
     name: approve the pending release
     # Each run is a decision, never a replay of one.
     cache: false
-    capabilities: ["repo-write:bwsalmon/grain", package-publish]
+    capabilities: ["repo-write:ai-on-gke/grain", package-publish]
     optional-capabilities: [image-signing]
     # Approving builds nothing: release-images.sh promote finds the
     # stamped :vX.Y.0-pending images and retags them.
@@ -86,7 +86,7 @@ jobs:
   reject:
     name: reject the pending release
     cache: false
-    capabilities: ["repo-write:bwsalmon/grain", package-publish]
+    capabilities: ["repo-write:ai-on-gke/grain", package-publish]
     timeout-minutes: 30
     steps:
       - name: Drop the pending release a person rejected
