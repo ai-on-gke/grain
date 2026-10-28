@@ -19,8 +19,8 @@
 // token with 403 rather than with the image.
 //
 // The token comes from where scripts/setup.sh looks for it: gcloud's own
-// credential -- activating a service account key first, when the host
-// was given one -- and otherwise the GCE metadata server's token for the
+// credential -- a service account key's first, when the host was given
+// one -- and otherwise the GCE metadata server's token for the
 // VM's attached service account. Neither is required; with no token the
 // caller goes on anonymously, which is all a public image ever needed.
 package registryauth
@@ -45,8 +45,18 @@ const GoogleUser = "oauth2accesstoken"
 
 // IsGoogleRegistry is whether host ("us-docker.pkg.dev", "gcr.io") is a
 // Google registry that takes an OAuth2 access token.
+//
+// host must be a bare DNS name: callers build a URL by pasting it after
+// "https://", so a host carrying anything else -- "evil.test?x-docker.pkg.dev",
+// "evil.test#.gcr.io", a port, user info -- would end in a Google suffix
+// while the request, and the token with it, went somewhere else.
 func IsGoogleRegistry(host string) bool {
 	host = strings.ToLower(strings.TrimSpace(host))
+	for _, c := range host {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '-') {
+			return false
+		}
+	}
 	return strings.HasSuffix(host, "-docker.pkg.dev") || host == "gcr.io" || strings.HasSuffix(host, ".gcr.io")
 }
 
@@ -124,7 +134,7 @@ var cache struct {
 	expires time.Time
 }
 
-// serviceAccountKeyFiles are the key files gcloud is activated with when
+// serviceAccountKeyFiles are the key files gcloud is pointed at when
 // one exists: the one the environment names, then the one a grain host
 // is provisioned with.
 func serviceAccountKeyFiles() []string {
@@ -158,19 +168,27 @@ func defaultToken(ctx context.Context) (string, error) {
 func gcloudToken(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	// A key file is used for this one call only, through gcloud's
+	// credential override, rather than by activating it: activation
+	// would switch the active account of whoever this daemon runs as
+	// for every later gcloud command on the host, not just this one. A
+	// key gcloud will not take falls through to the account it already
+	// has.
 	for _, keyFile := range serviceAccountKeyFiles() {
 		if _, err := os.Stat(keyFile); err != nil {
 			continue
 		}
-		// Best effort: a key gcloud will not take still leaves whatever
-		// account it already has.
-		activate := exec.CommandContext(ctx, "gcloud", "auth", "activate-service-account", "--key-file="+keyFile, "--quiet")
-		activate.Env = gcloudEnv()
-		_ = activate.Run()
+		if token, err := printAccessToken(ctx, "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="+keyFile); err == nil {
+			return token, nil
+		}
 		break
 	}
+	return printAccessToken(ctx)
+}
+
+func printAccessToken(ctx context.Context, extraEnv ...string) (string, error) {
 	printToken := exec.CommandContext(ctx, "gcloud", "auth", "print-access-token")
-	printToken.Env = gcloudEnv()
+	printToken.Env = append(gcloudEnv(), extraEnv...)
 	out, err := printToken.Output()
 	if err != nil {
 		return "", err

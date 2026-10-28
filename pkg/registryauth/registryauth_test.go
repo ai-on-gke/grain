@@ -32,6 +32,17 @@ func TestIsGoogleRegistry(t *testing.T) {
 		"docker.pkg.dev.example.test": false,
 		"notgcr.io":                   false,
 		"":                            false,
+		// A host that only ends in a Google suffix once pasted into a
+		// URL sends the request somewhere else entirely.
+		"evil.test?x-docker.pkg.dev":    false,
+		"evil.test#-docker.pkg.dev":     false,
+		"evil.test?.gcr.io":             false,
+		"evil.test/.gcr.io":             false,
+		"evil.test:443#.gcr.io":         false,
+		"user@evil.test#.gcr.io":        false,
+		"evil.test\\@us-docker.pkg.dev": false,
+		"gcr.io:443":                    false,
+		"US-DOCKER.PKG.DEV":             true,
 	} {
 		if got := IsGoogleRegistry(host); got != want {
 			t.Errorf("IsGoogleRegistry(%q) = %v, want %v", host, got, want)

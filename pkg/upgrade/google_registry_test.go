@@ -162,7 +162,9 @@ func TestPullImageLogsDockerInToAGoogleRegistry(t *testing.T) {
 	}
 	defer func() { dockerLogin = saved }()
 
-	u := newUpgrader(t, Config{Image: &ImageConfig{Repository: "us-docker.pkg.dev/proj/repo/grain"}})
+	// A StatusFile of its own: progress writes it as it goes, and an
+	// empty one would leave .tmp in the package directory.
+	u := newUpgrader(t, Config{StatusFile: filepath.Join(dir, "status.json"), Image: &ImageConfig{Repository: "us-docker.pkg.dev/proj/repo/grain"}})
 	p := newProgress(u.cfg.StatusFile, "main", Status{}, u.plan())
 	for _, ref := range []string{"us-docker.pkg.dev/proj/repo/grain:main", "ghcr.io/owner/grain:main"} {
 		if err := u.pullImage(context.Background(), p, stepPull, ref); err != nil {

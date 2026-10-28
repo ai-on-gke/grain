@@ -1,1 +1,0 @@
-{"branch":"","phase":"","detail":"","steps":[{"name":"pull image","state":"pending"},{"name":"signature","state":"pending"},{"name":"health check","state":"pending"},{"name":"unit flags","state":"pending"},{"name":"sandbox image","state":"pending"},{"name":"schema","state":"pending"},{"name":"record image","state":"pending"}]}

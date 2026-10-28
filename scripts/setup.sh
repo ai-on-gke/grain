@@ -3212,21 +3212,33 @@ registry_login() {
   local registry="${GRAIN_IMAGE%%/*}" target user token="$GRAIN_IMAGE_PULL_TOKEN"
   target="$registry"
   user="${GRAIN_IMAGE_PULL_USER:-x-access-token}"
-  case "$GRAIN_IMAGE" in
-    *-docker.pkg.dev/*|gcr.io/*)
-      target="https://${registry}"
-      user="${GRAIN_IMAGE_PULL_USER:-oauth2accesstoken}"
-      if [ -z "$token" ]; then
-        token="$(gcp_access_token || true)"
-      fi
-      ;;
-  esac
+  if [[ "$GRAIN_IMAGE" == */* ]] && google_registry_host "$registry"; then
+    target="https://${registry}"
+    user="${GRAIN_IMAGE_PULL_USER:-oauth2accesstoken}"
+    if [ -z "$token" ]; then
+      token="$(gcp_access_token || true)"
+    fi
+  fi
   [ -n "$token" ] || return 0
   log "Logging in to $registry as $user"
   if ! printf '%s' "$token" \
      | docker login "$target" -u "$user" --password-stdin >/dev/null 2>&1; then
     log "  docker login against $registry failed -- the pull below will say whether it mattered"
   fi
+}
+
+# google_registry_host is whether $1, an image reference's registry
+# host, is Artifact Registry or GCR -- the hosts that are handed this
+# machine's Google access token. Matched on the host alone and only on a
+# bare DNS name: a glob over the whole reference ("*-docker.pkg.dev/*")
+# also matches evil.test/x-docker.pkg.dev/img, and a host carrying a "?"
+# or "#" ends in a Google suffix while docker logs in somewhere else.
+google_registry_host() {
+  [[ "$1" =~ ^[a-z0-9.-]+$ ]] || return 1
+  case "$1" in
+    *-docker.pkg.dev|gcr.io|*.gcr.io) return 0 ;;
+  esac
+  return 1
 }
 
 # gcp_access_token prints a Google OAuth2 access token for pulling from
@@ -4570,16 +4582,14 @@ ensure_granule_oci_image() {
   # keeps that session for every later pull from it. So this is attempted
   # only for Artifact Registry, and is never fatal on its own: the pull
   # below is what actually decides.
-  case "$GRAIN_GRANULE_OCI_IMAGE" in
-    *-docker.pkg.dev/*|gcr.io/*)
-      local registry_host="${GRAIN_GRANULE_OCI_IMAGE%%/*}" gcp_token
-      gcp_token="$(gcp_access_token || true)"
-      if [ -z "$gcp_token" ] \
-         || ! printf '%s' "$gcp_token" | docker login -u oauth2accesstoken --password-stdin "https://${registry_host}" >/dev/null 2>&1; then
-        log "  could not authenticate docker to ${registry_host}; trying the pull anyway"
-      fi
-      ;;
-  esac
+  local registry_host="${GRAIN_GRANULE_OCI_IMAGE%%/*}" gcp_token
+  if [[ "$GRAIN_GRANULE_OCI_IMAGE" == */* ]] && google_registry_host "$registry_host"; then
+    gcp_token="$(gcp_access_token || true)"
+    if [ -z "$gcp_token" ] \
+       || ! printf '%s' "$gcp_token" | docker login -u oauth2accesstoken --password-stdin "https://${registry_host}" >/dev/null 2>&1; then
+      log "  could not authenticate docker to ${registry_host}; trying the pull anyway"
+    fi
+  fi
 
   log "Pulling the sandbox container $GRAIN_GRANULE_OCI_IMAGE"
   if ! docker pull "$GRAIN_GRANULE_OCI_IMAGE"; then
