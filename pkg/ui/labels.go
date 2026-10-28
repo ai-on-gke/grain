@@ -929,6 +929,11 @@ type Config struct {
 	// the same nil-means-unavailable contract Reboot and Sandboxes above
 	// already give.
 	PullRequests PullRequests
+	// ExternalBase is the deployment's external UI base
+	// (https://grain.example), the one place grain writes an absolute
+	// link: Grain-Task: in a changelist CL's description, since Critique
+	// has no grain-relative root. Empty leaves that line out.
+	ExternalBase string
 	// RepoNames, when set, is what AddTargetRepo asks for a repository's
 	// own spelling before writing it into the allowlist -- cmd/grain/
 	// daemon.go's repoNameGate over that daemon's GitHub client.

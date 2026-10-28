@@ -36,7 +36,9 @@ for (const [name, viewport] of [
     const clBox = await cl.boundingBox();
     const lineBox = await line.boundingBox();
     // After the pull request on the same line, and inside the pane's line.
-    expect(Math.abs(clBox.y - prBox.y)).toBeLessThan(2);
+    expect(
+      Math.abs(clBox.y + clBox.height / 2 - (prBox.y + prBox.height / 2)),
+    ).toBeLessThan(2);
     expect(clBox.x).toBeGreaterThan(prBox.x + prBox.width);
     expect(clBox.x + clBox.width).toBeLessThanOrEqual(
       lineBox.x + lineBox.width + 1,

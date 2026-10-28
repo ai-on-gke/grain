@@ -3604,7 +3604,9 @@ WHERE ` + "`streak_count`" + ` > 0`},
 	// (model.AwaitsSubmit, which this EXISTS clause and the auto_merge
 	// test spell out in SQL). EXISTS rather than a join to task_link,
 	// because a task carrying two fixes-links would otherwise appear
-	// twice in a view whose whole point is one row per task.
+	// twice in a view whose whole point is one row per task. A
+	// changelist link (a changelist CL, LinkKind.IsChange) counts as a
+	// fixes-link does, and a task with several CLs is still one row.
 	//
 	// 'awaiting_reply' also splits the same completed_at a third way, and it is
 	// model.AwaitsAck in SQL: a finished task with no pull request at all
@@ -3626,12 +3628,12 @@ SELECT
     WHEN ` + "`o`.`closed_at`" + `    IS NOT NULL THEN 'closed'
     WHEN ` + "`o`.`completed_at`" + ` IS NOT NULL AND ` + "`t`.`auto_merge`" + ` = FALSE AND EXISTS (
            SELECT 1 FROM ` + "`task_link`" + ` AS ` + "`fl`" + `
-           WHERE ` + "`fl`.`task_id`" + ` = ` + "`t`.`id`" + ` AND ` + "`fl`.`kind`" + ` = '` + string(LinkFixes) + `'
+           WHERE ` + "`fl`.`task_id`" + ` = ` + "`t`.`id`" + ` AND ` + "`fl`.`kind`" + ` IN (` + changeLinkKindsSQL + `)
          ) THEN 'awaiting_submit'
     WHEN ` + "`o`.`completed_at`" + ` IS NOT NULL
          AND ` + "`t`.`origin_reason`" + ` != '` + string(ReasonReview) + `' AND NOT EXISTS (
            SELECT 1 FROM ` + "`task_link`" + ` AS ` + "`al`" + `
-           WHERE ` + "`al`.`task_id`" + ` = ` + "`t`.`id`" + ` AND ` + "`al`.`kind`" + ` = '` + string(LinkFixes) + `'
+           WHERE ` + "`al`.`task_id`" + ` = ` + "`t`.`id`" + ` AND ` + "`al`.`kind`" + ` IN (` + changeLinkKindsSQL + `)
          ) THEN 'awaiting_reply'
     WHEN ` + "`o`.`completed_at`" + ` IS NOT NULL THEN 'completed'
     WHEN ` + "`o`.`pending_question_comment_id`" + ` IS NOT NULL THEN 'awaiting_reply'

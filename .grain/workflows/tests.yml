@@ -647,7 +647,7 @@ jobs:
             ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-connect/... ./cmd/grain-sandbox/... ./cmd/grit/... \
             ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
             ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/apierror/... ./pkg/attest/... \
-            ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/checkpost/... \
+            ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
             ./pkg/ci/... ./pkg/cifault/... ./pkg/cli/... ./pkg/console/... ./pkg/daemon/... \
             ./pkg/declschema/... ./pkg/demo/... ./pkg/designdoc/... ./pkg/dispatch/... \
             ./pkg/forge/... ./pkg/gcpsetup/... ./pkg/ghwebhook/... ./pkg/github/... ./pkg/gitproxy/... ./pkg/gitrefs/... \
