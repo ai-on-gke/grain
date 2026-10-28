@@ -2294,6 +2294,9 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *surface == "" {
+		*surface = os.Getenv(MCPSurfaceEnv)
+	}
 	switch *surface {
 	case "", MCPSurfaceControl, MCPSurfaceFull:
 	default:

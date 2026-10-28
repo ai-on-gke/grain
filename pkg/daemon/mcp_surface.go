@@ -34,6 +34,12 @@ const (
 	MCPSurfaceFull = "full"
 )
 
+// MCPSurfaceEnv names the environment variable a server reads when it is
+// given no -mcp-surface: how a test harness that drives runs end to end,
+// with mcpserver started many layers below it, asks for the full roster
+// its scripted agents call.
+const MCPSurfaceEnv = "GRAIN_MCP_SURFACE"
+
 // ResolveMCPSurface is the roster a server serves: the one -mcp-surface
 // names, or, left empty, the control set when the run has a sandbox for
 // `grain` to run in and the full roster when it has none.
