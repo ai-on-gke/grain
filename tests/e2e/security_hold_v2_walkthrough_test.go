@@ -117,9 +117,11 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// only adds paths and state-repo, grain/task-947; v7 only adds
 	// state-privilege, which judges the state repository alone,
 	// grain/task-1025; v8 only adds release-promotion, a handful of
-	// release files, grain/task-1236).
-	if trustboundary.Version != "trust-boundary/v8" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v8, the build has %s", trustboundary.Version)
+	// release files, grain/task-1236; v9 makes state-privilege hold all
+	// config-repository paths by default with settings/config-policy.yml
+	// exceptions, grain/task-1591).
+	if trustboundary.Version != "trust-boundary/v9" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v9, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

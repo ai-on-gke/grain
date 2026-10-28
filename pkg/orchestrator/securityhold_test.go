@@ -994,3 +994,36 @@ func TestSecurityHoldReholdsWhenReviewFixIntroducesRequiresHumanOrNonReviewCommi
 		}
 	})
 }
+
+func TestSecurityHoldConfigRepoDefaultHoldAndPolicyExceptions(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	// Without settings/config-policy.yml on main, every config-repo PR is held
+	// for human Submit by default.
+	got := finishStateChange(t, store, ctx, model.ConfigRepo(), "memory/notes.md")
+	if got.AutoMerge || linkOf(got, model.LinkHumanOnlyHold) == "" {
+		t.Fatalf("config repo memory/notes.md was not held by default: automerge=%v links=%+v", got.AutoMerge, got.Links)
+	}
+
+	// With auto_merge_paths on main, opted-in paths auto-merge while
+	// settings/config-policy.yml itself remains held by NeverAutoMergePaths.
+	basePolicy := map[string]string{
+		trustboundary.ConfigPolicyPath: "auto_merge_paths:\n  - memory/**\n",
+	}
+	store, ctx = openStore(t)
+	got = finishStateChangeWithBaseFiles(t, store, ctx, model.ConfigRepo(), basePolicy, map[string]string{
+		"memory/notes.md": "exempt\n",
+	})
+	if !got.AutoMerge || linkOf(got, model.LinkHumanOnlyHold) != "" {
+		t.Fatalf("opted-in memory/notes.md was held: automerge=%v links=%+v", got.AutoMerge, got.Links)
+	}
+
+	store, ctx = openStore(t)
+	got = finishStateChangeWithBaseFiles(t, store, ctx, model.ConfigRepo(), basePolicy, map[string]string{
+		trustboundary.ConfigPolicyPath: "auto_merge_paths:\n  - memory/**\n  - release-notes/**\n",
+	})
+	if got.AutoMerge || linkOf(got, model.LinkHumanOnlyHold) == "" {
+		t.Fatalf("%s was not held for human Submit: automerge=%v links=%+v",
+			trustboundary.ConfigPolicyPath, got.AutoMerge, got.Links)
+	}
+}
