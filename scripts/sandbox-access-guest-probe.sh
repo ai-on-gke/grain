@@ -146,7 +146,7 @@ cid=$(docker create "$GRANULE_IMAGE") && docker export "$cid" | tar -C "$W/img" 
 docker rm "$cid" >/dev/null 2>&1
 
 out=$(timeout 420 unshare --user --map-root-user --net --mount "$0" __inner "$W" 2>&1)
-echo "$out" | sed 's/^/     /'
+while IFS= read -r line; do echo "     $line"; done <<<"$out"
 sed 's/^/     acceptor: /' "$W/acceptor.log"
 
 if grep -q '^READY$' <<<"$out"; then pass "the guest boots under granule-shim in inline mode with dial-out configured"; else
