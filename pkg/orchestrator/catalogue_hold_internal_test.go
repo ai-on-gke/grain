@@ -17,6 +17,9 @@ package orchestrator
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ai-on-gke/grain/pkg/agent"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -76,5 +79,60 @@ func TestCatalogueHoldHoldsAnUnreadableTask(t *testing.T) {
 	}
 	if why := catalogueHold(ctx, Deps{Store: store})("no-such-task"); why == "" {
 		t.Fatal("a task the hold cannot read was let through")
+	}
+}
+
+// A proposal filed at the end of a run is judged against the catalogue
+// as the identical call filed live (ui.CreateTask): a grant the
+// catalogue marks requires_person files it for a person, even when its
+// proposer's own permission would have queued it.
+func TestRelayedProposalHoldsARequiresPersonGrant(t *testing.T) {
+	now := time.Date(2026, 10, 28, 6, 0, 0, 0, time.UTC)
+	relay := func(t *testing.T, cat *model.CapabilityCatalogue) model.Task {
+		t.Helper()
+		store, ctx := openTreeStore(t)
+		if err := store.UpdateConfig(ctx, func(c *model.Config) error {
+			c.CapabilityPolicy.Catalogue = cat
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		source := externalSource("7")
+		source.Base = ""
+		source.Grants = []model.Grant{{Capability: "self-debug", Via: model.GrantByLabel}}
+		if err := store.PutTask(ctx, source); err != nil {
+			t.Fatal(err)
+		}
+		result := &agent.Result{ToolCalls: []agent.ToolCall{{
+			Name: "propose_task",
+			Arguments: map[string]any{"title": "Follow up", "body": "And then this.",
+				"capabilities": []any{"self-debug"}},
+		}}}
+		if err := relayProposedTasks(ctx, store, nil, source, result, now); err != nil {
+			t.Fatal(err)
+		}
+		tasks, err := store.ListTasks(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, task := range tasks {
+			if task.Parent() == source.ID {
+				return task
+			}
+		}
+		t.Fatal("no proposal was filed")
+		return model.Task{}
+	}
+	if got := relay(t, nil); got.Approval == nil {
+		t.Fatalf("with no catalogue the proposal was not queued on its proposer's permission; the test proves nothing: %+v", got)
+	}
+	got := relay(t, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"self-debug": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+	}})
+	if got.Approval != nil {
+		t.Fatalf("a proposal holding a requires_person grant was approved by %+v", got.Approval.Actor)
+	}
+	if !strings.Contains(got.Body, "requires_person") {
+		t.Fatalf("body %q does not say why it waits for a person", got.Body)
 	}
 }
