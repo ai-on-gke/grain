@@ -73,10 +73,14 @@ func TestSeedDemoCoversEveryState(t *testing.T) {
 	}
 	got := map[model.State]int{}
 	presubmits := map[string]bool{}
+	reviews := map[string]bool{}
 	for _, task := range tasks {
 		got[task.State]++
 		if task.Presubmit != nil {
 			presubmits[task.Presubmit.State] = true
+		}
+		if task.CLReview != nil {
+			reviews[task.CLReview.State] = true
 		}
 		// The changelist tasks (a CitC workspace, no repo) aside.
 		if task.Repo != repo.String() && len(task.Changelists) == 0 {
@@ -97,6 +101,12 @@ func TestSeedDemoCoversEveryState(t *testing.T) {
 	for _, state := range []string{"passed", "failed", "running", "not_run", "unknown"} {
 		if !presubmits[state] {
 			t.Errorf("no seeded changelist task shows presubmit %q", state)
+		}
+	}
+	// And every review badge state (google3-cls.md §5).
+	for _, state := range []string{"draft", "in_review", "changes_requested", "needs_approval", "approved"} {
+		if !reviews[state] {
+			t.Errorf("no seeded changelist task shows review state %q", state)
 		}
 	}
 	for _, state := range want {
