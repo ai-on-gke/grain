@@ -15,6 +15,7 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -89,5 +90,37 @@ func TestStopTimeoutsCoverTheShutdownDrain(t *testing.T) {
 		if got := time.Duration(secs) * time.Second; dockerStop > 0 && got <= dockerStop {
 			t.Errorf("scripts/setup.sh: %q allows %s, want more than the unit's docker stop (%s)", m[0], got, dockerStop)
 		}
+	}
+}
+
+func TestRunHostUpgradeResumeIsNoOpOnceStopping(t *testing.T) {
+	t.Parallel()
+	stopping := make(chan struct{})
+	u := newRunHostUpgrade(nil, nil, true).withStopping(stopping)
+	readopted := 0
+	u.setReadopt(func() { readopted++ })
+
+	close(stopping)
+	u.resume()
+	if readopted != 0 {
+		t.Fatalf("readopt called %d time(s) after stopping closed, want 0", readopted)
+	}
+}
+
+func TestStopWithGraceBoundsListenerShutdown(t *testing.T) {
+	t.Parallel()
+	var hasDeadline bool
+	var remaining time.Duration
+	stopWithGrace(func(ctx context.Context) error {
+		var deadline time.Time
+		deadline, hasDeadline = ctx.Deadline()
+		remaining = time.Until(deadline)
+		return nil
+	})
+	if !hasDeadline {
+		t.Fatal("stopWithGrace passed a context without a deadline")
+	}
+	if remaining <= 0 || remaining > shutdownServerGrace {
+		t.Fatalf("stopWithGrace deadline remaining = %s, want in (0, %s]", remaining, shutdownServerGrace)
 	}
 }

@@ -424,7 +424,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	defer poll.Stop()
 	heartbeat := time.NewTicker(cliWaitHeartbeat)
 	defer heartbeat.Stop()
-	for !run.Conclusion.Done() {
+	for !run.Conclusion.Done() && !p.shuttingDown() {
 		remaining := time.Until(end)
 		if remaining <= 0 {
 			break
@@ -432,6 +432,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		timer := time.NewTimer(remaining)
 		select {
 		case <-ctx.Done():
+		case <-p.ShutdownStarted:
 		case <-poll.C:
 			if got, ok := p.CLIActions.CIRun(ctx, run.ID); ok {
 				run = got
@@ -442,7 +443,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		case <-timer.C:
 		}
 		timer.Stop()
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || p.shuttingDown() {
 			break
 		}
 	}
@@ -482,6 +483,15 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	}
 	p.recordCheckWait(ctx, scope.RunID, verdict, waited)
 	writeCLIJSON(w, http.StatusOK, resp)
+}
+
+func (p *GitProxy) shuttingDown() bool {
+	select {
+	case <-p.ShutdownStarted:
+		return true
+	default:
+		return false
+	}
 }
 
 func cleanJobs(jobs []string) []string {

@@ -41,8 +41,9 @@ import (
 // A nil *runHostUpgrade -- a deployment with neither -run-host-image nor
 // grain hostd -- flushes nothing and reports nothing.
 type runHostUpgrade struct {
-	host  *runhost.Host
-	hostd *runhost.Hostd
+	host     *runhost.Host
+	hostd    *runhost.Hostd
+	stopping <-chan struct{}
 
 	mu sync.Mutex
 	// report is what this process's startup adoption pass did.
@@ -57,6 +58,13 @@ func newRunHostUpgrade(host *runhost.Host, hd *runhost.Hostd, ci bool) *runHostU
 		return nil
 	}
 	return &runHostUpgrade{host: host, hostd: hd}
+}
+
+func (u *runHostUpgrade) withStopping(ch <-chan struct{}) *runHostUpgrade {
+	if u != nil {
+		u.stopping = ch
+	}
+	return u
 }
 
 // flushHook is upgrade.Config.Flush, or nil.
@@ -91,8 +99,14 @@ func (u *runHostUpgrade) flush(ctx context.Context) (func(), error) {
 
 // resume is the far side of a flush whose restart did not happen: this
 // daemon tails again, and adopts the runs it let go of as a new daemon
-// would have.
+// would have. Once shutdown has started, it is a no-op so a late resume
+// cannot adopt flushed runs back into a draining process.
 func (u *runHostUpgrade) resume() {
+	select {
+	case <-u.stopping:
+		return
+	default:
+	}
 	if u.host != nil {
 		u.host.Resume()
 	}
