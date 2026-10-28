@@ -56,8 +56,9 @@ var licenseLines = []string{
 const licenseMarker = "Licensed under the Apache License, Version 2.0"
 
 // licenseSkipped are tracked paths that are not grain's own source, or
-// whose bytes something compares: vendored code and test fixtures.
-var licenseSkipped = regexp.MustCompile(`^third_party/|(^|/)testdata/|(^|/)node_modules/|\.min\.js$`)
+// whose bytes something compares: vendored code and test fixtures
+// (testdata/, and frozen/ snapshots a test checks against SHA256SUMS).
+var licenseSkipped = regexp.MustCompile(`^third_party/|(^|/)testdata/|/frozen/|(^|/)node_modules/|\.min\.js$`)
 
 // commentStyle says how a tracked file's header is written: "//" or "#",
 // or "" for a file that needs none.
