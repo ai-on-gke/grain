@@ -196,9 +196,13 @@ func (r GrantRefusal) Error() string { return r.Reason }
 
 // CatalogueKindOf is the kind a task is judged as: a standing session
 // by the session tag it carries (ConsoleSessionTag), the director by
-// its own, a review by its origin.
+// its own, a review by its origin. A session is only a task grain filed
+// as one (interactive, with ReasonConsoleSession): the tag alone is
+// something a person or an agent can put on any interactive task, and
+// must not buy it the grants the catalogue keeps for sessions or the
+// director.
 func CatalogueKindOf(t Task) string {
-	if id, ok := ConsoleSessionIDOf(t); ok && t.Interactive {
+	if id, ok := ConsoleSessionIDOf(t); ok && t.Interactive && t.Origin.Reason == ReasonConsoleSession {
 		if id == DirectorSessionID {
 			return CatalogueKindDirector
 		}

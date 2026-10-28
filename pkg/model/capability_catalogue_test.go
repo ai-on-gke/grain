@@ -209,4 +209,20 @@ func TestCatalogueKindOf(t *testing.T) {
 	if got := model.CatalogueKindOf(model.Task{Origin: model.Origin{Reason: model.ReasonReview}}); got != model.CatalogueKindReview {
 		t.Fatalf("review task is %q", got)
 	}
+	director := model.Task{Interactive: true, Tags: []string{model.ConsoleSessionTag(model.DirectorSessionID)},
+		Origin: model.Origin{Reason: model.ReasonConsoleSession}}
+	if got := model.CatalogueKindOf(director); got != model.CatalogueKindDirector {
+		t.Fatalf("director session is %q", got)
+	}
+	session := model.Task{Interactive: true, Tags: []string{model.ConsoleSessionTag("ops")},
+		Origin: model.Origin{Reason: model.ReasonConsoleSession}}
+	if got := model.CatalogueKindOf(session); got != model.CatalogueKindSession {
+		t.Fatalf("console session is %q", got)
+	}
+	// The tag on an ordinary interactive task does not make it the
+	// director: only grain files a session.
+	forged := model.Task{Interactive: true, Tags: []string{model.ConsoleSessionTag(model.DirectorSessionID)}}
+	if got := model.CatalogueKindOf(forged); got != model.CatalogueKindTask {
+		t.Fatalf("an interactive task tagged as the director is %q, want task", got)
+	}
 }

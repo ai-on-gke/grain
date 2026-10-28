@@ -1647,12 +1647,17 @@ func pendingBranchHold(ctx context.Context, deps Deps) func(string) string {
 // capability or narrowed who may hold it, and the task waits, saying
 // which grant and why (model.CatalogueWaitCapability), rather than
 // running with it. A wait it recorded is cleared once the task passes.
-// nil when the deployment has no catalogue.
+// nil when the deployment has no catalogue. Like policyHold it fails
+// closed: a catalogue that cannot be read holds every task this cycle,
+// and a task that cannot be read is held, rather than either being
+// dispatched unjudged.
 func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 	cfg, err := deps.Store.GetConfig(ctx)
 	if err != nil {
 		log.Printf("orchestrator: reading the capability catalogue: %v", err)
-		return nil
+		return func(string) string {
+			return "held by settings/capabilities.yml: the capability catalogue could not be read to check it"
+		}
 	}
 	if cfg == nil || cfg.CapabilityPolicy.Catalogue == nil {
 		return nil
@@ -1661,7 +1666,10 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 	return func(taskID string) string {
 		task, err := deps.Store.GetTask(ctx, taskID)
 		if err != nil || task == nil {
-			return ""
+			if err != nil {
+				log.Printf("orchestrator: reading %s to check it against the capability catalogue: %v", taskID, err)
+			}
+			return "held by settings/capabilities.yml: the task could not be read to check it"
 		}
 		gc := model.TaskGrantContext(*task)
 		if gc.TemplateID != "" {

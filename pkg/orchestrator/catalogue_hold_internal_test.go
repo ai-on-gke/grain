@@ -63,3 +63,18 @@ func TestCatalogueHoldRejudgesAtDispatch(t *testing.T) {
 		t.Fatalf("wait %+v left behind", wait)
 	}
 }
+
+// The hold fails closed: a queued task it cannot read is held, not
+// dispatched unjudged.
+func TestCatalogueHoldHoldsAnUnreadableTask(t *testing.T) {
+	store, ctx := openTreeStore(t)
+	if err := store.UpdateConfig(ctx, func(c *model.Config) error {
+		c.CapabilityPolicy.Catalogue = &model.CapabilityCatalogue{}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if why := catalogueHold(ctx, Deps{Store: store})("no-such-task"); why == "" {
+		t.Fatal("a task the hold cannot read was let through")
+	}
+}
