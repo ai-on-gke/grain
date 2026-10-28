@@ -309,7 +309,7 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     58,
-		Description: "add each task's non-git change target (a google3 CL's workspace) to task and template",
+		Description: "add each task's non-git change target (a registered changelist workspace) to task and template",
 		Statements: []string{
 			"ALTER TABLE `task` ADD COLUMN `change_target_kind` TEXT NOT NULL DEFAULT ''",
 			"ALTER TABLE `task` ADD COLUMN `change_target_spec` TEXT NOT NULL DEFAULT ''",
