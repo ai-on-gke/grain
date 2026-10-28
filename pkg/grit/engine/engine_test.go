@@ -16,9 +16,12 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	gritsteps "github.com/ai-on-gke/grain/pkg/grit/steps"
 	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
@@ -121,4 +124,198 @@ func TestRunGateBoundsOneRunInArrivalOrder(t *testing.T) {
 		t.Fatalf("cleared wait = %+v, want zero Wait", cleared)
 	}
 	rel2()
+}
+
+type fakeSandbox struct {
+	name     string
+	execFn   func(ctx context.Context, cmd gritsteps.Command) (gritsteps.CommandResult, error)
+	released *atomic.Int32
+}
+
+func (s *fakeSandbox) Name() string { return s.name }
+func (s *fakeSandbox) Exec(ctx context.Context, cmd gritsteps.Command) (gritsteps.CommandResult, error) {
+	if s.execFn != nil {
+		return s.execFn(ctx, cmd)
+	}
+	return gritsteps.CommandResult{ExitCode: 0}, nil
+}
+func (s *fakeSandbox) Release(context.Context) error {
+	if s.released != nil {
+		s.released.Add(1)
+	}
+	return nil
+}
+
+type fakeSandboxes struct {
+	acquireFn func(ctx context.Context, req gritsteps.SandboxRequest) (gritsteps.Sandbox, error)
+}
+
+func (f *fakeSandboxes) Acquire(ctx context.Context, req gritsteps.SandboxRequest) (gritsteps.Sandbox, error) {
+	return f.acquireFn(ctx, req)
+}
+
+func TestStoppingSkipsNewJobsAndAutomaticRetriesAndRecordsInterrupted(t *testing.T) {
+	stopping := make(chan struct{})
+	var acquired atomic.Int32
+	var released atomic.Int32
+	var secondStarted atomic.Bool
+
+	sb := &fakeSandboxes{
+		acquireFn: func(ctx context.Context, req gritsteps.SandboxRequest) (gritsteps.Sandbox, error) {
+			n := acquired.Add(1)
+			return &fakeSandbox{
+				name:     fmt.Sprintf("sb-%d", n),
+				released: &released,
+				execFn: func(ctx context.Context, cmd gritsteps.Command) (gritsteps.CommandResult, error) {
+					if cmd.Script == "run-second" {
+						secondStarted.Store(true)
+						return gritsteps.CommandResult{ExitCode: 0}, nil
+					}
+					close(stopping)
+					return gritsteps.CommandResult{
+						ExitCode: 128,
+						Output: "fatal: unable to access 'http://127.0.0.1:9728/ai-on-gke/grain.git/': Recv failure: Connection reset by peer\n" +
+							"Actions cache http://127.0.0.1:9758/_apis/artifactcache/ is not reachable",
+					}, nil
+				},
+			}, nil
+		},
+	}
+
+	eng := &Engine{
+		Sandboxes:        sb,
+		Stopping:         stopping,
+		ConcurrencyLimit: func() int { return 1 },
+	}
+	plan := workflows.Plan{
+		Key: "plan-1",
+		Request: workflows.Request{
+			Repo:   "ai-on-gke/grain",
+			Ref:    "main",
+			Commit: "abc123",
+			Event:  workflows.EventPush,
+		},
+		Jobs: []workflows.PlannedJob{
+			{
+				ID:           "first",
+				Workflow:     "ci",
+				WorkflowPath: ".grain/workflows/ci.yml",
+				Key:          "key-first",
+				Job: workflows.Job{
+					ID:    "first",
+					Name:  "first",
+					Retry: true,
+					Steps: []workflows.Step{
+						{Name: "checkout", Run: "run-first", Infrastructure: true},
+						{Name: "later-step", Run: "run-second"},
+					},
+				},
+			},
+			{
+				ID:           "second",
+				Workflow:     "ci",
+				WorkflowPath: ".grain/workflows/ci.yml",
+				Key:          "key-second",
+				Needs:        []string{"first"},
+				Job: workflows.Job{
+					ID:    "second",
+					Name:  "second",
+					Needs: []string{"first"},
+					Steps: []workflows.Step{
+						{Name: "test", Run: "run-second"},
+					},
+				},
+			},
+		},
+	}
+
+	run := eng.Run(context.Background(), "run-1", plan, nil)
+	if got := acquired.Load(); got != 1 {
+		t.Fatalf("Sandboxes.Acquire count = %d, want 1 (no automatic retry or second job)", got)
+	}
+	if secondStarted.Load() {
+		t.Fatal("second step or job started after Stopping was closed")
+	}
+	if got := released.Load(); got != 1 {
+		t.Fatalf("sandbox release count = %d, want 1", got)
+	}
+	if !run.Interrupted || run.Conclusion != workflows.ConclusionCancelled {
+		t.Fatalf("run = (Interrupted=%v, Conclusion=%q, Error=%q), want Interrupted=true Conclusion=cancelled",
+			run.Interrupted, run.Conclusion, run.Error)
+	}
+	if run.Error != workflows.InterruptedRunError {
+		t.Fatalf("run.Error = %q, want %q", run.Error, workflows.InterruptedRunError)
+	}
+	for _, j := range run.Jobs {
+		if j.Conclusion != workflows.ConclusionCancelled || j.Error != workflows.InterruptedRunError {
+			t.Fatalf("job %s = (Conclusion=%q, Error=%q), want cancelled with InterruptedRunError",
+				j.JobID, j.Conclusion, j.Error)
+		}
+	}
+}
+
+func TestStoppingDuringRetrySandboxAcquireRecordsInterruptedInsteadOfErrored(t *testing.T) {
+	stopping := make(chan struct{})
+	var acquired atomic.Int32
+	var released atomic.Int32
+
+	sb := &fakeSandboxes{
+		acquireFn: func(ctx context.Context, req gritsteps.SandboxRequest) (gritsteps.Sandbox, error) {
+			n := acquired.Add(1)
+			if n == 2 {
+				// Simulate base run 55d1a2c6dc5fc22f: retry starts and daemon begins
+				// shutting down while retry is cloning from the torn-down git proxy.
+				close(stopping)
+				return nil, fmt.Errorf("checking out repository: git clone http://127.0.0.1:9728/ai-on-gke/grain.git: Connection reset by peer; Actions cache not reachable")
+			}
+			return &fakeSandbox{
+				name:     fmt.Sprintf("sb-%d", n),
+				released: &released,
+				execFn: func(ctx context.Context, cmd gritsteps.Command) (gritsteps.CommandResult, error) {
+					return gritsteps.CommandResult{
+						ExitCode: 1,
+						Output:   "transient connection reset by peer",
+					}, nil
+				},
+			}, nil
+		},
+	}
+
+	eng := &Engine{
+		Sandboxes: sb,
+		Stopping:  stopping,
+	}
+	plan := workflows.Plan{
+		Key: "plan-retry-stop",
+		Request: workflows.Request{
+			Repo:   "ai-on-gke/grain",
+			Ref:    "main",
+			Commit: "def456",
+			Event:  workflows.EventPush,
+		},
+		Jobs: []workflows.PlannedJob{
+			{
+				ID:           "build",
+				Workflow:     "ci",
+				WorkflowPath: ".grain/workflows/ci.yml",
+				Key:          "key-build",
+				Job: workflows.Job{
+					ID:   "build",
+					Name: "build",
+					Steps: []workflows.Step{
+						{Name: "test", Run: "go test ./..."},
+					},
+				},
+			},
+		},
+	}
+
+	run := eng.Run(context.Background(), "run-retry-stop", plan, nil)
+	if !run.Interrupted || run.Conclusion != workflows.ConclusionCancelled {
+		t.Fatalf("run = (Interrupted=%v, Conclusion=%q, Error=%q), want Interrupted=true Conclusion=cancelled",
+			run.Interrupted, run.Conclusion, run.Error)
+	}
+	if len(run.Jobs) != 1 || run.Jobs[0].Conclusion != workflows.ConclusionCancelled {
+		t.Fatalf("run.Jobs = %+v, want 1 cancelled job", run.Jobs)
+	}
 }
