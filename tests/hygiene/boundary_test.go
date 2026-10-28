@@ -45,22 +45,7 @@ var googleTokensExempt = []string{
 // from bwsalmon/grain before it was all moved out. The list may only
 // shrink: a file here that no longer says one fails the test until it is
 // taken off, so that it cannot quietly start again.
-var googleTokensPending = map[string]string{
-	// The google3 change target (propose_task's google3 argument, the
-	// CLI's -google3 flag, the new-task form's google3 choice).
-	"pkg/cli/google3_target_test.go":                    "google3 change target",
-	"pkg/cli/taskcmd.go":                                "google3 change target",
-	"pkg/mcp/mock_tools.go":                             "google3 change target",
-	"pkg/mcp/propose_google3.go":                        "google3 change target",
-	"pkg/mcp/propose_google3_test.go":                   "google3 change target",
-	"pkg/model/change_target.go":                        "google3 change target",
-	"pkg/model/migrations.go":                           "google3 change target",
-	"pkg/orchestrator/finish.go":                        "google3 change target",
-	"pkg/ui/change_target_test.go":                      "google3 change target",
-	"ui/src/components/NewTaskOverlay.google3.test.jsx": "google3 change target",
-	"ui/src/components/NewTaskOverlay.jsx":              "google3 change target",
-	"ui/src/components/RepoField.jsx":                   "google3 change target",
-}
+var googleTokensPending = map[string]string{}
 
 func TestCoreSaysNoGoogleTokens(t *testing.T) {
 	root := repoRoot(t)

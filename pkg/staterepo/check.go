@@ -45,6 +45,7 @@ import (
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/trustboundary"
 )
 
 // CheckReport is what a check found: enough to print a summary a human
@@ -180,6 +181,9 @@ func check(ctx context.Context, db *sql.DB, dir, scratch string, version int, mi
 	}
 	tables, err := tableNames(ctx, db)
 	if err != nil {
+		return report, err
+	}
+	if err := checkConfigPolicy(dir); err != nil {
 		return report, err
 	}
 	warnings, err := describeDump(ctx, db, dir, tables)
@@ -587,4 +591,23 @@ func readRows(path string) ([]map[string]any, error) {
 		return nil, fmt.Errorf("staterepo: parsing %s: %w", path, err)
 	}
 	return rows, nil
+}
+
+// checkConfigPolicy validates settings/config-policy.yml when present in the
+// dump directory, failing on invalid YAML syntax, unknown fields, malformed
+// globs, or any auto_merge_paths entry that matches or overlaps
+// trustboundary.NeverAutoMergePaths.
+func checkConfigPolicy(dir string) error {
+	p := filepath.Join(dir, filepath.FromSlash(trustboundary.ConfigPolicyPath))
+	data, err := os.ReadFile(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("staterepo: reading %s: %w", trustboundary.ConfigPolicyPath, err)
+	}
+	if _, err := trustboundary.CheckConfigPolicy(data); err != nil {
+		return fmt.Errorf("staterepo: %w", err)
+	}
+	return nil
 }

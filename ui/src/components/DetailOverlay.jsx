@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import ClChip from "./ClChip.jsx";
 import { processPath } from "../paths.js";
 import LinkedNote from "../linkedNote.jsx";
 import { Alert, Button, Chip, Link, Typography } from "@mui/material";
@@ -330,18 +331,12 @@ export default function DetailOverlay({
                 )}
                 {/* The changelists (CLs) that are this task's work
                     (model.LinkChangelist) sit beside its pull request,
-                    each its cl/<number> go link. */}
-                {(t.changelists || []).map((cl) => (
+                    each a chip linking to its cl/<number> link, the
+                    first (its primary) filled. */}
+                {(t.changelists || []).map((cl, i) => (
                   <Fragment key={`changelist-${cl}`}>
                     {" "}
-                    ·{" "}
-                    <Link
-                      href={`http://${cl}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      {cl}
-                    </Link>
+                    · <ClChip cl={cl} primary={i === 0} />
                   </Fragment>
                 ))}
                 {/* Provenance links and the tree of work this task belongs

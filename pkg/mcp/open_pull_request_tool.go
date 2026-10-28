@@ -71,6 +71,13 @@ type PullRequestOpener interface {
 	OpenPullRequest(ctx context.Context) (PullRequestReport, error)
 }
 
+// ChangeOpener is a PullRequestOpener that can also carry a change
+// description: what open_pull_request on a changelist task sends, since a
+// CL has no commits to build one from.
+type ChangeOpener interface {
+	OpenChange(ctx context.Context, summary, body string) (PullRequestReport, error)
+}
+
 // NewOpenPullRequestTools returns the one tool a run gets when its
 // dispatch can open its own pull request: open_pull_request.
 //
@@ -120,14 +127,24 @@ func openPullRequestTool(opener PullRequestOpener) Tool {
 			"The title is the summary line of the first commit whose message has " +
 			"a body, which is how you name the pull request after what you did " +
 			"rather than after what the task asked for -- rewrite that line and " +
-			"call this again to rename it. It takes no arguments: which repo, " +
-			"branch and base are grain's to decide, not yours.",
+			"call this again to rename it. Nothing you pass chooses where: which repo, " +
+			"branch and base are grain's to decide, not yours. " +
+			"On a changelist task (a workspace target, no git branch) it creates the task's " +
+			"CL from the workspace's pending files on the first call and updates it " +
+			"and uploads a new snapshot after, returning cl/N and its presubmit " +
+			"state; it never mails. There, pass summary and body: the CL " +
+			"description, written as a commit message (BUG= is the only tag-like " +
+			"line most CLs need; R=, CC=, TBR= and auto-submit or presubmit-bypass " +
+			"tags are refused).",
 		InputSchema: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
-			"properties":           map[string]any{},
+			"properties": map[string]any{
+				"summary": map[string]any{"type": "string", "description": "Changelist tasks only: the CL description's one-line summary."},
+				"body":    map[string]any{"type": "string", "description": "Changelist tasks only: the CL description's body."},
+			},
 		},
-		Handler: func(ctx context.Context, _ map[string]any) Result {
+		Handler: func(ctx context.Context, args map[string]any) Result {
 			if opener == nil {
 				return Result{
 					Text: "This run cannot open its own pull request (no route to grain's " +
@@ -136,7 +153,15 @@ func openPullRequestTool(opener PullRequestOpener) Tool {
 					IsError: true,
 				}
 			}
-			report, err := opener.OpenPullRequest(ctx)
+			summary, _ := args["summary"].(string)
+			body, _ := args["body"].(string)
+			var report PullRequestReport
+			var err error
+			if co, ok := opener.(ChangeOpener); ok && (summary != "" || body != "") {
+				report, err = co.OpenChange(ctx, summary, body)
+			} else {
+				report, err = opener.OpenPullRequest(ctx)
+			}
 			if err != nil {
 				return Result{Text: err.Error(), IsError: true}
 			}
@@ -154,6 +179,10 @@ func openPullRequestTool(opener PullRequestOpener) Tool {
 func renderPullRequestReport(r PullRequestReport) string {
 	if r.Number == 0 && r.Note != "" {
 		return strings.TrimRight(r.Note, "\n")
+	}
+	if r.Repo != "" && !strings.Contains(r.Repo, "/") {
+		// A CL: its note already says what was uploaded and how presubmit stands.
+		return strings.TrimRight(fmt.Sprintf("cl/%d: %s\n%s", r.Number, r.URL, r.Note), "\n")
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Pull request %s#%d is open", r.Repo, r.Number)

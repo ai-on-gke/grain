@@ -132,7 +132,7 @@ func carryClearance(ctx context.Context, store *model.Store, client github.Clien
 	if !ok {
 		return carriedClearance{}, false
 	}
-	if sameTrustBoundaryPatches(ctx, store, *current.Target, cleared, patches, matches) ||
+	if sameTrustBoundaryPatches(ctx, store, client, *current.Target, cleared, patches, matches) ||
 		reviewFixClearance(ctx, store, client, differ, current, ref, recordedSHA, headSHA, cleared, patches, matches) {
 		return carriedClearance{}, true
 	}
@@ -196,7 +196,7 @@ func inheritedClearance(ctx context.Context, store *model.Store, client github.C
 		return carriedClearance{}, false
 	}
 	cleared, ok := filePatches(diff)
-	if !ok || !sameTrustBoundaryPatches(ctx, store, *current.Target, cleared, patches, matches) {
+	if !ok || !sameTrustBoundaryPatches(ctx, store, client, *current.Target, cleared, patches, matches) {
 		return carriedClearance{}, false
 	}
 	return carriedClearance{source: source, sourcePR: *sourcePR, review: review}, true
@@ -207,7 +207,7 @@ func inheritedClearance(ctx context.Context, store *model.Store, client github.C
 // applied to the cleared one's paths -- carries the same patch in both.
 // A path one of them leaves alone is a difference: a port that drops part
 // of what was reviewed is not what was reviewed.
-func sameTrustBoundaryPatches(ctx context.Context, store *model.Store, repo model.RepoRef,
+func sameTrustBoundaryPatches(ctx context.Context, store *model.Store, client github.Client, repo model.RepoRef,
 	cleared, next map[string]string, matches []trustboundary.Match) bool {
 
 	paths := map[string]bool{}
@@ -221,7 +221,7 @@ func sameTrustBoundaryPatches(ctx context.Context, store *model.Store, repo mode
 		clearedPaths = append(clearedPaths, p)
 	}
 	clearedMatches := trustboundary.Classify(clearedPaths)
-	rules, guarded := repoGuard(ctx, store, repo, clearedPaths, true)
+	rules, guarded := repoGuard(ctx, store, client, repo, clearedPaths, true)
 	if rules.Broken != "" {
 		return false
 	}
@@ -299,11 +299,11 @@ func reviewFixClearance(ctx context.Context, store *model.Store, client github.C
 		return false
 	}
 
-	deltaMatches, ok := classifyPatchPaths(ctx, store, *current.Target, deltaPatches)
+	deltaMatches, ok := classifyPatchPaths(ctx, store, client, *current.Target, deltaPatches)
 	if !ok {
 		return false
 	}
-	reviewMatches, ok := classifyPatchPaths(ctx, store, *current.Target, reviewPatches)
+	reviewMatches, ok := classifyPatchPaths(ctx, store, client, *current.Target, reviewPatches)
 	if !ok {
 		return false
 	}
@@ -328,7 +328,7 @@ func reviewFixClearance(ctx context.Context, store *model.Store, client github.C
 		}
 	}
 
-	clearedMatches, ok := classifyPatchPaths(ctx, store, *current.Target, cleared)
+	clearedMatches, ok := classifyPatchPaths(ctx, store, client, *current.Target, cleared)
 	if !ok {
 		return false
 	}
@@ -351,7 +351,7 @@ func reviewFixClearance(ctx context.Context, store *model.Store, client github.C
 	return true
 }
 
-func classifyPatchPaths(ctx context.Context, store *model.Store, repo model.RepoRef,
+func classifyPatchPaths(ctx context.Context, store *model.Store, client github.Client, repo model.RepoRef,
 	patches map[string]string) ([]trustboundary.Match, bool) {
 
 	paths := make([]string, 0, len(patches))
@@ -359,7 +359,7 @@ func classifyPatchPaths(ctx context.Context, store *model.Store, repo model.Repo
 		paths = append(paths, p)
 	}
 	matches := trustboundary.Classify(paths)
-	rules, guarded := repoGuard(ctx, store, repo, paths, true)
+	rules, guarded := repoGuard(ctx, store, client, repo, paths, true)
 	if rules.Broken != "" {
 		return nil, false
 	}

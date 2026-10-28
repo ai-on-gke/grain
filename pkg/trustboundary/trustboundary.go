@@ -28,14 +28,20 @@
 package trustboundary
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
 	"path"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v8"
+const Version = "trust-boundary/v9"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -357,89 +363,146 @@ var StatePrivilege = Category{
 	RequiresHuman: true,
 }
 
-// StatePrivilegedTables are the settings tables (staterepo.SettingsTables)
-// whose rows grant reach or remove a person from a decision: capabilities,
-// repositories a task may read or write, secrets and env bound into a
-// sandbox, the images and isolation sandboxes run with, scripts run in
-// them, CI workflows, and the auto-merge and auto-approve switches on
-// what files work. A change to any of them is StatePrivilege.
-var StatePrivilegedTables = []string{
-	// network_access, the k8s images, privilege and service account,
-	// mcp_servers with $secret: bindings, capability_policy, the guest
-	// setup script.
-	"grain_config",
-	// Default capabilities and a repo's setup command.
-	"repo_config",
-	// CI workflows run for a repo, with the capabilities they declare.
-	"repo_workflow",
-	// What a release has to pass before it is promoted, and whether it
-	// is promoted without a person.
-	"qualification_config", "qualification_item", "qualification_item_depends_on",
-	// A template's target, auto-merge and network access, the repos it
-	// reads and writes, and the capabilities it grants.
-	"template", "template_read", "template_write", "template_grant",
-	// A suite's auto-merge and auto-approve, and which templates run
-	// under them.
-	"suite", "suite_item",
-	// The same for what a schedule files on its own.
-	"schedule", "schedule_read", "schedule_write", "schedule_grant",
-	// Sandboxes defined here: any image, any secret-store key as env.
-	"standing_sandbox", "standing_sandbox_secret", "standing_sandbox_env",
-	"persistent_sandbox",
-	// The cloud identities credentials are minted from.
-	"gcp_key",
-	// The agent API's scope sets. Declaring one grants nobody anything,
-	// but a set is granted by name and resolved when it is used, so
-	// widening one already granted (adding deployment:* to ops/triage)
-	// widens every grant of it -- a grant nobody made, unless a person
-	// merges it.
-	"api_scope_set",
+// ConfigPolicyPath is the repository-relative path of the config repository's
+// auto-merge exception policy. It is evaluated from the config repository's
+// base branch (main), never from an unmerged pull request head, and is itself
+// listed in NeverAutoMergePaths so only a human Submit can modify it.
+const ConfigPolicyPath = "settings/config-policy.yml"
+
+// NeverAutoMergePaths is the hardcoded ceiling of config-repository path globs
+// that always require a human Submit in grain/config, even if a pattern in
+// settings/config-policy.yml (auto_merge_paths) would otherwise match them.
+var NeverAutoMergePaths = []string{
+	// The exception policy itself: only a human may change what auto-merges.
+	ConfigPolicyPath,
+	// Declarative settings documents that define capabilities, task creation
+	// defaults, templates, schedules, and suites.
+	"settings/capabilities.yml",
+	"settings/new-task-form.yml",
+	"settings/templates.yml",
+	"settings/schedules.yml",
+	"settings/suites.yml",
+	// Core configuration, scope sets, credentials, backends, console sessions,
+	// and workflow tables.
+	"tables/grain_config.json",
+	"tables/repo_config.json",
+	"tables/api_scope_set.json",
+	"tables/git_credential.json",
+	"tables/repo_git_credential.json",
+	"tables/agent_backend.json",
+	"tables/console_session.json",
+	"tables/repo_workflow.json",
+	// Extracted scripts, CI workflows, and schema version.
+	"scripts/**",
+	"workflows/**",
+	".github/**",
+	".grain/**",
+	"schema-version",
 }
 
-// StateBenignTables are the settings tables that grant nothing --
-// presentation, inputs, field declarations, id sequences -- and, after
-// them, the non-settings tables whose bodies the repository carries as
-// text grain writes for itself (memory, release notes). A change to
-// their dump files alone merges like any other change.
-//
-// Every table in staterepo.SettingsTables is on exactly one of these two
-// lists (TestEveryStateTableIsClassified): a new settings table has to
-// be decided about before it can ship.
-var StateBenignTables = []string{
-	"custom_field",
-	"template_field", "template_custom_field", "template_sequence",
-	"suite_sequence",
-	"board", "board_column", "board_panel", "board_section", "board_sequence",
-	"schedule_custom_field", "schedule_sequence",
-	"memory", "memory_document", "release_note",
+// ConfigPolicy is the parsed representation of settings/config-policy.yml.
+type ConfigPolicy struct {
+	AutoMergePaths []string `yaml:"auto_merge_paths"`
 }
 
-// stateBenignPrefixes are the state repository's directories of text
-// grain writes for itself and reads back as notes, not as grants.
-var stateBenignPrefixes = []string{"memory/", "release-notes/"}
-
-// ClassifyState classifies paths in a pull request against this
-// deployment's own state repository, which the caller -- not the
-// repository -- decides it is.
-//
-// It fails closed. A path is benign only if it is the dump file of a
-// StateBenignTables table (tables/<table>.json), under memory/ or
-// release-notes/, or the README; everything else -- the settings
-// documents (settings/templates.yml and its siblings carry templates,
-// suites and schedules with their grants), scripts/ and workflows/
-// (bodies of grain_config's, repo_config's and repo_workflow's script
-// columns), the dump file of any other table, the repository's own CI --
-// is StatePrivilege. A layout grain adds later is held until it is listed
-// here, rather than let through until somebody notices.
-func ClassifyState(paths []string) []Match {
-	benign := map[string]bool{"README.md": true}
-	for _, t := range StateBenignTables {
-		benign["tables/"+t+".json"] = true
+// ParseConfigPolicy parses settings/config-policy.yml syntax and validates
+// that every entry in auto_merge_paths is a well-formed relative path glob.
+// An empty or comment-only document parses as a policy with no exceptions.
+func ParseConfigPolicy(data []byte) (ConfigPolicy, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return ConfigPolicy{}, nil
 	}
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	var policy ConfigPolicy
+	if err := dec.Decode(&policy); err != nil {
+		if errors.Is(err, io.EOF) {
+			return ConfigPolicy{}, nil
+		}
+		return ConfigPolicy{}, fmt.Errorf("parse %s: %w", ConfigPolicyPath, err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err == nil {
+		return ConfigPolicy{}, fmt.Errorf("parse %s: multiple YAML documents are not allowed", ConfigPolicyPath)
+	} else if !errors.Is(err, io.EOF) {
+		return ConfigPolicy{}, fmt.Errorf("parse %s: %w", ConfigPolicyPath, err)
+	}
+	for i, raw := range policy.AutoMergePaths {
+		if err := validateStateGlob(raw); err != nil {
+			return ConfigPolicy{}, fmt.Errorf("%s: auto_merge_paths[%d] %q: %w", ConfigPolicyPath, i, raw, err)
+		}
+		policy.AutoMergePaths[i] = strings.TrimSpace(raw)
+	}
+	return policy, nil
+}
+
+// ValidateConfigPolicy validates a parsed ConfigPolicy, rejecting invalid
+// globs and any auto_merge_paths entry that matches or overlaps a path in
+// NeverAutoMergePaths.
+func ValidateConfigPolicy(policy ConfigPolicy) error {
+	for i, raw := range policy.AutoMergePaths {
+		if err := validateStateGlob(raw); err != nil {
+			return fmt.Errorf("%s: auto_merge_paths[%d] %q: %w", ConfigPolicyPath, i, raw, err)
+		}
+		pat := strings.TrimSpace(raw)
+		for _, never := range NeverAutoMergePaths {
+			if stateGlobsOverlap(pat, never) {
+				return fmt.Errorf("%s: auto_merge_paths[%d] %q matches NeverAutoMergePaths entry %q (never allowed to auto-merge)", ConfigPolicyPath, i, pat, never)
+			}
+		}
+	}
+	return nil
+}
+
+// CheckConfigPolicy parses settings/config-policy.yml and validates it against
+// NeverAutoMergePaths.
+func CheckConfigPolicy(data []byte) (ConfigPolicy, error) {
+	policy, err := ParseConfigPolicy(data)
+	if err != nil {
+		return ConfigPolicy{}, err
+	}
+	if err := ValidateConfigPolicy(policy); err != nil {
+		return ConfigPolicy{}, err
+	}
+	return policy, nil
+}
+
+// IsNeverAutoMergePath reports whether filePath matches any entry in
+// NeverAutoMergePaths.
+func IsNeverAutoMergePath(filePath string) bool {
+	p := cleanStatePath(filePath)
+	if p == "" {
+		return false
+	}
+	for _, never := range NeverAutoMergePaths {
+		if MatchStatePath(never, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// ClassifyState classifies paths in a pull request against this deployment's
+// own state repository (grain/config), which the caller -- not the repository
+// -- decides it is.
+//
+// Every changed path in grain/config requires a human Submit (StatePrivilege,
+// RequiresHuman: true) by default. A path is exempt only when it matches one
+// of the opt-in globs in autoMergePaths (loaded from settings/config-policy.yml
+// on the config repository's base branch) AND does not match any entry in
+// NeverAutoMergePaths, which is evaluated first as a hardcoded ceiling.
+func ClassifyState(paths []string, autoMergePaths ...string) []Match {
 	set := map[string]bool{}
-	for _, p := range paths {
-		p = strings.TrimPrefix(strings.TrimPrefix(path.Clean("/"+p), "/"), "./")
-		if p == "" || p == "." || benign[p] || hasAnyPrefix(p, stateBenignPrefixes) {
+	for _, raw := range paths {
+		p := cleanStatePath(raw)
+		if p == "" {
+			continue
+		}
+		if IsNeverAutoMergePath(p) {
+			set[p] = true
+			continue
+		}
+		if matchesAnyStateGlob(p, autoMergePaths) {
 			continue
 		}
 		set[p] = true
@@ -455,11 +518,143 @@ func ClassifyState(paths []string) []Match {
 	return []Match{m}
 }
 
-func hasAnyPrefix(p string, prefixes []string) bool {
-	for _, pre := range prefixes {
-		if strings.HasPrefix(p, pre) {
+func cleanStatePath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	p = strings.TrimPrefix(strings.TrimPrefix(path.Clean("/"+p), "/"), "./")
+	if p == "" || p == "." {
+		return ""
+	}
+	return p
+}
+
+func matchesAnyStateGlob(filePath string, patterns []string) bool {
+	for _, raw := range patterns {
+		pat := strings.TrimSpace(raw)
+		if pat == "" || validateStateGlob(pat) != nil {
+			continue
+		}
+		if MatchStatePath(pat, filePath) {
 			return true
 		}
+	}
+	return false
+}
+
+func validateStateGlob(pattern string) error {
+	p := strings.TrimSpace(pattern)
+	if p == "" {
+		return errors.New("empty path glob")
+	}
+	if strings.HasPrefix(p, "/") || strings.HasSuffix(p, "/") {
+		return errors.New("path glob must be relative and must not start or end with '/'")
+	}
+	if strings.Contains(p, "\\") {
+		return errors.New("path glob must use '/' separators")
+	}
+	segs := strings.Split(p, "/")
+	for _, seg := range segs {
+		if seg == "" || seg == "." || seg == ".." {
+			return fmt.Errorf("invalid path segment %q", seg)
+		}
+		if seg == "**" {
+			continue
+		}
+		if strings.Contains(seg, "**") {
+			return fmt.Errorf("'**' must be a full path segment in %q", seg)
+		}
+		if _, err := path.Match(seg, "x"); err != nil {
+			return fmt.Errorf("invalid glob syntax in segment %q: %w", seg, err)
+		}
+	}
+	return nil
+}
+
+// MatchStatePath reports whether a slash-separated path matches pattern.
+// Single-segment wildcards (*, ?, [...]) follow path.Match; a "**" segment
+// matches zero or more path segments.
+func MatchStatePath(pattern, filePath string) bool {
+	pat := strings.Trim(strings.TrimSpace(pattern), "/")
+	p := cleanStatePath(filePath)
+	if pat == "" || p == "" {
+		return false
+	}
+	return matchStateSegments(strings.Split(pat, "/"), strings.Split(p, "/"))
+}
+
+func matchStateSegments(patSegs, pathSegs []string) bool {
+	if len(patSegs) == 0 {
+		return len(pathSegs) == 0
+	}
+	if patSegs[0] == "**" {
+		if matchStateSegments(patSegs[1:], pathSegs) {
+			return true
+		}
+		return len(pathSegs) > 0 && matchStateSegments(patSegs, pathSegs[1:])
+	}
+	if len(pathSegs) == 0 {
+		return false
+	}
+	ok, err := path.Match(patSegs[0], pathSegs[0])
+	if err != nil || !ok {
+		return false
+	}
+	return matchStateSegments(patSegs[1:], pathSegs[1:])
+}
+
+// stateGlobsOverlap reports whether there exists at least one concrete
+// non-empty relative path matched by both glob a and glob b.
+func stateGlobsOverlap(a, b string) bool {
+	a = strings.Trim(strings.TrimSpace(a), "/")
+	b = strings.Trim(strings.TrimSpace(b), "/")
+	if a == "" || b == "" {
+		return false
+	}
+	return segmentsOverlap(strings.Split(a, "/"), strings.Split(b, "/"))
+}
+
+func segmentsOverlap(a, b []string) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) > 0 && a[0] == "**" {
+		if segmentsOverlap(a[1:], b) {
+			return true
+		}
+		if len(b) > 0 {
+			return segmentsOverlap(a, b[1:])
+		}
+		return false
+	}
+	if len(b) > 0 && b[0] == "**" {
+		if segmentsOverlap(a, b[1:]) {
+			return true
+		}
+		if len(a) > 0 {
+			return segmentsOverlap(a[1:], b)
+		}
+		return false
+	}
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	if !singleSegmentOverlaps(a[0], b[0]) {
+		return false
+	}
+	return segmentsOverlap(a[1:], b[1:])
+}
+
+func singleSegmentOverlaps(a, b string) bool {
+	if a == b || a == "*" || b == "*" {
+		return true
+	}
+	if ok, err := path.Match(a, b); err == nil && ok {
+		return true
+	}
+	if ok, err := path.Match(b, a); err == nil && ok {
+		return true
 	}
 	return false
 }

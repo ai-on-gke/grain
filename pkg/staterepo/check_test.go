@@ -30,6 +30,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/trustboundary"
 )
 
 // dumpOf writes a real export of a database holding one task, which is
@@ -584,5 +585,57 @@ func TestCheckRefusesADirectoryThatIsNotAStateRepository(t *testing.T) {
 	_, db := openDB(t)
 	if _, err := staterepo.Check(ctx, db, t.TempDir(), model.SchemaVersion); err == nil {
 		t.Fatal("an empty directory passed the check")
+	}
+}
+
+func TestCheckValidatesConfigPolicy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := dumpOf(t)
+	policyPath := filepath.Join(dir, filepath.FromSlash(trustboundary.ConfigPolicyPath))
+	if err := os.MkdirAll(filepath.Dir(policyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Valid settings/config-policy.yml passes.
+	validPolicy := "auto_merge_paths:\n  - memory/**\n  - release-notes/**\n"
+	if err := os.WriteFile(policyPath, []byte(validPolicy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, db := openDB(t)
+	if _, err := staterepo.Check(ctx, db, dir, model.SchemaVersion); err != nil {
+		t.Fatalf("Check with valid %s failed: %v", trustboundary.ConfigPolicyPath, err)
+	}
+
+	// Invalid YAML syntax fails.
+	if err := os.WriteFile(policyPath, []byte("auto_merge_paths: [unclosed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, db = openDB(t)
+	if _, err := staterepo.Check(ctx, db, dir, model.SchemaVersion); err == nil {
+		t.Fatalf("Check with invalid YAML in %s succeeded, want error", trustboundary.ConfigPolicyPath)
+	}
+
+	// NeverAutoMergePaths entries in auto_merge_paths are rejected.
+	for _, forbidden := range []string{
+		trustboundary.ConfigPolicyPath,
+		"settings/capabilities.yml",
+		"tables/grain_config.json",
+		"scripts/**",
+		"**",
+	} {
+		content := "auto_merge_paths:\n  - \"" + forbidden + "\"\n"
+		if err := os.WriteFile(policyPath, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, db = openDB(t)
+		_, err := staterepo.Check(ctx, db, dir, model.SchemaVersion)
+		if err == nil {
+			t.Errorf("Check with forbidden auto_merge_paths entry %q succeeded, want error", forbidden)
+			continue
+		}
+		if !strings.Contains(err.Error(), "NeverAutoMergePaths") {
+			t.Errorf("Check(%q) error = %v, want mention of NeverAutoMergePaths", forbidden, err)
+		}
 	}
 }

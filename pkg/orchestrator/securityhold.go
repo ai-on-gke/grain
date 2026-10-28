@@ -154,7 +154,7 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	matches := trustboundary.Classify(files)
 	// The repository's own rules add to grain's list, never take from it
 	// (repoGuard): the effective list is both.
-	rules, guarded := repoGuard(ctx, store, *task.Target, files, known)
+	rules, guarded := repoGuard(ctx, store, client, *task.Target, files, known)
 	matches = append(matches, guarded...)
 	cleared := model.Link{Kind: model.LinkTrustBoundaryCleared, Target: clearedTarget(headSHA, rules)}
 	if known && len(matches) == 0 {
@@ -497,7 +497,7 @@ func settleSecurityHold(ctx context.Context, store *model.Store, client github.C
 				files, ferr := client.ListPullRequestFiles(ref.Repo.Owner, ref.Repo.Name, ref.Number)
 				known := ferr == nil && len(files) < github.PullRequestFilesCap
 				matches := trustboundary.Classify(files)
-				rules, guarded := repoGuard(ctx, store, *task.Target, files, known)
+				rules, guarded := repoGuard(ctx, store, client, *task.Target, files, known)
 				matches = append(matches, guarded...)
 				switch {
 				case known && len(matches) == 0:
@@ -744,14 +744,48 @@ func closeSecurityReviewOnSettle(ctx context.Context, store *model.Store, client
 // grain/config is always one, so a store nobody told still judges the
 // default state repository. A file list that could not be read in full
 // is held as touching every privileged path.
-func stateRepoGuard(store *model.Store, repo model.RepoRef, files []string, known bool) []trustboundary.Match {
+func stateRepoGuard(client github.Client, store *model.Store, repo model.RepoRef, files []string, known bool) []trustboundary.Match {
 	if !isSettingsRepo(store, repo) {
 		return nil
 	}
 	if !known {
 		return []trustboundary.Match{{Category: trustboundary.StatePrivilege, Paths: everyPath(files, known)}}
 	}
-	return trustboundary.ClassifyState(files)
+	autoMergePaths := loadConfigRepoAutoMergePaths(client, repo)
+	return trustboundary.ClassifyState(files, autoMergePaths...)
+}
+
+// loadConfigRepoAutoMergePaths loads settings/config-policy.yml from repo's
+// base branch (main), never from the unmerged pull request head, so a pull
+// request cannot exempt its own paths before a human submits it.
+func loadConfigRepoAutoMergePaths(client github.Client, repo model.RepoRef) []string {
+	if client == nil {
+		return nil
+	}
+	reader, ok := client.(github.FileReader)
+	if !ok {
+		return nil
+	}
+	base := "main"
+	if def, err := client.DefaultBranch(repo.Owner, repo.Name); err == nil && strings.TrimSpace(def) != "" {
+		base = strings.TrimSpace(def)
+	}
+	data, exists, err := reader.ReadFile(repo.Owner, repo.Name, base, trustboundary.ConfigPolicyPath)
+	if err != nil {
+		log.Printf("orchestrator: reading %s from %s@%s: %v -- holding all config paths for human Submit",
+			trustboundary.ConfigPolicyPath, repo, base, err)
+		return nil
+	}
+	if !exists {
+		return nil
+	}
+	policy, err := trustboundary.ParseConfigPolicy(data)
+	if err != nil {
+		log.Printf("orchestrator: invalid %s on %s@%s: %v -- holding all config paths for human Submit",
+			trustboundary.ConfigPolicyPath, repo, base, err)
+		return nil
+	}
+	return policy.AutoMergePaths
 }
 
 // isSettingsRepo reports whether repo is this deployment's state

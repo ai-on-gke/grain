@@ -20,7 +20,6 @@ package cli
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -109,10 +108,7 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	// and refuses it from a signed-in caller naming somebody else.
 	author := fs.String("author", "", "who asked for this task, recorded as its requester (defaults to the daemon's own actor)")
 	noRepo := fs.Bool("no-repo", false, "file this task with no repo at all, rather than falling back to the deployment default")
-	google3 := fs.Bool("google3", false, "file this task against google3: its change is a CL in a CitC workspace, with no repo or branch")
-	google3Workspace := fs.String("google3-workspace", "", "with --google3: an existing CitC workspace of the operator's, rather than the task's own")
-	google3StartCL := fs.Int64("google3-start-cl", 0, "with --google3: a pending CL of the operator's to continue")
-	google3SyncTo := fs.String("google3-sync-to", "", `with --google3: "head" or a CL number to sync the workspace to`)
+	resolveChangeTarget := bindChangeTargetFlags(fs)
 	base := fs.String("base", "", "base branch, if not the target repo's default")
 	issue := fs.Int("issue", 0, "GitHub issue number associated with this task")
 	var autoMerge bool
@@ -188,7 +184,7 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	if err != nil {
 		return err
 	}
-	changeTarget, err := google3Target(*google3, *google3Workspace, *google3StartCL, *google3SyncTo)
+	changeTarget, err := resolveChangeTarget()
 	if err != nil {
 		return err
 	}
@@ -779,36 +775,4 @@ func cmdRunNow(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		return err
 	}
 	return respond(ctx, c, out, id)
-}
-
-// google3Target is the change target `grain create --google3` files,
-// nil without the flag. Its spec flags mean nothing on their own, so
-// naming one without --google3 is an error rather than ignored.
-func google3Target(on bool, workspace string, startCL int64, syncTo string) (*model.ChangeTarget, error) {
-	workspace, syncTo = strings.TrimSpace(workspace), strings.TrimSpace(syncTo)
-	if !on {
-		if workspace != "" || startCL != 0 || syncTo != "" {
-			return nil, fmt.Errorf("--google3-workspace, --google3-start-cl and --google3-sync-to need --google3")
-		}
-		return nil, nil
-	}
-	spec := map[string]any{}
-	if workspace != "" {
-		spec["workspace"] = workspace
-	}
-	if startCL != 0 {
-		spec["start_cl"] = startCL
-	}
-	if syncTo != "" {
-		spec["sync_to"] = syncTo
-	}
-	ct := &model.ChangeTarget{Kind: "google3"}
-	if len(spec) > 0 {
-		data, err := json.Marshal(spec)
-		if err != nil {
-			return nil, err
-		}
-		ct.Spec = data
-	}
-	return ct, nil
 }

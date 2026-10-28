@@ -197,6 +197,10 @@ func StateOf(task Task, obs *Observation, activeRun bool, failureStreak int) Sta
 // and offering "Submit" as its next step would name a button it will
 // never grow.
 //
+// A changelist CL (LinkChangelist) is a task's change exactly as a pull
+// request is (docs/design/changelists.md#G3-2): a finished task
+// with a live CL waits on somebody's Submit, however many CLs it has.
+//
 // Nothing here asks whether the pull request is still open. A merged or
 // closed one closes the task itself (orchestrator.recordPullRequestEvents
 // sets ClosedAt), and StateClosed already outranks this in StateOf.
@@ -205,7 +209,7 @@ func AwaitsSubmit(task Task) bool {
 		return false
 	}
 	for _, l := range task.Links {
-		if l.Kind == LinkFixes {
+		if l.Kind.IsChange() {
 			return true
 		}
 	}
@@ -261,7 +265,7 @@ func AwaitsAck(task Task) bool {
 		return false
 	}
 	for _, l := range task.Links {
-		if l.Kind == LinkFixes {
+		if l.Kind.IsChange() {
 			return false
 		}
 	}

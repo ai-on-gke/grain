@@ -140,8 +140,8 @@ type ProposedTask struct {
 	// task with no repository target,
 	// task that will not clone or push a branch.
 	NoRepo bool
-	// ChangeTarget is propose_task's `google3` argument: a task whose
-	// change is a google3 CL rather than a git branch (model.ChangeTarget).
+	// ChangeTarget is propose_task's registered change-target argument: a task
+	// whose change is in a non-git workspace rather than a git branch (model.ChangeTarget).
 	ChangeTarget *model.ChangeTarget
 	// AtFront is whether this task joins the front of the backlog ahead
 	// of already queued work.
@@ -829,7 +829,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 		InputSchema: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
-			"properties": map[string]any{
+			"properties": withProposeChangeTargetProperties(map[string]any{
 				"id":     map[string]any{"type": "string"},
 				"title":  map[string]any{"type": "string"},
 				"body":   map[string]any{"type": "string"},
@@ -901,18 +901,9 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				"no_port":           map[string]any{"type": "boolean"},
 				"fixes_base_branch": map[string]any{"type": "boolean"},
 				"origin":            map[string]any{"type": "string"},
-				"google3": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"workspace": map[string]any{"type": "string"},
-						"start_cl":  map[string]any{"type": "integer"},
-						"sync_to":   map[string]any{"type": "string"},
-					},
-					"additionalProperties": false,
-				},
-				"no_repo":     map[string]any{"type": "boolean"},
-				"at_front":    map[string]any{"type": "boolean"},
-				"template_id": map[string]any{"type": "string"},
+				"no_repo":           map[string]any{"type": "boolean"},
+				"at_front":          map[string]any{"type": "boolean"},
+				"template_id":       map[string]any{"type": "string"},
 				"template_fields": map[string]any{
 					"type": "object",
 					"additionalProperties": map[string]any{
@@ -938,7 +929,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				"agent_framework":   map[string]any{"type": "string"},
 				"not_before":        map[string]any{"type": "string"},
 				"hold_for_approval": map[string]any{"type": "boolean"},
-			},
+			}),
 			"required": []string{"title", "body"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) Result {
@@ -958,7 +949,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				return Result{Text: err.Error(), IsError: true}
 			}
 			if changeTarget != nil {
-				if refusal := google3Refusal(args); refusal != "" {
+				if refusal := changeTargetRefusal(changeTarget.Kind, args); refusal != "" {
 					return Result{Text: refusal, IsError: true}
 				}
 			}

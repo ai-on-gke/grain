@@ -19,7 +19,6 @@ import (
 	"log"
 	"slices"
 
-	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -75,7 +74,7 @@ func runsThroughHostd(live Config, fw string) bool {
 func askHostdDraining(ctx context.Context, live Config, cli string) (why string, asked bool) {
 	hctx, cancel := context.WithTimeout(ctx, hostdStatusTimeout)
 	defer cancel()
-	peer, err := hostd.Client{Socket: live.hostExecutor().Socket, Build: daemonBuild()}.Hello(hctx)
+	peer, err := live.hostExecutor().hostdClient().Hello(hctx)
 	if err != nil || !peer.Draining {
 		return "", err == nil
 	}

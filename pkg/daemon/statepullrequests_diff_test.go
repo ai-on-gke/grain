@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/trustboundary"
 )
 
 // diffTestRepo is a simulated forge over a real bare repository, and a
@@ -220,5 +221,66 @@ func TestStateRepoPullRequestClientDiffsTheLocalConfigRepo(t *testing.T) {
 	}
 	if _, err := client.CompareDiff("grain", "config", "--output=/tmp/x", "edit"); err == nil {
 		t.Fatal("CompareDiff took an option for a revision")
+	}
+}
+
+func TestStateRepoPullRequestClientReadsConfigPolicyFromBaseBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	store, db, err := OpenStore("sqlite", "", dataDir)
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	defer db.Close()
+	repo, err := OpenStateRepo(ctx, dataDir)
+	if err != nil {
+		t.Fatalf("opening state repo: %v", err)
+	}
+	if err := loadStateRepo(ctx, dataDir, repo, db, false); err != nil {
+		t.Fatalf("loading state repo: %v", err)
+	}
+	manager := NewStateManager(dataDir, db, repo, OpenSecrets(dataDir), nil, nil)
+	client := &StateRepoPullRequestClient{Manager: manager, Store: store}
+
+	dir, base := repo.Dir(), repo.Branch()
+	work := filepath.Join(t.TempDir(), "work")
+	gitT(t, "", "clone", "-q", "--branch", base, dir, work)
+	gitT(t, work, "checkout", "-q", "-b", "pr-branch")
+	policyFile := filepath.Join(work, filepath.FromSlash(trustboundary.ConfigPolicyPath))
+	if err := os.MkdirAll(filepath.Dir(policyFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyFile, []byte("auto_merge_paths:\n  - tables/board.json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, work, "add", trustboundary.ConfigPolicyPath)
+	gitT(t, work, "-c", "user.email=s@example.com", "-c", "user.name=s", "commit", "-q", "-m", "unmerged policy")
+	gitT(t, work, "push", "-q", "origin", "pr-branch")
+
+	// Even if asked with ref="pr-branch", settings/config-policy.yml is read
+	// from base (main), where it does not exist yet.
+	if data, exists, err := client.ReadFile("grain", "config", "pr-branch", trustboundary.ConfigPolicyPath); err != nil || exists || len(data) != 0 {
+		t.Fatalf("ReadFile(pr-branch, %s) = (%q, %v, %v), want absent on main", trustboundary.ConfigPolicyPath, data, exists, err)
+	}
+
+	// Commit a different policy on base (main) and verify ReadFile returns
+	// main's policy rather than pr-branch's.
+	mainPolicy := "auto_merge_paths:\n  - memory/**\n"
+	mainPolicyFile := filepath.Join(dir, filepath.FromSlash(trustboundary.ConfigPolicyPath))
+	if err := os.MkdirAll(filepath.Dir(mainPolicyFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mainPolicyFile, []byte(mainPolicy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, dir, "add", trustboundary.ConfigPolicyPath)
+	gitT(t, dir, "-c", "user.email=s@example.com", "-c", "user.name=s", "commit", "-q", "-m", "main policy")
+
+	data, exists, err := client.ReadFile("grain", "config", "pr-branch", trustboundary.ConfigPolicyPath)
+	if err != nil || !exists || string(data) != mainPolicy {
+		t.Fatalf("ReadFile(pr-branch, %s) = (%q, %v, %v), want main's %q", trustboundary.ConfigPolicyPath, data, exists, err, mainPolicy)
 	}
 }
