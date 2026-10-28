@@ -67,6 +67,15 @@ type Server struct {
 	ExitedRetention time.Duration
 	// Poll is how often an attached spool is read; 100 ms when zero.
 	Poll time.Duration
+	// Remote, when set, is how this hostd dials out to a controller that
+	// cannot reach its socket -- a daemon in a Kubernetes cluster -- and
+	// serves every stream that controller opens over the session as it
+	// would a connection on Socket (remote_linux.go). Socket may then be
+	// "" for no local listener at all.
+	Remote func(ctx context.Context) (net.Conn, error)
+	// RemoteMinBackoff and RemoteMaxBackoff bound the wait between
+	// reconnects to Remote: 1s and 30s when zero.
+	RemoteMinBackoff, RemoteMaxBackoff time.Duration
 
 	uid uint32
 	wg  sync.WaitGroup
@@ -151,17 +160,25 @@ func (s *Server) Serve(ctx context.Context) error {
 		return err
 	}
 	s.logf("hostd: allowlist %s offers %d entries", s.Allowlist, len(a.Offers()))
-	ln, err := s.listen()
-	if err != nil {
-		return err
+	if s.Socket == "" && s.Remote == nil {
+		return errors.New("grain hostd: nothing to serve: no -socket to listen on and no -server to dial out to")
 	}
-	s.logf("hostd: listening on %s (hostd protocol %d, build %s)", s.Socket, ProtocolVersion, s.Build)
+	var ln *net.UnixListener
+	if s.Socket != "" {
+		ln, err = s.listen()
+		if err != nil {
+			return err
+		}
+		s.logf("hostd: listening on %s (hostd protocol %d, build %s)", s.Socket, ProtocolVersion, s.Build)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go func() {
-		<-ctx.Done()
-		ln.Close()
-	}()
+	if ln != nil {
+		go func() {
+			<-ctx.Done()
+			ln.Close()
+		}()
+	}
 	go s.sweepExited(ctx)
 	go func() {
 		select {
@@ -171,7 +188,17 @@ func (s *Server) Serve(ctx context.Context) error {
 			cancel()
 		}
 	}()
-	for {
+	if s.Remote != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.serveRemote(ctx)
+		}()
+	}
+	if ln == nil {
+		<-ctx.Done()
+	}
+	for ln != nil {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -410,6 +437,8 @@ func peerUID(conn *net.UnixConn) (uint32, error) {
 	return cred.Uid, nil
 }
 
+// handle serves one connection on the socket: only hostd's own uid may
+// use it.
 func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 	defer conn.Close()
 	uid, err := peerUID(conn)
@@ -417,6 +446,13 @@ func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 		s.logf("hostd: refused a connection from uid %d (err %v); only uid %d may connect", uid, err, s.uid)
 		return
 	}
+	s.serveConn(ctx, conn)
+}
+
+// serveConn serves one connection's request, whichever way it arrived:
+// on the socket (handle) or as a stream the controller hostd dialed out
+// to opened over that session (serveRemote). The caller closes conn.
+func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 	typ, payload, err := readFrame(conn)
 	if err != nil {
 		return
@@ -537,7 +573,7 @@ func (s *Server) refuse(conn net.Conn, reason string) {
 // is taken to have stopped reading, and its stdin is closed.
 const stdinBuffer = 1024
 
-func (s *Server) run(ctx context.Context, conn *net.UnixConn, req *Request, spec *Spec) {
+func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spec) {
 	deadline := time.Now().Add(spec.MaxDuration)
 	if !req.Deadline.IsZero() && req.Deadline.Before(deadline) {
 		deadline = req.Deadline

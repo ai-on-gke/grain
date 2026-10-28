@@ -148,17 +148,21 @@ func TestOpenPullRequestWithNoOpenerRefuses(t *testing.T) {
 	}
 }
 
-// The tool takes no arguments at all: which repo, branch and base a run
-// pushes to are grain's to decide, and a schema that admitted any of them
-// would invite an agent to try.
+// The tool takes nothing that says where: which repo, branch and base a
+// run pushes to are grain's to decide, and a schema that admitted any of
+// them would invite an agent to try. The only arguments are a changelist
+// CL's description text (summary and body), which a git task's pull
+// request ignores.
 func TestOpenPullRequestTakesNoArguments(t *testing.T) {
 	tool := NewOpenPullRequestTools(nil)[0]
 	props, ok := tool.InputSchema["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("InputSchema = %+v, want a properties object", tool.InputSchema)
 	}
-	if len(props) != 0 {
-		t.Errorf("properties = %+v, want none", props)
+	for name := range props {
+		if name != "summary" && name != "body" {
+			t.Errorf("property %q: want only the CL description's summary and body", name)
+		}
 	}
 	if tool.InputSchema["additionalProperties"] != false {
 		t.Errorf("additionalProperties = %v, want false", tool.InputSchema["additionalProperties"])

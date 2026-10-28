@@ -19,6 +19,7 @@ package hostd
 import (
 	"context"
 	"errors"
+	"net"
 	"time"
 )
 
@@ -35,6 +36,9 @@ type Server struct {
 	CurrentLink     string
 	ExitedRetention time.Duration
 	Poll            time.Duration
+
+	Remote                             func(ctx context.Context) (net.Conn, error)
+	RemoteMinBackoff, RemoteMaxBackoff time.Duration
 }
 
 // Drain does nothing off Linux.

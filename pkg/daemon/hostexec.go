@@ -79,7 +79,46 @@ type HostExecutor struct {
 	Reason string `json:"reason"`
 	// Socket is hostd's socket, for HostExecutorHostd.
 	Socket string `json:"socket,omitempty"`
+	// Remote is the session of a grain hostd that dials in to this
+	// daemon (hostd -server), for a HostExecutorHostd with no socket of
+	// its own to reach -- a daemon on Kubernetes, say. RemoteHostd says
+	// so for the UI.
+	Remote      *hostd.Remote `json:"-"`
+	RemoteHostd bool          `json:"remote,omitempty"`
 }
+
+// remoteHostExecutor is HostExecutorHostd through the hostd dialing in
+// over r.
+func remoteHostExecutor(r *hostd.Remote) HostExecutor {
+	return HostExecutor{Kind: HostExecutorHostd, Remote: r, RemoteHostd: true, Reason: remoteHostdReason}
+}
+
+// hostdClient is the client that reaches e's hostd: over the session of
+// one that dialed in when e has one, and otherwise at its socket.
+func (e HostExecutor) hostdClient() hostd.Client {
+	c := hostd.Client{Socket: e.Socket, Build: daemonBuild()}
+	if e.Remote != nil {
+		c.Dial = e.Remote.Dial
+	}
+	return c
+}
+
+// hostdWhere says where e's hostd is, after "grain hostd": "at
+// /run/grain-hostd/hostd.sock", or that it dials in.
+func (e HostExecutor) hostdWhere() string {
+	if e.Remote != nil {
+		return "on the machine that dials in to this daemon"
+	}
+	return "at " + e.Socket
+}
+
+// HostdClient is hostdClient, for the daemon's own wiring outside this
+// package (pkg/cli's host-git client).
+func (e HostExecutor) HostdClient() hostd.Client { return e.hostdClient() }
+
+// remoteHostdReason is HostExecutorHostd's reason with a hostd dialing in.
+const remoteHostdReason = "host CLIs and run: host capability servers run through a grain hostd on the operator's machine " +
+	"that dials in to this daemon (grain hostd -server, at " + hostd.RemotePath + ")"
 
 // HostAvailable reports whether "host" is a location this deployment
 // can run anything at.
@@ -99,13 +138,17 @@ func (c Config) hostExecutor() HostExecutor {
 	if c.HostExec != nil {
 		return *c.HostExec
 	}
+	if c.HostdRemote != nil {
+		return remoteHostExecutor(c.HostdRemote)
+	}
 	if KubernetesMode(c) {
 		return HostExecutor{Kind: HostExecutorNone, Reason: kubernetesNoHost}
 	}
 	return HostExecutor{Kind: HostExecutorLocal, Reason: "the daemon runs on this machine"}
 }
 
-// DetectHostExecutor is cfg's host executor, read once at start.
+// DetectHostExecutor is cfg's host executor, read once at start. A
+// daemon taking a dialing-in hostd (-hostd-token-file) has that one.
 // Kubernetes is decided from cfg alone, before anything about the
 // process or a hostd socket is looked at. A daemon on the bare machine
 // (whererun) runs host CLIs itself. A containerised one has hostd when
@@ -114,6 +157,13 @@ func (c Config) hostExecutor() HostExecutor {
 // hostd is up right now -- and otherwise has no host executor.
 // socketDirExists is os.Stat's answer unless a test says otherwise.
 func DetectHostExecutor(cfg Config, where whererun.Detection, socketDirExists func(string) bool) HostExecutor {
+	if cfg.HostdRemote != nil {
+		// A hostd that dials in is the host executor wherever the daemon
+		// runs, Kubernetes included: it is not this daemon's machine but
+		// the operator's, and it reaches the daemon rather than the other
+		// way round.
+		return remoteHostExecutor(cfg.HostdRemote)
+	}
 	if KubernetesMode(cfg) {
 		return HostExecutor{Kind: HostExecutorNone, Reason: kubernetesNoHost}
 	}
@@ -141,7 +191,11 @@ func DetectHostExecutor(cfg Config, where whererun.Detection, socketDirExists fu
 // for hostd to run on.
 func CheckHostExecutorFlags(cfg Config) error {
 	if cfg.HostdSocket != "" && KubernetesMode(cfg) {
-		return fmt.Errorf("-hostd-socket=%s: %s, so there is no grain hostd to reach", cfg.HostdSocket, kubernetesNoHost)
+		return fmt.Errorf("-hostd-socket=%s: %s, so there is no grain hostd to reach; "+
+			"a grain hostd on another machine can dial in instead (-hostd-token-file here, grain hostd -server there)", cfg.HostdSocket, kubernetesNoHost)
+	}
+	if cfg.HostdSocket != "" && cfg.HostdRemote != nil {
+		return fmt.Errorf("-hostd-socket=%s and -hostd-token-file: host CLIs go through one grain hostd -- the one at the socket, or one that dials in -- not both", cfg.HostdSocket)
 	}
 	return nil
 }
@@ -232,6 +286,9 @@ type HostdStatus struct {
 	Running      string `json:"running,omitempty"`
 	Current      string `json:"current,omitempty"`
 	CurrentBuild string `json:"currentBuild,omitempty"`
+	// Remote is the connection of a hostd that dials in, when that is
+	// how this daemon reaches it.
+	Remote *hostd.RemoteStatus `json:"remote,omitempty"`
 	// Suggest names allowlist entries this edition's defaults would run
 	// on the host that hostd's allowlist has none of. Only ever
 	// suggested: the allowlist is the operator's, and neither grain nor a
@@ -279,8 +336,8 @@ var daemonStarted = time.Now()
 
 // hostdProcesses is hostd's listing as Settings shows it, or nil when
 // hostd does not answer the listing.
-func hostdProcesses(ctx context.Context, socket string) []HostdProcess {
-	procs, err := hostd.Client{Socket: socket}.Processes(ctx)
+func hostdProcesses(ctx context.Context, exec HostExecutor) []HostdProcess {
+	procs, err := exec.hostdClient().Processes(ctx)
 	if err != nil {
 		return nil
 	}
@@ -299,10 +356,10 @@ func hostdProcesses(ctx context.Context, socket string) []HostdProcess {
 // drains for its own upgrade.
 const hostdUpdating = "grain hostd is updating (draining for its own upgrade): new host runs wait until it is back, and runs already going carry on"
 
-// hostdHello fills st's handshake fields from a hello to the hostd at
-// socket, and returns why no new host run can start there, or "".
-func hostdHello(ctx context.Context, socket string, st *HostdStatus) string {
-	hd := runhost.Hostd{Client: hostd.Client{Socket: socket, Build: daemonBuild()}}
+// hostdHello fills st's handshake fields from a hello to exec's hostd,
+// and returns why no new host run can start there, or "".
+func hostdHello(ctx context.Context, exec HostExecutor, st *HostdStatus) string {
+	hd := runhost.Hostd{Client: exec.hostdClient()}
 	peer, err := hd.Handshake(ctx)
 	st.Protocol, st.Build = peer.Protocol, peer.Build
 	st.Running, st.Current, st.CurrentBuild = peer.Running, peer.Current, peer.CurrentBuild
@@ -334,8 +391,12 @@ func (c Config) HostExecutorStatus(ctx context.Context) HostExecutorStatus {
 	}
 	hctx, cancel := context.WithTimeout(ctx, hostdStatusTimeout)
 	defer cancel()
-	offers, err := hostd.Client{Socket: exec.Socket}.Offers(hctx)
+	offers, err := exec.hostdClient().Offers(hctx)
 	out.Hostd = &HostdStatus{Reachable: err == nil}
+	if exec.Remote != nil {
+		st := exec.Remote.Status()
+		out.Hostd.Remote = &st
+	}
 	if err != nil {
 		out.Hostd.Error = err.Error()
 		return out
@@ -343,8 +404,8 @@ func (c Config) HostExecutorStatus(ctx context.Context) HostExecutorStatus {
 	for _, o := range offers {
 		out.Hostd.Offers = append(out.Hostd.Offers, string(o.Kind)+" "+o.Name)
 	}
-	out.Hostd.Error = hostdHello(hctx, exec.Socket, out.Hostd)
-	out.Hostd.Processes = hostdProcesses(hctx, exec.Socket)
+	out.Hostd.Error = hostdHello(hctx, exec, out.Hostd)
+	out.Hostd.Processes = hostdProcesses(hctx, exec)
 	out.Hostd.Suggest = c.hostdSuggestions(offers)
 	out.Hostd.Missing = hostdMissing(offers)
 	return out
@@ -396,25 +457,95 @@ func (c Config) cliHostdHost(r CLIRunResolution) (agent.Host, error) {
 		h.Path = r.HostPath
 		return h, nil
 	}
-	return agent.HostdHost{Client: hostd.Client{Socket: c.hostExecutor().Socket}, Entry: entry, Path: r.HostPath}, nil
+	return agent.HostdHost{Client: c.hostExecutor().hostdClient(), Entry: entry, Path: r.HostPath}, nil
 }
 
 // hostdOffersTimeout bounds asking hostd what it offers before a run, so
 // a wedged hostd costs a resolution seconds rather than a dispatch.
 const hostdOffersTimeout = 3 * time.Second
 
-// hostdOffersCLI is the path on the host the hostd at socket runs for its
-// cli entry named entry, with why "" -- or, when hostd does not answer or
+type hostdOffersCacheKey struct{}
+
+type hostdCacheTarget struct {
+	socket string
+	remote *hostd.Remote
+}
+
+type hostdSocketEntry struct {
+	once      sync.Once
+	offers    []hostd.Offer
+	err       error
+	helloOnce sync.Once
+	mismatch  string
+}
+
+type hostdOffersCache struct {
+	mu      sync.Mutex
+	sockets map[hostdCacheTarget]*hostdSocketEntry
+}
+
+// withHostdOffersCache attaches a per-resolution cache of hostd's Offers
+// and Hello responses to ctx so resolving all frameworks in one pass does
+// not dial the same socket repeatedly.
+func withHostdOffersCache(ctx context.Context) context.Context {
+	if ctx.Value(hostdOffersCacheKey{}) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, hostdOffersCacheKey{}, &hostdOffersCache{
+		sockets: map[hostdCacheTarget]*hostdSocketEntry{},
+	})
+}
+
+// hostdOffersCLI is the path on the host exec's hostd runs for its cli
+// entry named entry, with why "" -- or, when hostd does not answer or
 // its allowlist offers no such entry, why not.
-func hostdOffersCLI(ctx context.Context, socket, entry string) (path, why string) {
-	return hostdOffers(ctx, socket, hostd.KindCLI, entry)
+func hostdOffersCLI(ctx context.Context, exec HostExecutor, entry string) (path, why string) {
+	return hostdOffers(ctx, exec, hostd.KindCLI, entry)
 }
 
 // hostdOffers is hostdOffersCLI for an entry of any kind.
-func hostdOffers(ctx context.Context, socket string, kind hostd.Kind, entry string) (path, why string) {
+func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry string) (path, why string) {
+	if cache, ok := ctx.Value(hostdOffersCacheKey{}).(*hostdOffersCache); ok && cache != nil {
+		target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote}
+		cache.mu.Lock()
+		se, ok := cache.sockets[target]
+		if !ok {
+			se = &hostdSocketEntry{}
+			cache.sockets[target] = se
+		}
+		cache.mu.Unlock()
+		se.once.Do(func() {
+			octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
+			defer cancel()
+			se.offers, se.err = exec.hostdClient().Offers(octx)
+		})
+		if se.err != nil {
+			return "", se.err.Error()
+		}
+		for _, o := range se.offers {
+			if o.Kind == kind && o.Name == entry {
+				if kind != hostd.KindCLI {
+					return o.Path, ""
+				}
+				se.helloOnce.Do(func() {
+					octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
+					defer cancel()
+					var st HostdStatus
+					if why := hostdHello(octx, exec, &st); st.Mismatch != "" {
+						se.mismatch = why
+					}
+				})
+				if se.mismatch != "" {
+					return o.Path, se.mismatch
+				}
+				return o.Path, ""
+			}
+		}
+		return "", fmt.Sprintf("grain hostd answers, but its allowlist (%s) offers no %s entry %q", hostd.DefaultAllowlistPath, kind, entry)
+	}
 	octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
 	defer cancel()
-	offers, err := hostd.Client{Socket: socket}.Offers(octx)
+	offers, err := exec.hostdClient().Offers(octx)
 	if err != nil {
 		return "", err.Error()
 	}
@@ -427,7 +558,7 @@ func hostdOffers(ctx context.Context, socket string, kind hostd.Kind, entry stri
 			// which protocols differ. A draining one is left to the
 			// start, which re-queues the run rather than failing it.
 			var st HostdStatus
-			if why := hostdHello(octx, socket, &st); st.Mismatch != "" {
+			if why := hostdHello(octx, exec, &st); st.Mismatch != "" {
 				return o.Path, why
 			}
 			return o.Path, ""
@@ -444,7 +575,8 @@ func (c Config) capabilityHostd() *hostd.Client {
 	if exec.Kind != HostExecutorHostd {
 		return nil
 	}
-	return &hostd.Client{Socket: exec.Socket}
+	client := exec.hostdClient()
+	return &client
 }
 
 // storedHostWarned is the CLIs whose stored "host" this process has

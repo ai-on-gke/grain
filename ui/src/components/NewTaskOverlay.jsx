@@ -71,7 +71,7 @@ import { GlyphLabel } from "./ItemGlyph.jsx";
 import ModelSelect from "./ModelSelect.jsx";
 import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
 import WriteReposField from "./WriteReposField.jsx";
-import RepoField, { GOOGLE3, NO_REPO } from "./RepoField.jsx";
+import RepoField, { NO_REPO } from "./RepoField.jsx";
 import NoGitConnectionNotice from "./NoGitConnectionNotice.jsx";
 import SidePanel from "./SidePanel.jsx";
 import TaskPicker from "./TaskPicker.jsx";
@@ -175,16 +175,18 @@ export default function NewTaskOverlay({
   // <input> is never in the DOM to be submitted -- payload.repo comes
   // back "" the same way an unset field always has, with noRepo now
   // saying why.
-  const [noRepo, setNoRepo] = useState(
-    () => Boolean(draft?.noRepo) || Boolean(draft?.google3),
+  // changeTarget is the non-git change target pick, offered only where
+  // the binary registers the kind (config.changeTargets): a task with no
+  // repo too (so noRepo is set with it, hiding everything a branch would
+  // need), filed with a change target instead of noRepo, and never
+  // auto-merged -- a changelist has no pull request to merge.
+  const changeTargets = config?.changeTargets || [];
+  const [changeTarget, setChangeTarget] = useState(() =>
+    typeof draft?.changeTarget === "string" ? draft.changeTarget : "",
   );
-  // google3 is the "google3 (CitC)" pick, offered only where the binary
-  // registers the kind: a task with no repo too (so noRepo is set with
-  // it, hiding everything a branch would need), filed with a google3
-  // change target instead of noRepo, and never auto-merged -- a CL has
-  // no pull request to merge (google/docs/design/google3-cls.md#G3-1).
-  const [google3, setGoogle3] = useState(() => Boolean(draft?.google3));
-  const allowGoogle3 = (config?.changeTargets || []).includes(GOOGLE3);
+  const [noRepo, setNoRepo] = useState(
+    () => Boolean(draft?.noRepo) || Boolean(draft?.changeTarget),
+  );
   // base tracks Base branch as state, unlike most text fields on this
   // form, so picking a repo (below) can prefill it from
   // lastBaseForRepo without fighting an uncontrolled <input>'s own
@@ -521,7 +523,7 @@ export default function NewTaskOverlay({
         repo,
         repoEdited: repoEdited.current,
         noRepo,
-        google3,
+        changeTarget,
         base,
         baseEdited: baseEdited.current,
         newBranch,
@@ -555,7 +557,7 @@ export default function NewTaskOverlay({
     description,
     repo,
     noRepo,
-    google3,
+    changeTarget,
     base,
     newBranch,
     newBranchName,
@@ -589,7 +591,7 @@ export default function NewTaskOverlay({
     setDescription("");
     setRepo(defaultRepo || "");
     setNoRepo(false);
-    setGoogle3(false);
+    setChangeTarget("");
     setBase(lastBaseForRepo(tasks, defaultRepo || ""));
     baseEdited.current = false;
     setNewBranch(false);
@@ -635,10 +637,10 @@ export default function NewTaskOverlay({
   // own set alone, what CreateTask gives a task whose Target is nil) and
   // has no repo history to prefill a base from.
   const handleRepoChange = (picked) => {
-    const g3 = picked === GOOGLE3;
-    const none = picked === NO_REPO || g3;
+    const ct = changeTargets.includes(picked) ? picked : "";
+    const none = picked === NO_REPO || ct !== "";
     const r = none ? "" : picked;
-    setGoogle3(g3);
+    setChangeTarget(ct);
     setNoRepo(none);
     setRepo(r);
     // Re-seeded unconditionally when the picker is untouched, unlike
@@ -677,8 +679,9 @@ export default function NewTaskOverlay({
     // state: the two agree, but this is the one that decides what
     // reaches the server, and NO_REPO is not a repo name.
     const pickedRepo = data.get("repo") ?? repo;
-    const g3 = google3 || pickedRepo === GOOGLE3;
-    const none = noRepo || pickedRepo === NO_REPO || g3;
+    const ct =
+      changeTarget || (changeTargets.includes(pickedRepo) ? pickedRepo : "");
+    const none = noRepo || pickedRepo === NO_REPO || ct !== "";
     // A task creating its branch is filed onto that branch, and Base
     // branch is what grain cuts it from. A task with no repo has no
     // branch to create, so the box means nothing for one -- and it is
@@ -690,8 +693,8 @@ export default function NewTaskOverlay({
       title: title,
       description: description || "",
       repo: none ? "" : pickedRepo,
-      noRepo: none && !g3,
-      ...(g3 ? { changeTarget: { kind: GOOGLE3 } } : {}),
+      noRepo: none && !ct,
+      ...(ct ? { changeTarget: { kind: ct } } : {}),
       ...(creating
         ? {
             base: newBranchName.trim(),
@@ -699,10 +702,10 @@ export default function NewTaskOverlay({
             newBranchFrom: base || "",
           }
         : { base: none ? "" : base || "" }),
-      autoMerge: autoMerge && !g3,
+      autoMerge: autoMerge && !ct,
       // Only said when ticked: unticked is the server's own default
       // (model.Task.NoPort).
-      ...(noPort && !g3 ? { noPort: true } : {}),
+      ...(noPort && !ct ? { noPort: true } : {}),
       // Likewise only when ticked, and never for a task with no repo,
       // which has no base branch to fix.
       ...(fixesBaseBranch && !none ? { fixesBaseBranch: true } : {}),
@@ -743,7 +746,7 @@ export default function NewTaskOverlay({
       ...(Object.keys(customFields).length > 0 ? { customFields } : {}),
       dependsOn: dependsOn.map((t) => (typeof t === "object" && t ? t.id : t)),
       reads,
-      writes: g3 ? [] : writes,
+      writes: ct ? [] : writes,
       approved,
       atFront,
     };
@@ -765,7 +768,7 @@ export default function NewTaskOverlay({
       setRepo(defaultRepo || "");
       repoEdited.current = false;
       setNoRepo(false);
-      setGoogle3(false);
+      setChangeTarget("");
       setBase(lastBaseForRepo(tasks, defaultRepo || ""));
       baseEdited.current = false;
       setNewBranch(false);
@@ -947,15 +950,16 @@ export default function NewTaskOverlay({
                 repoSeed !== null
                   ? repoSeed
                   : liveDraft && !draftRepoYields
-                    ? liveDraft.google3 && allowGoogle3
-                      ? GOOGLE3
+                    ? liveDraft.changeTarget &&
+                      changeTargets.includes(liveDraft.changeTarget)
+                      ? liveDraft.changeTarget
                       : liveDraft.noRepo
                         ? NO_REPO
                         : liveDraft.repo || ""
                     : defaultRepo || ""
               }
               allowNoRepo
-              allowGoogle3={allowGoogle3}
+              changeTargets={changeTargets}
               onChange={(picked) => {
                 // Only a pick made here marks the repo as chosen: a team
                 // change routes through handleRepoChange too, and that is
@@ -1032,9 +1036,9 @@ export default function NewTaskOverlay({
               inputProps={{ "data-testid": "new-branch-name" }}
             />
           )}
-          {/* A google3 task has no branch and lands nowhere else: its
-              change is one CL (google3-cls.md §1.4 refuses writes). */}
-          {!google3 && (
+          {/* A non-git change target task has no branch and lands nowhere
+              else: its change is one changelist. */}
+          {!changeTarget && (
             <>
               <BranchField
                 name="base"
@@ -1074,16 +1078,16 @@ export default function NewTaskOverlay({
           // repo at all, which has no target for a read to collide with.
           target={noRepo ? "" : repo}
         />
-        {google3 ? (
+        {changeTarget ? (
           <Typography
             variant="caption"
             color="text.secondary"
             sx={{ display: "block", mt: 1 }}
-            data-testid="google3-note"
+            data-testid="change-target-note"
           >
-            Its change is a google3 CL in this task&apos;s own CitC workspace,
-            created for it: nothing is cloned, and there is no pull request to
-            merge or branch to port.
+            Its change is a {changeTarget} changelist in this task&apos;s own
+            workspace, created for it: nothing is cloned, and there is no pull
+            request to merge or branch to port.
           </Typography>
         ) : (
           <>

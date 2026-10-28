@@ -105,7 +105,7 @@ func pinHumanSubmit(ctx context.Context, store *model.Store, client github.Clien
 		}
 		known := len(files) < github.PullRequestFilesCap
 		matches := trustboundary.Classify(files)
-		rules, guarded := repoGuard(ctx, store, *task.Target, files, known)
+		rules, guarded := repoGuard(ctx, store, client, *task.Target, files, known)
 		matches = append(matches, guarded...)
 		if known && rules.Broken == "" && carryable(matches) {
 			cleared = clearedTarget(headSHA, rules)

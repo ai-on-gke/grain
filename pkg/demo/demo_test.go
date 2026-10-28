@@ -74,7 +74,8 @@ func TestSeedDemoCoversEveryState(t *testing.T) {
 	got := map[model.State]int{}
 	for _, task := range tasks {
 		got[task.State]++
-		if task.Repo != repo.String() {
+		// The one changelist task (a CitC workspace, no repo) aside.
+		if task.Repo != repo.String() && len(task.Changelists) == 0 {
 			t.Errorf("task %s repo = %q, want %q", task.ID, task.Repo, repo.String())
 		}
 		// The demo's pull requests are spelled the way a real run records

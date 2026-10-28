@@ -30,7 +30,7 @@ import (
 )
 
 // testTargetKind is a change target kind registered by this file alone,
-// standing in for google3 (which the google edition registers, and core
+// standing in for one an edition registers (which core
 // never imports): it attaches a grant and asks for a person when its
 // spec names a workspace.
 const testTargetKind = "ui-test-target"
@@ -55,18 +55,18 @@ func init() {
 	})
 }
 
-// A google3 task is filed with no repo -- even where the deployment has a
+// A change-target task is filed with no repo -- even where the deployment has a
 // default target -- carrying its change target, which is stored.
 func TestCreateTaskWithAChangeTargetFilesItWithNoRepo(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "fix it in google3", Approved: true,
-		ChangeTarget: &model.ChangeTarget{Kind: "google3", Spec: json.RawMessage(`{"sync_to":"head"}`)},
+		Title: "fix it in the workspace", Approved: true,
+		ChangeTarget: &model.ChangeTarget{Kind: testTargetKind, Spec: json.RawMessage(`{"sync_to":"head"}`)},
 	})
 	if err != nil {
-		t.Fatalf("filing a google3 task: %v", err)
+		t.Fatalf("filing a change-target task: %v", err)
 	}
 	if task.Repo != "" {
 		t.Errorf("repo = %q, want none", task.Repo)
@@ -75,13 +75,13 @@ func TestCreateTaskWithAChangeTargetFilesItWithNoRepo(t *testing.T) {
 	if stored.Target != nil {
 		t.Errorf("stored target = %+v, want nil", stored.Target)
 	}
-	if stored.ChangeTarget == nil || stored.ChangeTarget.Kind != "google3" ||
+	if stored.ChangeTarget == nil || stored.ChangeTarget.Kind != testTargetKind ||
 		stored.ChangeTarget.SpecString() != `{"sync_to":"head"}` {
 		t.Errorf("stored change target = %+v", stored.ChangeTarget)
 	}
 }
 
-// Every git-shaped field a google3 task cannot use is refused with a
+// Every git-shaped field a change-target task cannot use is refused with a
 // reason, rather than dropped.
 func TestCreateTaskWithAChangeTargetRefusesGitOnlyFields(t *testing.T) {
 	t.Parallel()
@@ -101,7 +101,7 @@ func TestCreateTaskWithAChangeTargetRefusesGitOnlyFields(t *testing.T) {
 		req := c2.req
 		req.Title = "refused"
 		if req.ChangeTarget == nil {
-			req.ChangeTarget = &model.ChangeTarget{Kind: "google3"}
+			req.ChangeTarget = &model.ChangeTarget{Kind: testTargetKind}
 		}
 		_, err := c.CreateTask(ctx, req)
 		var ve *ui.ValidationError
@@ -146,25 +146,26 @@ func TestProposedChangeTargetAttachesItsGrantAndWaitsForAPersonWhenItSaysSo(t *t
 	}
 }
 
-// A template bound to google3 (`change-target: google3` in its settings
+// A template bound to a change target (`change-target: <kind>` in its settings
 // file) files every task against it with no repo, and a template cannot
-// be bound to a repo and google3 at once.
+// be bound to a repo and a change target at once.
 func TestTemplateChangeTargetFilesItsTasksAgainstIt(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
+	c.Config.Capabilities = append(c.Config.Capabilities, ui.Capability{ID: "test-workspace", Name: "Test workspace"})
 	tmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
-		Name: "g3", Title: "fix it in google3", Description: "d",
-		ChangeTarget: &model.ChangeTarget{Kind: "google3", Spec: json.RawMessage(`{"sync_to":"head"}`)},
+		Name: "ws", Title: "fix it in the workspace", Description: "d",
+		ChangeTarget: &model.ChangeTarget{Kind: testTargetKind, Spec: json.RawMessage(`{"sync_to":"head"}`)},
 	})
 	if err != nil {
-		t.Fatalf("creating a google3 template: %v", err)
+		t.Fatalf("creating a change-target template: %v", err)
 	}
-	if tmpl.ChangeTarget == nil || tmpl.ChangeTarget.Kind != "google3" {
+	if tmpl.ChangeTarget == nil || tmpl.ChangeTarget.Kind != testTargetKind {
 		t.Fatalf("template change target = %+v", tmpl.ChangeTarget)
 	}
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{TemplateID: tmpl.ID, Approved: true})
 	if err != nil {
-		t.Fatalf("filing from the google3 template: %v", err)
+		t.Fatalf("filing from the change-target template: %v", err)
 	}
 	stored := mustGetTask(t, ctx, store, task.ID)
 	if stored.Target != nil || stored.ChangeTarget == nil || stored.ChangeTarget.SpecString() != `{"sync_to":"head"}` {
@@ -173,16 +174,16 @@ func TestTemplateChangeTargetFilesItsTasksAgainstIt(t *testing.T) {
 
 	_, err = c.CreateTemplate(ctx, ui.CreateTemplateRequest{
 		Name: "both", Title: "t", Repo: "acme/widgets",
-		ChangeTarget: &model.ChangeTarget{Kind: "google3"},
+		ChangeTarget: &model.ChangeTarget{Kind: testTargetKind},
 	})
 	var ve *ui.ValidationError
 	if !errors.As(err, &ve) || !strings.Contains(err.Error(), "repo") {
-		t.Errorf("template with a repo and google3: error %v, want a ValidationError naming repo", err)
+		t.Errorf("template with a repo and change target: error %v, want a ValidationError naming repo", err)
 	}
 }
 
 // checkedTargetKind is a change target kind whose filing check is a
-// control tool, standing in for google3's start_cl check.
+// control tool, standing in for a start_cl check.
 const checkedTargetKind = "ui-test-checked-target"
 
 func init() {
@@ -209,12 +210,12 @@ type clChecker struct {
 func (c *clChecker) Statuses() []servers.Status {
 	return []servers.Status{
 		{ID: "https://x.example/other", State: servers.Attached},
-		{ID: "https://x.example/citc", State: servers.Attached, Tools: []string{"check_cl"}},
+		{ID: "https://x.example/workspace", State: servers.Attached, Tools: []string{"check_cl"}},
 	}
 }
 
 func (c *clChecker) CallTool(_ context.Context, id, tool string, args map[string]any, _ time.Duration) ([]byte, error) {
-	if id != "https://x.example/citc" || tool != "check_cl" {
+	if id != "https://x.example/workspace" || tool != "check_cl" {
 		return nil, fmt.Errorf("capability server %s advertises no tool %s", id, tool)
 	}
 	c.calls = append(c.calls, args)

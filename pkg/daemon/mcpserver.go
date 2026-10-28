@@ -80,7 +80,19 @@ type DaemonPullRequests struct {
 }
 
 func (d DaemonPullRequests) OpenPullRequest(ctx context.Context) (mcp.PullRequestReport, error) {
-	status, err := d.Client.OpenPullRequest(ctx, d.TaskID)
+	return d.OpenChange(ctx, "", "")
+}
+
+// OpenChange is open_pull_request with a change description, which a
+// changelist task's CL is built from (mcp.ChangeOpener).
+func (d DaemonPullRequests) OpenChange(ctx context.Context, summary, body string) (mcp.PullRequestReport, error) {
+	var status ui.PullRequestStatus
+	var err error
+	if summary == "" && body == "" {
+		status, err = d.Client.OpenPullRequest(ctx, d.TaskID)
+	} else {
+		status, err = d.Client.OpenChange(ctx, d.TaskID, ui.OpenChangeRequest{Summary: summary, Body: body})
+	}
 	if err != nil {
 		return mcp.PullRequestReport{}, err
 	}

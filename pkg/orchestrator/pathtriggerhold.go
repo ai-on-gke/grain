@@ -129,7 +129,7 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 		log.Printf("orchestrator: reading which files %s touches for its triggers: %v -- "+
 			"every gating trigger holds it rather than guessing it touches nothing", ref, err)
 	}
-	securityReviewID, coveredBySecurityReview := reusableSecurityReviewPaths(ctx, store, *current, files, known, headSHA)
+	securityReviewID, coveredBySecurityReview := reusableSecurityReviewPaths(ctx, store, client, *current, files, known, headSHA)
 
 	var gates []gateFiring
 	var errs []error
@@ -209,7 +209,7 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 // filed by holdForTrustBoundary for task at headSHA and the set of paths that
 // review covers, or ("", nil) when no reusable security review exists for
 // headSHA.
-func reusableSecurityReviewPaths(ctx context.Context, store *model.Store, task model.Task,
+func reusableSecurityReviewPaths(ctx context.Context, store *model.Store, client github.Client, task model.Task,
 	files []string, known bool, headSHA string) (string, map[string]bool) {
 
 	if !known || headSHA == "" || task.Target == nil {
@@ -220,7 +220,7 @@ func reusableSecurityReviewPaths(ctx context.Context, store *model.Store, task m
 		return "", nil
 	}
 	matches := trustboundary.Classify(files)
-	rules, guarded := repoGuard(ctx, store, *task.Target, files, known)
+	rules, guarded := repoGuard(ctx, store, client, *task.Target, files, known)
 	matches = append(matches, guarded...)
 	if linkTarget(task, model.LinkTrustBoundaryCleared) != clearedTarget(headSHA, rules) {
 		return "", nil

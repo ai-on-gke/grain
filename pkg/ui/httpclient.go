@@ -794,6 +794,16 @@ func (c *HTTPClient) OpenPullRequest(ctx context.Context, id string) (PullReques
 	return status, nil
 }
 
+// OpenChange is Client.OpenChange over the wire: open_pull_request on a
+// task whose change is a changelist CL, carrying its description.
+func (c *HTTPClient) OpenChange(ctx context.Context, id string, req OpenChangeRequest) (PullRequestStatus, error) {
+	var status PullRequestStatus
+	if err := c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/pull-request", req, &status); err != nil {
+		return PullRequestStatus{}, err
+	}
+	return status, nil
+}
+
 // RecreateSandbox is Client.RecreateSandbox over the wire: destroy the
 // sandbox of id's live run and build an empty one in its place.
 //
