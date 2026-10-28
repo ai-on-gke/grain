@@ -1909,7 +1909,7 @@ func TestTheReleaseTrainRunsDailyWithTheCapabilitiesItUses(t *testing.T) {
 		t.Fatalf("%s declares %d jobs, want the one train job", releaseTrainPath, len(w.Jobs))
 	}
 	job := w.Jobs[0]
-	want := []string{"repo-write:bwsalmon/grain", "release-gate-read", "package-publish"}
+	want := []string{"repo-write:ai-on-gke/grain", "release-gate-read", "package-publish"}
 	if !slices.Equal(job.Capabilities, want) {
 		t.Errorf("%s job %s holds %v, want %v", releaseTrainPath, job.ID, job.Capabilities, want)
 	}

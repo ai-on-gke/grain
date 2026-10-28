@@ -94,7 +94,7 @@ image="${1:-grain-installer:test}"
 # are lower-case, and a job's own repository is the one whose packages
 # belong to the commit being tested. The fallback is for a run outside
 # grain CI -- a laptop, a shell in a sandbox -- where nothing has said.
-repo="${GRAIN_CI_REPO:-bwsalmon/grain}"
+repo="${RELEASE_IMAGE_REPO:-bwsalmon/grain}"
 repo="${repo,,}"
 
 base="${GRAIN_INSTALLER_BASE_IMAGE:-ghcr.io/${repo}/grain:main}"

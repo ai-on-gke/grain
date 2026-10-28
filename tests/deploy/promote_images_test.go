@@ -141,6 +141,16 @@ func TestPromoteChoosesTheReleaseTheLatestGitTagNames(t *testing.T) {
 		if docker != "" {
 			t.Errorf("a dry run asked docker for something:\n%s", docker)
 		}
+
+		out, docker, err = promoteRun(t, remote, []string{"--dry-run", "promote"}, map[string]string{
+			"GRAIN_CI_REPO": "ai-on-gke/grain",
+		})
+		if err != nil {
+			t.Fatalf("promote --dry-run with GRAIN_CI_REPO=ai-on-gke/grain failed: %v\n%s", err, out)
+		}
+		containsRun(t, out, "repository: ai-on-gke/grain")
+		containsRun(t, out, "registry: ghcr.io, root: ghcr.io/bwsalmon/grain")
+		containsRun(t, out, "and rebuild ghcr.io/bwsalmon/grain/grain:sha-"+released)
 	})
 
 	t.Run("a named release that latest agrees with moves latest", func(t *testing.T) {
