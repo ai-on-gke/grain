@@ -155,20 +155,8 @@ func TestTheImageNamesItself(t *testing.T) {
 	requireImage(t)
 	out := strings.TrimSpace(docker(t, "run", "--rm", image, "image"))
 
-	// There are two daemon images, grain and google-grain, and each names
-	// itself. When the image under test is one of them by name -- as it is
-	// in the release workflow -- it must print that name; a local tag
-	// (`grain-e2e:test`) says nothing about which, so either will do.
-	names := []string{"/grain:", "/google-grain:"}
-	if own := daemonImageName(image); own != "" {
-		names = []string{"/" + own + ":"}
-	}
-	named := false
-	for _, name := range names {
-		named = named || strings.Contains(out, name)
-	}
-	if !named {
-		t.Fatalf("image printed %q, want a reference containing one of %q", out, names)
+	if !strings.Contains(out, "/grain:") {
+		t.Fatalf("image printed %q, want a reference containing \"/grain:\"", out)
 	}
 	// As above: a bare `make image` leaves the source default and CI
 	// stamps the immutable sha- tag it is publishing under. Either is a
@@ -177,26 +165,6 @@ func TestTheImageNamesItself(t *testing.T) {
 	if strings.HasSuffix(out, ":") || strings.Contains(out, " ") {
 		t.Fatalf("image printed a malformed reference: %q", out)
 	}
-}
-
-// daemonImageName is "grain" or "google-grain" when ref is a reference to
-// that daemon image (ghcr.io/bwsalmon/grain/google-grain:sha-abc1234), and
-// "" when it is anything else, such as a locally built `grain-e2e:test`.
-func daemonImageName(ref string) string {
-	repo := ref
-	if at := strings.Index(repo, "@"); at >= 0 {
-		repo = repo[:at]
-	}
-	if colon := strings.LastIndex(repo, ":"); colon > strings.LastIndex(repo, "/") {
-		repo = repo[:colon]
-	}
-	switch name := repo[strings.LastIndex(repo, "/")+1:]; name {
-	case "grain", "google-grain":
-		if strings.Contains(repo, "/") {
-			return name
-		}
-	}
-	return ""
 }
 
 // The release label and the binary say the same thing.

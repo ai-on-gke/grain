@@ -309,9 +309,9 @@ GRAIN_INSTALL_MODE="${GRAIN_INSTALL_MODE:-}"
 # leaves it out -- removing an installed one -- for a deployment where
 # nothing runs as $GRAIN_USER on the bare machine and "host" is not
 # offered, as on Kubernetes. Its allowlist offers the built-in host
-# capabilities (grain-gchat, grain-gcp, grain-host-script) on the core
-# track, plus agy, host-git and grain-citc on the Google track. auto
-# with GRAIN_USER=root installs none: hostd refuses to run as root.
+# capabilities (host-git, grain-gchat, grain-gcp, grain-host-script), plus
+# agy when GRAIN_AGY_PATH is set. auto with GRAIN_USER=root installs none:
+# hostd refuses to run as root.
 GRAIN_HOSTD="${GRAIN_HOSTD:-auto}"
 
 # --- the deployment image (bwsalmon/agents#645) ------------------------
@@ -341,7 +341,6 @@ GRAIN_HOSTD="${GRAIN_HOSTD:-auto}"
 # published under its own name, so GRAIN_IMAGE_TAG=v1.5.0 pins one.
 GRAIN_LEGACY_IMAGE_REPO="${GRAIN_LEGACY_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}"
 GRAIN_OSS_IMAGE_REPO="${GRAIN_OSS_IMAGE_REPO:-$GRAIN_LEGACY_IMAGE_REPO}"
-GRAIN_GOOGLE_IMAGE_REPO="${GRAIN_GOOGLE_IMAGE_REPO:-ghcr.io/bwsalmon/grain/google-grain}"
 GRAIN_ALLOWED_IMAGE_REPOS="${GRAIN_ALLOWED_IMAGE_REPOS:-}"
 GRAIN_INSTALL_TRACK="${GRAIN_INSTALL_TRACK:-}"
 GRAIN_IMAGE_EXPLICIT="${GRAIN_IMAGE:-}"
@@ -931,11 +930,11 @@ Recognized variables:
                              allowlisted CLIs (agy) and `run: host` capability servers
                              on this machine, as GRAIN_USER. Writes grain-hostd.service
                              and, once, /etc/grain/hostd.yaml (the allowlist:
-                             grain-gchat, grain-gcp and grain-host-script on the core
-                             track, plus agy, host-git and grain-citc on the Google
-                             track; later runs keep your edits). 0 leaves it out -- and
-                             removes an installed one -- so nothing runs as GRAIN_USER
-                             on this machine and "host" is not offered as a run location
+                             host-git, grain-gchat, grain-gcp and grain-host-script,
+                             plus agy when GRAIN_AGY_PATH is set; later runs keep your
+                             edits). 0 leaves it out -- and removes an installed one --
+                             so nothing runs as GRAIN_USER on this machine and "host"
+                             is not offered as a run location
 
   GRAIN_UI_ADDR             UI/API bind address (default: 0.0.0.0:4242 on a fresh
                              install -- every interface, at http://<host>:4242/;
@@ -1351,8 +1350,8 @@ log() { echo "==> $*"; }
 
 # --- progress reporting ------------------------------------------------------
 #
-# Shared between setup.sh and google/scripts/cloudtop-install.sh (which
-# extracts this block with sed).
+# Shared between setup.sh and edition wrapper scripts (which extract this
+# block with sed).
 #
 # Every step that can take more than ~2s prints a step line before it starts
 # (step_start) and its elapsed time when it finishes (step_done). Polling
@@ -1750,10 +1749,10 @@ uninstall_images() {
       repos+=("$repo")
     fi
   fi
-  # And both daemon images, core and Google: a deployment that moved from
-  # grain/grain to google-grain on an upgrade still has the images it ran
+  # And the configured OSS/legacy daemon image repositories: a deployment
+  # that moved repositories on an upgrade still has the images it ran
   # before the move.
-  for repo in "${GRAIN_OSS_IMAGE_REPO:-}" "${GRAIN_GOOGLE_IMAGE_REPO:-}" "ghcr.io/bwsalmon/grain/google-grain"; do
+  for repo in "${GRAIN_OSS_IMAGE_REPO:-}" "${GRAIN_LEGACY_IMAGE_REPO:-}"; do
     if [ -n "$repo" ] && [[ " ${repos[*]} " != *" $repo "* ]]; then
       repos+=("$repo")
     fi
@@ -2664,115 +2663,33 @@ report_image_revision() {
   fi
 }
 
-# detect_install_track_signals prints the comma-separated Google install
-# signals found across the host, the installed systemd unit ($1), and the
-# deployment's state repository under $2.
-detect_install_track_signals() {
-  local unit_file="${1:-/etc/systemd/system/grain-daemon.service}"
-  local data_dir="${2:-${GRAIN_DATA_DIR:-/var/lib/grain/data}}"
-  local include_host="${GRAIN_DETECT_HOST_SIGNALS:-1}"
-  local google_bin_dir="${GRAIN_GOOGLE_BIN_DIR:-/google/bin}"
-  local host="" unit_agy="" unit_hosts="" state_cfg=""
-  local signals=()
-
-  if [ "$include_host" != "0" ]; then
-    host="${GRAIN_HOST_FQDN:-$(hostname -f 2>/dev/null || hostname 2>/dev/null || true)}"
-    host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
-    host="${host%.}"
-    case "$host" in
-      *.c.googlers.com) signals+=("host:*.c.googlers.com") ;;
-    esac
-    if [ -n "$google_bin_dir" ] && [ -d "$google_bin_dir" ]; then
-      signals+=("host:/google/bin")
-    fi
-  fi
-
-  unit_agy="${GRAIN_AGY_PATH:-}"
-  if [ -z "$unit_agy" ] && [ -r "$unit_file" ]; then
-    unit_agy="$(sed -n 's/.*-\{1,2\}agy-path[= ][\"'\'']*\([^\"'\''[:space:]]*\).*/\1/p' "$unit_file" | tail -n 1)"
-  fi
-  case "$unit_agy" in
-    /google/bin | /google/bin/*) signals+=("unit:-agy-path=/google/bin") ;;
-  esac
-
-  unit_hosts="${GRAIN_UI_ALLOWED_HOSTS:-}"
-  if [ -z "$unit_hosts" ] && [ -r "$unit_file" ]; then
-    unit_hosts="$(sed -n 's/.*-\{1,2\}ui-allowed-hosts[= ][\"'\'']*\([^\"'\''[:space:]]*\).*/\1/p' "$unit_file" | tail -n 1)"
-  fi
-  case "$(printf '%s' "$unit_hosts" | tr '[:upper:]' '[:lower:]')" in
-    *proxy.googlers.com*) signals+=("unit:-ui-allowed-hosts=*.proxy.googlers.com") ;;
-  esac
-
-  case "$(printf '%s' "${GRAIN_TARGET_REPOS:-},${GRAIN_TARGET_REPO:-}" | tr '[:upper:]' '[:lower:]')" in
-    *.code.corp.goog*) signals+=("store:git-code.corp.goog") ;;
-  esac
-
-  state_cfg="$data_dir/state-repo/config.json"
-  if [ -r "$state_cfg" ]; then
-    if grep -qi '\.code\.corp\.goog' "$state_cfg" 2>/dev/null && [[ " ${signals[*]:-} " != *" store:git-code.corp.goog "* ]]; then
-      signals+=("store:git-code.corp.goog")
-    fi
-    if grep -Eq '"ambientSource"[[:space:]]*:[[:space:]]*"ggh"|"credentialHelper"[[:space:]]*:[[:space:]]*"!ggh ' "$state_cfg" 2>/dev/null; then
-      signals+=("store:git-ggh")
-    fi
-    if grep -Eq '"type"[[:space:]]*:[[:space:]]*"antigravity"' "$state_cfg" 2>/dev/null &&
-      grep -Eq '"authMethod"[[:space:]]*:[[:space:]]*"ambient"' "$state_cfg" 2>/dev/null; then
-      signals+=("store:antigravity-ambient")
-    fi
-    if grep -Eq '"/google/bin(/[^"]*)?"' "$state_cfg" 2>/dev/null; then
-      signals+=("store:antigravity-google-bin")
-    fi
-    if grep -q '"corp-research"' "$state_cfg" 2>/dev/null; then
-      signals+=("store:capability=corp-research")
-    fi
-  fi
-
-  if [ "${#signals[@]}" -gt 0 ]; then
-    local IFS=,
-    printf '%s\n' "${signals[*]}"
-  fi
-}
-
-# detect_install_track classifies the deployment as "google" or "oss".
+# detect_install_track classifies the deployment track (defaults to "oss"
+# unless GRAIN_INSTALL_TRACK is explicitly set).
 detect_install_track() {
-  case "${GRAIN_INSTALL_TRACK:-}" in
-    google | oss)
-      printf '%s\n' "$GRAIN_INSTALL_TRACK"
-      return 0
-      ;;
-  esac
-  local signals
-  signals="$(detect_install_track_signals "$@")"
-  if [ -n "$signals" ]; then
-    printf 'google\n'
-  else
-    printf 'oss\n'
+  if [ -n "${GRAIN_INSTALL_TRACK:-}" ]; then
+    printf '%s\n' "$GRAIN_INSTALL_TRACK"
+    return 0
   fi
+  printf 'oss\n'
 }
 
 # default_image_for_track returns the default image repository for track $1.
 default_image_for_track() {
-  case "${1:-oss}" in
-    google) printf '%s\n' "${GRAIN_GOOGLE_IMAGE_REPO:-ghcr.io/bwsalmon/grain/google-grain}" ;;
-    *) printf '%s\n' "${GRAIN_OSS_IMAGE_REPO:-${GRAIN_LEGACY_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}}" ;;
-  esac
+  printf '%s\n' "${GRAIN_OSS_IMAGE_REPO:-${GRAIN_LEGACY_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}}"
 }
 
 # image_repo_can_transition is whether a deployment whose ref file names
 # repository $1 may keep its channel/tag when installing repository $2
-# (post-v2.0 repository shift between the legacy repository and the
-# open-source or Google repositories).
+# (repository shifts between the legacy, open-source, and allowed track
+# repositories).
 image_repo_can_transition() {
   local from="${1:-}" to="${2:-}" repo
   [ -n "$from" ] && [ -n "$to" ] || return 1
   [ "$from" = "$to" ] && return 0
   local known=(
     "ghcr.io/bwsalmon/grain/grain"
-    "ghcr.io/bwsalmon/grain/google-grain"
-    "us-docker.pkg.dev/gke-adaptive-orchestration/grain/grain"
     "${GRAIN_LEGACY_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}"
     "${GRAIN_OSS_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}"
-    "${GRAIN_GOOGLE_IMAGE_REPO:-ghcr.io/bwsalmon/grain/google-grain}"
   )
   local allowed_list="${GRAIN_ALLOWED_IMAGE_REPOS:-}"
   for repo in ${allowed_list//,/ }; do
@@ -2793,14 +2710,11 @@ resolve_image_repository() {
   local unit_service="${1:-/etc/systemd/system/grain-daemon.service}"
   local data_dir="${2:-${GRAIN_DATA_DIR:-/var/lib/grain/data}}"
   local explicit_track="${GRAIN_INSTALL_TRACK:-}"
-  GRAIN_INSTALL_TRACK_SIGNALS="$(detect_install_track_signals "$unit_service" "$data_dir")"
   GRAIN_INSTALL_TRACK="$(detect_install_track "$unit_service" "$data_dir")"
   if [ -n "$explicit_track" ]; then
     GRAIN_INSTALL_TRACK_REPORT="$GRAIN_INSTALL_TRACK (GRAIN_INSTALL_TRACK=$explicit_track, as given)"
-  elif [ -n "$GRAIN_INSTALL_TRACK_SIGNALS" ]; then
-    GRAIN_INSTALL_TRACK_REPORT="$GRAIN_INSTALL_TRACK ($GRAIN_INSTALL_TRACK_SIGNALS)"
   else
-    GRAIN_INSTALL_TRACK_REPORT="$GRAIN_INSTALL_TRACK (no Google signals detected)"
+    GRAIN_INSTALL_TRACK_REPORT="$GRAIN_INSTALL_TRACK (default)"
   fi
   if [ -z "${GRAIN_IMAGE_EXPLICIT:-}" ]; then
     GRAIN_IMAGE="$(default_image_for_track "$GRAIN_INSTALL_TRACK")"
@@ -2883,14 +2797,11 @@ fi
 
 # --- grain hostd, settled ------------------------------------------------
 #
-# After the install track, which "auto" reads. HOSTD_AGY_PATH is the agy
-# the allowlist's entry names: GRAIN_AGY_PATH, or the Google track's
-# jetski build (pkg/installtrack's GoogleAgyCLIPath -- keep the two in
-# step). Behind hostd agy runs on this host, so that path is not one the
+# HOSTD_AGY_PATH is the agy the allowlist's entry names when GRAIN_AGY_PATH
+# is given. Behind hostd agy runs on this host, so that path is not one the
 # daemon's container has to resolve: it is neither mounted in nor passed
 # as -agy-path, and both agent turns and the model-catalog probe run
 # through hostd's agy entry.
-GOOGLE_AGY_CLI_PATH=/google/bin/releases/jetski-devs/tools/cli
 HOSTD_UNIT=/etc/systemd/system/grain-hostd.service
 # grain-hostd-upgrade.path watches $HOSTD_VERSIONS_DIR/current and starts
 # grain-hostd-upgrade.service, which drains hostd onto the new binary
@@ -2969,8 +2880,6 @@ resolve_hostd() {
   fi
   if [ -n "$GRAIN_AGY_PATH" ]; then
     HOSTD_AGY_PATH="$GRAIN_AGY_PATH"
-  elif [ "${GRAIN_INSTALL_TRACK:-oss}" = google ]; then
-    HOSTD_AGY_PATH="$GOOGLE_AGY_CLI_PATH"
   fi
   if [ -n "$HOSTD_AGY_PATH" ]; then
     case "$HOSTD_AGY_PATH" in
@@ -3184,15 +3093,12 @@ image_ref_from() {
     [ -n "$r" ] && repos+=("$r")
   done
   case "$repo" in
-    "ghcr.io/bwsalmon/grain/grain" | "ghcr.io/bwsalmon/grain/google-grain" | "us-docker.pkg.dev/gke-adaptive-orchestration/grain/grain" | "${GRAIN_LEGACY_IMAGE_REPO:-}" | "${GRAIN_OSS_IMAGE_REPO:-}" | "${GRAIN_GOOGLE_IMAGE_REPO:-}")
+    "ghcr.io/bwsalmon/grain/grain" | "${GRAIN_LEGACY_IMAGE_REPO:-}" | "${GRAIN_OSS_IMAGE_REPO:-}")
       repos+=(
         "ghcr.io/bwsalmon/grain/grain"
-        "ghcr.io/bwsalmon/grain/google-grain"
-        "us-docker.pkg.dev/gke-adaptive-orchestration/grain/grain"
       )
       [ -n "${GRAIN_LEGACY_IMAGE_REPO:-}" ] && repos+=("$GRAIN_LEGACY_IMAGE_REPO")
       [ -n "${GRAIN_OSS_IMAGE_REPO:-}" ] && repos+=("$GRAIN_OSS_IMAGE_REPO")
-      [ -n "${GRAIN_GOOGLE_IMAGE_REPO:-}" ] && repos+=("$GRAIN_GOOGLE_IMAGE_REPO")
       ;;
   esac
   for r in "${repos[@]}"; do
@@ -3646,7 +3552,6 @@ done
 # on a deployment that no longer exists. Parsed as data, never sourced:
 # whoever runs this may be root (#2405).
 GRAIN_OSS_IMAGE_REPO="\${GRAIN_OSS_IMAGE_REPO:-${GRAIN_OSS_IMAGE_REPO:-}}"
-GRAIN_GOOGLE_IMAGE_REPO="\${GRAIN_GOOGLE_IMAGE_REPO:-${GRAIN_GOOGLE_IMAGE_REPO:-}}"
 GRAIN_ALLOWED_IMAGE_REPOS="\${GRAIN_ALLOWED_IMAGE_REPOS:-${GRAIN_ALLOWED_IMAGE_REPOS:-}}"
 $(declare -f image_ref_from)
 image="\$(image_ref_from "${UNIT_IMAGE_REF_FILE}" "${GRAIN_IMAGE}")"
@@ -3759,7 +3664,6 @@ write_image_ref_promoter() {
 set -euo pipefail
 
 GRAIN_OSS_IMAGE_REPO="\${GRAIN_OSS_IMAGE_REPO:-${GRAIN_OSS_IMAGE_REPO:-}}"
-GRAIN_GOOGLE_IMAGE_REPO="\${GRAIN_GOOGLE_IMAGE_REPO:-${GRAIN_GOOGLE_IMAGE_REPO:-}}"
 GRAIN_ALLOWED_IMAGE_REPOS="\${GRAIN_ALLOWED_IMAGE_REPOS:-${GRAIN_ALLOWED_IMAGE_REPOS:-}}"
 $(declare -f image_ref_from)
 
@@ -4024,7 +3928,6 @@ set -euo pipefail
 # channel or tag rather than reverting to what the previous setup.sh run
 # wrote.
 GRAIN_OSS_IMAGE_REPO="\${GRAIN_OSS_IMAGE_REPO:-${GRAIN_OSS_IMAGE_REPO:-}}"
-GRAIN_GOOGLE_IMAGE_REPO="\${GRAIN_GOOGLE_IMAGE_REPO:-${GRAIN_GOOGLE_IMAGE_REPO:-}}"
 GRAIN_ALLOWED_IMAGE_REPOS="\${GRAIN_ALLOWED_IMAGE_REPOS:-${GRAIN_ALLOWED_IMAGE_REPOS:-}}"
 $(declare -f image_ref_from)
 image="\${1:-}"
@@ -5802,10 +5705,9 @@ agent_cli_in_image() {
 # run: "host" through grain hostd, or "container" -- the daemon's own,
 # from its image. The daemon's own resolution (pkg/daemon/clirun.go) for
 # a daemon in the release container, from what this script gives it:
-# GRAIN_<CLI>_RUN, else the built-in default, which is the container
-# except for agy on the Google track (google.go's RegisterHostdDefault).
-# Without hostd there is no host to run on, and resolve_hostd has dropped
-# any host already. Settings -> Models can override it after the install.
+# GRAIN_<CLI>_RUN, else the built-in default (container). Without hostd
+# there is no host to run on, and resolve_hostd has dropped any host
+# already. Settings -> Models can override it after the install.
 cli_run_location() {
   local setting=""
   case "$1" in
@@ -5816,9 +5718,6 @@ cli_run_location() {
   if [ "${GRAIN_HOSTD:-0}" != "1" ]; then
     echo container
     return
-  fi
-  if [ -z "$setting" ] && [ "$1" = agy ] && [ "${GRAIN_INSTALL_TRACK:-oss}" = google ]; then
-    setting=host
   fi
   case "$setting" in
     host) echo host ;;
@@ -6689,8 +6588,8 @@ docker_run_args() {
 #   ExecStartPre         starts grain-hostd-allowlist.service (as root:
 #                        the + prefix), which adds the capabilities entries
 #                        grain's own servers need in the build hostd is
-#                        about to run -- host-git, grain-gcp, ..., and the
-#                        edition's, like the Google build's grain-citc --
+#                        about to run -- host-git, grain-gcp, ..., and any
+#                        edition-registered server --
 #                        that the allowlist has no entry of that name for
 #                        (`grain hostd -ensure-builtins`). A drain onto a
 #                        new binary ends in a start, so an upgrade brings
@@ -6899,8 +6798,8 @@ write_hostd_env() {
 # write a root-owned 0644 file if it had.
 #
 # A re-run keeps the file and whatever an operator has put in it, and
-# only puts its ownership and mode back to what hostd will load. On the
-# Google track (or with GRAIN_AGY_PATH) it starts with one entry, agy:
+# only puts its ownership and mode back to what hostd will load. With
+# GRAIN_AGY_PATH it starts with one cli entry, agy:
 #
 #   paths_under, cwd_under  $GRAIN_DATA_DIR and $GRAIN_SANDBOX_DIR, the
 #                           two directories docker_run_args mounts at the
@@ -6932,7 +6831,6 @@ write_hostd_allowlist() {
     # tests/deploy holds these functions' entries equal to that list.
     ensure_hostd_host_git
     ensure_hostd_detached_clis
-    ensure_hostd_citc
     ensure_hostd_builtin_capabilities
   else
     local tmp
@@ -7043,9 +6941,6 @@ YAML
     args: [capability, host-git]
     pass_env: [${proxies}]
 YAML
-  if [ "${GRAIN_INSTALL_TRACK:-}" = google ]; then
-    hostd_citc_entry
-  fi
   for name in "${builtin_caps[@]}"; do
     cat <<YAML
   grain-${name}:
@@ -7131,13 +7026,12 @@ ensure_hostd_builtin_capabilities() {
 
 # hostd_host_git_entry is the allowlist's host-git capability entry:
 # grain's own in-tree server (`grain capability host-git`,
-# pkg/gitproxy/hostgit.go) that runs an ambient git connection's gh, ggh
+# pkg/gitproxy/hostgit.go) that runs an ambient git connection's gh
 # or `git credential fill` on this host, as $GRAIN_USER, for the daemon
-# in its container (`grain git-ambient`, and cloudtop-install.sh's
-# --git). Its command line is fixed here: the daemon names only the
-# entry, and the server runs nothing but a registered source's own
-# token, package-token and `<tool> api` commands. pass_env is the corp
-# proxy, as for agy.
+# in its container (`grain git-ambient`). Its command line is fixed here:
+# the daemon names only the entry, and the server runs nothing but a
+# registered source's own token, package-token and `<tool> api` commands.
+# pass_env is the corp proxy, as for agy.
 hostd_host_git_entry() {
   local proxies
   proxies="$(IFS=,; echo "${HOSTD_PROXY_VARS[*]}")"
@@ -7170,12 +7064,12 @@ ensure_hostd_host_git() {
       chown root:root "$tmp"
       chmod 0644 "$tmp"
       mv -fT "$tmp" "$HOSTD_ALLOWLIST"
-      log "  grain hostd allowlist: added the host-git capability entry (an ambient git connection's gh/ggh/git)"
+      log "  grain hostd allowlist: added the host-git capability entry (an ambient git connection's gh/git)"
       ;;
     *)
       rm -f "$tmp"
       log "WARNING: $HOSTD_ALLOWLIST has no host-git capability entry, and its shape is not one this script"
-      log "         edits. An ambient git connection (grain git-ambient, or cloudtop-install.sh --git) needs it; add under capabilities:"
+      log "         edits. An ambient git connection (grain git-ambient) needs it; add under capabilities:"
       hostd_host_git_entry | while IFS= read -r line; do log "           $line"; done
       ;;
   esac
@@ -7227,58 +7121,6 @@ ensure_hostd_detached_clis() {
     log "         until they are there); add under clis:"
     while IFS= read -r line; do log "           $line"; done <<<"$add"
   fi
-}
-
-# hostd_citc_entry is the allowlist's entry for the Google build's citc
-# capability server (google/capability/citc): `grain capability citc`,
-# run on this host as $GRAIN_USER so it reaches the CitC mount and the
-# user's corp identity. Its built-in entry is run: host, naming
-# grain-citc with -listen 127.0.0.1:4250 -- the data plane grain proxies
-# the attempt's tools to -- so the entry takes extra args; the server
-# accepts no flag but -listen, and only a loopback address. It admits
-# GRAIN_CAPABILITY_PROBE, which Settings' Test sets so the probed copy
-# binds an ephemeral port rather than the attached server's.
-hostd_citc_entry() {
-  local proxies
-  proxies="$(IFS=,; echo "${HOSTD_PROXY_VARS[*]}")"
-  proxies="${proxies//,/, }"
-  cat <<YAML
-  grain-citc:
-    command: ${HOST_GRAIN_BIN:-/usr/local/bin/grain}
-    args: [capability, citc]
-    extra_args: true
-    env: [GRAIN_CAPABILITY_PROBE]
-    pass_env: [${proxies}]
-YAML
-}
-
-# ensure_hostd_citc adds the grain-citc entry to an allowlist an earlier
-# run wrote without one, on the Google track, the way ensure_hostd_host_git
-# adds host-git.
-ensure_hostd_citc() {
-  [ "${GRAIN_INSTALL_TRACK:-}" = google ] || return 0
-  [ -f "$HOSTD_ALLOWLIST" ] && [ ! -L "$HOSTD_ALLOWLIST" ] || return 0
-  if grep -Eq '^  grain-citc:' "$HOSTD_ALLOWLIST"; then
-    return 0
-  fi
-  local last tmp
-  last="$(grep -E '^[^[:space:]#]' "$HOSTD_ALLOWLIST" | tail -n 1)"
-  case "$last" in
-    "capabilities:"|"capabilities: {}")
-      tmp="$(mktemp "$HOSTD_ALLOWLIST.XXXXXX")"
-      sed 's/^capabilities: {}$/capabilities:/' "$HOSTD_ALLOWLIST" > "$tmp"
-      hostd_citc_entry >> "$tmp"
-      chown root:root "$tmp"
-      chmod 0644 "$tmp"
-      mv -fT "$tmp" "$HOSTD_ALLOWLIST"
-      log "  grain hostd allowlist: added the grain-citc capability entry (CitC workspaces, run: host)"
-      ;;
-    *)
-      log "WARNING: $HOSTD_ALLOWLIST has no grain-citc capability entry, and its shape is not one this script"
-      log "         edits. The citc capability server needs it; add under capabilities:"
-      hostd_citc_entry | while IFS= read -r line; do log "           $line"; done
-      ;;
-  esac
 }
 
 # report_hostd_suggestions names the cli entries this run's default

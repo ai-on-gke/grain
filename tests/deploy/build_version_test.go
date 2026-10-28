@@ -314,8 +314,8 @@ func withoutEnv(env []string, name string) []string {
 }
 
 // What a release job stamps on each branch, through the build phase's
-// dry run: the -X ldflag both daemon binaries get and the OCI version
-// label both images get, and the caller's RELEASE winning.
+// dry run: the -X ldflag the daemon binary gets and the OCI version
+// label the image gets, and the caller's RELEASE winning.
 func TestReleaseImagesDryRunNamesTheBuildVersionOfEachBranch(t *testing.T) {
 	dir, tips := versionRepo(t)
 	for name, tc := range map[string]struct {
@@ -342,10 +342,9 @@ func TestReleaseImagesDryRunNamesTheBuildVersionOfEachBranch(t *testing.T) {
 				t.Fatalf("release-images.sh --dry-run build: %v\n%s", err, out)
 			}
 			short := tc.commit[:7]
-			containsRun(t, out, "[dry-run] version: "+tc.want+", stamped into both daemon binaries as "+
+			containsRun(t, out, "[dry-run] version: "+tc.want+", stamped into the daemon binary as "+
 				"-X github.com/ai-on-gke/grain/pkg/version.Release="+tc.want+
 				" and labelled onto ghcr.io/bwsalmon/grain/grain:sha-"+short+
-				" and ghcr.io/bwsalmon/grain/google-grain:sha-"+short+
 				" as org.opencontainers.image.version="+tc.want)
 		})
 	}

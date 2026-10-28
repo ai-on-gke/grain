@@ -309,10 +309,11 @@ func TestReleaseImagesDryRun(t *testing.T) {
 			containsRun(t, out, "[dry-run]")
 			containsRun(t, out, "repository: bwsalmon/grain")
 			containsRun(t, out, "phase 'all': would build and publish")
-			// Two daemon images, one per install track, beside the
-			// shared sandbox images (grain/task-4944).
-			containsRun(t, out, "grain=ghcr.io/bwsalmon/grain/grain:sha-0123456, google_grain=ghcr.io/bwsalmon/grain/google-grain:sha-0123456")
-			containsRun(t, out, "ghcr.io/bwsalmon/grain/grain:sha-0123456 from ./cmd/grain (install track oss), ghcr.io/bwsalmon/grain/google-grain:sha-0123456 from ./google/cmd/grain (install track google)")
+			containsRun(t, out, "grain=ghcr.io/bwsalmon/grain/grain:sha-0123456")
+			containsRun(t, out, "ghcr.io/bwsalmon/grain/grain:sha-0123456 from ./cmd/grain (install track oss)")
+			if strings.Contains(out, "google-grain") {
+				t.Errorf("dry-run mentioned google-grain:\n%s", out)
+			}
 			if docker != "" {
 				t.Errorf("docker was asked to do something during dry-run:\n%s", docker)
 			}
@@ -523,13 +524,13 @@ func mapKeys(m map[string]string) []string {
 	return keys
 }
 
-// Every phase that publishes names both daemon images: the push publishes
-// and moves the branch tag of each, which is what makes
-// google-grain:main exist after a release on main.
-func TestReleaseImagesDryRunPushNamesBothDaemonImages(t *testing.T) {
+// Every phase that publishes names the daemon image beside the shared
+// sandbox images, and the push publishes and moves the branch tag of all
+// three.
+func TestReleaseImagesDryRunPushNamesDaemonAndSandboxImages(t *testing.T) {
 	for phase, want := range map[string]string{
-		"build": "would build ghcr.io/bwsalmon/grain/guest:sha-0123456, ghcr.io/bwsalmon/grain/k8s-sandbox:sha-0123456, ghcr.io/bwsalmon/grain/grain:sha-0123456 and ghcr.io/bwsalmon/grain/google-grain:sha-0123456",
-		"push":  "would publish and sign ghcr.io/bwsalmon/grain/grain:sha-0123456 and ghcr.io/bwsalmon/grain/google-grain:sha-0123456 to ghcr.io, and move the main tags of all four",
+		"build": "would build ghcr.io/bwsalmon/grain/guest:sha-0123456, ghcr.io/bwsalmon/grain/k8s-sandbox:sha-0123456 and ghcr.io/bwsalmon/grain/grain:sha-0123456",
+		"push":  "would publish and sign ghcr.io/bwsalmon/grain/grain:sha-0123456 to ghcr.io, and move the main tags of all three",
 	} {
 		t.Run(phase, func(t *testing.T) {
 			out, docker, err := releaseImagesRunArgs(t, []string{"--dry-run", phase}, map[string]string{"GRAIN_CI": "true"})
@@ -537,6 +538,9 @@ func TestReleaseImagesDryRunPushNamesBothDaemonImages(t *testing.T) {
 				t.Fatalf("release-images.sh --dry-run %s failed: %v\n%s", phase, err, out)
 			}
 			containsRun(t, out, want)
+			if strings.Contains(out, "google-grain") {
+				t.Errorf("dry-run %s mentioned google-grain:\n%s", phase, out)
+			}
 			if docker != "" {
 				t.Errorf("docker was asked to do something during dry-run:\n%s", docker)
 			}
@@ -544,17 +548,13 @@ func TestReleaseImagesDryRunPushNamesBothDaemonImages(t *testing.T) {
 	}
 }
 
-// The push moves google-grain's branch tag with the other three, and
-// signs google-grain before it does.
-func TestThePushPublishesAndSignsBothDaemonImages(t *testing.T) {
+// The push signs the daemon image before moving its branch tag.
+func TestThePushPublishesAndSignsTheDaemonImage(t *testing.T) {
 	published := publishImagesBody(t, read(t, "scripts", "release-images.sh"))
 	order := []string{
 		`push_image "$grain"`,
 		`sign_image "$grain"`,
-		`push_image "$google_grain"`,
-		`sign_image "$google_grain"`,
 		`"$grain $root/grain:$branch"`,
-		`"$google_grain $root/google-grain:$branch"`,
 	}
 	at := 0
 	for _, step := range order {
