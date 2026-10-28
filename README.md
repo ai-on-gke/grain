@@ -86,8 +86,7 @@ edition's install track claims (`pkg/installtrack`, where an edition linked
 into grain registers its track) the installer pulls that edition's build
 instead. The images are published with the same tags, and
 `GRAIN_INSTALL_TRACK` overrides the detection.
-A Google-track deployment from before 2.0 that names `grain/grain` moves to
-`google-grain` on its next upgrade, keeping its channel. Pass `GRAIN_CHANNEL=candidate` (the
+Pass `GRAIN_CHANNEL=candidate` (the
 current release candidate) or `GRAIN_CHANNEL=main` (the untested head of
 `main`) to follow another channel, or `GRAIN_IMAGE_TAG=vX.Y.Z` or
 `GRAIN_IMAGE_TAG=sha-<short sha>` to pin one build. Re-running the installer
@@ -214,8 +213,8 @@ exit codes, what each step does, and what to do when one is left manual.
 > as `GRAIN_USER` outside the daemon's lifecycle. It starts the few programs
 > that must run on the bare machine (agy under the user's corp identity, or a
 > stdio capability server with `run: host`), and only those that the root-owned
-> allowlist `/etc/grain/hostd.yaml` names: agy on the Google track, nothing on
-> the core track until you add an entry. The installer writes that file once
+> allowlist `/etc/grain/hostd.yaml` names: nothing on the core track until you
+> add an entry. The installer writes that file once
 > and keeps your edits. Its socket directory, `/run/grain-hostd`, is mounted
 > into the daemon's container, and `/etc/grain` never is. **`GRAIN_HOSTD=0`
 > leaves hostd out** (and removes an installed one): everything then runs in
@@ -260,15 +259,6 @@ exit codes, what each step does, and what to do when one is left manual.
 > branch matching the allowlist can therefore get their code built into the
 > daemon, which is why `**` is an explicit opt-in and never a default.
 
-### On a Google cloudtop
-
-```bash
-./google/scripts/cloudtop-install.sh
-```
-
-A Google-internal installer over `scripts/setup.sh`; see
-[google/docs/cloudtop-install.md](google/docs/cloudtop-install.md).
-
 ### Where grain keeps its files
 
 Everything lives under one root, split in two:
@@ -311,7 +301,7 @@ sudo ./scripts/setup.sh --purge       # or GRAIN_UNINSTALL_PURGE=1
 | `/usr/local/bin/grain`, `/usr/local/bin/granule`, `/usr/local/lib/grain`, `/usr/local/share/grain` (left by host mode), `/etc/profile.d/grain.sh` | removed | removed |
 | `/etc/grain/{image.env,cli.env,cosign.pub}` (the directory too, once it is empty) | removed | removed |
 | grain's sudoers drop-in (`/etc/sudoers.d/90-grain-nft`, left by host mode) and `/etc/modprobe.d/kvm-nested-grain.conf` | removed | removed |
-| the grain images (`ghcr.io/bwsalmon/grain/grain` or `ghcr.io/bwsalmon/grain/google-grain`, every tag) and every sandbox image those tags name | removed (`--keep-images` keeps them) | removed (`--keep-images` keeps them) |
+| the grain images (`ghcr.io/bwsalmon/grain/grain`, every tag) and every sandbox image those tags name | removed (`--keep-images` keeps them) | removed (`--keep-images` keeps them) |
 | `sleep`/`suspend`/`hibernate`/`hybrid-sleep.target` masks and `/etc/systemd/logind.conf.d/10-grain-no-suspend.conf` | unmasked, drop-in removed | unmasked, drop-in removed |
 | `GRAIN_SANDBOX_DIR` (`/var/lib/grain/scratch`, caches) and `/var/lib/granule/vms` | removed | removed |
 | `GRAIN_DATA_DIR` (`/var/lib/grain/data`: the task store, the secrets and `secrets/secrets.key`) | **kept**; the path of the key is printed | removed |
@@ -478,4 +468,14 @@ declared in [`go.mod`](go.mod). See the [implementation
 notes](docs/implementation-notes.md) for package-level detail and design
 rationale.
 
-Grain is licensed under the [Apache License 2.0](LICENSE).
+## Contributing
+
+This project is licensed under the [Apache 2.0 License](LICENSE).
+
+We follow [Google's Open Source Community Guidelines](https://opensource.google.com/conduct/).
+
+## Disclaimer
+
+This is not an officially supported Google product.
+
+This project is not eligible for the Google Open Source Software Vulnerability Rewards Program.
