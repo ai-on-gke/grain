@@ -127,6 +127,13 @@ func startDetachedMCP(ctx context.Context, home string) (func(), error) {
 	if err := json.Unmarshal(data, &spec); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", specPath, err)
 	}
+	// The args are the daemon's too, and hostd's paths_under never sees
+	// them: hold them to the one subcommand the wrapper exists to start,
+	// so the file cannot turn hostd's codex-detached entry into any other
+	// grain subcommand on the host.
+	if len(spec.Args) == 0 || spec.Args[0] != "mcpserver" {
+		return nil, fmt.Errorf("%s: args must start with the mcpserver subcommand, got %q", specPath, spec.Args)
+	}
 	grainBin, err := detachedGrainBinary()
 	if err != nil {
 		return nil, fmt.Errorf("locating grain: %w", err)

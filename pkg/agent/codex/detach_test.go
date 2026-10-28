@@ -17,6 +17,7 @@ package codex
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -247,5 +248,40 @@ curl -fsS -X POST "$url" \
 	}
 	if !strings.Contains(string(respBytes), "wrote detached.txt") {
 		t.Errorf("MCP response = %s, want 'wrote detached.txt'", respBytes)
+	}
+}
+
+// mcpserver.json is written by the daemon, so the wrapper refuses one
+// naming any grain subcommand but mcpserver rather than run it on the
+// host, and starts neither grain nor codex.
+func TestDetachedMCPWrapperRefusesOtherSubcommands(t *testing.T) {
+	prev := detachedGrainBinary
+	detachedGrainBinary = func() (string, error) {
+		t.Fatal("wrapper located grain for a spec it should refuse")
+		return "", nil
+	}
+	t.Cleanup(func() { detachedGrainBinary = prev })
+
+	for _, args := range [][]string{nil, {}, {"hostd"}, {"-x", "mcpserver"}} {
+		home := t.TempDir()
+		data, err := json.Marshal(detachedMCPSpec{Args: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, mcpServerFileName), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		marker := filepath.Join(home, "codex-ran")
+		fakeCodex := filepath.Join(home, "codex.bin")
+		if err := os.WriteFile(fakeCodex, []byte(fmt.Sprintf("#!/bin/sh\ntouch %q\n", marker)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("CODEX_HOME", home)
+		if code, err := RunDetached(context.Background(), []string{fakeCodex, "exec"}); err == nil || code == 0 {
+			t.Errorf("args %q: RunDetached = %d, %v; want a refusal", args, code, err)
+		}
+		if _, err := os.Stat(marker); err == nil {
+			t.Errorf("args %q: codex ran despite a refused spec", args)
+		}
 	}
 }
