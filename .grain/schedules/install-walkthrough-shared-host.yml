@@ -1,7 +1,0 @@
-name: Install walkthrough - shared host, re-run, upgrade and rollback
-template: install-walkthrough-shared-host
-base: main
-weekly:
-  day: tuesday
-  at: "05:00"
-overlap: skip
