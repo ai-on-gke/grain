@@ -77,10 +77,11 @@ type Store struct {
 	// so end-of-run RecordRunTelemetry merges proxy calls with MCP sidecar calls.
 	proxyToolsMu sync.Mutex
 	proxyTools   map[string]map[string]RunToolUse
-	// proxyCheckWaits and proxyCalls are the sandbox CLI's CI waits and
-	// argument-carrying calls per run (proxy_cli.go), under proxyToolsMu.
+	// proxyCheckWaits, proxyCalls and proxyAPICalls are the sandbox CLI's CI waits,
+	// argument-carrying calls and audited API calls per run (proxy_cli.go), under proxyToolsMu.
 	proxyCheckWaits map[string][]RunCheckWait
 	proxyCalls      map[string][]ProxyToolCall
+	proxyAPICalls   map[string][]RunAPICall
 
 	// SettingsRepo is the deployment's own state repository, whose merged
 	// changes the daemon applies to itself on its next tick
@@ -4215,6 +4216,7 @@ func (s *Store) GitPushAnyRef(ctx context.Context, sandbox string) (bool, error)
 type NamespaceScope struct {
 	TaskID            string
 	RunID             string
+	Attempt           int
 	TaskRepo          string
 	TaskBranch        string
 	TaskBase          string
@@ -4255,6 +4257,8 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 
 	var storedBranch, storedBase sql.NullString
 	_ = s.db.QueryRowContext(ctx, "SELECT `branch`, `base` FROM `task` WHERE `id` = ?", taskID).Scan(&storedBranch, &storedBase)
+	var attempt int
+	_ = s.db.QueryRowContext(ctx, "SELECT `attempt` FROM `task_run` WHERE `id` = ?", runID).Scan(&attempt)
 	taskBranch := Task{ID: taskID, Branch: storedBranch.String}.BranchName()
 	taskBase := strings.TrimSpace(storedBase.String)
 
@@ -4381,6 +4385,7 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	return NamespaceScope{
 		TaskID:            taskID,
 		RunID:             runID,
+		Attempt:           attempt,
 		TaskRepo:          taskRepo,
 		TaskBranch:        taskBranch,
 		TaskBase:          taskBase,

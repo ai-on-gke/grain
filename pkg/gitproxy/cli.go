@@ -61,19 +61,38 @@ var cliRouteTools = map[string]string{
 	"pr/resolve":        "resolve_review_thread",
 	"pr/review-comment": "add_review_comment",
 	"revert-info":       "revert_task",
+	"status":            "update_status",
+	"handover":          "write_handover",
+	"notify":            "notify_operator",
+	"tasks/notes":       "message_task",
+	"tasks/wait":        "wait_for_task",
+	"proposals":         "propose_task",
+	"quarantine":        "quarantine_test",
 }
 
 // CLIRouteActivity names a /cli/<route> request after the MCP tool it
 // stands in for.
 func CLIRouteActivity(path string) RouteActivity {
 	route := strings.Trim(strings.TrimPrefix(path, "/cli"), "/")
+	var targets []string
 	if strings.HasPrefix(route, "issues/") {
 		route = "issue"
 	}
 	if isRevertInfoRoute(route) {
+		id := strings.TrimSuffix(strings.TrimPrefix(route, "tasks/"), "/revert-info")
+		if id != "" {
+			targets = []string{id}
+		}
 		route = "revert-info"
 	}
-	if route == "context" {
+	if isTaskNotesRoute(route) {
+		id := strings.TrimSuffix(strings.TrimPrefix(route, "tasks/"), "/notes")
+		if id != "" {
+			targets = []string{id}
+		}
+		route = "tasks/notes"
+	}
+	if route == "context" || route == "api-routes" {
 		// The CLI's own bookkeeping, not something the run asked for:
 		// neither narrated nor counted.
 		return RouteActivity{}
@@ -86,31 +105,27 @@ func CLIRouteActivity(path string) RouteActivity {
 		// rows as it cared to invent.
 		return RouteActivity{}
 	}
-	return RouteActivity{Tool: tool, Phrase: mcp.ToolActivityNote(tool)}
+	phrase := mcp.ToolActivityNote(tool)
+	if route == "status" {
+		// /cli/status writes the caller's custom status note directly.
+		phrase = ""
+	}
+	return RouteActivity{Tool: tool, Phrase: phrase, Targets: targets}
 }
 
 // ServeCLIHTTP handles a request under /cli/<route>.
 func (p *GitProxy) ServeCLIHTTP(w http.ResponseWriter, r *http.Request) {
-	sandbox, ok := p.authenticateSandbox(w, r)
+	grant, ok := p.authenticateSandboxGrant(w, r)
 	if !ok {
 		return
 	}
-	if !p.nsLimiter.acquire(sandbox, p.MaxNamespaceConcurrency) {
+	if !p.nsLimiter.acquire(grant.Sandbox, p.MaxNamespaceConcurrency) {
 		http.Error(w, "too many concurrent requests from this sandbox", http.StatusTooManyRequests)
 		return
 	}
-	defer p.nsLimiter.release(sandbox)
-	if p.NamespaceScopes == nil {
-		http.Error(w, "forbidden: no namespace scope configured", http.StatusForbidden)
-		return
-	}
-	modelScope, live, err := p.NamespaceScopes.SandboxNamespaceScope(r.Context(), sandbox)
-	if err != nil {
-		http.Error(w, "failed to resolve sandbox namespace scope", http.StatusInternalServerError)
-		return
-	}
-	if !live {
-		http.Error(w, "forbidden: no live task run on this sandbox", http.StatusForbidden)
+	defer p.nsLimiter.release(grant.Sandbox)
+	modelScope, ok := p.resolveSandboxScope(w, r, grant)
+	if !ok {
 		return
 	}
 	scope := toNamespaceScope(modelScope)
@@ -118,7 +133,7 @@ func (p *GitProxy) ServeCLIHTTP(w http.ResponseWriter, r *http.Request) {
 	p.noteActivity(r.Context(), modelScope.TaskID, act.Phrase)
 	cw := &countingResponseWriter{ResponseWriter: w}
 	p.serveCLIRoute(cw, r, scope)
-	p.recordToolCall(r.Context(), modelScope.RunID, act.Tool, cw)
+	p.recordRouteCall(r.Context(), modelScope.RunID, act, cw)
 }
 
 func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {

@@ -113,8 +113,9 @@ func (f *fakeCreditor) CreditCLIWait(_ context.Context, taskID string, blocked t
 // arguments, as *model.Store does.
 type fullActivity struct {
 	fakeActivity
-	waits []string
-	calls []map[string]any
+	waits    []string
+	calls    []map[string]any
+	apiCalls []string
 }
 
 func (f *fullActivity) RecordProxyCheckWait(_ context.Context, runID, verdict string, _ time.Duration) error {
@@ -131,8 +132,16 @@ func (f *fullActivity) RecordProxyToolCallArgs(_ context.Context, runID, tool st
 	return nil
 }
 
+func (f *fullActivity) RecordProxyAPICall(_ context.Context, runID, tool, targetIDs string, _ int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.apiCalls = append(f.apiCalls, runID+":"+tool+":"+targetIDs)
+	return nil
+}
+
 func newActionProxy(t *testing.T, actions *fakeCLIActions) (http.Handler, *fullActivity, *fakeCreditor) {
 	t.Helper()
+	gitproxy.LogToTest(t)
 	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
 	raw, _ := json.Marshal(map[string]string{"sb-ci": "tok-ci", "sb-plain": "tok-plain"})
 	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
@@ -349,6 +358,220 @@ func TestCLIActionsUnwiredAnswer501(t *testing.T) {
 	}}}
 	if rec := send(gitproxy.NewHandler(proxy), http.MethodPost, "tok-ci", "/cli/pr/open", ""); rec.Code != http.StatusNotImplemented {
 		t.Errorf("unwired pr open: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func (f *fakeCLIActions) NotifyOperator(_ context.Context, taskID string, req gitproxy.CLINotifyRequest) (gitproxy.CLINotifyResult, error) {
+	return gitproxy.CLINotifyResult{ID: 1, Subject: req.Subject, Severity: "warning", Count: 1, New: true}, nil
+}
+
+func (f *fakeCLIActions) MessageTask(_ context.Context, taskID, targetTaskID, body string) (int64, error) {
+	return 99, nil
+}
+
+func (f *fakeCLIActions) CheckWaitTargets(_ context.Context, taskID string, targetIDs []string) ([]model.WaitTarget, error) {
+	return []model.WaitTarget{{ID: targetIDs[0], Closed: true, Merged: true}}, nil
+}
+
+func (f *fakeCLIActions) ProposeTask(_ context.Context, taskID, runID string, req gitproxy.CLIProposeRequest) (gitproxy.CLIProposeResult, error) {
+	return gitproxy.CLIProposeResult{
+		ID:              "100",
+		URL:             "/tasks/100",
+		HoldForApproval: true,
+		AutoMerge:       false,
+		Held:            true,
+	}, nil
+}
+
+func (f *fakeCLIActions) ListAPIRoutes(_ context.Context, taskID string, grants []string, scopeFilter string) ([]gitproxy.CLIAPIRoute, error) {
+	return []gitproxy.CLIAPIRoute{{Method: "GET", Path: "/api/tasks", Scope: "tasks:read", Tool: "api_list_tasks"}}, nil
+}
+
+func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
+	gitproxy.LogToTest(t)
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	store := gitproxy.NewSandboxTokenStore(tokenFile)
+	tok1, err := store.EnsureGrant("sb-1", "7", 1)
+	if err != nil || tok1 == "" {
+		t.Fatalf("EnsureGrant(sb-1, 7, 1): %q %v", tok1, err)
+	}
+	// Same task and attempt reuses token.
+	if same, err := store.EnsureGrant("sb-1", "7", 1); err != nil || same != tok1 {
+		t.Fatalf("EnsureGrant same attempt = %q, %v; want %q", same, err, tok1)
+	}
+	// New attempt rotates token.
+	tok2, err := store.EnsureGrant("sb-1", "7", 2)
+	if err != nil || tok2 == "" || tok2 == tok1 {
+		t.Fatalf("EnsureGrant new attempt = %q, %v; want rotated token != %q", tok2, err, tok1)
+	}
+
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := &fullActivity{}
+	credit := &fakeCreditor{}
+	actions := &fakeCLIActions{}
+	scopes := fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+		"sb-1": {
+			TaskID: "7", RunID: "run-2", Attempt: 2,
+			TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
+			Grants: []string{"quarantine-test", "api:tasks:read"},
+		},
+	}}
+	var apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderReason, apiHeaderAuth, apiHeaderTunnel string
+	proxy := &gitproxy.GitProxy{
+		Tokens:          tokens,
+		Namespace:       &namespace.Server{CIStore: ci.NewRunStore(10)},
+		NamespaceScopes: scopes,
+		CLIActions:      actions,
+		Activity:        act,
+		WaitCredit:      credit,
+		API: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			apiHeaderChannel = r.Header.Get("X-Grain-Channel")
+			apiHeaderTask = r.Header.Get("X-Grain-Acting-Task")
+			apiHeaderRun = r.Header.Get("X-Grain-Acting-Run")
+			apiHeaderReason = r.Header.Get("X-Grain-Acting-Reason")
+			apiHeaderAuth = r.Header.Get("Authorization")
+			apiHeaderTunnel = r.Header.Get("X-Grain-Tunnel-Token")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}),
+	}
+	h := gitproxy.NewHandler(proxy)
+
+	// Old attempt token is rejected.
+	if rec := send(h, http.MethodPost, tok1, "/cli/status", `{"status":"working"}`); rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
+		t.Errorf("revoked attempt 1 token: got %d, want 401/403", rec.Code)
+	}
+
+	// If the sandbox's active attempt advances to 3 while token is bound to attempt 2, proxy rejects with 403.
+	scopes.scopes["sb-1"] = model.NamespaceScope{TaskID: "7", RunID: "run-3", Attempt: 3}
+	if rec := send(h, http.MethodPost, tok2, "/cli/status", `{"status":"working"}`); rec.Code != http.StatusForbidden ||
+		!strings.Contains(rec.Body.String(), "belongs to attempt 2") {
+		t.Errorf("mismatched attempt token: got %d %s, want 403 belongs to attempt 2", rec.Code, rec.Body.String())
+	}
+	scopes.scopes["sb-1"] = model.NamespaceScope{
+		TaskID: "7", RunID: "run-2", Attempt: 2,
+		TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
+		Grants: []string{"quarantine-test", "api:tasks:read"},
+	}
+
+	// Stage 3 collaboration & blocking-wait endpoints:
+	if rec := send(h, http.MethodPost, tok2, "/cli/status", `{"status":"investigating"}`); rec.Code != http.StatusOK {
+		t.Errorf("POST /cli/status: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send(h, http.MethodPost, tok2, "/cli/handover", `{"handover":"settled decisions"}`); rec.Code != http.StatusOK {
+		t.Errorf("POST /cli/handover: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send(h, http.MethodPost, tok2, "/cli/notify", `{"subject":"flake","title":"Flaky test"}`); rec.Code != http.StatusOK {
+		t.Errorf("POST /cli/notify: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send(h, http.MethodPost, tok2, "/cli/tasks/8/notes", `{"body":"hello child task"}`); rec.Code != http.StatusOK {
+		t.Errorf("POST /cli/tasks/8/notes: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send(h, http.MethodPost, tok2, "/cli/tasks/wait", `{"ids":["8"],"until":"closed"}`); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"settled"`) {
+		t.Errorf("POST /cli/tasks/wait: %d %s", rec.Code, rec.Body)
+	}
+	// Parking via /cli/tasks/wait is refused.
+	if rec := send(h, http.MethodPost, tok2, "/cli/tasks/wait", `{"ids":["8"],"park":true}`); rec.Code != http.StatusForbidden {
+		t.Errorf("POST /cli/tasks/wait park=true: %d %s, want 403", rec.Code, rec.Body)
+	}
+
+	// Proposals enforce hold_for_approval=true, auto_merge=false, no supersedes, and cap at 10.
+	if rec := send(h, http.MethodPost, tok2, "/cli/proposals", `{"title":"t","body":"b","supersedes":"5"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("POST /cli/proposals with supersedes: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if rec := send(h, http.MethodPost, tok2, "/cli/proposals", `{"title":"t","body":"b","auto_merge":true}`); rec.Code != http.StatusForbidden {
+		t.Errorf("POST /cli/proposals with auto_merge=true: %d %s, want 403", rec.Code, rec.Body)
+	}
+	for i := 0; i < gitproxy.MaxCLIProposalsPerAttempt; i++ {
+		if rec := send(h, http.MethodPost, tok2, "/cli/proposals", `{"title":"t","body":"b"}`); rec.Code != http.StatusOK {
+			t.Fatalf("proposal %d: %d %s", i+1, rec.Code, rec.Body)
+		}
+	}
+	if rec := send(h, http.MethodPost, tok2, "/cli/proposals", `{"title":"t","body":"b"}`); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("proposal over cap: %d %s, want 429", rec.Code, rec.Body)
+	}
+	// Quarantine follow-up proposals share the same per-attempt proposal cap.
+	if rec := send(h, http.MethodPost, tok2, "/cli/quarantine", `{"test_name":"pkg/foo.TestBar","reason":"flake"}`); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("quarantine follow-up proposal over cap: %d %s, want 429", rec.Code, rec.Body)
+	}
+
+	// /api/ forwarding attaches X-Grain-Channel: sandbox-cli, X-Grain-Acting-Task, and X-Grain-Acting-Run,
+	// and forwards X-Grain-Reason as X-Grain-Acting-Reason.
+	req := httptest.NewRequest(http.MethodDelete, "/api/tasks/9/comments/1", nil)
+	req.Header.Set("Authorization", basicAuthHeader(tok2))
+	req.Header.Set("X-Grain-Reason", "obsolete note")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK ||
+		apiHeaderChannel != "sandbox-cli" || apiHeaderTask != "7" || apiHeaderRun != "run-2" || apiHeaderReason != "obsolete note" {
+		t.Errorf("DELETE /api/tasks/9/comments/1: code=%d channel=%q task=%q run=%q reason=%q",
+			rec.Code, apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderReason)
+	}
+
+	// The acting task, run and channel are the proxy's to say, never the
+	// sandbox's: a sandbox naming another task, dropping the channel or
+	// passing its own credential on is overwritten, not believed.
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	req.Header.Set("Authorization", basicAuthHeader(tok2))
+	req.Header.Set("X-Grain-Acting-Task", "1")
+	req.Header.Set("X-Grain-Acting-Run", "run-of-task-1")
+	req.Header.Set("X-Grain-Channel", "model")
+	req.Header.Set("X-Grain-Tunnel-Token", "stolen")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK ||
+		apiHeaderChannel != "sandbox-cli" || apiHeaderTask != "7" || apiHeaderRun != "run-2" ||
+		apiHeaderAuth != "" || apiHeaderTunnel != "" || apiHeaderReason != "" {
+		t.Errorf("GET /api/tasks with spoofed headers: code=%d channel=%q task=%q run=%q auth=%q tunnel=%q reason=%q, "+
+			"want the proxy's own task 7, run-2, sandbox-cli and no credential",
+			rec.Code, apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderAuth, apiHeaderTunnel, apiHeaderReason)
+	}
+
+	// An external capability server is never handed the sandbox's proxy
+	// token or a sandbox-supplied X-Grain-* header.
+	var capAuth, capActing string
+	capReached := false
+	proxy.CapHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capReached = true
+		capAuth = r.Header.Get("Authorization")
+		capActing = r.Header.Get("X-Grain-Acting-Task")
+		w.WriteHeader(http.StatusOK)
+	})
+	req = httptest.NewRequest(http.MethodPost, "/cap/widgets/mcp", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", basicAuthHeader(tok2))
+	req.Header.Set("X-Grain-Acting-Task", "1")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !capReached || capAuth != "" || capActing != "" {
+		t.Errorf("POST /cap/widgets/mcp: reached=%v auth=%q acting=%q; want the capability server reached with neither",
+			capReached, capAuth, capActing)
+	}
+	proxy.CapHandler = nil
+
+	// A live run with no task to act for is never forwarded: without
+	// X-Grain-Acting-Task the API would answer as the deployment itself.
+	scopes.scopes["sb-1"] = model.NamespaceScope{RunID: "run-2", Attempt: 2}
+	apiHeaderTask = "unset"
+	for _, path := range []string{"/api/tasks", "/cap/memory"} {
+		req = httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", basicAuthHeader(tok2))
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || apiHeaderTask != "unset" {
+			t.Errorf("GET %s with no live task: code=%d, forwarded=%v; want 403 and nothing forwarded",
+				path, rec.Code, apiHeaderTask != "unset")
+		}
+	}
+
+	act.mu.Lock()
+	apiCallCount := len(act.apiCalls)
+	act.mu.Unlock()
+	if apiCallCount == 0 {
+		t.Error("expected RecordProxyAPICall to record served proxy calls")
 	}
 }
 

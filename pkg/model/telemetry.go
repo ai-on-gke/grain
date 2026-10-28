@@ -411,7 +411,7 @@ func (s *Store) RecordBatchRunTelemetry(ctx context.Context, batch map[string]Ru
 					return fmt.Errorf("recording %s's CI habits: %w", runID, err)
 				}
 			}
-			if err := insertRunAPICallsTx(ctx, tx, runID, t.APICalls, time.Now().UTC()); err != nil {
+			if err := insertRunAPICallsTx(ctx, tx, runID, s.mergeWithProxyAPICalls(runID, t.APICalls), time.Now().UTC()); err != nil {
 				return err
 			}
 		}
@@ -749,6 +749,7 @@ func (s *Store) dropProxyTools(batch map[string]RunTelemetry) {
 	for runID := range batch {
 		delete(s.proxyTools, runID)
 		delete(s.proxyCheckWaits, runID)
+		delete(s.proxyAPICalls, runID)
 	}
 }
 
