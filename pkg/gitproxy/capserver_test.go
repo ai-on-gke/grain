@@ -88,3 +88,59 @@ func TestCapRegistryUnregisterLeavesAReplacementAlone(t *testing.T) {
 		t.Errorf("after the replaced registration was removed: %+v, %v", got, ok)
 	}
 }
+
+// TestCapRefusesBodiesParsersDisagreeOn: encoding/json matches keys
+// without regard to case and keeps the last duplicate, so a body whose
+// tools/call reads as a sandbox tool to the proxy's check could name a
+// model-only one to the server's own parser. Every such body is refused
+// before the server sees it.
+func TestCapRefusesBodiesParsersDisagreeOn(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"ci-job-1": "tok-ci"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reached := 0
+	caps := gitproxy.NewCapRegistry()
+	caps.Register(gitproxy.CapSandboxKey("ci-job-1"), []gitproxy.CapServer{{
+		Name:  "widgets",
+		Tools: []gitproxy.CapTool{{Name: "ping"}, {Name: "secret", ModelOnly: true}},
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reached++
+			w.WriteHeader(http.StatusOK)
+		}),
+	}})
+	h := gitproxy.NewHandler(&gitproxy.GitProxy{
+		Tokens:          tokens,
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{}},
+		CapServers:      caps,
+	})
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"secret"},"Params":{"name":"ping"}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"secret"},"paramſ":{"name":"ping"}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","Method":"ping","params":{"name":"secret"}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"secret","NAME":"ping"}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"secret","name":"ping"}}`,
+		`[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"secret","Name":"ping"}}]`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/cap/widgets/mcp", strings.NewReader(body))
+		req.Header.Set("Authorization", basicAuthHeader("tok-ci"))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code < 400 || reached != 0 {
+			t.Errorf("POST %s: %d, server reached %d times; want refused and untouched", body, rec.Code, reached)
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/cap/widgets/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{"a":{"b":1},"c":[{"name":"x"},{"name":"y"}]}}}`))
+	req.Header.Set("Authorization", basicAuthHeader("tok-ci"))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || reached != 1 {
+		t.Errorf("an unambiguous call with nested arguments: %d, reached %d times; want it forwarded", rec.Code, reached)
+	}
+}

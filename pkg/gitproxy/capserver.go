@@ -34,6 +34,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 // maxCapRequestBytes bounds one /cap/<server>/mcp request body, which the
@@ -250,8 +251,16 @@ func (p *GitProxy) serveExternalCap(w http.ResponseWriter, r *http.Request, serv
 }
 
 // capToolCalls is the tool name of every tools/call in body, a JSON-RPC
-// message or batch.
+// message or batch. A body with two keys in one object that differ at
+// most in case is refused outright: encoding/json matches keys without
+// regard to case and keeps the last duplicate, so such a body could read
+// as one tool here and as another to the capability server's parser --
+// {"method":"tools/call","params":{"name":"secret"},"Params":{"name":"ping"}}
+// is ping to this check and secret to a case-sensitive server.
 func capToolCalls(body []byte) ([]string, error) {
+	if err := rejectAmbiguousKeys(body); err != nil {
+		return nil, err
+	}
 	type message struct {
 		Method string          `json:"method"`
 		Params json.RawMessage `json:"params"`
@@ -285,6 +294,78 @@ func capToolCalls(body []byte) ([]string, error) {
 		out = append(out, params.Name)
 	}
 	return out, nil
+}
+
+// rejectAmbiguousKeys refuses a JSON document any of whose objects holds
+// two keys equal under Unicode case folding (exact duplicates included):
+// the keys parsers disagree on, so the ones no tools/call check can read
+// the way the server will.
+func rejectAmbiguousKeys(body []byte) error {
+	type frame struct {
+		object    bool
+		expectKey bool
+		keys      map[string]bool
+	}
+	var stack []*frame
+	valueDone := func() {
+		if n := len(stack); n > 0 && stack[n-1].object {
+			stack[n-1].expectKey = true
+		}
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch v := tok.(type) {
+		case json.Delim:
+			switch v {
+			case '{':
+				stack = append(stack, &frame{object: true, expectKey: true, keys: map[string]bool{}})
+			case '[':
+				stack = append(stack, &frame{})
+			default:
+				stack = stack[:len(stack)-1]
+				valueDone()
+			}
+		case string:
+			if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].expectKey {
+				top := stack[n-1]
+				k := foldKey(v)
+				if top.keys[k] {
+					return fmt.Errorf("key %q appears twice in one object (keys are compared without regard to case)", v)
+				}
+				top.keys[k] = true
+				top.expectKey = false
+				continue
+			}
+			valueDone()
+		default:
+			valueDone()
+		}
+	}
+}
+
+// foldKey maps s to one spelling per case-folding class: each rune to the
+// least rune of its unicode.SimpleFold orbit, which is how
+// strings.EqualFold (and encoding/json's key matching) compares runes.
+func foldKey(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		least := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < least {
+				least = f
+			}
+		}
+		b.WriteRune(least)
+	}
+	return b.String()
 }
 
 func writeCapJSON(w http.ResponseWriter, v any) {
