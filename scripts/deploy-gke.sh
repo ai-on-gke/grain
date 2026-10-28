@@ -172,6 +172,7 @@ load_config_file() {
     elif [[ "${val}" =~ ^\'(.*)\'$ ]]; then
       val="${BASH_REMATCH[1]}"
     fi
+    # shellcheck disable=SC2016
     if [[ "${val}" == *'$('* || "${val}" == *'`'* ]]; then
       die "refusing command substitution in config file ${file} for ${key}"
     fi
