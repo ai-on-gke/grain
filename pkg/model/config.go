@@ -921,6 +921,11 @@ type Config struct {
 	// controller inside these bounds (overcommit.go). In auto mode the
 	// two stored ratios are where the controller starts.
 	SandboxOvercommit OvercommitSettings
+	// ExternalAgentAPI enables the daemon's /mcp endpoint and bearer-token
+	// authentication for external agents (docs/agent-api.md, "External
+	// agents"). Off by default so a deployment must opt in before any
+	// external credential is accepted.
+	ExternalAgentAPI bool
 }
 
 // Default Kubernetes sandbox configuration values.

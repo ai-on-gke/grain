@@ -487,6 +487,12 @@ func (s *Server) memoryWriter(r *http.Request, id, kind, repo string) (model.Pri
 // every scope: there is no team memory agent writing only its own
 // team's layer any more.
 func (c *Client) requireMemoryGrant(ctx context.Context, id, repo string) error {
+	if call, ok := agentCallFromContext(ctx); ok && call.external != nil {
+		if call.grants.Has("memory:write") {
+			return nil
+		}
+		return forbiddenErrorf("%s does not hold the memory:write scope, so it may not write memory", id)
+	}
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil {
 		return err

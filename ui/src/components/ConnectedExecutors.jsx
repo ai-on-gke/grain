@@ -44,17 +44,17 @@ export default function ConnectedExecutors() {
   return (
     <>
       <Typography variant="subtitle2" sx={{ mb: 1 }}>
-        Connected executors
+        Model servers
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-        Remote executor nodes connected now, providing agent execution
-        environments and binaries. The tokens they connect with are on Settings
-        &rarr; Executors.
+        Model servers (<code>grain model-server</code>) connected now, providing
+        agent execution environments and binaries. The tokens they connect with
+        are on Settings &rarr; Executors.
       </Typography>
       <Stack spacing={1.25} sx={{ mb: 3 }}>
         {loadError && (
           <Alert severity="error">
-            Connected executors could not be read ({loadError}).
+            Model servers could not be read ({loadError}).
           </Alert>
         )}
         {executors.map((executor) => {
@@ -164,7 +164,7 @@ export default function ConnectedExecutors() {
           );
         })}
         {!loadError && executors.length === 0 && (
-          <Alert severity="info">No remote executors connected.</Alert>
+          <Alert severity="info">No model servers connected.</Alert>
         )}
       </Stack>
     </>

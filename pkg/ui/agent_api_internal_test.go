@@ -698,6 +698,17 @@ var capabilitiesAdminBodies = map[string]struct {
 	// holds that.
 	"PutAPIScopeSetRequest":    {reflect.TypeFor[PutAPIScopeSetRequest](), nil, []string{"set"}},
 	"DeleteAPIScopeSetRequest": {reflect.TypeFor[DeleteAPIScopeSetRequest](), nil, []string{"name"}},
+	"CreateExternalAgentTokenRequest": {reflect.TypeFor[CreateExternalAgentTokenRequest](),
+		nil, []string{"name", "scopeSet", "scopes", "repos", "expiresAt", "rateLimit", "maxConcurrent"}},
+}
+
+// capabilitiesAdminBodylessRoutes are capabilities:admin routes that act by URL
+// path parameter (or on all credentials) without decoding a JSON request body.
+var capabilitiesAdminBodylessRoutes = map[string]bool{
+	"POST /api/external-agents/tokens/{id}/rotate": true,
+	"POST /api/external-agents/tokens/{id}/revoke": true,
+	"DELETE /api/external-agents/tokens/{id}":      true,
+	"POST /api/external-agents/tokens/revoke-all":  true,
 }
 
 // TestCapabilitiesAdminGrantKeysAreScanned holds agentGrantEscalation to
@@ -716,6 +727,9 @@ func TestCapabilitiesAdminGrantKeysAreScanned(t *testing.T) {
 		}
 		bodies := inputs[pattern].bodies
 		if len(bodies) == 0 {
+			if capabilitiesAdminBodylessRoutes[pattern] {
+				continue
+			}
 			t.Errorf("%s reads no body this test can see: sort its keys in capabilitiesAdminBodies", pattern)
 		}
 		for _, name := range bodies {
