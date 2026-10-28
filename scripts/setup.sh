@@ -4883,7 +4883,16 @@ configure_state_repo() {
   # As the account (grain_cli), so the state-repo/.git it creates is that
   # account's: git refuses a repository whose owner is not the caller
   # ("detected dubious ownership"), and the daemon that starts a few
-  # lines below would otherwise fail its first `git config`.
+  # lines below would otherwise fail its first `git config`. Beside
+  # grain hostd, grain_cli runs the host binary, which needs git on
+  # this host; a minimal host without git uses run-image.sh, which runs
+  # the image's grain and git as the same uid:gid.
+  if [ "${GRAIN_HOSTD:-0}" = "1" ] && ! command -v git >/dev/null 2>&1 && [ -x /usr/local/lib/grain/run-image.sh ]; then
+    if ! /usr/local/lib/grain/run-image.sh -- state -data-dir "$GRAIN_DATA_DIR" status; then
+      log "  could not open the config repository yet -- grain-daemon.service will retry on start"
+    fi
+    return
+  fi
   if ! grain_cli state -data-dir "$GRAIN_DATA_DIR" status; then
     log "  could not open the config repository yet -- grain-daemon.service will retry on start"
   fi

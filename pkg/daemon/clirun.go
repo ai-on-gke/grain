@@ -278,6 +278,7 @@ func (c Config) cliHostPath(framework string) string {
 
 // ResolveCLIRun is where framework's CLI runs under c.
 func (c Config) ResolveCLIRun(ctx context.Context, framework string) CLIRunResolution {
+	ctx = withHostdOffersCache(ctx)
 	framework = model.NormalizeAgentFrameworkName(framework)
 	location, source := c.CLIRunSetting(framework)
 	r := CLIRunResolution{Framework: framework, Setting: location, Source: source, HostPath: c.cliHostPath(framework)}
@@ -440,6 +441,7 @@ func (c Config) upgradeInterruptNotes(ctx context.Context, store *model.Store) m
 
 // ResolveCLIRuns is every framework's resolution, in Settings order.
 func (c Config) ResolveCLIRuns(ctx context.Context) []CLIRunResolution {
+	ctx = withHostdOffersCache(ctx)
 	var out []CLIRunResolution
 	for _, fw := range model.CLIRunFrameworks {
 		out = append(out, c.ResolveCLIRun(ctx, fw))
