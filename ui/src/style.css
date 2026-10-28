@@ -4254,6 +4254,10 @@ fieldset legend {
 }
 :root[data-phone="true"] .inbox-actions {
   flex: 1 1 100%;
+  /* A CL's chip and its presubmit and review badges beside the answers
+     are wider than a phone: they wrap rather than run off the row. */
+  flex-wrap: wrap;
+  row-gap: 0.4rem;
   justify-content: flex-end;
   padding: 0 1rem 0.75rem;
 }
