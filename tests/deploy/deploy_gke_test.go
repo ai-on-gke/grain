@@ -259,7 +259,7 @@ func TestDeployGKEManifestsAndBaseSync(t *testing.T) {
 		contains(t, rendered, "timeoutSec: 86400")
 		contains(t, rendered, "kind: SecretProviderClass")
 		contains(t, rendered, "name: grain-access")
-		contains(t, rendered, "port: 7443")
+		contains(t, rendered, "port: 4244")
 		contains(t, rendered, "name: grain-sandbox-egress")
 		contains(t, rendered, "name: grain-access-ingress")
 		contains(t, rendered, "name: grain-webhook-isolation")

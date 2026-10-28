@@ -2,7 +2,7 @@
 
 This guide documents how to deploy **Grain on GKE** (`docs/design/grain-on-gke.md`) using `scripts/deploy-gke.sh`, the Kustomize overlay under `deploy/kubernetes/gke/` (and `deploy/gke/manifests/`), and the Terraform module under `deploy/gke/terraform/`.
 
-In this topology, `grain daemon`, its in-process services (package cache, git proxy, model proxy, Actions cache), the granule dial-out mTLS acceptor (`Service/grain-access:7443`), and `github-webhook` run on a GKE cluster behind an Identity-Aware Proxy (IAP) global external Application Load Balancer (`Gateway/grain-gateway`), while **`grain hostd` stays on the existing workstation** and dials out to GKE over a single IAP + token-authenticated WebSocket (`wss://<dns-name>/api/hostd/connect`).
+In this topology, `grain daemon`, its in-process services (package cache, git proxy, model proxy, Actions cache), the granule dial-out mTLS acceptor (`Service/grain-access:4244`), and `github-webhook` run on a GKE cluster behind an Identity-Aware Proxy (IAP) global external Application Load Balancer (`Gateway/grain-gateway`), while **`grain hostd` stays on the existing workstation** and dials out to GKE over a single IAP + token-authenticated WebSocket (`wss://<dns-name>/api/hostd/connect`).
 
 ---
 
@@ -83,7 +83,7 @@ Run without `--dry-run` to execute stages 1–5:
 This stage:
 1. Creates (or adopts with `--adopt-cluster`) the GKE cluster with Dataplane V2, Workload Identity, Gateway API (`CHANNEL_STANDARD`), Secret Manager CSI driver, the `daemon` node pool, and the nested-virtualization `grain-sandbox-pool` node pool (`--enable-nested-virtualization --workload-metadata=GKE_METADATA`), plus `Namespace/grain` (`pod-security.kubernetes.io/enforce=privileged`), `PriorityClass` objects (`grain-daemon`, `grain-interactive`, `grain-agent`, `grain-ci`), and `ResourceQuota/grain-quota`.
 2. Provisions Cloud SQL for PostgreSQL 16 (private IP + IAM authentication) or in-cluster Postgres (`--postgres=in-cluster`), creates Secret Manager secret containers, and binds `grain/grain` to `grain-daemon@<project>.iam.gserviceaccount.com` with least-privilege IAM (`roles/cloudsql.client`, `roles/cloudsql.instanceUser`, per-secret `roles/secretmanager.secretAccessor`, and bucket-scoped `roles/storage.objectAdmin`). Sandbox pods run as `ServiceAccount/grain-sandbox` with `automountServiceAccountToken: false` and **no** Workload Identity binding.
-3. Resolves and pins the `ghcr.io/bwsalmon/grain/...` daemon and granule guest images by `@sha256:` digest and applies the `deploy/kubernetes/gke/` Kustomize overlay (`Deployment/grain`, `Deployment/grain-webhook`, `Service/grain`, `Service/grain-hostd`, `Service/grain-sandbox`, `Service/grain-access:7443`, `SecretProviderClass/grain-secrets`, and `NetworkPolicy` objects `grain-sandbox-network-none`, `grain-sandbox-egress`, `grain-access-ingress`, `grain-webhook-isolation`). If `grain-daemon.service` is still active on the workstation, `Deployment/grain` is staged at `replicas: 0` until `--cutover`.
+3. Resolves and pins the `ghcr.io/bwsalmon/grain/...` daemon and granule guest images by `@sha256:` digest and applies the `deploy/kubernetes/gke/` Kustomize overlay (`Deployment/grain`, `Deployment/grain-webhook`, `Service/grain`, `Service/grain-hostd`, `Service/grain-sandbox`, `Service/grain-access:4244`, `SecretProviderClass/grain-secrets`, and `NetworkPolicy` objects `grain-sandbox-network-none`, `grain-sandbox-egress`, `grain-access-ingress`, `grain-webhook-isolation`). If `grain-daemon.service` is still active on the workstation, `Deployment/grain` is staged at `replicas: 0` until `--cutover`.
 4. Reserves `grain-gateway-ip`, creates the managed certificate `grain-gateway-cert`, configures the Gateway (`Gateway/grain-gateway` + `HTTPRoute/grain-routes` + `GCPBackendPolicy` with `timeoutSec: 86400` on `Service/grain-hostd`), populates `GRAIN_IAP_AUDIENCE` on `Deployment/grain`, and grants `roles/iap.httpsResourceAccessor` on the `grain` and `grain-hostd` backend services (never project-wide) to every `--iap-principal`.
 5. Leaves `/usr/local/bin/grain hostd`, `/etc/grain/hostd.yaml` and its allowlist intact on the workstation, writes `/etc/grain/hostd.token` (`0600`, owned by `--hostd-owner`), syncs the token to Secret Manager (`grain-hostd-token`) and Kubernetes (`Secret/grain-hostd-token`), writes `/etc/grain/hostd-remote.env` and `/etc/systemd/system/grain-hostd.service.d/remote.conf` pointing at `https://<dns-name>`, and restarts `grain-hostd.service` only.
 
@@ -134,7 +134,7 @@ Confirm the GKE deployment end-to-end:
 `--check` verifies:
 1. The UI answers through IAP at `https://<dns-name>/api/auth/access-code`.
 2. The workstation's `hostd` is connected (`/api/executors`).
-3. A test sandbox executes a command over the granule dial-out channel (`Service/grain-access:7443`).
+3. A test sandbox executes a command over the granule dial-out channel (`Service/grain-access:4244`).
 4. The GKE API server Cloud Audit Log records **zero** `pods/exec`, `pods/attach`, or `pods/portforward` calls for that test sandbox run.
 
 ### 6. Roll Back (`--rollback`)
