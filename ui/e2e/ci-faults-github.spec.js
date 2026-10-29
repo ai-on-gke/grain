@@ -85,32 +85,39 @@ for (const [name, viewport] of [
 // grain/task-1520: the box folds behind its header, and the choice is
 // this browser's -- a reload opens /ci with it still folded, the header
 // still saying how many, and no "new" badge for faults it already held.
-test("collapses the shared faults box and keeps it collapsed across a reload", async ({
-  page,
-}) => {
-  await page.goto("/ci");
-  const toggle = page.getByTestId("ci-shared-faults-toggle");
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  await expect(toggle).toHaveText(/\d+ shared failures?/);
-  const card = page.getByTestId("ci-shared-fault-github");
-  await expect(card).toBeVisible();
+// At a phone's width as well as a desktop's (2026-10-28 test plan §7).
+for (const [name, viewport] of [
+  ["desktop", { width: 1280, height: 900 }],
+  ["phone", { width: 390, height: 844 }],
+]) {
+  test(`collapses the shared faults box and keeps it collapsed across a reload (${name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/ci");
+    const toggle = page.getByTestId("ci-shared-faults-toggle");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(toggle).toHaveText(/\d+ shared failures?/);
+    const card = page.getByTestId("ci-shared-fault-github");
+    await expect(card).toBeVisible();
 
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await expect(card).toBeHidden();
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(card).toBeHidden();
 
-  await page.reload();
-  const again = page.getByTestId("ci-shared-faults-toggle");
-  await expect(again).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByTestId("ci-shared-fault-github")).toBeHidden();
-  await expect(page.getByTestId("ci-shared-faults-new")).toHaveCount(0);
+    await page.reload();
+    const again = page.getByTestId("ci-shared-faults-toggle");
+    await expect(again).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByTestId("ci-shared-fault-github")).toBeHidden();
+    await expect(page.getByTestId("ci-shared-faults-new")).toHaveCount(0);
 
-  // Keyboard opens it again.
-  await again.focus();
-  await page.keyboard.press("Enter");
-  await expect(again).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByTestId("ci-shared-fault-github")).toBeVisible();
-});
+    // Keyboard opens it again.
+    await again.focus();
+    await page.keyboard.press("Enter");
+    await expect(again).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("ci-shared-fault-github")).toBeVisible();
+  });
+}
 
 // A fault the collapsed box has not seen is counted on its header, the
 // chip sitting on the header's line and inside the page at both widths.
