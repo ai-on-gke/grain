@@ -748,3 +748,45 @@ func TestRenderMetricsRendersTheGitHubCISection(t *testing.T) {
 		t.Errorf("the whole report should print GitHub CI after grain's CI queueing:\n%s", whole)
 	}
 }
+
+// A job that concluded only as skipped or neutral decided nothing, so it
+// has no pass, fail or cancel rate to print: a dash, not 0% across the
+// row as though it had run and done none of the three (2026-10-28 test
+// plan §7, docs/test-runs/2026-10-28-github-ci-metrics-bot.md).
+func TestRenderMetricsGitHubCIJobWithNothingDecidedHasNoRates(t *testing.T) {
+	t.Parallel()
+	rep := ui.MetricsReport{
+		Since: time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC),
+		Until: time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC), WindowSeconds: 24 * 60 * 60,
+		GitHubCI: ui.MetricsGitHubCI{
+			Source: "github",
+			MetricsGitHubCIOutcomes: ui.MetricsGitHubCIOutcomes{
+				Jobs: 3, Passed: 1, Skipped: 1, Neutral: 1, PassRate: 1,
+			},
+			ByJob: []ui.MetricsGitHubCIJob{
+				{Source: "github", Repo: "acme/widgets", Job: "CI / build",
+					MetricsGitHubCIOutcomes: ui.MetricsGitHubCIOutcomes{Jobs: 1, Passed: 1, PassRate: 1}},
+				{Source: "github", Repo: "acme/widgets", Job: "Deploy / release",
+					MetricsGitHubCIOutcomes: ui.MetricsGitHubCIOutcomes{Jobs: 1, Skipped: 1}},
+				{Source: "github", Repo: "acme/widgets", Job: "codecov/patch",
+					MetricsGitHubCIOutcomes: ui.MetricsGitHubCIOutcomes{Jobs: 1, Neutral: 1}},
+			},
+		},
+	}
+	out := renderedMetrics(rep, mcp.MetricsSectionGitHubCI)
+	rows := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		for _, job := range []string{"CI / build", "Deploy / release", "codecov/patch"} {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "acme/widgets "+job); ok {
+				// n, pass, fail, cancel, flaky
+				rows[job] = strings.Join(strings.Fields(rest)[1:4], " ")
+			}
+		}
+	}
+	want := map[string]string{"CI / build": "100% 0% 0%", "Deploy / release": "- - -", "codecov/patch": "- - -"}
+	for job, w := range want {
+		if rows[job] != w {
+			t.Errorf("%s rates = %q, want %q:\n%s", job, rows[job], w, out)
+		}
+	}
+}

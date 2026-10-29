@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/whererun"
@@ -415,12 +416,12 @@ func TestHostdStatusSuggestsAMissingDefaultEntry(t *testing.T) {
 }
 
 // offersClaudeDetached is an allowlist with the container-equivalent
-// claude entry setup.sh writes, and the operator's own claude beside it.
-const offersClaudeDetached = "clis:\n  claude:\n    path: %[1]s\n    cwd_under: [%[2]s]\n  claude-detached:\n    path: %[1]s\n    paths_under: [%[2]s]\n    cwd_under: [%[2]s]\n"
+// claude and codex entries setup.sh writes, and the operator's own claude beside it.
+const offersClaudeDetached = "clis:\n  claude:\n    path: %[1]s\n    cwd_under: [%[2]s]\n  claude-detached:\n    path: %[1]s\n    paths_under: [%[2]s]\n    cwd_under: [%[2]s]\n  codex-detached:\n    path: %[1]s\n    paths_under: [%[2]s]\n    cwd_under: [%[2]s]\n"
 
-// detached is claude's container-equivalent entry on hostd when hostd
-// offers it, and otherwise a container run -- never a failed one -- with
-// Settings told why. It is offered for claude alone, and only behind
+// detached is claude's and codex's container-equivalent entry on hostd when
+// hostd offers it, and otherwise a container run -- never a failed one -- with
+// Settings told why. It is offered for claude and codex, and only behind
 // hostd.
 func TestDetachedResolution(t *testing.T) {
 	sh, _ := exec.LookPath("sh")
@@ -462,21 +463,25 @@ func TestDetachedResolution(t *testing.T) {
 	if got := cfg.cliRunLocations(model.AgentFrameworkClaude); !slices.Contains(got, model.CLIRunDetached) {
 		t.Errorf("claude's locations behind hostd = %v, want detached among them", got)
 	}
-	if got := cfg.cliRunLocations(model.AgentFrameworkCodex); slices.Contains(got, model.CLIRunDetached) {
-		t.Errorf("codex's locations = %v: its runs cannot be adopted yet", got)
+	if got := cfg.cliRunLocations(model.AgentFrameworkCodex); !slices.Contains(got, model.CLIRunDetached) {
+		t.Errorf("codex's locations behind hostd = %v, want detached among them", got)
 	}
 	if err := cfg.CheckCLIRunSettings(map[string]model.CLIRunSetting{"claude": {Location: "detached"}}); err != nil {
 		t.Errorf("claude detached behind hostd refused: %v", err)
 	}
-	if err := cfg.CheckCLIRunSettings(map[string]model.CLIRunSetting{"codex": {Location: "detached"}}); err == nil {
-		t.Error("codex detached accepted")
+	if err := cfg.CheckCLIRunSettings(map[string]model.CLIRunSetting{"codex": {Location: "detached"}}); err != nil {
+		t.Errorf("codex detached behind hostd refused: %v", err)
 	}
 	cfg.ClaudeRun = model.CLIRunDetached
+	cfg.CodexRun = model.CLIRunDetached
 	if err := CheckCLIRunFlags(cfg); err != nil {
-		t.Errorf("-claude-run=detached behind hostd: %v", err)
+		t.Errorf("-claude-run=detached -codex-run=detached behind hostd: %v", err)
 	}
 	if r := cfg.ResolveCLIRun(context.Background(), model.AgentFrameworkClaude); r.Location != model.CLIRunDetached || r.Source != "flag" {
 		t.Errorf("-claude-run=detached resolved to %+v", r)
+	}
+	if r := cfg.ResolveCLIRun(context.Background(), model.AgentFrameworkCodex); r.Location != model.CLIRunDetached || r.Entry != "codex-detached" || r.Source != "flag" {
+		t.Errorf("-codex-run=detached resolved to %+v", r)
 	}
 
 	// Without hostd there is nothing to detach through: the flag is
@@ -496,14 +501,19 @@ func TestDetachedResolution(t *testing.T) {
 }
 
 // Settings -> Models and the upgrade pane say which CLIs a daemon
-// upgrade interrupts: codex wherever it runs, since nothing carries its
-// runs across a restart yet, and claude in the container, which detached
-// would carry -- but not a detached claude.
+// upgrade interrupts: claude and codex in the container, which detached
+// would carry -- but not when detached.
 func TestUpgradeInterruptsNamesTheCLIsAnUpgradeLoses(t *testing.T) {
 	cfg := withExecutor(Config{HostdSocket: startTestHostd(t, offersClaudeDetached)}, inContainer, nil)
-	cfg.CLIRun = map[string]model.CLIRunSetting{"claude": {Location: model.CLIRunDetached}}
+	cfg.CLIRun = map[string]model.CLIRunSetting{
+		"claude": {Location: model.CLIRunDetached},
+		"codex":  {Location: model.CLIRunDetached},
+	}
 	if r := cfg.ResolveCLIRun(context.Background(), model.AgentFrameworkClaude); r.UpgradeInterrupts != "" {
 		t.Errorf("a detached claude says an upgrade interrupts it: %q", r.UpgradeInterrupts)
+	}
+	if r := cfg.ResolveCLIRun(context.Background(), model.AgentFrameworkCodex); r.UpgradeInterrupts != "" {
+		t.Errorf("a detached codex says an upgrade interrupts it: %q", r.UpgradeInterrupts)
 	}
 	cfg.CLIRun = map[string]model.CLIRunSetting{"claude": {Location: model.CLIRunContainer}}
 	r := cfg.ResolveCLIRun(context.Background(), model.AgentFrameworkClaude)
@@ -511,8 +521,8 @@ func TestUpgradeInterruptsNamesTheCLIsAnUpgradeLoses(t *testing.T) {
 		t.Errorf("claude in the container: %q, want it interrupted, with detached named as the cure", r.UpgradeInterrupts)
 	}
 	r = cfg.ResolveCLIRun(context.Background(), model.AgentFrameworkCodex)
-	if !strings.Contains(r.UpgradeInterrupts, "A daemon upgrade interrupts codex runs") || !strings.Contains(r.UpgradeInterrupts, "MCP endpoint the daemon itself serves") {
-		t.Errorf("codex: %q, want it interrupted, saying why nothing carries it", r.UpgradeInterrupts)
+	if !strings.Contains(r.UpgradeInterrupts, "A daemon upgrade interrupts codex runs") || !strings.Contains(r.UpgradeInterrupts, "Set it to detached") {
+		t.Errorf("codex in the container: %q, want it interrupted, with detached named as the cure", r.UpgradeInterrupts)
 	}
 	// The bare machine has no upgrade pane to say it in.
 	bare := withExecutor(Config{}, whererun.Detection{Host: true}, nil)
@@ -563,6 +573,74 @@ func TestBuildClaudeFrameworkDetachedSendsTheTokenAndForksItsMCPServer(t *testin
 	self, _ := os.Executable()
 	if !strings.Contains(config, `"command"`) || !strings.Contains(config, self) || strings.Contains(config, `"url"`) {
 		t.Errorf("mcp config = %s, want grain's mcpserver forked from %s, not an endpoint in this daemon", config, self)
+	}
+}
+
+// A detached codex shares the deployment's auth.json symlink in CODEX_HOME
+// and writes mcpserver.json instead of starting an HTTP MCP adapter inside
+// the daemon, so the host wrapper (grain codex-detached) can serve it
+// alongside codex across a daemon upgrade.
+func TestBuildCodexFrameworkDetachedSharesAuthFileAndDefersMCPServer(t *testing.T) {
+	dataDir := t.TempDir()
+	authFile := ManagedCodexAuthFile(dataDir)
+	if err := os.MkdirAll(filepath.Dir(authFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authFile, []byte(`{"tokens":{"access_token":"tok"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fakeCodex := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	allowlist := fmt.Sprintf("clis:\n  codex-detached:\n    path: %s\n    paths_under: [%%[2]s, %s]\n    cwd_under: [%%[2]s, %s]\n# %%[1]s\n", fakeCodex, dataDir, os.TempDir())
+	socket := startTestHostd(t, allowlist)
+	t.Setenv("TMPDIR", t.TempDir())
+	cfg := withExecutor(Config{DataDir: dataDir, HostdSocket: socket}, inContainer, nil)
+	cfg.CLIRun = map[string]model.CLIRunSetting{"codex": {Location: model.CLIRunDetached}}
+	fw, err := buildCodexFramework(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, ok := fw.(agent.HostProvider).Host().(agent.HostdHost)
+	if !ok || h.Entry != "codex-detached" || h.Client.Socket != socket {
+		t.Fatalf("host = %#v, want agent.HostdHost for entry codex-detached on %s", fw.(agent.HostProvider).Host(), socket)
+	}
+	tc, err := fw.(agent.TerminalFramework).TerminalCommand(context.Background(), agent.RunConfig{SandboxRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if tc.Cleanup != nil {
+			tc.Cleanup()
+		}
+	})
+	var codexHome string
+	for _, kv := range tc.Env {
+		if v, ok := strings.CutPrefix(kv, "CODEX_HOME="); ok {
+			codexHome = v
+		}
+	}
+	if codexHome == "" {
+		t.Fatalf("env = %v, want CODEX_HOME", tc.Env)
+	}
+	target, err := os.Readlink(filepath.Join(codexHome, "auth.json"))
+	if err != nil || target != authFile {
+		t.Fatalf("auth.json symlink = %q, %v; want %q", target, err, authFile)
+	}
+	specBytes, err := os.ReadFile(filepath.Join(codexHome, "mcpserver.json"))
+	if err != nil {
+		t.Fatalf("mcpserver.json missing in detached CODEX_HOME: %v", err)
+	}
+	if !strings.Contains(string(specBytes), `"args"`) || !strings.Contains(string(specBytes), `"mcpserver"`) {
+		t.Errorf("mcpserver.json = %s, want mcpserver args", specBytes)
+	}
+	configBytes, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	if err != nil {
+		t.Fatalf("config.toml missing: %v", err)
+	}
+	if strings.Contains(string(configBytes), "[mcp_servers.grain-sandbox]") {
+		t.Errorf("config.toml = %s, want [mcp_servers.grain-sandbox] deferred to grain codex-detached", configBytes)
 	}
 }
 

@@ -371,12 +371,12 @@ func memoryAgentBody(stateRepo RepoRef) string {
 		"they start.\n\n")
 
 	b.WriteString("Your evidence is the record of the runs themselves, and you read it with the " +
-		"self-debug capability's task tools: `list_grain_tasks` for what this deployment has " +
-		"been doing (narrow it with \"state\" -- failed is the interesting one -- and " +
-		"\"limit\"), `read_grain_task` for one task's whole record, every attempt and how each " +
-		"one ended and everything said on the way through, `read_grain_task_prompt` for what " +
-		"an agent was actually told, and `read_grain_task_transcript` for one attempt's own " +
-		"story. `read_grain_metrics` is the same evidence counted rather than read: the " +
+		"self-debug capability's `grain` commands in your sandbox: `grain task list` for what " +
+		"this deployment has been doing (pipe it through `grep` for failed tasks), " +
+		"`grain task read <id>` for one task's whole record, every attempt and how each " +
+		"one ended and everything said on the way through, `grain task prompt <id>` for what " +
+		"an agent was actually told, and `grain task transcript <id> [--attempt N]` for one " +
+		"attempt's own story. `grain metrics [<section>]` is the same evidence counted rather than read: the " +
 		"deployment's own report over a window you choose, including the tool-use census " +
 		"and the prompt sizes. Reach for it when what you think you are seeing is a rate -- " +
 		"\"runs keep timing out on this tool\" is a claim the census either supports or does " +
@@ -422,12 +422,12 @@ func memoryAgentBody(stateRepo RepoRef) string {
 		"what grain itself does before you write down a belief about it -- a " +
 		"memory that misreads grain's own behaviour is repeated to every run afterwards.\n\n")
 
-	b.WriteString("Write what you found with update_memory. Leave `repo` out for the memory " +
-		"every run gets, or set it to \"owner/name\" for the one only runs targeting that " +
+	b.WriteString("Write what you found with `grain memory write --file <f>`. Leave `--repo` out for the memory " +
+		"every run gets, or set `--repo owner/name` for the one only runs targeting that " +
 		"repository get; write both if both have something to say. Each one replaces the " +
 		"whole memory for that scope rather than adding to it, and what you are replacing is " +
 		"already in the prompt above: send back what is still true, drop what is not, and " +
-		"send an empty text to forget a scope entirely. That is the only way a memory ever " +
+		"write an empty file to forget a scope entirely. That is the only way a memory ever " +
 		"gets smaller, so re-reading what is there and cutting what has stopped being true " +
 		"is as much of this job as adding anything.\n\n")
 
@@ -450,17 +450,18 @@ func memoryAgentBody(stateRepo RepoRef) string {
 
 	b.WriteString("grain also keeps long notes -- documents: a named note per scope that no " +
 		"prompt carries, listed one line each in the memory block above and read in full with " +
-		"read_memory_document. You have those tools because you hold the memory capability, and " +
+		"`grain memory read <key>`. You have those commands because you hold the memory capability, and " +
 		"nothing else here is scheduled to look at them, so keeping them true is as much this " +
-		"job as the short memory is. Call list_memory_documents rather than working from the " +
-		"index in your own prompt: that index is this deployment's own scope, and the tool lists " +
+		"job as the short memory is. Run `grain memory list` rather than working from the " +
+		"index in your own prompt: that index is this deployment's own scope, and the command lists " +
 		"every repository's as well. Read the ones that touch what you have just been reading in " +
 		"the record, and read the old ones on principle. A document goes stale quietly -- nothing " +
 		"carries it, so nothing goes wrong the night it stops being true; it goes wrong later, in " +
 		"the one run that opens it mid-task and believes it.\n\n")
 
-	b.WriteString("You write one with the same update_memory call: name it in `document`, say in " +
-		"one line of `summary` what it is about, and put the note in `text`. That summary is the " +
+	b.WriteString("You write one with `grain memory doc-write <name> --summary <s> --file <f>` " +
+		"(and `--repo owner/name` for a repository's): say in one line of `--summary` what it is " +
+		"about, and put the note in the file. That summary is the " +
 		"part every prompt pays for, so it says what the note is about rather than what it says. " +
 		"Writing the same name again replaces the document whole and an empty text deletes it, so " +
 		"a note you have found to have gone stale is yours to correct on the spot -- rewrite it " +
@@ -588,8 +589,8 @@ func releaseNotesBody(stateRepo RepoRef) string {
 		"operator, and anybody they show it to. This is the account of how much work the " +
 		"cluster has done, across every repository it works in.\n\n")
 
-	b.WriteString("Start with `read_cluster_stats`. With no arguments it answers for the week " +
-		"that just ended -- the same week `write_release_notes` files under by default -- and " +
+	b.WriteString("Start with `grain release-notes stats` in your sandbox. With no arguments it answers for the week " +
+		"that just ended -- the same week `grain release-notes publish` files under by default -- and " +
 		"it is grain's own count, not an estimate: pull requests merged, tasks completed, " +
 		"tasks filed, runs and how many of them succeeded, how long the agents spent running, " +
 		"how many lines those merges added and removed, and the same counts per repository. " +
@@ -601,9 +602,9 @@ func releaseNotesBody(stateRepo RepoRef) string {
 		"too, and never quote a partial figure as the week's total.\n\n")
 
 	b.WriteString("Then find out what the week was actually about, with the self-debug task " +
-		"tools: `list_grain_tasks` for what has been going on (narrow it with \"state\" and " +
-		"\"limit\"), `read_grain_task` for one task's whole record, `read_grain_task_prompt` " +
-		"for what an agent was told and `read_grain_task_transcript` for one attempt's story. " +
+		"commands: `grain task list` for what has been going on, `grain task read <id>` for one " +
+		"task's whole record, `grain task prompt <id>` for what an agent was told and " +
+		"`grain task transcript <id>` for one attempt's story. " +
 		"Read the week the stats cover. You are looking for the handful of things a person " +
 		"would want to know: what landed and what it changes, what took several attempts and " +
 		"why, what is still open or still failing, what somebody had to answer a question " +
@@ -620,9 +621,10 @@ func releaseNotesBody(stateRepo RepoRef) string {
 			"quiet.\n\n")
 	}
 
-	b.WriteString("Write the week with `write_release_notes`. Leave \"period\" out and it files " +
-		"the week that just ended, the one the stats are for. \"title\" is a headline a person " +
-		"reads in a list -- what the week was about, not \"Weekly release notes\". \"text\" is " +
+	b.WriteString("Write the week with `grain release-notes publish --title <t> --file <f>`. Leave " +
+		"`--period` out and it files the week that just ended, the one the stats are for. `--title` " +
+		"is a headline a person reads in a list -- what the week was about, not \"Weekly release " +
+		"notes\". The file is " +
 		"markdown: lead with a short paragraph saying what the week amounted to, put the " +
 		"numbers where they can be seen, then say what happened in each repository that had " +
 		"something happen in it, then what is still outstanding. Writing the same week again " +
@@ -874,10 +876,10 @@ func infraReviewBody(stateRepo RepoRef) string {
 
 	b.WriteString("## Start with what you said last night\n\n")
 	b.WriteString("Before you look at a single number, find out what this job already " +
-		"recommended and what came of it. The self-debug task tools are how: `list_grain_tasks` " +
-		"for what this deployment has been doing (narrow it with \"state\" and \"limit\"), " +
-		"`read_grain_task` for one task's whole record including every comment on it, " +
-		"`read_grain_task_prompt` for what an agent was told and `read_grain_task_transcript` " +
+		"recommended and what came of it. The self-debug `grain` commands are how: `grain task list` " +
+		"for what this deployment has been doing, " +
+		"`grain task read <id>` for one task's whole record including every comment on it, " +
+		"`grain task prompt <id>` for what an agent was told and `grain task transcript <id>` " +
 		"for one attempt's own story. Look for the earlier firings of this same schedule -- " +
 		"their closing notes are your previous reports -- and for any task you proposed from " +
 		"one. For each open recommendation, answer three questions and carry the answers into " +
@@ -894,9 +896,9 @@ func infraReviewBody(stateRepo RepoRef) string {
 		"switches the schedule off.\n\n")
 
 	b.WriteString("## The numbers\n\n")
-	b.WriteString("`read_grain_metrics` is this deployment measuring itself, and it is the " +
+	b.WriteString("`grain metrics` is this deployment measuring itself, and it is the " +
 		"answer to every question of the form \"is this worse than it was\". Ask for one " +
-		"`section` at a time rather than the whole page. The ones this job is about:\n\n" +
+		"section at a time (`grain metrics <section>`) rather than the whole page. The ones this job is about:\n\n" +
 		"- `ci_queueing`: per job, how long it **ran** and how long it **waited**, slice by " +
 		"slice, plus what the waiting was blamed on. This is the most important series here, " +
 		"because those two numbers have opposite fixes and a single \"CI is slow\" figure " +
@@ -970,13 +972,13 @@ func infraReviewBody(stateRepo RepoRef) string {
 		"single figure, so go and look for these by name:\n\n" +
 		"- **Jobs cancelled rather than judged**, particularly by a daemon restart. A " +
 		"cancellation is not a verdict, and one can leave a cache cold or a branch unjudged " +
-		"for hours without anything saying so. `get_ci_log` is how you tell a job that was " +
+		"for hours without anything saying so. `grain ci log` is how you tell a job that was " +
 		"killed from one that failed.\n" +
 		"- **Tasks stuck in a state nothing will move them out of** -- waiting on a check that " +
 		"cannot arrive, on a merge that keeps being retried, on a person. `backlog` and " +
-		"`list_grain_tasks` between them will show you the oldest of these.\n" +
+		"`grain task list` between them will show you the oldest of these.\n" +
 		"- **Flaky jobs**, identified as the same job failing the same way across unrelated " +
-		"branches. `list_ci_runs` annotates a red job with the other branches failing " +
+		"branches. `grain ci list` annotates a red job with the other branches failing " +
 		"identically, and your self-debug grant lets you read every repository's runs rather " +
 		"than one's. \"This flaked on six branches tonight\" is worth more than any number you " +
 		"will tune.\n" +

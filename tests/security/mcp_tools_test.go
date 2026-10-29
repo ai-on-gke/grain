@@ -241,8 +241,11 @@ func publishedDaemonTools(t *testing.T, interactive bool, grants ...string) map[
 	return listTools(t, args, grants)
 }
 
+// mcpserverArgs serves the full roster: what these tests check is which
+// grant turns on which tool, which the control roster hides by serving
+// most of them as `grain` commands instead (TestControlRoster checks that).
 func mcpserverArgs(t *testing.T, grants []string) []string {
-	args := []string{"mcpserver", "-sandbox-root", t.TempDir()}
+	args := []string{"mcpserver", "-sandbox-root", t.TempDir(), "-mcp-surface", "full"}
 	for _, g := range grants {
 		args = append(args, "-grant", g)
 	}
@@ -558,5 +561,53 @@ func TestGetCIArtifactRefusesARepositoryOutsideTheTask(t *testing.T) {
 		if data, err := os.ReadFile(filepath.Join(root, entry.Name())); err == nil && strings.Contains(string(data), "SECRET-ARTIFACT-BYTES") {
 			t.Errorf("another repository's artifact bytes reached the sandbox as %s", entry.Name())
 		}
+	}
+}
+
+// TestControlRoster is the roster every production run is served
+// (docs/design/sandbox-first-agent-surface.md §6): with a sandbox and no
+// -mcp-surface, the sandbox tools and the run-ending, parking and
+// escalation tools, plus the tools of grants no sandbox process may
+// reach -- and nothing the `grain` CLI serves instead.
+func TestControlRoster(t *testing.T) {
+	control := func(interactive bool, grants ...string) map[string]bool {
+		t.Helper()
+		args := []string{"mcpserver", "-sandbox-root", t.TempDir()}
+		for _, g := range grants {
+			args = append(args, "-grant", g)
+		}
+		args = append(args, "-server", stubDaemon(t, grants), "-task", "1",
+			"-pr-repo", "acme/widgets", "-pr-branch", "grain/task-1")
+		if interactive {
+			args = append(args, "-interactive")
+		}
+		return listTools(t, args, grants)
+	}
+	want := []string{"run_command", "read_file", "write_file", "edit_file",
+		"ask_question", "request_secret", "comment_on_issue", "nothing_needed",
+		"propose_task", "wait_for_task", "resume_later", "recreate_sandbox"}
+	got := control(false, "grain-ci", "self-debug", "memory")
+	for _, name := range want {
+		if !got[name] {
+			t.Errorf("the control roster has no %q; got %v", name, got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("the control roster is %d tools, want exactly %v; got %v", len(got), want, got)
+	}
+	for _, name := range []string{"wait_for_checks", "get_ci_log", "pull_request_status", "grain_read",
+		"update_status", "write_handover", "update_memory", "read_grain_metrics", "open_pull_request"} {
+		if got[name] {
+			t.Errorf("the control roster serves %q, which is a `grain` CLI command", name)
+		}
+	}
+	if github := control(false); !github["wait_for_checks"] || !github["pull_request_status"] || !github["base_branch_status"] {
+		t.Errorf("a run without grain-ci reads GitHub's checks only through its MCP tools; got %v", github)
+	}
+	if !control(true, "grain-ci")["chat"] {
+		t.Errorf("an interactive run's control roster has no chat")
+	}
+	if !control(false, "grain-ci", "dispatch-control")["pause_pipeline"] {
+		t.Errorf("dispatch-control's tools are model-only, and missing from the control roster")
 	}
 }

@@ -414,6 +414,20 @@ func putStackedReview(ctx context.Context, store *model.Store, task model.Task,
 // filed this way (putSecurityReview).
 func putReview(ctx context.Context, store *model.Store, task model.Task,
 	tmpl model.Template, title, body string, inPlace bool, now time.Time) (model.Task, error) {
+	reviewTask, err := newReview(ctx, store, task, tmpl, title, body, inPlace, now)
+	if err != nil {
+		return model.Task{}, err
+	}
+	if err := store.PutTask(ctx, reviewTask); err != nil {
+		return model.Task{}, fmt.Errorf("orchestrator: filing review task %s: %w", reviewTask.ID, err)
+	}
+	return reviewTask, nil
+}
+
+// newReview is the review task putReview files, built but not yet
+// stored, for a caller with more to add to it first (fileCLReview).
+func newReview(ctx context.Context, store *model.Store, task model.Task,
+	tmpl model.Template, title, body string, inPlace bool, now time.Time) (model.Task, error) {
 
 	// The template's own values for this deployment's declared fields,
 	// sifted against what is still declared exactly as a schedule's
@@ -522,9 +536,6 @@ func putReview(ctx context.Context, store *model.Store, task model.Task,
 		reviewTask.Links = append(reviewTask.Links, model.Link{Kind: model.LinkPushesReviewedBranch, Target: task.ID})
 	}
 	model.InheritRequester(&reviewTask, task)
-	if err := store.PutTask(ctx, reviewTask); err != nil {
-		return model.Task{}, fmt.Errorf("orchestrator: filing review task %s: %w", reviewTask.ID, err)
-	}
 	return reviewTask, nil
 }
 

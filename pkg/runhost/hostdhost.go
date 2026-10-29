@@ -102,7 +102,7 @@ func (d *Hostd) Handshake(ctx context.Context) (hostd.Hello, error) {
 // (hostd.IsDraining), so the run is re-queued rather than failed.
 func (d *Hostd) Start(ctx context.Context, req hostd.Request, stdin io.Reader, stdout, stderr io.Writer) (hostd.Exit, error) {
 	r, ok := RunFrom(ctx)
-	if !ok {
+	if !ok || r.Run == "" || (len(req.Args) == 1 && req.Args[0] == "--version") {
 		return d.Client.Run(ctx, req, stdin, stdout, stderr)
 	}
 	peer, err := d.Handshake(ctx)

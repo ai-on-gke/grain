@@ -1005,6 +1005,9 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			if err != nil {
 				return Result{Text: err.Error(), IsError: true}
 			}
+			if err := refuseReviewOfGrants(capabilities); err != nil {
+				return Result{Text: err.Error(), IsError: true}
+			}
 			task := ProposedTask{
 				ID:                  id,
 				Title:               title,
