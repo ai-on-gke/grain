@@ -784,6 +784,16 @@ type Config struct {
 	SandboxAccessAddr     string
 	SandboxAccessDial     string
 	SandboxAccessCASecret string
+	// K8sGranuleAccess is how grain reaches a k8s-granule sandbox's guest
+	// once its pod is Ready: orchestrator.K8sGranuleAccessKubectl (the
+	// default, `granule exec` over `kubectl exec`) or
+	// orchestrator.K8sGranuleAccessDialout (the wrapper's dial-out
+	// channel, which needs SandboxAccessAddr and an in-cluster daemon).
+	// K8sGranuleReattachTimeout is how long a step waits for a dropped
+	// channel to come back (DefaultK8sGranuleReattachTimeout when zero).
+	// docs/design/grain-on-gke.md#GKE-3. Startup-only.
+	K8sGranuleAccess          string
+	K8sGranuleReattachTimeout time.Duration
 
 	// sandboxCPUs, sandboxMemoryMB and sandboxDiskGB are store-backed
 	// (model.Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB,

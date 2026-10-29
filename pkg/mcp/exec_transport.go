@@ -36,6 +36,7 @@ import (
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/kubectlgate"
+	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 )
 
 // execTransportMarker opens execTransportNotice, and is what
@@ -49,6 +50,15 @@ const execTransportNotice = execTransportMarker + " on this call: the Kubernetes
 	"sandbox itself is not at fault and recreate_sandbox will not help. Wait a minute and try the " +
 	"call again; a command that was cut off may have done part of its work."
 
+// channelLostNotice is the paragraph a tool result ends with when a
+// sandbox's dial-out access channel stayed down past the reattach timeout.
+const channelLostNotice = "[grain] The sandbox is unreachable: its access channel was lost and did not " +
+	"reconnect within the reattach timeout. grain has marked the sandbox unhealthy and is rebuilding it."
+
+func channelLostFailed(exitCode int, stderr string) bool {
+	return exitCode == -1 && strings.Contains(stderr, sandboxaccess.ErrChannelLost.Error())
+}
+
 // execTransportFailed reports whether a runner's answer is the exec
 // transport failing rather than anything the command said: no status at
 // all (-1), with stderr that names a hop on the way to the container
@@ -61,10 +71,13 @@ func execTransportFailed(exitCode int, stderr string) bool {
 	return kubectlgate.IsTransientTransport(stderr) || strings.Contains(stderr, SessionCutOffNotice)
 }
 
-// withExecTransportNotice appends execTransportNotice to an error text
-// whose exec failed on the transport (execTransportFailed), and returns
-// text unchanged otherwise.
+// withExecTransportNotice appends execTransportNotice (or channelLostNotice)
+// to an error text whose exec failed on the transport, and returns text
+// unchanged otherwise.
 func withExecTransportNotice(text string, exitCode int, stderr string) string {
+	if channelLostFailed(exitCode, stderr) {
+		return text + "\n\n" + channelLostNotice
+	}
 	if !execTransportFailed(exitCode, stderr) {
 		return text
 	}
