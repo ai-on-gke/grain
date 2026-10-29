@@ -15,6 +15,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
+import ReviewBadge from "./ClReview.jsx";
 import { processPath } from "../paths.js";
 import LinkedNote from "../linkedNote.jsx";
 import { Alert, Button, Chip, Link, Typography } from "@mui/material";
@@ -342,6 +343,12 @@ export default function DetailOverlay({
                       <>
                         {" "}
                         <PresubmitBadge presubmit={t.presubmit} />
+                      </>
+                    )}
+                    {i === 0 && t.clReview && (
+                      <>
+                        {" "}
+                        <ReviewBadge review={t.clReview} />
                       </>
                     )}
                   </Fragment>

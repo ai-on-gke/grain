@@ -20,6 +20,7 @@ import {
   announce,
   freshEntries,
   inboxEntries,
+  taskReason,
   useInboxNotifications,
   useNotificationSetting,
 } from "./inboxNotifications.js";
@@ -267,5 +268,24 @@ describe("a question's notification", () => {
       [],
     );
     expect(entry.title).toBe("42 asked a question");
+  });
+});
+
+describe("taskReason for a CL", () => {
+  it("says a CL nobody has mailed needs mailing", () => {
+    expect(
+      taskReason({
+        id: "1",
+        state: "awaiting_submit",
+        clReview: { needsMailing: true },
+      }),
+    ).toEqual({ id: "needs_mailing", text: "needs mailing" });
+    expect(
+      taskReason({
+        id: "1",
+        state: "awaiting_submit",
+        clReview: { state: "in_review" },
+      }).id,
+    ).toBe("submit");
   });
 });

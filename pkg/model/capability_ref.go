@@ -365,6 +365,10 @@ func splitCapabilities(s string) []string {
 // all unless a rule naming it sets AllowUntrusted.
 type CapabilityPolicy struct {
 	Rules []CapabilityPolicyRule `json:"rules,omitempty"`
+	// Catalogue is settings/capabilities.yml's restrictions
+	// (capability_catalogue.go), nil on a deployment whose grain/config
+	// has no such file.
+	Catalogue *CapabilityCatalogue `json:"catalogue,omitempty"`
 }
 
 // CapabilityPolicyRule admits the references Capability matches.
@@ -588,7 +592,7 @@ func containsString(list []string, s string) bool {
 // EncodeCapabilityPolicy and DecodeCapabilityPolicy are
 // grain_config.capability_policy's text: "" for no rules, otherwise JSON.
 func EncodeCapabilityPolicy(p CapabilityPolicy) (string, error) {
-	if len(p.Rules) == 0 {
+	if len(p.Rules) == 0 && p.Catalogue == nil {
 		return "", nil
 	}
 	data, err := json.Marshal(p)

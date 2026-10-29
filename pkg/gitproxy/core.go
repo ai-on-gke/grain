@@ -147,9 +147,10 @@ type GitProxy struct {
 	// X-Grain-Channel: sandbox-cli so agentAPIGate enforces non-dangerous
 	// scope rules.
 	API http.Handler
-	// CapHandler, when set, serves external capability server requests under
-	// /cap/<server>/mcp.
-	CapHandler http.Handler
+	// CapServers holds the external capability servers each attempt (or
+	// CI job) may reach from its sandbox under /cap/<server>/mcp; nil
+	// reaches none.
+	CapServers *CapRegistry
 	// ShutdownStarted, when set, is closed as the daemon begins to stop:
 	// a blocking /cli/ci/wait or /cli/ci/run-job ends its slice at once
 	// and hands back ResumeRunID rather than holding the proxy's

@@ -61,6 +61,13 @@ const BranchWaitCapability = "branch"
 // is dispatched by the first cycle after the policy allows it.
 const PolicyWaitCapability = "local-policy"
 
+// CatalogueWaitCapability is the GrantWait capability a task held by the
+// capability catalogue (settings/capabilities.yml, CapabilityCatalogue)
+// is recorded under; its Resource is the refusal. A config change that
+// revoked or narrowed a grant after the task was filed holds it here
+// rather than handing its sandbox what the catalogue now forbids.
+const CatalogueWaitCapability = "capability-catalogue"
+
 // QuotaWaitCapability is the GrantWait capability a task held back by
 // host sandbox resource budget, worker/merger capacity limits, or a
 // provider usage-limit pause is recorded under. Like ModelWaitCapability,
