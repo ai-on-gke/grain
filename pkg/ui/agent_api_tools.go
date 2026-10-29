@@ -390,6 +390,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/states":                           {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
 	"GET /api/tasks/{id}/messages":              {"after": "Only messages after this comment id.", "agents": "true to include other tasks' runs' messages to this task's agent (POST /api/tasks/{id}/agent-messages)."},
 	"GET /api/capability-servers/gchat-usage":   {"id": "The gchat capability server's capability_id."},
+	"GET /api/capability-methods":               {"kind": "The run kind the grants are for (task, process or ci): each method then carries policyRefusal, why the capability policy denies it that run.", "repo": "With kind, the repository (owner/name) the run is on."},
 	"GET /api/notifications":                    {"open": "1 for only notifications not yet cleared.", "after": "Only notifications after this id.", "family": "Only this family (the subject before its first ':')."},
 	"GET /api/memory/documents/{name}":          {"repo": "The repository (owner/name) whose document to read; the deployment's without one."},
 	"GET /api/release-notes/stats":              {"period": "The week whose figures to read; the week just ended without one."},

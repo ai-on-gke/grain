@@ -495,4 +495,57 @@ describe("GrantsPicker", () => {
     expect(within(gone).getByText("server not attached")).toBeTruthy();
     expect(gone.querySelector("input")).toBeNull();
   });
+
+  // grain/task-1810: a method the capability policy denies the form's
+  // run is listed disabled with the policy's reason, not offered; a
+  // held grant of one is flagged.
+  it("shows a method the policy denies disabled, with the rule as reason", async () => {
+    const reason = `the capability policy denies ${hostScript.ref} to this task on acme/widgets (rule 1: deny ${hostScript.ref})`;
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/capability-methods?kind=task&repo=acme%2Fwidgets")
+        return [{ ...hostScript, policyRefusal: reason }, gcpKey];
+      if (path === "/api/capability-grants/check")
+        return JSON.parse(opts.body).grants.map(({ grant }) => ({
+          grant,
+          recorded: grant,
+        }));
+      throw new Error(`unexpected ${path}`);
+    });
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[hostScript.ref]}
+        config={{ capabilityMethods: 2 }}
+        onApiChange={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={vi.fn()}
+        policySubject={{ kind: "task", repo: "acme/widgets" }}
+      />,
+    );
+    expect(
+      await screen.findByLabelText(
+        "example.com › host-script (denied by the capability policy)",
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    const menu = await screen.findByRole("menu", { name: "Grants to add" });
+    const denied = await within(menu).findByText("host-script");
+    const row = denied.closest('[role="menuitem"]');
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).toHaveAttribute("data-policy-denied", "true");
+    expect(
+      within(row).getByText(`Denied by the capability policy: ${reason}`),
+    ).toBeInTheDocument();
+    const allowed = within(menu)
+      .getByText("gcp-key")
+      .closest('[role="menuitem"]');
+    expect(allowed).not.toHaveAttribute("aria-disabled");
+    await user.click(allowed);
+    expect(onSubmit).toHaveBeenCalledWith(
+      { capability: gcpKey.ref, with: undefined },
+      null,
+    );
+  });
 });

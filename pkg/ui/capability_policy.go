@@ -372,3 +372,85 @@ func (c *HTTPClient) CapabilityServerUsage(ctx context.Context) ([]CapabilitySer
 	err := c.do(ctx, http.MethodGet, "/api/capability-servers/usage", nil, &out)
 	return out, err
 }
+
+// capabilityPolicyFor is the stored policy and the configured servers
+// whose aliases it is judged with, the way admission
+// (orchestrator.mintCapabilityPass) reads them.
+func (c *Client) capabilityPolicyFor(ctx context.Context) (model.CapabilityPolicy, map[string]protocol.ServerConfig, error) {
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return model.CapabilityPolicy{}, nil, err
+	}
+	var policy model.CapabilityPolicy
+	var configured map[string]protocol.ServerConfig
+	if cfg != nil {
+		policy = cfg.CapabilityPolicy
+		configured = cfg.MCPServers
+	}
+	configured, _ = intree.EnsureBuiltins(configured)
+	return policy, configured, nil
+}
+
+// policyFilingGrants judges a new agent task's capability references
+// against the capability policy (§4.2.2) before it is written, so a
+// grant admission would only refuse later is refused with the task
+// (400) instead. A default the policy denies -- a repository's default
+// the policy keeps from this run kind, say -- is dropped, since nobody
+// asked for it. Admission asks the policy again when it mints, so a
+// policy saved after a task was filed still has the last word.
+func (c *Client) policyFilingGrants(ctx context.Context, grants []model.Grant, target *model.RepoRef) ([]model.Grant, error) {
+	policy, configured, err := c.capabilityPolicyFor(ctx)
+	if err != nil || len(policy.Rules) == 0 {
+		return grants, err
+	}
+	subject := model.CapabilitySubject{Repo: target, Kind: model.CapabilityRunTask}
+	kept := make([]model.Grant, 0, len(grants))
+	for _, g := range grants {
+		if err := policy.Permits(g.Capability, subject, configured); err != nil {
+			if g.Via == model.GrantByDefault {
+				continue
+			}
+			return nil, validationErrorf("%v", err)
+		}
+		kept = append(kept, g)
+	}
+	return kept, nil
+}
+
+// policyEditRefusalFor is the capability policy's answer to grant being
+// attached to the task stored as id: 400 for one it denies the task. A
+// task that is not there is the edit's own error to report.
+func (c *Client) policyEditRefusalFor(ctx context.Context, id, grant string) error {
+	if !model.IsCapabilityRef(grant) {
+		return nil
+	}
+	task, err := c.Store.GetTask(ctx, model.NormalizeTaskID(id))
+	if err != nil || task == nil {
+		return nil
+	}
+	policy, configured, err := c.capabilityPolicyFor(ctx)
+	if err != nil {
+		return err
+	}
+	subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
+	if err := policy.Permits(grant, subject, configured); err != nil {
+		return validationErrorf("%v", err)
+	}
+	return nil
+}
+
+// markPolicyRefusals sets PolicyRefusal on each method of methods the
+// capability policy denies to subject, so a picker can show it refused
+// rather than offer a grant filing would turn away.
+func (c *Client) markPolicyRefusals(ctx context.Context, methods []CapabilityMethod, subject model.CapabilitySubject) ([]CapabilityMethod, error) {
+	policy, configured, err := c.capabilityPolicyFor(ctx)
+	if err != nil || len(policy.Rules) == 0 {
+		return methods, err
+	}
+	for i := range methods {
+		if err := policy.Permits(methods[i].Ref, subject, configured); err != nil {
+			methods[i].PolicyRefusal = err.Error()
+		}
+	}
+	return methods, nil
+}

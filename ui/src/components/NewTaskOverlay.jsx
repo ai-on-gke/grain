@@ -1233,6 +1233,10 @@ export default function NewTaskOverlay({
           onSubmit={methodGrants.onSubmit}
           onRemove={methodGrants.onRemove}
           idPrefix="new-task"
+          policySubject={{
+            kind: "task",
+            repo: noRepo ? "" : repo || config?.defaultTarget || "",
+          }}
         />
         {/* The model this one task runs on. Its choices are what the
             target team's connections advertise; a model only disabled

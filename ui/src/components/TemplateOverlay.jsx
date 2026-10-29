@@ -486,6 +486,7 @@ function TemplateOverlay({
             onSubmit={methodGrants.onSubmit}
             onRemove={methodGrants.onRemove}
             idPrefix="template"
+            policySubject={{ kind: "task", repo }}
           />
           {/* Renders nothing at all on a deployment that declares no
             fields, which is what leaves this form exactly as it was for

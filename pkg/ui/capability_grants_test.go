@@ -303,3 +303,91 @@ func TestCreateTaskGrantRefusalNamesItsField(t *testing.T) {
 		t.Errorf("%d %v", code, out)
 	}
 }
+
+// setDenyViewerFor stores a capability policy denying grantTestCap's
+// viewer to agent tasks on acme/widgets.
+func setDenyViewerFor(t *testing.T, client *ui.Client) {
+	t.Helper()
+	if err := client.SetCapabilityPolicy(context.Background(), model.CapabilityPolicy{Rules: []model.CapabilityPolicyRule{
+		{Capability: grantTestCap + "#viewer", Repos: []string{"acme/widgets"}, RunKinds: []string{model.CapabilityRunTask}, Deny: true},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A grant the capability policy denies the task's repo and run kind is
+// refused when the task is filed, naming the rule, rather than accepted
+// and parked at admission; another repository is not affected.
+func TestCreateTaskRefusesAGrantThePolicyDenies(t *testing.T) {
+	ts, client := grantTestServer(t)
+	setDenyViewerFor(t, client)
+	var out map[string]any
+	code := postJSON(t, ts, "POST", "/api/tasks", map[string]any{
+		"title":        "denied grant",
+		"repo":         "acme/widgets",
+		"capabilities": []string{grantTestCap + "#viewer"},
+	}, &out)
+	msg, _ := out["error"].(string)
+	if code != 400 || !strings.Contains(msg, "denies "+grantTestCap+"#viewer") || !strings.Contains(msg, "rule 1: deny "+grantTestCap+"#viewer") {
+		t.Fatalf("filing a denied grant: %d %v, want 400 naming the rule", code, out)
+	}
+	if code := postJSON(t, ts, "POST", "/api/tasks", map[string]any{
+		"title":        "elsewhere",
+		"repo":         "acme/gadgets",
+		"capabilities": []string{grantTestCap + "#viewer"},
+	}, &out); code != 201 {
+		t.Fatalf("filing on a repo the rule does not cover: %d %v", code, out)
+	}
+}
+
+// Attaching a denied grant to a task already filed is refused the same
+// way.
+func TestSetCapabilityGrantRefusesAGrantThePolicyDenies(t *testing.T) {
+	ts, client := grantTestServer(t)
+	repo := "acme/widgets"
+	task, err := client.CreateTask(context.Background(), ui.CreateTaskRequest{Title: "t", Repo: repo, Capabilities: &[]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDenyViewerFor(t, client)
+	var out map[string]any
+	code := postJSON(t, ts, "POST", "/api/tasks/"+task.ID+"/capabilities", map[string]any{"capability": grantTestCap + "#viewer", "attach": true}, &out)
+	if msg, _ := out["error"].(string); code != 400 || !strings.Contains(msg, "capability policy denies") {
+		t.Fatalf("attaching a denied grant: %d %v", code, out)
+	}
+}
+
+// The method listing asked for one run says which methods the policy
+// denies it, and why; one that names no run says nothing about policy.
+func TestCapabilityMethodsMarkWhatThePolicyDenies(t *testing.T) {
+	ts, client := grantTestServer(t)
+	setDenyViewerFor(t, client)
+	refusals := func(path string) map[string]string {
+		t.Helper()
+		var methods []ui.CapabilityMethod
+		if code := postJSON(t, ts, "GET", path, nil, &methods); code != 200 {
+			t.Fatalf("GET %s: %d", path, code)
+		}
+		out := map[string]string{}
+		for _, m := range methods {
+			out[m.Method] = m.PolicyRefusal
+		}
+		return out
+	}
+	got := refusals("/api/capability-methods?repo=acme/widgets&kind=task")
+	if !strings.Contains(got["viewer"], "rule 1: deny") || got["key"] != "" {
+		t.Errorf("acme/widgets task: %q", got)
+	}
+	for _, path := range []string{
+		"/api/capability-methods",
+		"/api/capability-methods?repo=acme/gadgets&kind=task",
+		"/api/capability-methods?repo=acme/widgets&kind=ci",
+	} {
+		if got := refusals(path); got["viewer"] != "" || got["key"] != "" {
+			t.Errorf("%s: %q, want nothing refused", path, got)
+		}
+	}
+	if code := postJSON(t, ts, "GET", "/api/capability-methods?kind=job", nil, nil); code != 400 {
+		t.Errorf("an unknown kind: %d, want 400", code)
+	}
+}

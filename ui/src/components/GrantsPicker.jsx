@@ -87,6 +87,13 @@ import {
 // attached server offers any more, arguments the server's current schema
 // no longer accepts, or now normalizes differently. An api grant is
 // flagged when its scope is dangerous, or when it is no longer offered.
+//
+// policySubject ({repo, kind}), where the form knows the run its grants
+// are for -- kind "task" for an agent task, and its repository -- has the
+// listing say which methods the capability policy denies that run
+// (docs/capabilities-spec.md §4.2.2): "Add grant…" shows such a method
+// disabled with the policy's reason rather than offer a grant filing
+// would refuse, and a held grant of one is flagged.
 
 const asList = (m) => (Array.isArray(m) ? m : []);
 
@@ -112,6 +119,7 @@ export default function GrantsPicker({
   onRemove,
   disabled = false,
   idPrefix = "grant",
+  policySubject = null,
 }) {
   const all = grants || [];
   const apiHeld = useMemo(() => all.filter(isApiGrant), [all]);
@@ -148,20 +156,28 @@ export default function GrantsPicker({
       live.current = false;
     };
   }, []);
-  const load = useCallback((fresh) => {
-    return capabilityMethods({ fresh })
-      .then((m) => {
-        if (!live.current) return null;
-        loaded.current = true;
-        setLoadError("");
-        setMethods(asList(m));
-        return asList(m);
-      })
-      .catch((err) => {
-        if (live.current) setLoadError(err.message);
-        return null;
-      });
-  }, []);
+  const subjectKind = policySubject?.kind || "";
+  const subjectRepo = policySubject?.repo || "";
+  const load = useCallback(
+    (fresh) => {
+      const subject = subjectKind
+        ? { kind: subjectKind, repo: subjectRepo }
+        : null;
+      return capabilityMethods({ fresh, subject })
+        .then((m) => {
+          if (!live.current) return null;
+          loaded.current = true;
+          setLoadError("");
+          setMethods(asList(m));
+          return asList(m);
+        })
+        .catch((err) => {
+          if (live.current) setLoadError(err.message);
+          return null;
+        });
+    },
+    [subjectKind, subjectRepo],
+  );
   useEffect(() => {
     if (wanted) load(loaded.current);
   }, [wanted, count, load]);
@@ -322,6 +338,13 @@ export default function GrantsPicker({
         badge: "server not attached",
         suffix: " (server not attached)",
         note: `No attached capability server offers ${ref} any more. Remove this grant, or attach the server again.`,
+      };
+    if (byRef[ref]?.policyRefusal)
+      return {
+        severity: "warning",
+        badge: "denied by policy",
+        suffix: " (denied by the capability policy)",
+        note: `${byRef[ref].policyRefusal}. Remove this grant, or change the capability policy in Settings.`,
       };
     if (check && check.error && !check.unchecked)
       return {
@@ -524,19 +547,27 @@ export default function GrantsPicker({
     );
   };
 
+  // A method the policy denies this run is listed, disabled, with the
+  // policy's reason in place of what it would need.
   const methodItem = (m) => (
     <MenuItem
       key={m.ref}
       className="method-grant-row"
       data-method={m.ref}
-      title={m.ref}
+      data-policy-denied={m.policyRefusal ? "true" : undefined}
+      title={m.policyRefusal || m.ref}
+      disabled={Boolean(m.policyRefusal)}
       onClick={() => addMethod(m)}
-      sx={{ whiteSpace: "normal" }}
+      sx={{ whiteSpace: "normal", "&.Mui-disabled": { opacity: 0.75 } }}
     >
       <ListItemIcon />
       <ListItemText
         primary={methodMenuLabel(m.ref, m.method)}
-        secondary={`${splitRef(m.ref).capability.replace(/^https:\/\//, "")}${m.requiresArgs ? " · needs arguments" : ""}`}
+        secondary={
+          m.policyRefusal
+            ? `Denied by the capability policy: ${m.policyRefusal}`
+            : `${splitRef(m.ref).capability.replace(/^https:\/\//, "")}${m.requiresArgs ? " · needs arguments" : ""}`
+        }
       />
     </MenuItem>
   );

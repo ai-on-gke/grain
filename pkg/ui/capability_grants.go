@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -48,6 +49,10 @@ type CapabilityMethod struct {
 	// grant of this method must name arguments (§2.2.1).
 	RequiresArgs bool `json:"requiresArgs"`
 	Releasable   bool `json:"releasable"`
+	// PolicyRefusal, on a listing asked for one run (?repo=&kind=), is
+	// why the capability policy (§4.2.2) denies this method to that run;
+	// empty where it admits it, and on a listing that names no run.
+	PolicyRefusal string `json:"policyRefusal,omitempty"`
 }
 
 // ListCapabilityMethods is every method of every attached capability
@@ -276,8 +281,38 @@ type checkGrantsRequest struct {
 	Grants []GrantRequest `json:"grants"`
 }
 
+// handleListCapabilityMethods is GET /api/capability-methods. With
+// ?kind= (task, process or ci) and optionally ?repo=owner/name, each
+// method also says whether the capability policy denies it to that run
+// (CapabilityMethod.PolicyRefusal), which is what a picker for a task on
+// that repository offers it by.
 func (s *Server) handleListCapabilityMethods(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.tasks.ListCapabilityMethods(r.Context()))
+	methods := s.tasks.ListCapabilityMethods(r.Context())
+	q := r.URL.Query()
+	if kind := strings.TrimSpace(q.Get("kind")); kind != "" {
+		switch kind {
+		case model.CapabilityRunTask, model.CapabilityRunProcess, model.CapabilityRunCI:
+		default:
+			writeError(w, http.StatusBadRequest, fmt.Errorf("kind %q is not task, process or ci", kind))
+			return
+		}
+		subject := model.CapabilitySubject{Kind: kind}
+		if repo := strings.TrimSpace(q.Get("repo")); repo != "" {
+			ref, err := model.ParseRepo(repo)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Errorf("repo %q: %w", repo, err))
+				return
+			}
+			subject.Repo = &ref
+		}
+		marked, err := s.tasks.markPolicyRefusals(r.Context(), methods, subject)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+		methods = marked
+	}
+	writeJSON(w, http.StatusOK, methods)
 }
 
 func (s *Server) handleCheckCapabilityGrants(w http.ResponseWriter, r *http.Request) {
