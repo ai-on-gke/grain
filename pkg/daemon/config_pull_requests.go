@@ -92,7 +92,7 @@ func (m *StateManager) OpenConfigPullRequest(ctx context.Context, req ui.ConfigP
 	if err != nil {
 		return ui.ConfigPullRequest{}, err
 	}
-	if _, err := localGit(dir, "update-ref", "refs/heads/"+branch, commit, ""); err != nil {
+	if _, err := localGit(dir, "update-ref", "--end-of-options", "refs/heads/"+branch, commit, ""); err != nil {
 		return ui.ConfigPullRequest{}, fmt.Errorf("creating config branch %s: %w", branch, err)
 	}
 
@@ -114,7 +114,7 @@ func (m *StateManager) OpenConfigPullRequest(ctx context.Context, req ui.ConfigP
 		CreatedAt: &now,
 	}
 	if err := store.PutTask(ctx, task); err != nil {
-		_, _ = localGit(dir, "update-ref", "-d", "refs/heads/"+branch, commit)
+		_, _ = localGit(dir, "update-ref", "-d", "--end-of-options", "refs/heads/"+branch, commit)
 		return ui.ConfigPullRequest{}, err
 	}
 	if err := store.Observe(ctx, model.Observation{TaskID: id, CompletedAt: &now, PrOpenedAt: &now}); err != nil {
@@ -144,7 +144,10 @@ func configChangeTitle(changes []staterepo.FileChange) string {
 // extractCommit writes commit's tree into dir (git archive), leaving the
 // repository's own working tree and index alone.
 func extractCommit(ctx context.Context, repoDir, commit, dir string) error {
-	cmd := exec.CommandContext(ctx, "git", "-C", repoDir, "archive", "--format=tar", commit)
+	cmd := exec.CommandContext(ctx, "git", "-C", repoDir, "archive", "--format=tar", "--end-of-options", commit)
+	// A local read of objects needs git on PATH and nothing else of the
+	// daemon's environment.
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_TERMINAL_PROMPT=0"}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -200,11 +203,13 @@ func commitChanges(ctx context.Context, repoDir, base, candidate string, changes
 	if name == "" {
 		name = "grain"
 	}
-	env := append(os.Environ(),
-		"GIT_INDEX_FILE="+index.Name(),
-		"GIT_AUTHOR_NAME="+name, "GIT_AUTHOR_EMAIL=grain@localhost",
+	// Plumbing on a local repository needs git on PATH and nothing else
+	// of the daemon's environment.
+	env := []string{"PATH=" + os.Getenv("PATH"),
+		"GIT_INDEX_FILE=" + index.Name(),
+		"GIT_AUTHOR_NAME=" + name, "GIT_AUTHOR_EMAIL=grain@localhost",
 		"GIT_COMMITTER_NAME=grain", "GIT_COMMITTER_EMAIL=grain@localhost",
-		"GIT_TERMINAL_PROMPT=0")
+		"GIT_TERMINAL_PROMPT=0"}
 	git := func(stdin []byte, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoDir}, args...)...)
 		cmd.Env = env
