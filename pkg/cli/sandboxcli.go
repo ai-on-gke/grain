@@ -102,7 +102,7 @@ func detectSandboxProxy(env sandboxEnv) (base, token string, ok bool) {
 			if err != nil || u.User == nil {
 				continue
 			}
-			if base == "" && u.Host != sandboxProxyAddr {
+			if base == "" && u.Host != sandboxProxyAddr && (u.User.Username() != "sandbox" || !strings.HasPrefix(u.Host, "127.0.0.1:")) {
 				continue
 			}
 			if base != "" && !strings.HasSuffix(base, "//"+u.Host) {
@@ -597,7 +597,7 @@ type sandboxArgs struct {
 
 // sandboxBoolFlags take no value.
 var sandboxBoolFlags = map[string]bool{
-	"i": true, "full": true, "json": true, "all": true,
+	"i": true, "full": true, "json": true, "all": true, "comments": true,
 	"no-repo": true, "fixes-base-branch": true, "no-port": true,
 	"no-follow-up": true, "park": true, "auto-merge": true,
 	"hold-for-approval": true, "at-front": true,

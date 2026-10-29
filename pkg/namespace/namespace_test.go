@@ -758,4 +758,3 @@ func TestNewRedactorAppliesToReadRedactedGrepAndGrainLog(t *testing.T) {
 		t.Errorf("RedactGrainLogText did not apply NewRedactor: %q", logOut)
 	}
 }
-

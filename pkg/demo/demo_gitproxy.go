@@ -56,6 +56,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -143,12 +144,15 @@ func configureGitProxyDemo(dir string, store *model.Store, repo model.RepoRef, b
 		return nil, fmt.Errorf("serving the simulated forge: %w", err)
 	}
 
-	// Ensure state/settings/settings.yaml exists so config:// reads work in demo.
-	settingsDir := filepath.Join(dir, "state", "settings")
+	// Ensure state-repo/settings/settings.yaml and secrets/secrets.key exist so
+	// config://, deploy://health, and deploy://grain.log reads work in demo.
+	settingsDir := filepath.Join(daemon.StateRepoDir(dir), "settings")
 	_ = os.MkdirAll(settingsDir, 0o755)
 	_ = os.WriteFile(filepath.Join(settingsDir, "settings.yaml"), []byte("default_model: gemini-2.5-pro\n"), 0o644)
+	_ = secrets.New(daemon.SecretsDir(dir))
 
 	logPath := filepath.Join(dir, "demo-daemon.log")
+	_ = os.WriteFile(logPath, []byte("2026-10-29T00:00:00Z grain demo: started daemon log\n"), 0o644)
 	api := &daemon.InProcessAPI{}
 	nsServer := &namespace.Server{
 		ArtifactDir: filepath.Join(dir, "state", "ci-artifacts"),

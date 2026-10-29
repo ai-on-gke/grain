@@ -296,10 +296,10 @@ func (d sandboxDeploy) ListStateTables(ctx context.Context) ([]string, error) {
 
 func (d sandboxDeploy) ReadGrainLog(ctx context.Context, source string) (string, error) {
 	tool := grainlog.Tools(grainlog.Config{Redactor: grainLogRedactor(d.secretsDir), Sources: d.logSources})[0]
-	args := map[string]any{}
-	if source != "" {
-		args["source"] = source
+	if source == "" {
+		source = "daemon"
 	}
+	args := map[string]any{"source": source}
 	return toolText(tool.Handler(ctx, args))
 }
 
