@@ -103,7 +103,6 @@ func LogIgnoredRelaySettings(dataDir string, secretStore *secrets.Store, logf fu
 // error here early, since those leave nothing running worth keeping the
 // process up for. See runDaemon's own doc comment.
 func Run(ctx context.Context, cfg Config) error {
-	cfg.DataDir = absDataDir(cfg.DataDir)
 	// Before anything binds: how long the restart that started this
 	// process left each listener unreachable is measured from the times
 	// the previous process wrote down, against when each is bound below
@@ -1714,21 +1713,4 @@ func drainInFlight(runs *orchestrator.InFlight) int {
 	}
 	log.Printf("grain daemon: every run in flight at shutdown has finished")
 	return 0
-}
-
-// absDataDir resolves a relative -data-dir against the working directory.
-// Everything under it is also reached from processes running elsewhere --
-// CI clones a repository's workflows into a temporary directory under it
-// and runs git from inside that clone -- so a relative one (`grain daemon
-// -data-dir d2`) failed every embedded CI run with "git rev-parse: chdir
-// d2/state/grain-ci-workflows-.../repo: no such file or directory"
-// (docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md, F6).
-func absDataDir(dir string) string {
-	if dir == "" || filepath.IsAbs(dir) {
-		return dir
-	}
-	if abs, err := filepath.Abs(dir); err == nil {
-		return abs
-	}
-	return dir
 }
