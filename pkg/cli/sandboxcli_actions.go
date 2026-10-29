@@ -239,8 +239,10 @@ func (c *sandboxCLI) ciRetrigger(p sandboxArgs) error {
 	return c.post("/cli/ci/retrigger", body, c.out)
 }
 
-// textArg is a command's text: its positionals joined, or --file's
-// contents ("-" for stdin).
+// textArg is a command's text: its positionals joined, --file's contents
+// ("-" for stdin), or, with neither, --<what> itself: the MCP tool's own
+// parameter name (`grain pr review-comment --body ...`), which used to be
+// read as no text at all.
 func (c *sandboxCLI) textArg(p sandboxArgs, what string) (string, error) {
 	if f := p.get("file"); f != "" {
 		var raw []byte
@@ -256,6 +258,9 @@ func (c *sandboxCLI) textArg(p sandboxArgs, what string) (string, error) {
 		return string(raw), nil
 	}
 	text := strings.Join(p.positional, " ")
+	if strings.TrimSpace(text) == "" {
+		text = p.get(what)
+	}
 	if strings.TrimSpace(text) == "" {
 		return "", fmt.Errorf("missing <%s> (or --file): run with --help for usage", what)
 	}

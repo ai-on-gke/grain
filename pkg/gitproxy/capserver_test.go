@@ -144,3 +144,45 @@ func TestCapRefusesBodiesParsersDisagreeOn(t *testing.T) {
 		t.Errorf("an unambiguous call with nested arguments: %d, reached %d times; want it forwarded", rec.Code, reached)
 	}
 }
+
+// TestCapRefusalSaysWhetherTheToolIsModelOnlyOrUnlisted: both are
+// refused before the server is reached, and the refusal names which --
+// a tool the server never listed used to be called model-only.
+func TestCapRefusalSaysWhetherTheToolIsModelOnlyOrUnlisted(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"ci-job-1": "tok-ci"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reached := 0
+	caps := gitproxy.NewCapRegistry()
+	caps.Register(gitproxy.CapSandboxKey("ci-job-1"), []gitproxy.CapServer{{
+		Name:  "widgets",
+		Tools: []gitproxy.CapTool{{Name: "ping"}, {Name: "rotate", ModelOnly: true}},
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reached++
+		}),
+	}})
+	h := gitproxy.NewHandler(&gitproxy.GitProxy{
+		Tokens:          tokens,
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{}},
+		CapServers:      caps,
+	})
+	for tool, want := range map[string]string{
+		"rotate":      `tool "rotate" of capability server "widgets" is model-only`,
+		"secret_dump": `capability server "widgets" lists no tool "secret_dump"`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/cap/widgets/mcp",
+			strings.NewReader(`[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping"}},{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"`+tool+`"}}]`))
+		req.Header.Set("Authorization", basicAuthHeader("tok-ci"))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || reached != 0 || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("batch calling %s: %d %q, server reached %d times; want 403 saying %q", tool, rec.Code, rec.Body.String(), reached, want)
+		}
+	}
+}

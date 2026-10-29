@@ -62,14 +62,15 @@ type CapServer struct {
 	Handler http.Handler
 }
 
-// sandboxTool is the named tool when it is sandbox-callable.
-func (s CapServer) sandboxTool(name string) bool {
+// tool reports whether the server listed the named tool, and whether
+// grain resolved it model-only.
+func (s CapServer) tool(name string) (listed, modelOnly bool) {
 	for _, t := range s.Tools {
 		if t.Name == name {
-			return !t.ModelOnly
+			return true, t.ModelOnly
 		}
 	}
-	return false
+	return false, false
 }
 
 // CapRegistry is where the servers a sandbox may reach under /cap/ are
@@ -227,7 +228,10 @@ func (p *GitProxy) serveExternalCap(w http.ResponseWriter, r *http.Request, serv
 			return
 		}
 		for _, tool := range calls {
-			if !srv.sandboxTool(tool) {
+			if listed, modelOnly := srv.tool(tool); !listed {
+				http.Error(cw, fmt.Sprintf("forbidden: capability server %q lists no tool %q for this run (run `grain cap %s` for its sandbox tools)", name, tool, name), http.StatusForbidden)
+				return
+			} else if modelOnly {
 				http.Error(cw, fmt.Sprintf("forbidden: tool %q of capability server %q is model-only: only the agent's own MCP channel may call it, never the sandbox (docs/capabilities-spec.md §5.2.6)", tool, name), http.StatusForbidden)
 				return
 			}

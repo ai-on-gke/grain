@@ -127,6 +127,17 @@ func TestSandboxCIWaitReportsEachVerdict(t *testing.T) {
 		proxy.bodies["POST /cli/pr/reply"]["body"] != "thanks, fixed" || proxy.bodies["POST /cli/pr/reply"]["comment_id"] != float64(5) {
 		t.Errorf("reply: %d %v", code, proxy.bodies["POST /cli/pr/reply"])
 	}
+	// --body, the MCP tool's own parameter name, is the body too: it used
+	// to be dropped and the command refused as having none.
+	if _, errOut, code := runActionCLI(t, srv, nil, "pr", "reply", "--body", "flagged reply"); code != 0 ||
+		proxy.bodies["POST /cli/pr/reply"]["body"] != "flagged reply" {
+		t.Errorf("reply --body: %d %s %v", code, errOut, proxy.bodies["POST /cli/pr/reply"])
+	}
+	set("/cli/pr/review-comment", "Recorded.\n")
+	if _, errOut, code := runActionCLI(t, srv, nil, "pr", "review-comment", "--body", "a finding", "--path", "a.go", "--line", "3"); code != 0 ||
+		proxy.bodies["POST /cli/pr/review-comment"]["body"] != "a finding" {
+		t.Errorf("review-comment --body: %d %s %v", code, errOut, proxy.bodies["POST /cli/pr/review-comment"])
+	}
 	if _, errOut, code := runActionCLI(t, srv, nil, "pr", "review-comment", "x", "--path", "a.go"); code != 1 || !strings.Contains(errOut, "--line") {
 		t.Errorf("review-comment without --line: %d %s", code, errOut)
 	}
