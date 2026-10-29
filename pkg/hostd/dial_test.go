@@ -58,3 +58,26 @@ func TestDialSaysHostdIsDown(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A hostd restart that takes several seconds (longer than the legacy 3s timeout)
+// is waited out rather than failing prematurely.
+func TestDialWaitsOutMultiSecondRestart(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "hostd.sock")
+	ready := make(chan net.Listener, 1)
+	go func() {
+		time.Sleep(3500 * time.Millisecond)
+		l, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Error(err)
+		}
+		ready <- l
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := Client{Socket: sock}.dial(ctx)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	conn.Close()
+	(<-ready).Close()
+}
