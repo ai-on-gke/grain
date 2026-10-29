@@ -365,7 +365,8 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		)
 	}
 	prompt += sandboxDirsSection(checkoutDir, sandboxRoot)
-	prompt += sandboxToolingSection(task.Target != nil)
+	prompt += sandboxToolingSection(task.Target != nil, grainci.Granted(task.Grants))
+	prompt += grainCLISection(task)
 	prompt += customFieldsSection(task)
 	prompt += timezoneSection(task)
 	prompt += issueSection(task)
@@ -455,15 +456,17 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		}
 		if grainci.Granted(task.Grants) {
 			prompt += fmt.Sprintf(
-				"\n\nPush as often as you like: %q is your branch. After each push, call "+
-					"`wait_for_checks`: that call explicitly starts grain's own CI for the "+
-					"pushed branch (or joins the identical run already in progress), waits "+
-					"for its verdict, and returns failing step output. It does not read or "+
-					"wait for GitHub checks. Pass `jobs` for fast selective feedback; a "+
-					"selected job includes its dependencies but never satisfies the task's "+
-					"required CI verdict. Before finishing, call `wait_for_checks` without "+
-					"`jobs` and get a successful full-suite result for the exact commit. If "+
-					"grain CI fails, fix it, push again and call `wait_for_checks` again.", branch)
+				"\n\nPush as often as you like: %q is your branch. After each push, run "+
+					"`grain ci wait` (give `run_command` `timeout: 600000`): it explicitly starts "+
+					"grain's own CI for the pushed branch (or joins the identical run already in "+
+					"progress), waits for its verdict, and prints failing step output. It does not "+
+					"read or wait for GitHub checks. If CI is still running when its 9-minute slice "+
+					"ends, it says so and names the run: carry on with `grain ci wait --resume "+
+					"<run-id>`. Pass `--jobs j1,j2` for fast selective feedback; a selected job "+
+					"includes its dependencies but never satisfies the task's required CI verdict. "+
+					"Before finishing, run `grain ci wait` without `--jobs` and get a successful "+
+					"full-suite result for the exact commit. If grain CI fails, fix it, push again "+
+					"and run `grain ci wait` again.", branch)
 			prompt += redCIProcedureSection()
 		} else {
 			prompt += fmt.Sprintf(
@@ -688,13 +691,13 @@ func mergeRepairRun(task model.Task, obs *model.Observation) bool {
 func redCIProcedureSection() string {
 	return "\n\nWhen grain CI is red, follow the " + model.RedCIProcedure + " rather than " +
 		"pushing and re-running the whole suite:\n\n" +
-		"1. Get the failing job and the exact failing test names from `wait_for_checks` and " +
-		"`get_ci_log` (`job`, `step` and `tail` on the failing step: a test runner's failure " +
-		"summary is at the end). For the full output, read the failing attempt over the sandbox " +
-		"namespace rather than re-running the suite to find the test: " +
-		"`curl -s http://127.0.0.1:9728/fs/ci/<repo>/<run>/<job>/attempts/<n>/tests/<pkg>/<Test>.log`, " +
-		"`.../attempts/<n>/gotest.log?grep=FAIL`, or `grain_grep` / `grain_copy`.\n" +
-		"2. Check `query_test_history` for those tests, and the note on whether the same job is " +
+		"1. Get the failing job and the exact failing test names from `grain ci wait` and " +
+		"`grain ci log --job <job> --step <step> --tail N` (a test runner's failure summary is at " +
+		"the end). For the full output, read the failing attempt from the namespace rather than " +
+		"re-running the suite to find the test: " +
+		"`grain read ci://<repo>/<run>/<job>/attempts/<n>/tests/<pkg>/<Test>.log`, or " +
+		"`grain grep -- '--- FAIL' ci://<repo>/<run>/<job>/attempts/<n>/gotest.log`.\n" +
+		"2. Check `grain ci test-history <test>` for those tests, and the note on whether the same job is " +
 		"failing on other branches. If it is inherited or flaky, say so, and do not chase it unless " +
 		"repairing that branch is this run's own work.\n" +
 		"3. Classify it. A step killed at its time limit (exit 124), out of memory (exit 137), " +
@@ -704,9 +707,9 @@ func redCIProcedureSection() string {
 		"./<pkg>`, or the job's own step command -- before changing anything.\n" +
 		"5. Fix it, then re-run that test locally, and any test that checks the file you changed " +
 		"(a CI workflow edit means running the tests that read the workflows).\n" +
-		"6. Push, then call `wait_for_checks` with `jobs` set to the jobs that failed (or " +
-		"`run_ci_job` / `retrigger_ci`) for fast feedback.\n" +
-		"7. Only once those are green, call `wait_for_checks` without `jobs` for the merge gate."
+		"6. Push, then run `grain ci wait --jobs <the jobs that failed>` (or `grain ci run-job " +
+		"<job>` / `grain ci retrigger`) for fast feedback.\n" +
+		"7. Only once those are green, run `grain ci wait` without `--jobs` for the merge gate."
 }
 
 // repairCISection is what a merge queue repair run is told about a red
@@ -889,7 +892,7 @@ func runtimeSection(task model.Task, maxRuntime time.Duration) string {
 	s := fmt.Sprintf(
 		"\n\ngrain cancels this run after %s of wall-clock time and destroys the "+
 			"sandbox with it, so treat that as your budget rather than as a limit you "+
-			"will never reach. Time you spend blocked inside wait_for_checks is not "+
+			"will never reach. Time you spend blocked inside `grain ci wait` is not "+
 			"charged against that budget -- up to %s over the whole run, which is "+
 			"credited back to your deadline as you spend it, so %s is the longest this "+
 			"run can live. Waiting for the verdict on a push you have already made is "+
@@ -920,7 +923,7 @@ func runtimeSection(task model.Task, maxRuntime time.Duration) string {
 // deployment's, and the prompt is built without it.
 func durableRuntimeSection(task model.Task) string {
 	s := fmt.Sprintf("\n\nThis run has no deadline; if it goes idle for %s it is suspended and resumed. "+
-		"Idle means no output, no tool call and no wait in progress (wait_for_checks, wait_for_task, a "+
+		"Idle means no output, no tool call and no wait in progress (`grain ci wait`, `grain task wait`, a "+
 		"CI job, a chat wait), so work for as long as the work needs.",
 		humanDuration(DefaultDurableIdleTimeout))
 	if task.Target != nil {
@@ -1005,7 +1008,7 @@ func statusSection(canReachDaemon bool) string {
 		"tool you called -- and for `run_command`, from its own `description` -- so " +
 		"give each command a description written for a person who cannot see the " +
 		"command (\"running the test suite\", \"pushing the branch\") and the row " +
-		"keeps up with you at no cost. `update_status` is for what the tool you are " +
+		"keeps up with you at no cost. `grain status \"<note>\"` is for what the tool you are " +
 		"calling cannot say on its own: which package you are reading your way " +
 		"around, why you have changed approach, what you are waiting for. Call it " +
 		"at those moments and not otherwise -- it costs a turn like any other call, " +
@@ -1385,9 +1388,13 @@ func sandboxDirsSection(checkoutDir, sandboxRoot string) string {
 // is no branch, no pull request and no CI for those tools to report on,
 // so it would be three tool names of noise. The other two hold for every
 // run in every sandbox.
-func sandboxToolingSection(hasTarget bool) string {
+func sandboxToolingSection(hasTarget, grainCI bool) string {
 	s := "\n\n"
-	if hasTarget {
+	if hasTarget && grainCI {
+		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
+			"`grain ci wait`, `grain pr status` and `grain pr base-status` rather than " +
+			"reaching for `gh`, which the stock sandbox image does not carry. "
+	} else if hasTarget {
 		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
 			"`wait_for_checks`, `pull_request_status` and `base_branch_status` rather than " +
 			"reaching for `gh`, which the stock sandbox image does not carry. "
@@ -1400,6 +1407,86 @@ func sandboxToolingSection(hasTarget bool) string {
 		"127, and one at the head of an `&&` chain takes the rest of the chain with it, including " +
 		"the `git commit` at the end of it."
 	return s
+}
+
+// grainCLISection is the short reference to the `grain` CLI every run with
+// a sandbox has (docs/design/sandbox-first-agent-surface.md §4): the MCP
+// roster is the control set alone, so this is the only place the rest of
+// what grain offers a run -- the namespace, CI, the pull request, the
+// collaboration helpers -- is named at all. `grain help` and `grain <cmd>
+// --help` carry the detail, which is why this stays a page.
+func grainCLISection(task model.Task) string {
+	repo := "<owner>/<repo>"
+	if task.Target != nil && task.Target.Owner != "" && task.Target.Name != "" {
+		repo = task.Target.Owner + "/" + task.Target.Name
+	}
+	s := "\n\n### Grain CLI (`grain`)\n\n" +
+		"Inside your sandbox, the `grain` CLI (run it with `run_command`) reaches this deployment's " +
+		"namespace, CI, pull request, merge queue and the capabilities granted to this task, with no " +
+		"tool-result size cap -- pipe it to `grep`, `jq` or a file:\n\n" +
+		"- **Namespace** (`ci://`, `src://`, `task://`, `config://`, `memory://`, `deploy://`): " +
+		"`grain ls <uri>`, `grain read <uri> [--tail N]`, `grain grep <re> <uri>`. For example " +
+		"`grain ls ci://" + repo + "`.\n"
+	if task.Target != nil {
+		s += "- **CI & pull request** (this task's branch): `grain ci wait [--jobs j1,j2]` (give " +
+			"`run_command` `timeout: 600000`; time blocked is credited back to your deadline), " +
+			"`grain ci run-job <job>`, `grain ci retrigger`, `grain ci list`, `grain ci log [<run-id>] " +
+			"[--job <j>] [--step <s>] [--tail N]`, `grain ci test-history <test>`, `grain pr status`, " +
+			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
+			"`grain pr review-comment`.\n"
+	}
+	s += "- **Task & collaboration:** `grain status \"<note>\"`, `grain handover write --file <path>`, " +
+		"`grain task wait <id>`, `grain task message <id> \"<body>\"`, `grain notify --subject <s> " +
+		"--title <t>`, `grain git revert --task <id> --reason \"<why>\"`, `grain merge-queue`.\n" +
+		grainCLIGrantBullets(task.Grants) +
+		"- **Turn-ending, parking and proposals stay tool calls:** use `comment_on_issue`, " +
+		"`nothing_needed`, `ask_question`, `request_secret`, `wait_for_task` (`park: true`), " +
+		"`resume_later` and `propose_task` directly, not as shell commands.\n\n" +
+		"Run `grain help` or `grain <command> --help` for every flag."
+	return s
+}
+
+// grainCLIGrants is the `grain` commands each of grain's own capability
+// grants unlocks, in the order grainCLIGrantBullets lists them. A grant
+// whose tools stay model tools (dispatch-control, self-upgrade, db-write,
+// team-broadcast) is not here: the tool roster already names those.
+var grainCLIGrants = []struct{ grant, commands string }{
+	{model.SelfDebugCapability, "`grain ls/read/grep src://...`, `grain task list`, `grain task read <id>`, " +
+		"`grain task transcript <id>`, `grain metrics [<section>]`, `grain read deploy://pipeline-changes`"},
+	{"grain-log", "`grain log [--tail N]`"},
+	{"deployment-health", "`grain health`, `grain read deploy://state`"},
+	{"bootstrap-playbooks", "`grain playbooks [<name>]`"},
+	{"memory", "`grain memory list`, `grain memory read <key>`, `grain memory write [--repo owner/name] --file <f>`, " +
+		"`grain memory doc-write <name> --summary <s> --file <f> [--repo owner/name]`"},
+	{"release-notes", "`grain release-notes stats [--period <p>]`, `grain release-notes publish --title <t> --file <f> [--period <p>]`"},
+	{"read-issues", "`grain issue list`, `grain issue read <n>`"},
+	{"test-quarantine", "`grain quarantine <pkg> <test> --reason <why>`"},
+	{"db-read", "`grain db query <sql>`"},
+}
+
+// grainCLIGrantBullets is one bullet per grant the task holds naming the
+// `grain` commands it unlocks, plus one for any api grant.
+func grainCLIGrantBullets(grants []model.Grant) string {
+	held := map[string]bool{}
+	api := false
+	for _, g := range grants {
+		held[g.Capability] = true
+		if strings.HasPrefix(g.Capability, model.APIGrantPrefix) {
+			api = true
+		}
+	}
+	var b strings.Builder
+	for _, c := range grainCLIGrants {
+		if held[c.grant] {
+			fmt.Fprintf(&b, "- **%s:** %s.\n", c.grant, c.commands)
+		}
+	}
+	if api {
+		b.WriteString("- **api grants:** `grain api routes` lists the agent API routes they reach; " +
+			"`grain api <METHOD> <path> [--body '<json>']` calls one. Routes a sandbox process may " +
+			"not call stay `api_*` tool calls.\n")
+	}
+	return b.String()
 }
 
 // timezoneSection tells the run the current time in the task's own time
@@ -2162,7 +2249,7 @@ func parkedResumeSection(h History) string {
 			". That time has passed (or a person undeferred the task early), so grain queued it " +
 			"again. The sandbox did not survive the park -- what that attempt pushed is on your " +
 			"branch, and nothing else of it is. Pick up what it was waiting to do: if it was " +
-			"waiting out a hold on CI, run CI again now with retrigger_ci and wait_for_checks.\n"
+			"waiting out a hold on CI, run CI again now with `grain ci retrigger` and `grain ci wait`.\n"
 	}
 	if len(h.Resumed) == 0 {
 		return ""

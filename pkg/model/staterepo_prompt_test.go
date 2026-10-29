@@ -37,7 +37,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -84,7 +83,7 @@ func TestTheMemoryAgentIsSentToTheTaskToolsForTheRecord(t *testing.T) {
 	}
 	// A nil reader returns the four tools anyway, refusing every call:
 	// this wants their names, not a route to the daemon.
-	for _, tool := range mcp.NewTaskTools(nil) {
+	for _, tool := range []struct{ Name string }{{"grain task list"}, {"grain task read"}, {"grain task prompt"}, {"grain task transcript"}} { // the self-debug task tools, as `grain` commands
 		if !strings.Contains(tmpl.Body, tool.Name) {
 			t.Errorf("the memory agent's prompt never mentions %s, the tool that reads the "+
 				"record it is scheduled to write a memory from", tool.Name)
@@ -135,7 +134,7 @@ func TestTheDirectorIsToldWhereTheRecordAndTheSettingsEachAre(t *testing.T) {
 		model.DirectorSessionBody(repo, model.ConsoleSession{}),
 		model.DirectorSessionBody(model.RepoRef{}, model.ConsoleSession{TasksApproved: true}),
 	} {
-		for _, tool := range mcp.NewTaskTools(nil) {
+		for _, tool := range []struct{ Name string }{{"grain task list"}, {"grain task read"}, {"grain task prompt"}, {"grain task transcript"}} { // the self-debug task tools, as `grain` commands
 			if !strings.Contains(body, tool.Name) {
 				t.Errorf("the director's prompt never mentions %s, the tool that answers "+
 					"what this deployment has run", tool.Name)

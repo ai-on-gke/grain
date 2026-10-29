@@ -350,6 +350,10 @@ func printTools(w io.Writer, t ui.MetricsTools) {
 		t.Errored, t.ErroredShare*100)
 	fmt.Fprintf(w, "  cut answers              %6d  (%.1f%% of them -- calls whose answer grain shortened to fit the cap)\n",
 		t.Cut, t.CutShare*100)
+	if t.ControlCalls > 0 || t.CLICalls > 0 {
+		fmt.Fprintf(w, "  by surface               %6d MCP control tool call(s), %d grain CLI command(s)\n",
+			t.ControlCalls, t.CLICalls)
+	}
 	fmt.Fprintf(w, "  %-16s %8s %8s %8s %9s %11s %11s %9s %11s\n",
 		"tool", "runs", "calls", "errors", "timed out", "mean bytes", "p95 bytes", "cut", "cut p50")
 	for _, use := range t.ByTool {
