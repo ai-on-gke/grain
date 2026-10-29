@@ -69,6 +69,7 @@ import {
   fixWhere,
 } from "../ciFaults.js";
 import { knownRepos, pullRequestUrl } from "../state.js";
+import TaskLink from "./detail/TaskLink.jsx";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { formatDateTime } from "../time.js";
 
@@ -1283,6 +1284,7 @@ export function RunList({
   showRepo = true,
   filters = [],
   faults = [],
+  onOpenTask,
 }) {
   const now = Date.now();
   const columns = showRepo ? 8 : 7;
@@ -1391,6 +1393,7 @@ export function RunList({
                   fault={fault}
                   branch={run.ref}
                   columns={columns}
+                  onOpenTask={onOpenTask}
                 />
               ))}
             </Fragment>
@@ -1413,7 +1416,7 @@ export function RunList({
 // exists to correct. Warning colour rather than error, for the reason
 // ConclusionErrored takes one -- what it points at is the deployment,
 // not this commit.
-function SharedFaultRow({ fault, branch, columns }) {
+function SharedFaultRow({ fault, branch, columns, onOpenTask }) {
   const summary = faultSummary(fault, branch);
   if (!summary) return null;
   const src = faultSource(fault);
@@ -1445,6 +1448,7 @@ function SharedFaultRow({ fault, branch, columns }) {
             {summary}
           </Typography>
         </Box>
+        <FaultOwner fault={fault} onOpenTask={onOpenTask} />
         {faultFixes(fault).map((fix) => (
           <Typography
             key={fix.pullRequest}
@@ -1514,6 +1518,33 @@ function writeSharedFaultsCollapsed(seen) {
   }
 }
 
+// FaultOwner is the task a shared fault is assigned to (ownerTaskId:
+// an open base-branch repair, or else the first task in queue order that
+// is hitting it -- cifault.ResolveOwner), linked to that task. Every other
+// branch failing the same way is told to leave the fix to it, so it is
+// the one name a reader of this fault needs; nothing is said where no
+// task owns it.
+function FaultOwner({ fault, onOpenTask }) {
+  const id = fault?.ownerTaskId;
+  if (!id) return null;
+  return (
+    <Typography
+      variant="caption"
+      color="text.secondary"
+      component="p"
+      className="ci-fault-owner"
+      data-testid="ci-fault-owner"
+      sx={{ display: "block", mt: 0.25, mb: 0, wordBreak: "break-word" }}
+    >
+      Assigned to{" "}
+      <TaskLink id={id} onOpenTask={onOpenTask}>
+        {`task #${id}`}
+      </TaskLink>
+      {fault.ownerRef ? ` (${fault.ownerRef})` : ""}
+    </Typography>
+  );
+}
+
 // SharedFaultsSection shows shared CI faults that are not already attached to a
 // visible grain-CI run row below -- in particular GitHub CI shared faults, and
 // grain CI faults when the run table is empty or narrowed away from their runs.
@@ -1523,7 +1554,7 @@ function writeSharedFaultsCollapsed(seen) {
 // per browser. A collapsed box remembers which faults it was hiding, and
 // any fault that turns up after that is counted on the header as new
 // rather than opening the box by itself.
-function SharedFaultsSection({ faults = [] }) {
+function SharedFaultsSection({ faults = [], onOpenTask }) {
   // null while expanded; the keys of the faults it held once collapsed.
   const [collapsedSeen, setCollapsedSeen] = useState(readSharedFaultsCollapsed);
   if (!faults || faults.length === 0) return null;
@@ -1658,6 +1689,7 @@ function SharedFaultsSection({ faults = [] }) {
                     {`Common files: ${paths.join(", ")}`}
                   </Typography>
                 )}
+                <FaultOwner fault={fault} onOpenTask={onOpenTask} />
                 {faultFixes(fault).map((fix) => (
                   <Typography
                     key={fix.pullRequest}
@@ -1798,7 +1830,13 @@ function formatCIReadError(err) {
   return err?.message || String(err);
 }
 
-export default function CIPage({ config, onOpenRun, initialRepo, showError }) {
+export default function CIPage({
+  config,
+  onOpenRun,
+  onOpenTask,
+  initialRepo,
+  showError,
+}) {
   const [data, setData] = useState(null);
   // Why the last poll of the run list failed, or "" once one succeeds.
   // Without it a list whose first read failed spun "Loading CI runs" for
@@ -2086,7 +2124,12 @@ export default function CIPage({ config, onOpenRun, initialRepo, showError }) {
           anything.
         </Alert>
       )}
-      {data !== null && <SharedFaultsSection faults={standaloneFaults} />}
+      {data !== null && (
+        <SharedFaultsSection
+          faults={standaloneFaults}
+          onOpenTask={onOpenTask}
+        />
+      )}
       {/* What CI is spending right now, above what it has spent: a
           reader who came to see whether anything is running should not
           have to find the un-concluded rows in a table of a hundred
@@ -2151,6 +2194,7 @@ export default function CIPage({ config, onOpenRun, initialRepo, showError }) {
             onOpen={onOpenRun}
             filters={narrowing.filters}
             faults={data.faults}
+            onOpenTask={onOpenTask}
           />
         ))}
     </main>
