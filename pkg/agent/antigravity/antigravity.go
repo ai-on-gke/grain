@@ -947,7 +947,12 @@ func settingsJSONWith(provider string, isUnc bool, servers []agent.CapabilityMCP
 			rules["allow"] = append(rules["allow"].([]string), "mcp("+s.Name+"/"+tool+")")
 		}
 	}
-	settings := map[string]any{"permissions": rules}
+	// planMode off: agy otherwise injects its plan protocol, which tells
+	// the model to plan, then call exit_plan_mode, before any edit -- a
+	// handoff to a person nobody is there to be in a headless run. An agy
+	// that does not know the key drops it when it rewrites this file
+	// (refreshAgyHome), so it costs nothing where unsupported.
+	settings := map[string]any{"permissions": rules, "planMode": false}
 	if provider != "" {
 		settings["modelProvider"] = provider
 	}
@@ -1355,6 +1360,24 @@ func HookDecisionFor(opts HookOptions, payload []byte) []byte {
 				"on the machine hosting this session is not one grain will let through.")
 		}
 		return noOpinion
+	}
+	switch in.ToolCall.Name {
+	case "exit_plan_mode":
+		// agy's own plan-mode handoff, not a tool that touches any
+		// machine: agy refuses edits until it is called, so denying it
+		// traps a run that started in plan mode in a read-only loop. It
+		// was 100% of its calls failing before this
+		// (docs/design/sandbox-first-agent-surface.md §5).
+		return noOpinion
+	case "enter_plan_mode":
+		return denyReason("Plan mode is off in headless grain runs, and entering it would stop " +
+			"every edit: there is nobody to approve a plan. Carry out the steps directly with " +
+			joinNames(sandboxToolNames()) + ".")
+	case "schedule":
+		return denyReason("schedule's timers do not exist in a headless grain run: nothing wakes " +
+			"this session up again. To wait for CI, run `grain ci wait` with " +
+			mcp.AgyQualifiedToolName("run_command") + " (timeout 600000); to free the sandbox while " +
+			"something finishes, call " + mcp.AgyQualifiedToolName("resume_later") + ".")
 	}
 	name := in.ToolCall.Name
 	if name == "" {
@@ -1847,7 +1870,12 @@ func toolPreamble(cfg agent.RunConfig) string {
 	return "Use the " + prefix + "* tools for everything you do to " + where + ". " +
 		joinNames(sandboxToolNames()) + " are the ones that reach " + where + "; " +
 		"the rest of the " + prefix + "* tools are how you report back, ask a question, " +
-		"read CI, or ask grain to open your pull request.\n" +
+		"park this run, or file follow-up work. CI, your pull request and grain's own data are " +
+		"the `grain` CLI, which you run inside " + mcp.AgyQualifiedToolName("run_command") +
+		" (`grain help` lists it).\n" +
+		"Never call exit_plan_mode, enter_plan_mode or schedule: plan-mode routing and timers are " +
+		"off in headless grain runs. Execute your plan directly in this turn with the " + prefix +
+		"* tools; to wait on CI, run `grain ci wait`.\n" +
 		"Treat every one of your own built-in tools as unavailable -- " +
 		strings.Join(withheldNativeTools, ", ") + ", and anything else whose name does not begin " +
 		prefix + ". They do not run in " + where + ": they run on the machine hosting this " +

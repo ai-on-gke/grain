@@ -1263,6 +1263,16 @@ const (
 	// that an older one did. Read by the edition's review gate
 	// (changelists.md §5, G3-5). Blocks nothing itself.
 	LinkCLReviewCleared LinkKind = "cl-review-cleared"
+	// LinkCLReviewFiled records that grain filed a required review of one
+	// snapshot of a task's CL (-> "cl/<number>@<snapshot>:<template>",
+	// CLReviewTarget), so each snapshot is reviewed once per template. It
+	// sits on the reviewed task beside LinkReviewTask.
+	LinkCLReviewFiled LinkKind = "cl-review-filed"
+	// LinkCLReviewOf is the same target on the review task itself: grain's
+	// record that it filed this task as that review, with the provider's
+	// read-only grant (orchestrator.SyncCLReviews). Only grain writes it,
+	// and it is what a clean finish clears (LinkCLReviewCleared).
+	LinkCLReviewOf LinkKind = "cl-review-of"
 )
 
 // CLThreadsPrincipal is who tells a task about new review threads on its

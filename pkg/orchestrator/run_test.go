@@ -480,7 +480,7 @@ func TestBuildPromptAsksForAStatusOnlyFromARunThatCanSendOne(t *testing.T) {
 	prompt := orchestrator.BuildPrompt(task, orchestrator.CheckoutDir, "", true,
 		orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
 	for _, want := range []string{
-		"update_status", "task's row", "`run_command`", "`description`",
+		"`grain status", "task's row", "`run_command`", "`description`",
 		"every tool call you make",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -490,13 +490,13 @@ func TestBuildPromptAsksForAStatusOnlyFromARunThatCanSendOne(t *testing.T) {
 
 	without := orchestrator.BuildPrompt(task, orchestrator.CheckoutDir, "", false,
 		orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
-	if strings.Contains(without, "update_status") {
-		t.Errorf("prompt names a tool this run's mcpserver never registered: %q", without)
+	if strings.Contains(without, "is for what the tool you are") {
+		t.Errorf("prompt offers a status line to a run with no daemon to send it to: %q", without)
 	}
 
 	bare := orchestrator.BuildPrompt(model.Task{ID: "t2", Title: "Think", Body: "details"}, "", "", true,
 		orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
-	if !strings.Contains(bare, "update_status") {
+	if !strings.Contains(bare, "is for what the tool you are") {
 		t.Errorf("prompt withholds the status tool from a task with no repo: %q", bare)
 	}
 }

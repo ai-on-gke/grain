@@ -175,6 +175,12 @@ func relayReviewFeedback(ctx context.Context, store *model.Store, client github.
 		return 0, err
 	}
 
+	// A review grain filed of a CL (fileCLReview) has no pull request to
+	// post on: its findings are saved as drafts on the CL instead.
+	if handled, n, err := relayCLReviewFeedback(ctx, store, task, findings, wantedAutoMerge, now); handled {
+		return n, err
+	}
+
 	reviewed, ref, ok, err := reviewedPullRequest(ctx, store, task)
 	if err != nil {
 		return 0, err
@@ -229,8 +235,12 @@ func relayReviewFeedback(ctx context.Context, store *model.Store, client github.
 	if hasBaseRepairBypass(*reviewed) {
 		return len(findings), fileBaseRepairReviewFollowUp(ctx, store, client, task, *reviewed, ref, findings, reviewID, now)
 	}
-	return len(findings), noteFindingsOnReviewedTask(ctx, store, task, *reviewed, ref, findings,
-		wantedAutoMerge, reviewID, submitted, now)
+	kind := "a draft review"
+	if submitted {
+		kind = "a review"
+	}
+	return len(findings), noteFindingsOnReviewedTask(ctx, store, task, *reviewed, ref.String(), kind, findings,
+		wantedAutoMerge, reviewID, now)
 }
 
 // reviewedWantsAutoMerge reports whether the task review was filed
@@ -496,8 +506,7 @@ func noteFindingsOnReview(ctx context.Context, store *model.Store, task model.Ta
 // only mislead. The draft review is still posted, since a finding about
 // code that just landed is still worth having.
 func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review, reviewed model.Task,
-	ref model.PullRequestRef, findings []reviewFinding, wantedAutoMerge bool, draftID int,
-	submitted bool, now time.Time) error {
+	ref, kind string, findings []reviewFinding, wantedAutoMerge bool, draftID int, now time.Time) error {
 
 	closed, err := taskClosed(ctx, store, reviewed.ID)
 	if err != nil {
@@ -507,10 +516,6 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 		return nil
 	}
 
-	kind := "a draft review"
-	if submitted {
-		kind = "a review"
-	}
 	// The question first, so the hold can name it: a human comment newer
 	// than this one is the owner's answer (reviewquestions.go).
 	body := fmt.Sprintf(
