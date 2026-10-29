@@ -1798,6 +1798,7 @@ export default function RepoPage({
                     onRemove={ciCapsMethods.onRemove}
                     disabled={readOnly}
                     idPrefix="repo-ci"
+                    runKind="ci"
                   />
                 </Box>
               </Stack>
