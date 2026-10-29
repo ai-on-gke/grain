@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import {
   Alert,
   Badge,
@@ -2526,6 +2533,27 @@ export default function RepoPage({
                         : `Read at ${(declarations.declarationsStatus.commit || "").slice(0, 12) || "no commit"}: ` +
                           declaredSummary(declarations.declarationsStatus)}
                     </Typography>
+                    {/* The trigger files by path: a Processes trigger row
+                      is listed only by its file and opens this tab (§5.1),
+                      so the file it names has to be here to be found. */}
+                    {(declarations.declarationsStatus.triggers || []).length >
+                      0 && (
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        className="declared-triggers"
+                      >
+                        Path triggers:{" "}
+                        {declarations.declarationsStatus.triggers.map(
+                          (path, i) => (
+                            <Fragment key={path}>
+                              {i > 0 && ", "}
+                              <code>{path}</code>
+                            </Fragment>
+                          ),
+                        )}
+                      </Typography>
+                    )}
                     {/* What a failed read leaves running: the last good
                       commit's declarations, counted the way a clean read
                       is, so a read error does not hide the merge rules

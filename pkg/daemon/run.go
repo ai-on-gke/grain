@@ -489,12 +489,17 @@ func Run(ctx context.Context, cfg Config) error {
 			forwardedPortsFunc = servicePorts.EndpointPorts
 		}
 		cpuOvercommit, memOvercommit := cfg.overcommitRatios()
+		if err := validateK8sGranuleAccess(cfg, InKubernetesPod()); err != nil {
+			return err
+		}
 		var access *orchestrator.K8sGranuleAccess
 		var accessLive func(string) bool
 		if cfg.SandboxAccessAddr != "" {
 			if access, err = startSandboxAccess(ctx, cfg, store, k8sInstance, k8sNamespace, &accessLive); err != nil {
 				return err
 			}
+			access.Mode = cfg.K8sGranuleAccess
+			access.ReattachTimeout = cfg.K8sGranuleReattachTimeout
 		}
 		granuleSandboxes := orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{
 			Instance:           k8sInstance,
