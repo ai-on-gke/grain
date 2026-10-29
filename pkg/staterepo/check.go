@@ -189,7 +189,7 @@ func check(ctx context.Context, db *sql.DB, dir, scratch string, version int, mi
 	if err := checkCapabilities(dir); err != nil {
 		return report, err
 	}
-	warnings, err := describeDump(ctx, db, dir, tables)
+	warnings, err := describeDump(ctx, db, dir, tables, migrating)
 	if err != nil {
 		return report, err
 	}
@@ -234,7 +234,7 @@ func check(ctx context.Context, db *sql.DB, dir, scratch string, version int, mi
 // resets rather than leaves alone (settingsResets, below), and a
 // settings file that is not there at all, which Apply empties the table
 // for (settingsMissing).
-func describeDump(ctx context.Context, db *sql.DB, dir string, tables []string) ([]string, error) {
+func describeDump(ctx context.Context, db *sql.DB, dir string, tables []string, migrating bool) ([]string, error) {
 	known := map[string]bool{}
 	for _, t := range tables {
 		known[t] = true
@@ -269,7 +269,7 @@ func describeDump(ctx context.Context, db *sql.DB, dir string, tables []string) 
 			if err != nil {
 				return nil, err
 			}
-			said, err := describeTable(ctx, db, k.Path(), table, rows, settings[table])
+			said, err := describeTable(ctx, db, k.Path(), table, rows, settings[table], migrating)
 			if err != nil {
 				return nil, err
 			}
@@ -290,28 +290,68 @@ func describeDump(ctx context.Context, db *sql.DB, dir string, tables []string) 
 		}
 		present[table] = true
 		if !known[table] {
-			warnings = append(warnings, fmt.Sprintf(
-				"%s names no table this build has; every row in it would be ignored", path))
+			if !migrating {
+				warnings = append(warnings, fmt.Sprintf(
+					"%s names no table this build has; every row in it would be ignored", path))
+				continue
+			}
+			if strings.HasSuffix(table, "_sequence") {
+				continue
+			}
+			rows, err := readRows(filepath.Join(dir, TablesDir, e.Name()))
+			if err != nil {
+				return nil, err
+			}
+			if w := droppedTableWarning(table, len(rows)); w != "" {
+				warnings = append(warnings, w)
+			}
 			continue
 		}
 		rows, err := readRows(filepath.Join(dir, TablesDir, e.Name()))
 		if err != nil {
 			return nil, err
 		}
-		said, err := describeTable(ctx, db, path, table, rows, settings[table])
+		said, err := describeTable(ctx, db, path, table, rows, settings[table], migrating)
 		if err != nil {
 			return nil, err
 		}
 		warnings = append(warnings, said...)
 	}
-	warnings = append(warnings, settingsMissing(tables, settings, present, nested)...)
+	if !migrating {
+		warnings = append(warnings, settingsMissing(tables, settings, present, nested)...)
+	}
 	sort.Strings(warnings)
 	return warnings, nil
 }
 
+// droppedTableWarning summarizes rows in a table this build does not
+// have when rehearsing a schema migration (such as rolling back from a
+// newer schema). Empty tables and sequence tables are silent; tables
+// carried by a dump fixup or checked by the retired-table guard are
+// handled there rather than here.
+func droppedTableWarning(table string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	switch table {
+	case "team", "team_user", "team_repo_config", "team_gcp_key", "user":
+		return ""
+	case "external_agent_token":
+		if n == 1 {
+			return "1 external agent token is not carried back"
+		}
+		return fmt.Sprintf("%d external agent tokens are not carried back", n)
+	default:
+		if n == 1 {
+			return fmt.Sprintf("1 %s row is not carried back", table)
+		}
+		return fmt.Sprintf("%d %s rows are not carried back", n, table)
+	}
+}
+
 // describeTable is describeDump for the rows of one table, wherever in
 // the repository they were written down.
-func describeTable(ctx context.Context, db *sql.DB, path, table string, rows []map[string]any, isSettings bool) ([]string, error) {
+func describeTable(ctx context.Context, db *sql.DB, path, table string, rows []map[string]any, isSettings, migrating bool) ([]string, error) {
 	cols, err := columns(ctx, db, table)
 	if err != nil {
 		return nil, err
@@ -336,8 +376,10 @@ func describeTable(ctx context.Context, db *sql.DB, path, table string, rows []m
 		}
 	}
 	if isSettings {
-		warnings = append(warnings, settingsResets(path, table, withoutWithheld(table, cols), rows)...)
-		warnings = append(warnings, withheldCarried(path, table, rows)...)
+		warnings = append(warnings, settingsResets(path, table, withoutWithheld(table, cols), rows, migrating)...)
+		if !migrating {
+			warnings = append(warnings, withheldCarried(path, table, rows)...)
+		}
 	}
 	// And the values, for the tables whose columns hold a closed
 	// vocabulary: a word this build does not have is the same silent
@@ -350,12 +392,15 @@ func describeTable(ctx context.Context, db *sql.DB, path, table string, rows []m
 // withheldColumns keeps out of the repository. Applying it ignores the
 // value (withheld.go), so the warning says that -- and, since the value
 // is now in this repository's history, that it should be treated as
-// leaked. The value itself is not repeated.
+// leaked. The value itself is not repeated. An empty value (such as the
+// "" a full Export writes on a deployment that never configured the
+// secret) holds no secret material and is not warned about.
 func withheldCarried(path, table string, rows []map[string]any) []string {
 	var out []string
 	for _, name := range withheldColumns[table] {
 		for i, row := range rows {
-			if _, ok := row[name]; !ok {
+			v, ok := row[name]
+			if !ok || v == nil || v == "" {
 				continue
 			}
 			out = append(out, fmt.Sprintf(
@@ -476,7 +521,7 @@ func settingsMissing(tables []string, settings, present, nested map[string]bool)
 // deployment ever reaches the question. Those get a sentence of their
 // own (mustBeGiven), because the two are opposite advice: one says weigh
 // what the merge would cost, the other says this will not merge.
-func settingsResets(path, table string, cols []column, rows []map[string]any) []string {
+func settingsResets(path, table string, cols []column, rows []map[string]any, migrating bool) []string {
 	var out []string
 	// One warning per column, naming the first row that is missing it,
 	// for the reason the loop above reports per column: a settings file
@@ -495,6 +540,9 @@ func settingsResets(path, table string, cols []column, rows []map[string]any) []
 						"column in the file",
 					path, i, c.name, table))
 				break
+			}
+			if migrating {
+				continue
 			}
 			out = append(out, fmt.Sprintf(
 				"%s row %d does not carry %q, which %s has; %s is a settings table, so applying this "+

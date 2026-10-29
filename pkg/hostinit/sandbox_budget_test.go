@@ -34,7 +34,8 @@ const smallHostSettingsJSON = `{"sandboxCommitment":{"cpusPerSandbox":2,"memoryM
 
 func runCheckSandboxBudget(t *testing.T, settings string) Step {
 	t.Helper()
-	opts := Options{}.withDefaults()
+	t.Setenv(localAPITokenFileEnv, "")
+	opts := Options{DataDir: "/var/lib/grain/data"}.withDefaults()
 	sys := newFakeSystem()
 	sys.onHTTPRequest("GET", "http://"+opts.UIAddr+"/api/settings", 200, []byte(settings), nil)
 	var r Result
@@ -65,7 +66,8 @@ func TestCheckSandboxBudgetReportsABudgetThatAdmitsNothing(t *testing.T) {
 	}
 	// A quarter of 7987 MiB, rounded down to 256, is the reserve; the
 	// largest whole GiB of what that leaves is the shape.
-	want := `curl -s -X PUT http://127.0.0.1:4242/api/settings -H 'Content-Type: application/json' -d '{"sandboxMemoryMb":6144,"sandboxMemoryReserveMb":1792}'`
+	want := `curl -s -X PUT http://127.0.0.1:4242/api/settings -H "Authorization: Bearer $(sudo cat /var/lib/grain/data/local-api-token)" ` +
+		`-H 'Content-Type: application/json' -d '{"sandboxMemoryMb":6144,"sandboxMemoryReserveMb":1792}'`
 	if s.Command != want {
 		t.Errorf("Command = %q\nwant      %q", s.Command, want)
 	}

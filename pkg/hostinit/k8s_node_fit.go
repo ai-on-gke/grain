@@ -172,7 +172,7 @@ func checkK8sNodeFitsSandbox(ctx context.Context, sys System, opts Options, r *R
 	if usable {
 		reqBody, _ := json.Marshal(fix)
 		detail += ", or run the command below"
-		step.Command = fmt.Sprintf("curl -s -X PUT %s -H 'Content-Type: application/json' -d %s", url, shQuote(string(reqBody)))
+		step.Command = apiCurlCommand(opts, http.MethodPut, url, reqBody)
 	}
 	step.Detail = detail
 	r.add(step)

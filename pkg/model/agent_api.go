@@ -259,10 +259,10 @@ type APIGrant struct {
 	Templates []string
 }
 
-// reposOf is the repositories g grants scope on: [""] for every one, nil
+// ReposOf is the repositories g grants scope on: [""] for every one, nil
 // for none -- which is a set limited to repositories the grant's own
 // @repo is not among.
-func (g APIGrant) reposOf(scope APIScope) []string {
+func (g APIGrant) ReposOf(scope APIScope) []string {
 	lim, limited := g.ScopeRepos[scope]
 	switch {
 	case !limited && g.Repo == "":
@@ -364,7 +364,7 @@ func apiGrantsOf(names []string, sandboxChannel bool) APIGrantSet {
 			continue
 		}
 		for _, scope := range g.Scopes {
-			for _, repo := range g.reposOf(scope) {
+			for _, repo := range g.ReposOf(scope) {
 				for _, s := range append([]APIScope{scope}, impliedAPIScopes[scope]...) {
 					if sandboxChannel && IsSandboxDeniedAPIScope(s) {
 						continue

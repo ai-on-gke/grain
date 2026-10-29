@@ -526,7 +526,7 @@ func APIScopeSetGrantNames(name string) []string {
 	}
 	var out []string
 	for _, sc := range g.Scopes {
-		for _, repo := range g.reposOf(sc) {
+		for _, repo := range g.ReposOf(sc) {
 			n := APIGrantPrefix + string(sc)
 			if repo != "" {
 				n += "@" + repo

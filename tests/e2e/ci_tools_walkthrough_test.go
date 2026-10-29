@@ -763,8 +763,9 @@ func (l *logTee) String() string {
 // the process's standard logger.
 func TestCIToolsWalkthroughStuckGateAdmitsTheJobItsOwnSandboxBlocks(t *testing.T) {
 	tee := &logTee{}
+	prevLog := log.Writer()
 	log.SetOutput(tee)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(prevLog) })
 
 	ledger := &model.Ledger{}
 	w := newCIWorld(t, bigWorkflow, model.Limits{
