@@ -118,7 +118,11 @@ type scriptedDirector struct {
 }
 
 func (f *scriptedDirector) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
-	args := []string{"mcpserver", "-sandbox-root", cfg.SandboxRoot, "-server", f.baseURL, "-task", cfg.TaskID}
+	// The full roster: this scripted Director calls the tools a real
+	// session reaches as `grain` commands (write_handover,
+	// read_deployment_health), which the control roster does not serve.
+	args := []string{"mcpserver", "-sandbox-root", cfg.SandboxRoot, "-server", f.baseURL, "-task", cfg.TaskID,
+		"-mcp-surface", "full"}
 	args = append(args, agent.GrantArgs(cfg)...)
 	args = append(args, agent.ProposeRepoArgs(cfg)...)
 	args = append(args, agent.InteractiveArgs(cfg)...)

@@ -41,6 +41,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -94,6 +95,12 @@ type Sizes struct {
 // ToolUse is one tool's numbers across the window.
 type ToolUse struct {
 	Name string
+	// Surface is which of a run's two surfaces the tool is on
+	// (agent.ToolSurface): agent.SurfaceControl for a tool on the MCP
+	// control roster, agent.SurfaceCLI for a `grain` command the sandbox
+	// proxy recorded under the tool name it replaced, and "" for a name
+	// grain does not publish.
+	Surface string
 	// Runs is how many of the window's runs called this tool at all --
 	// the difference between a tool every run uses twice and one that a
 	// single run used two hundred times.
@@ -181,6 +188,11 @@ type Tools struct {
 	// distribution can give once the cap is what bounds it.
 	Cut      int
 	CutShare float64
+	// ControlCalls and CLICalls split Calls by surface (ToolUse.Surface):
+	// calls to the MCP control roster, and `grain` commands the sandbox
+	// proxy served. Calls to names grain does not publish are in neither.
+	ControlCalls int
+	CLICalls     int
 	// CallsPerRun is the distribution of how many calls a run makes.
 	CallsPerRun Counts
 	// ByTool is every tool the window's runs called, busiest first --
@@ -319,7 +331,7 @@ func toolsOf(w Window, runs []model.RunTiming, uses []model.RunToolUse) Tools {
 		entry, ok := byName[use.Tool]
 		if !ok {
 			entry = &series{
-				use:     ToolUse{Name: use.Tool},
+				use:     ToolUse{Name: use.Tool, Surface: agent.ToolSurface(use.Tool)},
 				sizes:   model.SizeHistogram{},
 				dropped: model.SizeHistogram{},
 			}
@@ -341,6 +353,12 @@ func toolsOf(w Window, runs []model.RunTiming, uses []model.RunToolUse) Tools {
 		out.Calls += use.Calls
 		out.Errored += use.Errored
 		out.Cut += use.Elided
+		switch entry.use.Surface {
+		case agent.SurfaceControl:
+			out.ControlCalls += use.Calls
+		case agent.SurfaceCLI:
+			out.CLICalls += use.Calls
+		}
 		callsPerRun[use.RunID] += int64(use.Calls)
 	}
 

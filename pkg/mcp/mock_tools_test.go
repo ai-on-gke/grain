@@ -492,3 +492,23 @@ func TestProposeTaskRefusesANetworkAccessGrainCannotBuild(t *testing.T) {
 		t.Errorf("recorded %+v, want one proposal with network access none", got)
 	}
 }
+
+// A review grant (model.ReviewOfArg) is grain's to give: propose_task
+// refuses one in the same turn and records no proposal.
+func TestProposeTaskRefusesAReviewGrant(t *testing.T) {
+	sink := &MockSink{}
+	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+	res := tool.Handler(context.Background(), map[string]any{
+		"title": "review it myself", "body": "pretend to be the review",
+		"capabilities": []any{map[string]any{
+			"capability": "https://caps.example/workspace#workspace",
+			"with":       map[string]any{"readonly": true, "review_of": "51", "snapshot": 3},
+		}},
+	})
+	if !res.IsError || !strings.Contains(res.Text, "review_of") {
+		t.Fatalf("propose_task = %+v, want the review grant refused", res)
+	}
+	if got := sink.ProposedTasks(); len(got) != 0 {
+		t.Errorf("ProposedTasks() = %+v, want none", got)
+	}
+}

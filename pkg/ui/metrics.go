@@ -318,6 +318,11 @@ type MetricsTools struct {
 	Cut         int          `json:"cut"`
 	CutShare    float64      `json:"cutShare"`
 	CallsPerRun MetricsCount `json:"callsPerRun"`
+	// ControlCalls and CLICalls split calls by surface: the MCP control
+	// roster, and `grain` commands the sandbox proxy served
+	// (metrics.Tools).
+	ControlCalls int `json:"controlCalls"`
+	CLICalls     int `json:"cliCalls"`
 	// ByTool is busiest first, which is the order that matters: an error
 	// rate over four calls is not an error rate.
 	ByTool []MetricsToolUse `json:"byTool"`
@@ -377,7 +382,10 @@ type MetricsTaskPrompts struct {
 // elsewhere because nothing else can say, not because nothing else ran
 // long.
 type MetricsToolUse struct {
-	Name        string      `json:"name"`
+	Name string `json:"name"`
+	// Surface is "control" (MCP control roster), "cli" (a `grain`
+	// command) or empty for a name grain does not publish.
+	Surface     string      `json:"surface,omitempty"`
 	Runs        int         `json:"runs"`
 	Calls       int         `json:"calls"`
 	Errored     int         `json:"errored"`
@@ -1240,6 +1248,7 @@ func branchRepairsWireFrom(r metrics.BranchRepairs) MetricsBranchRepairs {
 	for _, use := range r.TopTools {
 		out.TopTools = append(out.TopTools, MetricsToolUse{
 			Name:        use.Name,
+			Surface:     use.Surface,
 			Runs:        use.Runs,
 			Calls:       use.Calls,
 			Errored:     use.Errored,
@@ -1747,6 +1756,8 @@ func metricsReportFrom(rep metrics.Report, cycles bool) MetricsReport {
 		Cut:          rep.Tools.Cut,
 		CutShare:     rep.Tools.CutShare,
 		CallsPerRun:  countOf(rep.Tools.CallsPerRun),
+		ControlCalls: rep.Tools.ControlCalls,
+		CLICalls:     rep.Tools.CLICalls,
 		ByTool:       make([]MetricsToolUse, 0, len(rep.Tools.ByTool)),
 	}
 	for _, use := range rep.Tools.ByTool {

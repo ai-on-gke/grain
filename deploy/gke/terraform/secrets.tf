@@ -50,3 +50,12 @@ resource "google_secret_manager_secret_iam_member" "grain_daemon_accessor" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.grain_daemon.email}"
 }
+
+# The sandbox-access CA is the one secret the daemon writes: it generates the
+# CA and adds the first version on its first start (-sandbox-access-ca-secret).
+resource "google_secret_manager_secret_iam_member" "grain_daemon_sandbox_ca_adder" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.grain["grain-sandbox-ca-key"].secret_id
+  role      = "roles/secretmanager.secretVersionAdder"
+  member    = "serviceAccount:${google_service_account.grain_daemon.email}"
+}

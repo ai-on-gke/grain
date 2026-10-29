@@ -768,6 +768,15 @@ type Config struct {
 	// default does not extend here (nothing publishes a packed guest
 	// image yet).
 	K8sGranuleImage string
+	// SandboxAccessAddr, when set with K8sGranuleSandboxes, runs the
+	// sandbox-access acceptor there and gives every sandbox pod
+	// dial-out credentials (sandbox_access.go). SandboxAccessDial is
+	// what wrappers dial (grain-access.<ns>.svc:4244 when empty), and
+	// SandboxAccessCASecret the Secret Manager secret the CA is kept in
+	// (a file in DataDir when empty). Startup-only, not store-backed.
+	SandboxAccessAddr     string
+	SandboxAccessDial     string
+	SandboxAccessCASecret string
 
 	// sandboxCPUs, sandboxMemoryMB and sandboxDiskGB are store-backed
 	// (model.Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB,

@@ -146,15 +146,16 @@ func (c Client) oneShot(ctx context.Context, req Request, want byte, out any) er
 
 // dialRetry is how long dial keeps trying a socket that is not there or
 // not listening, within the caller's deadline: a hostd restarting -- a
-// drain onto a new binary, systemd's Restart= -- removes its socket and
-// makes it again a second or two later, and a request in that window
-// should wait it out rather than fail.
-var dialRetry = 3 * time.Second
+// drain onto a new binary, systemd's Restart= and allowlist updates --
+// removes its socket and makes it again several seconds later, and a
+// request in that window should wait it out rather than fail.
+var dialRetry = 30 * time.Second
 
 func (c Client) dial(ctx context.Context) (net.Conn, error) {
 	var d net.Dialer
 	give := time.Now().Add(dialRetry)
-	for wait := 100 * time.Millisecond; ; wait *= 2 {
+	wait := 100 * time.Millisecond
+	for {
 		var conn net.Conn
 		var err error
 		if c.Dial != nil {
@@ -166,13 +167,24 @@ func (c Client) dial(ctx context.Context) (net.Conn, error) {
 			return conn, nil
 		}
 		down := errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, ErrRemoteNotConnected)
-		if !down || time.Now().Add(wait).After(give) || ctx.Err() != nil {
+		now := time.Now()
+		if !down || !now.Before(give) || ctx.Err() != nil {
 			return nil, c.unreachable(err, down)
+		}
+		sleep := wait
+		if rem := give.Sub(now); sleep > rem {
+			sleep = rem
 		}
 		select {
 		case <-ctx.Done():
 			return nil, c.unreachable(err, down)
-		case <-time.After(wait):
+		case <-time.After(sleep):
+		}
+		if wait < 1*time.Second {
+			wait *= 2
+			if wait > 1*time.Second {
+				wait = 1 * time.Second
+			}
 		}
 	}
 }

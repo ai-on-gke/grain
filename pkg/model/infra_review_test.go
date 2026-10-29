@@ -31,7 +31,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -144,13 +143,13 @@ func TestTheInfraReviewReadsItsOwnHistoryFirst(t *testing.T) {
 	tmpl := infraReview(t)
 	// A nil reader returns the four tools anyway, refusing every call:
 	// this wants their names, not a route to the daemon.
-	for _, tool := range mcp.NewTaskTools(nil) {
+	for _, tool := range []struct{ Name string }{{"grain task list"}, {"grain task read"}, {"grain task prompt"}, {"grain task transcript"}} { // the self-debug task tools, as `grain` commands
 		if !strings.Contains(tmpl.Body, tool.Name) {
 			t.Errorf("the prompt never mentions %s, which is how this run reads what it "+
 				"recommended last night and what came of it", tool.Name)
 		}
 	}
-	if !strings.Contains(tmpl.Body, "read_grain_metrics") {
+	if !strings.Contains(tmpl.Body, "grain metrics") {
 		t.Error("the prompt never mentions read_grain_metrics, which is the whole of this " +
 			"deployment's measurement of itself and the only reason the job can be more than " +
 			"an opinion")
@@ -186,7 +185,7 @@ func TestTheInfraReviewIsSentAfterReliabilityByName(t *testing.T) {
 	}
 	// The tools that answer the cross-branch question, which is the one
 	// no aggregate over job durations contains.
-	for _, want := range []string{"list_ci_runs", "get_ci_log"} {
+	for _, want := range []string{"grain ci list", "grain ci log"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the prompt never mentions %s, so the flake-across-branches signal has "+
 				"no route into the report", want)
