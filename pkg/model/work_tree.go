@@ -123,14 +123,15 @@ type WorkTree struct {
 }
 
 // TaskPullRequest is the pull request task's work was opened as, nil if
-// none.
+// none. A pull request left in a repository the task was since moved
+// off (PullRequestOffTarget) is not it.
 func TaskPullRequest(task Task) *PullRequestRef {
 	var out *PullRequestRef
 	for _, l := range task.Links {
 		if l.Kind != LinkFixes {
 			continue
 		}
-		if ref, err := ParsePullRequestRef(l.Target); err == nil {
+		if ref, err := ParsePullRequestRef(l.Target); err == nil && !PullRequestOffTarget(task, ref) {
 			out = &ref
 		}
 	}

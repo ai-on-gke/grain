@@ -990,7 +990,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 	}
 	out.Reviewers = slices.Clone(t.Reviewers)
 	for _, l := range t.Links {
-		if l.Kind == model.LinkFixes {
+		if l.Kind == model.LinkFixes && !model.LinkOffTarget(t, l) {
 			out.PullRequest = l.Target
 		}
 		if l.Kind == model.LinkProposedBy {

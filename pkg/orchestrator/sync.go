@@ -1072,6 +1072,20 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 		return err
 	}
 
+	// A task moved to another repository after a run had opened a pull
+	// request in the old one carries a second LinkFixes link it no
+	// longer owns. OpenPullRequestLinks already leaves it out; this takes
+	// it off the task for good, so the task's page, its Submit and every
+	// other reader of its links agree on the one pull request it has.
+	pruned, err := store.PruneOffTargetPullRequestLinks(ctx)
+	for _, l := range pruned {
+		log.Printf("orchestrator: dropped %s from task %s: it is in a repository the task no longer targets",
+			l.PullRequest, l.TaskID)
+	}
+	if err != nil {
+		log.Printf("orchestrator: dropping off-target pull request links: %v", err)
+	}
+
 	links, err := store.OpenPullRequestLinks(ctx)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading open pull request links: %w", err)

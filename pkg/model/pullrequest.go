@@ -102,3 +102,58 @@ const (
 	PrMerged     PrHealth = "merged"
 	PrClosed     PrHealth = "closed"
 )
+
+// PullRequestOffTarget reports whether ref, read off one of task's
+// LinkFixes links, is in a repository task no longer pushes to: neither
+// its Target nor one of its Writes. That is a pull request left behind
+// by a repo retarget (an edit moving the task to another repository
+// after a run had already opened one in the old), and it is no longer
+// this task's change: it is not what the task submits, not what the
+// merge queue reconciles the task's one observation row against, and
+// closing it on GitHub says nothing about the task. A task with no git
+// target (a changelist task, or one not yet given a repo) has nothing to
+// compare against, so none of its links is off target.
+func PullRequestOffTarget(task Task, ref PullRequestRef) bool {
+	if task.Target == nil || task.Target.Owner == "" {
+		return false
+	}
+	if ref.Repo.Same(*task.Target) {
+		return false
+	}
+	for _, w := range task.Writes {
+		if ref.Repo.Same(w.Repo) {
+			return false
+		}
+	}
+	return true
+}
+
+// LinkOffTarget is PullRequestOffTarget for one of task's links: true
+// only for a LinkFixes link whose pull request parses and is off target.
+// A link that will not parse is left for its readers to report, as they
+// already do.
+func LinkOffTarget(task Task, l Link) bool {
+	if l.Kind != LinkFixes {
+		return false
+	}
+	ref, err := ParsePullRequestRef(l.Target)
+	return err == nil && PullRequestOffTarget(task, ref)
+}
+
+// WithoutOffTargetPullRequests is task's links with every off-target
+// LinkFixes link (LinkOffTarget) dropped, and whether any was.
+func WithoutOffTargetPullRequests(task Task) ([]Link, bool) {
+	var out []Link
+	dropped := false
+	for _, l := range task.Links {
+		if LinkOffTarget(task, l) {
+			dropped = true
+			continue
+		}
+		out = append(out, l)
+	}
+	if !dropped {
+		return task.Links, false
+	}
+	return out, true
+}
