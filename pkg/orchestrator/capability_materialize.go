@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -201,7 +202,11 @@ func (m *passMaterialization) Close() {
 
 type sandboxChannelPortForwarder interface {
 	UsesChannelPortForward() bool
-	ForwardCapabilityPort(ctx context.Context, sandboxPort, hostPort int) error
+	// ForwardCapabilityPort listens on 127.0.0.1:sandboxPort in the guest
+	// and hands each connection, carried over the channel, to serve --
+	// the forward's own Serve, so that the relay's ownership check and
+	// the grant's Close apply to it as they do to the guest forwarder's.
+	ForwardCapabilityPort(ctx context.Context, sandboxPort int, serve func(context.Context, net.Conn)) error
 }
 
 type sandboxBatchFilePlacer interface {
@@ -240,7 +245,7 @@ func (m *passMaterialization) startForwarders(ctx context.Context, sb Sandbox, c
 	}
 	if cf, ok := sb.(sandboxChannelPortForwarder); ok && cf.UsesChannelPortForward() {
 		for _, f := range forwards {
-			if err := cf.ForwardCapabilityPort(ctx, f.sandboxPort, f.forward.HostPort()); err != nil {
+			if err := cf.ForwardCapabilityPort(ctx, f.sandboxPort, f.forward.Serve); err != nil {
 				return fmt.Errorf("forwarding sandbox port %d to host_port %d: %w",
 					f.sandboxPort, f.forward.HostPort(), err)
 			}

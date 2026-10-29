@@ -42,6 +42,7 @@ import (
 	"io"
 	"log"
 	"math/rand/v2"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -1121,33 +1122,61 @@ func (s *k8sGranuleSandbox) UsesChannelPortForward() bool {
 }
 
 // ForwardCapabilityPort opens a remote port forward from 127.0.0.1:sandboxPort
-// inside the guest to 127.0.0.1:hostPort on the controller over the dial-out
-// channel.
-func (s *k8sGranuleSandbox) ForwardCapabilityPort(ctx context.Context, sandboxPort, hostPort int) error {
+// inside the guest over the dial-out channel, handing each connection to
+// serve. The channel's caller-side target is a loopback listener of this
+// process's own rather than the grant's host_port itself, so every
+// connection still goes through serve (portforward.Forward.Serve): the
+// relay's check that host_port belongs to the capability server's service,
+// and the grant's Close cutting it (docs/capabilities-spec.md §5.3.2,
+// §5.3.4).
+func (s *k8sGranuleSandbox) ForwardCapabilityPort(ctx context.Context, sandboxPort int, serve func(context.Context, net.Conn)) error {
 	cr := s.currentChannelRunner()
 	if cr == nil {
 		return fmt.Errorf("orchestrator: granule sandbox pod %q has no dial-out channel runner for capability port forward", s.podName)
 	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("orchestrator: forwarding capability port %d in granule sandbox pod %q: %w", sandboxPort, s.podName, err)
+	}
+	fwdCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serve(fwdCtx, conn)
+		}
+	}()
 	remote := []guestforward.RemoteForward{
 		{
 			Guest:  fmt.Sprintf("127.0.0.1:%d", sandboxPort),
-			Target: fmt.Sprintf("127.0.0.1:%d", hostPort),
+			Target: ln.Addr().String(),
 		},
 	}
-	fwdCtx, cancel := context.WithCancel(ctx)
 	closer, err := cr.StartForward(fwdCtx, remote, nil)
 	if err != nil {
 		cancel()
-		return fmt.Errorf("orchestrator: forwarding capability port %d->%d in granule sandbox pod %q: %w", sandboxPort, hostPort, s.podName, err)
+		_ = ln.Close()
+		return fmt.Errorf("orchestrator: forwarding capability port %d in granule sandbox pod %q: %w", sandboxPort, s.podName, err)
 	}
 	s.forwardMu.Lock()
-	s.forwardClosers = append(s.forwardClosers, closer)
+	s.forwardClosers = append(s.forwardClosers, cancelCloser(cancel))
 	s.forwardMu.Unlock()
 	go func() {
-		<-ctx.Done()
+		<-fwdCtx.Done()
 		_ = closer.Close()
-		cancel()
+		_ = ln.Close()
 	}()
+	return nil
+}
+
+// cancelCloser is a context.CancelFunc as an io.Closer, for
+// forwardClosers.
+type cancelCloser context.CancelFunc
+
+func (c cancelCloser) Close() error {
+	c()
 	return nil
 }
 
