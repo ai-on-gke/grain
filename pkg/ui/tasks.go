@@ -1366,6 +1366,13 @@ type configResponse struct {
 	// settings have not been exported since Since. A standing banner, not
 	// a marker -- it is a condition, and goes away when a sync succeeds.
 	StateRepoSyncFailure *StateRepoSyncFailure `json:"stateRepoSyncFailure,omitempty"`
+	// PendingLocalScripts is how many local-script calls are waiting on
+	// a person (GET /api/local-script-approvals, which only the Inbox
+	// polls). It rides here so the sidebar's Inbox entry can count them
+	// the way the Inbox heading does without a poll of its own on every
+	// page: a run blocked on somebody is the Inbox's business wherever
+	// that somebody is looking (2026-10-29 intake walkthrough, O1).
+	PendingLocalScripts int `json:"pendingLocalScripts,omitempty"`
 	// HostSandboxes is true when the backend this daemon is running is
 	// -host-sandboxes (model.SandboxBackendHost, read off RunningConfig):
 	// every dispatched run happens in a plain directory on the daemon's
@@ -1919,6 +1926,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if s.tasks.Config.StateRepoSyncFailure != nil {
 		resp.StateRepoSyncFailure = s.tasks.Config.StateRepoSyncFailure()
 	}
+	resp.PendingLocalScripts = len(s.tasks.localScriptApprovals().Pending(s.tasks.now()))
 	if s.tasks.Config.StateRepoResetNotice != nil {
 		resp.StateRepoResetNotice = s.tasks.Config.StateRepoResetNotice()
 	}
