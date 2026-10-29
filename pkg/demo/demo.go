@@ -483,6 +483,14 @@ func Run(opts Options) error {
 		}
 	}
 
+	if opts.Unconfigured {
+		// Only now, past every seed above: filing a seeded task needs a
+		// connection that reaches its repository.
+		if err := forgetDemoGitConnections(ctx, store); err != nil {
+			return fmt.Errorf("grain demo: -unconfigured: %v", err)
+		}
+	}
+
 	creds.SetConnections(func(owner, repo string) (string, bool) {
 		name, err := store.GitConnectionOn(ctx, "", owner, repo)
 		return name, err == nil && name != ""
