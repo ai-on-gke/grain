@@ -3339,8 +3339,11 @@ func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
 		return susp, false, err
 	}
 	if len(targets) > 0 {
-		when, _, _ := resumedLater(result)
+		when, reason, _ := resumedLater(result)
 		susp.Detail = model.ParkedDetail(targets)
+		if reason = strings.TrimSpace(reason); reason != "" {
+			susp.Detail += ": " + reason
+		}
 		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged}.JSON()
 		return susp, true, nil
 	}
@@ -3357,6 +3360,9 @@ func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
 	susp.Detail = model.RequestedDetail(reason, when)
 	if when.At != nil && when.CI == "" && !when.Message {
 		susp.Detail = model.ParkedUntilDetail(*when.At)
+		if r := strings.TrimSpace(reason); r != "" {
+			susp.Detail += ": " + r
+		}
 	}
 	susp.ResumeOn = when.JSON()
 	susp.ResumeAt = when.At
