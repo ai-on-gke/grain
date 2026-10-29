@@ -1008,15 +1008,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	sandboxAccessCASecret := fs.String("sandbox-access-ca-secret", "",
 		"Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload "+
 			"Identity and generated into it on first start; empty keeps the CA in <data-dir>/sandbox-access-ca.pem")
-	k8sGranuleAccess := fs.String("k8s-granule-access", orchestrator.K8sGranuleAccessKubectl,
-		"k8s-granule only: how grain runs steps in a sandbox pod's guest once it is Ready -- \"kubectl\" "+
-			"(`granule exec` over `kubectl exec`) or \"dialout\" (the wrapper's dial-out channel to "+
-			"-sandbox-access-addr's acceptor). \"dialout\" needs -sandbox-access-addr and is refused when grain "+
-			"is not running in-cluster (docs/design/grain-on-gke.md#GKE-3)")
-	k8sGranuleReattachTimeout := fs.Duration("k8s-granule-reattach-timeout", orchestrator.DefaultK8sGranuleReattachTimeout,
-		"k8s-granule -k8s-granule-access=dialout only: how long a step in flight waits for a dropped dial-out "+
-			"channel to reconnect before the sandbox is given up as lost -- a CI job concludes errored with an "+
-			"\"infra: sandbox channel lost\" fault and is re-run, an agent's tool call fails and its sandbox is rebuilt")
+	k8sGranuleAccess := fs.String("k8s-granule-access", orchestrator.K8sGranuleAccessKubectl, "k8s-granule only: how grain runs steps in a sandbox's guest -- \"kubectl\" (granule exec over kubectl exec) or \"dialout\" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). docs/design/grain-on-gke.md#GKE-3")
+	k8sGranuleReattachTimeout := fs.Duration("k8s-granule-reattach-timeout", orchestrator.DefaultK8sGranuleReattachTimeout, "k8s-granule dialout only: how long a step waits for a dropped channel to reconnect before the sandbox is lost (a CI job errors with \"infra: sandbox channel lost\" and is re-run; an agent's tool call fails and its sandbox is rebuilt)")
 	sandboxCPUs := fs.Int("sandbox-cpus", 0,
 		"deployment-wide default vCPU count for a granule-managed sandbox VM, passed as `granule vm create`'s "+
 			"own -cpus (only used with -granule-sandboxes); 0 uses grain's own default, "+
@@ -1316,8 +1309,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		K8sGranuleSandboxes: *k8sGranuleSandboxes, K8sGranuleImage: *k8sGranuleImage,
 		SandboxAccessAddr: *sandboxAccessAddr, SandboxAccessDial: *sandboxAccessDial,
 		SandboxAccessCASecret: *sandboxAccessCASecret,
-		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout,
-		SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
+		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile); err != nil {
 		return cfg, fs, unknownFlags, err
