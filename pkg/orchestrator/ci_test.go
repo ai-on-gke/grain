@@ -29,6 +29,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 )
 
 // grain's own CI is started immediately by wait_for_checks when an agent asks,
@@ -278,12 +279,23 @@ func (f *fakeCI) finish(id string, conclusion ci.Conclusion, jobs ...ci.JobRun) 
 	run.Conclusion = conclusion
 	run.Jobs = jobs
 	f.runs[id] = run
-	if conclusion == ci.ConclusionFailure {
+	if conclusion == ci.ConclusionFailure || (conclusion == ci.ConclusionErrored && lostChannel(jobs)) {
 		if f.failed == nil {
 			f.failed = map[string]ci.Run{}
 		}
 		f.failed[run.Commit] = run
 	}
+}
+
+// lostChannel reports whether any of jobs ended on a lost sandbox channel,
+// the one errored run grain rechecks (startChannelLostRecheck).
+func lostChannel(jobs []ci.JobRun) bool {
+	for _, j := range jobs {
+		if strings.HasPrefix(j.Error, sandboxaccess.ChannelLostFault) {
+			return true
+		}
+	}
+	return false
 }
 
 // refuse makes every later Start answer err and start nothing, and
