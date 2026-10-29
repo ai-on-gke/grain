@@ -530,7 +530,7 @@ export function redBaseRepairAlerts(config, tasks) {
     return {
       id: `red-base-repair/${t.id}`,
       severity: "critical",
-      title: `\`${t.redBaseBranch}\` is red — repair #${t.id}`,
+      title: `${t.redBaseBranch} is red — repair #${t.id}`,
       sentence: redBaseRepairSentence(t),
       scope: { kind: "deployment" },
       impact: `Other work targeting ${t.redBaseBranch} waits until the repair merges.`,

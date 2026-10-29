@@ -66,6 +66,20 @@ describe("AlertsButton (grain/task-4008)", () => {
     expect(screen.getByTestId("alerts-empty")).toBeInTheDocument();
   });
 
+  // grain/task-1760: the popover's "see all" (settings-panel.md §4.1)
+  // was missing, so the rest of System → Health -- config repo state,
+  // settings waiting on a restart -- was a page away with no way there.
+  it("opens System → Health from See all, with or without alerts, and closes", async () => {
+    const onOpenHealth = vi.fn();
+    renderBell(config(), { onOpenHealth });
+    openPanel();
+    fireEvent.click(screen.getByTestId("alerts-see-all"));
+    expect(onOpenHealth).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.queryByTestId("alerts-panel")).not.toBeInTheDocument(),
+    );
+  });
+
   it("counts the alerts and takes the worst one's colour", () => {
     const { rerender } = renderBell(
       config({ agentPause: { paused: true, pauses: [pausedConnection] } }),
@@ -334,7 +348,7 @@ describe("AlertsButton: a red base branch's waiting repair", () => {
     expect(row).toHaveAttribute("data-alert-id", "red-base-repair/323");
     expect(row).toHaveAttribute("data-severity", "critical");
     expect(row).toHaveTextContent(
-      "`main` is red — repair #323 is waiting for human approval on trigger:grain-declarations (any human)",
+      "main is red — repair #323 is waiting for human approval on trigger:grain-declarations (any human)",
     );
   });
 
@@ -404,7 +418,7 @@ describe("AlertsButton: a red base branch's waiting repair", () => {
     ]);
     openPanel();
     expect(screen.getByTestId("alert-row")).toHaveTextContent(
-      "`main` is red — repair #323 is waiting in the merge queue (Waiting on check go)",
+      "main is red — repair #323 is waiting in the merge queue (Waiting on check go)",
     );
     expect(
       screen.queryByRole("button", { name: "Submit" }),

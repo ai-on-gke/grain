@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { useCallback, useRef } from "react";
+
 // revealFocusedTab is a scrollable MUI Tabs strip's onFocus. Arrow keys
 // move focus along the strip (MUI's own keyboard handling), but MUI only
 // scrolls the *selected* tab into view: at 700 px, every other
@@ -40,4 +42,71 @@ export function revealFocusedTab(event) {
   setTimeout(() => {
     if (tab.ownerDocument?.activeElement === tab) reveal();
   }, REVEAL_AGAIN_MS);
+}
+
+// revealSelectedTab scrolls a scrollable MUI Tabs strip -- root is the
+// Tabs' own element -- just far enough along that its selected tab is
+// wholly inside the visible part of the strip. Only the strip scrolls:
+// scrollIntoView would also move the page, which is not what a strip
+// changing width asked for.
+export function revealSelectedTab(root) {
+  const scroller = root?.querySelector?.(".MuiTabs-scroller");
+  const selected = root?.querySelector?.('[role="tab"][aria-selected="true"]');
+  if (!scroller || !selected) return;
+  const strip = scroller.getBoundingClientRect();
+  const tab = selected.getBoundingClientRect();
+  if (tab.left < strip.left) {
+    scroller.scrollLeft -= strip.left - tab.left;
+  } else if (tab.right > strip.right) {
+    scroller.scrollLeft += tab.right - strip.right;
+  }
+}
+
+// REVEAL_AFTER_MUI_MS outlasts MUI Tabs' animated scroll, which runs
+// for the theme's standard transition (300ms).
+export const REVEAL_AFTER_MUI_MS = 400;
+
+// useRevealSelectedTab keeps a scrollable strip's selected tab in view
+// whenever the strip itself changes width, and returns the ref to put on
+// the Tabs. MUI scrolls the selected tab into view when the selection
+// moves, but not when the visible part of the strip narrows under it --
+// and with scrollButtons="auto" that is exactly what happens on the
+// first layout of a narrow window: MUI scrolls the selected tab into a
+// strip as wide as the row, then finds the tabs overflow, adds its two
+// scroll buttons, and leaves the tab sitting under the right-hand one.
+// A phone opening /repos/<owner>/<name>/settings/advanced from Settings
+// -> Repositories saw 12px of the selected tab (found in the 2026-10-29
+// repository walkthrough). A rotated phone or a resized window is the
+// same narrowing, and gets the same answer.
+export function useRevealSelectedTab() {
+  const stop = useRef(null);
+  return useCallback((root) => {
+    stop.current?.();
+    stop.current = null;
+    const scroller = root?.querySelector?.(".MuiTabs-scroller");
+    if (!scroller || typeof ResizeObserver === "undefined") return;
+    // A keyboard user moving along the strip is followed by
+    // revealFocusedTab instead, and this would pull the strip back off
+    // the tab they are on.
+    const reveal = () => {
+      const focused = root.ownerDocument?.activeElement;
+      if (focused?.getAttribute?.("role") === "tab" && root.contains(focused))
+        return;
+      revealSelectedTab(root);
+    };
+    let again = null;
+    const observer = new ResizeObserver(() => {
+      reveal();
+      // MUI's own scroll to the selected tab is animated, towards the
+      // place it worked out for the wider strip, and it overwrites any
+      // scroll made while it runs: say it again once that has finished.
+      clearTimeout(again);
+      again = setTimeout(reveal, REVEAL_AFTER_MUI_MS);
+    });
+    observer.observe(scroller);
+    stop.current = () => {
+      observer.disconnect();
+      clearTimeout(again);
+    };
+  }, []);
 }

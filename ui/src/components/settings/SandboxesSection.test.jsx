@@ -468,17 +468,21 @@ describe("SandboxesSection", () => {
       fireEvent.change(input, { target: { value: "7.5" } });
       fireEvent.blur(input);
       expect(refuseBox).not.toHaveBeenCalled();
-      expect(saveChoice).toHaveBeenCalledWith({
-        sandboxOvercommit: {
-          mode: "auto",
-          cpuMin: 1,
-          cpuMax: 6,
-          memoryMin: 1,
-          memoryMax: 2,
-          cpuPressureTarget: 25,
-          memoryPressureTarget: 7.5,
+      expect(saveChoice).toHaveBeenCalledWith(
+        {
+          sandboxOvercommit: {
+            mode: "auto",
+            cpuMin: 1,
+            cpuMax: 6,
+            memoryMin: 1,
+            memoryMax: 2,
+            cpuPressureTarget: 25,
+            memoryPressureTarget: 7.5,
+          },
         },
-      });
+        // A refusal is reported against this bound, not Overcommit mode.
+        { errorKey: "sandboxOvercommitMemoryPressureTarget" },
+      );
     });
   });
 });

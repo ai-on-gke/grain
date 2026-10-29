@@ -163,7 +163,7 @@ func TestGoogleTrackRunsAgyThroughHostdAndMigratesFromHostMode(t *testing.T) {
 	if !strings.Contains(migrated.stdout, "capabilities: host-git") {
 		t.Errorf("the readiness report does not list host-git:\n%s", tail(migrated.stdout, 60))
 	}
-	if added := sudo("/usr/local/bin/grain", "git-ambient", "-host", "github.com", "-kind", "github", "-source", "gh"); added.exitCode != 0 {
+	if added := sudo("/usr/local/bin/grain", "git-ambient", "-host", "ghe.example.test", "-kind", "github", "-source", "gh"); added.exitCode != 0 {
 		t.Errorf("the containerised daemon refused an ambient connection beside a hostd offering host-git: %s", added)
 	}
 	if added := sudo("/usr/local/bin/grain", "git-ambient", "-host", "127.0.0.1:8088", "-kind", "git", "-base-url", "http://127.0.0.1:8088", "-source", "git"); added.exitCode != 0 {

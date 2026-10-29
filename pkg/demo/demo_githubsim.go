@@ -39,13 +39,46 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
+
+type demoSimState struct {
+	calls  *demoGitHubCalls
+	events orchestrator.GitHubEventSource
+}
+
+var demoSimClients sync.Map // map[github.Client]*demoSimState
+
+type demoGitHubSimTransport struct {
+	sim   *githubsim.Sim
+	calls *demoGitHubCalls
+}
+
+func (t demoGitHubSimTransport) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
+	resp, err := t.sim.Request(method, path, headers, body)
+	if err == nil && t.calls != nil {
+		caller, kind := "sync", "head read"
+		switch {
+		case strings.HasSuffix(path, "/branches"):
+			caller, kind = "ui", "branch list"
+		case strings.Contains(path, "/compare/"):
+			caller, kind = "ui", "PR files"
+		case strings.Contains(path, "/pulls/") && strings.HasSuffix(path, "/comments"):
+			caller, kind = "review-threads", "review comments"
+		case strings.Contains(path, "/pulls/"):
+			caller, kind = "sync", "PR read"
+		}
+		t.calls.recordCall(caller, kind, resp.Status == 304)
+	}
+	return resp, err
+}
 
 // demoGitHubSimBranches are the branches the simulated repo is seeded
 // with: its default, and one release branch, so a walkthrough has a
@@ -85,6 +118,11 @@ func configureGitHubSimDemo(dir string, cfg ui.Config, repo model.RepoRef) (ui.C
 		}
 	}
 
+	ghCalls, _ := cfg.GitHubCalls.(*demoGitHubCalls)
+	if ghCalls == nil {
+		ghCalls = newDemoGitHubCalls()
+		cfg.GitHubCalls = ghCalls
+	}
 	sim := githubsim.New(repo.Owner, repo.Name, bare, demoGitHubSimDefaultBranch)
 	// Seed an open issue, a comment, and a review comment on the first PR number
 	// (sim.PullRequestBase defaults to 9000) so `grain issue list|read` and
@@ -105,7 +143,8 @@ func configureGitHubSimDemo(dir string, cfg ui.Config, repo model.RepoRef) (ui.C
 			{ID: 501, Path: "README.md", Line: &lineOne, Body: "Please document this flag.", User: "reviewer"},
 		}
 	}
-	client := github.NewClient(sim, nil)
+	client := github.NewClient(demoGitHubSimTransport{sim: sim, calls: ghCalls}, nil)
+	demoSimClients.Store(client, &demoSimState{calls: ghCalls})
 	cfg.GitHubBranches = client
 	prReader := demoPullRequests{repo: repo, client: client}
 	if prev, ok := cfg.GitHubPullRequests.(demoPullRequests); ok {

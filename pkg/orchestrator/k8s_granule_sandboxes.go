@@ -37,9 +37,12 @@ package orchestrator
 // it to the same mcp.KubectlExecRunner K8sSandboxes uses.
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand/v2"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +54,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
+	"github.com/bwsalmon/granule/pkg/guestforward"
+	"github.com/bwsalmon/granule/pkg/sandbox"
 )
 
 // DefaultGranuleForwardBackoff is how long K8sGranuleSandboxes first
@@ -124,6 +129,20 @@ type K8sGranuleConfig struct {
 	// evaluated when starting a forward session and when reporting
 	// ReservedGuestPorts.
 	ForwardedPortsFunc func() []int
+	// NetworkNoneForwardedPortsFunc, when non-nil, returns additional
+	// controller loopback ports to forward into network:none guest VMs over
+	// the dial-out channel (e.g. sandboxnet.SandboxServicePorts.EndpointPorts
+	// when grain is in-cluster and inline guests reach services directly).
+	NetworkNoneForwardedPortsFunc func() []int
+	// GuestUser overrides DefaultK8sGranuleGuestUser for channel execs and
+	// file placements when non-empty.
+	GuestUser string
+	// GuestHomeDir overrides the guest home directory ("/home/" + GuestUser)
+	// used when expanding relative paths in channel file placements.
+	GuestHomeDir string
+	// Recreations, when non-nil, is used to rebuild and restore a live agent
+	// run's sandbox when a tool call encounters ErrChannelLost.
+	Recreations *SandboxRecreations
 	// ForwardRunner overrides granule.ForwardKubectl in tests.
 	ForwardRunner func(ctx context.Context, cfg granule.KubectlForwardConfig) error
 	// ForwardBackoff is the delay between reconnect attempts when a
@@ -443,13 +462,37 @@ func (k *K8sGranuleSandboxes) forwardedPorts() []int {
 	return out
 }
 
+// networkNoneForwardedPorts returns the deduplicated list of controller ports
+// to forward into a network:none guest loopback (127.0.0.1:<port>) over the
+// dial-out channel.
+func (k *K8sGranuleSandboxes) networkNoneForwardedPorts() []int {
+	var raw []int
+	raw = append(raw, k.forwardedPorts()...)
+	if k.cfg.NetworkNoneForwardedPortsFunc != nil {
+		raw = append(raw, k.cfg.NetworkNoneForwardedPortsFunc()...)
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	seen := make(map[int]bool, len(raw))
+	out := make([]int, 0, len(raw))
+	for _, p := range raw {
+		if p <= 0 || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
 // ReservedGuestPorts are the guest loopback ports a capability grant may
 // not forward into (docs/capabilities-spec.md §5.3.1): the guest's sshd
 // (port 22) plus any controller service ports forwarded into guest
-// loopback by `granule forward`.
+// loopback by `granule forward` or the dial-out channel.
 func (k *K8sGranuleSandboxes) ReservedGuestPorts() []int {
 	ports := []int{22}
-	for _, p := range k.forwardedPorts() {
+	for _, p := range k.networkNoneForwardedPorts() {
 		if p != 22 {
 			ports = append(ports, p)
 		}
@@ -463,8 +506,9 @@ func (k *K8sGranuleSandboxes) PodNameFor(sandbox string) (string, error) {
 }
 
 // Acquire implements Sandboxes: create this run's pod, wait for its
-// guest to answer ready, start the supervised `granule forward` session,
-// and hand back a handle that deletes it on Release.
+// guest to answer ready, wait for the dial-out channel when in dialout mode,
+// start the supervised forward session, and hand back a handle that deletes it
+// on Release.
 func (k *K8sGranuleSandboxes) Acquire(ctx context.Context, sandbox string, shape Shape) (Sandbox, error) {
 	name, err := k.PodNameFor(sandbox)
 	if err != nil {
@@ -481,11 +525,19 @@ func (k *K8sGranuleSandboxes) Acquire(ctx context.Context, sandbox string, shape
 		k.deleteQuietly(ctx, name)
 		return nil, unschedulableOutcome(ctx, k.fit, name, k.podShape(resolved), err)
 	}
-	sb := &k8sGranuleSandbox{owner: k, name: sandbox, podName: name, shape: shape, runner: k.execRunner(name), startedAt: time.Now()}
+	sb := &k8sGranuleSandbox{owner: k, name: sandbox, podName: name, shape: shape, runner: k.runnerFor(sandbox, name), startedAt: time.Now()}
 	k.mu.Lock()
 	k.live[sandbox] = sb
 	delete(k.readoptable, sandbox)
 	k.mu.Unlock()
+	if err := k.waitAccessChannel(ctx, sandbox, name); err != nil {
+		k.mu.Lock()
+		delete(k.live, sandbox)
+		k.mu.Unlock()
+		k.revokeAccess(ctx, sandbox)
+		k.deleteQuietly(ctx, name)
+		return nil, err
+	}
 	if err := sb.startForward(ctx); err != nil {
 		k.mu.Lock()
 		delete(k.live, sandbox)
@@ -527,7 +579,7 @@ func (k *K8sGranuleSandboxes) Readopt(ctx context.Context, sandbox string) (Sand
 	if err := k.registerSandboxAccess(ctx, sandbox); err != nil {
 		return nil, err
 	}
-	sb := &k8sGranuleSandbox{owner: k, name: sandbox, podName: name, runner: k.execRunner(name), startedAt: time.Now()}
+	sb := &k8sGranuleSandbox{owner: k, name: sandbox, podName: name, runner: k.runnerFor(sandbox, name), startedAt: time.Now()}
 	k.mu.Lock()
 	k.live[sandbox] = sb
 	delete(k.readoptable, sandbox)
@@ -693,6 +745,36 @@ func (k *K8sGranuleSandboxes) execRunner(name string) *mcp.KubectlExecRunner {
 	}
 }
 
+func (k *K8sGranuleSandboxes) channelRunner(sandbox, podName string) *sandboxaccess.Runner {
+	user := k.cfg.GuestUser
+	if user == "" {
+		user = DefaultK8sGranuleGuestUser
+	}
+	var channels sandboxaccess.ChannelProvider
+	var reattachTimeout time.Duration
+	if k.cfg.Access != nil {
+		channels = k.cfg.Access.channelProvider()
+		reattachTimeout = k.cfg.Access.reattachTimeout()
+	}
+	return &sandboxaccess.Runner{
+		Acceptor:        channels,
+		Sandbox:         sandbox,
+		User:            user,
+		HomeDir:         k.cfg.GuestHomeDir,
+		ReattachTimeout: reattachTimeout,
+		OnChannelLost: func(err error) {
+			k.handleChannelLost(sandbox, podName, err)
+		},
+	}
+}
+
+func (k *K8sGranuleSandboxes) runnerFor(sandbox, podName string) sandboxRunner {
+	if k.isDialout() {
+		return k.channelRunner(sandbox, podName)
+	}
+	return k.execRunner(podName)
+}
+
 // podAlive reports whether name is still tracked as live and not in a
 // terminal Kubernetes pod phase.
 func (k *K8sGranuleSandboxes) podAlive(ctx context.Context, sandbox, podName string) bool {
@@ -774,9 +856,48 @@ type k8sGranuleSandbox struct {
 	// SandboxHealth.StartedAt.
 	startedAt time.Time
 
-	forwardMu     sync.Mutex
-	forwardCancel context.CancelFunc
-	forwardDone   chan struct{}
+	forwardMu      sync.Mutex
+	forwardCancel  context.CancelFunc
+	forwardDone    chan struct{}
+	forwardClosers []io.Closer
+
+	healthMu  sync.Mutex
+	unhealthy error
+	rebuilds  int
+}
+
+func (s *k8sGranuleSandbox) setUnhealthy(err error) {
+	s.healthMu.Lock()
+	s.unhealthy = err
+	s.healthMu.Unlock()
+}
+
+func (s *k8sGranuleSandbox) unhealthyErr() error {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	return s.unhealthy
+}
+
+func (s *k8sGranuleSandbox) recordRebuild() {
+	s.healthMu.Lock()
+	s.rebuilds++
+	s.healthMu.Unlock()
+}
+
+func (s *k8sGranuleSandbox) rebuildCount() int {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	return s.rebuilds
+}
+
+func (s *k8sGranuleSandbox) currentChannelRunner() *sandboxaccess.Runner {
+	if cr, ok := s.runner.(*sandboxaccess.Runner); ok {
+		return cr
+	}
+	if s.owner != nil && s.owner.isDialout() {
+		return s.owner.channelRunner(s.name, s.podName)
+	}
+	return nil
 }
 
 func (s *k8sGranuleSandbox) Name() string { return s.name }
@@ -798,17 +919,16 @@ func (s *k8sGranuleSandbox) KubePod() agent.KubePod {
 }
 
 // startForward starts a supervised `granule forward` session over
-// `kubectl exec -i` into s.podName, forwarding each configured controller
-// port from guest 127.0.0.1:<port> to controller 127.0.0.1:<port>, and
-// waits until a session reports its guest listeners bound -- so nothing
-// the caller runs in the guest next (the run's first git clone through
-// 127.0.0.1:9728) can race the tunnel's startup. A session that fails
-// before it gets there is retried with the supervisor's own backoff
-// until ForwardReadyTimeout; the error is returned once that passes, ctx
-// is done, or the supervisor gives up because the pod is gone. The
-// supervisor itself is left running on error: stopForward stops it.
+// `kubectl exec -i` into s.podName (in kubectl mode) or over the dial-out
+// channel (in dialout mode, for network:none guests only), forwarding each
+// configured controller port from guest 127.0.0.1:<port> to controller
+// 127.0.0.1:<port>, and waits until a session reports its guest listeners
+// bound.
 func (s *k8sGranuleSandbox) startForward(ctx context.Context) error {
 	s.stopForward()
+	if s.owner != nil && s.owner.isDialout() {
+		return s.startChannelForward(ctx)
+	}
 	ports := s.owner.forwardedPorts()
 	if len(ports) == 0 {
 		return nil
@@ -888,6 +1008,50 @@ func (s *k8sGranuleSandbox) startForward(ctx context.Context) error {
 	}
 }
 
+func (s *k8sGranuleSandbox) startChannelForward(ctx context.Context) error {
+	resolved := s.shape
+	if s.owner != nil {
+		resolved = resolved.orDefault(s.owner.defaultShape())
+	}
+	// An inline guest shares its pod's network and reaches grain-git.<ns>.svc
+	// and the package caches over the cluster network directly; there is no
+	// forward stream for an inline guest when grain is in-cluster.
+	if resolved.NetworkAccess != model.NetworkNone {
+		return nil
+	}
+	ports := s.owner.networkNoneForwardedPorts()
+	if len(ports) == 0 {
+		return nil
+	}
+	cr := s.currentChannelRunner()
+	if cr == nil {
+		return fmt.Errorf("orchestrator: granule sandbox pod %q has no dial-out channel runner", s.podName)
+	}
+	remote := make([]guestforward.RemoteForward, len(ports))
+	for i, p := range ports {
+		addr := fmt.Sprintf("127.0.0.1:%d", p)
+		remote[i] = guestforward.RemoteForward{
+			Guest:  addr,
+			Target: addr,
+		}
+	}
+	fwdCtx, cancel := context.WithCancel(context.Background())
+	closer, err := cr.StartForward(fwdCtx, remote, nil)
+	if err != nil {
+		cancel()
+		return fmt.Errorf("orchestrator: starting channel forward into granule sandbox pod %q: %w", s.podName, err)
+	}
+	s.forwardMu.Lock()
+	if prev := s.forwardCancel; prev != nil {
+		s.forwardCancel = func() { prev(); cancel() }
+	} else {
+		s.forwardCancel = cancel
+	}
+	s.forwardClosers = append(s.forwardClosers, closer)
+	s.forwardMu.Unlock()
+	return nil
+}
+
 // forwardBackoff is the `granule forward` supervisor's reconnect delay:
 // exponential from base to max across consecutive drops, reset to base
 // by a session that stayed up at least healthy, and jittered.
@@ -935,9 +1099,14 @@ func (s *k8sGranuleSandbox) stopForward() {
 	s.forwardMu.Lock()
 	cancel := s.forwardCancel
 	done := s.forwardDone
+	closers := s.forwardClosers
 	s.forwardCancel = nil
 	s.forwardDone = nil
+	s.forwardClosers = nil
 	s.forwardMu.Unlock()
+	for _, c := range closers {
+		_ = c.Close()
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -946,10 +1115,146 @@ func (s *k8sGranuleSandbox) stopForward() {
 	}
 }
 
+// UsesChannelPortForward reports whether capability port forwards for this
+// sandbox run over the dial-out channel instead of a subprocess tunnel.
+func (s *k8sGranuleSandbox) UsesChannelPortForward() bool {
+	return s.owner != nil && s.owner.isDialout()
+}
+
+// ForwardCapabilityPort opens a remote port forward from 127.0.0.1:sandboxPort
+// inside the guest over the dial-out channel, handing each connection to
+// serve. The channel's caller-side target is a loopback listener of this
+// process's own rather than the grant's host_port itself, so every
+// connection still goes through serve (portforward.Forward.Serve): the
+// relay's check that host_port belongs to the capability server's service,
+// and the grant's Close cutting it (docs/capabilities-spec.md §5.3.2,
+// §5.3.4).
+func (s *k8sGranuleSandbox) ForwardCapabilityPort(ctx context.Context, sandboxPort int, serve func(context.Context, net.Conn)) error {
+	cr := s.currentChannelRunner()
+	if cr == nil {
+		return fmt.Errorf("orchestrator: granule sandbox pod %q has no dial-out channel runner for capability port forward", s.podName)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("orchestrator: forwarding capability port %d in granule sandbox pod %q: %w", sandboxPort, s.podName, err)
+	}
+	fwdCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serve(fwdCtx, conn)
+		}
+	}()
+	remote := []guestforward.RemoteForward{
+		{
+			Guest:  fmt.Sprintf("127.0.0.1:%d", sandboxPort),
+			Target: ln.Addr().String(),
+		},
+	}
+	closer, err := cr.StartForward(fwdCtx, remote, nil)
+	if err != nil {
+		cancel()
+		_ = ln.Close()
+		return fmt.Errorf("orchestrator: forwarding capability port %d in granule sandbox pod %q: %w", sandboxPort, s.podName, err)
+	}
+	s.forwardMu.Lock()
+	s.forwardClosers = append(s.forwardClosers, cancelCloser(cancel))
+	s.forwardMu.Unlock()
+	go func() {
+		<-fwdCtx.Done()
+		_ = closer.Close()
+		_ = ln.Close()
+	}()
+	return nil
+}
+
+// cancelCloser is a context.CancelFunc as an io.Closer, for
+// forwardClosers.
+type cancelCloser context.CancelFunc
+
+func (c cancelCloser) Close() error {
+	c()
+	return nil
+}
+
+// UsesBatchPlacement reports whether capability file placements for this
+// sandbox should be uploaded in a single PutFiles batch over the dial-out
+// channel.
+func (s *k8sGranuleSandbox) UsesBatchPlacement() bool {
+	return s.owner != nil && s.owner.isDialout() && s.currentChannelRunner() != nil
+}
+
+// PlaceFilesBatch uploads files into the guest in a single PutFiles batch over
+// the dial-out channel.
+func (s *k8sGranuleSandbox) PlaceFilesBatch(ctx context.Context, files []sandbox.FileUpload) error {
+	cr := s.currentChannelRunner()
+	if cr == nil {
+		return fmt.Errorf("orchestrator: granule sandbox pod %q has no dial-out channel runner for batch file placement", s.podName)
+	}
+	if err := cr.PutFiles(ctx, files); err != nil {
+		return fmt.Errorf("orchestrator: placing %d files in granule sandbox pod %q: %w", len(files), s.podName, err)
+	}
+	return nil
+}
+
+type agentToolRunner struct {
+	sb    *k8sGranuleSandbox
+	inner sandboxRunner
+}
+
+func (r *agentToolRunner) Run(ctx context.Context, argv []string, stdin string) (string, string, int) {
+	stdout, stderr, code, _ := r.Exec(ctx, argv, stdin)
+	return stdout, stderr, code
+}
+
+func (r *agentToolRunner) Exec(ctx context.Context, argv []string, stdin string) (string, string, int, error) {
+	if er, ok := r.inner.(interface {
+		Exec(ctx context.Context, argv []string, stdin string) (string, string, int, error)
+	}); ok {
+		stdout, stderr, code, err := er.Exec(ctx, argv, stdin)
+		if errors.Is(err, sandboxaccess.ErrChannelLost) {
+			r.sb.rebuildAfterChannelLoss(ctx)
+		}
+		return stdout, stderr, code, err
+	}
+	stdout, stderr, code := r.inner.Run(ctx, argv, stdin)
+	if code == -1 {
+		if err := r.sb.unhealthyErr(); errors.Is(err, sandboxaccess.ErrChannelLost) {
+			r.sb.rebuildAfterChannelLoss(ctx)
+			return stdout, stderr, code, err
+		}
+	}
+	return stdout, stderr, code, nil
+}
+
+func (s *k8sGranuleSandbox) rebuildAfterChannelLoss(ctx context.Context) {
+	s.recordRebuild()
+	rebuildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), k8sGranuleCleanupTimeout)
+	defer cancel()
+	if s.owner != nil && s.owner.cfg.Recreations != nil {
+		if _, ok, err := s.owner.cfg.Recreations.RecreateBySandbox(rebuildCtx, s.name); ok {
+			if err != nil {
+				log.Printf("orchestrator: rebuilding sandbox %q after channel loss failed: %v", s.name, err)
+			}
+			return
+		}
+	}
+	if err := s.Rebuild(rebuildCtx); err != nil {
+		log.Printf("orchestrator: rebuilding granule sandbox pod %q after channel loss failed: %v", s.podName, err)
+	}
+}
+
 // Tools implements Sandbox: the same four tools every remote backend
-// exposes, run over the granule-wrapped `kubectl exec` transport.
+// exposes, run over the configured transport (channel or `kubectl exec`).
 func (s *k8sGranuleSandbox) Tools(ctx context.Context) ([]mcp.Tool, error) {
-	return mcp.NewSSHSandboxTools(s.runner, s.owner.cfg.Workspace), nil
+	var workspace string
+	if s.owner != nil {
+		workspace = s.owner.cfg.Workspace
+	}
+	return mcp.NewSSHSandboxTools(&agentToolRunner{sb: s, inner: s.runner}, workspace), nil
 }
 
 // ConfigureGitCredentials points this guest's git at the proxy over the
@@ -971,11 +1276,10 @@ func (s *k8sGranuleSandbox) PlaceFile(ctx context.Context, path, content, mode s
 }
 
 // RunShell implements SandboxShell, granuleSandbox.RunShell's
-// counterpart over this backend's `kubectl exec ... granule exec`
-// transport. Without it a grain CI step here went through the
-// run_command tool instead, which clamps every command to run_command's
-// own ten-minute ceiling whatever the job's timeout-minutes said, and
-// reports nothing until the step ends.
+// counterpart over this backend's transport. Without it a grain CI step here
+// went through the run_command tool instead, which clamps every command to
+// run_command's own ten-minute ceiling whatever the job's timeout-minutes
+// said, and reports nothing until the step ends.
 func (s *k8sGranuleSandbox) RunShell(ctx context.Context, req ShellRequest) (ShellResult, error) {
 	var workspace string
 	if s.owner != nil {
@@ -1001,7 +1305,14 @@ func (s *k8sGranuleSandbox) Rebuild(ctx context.Context) error {
 	if err := s.owner.waitReady(ctx, s.podName); err != nil {
 		return err
 	}
-	return s.startForward(ctx)
+	if err := s.owner.waitAccessChannel(ctx, s.name, s.podName); err != nil {
+		return err
+	}
+	if err := s.startForward(ctx); err != nil {
+		return err
+	}
+	s.setUnhealthy(nil)
+	return nil
 }
 
 // Release deletes the pod -- the isolation boundary itself, the same way
