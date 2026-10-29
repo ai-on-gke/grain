@@ -1539,15 +1539,20 @@ type UpdateSettingsRequest struct {
 }
 
 func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
-	if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
-		return Settings{}, err
-	}
 	current, err := c.Store.GetConfig(ctx)
 	if err != nil {
 		return Settings{}, err
 	}
 	cfg, err := c.plannedConfig(ctx, req)
 	if err != nil {
+		if guard := c.checkGrainConfigWritable(ctx, current, nil); guard != nil {
+			return Settings{}, guard
+		}
+		return Settings{}, err
+	}
+	// A request changing only the Models and Sandboxes settings writes
+	// them here; any other field is the config repository's to change.
+	if err := c.checkGrainConfigWritable(ctx, current, &cfg); err != nil {
 		return Settings{}, err
 	}
 	if err := c.Store.PutConfig(ctx, cfg); err != nil {
