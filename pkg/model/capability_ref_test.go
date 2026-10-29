@@ -277,3 +277,38 @@ func TestCapabilityPolicyAppliesAcrossAdoptedServerAliases(t *testing.T) {
 		t.Error("a repo excluded by a rule naming the canonical id was granted the alias")
 	}
 }
+
+func TestCapabilityPolicyVerdictsByRunKind(t *testing.T) {
+	ref := testGCP + "#gcp-key"
+	if got := (CapabilityPolicy{}).Verdicts(ref); got != nil {
+		t.Errorf("empty policy verdicts = %v, want nil", got)
+	}
+	denyTasks := CapabilityPolicy{Rules: []CapabilityPolicyRule{
+		{Capability: testGCP + "#*", RunKinds: []string{CapabilityRunTask}, Deny: true},
+	}}
+	want := map[string]CapabilityPolicyVerdict{CapabilityRunTask: CapabilityPolicyDenied}
+	if got := denyTasks.Verdicts(ref); !reflect.DeepEqual(got, want) {
+		t.Errorf("denyTasks.Verdicts = %v, want %v", got, want)
+	}
+	allowOnlyCI := CapabilityPolicy{Rules: []CapabilityPolicyRule{
+		{Capability: testGCP + "#*", RunKinds: []string{CapabilityRunCI}},
+	}}
+	wantAllowCI := map[string]CapabilityPolicyVerdict{
+		CapabilityRunTask:    CapabilityPolicyDenied,
+		CapabilityRunProcess: CapabilityPolicyDenied,
+	}
+	if got := allowOnlyCI.Verdicts(ref); !reflect.DeepEqual(got, wantAllowCI) {
+		t.Errorf("allowOnlyCI.Verdicts = %v, want %v", got, wantAllowCI)
+	}
+	repoDependent := CapabilityPolicy{Rules: []CapabilityPolicyRule{
+		{Capability: testGCP + "#*", RunKinds: []string{CapabilityRunTask}, Repos: []string{"acme/*"}, Deny: true},
+		{Capability: testGCP + "#*", Events: []string{"schedule"}, Deny: true},
+	}}
+	wantRepoDependent := map[string]CapabilityPolicyVerdict{
+		CapabilityRunTask: CapabilityPolicyMayBeRefused,
+		CapabilityRunCI:   CapabilityPolicyMayBeRefused,
+	}
+	if got := repoDependent.Verdicts(ref); !reflect.DeepEqual(got, wantRepoDependent) {
+		t.Errorf("repoDependent.Verdicts = %v, want %v", got, wantRepoDependent)
+	}
+}
