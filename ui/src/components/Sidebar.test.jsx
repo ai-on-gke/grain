@@ -810,11 +810,7 @@ describe("Sidebar", () => {
   // no count while a run was blocked on a person (task 1808).
   it("counts local-script calls waiting for approval, as the Inbox heading does", () => {
     const { rerender } = render(
-      <Sidebar
-        {...baseProps}
-        config={{ pendingLocalScripts: 1 }}
-        tasks={[]}
-      />,
+      <Sidebar {...baseProps} config={{ pendingLocalScripts: 1 }} tasks={[]} />,
     );
     let inbox = screen.getByRole("button", { name: /Inbox 1/ });
     expect(
