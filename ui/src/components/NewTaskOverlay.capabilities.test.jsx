@@ -20,17 +20,20 @@
 // Part of the NewTaskOverlay suite -- see NewTaskOverlay.test.jsx for
 // why it is four files and what a test in one costs.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import NewTaskOverlay from "./NewTaskOverlay.jsx";
+import { resetCapabilityMethodsForTest } from "./capabilityMethods.js";
 import api from "../api.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
 describe("NewTaskOverlay", () => {
   afterEach(() => {
-    api.mockClear();
+    api.mockReset();
+    api.mockResolvedValue(null);
+    resetCapabilityMethodsForTest();
   });
 
   it("adds depends-on tasks via the picker and includes checked capabilities", async () => {
@@ -416,5 +419,58 @@ describe("NewTaskOverlay", () => {
     expect(JSON.parse(api.mock.calls[0][1].body).capabilities).toEqual([
       "self-debug",
     ]);
+  });
+
+  it("marks a capability method denied by the capability policy for agent tasks and links to the policy", async () => {
+    api.mockImplementation(async (path) => {
+      if (path === "/api/capability-methods") {
+        return [
+          {
+            ref: "https://grain.dev/capabilities/config-map#config-map",
+            capability: "https://grain.dev/capabilities/config-map",
+            method: "config-map",
+            requiresArgs: true,
+            policy: { task: "denied" },
+          },
+          {
+            ref: "https://grain.dev/capabilities/gcp#gcp-key",
+            capability: "https://grain.dev/capabilities/gcp",
+            method: "gcp-key",
+            requiresArgs: true,
+            policy: { task: "may_be_refused" },
+          },
+        ];
+      }
+      return null;
+    });
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={{ capabilityMethods: 2 }}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    const grants = screen.getByTestId("new-task-grants");
+    await user.click(
+      within(grants).getByRole("button", { name: "Add grant…" }),
+    );
+    const deniedRow = await screen.findByRole("menuitem", {
+      name: /config-map/,
+    });
+    expect(deniedRow).toHaveTextContent(
+      "denied by the capability policy for agent tasks",
+    );
+    expect(
+      within(deniedRow).getByRole("link", { name: "Settings → Capabilities" }),
+    ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
+
+    const repoRow = screen.getByRole("menuitem", { name: /gcp-key/ });
+    expect(repoRow).toHaveTextContent("may be refused");
+    expect(
+      within(repoRow).getByRole("link", { name: "Settings → Capabilities" }),
+    ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
   });
 });
