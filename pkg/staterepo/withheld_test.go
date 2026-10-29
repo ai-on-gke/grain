@@ -228,6 +228,20 @@ func TestApplyingSettingsKeepsTheRunningGoogleOAuthClientSecret(t *testing.T) {
 		t.Errorf("no warning that the file carries a withheld column; got %q", report.Warnings)
 	}
 
+	// An empty value -- such as the "" a full Export writes on a deployment
+	// where Google OAuth was never configured -- holds no secret material
+	// and is not warned about.
+	edit(func(row map[string]any) { row["google_oauth_client_secret"] = "" })
+	report, err = staterepo.Check(ctx, scratch, dir, model.SchemaVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "google_oauth_client_secret") {
+			t.Errorf("an empty withheld column is warned about as leaked secret material: %s", w)
+		}
+	}
+
 	edit(func(row map[string]any) { delete(row, "google_oauth_client_secret") })
 	report, err = staterepo.Check(ctx, scratch, dir, model.SchemaVersion)
 	if err != nil {

@@ -527,6 +527,10 @@ type streamingRunner interface {
 	RunStream(ctx context.Context, argv []string, stdin string, out io.Writer) (stdout, stderr string, exitCode int)
 }
 
+type execStreamRunner interface {
+	Exec(ctx context.Context, argv []string, stdin string, out io.Writer) (stdout, stderr string, exitCode int, err error)
+}
+
 // RunShell implements SandboxShell for a granule VM: the guest's own bash,
 // over the same transport every tool call and every credential write
 // already goes over.
@@ -610,8 +614,23 @@ func runGuestShell(ctx context.Context, runner sandboxRunner, workspace string, 
 	argv := []string{"bash", "-c", script}
 	var exitCode int
 	var stderr string
+	var execErr error
 	out := ""
-	if streamer, ok := runner.(streamingRunner); ok && req.Output != nil {
+	if execer, ok := runner.(execStreamRunner); ok {
+		var whole bytes.Buffer
+		sink := io.Writer(&whole)
+		if req.Output != nil {
+			sink = io.MultiWriter(&whole, req.Output)
+		}
+		_, stderr, exitCode, execErr = execer.Exec(ctx, argv, "", sink)
+		out = whole.String()
+		if exitCode == -1 && stderr != "" && !strings.Contains(out, stderr) {
+			if out != "" && !strings.HasSuffix(out, "\n") {
+				out += "\n"
+			}
+			out += stderr
+		}
+	} else if streamer, ok := runner.(streamingRunner); ok && req.Output != nil {
 		// The live copy is the result as well, and deliberately: what the
 		// caller has been reading line by line is the two streams
 		// interleaved, and handing it a differently ordered transcript at
@@ -638,6 +657,10 @@ func runGuestShell(ctx context.Context, runner sandboxRunner, workspace string, 
 	if exitCode == -1 && ctx.Err() != nil {
 		return ShellResult{Output: out, ExitCode: -1},
 			fmt.Errorf("orchestrator: %s stopped answering while running a script: %w", what, ctx.Err())
+	}
+	if execErr != nil {
+		return ShellResult{Output: out, ExitCode: -1},
+			fmt.Errorf("orchestrator: %s: %w", what, execErr)
 	}
 	if exitCode == -1 && strings.Contains(out, mcp.SessionCutOffNotice) {
 		// A `kubectl exec` session that ended before the script said how

@@ -144,6 +144,9 @@ type BudgetSnapshot struct {
 	// Low is Remaining under LowBudgetFraction of Limit: non-critical
 	// polling is cut back while it holds.
 	Low bool `json:"low"`
+	// Polls summarizes the adaptive poll schedule across tracked pull
+	// requests (tracked count, backed-off count, median and max interval).
+	Polls PollStats `json:"polls"`
 }
 
 // budgetWindow is how far back the spend rate is measured. Long enough

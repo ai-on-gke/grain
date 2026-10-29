@@ -4947,10 +4947,13 @@ configure_state_repo() {
   # lines below would otherwise fail its first `git config`. Beside
   # grain hostd, grain_cli runs the host binary, which needs git on
   # this host; a minimal host without git uses run-image.sh, which runs
-  # the image's grain and git as the same uid:gid.
-  if [ "${GRAIN_HOSTD:-0}" = "1" ] && ! command -v git >/dev/null 2>&1 && [ -x /usr/local/lib/grain/run-image.sh ]; then
-    if ! /usr/local/lib/grain/run-image.sh -- state -data-dir "$GRAIN_DATA_DIR" status; then
-      log "  could not open the config repository yet -- grain-daemon.service will retry on start"
+  # the image's grain and git as the same uid:gid, or leaves seeding to
+  # grain-daemon.service inside the container when run-image.sh is absent.
+  if [ "${GRAIN_HOSTD:-0}" = "1" ] && ! command -v git >/dev/null 2>&1; then
+    if [ -x /usr/local/lib/grain/run-image.sh ]; then
+      if ! /usr/local/lib/grain/run-image.sh -- state -data-dir "$GRAIN_DATA_DIR" status; then
+        log "  could not open the config repository yet -- grain-daemon.service will retry on start"
+      fi
     fi
     return
   fi
@@ -5499,6 +5502,50 @@ convert_reftable_repos() {
 # back -- and grain's own sqlite.Open (pkg/model/sqlite) recreates an
 # empty one, with the new schema, the next time grain-daemon.service
 # starts.
+# report_prepare_upgrade_stderr relays `grain state prepare-upgrade`'s
+# stderr while translating misleading warnings emitted when the target
+# build is an older release (such as rolling back to v3.0.0, whose
+# CheckMigration predates empty-secret filtering, migration-aware
+# settingsResets, and rollback table summaries).
+report_prepare_upgrade_stderr() {
+  local stderr_text="${1:-}"
+  [ -n "$stderr_text" ] || return 0
+  local cfg_file="$GRAIN_DATA_DIR/schema-upgrade/tables/grain_config.json"
+  local empty_oauth_secret=0
+  if [ -f "$cfg_file" ] && grep -q '"google_oauth_client_secret"[[:space:]]*:[[:space:]]*""' "$cfg_file" 2>/dev/null; then
+    empty_oauth_secret=1
+  fi
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      *'carries "google_oauth_client_secret", which holds secret material'*)
+        [ "$empty_oauth_secret" = "1" ] && continue
+        ;;
+      *'row 0 does not carry "'*'is a settings table, so applying this replaces the whole row'*)
+        continue
+        ;;
+      *'tables/'*'_sequence.json names no table this build has; every row in it would be ignored'*)
+        continue
+        ;;
+      *'tables/external_agent_token.json names no table this build has; every row in it would be ignored'*)
+        local tok_file="$GRAIN_DATA_DIR/schema-upgrade/tables/external_agent_token.json"
+        local count=0
+        if [ -f "$tok_file" ]; then
+          count="$(grep -o '"id"[[:space:]]*:' "$tok_file" 2>/dev/null | wc -l | tr -d '[:space:]' || true)"
+        fi
+        if [ "${count:-0}" -eq 1 ]; then
+          echo "warning: 1 external agent token is not carried back" >&2
+        elif [ "${count:-0}" -gt 1 ]; then
+          echo "warning: $count external agent tokens are not carried back" >&2
+        fi
+        continue
+        ;;
+    esac
+    printf '%s\n' "$line" >&2
+  done <<< "$stderr_text"
+}
+
 reformat_store_if_schema_changed() {
   local marker="$GRAIN_DATA_DIR/.schema_version"
   local store_dir="$GRAIN_DATA_DIR/store"
@@ -5549,9 +5596,14 @@ reformat_store_if_schema_changed() {
   else
     log "Schema changed ($old_version -> $new_version) -- carrying this deployment's rows across"
   fi
-  local prepared="" prepare_failed=0
-  prepared="$(grain_cli state -data-dir "$GRAIN_DATA_DIR" prepare-upgrade)" || prepare_failed=1
+  local prepared="" prepare_stderr="" prepare_failed=0
+  local prepare_err_file
+  prepare_err_file="$(mktemp)"
+  prepared="$(grain_cli state -data-dir "$GRAIN_DATA_DIR" prepare-upgrade 2>"$prepare_err_file")" || prepare_failed=1
+  prepare_stderr="$(cat "$prepare_err_file" 2>/dev/null || true)"
+  rm -f "$prepare_err_file"
   if [ "$prepare_failed" = "0" ]; then
+    report_prepare_upgrade_stderr "$prepare_stderr"
     case "$prepared" in
       prepared\ *)
         local from
@@ -5577,6 +5629,9 @@ reformat_store_if_schema_changed() {
         prepare_failed=1
         ;;
     esac
+  fi
+  if [ "$prepare_failed" = "1" ] && [ -n "$prepare_stderr" ]; then
+    printf '%s\n' "$prepare_stderr" >&2
   fi
   if [ "$prepare_failed" = "1" ] && [ "$GRAIN_ALLOW_STORE_RESET" != "1" ]; then
     echo "setup.sh: this build is at schema $new_version and the store in $GRAIN_DATA_DIR/store was" >&2

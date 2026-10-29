@@ -284,6 +284,35 @@ describe("CIPage", () => {
     ).toHaveAttribute("href", "https://github.com/acme/widgets/pull/99");
   });
 
+  // grain/task-1760: the API names the task a shared fault is assigned
+  // to (ownerTaskId, cifault.ResolveOwner) and the CLI and agents are told
+  // it, but this page dropped it, so a reader could not tell who was
+  // fixing the failure every branch was hitting.
+  it("names and links the task a shared fault is assigned to", async () => {
+    api.mockResolvedValue({
+      enabled: true,
+      runs: [],
+      faults: [
+        {
+          ...githubFault("gh-owned"),
+          ownerTaskId: "11",
+          ownerRef: "grain/task-11",
+        },
+        githubFault("gh-unowned"),
+      ],
+    });
+    const onOpenTask = vi.fn();
+    render(<CIPane showError={() => {}} onOpenTask={onOpenTask} />);
+
+    const owners = await screen.findAllByTestId("ci-fault-owner");
+    expect(owners).toHaveLength(1);
+    expect(owners[0]).toHaveTextContent("Assigned to task #11 (grain/task-11)");
+    const link = screen.getByRole("link", { name: "task #11" });
+    expect(link).toHaveAttribute("href", "/tasks/11");
+    await userEvent.click(link);
+    expect(onOpenTask).toHaveBeenCalledWith("11");
+  });
+
   // grain/task-1520: the box folds away behind a header that still says
   // how many, and the choice outlives a reload and the page's polling.
   it("collapses the shared faults box and remembers it across a re-mount", async () => {

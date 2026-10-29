@@ -23,6 +23,8 @@ package deploy
 // fails silently and looks like a working deploy.
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -194,4 +196,59 @@ func TestConfigureStateRepoUsesTheImageWhenTheHostLacksGit(t *testing.T) {
 	cfgRepo := body(t, setupCode(t), "configure_state_repo() {")
 	contains(t, cfgRepo, "! command -v git >/dev/null 2>&1")
 	contains(t, cfgRepo, `/usr/local/lib/grain/run-image.sh -- state -data-dir "$GRAIN_DATA_DIR" status`)
+
+	fn := shellFunction(t, "configure_state_repo")
+	out := runBash(t, fn+`
+command() {
+  if [ "$1" = "-v" ] && [ "$2" = "git" ]; then return 1; fi
+  builtin command "$@"
+}
+grain_cli() { echo "RAN_HOST_GRAIN_CLI"; return 1; }
+configure_state_repo
+`, "GRAIN_HOSTD=1", "GRAIN_DATA_DIR="+t.TempDir())
+	if strings.Contains(out, "RAN_HOST_GRAIN_CLI") {
+		t.Errorf("configure_state_repo fell through to host grain_cli without git:\n%s", out)
+	}
+}
+
+func TestReportPrepareUpgradeStderrFiltersFalseAlarmsAndSummarizesRollbackDrops(t *testing.T) {
+	dataDir := t.TempDir()
+	tablesDir := filepath.Join(dataDir, "schema-upgrade", "tables")
+	if err := os.MkdirAll(tablesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tablesDir, "grain_config.json"),
+		[]byte(`[{"id":1,"google_oauth_client_secret":""}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tablesDir, "external_agent_token.json"),
+		[]byte(`[]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fn := shellFunction(t, "report_prepare_upgrade_stderr")
+	raw := strings.Join([]string{
+		`warning: tables/external_agent_token.json names no table this build has; every row in it would be ignored`,
+		`warning: tables/external_agent_token_sequence.json names no table this build has; every row in it would be ignored`,
+		`warning: tables/grain_config.json row 0 carries "google_oauth_client_secret", which holds secret material and is never imported from this repository; applying this keeps the value the running database holds. Remove the column from the file, set the value through the settings API instead, and rotate it if it was ever committed here`,
+		`warning: tables/grain_config.json row 0 does not carry "external_agent_api", which grain_config has; grain_config is a settings table, so applying this replaces the whole row and that column lands on its default 0 rather than on whatever the running database holds`,
+		`rehearsed: 3 rows across 3 tables migrate from schema 59 into 58`,
+	}, "\n")
+
+	got := strings.TrimSpace(runBash(t, fn+`report_prepare_upgrade_stderr "$RAW" 2>&1`,
+		"GRAIN_DATA_DIR="+dataDir, "RAW="+raw))
+	if got != "rehearsed: 3 rows across 3 tables migrate from schema 59 into 58" {
+		t.Errorf("with 0 external agent tokens and empty oauth secret, got:\n%s", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(tablesDir, "external_agent_token.json"),
+		[]byte(`[{"id":"1","name":"a"},{"id":"2","name":"b"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got = strings.TrimSpace(runBash(t, fn+`report_prepare_upgrade_stderr "$RAW" 2>&1`,
+		"GRAIN_DATA_DIR="+dataDir, "RAW="+raw))
+	want := "warning: 2 external agent tokens are not carried back\nrehearsed: 3 rows across 3 tables migrate from schema 59 into 58"
+	if got != want {
+		t.Errorf("with 2 external agent tokens, got:\n%s\nwant:\n%s", got, want)
+	}
 }

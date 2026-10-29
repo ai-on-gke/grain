@@ -31,11 +31,18 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/kubectlgate"
+	"github.com/bwsalmon/granule/pkg/sandbox"
 )
+
+type remoteBatchFilePlacer interface {
+	PutFiles(ctx context.Context, files []sandbox.FileUpload) error
+	EffectiveHomeDir() string
+}
 
 // ConfigureGitCredentialsOverSSH writes .gitconfig and .git-credentials
 // into runner's remote SSH session's starting directory so that any git
@@ -64,6 +71,9 @@ func ConfigureGitCredentialsOverSSH(runner remoteRunner, remoteURL, token string
 	if err != nil {
 		return err
 	}
+	if batch, ok := runner.(remoteBatchFilePlacer); ok {
+		return configureGitCredentialsViaPutFiles(context.Background(), batch, remoteURL, credentials, gitconfig, netrc, identity)
+	}
 	stdin := credentials + gitconfig + netrc
 	script := gitCredentialsScript(len(credentials), len(gitconfig), len(netrc))
 	if identity.OrDefault().SigningKey != "" {
@@ -83,6 +93,42 @@ func ConfigureGitCredentialsOverSSH(runner remoteRunner, remoteURL, token string
 	})
 	if exitCode != 0 {
 		return fmt.Errorf("gitcredentials: writing remote .git-credentials and .gitconfig: %s", strings.TrimSpace(stderr))
+	}
+	return nil
+}
+
+func configureGitCredentialsViaPutFiles(ctx context.Context, batch remoteBatchFilePlacer, remoteURL, credentials, gitconfig, netrc string, identity GitIdentity) error {
+	home := batch.EffectiveHomeDir()
+	netrcPath := path.Join(home, ".git-credentials.netrc")
+	curlrc := fmt.Sprintf("netrc-optional\nnetrc-file = %q\n", netrcPath)
+
+	var signingUploads []sandbox.FileUpload
+	if identity.OrDefault().SigningKey != "" {
+		pubKey, allowedSigners, signScript, err := GitSigningFiles(remoteURL, identity, "")
+		if err != nil {
+			return err
+		}
+		signProg := path.Join(home, ".git-ssh-sign")
+		allowedPath := path.Join(home, ".git-allowed-signers")
+		pubKeyPath := path.Join(home, ".git-signing-key.pub")
+		gitconfig += fmt.Sprintf("[gpg]\n\tformat = ssh\n[gpg \"ssh\"]\n\tprogram = %s\n\tallowedSignersFile = %s\n[user]\n\tsigningkey = %s\n[commit]\n\tgpgsign = true\n[tag]\n\tgpgSign = true\n",
+			signProg, allowedPath, pubKeyPath)
+		signingUploads = []sandbox.FileUpload{
+			{Path: pubKeyPath, Content: []byte(pubKey), Mode: 0o600},
+			{Path: allowedPath, Content: []byte(allowedSigners), Mode: 0o600},
+			{Path: signProg, Content: []byte(signScript), Mode: 0o700},
+		}
+	}
+
+	uploads := []sandbox.FileUpload{
+		{Path: path.Join(home, ".git-credentials"), Content: []byte(credentials), Mode: 0o600},
+		{Path: path.Join(home, ".gitconfig"), Content: []byte(gitconfig), Mode: 0o600},
+		{Path: netrcPath, Content: []byte(netrc), Mode: 0o600},
+		{Path: path.Join(home, ".curlrc"), Content: []byte(curlrc), Mode: 0o600},
+	}
+	uploads = append(uploads, signingUploads...)
+	if err := batch.PutFiles(ctx, uploads); err != nil {
+		return fmt.Errorf("gitcredentials: writing remote .git-credentials and .gitconfig: %w", err)
 	}
 	return nil
 }

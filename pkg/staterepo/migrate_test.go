@@ -946,3 +946,110 @@ func TestADumpWithAnotherTeamsRepoSettingsOrGCPKeyIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// Rehearsing a schema upgrade (`grain state prepare-upgrade`,
+// CheckMigration) checks a full Export at the previous schema against a
+// fresh store at this build's schema. Neither the empty
+// google_oauth_client_secret column that Export wrote nor a settings
+// column added in the new schema (such as external_agent_api in schema
+// 59) should produce Apply-only warnings during the migration check.
+func TestCheckMigrationDoesNotWarnOnEmptyWithheldColumnOrAddedSettingsColumn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	srcStore, srcDB := openRealDB(t)
+	if err := srcStore.PutConfig(ctx, model.DefaultConfig()); err != nil {
+		t.Fatalf("putting default config: %v", err)
+	}
+	dir := t.TempDir()
+	if err := staterepo.Export(ctx, srcDB, dir); err != nil {
+		t.Fatalf("exporting: %v", err)
+	}
+	if err := staterepo.WriteSchemaVersion(dir, model.SchemaVersion-1); err != nil {
+		t.Fatal(err)
+	}
+	configs := readTable(t, dir, "grain_config")
+	if v, ok := configs[0]["google_oauth_client_secret"]; !ok || v != "" {
+		t.Fatalf("exported grain_config row google_oauth_client_secret = %v (present=%v), want empty string", v, ok)
+	}
+	delete(configs[0], "external_agent_api")
+	writeTable(t, dir, "grain_config", configs)
+
+	_, dstDB := openRealDB(t)
+	report, err := staterepo.CheckMigration(ctx, dstDB, dir, t.TempDir(), model.SchemaVersion)
+	if err != nil {
+		t.Fatalf("CheckMigration: %v", err)
+	}
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "google_oauth_client_secret") {
+			t.Errorf("migration check warned about an empty secret column grain exported itself:\n%s", w)
+		}
+		if strings.Contains(w, "external_agent_api") {
+			t.Errorf("migration check warned about an added settings column landing on its default:\n%s", w)
+		}
+	}
+}
+
+// Rolling back across a schema that added a table (such as 59 -> 58 with
+// external_agent_token) should be silent when the table is empty (and for
+// its _sequence companion), and summarize the count of rows not carried
+// back when it holds rows rather than emitting per-file unknown-table
+// warnings.
+func TestCheckMigrationSummarizesDroppedRollbackRowsInsteadOfWarningPerFile(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, srcDB := openRealDB(t)
+	dir := t.TempDir()
+	if err := staterepo.Export(ctx, srcDB, dir); err != nil {
+		t.Fatalf("exporting: %v", err)
+	}
+	if err := staterepo.WriteSchemaVersion(dir, model.SchemaVersion+1); err != nil {
+		t.Fatal(err)
+	}
+	// Rename external_agent_token in the dump to simulate rolling back to a
+	// build before external_agent_token existed, or test both an empty and
+	// populated table unknown to the target database.
+	_, checkDB := openRealDB(t)
+	if _, err := checkDB.ExecContext(ctx, "DROP TABLE `external_agent_token`; DROP TABLE `external_agent_token_sequence`"); err != nil {
+		t.Fatalf("dropping external_agent_token from target db: %v", err)
+	}
+
+	writeTable(t, dir, "external_agent_token", []map[string]any{})
+	writeTable(t, dir, "external_agent_token_sequence", []map[string]any{{"id": 1, "value": 2}})
+	report, err := staterepo.CheckMigration(ctx, checkDB, dir, t.TempDir(), model.SchemaVersion)
+	if err != nil {
+		t.Fatalf("CheckMigration with 0 external agent tokens: %v", err)
+	}
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "external_agent_token") || strings.Contains(w, "names no table this build has") {
+			t.Errorf("migration check with 0 external agent tokens warned:\n%s", w)
+		}
+	}
+
+	writeTable(t, dir, "external_agent_token", []map[string]any{
+		{"id": "1", "name": "ci-bot", "token_hash": "abc", "token_prefix": "gea_1", "created_at": "2026-10-28T00:00:00Z"},
+	})
+	report, err = staterepo.CheckMigration(ctx, checkDB, dir, t.TempDir(), model.SchemaVersion)
+	if err != nil {
+		t.Fatalf("CheckMigration with 1 external agent token: %v", err)
+	}
+	if !slices.Contains(report.Warnings, "1 external agent token is not carried back") {
+		t.Errorf("warnings for 1 dropped token = %q, want \"1 external agent token is not carried back\"", report.Warnings)
+	}
+
+	writeTable(t, dir, "external_agent_token", []map[string]any{
+		{"id": "1", "name": "ci-bot", "token_hash": "abc", "token_prefix": "gea_1", "created_at": "2026-10-28T00:00:00Z"},
+		{"id": "2", "name": "cd-bot", "token_hash": "def", "token_prefix": "gea_2", "created_at": "2026-10-28T00:00:00Z"},
+	})
+	report, err = staterepo.CheckMigration(ctx, checkDB, dir, t.TempDir(), model.SchemaVersion)
+	if err != nil {
+		t.Fatalf("CheckMigration with 2 external agent tokens: %v", err)
+	}
+	if !slices.Contains(report.Warnings, "2 external agent tokens are not carried back") {
+		t.Errorf("warnings for 2 dropped tokens = %q, want \"2 external agent tokens are not carried back\"", report.Warnings)
+	}
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "names no table this build has") {
+			t.Errorf("migration check still emitted per-file unknown-table warning:\n%s", w)
+		}
+	}
+}

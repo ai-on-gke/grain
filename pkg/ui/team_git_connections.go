@@ -219,6 +219,33 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 		}
 	}
 
+	candidate, err := model.NormalizeTeamGitConnection(model.TeamGitConnection{
+		Credential: "-",
+		Host:       host,
+		Scope:      req.Scope,
+	})
+	if err != nil {
+		return Team{}, validationErrorf("invalid connection: %w", err)
+	}
+	for _, raw := range settings.EffectiveGitConnections() {
+		existing, err := model.NormalizeTeamGitConnection(raw)
+		if err != nil || existing.Credential == "anonymous" {
+			continue
+		}
+		if !model.SameGitHost(existing.Host, candidate.Host, model.DefaultGitHost) || existing.Scope != candidate.Scope {
+			continue
+		}
+		onHost, _ := model.ResolveGitHost(candidate.Host, model.DefaultGitHost)
+		if candidate.Scope == "" {
+			return Team{}, validationErrorf(
+				"this deployment already has a default git connection on %s (%s): remove it or edit its scope first",
+				onHost, existing.Credential)
+		}
+		return Team{}, validationErrorf(
+			"this deployment already has a git connection on %s for scope %q (%s): remove it or edit its scope first",
+			onHost, candidate.Scope, existing.Credential)
+	}
+
 	credName := strings.TrimSpace(req.Credential)
 	if credName == "" {
 		// Allocate a deployment-owned credential name
@@ -280,15 +307,8 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 		return Team{}, fmt.Errorf("setting credential host: %w", err)
 	}
 
-	newConn := model.TeamGitConnection{
-		Credential: credName,
-		Host:       host,
-		Scope:      req.Scope,
-	}
-	normConn, err := model.NormalizeTeamGitConnection(newConn)
-	if err != nil {
-		return Team{}, validationErrorf("invalid connection: %w", err)
-	}
+	normConn := candidate
+	normConn.Credential = strings.TrimSpace(credName)
 
 	// Migrate legacy credential and append new connection
 	var updatedConns []model.TeamGitConnection

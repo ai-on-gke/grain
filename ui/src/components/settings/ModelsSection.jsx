@@ -105,9 +105,14 @@ export default function ModelsSection({ config, onSaved, showError }) {
       return null;
     }
   };
-  const deleteBackend = async (id) => {
+  // opts.keepalive is the unfinished draft's cleanup as the page goes
+  // away (ModelBackendPage's pagehide), which has to outlive the page.
+  const deleteBackend = async (id, { keepalive = false } = {}) => {
     try {
-      await api(backendPath(id), { method: "DELETE" });
+      await api(backendPath(id), {
+        method: "DELETE",
+        ...(keepalive ? { keepalive: true } : {}),
+      });
       setAgentBackends((current) => current.filter((b) => b.id !== id));
       refreshInBackground();
     } catch (err) {
@@ -312,13 +317,40 @@ export default function ModelsSection({ config, onSaved, showError }) {
                       />
                     </Stack>
                     {paused && (
-                      <Typography
-                        variant="body2"
-                        color="warning.main"
-                        className="connection-paused"
+                      <Stack
+                        direction="row"
+                        spacing={1}
+                        useFlexGap
+                        alignItems="center"
+                        flexWrap="wrap"
                       >
-                        {pausedUntil(paused, zone)}
-                      </Typography>
+                        <Typography
+                          variant="body2"
+                          color="warning.main"
+                          className="connection-paused"
+                        >
+                          {pausedUntil(paused, zone)}
+                        </Typography>
+                        {/* As a paused model below can be: the alerts
+                            panel was the only place a whole connection's
+                            pause could be lifted. */}
+                        {paused.canLift && (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={async () => {
+                              try {
+                                await liftAgentPause(paused);
+                                await onSaved?.();
+                              } catch (err) {
+                                showError?.(err.message);
+                              }
+                            }}
+                          >
+                            Resume
+                          </Button>
+                        )}
+                      </Stack>
                     )}
                     <Typography variant="body2" color="text.secondary">
                       Up to {backend.concurrency > 0 ? backend.concurrency : 4}{" "}
