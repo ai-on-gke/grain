@@ -521,6 +521,9 @@ var (
 	sandboxMirrorDockerCmd   = []string{"docker"}
 	sandboxMirrorTokenSource = registryauth.Token
 	mirrorSandboxImageFunc   = defaultMirrorSandboxImage
+	// sandboxMirrorRegistryDigest is what the mirror registry answers
+	// for a tag; tests replace it.
+	sandboxMirrorRegistryDigest = upgrade.RegistryManifestDigest
 )
 
 // ResetMirroredSandboxImageCacheForTest clears the in-memory mirrored sandbox
@@ -583,12 +586,18 @@ func defaultMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo, targe
 
 	// Fast path: if stageImage (or an earlier startup) already pushed
 	// targetTagRef and local docker has its RepoDigest for mirrorRepo,
-	// resolve the digest directly without re-pushing.
-	if pinned := inspectMirroredRepoDigest(ctx, targetTagRef, mirrorRepo, targetTagRef); pinned != "" {
-		return pinned, nil
-	}
-	if pinned := inspectMirroredRepoDigest(ctx, sourceRef, mirrorRepo, targetTagRef); pinned != "" {
-		return pinned, nil
+	// resolve the digest directly without re-pushing -- once the mirror
+	// itself still answers that digest for the tag. A RepoDigest is only
+	// docker's memory of a push; the repository may since have been
+	// emptied or recreated, and the cluster pulls from the registry.
+	for _, inspectRef := range []string{targetTagRef, sourceRef} {
+		if pinned := inspectMirroredRepoDigest(ctx, inspectRef, mirrorRepo, targetTagRef); pinned != "" {
+			_, digest, _ := strings.Cut(pinned, "@")
+			if remote, err := sandboxMirrorRegistryDigest(ctx, targetTagRef); err == nil && remote == digest {
+				return pinned, nil
+			}
+			break
+		}
 	}
 
 	// Ensure sourceRef is present locally before tagging.

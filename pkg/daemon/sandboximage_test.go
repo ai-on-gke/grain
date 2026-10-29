@@ -15,6 +15,8 @@
 package daemon
 
 import (
+	"context"
+	"errors"
 	"log"
 	"os"
 	"slices"
@@ -478,10 +480,15 @@ exit 0
 	if err := os.WriteFile(dir+"/docker", []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake docker: %v", err)
 	}
-	savedDocker, savedToken := sandboxMirrorDockerCmd, sandboxMirrorTokenSource
+	savedDocker, savedToken, savedRemote := sandboxMirrorDockerCmd, sandboxMirrorTokenSource, sandboxMirrorRegistryDigest
 	sandboxMirrorDockerCmd = []string{dir + "/docker"}
 	sandboxMirrorTokenSource = nil
-	t.Cleanup(func() { sandboxMirrorDockerCmd, sandboxMirrorTokenSource = savedDocker, savedToken })
+	sandboxMirrorRegistryDigest = func(context.Context, string) (string, error) {
+		return "", errors.New("HTTP 404 (fake registry)")
+	}
+	t.Cleanup(func() {
+		sandboxMirrorDockerCmd, sandboxMirrorTokenSource, sandboxMirrorRegistryDigest = savedDocker, savedToken, savedRemote
+	})
 	return logFile
 }
 
@@ -537,5 +544,42 @@ func TestMirrorSandboxImageDoesNotPinASourceDigestThatWasNeverPushed(t *testing.
 	logged, _ := os.ReadFile(logFile)
 	if !strings.Contains(string(logged), "push "+target) {
 		t.Errorf("no push was attempted:\n%s", logged)
+	}
+}
+
+// A RepoDigest for the mirror is only docker's memory of an earlier
+// push. When the mirror no longer answers it -- the repository was
+// emptied or recreated -- the image is pushed again rather than pinned
+// to a digest the cluster cannot pull; when it does, nothing is pushed.
+func TestMirrorSandboxImageChecksTheRegistryBeforeTrustingALocalRepoDigest(t *testing.T) {
+	source := "127.0.0.1:5000/src/guest:sha-aaaa111"
+	target := "127.0.0.1:5001/mirror/guest:sha-aaaa111"
+	digest := "sha256:f97baa533a26513c453a362be331a43eb60214302f449c16571b23cea141dce4"
+	logFile := fakeMirrorDocker(t, `["127.0.0.1:5001/mirror/guest@`+digest+`"]`, 0)
+
+	pinned, err := defaultMirrorSandboxImage(t.Context(), source, "127.0.0.1:5001/mirror/guest", target)
+	if err != nil || pinned != target+"@"+digest {
+		t.Fatalf("defaultMirrorSandboxImage = %q, %v; want %q", pinned, err, target+"@"+digest)
+	}
+	logged, _ := os.ReadFile(logFile)
+	if !strings.Contains(string(logged), "push "+target) {
+		t.Fatalf("a mirror answering 404 was not pushed to again:\n%s", logged)
+	}
+
+	if err := os.Remove(logFile); err != nil {
+		t.Fatal(err)
+	}
+	sandboxMirrorRegistryDigest = func(_ context.Context, ref string) (string, error) {
+		if ref != target {
+			t.Errorf("registry asked for %q, want %q", ref, target)
+		}
+		return digest, nil
+	}
+	if pinned, err := defaultMirrorSandboxImage(t.Context(), source, "127.0.0.1:5001/mirror/guest", target); err != nil || pinned != target+"@"+digest {
+		t.Fatalf("defaultMirrorSandboxImage(present) = %q, %v", pinned, err)
+	}
+	logged, _ = os.ReadFile(logFile)
+	if strings.Contains(string(logged), "push") {
+		t.Errorf("pushed although the mirror already has the digest:\n%s", logged)
 	}
 }
