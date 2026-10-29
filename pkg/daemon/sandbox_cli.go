@@ -156,6 +156,11 @@ func (g sandboxCLIGate) ListAPIRoutes(ctx context.Context, callerTaskID string, 
 	return a.ListAPIRoutes(ctx, callerTaskID, grants, scopeFilter)
 }
 
+// NewWaitCreditor returns a gitproxy.CLIWaitCreditor backed by credits.
+func NewWaitCreditor(credits *orchestrator.RunWaitCredits) gitproxy.CLIWaitCreditor {
+	return waitCreditAdapter{credits: credits}
+}
+
 // CreditCLIWait is gitproxy.CLIWaitCreditor over the same registry
 // CreditWaitForTask credits, reported as its own source so that a run's
 // CLI waits add to its MCP waits rather than competing with them
@@ -186,7 +191,7 @@ func (o *PullRequestOpener) reviewTool(ctx context.Context, taskID, name string,
 	if task == nil || task.Target == nil {
 		return "", false, fmt.Errorf("task %s has no repository of its own", taskID)
 	}
-	scope := mcp.PullRequestScope{Owner: task.Target.Owner, Repo: task.Target.Name, Branch: task.Branch}
+	scope := mcp.PullRequestScope{Owner: task.Target.Owner, Repo: task.Target.Name, Branch: task.BranchName()}
 	if pr := model.TaskPullRequest(*task); pr != nil && pr.Repo == *task.Target {
 		scope.PullRequestNumber = pr.Number
 	}

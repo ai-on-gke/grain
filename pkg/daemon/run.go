@@ -492,7 +492,7 @@ func Run(ctx context.Context, cfg Config) error {
 		var access *orchestrator.K8sGranuleAccess
 		var accessLive func(string) bool
 		if cfg.SandboxAccessAddr != "" {
-			if access, err = startSandboxAccess(ctx, cfg, k8sInstance, k8sNamespace, &accessLive); err != nil {
+			if access, err = startSandboxAccess(ctx, cfg, store, k8sInstance, k8sNamespace, &accessLive); err != nil {
 				return err
 			}
 		}
@@ -526,6 +526,13 @@ func Run(ctx context.Context, cfg Config) error {
 			"from image %q, each booting a real cloud-hypervisor VM over /dev/kvm. This is the same isolation "+
 			"-granule-sandboxes gives on a single host, scheduled by the cluster instead.",
 			k8sNamespace, k8sGranuleImage)
+		if LocalSandboxes == nil {
+			go func(checkCfg Config, img string) {
+				if warnErr := checkClusterSandboxImageConnectivity(ctx, checkCfg, img); warnErr != nil {
+					log.Printf("WARNING: %v", warnErr)
+				}
+			}(cfg, k8sGranuleImage)
+		}
 	} else if cfg.HostSandboxes {
 		runs := HostSandboxRunsDir(cfg)
 		if err := os.MkdirAll(runs, 0o755); err != nil {

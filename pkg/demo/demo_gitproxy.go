@@ -32,6 +32,7 @@ package demo
 // orchestrator's runOne would.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,13 +40,25 @@ import (
 	"net"
 	"net/http"
 	"net/http/cgi"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // demoGitProxy is the running proxy and what minting a run's access to it
@@ -54,8 +67,42 @@ type demoGitProxy struct {
 	store  *model.Store
 	tokens *gitproxy.SandboxTokenStore
 	repo   model.RepoRef
+	proxy  *gitproxy.GitProxy
+	ns     *namespace.Server
+	cli    *daemon.SandboxCLIBackend
+	api    *daemon.InProcessAPI
 	// url is the proxy's own base URL, http://127.0.0.1:PORT.
 	url string
+}
+
+// CreditCLIWait implements gitproxy.CLIWaitCreditor for runs started on the
+// demo git proxy.
+func (p *demoGitProxy) CreditCLIWait(_ context.Context, _ string, blocked time.Duration) (gitproxy.CLIWaitCredit, error) {
+	credited := blocked
+	if credited > orchestrator.RunWaitCreditCap {
+		credited = orchestrator.RunWaitCreditCap
+	}
+	return gitproxy.CLIWaitCredit{
+		Blocked:  blocked,
+		Credited: credited,
+		Cap:      orchestrator.RunWaitCreditCap,
+		Live:     true,
+	}, nil
+}
+
+func demoSrcDir(dir string) string {
+	if info, err := os.Stat("/usr/local/share/grain/src"); err == nil && info.IsDir() {
+		return "/usr/local/share/grain/src"
+	}
+	if info, err := os.Stat("playbooks"); err == nil && info.IsDir() {
+		if abs, err := filepath.Abs("."); err == nil {
+			return abs
+		}
+	}
+	src := filepath.Join(dir, "src")
+	_ = os.MkdirAll(filepath.Join(src, "playbooks"), 0o755)
+	_ = os.WriteFile(filepath.Join(src, "playbooks", "incident-triage.md"), []byte("# Incident Triage\n\nCheck CI runs and logs.\n"), 0o644)
+	return src
 }
 
 // configureGitProxyDemo serves the bare repo at bare (configureGitHubSimDemo's)
@@ -97,29 +144,92 @@ func configureGitProxyDemo(dir string, store *model.Store, repo model.RepoRef, b
 		return nil, fmt.Errorf("serving the simulated forge: %w", err)
 	}
 
-	proxy, err := gitproxy.BuildProxy(gitproxy.BuildConfig{
-		DataDir: dir, Store: store,
-		ForwardHost: forgeAddr, ForwardTLS: false,
+	// Ensure state-repo/settings/settings.yaml and secrets/secrets.key exist so
+	// config://, deploy://health, and deploy://grain.log reads work in demo.
+	settingsDir := filepath.Join(daemon.StateRepoDir(dir), "settings")
+	_ = os.MkdirAll(settingsDir, 0o755)
+	_ = os.WriteFile(filepath.Join(settingsDir, "settings.yaml"), []byte("default_model: gemini-2.5-pro\n"), 0o644)
+	_ = secrets.New(daemon.SecretsDir(dir))
+
+	logPath := filepath.Join(dir, "demo-daemon.log")
+	_ = os.WriteFile(logPath, []byte("2026-10-29T00:00:00Z grain demo: started daemon log\n"), 0o644)
+	api := &daemon.InProcessAPI{}
+	nsServer := &namespace.Server{
+		ArtifactDir: filepath.Join(dir, "state", "ci-artifacts"),
+		SrcDir:      demoSrcDir(dir),
+		NewRedactor: func() *redact.Redactor { return daemon.BuildNamespaceRedactor(dir) },
+	}
+	cliBackend := daemon.WireSandboxNamespace(nsServer, daemon.SandboxNamespaceConfig{
+		DataDir:      dir,
+		Store:        store,
+		InsecureHTTP: true,
+		API:          api,
+		GrainLogSources: []grainlog.Source{
+			{
+				Name: "daemon",
+				What: "the grain demo daemon's log",
+				Read: func(_ context.Context, _ systemlog.Query) ([]string, error) {
+					b, err := os.ReadFile(logPath)
+					if err != nil {
+						return nil, err
+					}
+					trimmed := strings.TrimRight(string(b), "\n")
+					if trimmed == "" {
+						return nil, nil
+					}
+					return strings.Split(trimmed, "\n"), nil
+				},
+			},
+		},
 	})
-	if err != nil {
-		return nil, fmt.Errorf("building the git proxy: %w", err)
-	}
-	proxyAddr, err := serveLoopback(gitproxy.NewHandler(proxy))
-	if err != nil {
-		return nil, fmt.Errorf("serving the git proxy: %w", err)
-	}
 	p := &demoGitProxy{
 		store:  store,
 		tokens: gitproxy.NewSandboxTokenStore(filepath.Join(dir, "secrets", "sandbox-tokens.json")),
 		repo:   repo,
-		url:    "http://" + proxyAddr,
+		ns:     nsServer,
+		cli:    cliBackend,
+		api:    api,
 	}
+	proxy, err := gitproxy.BuildProxy(gitproxy.BuildConfig{
+		DataDir:     dir,
+		Store:       store,
+		ForwardHost: forgeAddr,
+		ForwardTLS:  false,
+		Namespace:   nsServer,
+		CLI:         cliBackend,
+		WaitCredit:  p,
+		API:         api,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("building the git proxy: %w", err)
+	}
+	p.proxy = proxy
+	proxyAddr, err := serveLoopback(gitproxy.NewHandler(proxy))
+	if err != nil {
+		return nil, fmt.Errorf("serving the git proxy: %w", err)
+	}
+	p.url = "http://" + proxyAddr
 	// Worded without "at http://", which ui/e2e/fixtures.js reads as the
 	// UI's own address.
 	log.Printf("grain demo: -git-proxy: grain's git proxy listens on %s, forwarding %s to a simulated GitHub on %s; "+
 		"POST /api/e2e/git-proxy/runs {\"taskId\": ...} starts a run and mints its sandbox's token",
 		p.url, full, forgeAddr)
 	return p, nil
+}
+
+// wireServer connects the proxy's namespace and /cli/ routes to the demo's
+// UI/API server, CI run store, and simulated GitHub client once they are built.
+func (p *demoGitProxy) wireServer(srv http.Handler, client *ui.Client, cfg ui.Config) {
+	p.api.Set(srv)
+	p.proxy.CLIActions = ui.SandboxCLIActions{Client: client}
+	if ciStore, ok := cfg.CI.(ci.RunStore); ok {
+		p.ns.CIStore = ciStore
+	} else if p.store != nil {
+		p.ns.CIStore = ci.NewStoredRunStore(p.store, ci.StoredRunStoreOptions{})
+	}
+	if ghClient, ok := cfg.GitHubBranches.(github.Client); ok {
+		p.cli.SetIssues(ghClient)
+	}
 }
 
 // serveLoopback serves h on a free loopback port for as long as the demo

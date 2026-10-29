@@ -54,11 +54,15 @@ const (
 	// GoalPipelineHealthy is met when the pipeline steward would be quiet
 	// and no pipeline.* notification is open.
 	GoalPipelineHealthy GoalKind = "pipeline-healthy"
+	// GoalCLSubmitted is met when every CL of a task has been submitted,
+	// or one named CL has (changelists.md §6), as its change provider
+	// observes it.
+	GoalCLSubmitted GoalKind = "cl-submitted"
 )
 
 // GoalKinds is every GoalKind, in the design's order.
 func GoalKinds() []GoalKind {
-	return []GoalKind{GoalBaseGreen, GoalPRMerged, GoalTasksClosed, GoalPersonCloses, GoalPipelineHealthy}
+	return []GoalKind{GoalBaseGreen, GoalPRMerged, GoalTasksClosed, GoalPersonCloses, GoalPipelineHealthy, GoalCLSubmitted}
 }
 
 // Valid reports whether k is a declared kind.
@@ -113,6 +117,8 @@ type GoalSpec struct {
 	Until string   `json:"until,omitempty"`
 	// pipeline-healthy
 	Repos []string `json:"repos,omitempty"`
+	// cl-submitted: every CL of Task, or the one CL numbered CL.
+	CL int64 `json:"cl,omitempty"`
 }
 
 // GoalDecl is a goal as it is declared -- by a template, propose_task, a
@@ -135,7 +141,7 @@ func GoalDefaults(kind GoalKind) (maxResumes int, maxStall time.Duration, onLimi
 	switch kind {
 	case GoalBaseGreen:
 		return 6, 12 * time.Hour, GoalHoldOnLimit
-	case GoalPRMerged, GoalTasksClosed:
+	case GoalPRMerged, GoalTasksClosed, GoalCLSubmitted:
 		return 6, 24 * time.Hour, GoalHoldOnLimit
 	case GoalPipelineHealthy:
 		return 4, 6 * time.Hour, GoalNotifyOnLimit
@@ -192,6 +198,15 @@ func (d *GoalDecl) Normalize() error {
 			spec.Until = "merged"
 		default:
 			return fmt.Errorf("goal tasks-closed until %q: want closed or merged", s.Until)
+		}
+	case GoalCLSubmitted:
+		switch {
+		case strings.TrimSpace(s.Task) != "":
+			spec.Task = NormalizeTaskID(s.Task)
+		case s.CL > 0:
+			spec.CL = s.CL
+		default:
+			return errors.New("goal cl-submitted needs a task, or a cl number")
 		}
 	case GoalPipelineHealthy:
 		for _, r := range s.Repos {

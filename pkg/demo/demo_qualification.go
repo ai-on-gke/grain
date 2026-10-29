@@ -84,7 +84,7 @@ func seedQualificationDemo(ctx context.Context, store *model.Store, repo model.R
 // because a demo without one is what the panes' unavailable notes are
 // walked against.
 func configureSecretsDemo(dir string, cfg ui.Config) (ui.Config, error) {
-	path := filepath.Join(dir, "secrets-store")
+	path := filepath.Join(dir, "secrets")
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return cfg, fmt.Errorf("creating the secrets store: %w", err)
 	}

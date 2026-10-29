@@ -282,7 +282,7 @@ func placeAllInSandbox(ctx context.Context, sb Sandbox, commander SandboxCommand
 				batch = append(batch, sandbox.FileUpload{
 					Path:    pl.Path,
 					Content: data,
-					Mode:    pl.FileMode(),
+					Mode:    fs.FileMode(pl.FileMode()),
 				})
 			} else {
 				nonUser = append(nonUser, pl)

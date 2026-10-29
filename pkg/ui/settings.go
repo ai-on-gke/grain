@@ -285,6 +285,7 @@ type Settings struct {
 	// for on that backend.
 	SandboxImage        string `json:"sandboxImage"`
 	SandboxImageDefault string `json:"sandboxImageDefault"`
+	SandboxImageMirror  string `json:"sandboxImageMirror"`
 	// SandboxImageBackend is the backend those two are answered for --
 	// the one chosen in Settings, else the one running.
 	SandboxImageBackend string `json:"sandboxImageBackend"`
@@ -1012,10 +1013,16 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 	cfg, unrunnable := c.runnableSettings(cfg)
 	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
+	effectiveGranuleForWarn := firstNonEmptyString(cfg.K8sGranuleImage, granuleImgDefault)
+	if mirror := strings.TrimSpace(cfg.SandboxImageMirror); mirror != "" {
+		if mirrored := upgrade.MirrorSandboxRef(effectiveGranuleForWarn, mirror); mirrored != "" {
+			effectiveGranuleForWarn = mirrored
+		}
+	}
 	sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
 		ctx,
 		firstNonEmptyString(cfg.K8sSandboxImage, sandboxImgDefault),
-		firstNonEmptyString(cfg.K8sGranuleImage, granuleImgDefault),
+		effectiveGranuleForWarn,
 	)
 	out := Settings{
 		Configured:               true,
@@ -1054,6 +1061,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		K8sSandboxImageDefault: sandboxImgDefault,
 		K8sGranuleImage:        cfg.K8sGranuleImage,
 		K8sGranuleImageDefault: granuleImgDefault,
+		SandboxImageMirror:     cfg.SandboxImageMirror,
 		DaemonBuildVersion:     buildVersion,
 		K8sSandboxImageWarning: sandboxWarn,
 		K8sGranuleImageWarning: granuleWarn,
@@ -1350,6 +1358,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			K8sKubectlDefault:              model.DefaultK8sKubectl,
 			K8sSandboxImageDefault:         sandboxImgDefault,
 			K8sGranuleImageDefault:         granuleImgDefault,
+			SandboxImageMirror:             def.SandboxImageMirror,
 			DaemonBuildVersion:             buildVersion,
 			K8sSandboxImageWarning:         sandboxWarn,
 			K8sGranuleImageWarning:         granuleWarn,
@@ -1468,6 +1477,7 @@ type UpdateSettingsRequest struct {
 	SandboxDiskFloorShare  *float64                  `json:"sandboxDiskFloorShare"`
 	SandboxDiskFloorMinMB  *int                      `json:"sandboxDiskFloorMinMb"`
 	SandboxImage           *string                   `json:"sandboxImage"`
+	SandboxImageMirror     *string                   `json:"sandboxImageMirror"`
 	K8sNamespace           *string                   `json:"k8sNamespace"`
 	K8sKubectl             *string                   `json:"k8sKubectl"`
 	K8sSandboxImage        *string                   `json:"k8sSandboxImage"`
@@ -1862,6 +1872,15 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			}
 		}
 		cfg.SandboxImage = image
+	}
+	if req.SandboxImageMirror != nil {
+		mirror := strings.TrimSpace(*req.SandboxImageMirror)
+		if mirror != "" {
+			if err := sandboximage.ValidateReference(mirror); err != nil {
+				return model.Config{}, validationErrorf("sandboxImageMirror must be an OCI repository reference, such as us-docker.pkg.dev/my-project/grain/guest: %v", err)
+			}
+		}
+		cfg.SandboxImageMirror = mirror
 	}
 	if req.K8sNamespace != nil {
 		cfg.K8sNamespace = strings.TrimSpace(*req.K8sNamespace)
