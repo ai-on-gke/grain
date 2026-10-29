@@ -53,6 +53,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitrefs"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/procgroup"
+	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 )
 
 // ShellRequest is one script to run in a sandbox.
@@ -100,6 +101,13 @@ type ShellRequest struct {
 	// readopted the sandbox) re-attaches from byte 0 without running the
 	// script a second time.
 	StepID string
+	// Attach, when non-nil, is reported the exec id and output cursor of
+	// the command where the transport is a sandbox's dial-out channel, and
+	// when its ExecID is set the call reattaches to that exec instead of
+	// starting the script (docs/design/grain-on-gke.md#GKE-4). A
+	// transport without the channel ignores the reporting, and refuses a
+	// reattach with sandboxaccess.ErrChannelLost: it has no exec to find.
+	Attach *sandboxaccess.Attachment
 }
 
 // ShellResult is what one script did.
@@ -531,6 +539,12 @@ type execStreamRunner interface {
 	Exec(ctx context.Context, argv []string, stdin string, out io.Writer) (stdout, stderr string, exitCode int, err error)
 }
 
+// attachingRunner is a runner whose execs have ids that outlive this
+// process -- sandboxaccess.Runner, over a sandbox's dial-out channel.
+type attachingRunner interface {
+	ExecAttached(ctx context.Context, argv []string, stdin string, out io.Writer, att *sandboxaccess.Attachment) (stdout, stderr string, exitCode int, err error)
+}
+
 // RunShell implements SandboxShell for a granule VM: the guest's own bash,
 // over the same transport every tool call and every credential write
 // already goes over.
@@ -616,7 +630,26 @@ func runGuestShell(ctx context.Context, runner sandboxRunner, workspace string, 
 	var stderr string
 	var execErr error
 	out := ""
-	if execer, ok := runner.(execStreamRunner); ok {
+	attacher, canAttach := runner.(attachingRunner)
+	if req.Attach != nil && req.Attach.ExecID != "" && !canAttach {
+		err := &sandboxaccess.ChannelLostError{Cause: fmt.Errorf("%s has no channel to reattach exec %s over", what, req.Attach.ExecID)}
+		return ShellResult{ExitCode: -1}, fmt.Errorf("orchestrator: %s: %w", what, err)
+	}
+	if req.Attach != nil && canAttach {
+		var whole bytes.Buffer
+		sink := io.Writer(&whole)
+		if req.Output != nil {
+			sink = io.MultiWriter(&whole, req.Output)
+		}
+		_, stderr, exitCode, execErr = attacher.ExecAttached(ctx, argv, "", sink, req.Attach)
+		out = whole.String()
+		if exitCode == -1 && stderr != "" && !strings.Contains(out, stderr) {
+			if out != "" && !strings.HasSuffix(out, "\n") {
+				out += "\n"
+			}
+			out += stderr
+		}
+	} else if execer, ok := runner.(execStreamRunner); ok {
 		var whole bytes.Buffer
 		sink := io.Writer(&whole)
 		if req.Output != nil {

@@ -83,6 +83,8 @@ type (
 	GateRequest        = gritengine.GateRequest
 	OOMReporter        = gritengine.OOMReporter
 	PreemptionReporter = gritengine.PreemptionReporter
+	StepAttachment     = gritengine.StepAttachment
+	StepAttachments    = gritengine.StepAttachments
 )
 
 const (

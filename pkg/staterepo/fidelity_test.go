@@ -434,6 +434,14 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		sub.Add(time.Hour)); err != nil {
 		t.Fatalf("recording sandbox access credential: %v", err)
 	}
+	// A running CI step's exec id and output cursor
+	// (ci_step_attachment).
+	if err := store.PutCIStepAttachment(ctx, model.CIStepAttachment{
+		RunID: "c3d4-run", JobID: "tests.yml/go", StepID: "a1-s0", Sandbox: "c3d4-1",
+		ExecID: "exec-7-" + awkward, Cursor: 987654, UpdatedAt: sub,
+	}); err != nil {
+		t.Fatalf("recording a CI step attachment: %v", err)
+	}
 	// What a run said when it failed for a reason grain could not name
 	// (task_run_unmatched_failure) -- the one table here whose whole
 	// content is a provider's own words, so the awkward string is the
