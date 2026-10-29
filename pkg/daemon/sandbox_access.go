@@ -54,12 +54,12 @@ func sandboxAccessControllerIPs(getenv func(string) string) []string {
 	return ips
 }
 
-// startSandboxAccess loads (or creates) the deployment CA, starts the
-// acceptor on cfg.SandboxAccessAddr, and returns the access config
-// K8sGranuleSandboxes mints credentials through. live is consulted on
-// every admission; it is a pointer because the backend it reads is built
-// after this.
-func startSandboxAccess(ctx context.Context, cfg Config, deployment, namespace string, live *func(string) bool) (*orchestrator.K8sGranuleAccess, error) {
+// startSandboxAccess loads (or creates) the deployment CA, restores stored
+// sandbox-access credentials from accessStore, starts the acceptor on
+// cfg.SandboxAccessAddr, and returns the access config K8sGranuleSandboxes
+// mints credentials through. live is consulted on every admission; it is a
+// pointer because the backend it reads is built after this.
+func startSandboxAccess(ctx context.Context, cfg Config, accessStore orchestrator.SandboxAccessStore, deployment, namespace string, live *func(string) bool) (*orchestrator.K8sGranuleAccess, error) {
 	var store sandboxaccess.CAStore = sandboxaccess.FileCAStore{Path: filepath.Join(cfg.DataDir, "sandbox-access-ca.pem")}
 	if cfg.SandboxAccessCASecret != "" {
 		store = sandboxaccess.SecretManagerStore{Secret: cfg.SandboxAccessCASecret}
@@ -85,16 +85,39 @@ func startSandboxAccess(ctx context.Context, cfg Config, deployment, namespace s
 		SandboxAccessService + "." + namespace + ".svc",
 		SandboxAccessService + "." + namespace + ".svc.cluster.local",
 	}, controllerIPs...)
+	startupReadoptable := map[string]bool{}
 	acceptor, err := sandboxaccess.Listen(sandboxaccess.Config{
 		Deployment:  deployment,
 		CA:          ca,
 		ServerNames: names,
 		Live: func(sandbox string) bool {
-			return *live != nil && (*live)(sandbox)
+			if *live != nil {
+				return (*live)(sandbox)
+			}
+			return startupReadoptable[sandbox]
 		},
 	}, cfg.SandboxAccessAddr)
 	if err != nil {
 		return nil, err
+	}
+	if accessStore != nil {
+		creds, err := accessStore.SandboxAccessCredentials(ctx)
+		if err != nil {
+			_ = acceptor.Close()
+			return nil, fmt.Errorf("sandbox access: loading stored credentials: %w", err)
+		}
+		now := time.Now()
+		for _, c := range creds {
+			if !c.NotAfter.After(now) {
+				_ = accessStore.DeleteSandboxAccess(ctx, c.Sandbox)
+				continue
+			}
+			if err := acceptor.Register(c.Sandbox, c.TokenHash, c.NotAfter); err != nil {
+				_ = acceptor.Close()
+				return nil, fmt.Errorf("sandbox access: registering stored credential for %q: %w", c.Sandbox, err)
+			}
+			startupReadoptable[c.Sandbox] = true
+		}
 	}
 	go func() {
 		if err := acceptor.Serve(ctx); err != nil {
@@ -103,5 +126,5 @@ func startSandboxAccess(ctx context.Context, cfg Config, deployment, namespace s
 	}()
 	log.Printf("grain daemon: sandbox access acceptor on %s; wrappers dial %s, guest traffic to %v dropped in-pod",
 		acceptor.Addr(), dial, controllerIPs)
-	return &orchestrator.K8sGranuleAccess{Acceptor: acceptor, Dial: dial, ControllerIPs: controllerIPs}, nil
+	return &orchestrator.K8sGranuleAccess{Acceptor: acceptor, Store: accessStore, Dial: dial, ControllerIPs: controllerIPs}, nil
 }

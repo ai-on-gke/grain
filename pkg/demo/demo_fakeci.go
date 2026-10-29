@@ -52,7 +52,10 @@ type demoFakeCI struct {
 	runs []ci.Run // in the order they were started
 }
 
-var _ ci.Runner = (*demoFakeCI)(nil)
+var (
+	_ ci.Runner   = (*demoFakeCI)(nil)
+	_ ci.RunStore = (*demoFakeCI)(nil)
+)
 
 // Start records req as a run and returns it, pending. Nothing about the
 // repository is read -- there is no repository -- so a ref is accepted
@@ -90,6 +93,41 @@ func (f *demoFakeCI) Start(_ context.Context, req ci.Request) (ci.Run, error) {
 // WorkflowOptions has no workflow files to read, so it offers nothing.
 func (f *demoFakeCI) WorkflowOptions(context.Context, ci.Request) ([]ci.WorkflowOption, error) {
 	return nil, nil
+}
+
+func (f *demoFakeCI) Put(run ci.Run) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.runs {
+		if f.runs[i].ID == run.ID {
+			f.runs[i] = run
+			return
+		}
+	}
+	f.runs = append(f.runs, run)
+}
+
+func (f *demoFakeCI) Update(id string, fn func(*ci.Run)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.runs {
+		if f.runs[i].ID == id {
+			fn(&f.runs[i])
+			return
+		}
+	}
+}
+
+func (f *demoFakeCI) Live(key ci.Key) (ci.Run, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.runs) - 1; i >= 0; i-- {
+		run := f.runs[i]
+		if run.Key == key && !run.Conclusion.Done() {
+			return run, true
+		}
+	}
+	return ci.Run{}, false
 }
 
 func (f *demoFakeCI) Get(id string) (ci.Run, bool) {

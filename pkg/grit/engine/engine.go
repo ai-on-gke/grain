@@ -886,6 +886,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		Commit:          plan.Request.Commit,
 		Shape:           pj.Job.Sandbox,
 		Builtin:         pj.Job.Builtin,
+		Timeout:         pj.Job.Timeout(),
 	}
 	if adopted == nil && e.GuestCache != nil && pj.GuestKey != "" {
 		warmCtx, cancel := context.WithTimeout(queueCtx, pj.Job.Timeout())

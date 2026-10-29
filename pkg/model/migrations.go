@@ -341,6 +341,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `template` ADD COLUMN `reviewers` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     62,
+		Description: "persist sandbox-access token hashes and expiry times across restarts",
+		Statements:  []string{sandboxAccessTable},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
