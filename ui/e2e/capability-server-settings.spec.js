@@ -182,6 +182,38 @@ test("adds, tests, configures, edits, grants, denies by policy and removes a cap
     { capability: `${NEW}#*`, runKinds: ["task"], deny: true },
   ]);
 
+  // The deny rule reaches the New task grant picker, marking the server's
+  // methods as denied for agent tasks and linking back to the policy.
+  await page.getByRole("button", { name: "+ New task" }).click();
+  await page
+    .getByTestId("new-task-grants")
+    .getByRole("button", { name: "Add grant…" })
+    .click();
+  const grantMenu = page.getByRole("menu", { name: "Grants to add" });
+  const deniedItem = grantMenu.locator(`[data-method="${NEW}#cloud-viewer"]`);
+  await expect(deniedItem).toContainText(
+    "denied by the capability policy for agent tasks",
+  );
+  await expect(
+    deniedItem.getByRole("link", { name: "Settings → Capabilities" }),
+  ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
+  await deniedItem.scrollIntoViewIfNeeded();
+  const itemBox = await deniedItem.boundingBox();
+  const verdictBox = await deniedItem
+    .locator(".method-policy-verdict")
+    .boundingBox();
+  const menuBox = await grantMenu.boundingBox();
+  expect(itemBox.x).toBeGreaterThanOrEqual(menuBox.x - 1);
+  expect(itemBox.x + itemBox.width).toBeLessThanOrEqual(
+    menuBox.x + menuBox.width + 1,
+  );
+  expect(verdictBox.x).toBeGreaterThanOrEqual(itemBox.x - 1);
+  expect(verdictBox.x + verdictBox.width).toBeLessThanOrEqual(
+    itemBox.x + itemBox.width + 1,
+  );
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Close" }).click();
+
   // Removing it warns with what still grants it.
   await serverCard(page, NEW).getByRole("button", { name: "Remove" }).click();
   const dialog = page.getByRole("dialog");

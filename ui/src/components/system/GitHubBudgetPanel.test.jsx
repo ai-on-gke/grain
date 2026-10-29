@@ -75,4 +75,26 @@ describe("GitHubBudgetView", () => {
     expect(screen.getByText(/Under 15% left/)).toBeInTheDocument();
     expect(screen.queryByTestId("health-github-runs-out")).toBeNull();
   });
+
+  it("shows idle-poll backoff summary when pull requests are tracked", () => {
+    render(
+      <GitHubBudgetView
+        now={now}
+        github={{
+          ...github({ remaining: 3200 }),
+          polls: {
+            tracked: 4,
+            backedOff: 3,
+            baseSeconds: 30,
+            capSeconds: 480,
+            medianSeconds: 120,
+            maxSeconds: 480,
+          },
+        }}
+      />,
+    );
+    expect(screen.getByTestId("health-github-polls")).toHaveTextContent(
+      "Idle-poll backoff: 3 of 4 tracked PRs backed off · poll interval median 2m 0s, max 8m 0s (30s base, 8m 0s cap).",
+    );
+  });
 });
