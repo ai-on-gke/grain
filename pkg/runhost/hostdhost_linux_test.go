@@ -222,3 +222,26 @@ func TestHostdDrainingRefusalAndPlainStarts(t *testing.T) {
 		t.Fatalf("start on a draining hostd = %v, want ErrHostdDraining", err)
 	}
 }
+
+// A lone --version inside a run is a probe, not the run: it is a plain
+// start, never detached under the run's id, so it leaves no process for
+// a later daemon to adopt and takes no cursor.
+func TestHostdVersionProbeInARunIsAPlainStart(t *testing.T) {
+	client := serveHostd(t)
+	var seen cursors
+	d := &Hostd{Client: client, OnCursor: seen.on}
+	host := d.Host(agent.LocalHost{}, "sh")
+	ctx := WithRun(context.Background(), Run{Task: "42", Run: "run-3", Deadline: time.Now().Add(time.Minute)})
+	// sh's answer to --version varies by shell; only how it was started
+	// matters here.
+	_, _ = host.Run(ctx, agent.Command{Args: []string{"--version"}}, nil)
+	if _, ok := seen.get("run-3"); ok {
+		t.Fatal("a --version probe was started detached under the run's id")
+	}
+	if out, err := host.Run(ctx, agent.Command{Args: []string{"-c", "echo run"}}, nil); err != nil || out != "run\n" {
+		t.Fatalf("run start = %q, %v", out, err)
+	}
+	if _, ok := seen.get("run-3"); !ok {
+		t.Fatal("the run itself was not started detached")
+	}
+}

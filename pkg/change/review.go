@@ -101,6 +101,49 @@ type Mailer interface {
 	Mail(ctx context.Context, task model.Task, target string, reviewers, cc []string, by Person) (Result, error)
 }
 
+// ReviewFinding is one finding a review of a change left: a remark, or --
+// Path and Line set -- one about that line of the change.
+type ReviewFinding struct {
+	Body string `json:"body"`
+	Path string `json:"path,omitempty"`
+	Line int    `json:"line,omitempty"`
+}
+
+// ReviewFiler is a Provider whose changes grain reviews with a task of
+// its own, as it reviews a pull request: the review is filed holding the
+// grant ReviewGrant returns -- a grant string, the reference and its
+// with: arguments (read-only, model.ReviewOfArg naming reviewed, and the
+// snapshot) -- for deployment, this grain's deployment id, and its
+// findings are saved on the change as unpublished drafts.
+type ReviewFiler interface {
+	ReviewGrant(deployment string, reviewed model.Task, snapshot int) (string, error)
+	SaveReviewFindings(ctx context.Context, reviewed model.Task, target string, findings []ReviewFinding) error
+}
+
+// ReviewGate is a Provider that decides which reviews a change still
+// needs and whether it may be submitted: ReviewsMissing is the template
+// IDs of the required reviews not yet cleared on target's current
+// snapshot (model.LinkCLReviewCleared), and GateSubmittable is whether a
+// Submit may go ahead, with why not.
+type ReviewGate interface {
+	ReviewsMissing(ctx context.Context, task model.Task, target string) ([]string, error)
+	GateSubmittable(ctx context.Context, task model.Task, target string) (ok bool, reason string, err error)
+}
+
+// GateSubmit is the provider's ReviewGate answer for task's primary
+// change: ok, with no reason, when no provider gates it.
+func GateSubmit(ctx context.Context, task model.Task) (bool, string, error) {
+	p, target := ReviewOf(task)
+	if p == nil || target == "" {
+		return true, "", nil
+	}
+	g, ok := p.(ReviewGate)
+	if !ok {
+		return true, "", nil
+	}
+	return g.GateSubmittable(ctx, task, target)
+}
+
 // ReviewOf is the provider answering for task's CL review loop and its
 // primary change's target; nil when none is registered.
 func ReviewOf(task model.Task) (Provider, string) {

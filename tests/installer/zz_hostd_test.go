@@ -42,6 +42,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -177,6 +178,8 @@ func TestGoogleTrackRunsAgyThroughHostdAndMigratesFromHostMode(t *testing.T) {
 		// refuse the run before starting it.
 		{ID: "container-claude", Name: "claude in the container", Framework: model.AgentFrameworkClaude,
 			AuthMode: model.AntigravityAuthAmbient, Models: []string{"fake-claude-model"}},
+		{ID: "detached-codex", Name: "codex detached", Framework: model.AgentFrameworkCodex,
+			AuthMode: model.CodexAuthSubscription, Models: []string{"fake-codex-model"}},
 	}
 	if _, err := f.client.UpdateSettings(ctx, ui.UpdateSettingsRequest{ApprovedByDefault: &approved, AgentBackends: &backends}); err != nil {
 		t.Fatalf("configuring the fake agy and claude backends: %v", err)
@@ -548,6 +551,136 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"fake claud
 				t.Errorf("the transcript has tick %03d %d times, want once:\n%s", i, n, tail(transcript, 40))
 				break
 			}
+		}
+	})
+
+	// 6b''. A detached codex -- the image's codex wrapped by
+	// `grain codex-detached` through hostd's container-equivalent entry --
+	// starts its grain MCP HTTP adapter on the host outside the daemon,
+	// writes the loopback URL and bearer token into $CODEX_HOME/config.toml,
+	// and outlives a daemon upgrade alongside codex. The real extracted
+	// wrapper at current/codex is kept, and current/codex.bin is replaced
+	// by a fake that calls the live MCP HTTP endpoint after the daemon restarts.
+	t.Run("a daemon upgrade leaves a detached codex and its MCP endpoint running and the new daemon adopts it", func(t *testing.T) {
+		const ticks = 90 // 45 s: longer than the daemon's restart
+		if allow := sudoRead(hostdAllowlist); !strings.Contains(allow, "  codex-detached:\n    path: "+hostdVersions+"/current/codex\n") ||
+			!strings.Contains(allow, "      HOME: "+d.data+"/home\n") {
+			t.Fatalf("the allowlist offers no container-equivalent codex:\n%s", allow)
+		}
+		if wrapper := sudoRead(hostdVersions + "/current/codex"); !strings.Contains(wrapper, `codex-detached "$(dirname "$0")/codex.bin"`) {
+			t.Fatalf("current/codex is not the codex-detached wrapper:\n%s", wrapper)
+		}
+		authFile := codex.BackendAuthFile(filepath.Join(d.data, "secrets", "codex-auth.json"), "detached-codex")
+		tmpAuth := filepath.Join(d.root, "fake-codex-auth.json")
+		if err := os.WriteFile(tmpAuth, []byte(`{"tokens":{"access_token":"fake"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if r := sudo("install", "-D", "-m0600", "-o", d.user, tmpAuth, authFile); r.exitCode != 0 {
+			t.Fatalf("installing %s: %s", authFile, r)
+		}
+		report := filepath.Join(f.reports, "codex-detached.report")
+		script := fmt.Sprintf(`#!/bin/sh
+# A fake detached codex.bin: invoked by the host's current/codex wrapper
+# after grain codex-detached has started the MCP HTTP endpoint and written
+# $CODEX_HOME/config.toml.
+case "$1" in --version) echo "codex-cli %[3]s"; exit 0 ;; esac
+cat > /dev/null
+c=false; [ -e /.dockerenv ] && c=true
+echo "uid=$(id -u) in_container=$c home=$HOME codex_home=$CODEX_HOME auth_link=$(readlink "$CODEX_HOME/auth.json")" > %[2]q
+echo $$ > %[2]q.pid
+echo '{"type":"thread.started","thread_id":"fake-codex-detached"}'
+echo '{"type":"turn.started"}'
+i=0
+while [ $i -lt %[1]d ]; do
+  printf '{"type":"item.completed","item":{"id":"tick-%%03d","type":"agent_message","text":"codex steady tick %%03d"}}\n' $i $i
+  i=$((i+1))
+  sleep 0.5
+done
+url=$(sed -n 's/^url = "\(.*\)"/\1/p' "$CODEX_HOME/config.toml")
+auth=$(sed -n 's/^http_headers = { Authorization = "\(.*\)" }/\1/p' "$CODEX_HOME/config.toml")
+curl -fsS -X POST "$url" \
+  -H "Authorization: $auth" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+  > %[2]q.mcp
+echo '{"type":"item.completed","item":{"id":"msg-end","type":"agent_message","text":"fake codex finished detached"}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+`, ticks, report, codex.ReviewedCLIVersion)
+		tmp := filepath.Join(d.root, "fake-detached-codex-bin")
+		if err := os.WriteFile(tmp, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if r := sudo("install", "-m0755", tmp, hostdVersions+"/current/codex.bin"); r.exitCode != 0 {
+			t.Fatalf("installing the fake detached codex.bin: %s", r)
+		}
+		f.setCLIRun(t, ctx, d, `{"codex":{"location":"detached"}}`)
+		defer f.setCLIRun(t, ctx, d, `{}`)
+		if got, body := f.cliRun(t, ctx, d); func() bool {
+			for _, r := range got.Resolved {
+				if r.Framework == model.AgentFrameworkCodex {
+					return r.Location != model.CLIRunDetached || r.Via != "hostd"
+				}
+			}
+			return true
+		}() {
+			t.Fatalf("codex set to detached does not resolve to hostd's detached entry: %s", body)
+		}
+
+		task := f.start(t, ctx, model.AgentFrameworkCodex, "fake codex detached across a daemon upgrade", "")
+		var pid string
+		waitFor(t, "the detached codex to start on the host", 3*time.Minute, func() error {
+			if pid = strings.TrimSpace(sudoRead(report + ".pid")); pid == "" {
+				return errors.New("no pid yet")
+			}
+			return nil
+		})
+		if got := sudoRead(report); !strings.Contains(got, "in_container=false") || !strings.Contains(got, "home="+d.data+"/home") ||
+			!strings.Contains(got, "uid="+f.uid+" ") || !strings.Contains(got, "auth_link="+authFile) {
+			t.Errorf("the detached codex did not run on the host as %s with the container's HOME and shared auth.json: %q", d.user, got)
+		}
+		time.Sleep(3 * time.Second) // some ticks read by the old daemon
+		if r := sudo("systemctl", "restart", "grain-daemon.service"); r.exitCode != 0 {
+			t.Fatalf("restarting the daemon: %s", r)
+		}
+		if err := gone([]string{pid}); err == nil {
+			t.Fatalf("the detached codex (pid %s) did not outlive the daemon's restart", pid)
+		}
+		f.waitForAPI(t, ctx, d)
+		var detail ui.TaskDetail
+		waitFor(t, "the adopted codex run to finish", 3*time.Minute, func() error {
+			var err error
+			if detail, err = f.client.GetTask(ctx, task); err != nil {
+				return err
+			}
+			if len(detail.Attempts) == 0 || detail.Attempts[0].FinishedAt == nil {
+				return errors.New("the attempt is still live")
+			}
+			return nil
+		})
+		defer f.client.Close(ctx, task, ui.CloseOptions{})
+		attempt := detail.Attempts[0]
+		if len(detail.Attempts) != 1 || attempt.Outcome == model.InterruptedOutcome {
+			t.Fatalf("the detached codex was not carried through the upgrade: %d attempt(s), the first %s: %s",
+				len(detail.Attempts), attempt.Outcome, attempt.Detail)
+		}
+		if got := strings.TrimSpace(sudoRead(report + ".pid")); got != pid {
+			t.Fatalf("the fake codex was started again (pid %s, then %s): a re-dispatch, not an adoption", pid, got)
+		}
+		if mcpResp := sudoRead(report + ".mcp"); !strings.Contains(mcpResp, `"write_file"`) {
+			t.Errorf("the detached codex's MCP HTTP endpoint did not answer tools/list after the daemon restart: %q", mcpResp)
+		}
+		transcript, err := f.client.AttemptTranscript(ctx, task, attempt.Number)
+		if err != nil {
+			t.Fatalf("reading the adopted attempt's transcript: %v", err)
+		}
+		for i := range ticks {
+			if n := strings.Count(transcript, fmt.Sprintf("codex steady tick %03d", i)); n != 1 {
+				t.Errorf("the transcript has codex tick %03d %d times, want once:\n%s", i, n, tail(transcript, 40))
+				break
+			}
+		}
+		if !strings.Contains(transcript, "fake codex finished detached") {
+			t.Errorf("the transcript does not reach the run's end:\n%s", tail(transcript, 40))
 		}
 	})
 

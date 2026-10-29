@@ -1526,3 +1526,33 @@ func TestParseResultReadsAnAdoptedHostRunsStream(t *testing.T) {
 		t.Fatalf("Run on a detached host = %+v, %v; want ErrDetached and no result", result, err)
 	}
 }
+
+// TestHookLetsPlanModeEndAndExplainsTheTimers: agy's exit_plan_mode is a
+// plan-mode handoff rather than a host tool, so denying it trapped a run
+// in plan mode (docs/design/sandbox-first-agent-surface.md §5);
+// enter_plan_mode and schedule are refused with a reason that says what
+// to do instead.
+func TestHookLetsPlanModeEndAndExplainsTheTimers(t *testing.T) {
+	call := func(name string) []byte {
+		payload, err := json.Marshal(map[string]any{"toolCall": map[string]any{"name": name}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return HookDecision(payload)
+	}
+	if got := call("exit_plan_mode"); len(got) != 0 {
+		t.Errorf("HookDecision(exit_plan_mode) = %s, want no decision", got)
+	}
+	for name, want := range map[string]string{"enter_plan_mode": "Plan mode is off", "schedule": "grain ci wait"} {
+		var out struct{ Decision, Reason string }
+		if err := json.Unmarshal(call(name), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Decision != "deny" || !strings.Contains(out.Reason, want) {
+			t.Errorf("HookDecision(%s) = %+v, want a denial mentioning %q", name, out, want)
+		}
+	}
+	if pre := toolPreamble(agent.RunConfig{}); !strings.Contains(pre, "Never call exit_plan_mode, enter_plan_mode or schedule") {
+		t.Errorf("toolPreamble does not warn off plan mode and timers: %q", pre)
+	}
+}
