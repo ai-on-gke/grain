@@ -16,7 +16,7 @@ Alternatively, all of the design material could live in a separate repo rather t
 
 ## Process
 
-Wherever an agent opens a PR against the design folder (specifications, tasks, clarifications, playbooks), it should listen to that PR and respond to review comments by making updates to the doc PR. Every change is reviewed by a second agent before it is committed. That covers spec PRs, tasks PRs, clarification PRs, playbook PRs, and implementation (code) PRs alike: a separate agent, not the one that wrote the change, reviews it before it merges.
+Wherever an agent opens a PR against the design folder (specifications, tasks, clarifications, playbooks), it should listen to that PR and respond to review comments by making updates to the doc PR. Every change is reviewed by a second agent before it is committed. That covers spec PRs, tasks PRs, clarification PRs, playbook PRs, and implementation (code) PRs alike: a separate agent, not the one that wrote the change, reviews it before it merges. Implementation PRs opened outside grain are adopted and reviewed the same way (see [External pull request adoption](#external-pull-request-adoption)).
 
 ### Design
 
@@ -32,7 +32,27 @@ Once the specification is approved, an agent is run in grain to create a new PR 
 
 ### Implementation
 
+Implementation code reaches the repository by one of two paths. Both are held to the same gates: a review by an agent that did not write the change, a green CI and test run, and landing through the grain merge queue.
+
+1. **Autonomous agent implementation (from tasks).** Grain imports the task grainfiles and dispatches agents to write and land the code PRs.
+2. **External pull request adoption.** A contributor opens a pull request directly against the repository and grain adopts it. The contributor may be an engineer writing code by hand, an engineer working in an external interactive agent such as Jetski, or an external contributor on GitHub.
+
+#### Autonomous agent implementation
+
 Grain automatically imports the tasks into its backlog. A grain oncall watches the queue to ensure that tasks are completed in a timely manner. Agents decompose tasks into smaller tasks as desired, staying within their initial grants (per the grainfile specification). No human is in the loop during code implementation and landing; agents land code changes autonomously unless an escalation is needed. This "no human in the loop" landing still includes the second-agent review before a change is committed. If agents have questions or require clarifications, this is handled entirely via pull requests: the agent raises a new PR against the design folder documentation, which humans review, edit, and approve. If agents encounter problems with execution or testing (test flakes, insufficient permissions, etc.), they raise the issue in the grain inbox, which the team's grain on-call watches. Once the feature is landed, the task in the design folder is marked as complete, with the URL of the task serving as the index into the grain db for more information as desired.
+
+#### External pull request adoption
+
+Some implementation work is better written outside grain: a developer iterating interactively, or a contributor who doesn't use grain at all. Their PR still goes through grain's pipeline rather than around it.
+
+- **Adoption.** Grain adopts an external PR when it is opened, marked ready for review, or linked to a design, specification or task (by a link in its description, or by a human tagging it into the pipeline). Adoption makes the PR a tracked change in grain, with its own task. The PR remains the author's: grain doesn't push to the author's branch unless asked to (see below). An adopted PR that is linked to a task is recorded against that task, so the task isn't dispatched to an agent as well.
+- **Review against the design and specification.** Grain dispatches an agent to review the adopted PR. The agent does the standard review for code quality, tests and security, including a security review for changes that touch trust-boundary paths. It also reviews the PR directly against the governing design document (`design/design/*.design.md`), the detailed specification (`design/spec/...`) and any linked task:
+  - It checks that the implementation conforms to the design's architecture, to the specification's APIs, schemas and mockups, and to the linked task's requirements.
+  - It posts inline review comments on the PR wherever the implementation diverges from the design or spec, misses a requirement, or lacks test coverage.
+  - If the PR intentionally makes a design choice or spec change that `design/` doesn't yet reflect, the agent says so on the PR. Either the design or spec is updated first, or the agent raises (or asks the author for) a companion PR against `design/`, which humans review as they would any clarification PR. The code PR doesn't land ahead of the design change it depends on.
+  - If no design, spec or task governs the PR, the agent reviews it on its own merits and against the existing designs it touches. It flags a change large enough to need a design of its own.
+- **Testing and verification.** Grain runs the full CI and test suite against the PR, plus any end-to-end checks the specification or playbooks require. The external author addresses the review feedback, and the reviewing agent reviews each new head until it approves and CI is green. Alternatively, the author (or a maintainer) can ask grain to carry the feedback out. Grain then dispatches a follow-up run that pushes the fixes, and a second agent reviews that run's commits as it would any grain-authored change.
+- **Landing.** Once the review against the design and specification passes and the tests are green, grain submits the PR to the merge queue. It is merged under the same gates as a grain-authored PR. If the PR was linked to a task, that task in the design folder is marked complete as above.
 
 ### Checking
 

@@ -86,11 +86,12 @@ func skipUnlessLiveRequired(t *testing.T, reason string) {
 // docs/hand-runs/2026-09-08-agy-retry.md, write down the new schedule,
 // and reconsider DefaultModelRetryCutoff and the private-diagnostic dependency
 // in the light of it before changing this line.
-const measuredAgyVersion = "1.2.2"
+const measuredAgyVersion = "1.4.9"
 
-// refusalProbeRuntime is long enough to show the slow half of 1.2.2's
-// schedule, and deliberately longer than DefaultModelRetryCutoff: the probe
-// measures what the vendor binary would do without grain's new bound.
+// refusalProbeRuntime is a guard, well past the 2m30s 1.4.9 took to give
+// up on its own, and deliberately longer than DefaultModelRetryCutoff: the
+// probe measures what the vendor binary would do without grain's bound.
+// (1.2.2 was still retrying when the same seven minutes ran out.)
 // Both findings below share this one exec so the package timeout cannot
 // cut the second half off again.
 const refusalProbeRuntime = 7 * time.Minute
@@ -145,14 +146,16 @@ func requireMeasuredAgy(t *testing.T) {
 //
 // Two facts, both load-bearing in this package:
 //
-//   - agy is still retrying when refusalProbeRuntime expires, after at
-//     least ten provider requests. That is the 1.2.2 ladder turnDeadline
-//     exists to bound; a later binary returning sooner changes the
-//     decision and should make this probe ask to be re-measured again.
-//   - no provider refusal reaches the stream during that whole schedule.
-//     The private diagnostic remains the evidence production Run reads;
-//     TestLiveAgyLosesTheProvidersRefusalText below keeps that finding
-//     visible without launching the seven-minute exec a second time.
+//   - agy keeps retrying past DefaultModelRetryCutoff, after at least ten
+//     provider requests, before it gives up on its own. 1.4.9 made eight
+//     main-model attempts with backoff capped near thirty seconds and
+//     returned after about 2m30s (1.2.2 was still retrying at seven
+//     minutes). That ladder is what turnDeadline exists to bound; a binary
+//     that gives up before the cutoff makes the bound moot and should make
+//     this probe ask to be re-measured again.
+//   - what reaches the stream once agy does give up.
+//     TestLiveAgyLosesTheProvidersRefusalText below reads that off the
+//     same exec rather than launching the ladder a second time.
 //
 // It invokes the binary directly rather than Framework.Run so the new
 // model-turn deadline does not hide the vendor schedule being measured.
@@ -169,7 +172,7 @@ func TestLiveAgyRetriesARefusedTurnItself(t *testing.T) {
 	requireMeasuredAgy(t)
 	probe := cachedRefusedAgyProbe(t)
 
-	t.Logf("agy %s made %d request(s) to the refusing provider in %s before the probe stopped it",
+	t.Logf("agy %s made %d request(s) to the refusing provider in %s before it returned or the probe stopped it",
 		agyVersion(t), probe.requests, probe.elapsed.Round(time.Millisecond))
 	for i, at := range probe.times {
 		t.Logf("request %d at +%s", i+1, at.Round(time.Millisecond))
@@ -185,18 +188,23 @@ func TestLiveAgyRetriesARefusedTurnItself(t *testing.T) {
 			"schedule changed and should be re-measured rather than silently weakening the bound.\nstream:\n%s",
 			probe.requests, measuredAgyVersion, probe.stdout)
 	}
-	if !probe.guardExpired {
-		t.Errorf("agy returned after %s rather than remaining in its refusal ladder through %s; "+
-			"re-measure the schedule and reconsider DefaultModelRetryCutoff", probe.elapsed.Round(time.Millisecond), refusalProbeRuntime)
+	if !probe.guardExpired && probe.elapsed <= DefaultModelRetryCutoff {
+		t.Errorf("agy gave up on its own after %s, inside the %s model-turn deadline; %s retried for "+
+			"about 2m30s, so its schedule changed: re-measure it and reconsider DefaultModelRetryCutoff",
+			probe.elapsed.Round(time.Millisecond), DefaultModelRetryCutoff, measuredAgyVersion)
 	}
 }
 
 // TestLiveAgyLosesTheProvidersRefusalText is the other half of the same
-// measurement. agy 1.2.2 writes each 503 to its private diagnostic, but
-// puts none of the provider's words on its stream through seven minutes
-// of retries. Production Run deliberately reads that diagnostic now, so
-// overloads are classified; this probe remains the signal for when that
-// undocumented dependency can be removed.
+// measurement. agy 1.2.2 wrote each 503 to its private diagnostic, but
+// put none of the provider's words on its stream through seven minutes
+// of retries, which is why production Run reads that diagnostic. agy 1.4.9
+// ends its ladder with the provider's own sentence in the result's error
+// ("Error 503, Message: The model is overloaded..."), so capacityFailure
+// classifies the stream alone; this probe reports that, and is the signal
+// for when the diagnostic dependency can be removed. Run still cancels a
+// turn at DefaultModelRetryCutoff, before agy reaches that result, so the
+// diagnostic is still what classifies a bounded refusal.
 //
 // It reports the known gap as a skip rather than making every nightly red.
 // It still fails loudly in the useful direction: once agy's stream carries
@@ -303,9 +311,10 @@ func runRefusedAgy(t *testing.T) refusedAgyProbe {
 	sandboxRoot := t.TempDir()
 	cfg := agent.RunConfig{SandboxRoot: sandboxRoot, Prompt: "GRAIN-INTERNAL-RETRY-PROBE: reply with the word ok."}
 
-	// Long enough to capture the slow half of 1.2.2's ladder, including
-	// the request measured at +6m30s, while leaving the opt-in package test
-	// its own margin to report the result.
+	// Long enough to let 1.4.9 run its ladder out (about 2m30s), and to
+	// have captured the slow half of 1.2.2's, including the request
+	// measured at +6m30s, while leaving the opt-in package test its own
+	// margin to report the result.
 	ctx, cancel := context.WithTimeout(context.Background(), refusalProbeRuntime)
 	defer cancel()
 

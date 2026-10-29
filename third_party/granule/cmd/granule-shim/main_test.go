@@ -38,8 +38,9 @@ func newFakeAPIServer(t *testing.T, handler http.Handler) {
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
+	prevLog := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(prevLog) })
 	return &buf
 }
 
