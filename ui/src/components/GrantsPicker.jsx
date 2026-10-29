@@ -157,7 +157,10 @@ export default function GrantsPicker({
     };
   }, []);
   const subjectKind = policySubject?.kind || "";
-  const subjectRepo = policySubject?.repo || "";
+  // A repo still being typed, or mistyped, is no run to ask about: the
+  // listing names none rather than fail, and filing reports the repo.
+  const typedRepo = (policySubject?.repo || "").trim();
+  const subjectRepo = /^[^/\s]+\/[^/\s]+$/.test(typedRepo) ? typedRepo : "";
   const load = useCallback(
     (fresh) => {
       const subject = subjectKind

@@ -40,7 +40,8 @@ const gcpKey = {
 // at the time, so a test can attach a server after the first read.
 function serve(listing) {
   api.mockImplementation(async (path, opts) => {
-    if (path === "/api/capability-methods") return listing.current;
+    if (path.split("?")[0] === "/api/capability-methods")
+      return listing.current;
     if (path === "/api/capability-grants/check")
       return JSON.parse(opts.body).grants.map(({ grant }) => ({
         grant,
@@ -547,5 +548,23 @@ describe("GrantsPicker", () => {
       { capability: gcpKey.ref, with: undefined },
       null,
     );
+  });
+
+  it("asks about no repo while the one typed is not owner/name", async () => {
+    serve({ current: [hostScript] });
+    render(
+      <GrantsPicker
+        grants={[]}
+        config={{ capabilityMethods: 1 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+        policySubject={{ kind: "task", repo: "not a repo" }}
+      />,
+    );
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/capability-methods?kind=task"),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
