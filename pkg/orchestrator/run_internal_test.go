@@ -306,7 +306,7 @@ func TestSetupSectionTellsTheRunAFailedSetupIsNotItsChange(t *testing.T) {
 
 func TestSandboxToolingSectionNamesTheAbsencesAndTheirSubstitutes(t *testing.T) {
 	t.Parallel()
-	got := sandboxToolingSection(true)
+	got := sandboxToolingSection(true, false)
 	for _, want := range []string{
 		"`gh`", "wait_for_checks", "pull_request_status", "base_branch_status",
 		"sudo apt-get update", "command -v", "127", "&&",
@@ -314,6 +314,17 @@ func TestSandboxToolingSectionNamesTheAbsencesAndTheirSubstitutes(t *testing.T) 
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt section = %q, want it to mention %q", got, want)
 		}
+	}
+	// A grain-ci run reads CI with the `grain` CLI: its MCP roster has no
+	// CI tools (docs/design/sandbox-first-agent-surface.md §6).
+	got = sandboxToolingSection(true, true)
+	for _, want := range []string{"`gh`", "`grain ci wait`", "`grain pr status`", "`grain pr base-status`"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("grain-ci prompt section = %q, want it to mention %q", got, want)
+		}
+	}
+	if strings.Contains(got, "wait_for_checks") {
+		t.Errorf("grain-ci prompt section = %q names wait_for_checks, which its roster does not serve", got)
 	}
 }
 
@@ -323,7 +334,7 @@ func TestSandboxToolingSectionNamesTheAbsencesAndTheirSubstitutes(t *testing.T) 
 // hold for every run in one.
 func TestSandboxToolingSectionSkipsTheCITalkForATaskWithNoRepo(t *testing.T) {
 	t.Parallel()
-	got := sandboxToolingSection(false)
+	got := sandboxToolingSection(false, false)
 	for _, unwanted := range []string{"`gh`", "wait_for_checks", "base_branch_status"} {
 		if strings.Contains(got, unwanted) {
 			t.Errorf("prompt section = %q, want nothing about %q for a task with no repo", got, unwanted)

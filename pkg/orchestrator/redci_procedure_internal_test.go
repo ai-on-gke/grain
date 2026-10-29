@@ -29,14 +29,14 @@ import (
 var redCIProcedureSteps = []string{
 	model.RedCIProcedure,
 	"exact failing test names",
-	"`query_test_history`",
+	"`grain ci test-history <test>`",
 	"exit 124",
 	"exit 137",
 	"retrigger at most once",
 	"go test -race -run '<TestName>' ./<pkg>",
 	"before changing anything",
-	"`wait_for_checks` with `jobs` set to the jobs that failed",
-	"`wait_for_checks` without `jobs` for the merge gate",
+	"`grain ci wait --jobs <the jobs that failed>`",
+	"`grain ci wait` without `--jobs` for the merge gate",
 }
 
 func TestEveryRepoTaskIsGivenTheRedCIProcedure(t *testing.T) {

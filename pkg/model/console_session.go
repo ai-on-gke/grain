@@ -703,16 +703,16 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 	}
 
 	b.WriteString("The record of what this deployment has actually done is read through the " +
-		"self-debug capability, if this session holds it: `list_grain_tasks` for the tasks " +
-		"(narrow it with \"state\" and \"limit\"), `read_grain_task` for one task's whole " +
+		"self-debug capability, if this session holds it, with the `grain` CLI in your sandbox " +
+		"(`grain help`): `grain task list` for the tasks, `grain task read <id>` for one task's whole " +
 		"record -- every attempt, how each ended, and the conversation on it -- " +
-		"`read_grain_task_prompt` for what an agent was told, and " +
-		"`read_grain_task_transcript` for one attempt's own story, and `read_grain_metrics` " +
+		"`grain task prompt <id>` for what an agent was told, and " +
+		"`grain task transcript <id>` for one attempt's own story, and `grain metrics` " +
 		"for what this deployment measures about itself -- throughput, latency, how full it " +
 		"has been, the tool-use census, prompt sizes, CI waits, what sandboxes have cost. " +
-		"Any question about how this deployment behaves in general is that tool's rather " +
+		"Any question about how this deployment behaves in general is that command's rather " +
 		"than a guess from the tasks you happened to read. If you do not hold it, or " +
-		"those tools refuse because this session has no route back to the daemon, then the " +
+		"those commands refuse because this session has no route back to the daemon, then the " +
 		"history is not available to you: say that, and say it would need the self-debug " +
 		"capability, rather than answering from configuration or from what you remember of " +
 		"this conversation.\n\n")
@@ -724,7 +724,9 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 
 	b.WriteString("Anything a person can do in grain's UI you can do through grain's own API, if " +
 		"you are granted its scope: an `api:<scope>` or `api:<preset>` capability on this task " +
-		"serves you one `api_*` tool per route under it (docs/agent-api.md) -- `api:task-admin` " +
+		"serves you its routes (docs/agent-api.md): `grain api routes` lists them and `grain api <METHOD> " +
+		"<path>` calls one from your sandbox, while a route no sandbox process may call stays an " +
+		"`api_*` tool call -- `api:task-admin` " +
 		"to edit, reorder, retry and close tasks and re-run their CI, `api:ci-read` to read CI " +
 		"logs, `api:release-manager` to run schedules and cut and promote release candidates. " +
 		"When you need one you do not hold, ask the person for that grant by name; never try to " +

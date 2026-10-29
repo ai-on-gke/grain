@@ -49,7 +49,7 @@ func TestTheWorkflowReviewPromptSeparatesAHungRunFromANightWithNoRun(t *testing.
 		t.Error("the prompt does not tell the reviewer of a night with no run to report that " +
 			"and stop, which is the whole of that report")
 	}
-	if !strings.Contains(tmpl.Body, "still being written") || !strings.Contains(tmpl.Body, "get_ci_log") {
+	if !strings.Contains(tmpl.Body, "still being written") || !strings.Contains(tmpl.Body, "grain ci log") {
 		t.Error("the prompt does not send the reviewer of a run grain stopped waiting for to " +
 			"the log of the job that never ended, which is the only evidence of where it hangs")
 	}

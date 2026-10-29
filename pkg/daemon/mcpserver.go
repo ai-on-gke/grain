@@ -2287,8 +2287,21 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 	localScriptsEnvFile := fs.String("local-scripts-env-file", "",
 		"path of a 0600 JSON file of the secrets -local-scripts' scripts are delivered, by secret name "+
 			"(localscripts.WriteCredentialsFile); never the values themselves in argv")
+	surface := fs.String("mcp-surface", "",
+		"which tools to serve: \"control\" (the sandbox tools, the run-ending and escalation tools and the "+
+			"model-only grants' tools; everything else is a `grain` CLI command inside the sandbox) or \"full\" "+
+			"(every tool, for a client that cannot shell out and for tests). Empty is control when a sandbox "+
+			"flag is set, full otherwise (docs/design/sandbox-first-agent-surface.md §6)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *surface == "" {
+		*surface = os.Getenv(MCPSurfaceEnv)
+	}
+	switch *surface {
+	case "", MCPSurfaceControl, MCPSurfaceFull:
+	default:
+		return fmt.Errorf("grain mcpserver: -mcp-surface %q is neither %q nor %q", *surface, MCPSurfaceControl, MCPSurfaceFull)
 	}
 	if pins != nil {
 		if err := pins.check(*dataDir, *githubHost, *githubInsecureHTTP); err != nil {
@@ -2717,6 +2730,12 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 			metricsReader = DaemonMetrics{Client: client}
 		}
 		registry.Register(mcp.NewMetricsTools(metricsReader)...)
+	}
+
+	if ResolveMCPSurface(*surface, *granuleVM != "" || *root != "" || *container != "" || *k8sPod != "") == MCPSurfaceControl {
+		keep := controlRoster(tools, localTools, grants,
+			taskDetail.Task.ChangeTargetKind != "" || len(taskDetail.Task.Changelists) > 0)
+		registry.Retain(func(name string) bool { return keep[name] })
 	}
 
 	// Serve returns io.EOF once its caller closes the write end of our

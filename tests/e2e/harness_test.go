@@ -58,6 +58,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -84,6 +85,10 @@ var baseTime = time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 // It also hands every client here the test access code
 // (useTestAccessCode), as the grain CLI on a daemon's own host has it.
 func TestMain(m *testing.M) {
+	// These tests' scripted agents call the MCP tools the control roster
+	// serves as `grain` commands instead; they drive the full roster
+	// (tests/security's TestControlRoster checks the control one).
+	os.Setenv(daemon.MCPSurfaceEnv, daemon.MCPSurfaceFull)
 	restore := orchestrator.SetCheckRegistrationWindow(0)
 	removeAccessCode, err := useTestAccessCode()
 	if err != nil {

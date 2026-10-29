@@ -163,7 +163,7 @@ func workflowReviewBody(stem string) string {
 	b.WriteString("- **grain stopped waiting for a run that had not finished** -- it was started, " +
 		"it was still going many hours later, and grain filed this review rather than hold the " +
 		"schedule for ever. The run is there and it is unfinished, so read it: every job that did " +
-		"finish has a log, and so does the job that did not. `get_ci_log` follows a log that is " +
+		"finish has a log, and so does the job that did not. `grain ci log` follows a log that is " +
 		"still being written, which is how you read the one that never ended. Which job it is and " +
 		"what it was doing when it stopped producing output *is* the report -- a hang is the one " +
 		"failure this suite cannot tell anybody about by itself, and the log of the job that never " +
@@ -175,8 +175,9 @@ func workflowReviewBody(stem string) string {
 		"the same way, for whatever ran before it stopped, and reported as machinery rather than " +
 		"as a verdict on the tree.\n\n")
 
-	b.WriteString("Use `list_ci_runs` to find the run (narrow by this repository and by the branch " +
-		"the comment names) and `get_ci_log` to read any job's output.\n\n")
+	b.WriteString("Run `grain ci list` in your sandbox to find the run (narrow with `--repo` and " +
+		"`--ref` to the branch the comment names) and `grain ci log <run-id> --job <j>` to read any " +
+		"job's output; `grain ls` / `grain read ci://...` reach every file the run kept.\n\n")
 
 	b.WriteString("**Nothing in this run was served from grain CI's cache.** grain asks for a " +
 		"scheduled run with the cache bypassed, because the repetition is what a cadence is for: " +

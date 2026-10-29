@@ -37,6 +37,7 @@ package agent
 // does not call.
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
@@ -191,4 +192,156 @@ func dedupeToolNames(names []string) []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+// The two surfaces of a run with a sandbox
+// (docs/design/sandbox-first-agent-surface.md §4-§6).
+//
+// `grain mcpserver` serves the model only its control set: the four
+// sandbox tools, the tools that end, park or escalate a run, and the
+// dangerous grants' own tools, none of which a process inside the
+// sandbox may reach. Everything else PublishedToolNames lists is a
+// `grain` CLI command the agent runs inside run_command, and the
+// sandbox proxy records each of those calls in the census under the
+// tool name it replaced (gitproxy.RouteActivity) -- which is what lets
+// read_grain_metrics tell the two surfaces apart by name.
+
+// controlTools is the run-ending, parking and escalation tools every run
+// with a daemon keeps as model tool calls. write_handover and
+// add_review_comment are NewMockTools' too, and are not here: they are
+// `grain handover write` and `grain pr review-comment`.
+var controlTools = map[string]bool{
+	"ask_question":     true,
+	"request_secret":   true,
+	"comment_on_issue": true,
+	"nothing_needed":   true,
+	"propose_task":     true,
+	"wait_for_task":    true,
+	"resume_later":     true,
+	"recreate_sandbox": true,
+	"chat":             true,
+	"rename_session":   true,
+}
+
+// SandboxToolNames is the four tools that cross from the agent CLI into
+// the sandbox: run_command, read_file, write_file and edit_file.
+func SandboxToolNames() []string {
+	var names []string
+	for _, t := range mcp.NewHostSandboxTools("", nil) {
+		names = append(names, t.Name)
+	}
+	for _, t := range mcp.NewSSHSandboxTools(nil, "") {
+		names = append(names, t.Name)
+	}
+	return dedupeToolNames(names)
+}
+
+// IsControlTool reports whether name is one of the run-ending, parking
+// or escalation tools every run keeps on its MCP roster.
+func IsControlTool(name string) bool { return controlTools[name] }
+
+// ModelOnlyGrantToolNames is the tools of the grants a sandbox process
+// must never reach -- dispatch-control, pipeline-control, self-upgrade,
+// db-write and team-broadcast -- which stay on the MCP roster of a run
+// holding them. db-read's query_grain_db is `grain db query`, so only
+// execute_grain_db is here.
+func ModelOnlyGrantToolNames() []string {
+	var names []string
+	add := func(tools []mcp.Tool) {
+		for _, t := range tools {
+			names = append(names, t.Name)
+		}
+	}
+	add(dispatchcontrol.Tools(dispatchcontrol.Config{}))
+	add(pipelinecontrol.Tools(pipelinecontrol.Config{}))
+	add(selfupgrade.Tools(selfupgrade.Config{}))
+	add(mcp.NewBroadcastTools(nil))
+	names = append(names, "execute_grain_db")
+	return dedupeToolNames(names)
+}
+
+var (
+	publishedControlMu    sync.RWMutex
+	publishedControlNames []func() []string
+)
+
+// RegisterPublishedControlToolNames adds names to PublishedControlToolNames,
+// for the model-only tools a package this one cannot import generates --
+// the agent API routes the sandbox channel refuses (pkg/ui).
+func RegisterPublishedControlToolNames(names func() []string) {
+	publishedControlMu.Lock()
+	defer publishedControlMu.Unlock()
+	publishedControlNames = append(publishedControlNames, names)
+}
+
+// PublishedControlToolNames is every name `grain mcpserver` may serve on
+// its control roster: the sandbox tools, the control tools, the
+// model-only grants' tools and the model-only agent API routes.
+func PublishedControlToolNames() []string {
+	names := SandboxToolNames()
+	for _, name := range PublishedToolNames() {
+		if controlTools[name] {
+			names = append(names, name)
+		}
+	}
+	names = append(names, ModelOnlyGrantToolNames()...)
+	publishedControlMu.RLock()
+	for _, more := range publishedControlNames {
+		names = append(names, more()...)
+	}
+	publishedControlMu.RUnlock()
+	return dedupeToolNames(names)
+}
+
+// PublishedCLICommandNames is every published tool that is a `grain` CLI
+// command on a run with a sandbox, named as the census records it: what
+// PublishedToolNames lists and PublishedControlToolNames does not.
+// Capability tools a sandbox calls through `grain cap` are recorded as
+// cap__<server>__<tool> and are not listed (ToolSurface knows them).
+func PublishedCLICommandNames() []string {
+	control := map[string]bool{}
+	for _, name := range PublishedControlToolNames() {
+		control[name] = true
+	}
+	var names []string
+	for _, name := range PublishedToolNames() {
+		if !control[name] {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// Tool surfaces, as ToolSurface reports them.
+const (
+	SurfaceControl = "control"
+	SurfaceCLI     = "cli"
+)
+
+var (
+	surfaceOnce  sync.Once
+	surfaceNames map[string]string
+)
+
+// ToolSurface is which surface a census tool name belongs to:
+// SurfaceControl for the MCP control roster, SurfaceCLI for a `grain`
+// command the sandbox proxy recorded, and "" for a name grain does not
+// publish (a framework's own built-in tool).
+func ToolSurface(name string) string {
+	surfaceOnce.Do(func() {
+		surfaceNames = map[string]string{}
+		for _, n := range PublishedCLICommandNames() {
+			surfaceNames[n] = SurfaceCLI
+		}
+		for _, n := range PublishedControlToolNames() {
+			surfaceNames[n] = SurfaceControl
+		}
+	})
+	if s, ok := surfaceNames[name]; ok {
+		return s
+	}
+	if strings.HasPrefix(name, "cap__") {
+		return SurfaceCLI
+	}
+	return ""
 }

@@ -350,6 +350,10 @@ func printTools(w io.Writer, t ui.MetricsTools) {
 		t.Errored, t.ErroredShare*100)
 	fmt.Fprintf(w, "  cut answers              %6d  (%.1f%% of them -- calls whose answer grain shortened to fit the cap)\n",
 		t.Cut, t.CutShare*100)
+	if t.ControlCalls > 0 || t.CLICalls > 0 {
+		fmt.Fprintf(w, "  by surface               %6d MCP control tool call(s), %d grain CLI command(s)\n",
+			t.ControlCalls, t.CLICalls)
+	}
 	fmt.Fprintf(w, "  %-16s %8s %8s %8s %9s %11s %11s %9s %11s\n",
 		"tool", "runs", "calls", "errors", "timed out", "mean bytes", "p95 bytes", "cut", "cut p50")
 	for _, use := range t.ByTool {
@@ -1211,8 +1215,9 @@ func printGitHubCI(w io.Writer, g ui.MetricsGitHubCI) {
 			if i >= maxGitHubCIRows {
 				break
 			}
-			fmt.Fprintf(w, "  %-44s %5d %5.0f%% %5.0f%% %5.0f%% %5d\n",
-				j.Repo+" "+j.Job, j.Jobs, j.PassRate*100, j.FailRate*100, j.CancelRate*100, j.Flaky)
+			fmt.Fprintf(w, "  %-44s %5d %6s %6s %6s %5d\n", j.Repo+" "+j.Job, j.Jobs,
+				decidedPercent(j.MetricsGitHubCIOutcomes, j.PassRate), decidedPercent(j.MetricsGitHubCIOutcomes, j.FailRate),
+				decidedPercent(j.MetricsGitHubCIOutcomes, j.CancelRate), j.Flaky)
 		}
 		if more := len(g.ByJob) - maxGitHubCIRows + g.MoreJobs; more > 0 {
 			fmt.Fprintf(w, "  ... and %d more job(s)\n", more)
@@ -1239,6 +1244,16 @@ func printGitHubCI(w io.Writer, g ui.MetricsGitHubCI) {
 			b.Repo+" "+b.Branch, b.RedShare*100, Seconds(b.RedSeconds), Seconds(b.GreenSeconds),
 			b.RedStretches, Seconds(b.LongestRedSeconds), now)
 	}
+}
+
+// decidedPercent is one of a GitHub CI rate's three shares, or "-" when
+// nothing it is a share of was decided: a job that only ever skipped or
+// came back neutral has no pass rate, not a 0% one.
+func decidedPercent(o ui.MetricsGitHubCIOutcomes, rate float64) string {
+	if o.Passed+o.Failed+o.Cancelled == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.0f%%", rate*100)
 }
 
 // shortSHA is a commit as people write one.

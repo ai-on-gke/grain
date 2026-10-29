@@ -187,7 +187,7 @@ func TestTimedParkDefersTheTaskAndWakesItBackIntoTheQueue(t *testing.T) {
 	history := orchestrator.History{Attempt: 2, Attempts: previous,
 		ResumedUntil: orchestrator.ResumedUntil(previous)}
 	prompt := orchestrator.BuildPrompt(task, "work", "", true, 0, history, nil)
-	for _, want := range []string{"resumes from a park", "resume_at", wake.Format(time.RFC3339), "retrigger_ci"} {
+	for _, want := range []string{"resumes from a park", "resume_at", wake.Format(time.RFC3339), "grain ci retrigger"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
 		}

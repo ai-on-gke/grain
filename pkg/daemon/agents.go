@@ -1627,15 +1627,24 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 		return nil, err
 	}
 	codexPath := cfg.CodexPath
-	// See BuildClaudeFramework. codex's MCP server is grain's own HTTP
-	// endpoint on this machine whichever way it runs.
+	// See BuildClaudeFramework. A detached codex runs through hostd's
+	// container-equivalent entry ("codex-detached"), whose wrapper starts
+	// mcp.StartCommandHTTP + grain mcpserver on the host beside codex so
+	// the endpoint outlives a daemon upgrade too.
 	var container agent.Host
+	detached := false
 	if remoteHost == nil {
 		if r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkCodex); r.Via == ViaHostd {
 			if container, err = cfg.cliHostdHost(r); err != nil {
 				return nil, err
 			}
 			codexPath = "codex"
+			if r.Location == model.CLIRunDetached {
+				detached = true
+				if r.HostPath != "" {
+					codexPath = r.HostPath
+				}
+			}
 		}
 	}
 	if remoteHost == nil && container == nil {
@@ -1729,6 +1738,9 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	}
 	if container != nil {
 		opts = append(opts, codex.WithHost(container))
+		if detached {
+			opts = append(opts, codex.WithDetachedMCP())
+		}
 	}
 	if remoteHost != nil {
 		opts = append(opts, codex.WithHost(remoteHost))
