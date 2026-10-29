@@ -4346,9 +4346,9 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		// route on the agent API either.
 		// A scope set may limit ci:read to some repositories of its own
 		// (APIScopeSet.Repos) under a grant with no @repo, so where it
-		// reaches is the set's to say (reposOf), never the grant's alone.
+		// reaches is the set's to say (ReposOf), never the grant's alone.
 		if parsed, isAPI, perr := ParseAPIGrant(name); isAPI && perr == nil && slices.Contains(parsed.Scopes, "ci:read") {
-			for _, repo := range parsed.reposOf("ci:read") {
+			for _, repo := range parsed.ReposOf("ci:read") {
 				mayReadCI = true
 				if repo == "" {
 					mayReadAllCI = true
