@@ -264,7 +264,11 @@ func (p *printer) ciStarted(run ci.Run) {
 	}
 	fmt.Printf("started run %s: %s at %s\n", run.ID, run.Repo, ciRefDescriptionOf(run))
 	for _, job := range run.Jobs {
-		fmt.Printf("  %s (%s)\n", cicli.JobName(job), job.Workflow)
+		if job.Workflow != "" {
+			fmt.Printf("  %s (%s)\n", cicli.JobName(job), job.Workflow)
+		} else {
+			fmt.Printf("  %s\n", cicli.JobName(job))
+		}
 	}
 	fmt.Printf("\nfollow it with \"grain ci watch %s\", read it with \"grain ci show %s\","+
 		"\nor cancel it with \"grain ci cancel %s\"\n", run.ID, run.ID, run.ID)
