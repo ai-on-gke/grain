@@ -31,7 +31,10 @@ import (
 // live refusal probe already used as the point where a vendor retry ladder
 // stopped being cheap enough to leave alone. agy 1.2.2 crossed it: a
 // persistent 503 was still being retried five minutes and ten requests
-// later, and nothing about it reached the stream.
+// later, and nothing about it reached the stream. agy 1.4.9 gives up on
+// its own, with the refusal on its stream, but only after about 2m33s,
+// so the cutoff still ends a refused turn about a minute sooner
+// (docs/hand-runs/2026-09-08-agy-retry.md, 2026-10-29).
 //
 // DefaultModelTurnTimeout is the longest a turn may run when that log
 // shows no such retries -- a model that is slow rather than refused. Some

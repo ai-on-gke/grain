@@ -89,7 +89,8 @@
 // passes --print-timeout derived from the deadline on its own context, so
 // that grain's cancellation is always what stops a run; see printTimeout.
 // That does not leave one model call unbounded: agy 1.2.2 grew an internal
-// refusal ladder that was still running after five minutes, so turnDeadline
+// refusal ladder that was still running after five minutes (1.4.9's ends,
+// but only after about 2m33s), so turnDeadline
 // cancels a model turn whose --log-file shows agy retrying a provider error
 // once it passes the 100-second ceiling that used to bound the live probe,
 // and gives a turn with no retries logged up to a much longer slow-turn
