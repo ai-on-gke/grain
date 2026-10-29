@@ -90,6 +90,12 @@ var ownTaskOnlyRoutes = map[string]string{
 	"POST /api/tasks/{id}/messages": "it says something to the human watching your own task and parks it on their reply",
 }
 
+// ownMessagesReadRoute is the read half of a run's conversation: what the
+// person watching it said, and (agents=true) the notes other tasks'
+// agents left for it. It is the run's own to read; any other task's
+// needs api:task-admin, as message_task to an unrelated task does.
+const ownMessagesReadRoute = "GET /api/tasks/{id}/messages"
+
 // agentMessageRail refuses the two ways round a run can reach the wrong
 // conversation: an own-task-only route on another task, which it points
 // at POST /api/tasks/{id}/agent-messages instead, and that route on the
@@ -361,6 +367,11 @@ func sandboxChannelGuard(pattern string, body []byte) error {
 // honours an upgrade's hold on dispatch.
 func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, method string, scope APIScope,
 	target, sessionID string) error {
+	if pattern == ownMessagesReadRoute && target != "" && model.NormalizeTaskID(target) != acting.ID && !isTaskAdmin(acting) {
+		return fmt.Errorf("task %s cannot read task %s's messages: %s is a run's own conversation and the notes "+
+			"other tasks' agents left for it (message_task), so it takes only your own task's id (%s). "+
+			"Reading another task's needs api:task-admin", acting.ID, target, pattern, acting.ID)
+	}
 	if method == http.MethodGet {
 		return nil
 	}
