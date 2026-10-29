@@ -172,6 +172,12 @@ func TestWithheldNativeToolsAreToolsAgyStillHas(t *testing.T) {
 // subagent that could hold write tools (`define_subagent` does, and is
 // denied), but they are the names to look at first if agy's subagent
 // surface changes again.
+//
+// agy 1.4.9 added three. `run_workflow` runs a Python script whose
+// `call_tool` reaches agy's other tools, so it executes and delegates and
+// is withheld. `search_marketplace` and `list_plugin_accounts` read agy's
+// plugin marketplace and its own plugin bookkeeping, nothing on the
+// controller's filesystem, and are here.
 var triagedNativeTools = []string{
 	"ask_custom_permission", "ask_permission", "ask_question",
 	"browser_click_element", "browser_drag_pixel_to_pixel",
@@ -184,9 +190,10 @@ var triagedNativeTools = []string{
 	"capture_browser_screenshot", "click_browser_pixel",
 	"delete_knowledge", "execute_browser_javascript", "finish",
 	"generate_image", "list_browser_pages", "list_permissions",
-	"list_resources", "manage_inbox", "manage_subagents", "manage_task",
+	"list_plugin_accounts", "list_resources", "manage_inbox", "manage_subagents", "manage_task",
 	"open_browser_url", "read_browser_page", "read_resource",
-	"read_url_content", "schedule", "search_web", "send_message",
+	"read_url_content", "schedule", "search_marketplace", "search_web",
+	"send_message",
 	"wait", "wait_5_seconds",
 }
 
