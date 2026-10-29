@@ -751,4 +751,16 @@ test("scopes a report board to the repo its query names", async ({ page }) => {
   // No sections named, so the whole report is printed.
   await expect(page.getByText("Tasks filed")).toBeVisible();
   await expect(page.getByText("Backlog", { exact: true })).toBeVisible();
+  // The demo has nothing to say in several of the sections, and each of
+  // those is left out of the list a screen reader announces rather than
+  // counted as an empty item in it.
+  const sections = page.locator("ul.report-sections");
+  const items = sections.getByRole("listitem");
+  await expect(items.first()).toBeVisible();
+  for (const text of await items.allInnerTexts()) {
+    expect(text.trim()).not.toBe("");
+  }
+  expect(await sections.locator("> li").count()).toBeGreaterThan(
+    await items.count(),
+  );
 });

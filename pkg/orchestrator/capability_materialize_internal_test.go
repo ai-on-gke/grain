@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -284,5 +285,59 @@ func TestSetupScriptRunsInTheRootWithACleanEnvironment(t *testing.T) {
 	out, err = exec.Command("sh", "-c", setupScript, "sh", script, "1", root, "65536").CombinedOutput()
 	if !errors.As(err, &exit) || exit.ExitCode() != 126 || !strings.Contains(string(out), "not an executable") {
 		t.Fatalf("a non-executable command exited %v: %s", err, out)
+	}
+}
+
+// channelSandbox is a commandSandbox whose capability ports run over a
+// dial-out access channel (k8sGranuleSandbox in dialout mode).
+type channelSandbox struct {
+	commandSandbox
+	ports  []int
+	serves []func(context.Context, net.Conn)
+}
+
+func (s *channelSandbox) UsesChannelPortForward() bool { return true }
+func (s *channelSandbox) ForwardCapabilityPort(_ context.Context, sandboxPort int, serve func(context.Context, net.Conn)) error {
+	s.ports = append(s.ports, sandboxPort)
+	s.serves = append(s.serves, serve)
+	return nil
+}
+
+// A port forward carried over the dial-out channel goes through the
+// relay's forward rather than straight to host_port: no guest forwarder or
+// token is placed, and the grant's Close cuts a connection the channel is
+// carrying, as it does a guest forwarder's (docs/capabilities-spec.md
+// §5.3.4, docs/design/grain-on-gke.md#GKE-3).
+func TestMaterializePassForwardsChannelPortsThroughTheRelaysForward(t *testing.T) {
+	if _, err := os.Stat("/proc/net/tcp"); err != nil {
+		t.Skip("socket ownership is read from /proc")
+	}
+	hostPort := listenerOfThisProcess(t)
+	pass := testPass(&protocol.MintResponse{Ports: []protocol.Port{{HostPort: hostPort, SandboxPort: 9728}}})
+	cfg := Config{CapabilityPorts: portforward.NewRelay(), CapabilityPortsURL: "http://172.17.0.1:40003"}
+	sb := &channelSandbox{}
+	self := func(string) (portforward.Service, error) { return portforward.Service{PID: os.Getpid()}, nil }
+	m, err := materializePass(context.Background(), cfg, sb, pass, time.Now().Add(time.Hour), self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if got := sb.describe(); len(got) != 0 {
+		t.Fatalf("a channel forward ran guest commands: %v", got)
+	}
+	if len(sb.ports) != 1 || sb.ports[0] != 9728 {
+		t.Fatalf("forwarded sandbox ports %v, want [9728]", sb.ports)
+	}
+
+	guest, inner := net.Pipe()
+	defer guest.Close()
+	go sb.serves[0](context.Background(), inner)
+	guest.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := io.WriteString(guest, "x"); err != nil {
+		t.Fatalf("the channel connection was not bridged to host_port: %v", err)
+	}
+	m.Close()
+	if _, err := guest.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a channel connection survived its grant being closed: %v", err)
 	}
 }
