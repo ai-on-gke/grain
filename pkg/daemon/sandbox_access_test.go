@@ -58,7 +58,7 @@ func TestStartSandboxAccessKeepsOneCAInTheDataDir(t *testing.T) {
 	dir := t.TempDir()
 	var live func(string) bool
 	cfg := Config{DataDir: dir, SandboxAccessAddr: "127.0.0.1:0"}
-	access, err := startSandboxAccess(ctx, cfg, "dep", "grain", &live)
+	access, err := startSandboxAccess(ctx, cfg, nil, "dep", "grain", &live)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestStartSandboxAccessKeepsOneCAInTheDataDir(t *testing.T) {
 	if _, err := access.Acceptor.Mint("1-1", time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := startSandboxAccess(ctx, cfg, "dep", "grain", &live); err != nil {
+	if _, err := startSandboxAccess(ctx, cfg, nil, "dep", "grain", &live); err != nil {
 		t.Fatal(err)
 	}
 	second, _ := os.ReadFile(path)

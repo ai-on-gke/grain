@@ -120,6 +120,12 @@ func processGitHubEvent(ctx context.Context, deps Deps, allowedRepos []string,
 		return nil
 	}
 
+	if ev.Number > 0 {
+		github.Polls().Reset(github.PullRequestSubject(repo.Owner, repo.Name, ev.Number))
+	} else {
+		github.Polls().ResetRepo(repo.Owner, repo.Name)
+	}
+
 	switch ev.Event {
 	case "pull_request":
 		return handlePullRequestEvent(ctx, deps, repo, botLogin, botSlug, trustCache, ev, now)

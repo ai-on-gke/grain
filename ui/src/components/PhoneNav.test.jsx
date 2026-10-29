@@ -167,6 +167,33 @@ describe("PhoneNav", () => {
     );
   });
 
+  // A toggle in the rail -- a staging environment's pin -- changes the
+  // rail where it stands, so the drawer stays open to show it.
+  it("keeps the drawer open when a pin toggle inside it is tapped", async () => {
+    function PinRail() {
+      const [pinned, setPinned] = useState(false);
+      return (
+        <button aria-pressed={pinned} onClick={() => setPinned((p) => !p)}>
+          {pinned ? "Unpin web-preview" : "Pin web-preview"}
+        </button>
+      );
+    }
+    render(
+      <PhoneNav config={{}} running={false} onOpenNewTask={() => {}}>
+        <PinRail />
+      </PhoneNav>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Pin web-preview" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Unpin web-preview" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Navigation" })).toBeVisible();
+  });
+
   // The real rail's entries are ListItemButtons, which ButtonBase
   // activates from the keyboard by calling onClick directly -- no click
   // event -- so a keyboard pick navigated and left the drawer open over

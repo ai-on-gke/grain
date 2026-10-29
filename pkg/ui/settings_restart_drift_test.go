@@ -81,6 +81,8 @@ var settingsAppliedLive = map[string]string{
 	"networkAccess":         "the network the next sandbox is built with (liveConfig.refresh, via defaultShaper -- it rides on the same orchestrator.Shape)",
 	"sandboxImage": "the image the next sandbox is created from (liveConfig.refresh, via pkg/sandboximage's Source " +
 		"on granule and orchestrator.SandboxImageSetter on every other backend)",
+	"sandboxImageMirror": "the mirror repository the stock guest sandbox image is pushed to and resolved from " +
+		"(liveConfig.refresh, via applySandboxImage)",
 	"packageCacheEnabled": "whether the next sandbox is pointed at this deployment's package cache " +
 		"(orchestrator.Config.PackageCache, which asks cmd/grain's liveConfig per dispatch)",
 	"packageCacheSizeGb": "the size bound the package cache is held to (pkgcache.Cache.SetMaxBytes via liveConfig.refresh)",

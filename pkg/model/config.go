@@ -376,6 +376,15 @@ type Config struct {
 	// inside the stock guest at dispatch time to derive a local image --
 	// granule-only, and minutes of blocked dispatch after each upgrade.
 	SandboxImage string
+	// SandboxImageMirror is an optional cluster-accessible OCI repository
+	// (for example us-docker.pkg.dev/<cluster-project>/grain/guest) into
+	// which grain mirrors the build-stamped sandbox guest image on upgrade
+	// and startup. When set, off-cluster kubernetes-granule deployments
+	// pull the stamped DefaultSandboxImage on the host, push it to this
+	// mirror repository under its sha-<short> tag, and schedule sandbox
+	// pods against the mirror's pinned digest without treating the image
+	// as a custom image override.
+	SandboxImageMirror string
 	// PackageCacheEnabled is whether this deployment runs its package
 	// caches in front of every sandbox's package managers
 	// (pkg/pkgcache): with it on, each sandbox is handed an

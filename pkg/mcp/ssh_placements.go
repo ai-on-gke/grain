@@ -50,7 +50,14 @@ import (
 // empty, with the final mode" into the one step that has no such window,
 // and truncates an existing file to the same end state -- so a re-place
 // over a leftover file cannot inherit a wider mode either.
+type remoteFilePlacer interface {
+	PlaceFile(ctx context.Context, path, content, mode string) error
+}
+
 func PlaceFileOverSSH(ctx context.Context, runner remoteRunner, filePath, content, mode string) error {
+	if p, ok := runner.(remoteFilePlacer); ok {
+		return p.PlaceFile(ctx, filePath, content, mode)
+	}
 	// Each of the three steps is idempotent -- mkdir -p, an install over
 	// whatever is there, a dd that truncates -- so one the transport cut
 	// off is run again rather than failing the sandbox's setup.

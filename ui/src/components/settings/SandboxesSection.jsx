@@ -95,13 +95,25 @@ export default function SandboxesSection({ s }) {
   const effectiveMemoryRatio =
     liveOvercommit?.memoryOvercommit ?? liveBudget?.memoryOvercommit;
 
+  // A refusal of one bound is reported against that bound's own box
+  // (sandboxOvercommitCpuMin, ...), the key refuseBox and unchanged use
+  // for it too, rather than against the mode the whole object is saved
+  // under.
   const saveOvercommit = (patch) => {
-    saveChoice({
-      sandboxOvercommit: {
-        ...overcommit,
-        ...patch,
+    const [field] = Object.keys(patch);
+    saveChoice(
+      {
+        sandboxOvercommit: {
+          ...overcommit,
+          ...patch,
+        },
       },
-    });
+      field && field !== "mode"
+        ? {
+            errorKey: `sandboxOvercommit${field[0].toUpperCase()}${field.slice(1)}`,
+          }
+        : undefined,
+    );
   };
 
   // The auto controller's bounds are one JSON setting (sandboxOvercommit)

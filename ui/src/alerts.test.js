@@ -412,9 +412,9 @@ describe("collectAlerts: a red base branch's waiting repair", () => {
     expect(ids(alerts)).toEqual(["red-base-repair/323", "red-base-repair/324"]);
     const a = byId(alerts, "red-base-repair/323");
     expect(a.severity).toBe("critical");
-    expect(a.title).toBe("`main` is red — repair #323");
+    expect(a.title).toBe("main is red — repair #323");
     expect(a.sentence).toBe(
-      "`main` is red — repair #323 is waiting for human approval on trigger:grain-declarations (any human)",
+      "main is red — repair #323 is waiting for human approval on trigger:grain-declarations (any human)",
     );
     expect(a.scope).toEqual({ kind: "deployment" });
     expect(a.actions).toEqual([
@@ -427,7 +427,7 @@ describe("collectAlerts: a red base branch's waiting repair", () => {
       byId(alerts, "red-base-repair/324").actions.map((x) => x.kind),
     ).toEqual(["open-task", "force-merge-task"]);
     expect(byId(alerts, "red-base-repair/324").sentence).toBe(
-      "`candidate` is red — repair #324 is waiting in the merge queue (Waiting on check go)",
+      "candidate is red — repair #324 is waiting in the merge queue (Waiting on check go)",
     );
   });
 

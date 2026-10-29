@@ -116,6 +116,60 @@ describe("ModelsSection", () => {
     confirm.mockRestore();
   });
 
+  // A whole connection's usage-limit pause could only be lifted from the
+  // alerts panel; Settings → Models offered Resume for a paused model of
+  // it but not for the connection itself
+  // (docs/test-runs/2026-10-29-user-system-settings.md).
+  it("resumes a paused connection from its row", async () => {
+    const user = userEvent.setup();
+    const onSaved = vi.fn();
+    const pause = {
+      connection: "conn-1",
+      connectionName: "Primary Antigravity",
+      team: "default",
+      framework: "antigravity",
+      until: "2099-01-01T00:00:00Z",
+      reason: "usage limit reached",
+      canLift: true,
+    };
+    render(
+      <ModelsSection
+        config={{ agentPause: { paused: true, pauses: [pause] } }}
+        showError={vi.fn()}
+        onSaved={onSaved}
+      />,
+    );
+    await screen.findByText("Paused");
+    await user.click(screen.getByRole("button", { name: "Resume" }));
+    expect(api).toHaveBeenCalledWith("/api/pause?connection=conn-1", {
+      method: "DELETE",
+    });
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  });
+
+  it("offers no Resume for a pause this reader cannot lift", async () => {
+    render(
+      <ModelsSection
+        config={{
+          agentPause: {
+            paused: true,
+            pauses: [
+              {
+                connection: "conn-1",
+                team: "default",
+                until: "2099-01-01T00:00:00Z",
+                canLift: false,
+              },
+            ],
+          },
+        }}
+        showError={vi.fn()}
+      />,
+    );
+    await screen.findByText("Paused");
+    expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+  });
+
   it("lists every connection, whichever team a stored one names", async () => {
     api.mockImplementation((path, options) => {
       if (path === "/api/settings" && !options)

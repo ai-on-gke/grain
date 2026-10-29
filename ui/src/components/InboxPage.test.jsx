@@ -1395,7 +1395,7 @@ describe("InboxPage", () => {
       "Base-branch repair waiting",
     );
     expect(item.querySelector(".inbox-note")).toHaveTextContent(
-      "`main` is red — repair #323 is on security hold (trust-boundary/v4) for security review #376 — waiting for Submit",
+      "main is red — repair #323 is on security hold (trust-boundary/v4) for security review #376 — waiting for Submit",
     );
 
     await user.click(within(item).getByRole("button", { name: "Submit" }));

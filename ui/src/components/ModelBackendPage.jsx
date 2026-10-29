@@ -195,6 +195,21 @@ export default function ModelBackendPage({
     [],
   );
 
+  // A reload or a closed tab unmounts nothing, so the cleanup above never
+  // ran for it and the draft stayed behind as a nameless, disabled row
+  // named by its id. pagehide is the last moment the page has; keepalive
+  // lets the DELETE outlive it. The leave prompt has already been
+  // answered by then (guardLeaving's beforeunload).
+  useEffect(() => {
+    const onPageHide = () => {
+      if (!unfinishedRef.current) return;
+      unfinishedRef.current = false;
+      onDiscardRef.current?.(latest.current.id, { keepalive: true });
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
+
   const chooseAuthentication = async (value) => {
     const next = value.startsWith("reuse:")
       ? {
