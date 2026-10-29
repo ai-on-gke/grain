@@ -92,6 +92,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		"\"hostd-down\" (a container whose grain hostd is configured but not answering) or \"hostd\" (a container with a real grain hostd "+
 		"on a throwaway allowlist offering agy)")
 	hostModeInstall := fs.Bool("host-mode-install", false, "show the notice an unmigrated host-mode install shows (banner, System -> Health, Upgrade), with the CLIs the default bare-machine run locations leave nowhere to run")
+	notifications := fs.Bool("notifications", false, "run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green or ttl) has come true is cleared on its own, as on a daemon's cycle")
 	schedules := fs.Bool("schedules", false, "run the reconcile loop's schedule step every -reconcile interval (default 2s), so a schedule that comes due fires, or records why it was skipped, on its own (what it files is still never dispatched)")
 	reconcile := fs.Duration("reconcile", 0, "run the reconcile loop's suite step every interval, and its release step against -github-sim's simulated GitHub too, logging a failed cycle as the daemon does (default off; agents still never run)")
 	var upgradeVerifyCmd stringSliceFlag
@@ -168,6 +169,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		ModelCatalog:           *modelCatalog,
 		ModelDiscoveryInterval: *modelDiscoveryInterval,
 		Schedules:              *schedules,
+		Notifications:          *notifications,
 		Reconcile:              *reconcile,
 		HostExecutor:           *hostExecutor,
 		HostModeInstall:        *hostModeInstall,

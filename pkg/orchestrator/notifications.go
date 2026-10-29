@@ -52,26 +52,35 @@ func reconcileNotifications(ctx context.Context, deps Deps, now time.Time) error
 	if err := ReconcileStewardRegression(ctx, deps.Store, now); err != nil {
 		log.Printf("grain: %s notification: %v", model.SubjectStewardRegression, err)
 	}
-	open, err := deps.Store.ListNotifications(ctx, model.NotificationFilter{Open: true, Limit: 1000})
+	return ClearMetNotifications(ctx, deps.Store, now)
+}
+
+// ClearMetNotifications is reconcileNotifications' sweep of the open
+// notifications on store: each whose clears_when holds now is cleared
+// ("condition"), and an open warning or critical one the director has
+// not been given yet is delivered again. It needs nothing but the store,
+// which is what lets `grain demo -notifications` run it on its own.
+func ClearMetNotifications(ctx context.Context, store *model.Store, now time.Time) error {
+	open, err := store.ListNotifications(ctx, model.NotificationFilter{Open: true, Limit: 1000})
 	if err != nil {
 		return err
 	}
 	for _, n := range open {
 		if n.ClearsWhen != nil {
-			met, err := notificationConditionMet(ctx, deps.Store, *n.ClearsWhen, now)
+			met, err := notificationConditionMet(ctx, store, *n.ClearsWhen, now)
 			if err != nil {
 				log.Printf("grain: notification %d (%s): checking clears_when: %v", n.ID, n.Subject, err)
 				continue
 			}
 			if met {
-				if _, err := deps.Store.ClearNotificationByID(ctx, n.ID, "condition"); err != nil {
+				if _, err := store.ClearNotificationByID(ctx, n.ID, "condition"); err != nil {
 					return fmt.Errorf("clearing notification %d: %w", n.ID, err)
 				}
 				continue
 			}
 		}
 		if n.Delivered.Director == 0 && n.Severity.Rank() >= model.NotificationWarning.Rank() {
-			if _, err := deps.Store.DeliverNotificationToDirector(ctx, n, now); err != nil {
+			if _, err := store.DeliverNotificationToDirector(ctx, n, now); err != nil {
 				log.Printf("grain: notification %d: delivering to the director: %v", n.ID, err)
 			}
 		}

@@ -127,6 +127,10 @@ type Options struct {
 	// "schedule" reconciler every Reconcile interval (default 2s), so a
 	// schedule that comes due fires, or records its skip, on its own.
 	Schedules bool
+	// Notifications is -notifications (demo_notifications.go): the
+	// daemon's per-cycle notification sweep every Reconcile interval
+	// (default 2s), so a notification's clears_when clears it on its own.
+	Notifications bool
 	// Reconcile is -reconcile (demo_reconcile.go): how often to run the
 	// reconcile loop's suite step, and its release step too with
 	// -github-sim. Zero runs no loop at all.
@@ -528,6 +532,13 @@ func Run(opts Options) error {
 			interval = 2 * time.Second
 		}
 		go runDemoSchedules(context.Background(), store, interval)
+	}
+	if opts.Notifications {
+		interval := opts.Reconcile
+		if interval <= 0 {
+			interval = 2 * time.Second
+		}
+		go runDemoNotifications(context.Background(), store, interval)
 	}
 	if opts.ReviewQuestions {
 		interval := opts.Reconcile
