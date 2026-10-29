@@ -562,15 +562,13 @@ PINNED_SANDBOX_IMAGE="$(resolve_image_digest "${SANDBOX_IMAGE}")"
 
 # cluster_network_policy_mode prints how the cluster enforces NetworkPolicy:
 # "ADVANCED_DATAPATH" (Dataplane V2), "CALICO" (network policy enforcement on
-# the legacy datapath), or "NONE". GRAIN_GKE_ASSUME_NETWORK_POLICY stands in
-# for the live describe, for tests and dry runs.
+# the legacy datapath), or "NONE". Under --dry-run only,
+# GRAIN_GKE_ASSUME_NETWORK_POLICY stands in for the live describe so tests
+# can exercise each mode; a real run always asks the cluster, so the
+# variable cannot be used to skip the check.
 cluster_network_policy_mode() {
-  if [[ -n "${GRAIN_GKE_ASSUME_NETWORK_POLICY:-}" ]]; then
-    printf '%s\n' "${GRAIN_GKE_ASSUME_NETWORK_POLICY}"
-    return 0
-  fi
   if [[ "${DRY_RUN}" == "true" ]]; then
-    printf 'UNKNOWN\n'
+    printf '%s\n' "${GRAIN_GKE_ASSUME_NETWORK_POLICY:-UNKNOWN}"
     return 0
   fi
   local datapath enabled
