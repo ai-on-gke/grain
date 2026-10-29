@@ -33,13 +33,13 @@ it does anything.
 
 ``````console
 $ agy --version
-1.2.2
+1.4.9
 ``````
 
 ``````console
 path   /opt/antigravity/antigravity
-size   213582080 bytes
-sha256 e8f90ef67943b56c1148d73bc0e102d0b44d18935ffb11d49a2d870a095f416b
+size   229708176 bytes
+sha256 1c9102d0a36194d57f6b4a66249217ece0bf563e108bcdd1046b81c5b6d6004c
 ``````
 
 ## Commands and flags
@@ -54,21 +54,22 @@ Usage of agy:
   --conversation                  Resume a previous conversation by ID
   --dangerously-skip-permissions  Auto-approve all tool permission requests without prompting
   --disable-slash-commands        Disable slash command and skill expansion in print mode
-  --effort                        Reasoning effort for the current CLI session (low|medium|high)
+  --effort                        Reasoning effort for the current CLI session (low|medium|high|xhigh|max)
   -i                              Short alias for --prompt-interactive
   --input-format                  Input format for print mode (text, stream-json). stream-json reads one NDJSON message per line from stdin and runs a turn for each; it requires --output-format stream-json (default text)
   --json-schema                   Optional JSON schema string or path to a schema file to enforce structured output (for stream-json, only applicable to the final result)
   --log-file                      Override CLI log file path
-  --mode                          Set the agent execution mode for this session (accept-edits, plan)
+  --mode                          Set the agent execution mode for this session (accept-edits, auto, plan)
   --model                         Model for the current CLI session
   --new-project                   Create a new project for this session
   --output-format                 Output format for print mode (text, json, stream-json) (default text)
   -p                              Short alias for --print
   --print                         Run a single prompt non-interactively and print the response
-  --print-timeout                 Timeout for print mode wait (default 5m0s)
+  --print-timeout                 Optional time limit for print mode; 0 waits until the turn completes (default 0s)
   --project                       Project ID or project name for the current CLI session
   --prompt                        Alias for --print
   --prompt-interactive            Run an initial prompt interactively and continue the session
+  --remote-control                Create a remote connection for the CLI session on start up
   --sandbox                       Run in a sandbox with terminal restrictions enabled
 
 Available subcommands:
@@ -251,13 +252,14 @@ $ agy plugin --help
 Usage: agy plugin <command> [arguments]
 
 Commands:
-  list                   List imported plugins
+  list [--json]          List installed plugins
   import [source]        Import plugins from gemini or claude
-  install <target>       Install a plugin (supports plugin@marketplace)
+  install <target>       Install a plugin (supports plugin[@marketplace])
   uninstall <name>       Uninstall a plugin
   enable <name>          Enable a plugin
   disable <name>         Disable a plugin
-  validate [path]        Validate a plugin
+  validate [path] [--strict] [--json]
+                         Check a plugin's manifest and files
   link <mp> <target>     Generate link to a marketplace
   help                   Show this help
 ``````
@@ -294,7 +296,8 @@ Error: link requires marketplace name and target
 
 ``````console
 $ agy plugin list --help
-No imported plugins.
+Error: unknown list option "--help": only --json is supported
+[exit 1]
 ``````
 
 ``````console
@@ -304,8 +307,24 @@ Uninstalled plugin "--help"
 
 ``````console
 $ agy plugin validate --help
-Error: missing plugin.json: stat --help/plugin.json: no such file or directory
-[exit 1]
+Usage: agy plugin validate [path] [--strict] [--json]
+
+Checks a plugin the way the plugin loader reads it, and reports the files and
+fields that the loader skips or ignores.
+
+Arguments:
+  path        A plugin directory, or its plugin.json (default: the current
+              directory)
+
+Flags:
+  --strict    Also fail on warnings
+  --json      Print the report as JSON
+  -h, --help  Show this help
+
+Each finding is an error (the loader skips a file or the plugin, or an item
+can never work), a warning (a field or file is ignored or falls back to a
+default) or a note (how the plugin loads). Exits non-zero if there are errors,
+or warnings with --strict.
 ``````
 
 ### `agy plugins`
@@ -315,13 +334,14 @@ $ agy plugins --help
 Usage: agy plugin <command> [arguments]
 
 Commands:
-  list                   List imported plugins
+  list [--json]          List installed plugins
   import [source]        Import plugins from gemini or claude
-  install <target>       Install a plugin (supports plugin@marketplace)
+  install <target>       Install a plugin (supports plugin[@marketplace])
   uninstall <name>       Uninstall a plugin
   enable <name>          Enable a plugin
   disable <name>         Disable a plugin
-  validate [path]        Validate a plugin
+  validate [path] [--strict] [--json]
+                         Check a plugin's manifest and files
   link <mp> <target>     Generate link to a marketplace
   help                   Show this help
 ``````
@@ -358,7 +378,8 @@ Error: link requires marketplace name and target
 
 ``````console
 $ agy plugins list --help
-No imported plugins.
+Error: unknown list option "--help": only --json is supported
+[exit 1]
 ``````
 
 ``````console
@@ -368,8 +389,24 @@ Uninstalled plugin "--help"
 
 ``````console
 $ agy plugins validate --help
-Error: missing plugin.json: stat --help/plugin.json: no such file or directory
-[exit 1]
+Usage: agy plugin validate [path] [--strict] [--json]
+
+Checks a plugin the way the plugin loader reads it, and reports the files and
+fields that the loader skips or ignores.
+
+Arguments:
+  path        A plugin directory, or its plugin.json (default: the current
+              directory)
+
+Flags:
+  --strict    Also fail on warnings
+  --json      Print the report as JSON
+  -h, --help  Show this help
+
+Each finding is an error (the loader skips a file or the plugin, or an item
+can never work), a warning (a field or file is ignored or falls back to a
+default) or a note (how the plugin loads). Exits non-zero if there are errors,
+or warnings with --strict.
 ``````
 
 ### `agy remote-control`
@@ -432,10 +469,10 @@ $ the flags pkg/agent/antigravity passes, as agy --help describes them
 --dangerously-skip-permissions  Auto-approve all tool permission requests without prompting
 --add-dir                       Add a directory to the workspace (repeatable) (default [])
 --model                         Model for the current CLI session
---effort                        Reasoning effort for the current CLI session (low|medium|high)
+--effort                        Reasoning effort for the current CLI session (low|medium|high|xhigh|max)
 --input-format                  Input format for print mode (text, stream-json). stream-json reads one NDJSON message per line from stdin and runs a turn for each; it requires --output-format stream-json (default text)
 --output-format                 Output format for print mode (text, json, stream-json) (default text)
---print-timeout                 Timeout for print mode wait (default 5m0s)
+--print-timeout                 Optional time limit for print mode; 0 waits until the turn completes (default 0s)
 --disable-slash-commands        Disable slash command and skill expansion in print mode
 --conversation                  Resume a previous conversation by ID
 ``````
@@ -475,7 +512,8 @@ error: /exit is not available in print mode (the process exits as soon as the ru
 ``````console
 $ agy --disable-slash-commands -p /help
 error: agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.]]
-[exit 1]
+AGY_ERROR: {"short_error":"agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.]]","status":"INVALID_ARGUMENT","error_code":400,"code_kind":"http","retryable":false,"error_id":"$UUID-1"}
+[exit 3]
 ``````
 
 The third of those is the flag a run passes, over the first one's command: with slash expansion off, `/help` is not a command any more but literal text for the model, so what it buys is a model turn -- which fails here for want of a real credential, and that failure is the measurement.
@@ -488,390 +526,311 @@ The changelog ships *in* the binary, which makes it the closest thing to release
 
 ``````console
 $ agy changelog
-1.2.7:
-· Added inline Kitty graphics rendering for LaTeX math equations (`$$...$$` and fenced `math`, `latex`, and `tex` blocks) and Mermaid flowcharts and sequence diagrams in the artifact detail viewer, with Unicode ASCII fallback, Left/Right arrow horizontal panning for wide diagrams, and `m` to cycle between Image, ASCII, and Raw views
-· Improved the `ask_question` interactive prompt with Left/Right arrow navigation between questions, inline previews of confirmed write-in answers, check marks on answered options, and single-step submission on the final question
-· Improved the CLI startup banner for enterprise accounts to display the active Google Cloud Project ID beneath the signed-in account and plan tier
-· Improved model API retry responsiveness by capping per-attempt retry backoff at 30 seconds instead of waiting up to 4 minutes between attempts
-· Improved customization token budgeting by giving user and workspace rules a dedicated 20,000-token budget (cutting oversized rules on newline boundaries and listing over-budget rules by path and description) so large rule sets no longer evict skills, workflows, subagents, or MCP tools
-· Improved the `/usage` panel by removing the duplicate remaining-quota percentage line beneath each progress bar
-· Improved the default agent and subagent toolset by retiring the legacy `find_by_name`, `grep_search`, and `list_dir` tools from the default baseline while keeping them available to custom agents that explicitly list them in `tools`
-· Fixed plugin skill slash commands being double-prefixed (`/<plugin>:<plugin>:<skill>`) when a skill's frontmatter name already includes the plugin prefix, or being shadowed when multiple plugins define skills with the same short name
-· Fixed plugin upgrades leaving old MCP server and sidecar processes running from deleted install directories, and pruned superseded plugin versions and staging directories from the marketplace cache on startup
-· Fixed disabled plugins disappearing from the `/plugin` list after enabled-only customization queries, and hardened plugin ID path validation on uninstall
-· Fixed terminal rendering and Kitty keyboard protocol stack handling on exit and screen clear by upgrading Bubble Tea to v2.0.9
-· Fixed headless (`-p` / `--prompt`) runs occasionally skipping the background-task waiting notice, logged background SDK tool progress to task log files, and reduced memory usage by cloning truncated command output previews
-· Fixed starting the CLI unpinning conversations or marking them unread in the desktop app
+1.4.10:
+· Improved streaming of agent replies: lines that scroll off the top of the screen are now scrolled into your terminal's scrollback instead of repainting the whole screen, and text wrapping writes whole runs of text at a time, so streaming writes about 70% fewer bytes to the terminal and stays much smoother over slow SSH connections.
+· Improved memory use shortly after startup: the CLI now returns about 100 MB of memory left over from startup to the operating system 15 seconds after the interactive UI opens; print and headless modes are unaffected.
+· Improved the after-compaction size shown in the compaction marker and in `/context` to also count what the summary carries into the next prompt, such as your earlier requests and artifact, subagent, and running-task snapshots, so it is closer to the real size; the `(N summary)` label still shows the summary alone.
+· Fixed subagents losing the task their parent agent gave them, and the parent's ID, after their context was compacted, including with `/compact`; a subagent's summary now keeps the parent agent's 10 most recent messages.
+· Fixed conversations with many or large images, such as screenshots or pasted images, being rejected for exceeding the model's request size limit: images are now capped at 2000 pixels per side and large PNGs are sent as JPEGs when that is much smaller, and an image saved as JPEG but labeled PNG, such as a pasted image or browser screenshot, is no longer rejected for a mismatched type.
+· Fixed the `/browser` subagent not receiving the current page's snapshot when the selected page belongs to an isolated browser context, such as a page opened with `isolatedContext` or attached from an Incognito window.
 
-1.2.6:
-· Added Remote Control (start a connection via `--remote-control` startup flag or `/remote-control` slash command) to create a session-scoped remote connection for following and controlling your active terminal session from another device. Typing `/remote-control off` or closing the session automatically tears down the tunnel and unregisters the device from the active Remote Control session list.
-· Changed the default timeout for headless (`-p` / `--prompt`) runs from 5 minutes to unlimited so long-running agent turns run until the response completes unless `--print-timeout` is passed explicitly, and enabled daemon background commands in headless `GEMINI_API_KEY` sessions so background servers stay running after the turn finishes.
-· Improved headless (`-p` / `--prompt`) error reporting when a turn terminates on an agent or model API failure: the CLI now prints a structured `AGY_ERROR: {...}` JSON line on stderr with canonical status, HTTP or gRPC error code, retryability, and error ID (including HTTP status mapping for `GEMINI_API_KEY` SDK errors) and exits with code `3` instead of `1`.
-· Improved word-wise cursor movement (`Alt+F`, `Alt+B`, and `Ctrl`/`Alt`+Arrow keys) and word deletion (`Ctrl+W`, `Alt+Backspace`, and `Alt+D`) in the prompt editor to stop at punctuation boundaries instead of only whitespace, making it easy to step through or delete individual segments of file paths, URLs, and flags.
-· Fixed turns triggered from a connected Remote Control session or running across secondary workspaces executing without the CLI session's active permission mode, cycle mode, and non-workspace file access grants.
-· Fixed artifacts in the Remote Control companion rendering as plain `<name>.md` file links instead of rich artifact cards when the CLI's application data directory differs from the default bundle name.
-· Fixed text selection in the full-screen artifact viewer capturing the line-number gutter and trailing padding; dragging across the viewer now highlights and copies only the document text, with `Ctrl+C` to re-copy an active selection, `Esc` to clear it, and `Shift`+drag for native terminal selection.
-· Fixed submitting `/model <name> <prompt>` while a turn is already running switching the active model immediately in the middle of the in-flight turn; the one-shot model switch now waits until the queued prompt begins executing so the running turn and any earlier queued prompts finish on the session's original model.
-· Fixed file edits with diffs larger than 1 MiB exceeding the conversation storage limit and force-clearing the session; oversized edits now preserve their line-change statistics while omitting the raw diff body from stored conversation history and skipping the elided diff during `/rewind` reverts.
-· Fixed `/rewind` conversation reverts and forks sweeping backward to an older workspace snapshot when recent snapshot commits were skipped, which could silently overwrite kept work; snapshot lookup now sweeps forward from the target step and falls back to step-by-step revert replay when no later snapshot exists.
+1.4.9:
+· Added image pasting through your terminal's own paste shortcut, such as `Cmd+V` or `Ctrl+Shift+V` with only an image copied, and by dragging image files into the prompt, which attaches them instead of inserting their paths; image paste now also works over SSH with X11 or Wayland forwarding, and the CLI's paste key now says `No image or video found in the clipboard` when there is nothing to attach and names the clipboard tool to install, such as `wl-clipboard` on Wayland, when one is missing.
+· Improved the `/plugin` Discover tab to group marketplace plugins into the same sections as the Antigravity plugin marketplace instead of one flat list, listing a plugin under every section it belongs to.
+· Improved `agy plugin validate` to warn when a plugin's `name` isn't lowercase kebab-case, such as `Neo4j` or `foo_bar`, which the marketplace can't publish, and to suggest a valid name, failing under `--strict`; it now also checks the plugin's `logo`, noting when `plugin.json` has none and warning when the logo path is blank, uses backslashes, is absolute or points outside the plugin, sits in a folder the marketplace bundle leaves out such as `.github/`, or is a URL that won't be shown, with the same checks for context provider `iconUri` values.
+· Improved the position indicator under long `/diff` lists to say what it counts, such as `[1-44 of 195 files]` in `All Changes` and `[1-44 of 195 rows]` in `Per Turn`, where turn headers count as rows, so it no longer appears to disagree with the file count.
+· Improved Auto mode's review of commands that would leave the terminal sandbox: the reviewer now knows whether the working directory is inside a Git or other repository, so it no longer spends its time budget running `git status` in folders that aren't repositories and times out less often.
+· Changed `execute_url` permissions so approving a Google site such as `www.google.com` or `cloud.google.com` no longer also allows sensitive Google apps such as `mail.google.com`, `docs.google.com`, `drive.google.com`, `accounts.google.com`, or `console.cloud.google.com`; each of these now needs its own approval.
+· Fixed always-allow rules for multi-line commands, such as a `python -c` or `node -e` script spanning several lines, never taking effect, which made the CLI ask again every time and pile up unusable entries in your settings; existing multi-line rules now apply.
+· Fixed onboarding screens being cut off in small terminals and hiding their buttons: text and links now wrap to the terminal width, the color preview is cropped or hidden in very narrow terminals, the banner only shows when the whole step fits, and a step that is still too tall scrolls with `Shift+↑`/`Shift+↓` or `PgUp`/`PgDn` while the buttons stay visible.
+· Fixed Vim mode's `r`, `f`, `F`, `t`, and `T` canceling when the target character is a space, so `r<space>`, `f<space>`, and `df<space>` now work, commands on an empty last line acting on the line above, and a half-typed operator such as `d` carrying over after you submit a prompt.
+· Fixed invisible U+FFF9 and U+FFFA characters reaching the terminal around wrapped code in agent replies, which made some terminals and multiplexers draw boxes or leave stale characters on screen.
+· Fixed conversations failing every later model request with `INVALID_MEDIA` after the agent viewed a corrupt image or one with text in front of its header, such as a screenshot captured with `adb exec-out screencap -p > screenshot.png` that also captured a warning; such images are now rejected with an error that says where the real image header starts, so the agent can fix the command.
+· Fixed conversations getting stuck failing on every turn after a tool result was left without its matching tool call, such as after older history was trimmed; unmatched tool calls and results are now left out of the request.
+· Fixed conversations with certain models on a Google Cloud project failing for the rest of the conversation once the system prompt, tools, or an earlier message changed after a thinking block; outdated thinking blocks are now dropped instead of rejected.
+· Fixed the `/browser` subagent not receiving the current page's snapshot at the start of each turn with Chrome DevTools MCP 1.11 and later, because the snapshot request left out the now-required page ID and failed silently.
 
-1.2.5:
-· Added automatic subagent guidance for custom agents defined in Markdown: agents that list `invoke_subagent` in their tools now receive the roster of available subagents and usage instructions in their system prompt, so they can actually delegate to the subagents they declared.
-· Improved background task naming so a task keeps the name it was given when sent to the background; completion notifications and task lists now show that name instead of a generic auto-derived one.
-· Fixed stale credentials lingering after the sign-in server definitively rejects them (for example a revoked or invalidated enterprise account); the CLI now signs you out and clears the stale tokens so you can sign in again cleanly, while temporary network failures, server errors, and rate limits never cost you your session.
-· Fixed commands killed by an outside signal (for example when the whole session shuts down mid-run) being recorded as successful runs with exit code 0; such commands now finish as canceled while keeping the output collected before the interruption.
-· Fixed the `Interrupted` hint only appearing when Esc was pressed locally in the terminal; it now appears whenever the current turn is actually cancelled, including when it is stopped from a connected remote session.
-· Fixed the artifact viewer leaving markdown text stuck at its original width after a terminal resize; content now re-wraps to the new window size.
-· Fixed in-progress thinking frames occasionally freezing permanently in the conversation history (for example showing `Thinking... (31s)` forever), including after a terminal resize or session reload.
+1.4.8:
+· Added `[` and `]` to the `Per Turn` tab in `/diff` to jump to the first file of the previous or next turn, wrapping around at either end, in both the file list and the file view; the `All Changes` and `Per Turn` key-hint footers now wrap onto a second row on narrow terminals instead of being cut off.
+· Improved how quickly `/diff` opens in large repositories and long conversations: `All Changes` and `Commit Tree` appear as soon as tracked changes are ready, showing `checking for untracked files…` while untracked files load in the background, and `Per Turn` shows the newest turns first and loads older ones in the background with a `checking N older turn(s)…` indicator, caching finished turns so reopening `/diff` only recomputes the latest one.
+· Improved `/diff` in checkouts with large untracked files: binary files and untracked files over 1 MB are listed with a note such as `binary file` or `7.3 MB, over the 1 MB limit` instead of being read into memory, untracked files containing lines that start with `++` followed by a space are no longer shown incorrectly, and a file deleted while `/diff` is loading no longer makes the whole file list fail.
+· Improved Auto mode's review of commands that would leave the terminal sandbox: it now has more time to decide and stops any single slow check after 10 seconds, so it times out less often and asks you to approve safe commands less often.
+· Improved `agy plugin install` output to name each installed skill, agent, rule, command, MCP server, and hook, to stop listing component types the plugin doesn't contain as skipped, and to print the folder the plugin was installed to, adding `(replaced existing installation)` when it overwrote an earlier copy.
+· Improved `agy plugin validate` to check the `author`, `homepage`, and `repository` fields in `plugin.json`, warning when `author` is neither a name string nor a `{"name", "url"}` object or when a URL isn't a valid `https://` link, and plugin listings now show the author's name when `author` is written as an object instead of leaving it blank.
+· Improved resuming a conversation to use about 10% less CPU by not rendering already finished tool calls a second time.
+· Fixed failed tool calls, including calls to a tool that doesn't exist and canceled or interrupted calls, being passed back to the agent as ordinary results; the agent now sees them as errors and can recover on its next step.
+· Fixed conversations forked from one with an active `/goal`, including `/btw` side questions and forked subagents, inheriting that goal and being unable to stop; the inherited goal is now canceled at the fork point.
+· Fixed subagents failing to run when their custom agent's `name` contains a colon.
+· Fixed deleting a conversation leaving its running subagents, their saved history, and their shared or branched workspaces behind; they are now stopped and cleaned up with it.
+· Fixed a memory leak in long sessions with plugins that run sidecars, where every sidecar run left a background task running for the rest of the session.
+· Fixed pasting images on Windows when they were copied from a browser, Snipping Tool, or another app that puts PNG or V5 bitmap data on the clipboard, and pasting now retries when another app briefly holds the clipboard.
 
-1.2.4:
-· Added a `/skills reload` subcommand to asynchronously reload discovered skills and slash commands without restarting the session or blocking user input.
-· Added an inline argument autocomplete dropdown when typing `/model` and a live fuzzy search bar inside the interactive `/model` picker to filter models by name or ID.
-· Improved authentication error messages when OAuth tokens lack required scopes by including explicit instructions to run `/logout` and `/login`.
-· Fixed mid-conversation model switching to Gemini thinking models failing with `thought_signature` validation errors when prior turns were generated by non-Gemini models.
-· Fixed web search (`search_web`) failing with `"no summary returned from GenerateContent"` when the summarization model emits leading thought parts.
-· Fixed agent turns terminating prematurely with `NO_TOOL_CALL` when a tool call fails schema validation, allowing the agent loop to return the validation error and self-correct.
-· Fixed MCP tool schema augmentation mutating tool definitions in place, preventing strict argument validation failures.
-· Fixed `hooks.json` configurations being silently dropped when customization token budget truncation is active.
-· Fixed custom subagents losing configured `exclude` skill filters when runtime skill filtering is applied.
-· Fixed subagent status and termination tracking under pubsub batch coalescing so killed subagents are not reset to active by late step updates.
-· Fixed conversations with active turns or running daemon background tasks failing to auto-resume after a restart.
-· Fixed terminal `ERROR` steps (such as failed tool executions or timeouts) being omitted from `transcript.jsonl` conversation logs.
-· Fixed raw OSC 8 escape sequences rendering in `Apple_Terminal` over SSH connections by disabling unsupported hyperlink sequences.
+1.4.7:
+· Added `lastUserInput` to the JSON that hook commands receive on stdin, so a hook can inspect the latest message you sent, for example to screen prompts before the agent acts on them.
+· Added a temporary opt-in Halloween theme: turn on `Seasonal Themes` in `/config`, a row shown only while the theme is in season, for a Halloween startup banner, a moon-phase spinner, and a themed running light and prompt box borders.
+· Improved Auto mode to ask for approval less often on routine commands, such as cleaning up temporary files, stopping a local process, or running a code formatter.
+· Improved headless `-p` runs to use much less CPU, especially for long answers and when you have many saved conversations: they no longer build the conversation search index or render the transcript for display, and no longer start your custom status line and window title commands, none of which print mode shows.
+· Improved rendering speed while a response streams, when a permission prompt appears, and when you resize the window.
+· Improved MCP tools that are loaded on demand to return results of up to 10 KB directly to the agent; previously anything over 4 KB was saved to a file that the agent had to read in an extra step.
+· Improved the `/help` shortcuts tab by leaving out basic navigation keys such as the arrow keys, so the more useful shortcuts are easier to find.
+· Fixed skills, rules, custom agents, plugins, plugin MCP servers, and hooks not loading when you sign in with Application Default Credentials (`AGY_ADC_AUTH`).
+· Fixed conversations compacting over and over when a single message, tool output, or attached document was too large to fit in the context.
+· Fixed long links that wrap inside a Markdown table cell being linked only on their first line, to a truncated URL, so the whole link can now be clicked or copied. Tables in the default `Terminal` color scheme now use box-drawing borders instead of ASCII `|`, matching the other color schemes.
+· Fixed copying a long command that wraps across rows in a code block or inline code, which now copies as a single line instead of with a line break at each wrap point; wrapped code-block lines also now break between words and keep the block's indentation.
+· Fixed Vim mode's `r` replace, in Normal and Visual mode, leaving part of a collapsed `[Pasted text #N]` placeholder behind; the whole placeholder is now replaced.
+· Fixed plugin and MCP server sign-ins not being saved on macOS and Windows when the token was too large for the system keychain; such tokens are now stored in the CLI's private secrets file.
+· Fixed plugin MCP servers that sign in with OAuth being able to use a token saved by another user of the same computer account, or keeping the previous user's connection after you switch accounts or sign out. Their tokens now belong to the signed-in user and these servers reconnect when the user changes, so you may need to sign in to them again.
 
-1.2.3:
-· Added the `/copy btw` slash subcommand to copy the full text of the active `/btw` side-question response to the clipboard even when the response card is collapsed or scrolled, along with argument ghost hints when typing `/copy`.
-· Improved tool-calling fidelity by translating per-request tool-choice constraints (`any`, `required`, and named functions) into native backend function-calling configurations.
-· Fixed the `/hooks` command and hook inspection utilities omitting hooks bundled inside enabled plugins when listing active `hooks.json` configurations.
-· Fixed custom subagents created with `enable_mcp_tools: true` receiving an empty MCP server list instead of inheriting the parent agent's configured MCP servers, and fixed declarative subagent configurations failing to resolve relative config file paths (`relative_path_to_config`) against the parent agent's directory.
-· Fixed proactive feedback prompts triggering prematurely during the first few turns of a session or on transient, recovered tool errors.
+1.4.6:
+· Added a `Configure MCP servers...` row for installed plugins in `/plugin`, so you can set or change a plugin's MCP server variables at any time without disabling and re-enabling it; plugins with missing values show `⚠ needs setup`, each server shows `✓ configured` or the variables it still needs, and saving restarts an enabled plugin's servers so the new values take effect.
+· Improved terminal sandbox defaults to protect more credentials: sandboxed commands can no longer read or modify `~/.docker`, `~/.kube`, or `~/_netrc` unless you grant access explicitly. Previously `~/.docker` and `~/.kube` were writable inside the sandbox, so sandboxed commands that use Docker registry or Kubernetes cluster credentials now need an explicit grant.
+· Improved context compaction, including `/compact`, to keep images, PDFs, and other files you attached in the conversation summary, so the agent can still see them after older history is summarized.
+· Improved permission prompts so that allowing an action for the conversation, in the main agent or in a subagent, applies across the main conversation and all of its subagents instead of asking again for the same action.
+· Improved the in-progress status line to show what the agent is waiting on, such as initializing MCP servers or retrying an unavailable model (for example `Model unavailable (attempt 2/10), retrying in 12s` with a live countdown), instead of a generic working label.
+· Improved `/diff` to highlight the exact words that changed within each modified line, in every color scheme.
+· Improved `agy plugin validate`: it now has `--help`, checks a plugin's context providers (missing `label` or `command`, invalid or duplicate triggers, unknown fields, missing command files), warns about `skills` entries in `plugin.json` that don't exist or contain no `SKILL.md`, and reports every `SKILL.md` the plugin loader skips, including skills listed through `plugin.json` or `skills.json`.
+· Fixed terminal commands occasionally failing to start with `argument list too long` when the model returned a very large reasoning signature with the tool call.
+· Fixed text cursors drifting away from the insertion point after wide characters (CJK, emoji), tabs, other Unicode spaces, and on soft-wrapped lines, including `Up`/`Down` landing on the wrong row, in the prompt and in the settings, permission amend, plugin setup, feedback, hooks, and artifact search boxes.
+· Fixed the `Esc disabled during file edits` warning naming the wrong reject key when the prompt shows an extra choice, such as for edits outside the workspace in accept-edits mode.
+· Fixed sign-in not persisting across restarts on macOS and Windows for enterprise accounts, because the saved credential exceeded the system keychain's size limit.
 
-1.2.2:
-· Improved the startup warning for deprecated `unsandboxed` permission rules across CLI, shared, and project configuration files to list each affected file path, up to five offending rules, and step-by-step instructions for migrating them to `command` rules.
-· Improved `/resume` startup responsiveness when opening a large conversation history with a cold or stale summary cache.
-· Fixed MCP servers bundled inside plugins colliding with each other or with user-configured servers in `mcp_config.json` when they shared the same server name by automatically namespacing plugin MCP servers as `<plugin>_<server>`.
-· Fixed a memory leak where opening or scanning conversations left background step-cache eviction goroutines running for the rest of the session, significantly reducing memory usage after opening `/resume` or switching conversations.
-· Fixed `view_file` attempting to parse non-UTF-8 binary files as text or loading files larger than 100 MB into the model context; unsupported binary formats and oversized files are now rejected with a clear error before overflowing the context window.
-· Fixed Gemini API (`GEMINI_API_KEY`) sessions dropping model thinking blocks from prior turns on subsequent user messages and failing to propagate thought signatures on text and thought parts.
-· Fixed artifact review failing to trigger when a directory name above `.gemini/` matched a skipped path component such as `scratch`, prevented conversation forks and snapshot reverts from copying internal `.system_generated/subagents` and `.system_generated/worktrees` directories, and cleaned up subagent metadata records when deleting a conversation.
-· Fixed deleted conversations being recreated as empty, schema-less SQLite database files when background queries reconnected after deletion.
-· Fixed conversations launched without a workspace folder inheriting workspace paths and customizations from other open sessions.
+1.4.5:
+· Improved how agent responses read: a blank line now separates the collapsed thought block from the response, and once the response starts, the collapsed thought shows only its `Thought for …` header instead of repeating a snippet of the thinking; expand it to see the full thinking.
+· Improved `/` search in the `/diff` file view to count matches inside folded unchanged lines, such as `match 2/5 · +3 hidden` or `no matches · +1 hidden`, and the `f` hint now reads `show N hidden matches`.
+· Improved `/diff`'s `Commit Tree` to mark the selected commit with the same `>` cursor and selection color as `All Changes` and `Per Turn` instead of a highlighted bar, and made `Per Turn` start with the cursor on the first file instead of its turn header.
+· Improved recurring cron schedules created with the agent's `schedule` tool to fire at a consistent per-schedule offset instead of exactly on the cron boundary, to avoid traffic spikes: schedules that repeat within a day, such as every 30 minutes or hourly, now fire somewhere within their period, fixed-time schedules such as daily at 9:00 still fire within their scheduled minute, and the agent can request exact timing when a schedule needs it. `@every` schedules are unchanged.
+· Improved idle CPU usage by pausing screen refreshes while nothing on screen changes, roughly halving the CLI's CPU use when it is idle.
+· Improved CPU usage while a response streams by skipping redundant screen updates and refreshing the credit balance less often.
+· Improved rendering speed for long conversations, and made long conversations load faster when you resume them.
+· Improved startup CPU usage when the CLI refreshes its conversation summaries.
+· Improved memory usage by allocating storage for the prompt and other text inputs as you type instead of reserving it up front.
+· Fixed the agent silently retrying, potentially without end, when a model response was blocked by content safety filters.
+· Fixed plugins failing to load when `plugin.json` gives `skills` as a single path string, such as `"skills": "./skills/"`, instead of an array, as some plugins written for other tools do.
+· Fixed marketplace plugin installs and automatic updates failing with a checksum mismatch or network error when a download was briefly stale or interrupted; the CLI now retries the download once.
 
-1.2.1:
-· Added support for `excludeDefaultComponents: true` in custom agent Markdown frontmatter, allowing custom agents to opt out of default prompt sections and built-in tools while preserving post-invocation hooks.
-· Improved model API error resilience and diagnostics: transient `genai.APIError` failures (`502`, `503`, `504`, per-minute `429` rate limits, and mid-stream interruptions) automatically retry in-process with exponential backoff while preserving completed tool call outputs, and unrecovered `503` and `429` responses surface clear user-facing error messages.
-· Improved MCP and provider tool schema validation to preserve open object schemas (such as `{"type": "object"}` or explicit `additionalProperties: true`) instead of rejecting undeclared arguments on schemas that allow them.
-· Improved per-turn responsiveness and reduced memory usage when opening large conversations.
-· Fixed `--continue` starting a brand-new conversation when launched from a subdirectory, after a crash, or while another session is open in the same workspace; it now falls back to the most recent non-empty conversation in the current workspace or its parent/child directories.
-· Fixed full-screen blank flashes in inline mode when content first pushes to scrollback, at the end of a turn, or when clearing the screen with `Ctrl+L`.
-· Fixed remote companion UIs connected to an interactive CLI session via Remote Control displaying an unauthenticated sign-in screen instead of the active session's signed-in state.
-· Fixed the status line reporting the terminal sandbox as disabled when the session was launched with the `--sandbox` command-line flag.
-· Fixed image zoom keys (`Ctrl+=` and `Ctrl+-`) and the footer zoom hint appearing in the artifact viewer when a Mermaid diagram is rendered in ASCII mode instead of as a Kitty image.
+1.4.4:
+· Added Auto mode on Windows 11 version 24H2 and later for personal Google Accounts, selectable via `--mode auto`, `Agent Mode` in `/config`, `Shift+Tab`, or Remote Control Settings (`Agent` remains the default).
+· Added whole-file toggle (`f`) and hunk folding (`Ctrl+O`) to `Commit Tree` and `Per Turn` views in `/diff`, and consolidated `Per Turn` diffs so multiple edits to a file in one turn appear as a single combined diff.
+· Added `_meta["antigravity.google/root_conversation_id"]` to MCP `tools/call` requests so MCP servers receive the top-level conversation ID even when a tool is called from a nested subagent.
+· Improved Auto mode's review of commands that leave the terminal sandbox to include the assistant's preceding question on short replies like `yes`, check every subcommand in pipelines, and prompt before destructive Git or file commands.
+· Improved `agy plugin validate` with stricter checks across `plugin.json`, MCP server configs, `hooks.json`, and sidecar manifests for invalid JSON syntax, unknown fields, bad variable placeholders, unrecognized hook tool matchers, and missing hook scripts.
+· Improved CPU and memory usage while streaming responses by caching streamed code-block syntax tokens, rendered Markdown blocks, and inline file-edit confirmation diffs across frames.
+· Improved `/compact` and automatic compaction to retain tool declarations on summarization requests so the model API reuses its cached prompt prefix.
+· Improved Remote Control on tablets and foldables to use the multi-pane layout with touch-sized controls instead of collapsing to the phone view, and kept popovers open while dragging scrollbars.
+· Fixed subagents losing plugins inherited from the parent session, and fixed plugin-bundled subagents with `plugins.inherit_user: false` and restricted MCP tools failing to start with `mcp spec not found for provider`.
+· Fixed rules and `SKILL.md` skills loading twice when discovered from both a standalone customization folder and an enabled plugin.
+· Fixed long rows wrapping instead of truncating at the terminal width in `/diff`'s `Commit Tree` and `Per Turn` lists, and `Per Turn` headers truncating prompts at 50 characters.
+· Fixed the prompt box staying mid-screen after closing panels, dropdowns, or inline prompts, and blank gaps appearing above the prompt in `Medium` verbosity mode.
+· Fixed `Ctrl+Z` undo in the prompt mishandling pasted text, merging typing with recalled history entries, recording no-op `Backspace` or `Delete` steps, and truncating characters near emoji.
+· Fixed MCP client sessions and background connection routines leaking when `tools/list` failed during server startup or when the CLI shut down while a server was connecting.
+· Fixed the system prompt's user rules wording so `GEMINI.md` and `AGENTS.md` rules explicitly override earlier built-in instructions instead of only instructions that follow them.
+· Fixed supported media attachments with parameterized MIME types such as `audio/webm; codecs=opus` being rejected as unsupported.
+· Fixed several UI issues in Remote Control, including clipped headers and dialogs on phones, iOS Safari zoom on input focus, `Enable Telemetry` and `Marketing Emails` reverting while Settings loads, and dragged URLs losing query or `#` parameters.
+· Fixed rendering and export bugs in Remote Control, including broken nested code blocks, `$VAR` shell variables parsed as LaTeX, broken media previews, blurry or blank diagrams in `Copy Image` and `Export as PDF`, and background-tab timer drift.
 
-1.2.0:
-· Added the `remote-control start`, `remote-control status`, and `remote-control stop` subcommands to run the CLI as a background service registered with your operating system's service manager so your machine stays reachable across logouts and reboots; `remote-control start --name <label>` sets a custom machine label in the Remote Control instance list, and `--session` scopes the service to your active login session.
-· Improved half-page scrolling across all scrollable views — including altscreen mode, the diff viewer, and read-only detail panels where `ctrl+d` no longer triggers the exit prompt — and set `shift+up` and `shift+down` as customizable default keybindings for half-page navigation (`navigation.half_page_up` and `navigation.half_page_down`).
-· Fixed prompts or model responses blocked by content safety filters failing with a spurious "no candidate found" error, ending silently with an empty turn, or repeatedly retrying the rejected input; the CLI now surfaces a clear content-filter stop reason.
-· Fixed temporary working files written to the agent `scratch/` directory triggering recursive filesystem watchers and appearing as noisy entries in the artifact review panel and checkpoints.
-· Fixed MCP servers bundled inside globally installed plugins failing to initialize at CLI startup or failing to update their running status when plugins are enabled or disabled.
-· Fixed third-party MCP server tools failing schema validation when their input schemas omit `additionalProperties`.
-· Fixed unnecessary filesystem customization discovery walks running on every user message even when no slash command is invoked, reducing latency before the agent begins responding.
-· Fixed every log line in `cli.log` and background daemon subcommand output being prefixed with a spurious `ERROR: logging before google.Init` message.
-· Fixed the macOS `remote-control` background service terminating shortly after startup when launched by the system service manager, `remote-control start` and `remote-control stop` leaving legacy installer-script background services running, and the Remote Control setting being unavailable when your access comes from a paid Google Cloud project.
-· Fixed older conversations failing to load with an `unknown step type` error when resumed.
+1.4.3:
+· Added `/` search to the `/diff` file list and file view: matches are highlighted as you type, the search prompt shows how many matches the diff and each file contain, `Enter` jumps to the first match, and `n`/`N` step through matches one at a time across every file, with `match A/B` in the file view header. `n`/`N` in the artifact viewer now also step through matches one at a time, including several on the same line, instead of jumping from line to line.
+· Improved `agy plugin validate` to also check a plugin's hooks, sidecars, and component lists: it reports an error when `hooks.json`, a `sidecar.json`, or a `skills.json`, `rules.json`, `agents.json`, or `sidecars.json` file can't be parsed, and warns about unknown hook events, hook matchers that aren't valid regular expressions and so never match, a `hooks/hooks.json` file (which isn't read), list entries with no path or with a path missing from the plugin, `commands/` folders and `workflows/` Markdown files (which plugins don't load), and a Claude Code-style top-level `"hooks"` key, which loads as a single hook named `hooks`.
+· Improved timer labels in `/tasks` and the active task list to show durations in days, hours, minutes, and seconds, such as `1d 2h timer` or `5m timer`, instead of raw seconds such as `93784s timer`.
+· Fixed Gemini 4 Argon not shown in `/model` and `--model` when you connect with a `GEMINI_API_KEY`.
+· Fixed the CLI offering options that need the terminal sandbox on systems where it can't run, such as Linux systems that block unprivileged user namespaces and Windows before Windows 11 24H2.
+· Fixed subagents and custom agents in Auto mode asking you to approve every command that would leave the terminal sandbox; like the main agent's, their commands are now first reviewed by a separate agent, so safe commands run without asking and risky ones still prompt you.
+· Fixed the agent losing track of its most recently started subagents after a conversation was compacted, because the summary included each subagent's full initial prompt and was cut off before their conversation IDs; the summary now keeps only each subagent's type, role, and result, which also leaves more room in the context window.
+· Fixed a `PostToolUse` hook that fails to run, for example because its command is missing, exits with an error, times out, or prints invalid JSON, marking the tool call it follows as failed even though the tool succeeded; the failure is now logged and the tool keeps its result.
+· Fixed the agent failing to create empty files such as `__init__.py` or `.gitkeep`, and failing to write or edit regular project files with `... is not a valid artifact path` when the model sent blank artifact details.
+· Fixed updating or reinstalling a marketplace plugin on Windows leaving it half-deleted when another `agy` session, the Antigravity desktop app, or the Remote Control background service had it open; the installed plugin now stays intact until the new copy is in place, and the previous version is restored if the replacement fails.
+· Fixed `agy plugin install` and `agy plugin import` writing color codes into piped or redirected output, ignoring `NO_COLOR`, and showing raw codes in older Windows consoles; like `agy plugin validate`, they now use color only in a terminal and follow `NO_COLOR`, `CLICOLOR`, and `CLICOLOR_FORCE`.
+· Fixed Remote Control on iPhone and iPad asking you to accept the `Security Notice & Data Use` terms and showing the `Enable Notifications` prompt again every time you reopened it; it now remembers your answers, along with your theme, layout, and dismissed tips.
+· Fixed the prompt cursor appearing in the wrong place after resizing the terminal (sometimes on the `↑ N more lines` indicator or below the input box), when a slash command's completion hint didn't fit on the last line of the prompt (the hint is now shortened or left out), when the prompt was taller than the terminal, after pressing `Up` or `Down` onto a line with CJK characters or emoji, and after entering Vim visual mode, which also rewrapped the text.
+· Fixed the cursor drifting on lines with emoji such as 👩‍💻, 👍🏽, or ⚠️ inside tmux 3.6 and later, and after returning from your external editor (`Ctrl+G`) or a `Ctrl+Z` suspend in terminals that support grapheme-cluster widths.
+· Fixed the cursor drifting and lines wrapping too early under Japanese, Chinese, or Korean locales such as `LANG=ja_JP.UTF-8` when text contains characters like `→`, `…`, `─`, or `•`, which parts of the CLI counted as two columns wide while the rest drew them as one.
+· Fixed `Left`, `Right`, `Backspace`, and `Delete` in the prompt and other text boxes moving over or deleting only part of an emoji such as 👩‍💻 or 👍🏽, a flag, or a letter with a combining accent, and fixed text boxes cutting off a wide character, such as a CJK character or emoji, at the end of a wrapped line instead of moving it to the next line.
+· Fixed lines containing combining marks or other zero-width characters wrapping too early or leaving blank rows in `/diff` and the inline diff preview, and being cut off with `…` too soon in `/artifact` previews.
 
-1.1.28:
-· Improved resilience to transient model API errors: the agent now retries errors such as `503 Unavailable` for much longer with exponential backoff, so a brief service hiccup no longer aborts your session.
-· Improved sign-in and startup speed by reading your signed-in identity from the stored credential instead of making a network request on every launch and after browser consent; a failed identity lookup no longer prevents sign-in from completing, and the displayed plan tier no longer briefly disappears during startup.
-· Improved headless (`-p`) runs to exit promptly once the final answer is delivered: the CLI waits for running background tasks and scheduled timers to finish, bound by `--print-timeout`, and leaves daemon background tasks such as dev servers running instead of terminating them.
-· Improved failure reporting in headless (`-p`) runs: fatal errors now appear on stderr with a stable `error:` marker, a note is printed when the response may be truncated, and runs that previously ended silently with no output now explain why.
-· Improved headless (`-p`) turnaround by cutting up to 200 ms of idle latency per turn and skipping the model call that generated a conversation title no one would see.
-· Improved tool approval prompts to say exactly what you are approving — for example `Run this command?`, `Allow access to this URL?`, or `Allow calling this tool?` — with the command-editing shortcut offered only when a command is being approved, and a `Reason:` line explaining why approval is being requested when it is not obvious, such as a hook flagging the action or a file belonging to a different project.
-· Improved model selection auditability: the CLI log now records whenever a model name you specify resolves to a different model, such as alias resolution, `--effort` variant selection, or replacement of a deprecated saved model.
-· Changed what happens when `--print-timeout` expires mid-turn: the CLI now returns the partial output it has and exits successfully with a warning on stderr, instead of failing with a timeout error; interrupts such as Ctrl+C still exit non-zero.
-· Changed the default permission for fetching URLs from always allowed to asking first, so the agent now requests approval before reading a URL unless you have granted access.
-· Fixed plugin reinstalls keeping files that had been deleted from the source: installing a plugin now replaces its managed directory exactly, installing a plugin from its own installed directory is refused instead of corrupting it, and uninstalling a plugin no longer leaves its enabled/disabled entry behind in `config.json`.
-· Fixed MCP servers defined by plugins resolving relative or unset working directories against the wrong location; they now resolve against the plugin's own directory so plugin-bundled scripts run correctly.
-· Fixed a startup race where subagents could fail to find tools from MCP servers that were still initializing.
-· Fixed subagents sometimes appearing stuck in a running state after they had finished — especially in very large conversations — which also left queued when-idle messages undelivered until restart.
-· Fixed a memory leak where every finished terminal command kept internal state alive for the rest of the session; long sessions that run many commands now use significantly less memory.
-· Fixed headless (`-p`) runs stalling forever on implementation-plan approval that no one could give; non-interactive runs now proceed through plan review automatically.
-· Fixed sign-in failing with a project access error after switching from a business account with a selected project to a personal account; stale business project and license details are now fully cleared on personal sign-in.
+1.4.2:
+· Fixed conversation history not showing in Remote Control in daemon mode.
 
-1.1.27:
-· Added `/model <name> <prompt>`, which runs a single prompt on another model and then returns the session to the model it was using, so you can consult a different model mid-conversation without disturbing your saved default.
-· Added a `conversation_title` field to the JSON payload passed to custom status line and window title scripts, so they can show the active conversation's name and pick up renames immediately.
-· Added an `agents` list to custom agent Markdown frontmatter, letting an agent declare the subagents it depends on using the same workspace-relative, absolute, and agent-relative path rules as `skills`.
-· Improved `/model` to show a `[model]` argument hint as you type, so the command's arguments are discoverable without opening help.
-· Improved the `/settings` panel so each Verbosity option explains itself as you highlight it, describing whether tool calls, commands, and thoughts are shown in full or collapsed into a token metrics table.
-· Improved the sign-in and Google Cloud setup screens to use the CLI's standard styled key hints, which follow your color scheme and keybindings and drop the navigation hint when only one option is available.
-· Changed `/model <name>` to report `Model already set to <name>` when the session is already using that model, instead of reporting a switch that did not happen.
-· Fixed tool calls to MCP servers accepting arguments the server's own schema never declared, so an invented parameter is now rejected and corrected instead of being silently dropped.
-· Fixed headless runs with `-p` silently skipping tool actions they were not permitted to take, which now end with a notice naming the refused actions and report them as `denied_actions` in the JSON output.
-· Fixed `?` in Vim Normal mode opening the shortcuts panel while the prompt already contained text, so character-search and replace operators such as `f?`, `t?`, and `df?` work; `?` still opens shortcuts on an empty prompt.
-· Fixed `/model` with no argument doing nothing when run before the session had finished starting up, so it now opens the model picker.
-· Fixed print mode (`-p`) exiting before the session finished shutting down, which could drop the run's trailing conversation history before it reached disk.
-· Fixed a redundant approval prompt when the agent reads or writes another conversation's artifact files after you have already allowed access to files outside your workspace.
+1.4.1:
+· Improved `agy plugin validate` to also check a plugin's skills, subagents, and rules: for skills, it errors on a `SKILL.md` with missing or invalid frontmatter and warns when `name` or `description` is missing, when `name` doesn't match its folder, when the body is over the 24 KB limit, or when a skill in `skills/` is skipped because an earlier skill has the same name; for subagents, it errors on an `agents/` Markdown file with invalid frontmatter or a missing `name` or `description`, an unparseable `agent.json`, or a name reserved for a built-in agent, and warns on duplicate agent names, Markdown files in `agents/` without frontmatter, and `agent.json` files, which the CLI ignores; and for rules, it errors on a rule with invalid frontmatter or without a valid `trigger` (skipping a `README.md` in `rules/` without frontmatter), and warns on a `model_decision` rule without a `description`, a `glob` rule without `globs`, content cut to fit the 24 KB limit, or an `AGENTS.md` or `GEMINI.md` at the plugin root instead of in `rules/`.
+· Improved the inline diff preview when the agent asks to edit or create a file so it renders like the `/diff` file view, with syntax highlighting for your color scheme, background tints on added and removed lines (picked from your terminal's light or dark background when using the `Terminal` color scheme), and an untinted line-number gutter.
+· Improved CPU usage while typing and while the agent is working by rendering the prompt area once per frame, reusing measured line widths for unchanged rows across frames, and rendering the animated status line in styled runs instead of one character at a time.
+· Fixed `Enable Telemetry` in `/config` remaining editable for Business accounts (such as Google Cloud project and Application Default Credentials sign-in via `AGY_ADC_AUTH`), where prompts, content, and model responses are never collected: the row now shows `off (disabled)` and explains why, and first-run setup with `AGY_ADC_AUTH` now shows the Google Cloud Platform Terms of Service without the consumer telemetry opt-in checkbox.
+· Fixed agent commands failing to start on Windows versions that don't support the terminal sandbox (Windows 10 and Windows 11 before version 24H2) when a sandboxed permission mode was selected: the CLI now turns off the terminal sandbox and falls back to asking before running commands, and the Remote Control browser Settings modal hides sandboxed permission options on those systems.
+· Fixed socket disconnect errors such as `broken pipe`, `software caused connection abort`, `network is down`, and `http2: client connection lost` (for example after laptop sleep or a Wi-Fi change) stopping the turn with `Agent execution terminated due to error.` instead of retrying automatically and reporting a network error if retries fail.
+· Fixed an MCP server continuing to show as `Ready` in `/mcp` after its process exited unexpectedly, which left later tool calls failing with `client is closing: EOF`; the server is now marked as `Error` and its closed session is removed.
+· Fixed large structured tool outputs (such as JSON results from MCP tools) bypassing the per-step token limit while still being counted as truncated, which could push long conversations past the model's context window before automatic compaction ran.
+· Fixed clickable links in agent responses whose URL contains `;` opening a URL cut off at the first `;` in terminals and multiplexers that split link sequences on semicolons.
+· Fixed `/title` and `/remote-control` rejecting `on` and `off` when typed with uppercase letters, such as `/title ON` or `/remote-control Off`.
 
-1.1.26:
-· Added half-page scrolling with `Ctrl+D` and `Ctrl+U` to the artifact viewer.
-· Added the `pickerGrouping` setting to `/config` and `settings.json` to configure the default conversation list view in `/resume` (flat or grouped by workspace).
-· Improved terminal ASCII diagram rendering for Mermaid flowcharts in the artifact viewer and conversation.
-· Improved `/logout` execution time by short-circuiting token removal directly to file storage when keyring storage is bypassed or unreachable.
-· Changed unselected model families in the interactive `/model` picker to default to medium reasoning effort instead of low.
-· Fixed subagent tasks unexpectedly prompting for tool approval in always-proceed mode while viewing the subagent details panel.
-· Fixed orphaned Git worktrees accumulating on disk under `.system_generated/worktrees` when killing subagents or deleting conversations.
-· Fixed SQLite database WAL checkpointing on CLI exit so trailing session metadata updates are flushed to disk before shutdown.
-· Fixed customization discovery logging spurious errors when accessing temporary directories or paths outside the active workspace.
+1.4.0:
+· Added terminal status reporting over OSC 7501: in terminals that support it, the tab or window shows whether the CLI is working, waiting for your input, done, or failed. The CLI checks for support first, so other terminals are unaffected. Set `AGY_CLI_OSC7501=off` to turn it off, `AGY_CLI_OSC7501=on` for a terminal that supports it but doesn't answer the check, or `AGY_CLI_OSC7501_MESSAGES=brief` to show only the status without details such as the pending command or question.
+· Added the `alt+m` shortcut (`Option+m` on macOS when Option is set to act as Alt) to send a message using the opposite of your `Queued Messages` setting in `/config`, so you can send right away while in `Queue` mode, or queue a message while in `Send Immediately` mode.
+· Improved `agy plugin validate` so it checks a plugin with the same rules the CLI uses to load it, instead of simplified checks that rejected valid plugins (such as a manifest without a `name`) and missed problems that kept a plugin from loading. It lists each error and warning with its file and line, accepts a plugin directory or its `plugin.json`, warns about common `plugin.json` mistakes such as unknown fields (with "did you mean" suggestions), invalid names, and components placed inside `.antigravity-plugin/` instead of the plugin root, and adds `--strict` to fail on warnings and `--json` for a machine-readable report in CI.
+· Fixed the CLI refusing every message with `Eligibility check failed` until you restarted it when the service was briefly unavailable or rate-limited at launch; the check now retries temporary errors and no longer locks the session.
+· Fixed plugin MCP servers that use a variable in a request header, such as `"Authorization": "Bearer ${TOKEN}"`, sending the literal placeholder and failing to authenticate; headers now get the value you configured, like the server's command, arguments, and environment already did.
+· Fixed the `/diff` Commit Tree view: the header now counts commits instead of lines, the cursor stops only on commit rows and `Enter` opens that commit, the view fills the terminal height, and it shows the latest 100 commits (previously 10) with scrolling.
+· Fixed the agent losing track of its file changes, tasks, and session cost when a background command finished while the agent kept working; they no longer roll back to the point where that command started.
+· Fixed a background command's final output sometimes missing from its task log; the output is now always recorded when the command finishes or is canceled.
+· Fixed links to directories disappearing from agent responses; they now show the directory name, for example `pipelines/`.
 
-1.1.25:
-· Added an opt-in workspace-grouped view to the `/resume` conversation picker, allowing users to toggle between a flat list and conversations grouped by directory with `Ctrl+F`.
-· Added Gemini 3.8 Flash to the model catalog when connecting with a `GEMINI_API_KEY`.
-· Changed custom agents defined in Markdown to inherit ambient skills, rules, and subagents by default, matching the configuration of default agents.
-· Fixed MCP OAuth authentication failing when authorization servers return authorization codes longer than 1024 characters.
-· Fixed skill path matching and grouping in the `/skills` panel on Windows where host path separators (`\`) caused global and workspace skills to be misclassified.
-· Fixed relative path resolution in Markdown-defined custom agents so relative subagent and plugin paths resolve correctly against the agent definition's directory.
-· Fixed duplicate permission grants accumulating in configuration settings across session reloads and subagent invocations.
-· Fixed /boost failing at runtime by improving worker tool configurations.
-· Fixed a fatal nil pointer crash in the agent runtime caused by background summary updates attempting to read cached steps after trajectory closure.
-· Hardened Remote Control reverse-tunnel routing.
+1.3.6:
+· Added Claude Opus 5.5 and Claude Sonnet 5.5 for Application Default Credentials (`AGY_ADC_AUTH`) sign-in. Claude models now appear in `/model` only if your Google Cloud project can use them.
+· Improved Auto mode's review of commands that would leave the terminal sandbox: the review is faster and no longer times out without a decision, it allows the workspace's own format, lint, and fix commands instead of asking about them, and it blocks commands that would upload sensitive data.
+· Improved the `/diff` Commit Tree view with colors: commit hashes and change IDs are highlighted, descriptions are dimmed, the `Working Copy (Uncommitted Changes)` row stands out, and `@` is bold, so hashes, timestamps, and descriptions no longer run together.
+· Fixed the agent hanging indefinitely when the model connection stalled: if no data arrives for 5 minutes the request is now canceled and retried automatically, and a stalled request no longer leaves an empty response step behind.
+· Fixed questions asked by subagents and workflow agents being lost, which left the subagent waiting forever: the alert now reads `<agent> has a question` and shows it, and `Ctrl+K` or `a` in the subagent's view opens a question picker that sends your answer to that agent. Headless `-p` runs skip these questions so the subagent can continue.
+· Fixed agent shell commands hanging on an invisible editor when a version control command wants one, such as `git commit` without `-m` or `jj describe`: the CLI now sets `GIT_EDITOR`, `HGEDITOR`, and `JJ_EDITOR` to `false` for agent commands, so they fail right away instead.
+· Fixed skills, rules, workflows, and Markdown agents failing to load with `mapping values are not allowed in this context` when an unquoted `description:` contains a colon, such as `description: Runs checks: formatters and linters.`
+· Fixed Mermaid diagrams that start with YAML frontmatter, a `%%{init: ...}%%` directive, or `%%` comments, or that use Mermaid v11 syntax such as `id@{ shape: ..., label: ... }` nodes, showing as raw source instead of rendering in agent responses and the artifact viewer.
+· Fixed the `@` file-mention dropdown staying open after a newline in a multi-line prompt, where it took over `Up`/`Down` and made `Enter` pick a file instead of inserting the newline.
+· Fixed `/` search in the file and artifact viewer highlighting the wrong characters, or crashing, on lines with letters whose lowercase form has a different length such as `İ`; `n` and `N` now stop only on lines that show a highlight.
+· Fixed long lines and file paths containing CJK or other multi-byte text turning into `�` characters in `/codesearch` results; they are now cut cleanly with an ellipsis.
+· Fixed `agy plugin validate`, the summary `agy plugin install` prints, and marketplace previews in the `/plugin` Discover tab leaving out subagents a plugin declares in its root `agents.json`.
+· Fixed plugin names and manifests being case-sensitive where the agent was not: `/plugin` subcommands such as `/plugin List` now work in any case instead of failing with `Unknown subcommand`, and a manifest named `Plugin.json` is now found by `agy plugin install`, `agy plugin validate`, and enable and disable.
 
-1.1.24:
-· Improved `/mcp` panel navigation so up and down arrow keys strictly navigate between MCP servers and plugins, left and right arrow keys cycle available actions, and `Esc` exits action mode or the panel.
-· Fixed duplicate agent entries appearing in the `/agents` picker when an agent with the same name is discovered across multiple configuration sources or plugins.
-· Fixed tool initialization and agent startup failing when launched from an inaccessible or deleted working directory by using absolute URI schemes for in-memory parameter schemas.
-· Fixed headless CLI invocations with piped standard output or standard error hanging on exit by setting `FD_CLOEXEC` on the preserved streams so child processes do not keep the caller's pipes open.
-· Fixed MCP configuration parsing failing when `mcp_config.json` contains single-line (`//`) comments, multi-line (`/* */`) comments, or trailing commas.
-· Fixed orphaned annotation files accumulating in local storage when deleting conversations.
-· Fixed `/btw` side questions in conversations with an active `/goal` being forced to continue and making unintended tool calls.
+1.3.5:
+· Added Auto mode, which approves file edits and safe commands without asking and still prompts before irreversible actions; commands that would leave the terminal sandbox are first reviewed by a separate agent. Choose it with `--mode auto`, from `Agent Mode` in `/config`, or by pressing `Shift+Tab` to cycle modes. Auto mode is available on Linux and macOS, with Windows support coming later.
+· Added the `/compact` command to compact the conversation on demand and free up the context window: `/compact` on its own summarizes the conversation and ends the turn, and `/compact <message>` summarizes it and then answers your message. While it runs the CLI shows a `Compacting conversation...` progress label that you can cancel with `Esc`, and when it finishes it shows how many steps were summarized and how much smaller the context became.
+· Added syntax highlighting to the `/diff` file view, with token colors for each color scheme and a background tint on added and removed lines. With the `Terminal` color scheme the CLI detects whether your terminal has a light or dark background and picks matching colors. The color scheme previews in `/config` and first-run setup now show a sample exactly as `/diff` draws it.
+· Added folding to the `/diff` file view: each hunk header now shows how many unchanged lines are hidden above it, `Ctrl+O` expands or collapses the fold nearest the cursor, and `f` switches between showing only the changes and the whole file. Both keys work on uncommitted changes when the file on disk still matches the diff, and the footer explains when they can't be used.
+· Improved `/diff` performance on very large files by rendering only the rows on screen, so scrolling, expanding folds, and opening the whole file no longer freeze the CLI. Expanding folds and showing the whole file are turned off for files over 100,000 lines or 10 MB, and the footer says why.
+· Fixed colors being reduced to 256 colors in iTerm2 over SSH, where `COLORTERM` is not forwarded; the CLI now uses full 24-bit color when `LC_TERMINAL=iTerm2` is set, unless `COLORTERM` or `NO_COLOR` says otherwise.
 
-1.1.23:
-· Improved `/model <name>` autocompletion to accept the proposed model name ghost text with `Tab`.
-· Reduced subagent streaming overhead by sending subagent trajectory metadata once per subtrajectory instead of with every step.
-· Fixed commands with subcommands (such as `models` or `agents`) hanging on an inherited, unclosed standard input pipe instead of executing immediately.
-· Fixed CLI crashes caused by prompt hooks by catching hook panics and rejecting nil completion configurations in model requests.
-· Fixed tool invocations and results omitting tool-call IDs when reconstructing request history for Gemini models.
-· Fixed tool permission prompts for direct and MCP tool calls displaying generic prompt titles instead of their declared human-readable action descriptions.
-· Fixed unconfigured or interrupted Google Cloud authentication and onboarding sessions dropping into broken chat sessions instead of prompting with the sign-in screen.
-· Fixed transient authentication errors caused by token expiry clock skew by proactively refreshing browser and WIF OAuth tokens five minutes before expiration.
-· Fixed instructional cycle mode placeholders reappearing in the input prompt after typing and clearing content.
-· Fixed subagents defined with `enable_mcp_tools=true` failing with unknown tool errors by ensuring the MCP dispatcher meta-tool is available to the subagent executor.
-· Fixed prompts entered immediately after login being discarded with an account verification alert by queueing them until background eligibility verification completes.
-· Fixed cancelled or killed subagents remaining stuck in the "Running" state in the UI task drawer across ancestor conversations.
-· Fixed parsing MCP JSON configuration files on Windows when saved with a UTF-8 byte order mark (BOM).
+1.3.4:
+· Added a `--json` flag to `agy plugin list` for machine-readable output, and fixed the command showing only imported plugins: it now lists every installed plugin, including ones installed from a marketplace, with its version and whether it is enabled.
+· Changed `--model` and `/model` to accept a base model name without `--effort`: instead of failing with an error asking for `--effort`, the CLI now picks the model's default thinking level (the server's default for that model, otherwise medium, otherwise the lowest available).
+· Improved Remote Control so the browser's Settings modal opens for CLI sessions and shows the settings the CLI actually uses (project and global permissions, queued messages, AI credits, telemetry, and artifact review) instead of a notice that settings can't be changed in the browser, and `agy remote-control serve` sessions now use your saved `settings.json` and save changes made in the browser back to it.
+· Improved the `/model` picker for Business sign-in with a Google Cloud project on pay-as-you-go: third-party models your project can't access are now hidden instead of failing when you send a message.
+· Fixed long stalls when model requests fail repeatedly: the agent now waits at most 30 seconds between automatic retries instead of up to 4 minutes.
+· Fixed remote MCP servers that use OAuth signing you out after a temporary network failure, timeout, or server error; saved sign-ins are now cleared only when the server or its authorization server actually rejects them.
+· Fixed `--agent` silently running the default agent when the name matches no agent: headless `-p` runs now exit with code 1 and list the available agents, and interactive sessions show an `Agent Not Found` warning before falling back to the default agent.
+· Fixed combining `--print` with `--prompt-interactive` exiting with status 0 after reporting the conflict; it now exits with status 2 like other print-mode usage errors.
+· Fixed `/diff` showing `No uncommitted changes` in Git, Mercurial, and Jujutsu repositories configured to always color output, for example with `color.ui = always`.
+· Fixed `@conversation:` suggestions getting stuck on `Fetching matches for ...` when conversation search is slow; after 2 seconds the list now falls back to your local conversations.
+· Fixed the `Agents:` row in `/plugin` plugin details leaving out subagents a plugin declares in its root `agents.json`; it now lists every loaded agent by name instead of by its `agents/` folder name.
+· Fixed "Always allow" rules approved from a Remote Control browser session still applying after you removed them in the browser's rules editor or the shared tab of `/permissions`; these rules are now saved only to the shared `config.json`.
+· Fixed requests failing with `thinking_budget and thinking_level are not supported together` when signed in with Application Default Credentials and using a model that has a thinking level.
+· Fixed a conversation failing on every later request after the agent read a truncated or header-only WebM file; such files are now rejected when read instead of being attached.
 
-1.1.22:
-· Added a `/model <name>` argument that switches to a model by name, slug or label and saves it as your default in one step, with the rest of the first matching name offered as ghost text while you type; `/model` on its own still opens the picker, and an unrecognized name prints the valid ones.
-· Improved the `/effort` hint so it completes what you have actually typed instead of always showing a fixed `[low|medium|high]` placeholder.
-· Improved artifact handling in conversations that produce many files by coalescing bursts of filesystem events into a single rescan.
-· Fixed selectable reasoning effort for Gemini 3.1 Pro and Gemini 3.5 Flash when you authenticate with a Gemini API key.
-· Fixed the interface redrawing continuously while the tasks panel or a subagent detail panel was open with nothing running, which held process CPU near 32% instead of the roughly 10% it now settles at.
-· Fixed a running subagent's elapsed timer freezing on screen whenever the parent agent was itself waiting.
-· Fixed an HTTP 502 from the model endpoint ending the whole run instead of being retried, so a transient bad gateway is now treated as the temporary outage it is.
-· Fixed a `self` subagent launched from a conversation with no recorded agent configuration re-resolving its setup from scratch and drifting from its parent, most visibly by running interactively when the parent was in autonomous mode.
-· Fixed file deletions failing on Windows with a sharing violation while another process still held the file open, which is now retried with backoff for about a second before reporting failure.
-· Fixed headless daemon printing an `Open in your browser: http://localhost:<port>` line in its startup banner, which was never a supported way to connect and, under a service manager, was written to the log on every restart.
-· Fixed the built-in `migrate-workflows` skill assuming POSIX home directories and path separators, so it now resolves and reports paths correctly on Windows.
+1.3.3:
+· Added a pinned prompt header in no flickering mode while you scroll back through a long conversation: the prompt that produced the response you're reading stays at the top of the transcript, and clicking it jumps back to that prompt.
+· Added support for MCP servers to mark a tool as always loaded by setting `_meta: {"antigravity/alwaysLoad": true}` on it in their `tools/list` response, so the agent gets that tool directly instead of discovering it on demand.
+· Added support for a root-level `agents.json` in plugins, so a plugin can declare its subagents the same way it declares skills and rules with `skills.json` and `rules.json`.
+· Changed the macOS terminal sandbox to block sandboxed commands from reading `~/Library/Application Support` by default, since desktop apps keep credentials and session tokens there; previously it was readable, and you can still allow it explicitly in your sandbox rules.
+· Improved error messages: a request that fails with an HTML error page, for example from a corporate proxy, now shows the page title instead of the raw HTML, other long non-JSON error bodies are cut off after 500 bytes, and reaching your individual quota is reported right away instead of being retried.
+· Improved search in the `/plugin` Installed tab: you can now type spaces in a search query, press `Enter` to finish searching, then use `Space` to toggle the selected plugin and `Enter` to expand its details; start typing again to resume the search.
+· Fixed an expired or revoked sign-in showing an unclear error mid-session; the agent now says `Authentication expired. Please log back in.`, and a token refresh that was already in flight no longer restores the expired credentials.
+· Fixed `/add-dir` claiming it added a path that doesn't exist or isn't a directory; it now reports `directory not found` or `not a directory`.
+· Fixed `/btw` side questions running your user and workspace hooks, which could make hooks such as stop hooks loop or add extra steps to a quick question.
+· Fixed Jujutsu (`jj`) commands run by the agent, such as `jj diff` or `jj log`, hanging in an interactive pager; agent commands now set `JJ_PAGER=cat` alongside `PAGER` and `GIT_PAGER`.
+· Fixed subagents started with a `branch` or `share` workspace in a multi-repository workspace silently working in your real checkout; each repository now gets its own isolated copy.
+· Fixed a stopped subagent staying in the active agents list while it still had an approval pending; stopping it now clears its pending approvals right away.
+· Fixed `--remote-control` failing when you sign in with Application Default Credentials (`AGY_ADC_AUTH`); Remote Control doesn't support ADC yet, so the flag now exits with a clear error and the `/remote-control` command is hidden.
+· Fixed custom `alt` keybindings such as `alt+s` not working with the macOS Option key in terminals that don't treat Option as Meta, such as Terminal.app and VS Code-based terminals.
+· Fixed `/keybindings` silently doing nothing when the configured editor can't be found; it now shows an error.
+· Fixed `agy plugin validate` and plugin listings missing skills declared through the `skills` field in `plugin.json` or ignoring `skills.json` exclusions, so they now match the skills that actually load, and fixed a race that could drop results when importing plugins.
+· Fixed sandboxed commands failing with `Access is denied.` on Windows when PowerShell 7 was installed from the Microsoft Store; the agent now falls back to Windows PowerShell in that case.
+· Fixed `/diff` showing the error from `git diff HEAD` instead of the real cause, such as a corrupt index, when the fallback `git diff` also fails.
+· Fixed file links in agent responses whose line anchor was percent-encoded, such as `file.go%23L795`; the label now shows the line number and the link opens the correct line.
+· Fixed separate links to the same URL highlighting together when you hover over one of them in terminals that support clickable links.
+· Fixed counts in tool steps and the `/codesearch` panel, which now read "Found 1 result", "1 match", "1 file", and "Wrote 1 line" instead of "1 results", and the file-creation step reporting one line too many.
 
-1.1.21:
-· Added `/voice` dictation, which transcribes speech straight into the prompt; press `f5` or run `/voice` to start and stop it, and use the `mic-serve` subcommand to forward a local microphone to a CLI running on another machine over SSH. Only one live dictation stream is allowed per account, and a second one now says so instead of reporting an exhausted quota.
-· Added a `cost` field to the status line data model, exposing the unrounded estimated cost of the current session so a custom status line can display running token spend.
-· Improved the agent's code search by running an embedded `ripgrep` binary instead of shelling out to whatever the machine provides, so searches are faster and behave identically on systems with no `ripgrep` installed.
-· Improved the `always-proceed` permission mode to auto-approve MCP tool calls and page reads as well, which kept prompting even though the mode exists to run without interruptions.
-· Improved allow-always permission suggestions for script runners such as `npm run`, `yarn`, `pnpm` and `cargo run` by pinning the specific script name, so approving `npm run dev` no longer grants every script in the project.
-· Improved conversation titles by generating them automatically when a conversation is created, so the resume picker shows a meaningful name instead of a placeholder from the first message.
-· Improved the error shown when an MCP server configured for Google credentials cannot find Application Default Credentials.
-· Fixed corrupted edits to files containing non-ASCII text such as CJK characters, accented letters or emoji, where an inexact match was spliced at the wrong offset and produced invalid UTF-8.
-· Fixed the session stalling mid-response when a tool result or file diff contained invalid UTF-8, which broke the agent state stream and left the interface waiting indefinitely.
-· Fixed a file write being reported as a failure after the content had already been written to disk, which sent the agent into unnecessary retries on large files such as notebooks.
-· Fixed explicitly configured skill and plugin paths losing to customizations discovered automatically nearby, so a path you set in your configuration now wins a name collision.
+1.3.2:
+· Added `/plugin`, an interactive manager for the official Antigravity plugin marketplace: browse and install plugins that bundle skills, MCP servers, subagents, rules, and hooks, or install them from your shell without opening the CLI with `agy plugin install <plugin-name>@antigravity-plugins-official`; install one straight from a folder on your computer with `+ Install from local directory...`; fill in any settings a plugin needs in a simple form before it turns on; and manage installed plugins with `/plugin install`, `uninstall`, `enable`, `disable`, and `list`.
+· Added more options for plugin authors: keep the manifest in a `.antigravity-plugin/` or `.gemini-plugin/` folder, list skills in `plugin.json`, store data in a per-plugin folder available as `PLUGIN_DATA`, and ship command-line tools in a `bin/` folder that the agent can run by name.
+· Improved plugin installs: the plugin list opens instantly, an interrupted install never leaves a half-installed plugin behind, and installing or removing plugins on Windows is more reliable.
+· Improved plugin compatibility: plugins load every skill in their `skills/` folder, remote MCP servers start correctly once their settings are filled in, and a plugin's subagents can use the plugin's own MCP servers.
+· Changed `--dangerously-skip-permissions` to stop auto-approving the agent's implementation plan in `/plan` mode: the flag now only skips tool permission prompts, so plans wait for your review again. Set `Artifact Review` in `/config` if you want plans and other artifacts to proceed automatically.
+· Improved CPU usage while the agent runs long shell commands with a lot of output, since output that is already valid UTF-8 is no longer rescanned in full on every update.
+· Fixed `Tab`, `→`, and `←` in the `/diff` Commit Tree view moving the cursor to other lines instead of switching views as the `←/→ switch view` hint says, and added `Shift+Tab` to switch to the previous view in every `/diff` tab.
+· Fixed the `/resume` conversation picker crashing when you pressed `Enter` to import a conversation from the `Other` tab on a narrow terminal, and conversation titles with CJK characters being cut off mid-character.
+· Fixed conversations that collect many images failing on Claude models: images the agent views or you attach are now scaled down to at most 2576 pixels per side (previously 4096), keeping them within the model's limits however many images a conversation contains.
+· Fixed a timer the agent scheduled with a wake-up condition keeping a CPU core at 100% until it expired when the condition could no longer be met; the timer now waits idly and fires on schedule.
 
-1.1.20:
-· Added skill icon and visual branding support across the CLI, displaying emoji icons declared under `metadata.icon` in `SKILL.md` frontmatter across the `/skills` catalog list view, detail inspection headers, and slash command autocompletion popups, with proper multi-byte Unicode display width calculation to maintain terminal layout alignment.
-· Improved `@` file path autocompletion by indexing empty directories alongside files in ripgrep search results, allowing unpopulated and directory-only workspace structures to be discovered and traversed during path completion.
-· Improved permission management by automatically granting workspace-scoped read access under the default review mode, eliminating repetitive approval prompts for reading or listing files within the workspace root while strictly maintaining confirmation prompts for file modifications and external access.
-· Improved Git repository inspection performance by skipping recursive submodule worktree scans while continuing to track commit pointer updates to eliminate status latency in repositories with submodules.
-· Fixed print mode (`-p`/`--print`, including `--output-format json` and `stream-json`) treating benign tool execution errors and permission denials as fatal run failures with non-zero exit codes, ensuring headless exit codes reflect only cascade-level failures and match interactive session behavior.
-· Fixed the CLI overwriting and discarding unparsed configuration in `settings.json` when encountering an unrecognized setting value or syntax error on startup, preserving the existing configuration file on disk instead of saving a truncated version.
-· Fixed `/skills`, `/plugins`, `/agents`, and `/hooks` commands reporting that no customizations were found when invoked without an explicit agent configuration by mounting built-in customizations in listing views.
-· Fixed CJK draft jitter in the main prompt by normalizing boundary whitespace in streaming transcript updates, preventing unwanted spaces from being inserted characters.
-· Fixed the conversation spinner animation loop continuing to tick indefinitely in the background after turns completed, eliminating unnecessary CPU wakeups while the CLI is idle.
+1.3.1:
+· Improved navigation in the `/diff` file view: `←`/`→` now open the next or previous file at its first change with the hunk header and leading context in view, each file remembers its cursor and scroll position when you switch files or go back to the file list, `n`/`N` continue into the next or previous file's changes instead of stopping at the last change in the current file, and the key-hint footer drops the generic scroll and page hints and wraps onto extra lines instead of being cut off on narrow terminals.
+· Improved the `/diff` file view header to show where you are: it now ends with a right-aligned `change A/B · file X/Y` position, counting the block of added or removed lines under the cursor and the file's place in the file list (`file X/Y` is left out when only one file changed, and the position is hidden on narrow terminals).
+· Fixed `/rewind` in very long conversations listing older messages as `(empty message)` and failing with an error when you picked one: messages that were cleared to save space now show their original text, dimmed and labeled `cleared to save space, can't rewind here`, and can no longer be selected.
+· Fixed installing, reinstalling, and uninstalling plugins with `/plugin` on Windows failing while one of the plugin's MCP servers was running: the CLI now stops the plugin's MCP servers before replacing or deleting its folder and restarts them afterwards, and if another Antigravity process such as another `agy` session, the Antigravity Hub, or the `remote-control` daemon still holds the plugin open, it tells you to close it and retry. Plugin manifests, `mcp_config.json`, and `hooks.json` files saved with a UTF-8 byte-order mark now load, and installing from a marketplace no longer overwrites an existing plugin folder that came from a different source.
+· Fixed markdown custom agents ignoring `skills:`, `plugins:`, `rules:`, `agents:`, and `hooks:` entries written as paths relative to the agent's own file when the agent ran as a subagent or as the main agent; such entries now resolve against the agent's directory, so an agent that lists `agents: [child.md]` can invoke `child`.
+· Fixed subagents that stopped on an error, such as running out of quota or model capacity, being shown as `Done` in `/agents` and the list of running agents; they now show `Error:` with the reason, and the error clears once the subagent makes further progress.
+· Fixed `/tasks`, the active task list, and the status line's task count showing only background shell commands; timers and recurring jobs the agent schedules, and other tools running in the background, now appear there too and are shown as `completed` or `failed` without a made-up exit code.
+· Fixed messages sent with `Queued Messages` set to `Send Immediately` in `/config` being silently queued until the end of the turn whenever the agent had already written or updated an artifact, such as a task list or plan, during that turn; they now reach the agent right away.
+· Fixed terminal notifications not firing when the agent stops to ask you a question; with `Notifications` turned on in `/config`, the CLI now alerts you for pending questions just as it does for tool permission prompts.
+· Fixed restarting an MCP server from `/mcp` sometimes leaving it stopped, with an error such as `Failed to stop existing instances for reload: ... signal: killed`, when the old server process took too long to exit; the server now always starts again.
+· Fixed the sign-in error for accounts that need to verify their identity or appeal a Terms of Service block sometimes showing only `Verify your account to continue.` with no link; the verification or appeal link now always appears, and the CLI no longer suggests logging out and back in when that would not help.
+· Fixed `GEMINI_API_KEY` sessions failing a turn as if you had cancelled it when the connection to the Gemini API was dropped internally; the CLI now retries the request instead.
 
-1.1.19:
-· Fixed `--remote-control` refusing to start whenever port was taken, so it now takes a free port from the operating system.
-· Added the `AGY_CLI_HIDE_LOGO` environment variable for narrow terminals, screen readers and recordings where the banner's logo art gets in the way; setting it suppresses the art while keeping the version and account lines.
-· Added `AGY_CLI_DISABLE_ESCAPE_SEQUENCE_OPTIMIZATIONS` to bypass the renderer's dirty-rectangle and diffing optimizations.
+1.3.0:
+· Changed the default `Verbosity` setting from `high` to `medium`, so the conversation view now groups related tool calls and thoughts into concise summaries while keeping commands and responses visible. This applies to everyone who never picked a verbosity, including anyone who selected `high` while it was still the default; set `Verbosity` back to `high` in `/config` to see every tool call, command, and thought in full again.
+· Changed `j` and `k` in the `/diff` file view to move the line cursor like the up and down arrow keys, matching the file list and Vim, instead of jumping to the next or previous file; use the left and right arrow keys to switch files.
+· Fixed trackpad and mouse-wheel scrolling in the conversation view jumping back and forth, most noticeably over SSH or inside tmux, by ignoring the sideways part of diagonal swipes and limiting how far a single fast scroll step can move; `Page Up` and `Page Down` still move a full page.
+· Fixed files and folders whose paths contain spaces, `#`, `%`, or other special characters, or that sit on a Windows drive, being mishandled across the CLI: `@` file mentions, `/codesearch` results, and file links in agent responses now open the right file, and workspace trust and project-scoped custom agents now recognize projects created in the Antigravity desktop app in such folders.
 
-1.1.18:
-· Added support for passing a project name to `--project`, which previously accepted only a project ID and failed on anything else.
-· Added `item.rename` and `item.delete` keybindings for the conversation picker's rename and delete actions, so `f2` and `f4` can be rebound in `keybindings.json` on keyboards without function keys.
-· Improved `@` file path completion with a typo-tolerant fallback, so a query with a transposed or mistyped character still finds the file; typo matches never outrank exact ones.
-· Improved audio attachments by recognizing the standard formats Gemini models accept, including `wav`, `mp3`, `m4a`, `aac`, `flac` and `opus`, which were previously refused as unsupported.
-· Improved keystroke responsiveness on Windows by discarding the key-release events the console reports and nothing in the CLI reads, which were roughly doubling the rendering work per keystroke.
-· Improved the artifact viewer footer by moving the outline shortcut next to the scroll and page hints, so the three ways to move through a document read as one group.
-· Fixed print mode (`-p`) exiting successfully with an empty response when the agent state stream was dropped mid-run, which reported a failed turn as a clean success; it now surfaces the stream error and exits non-zero.
-· Fixed a valueless prompt flag swallowing the next flag as its prompt, so `--print --sandbox 'do the task'` no longer runs with the prompt `--sandbox` and the sandbox off; both that and a stray trailing argument are now errors.
-· Fixed an expanded `/btw` card pushing the footer hints and the prompt off-screen on a long answer, which is now clamped to the terminal height and scrollable with the arrow and page keys.
-· Fixed `/resume` opening below the fold instead of on the workspace you are working in, which happened whenever the CLI ran from a subdirectory of that workspace.
-· Fixed text losing its styling for the rest of a line after a file link, where the link's own reset also reset the surrounding prose.
-· Fixed a stray character appearing in the prompt every couple of seconds on terminals that print the CLI's periodic input-mode re-arming as literal text; the re-arm now happens only inside a terminal multiplexer, which is the only thing that resets those modes behind the CLI's back.
+1.2.17:
+· Added announcement cards above the prompt for model launches, deprecations, and other service notices. Cards appear one at a time, newest first; press `Esc` on an empty prompt to dismiss the current card permanently and show the next one, and sending a message hides the card for the rest of the session.
+· Improved the Windows command sandbox so sandboxed commands no longer need administrator rights, and common tools such as Python, Git, and `npm` work inside the sandbox out of the box.
+· Fixed markdown table columns drifting out of alignment when a cell contains emoji such as ⚠️ or 👍🏽 or scripts with combining characters such as Hindi, which affected every session over SSH or inside tmux.
+· Fixed `.tiff` images being reported with the wrong file type and silently converted to PNG when the agent viewed them.
 
-1.1.17:
-· Improved the agent execution harness by consolidating onto a single execution path, giving more consistent tool, hook, and prompt behavior.
-· Fixed `/teamwork-preview` and some other slash commands disappearing for some users.
-· Fixed `Enter` not opening an active background task or subagent while the prompt was in Vim insert mode.
-· Fixed attaching Ogg audio and video files such as `.ogg`, `.opus` and `.ogv`, which the model rejected because they were sent as the generic `application/ogg`.
+1.2.16:
+· Added `←`/`→` shortcuts to `/config`: on a highlighted setting they switch to the previous or next value and save it right away, without opening the dropdown, and the footer shows a `←/→ Change` hint
+· Improved responsiveness in long conversations in no flicker (altscreen) mode: resizing the terminal no longer freezes or lags the CLI, the full-screen view redraws the messages on screen first instead of showing text wrapped for the old width until the whole conversation has re-rendered, and interrupting the agent with `Esc` or resuming a conversation no longer re-renders every step already on screen.
+· Improved mouse text selection in the `altscreen` view and in the artifact viewer: dragging past the top or bottom now auto-scrolls, the selection stays on its text while the agent streams or you scroll with the wheel, and copying includes lines that scrolled off screen, without line numbers or comment previews from the artifact viewer
+· Improved the always-allow suggestion when approving `go` commands: approving a command such as `go vet` or `go build` now offers to allow that subcommand with any arguments, while `go run`, `go test`, `go generate`, `go install`, and `go tool` still require the exact command
+· Improved the `Send Immediately` option for Queued Messages in `/config`: a message you send while earlier messages are still queued now goes to the agent together with them, in order, instead of joining the queue, and a message that fails to send mid-turn goes back to the queue instead of being lost
+· Changed how the agent generates images: it now hands image requests to a built-in `image-generator` subagent, which writes the prompt, checks each result with up to three attempts, and saves the images to the conversation's artifacts, so image generation appears as a subagent run in the conversation
+· Fixed the agent stalling when a background command it was waiting on crashed or was killed by the system, for example when it ran out of memory; the agent now sees the command finish with its exit code, such as `137` or `134`, and keeps going
+· Fixed headless `-p` runs sometimes exiting before the agent could respond to a background command that finished after its first turn
+· Fixed `k` in Vim Normal mode recalling the last history entry instead of your queued messages when pressed on the top line, which could send a queued message twice; `k` now pulls queued messages back into the editor like the `Up` arrow does
+· Fixed `skills.json`, `rules.json`, and other customization manifests in a parent `.agents/` directory being ignored when a session started in a subdirectory; manifests now load from every `.agents/` directory between the working directory and the project root
+· Fixed the `/` menu listing built-in skills that the current agent does not enable, which inserted instructions for tools the agent could not use when selected
+· Fixed settings failing to load when `~/.gemini/config/config.json` starts with a UTF-8 byte order mark, as files saved by Notepad or PowerShell `Set-Content` on Windows do
+· Fixed slash-command output and alerts where a line exactly as wide as the terminal had its last word pushed to the start of the next line without indentation
 
-1.1.16:
-· Added `mcp` subcommands (`add`, `remove`, `list`, `enable`, `disable`) for managing MCP servers in your user-level `mcp_config.json` without hand-editing it, covering both stdio and HTTP servers through `--type`, `--env` and `--header`.
-· Improved `@` file path completion in large workspaces by running the lookup through the bundled `ripgrep` and debouncing keystrokes, and by ranking a file whose name matches your query above a directory or generated artifact that merely contains it.
-· Improved `/effort` so it adjusts reasoning effort for Gemini 3.6 Flash and Gemini 3.7 Flash when you sign in with a Gemini API key, a route that previously reported those models as not adjustable even though the same models were adjustable on every other sign-in path.
-· Fixed links printing as raw escape sequences on terminals that do not implement OSC 8 hyperlinks, such as Terminal.app, and extended the same detection to command output and alert bodies, which still emitted hyperlinks unconditionally.
-· Fixed a `=` character accumulating in the prompt every couple of seconds on terminals that do not implement the Kitty keyboard protocol, where the renderer's periodic re-arming of that protocol was printed as literal text instead of being interpreted.
-· Fixed `@` file path completion showing files that were in your `.antigravityignore`.
-· Fixed the artifact list showing a percent-escaped filename such as `quarterly%20plan.md` for artifacts whose name contains a space, so the list row, the inline preview and the detail header all spell the name the same way.
-· Fixed the prompt editor's cursor becoming misaligned when text wrapped.
-· Fixed the `/mcp` panel dropping `enabledTools`, `timeoutSeconds`, `url` and `tools.eager` from `mcp_config.json` when you toggled a server on or off; it now preserves any field it does not recognize, so configuration written by a newer client survives an edit.
-· Fixed `read_resource` discarding non-image binary content returned by an MCP server, which now offloads every blob to disk and inlines only small text and image resources, so large PDFs, audio and other binary resources are usable instead of silently dropped.
-· Fixed Workforce Identity Federation sign-in signing you out roughly every hour, because the token refresh went to the standard sign-in endpoint rather than the federated one.
-· Fixed skills that ship with the CLI being reported as not built-in, so the `builtin` flag in the `/skills` listing under `--output-format json` is accurate and the `/skills` panel groups them correctly.
-· Fixed the reasoning-effort description under the timeline gauge in the `/effort` and `/model` pickers overflowing on narrow terminals, where it is now omitted so the gauge stays readable.
-· Fixed `/btw` failing with a planner configuration error in conversations driven by a custom or SDK-defined agent, so side questions work regardless of which agent you are running.
-· Fixed a failed `/btw` side question always reporting `model returned an empty response`, which was a hardcoded guess rather than the real failure; the card now shows the side question's own error when there is one.
-· Fixed the status line, the active-items list and the `/tasks` panel continuing to show background tasks that had already finished.
-· Fixed the CLI overwriting a `settings.json` it could not parse with default settings, which silently reverted every setting the next time anything was saved; a refused save now leaves the file byte-identical so you can repair it by hand, and the status line names the file.
-· Fixed a subagent whose definition leaves `model` at `inherit` failing to start when the parent agent has no model of its own, which now falls back to the default fast tier.
+1.2.15:
+· Added prebuilt native Android binaries of the CLI that can run directly in Termux, without requiring a proot-distro environment.
+· Improved responsiveness while typing, scrolling, and streaming agent output by sharply reducing the memory the CLI allocates on every update and redraw
+· Improved `-p "/usage"` to show quota reset times in your local time zone when printing to a terminal; piped and `--json` output still use UTC timestamps, so existing scripts are unaffected
+· Improved the always-allow suggestion when approving `repo` commands: it is now limited to the subcommand, such as `repo status`, instead of allowing every `repo` command, matching `git`, `hg`, and `jj`
+· Improved how the agent handles a permission request that is not approved, such as one raised by a subagent that cannot ask you: it now respects the denial and no longer tries to work around it with other commands, scripts, or tools
+· Fixed the conversation view freezing for the rest of the session, with no new steps appearing while the agent kept working, after redraws such as several quick terminal resizes in a long conversation; the CLI now reconnects automatically, warns only if reconnecting fails, and sending a new message recovers a lost connection
+· Fixed requests made after your plan quota is used up and your AI credits balance cannot cover them: instead of retrying on `Working...` for about two and a half minutes and then showing the generic "Agent execution terminated due to error.", the CLI now immediately says "Your AI credits balance is too low to continue."
+· Fixed text like `Ga=q,f=32,s=1,v=1,i=31;AAAAAA==` being left behind in macOS Terminal.app after exiting the CLI over SSH; the CLI now asks the terminal to identify itself before probing for image support, and over SSH only Kitty and Ghostty are treated as image-capable, so WezTerm and Konsole no longer show garbled image placeholders
+· Fixed the Vim mode cursor stopping inside emoji such as 👩‍💻 or ⚠️ and characters with combining marks such as Devanagari: `h`, `l`, and other motions now move over whole characters, and `x` and `r` delete or replace the whole character instead of a hidden part of it
+· Fixed the search box in the `/resume` conversation picker wrapping long queries so that their beginning scrolled out of view; the box now uses the full terminal width
+· Fixed the agent being blocked from reading your global rules and customization files in `~/.gemini/config`, including the `rules/` folder, `AGENTS.md`, `GEMINI.md`, `skills.json`, `rules.json`, `plugins.json`, and `agents.json`; it can now read them and asks before editing them, while other files in that folder stay off-limits
+· Fixed global rules being added to the agent's context more than once when `~/.gemini/GEMINI.md`, `~/.gemini/AGENTS.md`, or their `~/.gemini/config/` counterparts are symlinks to the same file
+· Fixed signing in to MCP servers whose OAuth client registration responds with HTTP `200` instead of `201`, which previously failed with `registration failed with status 200`
+· Fixed large WebP images opened by the agent not being scaled down to fit image size limits the way PNG and JPEG images are
 
-1.1.15:
-· Added `--input-format stream-json` to print mode, which reads newline-delimited JSON prompts from stdin and runs one turn per message in a single conversation, so a driver can keep a session open.
-· Added a `rules:` key to markdown agent frontmatter, so an agent can name rule files directly instead of inheriting your whole rule tree; a rule named this way always applies.
-· Added plugin support for a top-level `rules.json`, so a plugin can declare the rule files it ships the same way it already declares its skills.
-· Added a more specific hint on the spinner line, which now names the tool call the agent is currently running.
-· Fixed the CLI aborting at startup on hosts that preload their own allocator through `LD_PRELOAD`, such as Cloud TPU VM images, where it died before the interface appeared.
-· Fixed personal accounts hitting a resource-exhausted error at startup when saved credentials were restored from the system keyring, and cut the repeated account checks that followed.
-· Fixed your billing project, and the license tier it selects, being lost when the CLI restarted and restored saved credentials from the system keyring.
-· Fixed a spurious "Out of credits" message for enterprise users signed in through Application Default Credentials.
-· Fixed the `/model` picker cutting off models, and its own header, on terminals too short to show every model; the list now scrolls.
-· Fixed the `/model` picker misaligning its columns for model names that are not plain ASCII, by measuring column widths in display cells rather than bytes.
-· Fixed the spinner line flickering to a generic label between quick tool calls.
-· Fixed streamed text corrupting non-ASCII characters into replacement characters, in both the interactive display and `--output-format stream-json` text deltas.
-· Fixed artifacts written into a subdirectory of a conversation's artifact directory, such as `scratch/`, never appearing in the artifact list.
-· Fixed reading a `.wav` file failing as an unsupported media type, by normalizing non-canonical MIME types such as `audio/wave` before they reach the model.
+1.2.14:
+· Added the `Queued Messages` option to `/config`: keep the default `Queue` to hold follow-up messages until the current turn ends, or choose `Send Immediately` to interrupt the agent with them; it can also be set with `"queuedMessages": "send-immediately"` in `settings.json`, which was previously ignored
+· Improved `remote-control start` on Linux machines without a systemd user service manager, such as most containers: instead of failing, it now starts the daemon as a background process and warns that it will not restart after a crash or start at boot; `remote-control status` shows its PID and `remote-control stop` shuts it down
+· Improved loading long conversations: resuming a conversation with thousands of steps is noticeably faster because the CLI no longer scans every step up front
+· Improved automatically generated conversation titles to take images and files attached to your first message into account, so screenshot- or file-driven requests get specific titles and messages with only attachments get a title too
+· Improved the sign-in error shown to accounts blocked for a Terms of Service violation, which now includes a link to submit an appeal
+· Changed `--json-schema` to reject plain text, bare type names such as `string`, and missing schema files instead of silently treating them as a string schema; these inputs, and any schema whose root is not `"type": "object"`, now fail at startup with an error and exit code `1`
+· Fixed the prompt cursor drifting away from the end of the text after emoji such as ⚠️ or 👩‍💻, or scripts with combining marks such as Devanagari and Thai, especially inside `tmux`, and fixed prompt wrapping splitting such characters across two lines
+· Fixed the agent hanging when it tried to view a pipe, socket, or device file, and a conversation getting stuck with `INVALID_ARGUMENT` errors after the agent viewed a truncated MP4, MOV, or M4A recording; both are now rejected up front with a clear message
+· Fixed resuming a conversation whose history had a missing step, for example after a crash or an interrupted write, hiding the most recent steps and letting new messages overwrite them
 
-1.1.14:
-· Added a faster return path for enterprise sign-in, so a returning user is offered a single `Continue with ...` option naming the method they last used.
-· Added support for OAuth client ID metadata documents when connecting to an MCP server, so servers implementing that part of the specification no longer require a manually supplied client ID or dynamic client registration.
-· Improved the `/context` panel, which is now scrollable and sized to the terminal. `/usage` is sized the same way.
-· Improved markdown-defined agents with a single `inheritCustomizations` switch that decides whether the agent adopts your skills, rules, plugins, subagents and MCP servers, replacing per-kind defaults that silently disagreed with each other.
-· Improved the setting that allows access outside your workspace, which now grants only read access; writes are auto approved according to the cycle mode setting.
-· Fixed the CLI exiting silently when its language server failed, both at startup and while running; the failure is now printed to the terminal and the process exits non-zero instead of reporting success.
-· Fixed the sign-in URL and other links rendering as garbled text on terminals that do not parse OSC 8 hyperlinks, such as GNU `screen`, which are now detected and given plain text instead.
-· Fixed `Enter` being swallowed while the path-suggestion popup was still loading, which sent the prompt and then popped the results open on top of it.
-· Fixed the artifact list marking every earlier artifact as approved when reopened, so artifacts that were unreviewed, commented on or rejected in a previous turn keep their real status.
-· Fixed one malformed entry in your MCP configuration bringing down every other server, which is now logged and skipped so the remaining servers still load.
-· Fixed built-in skills, rules and plugins disappearing from an agent that set `inherit_user` to false, which was only meant to opt out of your personal customizations, not the ones shipped with the CLI.
-· Fixed reverting or branching a long conversation failing with `too many SQL variables`.
-· Fixed a long conversation's title jumping to an unrelated older message once history was truncated, by protecting the checkpoint the title is derived from.
-· Fixed a multi-line paste submitting one prompt per line on terminals that do not honour bracketed paste.
+1.2.13:
+· Improved rate-limit handling when the model API returns a retry delay: the CLI now waits the delay the server asks for instead of a fixed 5 seconds, and stops right away instead of retrying when the delay is longer than 30 seconds or the quota is a daily or billing cap
+· Improved rendering efficiency, cutting CPU use and memory churn while the conversation view redraws, such as during fast scrolling or while the agent is working
+· Improved the artifact viewer's `m` hint to name the content and the mode it switches to, such as `diagram ASCII`, `diagram source`, or `math image`, instead of `toggle ASCII` or `toggle raw`
+· Fixed the workspace trust dialog, the `/help` panel, and the sign-in and MCP authentication screens clipping text on narrow terminals of around 40 columns; long lines and navigation hints now wrap, and the `/help` tab bar compacts to fit
 
-1.1.13:
-· Added support for `GEMINI_API_KEY`, so the CLI can run against the Gemini API directly without signing in. Set `modelProvider: "gemini"` in `settings.json`, export `GEMINI_API_KEY`, and point `GOOGLE_GEMINI_BASE_URL` at a custom endpoint if you need one. The banner and `/help` show `Gemini API key` as the credential, and `/logout` explains that it comes from the environment rather than appearing to end a session.
-· Improved `/codesearch` resilience by falling back to a local search when the `ripgrep` binary cannot be executed, such as when an endpoint security agent blocks it.
-· Improved artifact list scrolling by caching each file's preview line count, which previously re-read every listed file from disk on every keypress.
-· Improved custom agent support by making `manage_task` available to declarative agents that have not opted out of fundamental components, so a custom agent can list and kill its own background tasks, and reworded its step lines to read `Killed task X` and `Checked task X`.
-· Improved `search_web` steps by showing the query while the search is still running rather than only after it returns.
-· Improved the agent's behavior after backgrounding work by removing the anti-polling reminder text from the `manage_task` and `manage_inbox` tool results, which could itself nudge the model into a polling loop.
-· Improved the `/resume` picker by relabeling its second tab, which previously carried a name that did not distinguish it from the first.
-· Improved deleting a conversation from the `/resume` picker by moving the keybinding from `ctrl+delete` to `f4`, since macOS terminals disagree on how they report the delete key and the old binding silently did nothing there.
-· Improved the time to open a large conversation by loading step headers in batches and no longer reading each step's full payload just to read its type.
-· Improved embedded ripgrep reliability and security by saving extracted binaries to the user cache directory instead of /tmp. Added content-addressed SHA-256 verification and atomic renaming to guarantee binary integrity and prevent concurrent execution races.
-· Fixed a distorted startup banner in Cloud Shell, where the web terminal mishandles the cursor-optimization escape sequences the renderer emits; a conservative rendering mode now turns on automatically there.
-· Fixed the direct Gemini API route parking on the sign-in screen instead of booting straight into the main UI, and fixed model requests failing against a custom endpoint set through `GOOGLE_GEMINI_BASE_URL` by dropping a session field such an endpoint is not guaranteed to support.
-· Fixed conversations disappearing from the `/resume` picker after cycling to the second tab and back, which left it reporting `No conversations available`, and kept the `tab` hint in the shortcut bar even when a tab is empty.
-· Fixed trajectory truncation destroying nearly all of a long conversation's history, by charging the size budget only against steps whose bytes can actually be reclaimed instead of against protected checkpoints and the unreclaimable residue of already-cleared steps.
-· Fixed unbounded growth of the on-disk conversation database in sessions woken by background tasks, subagents or agent messages, where each wake appended duplicate grants and settings to every persisted row.
-· Fixed corruption of the saved transcript when a background message appended to it while context compaction was rewriting it, which left malformed JSON that no longer parsed.
-· Fixed a hung sandbox setup killing the rest of the conversation, where the step was never unregistered so every later message was silently swallowed and the session appeared dead until a restart.
-· Fixed `define_subagent` using a model-supplied agent name directly as a directory name, so a name containing `..` could write its `agent.md` outside the conversation's artifact directory; names are now validated at both the tool and the handler.
-· Fixed artifact list rendering, where previews produced garbled text and overflowed the panel on wide CJK or emoji characters, the cursor could point past the end of the list when entries disappeared, and the header and footer lines were left out of the scroll math so the list overflowed its viewport.
-· Fixed `Esc` in the artifact viewer showing a spurious submit confirmation for reviews that had completed in earlier turns, and fixed submitting re-reporting those same reviews.
-· Fixed `invoke_subagent`, `send_message`, `manage_subagents`, `define_subagent`, and `generate_image` rendering with no tool call line at all in collapsed and expanded tool groups, leaving a bare `(ctrl+o to expand)` hint with no tool name.
+1.2.12:
+· Improved scrolling in the full-screen view: bursts of mouse-wheel or trackpad events are now coalesced before redrawing, which cuts CPU use and reduces scroll lag in long conversations and the artifact viewer
+· Improved `GEMINI_API_KEY` sessions to stop immediately when the Gemini API reports an exhausted daily quota, a project or billing-account spend cap, or depleted prepaid credits, instead of spending several minutes on retries that cannot succeed; short-lived per-minute rate limits are still retried
+· Fixed resuming a long conversation in `medium` or `low` verbosity taking many seconds and lagging while history replayed: earlier tool groups now appear already finished instead of each re-animating, and keys pressed during the replay no longer refresh a half-loaded transcript
+· Fixed the terminal or tab title changing to a string like `Ga=q,f=32,...` every time the CLI starts inside GNU `screen`, `tmux` (including iTerm2 `tmux -CC` tabs), or Zellij; the CLI no longer sends its image-support probe through a multiplexer, and `CLI_GRAPHICS=kitty` still forces image mode
+· Fixed Vim mode ignoring non-ASCII characters such as `é` or `中` after `r`, `f`, `F`, `t` and `T`, `fv` and `fV` in Visual mode leaving Visual mode instead of extending the selection, and `D`, `C`, or Visual `~`/`u`/`U` recording an empty undo step and clearing redo history when they changed nothing
 
-1.1.12:
-· Added a heading outline to the artifact viewer, opened with `t`, so a long markdown document's structure is visible at a glance and you can jump straight to a section instead of scrolling.
-· Added non-interactive answers for more read-only slash commands in print mode, so `-p "/permissions"`, `/hooks`, `/help`, `/changelog` and `/config` each emit one tab-separated record per line — or a structured payload under `--output-format json` and `stream-json` — without starting an agent turn, spending quota or leaving a conversation behind, with `/help` listing exactly the commands print mode answers and `/changelog` printing the release notes.
-· Added machine-readable output to the `models` and `agents` subcommands through an `--output-format` flag accepting `json` and `stream-json`, and moved their error messages and progress spinner off stdout so captured output contains only the list.
-· Added a `disable-slash-command: true` flag for a skill's `SKILL.md` frontmatter, which hides that skill from the `/` menu and from `/name` resolution while leaving it discoverable and invocable by the model, so a large skill library no longer floods the command menu.
-· Added rendering for alert callouts (`[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) and for carousel blocks in markdown artifacts, which previously showed as raw markup.
-· Improved terminal hyperlink support, enabling clickable links over SSH and in hyperlink-capable `tmux`, keeping word-wrapped URLs clickable past their first line, linking URLs that the markdown renderer had left as plain text including ones inside code blocks, no longer highlighting unrelated links together on hover, and fixing horizontal scrolling and text selection on lines that contain a link.
-· Improved tool call headers so every native and MCP tool call carries a short summary of what it is doing instead of a bare name or a raw argument blob, with the same summary naming background tasks and subagents in the activity list and the matching action phrase describing the request in permission prompts.
-· Improved headroom for large toolsets by raising the per-session limit on tool declarations, so heavy MCP, plugin and skill setups stop being rejected for having too many tools.
-· Improved sign-in with Application Default Credentials by resolving the quota project automatically, so service-account logins work without extra configuration.
-· Improved repository detection so a Git repository nested inside a larger multi-repository checkout resolves to the intended root, with submodules and worktrees covered.
-· Improved headless `-p` runs so the agent settles a choice itself where it would otherwise ask, instead of stalling on a question nobody is there to answer.
-· Improved the `schedule` tool by dropping the redundant `Timer Cancelled` notification when a one-shot timer with an early-termination condition is cancelled, and by naming both the condition and the exact sender whose message satisfied it in the step result.
-· Improved file paths in tool step lines by collapsing your home directory to `~` instead of truncating the front of the path, so the interesting end of a long path stays on screen.
-· Fixed `--mode` being ignored in headless `-p` runs, where a valid value such as `accept-edits` or `plan` was never applied and an unrecognized value produced no warning at all.
-· Fixed startup diagnostics being swallowed into the log file instead of reaching the terminal, including crash notices, the `--conversation` not-found warning, the `--print` and `--prompt-interactive` conflict, conversation load errors, and the `--mode` and `--agent` warnings.
-· Fixed a character disappearing from your submitted prompt where it wrapped at the terminal's right edge, caused by the echoed prompt being indented after it had already been wrapped to the full width.
-· Fixed file citations in a response losing their line numbers, so a cited range renders as `path:10-25` again instead of just the file name.
-· Fixed a write-in answer in a multi-select question discarding the boxes you had already ticked, and fixed a stale write-in being submitted after you went back to a predefined option.
-· Fixed large background tasks crowding out the prompt by limiting each active item below the input box to a single line.
-· Fixed corruption of `config.json` by writing user config atomically, so a crash or a concurrent writer can no longer leave a truncated file that silently breaks settings persistence.
-· Fixed the CLI giving up on a slow OS keyring after one second and falling back to empty storage, which forced a re-login; it now waits five seconds, as every other keyring operation already did.
-· Fixed conversation preview titles derived from the first user message by cutting them at the first line and capping them at 500 characters, so a large pasted or scripted prompt no longer produces a multi-megabyte stored title.
-· Fixed a crash on Windows when resolving the conversation transcript path, by honoring the path's drive letter in the trajectory log artifact converter.
-· Fixed a subagent going silent on its parent when its own message failed to send, and fixed the parent being handed an empty notice when a subagent went idle without a final response.
-· Fixed the `read_url_content` tool leaking a connection on every call, which could eventually exhaust the machine's available ports.
-· Fixed the status line reporting model quota that was always one fetch out of date, so it now matches the quota you actually have left.
-
-1.1.11:
-· Added a Vim editing mode, off by default and switched on from `/settings` under `Editor Mode`, bringing modal editing to the prompt with Normal, Insert, Visual and Visual Line modes, a mode badge in the status line and a Vim tab in `/help`, and covering the `h`/`j`/`k`/`l`, `w`/`b`/`e` and `W`/`B`/`E` motions, the `0`/`^`/`$`/`gg`/`G` boundaries, the `f`/`F`/`t`/`T` character searches with their `;` and `,` repeats, the `i`/`a`/`I`/`A` insert entries, the `d`/`c`/`y` operators alongside `x`, `D` and `C` filling the unnamed register for `p`, and the `iw`/`aw`/`iW`/`aW`/`ip`/`ap` text objects.
-· Added Vim-aware submission so a prompt can be sent without leaving modal editing, through an `Editor Mode > Insert First` toggle that opens the prompt in Insert mode where a bare `Enter` submits and a modified key such as `shift+enter` or `ctrl+j` inserts a newline, `ctrl+s` and `ctrl+enter` keys that submit from Normal mode, an `Enter` binding available as `vim.insert.submit`, and the full set of `vim.*` scopes in `keybindings.json` for remapping any of it.
-· Added Vim editing to the comment editors in the diff and artifact-detail views, whose footer hints follow the active mode rather than showing one fixed set of bindings, and made a collapsed block behave as a single unit under Vim motions.
-· Added non-interactive answers for the read-only slash commands in print mode, so `-p "/usage"`, `/quota`, `/credits`, `/model`, `/effort` and `/skills` emit one tab-separated record per line — or a structured payload under `--output-format json` and `stream-json` — without starting an agent turn, spending quota, or leaving a conversation behind.
-· Added an explicit refusal for the remaining interactive-only slash commands in print mode, which previously fell through as literal prompt text and let the model answer as though the command had run, so `-p "/clear"` reported the context cleared while nothing was cleared; each now fails with the flag or subcommand that replaces it.
-· Improved plugin enable and disable so `config.json` is the only place enablement lives, seeded once from each plugin's manifest, which stops a plugin that later ships `"disabled": true` from switching itself off under someone who was already running it and stops a shipped-default change from moving every user on the next release.
-· Improved the artifact detail view by wrapping long lines in code files instead of clipping them at the right edge.
-· Improved model retries by honoring the server-supplied retry delay instead of the client's own backoff, so a retry after a rate limit or an overload waits exactly as long as the server asks.
-· Improved model-loading errors so a permission failure such as a missing license or a missing IAM role is shown as itself, with a troubleshooting link, instead of a generic failure during the run.
-· Fixed an allowlist entry that tokenizes to zero command words — `command(time)`, a comment-only entry, or an empty compound such as `()` — matching every command and silently auto-approving anything the agent ran; such an entry now matches nothing.
-· Fixed commands being auto-approved while the session was in request-review or strict permission mode.
-· Fixed admin controls being skipped for MCP servers at startup, where a fetch made before authentication cached "admin controls not applicable" and allowed every server for the next five minutes, and fixed the built-in Chrome DevTools MCP server being blocked outright by admin controls.
-· Fixed MCP progress callbacks being dropped and the task log file not being initialized, so long-running MCP tool calls report progress again.
-· Fixed a slash command receiving the collapsed `[Pasted text #N]` placeholder instead of the pasted content when its argument was pasted into the prompt.
-· Fixed the prompt saving the typed prefix rather than the completed command name to history when an autocompleted slash command was submitted, so up-arrow recall replays what actually ran, and made an alias require an exact match before auto-executing so a partial alias fills the prompt instead of running a command you did not finish typing.
-· Fixed an asynchronous settings refresh re-enabling the feedback survey partway through a print-mode run that had switched it off.
-· Fixed spurious "Out of credits" errors, where an empty credits response was read as a balance of zero.
-· Fixed the "Use AI Credits" setting being offered to accounts signed in through a Google Cloud project or application default credentials, where it does not apply.
-
-1.1.10:
-· Added Business sign-in for Gemini Enterprise accounts, so you can authenticate with a Google Cloud project under Google Cloud terms, use a license seat allocated or auto-assigned from your organization's GE-Standard or GE-Plus subscription, run inference in a chosen region, and have your organization's administrator controls applied to various features.
-· Added Workforce Identity Federation sign-in for enterprise users, available as the `Use advanced SSO config` option on the Google Cloud sign-in screen, so organizations that federate identity through an external provider can authenticate with their own identity provider.
-· Added sign-in with Application Default Credentials so you can use Agent Platform.
-· Added a non-blocking advisory banner when the same conversation is already open in another CLI instance on the same machine, pointing at `/fork` so two sessions no longer interleave writes into one trajectory.
-· Improved the terminal sandbox by granting read-only rather than writable access to a Git repository's `.git` directory, so the agent can inspect repository metadata without being able to rewrite it from inside the sandbox.
-· Improved hook ordering so hooks defined in `hooks.json` run before the built-in termination checks, which lets `PostInvocation` hooks observe the final invocation of a turn and lets `Stop` hooks run at all instead of sitting unreachable behind the built-ins.
-· Improved the `schedule` tool to accept `DurationSeconds` and `MaxIterations` when a model emits them as bare JSON numbers rather than strings, accepting integral values and rejecting non-integral ones with a clear error instead of failing the call.
-· Fixed `--model` and `--effort` being ignored in interactive sessions and in headless `-p` runs, where the flags were applied after model configuration had already been initialized so the run silently fell back to the persisted or default model.
-· Fixed a bare `--effort` resolving against the default model instead of the model you actually have selected, which could silently move you to a different model.
-· Fixed stopping a subagent tree stopping only the conversation it was invoked from, while every descendant subagent and the background tasks they owned kept running and the CLI still reported them as killed.
-· Fixed a forced-continuation deadlock where a coordinator waiting on active subagents or background tasks would loop injecting empty continue steps until it hit the invocation limit, wasting tokens and blocking progress.
-· Fixed the spacebar not toggling an option in multi-select prompts, including the `ask_question` dialog and the onboarding import checkbox, which left `x` as the only working toggle; the hint bar now advertises it.
-· Fixed the Left and Right arrow keys being captured to navigate the input box suggestion dropdown, so you can move the cursor and edit text again while suggestions are showing.
-· Fixed the model picker's "No models available" state rendering without its header and footer, so it now shows the standard chrome and an `esc` hint to go back.
-· Fixed tools that an MCP server marks to always run in the background executing as blocking calls that stalled the turn.
-· Fixed an MCP process leak when a server connection dropped unexpectedly.
-· Fixed the artifact viewer corrupting plain documents by horizontally clipping every document rather than only the diagram artifacts that need it.
-· Fixed the sandbox not recording blocked network requests when the command itself exited successfully, which hid the fact that a request had been denied.
-
-1.1.9:
-· Added slash-command and skill expansion to print mode, so a headless run such as `-p "/my-skill review this diff"` now resolves and applies the skill instead of sending it as literal text, with `--disable-slash-commands` to opt out.
-· Improved interactive startup so a slow or hanging MCP server no longer stalls the first agent turn, loading MCP servers in the background for the interactive session while headless and one-shot runs keep blocking so their single scripted turn still sees the full toolset.
-· Improved permission grants so a pattern approved at a prompt is recorded for the rest of the conversation, letting later commands that match it run without prompting again.
-· Improved the default system temporary-directory grant to cover writes as well as reads, so agents no longer trigger a permission prompt when creating or updating files there.
-· Fixed stop hooks that always block hanging the agent forever; after a configurable number of consecutive continuations, the hook can no longer block and the turn ends normally.
-· Fixed `PostToolUse` hooks firing on non-tool steps such as user input and model responses, which also caused them to ignore their configured matchers.
+1.2.11:
+· Improved reasoning effort level for models with different support, selectable with `--effort` or from the effort gauge in `/effort` and `/model`.
+· Changed plugins placed directly in `~/.gemini/config/plugins` so that a plugin whose MCP server needs configuration variables now starts disabled until you enable it, matching plugins installed through `/plugin`.
 ... [truncated at 65536 bytes by scripts/agy-surface.sh]
 ``````
 
@@ -880,6 +839,9 @@ The model catalog. Every name here carries a reasoning effort, but that is the c
 ``````console
 $ agy models
 Fetching available models...
+gemini-4-argon-high	Gemini 4 Argon (High)
+gemini-4-argon-medium	Gemini 4 Argon (Medium)
+gemini-4-argon-low	Gemini 4 Argon (Low)
 gemini-3.8-flash-high	Gemini 3.8 Flash (High)
 gemini-3.8-flash-medium	Gemini 3.8 Flash (Medium)
 gemini-3.8-flash-low	Gemini 3.8 Flash (Low)
@@ -901,9 +863,6 @@ The probe is `agy agents` rather than `agy --version`, because *which* command i
 
 ``````console
 $ agy agents; find $HOME -mindepth 1 -printf '%y %P' | sort
-d .cache
-d .cache/ms-playwright-go
-d .cache/ms-playwright-go/1.57.0
 d .gemini
 d .gemini/antigravity-cli
 d .gemini/antigravity-cli/bin
@@ -914,13 +873,16 @@ d .gemini/antigravity-cli/builtin/skills/agy-customizations
 d .gemini/antigravity-cli/builtin/skills/agy-customizations/docs
 d .gemini/antigravity-cli/builtin/skills/antigravity_guide
 d .gemini/antigravity-cli/builtin/skills/antigravity_guide/references
+d .gemini/antigravity-cli/builtin/skills/automation
 d .gemini/antigravity-cli/builtin/skills/generative_ui
 d .gemini/antigravity-cli/builtin/skills/migrate-workflows
 d .gemini/antigravity-cli/builtin/skills/permissioned-github
+d .gemini/antigravity-cli/builtin/skills/plugin
+d .gemini/antigravity-cli/builtin/skills/run-workflow
+d .gemini/antigravity-cli/builtin/skills/ui-plugin-navigation
 d .gemini/antigravity-cli/cache
 d .gemini/antigravity-cli/conversations
 d .gemini/antigravity-cli/crashes
-d .gemini/antigravity-cli/knowledge
 d .gemini/antigravity-cli/log
 d .gemini/config
 d .gemini/config/projects
@@ -939,16 +901,19 @@ f .gemini/antigravity-cli/builtin/skills/antigravity_guide/references/app.md
 f .gemini/antigravity-cli/builtin/skills/antigravity_guide/references/cli.md
 f .gemini/antigravity-cli/builtin/skills/antigravity_guide/references/ide.md
 f .gemini/antigravity-cli/builtin/skills/antigravity_guide/references/sdk.md
+f .gemini/antigravity-cli/builtin/skills/automation/SKILL.md
 f .gemini/antigravity-cli/builtin/skills/generative_ui/SKILL.md
 f .gemini/antigravity-cli/builtin/skills/migrate-workflows/SKILL.md
 f .gemini/antigravity-cli/builtin/skills/permissioned-github/SKILL.md
+f .gemini/antigravity-cli/builtin/skills/plugin/SKILL.md
+f .gemini/antigravity-cli/builtin/skills/run-workflow/SKILL.md
+f .gemini/antigravity-cli/builtin/skills/ui-plugin-navigation/SKILL.md
 f .gemini/antigravity-cli/cache/default_project_id.txt
 f .gemini/antigravity-cli/conversation_summaries.db
 f .gemini/antigravity-cli/conversation_summaries.db-shm
 f .gemini/antigravity-cli/conversation_summaries.db-wal
 f .gemini/antigravity-cli/installation_id
 f .gemini/antigravity-cli/jetski_state.pbtxt
-f .gemini/antigravity-cli/knowledge/knowledge.lock
 f .gemini/antigravity-cli/log/cli-$TIMESTAMP.log
 f .gemini/config/.migrated
 f .gemini/config/mcp_config.json
@@ -1142,6 +1107,8 @@ Each named hook supports:
 
 *   **`enabled`** (bool, optional): Defaults to `true`. Set to `false` to
     disable.
+*   **`SessionStart`** (array, optional): Handlers running once when a new
+    conversation session starts.
 *   **`PreToolUse`** (array, optional): Handlers running before a tool executes.
 *   **`PostToolUse`** (array, optional): Handlers running after a tool
     completes.
@@ -1158,6 +1125,9 @@ Each named hook supports:
 
 | Event            | When it fires     | Matcher target   | Structure         |
 | :--------------- | :---------------- | :--------------- | :---------------- |
+| `SessionStart`   | Once when a new   | N/A (ignored).   | Flat (list of     |
+:                  : session starts.   :                  : handler objects   :
+:                  :                   :                  : directly).        :
 | `PreToolUse`     | Before a tool     | Tool name (e.g., | Grouped (uses     |
 :                  : step executes.    : `run_command`).  : `matcher` &       :
 :                  :                   :                  : `hooks` wrapper). :
@@ -1221,15 +1191,18 @@ Every hook payload sent to `stdin` includes these common system metadata fields:
   "workspacePaths": ["/path/to/workspace"],
   "transcriptPath": "/path/to/workspace/.gemini/antigravity/transcript.jsonl",
   "artifactDirectoryPath": "/path/to/workspace/.gemini/antigravity/artifacts",
-  "modelName": "auto"
+  "modelName": "auto",
+  "lastUserInput": "Fix the failing unit test"
 }
+```
 
 > [!NOTE]
-> The `transcriptPath` and `artifactDirectoryPath` are product-specific. The example above uses `antigravity` (for Antigravity 2.0). Depending on the interface you are using, the directory name will differ:
-*   **CLI**: `antigravity-cli/`
-*   **Antigravity 2.0**: `antigravity/`
-*   **IDE**: `antigravity-ide/`
-```
+> The `transcriptPath` and `artifactDirectoryPath` are product-specific. The
+> example above uses `antigravity` (for Antigravity 2.0). Depending on the
+> interface you are using, the directory name will differ:
+> *   **CLI**: `antigravity-cli/`
+> *   **Antigravity 2.0**: `antigravity/`
+> *   **IDE**: `antigravity-ide/`
 
 --------------------------------------------------------------------------------
 
@@ -1279,6 +1252,7 @@ Use to gate, block, or audit tool executions.
 
         ```json
         {
+          "decision": "allow",
           "overwrite": {
             "CommandLine": "ls -la"
           }
@@ -1300,6 +1274,12 @@ Use for post-execution cleanup, auto-fixes, or analysis.
 
     ```json
     {
+      "toolCall": {
+        "name": "run_command",
+        "args": {
+          "CommandLine": "npm test"
+        }
+      },
       "stepIdx": 5,
       "error": "exit status 1", // Present if the tool failed
       ... (common fields)
@@ -1310,7 +1290,35 @@ Use for post-execution cleanup, auto-fixes, or analysis.
 
 --------------------------------------------------------------------------------
 
-### 3. `PreInvocation` Contract
+### 3. `SessionStart` Contract
+
+Use to inject welcome messages, initial instructions, or startup context once at
+the beginning of a new conversation session.
+
+*   **Input (stdin)**: Common system metadata fields (`conversationId`,
+    `workspacePaths`, `transcriptPath`, `artifactDirectoryPath`, `modelName`).
+
+*   **Output (stdout)**:
+
+    ```json
+    {
+      "injectSteps": [
+        {
+          "systemMessage": {
+            "systemMessage": "Welcome! Custom workspace environment is active."
+          }
+        }
+      ]
+    }
+    ```
+
+    *   **`injectSteps`** (array of objects, optional): Steps to inject at
+        session startup. Accepts the same step types as `PreInvocation` (see
+        below).
+
+--------------------------------------------------------------------------------
+
+### 4. `PreInvocation` Contract
 
 Use to inject context or instructions before the model runs.
 
@@ -1338,13 +1346,20 @@ Use to inject context or instructions before the model runs.
 
     *   **`injectSteps`** (array of objects, optional): Steps to inject.
         Supported step types:
-        *   `{"toolCall": {"name": "...", "args": {...}}}`
-        *   `{"userMessage": "..."}`
-        *   `{"ephemeralMessage": "..."}` (transient system message)
+        *   `{"systemMessage": {"systemMessage": "...", "metadata": {...}}}`
+            (persists in the conversation trajectory across turns; note that
+            `systemMessage` requires a nested object rather than a plain string).
+            To show markdown to the user that the model never reads, set
+            `metadata.user_markdown`: the UI renders it inline instead of a
+            collapsible "System Message" row, and the model sees only the
+            `systemMessage` text (leave it `""` to send the model nothing).
+        *   `{"userMessage": "..."}` (plain string)
+        *   `{"ephemeralMessage": "..."}` (plain string; transient message
+            dropped after the current turn)
 
 --------------------------------------------------------------------------------
 
-### 4. `PostInvocation` Contract
+### 5. `PostInvocation` Contract
 
 Use to inspect model outputs and potentially force continuation.
 
@@ -1358,7 +1373,8 @@ Use to inspect model outputs and potentially force continuation.
     }
     ```
 
-    *   **`injectSteps`** (array, optional): Steps to inject.
+    *   **`injectSteps`** (array, optional): Steps to inject (same supported
+        step types as `PreInvocation`).
     *   **`terminationBehavior`** (string, optional):
         *   `"force_continue"`: Forces the execution loop to continue.
         *   `"terminate"`: Forces the loop to stop.
@@ -1366,7 +1382,7 @@ Use to inspect model outputs and potentially force continuation.
 
 --------------------------------------------------------------------------------
 
-### 5. `Stop` Contract
+### 6. `Stop` Contract
 
 Use to prevent the agent from stopping if goals are not met.
 
@@ -1375,12 +1391,25 @@ Use to prevent the agent from stopping if goals are not met.
     ```json
     {
       "executionNum": 1,
-      "terminationReason": "model_stop", // e.g., "model_stop", "max_steps_exceeded", "error"
+      "terminationReason": "NO_TOOL_CALL", // e.g., "NO_TOOL_CALL", "MAX_INVOCATIONS", "ERROR", "USER_CANCELED", "TERMINAL_STEP_TYPE"
       "error": "", // Present if stopped due to error
       "fullyIdle": true, // true if all background tasks are done
       ... (common fields)
     }
     ```
+    *   **`terminationReason`** (string): The `ExecutorTerminationReason` enum
+        name with the `EXECUTOR_TERMINATION_REASON_` prefix stripped:
+        *   `"NO_TOOL_CALL"`: Normal turn completion (model finished without
+            calling a tool).
+        *   `"MAX_INVOCATIONS"`: Hit the maximum invocation limit.
+        *   `"MAX_FORCED_INVOCATIONS"`: Hit the forced-continuation limit.
+        *   `"MAX_TOKEN_BUDGET_EXCEEDED"`: Exceeded the token budget.
+        *   `"ERROR"`: Execution terminated due to an error.
+        *   `"USER_CANCELED"`: Canceled by the user.
+        *   `"TERMINAL_STEP_TYPE"`: Stopped on a terminal step type.
+        *   `"TERMINAL_CUSTOM_HOOK"`: Terminated by a custom `PostInvocation`
+            hook.
+        *   `"INJECTED_RESPONSE"`: Terminated after an injected response.
 
 *   **Output (stdout)**:
 
@@ -1420,6 +1449,12 @@ customization root directory (e.g., `.agents/` in your project, or
 *   **Skills**: `skills.json`
 *   **Plugins**: `plugins.json`
 
+Inside a project, these files are honored in every `.agents/` directory between
+the current working directory and the project root, so a config file at the
+repository root applies no matter which subdirectory a session is started in.
+Relative `path` entries resolve against the directory containing the dot-dir
+that declares them, falling back to the project root when nothing exists there.
+
 ## Configuration Schema
 
 Both configuration files share the same schema, allowing you to declare path
@@ -1449,7 +1484,8 @@ entries and inherit from other configurations.
 ### Top-Level Fields
 
 *   **`entries`** (array of objects, optional): A list of path entries to scan
-    for customizations of this type.
+    for customizations of this type. Each entry directory is scanned **one level
+    deep**.
 *   **`inherits`** (array of objects, optional): A list of other configuration
     files to inherit from. The entries from inherited files are merged with your
     local entries. Inherited files are processed in the order they are listed.
@@ -1464,17 +1500,26 @@ Each object in the `entries` or `inherits` array supports the following fields:
 :                :                  :          : directory (for `entries`) or  :
 :                :                  :          : another JSON config file (for :
 :                :                  :          : `inherits`).                  :
-| `include_only` | array of strings | No       | A list of regex patterns. If  |
-:                :                  :          : specified, only               :
-:                :                  :          : customizations whose          :
-:                :                  :          : directory names match at      :
-:                :                  :          : least one of these patterns   :
-:                :                  :          : will be loaded.               :
-| `exclude`      | array of strings | No       | A list of regex patterns.     |
-:                :                  :          : Customizations whose          :
-:                :                  :          : directory names match any of  :
-:                :                  :          : these patterns will be        :
+| `include_only` | array of strings | No       | Patterns naming items         |
+:                :                  :          : relative to `path`. If        :
+:                :                  :          : specified, only matching      :
+:                :                  :          : customizations will be        :
+:                :                  :          : loaded.                       :
+| `exclude`      | array of strings | No       | Patterns. Customizations      |
+:                :                  :          : whose directory names match   :
+:                :                  :          : any of these patterns will be :
 :                :                  :          : skipped.                      :
+
+## Explicitly Configured Paths
+
+Config files are also honored on explicitly configured customization paths (e.g.
+`skills_paths` in an agent's customization discovery config) when the configured
+path points directly at a config file (e.g. `path/to/skills.json`). A configured
+directory keeps its regular one-level scan; a manifest inside it is not
+expanded. Directories referenced from manifest `entries` follow the standard
+one-level entry scan, and top-level `exclude` patterns apply across all
+explicitly configured paths, not just the one that declared them. They never
+filter customizations inherited from the user's environment.
 
 ## Path Resolution Rules
 
@@ -1542,7 +1587,7 @@ server identifiers to their respective configurations.
 ## Configuration Schema
 
 Antigravity supports two transport mechanisms for MCP: **Stdio** (for local
-command-line tools) and **SSE** (for remote services).
+command-line tools) and **Streamable HTTP** (for remote services).
 
 ```json
 {
@@ -1555,7 +1600,7 @@ command-line tools) and **SSE** (for remote services).
       }
     },
     "remote-service": {
-      "serverUrl": "https://mcp.mycompany.com/sse"
+      "url": "https://mcp.mycompany.com/mcp"
     }
   }
 }
@@ -1572,12 +1617,19 @@ spawns the process and communicates with it over standard input/output.
 *   **`env`** (object, optional): Environment variables to inject into the
     server process.
 
-### 2. SSE Transport (Remote)
+### 2. Streamable HTTP Transport (Remote)
 
-Used to connect to a remote MCP server over HTTP using Server-Sent Events (SSE).
+Used to connect to a remote MCP server over the
+[Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http)
+transport.
 
-*   **`serverUrl`** (string, required): The HTTP(S) URL of the remote MCP
-    endpoint.
+*   **`url`** (string, required): The HTTP(S) URL of the remote MCP endpoint.
+    The legacy key `serverUrl` is also accepted.
+
+The legacy HTTP+SSE transport (MCP spec 2024-11-05) is not supported. Point
+`url` at the server's Streamable HTTP endpoint (often `/mcp` rather than
+`/sse`). For a server that only speaks legacy SSE, run a stdio bridge such as
+`mcp-remote` as a Stdio server instead.
 
 --------------------------------------------------------------------------------
 
@@ -1645,6 +1697,12 @@ The `plugin.json` file serves as the marker declaring the directory as a plugin.
 
 *   **`name`** (string, optional): The display name of the plugin. If omitted,
     it defaults to the directory name.
+*   **`author`** (string or object, optional): Developer or team name string, or
+    an object with `name` and optional `url` (`https://`).
+*   **`homepage`** (string, optional): External `https://` website or
+    documentation URL.
+*   **`repository`** (string or object, optional): Source repository `https://`
+    URL (or `{"type": "git", "url": "https://..."}`).
 
 --------------------------------------------------------------------------------
 
@@ -1659,6 +1717,16 @@ When a plugin is discovered and enabled:
 3.  **Lifecycle Scoping**:
     *   **Hooks** defined in `plugins/<name>/hooks.json` are registered and run
         during the agent's lifecycle.
+        > [!NOTE]
+        > Runtime plugin discovery strictly loads `hooks.json` from the plugin
+        > root (`<plugin_dir>/hooks.json`). While `agy plugin install` stages
+        > `hooks/hooks.json` into `<plugin_dir>/hooks.json` when importing a
+        > pure Gemini CLI (`gemini-extension.json`) or Claude Code
+        > (`.claude-plugin/plugin.json`) extension, native plugins (any
+        > directory containing `plugin.json`, `.antigravity-plugin/plugin.json`,
+        > or `.gemini-plugin/plugin.json`, or loaded via `plugins.json`) do not
+        > run extension staging and **must** place `hooks.json` directly at the
+        > plugin root.
     *   **MCP Servers** defined in `plugins/<name>/mcp_config.json` are
         launched, and their tools are made available.
     *   **Rules** in `plugins/<name>/rules/` are merged into the active rule
@@ -1733,6 +1801,19 @@ support frontmatter and are always active for their directory scope.
     multiple paths (e.g., inherited from parent directories), it is only applied
     once per conversation.
 *   If a rule is defined in a plugin, it is loaded when the plugin is enabled.
+
+## Size Limits and Context Budget
+
+*   **Per-File Limit (`24 KB` / `24,000` bytes)**: Each rule file is capped at
+    24,000 bytes (after expanding `@[label](path)` includes) and truncated on
+    line boundaries when over the cap.
+*   **Aggregate Rules Budget (`20,000` tokens)**: Always-on and global rules
+    share a dedicated 20,000-token rules budget (`defaultRulesBudget`),
+    separate from the customization budget for skills, workflows, subagents,
+    and MCP tools. Over-budget rules are demoted from full inline text to file
+    path pointers so the agent can read them on demand. Rules shipped by
+    builtin plugins are exempt from this budget and are always inlined in
+    full.
 ``````
 
 #### `.gemini/antigravity-cli/builtin/skills/agy-customizations/docs/skills.md`
@@ -1867,7 +1948,7 @@ sitemap:
 -   **Terminal Sandbox**: `https://antigravity.google/docs/sandbox`
 -   **Changelog & Release Notes**: `https://antigravity.google/changelog`
 -   **Troubleshooting & Support**: `https://antigravity.google/support`
-    <!-- LINT.ThenChange(//depot/<upstream>/third_party/gemini_coder/agent_ui_toolkit/dev/appVariant/externalAppVariant.ts:custom_links) -->
+    <!-- LINT.ThenChange(//depot/google3/third_party/gemini_coder/agent_ui_toolkit/dev/appVariant/externalAppVariant.ts:custom_links) -->
 ``````
 
 #### `.gemini/antigravity-cli/builtin/skills/antigravity_guide/references/app.md`
@@ -2188,6 +2269,270 @@ async with Agent(config) as agent:
 ```
 ``````
 
+#### `.gemini/antigravity-cli/builtin/skills/automation/SKILL.md`
+
+``````markdown
+---
+name: automation
+description: Interactive guide to design and create a scheduled background automation. Use this skill when the user wants to create an automated or recurring scheduled task (e.g. "summarize my emails every morning", "every Monday send me a to-do list"). Also triggered by the /automation slash command.
+metadata:
+  icon: schedule
+---
+
+# Scheduled Automations
+
+A **scheduled automation** is a background sidecar (`"builtin": "schedule"`)
+that runs on a cron schedule and starts a fresh agent conversation (`agentapi
+new-conversation`) on each run.
+
+This skill is **strictly for scheduled (cron) automations**. Do not use it to
+create UI sidecars, continuous generic command/daemon sidecars, or in-turn
+timers (use the `schedule` tool instead).
+
+## Quick Start (5-Turn Creation Flow)
+
+1.  **Turn 1 — Cadence**: Ask via `ask_question` (`Hourly`, `Daily`, `Weekly`,
+    or `Custom cron schedule`).
+2.  **Turn 2 — Time / Day**: Ask for the specific time or day of week
+    (`ask_question`).
+3.  **Turn 3 — Task Prompt**: Ask what the agent should do on each run and
+    refine into a self-contained prompt.
+4.  **Turn 4 — Write `sidecar.json`**: Create
+    `~/.gemini/jetski/sidecars/<slug>/sidecar.json` with `"builtin":
+    "schedule"`, `"args": {"schedule": "<cron>", "prompt": "<prompt>"}`.
+5.  **Turn 5 — Optional Test Run**: Offer to test the prompt immediately via
+    `agentapi new-conversation`.
+
+--------------------------------------------------------------------------------
+
+## Interactive Creation Workflow
+
+Guide the user through creating the automation **one step at a time** across
+turns. If the user already provided some details in their initial prompt (such
+as the schedule or the task), skip the questions already answered and proceed to
+the next missing step.
+
+### Turn 1: Ask for the Cadence
+
+If the schedule cadence is not yet specified, use the `ask_question` tool to
+ask:
+
+-   **Question**: `"What should be the cadence of the automation?"`
+-   **Options**:
+    -   `Hourly`
+    -   `Daily`
+    -   `Weekly`
+    -   `Custom cron schedule`
+
+Wait for the user's response before moving to the next question.
+
+### Turn 2: Confirm the Specific Time / Day
+
+Based on the chosen cadence, confirm the exact schedule in a follow-up turn
+using `ask_question`:
+
+-   **If Daily**: Use `ask_question` to confirm the hour of the day (e.g., `9:00
+    AM`, `12:00 PM`, `5:00 PM`; the user can also enter a custom time via the
+    built-in write-in option).
+-   **If Weekly**: Use `ask_question` to confirm both the day(s) of the week
+    (e.g., `Monday`, `Friday`, `Weekdays (Mon–Fri)`) and the hour of the day
+    (e.g., `9:00 AM`, `5:00 PM`).
+-   **If Hourly**: Default to the top of every hour (`0 * * * *`), or confirm if
+    they want a specific minute offset.
+-   **If Custom cron schedule**: Ask the user to specify their desired cron
+    expression or interval (e.g., `*/30 * * * *` for every 30 minutes).
+
+Wait for the user's response before asking what the task should do.
+
+### Turn 3: Ask What the Task Should Do
+
+Once the schedule is set (and if the task itself has not been described yet),
+ask the user in plain text (do **not** use `ask_question` for this open-ended
+step):
+
+> *"What would you like the task to do? (For example: 'Summarize my unread
+> emails from the last 24 hours and highlight any that need a reply' or 'Check
+> my open pull requests and list any with failing checks.')"*
+
+Wait for the user's response.
+
+--------------------------------------------------------------------------------
+
+## Step 4: Create `sidecar.json` & Offer a Test Run to Configure Permissions
+
+### 1. Translate Schedule & Author Self-Contained Run Prompt
+
+-   **Cron schedule**: Standard 5-field cron expression (`minute hour
+    day-of-month month day-of-week`) written in the user's local time, always
+    prefixed with `CRON_TZ=<IANA zone> ` so it runs in the user's timezone:
+    -   Hourly: `CRON_TZ=America/New_York 0 * * * *`
+    -   Daily at 9:00 AM: `CRON_TZ=America/New_York 0 9 * * *`
+    -   Daily at 5:00 PM: `CRON_TZ=America/New_York 0 17 * * *`
+    -   Weekly on Monday at 9:00 AM: `CRON_TZ=America/New_York 0 9 * * 1`
+    -   Weekdays at 9:00 AM: `CRON_TZ=America/New_York 0 9 * * 1-5`
+-   **Determine the user's timezone** (an IANA name such as `Europe/Zurich`;
+    never an abbreviation like `PST` or a raw offset like `+02:00`):
+    1.  If the user already stated a timezone or city, use the matching IANA
+        zone.
+    2.  Otherwise detect the host's timezone (map any OS-specific zone name to
+        its IANA equivalent).
+    3.  If detection fails, use `ask_question` to confirm the user's timezone
+        (offer the detected zone plus a few common zones; the user can write in
+        their own).
+    4.  If the user supplies a custom cron that already starts with `CRON_TZ=`
+        or `TZ=`, keep it as-is and do not add a second prefix.
+    5.  When confirming the schedule to the user, state it with the zone (e.g.,
+        "every day at 9:00 AM Europe/Zurich time").
+-   **Self-contained prompt**: Each scheduled run starts a brand-new
+    conversation with no memory of prior runs. Write a clear, self-contained
+    prompt stating the data sources, actions, and desired output format.
+
+### 2. Announce Automation Creation & Write `<configDir>/sidecars/<sidecar-id>/sidecar.json`
+
+Before calling `write_to_file`, **always output a short message to the user**
+stating that you are now creating the **`<display_name>`** automation (do not
+mention `sidecar.json` or internal file details to the user). Also set
+`toolAction` / `toolSummary` on `write_to_file` to `"Creating <display_name>
+automation"`.
+
+Create the configuration file at:
+
+```
+<configDir>/sidecars/<sidecar-id>/sidecar.json
+```
+
+-   `<configDir>` is the user's `.gemini/config` directory (typically
+    `~/.gemini/config`).
+-   `<sidecar-id>` is a short, unique `kebab-case` identifier derived from the
+    task (e.g., `daily-pr-check`).
+-   Choose a clear, human-readable **`display_name`** (e.g., `"Daily PR Status
+    Check"`). You MUST tell the user this exact `display_name` when pointing
+    them to the Automations dashboard so they know which automation to enable.
+-   Use **snake_case** field names only (`restart_policy`, `display_name`,
+    `agent_permissions`, `access_grants`, `workspace_uris`).
+-   Use lowercase string literals for **`restart_policy`** (`"always"` is
+    required for `"builtin": "schedule"` and continuous daemons; `"on-failure"`
+    or `"never"` apply only to one-shot `"command"` sidecars) — never proto enum
+    names like `"SIDECAR_RESTART_POLICY_ALWAYS"` or `"unless-stopped"`.
+-   Never place `sidecar.json` or scripts inside an ephemeral CitC workspace
+    (`/google/src/cloud/<user>/<workspace>/...`) or point symlinks in
+    `~/.gemini/config/` to an ephemeral CitC workspace that may later be
+    deleted.
+
+> [!CAUTION] **Never Hallucinate Tools or Permissions**: - Do **NOT** guess or
+> invent MCP servers (`mcp(...)`) or CLI commands (`command(...)`) that you have
+> not verified exist in the current environment. - Only include an
+> `mcp(<server>/<tool>)` grant if `<server>` is actually present in your
+> `<mcp_servers>` system prompt block. - Only include a `command(<prefix>)`
+> grant if you have verified the binary/subcommand exists (e.g., via an
+> available skill or a live test run). - Never use overly generic wildcards
+> (`command(*)`, `read_file(*)`, `read_file(/)`, `write_file(*)`, `mcp(*)`,
+> `read_url(*)`) or invalid wrapper syntax like `allow(*)`.
+
+#### Example `sidecar.json`
+
+```json
+{
+  "builtin": "schedule",
+  "args": [
+    "CRON_TZ=America/New_York 0 9 * * *",
+    "agentapi",
+    "new-conversation",
+    "--",
+    "Check open pull requests in the repository and summarize any with failing CI checks or pending review comments."
+  ],
+  "restart_policy": "always",
+  "display_name": "Daily PR Status Check",
+  "description": "Every day at 9:00 AM (America/New_York), checks open pull requests and summarizes failing checks or review comments.",
+  "agent_permissions": {
+    "access_grants": [
+      "command(gh pr list)",
+      "command(gh pr view)"
+    ]
+  }
+}
+```
+
+-   `args[0]` **must** be the full cron schedule as a single string, including
+    the `CRON_TZ=<zone>` prefix (never omit `args[0]` or place the executable at
+    `args[0]` when `"builtin": "schedule"` is set).
+-   Always use **absolute paths** for any local script arguments in `args`
+    (never bare relative filenames like `"watcher.py"` or paths inside ephemeral
+    workspaces that may later be deleted).
+-   Always include `"--"` immediately before the prompt string in `args` so the
+    prompt is cleanly separated from `agentapi new-conversation` flags.
+
+### 3. Point to the Dashboard (with Automation Name) & Ask to Test-Run for Reliable Permissions
+
+> [!CAUTION] **DO NOT enable the automation yourself.** Never modify
+> `user_config.json` to set `"enabled": true`, and never invoke any command or
+> RPC to start or enable the sidecar.
+
+After writing `sidecar.json`:
+
+1.  Tell the user that the automation **`<display_name>`** (`<sidecar-id>`) has
+    been created, and explicitly instruct them to enable it in the
+    **Automations** dashboard using the action button: `[Open Automations
+    Dashboard](sidecar://dashboard)`
+2.  Explain to the user that **once enabled, the automation will run in a
+    project that inherits global permissions and presets, and all other
+    non-approved commands will be auto-denied**. To ensure that the automation
+    can proceed successfully and unattended, you can execute a test run right
+    now to configure the permissions properly.
+3.  Use `ask_question` to ask the user if they want you to execute a test run
+    now:
+    -   **Question**: `"Once enabled, '<display_name>' will run in a project
+        that inherits global permissions and presets, and all other non-approved
+        commands will be auto-denied. Would you like me to execute a test run
+        now to configure its permissions properly so it can proceed
+        successfully?"`
+    -   **Options**:
+        -   `(Recommended) Yes, execute a test run now to configure permissions`
+        -   `No, I'll review permissions and enable '<display_name>' in the
+            Automations dashboard`
+
+--------------------------------------------------------------------------------
+
+## Step 5: If the User Chooses to Test-Run the Task Now
+
+When the user agrees to a test run:
+
+1.  **Execute the task once in the current conversation**:
+    -   Search for and read any relevant skills (`skill_search` / `view_file` on
+        `SKILL.md`) or check available `<mcp_servers>` needed to fulfill the
+        task.
+    -   Run the actual commands, file reads/writes, URL fetches, or MCP tools to
+        perform the task once.
+    -   If the required tool/integration does not exist or needs
+        authentication/setup, inform the user clearly so they know what is
+        missing before enabling the automation.
+2.  **Update `sidecar.json` with the exact verified permissions**:
+    -   Record every permission grant actually required during the test run,
+        scoped as succinctly as possible in `agent_permissions`:
+        -   **`workspace_uris`**: `["file:///absolute/path/to/dir"]` if the task
+            needed read+write access to a workspace folder.
+        -   **`access_grants`**:
+        -   `command(<binary_and_subcommand>)` — e.g., `command(gh pr list)`
+            (never `command(*)`).
+        -   `read_file(<absolute_path>)` — e.g., `read_file(/Users/alice/notes)`
+            (never `read_file(*)` or `read_file(/)`).
+        -   `write_file(<absolute_path>)` — e.g.,
+            `write_file(/Users/alice/digests)` (never `write_file(*)` or
+            `write_file(/)`).
+        -   `mcp(<server_name>/<tool_name>)` — e.g., `mcp(buganizer/get_bugs)`
+            (only for real MCP tools actually called; never `mcp(*)`).
+        -   `read_url(<domain>)` / `execute_url(<domain>)` — e.g.,
+            `read_url(github.com)` (never `read_url(*)`).
+    -   Also update the prompt in `args` if the test run revealed specific skill
+        paths or CLI flags that will help future scheduled runs succeed reliably
+        using those exact granted commands.
+3.  **Final confirmation with the Automation Name**:
+    -   Summarize the verified permissions added to **`<display_name>`**
+        (`<sidecar-id>`) and remind the user to enable **`<display_name>`** in
+        the **Automations** dashboard: `[Open Automations
+        Dashboard](sidecar://dashboard)`
+``````
+
 #### `.gemini/antigravity-cli/builtin/skills/generative_ui/SKILL.md`
 
 ``````markdown
@@ -2234,7 +2579,9 @@ small interactive experiences for the user.
     `--muted-foreground`, `--placeholder`), and accents
     (`--primary`/`--primary-foreground`, `--secondary`/`--secondary-foreground`,
     `--accent`) are all available. Typography is applied for you on the document
-    body — you do not need to set a font.
+    body — you do not need to set a font, and never use sub-12px micro-text
+    (`text-[10px]`, `text-[11px]`, or CSS `font-size` below `12px`; keep
+    `text-xs` / `12px` as the minimum floor unless the user asks).
 
 *   **Text & Surface Colors**: Use semantic variables (`bg-[var(--card)]`,
     `text-[var(--foreground)]`, `text-[var(--muted-foreground)]`)
@@ -2643,6 +2990,630 @@ When you have determined that you need permission:
 **Never try to pipe or redirect output of the gh command, it will not work in your environment**
 ``````
 
+#### `.gemini/antigravity-cli/builtin/skills/plugin/SKILL.md`
+
+``````markdown
+---
+name: plugin
+description: How to manage and create plugins — namespaced bundles of skills, agents, rules, MCP servers and hooks that install, enable and disable as a single unit. Use this skill when the user wants to enable, disable, install or uninstall a plugin, when they want to create a new plugin, or when a new customization should be packaged into a plugin rather than left loose. Also triggered by the /plugin slash command. Don't use for the underlying customization system itself — discovery roots, loading priority, or authoring a standalone skill, agent, rule, hook or MCP server outside a plugin; see the customizations guide skill for those.
+---
+
+# Plugins
+
+A **plugin** is a namespaced bundle of customizations that ships, installs, and
+turns on as one unit. It can contain skills, agents, rules, MCP servers and
+hooks. When a plugin is on, everything inside it is active; disabling it takes
+the whole bundle down at once.
+
+Your job is either to change a plugin's lifecycle state or to get new
+functionality into the right plugin. Step 0 and Step 1 are common to both; Step
+1 routes you to Step 2A or Step 2B.
+
+For the underlying customization system — discovery roots, loading priority,
+what each customization type is for — see the customizations guide skill. This
+skill does not restate that material.
+
+## Quick Start
+
+After writing `/tmp/lsrpc.sh` in **Step 0**, prefix every `lsrpc` call with
+`source /tmp/lsrpc.sh &&` and key every mutation on `<dir>` (the install
+directory name `(.path | split("/") | last)` from Step 0, never `plugin.json`'s
+`name`):
+
+<!-- mdformat off -->
+| Operation | Command / Action | Key Guardrail |
+| :--- | :--- | :--- |
+| **Inventory installed plugins** (Step 0) | `source /tmp/lsrpc.sh && lsrpc GetAllPlugins '{"workspaceUris":["file:///path/to/workspace"]}' \| jq '[.plugins[] \| {name, dir: (.path \| split("/") \| last), disabled: (.disabled // false), isGlobal, skills: [.skills[]?.name], agents: [.agents[]?.name], rules: [.rules[]?.absolutePath], hooks: ((.hooksJson // "") \| length > 0), mcp: [.mcpServers[]?.name]}]'` | Never read `GetAllPlugins` unfiltered (inlines full `SKILL.md` text); always pipe through `jq` and use `dir` for mutations (`'{}'` if no workspace is active). |
+| **Enable / Disable plugin** (Step 2A) | `source /tmp/lsrpc.sh && lsrpc JetboxWriteState '{"userConfig":{"plugins":{"<dir>":{"enabled":true}}}}'` (`false` to disable) | Takes effect live (no restart). Never hand-edit `~/.gemini/config/config.json`. |
+| **Uninstall user plugin** (Step 2A) | `source /tmp/lsrpc.sh && lsrpc DeletePlugin '{"pluginId":"<dir>"}'` | Refuse if `.path` contains `/builtin/plugins/` (offer to disable instead). If currently disabled, set `"enabled":true` via `JetboxWriteState` before deleting. |
+| **Install Marketplace plugin** (Step 2A) | `source /tmp/lsrpc.sh && lsrpc InstallCustomization '{"id":"<marketplace-id>"}'` | Use `<marketplace-id>` from the Customizations page or user (never guess from `name`; only Marketplace plugins can be installed). Requires a restart. |
+| **Author / consolidate plugin** (Steps 2B–4) | Create `~/.gemini/config/plugins/<name>/plugin.json` (or in source repo if published) + used subdirectories (`skills/`, `agents/`, `rules/AGENTS.md`, `mcp_config.json`, `hooks.json`, `assets/logo.svg`) | Check Step 0 inventory for `name` collisions first; re-run Step 0 inventory, tell the user to restart, and link as `[<name>](customization://<dir>)` (never `plugin://`). |
+<!-- mdformat on -->
+
+## Step 0: Preflight and inventory
+
+Every path needs to know what is already installed. Talk to the language server
+over its local Connect endpoint. The address and CSRF token are normally already
+in your shell environment; you do not need to hunt for a port file.
+
+```bash
+: "${ANTIGRAVITY_LS_ADDRESS:=localhost:5387}"
+curl -sS "http://${ANTIGRAVITY_LS_ADDRESS}/healthz"
+```
+
+Write the helper to a file once, then source it in every call below. Each
+command you run is a fresh shell, so a function defined in one call is gone by
+the next; sourcing a file is what makes it reusable.
+
+```bash
+cat > /tmp/lsrpc.sh <<'EOF'
+: "${ANTIGRAVITY_LS_ADDRESS:=localhost:5387}"
+lsrpc() {  # usage: lsrpc <MethodName> <json-body>
+  curl -sS -X POST \
+    "http://${ANTIGRAVITY_LS_ADDRESS}/exa.language_server_pb.LanguageServerService/$1" \
+    -H "Content-Type: application/json" \
+    -H "x-codeium-csrf-token: ${ANTIGRAVITY_CSRF_TOKEN}" \
+    -d "$2"
+}
+EOF
+```
+
+Now list the installed plugins, passing active workspace URIs in
+`workspaceUris` so workspace-scoped plugins are discovered (or `'{}'` when no
+workspace is active). Prefix every `lsrpc` snippet in this skill with
+`source /tmp/lsrpc.sh &&`:
+
+```bash
+source /tmp/lsrpc.sh && lsrpc GetAllPlugins '{"workspaceUris":["file:///path/to/workspace"]}' | jq '[.plugins[] | {
+  name,
+  dir: (.path | split("/") | last),
+  disabled: (.disabled // false),
+  isGlobal,
+  skills: [.skills[]?.name],
+  agents: [.agents[]?.name],
+  rules: [.rules[]?.absolutePath],
+  hooks: ((.hooksJson // "") | length > 0),
+  mcp: [.mcpServers[]?.name]
+}]'
+```
+
+> **Never read `GetAllPlugins` unfiltered.** The response inlines the *full
+> text* of every bundled `SKILL.md`. A single plugin can exceed 16KB and a
+> populated config will flood your context. Always pipe it through `jq`.
+
+**`dir` is the identifier that matters.** It is the install directory name — the
+last path segment — and it is what every mutation below is keyed on. It is
+frequently **not** the same as `name` from `plugin.json`: a plugin installed
+from the Marketplace lands in a directory named after a signed 64-bit hash, so a
+plugin displayed as `data-tools` may live in a directory called
+`-1870732469773246571`. Using `name` where `dir` is expected fails silently or
+builds a garbage path.
+
+## Step 1: Decide the kind
+
+-   The user names an existing plugin and a lifecycle verb — "turn off X",
+    "install Y", "get rid of Z" -> **Step 2A**.
+-   The user wants new capability, or wants existing loose customizations tidied
+    up — "I want a Strava thing", "package these skills together" -> **Step
+    2B**.
+
+## Step 2A: Lifecycle operations
+
+Resolve the target to its `dir` from the Step 0 inventory first. If the user's
+words match several plugins, ask which one rather than guessing.
+
+**Enable or disable.** This is the same write the Customizations page performs,
+and it takes effect live — no restart.
+
+```bash
+# Enable:
+source /tmp/lsrpc.sh && lsrpc JetboxWriteState '{"userConfig":{"plugins":{"<dir>":{"enabled":true}}}}'
+
+# Disable:
+source /tmp/lsrpc.sh && lsrpc JetboxWriteState '{"userConfig":{"plugins":{"<dir>":{"enabled":false}}}}'
+```
+
+The write deep-merges, so send only the one plugin. Never hand-edit
+`~/.gemini/config/config.json` to do this: writes that bypass the language
+server miss the live reload and are only picked up by a slow backstop poll.
+
+**Uninstall.**
+
+```bash
+source /tmp/lsrpc.sh && lsrpc DeletePlugin '{"pluginId":"<dir>"}'
+```
+
+**Check both of these before you run it:**
+
+-   **Built-in plugins cannot be uninstalled.** A plugin whose path contains
+    `/builtin/plugins/` ships with the product. Refuse, and offer to disable it
+    instead.
+-   **Uninstall leaves the enablement entry behind.** Nothing clears
+    `plugins.<dir>` from `config.json`. If the plugin was disabled and is later
+    reinstalled into the same directory name, it comes back **disabled** for no
+    visible reason. Before deleting a disabled plugin, set it back to enabled so
+    the stale entry is harmless, and tell the user you did.
+
+**Install.** For a plugin published to the Agent Marketplace:
+
+```bash
+source /tmp/lsrpc.sh && lsrpc InstallCustomization '{"id":"<marketplace-id>"}'
+```
+
+You cannot derive this ID from the plugin's name. Take it from the Marketplace
+tab of the Customizations page, or ask the user for it. If all you have is a
+name, say so rather than guessing an ID.
+
+A `source not found` error means one of two things: the ID is wrong, or the
+Marketplace catalog isn't launched for this user. The catalog case has a tell —
+the ID comes back empty, so the message reads `source for customization not
+found` with nothing between the words. Re-check the ID first.
+
+Only install plugins that have a Marketplace entry. If the plugin has none, or
+the catalog isn't launched for this user, do not try to install it another way;
+tell the user it isn't available to install.
+
+A newly installed plugin **directory** is only discovered on startup. Tell the
+user to restart before expecting its skills to appear.
+
+Lifecycle operations end here. Skip Step 3, which covers authoring only, and go
+to Step 4.
+
+## Step 2B: Decide where the functionality belongs
+
+A plugin is a bundle, so the first question is never "what do I build" but
+"where does it go". Take the inventory from Step 0 and see whether the request
+fits an existing plugin. Plugins tend to cohere around one of three shapes:
+
+-   **A data provider or external service.** Everything that talks to one system
+    — Strava, GitHub, a particular API. Its MCP server, the skill that drives
+    it, and the rules about its quirks belong together.
+-   **An artifact or file type.** Spreadsheet handling, proto editing, log
+    analysis. Grouped by what the user is operating *on*.
+-   **A role or recurring job.** Data analysis, running a small business,
+    reviewing documents, writing code. Broader, and the right home when a
+    capability spans several providers in service of one repeated task.
+
+**Recommend and proceed.** State in one line which plugin you picked and why,
+then keep going. Use **`ask_question`** only when two existing plugins are
+genuinely close, or when nothing fits and the boundary for a new one is unclear.
+Do not stall on a decision the user can trivially reverse.
+
+If nothing fits, create a new plugin at `~/.gemini/config/plugins/<name>/`.
+Before settling on a name, check it against the Step 0 inventory: names share
+one global namespace, and when two plugins claim the same name the first
+discovered wins and the other is dropped **silently**.
+
+If the plugin is meant to be shared or published, create it in the source
+repository it will be published from instead of the user's config directory.
+
+### Consolidating loose customizations
+
+When the user asks to tidy up standalone customizations, move the directories: a
+skill at `~/.gemini/config/skills/foo/` becomes
+`~/.gemini/config/plugins/<name>/skills/foo/`, and a rule becomes
+`rules/AGENTS.md` inside the plugin.
+
+MCP servers need a warning first. Moving an entry out of the user's
+`mcp_config.json` and into the plugin's own `mcp_config.json` ties its lifecycle
+to the plugin: it is assembled only while the plugin is enabled, so disabling
+the plugin stops its tools being offered along with everything else in the
+bundle. Control moves with it too, since the server is no longer an entry in the
+user's own config and is managed through the plugin rather than on its own. Tell
+the user this before you move the entry.
+
+## Step 3: Author the bundle
+
+Create only the subdirectories the plugin actually uses:
+
+```text
+~/.gemini/config/plugins/<name>/
+├── plugin.json       # required
+├── README.md         # user-facing docs; never read by the agent
+├── mcp_config.json   # optional, same format as the user's own
+├── hooks.json        # optional
+├── assets/logo.svg   # optional
+├── skills/<skill>/SKILL.md
+├── agents/<agent>.md
+└── rules/AGENTS.md
+```
+
+Write the inner customizations yourself — the `SKILL.md`, the agent markdown,
+the rules, the MCP config. Do not hand that back to the user as a follow-up.
+Rules in a plugin's `rules/AGENTS.md` are plain markdown with no frontmatter and
+are always on while the plugin is enabled.
+
+`plugin.json` is parsed as JSONC, so comments and trailing commas are allowed:
+
+```json
+{
+  "name": "strava",
+  "description": "Strava integration: pull activity data, summarize training load, and draft workout notes.",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Summarize this week's workout mileage and heart rate zones",
+    "Compare pacing and cadence across my last 4 long runs",
+    "Draft an annotated Strava description for my latest activity"
+  ]
+}
+```
+
+| Field              | Type     | Notes                                        |
+| ------------------ | -------- | -------------------------------------------- |
+| `name`             | string   | The label users see, and the global unique   |
+:                    :          : key — two plugins sharing a `name` collide   :
+:                    :          : and one is dropped. **Not** the install      :
+:                    :          : identifier; that is the directory. Lowercase :
+:                    :          : kebab-case. Defaults to the directory name   :
+:                    :          : if omitted.                                  :
+| `description`      | string   | One or two sentences saying what the plugin  |
+:                    :          : does and who it is for. This is what         :
+:                    :          : Marketplace search matches.                  :
+| `logo`             | string   | Optional. A path relative to the plugin      |
+:                    :          : directory, such as `assets/logo.svg`, ending :
+:                    :          : in `.png`, `.svg`, `.jpg`, `.jpeg` or        :
+:                    :          : `.webp`. URLs and absolute paths are         :
+:                    :          : rejected silently — a bad value renders no   :
+:                    :          : logo rather than erroring.                   :
+| `suggestedPrompts` | string[] | Optional. Up to 3 starter prompts for card   |
+:                    :          : and detail views. Exactly 3 prompts are      :
+:                    :          : recommended for UI card layouts. Empty       :
+:                    :          : strings are skipped and additional prompts   :
+:                    :          : beyond 3 are ignored.                        :
+| `displayName`      | string   | Optional. Human-readable presentation title  |
+:                    :          : shown in UI headers, cards, and slash        :
+:                    :          : command menus.                               :
+| `version`          | string   | Optional. Semantic version string.           |
+| `author`           | string / | Optional. Developer or team name string, or  |
+:                    : object   : an object with `name` and optional `url`     :
+:                    :          : (`https://`).                                :
+| `homepage`         | string   | Optional. External `https://` website or     |
+:                    :          : documentation URL.                           :
+| `repository`       | string / | Optional. Source repository `https://` URL   |
+:                    : object   : (or `{"type": "git", "url": "https://..."}`). :
+| `disabled`         | boolean  | Optional. Ships the plugin turned off. A     |
+:                    :          : choice the user has already made wins over   :
+:                    :          : this field.                                  :
+
+> **Do not add any other top-level field.** Unknown top-level fields are
+> silently discarded by the loader — they neither take effect nor error out.
+
+Offer to generate a logo with the `generate_image` tool. Ask for a square asset
+of at least 128x128 with a transparent background, high contrast so it reads on
+both themes, and roughly 10% empty margin baked in — the frame adds no padding
+of its own and center-crops anything non-square.
+
+## Step 4: Verify and hand back
+
+Re-run the Step 0 inventory and confirm the plugin appears with the components
+you expect. Then tell the user:
+
+-   What changed, and which plugin now owns it.
+-   Whether a **restart** is required. Creating or installing a new plugin
+    directory needs one; enabling, disabling and uninstalling do not.
+-   Where to manage it, as a link: `[<name>](customization://<dir>)` opens the
+    plugin's own page, which lists what it provides and can turn it on and off.
+
+`<dir>` is the install directory from Step 0, never the manifest `name`. A
+plugin directory created in this session is not discovered until a restart, and
+until then its page reports nothing installed under that id, so give the link
+and the restart together.
+
+Do not emit `plugin://` or `plugins://` links; they are not handled and render
+as dead text.
+
+## Constraints & Tips
+
+-   **Key every mutation on the install directory name, never `plugin.json`'s
+    `name`.** This is the single most common way to break a plugin operation.
+-   **Prefer the language server RPCs over editing files.** `config.json` is
+    written atomically at mode 0600 and holds sibling state — `userSettings`,
+    permission grants. A careless rewrite clobbers them.
+-   **One coherent purpose per plugin.** Bundling unrelated capabilities forces
+    the user into an all-or-nothing toggle. If a request does not fit the
+    plugin's description, that is the signal to create a new one.
+-   **MCP server names are global too.** They collide across the user's config
+    and every installed plugin, so prefix a plugin's servers with the plugin
+    name rather than shipping a generic `search` or `db`.
+-   **Keep `description` honest and current.** It is what the user reads before
+    installing and what search matches. Update it when the bundle's contents
+    change.
+``````
+
+#### `.gemini/antigravity-cli/builtin/skills/run-workflow/SKILL.md`
+
+``````markdown
+---
+name: run-workflow
+description: >-
+  How to write and run a dynamic workflow script with the `run_workflow` tool:
+  a Python script that orchestrates many agents with `agent`, `parallel`,
+  `pipeline`, and `phase`. Use when a task splits into many
+  independent or staged pieces of agent work (fan out over files, modules,
+  bugs, or review angles, then aggregate), or when the user asks for a
+  workflow. Don't use for a single delegated task (use a subagent) or for
+  legacy workflow files (see migrate-workflows).
+---
+
+# Dynamic workflows with `run_workflow`
+
+A workflow is a short Python script that the `run_workflow` tool executes. The
+script decides which agents to start, in what order, and what to do with their
+results. Use it instead of many manual subagent calls when the orchestration
+itself is code: loops over a list, fan-out then aggregate, or staged pipelines.
+
+## Steps
+
+1.  Pass the script inline as `Script`, or write it to a file (for example in
+    the conversation scratch directory) and pass its absolute path as
+    `ScriptPath`. Set exactly one of them; a file is easier to fix and rerun.
+2.  Call `run_workflow(Script="...", Description="...")` or
+    `run_workflow(ScriptPath="/abs/path/workflow.py", Description="...")`.
+    `Description` is a one-line goal shown in the UI.
+    The workflow runs in the background, and you are notified when it ends.
+    For a quick script, such as a `call_tool` fan-out, set
+    `WaitMsBeforeAsync` (up to 10000) to get the result in the same turn if it
+    finishes in time.
+    To pass inputs, set `Args` to a JSON object; the script reads it as the
+    `args` dict. When `ScriptPath` is a saved workflow's entry script, `Args`
+    is validated against the args schema in its `workflow.json`.
+3.  Read the tool result: it contains the `log()` output (`Logs:`) and what the
+    script printed (`Output:`). Each agent is also linked from the workflow
+    step, so the user can open its conversation.
+4.  If the tool returns an error, fix the script at the reported line and run
+    it again.
+
+## Script rules
+
+The script runs in its own `python3` process, which needs Python 3.8 or later
+on `PATH`:
+
+-   `await` works at the top level, and you can define `async def` helpers.
+-   Installed library workflows are importable by name (`import <library>` or
+    `from <library> import <name>`); library modules see the same primitives as
+    the script.
+-   What the script prints (`print()`, `stderr`, child-process output, and the
+    `repr` of a trailing expression) is returned in the tool result's `Output:`
+    section (and appended to the error when the workflow fails).
+-   An uncaught exception stops the workflow and reports the script line.
+-   `CONVERSATION_ID` and `STEP_INDEX` identify the `run_workflow` step.
+    `WORKSPACES` is a tuple of the workspace directories, primary first (empty
+    if there are none).
+-   The working directory is `Cwd` if given, else `WORKSPACES[0]`, so relative
+    paths resolve against it. Local modules are not importable.
+
+## Primitives
+
+| Primitive | Behavior |
+| --- | --- |
+| `log(*args)` | Adds a line to the workflow output and the UI. |
+| `phase(name)` | Starts a named phase; later logs and agents group under it. |
+| `agent(prompt=None, schema=None, role=None, type_name="self", workspace="inherit", model=None)` | Defines an agent; nothing runs yet. `await agent(prompt, schema)` runs it once and returns its result. `a = agent(...)` then `await a(prompt, schema)` runs one turn in a conversation kept across calls. |
+| `parallel(items, fn)` | Promise that calls `fn(item)` for each item and awaits all results concurrently; results are in item order. If one fails, the rest are cancelled. |
+| `pipeline(items, fn)` | Promise that calls and awaits `fn(item)` one item at a time; results are in item order. |
+| `trajectory(last=None, types=None, tools=None, min_index=None, max_index=None)` | `await trajectory()` returns steps before this `run_workflow` call started, oldest first. `min_index` and `max_index` bound `step.index` (inclusive); `types` and `tools` filter by step type or tool name; `last` keeps the last N matching steps. |
+
+Arguments:
+
+-   `type_name`: the agent type to run. `"self"` uses the current agent's
+    configuration; any available custom agent name also works.
+-   `workspace`: `"inherit"` (the current workspace), `"branch"` (a new isolated
+    clone, for agents that edit code in parallel), or `"share"` (a new workspace
+    that shares the underlying repository). Other values are errors.
+-   `schema` (required): a JSON schema (dict or string) for the agent's result.
+    The agent returns the result by calling its `finish` tool, which checks it
+    against the schema, and `await agent(...)` returns the parsed value. An
+    agent that ends without calling `finish` fails the workflow. Use
+    `{"type": "string"}` for a free-form answer.
+-   `role`: an optional short title for the agent's card, such as
+    `"Security reviewer"`.
+-   `model`: the agent's model tier: `"inherit"` (default, your model),
+    `"flash_lite"`, `"flash"`, or `"pro"`. Use a lighter tier for simple,
+    high-fan-out work.
+-   `fn`: usually a `lambda` that returns `agent(...)`, or an `async def`
+    helper that awaits several agents. It must return something awaitable:
+    an `agent()` or a call on one, a nested `parallel()` / `pipeline()`, or
+    an `async def` call. Build per-item prompts and roles with f-strings.
+
+Awaiting the same agent twice runs it once and returns the same result. An
+`agent()` that is never awaited or called never runs, so always `await` it, or
+pass it to `parallel` / `pipeline` and await that.
+
+The workflow step shows one card per agent, in the order agents start, titled
+with its `role`, or else the first line of its prompt, so set a role or start
+each prompt with a short line that names the job.
+
+## Agents that keep their context
+
+When one agent should do several related turns, such as a reviewer that checks
+the fixes for the bugs it found, call it instead of awaiting it. Each
+`a(prompt, schema)` is lazy like an awaited `agent()` and returns that turn's
+`finish` result; the agent's own `prompt`, if any, is its standing instructions
+and leads the first turn. `schema` on a call defaults to the agent's. Turns on
+one agent run one at a time, in the order they were started. A failed turn
+raises, but the agent stays usable. An agent is either awaited or called, not
+both. `del a` ends the agent, unless something else, such as a lambda, still
+references it; every agent ends when the workflow ends.
+
+```python
+reviewer = agent("You review Go code for correctness.", role="Reviewer")
+bugs = await reviewer("List the bugs in foo.go.", {"type": "array", "items": {"type": "string"}})
+fixes = await parallel(bugs, lambda b: agent(f"Fix: {b}", {"type": "string"}))
+ok = await reviewer(f"Fixes made: {fixes}. Are all your bugs fixed?", {"type": "boolean"})
+del reviewer
+```
+
+## Calling tools from the script
+
+Where the `run_workflow` tool description lists tools for `call_tool`, the
+script can call them directly:
+
+-   `call_tool(name, **args)` returns a promise like `agent()` does. Awaiting it
+    runs the tool with the arguments you would pass to it directly and returns
+    the tool's output as a `str`.
+-   It raises `ToolError` (with `.tool` and `.message`) if the tool fails or
+    the call is denied. `.denied` is `True` when a pre-tool hook or the
+    permission check rejected the call before the tool ran, so a script can
+    skip denied calls and still fail on real errors.
+-   The user cannot be asked anything from a workflow: a call that needs user
+    approval that has not already been granted is denied.
+-   Tool outputs are not shown to you unless the script logs or prints them.
+
+## Reading earlier conversation steps
+
+Pass inputs you already have in `Args` (or inline in the script). Use
+`await trajectory(...)` when the script needs to inspect steps from earlier in
+this conversation—such as mining a failed `run_command` output without
+rerunning it—and pass only the relevant slice into child `agent()` prompts.
+
+Each returned `Step` is a `dict` that also supports attribute access (missing
+fields return `None` as attributes):
+
+-   `index` (`int`): 0-based step index.
+-   `type` (`str`): step type, e.g. `"USER_INPUT"`, `"PLANNER_RESPONSE"`,
+    `"SYSTEM_MESSAGE"`, or `"GENERIC"` (tool calls).
+-   `status` (`str`): e.g. `"DONE"`, `"ERROR"`, or `"CLEARED"`.
+-   Message steps set `text` (`str`); tool steps set `tool` (`str`), `args`
+    (parsed `dict`), and `output` (`str`, truncated at 200k characters).
+
+```python
+steps = await trajectory(tools=["run_command"], last=20)
+errors = [s.output for s in steps if s.status == "ERROR" and s.output]
+log(f"Found {len(errors)} failed command(s)")
+```
+
+`trajectory()` only returns steps before the `run_workflow` call started (steps
+added while the workflow runs in the background are not included). Older tool
+steps evicted from memory have `status == "CLEARED"` and `output == None`; read
+the conversation's `transcript.jsonl` / `transcript_full.jsonl` when you need
+cleared tool outputs or steps added after the workflow started.
+
+## Behavior to know
+
+-   Workflow agents are main agents, not subagents. They are hidden from the
+    conversation list and reachable from the workflow step. An awaited agent
+    is single-use; a called agent lasts until deleted or the workflow ends.
+-   `await agent(...)` returns when the agent's run ends, with the result it
+    passed to `finish`.
+-   If one agent in `parallel` fails, the whole call fails and the other agents
+    in it are cancelled. Stopping the parent conversation stops all running
+    workflow agents.
+-   Agents do not see the script or each other. Put all the context an agent
+    needs in its prompt, and ask for a short, well-defined output.
+
+## Example
+
+Fan out over a list that an agent produces:
+
+```python
+phase("Discover")
+files = await agent(
+    "List the Go files under pkg/foo that call Bar(). Paths only.",
+    schema={"type": "array", "items": {"type": "string"}},
+)
+
+phase("Review")
+reviews = await parallel(files, lambda f: agent(
+    f"Review {f} for misuse of Bar(). Reply in 3 bullets or 'OK'.",
+    schema={"type": "string"},
+    role=f"Review {f}",
+))
+for r in reviews:
+    log(r)
+```
+``````
+
+#### `.gemini/antigravity-cli/builtin/skills/ui-plugin-navigation/SKILL.md`
+
+``````markdown
+---
+name: ui-plugin-navigation
+description: Discover UI plugin panels relevant to the current task and surface a one-click pill in chat to open (toggle) them in the side pane. Use when a running UI plugin's panel would help with what the user is doing, or right after the user enables a new UI plugin pane and a shortcut to open it is handy.
+disable-slash-command: true
+---
+
+# UI Plugin Navigation
+
+> [!NOTE]
+> **UI plugins and UI extensions are the same thing**: a sidecar-backed web
+> panel that renders in the auxiliary (side) pane. Treat the two terms as
+> interchangeable. Everything below applies whichever term the user or other
+> skills use.
+
+Some plugins expose a UI panel that renders in the auxiliary (side) pane. This
+skill tells you how to surface a clickable **pill** in chat that opens/toggles
+that panel, using the `sidecar://` link scheme.
+
+## When to surface a pill
+
+Offer a pill in either situation:
+
+1.  **Contextual relevance.** Read the enabled UI plugins' `description` /
+    `display_name`. If a plugin's purpose matches what the user is doing right
+    now and seeing its UI would help, offer that plugin's pill.
+2.  **After a new UI plugin pane is enabled.** When the user has just created
+    and enabled a UI plugin pane, include a pill pointing to it so they can open
+    it immediately.
+
+Surface pills sparingly — only when the panel is genuinely useful. Don't repeat
+a pill the user has already opened or dismissed.
+
+## Step 1: Find UI plugin panes and their views
+
+UI plugin panes are backed by sidecars, which live under these directories (each
+in its own `<sidecar-id>/` folder containing a `sidecar.json`):
+
+-   `~/.gemini/config/sidecars/<sidecar-id>/`
+-   `~/.gemini/<app-name>/builtin/sidecars/<sidecar-id>/`
+-   `~/.gemini/config/plugins/<plugin>/sidecars/<sidecar-id>/` (or external
+    sidecar folders referenced by
+    `~/.gemini/config/plugins/<plugin>/sidecars.json`)
+-   `~/.gemini/<app-name>/builtin/plugins/<plugin>/sidecars/<sidecar-id>/` (or
+    referenced by `~/.gemini/<app-name>/builtin/plugins/<plugin>/sidecars.json`)
+
+The **sidecar-id** is the folder name — except for **plugin** sidecars (those
+under a `plugins/<plugin>/sidecars/` directory or referenced by a plugin's
+`sidecars.json`), whose id is namespaced as `<plugin>/<sidecar-folder>`. A
+sidecar has a UI panel only if its `sidecar.json` has `has_web_ui` set to true
+and a `ui_config.views` entry with `entrypoint:
+SIDECAR_UI_ENTRYPOINT_AUX_PANE`. From that entry take:
+
+-   **sidecar-id** — the folder name, or `<plugin>/<folder>` for plugin
+    sidecars.
+-   **view-path** — the `path` field (e.g. `/`, `host.html?view=auxpane`).
+-   Use `description` / `display_name` (and `views[].title`) to judge relevance
+    and to label the pill.
+
+## Step 2: Emit the pill link
+
+Write a standard markdown link with the `sidecar://` scheme:
+
+```markdown
+[Label](sidecar://<sidecar-id>/<view-path>)
+```
+
+-   **Label** — should be equivalent to the view `title`, the sidecar
+    `display_name` or the `sidecar_id` with preference in that order. If the
+    sidecar is part of a plugin, you can also use the plugin name instead.
+-   Only emit pills for **AUX_PANE** views of plugins that are **enabled and
+    running**.
+
+Examples (substitute the actual id/path you discovered in Step 1):
+
+```markdown
+[<Sidecar Name>](sidecar://<sidecar-id>/)
+[<Sidecar Name>](sidecar://<sidecar-id>/host.html?view=auxpane)
+```
+
+## Constraints & Tips
+
+*   **The pill toggles the aux pane.** Clicking opens the plugin's panel. DO NOT
+    output a plugin link, if the plugin isn't enabled/running.
+*   **Deduce relevance from the description, not guesswork.** If no enabled UI
+    plugin's description matches the conversation, don't force a pill.
+*   **One pill per pane.** Don't emit multiple links to the same view.
+``````
+
 ## What it reads back
 
 Print mode answers `/permissions` and `/hooks` without an agent turn, which is the only way this repository can check that the files `pkg/agent/antigravity` writes are files agy actually loads. All three are planted below in the shape that package writes them, in a HOME configured the way `writeAgyHome` configures an API-key run -- which is what it takes to get an answer at all: 1.1.26 asks for a credential before it will report what it loaded, and takes the placeholder one (see `API_KEY_PLACEHOLDER`).
@@ -2677,18 +3648,19 @@ The same argv `Framework.Run` builds, against the same private-HOME shape, with 
 
 ``````console
 $ agy --input-format stream-json --output-format stream-json --dangerously-skip-permissions --disable-slash-commands --print-timeout 20s
-{"event":"init","conversation_id":"$UUID","init":{"cwd":"$PWD","tools":["ask_custom_permission","ask_permission","ask_question","browser_click_element","browser_drag_pixel_to_pixel","browser_get_dom","browser_get_network_request","browser_input","browser_list_network_requests","browser_mouse_down","browser_mouse_up","browser_move_mouse","browser_press_key","browser_refresh_page","browser_resize_window","browser_scroll","browser_scroll_dom","browser_select_option","browser_subagent","call_mcp_tool","capture_browser_console_logs","capture_browser_screenshot","click_browser_pixel","command_status","define_subagent","delete_knowledge","execute_browser_javascript","find_by_name","finish","generate_image","grep_search","invoke_subagent","list_browser_pages","list_dir","list_permissions","list_resources","manage_inbox","manage_subagents","manage_task","multi_replace_file_content","notebook_edit","notebook_execution","open_browser_url","read_browser_page","read_resource","read_url_content","replace_file_content","run_command","schedule","search_web","sed_file","send_command_input","send_message","view_file","wait","wait_5_seconds","write_to_file"],"permission_mode":"always-proceed"}}
+{"event":"init","conversation_id":"$UUID","init":{"cwd":"$PWD","tools":["ask_custom_permission","ask_permission","ask_question","browser_click_element","browser_drag_pixel_to_pixel","browser_get_dom","browser_get_network_request","browser_input","browser_list_network_requests","browser_mouse_down","browser_mouse_up","browser_move_mouse","browser_press_key","browser_refresh_page","browser_resize_window","browser_scroll","browser_scroll_dom","browser_select_option","browser_subagent","call_mcp_tool","capture_browser_console_logs","capture_browser_screenshot","click_browser_pixel","command_status","define_subagent","delete_knowledge","execute_browser_javascript","find_by_name","finish","generate_image","grep_search","invoke_subagent","list_browser_pages","list_dir","list_permissions","list_plugin_accounts","list_resources","manage_inbox","manage_subagents","manage_task","multi_replace_file_content","notebook_edit","notebook_execution","open_browser_url","read_browser_page","read_resource","read_url_content","replace_file_content","run_command","run_workflow","schedule","search_marketplace","search_web","sed_file","send_command_input","send_message","view_file","wait","wait_5_seconds","write_to_file"],"permission_mode":"always-proceed"}}
 {"event":"step_update","step_update":{"conversation_id":"$UUID","step_index":0,"state":"DONE","step_type":"user_input"}}
 {"event":"step_update","step_update":{"conversation_id":"$UUID","step_index":1,"state":"DONE","step_type":"error_message"}}
 error: agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.]]
+AGY_ERROR: {"short_error":"agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.]]","status":"INVALID_ARGUMENT","error_code":400,"code_kind":"http","retryable":false,"error_id":"$UUID-1"}
 {"event":"result","result":{"conversation_id":"$UUID","status":"ERROR","response":"","error":"agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.]]","duration_seconds":$SECONDS,"num_turns":1,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}}
-[exit 1]
+[exit 3]
 ``````
 
 ``````console
 $ that init event's own roster, sorted
 permission_mode: always-proceed
-native tools: 57
+native tools: 60
 ask_custom_permission
 ask_permission
 ask_question
@@ -2724,6 +3696,7 @@ invoke_subagent
 list_browser_pages
 list_dir
 list_permissions
+list_plugin_accounts
 list_resources
 manage_inbox
 manage_subagents
@@ -2737,7 +3710,9 @@ read_resource
 read_url_content
 replace_file_content
 run_command
+run_workflow
 schedule
+search_marketplace
 search_web
 sed_file
 send_command_input
@@ -2870,21 +3845,26 @@ json:"_custom_tool_result"
 json:"agent_browser_tools,omitempty"
 json:"allow_tool,omitempty"
 json:"allowed_tools,omitzero"
-json:"allowed_tools,omitzero,required"
 json:"append_ephemeral_to_previous_tool_result,omitempty"
 json:"browser_get_network_request_tool_config,omitempty"
 json:"browser_list_network_requests_tool_config,omitempty"
+json:"call_tool,omitempty"
+json:"call_tool_result_json,omitempty"
+json:"cli_tool_scope,omitempty"
+json:"cli_tools,omitempty"
+json:"current_tool_step_idx"
 json:"custom_tools,omitempty"
 json:"delta_tool_calls,omitempty"
-json:"devtools"
 json:"disable_parallel_tool_calls,omitempty"
 json:"disable_simple_research_tools,omitempty"
 json:"disable_tool_call_execution_outside_workspace,omitempty"
 json:"disable_tool_calls,omitempty"
 json:"disable_tool_hook_notices,omitempty"
+json:"disabledTools"
 json:"disabledTools,omitempty,omitzero"
 json:"disabled_tools,omitempty"
 json:"does_not_support_tool_choice,omitempty"
+json:"enable_bigquery_tool,omitzero"
 json:"enable_low_level_tools_instructions,omitempty"
 json:"enable_mcp_tools"
 json:"enable_mcp_tools,omitempty"
@@ -2903,15 +3883,22 @@ json:"finish_tool_schema,omitempty"
 json:"force_all_tools_eager,omitempty"
 json:"force_disable_tool_calling,omitempty"
 json:"force_enable_send_message_tool,omitempty"
+json:"grounding_tool_count,omitzero"
 json:"group_tools_with_planner_response,omitempty"
 json:"hide_nominal_tool_steps,omitempty"
 json:"hide_tool_tag_in_di,omitempty"
 json:"includeServerSideToolInvocations,omitempty"
 json:"include_server_side_tool_invocations,omitempty"
 json:"interactive_tool_calls_count,omitempty"
+json:"last_tool_parse_error,omitempty"
 json:"low_level_tools_config,omitempty"
 json:"max_bytes_per_tool_arg,omitempty"
+json:"max_concurrent_tool_calls,omitempty"
+json:"max_tool_calls,omitempty"
+json:"max_tool_calls,omitzero"
 json:"max_tool_rounds,omitempty"
+json:"mcpTool,omitempty"
+json:"mcpToolName,omitempty"
 json:"model_native_tool_type,omitempty"
 json:"modified_tool_call,omitempty"
 json:"no_active_task_soft_reminder_tool_threshold,omitempty"
@@ -2921,6 +3908,7 @@ json:"no_tool_summary,omitempty"
 json:"no_wait_for_previous_tools,omitempty"
 json:"old_tool_name,omitempty"
 json:"parallel_tool_calls,omitzero"
+json:"per_tool,omitempty"
 json:"post_tool_hook_names,omitempty"
 json:"post_tool_hooks,omitempty"
 json:"pre_tool_hook_names,omitempty"
@@ -2942,6 +3930,7 @@ json:"tool,omitempty"
 json:"toolAction"
 json:"toolCall,omitempty"
 json:"toolCallCancellation,omitempty"
+json:"toolCallId"
 json:"toolChoice,omitempty"
 json:"toolConfig,omitempty"
 json:"toolConfirmation"
@@ -2961,13 +3950,15 @@ json:"tool_breakdown,omitempty"
 json:"tool_call,omitempty"
 json:"tool_call_choice_reason,omitempty"
 json:"tool_call_choices,omitempty"
+json:"tool_call_consumption,omitempty"
 json:"tool_call_count,omitempty"
+json:"tool_call_id"
 json:"tool_call_id,omitempty"
-json:"tool_call_id,required"
 json:"tool_call_index,omitempty"
 json:"tool_call_json,omitempty"
 json:"tool_call_output_tokens,omitempty"
 json:"tool_call_stats,omitempty"
+json:"tool_call_step,omitempty"
 json:"tool_calls"
 json:"tool_calls,omitempty"
 json:"tool_calls,omitzero"
@@ -2977,6 +3968,7 @@ json:"tool_choice,omitzero"
 json:"tool_class_name,omitempty"
 json:"tool_config,omitempty"
 json:"tool_confirmation_pending,omitempty"
+json:"tool_declarations,omitempty"
 json:"tool_decorators,omitempty"
 json:"tool_definitions,omitempty"
 json:"tool_errors,omitempty"
@@ -2994,25 +3986,30 @@ json:"tool_requests,omitempty"
 json:"tool_response_key,omitempty"
 json:"tool_result,omitempty"
 json:"tool_result_is_error,omitempty"
+json:"tool_result_step,omitempty"
 json:"tool_search,omitempty"
 json:"tool_set_mode,omitempty"
+json:"tool_source,omitempty"
 json:"tool_status,omitempty"
 json:"tool_summary,omitempty"
 json:"tool_turn_limit,omitempty"
 json:"tool_type,omitempty"
+json:"tool_ui_meta,omitempty"
 json:"tool_use_id,omitzero"
 json:"tool_use_prompt_token_count,omitempty"
 json:"tool_use_prompt_tokens_details,omitempty"
+json:"tool_use_tokens_by_modality,omitzero"
 json:"tool_variant,omitempty"
 json:"tools"
 json:"tools,omitempty"
 json:"tools,omitempty,omitzero"
 json:"tools,omitzero"
-json:"tools,omitzero,required"
 json:"toolsListChanged,omitempty"
 json:"tooltip,omitempty"
 json:"tooltipSupport,omitempty"
 json:"tooltip_text,omitempty"
+json:"total_tool_use_tokens,omitzero"
+json:"unknown_tool,omitempty"
 json:"use_only_override_tools,omitempty"
 json:"use_replace_content_edit_tool,omitempty"
 json:"use_structured_tool_responses,omitempty"
@@ -3028,7 +4025,10 @@ json:"wrap_tool_responses,omitempty"
 ``````console
 $ strings -n 4 agy | grep -aoE 'json:"[A-Za-z0-9_.,-]*([Pp]ermission|[Dd]eny|[Aa]llow)[A-Za-z0-9_.,-]*"' | sort -u
 json:"AllowMultiple"
+json:"actuationAllowedUrls,omitempty"
 json:"actuation_allowed_urls,omitempty"
+json:"additionalAllowedHTTPHosts,omitempty"
+json:"additionalAllowedRPCs,omitempty"
 json:"agentPermissions"
 json:"agent_permissions,omitempty"
 json:"agy_allowed_models,omitempty"
@@ -3050,6 +4050,7 @@ json:"allow_app_deployments,omitempty"
 json:"allow_attribution,omitempty"
 json:"allow_auto_run_commands,omitempty"
 json:"allow_browser_experimental_features,omitempty"
+json:"allow_browser_use,omitempty"
 json:"allow_cascade_access_gitignore_files,omitempty"
 json:"allow_cascade_in_background,omitempty"
 json:"allow_conversation_sharing,omitempty"
@@ -3063,6 +4064,7 @@ json:"allow_github_reviews,omitempty"
 json:"allow_half_duplex,omitempty"
 json:"allow_individual_level_analytics,omitempty"
 json:"allow_mcp_servers,omitempty"
+json:"allow_missing,omitempty"
 json:"allow_multiple,omitempty"
 json:"allow_network,omitempty"
 json:"allow_partial_replacement_success,omitempty"
@@ -3078,14 +4080,18 @@ json:"allow_view_gitignore,omitempty"
 json:"allow_write,omitempty"
 json:"allowed"
 json:"allowed,omitempty"
+json:"allowedDomains,omitempty"
 json:"allowedFunctionNames,omitempty"
+json:"allowedPassthrough,omitempty"
 json:"allowedSites"
+json:"allowed_callers,omitzero"
 json:"allowed_cascade_step_types,omitempty"
 json:"allowed_commands,omitempty"
 json:"allowed_context_types,omitempty"
 json:"allowed_domains,omitzero"
 json:"allowed_function_names,omitempty"
 json:"allowed_headers,omitempty"
+json:"allowed_hosts,omitzero"
 json:"allowed_implicit_step_types,omitempty"
 json:"allowed_mcp_servers,omitempty"
 json:"allowed_methods,omitempty"
@@ -3094,13 +4100,15 @@ json:"allowed_models,omitempty"
 json:"allowed_origin_pen_users,omitempty"
 json:"allowed_origins,omitempty"
 json:"allowed_resources,omitempty"
+json:"allowed_teammates,omitempty"
 json:"allowed_third_party_models,omitempty"
 json:"allowed_tiers,omitempty"
 json:"allowed_tools,omitzero"
-json:"allowed_tools,omitzero,required"
 json:"allowed_types,omitempty"
+json:"allowed_values,omitempty"
 json:"allowed_websites,omitempty"
 json:"allowlist,omitempty"
+json:"allowlist,omitzero"
 json:"allowlisted_urls,omitempty"
 json:"allows_user_interactions,omitempty"
 json:"as_deny_list,omitempty"
@@ -3115,6 +4123,7 @@ json:"cascade_allowed_commands,omitempty"
 json:"cascade_allowed_models_config,omitempty"
 json:"copyRequiresWriterPermission,omitempty"
 json:"deny,omitempty"
+json:"deny_conditions,omitempty"
 json:"deny_reason,omitempty"
 json:"dir_allowlist,omitempty"
 json:"disable_allow_multiple,omitempty"
@@ -3127,10 +4136,12 @@ json:"file_allowlist,omitempty"
 json:"file_permission_request,omitempty"
 json:"global_permission_grants,omitempty"
 json:"hasAugmentedPermissions,omitempty"
+json:"implicit_allow,omitempty"
 json:"inheritedPermissionsDisabled,omitempty"
 json:"isAllowed"
 json:"is_permission,omitempty"
 json:"log_source_batching_denylist,omitempty"
+json:"mcpAllowlist,omitempty"
 json:"mcp_allowlist,omitempty"
 json:"override_allow_action_on_unsaved_file,omitempty"
 json:"permission"
@@ -3139,6 +4150,8 @@ json:"permissionDetails,omitempty"
 json:"permissionId,omitempty"
 json:"permissionIds,omitempty"
 json:"permissionPreset"
+json:"permissionPreset,omitempty"
+json:"permissionPresetLocked"
 json:"permissionType,omitempty"
 json:"permission_config,omitempty"
 json:"permission_grants,omitempty"
@@ -3146,6 +4159,8 @@ json:"permission_grants_v2_migrated,omitempty"
 json:"permission_mode,omitempty"
 json:"permission_overrides,omitempty"
 json:"permission_preset,omitempty"
+json:"permission_preset_locked,omitempty"
+json:"permission_settings,omitempty"
 json:"permissions"
 json:"permissions,omitempty"
 json:"permissions_v2,omitempty"
@@ -3201,8 +4216,10 @@ json:"stop_hook_names,omitempty"
 json:"stop_hooks,omitempty"
 json:"supports_hook_result_proto_bytes,omitempty"
 json:"webhookConfig,omitempty"
+json:"webhook_config,omitzero"
 json:"webhook_id,omitempty"
 json:"webhook_url,omitempty"
+json:"webhooks,omitzero"
 ``````
 
 **json tags naming an MCP server**
@@ -3218,14 +4235,24 @@ json:"hasMCP"
 json:"launched_mcp_servers,omitempty"
 json:"mcp"
 json:"mcp,omitempty"
+json:"mcpAllowlist,omitempty"
+json:"mcpArgumentsJson,omitempty"
 json:"mcpAuth"
+json:"mcpCascadeId,omitempty"
+json:"mcpControls,omitempty"
+json:"mcpEnabled,omitempty"
+json:"mcpResourceUri,omitempty"
+json:"mcpServerName,omitempty"
 json:"mcpServers"
 json:"mcpServers,omitempty"
 json:"mcpServers,omitempty,omitzero"
+json:"mcpTool,omitempty"
+json:"mcpToolName,omitempty"
 json:"mcp_allowlist,omitempty"
 json:"mcp_config_json,omitempty"
 json:"mcp_controls,omitempty"
 json:"mcp_enabled,omitempty"
+json:"mcp_server_url"
 json:"mcp_servers,omitempty"
 json:"mcp_setting,omitempty"
 json:"override_mcp_config_json,omitempty"
@@ -3238,23 +4265,30 @@ json:"x-mcp-header,omitempty"
 ``````console
 $ strings -n 4 agy | grep -aoE 'json:"[A-Za-z0-9_.,-]*([Aa]gent|[Ss]kill)[A-Za-z0-9_.,-]*"' | sort -u
 json:"Subagents"
-json:"User-Agent"
+json:"agent"
 json:"agent,omitempty"
+json:"agent,omitzero"
+json:"agentControls,omitempty"
 json:"agentMode,omitempty"
 json:"agentPermissions"
+json:"agentPluginsSpec"
 json:"agentScript"
 json:"agentScriptName,omitempty"
 json:"agentScripts"
 json:"agent_api_config,omitempty"
 json:"agent_browser_tools,omitempty"
+json:"agent_config,omitzero"
 json:"agent_config_resolution,omitempty"
 json:"agent_controls,omitempty"
 json:"agent_customizations,omitempty"
 json:"agent_environment,omitempty"
+json:"agent_experiences,omitempty"
 json:"agent_id,omitempty"
+json:"agent_identity,omitempty"
 json:"agent_message,omitempty"
 json:"agent_model_sorts,omitempty"
 json:"agent_mouse_position,omitempty"
+json:"agent_name"
 json:"agent_name,omitempty"
 json:"agent_onboarding_completed,omitempty"
 json:"agent_path,omitempty"
@@ -3267,17 +4301,24 @@ json:"agent_script_item,omitempty"
 json:"agent_script_override,omitempty"
 json:"agent_scripts,omitempty"
 json:"agent_setting,omitempty"
+json:"agent_sound_volume,omitempty"
 json:"agent_state,omitempty"
 json:"agent_type,omitempty"
 json:"agentic_mode,omitempty"
 json:"agentic_mode_config,omitempty"
 json:"agents"
 json:"agents,omitempty"
+json:"agents,omitzero"
 json:"agents_paths,omitempty"
 json:"allow_agent_access_gitignore_files,omitempty"
 json:"allow_agent_access_non_workspace_files,omitempty"
+json:"assigned_agent,omitempty"
+json:"assigned_agent_identity,omitempty"
+json:"base_agent,omitempty"
+json:"base_agent,omitzero"
 json:"browser_subagent,omitempty"
 json:"browser_subagent_model,omitempty"
+json:"browser_subagent_webview_model,omitempty"
 json:"builtin_agent_names,omitempty"
 json:"builtin_skill_names,omitempty"
 json:"caller_agent,omitempty"
@@ -3286,24 +4327,35 @@ json:"custom_agent_spec,omitempty"
 json:"default_agent_model_config,omitempty"
 json:"default_agent_model_id,omitempty"
 json:"disable_subagent_config_adjustment,omitempty"
+json:"enable_browser_subagent_auto_invoke,omitempty"
 json:"enable_browser_subagent_v2,omitempty"
+json:"enable_browser_subagent_webview,omitempty"
 json:"enable_subagent_tools"
 json:"enable_subagent_tools,omitempty"
 json:"enable_teamwork_subagent,omitempty"
 json:"hasCustomAgentSpec,omitempty"
+json:"hasRunningSubagents,omitempty"
 json:"hasSkills"
+json:"has_running_subagents,omitempty"
 json:"includeUserAgentShadowDOM,omitempty"
 json:"includeUserAgentShadowTree,omitempty"
 json:"include_subagent_snapshots,omitempty"
 json:"invoke_subagent,omitempty"
+json:"is_agent_authored"
 json:"is_agentic,omitempty"
 json:"is_skill_file,omitempty"
 json:"last_selected_agent_model,omitempty"
 json:"main_agent,omitempty"
+json:"max_concurrent_subagents,omitzero"
 json:"max_subagent_snapshots,omitempty"
+json:"multi_agent,omitzero"
+json:"multiagentControls,omitempty"
 json:"multiagent_controls,omitempty"
 json:"navigatorUserAgentIssueDetails,omitempty"
+json:"noSkill,omitempty"
+json:"override_skill_id,omitempty"
 json:"pending_agent_messages,omitempty"
+json:"pending_agent_messages_sequence_number,omitempty"
 json:"pending_agent_messages_update,omitempty"
 json:"preload_skill_names,omitempty"
 json:"removedAgentTasks"
@@ -3311,17 +4363,23 @@ json:"requested_agent_spec,omitempty"
 json:"reused_subagent_id,omitempty"
 json:"run_subagent,omitempty"
 json:"selected_agent_script,omitempty"
+json:"self_subagent_remove_prompt_sections,omitempty"
 json:"service_agent_attributes,omitempty"
 json:"should_download_firebase_skill,omitempty"
+json:"skill_id"
 json:"skill_id,omitempty"
 json:"skill_md,omitempty"
 json:"skill_metadata,omitempty"
+json:"skill_name"
+json:"skill_names"
 json:"skill_names,omitempty"
+json:"skill_overrides,omitempty"
 json:"skill_path,omitempty"
 json:"skill_paths,omitempty"
 json:"skill_search,omitempty"
 json:"skills"
 json:"skills,omitempty"
+json:"skills,omitzero"
 json:"skills_path,omitempty"
 json:"skills_paths,omitempty"
 json:"subagent"
@@ -3338,6 +4396,7 @@ json:"subagent_spec,omitempty"
 json:"subagent_usd"
 json:"subagents"
 json:"subagents,omitempty"
+json:"target_skill_ids,omitempty"
 json:"total_subagent_count,omitempty"
 json:"userAgent"
 json:"userAgentMetadata,omitempty"
@@ -3353,15 +4412,22 @@ $ strings -n 4 agy | grep -aoE 'json:"[A-Za-z0-9_.,-]*[Ss]andbox[A-Za-z0-9_.,-]*
 json:"BypassSandbox"
 json:"BypassSandbox,omitempty"
 json:"allow_sandbox_app_deployments,omitempty"
-json:"chromiumSandbox"
 json:"cns_sandbox_mounts,omitempty"
+json:"disable_sandbox_bypass,omitempty"
 json:"enableTerminalSandbox,omitempty"
 json:"enable_terminal_sandbox,omitempty"
+json:"inheritFilesFromSandbox,omitempty"
 json:"is_sandbox,omitempty"
 json:"ran_in_sandbox,omitempty"
+json:"read_only_sandbox,omitempty"
 json:"sandbox,omitempty"
+json:"sandboxAvailable"
 json:"sandboxMode"
+json:"sandboxProxy,omitempty"
+json:"sandboxScreenshotsDir,omitempty"
 json:"sandbox_allow_network,omitempty"
+json:"sandbox_available,omitempty"
+json:"sandbox_bypass_disabled,omitempty"
 json:"sandbox_details,omitempty"
 json:"sandbox_enabled_at_v2_migration,omitempty"
 json:"sandbox_errors,omitempty"
@@ -3369,8 +4435,10 @@ json:"sandbox_id,omitempty"
 json:"sandbox_mode,omitempty"
 json:"sandbox_mode_enabled,omitempty"
 json:"sandbox_override,omitempty"
+json:"sandbox_proxy,omitempty"
 json:"sandbox_system_allowlist,omitempty"
 json:"sandbox_type,omitempty"
+json:"sandboxed_trusted_cli,omitempty"
 ``````
 
 **yaml:"..."**
@@ -3390,6 +4458,7 @@ yaml:"clientId,omitempty"
 yaml:"clientSecret,omitempty"
 yaml:"command,omitempty"
 yaml:"commandExecutionPolicy,omitempty"
+yaml:"compress"
 yaml:"config,omitempty"
 yaml:"consoleSeparator"
 yaml:"container,omitempty"
@@ -3413,12 +4482,14 @@ yaml:"exclude_functions,omitempty"
 yaml:"exclude_macros,omitempty"
 yaml:"extensions,omitempty"
 yaml:"features,omitempty"
+yaml:"filename"
 yaml:"functionKey"
 yaml:"functions,omitempty"
 yaml:"glob"
 yaml:"globs"
 yaml:"headers,omitempty"
 yaml:"hidden,omitempty"
+yaml:"hooks,omitempty"
 yaml:"icon"
 yaml:"id"
 yaml:"imports,omitempty"
@@ -3433,8 +4504,12 @@ yaml:"levelKey"
 yaml:"limits,omitempty"
 yaml:"lineEnding"
 yaml:"link,omitempty"
+yaml:"localtime"
 yaml:"logo"
 yaml:"mainAgent,omitempty"
+yaml:"maxage"
+yaml:"maxbackups"
+yaml:"maxsize"
 yaml:"mcpServers,omitempty"
 yaml:"messageKey"
 yaml:"metadata"
@@ -3447,6 +4522,7 @@ yaml:"oauth,omitempty"
 yaml:"overloads,omitempty"
 yaml:"params,omitempty"
 yaml:"plugins,omitempty"
+yaml:"preloadSkills,omitempty"
 yaml:"publisher"
 yaml:"return,omitempty"
 yaml:"rules,omitempty"
@@ -3514,14 +4590,18 @@ jsonschema_description:"A detailed system prompt for this subagent."
 jsonschema_description:"A list of sed expressions to apply sequentially."
 jsonschema_description:"A single contiguous chunk to replace."
 jsonschema_description:"Absolute URI of the subagent's transcript log, if available."
+jsonschema_description:"Absolute path of a Python workflow script file. Set exactly one of Script and ScriptPath."
 jsonschema_description:"Absolute path to the .ipynb notebook file."
 jsonschema_description:"Absolute path to the node to edit, e.g /path/to/file"
-jsonschema_description:"Always set to true."
 jsonschema_description:"Arguments to pass to the tool."
 jsonschema_description:"Array of subagents to invoke. Each entry specifies a separate subagent to launch concurrently."
+jsonschema_description:"Brief summary of the workflow goal."
+jsonschema_description:"Browser action to execute in the built-in webview browser."
+jsonschema_description:"Browser action to execute in this batch step."
 jsonschema_description:"Byte offset into the line range. Use to continue reading when content is truncated by the byte limit."
 jsonschema_description:"Classification of the edit. Examples include \"
 jsonschema_description:"Content of the message."
+jsonschema_description:"Conversation ID of the agent to message, or '@children' to broadcast to all active direct subagents."
 jsonschema_description:"Conversation ID of the agent to message."
 jsonschema_description:"Cron only. Maximum number of triggers before the schedule stops; defaults to unlimited."
 jsonschema_description:"Cron only. Set true only for an independent standing job that should keep firing after the current task is done."
@@ -3529,39 +4609,40 @@ jsonschema_description:"Decision for the tool call: 'allow' to proceed, 'deny' t
 jsonschema_description:"Decision on whether to stop execution: 'stop' to allow termination, 'continue' or 'block' to continue execution."
 jsonschema_description:"Defaults to 1:1."
 jsonschema_description:"Detailed multi-line summary of the artifact's contents and purpose."
-jsonschema_description:"End line to read (inclusive)."
+jsonschema_description:"End line to read (inclusive). Omit to read until the end of the file, within the per-read limits."
 jsonschema_description:"Grant access to MCP tools."
 jsonschema_description:"Grant tools to create and edit files, and run commands."
 jsonschema_description:"Grant tools to define and invoke its own subagents."
-jsonschema_description:"Horizontal scroll delta in pixels. Positive values scroll to the right, negative values scroll to the left."
-jsonschema_description:"Human-readable description of the JavaScript to execute"
 jsonschema_description:"Human-readable description of what this subagent does and when it should be used."
-jsonschema_description:"Human-readable title for the Knowledge Item"
 jsonschema_description:"ID of the command to get status for"
 jsonschema_description:"If decision is 'ask', requests these standard permission resource strings instead of default."
-jsonschema_description:"If true, captures a screenshot of a specific element by index instead of the full viewport."
 jsonschema_description:"If true, performs a case-insensitive search."
-jsonschema_description:"If true, saves the screenshot as an artifact."
 jsonschema_description:"If true, the user can select multiple options."
 jsonschema_description:"Images to edit, combine, or use as references."
-jsonschema_description:"Index of the annotated DOM element to click on."
-jsonschema_description:"Index of the annotated DOM element to input text into."
-jsonschema_description:"Index of the annotated DOM select element to select an option from."
 jsonschema_description:"Input to deliver to the task. Required for 'send_input'."
-jsonschema_description:"List of references related to this Knowledge Item"
+jsonschema_description:"Keyboard key name for 'press' (e.g., 'Enter', 'Tab', 'Escape', 'ArrowDown')."
 jsonschema_description:"Markdown language for the code block, e.g 'python' or 'javascript'"
+jsonschema_description:"Maximum number of results to return. Defaults to 5, at most 15."
 jsonschema_description:"Message sent to you as a high-priority notification when the timer fires or the cron triggers."
-jsonschema_description:"Mouse button to press. Options are 'left', 'right', or 'middle'."
-jsonschema_description:"Mouse button to release. Options are 'left', 'right', or 'middle'."
 jsonschema_description:"Name of the MCP server."
-jsonschema_description:"Name of the key/key combination to simulate. Examples of keys are: \"
 jsonschema_description:"Name of the server to list available resources from."
 jsonschema_description:"Name of the server to read the resource from."
 jsonschema_description:"Name of the tool to call."
+jsonschema_description:"Normalized horizontal viewport coordinate in [0, 1000] when clicking/hovering/scrolling by coordinates."
+jsonschema_description:"Normalized horizontal viewport coordinate in [0, 1000] when targeting by coordinates."
+jsonschema_description:"Normalized vertical viewport coordinate in [0, 1000] when clicking/hovering/scrolling by coordinates."
+jsonschema_description:"Normalized vertical viewport coordinate in [0, 1000] when targeting by coordinates."
 jsonschema_description:"Number of characters to view. Make this as small as possible to avoid excessive memory usage."
-jsonschema_description:"One paragraph summary of the Knowledge Item"
-jsonschema_description:"Optional absolute paths to media files (images, videos, etc.) to provide as context to the subagent. Maximum 3 files."
+jsonschema_description:"One sentence naming the specific effect that decided the verdict."
+jsonschema_description:"Option value or visible label to select for 'select_option'."
+jsonschema_description:"Optional HTTP status code in [100, 599] when relevant."
+jsonschema_description:"Optional challenge or blocker kind when status is 'BLOCKED'."
+jsonschema_description:"Optional count of items acted on / claimed complete."
+jsonschema_description:"Optional count of items verified in post-action page/DOM state."
+jsonschema_description:"Optional count of requested items in the task."
 jsonschema_description:"Optional domain to recommend the search prioritize"
+jsonschema_description:"Optional origin (scheme://host[:port]) where the task completed or blocked; must match a URL visited in this trajectory."
+jsonschema_description:"Optional working directory for the script, as an absolute path. Defaults to the first workspace."
 jsonschema_description:"Optional, Pattern to search for, supports glob format"
 jsonschema_description:"Optional, exclude files/directories that match the given glob patterns"
 jsonschema_description:"Optional, maximum depth to search"
@@ -3569,25 +4650,35 @@ jsonschema_description:"Optional, type filter, enum=file,directory,any"
 jsonschema_description:"Optional. Endline to view, 1-indexed, inclusive. When specified, this value must be greater than or equal to StartLine."
 jsonschema_description:"Optional. Overrides/customizes the arguments of the tool call before it runs."
 jsonschema_description:"Optional. Startline to view, 1-indexed, inclusive. When specified, this value must be less than or equal to EndLine."
+jsonschema_description:"Ordered list of browser actions to execute sequentially when action='batch' (stops on first error or URL change)."
 jsonschema_description:"Path of the node within the file, e.g package.class.FunctionName"
 jsonschema_description:"Path to file to view. Must be an absolute path."
 jsonschema_description:"Path to list contents of, should be absolute path to a directory"
+jsonschema_description:"Python source of the workflow script. Set exactly one of Script and ScriptPath."
+jsonschema_description:"Scroll direction for 'scroll' ('up', 'down', 'left', 'right')."
+jsonschema_description:"Scroll distance in pixels for 'scroll' (default 400)."
 jsonschema_description:"Seconds to wait for a one-shot timer. Mutually exclusive with CronExpression."
 jsonschema_description:"Set to true to run outside the sandbox (requires elevated user permission for auth exchange, network, or port binding)."
 jsonschema_description:"Set true to enable the subagent to call MCP tools."
 jsonschema_description:"Set true to equip the subagent with tools to create and edit files, and run commands."
 jsonschema_description:"Set true to equip the subagent with tools to define and invoke its own subagents"
 jsonschema_description:"Short descriptive name for the saved file."
-jsonschema_description:"Start line to read (inclusive)."
+jsonschema_description:"Short summary of what this browser script intends to inspect or actuate (shown to the user on the page overlay)."
+jsonschema_description:"Specific reason enum matching the status."
+jsonschema_description:"Start line to read (inclusive). Omit to read from the beginning of the file."
 jsonschema_description:"Subagents to kill. Required for 'kill'."
 jsonschema_description:"System prompt for the subagent."
+jsonschema_description:"Target agent browser tab ID (defaults to 'agent-tab-1')."
+jsonschema_description:"Target http://, https://, or about:blank URL for 'open', 'navigate', or 'new-tab'."
 jsonschema_description:"Task to manage, as reported by 'list'. Required for 'kill', 'status' and 'send_input'."
+jsonschema_description:"Terminal outcome classification: 'COMPLETED', 'BLOCKED', or 'REFUSED'."
+jsonschema_description:"Text to enter for 'fill' or 'type', or text to wait for in 'wait'."
 jsonschema_description:"The ID of the message to read. Required when Action is 'read'."
 jsonschema_description:"The IDs of the cells to execute."
 jsonschema_description:"The IDs of the subagents to kill. Required for 'kill'."
-jsonschema_description:"The URL to open in the user's browser."
 jsonschema_description:"The absolute path of the file to create."
 jsonschema_description:"The absolute path of the file to modify."
+jsonschema_description:"The absolute path of the file to read."
 jsonschema_description:"The absolute path to the file to edit."
 jsonschema_description:"The action to perform."
 jsonschema_description:"The action to perform: 'list' (list all messages with metadata) or 'read' (read full content of a specific message)."
@@ -3596,28 +4687,23 @@ jsonschema_description:"The code contents to write to the file."
 jsonschema_description:"The command ID from a previous run_command call. This is returned in the run_command output."
 jsonschema_description:"The content to replace the target content with."
 jsonschema_description:"The content to replace the target with. Leave empty to delete the target."
+jsonschema_description:"The content to replace the target with. Use an empty string to delete the target. Required unless Edits is set."
+jsonschema_description:"The content to replace the target with. Use an empty string to delete the target."
 jsonschema_description:"The current working directory for the command"
 jsonschema_description:"The directory to search within. Must be an absolute path."
 jsonschema_description:"The exact command line string to execute."
 jsonschema_description:"The full contents to write to the file."
-jsonschema_description:"The index of the element to capture (required if CaptureByElementIndex is true). Get the index using browser_get_dom."
+jsonschema_description:"The grant string, in the exact format specified by the skill that instructed you to call this tool."
 jsonschema_description:"The input to send to the task. Required when Action is 'send_input'."
 jsonschema_description:"The list of questions to ask."
 jsonschema_description:"The message content."
 jsonschema_description:"The number of seconds to wait. Use for one-shot timers. Mutually exclusive with CronExpression."
-jsonschema_description:"The page_id of the browser page containing the dropdown element."
-jsonschema_description:"The page_id of the browser page to click on."
-jsonschema_description:"The page_id of the browser page to get network request from."
-jsonschema_description:"The page_id of the browser page to input text on."
-jsonschema_description:"The page_id of the browser page to list network requests for."
-jsonschema_description:"The path of the file to read."
 jsonschema_description:"The path to search. Must be an absolute path to a directory or a file. This is a required parameter."
-jsonschema_description:"The permission grant string in the format specified in a skill's documentation."
 jsonschema_description:"The question to ask the user. Do NOT add 'select all that apply' or similar text to the question title."
+jsonschema_description:"The question, without 'select all that apply' or similar; the UI adds that."
 jsonschema_description:"The reason for the stop or continue decision."
 jsonschema_description:"The reason why the tool call is blocked or why permission is asked. Required if decision is not 'allow'."
 jsonschema_description:"The recipient ID to send the message to, e.g. a subagent conversation ID."
-jsonschema_description:"The request ID to retrieve details for. This ID can be obtained from the list_network_requests tool."
 jsonschema_description:"The search term or pattern to look for within files."
 jsonschema_description:"The subagent's conversation ID, used to message or kill it."
 jsonschema_description:"The subagent's current lifecycle state."
@@ -3629,84 +4715,79 @@ jsonschema_description:"The target file to modify. Must be an absolute path. Alw
 jsonschema_description:"The target of the action (e.g., the command string, file path)"
 jsonschema_description:"The task ID to manage. Required when Action is 'kill', 'status', or 'send_input'."
 jsonschema_description:"The text prompt to generate an image for or the edit instructions."
-jsonschema_description:"The text to input into the element."
 jsonschema_description:"The type of cell: 'code', 'markdown', or 'raw'. Required for 'add' action."
-jsonschema_description:"The value or text of the option to select from the dropdown."
-jsonschema_description:"The window contents height in display independent pixels. Only used when WindowState is 'normal'."
-jsonschema_description:"The window contents width in display independent pixels. Only used when WindowState is 'normal'."
+jsonschema_description:"True if the user can get back to their prior state after this command runs. False if any effect of it cannot be undone."
 jsonschema_description:"Type name of the subagent to invoke."
-jsonschema_description:"Type of click to perform: 'left', 'right', or 'double'. If not specified or left empty, a left click will be performed."
-jsonschema_description:"Type of reference (e.g., file, conversation_id, url)"
 jsonschema_description:"URL to read content from"
 jsonschema_description:"Unique identifier for the resource."
 jsonschema_description:"Unique name used to invoke the subagent."
-jsonschema_description:"Value of the reference"
-jsonschema_description:"Vertical scroll delta in pixels. Positive values scroll down, negative values scroll up."
+jsonschema_description:"Wait duration in milliseconds for 'wait'."
 jsonschema_description:"What the image should depict, or how to edit the given images."
 jsonschema_description:"What this subagent does and when it should be used."
+jsonschema_description:"Whether the user can select several options."
 jsonschema_description:"Whether this artifact should be presented to the user."
-jsonschema_description:"Whether to clear existing text before inputting. Default is false."
 jsonschema_description:"Whether to overwrite an existing file, replacing its entire contents."
-jsonschema_description:"Whether to press Enter after inputting the text. Default is false."
 jsonschema_description:"Whether to terminate the command. Exactly one of input and terminate must be specified."
-jsonschema_description:"X coordinate of the pixel to scroll (0-999). Coordinates are scaled to a 1000x1000 grid and mapped to screen dimensions."
-jsonschema_description:"Y coordinate of the pixel to scroll (0-999). Coordinates are scaled to a 1000x1000 grid and mapped to screen dimensions."
-jsonschema_description:"direction of the scroll. Options are left, right, up, down"
-jsonschema_description:"index of the element to scroll on"
-jsonschema_description:"page_id of the Browser page to capture a screenshot of."
-jsonschema_description:"page_id of the Browser page to capture console logs of."
-jsonschema_description:"page_id of the Browser page to execute the JavaScript on"
-jsonschema_description:"page_id of the Browser page to get the DOM tree of"
-jsonschema_description:"page_id of the Browser page to move the mouse cursor to."
-jsonschema_description:"page_id of the Browser page to perform the drag operation on"
-jsonschema_description:"page_id of the Browser page to press the mouse button on"
-jsonschema_description:"page_id of the Browser page to read"
-jsonschema_description:"page_id of the Browser page to refresh/reload"
-jsonschema_description:"page_id of the Browser page to release the mouse button on"
-jsonschema_description:"page_id of the Browser page to resize."
-jsonschema_description:"page_id of the Browser page to scroll on"
-jsonschema_description:"page_id of the Browser page to scroll."
-jsonschema_description:"page_id of the Browser page to simulate a key press on"
-jsonschema_description:"x-coordinate of the pixel to move the mouse cursor to."
-jsonschema_description:"y-coordinate of the pixel to move the mouse cursor to."
+jsonschema_description:"Which kind of entry to return. Defaults to plugin."
 ``````
 
 **paths under .gemini**
 
 ``````console
 $ strings -n 4 agy | grep -aoE '\.gemini/[A-Za-z0-9_./-]+' | sort -u
+.gemini/AGENTS.md
+.gemini/GEMINI.md
 .gemini/antigravity-cli/
 .gemini/antigravity-cli/cache
 .gemini/antigravity-cli/cache/projects.json
 .gemini/antigravity-cli/hooks.json
 .gemini/antigravity-cli/settings.json
+.gemini/antigravity-cli/settings.jsonmDNS
 .gemini/antigravity/artifacts
+.gemini/antigravity/brain
 .gemini/antigravity/transcript.jsonl
+.gemini/config
 .gemini/config/
+.gemini/config/config.json
 .gemini/config/global_workflows/
 .gemini/config/hooks.json
 .gemini/config/mcp_config.json
+.gemini/config/plugins
+.gemini/config/plugins/
 .gemini/config/projects/
+.gemini/config/sidecars/
 .gemini/config/skills/
+.gemini/config/skills/foo/
+.gemini/config/test_security.pyactuation_promptgit
 .gemini/config/workflows.json
 .gemini/config/workflows/
 .gemini/configbackground
-.gemini/jetski/5000-lines.jsonlMANAGER_POSTONBOARDING_COMPLETEretroactive_migration_env_movedretroactive_migration_completedtransport
+.gemini/grpc_codefail_openllm_callshas_errorreason_idUnknownCADISK_READ
+.gemini/jetski/
+.gemini/jetski/5000-lines.jsonlMANAGER_POSTONBOARDING_COMPLETEcontext
+.gemini/jetski/800-lines.jsonlMANAGER_CONVERSATION_AVAILABLEworkspace
+.gemini/jetski/sidecars/
+.gemini/jetski/tab-perf-convo/plan.mdWrite
 ``````
 
 **settings, config and hook file names**
 
 ``````console
 $ strings -n 4 agy | grep -aoE '/[a-z0-9_-]{0,30}(settings|config|hook|agent|permission|skill|plugin|rule|workflow)[a-z0-9_-]{0,30}\.(json|yaml|yml|md|toml)' | sort -u
+/admin_settings.json
+/agent.json
+/agent.md
 /backend-config.yaml
+/config.json
+/config.toml
 /config.yml
-/configuration.md
 /frontend-config.json
 /hooks.json
 /hooks.md
 /json_configs.md
 /mcp_config.json
 /plugin.json
+/plugins.json
 /plugins.md
 /rules.md
 /settings.json
@@ -3742,14 +4823,19 @@ allowedOriginsAll
 allowedParameters
 allowedPaths
 allowedPrefixes
+allowedRecordTypes
 allowedResources
+allowedSubagents
 allowedSubcommands
 allowedSubscriptions
+allowedTeammates
+allowedThirdPartyModels
 allowedTiers
 allowedToolActions
 allowedToolPrefixes
 allowedTools
 allowedTypes
+allowedValues
 allowedWOrigins
 allowedWebsites
 deniedActions
@@ -3758,11 +4844,17 @@ deniedCommands
 deniedToolPrefixes
 deniedTools
 disabledHeuristics
+disabledReason
 disabledTelemetry
 disabledTools
+disabledValue
+enabledConnectors
+enabledExperimentIds
+enabledFlags
 enabledHeuristics
 enabledHooks
 enabledLabsFeatures
+enabledTargets
 enabledTools
 ``````
 
@@ -3784,18 +4876,25 @@ permissionAction
 permissionChecker
 permissionConfig
 permissionGrants
+permissionLocks
 permissionManager
 permissionOverrides
+permissionOverridesX
 permissionPreset
 permissionRefreshInterval
 sandboxAllowNetwork
+sandboxAvailable
+sandboxBypassDisabled
 sandboxDetails
 sandboxEnabled
+sandboxErrorGuidance
 sandboxErrors
 sandboxMode
 sandboxModeEnabled
 sandboxOverride
 sandboxOverrideB
+sandboxProxy
+sandboxResolver
 sandboxState
 sandboxSystemAllowlist
 ``````

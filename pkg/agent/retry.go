@@ -96,7 +96,9 @@ package agent
 //   - agy 1.2.2 was still retrying a persistent 503 after ten requests
 //     and five minutes. Version 1.1.27 had made one request in 0.15s; the
 //     change is why agent/antigravity now cancels one model turn after
-//     100 seconds (docs/hand-runs/2026-09-08-agy-retry.md).
+//     100 seconds. 1.4.9 gives up after nine attempts and about two and a
+//     half minutes, still past that bound
+//     (docs/hand-runs/2026-09-08-agy-retry.md).
 //
 // Claude and codex leave their internal ladders alone; their own files
 // carry the decisions on CLAUDE_CODE_MAX_RETRIES and
