@@ -286,7 +286,7 @@ spec:
 # The sandbox-access acceptor's own Service, serving nothing else
 # (docs/design/grain-on-gke.md, "Sandbox access"). ClusterIP only, never
 # behind the Gateway: reachable only from the pods
-# sandbox-access-networkpolicy.yaml admits. It is defined before the
+# deploy/kubernetes/gke/networkpolicy.yaml admits. It is defined before the
 # Deployment so the grain pod is started with GRAIN_ACCESS_SERVICE_HOST,
 # the ClusterIP grain hands granule to drop guest traffic to.
 apiVersion: v1
@@ -300,6 +300,7 @@ spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: grain
+    app.kubernetes.io/component: daemon
   ports:
     - name: sandbox-access
       port: 4244
@@ -326,6 +327,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: grain
+        app.kubernetes.io/component: daemon
     spec:
       serviceAccountName: grain
       # Above every sandbox class (grain-daemon, above): a

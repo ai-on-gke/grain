@@ -1,4 +1,5 @@
-# NetworkPolicies for grain on GKE (docs/design/grain-on-gke.md §Security, point 3):
+# NetworkPolicies for grain on GKE and -k8s-granule-sandboxes
+# (docs/design/grain-on-gke.md §Security, point 3):
 #
 #   1. grain-sandbox-network-none: restricts `grain.dev/network: none` sandbox
 #      pods to zero ingress and egress only to the grain daemon pod (proxies,
@@ -18,6 +19,15 @@
 #      (`app: grain-webhook`). Blocks all outbound egress (`egress: []`) because
 #      `grain` polls `grain-webhook` inbound over `/v1/events`, and restricts
 #      inbound port 8080 to the `grain` daemon pod and GKE Gateway ranges.
+#
+# Note on wrapper vs. guest separation inside a sandbox pod: with
+# CHV_NET_MODE=inline a guest shares its pod's IP and MAC, so to a Kubernetes
+# NetworkPolicy the wrapper's packets and the guest's are the same pod's.
+# Keeping the guest off the acceptor (4244) is enforced inside the pod by
+# granule's netshim, which drops every guest-originated packet to
+# GRANULE_ACCESS_CONTROLLER_IPS (the grain-access ClusterIP and the grain pod's
+# IP) on the guest's tap (third_party/granule/pkg/netshim/splice.go,
+# controllerDropRules), and by the acceptor's mTLS client-certificate check.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
