@@ -890,9 +890,20 @@ func (r *BackendRunner) verifyAndConcludeRun(ctx context.Context, rs gritapi.Run
 	// must pass DSSE signature and subject (tree SHA256 + gitTree + commit)
 	// verification before being recorded in RunStore / ci.Gate.
 	if conclusion != ConclusionCancelled {
-		if err := r.verifyRunAttestation(ctx, rs.ID, meta); err != nil {
+		if err := r.verifyRunAttestation(ctx, rs, meta); err != nil {
 			conclusion = ConclusionErrored
 			runErr = fmt.Sprintf("attestation verification failed: %v", err)
+			// No job's conclusion is vouched for either: keep a
+			// "success" from the unsigned status out of the job rows,
+			// where `grain ci list` would count it as green.
+			for i := range jobs {
+				if jobs[i].Conclusion == ConclusionSuccess {
+					jobs[i].Conclusion = ConclusionErrored
+					for k := range jobs[i].Steps {
+						jobs[i].Steps[k].Conclusion = ConclusionErrored
+					}
+				}
+			}
 		}
 	}
 
@@ -928,7 +939,8 @@ func (r *BackendRunner) verifyAndConcludeRun(ctx context.Context, rs gritapi.Run
 	return nil
 }
 
-func (r *BackendRunner) verifyRunAttestation(ctx context.Context, runID string, meta trackedRunMeta) error {
+func (r *BackendRunner) verifyRunAttestation(ctx context.Context, rs gritapi.RunStatus, meta trackedRunMeta) error {
+	runID := rs.ID
 	env, err := r.backend.GetAttestation(ctx, runID)
 	if err != nil {
 		return fmt.Errorf("fetching attestation for run %s: %w", runID, err)
@@ -947,6 +959,36 @@ func (r *BackendRunner) verifyRunAttestation(ctx context.Context, runID string, 
 	}
 	if err := stmt.CheckSubject(expectedTree, meta.Commit); err != nil {
 		return err
+	}
+	return checkAttestedVerdict(stmt, rs)
+}
+
+// checkAttestedVerdict binds the verdict about to be recorded to the one
+// grit signed. The run status and its jobs' conclusions come from
+// unsigned `GET /v1/runs/{id}` responses; only the attestation is signed,
+// so a status that names another run, or a job set or conclusion the
+// statement does not, is refused rather than recorded -- otherwise a
+// verified attestation of a failing run would carry a "success" status
+// through (docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md, F2).
+func checkAttestedVerdict(stmt *attest.Statement, rs gritapi.RunStatus) error {
+	if got := stmt.Predicate.Request.Run; got != "" && got != rs.ID {
+		return fmt.Errorf("attestation is for run %s, not %s", got, rs.ID)
+	}
+	attested := make(map[string]string, len(stmt.Predicate.Jobs))
+	for _, j := range stmt.Predicate.Jobs {
+		attested[j.ID] = strings.ToLower(strings.TrimSpace(j.Result.Conclusion))
+	}
+	if len(attested) != len(rs.Jobs) {
+		return fmt.Errorf("attestation covers %d jobs, run status reports %d", len(attested), len(rs.Jobs))
+	}
+	for _, j := range rs.Jobs {
+		want, ok := attested[j.ID]
+		if !ok {
+			return fmt.Errorf("job %s is not in the attestation", j.ID)
+		}
+		if got := strings.ToLower(strings.TrimSpace(j.Conclusion)); got != want {
+			return fmt.Errorf("job %s: run status reports %q, attestation signs %q", j.ID, got, want)
+		}
 	}
 	return nil
 }

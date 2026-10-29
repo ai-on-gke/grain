@@ -415,3 +415,97 @@ func TestBackendRunnerContract(t *testing.T) {
 		})
 	}
 }
+
+// greenWashingBackend reports every completed job and run as a success in
+// its (unsigned) run status, leaving the signed attestation alone: what a
+// buggy grit or anything between grain and grit could hand the runner.
+type greenWashingBackend struct {
+	gritapi.Backend
+}
+
+func (b greenWashingBackend) GetRun(ctx context.Context, id string) (gritapi.RunStatus, error) {
+	rs, err := b.Backend.GetRun(ctx, id)
+	if rs.Status == "completed" {
+		rs.Conclusion = "success"
+		for i := range rs.Jobs {
+			rs.Jobs[i].Conclusion = "success"
+		}
+	}
+	return rs, err
+}
+
+// TestBackendRunnerRecordsOnlyTheAttestedVerdict is the regression for the
+// 2026-10-29 walkthrough's F2: the runner verified the attestation's
+// signature and subject but recorded the conclusions from the unsigned run
+// status, so a status saying "success" over an attestation signing
+// "failure" was recorded green.
+func TestBackendRunnerRecordsOnlyTheAttestedVerdict(t *testing.T) {
+	for _, mode := range []string{"local", "remote"} {
+		t.Run(mode, func(t *testing.T) {
+			signer, err := attest.LoadOrCreateFileSigner(filepath.Join(t.TempDir(), "attest.key"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := newBackendTestEnv(t, mode, t.TempDir(), signer, "", func(ctx context.Context, jenv grit.JobExecEnv) (grit.JobExecResult, error) {
+				return grit.JobExecResult{Conclusion: "failure", Log: []byte("exit 1")}, nil
+			})
+			defer env.close()
+
+			tree, archive := buildTestTree(t, map[string]string{"a.txt": "a"})
+			var verified []Run
+			runner := NewBackendRunner(BackendRunnerConfig{
+				Backend:  greenWashingBackend{env.backend},
+				StateDir: t.TempDir(),
+				TreeResolver: func(ctx context.Context, req Request) (treeid.ID, []byte, error) {
+					return tree, archive, nil
+				},
+				OnVerdictVerified: func(run Run) { verified = append(verified, run) },
+			})
+			run, err := runner.Start(context.Background(), Request{
+				Repo:   "acme/widgets",
+				Ref:    "main",
+				Commit: "3333333333333333333333333333333333333333",
+				Event:  EventPush,
+				Jobs:   []string{"test"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := waitRunnerRunDone(t, runner, run.ID)
+			if done.Conclusion == ConclusionSuccess || !strings.Contains(done.Error, "attestation signs") {
+				t.Fatalf("done = (conclusion=%q, error=%q), want a refusal naming the attested conclusion", done.Conclusion, done.Error)
+			}
+			if len(verified) != 0 {
+				t.Fatalf("OnVerdictVerified called for a status the attestation contradicts: %+v", verified)
+			}
+			for _, j := range done.Jobs {
+				if j.Conclusion == ConclusionSuccess {
+					t.Errorf("job %s recorded success from an unverified status", j.JobID)
+				}
+			}
+		})
+	}
+}
+
+// TestCheckAttestedVerdict covers the binding's other refusals: a status
+// for another run, and a job set the attestation does not cover.
+func TestCheckAttestedVerdict(t *testing.T) {
+	stmt := &attest.Statement{Predicate: attest.RunPredicate{
+		Request: attest.RequestInfo{Run: "r-1"},
+		Jobs:    []attest.Job{{ID: "a", Result: attest.Result{Conclusion: "success"}}},
+	}}
+	ok := gritapi.RunStatus{ID: "r-1", Jobs: []gritapi.JobStatus{{ID: "a", Conclusion: "success"}}}
+	if err := checkAttestedVerdict(stmt, ok); err != nil {
+		t.Fatalf("matching status refused: %v", err)
+	}
+	for name, rs := range map[string]gritapi.RunStatus{
+		"other run":   {ID: "r-2", Jobs: ok.Jobs},
+		"extra job":   {ID: "r-1", Jobs: []gritapi.JobStatus{{ID: "a", Conclusion: "success"}, {ID: "b", Conclusion: "success"}}},
+		"renamed job": {ID: "r-1", Jobs: []gritapi.JobStatus{{ID: "b", Conclusion: "success"}}},
+		"conclusion":  {ID: "r-1", Jobs: []gritapi.JobStatus{{ID: "a", Conclusion: "failure"}}},
+	} {
+		if err := checkAttestedVerdict(stmt, rs); err == nil {
+			t.Errorf("%s: accepted %+v", name, rs)
+		}
+	}
+}
