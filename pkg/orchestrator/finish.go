@@ -343,6 +343,13 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		return nil
 	}
 
+	// A required review of a CL that finished without parking, suspending
+	// or leaving a finding has passed: its snapshot is cleared for it
+	// (clearCLReview), and the provider's gate reads that.
+	if err := clearCLReview(ctx, store, task, findings, now); err != nil {
+		return err
+	}
+
 	// A branch on the remote is only this run's work if this run put it
 	// there. One an earlier attempt pushed -- before parking, say, or
 	// before running out of turns -- is still there when a later attempt
@@ -1591,6 +1598,12 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		capabilities, _ := model.CapabilityEntries(p["capabilities"])
 		for _, cap := range capabilities {
 			cap = strings.TrimSpace(cap)
+			// A review grant is grain's to give, on a review it files
+			// itself (SyncCLReviews); the live call refused it too.
+			if model.GrantNamesReviewOf(cap) {
+				body += reviewOfGrantRefusedNote(cap)
+				continue
+			}
 			// grain-ci is passed over, as ui.CreateTask passes it over
 			// for the same call filed live: the target repository's CI
 			// Mode decides it (defaultTaskGrants, above), and naming it
@@ -3446,4 +3459,12 @@ func parkedOn(ctx context.Context, store *model.Store, taskID string, result *ag
 		}
 	}
 	return parked, nil
+}
+
+// reviewOfGrantRefusedNote is the line added to a proposal whose grant
+// named a review (model.ReviewOfArg) and was dropped for it.
+func reviewOfGrantRefusedNote(grant string) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s` with %q, which only a review "+
+		"grain files itself may hold, so it was filed without that grant.",
+		model.CapabilityGrantRef(grant), model.ReviewOfArg)
 }

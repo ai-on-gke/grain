@@ -1198,6 +1198,13 @@ const MAX_CI_QUEUE_JOBS = 8;
 // worst first: the question is "which of them fail", not the whole list.
 const GITHUB_CI_ROWS = 8;
 
+// decidedPercent is one of a GitHub CI rate's three shares, or a dash
+// when nothing it is a share of was decided -- a job that only ever
+// skipped or came back neutral has no pass rate, not a 0% one.
+function decidedPercent(o, rate) {
+  return o.passed + o.failed + o.cancelled > 0 ? percent(rate) : "—";
+}
+
 // GitHubCISection is the CI beside grain's own: GitHub Actions jobs and
 // other providers' check runs (report.githubCI, metrics.GitHubCI). Every
 // number in it is labelled with its source, and none of it is computed
@@ -1242,17 +1249,17 @@ export function GitHubCISection({ report }) {
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 3, mb: 1 }}>
         <Stat
           label="Passed"
-          value={percent(gh.passRate)}
+          value={decidedPercent(gh, gh.passRate)}
           sub={`${gh.passed} of ${gh.passed + gh.failed + gh.cancelled} decided`}
         />
         <Stat
           label="Failed"
-          value={percent(gh.failRate)}
+          value={decidedPercent(gh, gh.failRate)}
           sub={`${gh.failed} failed or timed out`}
         />
         <Stat
           label="Cancelled"
-          value={percent(gh.cancelRate)}
+          value={decidedPercent(gh, gh.cancelRate)}
           sub={`${gh.cancelled} cancelled`}
         />
         {gh.skipped + gh.neutral + gh.other > 0 && (
@@ -1310,13 +1317,13 @@ export function GitHubCISection({ report }) {
                     {j.jobs}
                   </TableCell>
                   <TableCell align="right" sx={num}>
-                    {percent(j.passRate)}
+                    {decidedPercent(j, j.passRate)}
                   </TableCell>
                   <TableCell align="right" sx={num}>
-                    {percent(j.failRate)}
+                    {decidedPercent(j, j.failRate)}
                   </TableCell>
                   <TableCell align="right" sx={num}>
-                    {percent(j.cancelRate)}
+                    {decidedPercent(j, j.cancelRate)}
                   </TableCell>
                   <TableCell align="right" sx={num}>
                     {j.flaky || "—"}

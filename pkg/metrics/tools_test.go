@@ -424,3 +424,27 @@ func TestChecksLabelsWaitsByProviderAndKeepsTAPBeside(t *testing.T) {
 		t.Errorf("github = %+v, want the unlabelled row counted as github", gh)
 	}
 }
+
+// The census splits calls by surface: the MCP control roster and the
+// `grain` commands the sandbox proxy recorded under the tool names they
+// replaced (agent.ToolSurface).
+func TestToolsSplitCallsBySurface(t *testing.T) {
+	rep := metrics.Compute(metrics.Input{
+		Window: win,
+		Runs:   []model.RunTiming{finishedRun("r1", 10*time.Hour, "succeeded", "")},
+		ToolUses: []model.RunToolUse{
+			{RunID: "r1", Tool: "run_command", Calls: 7},
+			{RunID: "r1", Tool: "wait_for_checks", Calls: 3},
+			{RunID: "r1", Tool: "Bash", Calls: 1},
+		},
+	})
+	if rep.Tools.ControlCalls != 7 || rep.Tools.CLICalls != 3 {
+		t.Errorf("ControlCalls, CLICalls = %d, %d; want 7, 3", rep.Tools.ControlCalls, rep.Tools.CLICalls)
+	}
+	for _, use := range rep.Tools.ByTool {
+		want := map[string]string{"run_command": "control", "wait_for_checks": "cli", "Bash": ""}[use.Name]
+		if use.Surface != want {
+			t.Errorf("%s.Surface = %q, want %q", use.Name, use.Surface, want)
+		}
+	}
+}

@@ -966,4 +966,21 @@ func getTaskAsExternal(ctx context.Context, s *Server, tok *model.ExternalAgentT
 	return detail, nil
 }
 
-func init() { agent.RegisterPublishedToolNames(AgentAPIToolNames) }
+func init() {
+	agent.RegisterPublishedToolNames(AgentAPIToolNames)
+	agent.RegisterPublishedControlToolNames(ModelOnlyAgentAPIRouteToolNames)
+}
+
+// ModelOnlyAgentAPIRouteToolNames is every generated tool that stays on
+// the model's control roster whatever the grants: the routes the sandbox
+// channel refuses outright, and those it refuses for some bodies
+// (ModelOnlyAgentAPIToolNames is the same for one run's grants).
+func ModelOnlyAgentAPIRouteToolNames() []string {
+	var names []string
+	for _, r := range AgentAPIRoutes() {
+		if IsSandboxDeniedScope(r.Scope) || sandboxChannelGuard(r.Pattern, nil) != nil || sandboxGuardReadsBody[r.Pattern] {
+			names = append(names, r.Tool)
+		}
+	}
+	return names
+}

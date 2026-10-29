@@ -124,9 +124,32 @@ func (c *Client) submitChange(ctx context.Context, task model.Task) error {
 	if err != nil {
 		return err
 	}
+	if ok, reason, err := change.GateSubmit(ctx, task); err != nil {
+		return fmt.Errorf("checking whether %s may be submitted: %w", task.ID, err)
+	} else if !ok {
+		if reason == "" {
+			reason = "its required reviews have not passed on the current snapshot"
+		}
+		return validationErrorf("%s cannot be submitted yet: %s", task.ID, reason)
+	}
 	state, err := c.Store.State(ctx, task.ID)
 	if err != nil {
 		return err
+	}
+	if pending := model.PendingApprovals(task); len(pending) > 0 {
+		withoutApprovals := task
+		withoutApprovals.Links = slices.DeleteFunc(slices.Clone(task.Links), func(l model.Link) bool {
+			return l.Kind == model.LinkApprovalRequired
+		})
+		if view := changeSubmit(withoutApprovals, state); view == nil {
+			return validationErrorf("task %s has no live CL to submit", task.ID)
+		} else if !view.CanSubmit {
+			return validationErrorf("%s cannot be submitted yet: %s", view.Target, strings.Join(view.Reasons, "; "))
+		}
+		done, err := c.approveChangeSubmit(ctx, &task, by, pending)
+		if err != nil || !done {
+			return err
+		}
 	}
 	view := changeSubmit(task, state)
 	if view == nil {
@@ -315,4 +338,50 @@ func submitsAsCL(task model.Task) bool {
 		}
 	}
 	return true
+}
+
+// approveChangeSubmit records by's approval of any pending approval rules
+// on task that by is an approver of, and reports whether all pending
+// approvals are now satisfied so the CL Submit may proceed.
+func (c *Client) approveChangeSubmit(ctx context.Context, task *model.Task, by model.Principal, pending []model.ApprovalRequirement) (bool, error) {
+	approves := map[string]bool{}
+	for _, r := range pending {
+		for _, token := range r.Approvers {
+			ok, err := c.Store.IsApprover(ctx, by.ID, token)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				approves[r.Rule] = true
+				break
+			}
+		}
+	}
+	if len(approves) == 0 {
+		return false, forbiddenErrorf("%s touches sensitive paths, and %s is not one of the people who may release it. "+
+			"It waits for:\n%s", task.ID, by.ID, describePending(pending))
+	}
+	var remaining []model.ApprovalRequirement
+	if err := c.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		for _, r := range model.PendingApprovals(*t) {
+			if approves[r.Rule] {
+				t.Links = append(t.Links, model.Link{Kind: model.LinkApprovedBy, Target: r.Rule + "=" + by.ID})
+			}
+		}
+		remaining = model.PendingApprovals(*t)
+		*task = *t
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	if len(remaining) == 0 {
+		return true, nil
+	}
+	_, err := c.Store.AddComment(ctx, model.Comment{
+		TaskID:    task.ID,
+		Author:    model.Attribution{Actor: by},
+		Body:      fmt.Sprintf("Approved by %s. This change still waits for:\n%s", by.ID, describePending(remaining)),
+		CreatedAt: c.now(),
+	})
+	return false, err
 }

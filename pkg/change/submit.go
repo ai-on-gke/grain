@@ -154,11 +154,19 @@ func SubmitBlockers(task model.Task, obs Observation, observed bool) []string {
 	return out
 }
 
-// GrainReviewBlockers is grain's own review gate on task: holds and
-// approvals that a pull request's merge waits on, which a CL's Submit
-// waits on the same way.
+// GrainReviewBlockers is grain's own review gate on task: the provider's
+// ReviewGate (GateSubmit), and the holds and approvals that a pull
+// request's merge waits on, which a CL's Submit waits on the same way.
 func GrainReviewBlockers(task model.Task) []string {
 	var out []string
+	if ok, reason, err := GateSubmit(context.Background(), task); err != nil {
+		out = append(out, err.Error())
+	} else if !ok {
+		if reason == "" {
+			reason = "its required reviews have not passed on the current snapshot"
+		}
+		out = append(out, reason)
+	}
 	for _, l := range task.Links {
 		switch l.Kind {
 		case model.LinkSecurityHold:

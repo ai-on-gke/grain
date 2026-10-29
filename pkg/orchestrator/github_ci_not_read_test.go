@@ -302,7 +302,7 @@ func TestAConfigRepositoryRepairPointsAtGrainCIAlone(t *testing.T) {
 	}
 	bodies := commentBodies(t, ctx, store, task.ID)
 	repair := bodies[len(bodies)-1]
-	for _, want := range []string{".grain/workflows", "get_ci_log", branch} {
+	for _, want := range []string{".grain/workflows", "grain ci log", branch} {
 		if !strings.Contains(repair, want) {
 			t.Errorf("the repair comment does not say %q:\n%s", want, repair)
 		}
