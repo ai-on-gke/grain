@@ -297,6 +297,18 @@ func printGitHub(w io.Writer, g ui.MetricsGitHub, now time.Time) {
 		g.Sent, g.Revalidated, g.Spent, g.Failed, g.Declined)
 	fmt.Fprintf(w, "  etag cache         %d of %d entries, %d evicted\n",
 		g.Cache.Entries, g.Cache.MaxEntries, g.Cache.Evicted)
+	polls := g.Polls
+	if polls.Tracked == 0 {
+		polls = g.Budget.Polls
+	}
+	if polls.Tracked > 0 {
+		fmt.Fprintf(w, "  poll schedule      %d of %d PR(s) backed off (median %s, max %s; %s..%s)\n",
+			polls.BackedOff, polls.Tracked,
+			time.Duration(polls.MedianSeconds)*time.Second,
+			time.Duration(polls.MaxSeconds)*time.Second,
+			time.Duration(polls.BaseSeconds)*time.Second,
+			time.Duration(polls.CapSeconds)*time.Second)
+	}
 	if len(g.Callers) > 0 {
 		fmt.Fprintln(w, "  by caller (spent / sent):")
 		for _, c := range g.Callers {
