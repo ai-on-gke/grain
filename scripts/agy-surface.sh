@@ -174,6 +174,12 @@ fi
 # colour, the throwaway HOME the probe ran in, the real HOME agy was
 # installed into, and the checkout it was run from. What is left should be
 # the same bytes on a laptop and on a runner.
+#
+# It also replaces the Google-internal source paths agy's bundled docs
+# quote (a LINT.ThenChange target, a workspace path) with $INTERNAL_PATH:
+# this repository is grain's open-source core, and
+# tests/hygiene/boundary_test.go fails on those names anywhere in it. The
+# patterns are bracketed so this file does not spell them either.
 scrub() {
   sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' \
       -e 's/\r$//' \
@@ -184,7 +190,9 @@ scrub() {
       -e 's/[0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}/$UUID/g' \
       -e 's/"duration_seconds":[0-9.e-]*/"duration_seconds":$SECONDS/g' \
       -e 's/cli-[0-9]\{8\}_[0-9]\{6\}\.log/cli-$TIMESTAMP.log/g' \
-      -e 's/crash_[0-9]\{1,\}_/crash_$PID_/g'
+      -e 's/crash_[0-9]\{1,\}_/crash_$PID_/g' \
+      -e 's#//depot/google[3]/[^)[:space:]`]*#$INTERNAL_PATH#g' \
+      -e 's#/google/[s]rc/[^)[:space:]`]*#$INTERNAL_PATH#g'
 }
 
 # limit applies the two caps, announcing either in the document.
