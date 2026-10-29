@@ -1063,6 +1063,18 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	withholdCapabilities := withhold
+	if withholdCapabilities == "" && event == "" {
+		withholdCapabilities, err = s.tasks.withholdReleaseSecrets(r.Context(), repo, ci.EventManual)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+	}
+	withholdReason := withhold
+	if withholdReason == "" {
+		withholdReason = withholdCapabilities
+	}
 	run, err := runner.Start(r.Context(), ci.Request{
 		Repo:                   repo.String(),
 		Ref:                    strings.TrimSpace(ref),
@@ -1072,8 +1084,9 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		Workflow:               strings.TrimSpace(req.Workflow),
 		Jobs:                   req.Jobs,
 		Recheck:                req.Recheck,
+		WithholdEventGated:     withholdCapabilities != "",
 		WithholdReleaseSecrets: withhold != "",
-		WithholdReason:         withhold,
+		WithholdReason:         withholdReason,
 	})
 	if err != nil {
 		// Everything Start refuses is a fact about the request -- a
@@ -1089,15 +1102,17 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // withholdReleaseSecrets is why a by-hand run of event on repo is to be
-// handed none of the repository's release secrets, "" when it may be.
+// handed none of the repository's capabilities or release secrets, ""
+// when it may be.
 //
 // A workflow_dispatch -- and a release, which this route can be asked
-// for by name -- is the event release secrets are placed into, on
-// whatever branch the caller names, including a task branch nobody has
-// reviewed. GitHub lets only somebody with write access fire one;
-// grain's equivalent is the line StartRepoRelease already draws: a
-// person, the deployment's owner, rather than an agent. An agent's run
-// still runs, and a job that needs a secret says why it did not get one.
+// for by name -- is the event capabilities and release secrets are
+// placed into, on whatever branch the caller names, including a task
+// branch nobody has reviewed. GitHub lets only somebody with write
+// access fire one; grain's equivalent is the line StartRepoRelease
+// already draws: a person, the deployment's owner, rather than an agent.
+// An agent's run still runs, and a job that needs a capability or a
+// secret says why it did not get one.
 func (c *Client) withholdReleaseSecrets(ctx context.Context, repo model.RepoRef, event ci.Event) (string, error) {
 	if event != ci.EventManual && event != ci.EventRelease {
 		return "", nil
@@ -1105,7 +1120,7 @@ func (c *Client) withholdReleaseSecrets(ctx context.Context, repo model.RepoRef,
 	if c.actor(ctx).Kind == model.PrincipalHuman {
 		return "", nil
 	}
-	return fmt.Sprintf("a %s run of %s started by a caller that is not a person places no release secrets",
+	return fmt.Sprintf("a %s run of %s started by a caller that is not a person places no capabilities or release secrets",
 		event, repo), nil
 }
 

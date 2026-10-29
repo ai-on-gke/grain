@@ -519,7 +519,7 @@ these rules however the job's YAML is written:
 | tags, such as `refs/tags/v2.4.0` and `refs/tags/v2.4.0-rc.1` | create, move (force) and delete |
 | `refs/tags/latest` | create and force-move |
 | other branches, such as `refs/heads/candidate` | create, force-move and delete |
-| `refs/heads/main` | create, or a fast-forward the push shows. A force-push or a deletion is refused |
+| `refs/heads/main` | create only. An update (including a fast-forward) or a deletion is refused |
 
 When one ref in a push is refused, the proxy refuses the whole push and
 says why. It records every allowed update in the audit log as

@@ -25,19 +25,31 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
+	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
+	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
+type stubPackageCredentials struct{}
+
+func (stubPackageCredentials) PackageCredential(registry, owner, repo string) (packagepublish.Credential, error) {
+	return packagepublish.Credential{Registry: "ghcr.io", Username: "bot", Token: "tok", Name: "stub"}, nil
+}
+
 // ciAPIRegistry is a registry holding what the deployment's does for a
-// CI job's api grants: release-gate-read registered by name, and every
-// api grant resolved, for CI, to its token-minting provider.
+// CI job's api grants and event-gated capabilities: release-gate-read
+// and package-publish registered by name, repo-write dynamic provider,
+// and every api grant resolved, for CI, to its token-minting provider.
 func ciAPIRegistry(gate *ciapi.Endpoint) *model.CapabilityRegistry {
-	reg := model.NewCapabilityRegistry(ciapi.NewAlias(gate, ciapi.Config{}, model.ReleaseGateReadCapability,
-		ciapi.Aliases[model.ReleaseGateReadCapability]))
-	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
+	reg := model.NewCapabilityRegistry(
+		ciapi.NewAlias(gate, ciapi.Config{}, model.ReleaseGateReadCapability,
+			ciapi.Aliases[model.ReleaseGateReadCapability]),
+		packagepublish.New(packagepublish.Config{Credentials: stubPackageCredentials{}}),
+	)
+	reg.RegisterDynamic(repowrite.DynamicProvider, ui.AgentAPIDynamicProvider)
 	reg.RegisterCIDynamic(ciapi.DynamicProvider(gate, ciapi.Config{}))
 	return reg
 }
@@ -45,7 +57,8 @@ func ciAPIRegistry(gate *ciapi.Endpoint) *model.CapabilityRegistry {
 // release-gate-read (docs/design/release-from-trunk.md §6, RFT-3) and
 // any other api grant a job declares are granted to the cron grain
 // itself fires and to trusted events, and to nothing an untrusted tree
-// can ask for: a pull request's or an ordinary push's run gets no token.
+// can ask for: a pull request's, an ordinary push's, or an agent's
+// withheld workflow_dispatch/release run gets no token.
 func TestAPIGrantsAreGrantedToTrustedSchedulesAndReleasesOnly(t *testing.T) {
 	for _, id := range []string{model.ReleaseGateReadCapability, "api:release-gate-read", "api:ci:read"} {
 		t.Run(id, func(t *testing.T) { testTrustedOnly(t, id) })
@@ -60,20 +73,23 @@ func testTrustedOnly(t *testing.T, id string) {
 	ids := []string{id}
 
 	for _, tc := range []struct {
-		event   ci.Event
-		trusted bool
-		want    bool
+		event    ci.Event
+		trusted  bool
+		withhold bool
+		want     bool
 	}{
-		{ci.EventSchedule, true, true},
-		{ci.EventSchedule, false, false},
-		{ci.EventRelease, false, true},
-		{ci.EventManual, false, true},
-		{ci.EventPush, false, false},
-		{ci.EventPullRequest, false, false},
+		{ci.EventSchedule, true, false, true},
+		{ci.EventSchedule, false, false, false},
+		{ci.EventRelease, false, false, true},
+		{ci.EventRelease, false, true, false},
+		{ci.EventManual, false, false, true},
+		{ci.EventManual, false, true, false},
+		{ci.EventPush, false, false, false},
+		{ci.EventPullRequest, false, false, false},
 	} {
-		_, resolved, err := ResolveCICapabilities(context.Background(), reg, nil, repo, "ci-job", tc.event, tc.trusted, ids)
+		_, resolved, err := ResolveCICapabilities(context.Background(), reg, nil, repo, "ci-job", tc.event, tc.trusted, ids, tc.withhold)
 		if err != nil {
-			t.Fatalf("%s (trusted %v): %v", tc.event, tc.trusted, err)
+			t.Fatalf("%s (trusted %v, withhold %v): %v", tc.event, tc.trusted, tc.withhold, err)
 		}
 		var granted bool
 		for _, r := range resolved {
@@ -82,9 +98,10 @@ func testTrustedOnly(t *testing.T, id string) {
 			}
 		}
 		if granted != tc.want {
-			t.Errorf("%s (trusted schedule %v): granted %v (%+v), want %v", tc.event, tc.trusted, granted, resolved, tc.want)
+			t.Errorf("%s (trusted schedule %v, withhold %v): granted %v (%+v), want %v",
+				tc.event, tc.trusted, tc.withhold, granted, resolved, tc.want)
 		}
-		cc, resolved, _ := ResolveCICapabilities(context.Background(), reg, nil, repo, "ci-job", tc.event, tc.trusted, ids)
+		cc, resolved, _ := ResolveCICapabilities(context.Background(), reg, nil, repo, "ci-job", tc.event, tc.trusted, ids, tc.withhold)
 		materialized, err := model.MaterializeGrants(context.Background(), reg, cc, resolved)
 		if err != nil {
 			t.Fatalf("%s: materializing: %v", tc.event, err)
@@ -94,7 +111,8 @@ func testTrustedOnly(t *testing.T, id string) {
 			minted = minted || m.Materialization.Lease != nil
 		}
 		if minted != tc.want || (gate.Tokens.Len() == 1) != tc.want {
-			t.Errorf("%s (trusted schedule %v): minted %v with %d tokens, want %v", tc.event, tc.trusted, minted, gate.Tokens.Len(), tc.want)
+			t.Errorf("%s (trusted schedule %v, withhold %v): minted %v with %d tokens, want %v",
+				tc.event, tc.trusted, tc.withhold, minted, gate.Tokens.Len(), tc.want)
 		}
 		for _, m := range materialized {
 			if m.Materialization.Lease != nil {
@@ -112,6 +130,67 @@ func testTrustedOnly(t *testing.T, id string) {
 		if r.Grant.Capability == id && !r.Resolution.Refused {
 			t.Errorf("another repository's trusted schedule was not refused: %+v", resolved)
 		}
+	}
+}
+
+// Event-gated capabilities (repo-write:* and package-publish) are
+// withheld when a workflow_dispatch or release request is marked as not
+// a person's, while human dispatches, trusted releases, and (for
+// repo-write) trusted schedules still receive them.
+func TestEventGatedCapabilitiesAreWithheldFromNonHumanDispatches(t *testing.T) {
+	gate := ciapi.NewEndpoint()
+	gate.SetURL("http://192.0.2.1:9000")
+	reg := ciAPIRegistry(gate)
+	repo := model.GrainSourceRepo()
+
+	for _, tc := range []struct {
+		id              string
+		trustedSchedule bool
+	}{
+		{"repo-write:bwsalmon/grain", true},
+		{packagepublish.CapabilityName, false},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			for _, c := range []struct {
+				name     string
+				event    ci.Event
+				trusted  bool
+				withhold bool
+				want     bool
+			}{
+				{"human workflow_dispatch", ci.EventManual, false, false, true},
+				{"agent workflow_dispatch withheld", ci.EventManual, false, true, false},
+				{"trusted release", ci.EventRelease, false, false, true},
+				{"agent release withheld", ci.EventRelease, false, true, false},
+				{"trusted schedule", ci.EventSchedule, true, false, tc.trustedSchedule},
+				{"untrusted schedule", ci.EventSchedule, false, false, false},
+				{"push", ci.EventPush, false, false, false},
+				{"pull_request", ci.EventPullRequest, false, false, false},
+			} {
+				_, resolved, err := ResolveCICapabilities(context.Background(), reg, nil, repo, "c1234-0",
+					c.event, c.trusted, []string{tc.id}, c.withhold)
+				if err != nil {
+					t.Fatalf("%s: %v", c.name, err)
+				}
+				var granted bool
+				for _, r := range resolved {
+					if r.Grant.Capability == tc.id && !r.Resolution.Refused {
+						granted = true
+					}
+				}
+				if granted != c.want {
+					t.Errorf("%s: granted=%v (%+v), want %v", c.name, granted, resolved, c.want)
+				}
+			}
+		})
+	}
+
+	regFn := func() *model.CapabilityRegistry { return reg }
+	if ciHoldsRepoAccess(regFn, ci.EventManual, false, []string{"repo-write:bwsalmon/grain"}, true) {
+		t.Error("ciHoldsRepoAccess admitted repo-write on a withheld manual run")
+	}
+	if !ciHoldsRepoAccess(regFn, ci.EventManual, false, []string{"repo-write:bwsalmon/grain"}, false) {
+		t.Error("ciHoldsRepoAccess refused repo-write on a human manual run")
 	}
 }
 
