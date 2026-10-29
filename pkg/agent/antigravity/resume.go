@@ -182,8 +182,10 @@ import (
 //
 // That changed in agy 1.2.2. The same live probe, against the same Gemini
 // stub and the argv/private HOME a dispatch builds, saw ten requests and
-// was still inside agy after five minutes. There remains no retry flag,
-// environment variable or settings key to turn down. The full schedule and
+// was still inside agy after five minutes. 1.4.9's ladder ends after nine
+// attempts over about 2m33s, which still outlasts the bound below. There
+// remains no retry flag, environment variable or settings key to turn
+// down. The full schedule and
 // the remeasurement are in docs/hand-runs/2026-09-08-agy-retry.md.
 //
 // turnDeadline therefore enforces the 100-second boundary the live probe

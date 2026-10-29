@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           go test ./pkg/agent/antigravity/ \
-            -run 'TestLiveAgy(RetriesARefusedTurnItself|LosesTheProvidersRefusalText|BoundsARefusedTurn)' \
+            -run 'TestLiveAgy(RetriesARefusedTurnItself|ReportsTheProvidersRefusalText|BoundsARefusedTurn)' \
             -count=1 -v -timeout 12m
 
       - name: Measure agy's cross-dispatch resume
