@@ -66,7 +66,7 @@ Usage of grain daemon:
   -codex-path string
     	path to the codex CLI binary agent/codex runs as a subprocess; empty resolves "codex" against $PATH instead. Only used when the agent-framework setting is "codex"
   -codex-run string
-    	where the codex CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release
+    	where the codex CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. codex also takes "detached": the image's codex, through grain hostd's codex-detached entry, so a daemon upgrade does not interrupt it
   -container-git-proxy-host string
     	host address grain services are reachable at from local sandbox containers
   -container-sandbox-cap-add string

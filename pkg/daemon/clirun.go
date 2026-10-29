@@ -207,20 +207,15 @@ func (c Config) cliRunLocations(framework string) []string {
 // detachedFrameworks are the CLIs that have a detached location: those
 // whose runs a daemon can adopt from hostd's spool (agent.ResultParser,
 // and a framework that leaves a detached attempt alone) and whose MCP
-// server outlives the daemon with them. codex is not one yet
-// (docs/non-disruptive-upgrade.md, "Which substrate carries which CLI"),
-// though setup.sh writes its entry and agent/codex now reads an adopted
-// run: its grain tools are an HTTP endpoint this daemon serves
-// (mcp.StartCommandHTTP), which a detached codex would lose at the
-// restart. noDetached says so.
-var detachedFrameworks = map[string]bool{model.AgentFrameworkClaude: true}
+// server outlives the daemon with them.
+var detachedFrameworks = map[string]bool{
+	model.AgentFrameworkClaude: true,
+	model.AgentFrameworkCodex:  true,
+}
 
 // noDetached is why a CLI detachedFrameworks leaves out has no detached
 // location.
-var noDetached = map[string]string{
-	model.AgentFrameworkCodex: "codex has no detached location: its grain tools are an MCP endpoint the daemon itself serves, " +
-		"so a codex left running across an upgrade would lose them at the restart",
-}
+var noDetached = map[string]string{}
 
 // detachedEntry is framework's container-equivalent allowlist entry:
 // "claude-detached", beside the operator's own "claude", whose meaning

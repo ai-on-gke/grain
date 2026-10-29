@@ -15,7 +15,9 @@
 package codex
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -24,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // adoptedStream is a codex run's whole `codex exec --json` stream as
@@ -124,5 +127,173 @@ func TestADetachedCodexRunIsLeftAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(r.calls[0].dir); !os.IsNotExist(err) {
 		t.Errorf("a finished run's CODEX_HOME is still there (%v)", err)
+	}
+}
+
+func TestDetachedMCPTestChild(t *testing.T) {
+	if os.Getenv("GRAIN_CODEX_DETACHED_MCP_CHILD") != "1" {
+		return
+	}
+	registry := mcp.NewRegistry()
+	registry.Register(mcp.Tool{
+		Name:        "write_file",
+		InputSchema: map[string]any{"type": "object"},
+		Handler: func(_ context.Context, args map[string]any) mcp.Result {
+			return mcp.Result{Text: fmt.Sprintf("wrote %v", args["file_path"])}
+		},
+	})
+	_ = mcp.Serve(context.Background(), registry, bufio.NewReader(os.Stdin), bufio.NewWriter(os.Stdout))
+	os.Exit(0)
+}
+
+// WithDetachedMCP writes mcpserver.json instead of starting an HTTP MCP
+// adapter inside the daemon, and RunDetached (`grain codex-detached`) starts
+// mcp.StartCommandHTTP in the detached wrapper, writes the loopback URL,
+// per-run bearer token, and snapshotted tools into $CODEX_HOME/config.toml,
+// and serves tool calls for the duration of the codex invocation.
+func TestDetachedMCPWrapperServesToolsAndWritesConfig(t *testing.T) {
+	dir := t.TempDir()
+	fakeGrain := filepath.Join(dir, "grain")
+	grainEnv := filepath.Join(dir, "grain-env")
+	grainScript := fmt.Sprintf("#!/bin/sh\nenv > %q\nexport GRAIN_CODEX_DETACHED_MCP_CHILD=1\nexec %q -test.run=^TestDetachedMCPTestChild$\n", grainEnv, os.Args[0])
+	if err := os.WriteFile(fakeGrain, []byte(grainScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// The wrapper starts its own grain, never a path from mcpserver.json.
+	prev := detachedGrainBinary
+	detachedGrainBinary = func() (string, error) { return fakeGrain, nil }
+	t.Cleanup(func() { detachedGrainBinary = prev })
+
+	f := newFramework(nil, "/nonexistent/grain-from-the-daemon", WithDetachedMCP(), WithEffort("high"))
+	f.startMCP = func(context.Context, string, []string) (*mcp.ManagedHTTP, error) {
+		t.Fatal("daemon started MCP adapter despite WithDetachedMCP")
+		return nil, nil
+	}
+
+	home, _, cleanup, err := f.writeConfig(context.Background(), []string{"mcpserver", "-sandbox-root", dir}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	initialCfg, err := os.ReadFile(filepath.Join(home, configFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(initialCfg), "[mcp_servers."+mcpServerName+"]") {
+		t.Fatalf("initial config.toml already has [%s]:\n%s", mcpServerName, initialCfg)
+	}
+
+	outFile := filepath.Join(dir, "mcp-response.json")
+	configSnapshot := filepath.Join(dir, "config-at-run.toml")
+	fakeCodex := filepath.Join(dir, "codex.bin")
+	codexScript := fmt.Sprintf(`#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  echo "codex-cli %s"
+  exit 0
+fi
+cp "$CODEX_HOME/config.toml" %q
+[ "${OPENAI_API_KEY:-}" = sk-detached-test ] || { echo "codex lost OPENAI_API_KEY" >&2; exit 3; }
+url=$(sed -n 's/^url = "\(.*\)"/\1/p' "$CODEX_HOME/config.toml")
+auth=$(sed -n 's/^http_headers = { Authorization = "\(.*\)" }/\1/p' "$CODEX_HOME/config.toml")
+curl -fsS -X POST "$url" \
+  -H "Authorization: $auth" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"write_file","arguments":{"file_path":"detached.txt"}}}' \
+  > %q
+`, ReviewedCLIVersion, configSnapshot, outFile)
+	if err := os.WriteFile(fakeCodex, []byte(codexScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("CODEX_HOME", home)
+	t.Setenv("OPENAI_API_KEY", "sk-detached-test")
+	// A --version probe must not start the MCP adapter or rewrite config.toml.
+	if code, err := RunDetached(context.Background(), []string{fakeCodex, "--version"}); err != nil || code != 0 {
+		t.Fatalf("RunDetached(--version) = %d, %v", code, err)
+	}
+	afterProbeCfg, err := os.ReadFile(filepath.Join(home, configFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterProbeCfg) != string(initialCfg) {
+		t.Fatalf("--version probe rewrote config.toml:\n%s", afterProbeCfg)
+	}
+
+	// An exec invocation starts the managed HTTP MCP server and writes its
+	// URL, token, and snapshotted tools into config.toml before running codex.
+	if code, err := RunDetached(context.Background(), []string{fakeCodex, "exec", "--json", "-"}); err != nil || code != 0 {
+		t.Fatalf("RunDetached(exec) = %d, %v", code, err)
+	}
+	runCfgBytes, err := os.ReadFile(configSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCfg := string(runCfgBytes)
+	for _, want := range []string{
+		`approval_policy = "never"`,
+		`[mcp_servers.grain-sandbox]`,
+		`url = "http://127.0.0.1:`,
+		`http_headers = { Authorization = "Bearer `,
+		`enabled_tools = ["write_file"]`,
+		`[mcp_servers.grain-sandbox.tools."write_file"]`,
+		`approval_mode = "approve"`,
+	} {
+		if !strings.Contains(runCfg, want) {
+			t.Errorf("config.toml during detached run missing %q:\n%s", want, runCfg)
+		}
+	}
+	respBytes, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(respBytes), "wrote detached.txt") {
+		t.Errorf("MCP response = %s, want 'wrote detached.txt'", respBytes)
+	}
+	// codex keeps its model credential; the mcpserver beside it on the
+	// host is not handed it.
+	envBytes, err := os.ReadFile(grainEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(envBytes), "sk-detached-test") {
+		t.Errorf("grain mcpserver was started with OPENAI_API_KEY in its environment")
+	}
+}
+
+// mcpserver.json is written by the daemon, so the wrapper refuses one
+// naming any grain subcommand but mcpserver rather than run it on the
+// host, and starts neither grain nor codex.
+func TestDetachedMCPWrapperRefusesOtherSubcommands(t *testing.T) {
+	prev := detachedGrainBinary
+	detachedGrainBinary = func() (string, error) {
+		t.Fatal("wrapper located grain for a spec it should refuse")
+		return "", nil
+	}
+	t.Cleanup(func() { detachedGrainBinary = prev })
+
+	for _, args := range [][]string{nil, {}, {"hostd"}, {"-x", "mcpserver"}} {
+		home := t.TempDir()
+		data, err := json.Marshal(detachedMCPSpec{Args: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, mcpServerFileName), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		marker := filepath.Join(home, "codex-ran")
+		fakeCodex := filepath.Join(home, "codex.bin")
+		if err := os.WriteFile(fakeCodex, []byte(fmt.Sprintf("#!/bin/sh\ntouch %q\n", marker)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("CODEX_HOME", home)
+		if code, err := RunDetached(context.Background(), []string{fakeCodex, "exec"}); err == nil || code == 0 {
+			t.Errorf("args %q: RunDetached = %d, %v; want a refusal", args, code, err)
+		}
+		if _, err := os.Stat(marker); err == nil {
+			t.Errorf("args %q: codex ran despite a refused spec", args)
+		}
 	}
 }
