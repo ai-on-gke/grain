@@ -19,7 +19,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -31,6 +33,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/bwsalmon/granule/pkg/sandbox"
 )
 
 // This file materializes a minted pass (capability_pass.go) into the
@@ -197,42 +200,65 @@ func (m *passMaterialization) Close() {
 	m.closeEndpoints()
 }
 
+type sandboxChannelPortForwarder interface {
+	UsesChannelPortForward() bool
+	// ForwardCapabilityPort listens on 127.0.0.1:sandboxPort in the guest
+	// and hands each connection, carried over the channel, to serve --
+	// the forward's own Serve, so that the relay's ownership check and
+	// the grant's Close apply to it as they do to the guest forwarder's.
+	ForwardCapabilityPort(ctx context.Context, sandboxPort int, serve func(context.Context, net.Conn)) error
+}
+
+type sandboxBatchFilePlacer interface {
+	UsesBatchPlacement() bool
+	PlaceFilesBatch(ctx context.Context, files []sandbox.FileUpload) error
+}
+
 // apply carries the pass into sandbox: the guest end of every forward,
 // then every placement, then the setup commands -- at dispatch, and again
 // into the fresh VM of a recreate_sandbox (§5.5.5).
-func (m *passMaterialization) apply(ctx context.Context, sandbox Sandbox) error {
-	commander, ok := sandboxRunsCommands(sandbox)
+func (m *passMaterialization) apply(ctx context.Context, sb Sandbox) error {
+	commander, ok := sandboxRunsCommands(sb)
 	if !ok {
-		return fmt.Errorf("this sandbox backend (%T) cannot run commands in its sandbox, so it cannot materialize capability grants", sandbox)
+		return fmt.Errorf("this sandbox backend (%T) cannot run commands in its sandbox, so it cannot materialize capability grants", sb)
 	}
-	if err := m.startGuestForwarders(ctx, sandbox, commander); err != nil {
+	if err := m.startGuestForwarders(ctx, sb, commander); err != nil {
 		return err
 	}
-	for _, pl := range m.pass.Placements() {
-		if err := placeInSandbox(ctx, sandbox, commander, pl); err != nil {
-			return fmt.Errorf("placing %s: %w", pl.Path, err)
-		}
+	if err := placeAllInSandbox(ctx, sb, commander, m.pass.Placements()); err != nil {
+		return err
 	}
 	return m.runSetup(ctx, commander)
 }
 
-func (m *passMaterialization) startGuestForwarders(ctx context.Context, sandbox Sandbox, commander SandboxCommander) error {
-	return m.startForwarders(ctx, sandbox, commander, m.forwards)
+func (m *passMaterialization) startGuestForwarders(ctx context.Context, sb Sandbox, commander SandboxCommander) error {
+	return m.startForwarders(ctx, sb, commander, m.forwards)
 }
 
 // startForwarders places grain's guest forwarder and each forward's token
-// and starts the forwarder on each forward's sandbox port.
-func (m *passMaterialization) startForwarders(ctx context.Context, sandbox Sandbox, commander SandboxCommander, forwards []openForward) error {
+// and starts the forwarder on each forward's sandbox port -- or, when the
+// sandbox runs over a dial-out access channel, forwards the ports directly
+// over the channel without starting a guest subprocess.
+func (m *passMaterialization) startForwarders(ctx context.Context, sb Sandbox, commander SandboxCommander, forwards []openForward) error {
 	if len(forwards) == 0 {
 		return nil
 	}
+	if cf, ok := sb.(sandboxChannelPortForwarder); ok && cf.UsesChannelPortForward() {
+		for _, f := range forwards {
+			if err := cf.ForwardCapabilityPort(ctx, f.sandboxPort, f.forward.Serve); err != nil {
+				return fmt.Errorf("forwarding sandbox port %d to host_port %d: %w",
+					f.sandboxPort, f.forward.HostPort(), err)
+			}
+		}
+		return nil
+	}
 	script := capabilityPortsDir + "/forwarder.py"
-	if err := placeInSandbox(ctx, sandbox, commander, protocol.Placement{Path: script, Mode: "0600", Content: portforward.GuestForwarder}); err != nil {
+	if err := placeInSandbox(ctx, sb, commander, protocol.Placement{Path: script, Mode: "0600", Content: portforward.GuestForwarder}); err != nil {
 		return fmt.Errorf("placing the capability port forwarder: %w", err)
 	}
 	for _, f := range forwards {
 		tokenFile := fmt.Sprintf("%s/%d.token", capabilityPortsDir, f.sandboxPort)
-		if err := placeInSandbox(ctx, sandbox, commander, protocol.Placement{Path: tokenFile, Mode: "0600", Content: f.forward.Token()}); err != nil {
+		if err := placeInSandbox(ctx, sb, commander, protocol.Placement{Path: tokenFile, Mode: "0600", Content: f.forward.Token()}); err != nil {
 			return fmt.Errorf("placing the token of the forward to sandbox port %d: %w", f.sandboxPort, err)
 		}
 		_, stderr, code := commander.RunInSandbox(ctx, []string{"python3", script,
@@ -240,6 +266,48 @@ func (m *passMaterialization) startForwarders(ctx context.Context, sandbox Sandb
 		if code != 0 {
 			return fmt.Errorf("forwarding sandbox port %d to host_port %d: the guest forwarder (python3) did not start: %s",
 				f.sandboxPort, f.forward.HostPort(), guestCommandDetail(stderr, code))
+		}
+	}
+	return nil
+}
+
+func placeAllInSandbox(ctx context.Context, sb Sandbox, commander SandboxCommander, placements []protocol.Placement) error {
+	if len(placements) == 0 {
+		return nil
+	}
+	if bp, ok := sb.(sandboxBatchFilePlacer); ok && bp.UsesBatchPlacement() {
+		var batch []sandbox.FileUpload
+		var nonUser []protocol.Placement
+		for _, pl := range placements {
+			if pl.Owner == "" || pl.Owner == sandboxUser {
+				data, err := pl.Decoded()
+				if err != nil {
+					return fmt.Errorf("placing %s: %w", pl.Path, err)
+				}
+				batch = append(batch, sandbox.FileUpload{
+					Path:    pl.Path,
+					Content: data,
+					Mode:    fs.FileMode(pl.FileMode()),
+				})
+			} else {
+				nonUser = append(nonUser, pl)
+			}
+		}
+		if len(batch) > 0 {
+			if err := bp.PlaceFilesBatch(ctx, batch); err != nil {
+				return fmt.Errorf("placing files in batch: %w", err)
+			}
+		}
+		for _, pl := range nonUser {
+			if err := placeInSandbox(ctx, sb, commander, pl); err != nil {
+				return fmt.Errorf("placing %s: %w", pl.Path, err)
+			}
+		}
+		return nil
+	}
+	for _, pl := range placements {
+		if err := placeInSandbox(ctx, sb, commander, pl); err != nil {
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
 		}
 	}
 	return nil

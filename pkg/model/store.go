@@ -575,8 +575,8 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
   `+"`origin_actor_kind`, `origin_actor_id`, `origin_behalf_kind`, `origin_behalf_id`, `origin_reason`"+`,
   `+"`approval_actor_kind`, `approval_actor_id`, `approval_behalf_kind`, `approval_behalf_id`, `approved_at`, `deferred_at`, `deferred_until`, `undeferred_at`"+`,
   `+"`target_owner`, `target_name`, `binding`, `base`, `folder`"+`,
-  `+"`auto_merge`, `auto_approve_proposals`, `created_at`, `order_key`, `sandbox_cpus`, `sandbox_memory_mb`, `sandbox_disk_gb`, `interactive`, `agent_framework`, `agent_backend_id`, `agent_model`, `prompt_extension`, `review_template_id`, `network_access`, `nothing_needed_action`, `creator`, `time_zone`, `issue`, `no_port`, `agent_model_source`, `origin_ref`, `resume_on_deadline`, `change_target_kind`, `change_target_spec`"+`
-) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  `+"`auto_merge`, `auto_approve_proposals`, `created_at`, `order_key`, `sandbox_cpus`, `sandbox_memory_mb`, `sandbox_disk_gb`, `interactive`, `agent_framework`, `agent_backend_id`, `agent_model`, `prompt_extension`, `review_template_id`, `network_access`, `nothing_needed_action`, `creator`, `time_zone`, `issue`, `no_port`, `agent_model_source`, `origin_ref`, `resume_on_deadline`, `change_target_kind`, `change_target_spec`, `reviewers`"+`
+) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Branch, string(t.Intent), t.Title, t.Body,
 		string(oActor.Kind), oActor.ID, kindOf(oBehalf), idOf(oBehalf), string(t.Origin.Reason),
 		aActorKind, aActorID, aBehalfKind, aBehalfID, timeOf(t.ApprovedAt), timeOf(t.DeferredAt), timeOf(t.DeferredUntil),
@@ -584,7 +584,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		targetOwner, targetName, string(t.Binding), nullable(t.Base), folderOf(t.Folder),
 		t.AutoMerge, t.AutoApproveProposals, timeOf(t.CreatedAt), t.OrderKey, t.SandboxCPUs, t.SandboxMemoryMB, t.SandboxDiskGB, t.Interactive,
 		t.AgentFramework, t.AgentBackendID, t.Model, t.PromptExtension, t.ReviewTemplateID, string(t.NetworkAccess), string(t.NothingNeededAction), t.Creator, t.TimeZone, t.Issue, t.NoPort, string(t.ModelSource), string(t.WorkOrigin), t.ResumeOnDeadline,
-		changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(),
+		changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)),
 	); err != nil {
 		return fmt.Errorf("writing task %s: %w", t.ID, err)
 	}
@@ -1015,7 +1015,7 @@ const taskColumns = "`id`,`branch`,`intent`,`title`,`body`," +
 	"`approval_actor_kind`,`approval_actor_id`,`approval_behalf_kind`,`approval_behalf_id`,`approved_at`,`deferred_at`,`deferred_until`,`undeferred_at`," +
 	"`target_owner`,`target_name`,`binding`,`base`,`folder`," +
 	"`auto_merge`,`auto_approve_proposals`,`created_at`,`order_key`,`sandbox_cpus`,`sandbox_memory_mb`,`sandbox_disk_gb`,`interactive`," +
-	"`agent_framework`,`agent_backend_id`,`agent_model`,`prompt_extension`,`review_template_id`,`network_access`,`nothing_needed_action`,`creator`,`time_zone`,`issue`,`no_port`,`agent_model_source`,`origin_ref`,`resume_on_deadline`,`change_target_kind`,`change_target_spec`"
+	"`agent_framework`,`agent_backend_id`,`agent_model`,`prompt_extension`,`review_template_id`,`network_access`,`nothing_needed_action`,`creator`,`time_zone`,`issue`,`no_port`,`agent_model_source`,`origin_ref`,`resume_on_deadline`,`change_target_kind`,`change_target_spec`,`reviewers`"
 
 // scanTask reads one task row. It takes the Scan method rather than a
 // *sql.Row or *sql.Rows so one function serves both the single-row and
@@ -1023,7 +1023,7 @@ const taskColumns = "`id`,`branch`,`intent`,`title`,`body`," +
 func scanTask(scan func(...any) error) (Task, error) {
 	var t Task
 	var intent, binding, networkAccess, nothingNeeded, modelSource, workOrigin string
-	var ctKind, ctSpec string
+	var ctKind, ctSpec, reviewers string
 	var oaKind, oaID, oReason string
 	var obKind, obID, aaKind, aaID, abKind, abID sql.NullString
 	var tOwner, tName, base, folder sql.NullString
@@ -1033,10 +1033,11 @@ func scanTask(scan func(...any) error) (Task, error) {
 		&aaKind, &aaID, &abKind, &abID, &approvedAt, &deferredAt, &deferredUntil, &undeferredAt,
 		&tOwner, &tName, &binding, &base, &folder,
 		&t.AutoMerge, &t.AutoApproveProposals, &createdAt, &t.OrderKey, &t.SandboxCPUs, &t.SandboxMemoryMB, &t.SandboxDiskGB, &t.Interactive,
-		&t.AgentFramework, &t.AgentBackendID, &t.Model, &t.PromptExtension, &t.ReviewTemplateID, &networkAccess, &nothingNeeded, &t.Creator, &t.TimeZone, &t.Issue, &t.NoPort, &modelSource, &workOrigin, &t.ResumeOnDeadline, &ctKind, &ctSpec); err != nil {
+		&t.AgentFramework, &t.AgentBackendID, &t.Model, &t.PromptExtension, &t.ReviewTemplateID, &networkAccess, &nothingNeeded, &t.Creator, &t.TimeZone, &t.Issue, &t.NoPort, &modelSource, &workOrigin, &t.ResumeOnDeadline, &ctKind, &ctSpec, &reviewers); err != nil {
 		return Task{}, err
 	}
 	t.ChangeTarget = ChangeTargetFromStored(ctKind, ctSpec)
+	t.Reviewers = splitCSV(reviewers)
 
 	if t.Branch == "" {
 		// A state-repository dump from before configurable branches has no
@@ -4791,7 +4792,7 @@ const configColumns = "`poll_interval_ms`,`max_workers`,`max_mergers`,`max_merge
 	"`k8s_privileged`,`k8s_network_policy`,`k8s_deployment`,`k8s_container`," +
 	"`mcp_servers`,`capability_policy`,`cli_run`,`sandbox_overcommit`,`base_ci_red_streak`," +
 	"`k8s_priority_class_interactive`,`k8s_priority_class_agent`,`k8s_priority_class_ci`,`sandbox_disk_overcommit`," +
-	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`"
+	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`"
 
 func scanConfig(scan func(...any) error) (Config, error) {
 	var c Config
@@ -4849,7 +4850,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 		&c.K8sPrivileged, &c.K8sNetworkPolicy, &c.K8sDeployment, &c.K8sContainer,
 		&mcpServers, &capabilityPolicy, &cliRun, &sandboxOvercommit, &c.BaseCIRedStreak,
 		&c.K8sPriorityClassInteractive, &c.K8sPriorityClassAgent, &c.K8sPriorityClassCI, &c.SandboxDiskOvercommit,
-		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI); err != nil {
+		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror); err != nil {
 		return Config{}, err
 	}
 	backends, err := DecodeAgentBackends(agentBackends)
@@ -4958,7 +4959,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
-		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		c.PollInterval.Milliseconds(), c.MaxWorkers, c.MaxMergers, c.MaxMergesPerRepo, c.MergeBatchSize,
 		c.MergeGatherWindow.Milliseconds(), c.MaxCIJobs, c.MaxAgentTurns,
 		c.GitHubHost, c.GitHubInsecureHTTP, c.GCPProject, c.GCPServiceAccountEmail,
@@ -4993,7 +4994,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		strings.TrimSpace(c.K8sPriorityClassInteractive), strings.TrimSpace(c.K8sPriorityClassAgent),
 		strings.TrimSpace(c.K8sPriorityClassCI), c.SandboxDiskOvercommit,
 		strings.TrimSpace(c.AutoUpgradeChannel), strings.TrimSpace(c.AutoUpgradeTime),
-		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI)
+		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI, strings.TrimSpace(c.SandboxImageMirror))
 	return err
 }
 
@@ -5737,19 +5738,20 @@ func newTemplateID(ctx context.Context, tx *sql.Tx) (string, error) {
 }
 
 const templateColumns = "`id`,`name`,`title`,`body`," +
-	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`"
+	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`,`reviewers`"
 
 func scanTemplate(scan func(...any) error) (Template, error) {
 	var t Template
 	var target RepoRef
 	var base sql.NullString
-	var networkAccess, nothingNeeded, goal, ctKind, ctSpec string
+	var networkAccess, nothingNeeded, goal, ctKind, ctSpec, reviewers string
 	if err := scan(&t.ID, &t.Name, &t.Title, &t.Body,
 		&target.Owner, &target.Name, &base, &t.AutoMerge, &t.CreatedAt, &networkAccess, &nothingNeeded, &t.Model, &t.Interactive,
-		&goal, &ctKind, &ctSpec); err != nil {
+		&goal, &ctKind, &ctSpec, &reviewers); err != nil {
 		return Template{}, err
 	}
 	t.ChangeTarget = ChangeTargetFromStored(ctKind, ctSpec)
+	t.Reviewers = splitCSV(reviewers)
 	// A goal this build cannot read is dropped rather than failing every
 	// read of the template table.
 	t.Goal, _ = ParseGoalDecl(goal)
@@ -5780,10 +5782,10 @@ func putTemplate(ctx context.Context, tx *sql.Tx, t Template) error {
 	}
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`template`"+` (
   `+templateColumns+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Name, t.Title, t.Body,
 		targetOwner, targetName, t.Base, t.AutoMerge, t.CreatedAt.UTC(), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Interactive,
-		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString())
+		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)))
 	if err != nil {
 		return fmt.Errorf("writing template %s: %w", t.ID, err)
 	}

@@ -21,9 +21,11 @@ package metrics_test
 // a history that does not reach back as far as the window asks.
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	changepkg "github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -637,5 +639,40 @@ func TestMergesSummarizeWhatEachBaseBranchRepairHeld(t *testing.T) {
 	}
 	if h.Reaches == nil || !h.Reaches.Equal(since.Add(-3*time.Hour)) {
 		t.Errorf("reaches = %v, want the oldest pass's start", h.Reaches)
+	}
+}
+
+// forgeCLs names the forge its CLs land on, as the edition does.
+type forgeCLs struct{}
+
+func (forgeCLs) Kind() model.LinkKind { return model.LinkChangelist }
+func (forgeCLs) Forge() string        { return "acme-forge" }
+func (forgeCLs) Observe(context.Context, model.Task, string) (changepkg.Observation, error) {
+	return changepkg.Observation{}, nil
+}
+func (forgeCLs) Threads(context.Context, model.Task, string) ([]changepkg.Thread, error) {
+	return nil, nil
+}
+func (forgeCLs) Submit(context.Context, model.Task, string, changepkg.Person) (changepkg.Result, error) {
+	return changepkg.Result{}, nil
+}
+func (forgeCLs) Sync(context.Context, model.Task, string) (changepkg.SyncResult, error) {
+	return changepkg.SyncResult{}, nil
+}
+
+// A submitted CL lands like a merged pull request, and is counted under
+// the forge its provider names.
+func TestMergesCountSubmittedCLsByForge(t *testing.T) {
+	changepkg.Register(forgeCLs{})
+	t.Cleanup(func() { changepkg.Unregister(model.LinkChangelist) })
+	cl := landed("2", time.Hour, 5*time.Hour, 5*time.Hour, 6*time.Hour)
+	cl.ChangeKind = model.LinkChangelist
+	rep := metrics.Compute(metrics.Input{
+		Window: win,
+		Tasks:  []model.TaskTiming{landed("1", time.Hour, 5*time.Hour, 5*time.Hour, 6*time.Hour), cl},
+	})
+	m := rep.Merges
+	if m.Landed != 2 || m.LandedByForge[metrics.ForgeGitHub] != 1 || m.LandedByForge["acme-forge"] != 1 {
+		t.Fatalf("Landed = %d by forge %v, want one github and one acme-forge", m.Landed, m.LandedByForge)
 	}
 }

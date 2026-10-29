@@ -19,6 +19,7 @@ import {
   Button,
   Chip,
   IconButton,
+  Link,
   ListItemIcon,
   ListItemText,
   ListSubheader,
@@ -102,6 +103,26 @@ const liveErrorsOf = (schema, value) =>
     ? {}
     : validateValue(schema, schema, value || {});
 
+const RUN_KIND_LABELS = {
+  task: "agent tasks",
+  process: "processes",
+  ci: "CI jobs",
+};
+
+function policyVerdictText(verdict, runKind) {
+  if (!verdict) return "";
+  const forKind = RUN_KIND_LABELS[runKind]
+    ? ` for ${RUN_KIND_LABELS[runKind]}`
+    : "";
+  if (verdict === "denied") {
+    return `denied by the capability policy${forKind}`;
+  }
+  if (verdict === "may_be_refused") {
+    return `may be refused by the capability policy${forKind}`;
+  }
+  return "";
+}
+
 let nextDraft = 0;
 
 export default function GrantsPicker({
@@ -112,6 +133,7 @@ export default function GrantsPicker({
   onRemove,
   disabled = false,
   idPrefix = "grant",
+  runKind = "task",
 }) {
   const all = grants || [];
   const apiHeld = useMemo(() => all.filter(isApiGrant), [all]);
@@ -312,6 +334,27 @@ export default function GrantsPicker({
     );
   };
 
+  const policyState = (ref) => {
+    const verdict = runKind ? byRef[ref]?.policy?.[runKind] : undefined;
+    if (!verdict) return null;
+    const policyNote = policyVerdictText(verdict, runKind);
+    return {
+      severity: "warning",
+      badge: verdict === "denied" ? "denied by policy" : "may be refused",
+      suffix: ` (${policyNote})`,
+      textNote: `This grant is ${policyNote} (Settings → Capabilities).`,
+      note: (
+        <>
+          This grant is {policyNote} (
+          <Link href="/settings/capabilities#capability-policy">
+            Settings → Capabilities
+          </Link>
+          ).
+        </>
+      ),
+    };
+  };
+
   // methodState is what is wrong with a held method grant, if anything.
   const methodState = (g) => {
     const { ref } = parseGrant(g);
@@ -337,7 +380,7 @@ export default function GrantsPicker({
         suffix: " (normalizes differently now)",
         note: `The server's current schema normalizes this grant differently (now ${check.recorded}). It keeps what it was granted until you edit it.`,
       };
-    return null;
+    return policyState(ref);
   };
 
   const removeMethod = (g) =>
@@ -371,7 +414,7 @@ export default function GrantsPicker({
             kind="method"
             label={label}
             ariaLabel={`${label}${state?.suffix || ""}`}
-            tip={`${state ? `${state.note}\n\n` : ""}${d.lines.join("\n")}`}
+            tip={`${state ? `${state.textNote || state.note}\n\n` : ""}${d.lines.join("\n")}`}
             caption={method?.description || ""}
             badge={
               state
@@ -385,7 +428,7 @@ export default function GrantsPicker({
           />
         );
       }
-      const state = g ? methodState(g) : null;
+      const state = g ? methodState(g) : policyState(ref);
       const d = describeGrant(g || ref, { method, config });
       return (
         <ArgsSection
@@ -524,22 +567,63 @@ export default function GrantsPicker({
     );
   };
 
-  const methodItem = (m) => (
-    <MenuItem
-      key={m.ref}
-      className="method-grant-row"
-      data-method={m.ref}
-      title={m.ref}
-      onClick={() => addMethod(m)}
-      sx={{ whiteSpace: "normal" }}
-    >
-      <ListItemIcon />
-      <ListItemText
-        primary={methodMenuLabel(m.ref, m.method)}
-        secondary={`${splitRef(m.ref).capability.replace(/^https:\/\//, "")}${m.requiresArgs ? " · needs arguments" : ""}`}
-      />
-    </MenuItem>
-  );
+  const methodItem = (m) => {
+    const verdict = runKind ? m.policy?.[runKind] : undefined;
+    const policyNote = policyVerdictText(verdict, runKind);
+    const refSummary = `${splitRef(m.ref).capability.replace(/^https:\/\//, "")}${m.requiresArgs ? " · needs arguments" : ""}`;
+    return (
+      <MenuItem
+        key={m.ref}
+        className="method-grant-row"
+        data-method={m.ref}
+        data-policy-verdict={verdict || undefined}
+        title={policyNote ? `${m.ref} — ${policyNote}` : m.ref}
+        onClick={() => addMethod(m)}
+        sx={{ whiteSpace: "normal", alignItems: "flex-start" }}
+      >
+        <ListItemIcon sx={{ pt: 0.25 }}>
+          {verdict ? (
+            <WarningAmberIcon fontSize="small" color="warning" />
+          ) : null}
+        </ListItemIcon>
+        <ListItemText
+          sx={{ minWidth: 0 }}
+          primary={methodMenuLabel(m.ref, m.method)}
+          secondary={
+            policyNote ? (
+              <>
+                <Box
+                  component="span"
+                  sx={{ display: "block", overflowWrap: "anywhere" }}
+                >
+                  {refSummary}
+                </Box>
+                <Typography
+                  variant="caption"
+                  color="warning.main"
+                  component="span"
+                  className="method-policy-verdict"
+                  sx={{ display: "block", overflowWrap: "anywhere" }}
+                >
+                  {policyNote} (
+                  <Link
+                    href="/settings/capabilities#capability-policy"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    Settings → Capabilities
+                  </Link>
+                  )
+                </Typography>
+              </>
+            ) : (
+              refSummary
+            )
+          }
+        />
+      </MenuItem>
+    );
+  };
 
   const anyApi = presets.length > 0 || areas.length > 0;
   const anyMethods = (methods || []).length > 0;

@@ -823,8 +823,14 @@ stage_deploy_grain() {
       -e "s|ghcr.io/bwsalmon/grain/grain@sha256:0000000000000000000000000000000000000000000000000000000000000000|${PINNED_IMAGE}|g" \
       -e "s|ghcr.io/bwsalmon/grain/granule@sha256:0000000000000000000000000000000000000000000000000000000000000000|${PINNED_SANDBOX_IMAGE}|g" \
       -e "s|-default-target-repo=ai-on-gke/grain|-default-target-repo=${TARGET_REPO}|g" \
-      -e "s|value: dialout|value: ${ACCESS_MODE}|g" \
       >"${rendered}"
+
+  if [[ "${ACCESS_MODE}" == "kubectl" ]]; then
+    sed -i \
+      -e '/- -sandbox-access-addr=/d' \
+      -e '/- -sandbox-access-ca-secret=/d' \
+      "${rendered}"
+  fi
 
   if [[ "${POSTGRES_MODE}" == "in-cluster" ]]; then
     sed -i \

@@ -1020,6 +1020,10 @@ type MetricsGitHub struct {
 	// out at that rate (zero when it lasts until the reset). Low is the
 	// throttle: under 15% left, idle and background polling stops.
 	Budget MetricsGitHubBudget `json:"budget"`
+	// Polls summarizes the adaptive poll schedule across tracked pull
+	// requests: how many are tracked, how many are backed off past the
+	// base cadence, and the median and longest poll interval in force.
+	Polls github.PollStats `json:"polls"`
 	// Cache is the ETag cache's occupancy against its bounds, and how
 	// many entries it has had to evict to stay inside them -- non-zero
 	// and growing means the working set does not fit.
@@ -1047,14 +1051,15 @@ type MetricsGitHubCallerKind struct {
 
 // MetricsGitHubBudget is github.BudgetSnapshot as the report says it.
 type MetricsGitHubBudget struct {
-	Limit        int       `json:"limit"`
-	Remaining    int       `json:"remaining"`
-	ResetsAt     time.Time `json:"resetsAt,omitempty"`
-	Credentials  int       `json:"credentials"`
-	SpendPerHour float64   `json:"spendPerHour"`
-	ExhaustedAt  time.Time `json:"exhaustedAt,omitempty"`
-	Low          bool      `json:"low"`
-	LowFraction  float64   `json:"lowFraction"`
+	Limit        int              `json:"limit"`
+	Remaining    int              `json:"remaining"`
+	ResetsAt     time.Time        `json:"resetsAt,omitempty"`
+	Credentials  int              `json:"credentials"`
+	SpendPerHour float64          `json:"spendPerHour"`
+	ExhaustedAt  time.Time        `json:"exhaustedAt,omitempty"`
+	Low          bool             `json:"low"`
+	LowFraction  float64          `json:"lowFraction"`
+	Polls        github.PollStats `json:"polls"`
 }
 
 // MetricsGitHubEndpoint is one call shape's share of the above.
@@ -1127,10 +1132,16 @@ func githubMetrics(source GitHubCallStats) MetricsGitHub {
 		}
 		return a.Caller < b.Caller
 	})
+	polls := s.Polls
+	if polls.Tracked == 0 {
+		polls = s.Budget.Polls
+	}
+	out.Polls = polls
 	out.Budget = MetricsGitHubBudget{
 		Limit: s.Budget.Limit, Remaining: s.Budget.Remaining, ResetsAt: s.Budget.Resets,
 		Credentials: s.Budget.Credentials, SpendPerHour: s.Budget.SpendPerHour,
 		ExhaustedAt: s.Budget.ExhaustedAt, Low: s.Budget.Low, LowFraction: github.LowBudgetFraction,
+		Polls: polls,
 	}
 	out.Cache = s.Cache
 	return out

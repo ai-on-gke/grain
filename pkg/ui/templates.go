@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -64,10 +65,13 @@ type Template struct {
 	// template carries (model.Template.ChangeTarget): `target: <kind>`.
 	// Omitted for a git or unbound template.
 	ChangeTarget *model.ChangeTarget `json:"changeTarget,omitempty"`
-	ID           string              `json:"id"`
-	Name         string              `json:"name"`
-	Title        string              `json:"title"`
-	Description  string              `json:"description"`
+	// Reviewers is the person-set list of reviewer usernames every task filed
+	// from this template starts with (model.Template.Reviewers).
+	Reviewers   []string `json:"reviewers,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
 	// Fields is the inputs this template asks for when somebody
 	// instantiates it (model.TemplateField, grain/task-58) -- the named
 	// holes its title and body leave as `{{name}}`, in the order a form
@@ -196,6 +200,7 @@ func templateFrom(t model.Template) Template {
 		out.Repo, out.Base = t.Target.String(), t.Base
 	}
 	out.ChangeTarget = t.ChangeTarget.Clone()
+	out.Reviewers = slices.Clone(t.Reviewers)
 	for _, r := range t.Reads {
 		out.Reads = append(out.Reads, r.String())
 	}
@@ -299,9 +304,12 @@ type CreateTemplateRequest struct {
 	// ChangeTarget binds the template to a non-git target (a registered change target kind), in
 	// place of Repo and Base (model.ValidateTemplateChangeTarget).
 	ChangeTarget *model.ChangeTarget `json:"changeTarget,omitempty"`
-	Repo         string              `json:"repo"`
-	Base         string              `json:"base"`
-	AutoMerge    bool                `json:"autoMerge"`
+	// Reviewers is the person-set list of reviewer usernames every task filed
+	// from this template starts with (model.Template.Reviewers).
+	Reviewers []string `json:"reviewers,omitempty"`
+	Repo      string   `json:"repo"`
+	Base      string   `json:"base"`
+	AutoMerge bool     `json:"autoMerge"`
 	// NetworkAccess fixes the network of every task this template files
 	// (model.Template.NetworkAccess): one of model.NetworkAccesses(), or
 	// "" for a template that fixes none and leaves each firing on the
@@ -425,6 +433,7 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 		Writes:        writes,
 		Grants:        grants,
 		CustomFields:  customFields,
+		Reviewers:     model.NormalizeReviewers(req.Reviewers),
 		CreatedAt:     c.now(),
 
 		NothingNeededAction: nothingNeeded,
@@ -511,6 +520,9 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 	// tasks against it, with no repo, unless the request chose its own.
 	if !req.NoRepo && req.ChangeTarget == nil && comp.ChangeTarget != nil {
 		req.ChangeTarget = comp.ChangeTarget
+	}
+	if len(req.Reviewers) == 0 && len(comp.Reviewers) > 0 {
+		req.Reviewers = slices.Clone(comp.Reviewers)
 	}
 	// One of grain's own templates is about this deployment rather than
 	// any repository (model.FileableSystemTemplates), so filed with no
@@ -666,9 +678,12 @@ type UpdateTemplateRequest struct {
 	// ChangeTarget replaces the template's non-git target; one with an
 	// empty kind clears it. Absent leaves it as it is.
 	ChangeTarget *model.ChangeTarget `json:"changeTarget,omitempty"`
-	Repo         *string             `json:"repo,omitempty"`
-	Base         *string             `json:"base,omitempty"`
-	AutoMerge    *bool               `json:"autoMerge,omitempty"`
+	// Reviewers replaces the template's reviewer list; a non-nil empty slice
+	// clears it. Absent leaves it as it is.
+	Reviewers *[]string `json:"reviewers,omitempty"`
+	Repo      *string   `json:"repo,omitempty"`
+	Base      *string   `json:"base,omitempty"`
+	AutoMerge *bool     `json:"autoMerge,omitempty"`
 	// NetworkAccess edits what CreateTemplateRequest.NetworkAccess sets,
 	// with an empty string meaningful rather than ignored: it clears the
 	// template's own answer, so its firings go back to taking the
@@ -875,6 +890,9 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 		}
 		if req.Writes != nil {
 			t.Writes = writes
+		}
+		if req.Reviewers != nil {
+			t.Reviewers = model.NormalizeReviewers(*req.Reviewers)
 		}
 		if req.ChangeTarget != nil {
 			t.ChangeTarget = nil

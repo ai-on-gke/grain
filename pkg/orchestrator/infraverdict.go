@@ -23,6 +23,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 )
 
 // Trunk release gates: the runs a release from trunk is selected on, and
@@ -50,6 +51,19 @@ import (
 // (ci.Request.Recheck), so the passes the run did reach are kept -- up to
 // maxInfraRetries times and no sooner than infraRetryDelay after the last,
 // before anybody is filed to repair or review anything.
+
+//
+// # A lost sandbox channel, on any branch
+//
+// A CI job whose dial-out sandbox channel dropped and did not come back
+// within -k8s-granule-reattach-timeout concludes errored with a
+// sandboxaccess.ChannelLostFault error (docs/design/grain-on-gke.md#GKE-3):
+// the pod went away under it, which says nothing about the tree. That is
+// not only a release gate's problem, so a task branch's required run gets
+// the same treatment: its channel-lost jobs are re-run once, uncached, as
+// soon as the run ends (startChannelLostRecheck), rather than waiting
+// ciRetryDelay for a whole-suite replacement, and a job that passes that
+// re-run is not recorded as a flake.
 
 // maxInfraRetries is how many automatic re-runs an `infra` verdict on a
 // trunk release gate gets before it is treated as the verdict it is.
@@ -141,7 +155,19 @@ func infraVerdict(run ci.Run) (string, bool) {
 // one. Grain wrote those words, so they can be read broadly.
 var infraJobErrors = []string{
 	"capabilit", "credential", "quota", "rate limit", "rate-limit", "429", "too many requests",
-	"resource_exhausted", "not granted",
+	"resource_exhausted", "not granted", sandboxaccess.ChannelLostFault,
+}
+
+// channelLostJobs names (ciJobName) the jobs of run that ended on a lost
+// sandbox channel (sandboxaccess.ChannelLostFault).
+func channelLostJobs(run ci.Run) []string {
+	var out []string
+	for _, job := range run.Jobs {
+		if job.Conclusion == ci.ConclusionErrored && strings.HasPrefix(job.Error, sandboxaccess.ChannelLostFault) {
+			out = append(out, ciJobName(job))
+		}
+	}
+	return out
 }
 
 // infraStepOutput are external rate-limit and registry signatures read

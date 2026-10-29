@@ -29,7 +29,8 @@ import (
 // reviews having passed on the current snapshot.
 type gatedCLs struct {
 	fakeCLs
-	cleared bool
+	cleared   bool
+	submitted []string
 }
 
 func (g *gatedCLs) Kind() model.LinkKind { return model.LinkChangelist }
@@ -45,6 +46,10 @@ func (g *gatedCLs) GateSubmittable(context.Context, model.Task, string) (bool, s
 	}
 	return false, "the security review has not passed on snapshot 4", nil
 }
+func (g *gatedCLs) Submit(_ context.Context, _ model.Task, target string, by change.Person) (change.Result, error) {
+	g.submitted = append(g.submitted, target+"|"+by.Name)
+	return change.Result{Target: target, Message: "Submitted " + target + "."}, nil
+}
 
 // Submit on a CL waits for the provider's gate: refused, with its reason,
 // while a required review is missing, and let through once it passes.
@@ -52,12 +57,19 @@ func TestSubmitOnACLWaitsForItsRequiredReviews(t *testing.T) {
 	client, store, ctx := testClient(t)
 	gate := &gatedCLs{}
 	change.Register(gate)
-	t.Cleanup(func() { change.Unregister(model.LinkChangelist) })
-	if err := store.PutTask(ctx, model.Task{ID: "93", Title: "t", Intent: model.IntentImplement,
-		Links: []model.Link{{Kind: model.LinkChangelist, Target: "cl/93"}}}); err != nil {
-		t.Fatal(err)
-	}
+	t.Cleanup(func() {
+		change.Unregister(model.LinkChangelist)
+		change.Forget("cl/93")
+	})
+	seedAwaitingSubmit(t, store, ctx, "93", "cl/93")
+	obs := submittable
+	obs.Target, obs.Snapshot = "cl/93", 4
+	change.Remember(obs)
 
+	if got, _ := client.GetTask(ctx, "93"); got.CLSubmit == nil || got.CLSubmit.CanSubmit ||
+		!strings.Contains(strings.Join(got.CLSubmit.Reasons, "; "), "security review has not passed") {
+		t.Fatalf("clSubmit = %+v, want disabled with the gate's reason", got.CLSubmit)
+	}
 	err := client.Submit(ctx, "93")
 	var ve *ui.ValidationError
 	if err == nil || !strings.Contains(err.Error(), "security review has not passed") {
@@ -66,48 +78,59 @@ func TestSubmitOnACLWaitsForItsRequiredReviews(t *testing.T) {
 	if !errors.As(err, &ve) {
 		t.Errorf("Submit error %T, want a validation error the page can show", err)
 	}
-	if task, _ := store.GetTask(ctx, "93"); task.AutoMerge {
-		t.Fatal("a refused Submit turned auto-merge on")
+	if len(gate.submitted) != 0 {
+		t.Fatalf("a refused Submit reached the provider: %v", gate.submitted)
 	}
 
 	gate.cleared = true
+	if got, _ := client.GetTask(ctx, "93"); got.CLSubmit == nil || !got.CLSubmit.CanSubmit {
+		t.Fatalf("clSubmit = %+v, want submittable once the review passed", got.CLSubmit)
+	}
 	if err := client.Submit(ctx, "93"); err != nil {
 		t.Fatalf("Submit after the review passed: %v", err)
 	}
-	if task, _ := store.GetTask(ctx, "93"); !task.AutoMerge {
-		t.Fatal("Submit did not go through once the gate allowed it")
+	if task, _ := store.GetTask(ctx, "93"); len(gate.submitted) != 1 || len(change.LiveChanges(*task)) != 0 {
+		t.Fatalf("Submit did not go through once the gate allowed it: submitted=%v links=%+v", gate.submitted, task.Links)
 	}
 }
 
 // A CL also held for a person's approval is gated all the same: the
-// approvals path turns auto-merge on by itself, so the review gate is
-// asked first.
+// approvals path is not reached until the review gate allows Submit.
 func TestSubmitWithApprovalsOnACLWaitsForItsRequiredReviews(t *testing.T) {
 	client, store, ctx := testClient(t)
 	gate := &gatedCLs{}
 	change.Register(gate)
-	t.Cleanup(func() { change.Unregister(model.LinkChangelist) })
-	if err := store.PutTask(ctx, model.Task{ID: "94", Title: "t", Intent: model.IntentImplement,
-		Links: []model.Link{{Kind: model.LinkChangelist, Target: "cl/94"},
-			model.ApprovalRequiredLink("builtin:path-triggers", []string{"carol"})}}); err != nil {
+	t.Cleanup(func() {
+		change.Unregister(model.LinkChangelist)
+		change.Forget("cl/94")
+	})
+	seedAwaitingSubmit(t, store, ctx, "94", "cl/94")
+	if err := store.UpdateTask(ctx, "94", func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.ApprovalRequiredLink("builtin:path-triggers", []string{"carol"}))
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
+	obs := submittable
+	obs.Target, obs.Snapshot = "cl/94", 4
+	change.Remember(obs)
 	person := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "carol"})
 
 	if err := client.Submit(person, "94"); err == nil || !strings.Contains(err.Error(), "security review has not passed") {
 		t.Fatalf("Submit = %v, want it refused with the gate's reason", err)
 	}
 	task, _ := store.GetTask(ctx, "94")
-	if task.AutoMerge || len(model.PendingApprovals(*task)) != 1 {
-		t.Fatalf("a refused Submit changed the hold: automerge=%v pending=%+v", task.AutoMerge, model.PendingApprovals(*task))
+	if len(gate.submitted) != 0 || len(model.PendingApprovals(*task)) != 1 {
+		t.Fatalf("a refused Submit changed the hold: submitted=%v pending=%+v", gate.submitted, model.PendingApprovals(*task))
 	}
 
 	gate.cleared = true
 	if err := client.Submit(person, "94"); err != nil {
 		t.Fatalf("Submit after the review passed: %v", err)
 	}
-	if task, _ := store.GetTask(ctx, "94"); !task.AutoMerge {
-		t.Fatal("Submit did not go through once the gate allowed it")
+	if task, _ := store.GetTask(ctx, "94"); len(gate.submitted) != 1 || len(model.PendingApprovals(*task)) != 0 || len(change.LiveChanges(*task)) != 0 {
+		t.Fatalf("Submit did not go through once the gate allowed it: submitted=%v pending=%+v links=%+v",
+			gate.submitted, model.PendingApprovals(*task), task.Links)
 	}
 }
 

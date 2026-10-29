@@ -16,7 +16,7 @@ Alternatively, all of the design material could live in a separate repo rather t
 
 ## Process
 
-Wherever an agent opens a PR against the design folder (specifications, tasks, clarifications, playbooks), it should listen to that PR and respond to review comments by making updates to the doc PR.
+Wherever an agent opens a PR against the design folder (specifications, tasks, clarifications, playbooks), it should listen to that PR and respond to review comments by making updates to the doc PR. Every change is reviewed by a second agent before it is committed. That covers spec PRs, tasks PRs, clarification PRs, playbook PRs, and implementation (code) PRs alike: a separate agent, not the one that wrote the change, reviews it before it merges.
 
 ### Design
 
@@ -32,7 +32,7 @@ Once the specification is approved, an agent is run in grain to create a new PR 
 
 ### Implementation
 
-Grain automatically imports the tasks into its backlog. A grain oncall watches the queue to ensure that tasks are completed in a timely manner. Agents decompose tasks into smaller tasks as desired, staying within their initial grants (per the grainfile specification). No human is in the loop during code implementation and landing; agents land code changes autonomously unless an escalation is needed. If agents have questions or require clarifications, this is handled entirely via pull requests: the agent raises a new PR against the design folder documentation, which humans review, edit, and approve. If agents encounter problems with execution or testing (test flakes, insufficient permissions, etc.), they send a message to a grain on-call chat session for the team. Once the feature is landed, the task in the design folder is marked as complete, with the URL of the task serving as the index into the grain db for more information as desired.
+Grain automatically imports the tasks into its backlog. A grain oncall watches the queue to ensure that tasks are completed in a timely manner. Agents decompose tasks into smaller tasks as desired, staying within their initial grants (per the grainfile specification). No human is in the loop during code implementation and landing; agents land code changes autonomously unless an escalation is needed. This "no human in the loop" landing still includes the second-agent review before a change is committed. If agents have questions or require clarifications, this is handled entirely via pull requests: the agent raises a new PR against the design folder documentation, which humans review, edit, and approve. If agents encounter problems with execution or testing (test flakes, insufficient permissions, etc.), they raise the issue in the grain inbox, which the team's grain on-call watches. Once the feature is landed, the task in the design folder is marked as complete, with the URL of the task serving as the index into the grain db for more information as desired.
 
 ### Checking
 

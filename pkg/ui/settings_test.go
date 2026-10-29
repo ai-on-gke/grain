@@ -1490,6 +1490,37 @@ func TestUpdateSettingsRoundTripsKubernetesSettingsAndValidatesNodeSelector(t *t
 		t.Fatal("UpdateSettings accepted a malformed k8sNodeSelector entry")
 	}
 
+	// A namespace or PriorityClass name Kubernetes could never accept is
+	// refused where it is typed, by the setting's name, rather than on
+	// every pod grain creates (2026-10-29 walkthrough: "Bad_Class").
+	for _, tc := range []struct {
+		key string
+		req func(*string) ui.UpdateSettingsRequest
+	}{
+		{"k8sNamespace", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sNamespace: v} }},
+		{"k8sPriorityClassCi", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sPriorityClassCI: v} }},
+		{"k8sPriorityClassAgent", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sPriorityClassAgent: v} }},
+		{"k8sPriorityClassInteractive", func(v *string) ui.UpdateSettingsRequest {
+			return ui.UpdateSettingsRequest{K8sPriorityClassInteractive: v}
+		}},
+	} {
+		bad := "Bad_Name"
+		if _, err := c.UpdateSettings(ctx, tc.req(&bad)); err == nil || !strings.HasPrefix(err.Error(), tc.key+" ") {
+			t.Errorf("UpdateSettings(%s=%q) = %v, want a refusal naming %s", tc.key, bad, err, tc.key)
+		}
+		good := " walk-low.v1 "
+		if tc.key == "k8sNamespace" {
+			good = " walk-ns "
+		}
+		if _, err := c.UpdateSettings(ctx, tc.req(&good)); err != nil {
+			t.Errorf("UpdateSettings(%s=%q): %v", tc.key, good, err)
+		}
+	}
+	none := ""
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{K8sPriorityClassCI: &none}); err != nil {
+		t.Errorf("an empty priority class (none) was refused: %v", err)
+	}
+
 	backend := string(model.SandboxBackendKubernetesGranule)
 	ns := "grain-k8s"
 	kubectl := "/usr/local/bin/kubectl"

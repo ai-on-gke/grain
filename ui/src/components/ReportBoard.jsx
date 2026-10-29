@@ -551,9 +551,16 @@ function ReportSection({
   // is worth printing above it. It is an h3 like those: subtitle2's own
   // element is an h6, which put a titled section three levels under the
   // untitled ones beside it in a screen reader's heading list.
+  // A section the board did not name and that drew nothing is still a
+  // list item until it is hidden: the Report pane renders every section,
+  // and the empty ones were each an extra, silent entry in a screen
+  // reader's "list, 13 items". `hidden` rather than not rendering it,
+  // because the body has to be in the DOM for the effect above to see
+  // whether it has drawn something yet.
   return (
     <li
       className={`report-section${dragging ? " report-section-dragging" : ""}${over ? " report-section-drop-target" : ""}${picked ? " report-section-picked" : ""}`}
+      hidden={empty && !explain}
       {...target}
     >
       <div className="report-section-grip" {...grip}>

@@ -219,3 +219,58 @@ func TestTeamAdminChoosesNoGitCredential(t *testing.T) {
 		t.Errorf("UpdateTeam(no-such-credential) = %v, want refused", err)
 	}
 }
+
+// Test on an SSH key that no repository is in reach of -- a plain git
+// host the deployment has no repository on, with no owner/repo scope --
+// reads nothing and dials nothing, so it must not report the key
+// accepted: the walkthrough of 2026-10-29 saw "Token accepted by
+// ssh.walk.test" for a host that does not resolve.
+func TestSSHKeyCheckWithNothingToReadIsNotAccepted(t *testing.T) {
+	client, store, _ := testClient(t)
+	credentials, err := gitproxy.LoadCredentialSet(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Config.Credentials = credentials
+	srv := ui.NewServerWithClient(client)
+	if err := store.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval}); err != nil {
+		t.Fatal(err)
+	}
+	admitUser(t, store, "dana")
+	dana := map[string]string{"Content-Type": "application/json", "X-Grain-User": "dana"}
+	if rec := doWithHeaders(t, srv, http.MethodPut, "/api/deployment",
+		`{"targetRepos":["acme/widgets"]}`, dana); rec.Code != http.StatusOK {
+		t.Fatalf("targeting acme/widgets: %d %s", rec.Code, rec.Body)
+	}
+	_, edPriv, _ := ed25519.GenerateKey(rand.Reader)
+	block, _ := ssh.MarshalPrivateKey(edPriv, "")
+	_, hostPriv, _ := ed25519.GenerateKey(rand.Reader)
+	hostSigner, _ := ssh.NewSignerFromKey(hostPriv)
+	body, _ := json.Marshal(map[string]any{"type": "ssh", "host": "git.unresolvable.invalid", "kind": "git",
+		"ssh": map[string]any{
+			"privateKey": string(pem.EncodeToMemory(block)),
+			"knownHosts": "git.unresolvable.invalid " + string(ssh.MarshalAuthorizedKey(hostSigner.PublicKey())),
+		}})
+	rec := doWithHeaders(t, srv, http.MethodPost, "/api/deployment/git-connections", string(body), dana)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("saving the SSH connection: %d %s", rec.Code, rec.Body)
+	}
+	var team ui.Team
+	if err := json.Unmarshal(rec.Body.Bytes(), &team); err != nil {
+		t.Fatal(err)
+	}
+	cred := team.GitConnections[len(team.GitConnections)-1].Credential
+
+	check, _ := json.Marshal(map[string]string{"host": "git.unresolvable.invalid", "credential": cred})
+	rec = doWithHeaders(t, srv, http.MethodPost, "/api/deployment/git-connections/check", string(check), dana)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("checking: %d %s", rec.Code, rec.Body)
+	}
+	var res ui.TeamGitHubCredentialCheck
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.OK || !strings.Contains(res.Error, "nothing was tested") || len(res.Repos) != 0 {
+		t.Errorf("check = %+v, want not OK, saying nothing was tested", res)
+	}
+}

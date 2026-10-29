@@ -235,6 +235,7 @@ func TestAgentAPICannotFileAroundTheProposalGate(t *testing.T) {
 		// Mailing a CL and publishing its replies are a person's.
 		{http.MethodPost, "/api/tasks/2/change-mail", `{"reviewers":["alice"]}`},
 		{http.MethodPost, "/api/tasks/2/change-publish", `{}`},
+		{http.MethodPost, "/api/tasks/2/change-sync", `{}`},
 		{http.MethodPost, "/api/schedules", `{"title":"x","repo":"acme/widgets","writes":[{"repo":"acme/gadgets"}]}`},
 		{http.MethodPost, "/api/templates", `{"name":"x","title":"x","autoMerge":true}`},
 	} {

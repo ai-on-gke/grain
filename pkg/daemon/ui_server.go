@@ -477,6 +477,12 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 			}
 			return nil
 		},
+		CheckClusterImageConnectivity: func(ctx context.Context, imageRef string) error {
+			if LocalSandboxes != nil {
+				return nil
+			}
+			return checkClusterSandboxImageConnectivity(ctx, live.Current(), imageRef)
+		},
 		// The Settings pane's sandbox image check reads labels the way
 		// the daemon's own startup check does: local docker first, then
 		// the registry (FetchImageLabels), Google-authenticated for an

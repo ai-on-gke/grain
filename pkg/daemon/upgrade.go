@@ -193,12 +193,13 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 				// together. A host-directory deployment has no second
 				// image to keep in step -- see SandboxImageArgs's own
 				// doc comment.
-				SandboxImageArgs: sandboxImageArgs(cfg.GranuleSandboxes),
+				SandboxImageArgs: upgradeSandboxImageArgs(cfg),
 				// And what this host pins over that answer, if
 				// anything, so the step reports a pull whose image
 				// nothing will run as exactly that rather than as a
 				// sandbox kept in step (sandboxImagePin).
-				SandboxImagePin: sandboxImagePin(cfg),
+				SandboxImagePin:    sandboxImagePin(cfg),
+				SandboxImageMirror: sandboxImageMirrorRepo(cfg),
 				// And whether the image it pulls would accept the
 				// command line this host's unit starts grain with. The
 				// unit is written once by scripts/setup.sh and the

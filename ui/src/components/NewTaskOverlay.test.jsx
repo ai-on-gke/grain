@@ -638,4 +638,35 @@ describe("NewTaskOverlay", () => {
       expect(screen.getByTestId("draft-repo-notice")).toBeInTheDocument();
     });
   });
+
+  it("round-trips person-set reviewers through the draft and submit payload", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <NewTaskOverlay
+        config={null}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    await user.type(screen.getByLabelText(/Title/), "CL task");
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await user.type(screen.getByLabelText("Reviewers"), "alice, bob");
+    unmount();
+
+    render(
+      <NewTaskOverlay
+        config={null}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+    expect(screen.getByLabelText("Reviewers")).toHaveValue("alice, bob");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+
+    const body = JSON.parse(api.mock.calls.at(-1)[1].body);
+    expect(body.reviewers).toEqual(["alice", "bob"]);
+  });
 });

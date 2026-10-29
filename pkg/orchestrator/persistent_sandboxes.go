@@ -141,7 +141,14 @@ func (s *containerSandbox) DialPort(ctx context.Context, port int) (net.Conn, er
 	return dialGuestPort(ctx, s.runner, s.name, port)
 }
 
+type portDialRunner interface {
+	DialPort(ctx context.Context, port int) (net.Conn, error)
+}
+
 func dialGuestPort(ctx context.Context, runner sandboxRunner, name string, port int) (net.Conn, error) {
+	if pd, ok := runner.(portDialRunner); ok {
+		return pd.DialPort(ctx, port)
+	}
 	dialer, ok := runner.(streamRunner)
 	if !ok {
 		return nil, fmt.Errorf("orchestrator: sandbox %q's transport cannot open a connection into the guest", name)
@@ -639,9 +646,14 @@ func (s *PersistentSandboxSupervisor) build(ctx context.Context, pd persistentDe
 	}
 	e.set(func(e *persistentEntry) { e.state = PersistentStarting })
 	e.event("build", "acquiring sandbox %s", name)
+	var life time.Duration
+	if _, every, err := model.ParsePersistentRefresh(e.def.Refresh); err == nil && every > 0 {
+		life = every
+	}
 	sb, counted, err := pd.meter.Acquire(ctx, pd.sandboxes, model.SandboxKindAgent, name, Shape{
 		CPUs: e.def.CPUs, MemoryMB: e.def.MemoryMB, DiskGB: e.def.DiskGB, NetworkAccess: e.def.NetworkAccess,
 		Class: SandboxClassAgent,
+		Life:  life,
 	})
 	if err != nil {
 		return nil, nil, err

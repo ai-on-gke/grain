@@ -30,11 +30,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/hostd"
@@ -67,8 +70,11 @@ type Options struct {
 	Unconfigured     bool
 	AgentPaused      bool
 	MergeQueueStates bool
-	FakeCI           bool
-	GitHubSim        bool
+	// StalledTasks hands the UI the orchestrator's stall deadlines and
+	// seeds two tasks past them (demo_stalled.go).
+	StalledTasks bool
+	FakeCI       bool
+	GitHubSim    bool
 	// ScheduledWorkflows runs the daemon's "declarations" and
 	// "scheduled-workflows" reconcilers against -github-sim's repo, adds
 	// its candidate branch, and lets a -fake-ci run be finished
@@ -138,6 +144,11 @@ type Options struct {
 	// install notice an unmigrated host-mode install gets
 	// (pkg/daemon's installnotice.go).
 	HostModeInstall bool
+	// GithubWebhookURL and GithubWebhookAddr wire the daemon's GitHub
+	// webhook consumer (-github-webhook-url or -github-webhook-addr) into
+	// the demo store and poll schedule.
+	GithubWebhookURL  string
+	GithubWebhookAddr string
 }
 
 // demoCLIRunConfig is the daemon config Settings -> Models' run locations
@@ -248,6 +259,7 @@ func Run(opts Options) error {
 		return fmt.Errorf("grain demo: opening the throwaway store: %v", err)
 	}
 	defer db.Close()
+	cfg.SourceDB, cfg.DBDriver = db, "sqlite"
 
 	// The one piece of this demo that is not a row in the store: the
 	// System pane's Logs tab, which reads ui.Config.Logs rather than
@@ -266,9 +278,10 @@ func Run(opts Options) error {
 	}
 	cfg.Logs = map[string]ui.LogSource{"daemon": systemlog.File{Path: logPath}}
 	// GET /api/metrics' github section, which System → Health reads for
-	// its GitHub budget panel: a demo makes no GitHub calls of its own,
-	// so it reports a fixed, plausible hour instead (demoGitHubCalls).
-	cfg.GitHubCalls = demoGitHubCalls{}
+	// its GitHub budget panel: seeded with a plausible hour of calls, and
+	// updated live as -github-sim and -reconcile poll or receive webhooks.
+	ghCalls := newDemoGitHubCalls()
+	cfg.GitHubCalls = ghCalls
 
 	// Fake GitHub credentials under dir/secrets/github so GitCredentialsConfigured is true.
 	githubSecretsDir := filepath.Join(dir, "secrets", "github")
@@ -448,12 +461,20 @@ func Run(opts Options) error {
 	if opts.AgentPaused {
 		cfg.AgentPause = demoAgentPause(time.Now().UTC())
 	}
+	if opts.StalledTasks {
+		cfg = stalledTasksConfig(cfg)
+	}
 	if err := seedDemo(ctx, store, cfg); err != nil {
 		return fmt.Errorf("grain demo: seeding fake tasks: %v", err)
 	}
 	if opts.MergeQueueStates {
 		if err := seedMergeQueueStatesDemo(ctx, store, cfg); err != nil {
 			return fmt.Errorf("grain demo: seeding merge queue states: %v", err)
+		}
+	}
+	if opts.StalledTasks {
+		if err := seedStalledTasksDemo(ctx, store, cfg); err != nil {
+			return fmt.Errorf("grain demo: -stalled-tasks: %v", err)
 		}
 	}
 	if opts.MergeRules {
@@ -482,6 +503,14 @@ func Run(opts Options) error {
 		}
 	}
 
+	if opts.Unconfigured {
+		// Only now, past every seed above: filing a seeded task needs a
+		// connection that reaches its repository.
+		if err := forgetDemoGitConnections(ctx, store); err != nil {
+			return fmt.Errorf("grain demo: -unconfigured: %v", err)
+		}
+	}
+
 	creds.SetConnections(func(owner, repo string) (string, bool) {
 		name, err := store.GitConnectionOn(ctx, "", owner, repo)
 		return name, err == nil && name != ""
@@ -493,6 +522,18 @@ func Run(opts Options) error {
 		// Only now, past every seed above: the seeds write configuration
 		// through the same client guard this turns into a refusal.
 		cfg.StateRepo = newExternalConfigRepo(opts.ExternalConfigRepo, opts.ExternalConfigBranch)
+	}
+	ghCalls.enableLive()
+	webhookConsumer, err := startDemoGitHubWebhooks(context.Background(), dir, opts, creds, store, ghCalls)
+	if err != nil {
+		return fmt.Errorf("grain demo: %v", err)
+	}
+	if webhookConsumer != nil {
+		if ghClient, ok := cfg.GitHubBranches.(github.Client); ok && ghClient != nil {
+			if st, ok := demoSimClients.Load(ghClient); ok {
+				st.(*demoSimState).events = webhookConsumer
+			}
+		}
 	}
 	client := ui.NewClient(cfg, store)
 	if opts.ModelCatalog != "" {
@@ -536,14 +577,15 @@ func Run(opts Options) error {
 		go runDemoReviewQuestions(context.Background(), store, interval)
 	}
 	var srv http.Handler = ui.NewServerWithClient(client)
-	if scheduledWorkflows != nil {
-		srv = scheduledWorkflowsDemoHandler(srv, cfg.CI.(*demoFakeCI), githubSimRepo)
+	if fakeCI, ok := cfg.CI.(*demoFakeCI); ok {
+		srv = scheduledWorkflowsDemoHandler(srv, fakeCI, githubSimRepo)
 	}
 	if observabilityBackend != nil {
 		srv = observabilityDemoHandler(srv, observabilityBackend)
 	}
 	if gitProxy != nil {
 		srv = gitProxyDemoHandler(srv, gitProxy)
+		gitProxy.wireServer(srv, client, cfg)
 	}
 	if baseBranch != nil {
 		srv = baseBranchDemoHandler(srv, baseBranch)
@@ -1458,8 +1500,62 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		obs.Target, obs.Health, obs.Presubmit, obs.Snapshot = seed.cl, seed.health, seed.presubmit, 1
 		change.Remember(obs)
 	}
+	// One more, approved and passing but behind head: its Submit is
+	// disabled with that reason and its Sync is offered, where the
+	// approved one above is submittable (changelists.md §6-§7).
+	behind, err := create(ago(19*time.Hour), ui.CreateTaskRequest{
+		Title: "Sync the depot retry budget with head", Approved: true, NoRepo: clTarget == nil, ChangeTarget: clTarget,
+		Description: "A changelist task whose approved CL has fallen behind head.",
+	})
+	if err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	if err := store.UpdateTask(ctx, behind.ID, func(t *model.Task) error {
+		t.Links = append(t.Links, model.Link{Kind: model.LinkChangelist, Target: "cl/612400105"})
+		return nil
+	}); err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	behindDone := ago(18 * time.Hour)
+	if err := store.ObserveField(ctx, behind.ID, behindDone, func(o *model.Observation) {
+		o.CompletedAt = &behindDone
+	}); err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	change.Remember(change.Observation{Target: "cl/612400105", Health: change.HealthBehind, Presubmit: change.PresubmitPassed,
+		Snapshot: 2, ReviewState: change.ReviewStateApproved, LGTM: []string{"carol"}})
+	registerDemoChangelists()
 
 	return nil
+}
+
+// demoChangelists answers for the demo's CLs where no edition has
+// registered a provider, so the Submit and Sync buttons have something
+// to answer them: a submit reports the CL submitted as itself, and a
+// sync reports a new snapshot. Nothing leaves the process.
+type demoChangelists struct{}
+
+func registerDemoChangelists() {
+	if _, ok := change.Lookup(model.LinkChangelist); ok {
+		return
+	}
+	change.Register(demoChangelists{})
+}
+
+func (demoChangelists) Kind() model.LinkKind { return model.LinkChangelist }
+func (demoChangelists) Forge() string        { return "demo" }
+func (demoChangelists) Observe(_ context.Context, _ model.Task, target string) (change.Observation, error) {
+	obs, _ := change.LastObserved(target)
+	return obs, nil
+}
+func (demoChangelists) Threads(context.Context, model.Task, string) ([]change.Thread, error) {
+	return nil, nil
+}
+func (demoChangelists) Submit(_ context.Context, _ model.Task, target string, by change.Person) (change.Result, error) {
+	return change.Result{Target: target, Message: fmt.Sprintf("%s submitted %s (demo: nothing left this process).", by.Name, target)}, nil
+}
+func (demoChangelists) Sync(_ context.Context, _ model.Task, _ string) (change.SyncResult, error) {
+	return change.SyncResult{Message: "synced to head (demo)"}, nil
 }
 
 // seedDemoNotifications raises three operator notifications (DT-5), so
@@ -2003,14 +2099,181 @@ func startDemoRemoteHostd(remote *hostd.Remote) error {
 	return nil
 }
 
-// demoGitHubCalls is ui.GitHubCallStats for a demo: an hour two-thirds
-// spent, falling fast enough to run out before it resets, with the
-// spend split across the callers a deployment actually has. Fixed
-// relative to the moment it is asked, so the panel always has a
-// projection to show.
-type demoGitHubCalls struct{}
+// demoGitHubCalls is ui.GitHubCallStats for a demo: seeded with an hour
+// two-thirds spent, falling fast enough to run out before it resets, with
+// the spend split across the callers a deployment actually has, and updated
+// live as -github-sim / -reconcile polls pull requests or receives webhooks.
+type demoGitHubCalls struct {
+	mu             sync.Mutex
+	webhookMu      sync.Mutex
+	live           bool
+	pollSeeded     bool
+	polls          *github.PollSchedule
+	pollAt         time.Time
+	extraSent      int64
+	extraReval     int64
+	extraRemaining int
+	extraCallers   map[string]map[string]github.KindStats
+}
 
-func (demoGitHubCalls) Stats() github.Stats {
+func newDemoGitHubCalls() *demoGitHubCalls {
+	return &demoGitHubCalls{
+		polls:        &github.PollSchedule{},
+		pollAt:       time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC),
+		extraCallers: make(map[string]map[string]github.KindStats),
+	}
+}
+
+func (d *demoGitHubCalls) enableLive() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.live = true
+	d.mu.Unlock()
+}
+
+func (d *demoGitHubCalls) recordCall(caller, kind string, revalidated bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.live {
+		return
+	}
+	d.recordLocked(caller, kind, revalidated)
+}
+
+func (d *demoGitHubCalls) recordLocked(caller, kind string, revalidated bool) {
+	if caller == "" {
+		caller = "other"
+	}
+	if kind == "" {
+		kind = "other"
+	}
+	d.extraSent++
+	if revalidated {
+		d.extraReval++
+	} else {
+		d.extraRemaining++
+	}
+	byKind := d.extraCallers[caller]
+	if byKind == nil {
+		byKind = make(map[string]github.KindStats)
+		d.extraCallers[caller] = byKind
+	}
+	ks := byKind[kind]
+	ks.Sent++
+	if revalidated {
+		ks.Revalidated++
+	}
+	byKind[kind] = ks
+}
+
+func (d *demoGitHubCalls) resetPR(owner, repo string, number int) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.polls.Reset(github.PullRequestSubject(owner, repo, number))
+}
+
+func (d *demoGitHubCalls) resetRepo(owner, repo string) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.polls.ResetRepo(owner, repo)
+}
+
+func (d *demoGitHubCalls) pollDemoPullRequests(ctx context.Context, store *model.Store) {
+	if d == nil || store == nil {
+		return
+	}
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		return
+	}
+	type prTarget struct {
+		owner  string
+		name   string
+		number int
+		fp     string
+		class  github.PollClass
+		active bool
+	}
+	seen := make(map[string]bool)
+	var prs []prTarget
+	for _, t := range tasks {
+		ref := model.TaskPullRequest(t)
+		if ref == nil || ref.Number <= 0 {
+			continue
+		}
+		owner, name := ref.Repo.Owner, ref.Repo.Name
+		if owner == "" || name == "" {
+			owner, name = "acme", "widgets"
+		}
+		subj := github.PullRequestSubject(owner, name, ref.Number)
+		if seen[subj] {
+			continue
+		}
+		seen[subj] = true
+		fp := strconv.Itoa(ref.Number)
+		class := github.PollNormal
+		active := false
+		if ref.Number == 101 {
+			class = github.PollCritical
+			active = true
+		}
+		prs = append(prs, prTarget{
+			owner:  owner,
+			name:   name,
+			number: ref.Number,
+			fp:     fp,
+			class:  class,
+			active: active,
+		})
+	}
+	if len(prs) == 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.live = true
+	if !d.pollSeeded {
+		seedAt := d.pollAt
+		for _, pr := range prs {
+			subj := github.PullRequestSubject(pr.owner, pr.name, pr.number)
+			for _, aspect := range []string{"PR read", "review comments"} {
+				k := github.PollKey{Scope: "demo", Subject: subj, Aspect: aspect}
+				_ = d.polls.Due(k, pr.class, pr.active, seedAt)
+				d.polls.Observe(k, pr.fp, seedAt)
+			}
+		}
+		d.pollAt = d.pollAt.Add(github.PollBase)
+		d.pollSeeded = true
+	}
+	now := d.pollAt
+	for _, pr := range prs {
+		subj := github.PullRequestSubject(pr.owner, pr.name, pr.number)
+		prKey := github.PollKey{Scope: "demo", Subject: subj, Aspect: "PR read"}
+		if d.polls.Due(prKey, pr.class, pr.active, now) {
+			d.polls.Observe(prKey, pr.fp, now)
+			d.recordLocked("sync", "PR read", !pr.active)
+		}
+		revKey := github.PollKey{Scope: "demo", Subject: subj, Aspect: "review comments"}
+		if d.polls.Due(revKey, pr.class, pr.active, now) {
+			d.polls.Observe(revKey, pr.fp, now)
+			d.recordLocked("review-threads", "review comments", !pr.active)
+		}
+	}
+	d.pollAt = d.pollAt.Add(github.PollBase)
+}
+
+func (d *demoGitHubCalls) Stats() github.Stats {
 	now := time.Now()
 	kinds := func(pairs ...any) map[string]github.KindStats {
 		out := map[string]github.KindStats{}
@@ -2019,21 +2282,114 @@ func (demoGitHubCalls) Stats() github.Stats {
 		}
 		return out
 	}
+	callers := map[string]github.CallerStats{
+		"sync":           {Sent: 2400, Revalidated: 1500, Kinds: kinds("PR read", 1200, 820, "head read", 800, 420, "checks", 400, 260)},
+		"base-branch-ci": {Sent: 900, Revalidated: 640, Kinds: kinds("head read", 600, 420, "checks", 300, 220)},
+		"review-threads": {Sent: 700, Revalidated: 560, Kinds: kinds("review comments", 700, 560)},
+		"path-triggers":  {Sent: 410, Revalidated: 330, Kinds: kinds("head read", 300, 260, "repo read", 110, 70)},
+		"agent tools":    {Sent: 520, Revalidated: 300, Kinds: kinds("checks", 380, 220, "PR read", 140, 80)},
+		"ui":             {Sent: 280, Revalidated: 200, Kinds: kinds("branch list", 180, 140, "PR files", 100, 60)},
+	}
+	sent := int64(5210)
+	reval := int64(3530)
+	remaining := 1650
+	polls := github.PollStats{
+		Tracked:       3,
+		BackedOff:     2,
+		BaseSeconds:   int(github.PollBase / time.Second),
+		CapSeconds:    int(github.PollCap / time.Second),
+		MedianSeconds: 120,
+		MaxSeconds:    int(github.PollCap / time.Second),
+	}
+	if d != nil {
+		d.mu.Lock()
+		sent += d.extraSent
+		reval += d.extraReval
+		remaining = max(0, remaining-d.extraRemaining)
+		for caller, byKind := range d.extraCallers {
+			cs := callers[caller]
+			if cs.Kinds == nil {
+				cs.Kinds = make(map[string]github.KindStats)
+			}
+			for k, add := range byKind {
+				cs.Sent += add.Sent
+				cs.Revalidated += add.Revalidated
+				cur := cs.Kinds[k]
+				cur.Sent += add.Sent
+				cur.Revalidated += add.Revalidated
+				cs.Kinds[k] = cur
+			}
+			callers[caller] = cs
+		}
+		if d.polls != nil {
+			if livePolls := d.polls.Stats(d.pollAt); livePolls.Tracked > 0 {
+				polls = livePolls
+			}
+		}
+		d.mu.Unlock()
+	}
+	limit := github.RateLimitSnapshot{Limit: 5000, Remaining: remaining, Resets: now.Add(38 * time.Minute), Seen: now}
 	return github.Stats{
-		Sent: 5210, Revalidated: 3530, Failed: 12,
-		Callers: map[string]github.CallerStats{
-			"sync":           {Sent: 2400, Revalidated: 1500, Kinds: kinds("PR read", 1200, 820, "head read", 800, 420, "checks", 400, 260)},
-			"base-branch-ci": {Sent: 900, Revalidated: 640, Kinds: kinds("head read", 600, 420, "checks", 300, 220)},
-			"review-threads": {Sent: 700, Revalidated: 560, Kinds: kinds("review comments", 700, 560)},
-			"path-triggers":  {Sent: 410, Revalidated: 330, Kinds: kinds("head read", 300, 260, "repo read", 110, 70)},
-			"agent tools":    {Sent: 520, Revalidated: 300, Kinds: kinds("checks", 380, 220, "PR read", 140, 80)},
-			"ui":             {Sent: 280, Revalidated: 200, Kinds: kinds("branch list", 180, 140, "PR files", 100, 60)},
-		},
-		Limit: github.RateLimitSnapshot{Limit: 5000, Remaining: 1650, Resets: now.Add(38 * time.Minute), Seen: now},
+		Sent: sent, Revalidated: reval, Failed: 12,
+		Callers: callers,
+		Limit:   limit,
 		Budget: github.BudgetSnapshot{
-			RateLimitSnapshot: github.RateLimitSnapshot{Limit: 5000, Remaining: 1650, Resets: now.Add(38 * time.Minute), Seen: now},
+			RateLimitSnapshot: limit,
 			Credentials:       1, SpendPerHour: 3300, ExhaustedAt: now.Add(30 * time.Minute),
+			Polls: polls,
 		},
+		Polls: polls,
 		Cache: github.CacheStats{Entries: 412, Bytes: 3 << 20, MaxEntries: 2048, MaxBytes: 32 << 20},
+	}
+}
+
+func startDemoGitHubWebhooks(ctx context.Context, dir string, opts Options, creds *gitproxy.CredentialSet, store *model.Store, ghCalls *demoGitHubCalls) (*daemon.GitHubWebhookConsumer, error) {
+	if opts.GithubWebhookURL == "" && opts.GithubWebhookAddr == "" {
+		return nil, nil
+	}
+	consumer, err := daemon.NewGitHubWebhookConsumer(daemon.Config{
+		DataDir:           dir,
+		GithubWebhookURL:  opts.GithubWebhookURL,
+		GithubWebhookAddr: opts.GithubWebhookAddr,
+	}, creds)
+	if err != nil {
+		return nil, err
+	}
+	wake := func() {
+		processDemoGitHubWebhooks(ctx, store, consumer, ghCalls, time.Now().UTC())
+	}
+	if err := consumer.Start(ctx, wake, func(string) {}); err != nil {
+		return nil, err
+	}
+	return consumer, nil
+}
+
+func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events orchestrator.GitHubEventSource, ghCalls *demoGitHubCalls, now time.Time) {
+	if store == nil || events == nil {
+		return
+	}
+	if ghCalls != nil {
+		ghCalls.webhookMu.Lock()
+		defer ghCalls.webhookMu.Unlock()
+	}
+	if pending, err := events.Pending(); err == nil {
+		for _, ev := range pending {
+			if owner, name, ok := ghwebhook.RepoSplit(ev.Repo); ok {
+				if ev.Number > 0 {
+					github.Polls().Reset(github.PullRequestSubject(owner, name, ev.Number))
+					ghCalls.resetPR(owner, name, ev.Number)
+				} else {
+					github.Polls().ResetRepo(owner, name)
+					ghCalls.resetRepo(owner, name)
+				}
+			}
+		}
+	}
+	deps := orchestrator.Deps{
+		Store:        store,
+		GitHubEvents: events,
+	}
+	if err := runDemoReconcilers(ctx, deps, now, "github-events", "takeovers"); err != nil {
+		log.Printf("grain demo: github webhook reconcile: %v", err)
 	}
 }
