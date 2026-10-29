@@ -1,0 +1,333 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://grain.dev/schemas/grainfiles/common.schema.json",
+  "title": "Common definitions for Grainfiles (docs/grainfiles-spec.md §6)",
+  "$defs": {
+    "grainfile": {
+      "type": "string",
+      "enum": [
+        "v1"
+      ],
+      "default": "v1"
+    },
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^((https|file)://(?!.*::)[^/\\s\\\\<>@#?]+(/[^\\s\\\\<>@#?]*)?|(?![a-zA-Z][a-zA-Z0-9+.-]*:|git@)(?!.*::)[^\\s\\\\<>@#?]+)(#[A-Za-z0-9_.-]+)?$"
+    },
+    "userIdentity": {
+      "type": "string",
+      "pattern": "^[^<>\\s][^<>]*\\s+<[^<>\\s@]+@[^<>\\s@]+\\.[^<>\\s@]+>$"
+    },
+    "deployment": {
+      "type": "string",
+      "minLength": 1,
+      "default": "/",
+      "pattern": "^((https|file)://(?!.*::)[^/\\s\\\\<>@#?]+(/[^\\s\\\\<>@#?]*)?|(?![a-zA-Z][a-zA-Z0-9+.-]*:|git@)(?!.*::)[^\\s\\\\<>@#?]+)$"
+    },
+    "deploymentIdentity": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/deployment"
+    },
+    "requestor": {
+      "oneOf": [
+        {
+          "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/userIdentity"
+        },
+        {
+          "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/deployment"
+        }
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp with explicit timezone ('Z' or '±HH:MM' offset, 00 <= HH <= 23, 00 <= MM <= 59); normalized to UTC.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|\\+(?:[01]\\d|2[0-3]):[0-5]\\d|-(?:[01]\\d|2[0-3]):[0-5]\\d)$"
+    },
+    "notBefore": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Earliest activation timestamp: RFC 3339 timestamp with 'Z' or explicit '±HH:MM' offset (normalized to UTC).",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|\\+(?:[01]\\d|2[0-3]):[0-5]\\d|-(?:[01]\\d|2[0-3]):[0-5]\\d)$"
+    },
+    "draft": {
+      "type": "boolean",
+      "default": false
+    },
+    "refList": {
+      "type": "array",
+      "items": {
+        "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/ref"
+      }
+    },
+    "capabilityRef": {
+      "type": "string",
+      "description": "Streamable HTTP MCP capability URL with optional #<method> fragment (https://<host>/<path>[#<method>]).",
+      "minLength": 1,
+      "pattern": "^https://(?!.*\\.(?:grain\\.md|jinja2)(?:[#]|$))(?:localhost(?::[0-9]{1,5})?|[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)+(?::[0-9]{1,5})?)(?:/[A-Za-z0-9][A-Za-z0-9._:@-]*)+(?:#[A-Za-z0-9][A-Za-z0-9._-]*)?$"
+    },
+    "capabilityItem": {
+      "oneOf": [
+        {
+          "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/capabilityRef"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "capability": {
+              "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/capabilityRef"
+            },
+            "with": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "capability"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "capabilityList": {
+      "type": "array",
+      "items": {
+        "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/capabilityItem"
+      }
+    },
+    "scheduleItem": {
+      "type": "object",
+      "properties": {
+        "cron": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1,
+          "default": "UTC"
+        }
+      },
+      "required": [
+        "cron"
+      ],
+      "additionalProperties": false
+    },
+    "scheduleOrList": {
+      "oneOf": [
+        {
+          "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/scheduleItem"
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/scheduleItem"
+          }
+        }
+      ]
+    },
+    "eventFilter": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "branches": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "ignore": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "repo"
+          ]
+        },
+        {
+          "required": [
+            "repos"
+          ]
+        },
+        {
+          "required": [
+            "branches"
+          ]
+        },
+        {
+          "required": [
+            "paths"
+          ]
+        }
+      ],
+      "additionalProperties": false
+    },
+    "eventFilterOrList": {
+      "oneOf": [
+        {
+          "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/eventFilter"
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/eventFilter"
+          }
+        }
+      ]
+    },
+    "workflowFilter": {
+      "type": "object",
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "triggered",
+              "succeeded",
+              "failed",
+              "started",
+              "success",
+              "failure"
+            ]
+          }
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "branches": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "workflow"
+          ]
+        },
+        {
+          "required": [
+            "workflows"
+          ]
+        }
+      ],
+      "additionalProperties": false
+    },
+    "workflowFilterOrList": {
+      "oneOf": [
+        {
+          "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/workflowFilter"
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/workflowFilter"
+          }
+        }
+      ]
+    },
+    "when": {
+      "type": "object",
+      "properties": {
+        "schedule": {
+          "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/scheduleOrList"
+        },
+        "push": {
+          "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/eventFilterOrList"
+        },
+        "merge": {
+          "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/eventFilterOrList"
+        },
+        "pull_request": {
+          "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/eventFilterOrList"
+        },
+        "workflow": {
+          "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/workflowFilterOrList"
+        },
+        "manual": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "scenario": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "properties": {
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "description"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "minProperties": 1
+    }
+  }
+}
