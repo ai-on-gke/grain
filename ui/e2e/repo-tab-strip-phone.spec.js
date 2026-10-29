@@ -46,9 +46,7 @@ for (const [id, label] of [
       const strip = await scroller.boundingBox();
       const box = await tab.boundingBox();
       expect(box.x).toBeGreaterThanOrEqual(strip.x - 1);
-      expect(box.x + box.width).toBeLessThanOrEqual(
-        strip.x + strip.width + 1,
-      );
+      expect(box.x + box.width).toBeLessThanOrEqual(strip.x + strip.width + 1);
     }).toPass({ timeout: 5000 });
   });
 }
