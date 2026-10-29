@@ -49,6 +49,13 @@ const (
 	DaemonServicesMax = 4249
 )
 
+// SandboxAccess is the sandbox-access acceptor every k8s-granule sandbox
+// pod's wrapper dials out to (-sandbox-access-addr, the grain-access
+// Service). pkg/sandboxaccess.DefaultPort repeats it rather than
+// importing this package, to stay neutral; pkg/daemon's tests hold the
+// two equal.
+const SandboxAccess = 4244
+
 // 4280-4289: persistent sandboxes' host_port (model.PersistentSandbox),
 // the staging environments grain keeps running beside itself.
 const (

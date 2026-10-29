@@ -247,6 +247,9 @@ func (c *Client) SetCapabilityGrant(ctx context.Context, id string, req GrantReq
 	if _, ok := c.capabilityByID(normalized); !ok {
 		return validationErrorf("%s", capabilityRefusal(normalized))
 	}
+	if err := c.catalogueEditRefusalFor(ctx, id, normalized); err != nil {
+		return err
+	}
 	return c.mutate(ctx, id, func(task *model.Task) error {
 		kept := make([]model.Grant, 0, len(task.Grants)+1)
 		placed := false

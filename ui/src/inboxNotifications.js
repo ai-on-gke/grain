@@ -77,6 +77,10 @@ export function taskReason(t) {
     return { id: "reply", text: "asked a question" };
   if (t.state === "awaiting_submit" && t.reviewQuestions)
     return { id: "review_questions", text: "has review questions for you" };
+  // A CL nobody has mailed to a reviewer yet is the owner's to Mail
+  // before anybody can review it (changelists.md §5).
+  if (t.state === "awaiting_submit" && t.clReview?.needsMailing)
+    return { id: "needs_mailing", text: "needs mailing" };
   if (t.state === "awaiting_submit")
     return { id: "submit", text: "is ready to submit" };
   if (t.state === "failed") return { id: "failed", text: "failed" };

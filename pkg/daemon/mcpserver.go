@@ -134,6 +134,24 @@ func (d DaemonChangeChecks) WaitChangeChecks(ctx context.Context, req change.Che
 	return resp.Report, err
 }
 
+// DaemonChangeReview implements mcp.ChangeReviewer by asking the daemon
+// (POST /api/tasks/{id}/change-review), which answers through the
+// registered change.Replier.
+type DaemonChangeReview struct {
+	Client *ui.HTTPClient
+	TaskID string
+}
+
+func (d DaemonChangeReview) ReplyToChangeThread(ctx context.Context, thread, body string) (change.ReplyResult, error) {
+	resp, err := d.Client.ChangeReview(ctx, d.TaskID, ui.ChangeReviewRequest{Op: ui.ChangeReviewReply, Thread: thread, Body: body})
+	return resp.Result, err
+}
+
+func (d DaemonChangeReview) ResolveChangeThread(ctx context.Context, thread string) (change.ReplyResult, error) {
+	resp, err := d.Client.ChangeReview(ctx, d.TaskID, ui.ChangeReviewRequest{Op: ui.ChangeReviewResolve, Thread: thread})
+	return resp.Result, err
+}
+
 func (d DaemonChangeChecks) ChangeCIRefusal(ctx context.Context, tool string) (string, error) {
 	resp, err := d.Client.ChangeChecks(ctx, d.TaskID, ui.ChangeChecksRequest{Op: ui.ChangeChecksRefusal, Tool: tool})
 	return resp.Refusal, err
@@ -2504,6 +2522,9 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		// (changelists.md §3). Registered last, in place of those names.
 		if taskDetail.Task.ChangeTargetKind != "" || len(taskDetail.Task.Changelists) > 0 {
 			registry.Register(mcp.NewChangeChecksTools(DaemonChangeChecks{Client: client, TaskID: *taskID})...)
+			// Its review threads are answered on the CL, as drafts
+			// published when the run ends (changelists.md §5).
+			registry.Register(mcp.NewChangeReviewTools(DaemonChangeReview{Client: client, TaskID: *taskID})...)
 		}
 		// Not a tool either: the same row, written the way that costs
 		// the run nothing. With a daemon to tell, every call this

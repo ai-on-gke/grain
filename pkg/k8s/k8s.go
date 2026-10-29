@@ -317,6 +317,12 @@ type PodOptions struct {
 	// prepared, whose manifest is then exactly what it was before this
 	// field existed.
 	Setup *Setup
+	// SecretMounts are Secrets mounted read-only, with files readable by
+	// their owner only, into the sandbox container alone -- what a
+	// granule pod's wrapper finds its sandbox-access credentials in
+	// (pkg/sandboxaccess). The Secret may be created after the pod: the
+	// kubelet holds the container until the volume can be mounted.
+	SecretMounts []SecretMount
 }
 
 // Setup is an init container that leaves files for the sandbox container
@@ -499,6 +505,14 @@ func (c Client) Manifest(name string, shape PodShape, opts PodOptions) ([]byte, 
 			"hostPath": map[string]any{"path": dev, "type": "CharDevice"},
 		})
 		volumeMounts = append(volumeMounts, map[string]any{"name": volName, "mountPath": dev})
+	}
+	for i, m := range opts.SecretMounts {
+		volName := secretVolumeName(i)
+		volumes = append(volumes, map[string]any{
+			"name":   volName,
+			"secret": map[string]any{"secretName": m.Secret, "defaultMode": 0o400},
+		})
+		volumeMounts = append(volumeMounts, map[string]any{"name": volName, "mountPath": m.MountPath, "readOnly": true})
 	}
 	var initContainers []any
 	if opts.Setup != nil {

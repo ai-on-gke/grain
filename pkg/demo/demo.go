@@ -1415,15 +1415,24 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 			{Name: "//devtools/grain/retry:budget_test", State: "failed"},
 			{Name: "//devtools/grain/retry:lint", State: "failed"},
 			{Name: "//devtools/grain/retry:build", State: "passed"},
-		}})
+		},
+		// And its reviewer asked for changes (changelists.md §5); the four
+		// below show the review badge's other states.
+		ReviewState: change.ReviewStateChangesRequested})
 	for i, seed := range []struct {
 		title, cl, presubmit string
 		health               change.Health
+		review               change.Observation
 	}{
-		{"Move the depot retry budget behind a flag", "cl/612400101", change.PresubmitPassed, change.HealthOK},
-		{"Add a TAP project for the retry budget", "cl/612400102", change.PresubmitRunning, change.HealthPending},
-		{"Document the depot retry budget", "cl/612400103", change.PresubmitNotRun, change.HealthPending},
-		{"Trim the retry budget's BUILD deps", "cl/612400104", change.PresubmitUnknown, change.HealthUnknown},
+		{"Move the depot retry budget behind a flag", "cl/612400101", change.PresubmitPassed, change.HealthOK,
+			change.Observation{ReviewState: change.ReviewStateApproved, LGTM: []string{"alice"}}},
+		{"Add a TAP project for the retry budget", "cl/612400102", change.PresubmitRunning, change.HealthPending,
+			change.Observation{ReviewState: change.ReviewStateInReview}},
+		{"Document the depot retry budget", "cl/612400103", change.PresubmitNotRun, change.HealthPending,
+			change.Observation{ReviewState: change.ReviewStateDraft, NeedsMailing: true}},
+		{"Trim the retry budget's BUILD deps", "cl/612400104", change.PresubmitUnknown, change.HealthUnknown,
+			change.Observation{ReviewState: change.ReviewStateNeedsApproval, LGTM: []string{"bob"},
+				NeedsApproval: []string{"owners", "readability"}}},
 	} {
 		at := ago(time.Duration(24-i) * time.Hour)
 		seeded, err := create(at, ui.CreateTaskRequest{
@@ -1445,7 +1454,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		}); err != nil {
 			return fmt.Errorf("seeding a changelist task: %w", err)
 		}
-		change.Remember(change.Observation{Target: seed.cl, Health: seed.health, Presubmit: seed.presubmit, Snapshot: 1})
+		obs := seed.review
+		obs.Target, obs.Health, obs.Presubmit, obs.Snapshot = seed.cl, seed.health, seed.presubmit, 1
+		change.Remember(obs)
 	}
 
 	return nil
