@@ -223,3 +223,31 @@ func TestInitLinuxContainerUseBinaryNeedsNoBuildToolchain(t *testing.T) {
 		t.Errorf("unit does not run the -use-binary binary %s:\n%s", bin, unit)
 	}
 }
+
+func TestPreflightUseBinaryWarnsOnNonRootOwner(t *testing.T) {
+	t.Parallel()
+	if got := nonRootUIDName(0); got != "" {
+		t.Errorf("nonRootUIDName(0) = %q, want empty for root", got)
+	}
+	if got := nonRootUIDName(1000); got == "" {
+		t.Errorf("nonRootUIDName(1000) = empty, want owner name or uid 1000")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; temp files are owned by root")
+	}
+	bin := prebuiltGrain(t)
+	var r Result
+	opts := Options{Platform: PlatformLinuxContainer, UseBinary: bin}
+	if ok := preflight(context.Background(), newFakeSystem(), &r, opts, "linux"); !ok {
+		t.Fatalf("preflight = false, want true: %+v", r.Steps)
+	}
+	s, found := stepStatus(r, "prebuilt grain binary")
+	if !found || s.Status != StepSkipped {
+		t.Fatalf("prebuilt grain binary: got %+v, want StepSkipped", s)
+	}
+	for _, want := range []string{"not root", "/usr/local/bin/grain"} {
+		if !strings.Contains(s.Detail, want) {
+			t.Errorf("prebuilt grain binary Detail = %q, want substring %q", s.Detail, want)
+		}
+	}
+}
