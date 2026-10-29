@@ -35,7 +35,7 @@ import ReportBoard from "./ReportBoard.jsx";
 import ReleaseNotesPanel from "./ReleaseNotesPanel.jsx";
 import HealthTab from "./system/HealthTab.jsx";
 import { SYSTEM_TABS, systemTabLabel } from "../settingsSections.js";
-import { revealFocusedTab } from "../tabStrip.js";
+import { revealFocusedTab, useRevealSelectedTab } from "../tabStrip.js";
 import { useIsPhone } from "../phone.js";
 
 export { SYSTEM_TABS };
@@ -156,9 +156,11 @@ export default function SystemPage({
 }) {
   const isPhone = useIsPhone();
   const current = tab || "health";
+  const tabStripRef = useRevealSelectedTab();
 
   const tabs = isPhone ? null : (
     <Tabs
+      ref={tabStripRef}
       value={current}
       onChange={(_, value) => onTab(value === "health" ? "" : value)}
       variant="scrollable"
