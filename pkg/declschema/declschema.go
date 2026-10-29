@@ -615,6 +615,11 @@ func templateSchema() Schema {
 				Keys:    []Key{settingsOnly("change-target", Reach)},
 				Columns: []string{"change_target_kind", "change_target_spec"},
 			},
+			{
+				Model:   "Reviewers",
+				Keys:    []Key{settingsOnly("reviewers", Reach)},
+				Columns: []string{"reviewers"},
+			},
 			{Model: "Reads", Keys: []Key{settingsOnly("reads", Reach)}, Table: "template_read"},
 			{Model: "Writes", Keys: []Key{settingsOnly("writes", Reach)}, Table: "template_write"},
 			{Model: "Grants", Keys: []Key{settingsOnly("grants", Reach)}, Table: "template_grant"},

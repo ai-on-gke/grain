@@ -220,7 +220,11 @@ func (c *Client) MailChange(ctx context.Context, id, by string, req MailChangeRe
 	if !ok {
 		return change.Result{}, errNoChangeReview
 	}
-	res, err := mailer.Mail(ctx, *task, change.Primary(*task), req.Reviewers, req.CC, change.Person{Name: by})
+	reviewers := req.Reviewers
+	if len(reviewers) == 0 {
+		reviewers = task.Reviewers
+	}
+	res, err := mailer.Mail(ctx, *task, change.Primary(*task), reviewers, req.CC, change.Person{Name: by})
 	if err != nil {
 		change.NoteError(ctx, p, err, c.Store, c.now())
 		return change.Result{}, apierror.Expose(err)

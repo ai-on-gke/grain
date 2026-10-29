@@ -335,6 +335,14 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     61,
+		Description: "add person-set reviewers to task and template",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `reviewers` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `template` ADD COLUMN `reviewers` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     62,
 		Description: "persist sandbox-access token hashes and expiry times across restarts",
 		Statements:  []string{sandboxAccessTable},
 	},
