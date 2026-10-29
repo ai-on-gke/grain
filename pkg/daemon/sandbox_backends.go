@@ -256,8 +256,16 @@ func EffectiveK8sGranuleImage(cfg Config) string {
 		base = ui.DefaultSandboxImageFor(installtrack.TrackOSS, version.Get())
 	}
 	if mirrorRepo := sandboxImageMirrorRepo(cfg); mirrorRepo != "" {
-		if cfg.K8sGranuleImage != "" && !isMirroredGuestRef(cfg.K8sGranuleImage, mirrorRepo) {
-			return cfg.K8sGranuleImage
+		// -k8s-granule-image's flag default is the stamp itself, so a
+		// daemon started with -sandbox-image-mirror and no image of its
+		// own arrives here with the stamp in K8sGranuleImage: that is
+		// the image to mirror, not a pin that opts out of the mirror.
+		pinned := cfg.K8sGranuleImage
+		if pinned == DefaultSandboxImage || pinned == model.DefaultSandboxImage || pinned == base {
+			pinned = ""
+		}
+		if pinned != "" && !isMirroredGuestRef(pinned, mirrorRepo) {
+			return pinned
 		}
 		return resolveOrMirrorSandboxImage(context.Background(), base, mirrorRepo)
 	}
