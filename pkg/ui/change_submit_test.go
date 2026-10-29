@@ -45,6 +45,7 @@ func (e *submitOutcome) UntrustedDetail() string    { return e.detail }
 type fakeSubmitter struct {
 	fakeCLs
 	submitted []string // target|person
+	granted   []bool   // whether the task Submit was handed held the submit grant
 	syncs     int
 	result    change.Result
 	err       error
@@ -53,8 +54,9 @@ type fakeSubmitter struct {
 
 func (f *fakeSubmitter) Kind() model.LinkKind { return model.LinkChangelist }
 func (f *fakeSubmitter) TargetKind() string   { return "fakesubmit" }
-func (f *fakeSubmitter) Submit(_ context.Context, _ model.Task, target string, by change.Person) (change.Result, error) {
+func (f *fakeSubmitter) Submit(_ context.Context, task model.Task, target string, by change.Person) (change.Result, error) {
 	f.submitted = append(f.submitted, target+"|"+by.Name)
+	f.granted = append(f.granted, hasSubmitGrant(task))
 	return f.result, f.err
 }
 func (f *fakeSubmitter) Sync(context.Context, model.Task, string) (change.SyncResult, error) {
@@ -63,6 +65,15 @@ func (f *fakeSubmitter) Sync(context.Context, model.Task, string) (change.SyncRe
 }
 func (f *fakeSubmitter) SubmitGrant(target string) (string, map[string]any) {
 	return "https://example.test/capabilities/ws#submit", map[string]any{"cl": strings.TrimPrefix(target, "cl/")}
+}
+
+func hasSubmitGrant(task model.Task) bool {
+	for _, g := range task.Grants {
+		if strings.Contains(g.Capability, "ws#submit") && strings.Contains(g.Capability, `"42"`) {
+			return true
+		}
+	}
+	return false
 }
 
 var submittable = change.Observation{Target: "cl/42", Status: change.StatusLGTM, Health: change.HealthOK, Snapshot: 3,
@@ -174,12 +185,16 @@ func TestSubmitCLRecordsThePersonsGrantAndClosesRenumbered(t *testing.T) {
 		t.Fatalf("submitted = %v", fake.submitted)
 	}
 	task, _ := store.GetTask(ctx, "71")
-	grant := false
-	for _, g := range task.Grants {
-		grant = grant || (strings.Contains(g.Capability, "ws#submit") && strings.Contains(g.Capability, `"42"`))
+	// The person's grant was on the task Submit was handed, and is gone
+	// once it answered: it is not carried into a later session.
+	if len(fake.granted) != 1 || !fake.granted[0] {
+		t.Fatalf("Submit was handed the grant: %v, want true", fake.granted)
 	}
-	if !grant {
-		t.Fatalf("grants = %+v, want the submit grant with cl 42", task.Grants)
+	if hasSubmitGrant(*task) {
+		t.Fatalf("grants = %+v, want the submit grant released after Submit", task.Grants)
+	}
+	if task.AutoMerge {
+		t.Fatal("a CL Submit turned auto-merge on")
 	}
 	submitted := false
 	for _, l := range task.Links {
@@ -232,6 +247,9 @@ func TestSubmitCLOutcomes(t *testing.T) {
 			}
 			if !tc.woken && state != model.StateAwaitingSubmit {
 				t.Fatalf("state %s, want still awaiting_submit", state)
+			}
+			if task, _ := store.GetTask(ctx, "72"); hasSubmitGrant(*task) {
+				t.Fatalf("submit grant still held after a %s outcome", tc.name)
 			}
 			if c := lastComment(t, store, ctx, "72"); !strings.Contains(c, tc.comment) {
 				t.Fatalf("comment %q, want it to mention %q", c, tc.comment)

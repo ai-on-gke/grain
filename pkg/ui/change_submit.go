@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"slices"
 	"strings"
@@ -135,8 +136,16 @@ func (c *Client) submitChange(ctx context.Context, task model.Task) error {
 		return validationErrorf("%s cannot be submitted yet: %s", view.Target, strings.Join(view.Reasons, "; "))
 	}
 	target, now := view.Target, c.now()
-	if err := c.recordSubmitGrant(ctx, task.ID, p, target, by, now); err != nil {
+	grant, err := c.recordSubmitGrant(ctx, task.ID, p, target, by, now)
+	if err != nil {
 		return err
+	}
+	// The grant is this press's and no one else's: it is gone once Submit
+	// has answered, whatever it answered, so no later run or session on
+	// the task inherits it (review task 1709).
+	defer c.releaseSubmitGrant(context.WithoutCancel(ctx), task.ID, grant)
+	if fresh, err := c.Store.GetTask(ctx, task.ID); err == nil && fresh != nil {
+		task = *fresh
 	}
 	res, err := p.Submit(ctx, task, target, change.Person{Name: by.ID})
 	if err == nil {
@@ -167,13 +176,18 @@ func (c *Client) submitChange(ctx context.Context, task model.Task) error {
 
 // recordSubmitGrant records by's Submit of target on the task: the
 // provider's submit method, granted with the CL as its argument, and a
-// comment attributed to by at now saying so.
-func (c *Client) recordSubmitGrant(ctx context.Context, id string, p change.Provider, target string, by model.Principal, now time.Time) error {
+// comment attributed to by at now saying so, which is the lasting record
+// of who pressed it and when. It answers the grant string ("" when the
+// provider names none) for releaseSubmitGrant: the grant itself lasts
+// only as long as the Submit it was pressed for.
+func (c *Client) recordSubmitGrant(ctx context.Context, id string, p change.Provider, target string, by model.Principal, now time.Time) (string, error) {
+	grant := ""
 	if g, ok := p.(change.SubmitGranter); ok {
 		capability, with := g.SubmitGrant(target)
-		grant, err := model.EncodeCapabilityGrant(protocol.GrantSpec{Capability: capability, With: with})
+		var err error
+		grant, err = model.EncodeCapabilityGrant(protocol.GrantSpec{Capability: capability, With: with})
 		if err != nil {
-			return fmt.Errorf("recording the submit grant: %w", err)
+			return "", fmt.Errorf("recording the submit grant: %w", err)
 		}
 		if err := c.Store.UpdateTask(ctx, id, func(t *model.Task) error {
 			if !slices.ContainsFunc(t.Grants, func(have model.Grant) bool { return have.Capability == grant }) {
@@ -181,12 +195,28 @@ func (c *Client) recordSubmitGrant(ctx context.Context, id string, p change.Prov
 			}
 			return nil
 		}); err != nil {
-			return fmt.Errorf("recording the submit grant: %w", err)
+			return "", fmt.Errorf("recording the submit grant: %w", err)
 		}
 	}
 	_, err := c.Store.AddComment(ctx, model.Comment{TaskID: id, Author: model.Attribution{Actor: by},
 		Body: fmt.Sprintf("Submitted %s.", target), CreatedAt: now})
-	return err
+	return grant, err
+}
+
+// releaseSubmitGrant takes a Submit's grant back off the task once the
+// Submit has answered. A person's Submit authorizes that one press; it is
+// not carried into the task's later runs or sessions. (A task's
+// auto-merge is a standing decision and is not touched here.)
+func (c *Client) releaseSubmitGrant(ctx context.Context, id, grant string) {
+	if grant == "" {
+		return
+	}
+	if err := c.Store.UpdateTask(ctx, id, func(t *model.Task) error {
+		t.Grants = slices.DeleteFunc(t.Grants, func(g model.Grant) bool { return g.Capability == grant })
+		return nil
+	}); err != nil {
+		log.Printf("ui: releasing the submit grant on task %s: %v", id, err)
+	}
 }
 
 // syncAfterSubmit is a Submit that came back needing a sync: one sync,
