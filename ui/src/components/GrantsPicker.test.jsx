@@ -497,6 +497,37 @@ describe("GrantsPicker", () => {
     expect(gone.querySelector("input")).toBeNull();
   });
 
+  it("shows the capability policy verdict for the picker's run kind", async () => {
+    serve({
+      current: [
+        { ...hostScript, policy: { task: "denied", ci: "may_be_refused" } },
+      ],
+    });
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[hostScript.ref]}
+        config={config}
+        runKind="ci"
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    const heldLine = await screen.findByLabelText(
+      "example.com › host-script (may be refused by the capability policy for CI jobs)",
+    );
+    expect(within(heldLine).getByText("may be refused")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    const item = await screen.findByRole("menuitem", { name: /host-script/ });
+    expect(item).toHaveTextContent(
+      "may be refused by the capability policy for CI jobs",
+    );
+    expect(
+      within(item).getByRole("link", { name: "Settings → Capabilities" }),
+    ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
+  });
   // grain/task-1810: a method the capability policy denies the form's
   // run is listed disabled with the policy's reason, not offered; a
   // held grant of one is flagged.
@@ -521,7 +552,7 @@ describe("GrantsPicker", () => {
         onApiChange={vi.fn()}
         onSubmit={onSubmit}
         onRemove={vi.fn()}
-        policySubject={{ kind: "task", repo: "acme/widgets" }}
+        policyRepo="acme/widgets"
       />,
     );
     expect(
@@ -536,9 +567,10 @@ describe("GrantsPicker", () => {
     const row = denied.closest('[role="menuitem"]');
     expect(row).toHaveAttribute("aria-disabled", "true");
     expect(row).toHaveAttribute("data-policy-denied", "true");
+    expect(row).toHaveTextContent(reason);
     expect(
-      within(row).getByText(`Denied by the capability policy: ${reason}`),
-    ).toBeInTheDocument();
+      within(row).getByRole("link", { name: "Settings → Capabilities" }),
+    ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
     const allowed = within(menu)
       .getByText("gcp-key")
       .closest('[role="menuitem"]');
@@ -559,11 +591,11 @@ describe("GrantsPicker", () => {
         onApiChange={vi.fn()}
         onSubmit={vi.fn()}
         onRemove={vi.fn()}
-        policySubject={{ kind: "task", repo: "not a repo" }}
+        policyRepo="not a repo"
       />,
     );
     await waitFor(() =>
-      expect(api).toHaveBeenCalledWith("/api/capability-methods?kind=task"),
+      expect(api).toHaveBeenCalledWith("/api/capability-methods"),
     );
     expect(screen.queryByRole("alert")).toBeNull();
   });

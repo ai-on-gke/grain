@@ -183,9 +183,7 @@ test("adds, tests, configures, edits, grants, denies by policy and removes a cap
   ]);
 
   // From then on filing refuses a grant the rule denies, naming the
-  // rule, rather than accepting a task admission would only park; and
-  // New task's "Add grant…" lists the denied method disabled with the
-  // policy's reason, beside the demo server's method it does not cover.
+  // rule, rather than accepting a task admission would only park.
   const refused = await request.post("/api/tasks", {
     data: {
       title: `E2E denied grant ${Date.now()}`,
@@ -196,26 +194,44 @@ test("adds, tests, configures, edits, grants, denies by policy and removes a cap
   });
   expect(refused.status()).toBe(400);
   expect((await refused.json()).error).toContain(`rule 1: deny ${NEW}#*`);
-  const newTask = await page.context().newPage();
-  try {
-    await newTask.goto("/");
-    await newTask.getByRole("button", { name: "+ New task" }).click();
-    await newTask
-      .getByTestId("new-task-grants")
-      .getByRole("button", { name: "Add grant…" })
-      .click();
-    const menu = newTask.getByRole("menu", { name: "Grants to add" });
-    const denied = menu.locator(`[data-method="${NEW}#cloud-viewer"]`);
-    await expect(denied).toHaveAttribute("aria-disabled", "true");
-    await expect(denied).toContainText(
-      `Denied by the capability policy: the capability policy denies ${NEW}#cloud-viewer`,
-    );
-    await expect(
-      menu.locator(`[data-method="${DEMO}#cloud-viewer"]`),
-    ).not.toHaveAttribute("aria-disabled", "true");
-  } finally {
-    await newTask.close();
-  }
+
+  // The deny rule reaches the New task grant picker: on the demo's
+  // default repo the server's methods are listed disabled with the
+  // policy's reason and a link back to the policy, beside the demo
+  // server's method it does not cover.
+  await page.getByRole("button", { name: "+ New task" }).click();
+  await page
+    .getByTestId("new-task-grants")
+    .getByRole("button", { name: "Add grant…" })
+    .click();
+  const grantMenu = page.getByRole("menu", { name: "Grants to add" });
+  const deniedItem = grantMenu.locator(`[data-method="${NEW}#cloud-viewer"]`);
+  await expect(deniedItem).toHaveAttribute("aria-disabled", "true");
+  await expect(deniedItem).toContainText(
+    `the capability policy denies ${NEW}#cloud-viewer to this task`,
+  );
+  await expect(
+    deniedItem.getByRole("link", { name: "Settings → Capabilities" }),
+  ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
+  await expect(
+    grantMenu.locator(`[data-method="${DEMO}#cloud-viewer"]`),
+  ).not.toHaveAttribute("aria-disabled", "true");
+  await deniedItem.scrollIntoViewIfNeeded();
+  const itemBox = await deniedItem.boundingBox();
+  const verdictBox = await deniedItem
+    .locator(".method-policy-verdict")
+    .boundingBox();
+  const menuBox = await grantMenu.boundingBox();
+  expect(itemBox.x).toBeGreaterThanOrEqual(menuBox.x - 1);
+  expect(itemBox.x + itemBox.width).toBeLessThanOrEqual(
+    menuBox.x + menuBox.width + 1,
+  );
+  expect(verdictBox.x).toBeGreaterThanOrEqual(itemBox.x - 1);
+  expect(verdictBox.x + verdictBox.width).toBeLessThanOrEqual(
+    itemBox.x + itemBox.width + 1,
+  );
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Close" }).click();
 
   // Removing it warns with what still grants it.
   await serverCard(page, NEW).getByRole("button", { name: "Remove" }).click();

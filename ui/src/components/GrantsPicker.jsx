@@ -19,6 +19,7 @@ import {
   Button,
   Chip,
   IconButton,
+  Link,
   ListItemIcon,
   ListItemText,
   ListSubheader,
@@ -88,12 +89,13 @@ import {
 // no longer accepts, or now normalizes differently. An api grant is
 // flagged when its scope is dangerous, or when it is no longer offered.
 //
-// policySubject ({repo, kind}), where the form knows the run its grants
-// are for -- kind "task" for an agent task, and its repository -- has the
-// listing say which methods the capability policy denies that run
-// (docs/capabilities-spec.md §4.2.2): "Add grant…" shows such a method
-// disabled with the policy's reason rather than offer a grant filing
-// would refuse, and a held grant of one is flagged.
+// runKind is the kind of run the grants are for ("task", "process" or
+// "ci"): each method carries the capability policy's verdict per kind
+// (docs/capabilities-spec.md §4.2.2), shown on it. policyRepo, where the
+// form knows the repository too, has the listing judge that one run: a
+// method the policy denies it is listed disabled with the policy's own
+// reason rather than offered as a grant filing would refuse, and a held
+// grant of one is flagged.
 
 const asList = (m) => (Array.isArray(m) ? m : []);
 
@@ -109,6 +111,26 @@ const liveErrorsOf = (schema, value) =>
     ? {}
     : validateValue(schema, schema, value || {});
 
+const RUN_KIND_LABELS = {
+  task: "agent tasks",
+  process: "processes",
+  ci: "CI jobs",
+};
+
+function policyVerdictText(verdict, runKind) {
+  if (!verdict) return "";
+  const forKind = RUN_KIND_LABELS[runKind]
+    ? ` for ${RUN_KIND_LABELS[runKind]}`
+    : "";
+  if (verdict === "denied") {
+    return `denied by the capability policy${forKind}`;
+  }
+  if (verdict === "may_be_refused") {
+    return `may be refused by the capability policy${forKind}`;
+  }
+  return "";
+}
+
 let nextDraft = 0;
 
 export default function GrantsPicker({
@@ -119,7 +141,8 @@ export default function GrantsPicker({
   onRemove,
   disabled = false,
   idPrefix = "grant",
-  policySubject = null,
+  runKind = "task",
+  policyRepo = "",
 }) {
   const all = grants || [];
   const apiHeld = useMemo(() => all.filter(isApiGrant), [all]);
@@ -156,16 +179,14 @@ export default function GrantsPicker({
       live.current = false;
     };
   }, []);
-  const subjectKind = policySubject?.kind || "";
   // A repo still being typed, or mistyped, is no run to ask about: the
   // listing names none rather than fail, and filing reports the repo.
-  const typedRepo = (policySubject?.repo || "").trim();
-  const subjectRepo = /^[^/\s]+\/[^/\s]+$/.test(typedRepo) ? typedRepo : "";
+  const typedRepo = (policyRepo || "").trim();
+  const subjectRepo =
+    runKind && /^[^/\s]+\/[^/\s]+$/.test(typedRepo) ? typedRepo : "";
   const load = useCallback(
     (fresh) => {
-      const subject = subjectKind
-        ? { kind: subjectKind, repo: subjectRepo }
-        : null;
+      const subject = subjectRepo ? { kind: runKind, repo: subjectRepo } : null;
       return capabilityMethods({ fresh, subject })
         .then((m) => {
           if (!live.current) return null;
@@ -179,7 +200,7 @@ export default function GrantsPicker({
           return null;
         });
     },
-    [subjectKind, subjectRepo],
+    [runKind, subjectRepo],
   );
   useEffect(() => {
     if (wanted) load(loaded.current);
@@ -331,6 +352,44 @@ export default function GrantsPicker({
     );
   };
 
+  const policyState = (ref) => {
+    const refused = byRef[ref]?.policyRefusal;
+    if (refused)
+      return {
+        severity: "warning",
+        badge: "denied by policy",
+        suffix: " (denied by the capability policy)",
+        textNote: `${refused}. Remove this grant, or change the capability policy (Settings → Capabilities).`,
+        note: (
+          <>
+            {refused}. Remove this grant, or change the capability policy (
+            <Link href="/settings/capabilities#capability-policy">
+              Settings → Capabilities
+            </Link>
+            ).
+          </>
+        ),
+      };
+    const verdict = runKind ? byRef[ref]?.policy?.[runKind] : undefined;
+    if (!verdict) return null;
+    const policyNote = policyVerdictText(verdict, runKind);
+    return {
+      severity: "warning",
+      badge: verdict === "denied" ? "denied by policy" : "may be refused",
+      suffix: ` (${policyNote})`,
+      textNote: `This grant is ${policyNote} (Settings → Capabilities).`,
+      note: (
+        <>
+          This grant is {policyNote} (
+          <Link href="/settings/capabilities#capability-policy">
+            Settings → Capabilities
+          </Link>
+          ).
+        </>
+      ),
+    };
+  };
+
   // methodState is what is wrong with a held method grant, if anything.
   const methodState = (g) => {
     const { ref } = parseGrant(g);
@@ -341,13 +400,6 @@ export default function GrantsPicker({
         badge: "server not attached",
         suffix: " (server not attached)",
         note: `No attached capability server offers ${ref} any more. Remove this grant, or attach the server again.`,
-      };
-    if (byRef[ref]?.policyRefusal)
-      return {
-        severity: "warning",
-        badge: "denied by policy",
-        suffix: " (denied by the capability policy)",
-        note: `${byRef[ref].policyRefusal}. Remove this grant, or change the capability policy in Settings.`,
       };
     if (check && check.error && !check.unchecked)
       return {
@@ -363,7 +415,7 @@ export default function GrantsPicker({
         suffix: " (normalizes differently now)",
         note: `The server's current schema normalizes this grant differently (now ${check.recorded}). It keeps what it was granted until you edit it.`,
       };
-    return null;
+    return policyState(ref);
   };
 
   const removeMethod = (g) =>
@@ -397,7 +449,7 @@ export default function GrantsPicker({
             kind="method"
             label={label}
             ariaLabel={`${label}${state?.suffix || ""}`}
-            tip={`${state ? `${state.note}\n\n` : ""}${d.lines.join("\n")}`}
+            tip={`${state ? `${state.textNote || state.note}\n\n` : ""}${d.lines.join("\n")}`}
             caption={method?.description || ""}
             badge={
               state
@@ -411,7 +463,7 @@ export default function GrantsPicker({
           />
         );
       }
-      const state = g ? methodState(g) : null;
+      const state = g ? methodState(g) : policyState(ref);
       const d = describeGrant(g || ref, { method, config });
       return (
         <ArgsSection
@@ -550,34 +602,82 @@ export default function GrantsPicker({
     );
   };
 
-  // A method the policy denies this run is listed, disabled, with the
-  // policy's reason in place of what it would need.
-  const methodItem = (m) => (
-    <MenuItem
-      key={m.ref}
-      className="method-grant-row"
-      data-method={m.ref}
-      data-policy-denied={m.policyRefusal ? "true" : undefined}
-      title={m.policyRefusal || m.ref}
-      disabled={Boolean(m.policyRefusal)}
-      onClick={() => addMethod(m)}
-      // The reason is read at full contrast; only the name is dimmed.
-      sx={{ whiteSpace: "normal", "&.Mui-disabled": { opacity: 1 } }}
-    >
-      <ListItemIcon />
-      <ListItemText
-        primary={methodMenuLabel(m.ref, m.method)}
-        primaryTypographyProps={
-          m.policyRefusal ? { color: "text.disabled" } : undefined
-        }
-        secondary={
-          m.policyRefusal
-            ? `Denied by the capability policy: ${m.policyRefusal}`
-            : `${splitRef(m.ref).capability.replace(/^https:\/\//, "")}${m.requiresArgs ? " · needs arguments" : ""}`
-        }
-      />
-    </MenuItem>
-  );
+  // A method the policy denies the one run this picker is for (a repo
+  // is known: policyRepo) is listed disabled, with the policy's own
+  // reason; one it may deny some run of the kind carries the verdict.
+  const methodItem = (m) => {
+    const refused = m.policyRefusal || "";
+    const verdict = refused
+      ? "denied"
+      : runKind
+        ? m.policy?.[runKind]
+        : undefined;
+    const policyNote = refused || policyVerdictText(verdict, runKind);
+    const refSummary = `${splitRef(m.ref).capability.replace(/^https:\/\//, "")}${m.requiresArgs ? " · needs arguments" : ""}`;
+    return (
+      <MenuItem
+        key={m.ref}
+        className="method-grant-row"
+        data-method={m.ref}
+        data-policy-verdict={verdict || undefined}
+        data-policy-denied={refused ? "true" : undefined}
+        title={policyNote ? `${m.ref} — ${policyNote}` : m.ref}
+        disabled={Boolean(refused)}
+        onClick={refused ? undefined : () => addMethod(m)}
+        sx={{
+          whiteSpace: "normal",
+          alignItems: "flex-start",
+          // Disabled, but its reason reads at full contrast and its
+          // Settings link still follows.
+          "&.Mui-disabled": { opacity: 1, pointerEvents: "auto" },
+        }}
+      >
+        <ListItemIcon sx={{ pt: 0.25 }}>
+          {verdict ? (
+            <WarningAmberIcon fontSize="small" color="warning" />
+          ) : null}
+        </ListItemIcon>
+        <ListItemText
+          sx={{ minWidth: 0 }}
+          primary={methodMenuLabel(m.ref, m.method)}
+          primaryTypographyProps={
+            refused ? { color: "text.disabled" } : undefined
+          }
+          secondary={
+            policyNote ? (
+              <>
+                <Box
+                  component="span"
+                  sx={{ display: "block", overflowWrap: "anywhere" }}
+                >
+                  {refSummary}
+                </Box>
+                <Typography
+                  variant="caption"
+                  color="warning.main"
+                  component="span"
+                  className="method-policy-verdict"
+                  sx={{ display: "block", overflowWrap: "anywhere" }}
+                >
+                  {policyNote} (
+                  <Link
+                    href="/settings/capabilities#capability-policy"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    Settings → Capabilities
+                  </Link>
+                  )
+                </Typography>
+              </>
+            ) : (
+              refSummary
+            )
+          }
+        />
+      </MenuItem>
+    );
+  };
 
   const anyApi = presets.length > 0 || areas.length > 0;
   const anyMethods = (methods || []).length > 0;

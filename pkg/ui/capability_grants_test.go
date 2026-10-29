@@ -127,7 +127,7 @@ func refGrants(caps []string) []string {
 }
 
 func TestCapabilityMethodsListArgumentSchemas(t *testing.T) {
-	ts, _ := grantTestServer(t)
+	ts, client := grantTestServer(t)
 	var methods []ui.CapabilityMethod
 	if code := postJSON(t, ts, "GET", "/api/capability-methods", nil, &methods); code != 200 {
 		t.Fatalf("status %d", code)
@@ -136,14 +136,33 @@ func TestCapabilityMethodsListArgumentSchemas(t *testing.T) {
 		t.Fatalf("methods = %+v", methods)
 	}
 	key := methods[0]
-	if key.Ref != grantTestCap+"#key" || !key.RequiresArgs || !key.Releasable || key.Args == nil {
+	if key.Ref != grantTestCap+"#key" || !key.RequiresArgs || !key.Releasable || key.Args == nil || key.Policy != nil {
 		t.Errorf("key = %+v", key)
 	}
 	if props, _ := key.Args["properties"].(map[string]any); props["account"] == nil {
 		t.Errorf("key's schema lost its properties: %v", key.Args)
 	}
-	if v := methods[1]; v.RequiresArgs || v.Releasable || v.Args != nil {
+	if v := methods[1]; v.RequiresArgs || v.Releasable || v.Args != nil || v.Policy != nil {
 		t.Errorf("viewer = %+v", v)
+	}
+
+	if err := client.SetCapabilityPolicy(context.Background(), model.CapabilityPolicy{
+		Rules: []model.CapabilityPolicyRule{
+			{Capability: grantTestCap + "#key", RunKinds: []string{model.CapabilityRunTask}, Deny: true},
+			{Capability: grantTestCap + "#viewer", RunKinds: []string{model.CapabilityRunTask}, Repos: []string{"acme/*"}, Deny: true},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	methods = nil
+	if code := postJSON(t, ts, "GET", "/api/capability-methods", nil, &methods); code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	if got := methods[0].Policy[model.CapabilityRunTask]; got != model.CapabilityPolicyDenied {
+		t.Errorf("key policy = %v, want task denied", methods[0].Policy)
+	}
+	if got := methods[1].Policy[model.CapabilityRunTask]; got != model.CapabilityPolicyMayBeRefused {
+		t.Errorf("viewer policy = %v, want task may_be_refused", methods[1].Policy)
 	}
 }
 

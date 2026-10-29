@@ -401,6 +401,24 @@ const (
 	CapabilityRunCI      = "ci"
 )
 
+// CapabilityPolicyVerdict is what a CapabilityPolicy says about a
+// capability reference when only the run kind is known (for a grant
+// picker before a run starts).
+type CapabilityPolicyVerdict string
+
+const (
+	// CapabilityPolicyAllowed means every trusted run of the kind is
+	// admitted by the policy.
+	CapabilityPolicyAllowed CapabilityPolicyVerdict = ""
+	// CapabilityPolicyDenied means the policy refuses the reference to
+	// every run of the kind, whatever its repository or trigger event.
+	CapabilityPolicyDenied CapabilityPolicyVerdict = "denied"
+	// CapabilityPolicyMayBeRefused means the policy admits some runs of
+	// the kind and refuses others, depending on the repository or
+	// trigger event.
+	CapabilityPolicyMayBeRefused CapabilityPolicyVerdict = "may_be_refused"
+)
+
 // CapabilitySubject is the run a grant is admitted for.
 type CapabilitySubject struct {
 	Repo *RepoRef
@@ -473,6 +491,86 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 		return fmt.Errorf("the capability policy does not admit %s for this %s", ref, s.describe())
 	}
 	return nil
+}
+
+// VerdictForKind reports what p does to a grant of ref for a trusted run
+// of kind when the repository and trigger event are not yet known:
+// CapabilityPolicyDenied when every run of that kind is refused,
+// CapabilityPolicyMayBeRefused when a repository- or event-dependent rule
+// may refuse it, or CapabilityPolicyAllowed when every trusted run of
+// that kind is admitted.
+func (p CapabilityPolicy) VerdictForKind(ref, kind string, servers ...map[string]protocol.ServerConfig) CapabilityPolicyVerdict {
+	if !IsCapabilityRef(ref) {
+		return CapabilityPolicyAllowed
+	}
+	ref = CapabilityGrantRef(ref)
+	refs := equivalentCapabilityRefs(ref, servers)
+	allOfKind := CapabilitySubject{Kind: kind}
+	anyDeny := false
+	for _, r := range p.Rules {
+		if !r.Deny || !r.namesAny(refs) {
+			continue
+		}
+		if r.covers(allOfKind) {
+			return CapabilityPolicyDenied
+		}
+		if r.coversAnyOfKind(kind) {
+			anyDeny = true
+		}
+	}
+	named := false
+	admitsAll := false
+	admitsSome := false
+	for _, r := range p.Rules {
+		if r.Deny || !r.namesAny(refs) {
+			continue
+		}
+		named = true
+		if r.covers(allOfKind) {
+			admitsAll = true
+		}
+		if r.coversAnyOfKind(kind) {
+			admitsSome = true
+		}
+	}
+	if named {
+		if !admitsSome {
+			return CapabilityPolicyDenied
+		}
+		if !admitsAll {
+			return CapabilityPolicyMayBeRefused
+		}
+	}
+	if anyDeny {
+		return CapabilityPolicyMayBeRefused
+	}
+	return CapabilityPolicyAllowed
+}
+
+// Verdicts reports VerdictForKind across CapabilityRunTask,
+// CapabilityRunProcess and CapabilityRunCI, omitting kinds the policy
+// admits unconditionally. Returns nil when every kind is admitted.
+func (p CapabilityPolicy) Verdicts(ref string, servers ...map[string]protocol.ServerConfig) map[string]CapabilityPolicyVerdict {
+	var out map[string]CapabilityPolicyVerdict
+	for _, kind := range []string{CapabilityRunTask, CapabilityRunProcess, CapabilityRunCI} {
+		if v := p.VerdictForKind(ref, kind, servers...); v != CapabilityPolicyAllowed {
+			if out == nil {
+				out = make(map[string]CapabilityPolicyVerdict)
+			}
+			out[kind] = v
+		}
+	}
+	return out
+}
+
+func (r CapabilityPolicyRule) coversAnyOfKind(kind string) bool {
+	if len(r.RunKinds) > 0 && !containsString(r.RunKinds, kind) {
+		return false
+	}
+	if kind != CapabilityRunCI && len(r.Events) > 0 && !containsString(r.Events, "") {
+		return false
+	}
+	return true
 }
 
 func (r CapabilityPolicyRule) names(ref string) bool {

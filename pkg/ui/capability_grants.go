@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -49,6 +50,11 @@ type CapabilityMethod struct {
 	// grant of this method must name arguments (§2.2.1).
 	RequiresArgs bool `json:"requiresArgs"`
 	Releasable   bool `json:"releasable"`
+	// Policy is the capability policy's verdict on this method for each
+	// run kind it restricts (model.CapabilityRunTask,
+	// model.CapabilityRunProcess, model.CapabilityRunCI). Omitted when
+	// every kind is admitted unconditionally.
+	Policy map[string]model.CapabilityPolicyVerdict `json:"policy,omitempty"`
 	// PolicyRefusal, on a listing asked for one run (?repo=&kind=), is
 	// why the capability policy (§4.2.2) denies this method to that run;
 	// empty where it admits it, and on a listing that names no run.
@@ -63,16 +69,27 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 	if c.Config.CapabilityServers == nil {
 		return out
 	}
+	var policy model.CapabilityPolicy
+	var configured map[string]protocol.ServerConfig
+	if c.Store != nil {
+		if cfg, err := c.Store.GetConfig(ctx); err == nil && cfg != nil {
+			policy = cfg.CapabilityPolicy
+			configured = cfg.MCPServers
+		}
+	}
+	configured, _ = intree.EnsureBuiltins(configured)
 	for _, s := range c.Config.CapabilityServers.Statuses() {
 		for _, m := range s.MethodDetails {
+			ref := s.ID + "#" + m.Name
 			out = append(out, CapabilityMethod{
-				Ref:          s.ID + "#" + m.Name,
+				Ref:          ref,
 				Capability:   s.ID,
 				Method:       m.Name,
 				Description:  m.Description,
 				Args:         m.Args,
 				RequiresArgs: !protocol.ArgsHaveNoRequirement(m.Args),
 				Releasable:   m.Releasable,
+				Policy:       policy.Verdicts(ref, configured),
 			})
 		}
 	}

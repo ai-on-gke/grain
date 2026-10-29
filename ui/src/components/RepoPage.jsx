@@ -1798,6 +1798,7 @@ export default function RepoPage({
                     onRemove={ciCapsMethods.onRemove}
                     disabled={readOnly}
                     idPrefix="repo-ci"
+                    runKind="ci"
                   />
                 </Box>
               </Stack>
@@ -2139,7 +2140,7 @@ export default function RepoPage({
                     onRemove={capsMethods.onRemove}
                     disabled={readOnly}
                     idPrefix="repo-default"
-                    policySubject={{ kind: "task", repo }}
+                    policyRepo={repo}
                   />
                 </Box>
                 <Typography variant="body2" color="text.secondary">

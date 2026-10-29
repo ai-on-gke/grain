@@ -26,7 +26,7 @@ import api from "../api.js";
 export const METHODS_TTL_MS = 30000;
 
 // methodsCache is one entry ({promise, at, settled}) per listing asked
-// for: the plain one, and one per run a picker names (policySubject).
+// for: the plain one, and one per run a picker names (runKind and policyRepo).
 const methodsCache = new Map();
 
 // methodsPath is the listing for subject: with ?kind= (and ?repo=) each

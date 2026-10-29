@@ -92,6 +92,9 @@ type Stats struct {
 	// Budget is the tightest credential's budget, with how fast it is
 	// falling and when it runs out at that rate.
 	Budget BudgetSnapshot `json:"budget"`
+	// Polls summarizes the adaptive poll schedule across tracked pull
+	// requests.
+	Polls PollStats `json:"polls"`
 	// Cache is this transport's ETag cache occupancy and evictions.
 	Cache CacheStats `json:"cache"`
 }
@@ -219,9 +222,14 @@ func atoi(s string) (int, bool) {
 // should not be able to write into the transport's own map.
 func (t *RealTransport) Stats() Stats {
 	t.init()
+	now := time.Now()
 	out := t.counts.snapshot()
 	out.Callers = t.ledgerOf().callerStats()
-	out.Budget = t.ledgerOf().budget(time.Now())
+	out.Budget = t.ledgerOf().budget(now)
+	out.Polls = polls.Stats(now)
+	if out.Budget.Polls.Tracked == 0 {
+		out.Budget.Polls = out.Polls
+	}
 	out.Cache = t.cache.stats()
 	return out
 }

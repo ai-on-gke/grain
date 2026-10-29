@@ -27,8 +27,8 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../api.js";
-import { UsageList } from "./CapabilityServersPanel.jsx";
 import { invalidateCapabilityMethods } from "./capabilityMethods.js";
+import { UsageList } from "./CapabilityServersPanel.jsx";
 
 // CapabilityPolicyEditor is grain_config.capability_policy
 // (model.CapabilityPolicy, docs/capabilities-spec.md §4.2.2): rules that
@@ -208,8 +208,6 @@ export default function CapabilityPolicyEditor({ showError, readOnly }) {
   const load = useCallback(async () => {
     try {
       const data = await api("/api/capability-policy");
-      // The grant pickers' listings say what the policy denies.
-      invalidateCapabilityMethods();
       setRules((data?.policy?.rules || []).map(fromRule));
       setDirty(false);
       setPreview(null);
@@ -238,7 +236,6 @@ export default function CapabilityPolicyEditor({ showError, readOnly }) {
         method: "PUT",
         body: JSON.stringify({ policy: policy() }),
       });
-      // The grant pickers' listings say what the policy denies.
       invalidateCapabilityMethods();
       setRules((data?.policy?.rules || []).map(fromRule));
       setDirty(false);

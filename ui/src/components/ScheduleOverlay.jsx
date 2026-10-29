@@ -1075,7 +1075,7 @@ function ScheduleOverlay({
                 onSubmit={methodGrants.onSubmit}
                 onRemove={methodGrants.onRemove}
                 idPrefix="schedule"
-                policySubject={{ kind: "task", repo }}
+                policyRepo={repo}
               />
               {/* Renders nothing on a deployment that declares no fields,
                 so this form is unchanged for everybody who has never
