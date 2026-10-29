@@ -560,6 +560,58 @@ resolve_image_digest() {
 PINNED_IMAGE="$(resolve_image_digest "${IMAGE}")"
 PINNED_SANDBOX_IMAGE="$(resolve_image_digest "${SANDBOX_IMAGE}")"
 
+# cluster_network_policy_mode prints how the cluster enforces NetworkPolicy:
+# "ADVANCED_DATAPATH" (Dataplane V2), "CALICO" (network policy enforcement on
+# the legacy datapath), or "NONE". GRAIN_GKE_ASSUME_NETWORK_POLICY stands in
+# for the live describe, for tests and dry runs.
+cluster_network_policy_mode() {
+  if [[ -n "${GRAIN_GKE_ASSUME_NETWORK_POLICY:-}" ]]; then
+    printf '%s\n' "${GRAIN_GKE_ASSUME_NETWORK_POLICY}"
+    return 0
+  fi
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    printf 'UNKNOWN\n'
+    return 0
+  fi
+  local datapath enabled
+  datapath="$(gcloud container clusters describe "${CLUSTER}" --project="${PROJECT}" --region="${REGION}" \
+    --format='value(networkConfig.datapathProvider)' 2>/dev/null || true)"
+  enabled="$(gcloud container clusters describe "${CLUSTER}" --project="${PROJECT}" --region="${REGION}" \
+    --format='value(networkPolicy.enabled)' 2>/dev/null || true)"
+  if [[ "${datapath}" == "ADVANCED_DATAPATH" ]]; then
+    printf 'ADVANCED_DATAPATH\n'
+  elif [[ "${enabled,,}" == "true" ]]; then
+    printf 'CALICO\n'
+  else
+    printf 'NONE\n'
+  fi
+}
+
+# require_network_policy_enforcement refuses to adopt a cluster that does
+# not enforce NetworkPolicy. On such a cluster the policies in
+# deploy/kubernetes/gke/networkpolicy.yaml are accepted by the API server
+# and then ignored: the sandbox-access acceptor (4244) is open to every pod,
+# `network: none` sandboxes get the internet, and sandboxes reach node and
+# pod CIDRs -- while the daemon runs with -k8s-network-policy and believes
+# otherwise (docs/design/grain-on-gke.md, Security point 3). Neither
+# Dataplane V2 nor Calico can be switched on here without recreating nodes,
+# so this stops rather than changing the cluster.
+require_network_policy_enforcement() {
+  local mode
+  mode="$(cluster_network_policy_mode)"
+  case "${mode}" in
+    ADVANCED_DATAPATH | CALICO)
+      log "  Adopted cluster '${CLUSTER}' enforces NetworkPolicy (${mode})."
+      ;;
+    UNKNOWN)
+      log "  Would verify that adopted cluster '${CLUSTER}' enforces NetworkPolicy (Dataplane V2 or network policy enforcement) and refuse otherwise."
+      ;;
+    *)
+      die "refusing to adopt cluster '${CLUSTER}': it does not enforce NetworkPolicy (neither Dataplane V2 nor --enable-network-policy), so grain's sandbox NetworkPolicies would be ignored; enable network policy enforcement on the cluster (gcloud container clusters update ${CLUSTER} --update-addons=NetworkPolicy=ENABLED, then --enable-network-policy) or let this script create a new cluster"
+      ;;
+  esac
+}
+
 # Step 1: Create (or adopt) the GKE cluster, node pools, Workload Identity,
 # namespace, PriorityClasses, and ResourceQuota.
 stage_cluster() {
@@ -618,6 +670,7 @@ stage_cluster() {
     fi
 
     if [[ "${cluster_exists}" == "true" ]]; then
+      require_network_policy_enforcement
       log "  Adopting existing GKE cluster '${CLUSTER}' and ensuring Workload Identity, Gateway API, and Secret Manager CSI..."
       run_cmd gcloud container clusters update "${CLUSTER}" \
         --project="${PROJECT}" \
