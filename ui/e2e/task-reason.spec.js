@@ -111,13 +111,13 @@ test("a task row says its sub-case, and a stuck one offers the control that ends
   ).toHaveText("Cancel");
 
   // The merge-queue row says its own sub-case beside the queue's phrase.
-  const batched = page
-    .locator(".task-activity-reason", { hasText: "batch run" })
+  const rechecking = page
+    .locator(".task-activity-reason", { hasText: "grain running" })
     .first();
-  await expect(batched).toBeVisible();
-  await expect(batched.locator("..")).toHaveAttribute(
+  await expect(rechecking).toBeVisible();
+  await expect(rechecking.locator("..")).toHaveAttribute(
     "title",
-    /batching\/batch_run\nDriven by /,
+    /re-checking this change on top of main[\s\S]*waiting_ci\/grain_running\nDriven by /,
   );
 
   if (shots) {
