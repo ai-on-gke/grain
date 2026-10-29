@@ -1196,6 +1196,20 @@ describe("the whole report, as the Metrics pane draws it", () => {
     expect(screen.queryByText(/nothing to report over this window/)).toBeNull();
   });
 
+  // ...and not there to a screen reader either: the pane's list counts
+  // only the sections that drew something, rather than announcing an
+  // empty item for each one that did not.
+  it("leaves a silent section out of the list's items", async () => {
+    api.mockResolvedValue(report());
+    render(<ReportBoard showError={() => {}} />);
+    await screen.findByText("Throughput");
+    const items = within(screen.getByRole("list")).getAllByRole("listitem");
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item.textContent.trim()).not.toBe("");
+    }
+  });
+
   it("heads every rendered section at h3", async () => {
     api.mockResolvedValue(
       withCensus({

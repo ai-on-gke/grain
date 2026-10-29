@@ -580,7 +580,7 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 	if cfg.Builtin != "" && len(methods) == 0 {
 		schema := server.ConfigSchema
 		_ = server.Close()
-		reason := "it offers no methods until it is configured: open Configure"
+		reason := "it offers no methods until it is configured: fill in its Server settings (Edit server settings, under Settings → Capabilities)"
 		var prevState State
 		r.set(id, func(e *entry) {
 			prevState = e.state

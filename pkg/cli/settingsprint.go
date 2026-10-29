@@ -276,6 +276,12 @@ func (p *printer) settings(s ui.Settings) {
 	// whether its sandbox contract is one this grain still drives: the
 	// copy of Settings -> Sandboxes an operator can read from the host.
 	fmt.Printf("sandbox image:   %s\n", orDefaultValue(s.SandboxImage, s.SandboxImageDefault))
+	if s.SandboxImageMirror != "" {
+		fmt.Printf("sandbox image mirror: %s\n", s.SandboxImageMirror)
+	}
+	if s.K8sGranuleImageWarning != "" {
+		fmt.Printf("  WARNING: %s\n", s.K8sGranuleImageWarning)
+	}
 	if s.SandboxBaseImage != "" {
 		fmt.Printf("sandbox base:    %s (sandbox contract v%d, oldest supported v%d)\n",
 			s.SandboxBaseImage, s.SandboxContractVersion, s.SandboxMinimumContractVersion)

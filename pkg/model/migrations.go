@@ -346,6 +346,13 @@ var Migrations = []Migration{
 		Description: "persist sandbox-access token hashes and expiry times across restarts",
 		Statements:  []string{sandboxAccessTable},
 	},
+	{
+		Version:     63,
+		Description: "add sandbox_image_mirror to grain_config for mirroring stamped sandbox images",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `sandbox_image_mirror` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

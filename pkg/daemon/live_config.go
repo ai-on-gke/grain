@@ -132,6 +132,8 @@ type LiveConfig struct {
 	// rather than the next restart.
 	sandboxImages     *sandboximage.Source
 	stockSandboxImage string
+	baseStockImage    string
+	stockMirrorRepo   string
 	// sandboxImageLabels reads a custom image's labels for the contract
 	// line logged when it changes; nil logs nothing.
 	sandboxImageLabels sandboximage.LabelReader
@@ -177,7 +179,8 @@ func NewLiveConfig(store *model.Store, sandboxes orchestrator.Sandboxes, cfg Con
 // of that constructor is a test that has no sandbox image at all, and
 // only the daemon's own start has one to give.
 func (l *LiveConfig) WithSandboxImages(src *sandboximage.Source, stock string, labels sandboximage.LabelReader) *LiveConfig {
-	l.sandboxImages, l.stockSandboxImage, l.sandboxImageLabels = src, stock, labels
+	l.sandboxImages, l.stockSandboxImage, l.baseStockImage, l.sandboxImageLabels = src, stock, stock, labels
+	l.stockMirrorRepo = sandboxImageMirrorRepo(l.Applied)
 	return l
 }
 
@@ -593,6 +596,16 @@ func (l *LiveConfig) applySandboxInstance(ctx context.Context) {
 func (l *LiveConfig) applySandboxImage(ctx context.Context, cfg Config) {
 	if l.stockSandboxImage == "" {
 		return
+	}
+	if mirrorRepo := sandboxImageMirrorRepo(cfg); mirrorRepo != l.stockMirrorRepo {
+		l.stockMirrorRepo = mirrorRepo
+		if mirrorRepo != "" || l.baseStockImage == "" {
+			if nextStock := stockSandboxImageFor(cfg); nextStock != "" {
+				l.stockSandboxImage = nextStock
+			}
+		} else {
+			l.stockSandboxImage = l.baseStockImage
+		}
 	}
 	custom := customSandboxImageFor(cfg)
 	var changed bool

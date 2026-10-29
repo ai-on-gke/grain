@@ -158,6 +158,34 @@ func (r *SandboxRecreations) lookup(taskID string) *sandboxRecreation {
 	return r.live[taskID]
 }
 
+// lookupBySandbox returns the registered run whose sandbox is named
+// sandboxName, if there is one.
+func (r *SandboxRecreations) lookupBySandbox(sandboxName string) *sandboxRecreation {
+	if r == nil || sandboxName == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, rec := range r.live {
+		if rec != nil && rec.sandbox != nil && rec.sandbox.Name() == sandboxName {
+			return rec
+		}
+	}
+	return nil
+}
+
+// RecreateBySandbox rebuilds the sandbox of the live run holding sandboxName
+// and restores its setup. It reports ok=false when no live run is registered
+// under sandboxName.
+func (r *SandboxRecreations) RecreateBySandbox(ctx context.Context, sandboxName string) (SandboxRecreation, bool, error) {
+	rec := r.lookupBySandbox(sandboxName)
+	if rec == nil {
+		return SandboxRecreation{}, false, nil
+	}
+	out, err := rec.recreate(ctx)
+	return out, true, err
+}
+
 // setMaterialized records the capabilities RunDispatch materialized for
 // taskID's run, so a rebuild can write their sandbox-side placements
 // back into the new sandbox.
