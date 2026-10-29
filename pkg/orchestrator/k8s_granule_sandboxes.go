@@ -49,6 +49,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 )
 
 // DefaultGranuleForwardBackoff is how long K8sGranuleSandboxes first
@@ -172,6 +173,11 @@ type K8sGranuleConfig struct {
 	// edit_file/write_file operate in inside each guest -- the granule
 	// VM's own account home, not anything about the pod.
 	Workspace string
+	// Access, when set, gives every pod credentials for granule's
+	// dial-out sandbox access channel and points its wrapper at grain's
+	// acceptor (k8s_granule_access.go). Nil builds pods exactly as
+	// before.
+	Access *K8sGranuleAccess
 	// ReadyTimeout bounds how long Acquire waits for a freshly created
 	// pod's guest to answer "granule ready" before giving up
 	// (DefaultK8sGranuleReadyTimeout if zero). Dominated by the image
@@ -457,11 +463,12 @@ func (k *K8sGranuleSandboxes) Acquire(ctx context.Context, sandbox string, shape
 	}
 	resolved := shape.orDefault(k.defaultShape())
 	defer k.markBuilding(name)()
-	if err := k.create(ctx, name, resolved); err != nil {
+	if err := k.create(ctx, sandbox, name, resolved); err != nil {
 		k.deleteQuietly(ctx, name)
 		return nil, err
 	}
 	if err := k.waitReady(ctx, name); err != nil {
+		k.revokeAccess(sandbox)
 		k.deleteQuietly(ctx, name)
 		return nil, unschedulableOutcome(ctx, k.fit, name, k.podShape(resolved), err)
 	}
@@ -474,6 +481,7 @@ func (k *K8sGranuleSandboxes) Acquire(ctx context.Context, sandbox string, shape
 		delete(k.live, sandbox)
 		k.mu.Unlock()
 		sb.stopForward()
+		k.revokeAccess(sandbox)
 		k.deleteQuietly(ctx, name)
 		return nil, err
 	}
@@ -522,7 +530,13 @@ func (k *K8sGranuleSandboxes) Readopt(ctx context.Context, sandbox string) (Sand
 // first and waiting for that delete to finish -- K8sSandboxes.create's
 // own reasoning: a name is not free again until the old object has
 // actually left the cluster.
-func (k *K8sGranuleSandboxes) create(ctx context.Context, name string, shape Shape) error {
+//
+// With K8sGranuleConfig.Access set, it also mints sandbox's access
+// credentials, points the wrapper at the acceptor, and puts the
+// credentials in the Secret grain-access-<pod>, owned by the pod. The
+// Secret is created after the pod, because its ownerReference needs the
+// pod's uid; the kubelet holds the container until it can be mounted.
+func (k *K8sGranuleSandboxes) create(ctx context.Context, sandbox, name string, shape Shape) error {
 	if err := k.client.Delete(ctx, name, true); err != nil {
 		return fmt.Errorf("orchestrator: deleting stale granule sandbox pod %q before rebuilding it: %w", name, err)
 	}
@@ -530,10 +544,30 @@ func (k *K8sGranuleSandboxes) create(ctx context.Context, name string, shape Sha
 	if err := admitPod(ctx, k.fit, name, podShape); err != nil {
 		return err
 	}
-	if err := k.priority.createPod(ctx, k.pods(), name, podShape, k.podOptions(shape), k.cfg.StrictPriorityClasses); err != nil {
+	opts := k.podOptions(shape)
+	creds, err := k.mintAccess(sandbox, name, &opts)
+	if err != nil {
+		return err
+	}
+	if creds != nil {
+		// The old pod's Secret is garbage-collected with it, but not
+		// necessarily yet; the name has to be free for create.
+		if err := k.client.DeleteSecret(ctx, sandboxaccess.SecretName(name)); err != nil {
+			k.revokeAccess(sandbox)
+			return fmt.Errorf("orchestrator: %w", err)
+		}
+	}
+	if err := k.priority.createPod(ctx, k.pods(), name, podShape, opts, k.cfg.StrictPriorityClasses); err != nil {
+		k.revokeAccess(sandbox)
 		return fmt.Errorf("orchestrator: creating granule sandbox pod %q: %w", name, err)
 	}
 	k.fit.Reserve(name, podShape.Requests())
+	if creds != nil {
+		if err := k.createAccessSecret(ctx, name, creds); err != nil {
+			k.revokeAccess(sandbox)
+			return fmt.Errorf("orchestrator: granule sandbox pod %q: %w", name, err)
+		}
+	}
 	return nil
 }
 
@@ -937,7 +971,7 @@ func (s *k8sGranuleSandbox) RunInSandbox(ctx context.Context, argv []string, std
 func (s *k8sGranuleSandbox) Rebuild(ctx context.Context) error {
 	s.stopForward()
 	defer s.owner.markBuilding(s.podName)()
-	if err := s.owner.create(ctx, s.podName, s.shape.orDefault(s.owner.defaultShape())); err != nil {
+	if err := s.owner.create(ctx, s.name, s.podName, s.shape.orDefault(s.owner.defaultShape())); err != nil {
 		return err
 	}
 	if err := s.owner.waitReady(ctx, s.podName); err != nil {
@@ -952,6 +986,7 @@ func (s *k8sGranuleSandbox) Release(ctx context.Context) error {
 	s.owner.mu.Lock()
 	delete(s.owner.live, s.name)
 	s.owner.mu.Unlock()
+	s.owner.revokeAccess(s.name)
 	s.stopForward()
 	s.owner.fit.Release(s.podName)
 	// Detached from ctx: a caller releasing because its run was cancelled

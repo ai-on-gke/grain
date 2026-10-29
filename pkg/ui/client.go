@@ -2144,6 +2144,14 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	// The capability catalogue (settings/capabilities.yml) refuses what
+	// it does not admit here, and names what only a person may grant:
+	// a proposal or an agent's own filing holding one is left for a
+	// person to approve, whatever permission it would otherwise inherit.
+	grants, catalogueNeedsPerson, err := c.catalogueFilingGrants(ctx, grants, target, req.TemplateID)
+	if err != nil {
+		return Task{}, err
+	}
 	customFields, err := c.normalizeCustomFields(ctx, req.CustomFields)
 	if err != nil {
 		return Task{}, err
@@ -2296,6 +2304,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			needsPersonWhy = why
 		}
 	}
+	catalogueHold := false
+	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.actor(ctx).Kind == model.PrincipalAgent) {
+		why := model.CatalogueRequiresPersonNote(catalogueNeedsPerson)
+		if needsPersonWhy == "" {
+			needsPersonWhy = why
+		} else {
+			needsPersonWhy += "; " + why
+		}
+		if proposedBy == nil {
+			catalogueHold, req.Approved = true, false
+		}
+	}
 	autoMerge, autoSubmit, sessionQueued := req.AutoMerge, false, false
 	var limitNote, ungrantedNote, heldNote, refusal string
 	var escalated []string
@@ -2443,6 +2463,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// templateId (fromTemplate), and that must not turn propose_task into
 	// a way to approve its own work.
 	switch {
+	case catalogueHold:
+		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
 	case req.Approved || (req.Interactive && proposedBy == nil && c.actor(ctx).Kind != model.PrincipalAgent):
 		task.Approval = &model.Attribution{Actor: c.actor(ctx)}
 		task.ApprovedAt = &now
@@ -4048,6 +4070,12 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			return Task{}, err
 		}
 	}
+	// Read outside the closure, which may run more than once: the
+	// catalogue a retarget is judged against (settings/capabilities.yml).
+	catalogue, err := c.capabilityCatalogue(ctx)
+	if err != nil {
+		return Task{}, err
+	}
 	submitted, submittedAt, submittedHead := false, c.now(), ""
 	if req.AutoMerge != nil && *req.AutoMerge {
 		// Read outside the closure: it may ask GitHub, and the
@@ -4087,6 +4115,13 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				allowed := c.teamTargetRepos(ctx, model.DefaultTeamID)
 				if !targetAllowed(allowed, *target) {
 					return validationErrorf("%s", model.OffAllowlistRefusal(*target, allowed, "this task cannot be moved onto it"))
+				}
+				if catalogue != nil {
+					gc := model.TaskGrantContext(*task)
+					gc.Repo = target
+					if _, err := catalogue.ValidateGrants(gc); err != nil {
+						return validationErrorf("this task cannot be moved onto %s: %v", target, err)
+					}
 				}
 			}
 			task.Target = target
@@ -4432,6 +4467,11 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 	}
 	if _, ok := c.capabilityByID(capabilityID); attach && !ok {
 		return validationErrorf("%s", capabilityRefusal(capabilityID))
+	}
+	if attach {
+		if err := c.catalogueEditRefusalFor(ctx, id, capabilityID); err != nil {
+			return err
+		}
 	}
 	// Rebuilding the grant set inside the closure is what lets two people
 	// attach two different capabilities without one losing: a retry runs

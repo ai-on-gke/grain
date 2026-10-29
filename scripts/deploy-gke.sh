@@ -738,6 +738,13 @@ stage_dependencies() {
       --role="roles/secretmanager.secretAccessor" \
       --quiet
   done
+  # The sandbox-access CA is the one secret grain writes: it generates the CA
+  # and adds the first version on its first start (-sandbox-access-ca-secret).
+  run_cmd gcloud secrets add-iam-policy-binding grain-sandbox-ca-key \
+    --project="${PROJECT}" \
+    --member="serviceAccount:${GSA_EMAIL}" \
+    --role="roles/secretmanager.secretVersionAdder" \
+    --quiet
 
   if [[ "${POSTGRES_MODE}" == "cloudsql" ]]; then
     log "  Ensuring Cloud SQL for PostgreSQL 16 instance '${CLOUDSQL_INSTANCE}' (${CLOUDSQL_TIER})..."
@@ -796,7 +803,7 @@ stage_dependencies() {
 }
 
 # Step 3: Render and apply the GKE Kustomize overlay (Deployment/grain,
-# Deployment/grain-webhook, Service/grain-sandbox, Service/grain-access:7443,
+# Deployment/grain-webhook, Service/grain-sandbox, Service/grain-access:4244,
 # Service/grain-hostd, Service/grain-webhook, ServiceAccount/grain-sandbox,
 # SecretProviderClass/grain-secrets, and NetworkPolicies) with digest-pinned images.
 stage_deploy_grain() {
@@ -1213,7 +1220,7 @@ stage_rollback() {
 # Confirms:
 # 1. The UI answers through IAP (and refuses unauthenticated requests).
 # 2. hostd is connected and healthy.
-# 3. A test sandbox runs a command over the granule dial-out channel (grain-access:7443).
+# 3. A test sandbox runs a command over the granule dial-out channel (grain-access:4244).
 # 4. The Kubernetes API server audit log shows zero exec/attach/portforward calls for that run.
 stage_check() {
   log "Stage 7 (--check): Verifying GKE deployment at ${GATEWAY_URL}..."
@@ -1251,7 +1258,7 @@ stage_check() {
   probe_id="gke-check-$(date +%s)"
   local start_ts
   start_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  log "  Check 3/4: Running test sandbox command (${probe_id}) over granule dial-out channel (Service/grain-access:7443)..."
+  log "  Check 3/4: Running test sandbox command (${probe_id}) over granule dial-out channel (Service/grain-access:4244)..."
   run_cmd kubectl -n "${NAMESPACE}" exec deploy/grain -c grain -- \
     /usr/local/bin/grain sandbox probe --id="${probe_id}" --access=dialout -- echo "dialout-ok:${probe_id}"
 

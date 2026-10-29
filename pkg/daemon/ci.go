@@ -446,6 +446,9 @@ func (g *CiGrantReservations) Acquire(ctx context.Context, req ci.SandboxRequest
 	if err := ciPolicyRefusal(g.Policy, req, g.Log); err != nil {
 		return nil, err
 	}
+	if err := ciCatalogueRefusal(ctx, g.Config, req, g.Log); err != nil {
+		return nil, err
+	}
 	repo, err := model.ParseRepo(req.Repo)
 	if err != nil {
 		return nil, err
@@ -1250,11 +1253,26 @@ func ciTrustedScheduleAdmits(provider model.CapabilityProvider, event ci.Event, 
 // (model.Store.EffectiveRepoConfig), which holds what the default team's
 // team_repo_config layered over it until schema 23. Repo spelling is
 // case-insensitive,
-// including requests coming directly from the MCP CI tool.
+// including requests coming directly from the MCP CI tool. The capability
+// catalogue's deployment-wide CI defaults (settings/capabilities.yml
+// defaults.ci) join every repository's own list.
 func CiRepoCapabilities(store *model.Store) func(context.Context, string) ([]string, error) {
 	return func(ctx context.Context, name string) ([]string, error) {
 		eff, err := ciRepoConfig(ctx, store, name)
-		return eff.CICapabilities, err
+		if err != nil {
+			return eff.CICapabilities, err
+		}
+		cfg, err := store.GetConfig(ctx)
+		if err != nil || cfg == nil || cfg.CapabilityPolicy.Catalogue == nil {
+			return eff.CICapabilities, err
+		}
+		out := append([]string{}, eff.CICapabilities...)
+		for _, id := range cfg.CapabilityPolicy.Catalogue.Defaults.CI {
+			if !slices.Contains(out, id) {
+				out = append(out, id)
+			}
+		}
+		return out, nil
 	}
 }
 
