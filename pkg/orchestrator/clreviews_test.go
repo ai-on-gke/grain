@@ -251,3 +251,29 @@ func TestAProposalCannotAskForAReviewGrant(t *testing.T) {
 		t.Errorf("proposal body = %q, want a note on the refused grant", proposal.Body)
 	}
 }
+
+// Only a review grain filed clears a snapshot: a review task that holds a
+// review grant but lacks grain's own record of filing it
+// (model.LinkCLReviewOf) clears nothing, however cleanly it finishes.
+func TestOnlyAReviewGrainFiledClearsACLSnapshot(t *testing.T) {
+	provider, store, ctx := reviewedCL(t, "54", 1)
+	grant, err := provider.ReviewGrant("d", model.Task{ID: "54"}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	impostor := model.Task{ID: "55", Title: "review", Intent: model.IntentImplement,
+		Origin: model.Origin{Reason: model.ReasonReview},
+		Grants: []model.Grant{{Capability: grant}},
+		Links:  []model.Link{{Kind: model.LinkProposedBy, Target: "54"}}}
+	if err := store.PutTask(ctx, impostor); err != nil {
+		t.Fatal(err)
+	}
+	_, client := newSim(t, "acme", "widgets", "main")
+	result := toolResult(agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "looks right"}})
+	if err := orchestrator.ProcessResult(ctx, store, client, impostor, result, "55-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	if got := linksOf(reloaded(t, ctx, store, "54"), model.LinkCLReviewCleared); len(got) != 0 {
+		t.Errorf("cleared = %v, want nothing cleared by a review grain did not file", got)
+	}
+}

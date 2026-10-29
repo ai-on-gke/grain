@@ -110,3 +110,20 @@ func TestSubmitWithApprovalsOnACLWaitsForItsRequiredReviews(t *testing.T) {
 		t.Fatal("Submit did not go through once the gate allowed it")
 	}
 }
+
+// An agent's live proposal may not ask for a review grant
+// (model.ReviewOfArg): only grain files a task holding one.
+func TestCreateTaskRefusesAProposalAskingForAReviewGrant(t *testing.T) {
+	client, store, ctx := testClient(t)
+	if err := store.PutTask(ctx, model.Task{ID: "95", Title: "parent", Intent: model.IntentImplement}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "review it myself", Description: "d", ProposedBy: "95",
+		Capabilities: &[]string{`https://caps.example/workspace#workspace={"readonly":true,"review_of":"95","snapshot":1}`},
+	})
+	var ve *ui.ValidationError
+	if !errors.As(err, &ve) || !strings.Contains(err.Error(), model.ReviewOfArg) {
+		t.Fatalf("CreateTask = %v, want a validation error naming %s", err, model.ReviewOfArg)
+	}
+}
