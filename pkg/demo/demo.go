@@ -248,6 +248,7 @@ func Run(opts Options) error {
 		return fmt.Errorf("grain demo: opening the throwaway store: %v", err)
 	}
 	defer db.Close()
+	cfg.SourceDB, cfg.DBDriver = db, "sqlite"
 
 	// The one piece of this demo that is not a row in the store: the
 	// System pane's Logs tab, which reads ui.Config.Logs rather than
@@ -536,14 +537,15 @@ func Run(opts Options) error {
 		go runDemoReviewQuestions(context.Background(), store, interval)
 	}
 	var srv http.Handler = ui.NewServerWithClient(client)
-	if scheduledWorkflows != nil {
-		srv = scheduledWorkflowsDemoHandler(srv, cfg.CI.(*demoFakeCI), githubSimRepo)
+	if fakeCI, ok := cfg.CI.(*demoFakeCI); ok {
+		srv = scheduledWorkflowsDemoHandler(srv, fakeCI, githubSimRepo)
 	}
 	if observabilityBackend != nil {
 		srv = observabilityDemoHandler(srv, observabilityBackend)
 	}
 	if gitProxy != nil {
 		srv = gitProxyDemoHandler(srv, gitProxy)
+		gitProxy.wireServer(srv, client, cfg)
 	}
 	if baseBranch != nil {
 		srv = baseBranchDemoHandler(srv, baseBranch)

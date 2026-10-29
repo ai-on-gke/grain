@@ -688,3 +688,74 @@ func TestGrepMatchLimitListJSONAndGlob(t *testing.T) {
 		t.Errorf("glob = %q, want pkg/sub/many.txt", got)
 	}
 }
+
+func TestNewRedactorAppliesToReadRedactedGrepAndGrainLog(t *testing.T) {
+	t.Parallel()
+
+	store := ci.NewRunStore(5)
+	const secretVal = "super-secret-custom-token-998877"
+	store.Put(ci.Run{
+		ID:         "run-redact",
+		Repo:       "bwsalmon/grain",
+		Ref:        "main",
+		Conclusion: ci.ConclusionFailure,
+		Jobs: []ci.JobRun{
+			{
+				Name:       "go",
+				Conclusion: ci.ConclusionFailure,
+				Steps: []ci.StepRun{
+					{
+						Name:       "Test",
+						Conclusion: ci.ConclusionFailure,
+						Output:     "prefix line\nusing secret=" + secretVal + " in step\nsuffix line\n",
+					},
+				},
+			},
+		},
+	})
+
+	var mu sync.Mutex
+	var secrets []redact.KnownValue
+	srv := &Server{
+		CIStore: store,
+		NewRedactor: func() *redact.Redactor {
+			mu.Lock()
+			defer mu.Unlock()
+			return redact.New(append([]redact.KnownValue(nil), secrets...))
+		},
+	}
+
+	// Secret added after server construction (simulating runtime secret rotation/addition).
+	mu.Lock()
+	secrets = append(secrets, redact.KnownValue{Label: "secret custom", Value: secretVal})
+	mu.Unlock()
+
+	scope := Scope{TaskRepo: "bwsalmon/grain", MayReadCI: true, MayReadGrainLog: true}
+	node, err := srv.Resolve(context.Background(), scope, "ci", "bwsalmon/grain/run-redact/go/Test.log")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	copied, err := srv.ReadRedacted(node, -1)
+	if err != nil {
+		t.Fatalf("ReadRedacted: %v", err)
+	}
+	if strings.Contains(copied, secretVal) || !strings.Contains(copied, "[redacted: secret custom]") {
+		t.Errorf("ReadRedacted did not apply NewRedactor: %q", copied)
+	}
+
+	grepRes, err := srv.Grep(context.Background(), scope, "ci", "bwsalmon/grain/run-redact/go/Test.log", GrepOptions{
+		Pattern: "using secret",
+	})
+	if err != nil {
+		t.Fatalf("Grep: %v", err)
+	}
+	if strings.Contains(grepRes.Output, secretVal) || !strings.Contains(grepRes.Output, "[redacted: secret custom]") {
+		t.Errorf("Grep did not apply NewRedactor: %q", grepRes.Output)
+	}
+
+	logOut := srv.RedactGrainLogText("daemon started with token=" + secretVal + "\n")
+	if strings.Contains(logOut, secretVal) || !strings.Contains(logOut, "[redacted: secret custom]") {
+		t.Errorf("RedactGrainLogText did not apply NewRedactor: %q", logOut)
+	}
+}
+

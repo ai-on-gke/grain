@@ -55,6 +55,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -2577,30 +2578,52 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		apiGrants := model.APIGrantsOf(grants)
 		mayReadCI := grants.Has(grainci.CapabilityName) || grants.Has(selfdebug.CapabilityName) || apiGrants.Has("ci:read")
 		mayReadAllCI := ciScope.AllRepos || apiGrants.Allows("ci:read", "")
-		var allowedCIRepos map[string]bool
+		allowedCIRepos := make(map[string]bool)
+		addAllowedRepo := func(r string) {
+			r = strings.TrimSpace(r)
+			if r == "" {
+				return
+			}
+			allowedCIRepos[r] = true
+			allowedCIRepos[strings.ToLower(r)] = true
+		}
+		addAllowedRepo(ciScope.Repo)
+		addAllowedRepo(taskDetail.Task.Repo)
+		for _, r := range taskDetail.Task.Reads {
+			addAllowedRepo(r)
+		}
+		for _, w := range taskDetail.Task.Writes {
+			addAllowedRepo(w.Repo)
+		}
 		for _, name := range grants {
 			parsed, isAPI, err := model.ParseAPIGrant(name)
 			if !isAPI || err != nil || parsed.Repo == "" || !slices.Contains(parsed.Scopes, "ci:read") {
 				continue
 			}
-			if allowedCIRepos == nil {
-				allowedCIRepos = make(map[string]bool)
-			}
-			allowedCIRepos[parsed.Repo] = true
-			allowedCIRepos[strings.ToLower(parsed.Repo)] = true
+			addAllowedRepo(parsed.Repo)
 		}
 		registry.Register(mcp.NewNamespaceTools(mcp.NamespaceToolsConfig{
 			Scope: namespace.Scope{
-				TaskRepo:     ciScope.Repo,
-				MayReadCI:    mayReadCI,
-				MayReadAllCI: mayReadAllCI,
-				AllowedRepos: allowedCIRepos,
-				MayReadSrc:   grants.Has(selfdebug.CapabilityName),
+				TaskIDStr:        strings.TrimSpace(*taskID),
+				TaskRepo:         ciScope.Repo,
+				MayReadCI:        mayReadCI,
+				MayReadAllCI:     mayReadAllCI,
+				AllowedRepos:     allowedCIRepos,
+				MayReadSrc:       grants.Has(selfdebug.CapabilityName),
+				MayReadPlaybooks: grants.Has(bootstrap.CapabilityName) || grants.Has(selfdebug.CapabilityName),
+				MayReadAllTasks:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("tasks:read", ""),
+				MayReadFullConfig: grants.Has(selfdebug.CapabilityName) ||
+					apiGrants.Allows("settings:read", "") || apiGrants.Allows("repos:read", ""),
+				MayReadAllMemory: grants.Has(memory.CapabilityName) || apiGrants.Allows("memory:read", ""),
+				MayReadMetrics:   grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", ""),
+				MayReadPipeline:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", "") || apiGrants.Allows("dispatch:read", ""),
+				MayReadHealth:    grants.Has(deploymenthealth.CapabilityName) || apiGrants.Allows("deployment:read", ""),
+				MayReadGrainLog:  grants.Has(grainlog.CapabilityName),
 			},
 			CIReader:    DaemonGrainCI{Client: client, TaskID: *taskID},
 			ArtifactDir: ciArtifactDir(*dataDir),
 			SrcDir:      *grainSrcDir,
-			Redactor:    buildNamespaceRedactor(*dataDir),
+			NewRedactor: func() *redact.Redactor { return buildNamespaceRedactor(*dataDir) },
 			WriteFile:   writeFile,
 		})...)
 

@@ -65,7 +65,11 @@ import (
 // for the in-process client the sandbox namespace reads through. The UI
 // server publishes it once built (startUIServer); until then -- and on a
 // daemon that never builds one -- every request fails, saying so.
-var LiveAPI = &inProcessAPI{}
+var LiveAPI = &InProcessAPI{}
+
+// InProcessAPI is an http.RoundTripper and http.Handler backed by an
+// atomically published http.Handler.
+type InProcessAPI = inProcessAPI
 
 type inProcessAPI struct {
 	handler atomic.Pointer[http.Handler]
@@ -127,8 +131,8 @@ func inProcessAPIClient(api http.RoundTripper) *ui.HTTPClient {
 	}
 }
 
-// sandboxNamespaceConfig is what wireSandboxNamespace needs of the daemon.
-type sandboxNamespaceConfig struct {
+// SandboxNamespaceConfig is what WireSandboxNamespace needs of the daemon.
+type SandboxNamespaceConfig struct {
 	DataDir      string
 	Store        *model.Store
 	GithubHost   string
@@ -136,15 +140,25 @@ type sandboxNamespaceConfig struct {
 	// API is what the readers' requests are answered by; LiveAPI in
 	// the daemon.
 	API http.RoundTripper
+	// Issues is an optional IssueReader override (e.g. githubsim in grain demo).
+	Issues mcp.IssueReader
+	// GrainLogSources overrides grainlog.DefaultSources when non-empty (e.g. in grain demo).
+	GrainLogSources []grainlog.Source
 }
 
-// wireSandboxNamespace fills ns's task://, memory://, deploy:// and
+type sandboxNamespaceConfig = SandboxNamespaceConfig
+
+// WireSandboxNamespace fills ns's task://, memory://, deploy:// and
 // config:// providers, and returns the backend of the proxy's /cli/
 // issue and database reads.
+func WireSandboxNamespace(ns *namespace.Server, cfg SandboxNamespaceConfig) *SandboxCLIBackend {
+	return wireSandboxNamespace(ns, cfg)
+}
+
 func wireSandboxNamespace(ns *namespace.Server, cfg sandboxNamespaceConfig) *sandboxCLIBackend {
 	client := inProcessAPIClient(cfg.API)
 	ns.Tasks = mcp.NamespaceTasks{Reader: namespaceTaskReader{DaemonTasks: DaemonTasks{Client: client}, store: cfg.Store}}
-	ns.Deploy = sandboxDeploy{client: client, stateDir: StateRepoDir(cfg.DataDir), secretsDir: SecretsDir(cfg.DataDir)}
+	ns.Deploy = sandboxDeploy{client: client, stateDir: StateRepoDir(cfg.DataDir), secretsDir: SecretsDir(cfg.DataDir), logSources: cfg.GrainLogSources}
 	if cfg.Store != nil {
 		ns.Memory = sandboxMemory{store: cfg.Store}
 		ns.Config = sandboxRepoConfig{store: cfg.Store}
@@ -186,6 +200,7 @@ func (r namespaceTaskReader) AttemptPrompt(ctx context.Context, id string, attem
 type sandboxDeploy struct {
 	client               *ui.HTTPClient
 	stateDir, secretsDir string
+	logSources           []grainlog.Source
 }
 
 var (
@@ -280,7 +295,7 @@ func (d sandboxDeploy) ListStateTables(ctx context.Context) ([]string, error) {
 }
 
 func (d sandboxDeploy) ReadGrainLog(ctx context.Context, source string) (string, error) {
-	tool := grainlog.Tools(grainlog.Config{Redactor: grainLogRedactor(d.secretsDir)})[0]
+	tool := grainlog.Tools(grainlog.Config{Redactor: grainLogRedactor(d.secretsDir), Sources: d.logSources})[0]
 	args := map[string]any{}
 	if source != "" {
 		args["source"] = source
@@ -289,8 +304,12 @@ func (d sandboxDeploy) ReadGrainLog(ctx context.Context, source string) (string,
 }
 
 func (d sandboxDeploy) ListGrainLogSources(context.Context) ([]string, error) {
+	sources := d.logSources
+	if len(sources) == 0 {
+		sources = grainlog.DefaultSources()
+	}
 	var names []string
-	for _, s := range grainlog.DefaultSources() {
+	for _, s := range sources {
 		names = append(names, s.Name)
 	}
 	return names, nil
@@ -435,11 +454,18 @@ func withoutUserinfo(raw string) string {
 	return u.String()
 }
 
-// sandboxCLIBackend is gitproxy.CLIBackend: list_issues, read_issue and
+// SandboxCLIBackend is gitproxy.CLIBackend: list_issues, read_issue and
 // query_grain_db, built for the run asking.
+type SandboxCLIBackend = sandboxCLIBackend
+
 type sandboxCLIBackend struct {
 	cfg    sandboxNamespaceConfig
 	client *ui.HTTPClient
+}
+
+// SetIssues configures an in-memory IssueReader override (e.g. githubsim).
+func (b *sandboxCLIBackend) SetIssues(issues mcp.IssueReader) {
+	b.cfg.Issues = issues
 }
 
 // IssueTools reads GitHub with the credential the run's own task pushes
@@ -447,6 +473,16 @@ type sandboxCLIBackend struct {
 // -pr-credential (orchestrator's runGitCredential) -- so the proxy reads
 // as the account the tools would have.
 func (b *sandboxCLIBackend) IssueTools(ctx context.Context, scope namespace.Scope) []mcp.Tool {
+	if b.cfg.Issues != nil {
+		var issueScope mcp.IssueScope
+		if scope.TaskRepo != "" {
+			if ref, err := model.ParseRepo(scope.TaskRepo); err == nil {
+				issueScope.DefaultOwner = ref.Owner
+				issueScope.DefaultRepo = ref.Name
+			}
+		}
+		return mcp.NewIssueTools(b.cfg.Issues, issueScope)
+	}
 	credential := ""
 	if b.cfg.Store != nil && scope.TaskIDStr != "" && scope.TaskRepo != "" {
 		if ref, err := model.ParseRepo(scope.TaskRepo); err == nil && !model.IsConfigRepo(ref) {

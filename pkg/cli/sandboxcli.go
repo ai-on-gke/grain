@@ -36,6 +36,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,7 +61,25 @@ type sandboxEnv struct {
 }
 
 func osSandboxEnv() sandboxEnv {
-	return sandboxEnv{Getenv: os.Getenv, ReadFile: os.ReadFile, CredsPath: sandboxGitCredsPath}
+	creds := sandboxGitCredsPath
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		p := filepath.Join(home, ".git-credentials")
+		if _, err := os.Stat(p); err == nil {
+			creds = p
+		}
+	}
+	return sandboxEnv{Getenv: os.Getenv, ReadFile: os.ReadFile, CredsPath: creds}
+}
+
+func parseGitCredentialURL(line string) (*url.URL, error) {
+	line = strings.TrimSpace(line)
+	if at := strings.LastIndex(line, "@"); at >= 0 {
+		hostPart := line[at+1:]
+		hostPart = strings.ReplaceAll(hostPart, "%3a", ":")
+		hostPart = strings.ReplaceAll(hostPart, "%3A", ":")
+		line = line[:at+1] + hostPart
+	}
+	return url.Parse(line)
 }
 
 // detectSandboxProxy returns the proxy base URL and token when this process
@@ -79,7 +98,7 @@ func detectSandboxProxy(env sandboxEnv) (base, token string, ok bool) {
 	if raw, err := env.ReadFile(env.CredsPath); err == nil {
 		sc := bufio.NewScanner(strings.NewReader(string(raw)))
 		for sc.Scan() {
-			u, err := url.Parse(strings.TrimSpace(sc.Text()))
+			u, err := parseGitCredentialURL(sc.Text())
 			if err != nil || u.User == nil {
 				continue
 			}
@@ -243,7 +262,7 @@ func (c *sandboxCLI) run(args []string) error {
 		if err != nil {
 			return err
 		}
-		q := p.query("glob")
+		q := p.query("glob", "max")
 		q.Set("grep", pattern)
 		if p.has("i") {
 			q.Set("i", "1")
@@ -362,13 +381,13 @@ func (c *sandboxCLI) run(args []string) error {
 		}
 		return c.fs("src://playbooks", url.Values{"list": {""}})
 	case "issue list":
-		return c.get("/cli/issues", p.query("repo"), c.out)
+		return c.get("/cli/issues", p.query("repo", "label", "limit"), c.out)
 	case "issue read":
 		n, err := p.arg(0, "number")
 		if err != nil {
 			return err
 		}
-		return c.get("/cli/issues/"+url.PathEscape(n), p.query("repo"), c.out)
+		return c.get("/cli/issues/"+url.PathEscape(n), p.query("repo", "comments"), c.out)
 	case "db query":
 		sql := strings.Join(p.positional, " ")
 		if strings.TrimSpace(sql) == "" {
@@ -526,7 +545,7 @@ func (c *sandboxCLI) ciLog(p sandboxArgs) error {
 	if !strings.HasSuffix(step, ".log") {
 		step += ".log"
 	}
-	return c.fs(uri+"/"+step, p.query("tail"))
+	return c.fs(uri+"/"+step, p.query("tail", "offset", "limit"))
 }
 
 func (c *sandboxCLI) ciArtifact(p sandboxArgs) error {

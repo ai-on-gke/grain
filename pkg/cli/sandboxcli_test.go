@@ -59,6 +59,8 @@ func TestDetectSandboxProxy(t *testing.T) {
 	}{
 		{name: "git credentials", creds: "https://x-access-token:ghs_x@github.com\nhttp://x-access-token:tok-1@127.0.0.1:9728\n",
 			base: "http://127.0.0.1:9728", token: "tok-1", ok: true},
+		{name: "git credential-store percent-encoded colon", creds: "http://sandbox:tok-escaped@127.0.0.1%3a9728\n",
+			base: "http://127.0.0.1:9728", token: "tok-escaped", ok: true},
 		{name: "env names the proxy", vars: map[string]string{"GRAIN_SANDBOX_PROXY": "http://127.0.0.1:9728/", "GRAIN_SANDBOX_TOKEN": "tok-2"},
 			base: "http://127.0.0.1:9728", token: "tok-2", ok: true},
 		{name: "env proxy, token from credentials", vars: map[string]string{"GRAIN_SANDBOX_PROXY": "http://127.0.0.1:9728"},

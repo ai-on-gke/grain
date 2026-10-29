@@ -86,6 +86,12 @@ func (d daemonNamespaceCIStore) Live(key ci.Key) (ci.Run, bool) {
 	return ci.Run{}, false
 }
 
+// BuildNamespaceRedactor builds a Redactor loaded with known secret values and
+// GitHub credentials from dataDir/secrets.
+func BuildNamespaceRedactor(dataDir string) *redact.Redactor {
+	return buildNamespaceRedactor(dataDir)
+}
+
 func buildNamespaceRedactor(dataDir string) *redact.Redactor {
 	var known []redact.KnownValue
 	if dataDir != "" {
