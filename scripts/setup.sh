@@ -7760,6 +7760,39 @@ setup_tailscale() {
   step_done "ready"
 }
 
+# sandbox_budget_summary is the capacity line's account of the sandbox
+# budget, from `grain sandbox-budget`'s output (pkg/cli/sandbox_budget_cmd.go):
+# "<verdict>: <detail>", then "fix: <grain settings command>" when some
+# settings would fit. Empty output is a daemon that did not answer, or an
+# image from before that subcommand.
+sandbox_budget_summary() {
+  local first="${1%%$'\n'*}"
+  case "$first" in
+    fits:* | unchecked:*) printf '%s\n' "${first#*: }" ;;
+    admits-nothing:*) printf '%s\n' "NONE -- one sandbox of this deployment's shape does not fit (see !! below)" ;;
+    *) printf '%s\n' "not read (the daemon did not answer grain sandbox-budget; it logs the budget at start)" ;;
+  esac
+}
+
+# report_sandbox_budget_problem is the readiness report's !! block for a
+# budget that admits nothing -- the same finding grain init reports as a
+# manual step (pkg/hostinit checkSandboxBudget), with the `grain
+# settings` command that would fit when there is one. Without it the
+# deploy reports success on a host where every approved task stays
+# queued forever (the 10-28 walkthrough's 2 vCPU / 7.8 GiB e2-standard-2).
+report_sandbox_budget_problem() {
+  local first="${1%%$'\n'*}" fix=""
+  if [[ "$1" == *$'\n'fix:\ * ]]; then
+    fix="${1##*$'\n'fix: }"
+    fix="${fix%%$'\n'*}"
+  fi
+  printf '%s\n' "${first#admits-nothing: }" | fold -s -w 72 | sed 's/ *$//; 1s/^/    !! /; 2,$s/^/       /'
+  if [ -n "$fix" ]; then
+    echo "       To fit one, run: $fix"
+    echo "       (or set the same in Settings -> Sandbox) -- the daemon applies it without a restart."
+  fi
+}
+
 # report_readiness prints what this host can actually do, as opposed to
 # what this script did. The two have come apart repeatedly: seeding a
 # credential is seed-once, minting the Gemini key is deliberately
@@ -7853,6 +7886,17 @@ report_readiness() {
   fi
   local secrets_repo
   secrets_repo="$(secrets_repo_field remote)"
+  # Whether this host's sandbox budget can hold even one sandbox of the
+  # deployment's own shape: grain init's check (hostinit.CheckSandboxBudget),
+  # asked of the daemon itself, since only it knows the host it counted
+  # and the settings it resolved. The CLI presents the access code
+  # without being asked to. Nothing to ask of a daemon that is not
+  # running; and an image older than the subcommand answers nothing,
+  # which the capacity line says rather than guessing.
+  local budget=""
+  if [ "$daemon" = active ]; then
+    budget="$(grain_cli -connect-timeout 30s -timeout 30s sandbox-budget 2>/dev/null || true)"
+  fi
   step_done "checked"
 
   echo
@@ -7894,10 +7938,12 @@ report_readiness() {
   echo "    default repo:      ${GRAIN_TARGET_REPO:-<none: a task with no repo parks>}"
   # Not GRAIN_MAX_WORKERS / GRAIN_MAX_MERGERS: the daemon ignores both
   # flags now (pkg/cli/daemon.go), and printing them told a fresh
-  # install "1" while its default team, with no counts of its own,
-  # dispatched as many runs as the sandbox budget had room for.
-  echo "    capacity:          each team's own max workers / mergers / CI jobs (Team settings; 0 sets no count),"
-  echo "                       within this host's sandbox budget (the daemon logs it at start)"
+  # install "1" while the deployment dispatched as many runs as the
+  # sandbox budget had room for. Nor "each team's own" counts: the build
+  # is single-tenant (docs/single-tenant-reset.md), and the counts are the
+  # deployment's own settings.
+  echo "    capacity:          the deployment's max workers (Settings, or grain settings -max-workers),"
+  echo "                       within this host's sandbox budget: $(sandbox_budget_summary "$budget")"
   echo "    ci cache:          ${GRAIN_CI_CACHE_MAX_BYTES:-<default>} bytes, ${GRAIN_CI_CACHE_MAX_ENTRIES:-<default>} entries, kept ${GRAIN_CI_CACHE_MAX_AGE:-<default>}"
   if [ "$GRAIN_GRANULE_ENABLE" = "1" ]; then
     echo "    sandboxing:        granule VMs (one per run, over SSH as ${GRAIN_GRANULE_SSH_USER})"
@@ -7936,6 +7982,10 @@ report_readiness() {
     ready=0
     echo "    !! With no GitHub credential the git proxy cannot clone. A dispatched run"
     echo "       finds an empty sandbox and ends without pushing or asking anything."
+  fi
+  if [[ "$budget" == admits-nothing:* ]]; then
+    ready=0
+    report_sandbox_budget_problem "$budget"
   fi
   if [ "$gemini" = "MISSING" ] && [ "$claude" = "MISSING" ] && [ "$openai" = "MISSING" ]; then
     ready=0
