@@ -747,6 +747,13 @@ func collectCIRun(ctx context.Context, deps Deps, task model.Task,
 			return err
 		}
 	}
+	// An errored run that errored because a sandbox's channel was lost is
+	// re-run the same way, at once and uncached (infraverdict.go).
+	if run.Conclusion == ci.ConclusionErrored {
+		if started, err := startChannelLostRecheck(ctx, deps, task, status, run, now); started || err != nil {
+			return err
+		}
+	}
 
 	finished := run.FinishedAt
 	if finished == nil {

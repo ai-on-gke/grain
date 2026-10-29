@@ -248,18 +248,35 @@ export default function ConnectionModelsField({
         </Typography>
       )}
       {pinned && discoverable && (
-        <Button
-          type="button"
-          size="small"
-          variant="text"
-          sx={{ alignSelf: "flex-start" }}
-          onClick={() => {
-            setPinRequested(false);
-            onChange({ models: [], model: undefined });
-          }}
-        >
-          Advertise all models
-        </Button>
+        <Box>
+          {/* With nothing listed by the provider -- it could not be
+              asked, or has not answered yet -- "all" is none: pressing
+              this used to throw away the typed list and leave the
+              connection advertising no model at all. */}
+          <Button
+            type="button"
+            size="small"
+            variant="text"
+            disabled={discovered.length === 0}
+            onClick={() => {
+              setPinRequested(false);
+              onChange({ models: [], model: undefined });
+            }}
+          >
+            Advertise all models
+          </Button>
+          {discovered.length === 0 && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="div"
+              data-testid="advertise-all-unavailable"
+            >
+              The provider has listed no models, so this connection keeps the
+              ones listed here.
+            </Typography>
+          )}
+        </Box>
       )}
     </Stack>
   );

@@ -243,9 +243,15 @@ export default function PhoneNav({
 // out of a phone's reach (2026-10-23 responsive walkthrough, bug 3).
 // The menu's own items still close it: the menu is portalled to <body>,
 // but React carries their clicks back up through this Box all the same.
+// And a toggle (aria-pressed) -- a staging environment's pin -- which
+// changes the rail in place rather than going anywhere: closing on it
+// hid the very entry it had just pinned (2026-10-29 responsive
+// walkthrough).
 function keepsDrawerOpen(target) {
   return Boolean(
-    target.closest('input, [aria-haspopup]:not([aria-haspopup="false"])'),
+    target.closest(
+      'input, [aria-haspopup]:not([aria-haspopup="false"]), [aria-pressed]',
+    ),
   );
 }
 

@@ -128,6 +128,13 @@ describe("ProcessesList", () => {
     expect(rowsOf("trigger")).toHaveLength(1);
     expect(within(rowsOf("workflow")[0]).getByText("Workflow")).toBeTruthy();
     expect(within(rowsOf("trigger")[0]).getByText("docs.yml")).toBeTruthy();
+    // Declared like every other declared row, naming its repo and file.
+    const chip = rowsOf("trigger")[0].querySelector(".declared-chip");
+    expect(chip).toHaveTextContent("Declared by acme/widgets");
+    expect(chip).toHaveAttribute(
+      "title",
+      "Declared in acme/widgets, .grain/triggers/docs.yml",
+    );
     const filter = screen.getByTestId("process-kind-filter");
     expect(within(filter).getByText("All 7")).toBeTruthy();
     expect(within(filter).getByText("Schedules 3")).toBeTruthy();
@@ -195,13 +202,14 @@ describe("ProcessesList", () => {
     );
     expect(within(system).getByText("🔒 System")).toBeTruthy();
     expect(within(system).getByText("Paused")).toBeTruthy();
-    // The declared row carries DeclaredChip, naming the repo, with the
-    // file in its tooltip; the rows nothing declared carry none.
+    // The declared rows (the workflow schedule and the trigger) carry
+    // DeclaredChip, naming the repo, with the file in its tooltip; the
+    // rows nothing declared carry none.
     const chips = document.querySelectorAll(".process-row .declared-chip");
-    expect(chips).toHaveLength(1);
-    expect(rowsOf("workflow")[0].contains(chips[0])).toBe(true);
-    expect(chips[0]).toHaveTextContent("Declared by acme/widgets");
-    expect(chips[0]).toHaveAttribute(
+    expect(chips).toHaveLength(2);
+    const workflowChip = rowsOf("workflow")[0].querySelector(".declared-chip");
+    expect(workflowChip).toHaveTextContent("Declared by acme/widgets");
+    expect(workflowChip).toHaveAttribute(
       "title",
       "Declared in acme/widgets, .grain/workflows/nightly.yml",
     );

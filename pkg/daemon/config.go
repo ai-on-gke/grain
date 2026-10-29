@@ -630,6 +630,13 @@ type Config struct {
 	// and live: liveConfig hands each change to the sandbox backend, so it
 	// reaches the next sandbox created.
 	CustomSandboxImage string
+	// SandboxImageMirror is -sandbox-image-mirror / model.Config.SandboxImageMirror:
+	// an optional OCI repository (for example,
+	// us-docker.pkg.dev/<cluster-project>/grain/guest) that off-cluster
+	// deployments mirror the build-stamped sandbox guest image into on
+	// upgrade and startup so a cluster in another GCP organization can
+	// pull the exact commit-matched guest image from its own registry.
+	SandboxImageMirror string
 	// packageCacheEnabled is model.Config's own field of the same name:
 	// whether each sandbox this deployment builds is pointed at the
 	// controller's package cache (pkg/pkgcache). Live -- re-read
@@ -777,6 +784,16 @@ type Config struct {
 	SandboxAccessAddr     string
 	SandboxAccessDial     string
 	SandboxAccessCASecret string
+	// K8sGranuleAccess is how grain reaches a k8s-granule sandbox's guest
+	// once its pod is Ready: orchestrator.K8sGranuleAccessKubectl (the
+	// default, `granule exec` over `kubectl exec`) or
+	// orchestrator.K8sGranuleAccessDialout (the wrapper's dial-out
+	// channel, which needs SandboxAccessAddr and an in-cluster daemon).
+	// K8sGranuleReattachTimeout is how long a step waits for a dropped
+	// channel to come back (DefaultK8sGranuleReattachTimeout when zero).
+	// docs/design/grain-on-gke.md#GKE-3. Startup-only.
+	K8sGranuleAccess          string
+	K8sGranuleReattachTimeout time.Duration
 
 	// sandboxCPUs, sandboxMemoryMB and sandboxDiskGB are store-backed
 	// (model.Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB,
@@ -871,6 +888,7 @@ func (c Config) ChangesFrom(prev Config) []string {
 	note("sandbox-network-access",
 		model.NormalizeNetworkAccess(prev.networkAccess), model.NormalizeNetworkAccess(c.networkAccess))
 	note("sandbox-image", orStampedImage(prev.CustomSandboxImage), orStampedImage(c.CustomSandboxImage))
+	note("sandbox-image-mirror", prev.SandboxImageMirror, c.SandboxImageMirror)
 	note("package-cache-size-gb", prev.PackageCacheGB, c.PackageCacheGB)
 	note("actions-cache-size-gb", prev.ActionsCacheGB, c.ActionsCacheGB)
 	// Worth a journal line where the package cache's own switch is not:
@@ -1154,6 +1172,7 @@ func (c Config) logStoreOverrides(mc model.Config) {
 	warn("k8s-kubectl", c.K8sKubectl, mc.K8sKubectl)
 	warn("k8s-sandbox-image", firstNonEmpty(c.K8sSandboxImage, c.K8sImage, DefaultK8sSandboxImage), firstNonEmpty(mc.K8sSandboxImage, DefaultK8sSandboxImage))
 	warn("k8s-granule-image", firstNonEmpty(c.K8sGranuleImage, DefaultSandboxImage), firstNonEmpty(mc.K8sGranuleImage, DefaultSandboxImage))
+	warn("sandbox-image-mirror", c.SandboxImageMirror, mc.SandboxImageMirror)
 	warn("k8s-workspace", c.K8sWorkspace, mc.K8sWorkspace)
 	warn("k8s-git-proxy-host", c.K8sGitProxyHost, mc.K8sGitProxyHost)
 	warn("k8s-sandbox-service", c.K8sSandboxService, mc.K8sSandboxService)
@@ -1445,6 +1464,7 @@ func (c Config) ToModelConfig() model.Config {
 	if c.K8sGranuleImage != DefaultSandboxImage && c.K8sGranuleImage != model.DefaultSandboxImage {
 		mc.K8sGranuleImage = c.K8sGranuleImage
 	}
+	mc.SandboxImageMirror = c.SandboxImageMirror
 	if c.K8sWorkspace != model.DefaultK8sWorkspace {
 		mc.K8sWorkspace = c.K8sWorkspace
 	}
@@ -1565,6 +1585,7 @@ func (c Config) WithModelConfig(mc model.Config) Config {
 	c.DiskFloorShare, c.DiskFloorMinMB = mc.SandboxDiskFloorShare, mc.SandboxDiskFloorMinMB
 	c.networkAccess = mc.NetworkAccess
 	c.CustomSandboxImage = mc.SandboxImage
+	c.SandboxImageMirror = mc.SandboxImageMirror
 	c.PackageCacheEnabled = mc.PackageCacheEnabled
 	c.PackageCacheGB = mc.PackageCacheSizeGB
 	c.ActionsCacheEnabled = mc.ActionsCacheEnabled

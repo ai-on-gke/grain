@@ -274,6 +274,58 @@ describe("ModelBackendPage", () => {
     confirm.mockRestore();
   });
 
+  // A reload or a closed tab unmounts nothing, so the draft used to stay
+  // behind as a nameless, disabled connection named by its id
+  // (docs/test-runs/2026-10-29-user-system-settings.md).
+  it("deletes an unfinished connection when the page goes away", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(true);
+    const onDiscard = vi.fn();
+
+    render(
+      <StatefulModelBackendPage onSaveMock={onSave} onDiscard={onDiscard} />,
+    );
+
+    // Nothing stored yet: going away deletes nothing.
+    window.dispatchEvent(new Event("pagehide"));
+    expect(onDiscard).not.toHaveBeenCalled();
+
+    await user.click(screen.getByLabelText(/Agent type/));
+    await user.click(screen.getByRole("option", { name: "Antigravity" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByText("Authentication");
+
+    window.dispatchEvent(new Event("pagehide"));
+    expect(onDiscard).toHaveBeenCalledTimes(1);
+    expect(onDiscard).toHaveBeenCalledWith("backend-test-1", {
+      keepalive: true,
+    });
+
+    // Only once: a second pagehide (bfcache) has nothing left to delete.
+    window.dispatchEvent(new Event("pagehide"));
+    expect(onDiscard).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a finished connection when the page goes away", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(true);
+    const onDiscard = vi.fn();
+
+    render(
+      <StatefulModelBackendPage onSaveMock={onSave} onDiscard={onDiscard} />,
+    );
+    await user.click(screen.getByLabelText(/Agent type/));
+    await user.click(screen.getByRole("option", { name: "Custom command" }));
+    await user.type(screen.getByLabelText(/Command/), "./bin/my-agent");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Save connection" }),
+    );
+
+    window.dispatchEvent(new Event("pagehide"));
+    expect(onDiscard).not.toHaveBeenCalled();
+  });
+
   it("supports creating a custom framework connection with command", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(true);

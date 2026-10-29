@@ -16,6 +16,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -235,6 +236,11 @@ export default function PageHeader({
     const node = slotRef.current;
     if (!node) return undefined;
     const measure = () => {
+      // Open, the slot is a menu of its own height and clips nothing,
+      // which says nothing about the row it closes back into. Measuring
+      // it then dropped "more" for a frame as it closed, and the focus
+      // Escape hands back to it with it.
+      if (node.classList.contains("page-header-slot-expanded")) return;
       const clipped = node.scrollHeight > node.clientHeight + 1;
       setOverflowing((was) => (was === clipped ? was : clipped));
     };
@@ -253,6 +259,42 @@ export default function PageHeader({
       watchChildren.disconnect();
     };
   }, []);
+
+  // The open menu closes the way a menu does: Escape, which hands focus
+  // back to "more" so the keyboard is where it opened it, and a press
+  // anywhere outside the rail. Left open, it lay over the top of the
+  // page until "more" itself was found and pressed again. A press in a
+  // popup the menu's own controls opened (a filter's popover, a
+  // select's list) is not outside it: those are portalled out of the
+  // rail, and closing under them would move their anchor. Both are
+  // native listeners: what is in the slot is portalled in from the
+  // page, so React hands its events to the page's tree, not this one.
+  const headerRef = useRef(null);
+  const moreRef = useRef(null);
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!expanded || !header) return undefined;
+    const onPointerDown = (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (header.contains(target)) return;
+      if (target.closest(".MuiPopover-root, .MuiModal-root, .MuiPopper-root"))
+        return;
+      setExpanded(false);
+    };
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      setExpanded(false);
+      moreRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    header.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      header.removeEventListener("keydown", onKeyDown);
+    };
+  }, [expanded]);
 
   const segments =
     typeof title === "string" ? title.split(" / ").filter(Boolean) : null;
@@ -275,6 +317,7 @@ export default function PageHeader({
       component="header"
       data-testid={variant === "pane" ? "pane-header" : "page-header"}
       className={`page-header page-header-${variant}`}
+      ref={headerRef}
     >
       {resolvedIcon ? (
         <span className="header-icon">{resolvedIcon}</span>
@@ -328,6 +371,7 @@ export default function PageHeader({
         <Tooltip title={expanded ? "Fewer" : "More"}>
           <IconButton
             size="small"
+            ref={moreRef}
             aria-label="More page actions"
             aria-expanded={expanded}
             data-testid="page-header-more"

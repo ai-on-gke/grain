@@ -169,6 +169,8 @@ func sshRunCommandTool(runner remoteRunner, workspace string) Tool {
 				notice = bound.timedOutNotice()
 			case exitCode == 137 && elapsed >= bound.d:
 				notice = bound.killedNotice()
+			case channelLostFailed(exitCode, stderr):
+				notice = channelLostNotice
 			case execTransportFailed(exitCode, stderr):
 				notice = execTransportNotice
 			}

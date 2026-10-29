@@ -86,6 +86,39 @@ describe("useSettingsSection", () => {
     expect(result.current.settings.showClosedByDefault).toBe(true);
   });
 
+  // The auto overcommit bounds are saved inside sandboxOvercommit; a bound
+  // the daemon refused (cpuMin above cpuMax) used to read "Couldn't save
+  // Overcommit mode", naming a field nobody had touched.
+  it("names the field a save says its refusal belongs to", async () => {
+    const overcommit = { mode: "auto", cpuMin: 1, cpuMax: 6 };
+    const { result } = await loaded({ sandboxOvercommit: overcommit });
+    api.mockRejectedValueOnce(
+      new Error(
+        "sandboxOvercommit: sandbox overcommit cpuMin 8.00 is above cpuMax 6.00",
+      ),
+    );
+    await act(() =>
+      result.current.saveChoice(
+        { sandboxOvercommit: { ...overcommit, cpuMin: 8 } },
+        { errorKey: "sandboxOvercommitCpuMin" },
+      ),
+    );
+    expect(result.current.settings.sandboxOvercommit).toEqual(overcommit);
+    expect(statusLine(result.current)).toBe("Couldn't save Auto CPU minimum");
+    expect(result.current.error.key).toBe("sandboxOvercommitCpuMin");
+    expect(result.current.error.message).toBe(
+      "Auto CPU minimum: sandbox overcommit cpuMin 8.00 is above cpuMax 6.00",
+    );
+
+    // Retrying keeps the attribution.
+    api.mockRejectedValueOnce(new Error("still above"));
+    await act(() => result.current.error.retry());
+    await waitFor(() =>
+      expect(result.current.error.message).toBe("still above"),
+    );
+    expect(statusLine(result.current)).toBe("Couldn't save Auto CPU minimum");
+  });
+
   it("stops saying a save failed once the box is put back to the saved value", async () => {
     const { result, dismissError } = await loaded({
       pollInterval: "10s",
