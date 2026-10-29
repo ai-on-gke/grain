@@ -212,3 +212,26 @@ func TestChangeChecksToolsOverALiveServer(t *testing.T) {
 		t.Fatalf("pull_request_status after recovery = %+v", res)
 	}
 }
+
+// A sandboxed run serves the control surface. On a changelist task it
+// still has every tool its review-thread wake names (orchestrator's
+// reviewthreads.go): the CL's checks, open_pull_request to upload a fix,
+// and reply_to_pull_request_comment/resolve_review_thread for cl/<n>:<id>
+// threads, none of which a `grain pr` command can do for a CL. A
+// pull-request task holding grain-ci reaches them through `grain` instead.
+func TestControlRosterKeepsAChangelistTasksReviewTools(t *testing.T) {
+	cl := []string{"pull_request_status", "wait_for_checks", "open_pull_request",
+		"reply_to_pull_request_comment", "resolve_review_thread"}
+	keep := controlRoster(nil, nil, GrantNames{"grain-ci"}, true)
+	for _, name := range cl {
+		if !keep[name] {
+			t.Errorf("a changelist task's control roster drops %s", name)
+		}
+	}
+	keep = controlRoster(nil, nil, GrantNames{"grain-ci"}, false)
+	for _, name := range cl {
+		if keep[name] {
+			t.Errorf("a grain-ci pull-request task's control roster keeps %s, which `grain` serves", name)
+		}
+	}
+}
