@@ -257,6 +257,30 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	bridge(guest, buf.Reader, upstream)
 }
 
+// Serve bridges guest -- a connection a sandbox's dial-out access channel
+// carried to this host, rather than one ServeHTTP accepted with the
+// forward's token (docs/design/grain-on-gke.md#GKE-3) -- to the forward's
+// host_port under the rules ServeHTTP applies: the listener is checked
+// against the capability server's own service on every connection
+// (§5.3.2), and closing the forward cuts the connection (§5.3.4). It
+// returns once the bridge ends, and always closes guest.
+func (f *Forward) Serve(ctx context.Context, guest net.Conn) {
+	upstream, err := f.relay.verifiedDial(ctx, f.hostPort, f.service)
+	if err != nil {
+		log.Printf("capability ports: refusing a connection to host_port %d: %v", f.hostPort, err)
+		guest.Close()
+		return
+	}
+	if !f.track(guest) || !f.track(upstream) {
+		guest.Close()
+		upstream.Close()
+		return
+	}
+	defer f.untrack(guest)
+	defer f.untrack(upstream)
+	bridge(guest, guest, upstream)
+}
+
 // bridge copies both ways until both directions end; from is what the
 // guest had already sent past the request.
 func bridge(guest net.Conn, from io.Reader, upstream net.Conn) {

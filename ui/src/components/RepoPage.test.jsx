@@ -1865,6 +1865,12 @@ describe("RepoPage", () => {
         /Read at 0f1e2d3c4b5a: 1 template\(s\), 0 suite\(s\), 1 schedule\(s\), 1 trigger\(s\)/,
       ),
     ).toBeInTheDocument();
+    // A Processes trigger row opens this tab (§5.1), so the file it
+    // names is listed here by path rather than only counted.
+    const triggers = document.querySelector(".declared-triggers");
+    expect(triggers).toHaveTextContent(
+      "Path triggers: .grain/triggers/design-docs.yml",
+    );
   });
 
   it("shows the warnings the last declarations read left on the merge rules", async () => {

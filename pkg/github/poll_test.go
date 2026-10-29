@@ -181,3 +181,51 @@ func TestForgottenPollsAreDropped(t *testing.T) {
 		t.Error("an entry nobody asked about for an hour is still held")
 	}
 }
+
+func TestPollScheduleStatsSummarizesTrackedAndBackedOffPRs(t *testing.T) {
+	low := false
+	p := newTestSchedule(&low)
+	now := time.Date(2026, 10, 26, 4, 0, 0, 0, time.UTC)
+
+	pr1 := PollKey{Subject: PullRequestSubject("acme", "widgets", 1), Aspect: "pull request"}
+	pr2 := PollKey{Subject: PullRequestSubject("acme", "widgets", 2), Aspect: "pull request"}
+	pr3 := PollKey{Subject: PullRequestSubject("acme", "widgets", 3), Aspect: "pull request"}
+
+	// pr1 is active (merge queue head): stays at PollBase (30s).
+	p.Due(pr1, PollCritical, true, now)
+	p.Observe(pr1, "same", now)
+	p.Due(pr1, PollCritical, true, now.Add(PollBase))
+	p.Observe(pr1, "same", now.Add(PollBase))
+
+	// pr2 is idle over two unchanged observations: 30s -> 60s.
+	p.Due(pr2, PollNormal, false, now)
+	p.Observe(pr2, "same", now)
+	p.Due(pr2, PollNormal, false, now.Add(PollBase))
+	p.Observe(pr2, "same", now.Add(PollBase))
+
+	// pr3 is idle over four unchanged observations: 30s -> 60s -> 120s -> 240s.
+	t3 := now
+	for i := 0; i < 4; i++ {
+		p.Due(pr3, PollNormal, false, t3)
+		p.Observe(pr3, "same", t3)
+		t3 = t3.Add(p.Interval(pr3))
+	}
+
+	got := p.Stats(t3)
+	if got.Tracked != 3 || got.BackedOff != 2 {
+		t.Fatalf("Stats = %+v, want 3 tracked and 2 backed off", got)
+	}
+	if got.BaseSeconds != 30 || got.CapSeconds != 480 {
+		t.Errorf("bounds = %ds..%ds, want 30s..480s", got.BaseSeconds, got.CapSeconds)
+	}
+	if got.MedianSeconds != 60 || got.MaxSeconds != 240 {
+		t.Errorf("intervals = median %ds max %ds, want 60s and 240s", got.MedianSeconds, got.MaxSeconds)
+	}
+
+	// Resetting pr3 brings it back to PollBase.
+	p.Reset(pr3.Subject)
+	got = p.Stats(t3)
+	if got.BackedOff != 1 || got.MaxSeconds != 60 {
+		t.Errorf("Stats after Reset(pr3) = %+v, want 1 backed off and max 60s", got)
+	}
+}

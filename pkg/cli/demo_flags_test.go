@@ -43,3 +43,25 @@ func TestParseDemoFlagsExternalConfigRepo(t *testing.T) {
 		t.Errorf("-external-config-branch alone: err = %v, want one naming -external-config-repo", err)
 	}
 }
+
+func TestParseDemoFlagsGitHubWebhooks(t *testing.T) {
+	opts, err := parseDemoFlags([]string{"-github-webhook-addr", "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("parseDemoFlags(-github-webhook-addr): %v", err)
+	}
+	if opts.GithubWebhookAddr != "127.0.0.1:0" {
+		t.Errorf("GithubWebhookAddr = %q, want 127.0.0.1:0", opts.GithubWebhookAddr)
+	}
+
+	opts, err = parseDemoFlags([]string{"-github-webhook-url", "http://127.0.0.1:9000"})
+	if err != nil {
+		t.Fatalf("parseDemoFlags(-github-webhook-url): %v", err)
+	}
+	if opts.GithubWebhookURL != "http://127.0.0.1:9000" {
+		t.Errorf("GithubWebhookURL = %q, want http://127.0.0.1:9000", opts.GithubWebhookURL)
+	}
+
+	if _, err := parseDemoFlags([]string{"-github-webhook-addr", "127.0.0.1:0", "-github-webhook-url", "http://127.0.0.1:9000"}); err == nil {
+		t.Error("expected error when both -github-webhook-addr and -github-webhook-url are set")
+	}
+}

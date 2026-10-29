@@ -507,6 +507,7 @@ func TestDemoScenariosRaiseTheSetupAndPauseBanners(t *testing.T) {
 	}
 	stored := model.DefaultConfig()
 	stored.AgentBackends = []model.AgentBackend{{ID: "gemini-pro", Framework: model.AgentFrameworkAntigravity}}
+	stored.GitConnections = []model.TeamGitConnection{{Credential: "default", Host: "github.com"}}
 	if err := store.PutConfig(ctx, stored); err != nil {
 		t.Fatalf("storing config: %v", err)
 	}
@@ -514,6 +515,9 @@ func TestDemoScenariosRaiseTheSetupAndPauseBanners(t *testing.T) {
 	cfg, err := unconfigureDemo(ctx, store, ui.Config{Actor: ui.DefaultActor("demo-operator")})
 	if err != nil {
 		t.Fatalf("unconfigureDemo: %v", err)
+	}
+	if err := forgetDemoGitConnections(ctx, store); err != nil {
+		t.Fatalf("forgetDemoGitConnections: %v", err)
 	}
 	cfg.AgentPause = demoAgentPause(time.Now().UTC())
 
@@ -528,6 +532,10 @@ func TestDemoScenariosRaiseTheSetupAndPauseBanners(t *testing.T) {
 		AgentPause               *struct {
 			Paused bool `json:"paused"`
 		} `json:"agentPause"`
+		Deployment struct {
+			HasGitCredential bool              `json:"hasGitCredential"`
+			GitConnections   []json.RawMessage `json:"gitConnections"`
+		} `json:"deployment"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decoding /api/config: %v", err)
@@ -538,6 +546,11 @@ func TestDemoScenariosRaiseTheSetupAndPauseBanners(t *testing.T) {
 	}
 	if got.AgentPause == nil || !got.AgentPause.Paused {
 		t.Errorf("agentPause = %+v, want a pause in force", got.AgentPause)
+	}
+	// What New task's and Repos' no-git-connection notice reads.
+	if got.Deployment.HasGitCredential || len(got.Deployment.GitConnections) != 0 {
+		t.Errorf("deployment hasGitCredential=%v gitConnections=%d, want none on an unconfigured demo",
+			got.Deployment.HasGitCredential, len(got.Deployment.GitConnections))
 	}
 }
 

@@ -29,8 +29,9 @@ import (
 func captureLog(t *testing.T, f func()) string {
 	t.Helper()
 	var logs strings.Builder
+	prevLog := log.Writer()
 	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(prevLog) })
 	f()
 	return logs.String()
 }
@@ -332,5 +333,123 @@ func TestSandboxImageCreateArgsAdoptsADigestPinnedStamp(t *testing.T) {
 	}
 	if image := uiSandboxImage(cfg); image == nil || image.Image != stamped || image.Pinned {
 		t.Errorf("uiSandboxImage = %+v, want the pinned stamp, unpinned", image)
+	}
+}
+
+func TestUpgradeSandboxImageArgsIncludesK8sGranuleAndMirror(t *testing.T) {
+	t.Parallel()
+	if got := upgradeSandboxImageArgs(Config{}); got != nil {
+		t.Fatalf("upgradeSandboxImageArgs(empty) = %v, want nil", got)
+	}
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+	}{
+		{
+			name: "GranuleSandboxes",
+			cfg:  Config{GranuleSandboxes: true},
+		},
+		{
+			name: "K8sGranuleSandboxes",
+			cfg:  Config{K8sGranuleSandboxes: true},
+		},
+		{
+			name: "SandboxImageMirror",
+			cfg:  Config{SandboxImageMirror: "us-docker.pkg.dev/cluster-project/grain/guest"},
+		},
+	} {
+		if got := upgradeSandboxImageArgs(tc.cfg); !slices.Equal(got, []string{"sandbox-image"}) {
+			t.Errorf("upgradeSandboxImageArgs(%s) = %v, want [sandbox-image]", tc.name, got)
+		}
+	}
+}
+
+func TestSandboxImageMirrorRepoAndEffectiveK8sGranuleImageMirrorsStampedGuest(t *testing.T) {
+	ResetMirroredSandboxImageCacheForTest()
+	t.Cleanup(ResetMirroredSandboxImageCacheForTest)
+
+	stamped := "us-docker.pkg.dev/source-project/grain/guest:sha-31d0973@sha256:053664f0a62cf642aff3b59530eaee5b22441cdfd9ba74ff6af2632a50f8891a"
+	savedStamp := DefaultSandboxImage
+	DefaultSandboxImage = stamped
+	t.Cleanup(func() { DefaultSandboxImage = savedStamp })
+
+	mirrorDigest := "sha256:d210757e35832d3c8f47f11abd84c3d2f82fa0b7b2c88a13fd021d6999018a83"
+	dir := t.TempDir()
+	logFile := dir + "/docker.log"
+	dockerScript := dir + "/docker"
+	script := `#!/bin/sh
+echo "$@" >> "` + logFile + `"
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  ref=""
+  for arg in "$@"; do ref="$arg"; done
+  case "$ref" in
+    us-docker.pkg.dev/cluster-project/grain/guest:sha-31d0973)
+      if grep -q "^push us-docker.pkg.dev/cluster-project/grain/guest:sha-31d0973$" "` + logFile + `" 2>/dev/null; then
+        echo '["us-docker.pkg.dev/cluster-project/grain/guest@` + mirrorDigest + `"]'
+        exit 0
+      fi
+      exit 1
+      ;;
+    *)
+      exit 1
+      ;;
+  esac
+fi
+exit 0
+`
+	if err := os.WriteFile(dockerScript, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake docker: %v", err)
+	}
+	savedDocker := sandboxMirrorDockerCmd
+	savedToken := sandboxMirrorTokenSource
+	sandboxMirrorDockerCmd = []string{dockerScript}
+	sandboxMirrorTokenSource = nil
+	t.Cleanup(func() {
+		sandboxMirrorDockerCmd = savedDocker
+		sandboxMirrorTokenSource = savedToken
+	})
+
+	// Explicit SandboxImageMirror setting mirrors DefaultSandboxImage and
+	// resolves the mirror's RepoDigest, ignoring stale sha- pins in that
+	// same mirror repository.
+	cfg := Config{
+		K8sGranuleSandboxes: true,
+		SandboxImageMirror:  "us-docker.pkg.dev/cluster-project/grain/guest",
+		K8sGranuleImage:     "us-docker.pkg.dev/cluster-project/grain/guest:sha-0000000@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		CustomSandboxImage:  "us-docker.pkg.dev/cluster-project/grain/guest:sha-0000000@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+	}
+	wantMirrored := "us-docker.pkg.dev/cluster-project/grain/guest:sha-31d0973@" + mirrorDigest
+	if got := customSandboxImageFor(cfg); got != "" {
+		t.Fatalf("customSandboxImageFor(mirrored guest ref) = %q, want empty so stock mirrored image is used without drift warning", got)
+	}
+	if got := activeSandboxImageFor(cfg); got != wantMirrored {
+		t.Fatalf("activeSandboxImageFor = %q, want %q", got, wantMirrored)
+	}
+	loggedBytes, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("read docker log: %v", err)
+	}
+	logged := string(loggedBytes)
+	for _, wantCmd := range []string{
+		"pull " + stamped,
+		"tag " + stamped + " us-docker.pkg.dev/cluster-project/grain/guest:sha-31d0973",
+		"push us-docker.pkg.dev/cluster-project/grain/guest:sha-31d0973",
+	} {
+		if !strings.Contains(logged, wantCmd) {
+			t.Errorf("docker log missing %q:\n%s", wantCmd, logged)
+		}
+	}
+
+	// Automatic derivation when K8sGranuleImage names a cross-project guest
+	// sha- tag even if SandboxImageMirror is not explicitly set.
+	derivedCfg := Config{
+		K8sGranuleSandboxes: true,
+		K8sGranuleImage:     "us-docker.pkg.dev/cluster-project/grain/guest:sha-0000000@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+	}
+	if gotRepo := sandboxImageMirrorRepo(derivedCfg); gotRepo != "us-docker.pkg.dev/cluster-project/grain/guest" {
+		t.Fatalf("sandboxImageMirrorRepo(derived) = %q, want us-docker.pkg.dev/cluster-project/grain/guest", gotRepo)
+	}
+	if got := EffectiveK8sGranuleImage(derivedCfg); got != wantMirrored {
+		t.Fatalf("EffectiveK8sGranuleImage(derived) = %q, want %q", got, wantMirrored)
 	}
 }

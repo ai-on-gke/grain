@@ -156,6 +156,20 @@ type ImageConfig struct {
 	// Empty for a deployment that pins nothing, which is the case the
 	// stamp was built for and has nothing to report.
 	SandboxImagePin string
+	// SandboxImageMirror, when non-empty, is a cluster-accessible OCI
+	// repository (for example "us-docker.pkg.dev/<project>/grain/guest")
+	// into which stageImage tags and pushes the candidate build's stamped
+	// sandbox image after pulling and verifying it. Used when an off-cluster
+	// host schedules kubernetes-granule pods onto a cluster that cannot pull
+	// directly from the track's own sandbox image repository.
+	SandboxImageMirror string
+	// TagCmd tags a local image ref (first extra argument) as a target ref
+	// (second extra argument); {"docker", "tag"} when left nil.
+	TagCmd []string
+	// PushCmd pushes a tagged image ref appended as its last argument;
+	// {"docker", "push"} when left nil. Like PullCmd, the default command
+	// logs docker in to a Google registry via registryauth.Token first.
+	PushCmd []string
 	// UnitFlags are the names of the flags this deployment's own service
 	// was started with -- "-data-dir", "-granule-sandboxes" -- which on a
 	// host deployment is exactly what grain-daemon.service's ExecStart
@@ -416,6 +430,76 @@ func (u *Upgrader) pullImage(ctx context.Context, p *progress, step, ref string)
 	}
 	argv = append(append([]string{}, argv...), ref)
 	return runLogged(ctx, p, step, "", argv)
+}
+
+func (u *Upgrader) tagImage(ctx context.Context, p *progress, step, src, dst string) error {
+	argv := u.cfg.Image.TagCmd
+	if len(argv) == 0 {
+		argv = []string{"docker", "tag"}
+	}
+	argv = append(append([]string{}, argv...), src, dst)
+	return runLogged(ctx, p, step, "", argv)
+}
+
+func (u *Upgrader) pushImage(ctx context.Context, p *progress, step, ref string) error {
+	argv := u.cfg.Image.PushCmd
+	if len(argv) == 0 {
+		argv = []string{"docker", "push"}
+		if host := registryauth.HostOf(ref); registryauth.IsGoogleRegistry(host) {
+			if token, err := registryauth.Token(ctx); err != nil {
+				p.logf("%s: no Google access token for %s, pushing with existing credentials: %v", step, host, err)
+			} else if err := dockerLogin(ctx, host, token); err != nil {
+				p.logf("%s: docker login to %s failed, pushing anyway: %v", step, host, err)
+			}
+		}
+	}
+	argv = append(append([]string{}, argv...), ref)
+	return runLogged(ctx, p, step, "", argv)
+}
+
+// MirrorSandboxRef constructs the target `<mirrorRepo>:<tag>` reference for
+// mirroring sandboxRef into mirrorRepo, preserving sandboxRef's tag (for
+// example `sha-31d0973` from `.../guest:sha-31d0973@sha256:...`).
+func MirrorSandboxRef(sandboxRef, mirrorRepo string) string {
+	mirror := repositoryOf(strings.TrimSpace(mirrorRepo))
+	withoutDigest, digest, _ := strings.Cut(strings.TrimSpace(sandboxRef), "@")
+	if mirror == "" || withoutDigest == "" {
+		return ""
+	}
+	tag := ""
+	if idx := strings.LastIndex(withoutDigest, ":"); idx != -1 && idx > strings.LastIndex(withoutDigest, "/") {
+		tag = withoutDigest[idx+1:]
+	}
+	if tag == "" {
+		if hex, ok := strings.CutPrefix(digest, "sha256:"); ok && len(hex) >= 12 {
+			tag = "sha256-" + hex[:12]
+		} else {
+			tag = "latest"
+		}
+	}
+	return mirror + ":" + tag
+}
+
+func (u *Upgrader) mirrorSandboxImage(ctx context.Context, p *progress, step, sandbox string) (string, error) {
+	mirror := repositoryOf(strings.TrimSpace(u.cfg.Image.SandboxImageMirror))
+	if mirror == "" || mirror == repositoryOf(sandbox) {
+		return "", nil
+	}
+	target := MirrorSandboxRef(sandbox, mirror)
+	if target == "" {
+		return "", nil
+	}
+	if err := u.tagImage(ctx, p, step, sandbox, target); err != nil {
+		return "", fmt.Errorf("tagging sandbox image %s as %s: %w", sandbox, target, err)
+	}
+	if err := u.pushImage(ctx, p, step, target); err != nil {
+		return "", fmt.Errorf("pushing sandbox image %s to mirror %s: %w", sandbox, target, err)
+	}
+	pinned, err := u.pinImage(ctx, p, step, target)
+	if err != nil {
+		return "", fmt.Errorf("pinning mirrored sandbox image %s: %w", target, err)
+	}
+	return pinned, nil
 }
 
 // dockerLogin logs docker in to a Google registry with token, given on
@@ -897,6 +981,14 @@ func (u *Upgrader) cleanOldImages(ctx context.Context, p *progress, ref, prevRef
 	}
 	if u.cfg.Image.SandboxImagePin != "" {
 		repos[repositoryOf(u.cfg.Image.SandboxImagePin)] = true
+	}
+	if mirror := repositoryOf(strings.TrimSpace(u.cfg.Image.SandboxImageMirror)); mirror != "" {
+		repos[mirror] = true
+		for _, s := range []string{sandbox, prevSandbox} {
+			if target := MirrorSandboxRef(s, mirror); target != "" {
+				keep[target] = true
+			}
+		}
 	}
 
 	for repo := range repos {

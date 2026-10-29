@@ -1226,6 +1226,11 @@ type Config struct {
 	// for an image reference and returns an error when the image does not
 	// resolve.
 	CheckImageManifest func(ctx context.Context, imageRef string) error
+	// CheckClusterImageConnectivity, when set, checks whether the target
+	// Kubernetes cluster can pull imageRef across GCP organization/project
+	// boundaries and returns an actionable warning suggesting
+	// -sandbox-image-mirror when the cluster cannot pull the image.
+	CheckClusterImageConnectivity func(ctx context.Context, imageRef string) error
 	// InspectImageLabels, when set, reads an image's OCI labels -- how
 	// the Settings pane checks a custom sandbox image's contract
 	// (sandboximage.CheckCustomImage). nil reports every custom image's

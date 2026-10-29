@@ -1910,3 +1910,105 @@ func TestUpgraderImageCleanupRemovesEmptyDigestImagesByIDButNeverKeptOnes(t *tes
 		t.Errorf("removed images = %q, want only %q, once", got, want)
 	}
 }
+
+func TestMirrorSandboxRef(t *testing.T) {
+	cases := []struct {
+		sandboxRef string
+		mirrorRepo string
+		want       string
+	}{
+		{
+			sandboxRef: "us-docker.pkg.dev/source-project/grain/guest:sha-31d0973@sha256:053664f0a62cf642aff3b59530eaee5b22441cdfd9ba74ff6af2632a50f8891a",
+			mirrorRepo: "us-docker.pkg.dev/cluster-project/grain/guest",
+			want:       "us-docker.pkg.dev/cluster-project/grain/guest:sha-31d0973",
+		},
+		{
+			sandboxRef: "ghcr.io/bwsalmon/grain/guest:sha-abc1234",
+			mirrorRepo: "us-docker.pkg.dev/cluster-project/grain/guest:oldtag@sha256:deadbeef",
+			want:       "us-docker.pkg.dev/cluster-project/grain/guest:sha-abc1234",
+		},
+		{
+			sandboxRef: "us-docker.pkg.dev/source-project/grain/guest@sha256:053664f0a62cf642aff3b59530eaee5b22441cdfd9ba74ff6af2632a50f8891a",
+			mirrorRepo: "us-docker.pkg.dev/cluster-project/grain/guest",
+			want:       "us-docker.pkg.dev/cluster-project/grain/guest:sha256-053664f0a62c",
+		},
+	}
+	for _, tc := range cases {
+		if got := MirrorSandboxRef(tc.sandboxRef, tc.mirrorRepo); got != tc.want {
+			t.Errorf("MirrorSandboxRef(%q, %q) = %q, want %q", tc.sandboxRef, tc.mirrorRepo, got, tc.want)
+		}
+	}
+}
+
+func TestUpgraderImageMirrorsSandboxImageAndCleansOldMirroredTags(t *testing.T) {
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image.env")
+	tagged := filepath.Join(dir, "tagged")
+	pushed := filepath.Join(dir, "pushed")
+	removed := filepath.Join(dir, "removed")
+	const (
+		grainRepo    = "us-docker.pkg.dev/source-project/grain/grain"
+		guestRepo    = "us-docker.pkg.dev/source-project/grain/guest"
+		mirrorRepo   = "us-docker.pkg.dev/cluster-project/grain/guest"
+		mirrorDigest = "sha256:d210757e35832d3c8f47f11abd84c3d2f82fa0b7b2c88a13fd021d6999018a83"
+	)
+	writeTestFile(t, refFile, "GRAIN_IMAGE="+grainRepo+":v2\n")
+
+	u := newUpgrader(t, Config{
+		Image: &ImageConfig{
+			Repository:         grainRepo,
+			RefFile:            refFile,
+			SandboxImageArgs:   []string{"sandbox-image"},
+			SandboxImageMirror: mirrorRepo,
+			PullCmd:            []string{"true"},
+			TagCmd:             []string{"sh", "-c", `printf '%s -> %s\n' "$1" "$2" >> ` + tagged, "sh"},
+			PushCmd:            []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pushed, "sh"},
+			DigestCmd: []string{"sh", "-c",
+				`case "$1" in
+					` + mirrorRepo + `*) echo "` + mirrorRepo + `@` + mirrorDigest + `";;
+					*) echo "${1%:*}@` + testDigest + `";;
+				esac`,
+				"sh"},
+			RunCmd: []string{"sh", "-c",
+				`case "$1 $2" in
+					*v3*sandbox-image*) echo ` + guestRepo + `:sha-v3@` + testDigest + `;;
+					*v2*sandbox-image*) echo ` + guestRepo + `:sha-v2@` + testDigest + `;;
+					*) echo 7;;
+				esac`,
+				"sh"},
+			ListCmd: []string{"sh", "-c",
+				`case "$1" in
+					` + mirrorRepo + `)
+						echo ` + mirrorRepo + `:sha-v3
+						echo ` + mirrorRepo + `:sha-v2
+						echo ` + mirrorRepo + `:sha-v1
+						;;
+				esac`,
+				"sh"},
+			RemoveCmd: []string{"sh", "-c", `printf '%s\n' "$*" >> ` + removed + `; exit 0`, "sh"},
+		},
+		HealthCheckArgs: []string{"schema-version"},
+		StatusFile:      filepath.Join(dir, "upgrade-status.json"),
+	})
+
+	if err := u.Start("v3"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	status := waitForPhase(t, u, PhaseOK)
+
+	wantTag := guestRepo + ":sha-v3@" + testDigest + " -> " + mirrorRepo + ":sha-v3\n"
+	if got := readFile(t, tagged); got != wantTag {
+		t.Errorf("tagged = %q, want %q", got, wantTag)
+	}
+	wantPush := mirrorRepo + ":sha-v3\n"
+	if got := readFile(t, pushed); got != wantPush {
+		t.Errorf("pushed = %q, want %q", got, wantPush)
+	}
+	wantMirrored := mirrorRepo + ":sha-v3@" + mirrorDigest
+	if detail := stepDetail(t, status, stepSandbox); !strings.Contains(detail, wantMirrored) {
+		t.Errorf("%s step = %q, want it to include mirrored digest %q", stepSandbox, detail, wantMirrored)
+	}
+	if gotRemoved := readFile(t, removed); gotRemoved != mirrorRepo+":sha-v1\n" {
+		t.Errorf("removed images = %q, want only %q", gotRemoved, mirrorRepo+":sha-v1\n")
+	}
+}

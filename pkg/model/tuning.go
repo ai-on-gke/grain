@@ -79,6 +79,7 @@ var RecognizedGrainConfigParameters = map[string]struct{}{
 	"network_access":                 {},
 	"console_sessions":               {},
 	"sandbox_image":                  {},
+	"sandbox_image_mirror":           {},
 	"package_cache_enabled":          {},
 	"package_cache_size_gb":          {},
 	"actions_cache_enabled":          {},
