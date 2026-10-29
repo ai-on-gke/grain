@@ -634,10 +634,15 @@ export default function Sidebar({
           ? `${cachedActions.toLocaleString()} cache entries this deployment's CI jobs have left for each other`
           : undefined;
   // What the inbox holds: actionable tasks waiting on the reader
-  // (state.js's inboxCount), and the open operator notifications listed
-  // above them.
+  // (state.js's inboxCount), the open operator notifications listed
+  // above them, and the config repository's sync failure, which the
+  // Inbox lists as a row of its own and counts in its heading
+  // (InboxPage.jsx's StateSyncGroup). Without it a deployment whose
+  // only trouble was that sync showed a bare Inbox entry here while
+  // the page it opens said 1 (2026-10-29 intake walkthrough).
   const waitingTasks = inboxTasks(tasks).length;
-  const inboxCount = waitingTasks + notificationCount;
+  const syncFailing = config?.stateRepoSyncFailure ? 1 : 0;
+  const inboxCount = waitingTasks + notificationCount + syncFailing;
   const inboxTitle = [
     waitingTasks > 0
       ? `${waitingTasks} task${waitingTasks === 1 ? "" : "s"} waiting on you`
@@ -645,6 +650,7 @@ export default function Sidebar({
     notificationCount > 0
       ? `${notificationCount} notification${notificationCount === 1 ? "" : "s"}`
       : "",
+    syncFailing ? "settings are not being exported" : "",
   ]
     .filter(Boolean)
     .join(", ");

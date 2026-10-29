@@ -67,8 +67,11 @@ type Options struct {
 	Unconfigured     bool
 	AgentPaused      bool
 	MergeQueueStates bool
-	FakeCI           bool
-	GitHubSim        bool
+	// StalledTasks hands the UI the orchestrator's stall deadlines and
+	// seeds two tasks past them (demo_stalled.go).
+	StalledTasks bool
+	FakeCI       bool
+	GitHubSim    bool
 	// ScheduledWorkflows runs the daemon's "declarations" and
 	// "scheduled-workflows" reconcilers against -github-sim's repo, adds
 	// its candidate branch, and lets a -fake-ci run be finished
@@ -449,12 +452,20 @@ func Run(opts Options) error {
 	if opts.AgentPaused {
 		cfg.AgentPause = demoAgentPause(time.Now().UTC())
 	}
+	if opts.StalledTasks {
+		cfg = stalledTasksConfig(cfg)
+	}
 	if err := seedDemo(ctx, store, cfg); err != nil {
 		return fmt.Errorf("grain demo: seeding fake tasks: %v", err)
 	}
 	if opts.MergeQueueStates {
 		if err := seedMergeQueueStatesDemo(ctx, store, cfg); err != nil {
 			return fmt.Errorf("grain demo: seeding merge queue states: %v", err)
+		}
+	}
+	if opts.StalledTasks {
+		if err := seedStalledTasksDemo(ctx, store, cfg); err != nil {
+			return fmt.Errorf("grain demo: -stalled-tasks: %v", err)
 		}
 	}
 	if opts.MergeRules {
