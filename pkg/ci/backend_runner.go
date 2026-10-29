@@ -22,9 +22,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -199,6 +202,9 @@ type BackendRunner struct {
 	tracked map[string]trackedRunMeta // runID -> metadata
 	byReqID map[string]string         // requestID -> runID
 	syncMu  sync.Mutex
+	// reconciledAtStart is set once the in-flight runs carried over from
+	// a previous daemon have each been asked about directly (SyncOnce).
+	reconciledAtStart bool
 }
 
 var _ Runner = (*BackendRunner)(nil)
@@ -647,6 +653,17 @@ func (r *BackendRunner) SyncOnce(ctx context.Context, wait time.Duration, limit 
 		return err
 	}
 
+	if !r.reconciledAtStart {
+		// A run this runner tracked can have been lost while no daemon
+		// was watching -- grit's state reset and the cursor already moved
+		// to the new epoch -- and no event will ever name it again. Ask
+		// about each in-flight run once at start.
+		if err := r.reconcileInFlight(ctx, ""); err != nil {
+			return err
+		}
+		r.reconciledAtStart = true
+	}
+
 	savedEpoch, afterSeq, err := r.cursor.LoadCursor()
 	if err != nil {
 		return err
@@ -729,10 +746,29 @@ func (r *BackendRunner) resyncInFlight(ctx context.Context, newEpoch string) err
 		newEpoch = headBatch.Epoch
 	}
 
+	if err := r.reconcileInFlight(ctx, newEpoch); err != nil {
+		return err
+	}
+
+	latest, err := r.backend.Events(ctx, highWater, 0, 1000)
+	if err == nil && latest.NextSeq > 1 {
+		highWater = latest.NextSeq - 1
+	}
+	return r.cursor.SaveCursor(newEpoch, highWater)
+}
+
+// reconcileInFlight asks grit about every run this runner has not yet
+// concluded, recording what it says and concluding the ones it no longer
+// knows (concludeLostRun).
+func (r *BackendRunner) reconcileInFlight(ctx context.Context, epoch string) error {
 	for _, runID := range r.inFlightRunIDs() {
 		rs, rErr := r.backend.GetRun(ctx, runID)
 		if rErr != nil {
 			if apiErr, ok := rErr.(*gritapi.APIError); ok && apiErr.StatusCode == 404 {
+				r.mu.Lock()
+				meta := r.tracked[runID]
+				r.mu.Unlock()
+				r.concludeLostRun(meta, epoch)
 				continue
 			}
 			return rErr
@@ -741,12 +777,7 @@ func (r *BackendRunner) resyncInFlight(ctx context.Context, newEpoch string) err
 			return err
 		}
 	}
-
-	latest, err := r.backend.Events(ctx, highWater, 0, 1000)
-	if err == nil && latest.NextSeq > 1 {
-		highWater = latest.NextSeq - 1
-	}
-	return r.cursor.SaveCursor(newEpoch, highWater)
+	return nil
 }
 
 func (r *BackendRunner) handleEvent(ctx context.Context, ev gritapi.Event) error {
@@ -891,6 +922,13 @@ func (r *BackendRunner) verifyAndConcludeRun(ctx context.Context, rs gritapi.Run
 	// verification before being recorded in RunStore / ci.Gate.
 	if conclusion != ConclusionCancelled {
 		if err := r.verifyRunAttestation(ctx, rs, meta); err != nil {
+			var transient *transientGritError
+			if errors.As(err, &transient) {
+				// grit restarting, or a proxy in front of it, is not a
+				// verdict: leave the run in flight and let the next
+				// sync fetch the attestation again.
+				return err
+			}
 			conclusion = ConclusionErrored
 			runErr = fmt.Sprintf("attestation verification failed: %v", err)
 			// No job's conclusion is vouched for either: keep a
@@ -943,10 +981,20 @@ func (r *BackendRunner) verifyRunAttestation(ctx context.Context, rs gritapi.Run
 	runID := rs.ID
 	env, err := r.backend.GetAttestation(ctx, runID)
 	if err != nil {
-		return fmt.Errorf("fetching attestation for run %s: %w", runID, err)
+		err = fmt.Errorf("fetching attestation for run %s: %w", runID, err)
+		if isTransientGritError(err) {
+			return &transientGritError{err}
+		}
+		return err
+	}
+	if env == nil {
+		return fmt.Errorf("grit returned no attestation for run %s", runID)
 	}
 	keys, err := r.resolveKeySet(ctx)
 	if err != nil {
+		if isTransientGritError(err) {
+			return &transientGritError{err}
+		}
 		return err
 	}
 	stmt, err := attest.Verify(env, keys)
@@ -991,6 +1039,75 @@ func checkAttestedVerdict(stmt *attest.Statement, rs gritapi.RunStatus) error {
 		}
 	}
 	return nil
+}
+
+// transientGritError marks a failure to reach grit while verifying a run:
+// the verdict is retried on the next sync rather than recorded.
+type transientGritError struct{ err error }
+
+func (e *transientGritError) Error() string { return e.err.Error() }
+func (e *transientGritError) Unwrap() error { return e.err }
+
+// isTransientGritError reports whether err is grit being unreachable or
+// failing on its side (a transport error, 429 or 5xx) rather than an answer
+// about the run. Such an error must not be recorded as the run's verdict:
+// a 503 while grit restarted used to conclude the run errored for good
+// (docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md, F3).
+func isTransientGritError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var apiErr *gritapi.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode >= 500
+	}
+	var netErr net.Error
+	var opErr *net.OpError
+	return errors.As(err, &netErr) || errors.As(err, &opErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// concludeLostRun records a run grit no longer knows -- its state was
+// reset, so it answers 404 for the id -- as errored. Skipping it left the
+// run "running" in grain for ever, and every `grain ci wait` and gate on
+// it waiting with it (docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md, F4).
+func (r *BackendRunner) concludeLostRun(meta trackedRunMeta, newEpoch string) {
+	now := time.Now().UTC()
+	run, ok := r.store.Get(meta.RunID)
+	if !ok {
+		run = Run{
+			ID:          meta.RunID,
+			Key:         runKeyForMeta(meta),
+			Repo:        meta.Repo,
+			Ref:         meta.Ref,
+			Commit:      meta.Commit,
+			Event:       meta.Event,
+			RequestedBy: meta.RequestedBy,
+			Recheck:     meta.Recheck,
+			StartedAt:   &now,
+			Build:       BuildOf(version.Get()),
+		}
+	}
+	for i := range run.Jobs {
+		if !run.Jobs[i].Conclusion.Done() {
+			run.Jobs[i].Conclusion = ConclusionErrored
+		}
+	}
+	run.FinishedAt = &now
+	run.Conclusion = ConclusionErrored
+	run.Error = fmt.Sprintf("grit no longer has run %s (its state was reset): run it again", meta.RunID)
+	if newEpoch != "" {
+		run.Error = fmt.Sprintf("grit no longer has run %s (its state was reset; event stream epoch is now %s): run it again", meta.RunID, newEpoch)
+	}
+	r.store.Put(run)
+
+	r.mu.Lock()
+	meta.Concluded = true
+	r.tracked[meta.RunID] = meta
+	r.saveTrackedLocked()
+	r.mu.Unlock()
 }
 
 func mapConclusion(c string) Conclusion {
