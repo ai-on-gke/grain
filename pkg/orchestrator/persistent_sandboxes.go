@@ -639,9 +639,14 @@ func (s *PersistentSandboxSupervisor) build(ctx context.Context, pd persistentDe
 	}
 	e.set(func(e *persistentEntry) { e.state = PersistentStarting })
 	e.event("build", "acquiring sandbox %s", name)
+	var life time.Duration
+	if _, every, err := model.ParsePersistentRefresh(e.def.Refresh); err == nil && every > 0 {
+		life = every
+	}
 	sb, counted, err := pd.meter.Acquire(ctx, pd.sandboxes, model.SandboxKindAgent, name, Shape{
 		CPUs: e.def.CPUs, MemoryMB: e.def.MemoryMB, DiskGB: e.def.DiskGB, NetworkAccess: e.def.NetworkAccess,
 		Class: SandboxClassAgent,
+		Life:  life,
 	})
 	if err != nil {
 		return nil, nil, err
