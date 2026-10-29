@@ -90,6 +90,15 @@ type Observation struct {
 	LGTM          []string `json:"lgtm,omitempty"`
 	NeedsApproval []string `json:"needs_approval,omitempty"`
 	NeedsMailing  bool     `json:"needs_mailing,omitempty"`
+	// Submittable is the forge's own word that the CL can be submitted
+	// now, and Reasons why not when it cannot (stage S5, §6). Core's
+	// Submit gate adds its own reasons (SubmitBlockers) and never takes
+	// Submittable alone as enough.
+	Submittable bool     `json:"submittable,omitempty"`
+	Reasons     []string `json:"reasons,omitempty"`
+	// SnapshotAt is when the current snapshot was uploaded, which the
+	// stale-snapshot sync trigger reads (stage S6, §7).
+	SnapshotAt time.Time `json:"snapshot_at,omitempty"`
 }
 
 // Thread is one review thread on a change.
@@ -346,4 +355,21 @@ func HealthOf(kind string) HealthState {
 	healthMu.Lock()
 	defer healthMu.Unlock()
 	return health[kind]
+}
+
+// Forger is a Provider that names the forge its changes land on, as
+// merge metrics count them.
+type Forger interface {
+	Forge() string
+}
+
+// ForgeOf is the forge a change of kind lands on: its provider's Forge,
+// or the kind itself.
+func ForgeOf(kind model.LinkKind) string {
+	if p, ok := Lookup(kind); ok {
+		if f, ok := p.(Forger); ok && f.Forge() != "" {
+			return f.Forge()
+		}
+	}
+	return string(kind)
 }

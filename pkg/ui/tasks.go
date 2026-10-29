@@ -307,6 +307,10 @@ type Task struct {
 	// Review is the primary CL's review beside its chip, with its Mail
 	// and Publish replies buttons (change_review.go). Nil until observed.
 	CLReview *ChangeReview `json:"clReview,omitempty"`
+	// CLSubmit is the first live CL's Submit and Sync buttons, with why
+	// either is disabled (change_submit.go). Nil for a task with no live
+	// CL.
+	CLSubmit *ChangeSubmit `json:"clSubmit,omitempty"`
 	// ChangeTargetKind is the kind of non-git change this task's work is
 	// ("changelist"), or "" for a git task (model.ChangeTarget).
 	ChangeTargetKind string `json:"changeTargetKind,omitempty"`
@@ -1047,6 +1051,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 			if len(out.Changelists) == 0 {
 				out.Presubmit = changePresubmit(l.Target)
 				out.CLReview = changeReview(t.ID, l.Target)
+				out.CLSubmit = changeSubmit(t, state)
 			}
 			out.Changelists = append(out.Changelists, l.Target)
 		}

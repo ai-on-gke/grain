@@ -36,8 +36,15 @@ export const GOAL_KINDS = [
   ["pipeline-healthy", "Pipeline healthy"],
 ];
 
+// Kinds a goal can carry but the editor does not offer: declared by
+// propose_task or the API.
+const OTHER_KINDS = [["cl-submitted", "CL submitted"]];
+
 const kindLabel = (kind) =>
-  (GOAL_KINDS.find(([k]) => k === kind) || [kind, kind])[1];
+  ([...GOAL_KINDS, ...OTHER_KINDS].find(([k]) => k === kind) || [
+    kind,
+    kind,
+  ])[1];
 
 // goalSummary is the goal in a sentence: what it waits for.
 export function goalSummary(goal) {
@@ -51,6 +58,10 @@ export function goalSummary(goal) {
         : `${s.repo}#${s.number} merged`;
     case "tasks-closed":
       return `${(s.tasks || []).join(", ")} ${s.until || "closed"}`;
+    case "cl-submitted":
+      return s.task
+        ? `every CL of task ${s.task} submitted`
+        : `cl/${s.cl} submitted`;
     case "pipeline-healthy":
       return s.repos?.length
         ? `the pipeline healthy for ${s.repos.join(", ")}`

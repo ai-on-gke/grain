@@ -1249,6 +1249,11 @@ const (
 	// pending CL on submit records the submitted number here. A work tree
 	// reads it as cl-submitted.
 	LinkChangelistSubmitted LinkKind = "changelist-submitted"
+	// LinkChangelistAbandoned records a task's CL that was abandoned
+	// (-> "cl/<number>"), as a poll found it (changelists.md §7). It is
+	// not a change link: a task whose every CL is abandoned no longer
+	// awaits a Submit, and reads awaiting_reply once its run is over.
+	LinkChangelistAbandoned LinkKind = "changelist-abandoned"
 	// LinkCLThread records one review thread on a task's CL that grain
 	// has already sent a run (or a running run's addendum) to deal with
 	// (-> "cl/<number>:<comment id>"): LinkReviewThread's job for a CL.
