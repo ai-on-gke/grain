@@ -427,6 +427,13 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err := store.SetSpoolCursor(ctx, "a1b2-1", 987654, sub); err != nil {
 		t.Fatalf("advancing a spool cursor: %v", err)
 	}
+	// A live k8s-granule sandbox's reverse-channel token hash and expiry
+	// (sandbox_access).
+	if err := store.SetSandboxAccess(ctx, "c3d4-1",
+		"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		sub.Add(time.Hour)); err != nil {
+		t.Fatalf("recording sandbox access credential: %v", err)
+	}
 	// What a run said when it failed for a reason grain could not name
 	// (task_run_unmatched_failure) -- the one table here whose whole
 	// content is a provider's own words, so the awkward string is the
