@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
@@ -81,6 +82,10 @@ func TestTheAllowlistOffersAContainerEquivalentClaude(t *testing.T) {
 	c := a.Lookup(hostd.KindCLI, "codex-detached")
 	if c == nil || c.Path != "/usr/local/lib/grain/hostd/current/codex" || c.SetEnv["HOME"] != "/d/home" {
 		t.Errorf("codex-detached = %+v", c)
+	}
+	gotCodex, wantCodex := slices.Sorted(slices.Values(c.Env)), slices.Sorted(slices.Values(codex.HostdEnv()))
+	if !slices.Equal(gotCodex, wantCodex) {
+		t.Errorf("codex-detached env = %v, want exactly what pkg/agent/codex sends: %v", gotCodex, wantCodex)
 	}
 	// The operator's own entries keep their names: nothing called claude.
 	if a.Lookup(hostd.KindCLI, "claude") != nil {
@@ -177,9 +182,9 @@ func TestClaudeDefaultsToDetachedWithHostd(t *testing.T) {
 			t.Errorf("%v: GRAIN_CLAUDE_RUN = %q, want %q", tc.env, v, tc.want)
 		}
 	}
-	// detached is claude's alone, for now.
+	// detached is claude's and codex's.
 	text := setupText(t)
-	contains(t, text, `only claude has a detached run location yet`)
+	contains(t, text, `only claude and codex have a detached run location`)
 }
 
 // The extractor takes the image's claude, codex and kubectl out beside
@@ -248,13 +253,15 @@ esac
 	}
 
 	run("sha256:aaaaaaaaaaaa1")
-	for _, name := range []string{"grain", "claude", "codex", "kubectl"} {
+	for _, name := range []string{"grain", "claude", "codex", "codex.bin", "kubectl"} {
 		p := filepath.Join(versions, "current", name)
 		if fi, err := os.Stat(p); err != nil || fi.Mode()&0o111 == 0 {
 			t.Fatalf("%s: %v (mode %v)", p, err, fi)
 		}
 	}
 	contains(t, read(filepath.Join(versions, "aaaaaaaaaaaa", "claude")), "claude sha256:aaaaaaaaaaaa1")
+	contains(t, read(filepath.Join(versions, "aaaaaaaaaaaa", "codex.bin")), "codex sha256:aaaaaaaaaaaa1")
+	contains(t, read(filepath.Join(versions, "aaaaaaaaaaaa", "codex")), "codex-detached")
 	// No stage is left behind.
 	if left, _ := filepath.Glob(filepath.Join(dir, "lib", ".extract-stage.*")); len(left) != 0 {
 		t.Errorf("stage left behind: %v", left)
@@ -284,6 +291,22 @@ esac
 	contains(t, read(cpLog), "claude deref=1")
 	if got := read(filepath.Join(versions, "aaaaaaaaaaaa", "claude")); got != "#!/bin/sh\necho running\n" {
 		t.Errorf("a version's claude was written over: %q", got)
+	}
+
+	// A version an older extractor installed before codex was wrapped has
+	// the real codex at codex and no codex.bin: the real one moves to
+	// codex.bin and the wrapper takes its place, rather than the wrapper
+	// being skipped because codex.bin was copied in beside it.
+	if err := os.Remove(filepath.Join(versions, "aaaaaaaaaaaa", "codex.bin")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(versions, "aaaaaaaaaaaa", "codex"), []byte("#!/bin/sh\necho old codex\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run("sha256:aaaaaaaaaaaa1")
+	contains(t, read(filepath.Join(versions, "aaaaaaaaaaaa", "codex")), "codex-detached")
+	if got := read(filepath.Join(versions, "aaaaaaaaaaaa", "codex.bin")); got != "#!/bin/sh\necho old codex\n" {
+		t.Errorf("an older version's codex was not moved to codex.bin: %q", got)
 	}
 
 	// An upgrade is a new directory and a moved link: the old version's

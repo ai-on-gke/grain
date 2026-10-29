@@ -276,12 +276,12 @@ with the deployment's login:
    `cli codex-detached`), so an operator's existing `claude`/`codex`
    host entries, which point at a CLI on the host's PATH, keep their
    meaning.
-4. **A run location of its own.** `-claude-run=detached` (and Settings
-   → Models' "detached in grain hostd") selects it. `setup.sh` makes it
-   the default for claude when hostd is on. `container` stays available
-   as the explicit opt-out, and is what a hostd that is down or
-   incompatible falls back to, with the Settings warning `host` already
-   gives.
+4. **A run location of its own.** `-claude-run=detached` and
+   `-codex-run=detached` (and Settings → Models' "detached in grain
+   hostd") select it. `setup.sh` makes it the default for claude when
+   hostd is on. `container` stays available as the explicit opt-out, and
+   is what a hostd that is down or incompatible falls back to, with the
+   Settings warning `host` already gives.
 
 **Coverage, by what runs a CLI on a container install with hostd:**
 
@@ -290,8 +290,8 @@ with the deployment's login:
 | agy (Google edition) | hostd, detached | **yes** (adopted from the cursor) | — |
 | claude run | hostd, detached, from `cli claude-detached` (the installer's default with hostd, `GRAIN_CLAUDE_RUN=detached`) | **yes** (adopted from the cursor; `tests/installer/zz_hostd_test.go`) | — (`container` is the opt-out, and the fallback while hostd is down, incompatible or lacks the entry) |
 | claude run, Cloudtop install (`google/scripts/cloudtop-install.sh`) | `LocalHost` in the container: the installer passes `GRAIN_CLAUDE_RUN=container` before `setup.sh` picks its default, because a Cloudtop's exec policy blocks claude on the bare machine and `detached` execs the image's claude there | no: every claude run in flight is lost, re-queued with no strike. The check lists it as expected for this install (`AdoptionReport.Expected`), and Settings → Models and the upgrade pane say so, with the Google edition's caveat on detached | whether the exec policy lets hostd start `/usr/local/lib/grain/hostd/<image>/claude` has not been checked on a real Cloudtop (task 1506). If it does, the installer should default claude to `detached`. If it does not, claude needs a substrate the policy allows, such as a docker run host (`-run-host-image`), which on this install would need the kubeconfig and `kubectl` described above |
-| codex run | `LocalHost` in the container | no: lost, named in the check, and said in Settings → Models and the upgrade pane (`CLIRunResolution.UpgradeInterrupts`) | codex now implements `agent.ResultParser` and leaves a detached attempt alone (`pkg/agent/codex`, `TestResumeAdoptedHostdCodexRun`), and its `auth.json` refresh is grain's (`codex.Refresher`, open question 1), so the shared file is safe. What is left is its MCP endpoint: codex's grain tools are an HTTP adapter the daemon itself serves (`mcp.StartCommandHTTP`, [`codex-isolation.md`](codex-isolation.md)), which a codex detached in hostd would lose at the restart. Until that adapter runs outside the daemon, codex has no `detached` location (`noDetached` in `pkg/daemon/clirun.go`). |
-| console / Director session | a durable task: each turn is a `task_run` attempt on the session's framework (durable tasks DT-S10) | as its framework's runs do: **yes** for claude `detached` and agy through hostd, adopted like any run; no for a CLI in the container | — for the CLI, which is the framework's row above. Its `chat` wait (up to 1 h) is a poll loop in the CLI's own `mcpserver` (`daemonChat`), which treats a failed read as a gap rather than the end of the turn and bounds each read by the wait's deadline, so a reply posted after the restart reaches it (`TestDaemonChatWaitsThroughADaemonRestart`). The check and the upgrade pane name each session run and count them (`AdoptedRunNote.Session`). |
+| codex run | hostd, detached, from `cli codex-detached` (`-codex-run=detached` / Settings → Models; `GRAIN_CODEX_RUN=container` is the installer's default until flipped) | **yes** when `detached` (adopted from the cursor; `grain codex-detached` serves the run's loopback MCP HTTP adapter alongside `codex.bin` outside the daemon; `tests/installer/zz_hostd_test.go`) | — (`container` is the opt-out, and the fallback while hostd is down, incompatible or lacks the entry) |
+| console / Director session | a durable task: each turn is a `task_run` attempt on the session's framework (durable tasks DT-S10) | as its framework's runs do: **yes** for claude/codex `detached` and agy through hostd, adopted like any run; no for a CLI in the container | — for the CLI, which is the framework's row above. Its `chat` wait (up to 1 h) is a poll loop in the CLI's own `mcpserver` (`daemonChat`), which treats a failed read as a gap rather than the end of the turn and bounds each read by the wait's deadline, so a reply posted after the restart reaches it (`TestDaemonChatWaitsThroughADaemonRestart`). The check and the upgrade pane name each session run and count them (`AdoptedRunNote.Session`). |
 | run in setup (sandbox building, no CLI yet) | the daemon's goroutine | handed back at shutdown: finished interrupted with no strike, queued at once with its Run now and priority kept (task 837's rule), its sandbox released (`finishStoppedInSetup`; it used to read as `setup-failed`, a strike) | — |
 
 Kubernetes is unchanged: run pods (`-run-host-image=self`) are its
