@@ -301,7 +301,20 @@ func startCIRecheck(ctx context.Context, deps Deps, task model.Task, status mode
 func startChannelLostRecheck(ctx context.Context, deps Deps, task model.Task, status model.CIStatus,
 	run ci.Run, now time.Time) (bool, error) {
 
-	if status.RecheckOf != "" || task.Target == nil || len(channelLostJobs(run)) == 0 {
+	if status.RecheckOf != "" || task.Target == nil {
+		return false, nil
+	}
+	lost := channelLostJobs(run)
+	if len(lost) == 0 {
+		return false, nil
+	}
+	// The re-run takes every job of the run that did not pass
+	// (recheckTargets), so a job that failed beside the lost one gets
+	// the flake recheck too -- which this change's merge rules may refuse.
+	// Then the run is left to the errored path it took before.
+	if why := flakeRecheckRefusal(task); why != "" && len(recheckTargets(run, nil)) > len(lost) {
+		log.Printf("orchestrator: task %s: grain CI run %s lost a sandbox channel at %s, beside a job that "+
+			"did not pass for its own reasons; not rechecking it: %s", task.ID, run.ID, shortSHA(status.Commit), why)
 		return false, nil
 	}
 	started, rechecking, recheck, err := askCIRecheck(ctx, deps, task, status, run, ciDetail(run), now)

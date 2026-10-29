@@ -121,3 +121,39 @@ func TestAnErroredRunWithoutALostChannelIsNotRecheckedAtOnce(t *testing.T) {
 		t.Fatalf("%d uncached re-runs were asked for, want none", n)
 	}
 }
+
+// Under `flake_recheck: false`, a lost channel does not buy the flake
+// recheck for a job that failed beside it: the re-run would take every job
+// that did not pass, so no channel-lost re-run is started.
+func TestAChannelLostRecheckDoesNotRecheckAFailureFlakeRecheckFalseRefuses(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	no := false
+	declareMergeRules(t, ctx, store, repo, &model.MergeRules{Path: model.MergeRulesPath,
+		Rules: []model.MergeRule{{ID: "strict", Paths: []string{"pkg/**"},
+			MergePolicy: model.MergePolicy{FlakeRecheck: &no}}}})
+	task, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
+	task = grantCI(t, ctx, store, task)
+	classifyAs(t, ctx, store, client, repo, task.ID, branch, "pkg/x.go")
+	classified, err := store.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := newFakeCI()
+	runner.answerRechecks(recheckPasses) // a recheck would have called both green
+	first := startRequiredCI(t, ctx, store, client, runner, *classified, repo, branch)
+	failing := flakyJob()
+	failing.JobID, failing.Name = "lint", "lint"
+	runner.finish(first.RunID, ci.ConclusionErrored, channelLostJob(), failing)
+	if err := runCIReconciler(t, ctx, store, client, runner); err != nil {
+		t.Fatal(err)
+	}
+	if n := runner.rechecks(); n != 0 {
+		t.Fatalf("%d uncached re-run(s) asked for beside a failure `flake_recheck: false` refuses, want none", n)
+	}
+	if status := ciStatusOf(t, ctx, store, task.ID); status.Green() {
+		t.Fatalf("status = %+v: a failure under `flake_recheck: false` went green", status)
+	}
+}
