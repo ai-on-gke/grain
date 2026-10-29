@@ -78,3 +78,35 @@ func TestSubmitOnACLWaitsForItsRequiredReviews(t *testing.T) {
 		t.Fatal("Submit did not go through once the gate allowed it")
 	}
 }
+
+// A CL also held for a person's approval is gated all the same: the
+// approvals path turns auto-merge on by itself, so the review gate is
+// asked first.
+func TestSubmitWithApprovalsOnACLWaitsForItsRequiredReviews(t *testing.T) {
+	client, store, ctx := testClient(t)
+	gate := &gatedCLs{}
+	change.Register(gate)
+	t.Cleanup(func() { change.Unregister(model.LinkChangelist) })
+	if err := store.PutTask(ctx, model.Task{ID: "94", Title: "t", Intent: model.IntentImplement,
+		Links: []model.Link{{Kind: model.LinkChangelist, Target: "cl/94"},
+			model.ApprovalRequiredLink("builtin:path-triggers", []string{"carol"})}}); err != nil {
+		t.Fatal(err)
+	}
+	person := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "carol"})
+
+	if err := client.Submit(person, "94"); err == nil || !strings.Contains(err.Error(), "security review has not passed") {
+		t.Fatalf("Submit = %v, want it refused with the gate's reason", err)
+	}
+	task, _ := store.GetTask(ctx, "94")
+	if task.AutoMerge || len(model.PendingApprovals(*task)) != 1 {
+		t.Fatalf("a refused Submit changed the hold: automerge=%v pending=%+v", task.AutoMerge, model.PendingApprovals(*task))
+	}
+
+	gate.cleared = true
+	if err := client.Submit(person, "94"); err != nil {
+		t.Fatalf("Submit after the review passed: %v", err)
+	}
+	if task, _ := store.GetTask(ctx, "94"); !task.AutoMerge {
+		t.Fatal("Submit did not go through once the gate allowed it")
+	}
+}

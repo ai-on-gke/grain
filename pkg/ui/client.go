@@ -4791,12 +4791,10 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	if pending := model.PendingApprovals(*task); len(pending) > 0 && !task.AutoMerge {
-		return c.submitWithApprovals(ctx, *task, pending)
-	}
 	// A CL whose provider gates Submit on its required reviews
 	// (change.ReviewGate) is submitted only once they have passed on its
-	// current snapshot.
+	// current snapshot -- asked before the approvals path below, which
+	// turns auto-merge on by itself once the last approval is in.
 	if ok, reason, err := change.GateSubmit(ctx, *task); err != nil {
 		return fmt.Errorf("checking whether %s may be submitted: %w", id, err)
 	} else if !ok {
@@ -4804,6 +4802,9 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 			reason = "its required reviews have not passed on the current snapshot"
 		}
 		return validationErrorf("%s cannot be submitted yet: %s", id, reason)
+	}
+	if pending := model.PendingApprovals(*task); len(pending) > 0 && !task.AutoMerge {
+		return c.submitWithApprovals(ctx, *task, pending)
 	}
 	now, head := c.now(), c.submittedHead(ctx, *task)
 	if err := c.mutate(ctx, id, func(task *model.Task) error {
