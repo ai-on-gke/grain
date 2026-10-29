@@ -492,7 +492,7 @@ func Run(ctx context.Context, cfg Config) error {
 		var access *orchestrator.K8sGranuleAccess
 		var accessLive func(string) bool
 		if cfg.SandboxAccessAddr != "" {
-			if access, err = startSandboxAccess(ctx, cfg, k8sInstance, k8sNamespace, &accessLive); err != nil {
+			if access, err = startSandboxAccess(ctx, cfg, store, k8sInstance, k8sNamespace, &accessLive); err != nil {
 				return err
 			}
 		}

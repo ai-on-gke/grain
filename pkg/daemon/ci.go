@@ -839,6 +839,7 @@ func (s CiSandboxes) jobShape(req ci.SandboxRequest) orchestrator.Shape {
 		// interactive session preempts, and a preempted job is retried
 		// as infrastructure (ci.PreemptionReporter).
 		Class: orchestrator.SandboxClassCI,
+		Life:  req.Timeout,
 	}.AtLeast(s.defaultShape())
 }
 
@@ -2763,6 +2764,7 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 				ReleaseSecrets: ci.JobSecrets(pj.Job, plan.Request.ReleaseSecrets),
 				Builtin:        pj.Job.Builtin,
 				Shape:          pj.Job.Sandbox,
+				Timeout:        pj.Job.Timeout(),
 			}
 			sb, err := readopter.Readopt(ctx, sbReq)
 			if err != nil {

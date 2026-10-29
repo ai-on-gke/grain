@@ -288,10 +288,23 @@ import "strconv"
 // usernames passed to a workspace capability grant and used as the default
 // reviewer list when mailing a changelist (Task.Reviewers, Template.Reviewers).
 //
-// 62 adds `sandbox_image_mirror` to `grain_config`: an optional OCI
+// 62 adds the `sandbox_access` table: the SHA-256 token digest and expiry
+// time for each live k8s-granule sandbox's reverse control channel
+// (model.SandboxAccessCredential, docs/design/grain-on-gke.md#GKE-2).
+//
+// 63 adds `sandbox_image_mirror` to `grain_config`: an optional OCI
 // repository into which grain mirrors the build-stamped sandbox image on
 // upgrade and startup (model.Config.SandboxImageMirror).
-const SchemaVersion = 62
+const SchemaVersion = 63
+
+// sandboxAccessTable is the `sandbox_access` table, named once for Tables
+// and for the migration that adds it.
+const sandboxAccessTable = `CREATE TABLE IF NOT EXISTS ` + "`sandbox_access`" + ` (
+  ` + "`sandbox`" + `    TEXT     NOT NULL,
+  ` + "`token_hash`" + ` TEXT     NOT NULL,
+  ` + "`not_after`" + `  DATETIME NOT NULL,
+  PRIMARY KEY (` + "`sandbox`" + `)
+)`
 
 // externalAgentTokenTable and externalAgentTokenSequenceTable are named
 // once for Tables and for the migration that adds them.
@@ -3599,6 +3612,13 @@ var Tables = []string{
   ` + "`family`" + `  TEXT NOT NULL,
   PRIMARY KEY (` + "`task_id`" + `, ` + "`family`" + `)
 )`,
+
+	// Each live k8s-granule sandbox's reverse-channel token hash and expiry
+	// (model.SandboxAccessCredential, docs/design/grain-on-gke.md#GKE-2),
+	// kept so a restarting daemon can re-register readopted sandboxes with
+	// its acceptor before their wrappers reconnect. The raw token is never
+	// stored.
+	sandboxAccessTable,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and
