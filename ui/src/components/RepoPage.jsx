@@ -78,7 +78,7 @@ import { repoAdministered } from "../taskWrites.js";
 import { declaredPushRef } from "./Declared.jsx";
 import { DISCARD_PROMPT } from "./Overlay.jsx";
 import { guardLeaving, leavingLosesEdits } from "../unsavedEdits.js";
-import { revealFocusedTab } from "../tabStrip.js";
+import { revealFocusedTab, useRevealSelectedTab } from "../tabStrip.js";
 import { repoApiRoot } from "../repoApi.js";
 
 // latestPerName keeps the first row the branch list gives for each name.
@@ -1136,6 +1136,7 @@ export default function RepoPage({
   };
 
   const [ownTab, setOwnTab] = useState(() => tabFromHash(window.location.hash));
+  const tabStripRef = useRevealSelectedTab();
   const tab = onShowTab
     ? REPO_TABS.some((t) => t.id === repoTab)
       ? repoTab
@@ -1364,6 +1365,7 @@ export default function RepoPage({
           </Alert>
         )}
         <Tabs
+          ref={tabStripRef}
           value={tab}
           onChange={(_, next) => showTab(next)}
           variant="scrollable"
@@ -1796,6 +1798,7 @@ export default function RepoPage({
                     onRemove={ciCapsMethods.onRemove}
                     disabled={readOnly}
                     idPrefix="repo-ci"
+                    runKind="ci"
                   />
                 </Box>
               </Stack>

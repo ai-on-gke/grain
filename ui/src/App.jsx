@@ -3289,6 +3289,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       }
       onOpenTask={openTask}
       onAct={act}
+      onOpenHealth={() => openSystem("health")}
     />
   );
 
@@ -3505,6 +3506,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                           <CIPage
                             config={config}
                             onOpenRun={setOpenCIRunId}
+                            onOpenTask={openTask}
                             initialRepo={ciRepo}
                             showError={showError}
                           />

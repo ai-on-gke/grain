@@ -29,8 +29,9 @@ import (
 func captureLog(t *testing.T, f func()) string {
 	t.Helper()
 	var logs strings.Builder
+	prevLog := log.Writer()
 	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(prevLog) })
 	f()
 	return logs.String()
 }
