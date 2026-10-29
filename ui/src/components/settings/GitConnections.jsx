@@ -353,6 +353,7 @@ function GitConnectionsList({
   // Per-connection test state
   const [testingCred, setTestingCred] = useState(null);
   const [testResult, setTestResult] = useState(null);
+  const [actionError, setActionError] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -449,6 +450,7 @@ function GitConnectionsList({
     )
       return;
     setBusy(true);
+    setActionError(null);
     try {
       await api(
         `/api/deployment/git-connections/${encodeURIComponent(conn.credential)}`,
@@ -459,6 +461,7 @@ function GitConnectionsList({
       setReload((n) => n + 1);
       await onChanged?.();
     } catch (err) {
+      setActionError(err?.message || String(err));
       showError?.(err);
     } finally {
       setBusy(false);
@@ -467,6 +470,7 @@ function GitConnectionsList({
 
   const resetNewConnectionForm = () => {
     setAdding(false);
+    setActionError(null);
     setHost("");
     setKind("github");
     setAuthType("pat");
@@ -485,6 +489,7 @@ function GitConnectionsList({
 
   const saveNewConnection = async () => {
     setBusy(true);
+    setActionError(null);
     try {
       const body = {
         host: host.trim(),
@@ -517,6 +522,7 @@ function GitConnectionsList({
       setReload((n) => n + 1);
       await onChanged?.();
     } catch (err) {
+      setActionError(err?.message || String(err));
       showError?.(err);
     } finally {
       setBusy(false);
@@ -549,6 +555,17 @@ function GitConnectionsList({
           </Button>
         )}
       </Stack>
+
+      {actionError && (
+        <Alert
+          severity="error"
+          onClose={() => setActionError(null)}
+          sx={{ mb: 2 }}
+          data-testid="git-connections-error"
+        >
+          {actionError}
+        </Alert>
+      )}
 
       {connections.length === 0 && !loading ? (
         <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
