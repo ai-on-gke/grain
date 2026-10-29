@@ -61,6 +61,38 @@ func (s *Store) DeleteSandboxAccess(ctx context.Context, sandbox string) error {
 	})
 }
 
+// DeleteFinishedSandboxAccess clears the stored token hashes of sandboxes
+// whose owning task_run or ci_job has finished and that no unfinished run
+// or job still claims. SandboxAccessCredentials already leaves those rows
+// out, so nothing else ever sees them to clear them: a process that died
+// between finishing a run and releasing its sandbox would otherwise leave
+// the row behind for good.
+func (s *Store) DeleteFinishedSandboxAccess(ctx context.Context) error {
+	return s.write(ctx, "clear finished sandboxes' access credentials", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+DELETE FROM `+"`sandbox_access`"+`
+WHERE (
+    EXISTS (
+        SELECT 1 FROM `+"`task_run`"+` AS tr
+        WHERE tr.`+"`sandbox`"+` = `+"`sandbox_access`"+`.`+"`sandbox`"+` AND tr.`+"`finished_at`"+` IS NOT NULL
+    )
+    OR EXISTS (
+        SELECT 1 FROM `+"`ci_job`"+` AS cj
+        WHERE cj.`+"`sandbox`"+` = `+"`sandbox_access`"+`.`+"`sandbox`"+` AND cj.`+"`finished_at`"+` IS NOT NULL
+    )
+)
+AND NOT EXISTS (
+    SELECT 1 FROM `+"`task_run`"+` AS tr
+    WHERE tr.`+"`sandbox`"+` = `+"`sandbox_access`"+`.`+"`sandbox`"+` AND tr.`+"`finished_at`"+` IS NULL
+)
+AND NOT EXISTS (
+    SELECT 1 FROM `+"`ci_job`"+` AS cj
+    WHERE cj.`+"`sandbox`"+` = `+"`sandbox_access`"+`.`+"`sandbox`"+` AND cj.`+"`finished_at`"+` IS NULL
+)`)
+		return err
+	})
+}
+
 // GetSandboxAccess returns the stored token hash and expiry for sandbox, if
 // one is recorded.
 func (s *Store) GetSandboxAccess(ctx context.Context, sandbox string) (SandboxAccessCredential, bool, error) {

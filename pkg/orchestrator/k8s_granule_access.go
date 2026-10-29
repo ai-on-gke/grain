@@ -62,6 +62,7 @@ type SandboxAccessStore interface {
 	DeleteSandboxAccess(ctx context.Context, sandbox string) error
 	GetSandboxAccess(ctx context.Context, sandbox string) (model.SandboxAccessCredential, bool, error)
 	SandboxAccessCredentials(ctx context.Context) ([]model.SandboxAccessCredential, error)
+	DeleteFinishedSandboxAccess(ctx context.Context) error
 }
 
 // K8sGranuleAccess turns on granule's dial-out sandbox access channel
@@ -316,6 +317,11 @@ func (k *K8sGranuleSandboxes) sweepOrphanAccess(ctx context.Context) {
 	if k.cfg.Access != nil && k.cfg.Access.Store != nil {
 		if ctx == nil {
 			ctx = context.Background()
+		}
+		// Rows of sandboxes whose run has finished are not in the list
+		// below, so they are cleared here or never.
+		if err := k.cfg.Access.Store.DeleteFinishedSandboxAccess(ctx); err != nil {
+			log.Printf("orchestrator: clearing finished sandboxes' access credentials: %v", err)
 		}
 		if creds, err := k.cfg.Access.Store.SandboxAccessCredentials(ctx); err == nil {
 			for _, c := range creds {
