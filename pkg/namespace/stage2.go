@@ -792,8 +792,9 @@ var urlUserinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)([^/@\s
 // Redactor secrets, matching pkg/capability/grainlog.Redactor.
 func (s *Server) RedactGrainLogText(raw string) string {
 	lines := strings.Split(raw, "\n")
+	redactor := s.redactor()
 	for i, line := range lines {
-		line = redactLine(s.Redactor, line)
+		line = redactLine(redactor, line)
 		if strings.Contains(line, "://") && strings.Contains(line, "@") {
 			line = urlUserinfoPattern.ReplaceAllStringFunc(line, func(m string) string {
 				u, err := url.Parse(m)
