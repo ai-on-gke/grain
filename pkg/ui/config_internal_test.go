@@ -85,3 +85,59 @@ func TestInternalModeLetsGrainsOwnWritesThrough(t *testing.T) {
 		t.Fatalf("a write from grain's own code was refused: %v", err)
 	}
 }
+
+// openerStateRepo is a config repository that opens pull requests.
+type openerStateRepo struct {
+	*fakeStateRepo
+	got []ui.ConfigPullRequestRequest
+}
+
+func (o *openerStateRepo) OpenConfigPullRequest(_ context.Context, req ui.ConfigPullRequestRequest) (ui.ConfigPullRequest, error) {
+	o.got = append(o.got, req)
+	return ui.ConfigPullRequest{TaskID: "7", Number: 7, Branch: "grain/task-7", Base: "main"}, nil
+}
+
+// The refusal's own change, sent back as it is, opens the pull request;
+// anything that is not a refusal's change is refused before it reaches
+// the repository.
+func TestOpenConfigPullRequestTakesTheRefusalsChange(t *testing.T) {
+	t.Parallel()
+	opener := &openerStateRepo{fakeStateRepo: &fakeStateRepo{status: ui.StateRepoStatus{Branch: "main"}}}
+	_, client := testServer(t)
+	storeSettingsRow(t, client)
+	client.Config.StateRepo = opener
+	srv := ui.NewServerWithClient(client)
+
+	rec := do(t, srv, http.MethodPost, "/api/templates", `{"name":"T","title":"Fresh title"}`)
+	var refusal configRefusalBody
+	if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &refusal) != nil {
+		t.Fatalf("refusal: %d %s", rec.Code, rec.Body)
+	}
+	body, _ := json.Marshal(map[string]any{"title": "Add template T", "changes": refusal.Change})
+	rec = do(t, srv, http.MethodPost, "/api/state-repo/pull-requests", string(body))
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"branch":"grain/task-7"`) {
+		t.Fatalf("open: %d %s", rec.Code, rec.Body)
+	}
+	if len(opener.got) != 1 || opener.got[0].Title != "Add template T" || len(opener.got[0].Changes) != len(refusal.Change) {
+		t.Fatalf("the repository was asked %+v", opener.got)
+	}
+
+	for _, bad := range []string{
+		`{"changes":[]}`,
+		`{"changes":[{"path":"../etc/passwd","op":"modify","patch":"x"}]}`,
+		`{"changes":[{"path":".git/config","op":"modify","patch":"x"}]}`,
+		`{"changes":[{"path":"settings/templates.yml","op":"rename","patch":"x"}]}`,
+	} {
+		if rec := do(t, srv, http.MethodPost, "/api/state-repo/pull-requests", bad); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d %s", bad, rec.Code, rec.Body)
+		}
+	}
+	if len(opener.got) != 1 {
+		t.Fatalf("a refused change reached the repository: %+v", opener.got)
+	}
+
+	client.Config.StateRepo = nil
+	if rec := do(t, srv, http.MethodPost, "/api/state-repo/pull-requests", string(body)); rec.Code != http.StatusNotImplemented {
+		t.Fatalf("no config repository: %d %s", rec.Code, rec.Body)
+	}
+}

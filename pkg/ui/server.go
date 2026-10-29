@@ -505,6 +505,7 @@ func (s *Server) routes() {
 	s.route("GET /api/state-repo/files", s.handleListStateRepoFiles)
 	s.route("GET /api/state-repo/file", s.handleGetStateRepoFile)
 	s.route("POST /api/state-repo/sync", s.handleSyncStateRepo)
+	s.route("POST /api/state-repo/pull-requests", s.handleOpenConfigPullRequest)
 	s.route("POST /api/state-repo/remote", s.handleSetStateRepoRemote)
 	s.route("POST /api/state-repo/secrets-key", s.handleImportSecretsKey)
 	s.route("POST /api/state-repo/import-key", s.handleImportSecretsKey)

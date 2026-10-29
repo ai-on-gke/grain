@@ -274,6 +274,7 @@ var routeScopes = map[string]APIScope{
 	"GET /api/state-repo/files":                                            "settings:read",
 	"GET /api/state-repo/file":                                             "settings:read",
 	"POST /api/state-repo/sync":                                            "settings:write",
+	"POST /api/state-repo/pull-requests":                                   "settings:write",
 	"POST /api/state-repo/remote":                                          "settings:write",
 	"POST /api/state-repo/secrets-key":                                     "secrets:write",
 	"POST /api/state-repo/import-key":                                      "secrets:write",
