@@ -141,7 +141,14 @@ func (s *containerSandbox) DialPort(ctx context.Context, port int) (net.Conn, er
 	return dialGuestPort(ctx, s.runner, s.name, port)
 }
 
+type portDialRunner interface {
+	DialPort(ctx context.Context, port int) (net.Conn, error)
+}
+
 func dialGuestPort(ctx context.Context, runner sandboxRunner, name string, port int) (net.Conn, error) {
+	if pd, ok := runner.(portDialRunner); ok {
+		return pd.DialPort(ctx, port)
+	}
 	dialer, ok := runner.(streamRunner)
 	if !ok {
 		return nil, fmt.Errorf("orchestrator: sandbox %q's transport cannot open a connection into the guest", name)

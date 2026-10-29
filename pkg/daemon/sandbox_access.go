@@ -32,6 +32,36 @@ import (
 // puts in front of the acceptor, and so the default dial name.
 const SandboxAccessService = "grain-access"
 
+// validateK8sGranuleAccess checks -k8s-granule-access: "kubectl" (or
+// empty) always passes; "dialout" needs the acceptor (-sandbox-access-addr)
+// and a daemon running in-cluster, since the wrappers dial a Service only
+// pods can reach. There is no fallback to kubectl exec: a deployment that
+// asked for the channel and cannot have it is refused at startup rather
+// than quietly running the other way (docs/design/grain-on-gke.md#GKE-3).
+func validateK8sGranuleAccess(cfg Config, inCluster bool) error {
+	switch cfg.K8sGranuleAccess {
+	case "", orchestrator.K8sGranuleAccessKubectl:
+		return nil
+	case orchestrator.K8sGranuleAccessDialout:
+	default:
+		return fmt.Errorf("-k8s-granule-access=%q: want %q or %q", cfg.K8sGranuleAccess,
+			orchestrator.K8sGranuleAccessKubectl, orchestrator.K8sGranuleAccessDialout)
+	}
+	if !inCluster {
+		return fmt.Errorf("-k8s-granule-access=%s needs grain running in-cluster (sandbox wrappers dial a "+
+			"Service only pods can reach); this daemon is not in a Kubernetes pod -- use -k8s-granule-access=%s",
+			orchestrator.K8sGranuleAccessDialout, orchestrator.K8sGranuleAccessKubectl)
+	}
+	if cfg.SandboxAccessAddr == "" {
+		return fmt.Errorf("-k8s-granule-access=%s needs -sandbox-access-addr: the channel ends at its acceptor",
+			orchestrator.K8sGranuleAccessDialout)
+	}
+	if cfg.K8sGranuleReattachTimeout < 0 {
+		return fmt.Errorf("-k8s-granule-reattach-timeout=%s: must not be negative", cfg.K8sGranuleReattachTimeout)
+	}
+	return nil
+}
+
 // sandboxAccessDial is where wrappers dial the acceptor.
 func sandboxAccessDial(cfg Config, namespace string) string {
 	if cfg.SandboxAccessDial != "" {

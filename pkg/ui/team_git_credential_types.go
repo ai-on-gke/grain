@@ -417,7 +417,18 @@ func (c *Client) checkSSHCredential(ctx context.Context, cred gitproxy.Credentia
 		}
 		out.Repos = append(out.Repos, verdict)
 	}
-	if !out.OK {
+	// An SSH key is only ever checked by reading a repository with it:
+	// with none in reach of the check nothing was dialled at all, which
+	// is not the same as the key working, and reporting it as accepted
+	// told an operator a key for a host that does not even resolve was
+	// fine.
+	if len(out.Repos) == 0 && out.Skipped == 0 {
+		out.OK = false
+		out.Error = "nothing was tested: an SSH key is checked by reading a repository with it, and no repository on " +
+			cred.SSH.Host + " is in this check's reach -- give the connection an owner/repo scope, or add a repository on " +
+			cred.SSH.Host + " to this deployment"
+	}
+	if !out.OK && out.Error == "" {
 		out.Error = "the SSH key could not read every repository"
 		for _, r := range out.Repos {
 			if r.Error != "" {

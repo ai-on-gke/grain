@@ -1792,7 +1792,7 @@ var withheldNativeTools = []string{
 	"view_file", "write_to_file", "replace_file_content",
 	"multi_replace_file_content", "sed_file", "list_dir",
 	"grep_search", "find_by_name", "notebook_edit", "notebook_execution",
-	"define_subagent", "invoke_subagent",
+	"define_subagent", "invoke_subagent", "run_workflow",
 }
 
 // IsWithheldNativeTool reports whether name is one of agy's own tools

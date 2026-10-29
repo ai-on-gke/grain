@@ -54,6 +54,22 @@ func unconfigureDemo(ctx context.Context, store *model.Store, cfg ui.Config) (ui
 	return cfg, store.PutConfig(ctx, *stored)
 }
 
+// forgetDemoGitConnections takes the seeded git connection away from an
+// -unconfigured demo, after the seeds that need it to file their tasks.
+// unconfigureDemo drops only the credential files, which left the
+// deployment listing a connection named "default": hasGitCredential
+// stayed true and the "add a git connection first" notice on New task
+// and Repos never showed.
+func forgetDemoGitConnections(ctx context.Context, store *model.Store) error {
+	stored, err := store.GetConfig(ctx)
+	if err != nil || stored == nil {
+		return err
+	}
+	stored.GitConnections = nil
+	stored.GitCredential = ""
+	return store.PutConfig(ctx, *stored)
+}
+
 // demoAgentPause is a real orchestrator.Pause, begun the way a run that
 // met a provider's usage limit begins one -- on the demo's own Gemini
 // connection, which belongs to the default team -- so the agent-pause

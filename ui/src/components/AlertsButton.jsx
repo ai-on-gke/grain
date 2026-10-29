@@ -69,6 +69,7 @@ export default function AlertsButton({
   onOpenConfigRepo,
   onOpenTask,
   onAct,
+  onOpenHealth,
 }) {
   const [anchor, setAnchor] = useState(null);
   const count = alerts.length;
@@ -151,6 +152,31 @@ export default function AlertsButton({
           onOpenTask={onOpenTask}
           onAct={onAct}
         />
+        {/* "See all": System → Health lists these same alerts beside what
+            the popover has no room for -- the config repo's backing
+            state, settings waiting on a restart -- so it is offered
+            whether or not anything is alerting (settings-panel.md §4.1). */}
+        {onOpenHealth && (
+          <Box
+            sx={{
+              px: 1,
+              pb: 1,
+              display: "flex",
+              justifyContent: "flex-end",
+            }}
+          >
+            <Button
+              size="small"
+              data-testid="alerts-see-all"
+              onClick={() => {
+                setAnchor(null);
+                onOpenHealth();
+              }}
+            >
+              See all on System → Health
+            </Button>
+          </Box>
+        )}
       </Popover>
     </>
   );

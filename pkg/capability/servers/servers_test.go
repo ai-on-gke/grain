@@ -364,6 +364,10 @@ func TestABuiltinWaitingForConfigurationNeedsConfigAndAliasesResolve(t *testing.
 	}
 	if s := byID[configMap]; s.State != NeedsConfig || len(s.Methods) != 0 {
 		t.Errorf("a built-in offering no methods = %+v, want needs-config", s)
+	} else if !strings.Contains(s.Reason, "Edit server settings") {
+		// Settings shows this reason beside the server; it used to say
+		// "open Configure", a control that page does not have.
+		t.Errorf("needs-config reason = %q, want it to name the Edit server settings control", s.Reason)
 	}
 	if s := byID[other]; s.State != Failed {
 		t.Errorf("an operator's own broken entry = %+v, want failed, not needs-config", s)
