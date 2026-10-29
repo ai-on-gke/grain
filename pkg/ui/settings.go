@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -1883,7 +1884,11 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.SandboxImageMirror = mirror
 	}
 	if req.K8sNamespace != nil {
-		cfg.K8sNamespace = strings.TrimSpace(*req.K8sNamespace)
+		ns := strings.TrimSpace(*req.K8sNamespace)
+		if ns != "" && !k8sLabelName.MatchString(ns) {
+			return model.Config{}, validationErrorf("k8sNamespace %q is not a Kubernetes namespace name: at most 63 lowercase letters, digits and '-', starting and ending with a letter or digit", ns)
+		}
+		cfg.K8sNamespace = ns
 	}
 	if req.K8sKubectl != nil {
 		cfg.K8sKubectl = strings.TrimSpace(*req.K8sKubectl)
@@ -1936,13 +1941,25 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.K8sContainer = strings.TrimSpace(*req.K8sContainer)
 	}
 	if req.K8sPriorityClassInteractive != nil {
-		cfg.K8sPriorityClassInteractive = strings.TrimSpace(*req.K8sPriorityClassInteractive)
+		name, err := k8sPriorityClassName("k8sPriorityClassInteractive", *req.K8sPriorityClassInteractive)
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sPriorityClassInteractive = name
 	}
 	if req.K8sPriorityClassAgent != nil {
-		cfg.K8sPriorityClassAgent = strings.TrimSpace(*req.K8sPriorityClassAgent)
+		name, err := k8sPriorityClassName("k8sPriorityClassAgent", *req.K8sPriorityClassAgent)
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sPriorityClassAgent = name
 	}
 	if req.K8sPriorityClassCI != nil {
-		cfg.K8sPriorityClassCI = strings.TrimSpace(*req.K8sPriorityClassCI)
+		name, err := k8sPriorityClassName("k8sPriorityClassCi", *req.K8sPriorityClassCI)
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sPriorityClassCI = name
 	}
 	if req.PackageCacheEnabled != nil {
 		cfg.PackageCacheEnabled = *req.PackageCacheEnabled
@@ -2395,4 +2412,25 @@ func gitHubHostSetting(raw string) (string, error) {
 		}
 	}
 	return host, nil
+}
+
+// k8sLabelName is a Kubernetes DNS-1123 label, what a namespace name
+// must be; k8sSubdomainName a DNS-1123 subdomain, what a PriorityClass
+// name must be. A name outside them is one the API server refuses on
+// every pod grain creates, so it is refused here, where it is typed,
+// instead (the connections and infrastructure settings walkthrough of
+// 2026-10-29 saved "Bad_Class" without a word).
+var (
+	k8sLabelName     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+	k8sSubdomainName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+)
+
+// k8sPriorityClassName trims a priority class setting and refuses a
+// name Kubernetes could never accept. Empty is valid: it sets none.
+func k8sPriorityClassName(key, raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name != "" && (len(name) > 253 || !k8sSubdomainName.MatchString(name)) {
+		return "", validationErrorf("%s %q is not a Kubernetes PriorityClass name: lowercase letters, digits, '-' and '.', starting and ending with a letter or digit", key, name)
+	}
+	return name, nil
 }
