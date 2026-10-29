@@ -283,7 +283,11 @@ import "strconv"
 //
 // 60 adds `provider` to `task_run_check_wait`, labelling each recorded CI
 // wait with the CI it was on (grain, github, tap).
-const SchemaVersion = 60
+//
+// 61 adds `sandbox_image_mirror` to `grain_config`: an optional OCI
+// repository into which grain mirrors the build-stamped sandbox image on
+// upgrade and startup (model.Config.SandboxImageMirror).
+const SchemaVersion = 61
 
 // externalAgentTokenTable and externalAgentTokenSequenceTable are named
 // once for Tables and for the migration that adds them.
@@ -1948,6 +1952,7 @@ var Tables = []string{
   ` + "`auto_upgrade_time`" + `            TEXT    NOT NULL DEFAULT '',
   ` + "`judgement_model`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`external_agent_api`" + `           INTEGER NOT NULL DEFAULT 0,
+  ` + "`sandbox_image_mirror`" + `         TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

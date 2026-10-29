@@ -40,6 +40,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/k8s"
 )
 
 // K8sGranuleOptions configures -platform=k8s-granule: which manifest to
@@ -435,7 +437,9 @@ func checkK8sGranuleNestedVirt(g K8sGranuleOptions, dataDir string, timeout time
 						"module), or pin sandboxes to a pool that has it with -k8s-node-selector.\n\n%s", diagnosis)})
 				return false, false
 			}
-			if terminated {
+			if hint := k8s.ImagePullMirrorHint(diagnosis, g.Image, ""); hint != "" {
+				explanation = hint
+			} else if terminated {
 				explanation = fmt.Sprintf(
 					"the container already exited rather than timing out waiting to boot -- a likely sign "+
 						"that %q is not a packed guest (a self-contained image with its own disk and kernel "+

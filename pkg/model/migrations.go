@@ -333,6 +333,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `task_run_check_wait` ADD COLUMN `provider` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     61,
+		Description: "add sandbox_image_mirror to grain_config for mirroring stamped sandbox images",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `sandbox_image_mirror` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

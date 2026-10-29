@@ -15,14 +15,23 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
+	"slices"
 	"strings"
+	"sync"
 
+	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // granuleImageFlag is granule's own flag naming the image a VM's
@@ -294,6 +303,18 @@ func sandboxImageArgs(granuleSandboxes bool) []string {
 	return []string{"sandbox-image"}
 }
 
+// upgradeSandboxImageArgs returns the subcommand an off-cluster ModeImage
+// upgrade runs inside a candidate grain image to learn which sandbox guest
+// image to pull (and optionally mirror) alongside it.
+//
+// Included for both local GranuleSandboxes and off-cluster K8sGranuleSandboxes
+// (as well as any deployment with a sandbox image mirror configured), so a
+// host deployment running kubernetes-granule pulls and mirrors the candidate
+// build's guest image during stageImage before cutting over.
+func upgradeSandboxImageArgs(cfg Config) []string {
+	return sandboxImageArgs(cfg.GranuleSandboxes || cfg.K8sGranuleSandboxes || sandboxImageMirrorRepo(cfg) != "")
+}
+
 // sandboxImagePin is upgrade.ImageConfig.SandboxImagePin: the sandbox
 // image this deployment's own -granule-create-arg names, which wins over
 // whatever the newly pulled build asks for (sandboxImageCreateArgs), so
@@ -417,10 +438,241 @@ func customSandboxImageFor(cfg Config) string {
 			return ""
 		}
 	case cfg.K8sSandboxes, cfg.K8sGranuleSandboxes:
+		if mirrorRepo := sandboxImageMirrorRepo(cfg); mirrorRepo != "" && isMirroredGuestRef(custom, mirrorRepo) {
+			return ""
+		}
 	default:
 		return ""
 	}
 	return custom
+}
+
+// imageTag extracts the tag portion of ref (after the last ':' following the
+// last '/', with any '@digest' stripped), or "" if ref has no tag.
+func imageTag(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if at := strings.LastIndex(ref, "@"); at >= 0 {
+		ref = ref[:at]
+	}
+	if colon := strings.LastIndex(ref, ":"); colon > strings.LastIndex(ref, "/") {
+		return ref[colon+1:]
+	}
+	return ""
+}
+
+// sandboxImageMirrorRepo returns the OCI repository (without tag or digest)
+// into which the build-stamped guest sandbox image should be mirrored for
+// cluster pulls, or "" when mirroring is not configured.
+//
+// An explicit cfg.SandboxImageMirror (-sandbox-image-mirror /
+// grain_config.sandbox_image_mirror) always wins. Otherwise, on a
+// kubernetes-granule deployment whose k8s_granule_image or sandbox_image
+// names a bare Artifact Registry / GCR repository in another GCP project
+// (e.g. "us-docker.pkg.dev/<project>/grain/guest") or a "sha-" guest tag in
+// another project's ".../guest" repository, that repository is derived as the
+// mirror target so upgrades automatically advance the mirrored guest image
+// instead of staying pinned to an older commit's digest.
+func sandboxImageMirrorRepo(cfg Config) string {
+	if mirror := strings.TrimSpace(cfg.SandboxImageMirror); mirror != "" {
+		return imageRepository(mirror)
+	}
+	if !cfg.K8sGranuleSandboxes {
+		return ""
+	}
+	stampedRepo := imageRepository(DefaultSandboxImage)
+	for _, candidate := range []string{cfg.K8sGranuleImage, cfg.CustomSandboxImage, cfg.SandboxImage} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		repo := imageRepository(candidate)
+		_, project, _ := k8s.ImageRegistryProject(repo)
+		if repo == "" || repo == stampedRepo || project == "" {
+			continue
+		}
+		tag := imageTag(candidate)
+		if candidate == repo || (strings.HasSuffix(repo, "/guest") && strings.HasPrefix(tag, "sha-")) {
+			return repo
+		}
+	}
+	return ""
+}
+
+// isMirroredGuestRef reports whether ref is the bare mirror repository or a
+// mirrored guest tag ("sha-..." or matching DefaultSandboxImage's tag) inside
+// mirrorRepo.
+func isMirroredGuestRef(ref, mirrorRepo string) bool {
+	ref = strings.TrimSpace(ref)
+	mirrorRepo = imageRepository(strings.TrimSpace(mirrorRepo))
+	if ref == "" || mirrorRepo == "" {
+		return false
+	}
+	if imageRepository(ref) != mirrorRepo {
+		return false
+	}
+	tag := imageTag(ref)
+	return tag == "" || strings.HasPrefix(tag, "sha-") || tag == imageTag(DefaultSandboxImage)
+}
+
+var (
+	mirroredSandboxImagesMu  sync.Mutex
+	mirroredSandboxImages    = map[string]string{}
+	mirroredSandboxWarned    = map[string]bool{}
+	sandboxMirrorDockerCmd   = []string{"docker"}
+	sandboxMirrorTokenSource = registryauth.Token
+	mirrorSandboxImageFunc   = defaultMirrorSandboxImage
+)
+
+// ResetMirroredSandboxImageCacheForTest clears the in-memory mirrored sandbox
+// image cache between unit tests.
+func ResetMirroredSandboxImageCacheForTest() {
+	mirroredSandboxImagesMu.Lock()
+	defer mirroredSandboxImagesMu.Unlock()
+	clear(mirroredSandboxImages)
+	clear(mirroredSandboxWarned)
+}
+
+// resolveOrMirrorSandboxImage resolves the mirrored guest image reference in
+// mirrorRepo corresponding to sourceRef (pulling sourceRef, tagging and
+// pushing it to mirrorRepo, and pinning to mirrorRepo's RepoDigest when local
+// docker is available).
+func resolveOrMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo string) string {
+	mirrorRepo = imageRepository(strings.TrimSpace(mirrorRepo))
+	targetTagRef := upgrade.MirrorSandboxRef(sourceRef, mirrorRepo)
+	if targetTagRef == "" {
+		return sourceRef
+	}
+	cacheKey := sourceRef + "|" + mirrorRepo
+	mirroredSandboxImagesMu.Lock()
+	if cached, ok := mirroredSandboxImages[cacheKey]; ok {
+		mirroredSandboxImagesMu.Unlock()
+		return cached
+	}
+	mirroredSandboxImagesMu.Unlock()
+
+	pinned, err := mirrorSandboxImageFunc(ctx, sourceRef, mirrorRepo, targetTagRef)
+	if err != nil {
+		mirroredSandboxImagesMu.Lock()
+		alreadyWarned := mirroredSandboxWarned[cacheKey]
+		mirroredSandboxWarned[cacheKey] = true
+		mirroredSandboxImagesMu.Unlock()
+		if !alreadyWarned {
+			log.Printf("WARNING: mirroring sandbox image %s to %s failed (%v); using %s", sourceRef, mirrorRepo, err, targetTagRef)
+		}
+		return targetTagRef
+	}
+	if pinned == "" {
+		pinned = targetTagRef
+	}
+	mirroredSandboxImagesMu.Lock()
+	mirroredSandboxImages[cacheKey] = pinned
+	mirroredSandboxImagesMu.Unlock()
+	return pinned
+}
+
+func defaultMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo, targetTagRef string) (string, error) {
+	if LocalSandboxes != nil && slices.Equal(sandboxMirrorDockerCmd, []string{"docker"}) {
+		return targetTagRef, nil
+	}
+	if len(sandboxMirrorDockerCmd) == 0 {
+		return targetTagRef, nil
+	}
+	if _, err := exec.LookPath(sandboxMirrorDockerCmd[0]); err != nil {
+		return targetTagRef, nil
+	}
+
+	// Fast path: if stageImage (or an earlier startup) already pushed
+	// targetTagRef and local docker has its RepoDigest for mirrorRepo,
+	// resolve the digest directly without re-pushing.
+	if pinned := inspectMirroredRepoDigest(ctx, targetTagRef, mirrorRepo, targetTagRef); pinned != "" {
+		return pinned, nil
+	}
+	if pinned := inspectMirroredRepoDigest(ctx, sourceRef, mirrorRepo, targetTagRef); pinned != "" {
+		return pinned, nil
+	}
+
+	// Ensure sourceRef is present locally before tagging.
+	if _, err := runSandboxMirrorDocker(ctx, nil, "image", "inspect", "--format", "{{.Id}}", sourceRef); err != nil {
+		_ = sandboxMirrorLogin(ctx, sourceRef)
+		if _, pullErr := runSandboxMirrorDocker(ctx, nil, "pull", sourceRef); pullErr != nil {
+			return "", fmt.Errorf("docker pull %s: %w", sourceRef, pullErr)
+		}
+	}
+	if _, err := runSandboxMirrorDocker(ctx, nil, "tag", sourceRef, targetTagRef); err != nil {
+		return "", fmt.Errorf("docker tag %s %s: %w", sourceRef, targetTagRef, err)
+	}
+	_ = sandboxMirrorLogin(ctx, targetTagRef)
+	if _, err := runSandboxMirrorDocker(ctx, nil, "push", targetTagRef); err != nil {
+		return "", fmt.Errorf("docker push %s: %w", targetTagRef, err)
+	}
+	if pinned := inspectMirroredRepoDigest(ctx, targetTagRef, mirrorRepo, targetTagRef); pinned != "" {
+		log.Printf("grain daemon: mirrored sandbox image %s -> %s", sourceRef, pinned)
+		return pinned, nil
+	}
+	log.Printf("grain daemon: mirrored sandbox image %s -> %s", sourceRef, targetTagRef)
+	return targetTagRef, nil
+}
+
+func inspectMirroredRepoDigest(ctx context.Context, inspectRef, mirrorRepo, targetTagRef string) string {
+	out, err := runSandboxMirrorDocker(ctx, nil, "image", "inspect", "--format", "{{json .RepoDigests}}", inspectRef)
+	if err != nil {
+		return ""
+	}
+	var digests []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &digests); err != nil || len(digests) == 0 {
+		return ""
+	}
+	prefix := mirrorRepo + "@"
+	for _, d := range digests {
+		if strings.HasPrefix(d, prefix) {
+			if _, digest, ok := strings.Cut(d, "@"); ok && digest != "" {
+				return targetTagRef + "@" + digest
+			}
+		}
+	}
+	if inspectRef == targetTagRef && len(digests) == 1 {
+		if _, digest, ok := strings.Cut(digests[0], "@"); ok && digest != "" {
+			return targetTagRef + "@" + digest
+		}
+	}
+	return ""
+}
+
+func sandboxMirrorLogin(ctx context.Context, imageRef string) error {
+	host := registryauth.HostOf(imageRef)
+	if !registryauth.IsGoogleRegistry(host) || sandboxMirrorTokenSource == nil {
+		return nil
+	}
+	token, err := sandboxMirrorTokenSource(ctx)
+	if err != nil || token == "" {
+		return err
+	}
+	_, err = runSandboxMirrorDocker(ctx, strings.NewReader(token+"\n"),
+		"login", "-u", "oauth2accesstoken", "--password-stdin", "https://"+host)
+	return err
+}
+
+func runSandboxMirrorDocker(ctx context.Context, stdin *strings.Reader, args ...string) (string, error) {
+	cmdline := append(slices.Clone(sandboxMirrorDockerCmd), args...)
+	cmd := exec.CommandContext(ctx, cmdline[0], cmdline[1:]...)
+	cmd.Env = append([]string(nil), os.Environ()...)
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	return out.String(), err
+}
+
+func checkClusterSandboxImageConnectivity(ctx context.Context, cfg Config, imageRef string) error {
+	client := k8s.Client{
+		Namespace:  firstNonEmpty(cfg.K8sNamespace, model.DefaultK8sNamespace),
+		Kubectl:    cfg.K8sKubectl,
+		Kubeconfig: EffectiveK8sKubeconfig(cfg),
+	}
+	return client.CheckImagePullConnectivity(ctx, imageRef)
 }
 
 // activeSandboxImageFor is the OCI image new sandboxes on cfg's active

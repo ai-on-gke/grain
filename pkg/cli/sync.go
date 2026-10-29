@@ -326,6 +326,7 @@ var settingsDiffRows = []settingsDiffRow{
 	// replaced what runs inside every sandbox on this deployment has to
 	// say so on one line of a workflow log like every other change here.
 	{"sandboxImage", "sandbox image", func(s ui.Settings) any { return s.SandboxImage }},
+	{"sandboxImageMirror", "sandbox image mirror", func(s ui.Settings) any { return s.SandboxImageMirror }},
 	{"k8sNamespace", "k8s namespace", func(s ui.Settings) any { return s.K8sNamespace }},
 	{"k8sKubectl", "k8s kubectl", func(s ui.Settings) any { return s.K8sKubectl }},
 	{"k8sSandboxImage", "k8s sandbox image", func(s ui.Settings) any { return s.K8sSandboxImage }},

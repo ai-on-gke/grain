@@ -1198,3 +1198,40 @@ func TestClusterCapacityFiltersByNodeSelector(t *testing.T) {
 		t.Errorf("calls = %v, want get nodes -l pool=kvm,tier=sandbox -o json", recorded)
 	}
 }
+
+func TestWaitReadySuggestsSandboxImageMirrorOnCrossOrg403PullFailure(t *testing.T) {
+	pullErr := `ErrImagePull: failed to pull and unpack image "us-docker.pkg.dev/source-project/grain/guest@sha256:053664f0a62cf642aff3b59530eaee5b22441cdfd9ba74ff6af2632a50f8891a": failed to authorize: failed to fetch oauth token: unexpected status from GET request to https://us-docker.pkg.dev/v2/token?scope=repository%3Asource-project%2Fgrain%2Fguest%3Apull&service=us-docker.pkg.dev: 403 Forbidden`
+	kubectl, _ := fakeKubectl(t, map[string]struct {
+		stdout string
+		code   int
+	}{"get": {stdout: "Pending|False||" + pullErr}})
+	c := Client{Kubectl: kubectl}
+
+	err := c.WaitReady(context.Background(), "p", time.Now().Add(time.Minute), 0, 10*time.Millisecond)
+	if err == nil {
+		t.Fatal("WaitReady succeeded on 403 ErrImagePull")
+	}
+	if !strings.Contains(err.Error(), "-sandbox-image-mirror us-docker.pkg.dev/<cluster-project>/grain/guest") {
+		t.Errorf("WaitReady error = %q, want suggestion for -sandbox-image-mirror", err.Error())
+	}
+}
+
+func TestCheckImagePullConnectivitySuggestsMirrorWhenClusterInDifferentProject(t *testing.T) {
+	kubectl, _ := fakeKubectl(t, map[string]struct {
+		stdout string
+		code   int
+	}{
+		"get":    {stdout: "gce://cluster-project/us-central1-a/gke-node-1\n"},
+		"config": {stdout: "gke_cluster-project_us-central1_sandbox\n"},
+	})
+	c := Client{Kubectl: kubectl, Namespace: "grain"}
+
+	err := c.CheckImagePullConnectivity(context.Background(), "us-docker.pkg.dev/source-project/grain/guest:sha-31d0973@sha256:053664f0a62cf642aff3b59530eaee5b22441cdfd9ba74ff6af2632a50f8891a")
+	if err == nil {
+		t.Fatal("CheckImagePullConnectivity succeeded, want cross-project warning")
+	}
+	want := "grain settings -sandbox-image-mirror us-docker.pkg.dev/cluster-project/grain/guest"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("CheckImagePullConnectivity = %q, want %q", err.Error(), want)
+	}
+}
