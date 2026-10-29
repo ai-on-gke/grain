@@ -184,9 +184,9 @@ var triagedNativeTools = []string{
 	"capture_browser_screenshot", "click_browser_pixel",
 	"delete_knowledge", "execute_browser_javascript", "finish",
 	"generate_image", "list_browser_pages", "list_permissions",
-	"list_resources", "manage_inbox", "manage_subagents", "manage_task",
+	"list_plugin_accounts", "list_resources", "manage_inbox", "manage_subagents", "manage_task",
 	"open_browser_url", "read_browser_page", "read_resource",
-	"read_url_content", "schedule", "search_web", "send_message",
+	"read_url_content", "schedule", "search_marketplace", "search_web", "send_message",
 	"wait", "wait_5_seconds",
 }
 
