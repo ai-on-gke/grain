@@ -1932,7 +1932,6 @@ asks for the latest updates, advanced Vertex AI integrations, or complex setups
 not covered here, you **MUST** dynamically fetch the live page from the official
 sitemap:
 
-<!-- LINT.IfChange(sitemap) -->
 
 -   **Main Documentation Home**: `https://antigravity.google/docs`
 -   **Skills**: `https://antigravity.google/docs/skills`
@@ -1948,7 +1947,6 @@ sitemap:
 -   **Terminal Sandbox**: `https://antigravity.google/docs/sandbox`
 -   **Changelog & Release Notes**: `https://antigravity.google/changelog`
 -   **Troubleshooting & Support**: `https://antigravity.google/support`
-    <!-- LINT.ThenChange(//depot/google3/third_party/gemini_coder/agent_ui_toolkit/dev/appVariant/externalAppVariant.ts:custom_links) -->
 ``````
 
 #### `.gemini/antigravity-cli/builtin/skills/antigravity_guide/references/app.md`
@@ -2415,7 +2413,7 @@ Create the configuration file at:
     or `"never"` apply only to one-shot `"command"` sidecars) — never proto enum
     names like `"SIDECAR_RESTART_POLICY_ALWAYS"` or `"unless-stopped"`.
 -   Never place `sidecar.json` or scripts inside an ephemeral CitC workspace
-    (`/google/src/cloud/<user>/<workspace>/...`) or point symlinks in
+    (`$INTERNAL_WORKSPACE/<user>/<workspace>/...`) or point symlinks in
     `~/.gemini/config/` to an ephemeral CitC workspace that may later be
     deleted.
 

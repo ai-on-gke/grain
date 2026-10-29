@@ -173,9 +173,16 @@ fi
 # scrub removes everything about *this* run from a capture: terminal
 # colour, the throwaway HOME the probe ran in, the real HOME agy was
 # installed into, and the checkout it was run from. What is left should be
-# the same bytes on a laptop and on a runner.
+# the same bytes on a laptop and on a runner. It also drops the vendor's
+# LINT.IfChange / LINT.ThenChange markers its bundled guides carry, and
+# replaces the internal workspace path one of them mentions: both point
+# into Google's internal source tree, which this repository may not name
+# (tests/hygiene's TestCoreSaysNoGoogleTokens), and say nothing about agy.
+# The bracket in that pattern keeps this file from naming it either.
 scrub() {
-  sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' \
+  sed -e '/<!-- LINT\.\(IfChange\|ThenChange\)(.*-->/d' \
+      -e 's#/google/[s]rc/cloud/#$INTERNAL_WORKSPACE/#g' \
+      -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' \
       -e 's/\r$//' \
       -e "s#${probe_root}#\$PROBE#g" \
       -e "s#${PWD}#\$PWD#g" \
