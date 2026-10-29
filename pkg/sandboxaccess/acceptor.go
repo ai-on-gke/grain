@@ -30,8 +30,12 @@
 // chain to its own CA and name the very sandbox it presents a token for,
 // and refuses any sandbox that is no longer live in its own view. A
 // connection that passes all of that is handed to granule's Acceptor
-// with its token registered, so a wrapper reconnecting to a restarted
-// grain is re-admitted from the stored hash alone.
+// with its token registered. The token hashes live in this process's
+// memory only: Register is the hook for restoring them after a restart,
+// but nothing persists them yet, so a sandbox pod readopted by a
+// restarted grain has no credentials here and its wrapper is refused
+// until the pod is rebuilt (reattach is GKE-4,
+// docs/design/grain-on-gke.md "Restart").
 package sandboxaccess
 
 import (
@@ -210,7 +214,8 @@ func (a *Acceptor) Mint(sandboxName string, ttl time.Duration) (Credentials, err
 
 // Register restores a sandbox's token hash (TokenHash, hex) minted
 // earlier -- by this process or a previous one -- so its wrapper is
-// admitted when it reconnects.
+// admitted when it reconnects. Nothing in grain calls it yet: no hash is
+// persisted across a restart.
 func (a *Acceptor) Register(sandboxName, tokenHash string, notAfter time.Time) error {
 	if err := validSandbox(sandboxName); err != nil {
 		return err

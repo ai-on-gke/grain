@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://grain.dev/schemas/grainfiles/task.schema.json",
+  "title": "A task grainfile (<name>.task.grain.md, docs/grainfiles-spec.md §7.1)",
+  "type": "object",
+  "properties": {
+    "grainfile": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/grainfile"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requestor": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/requestor"
+    },
+    "recipient": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/deployment",
+      "default": "/"
+    },
+    "draft": {
+      "type": "boolean",
+      "default": false
+    },
+    "not_before": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/notBefore"
+    },
+    "depends_on": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/refList"
+    },
+    "capabilities": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/capabilityList"
+    },
+    "references": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/refList"
+    },
+    "from_template": {
+      "$ref": "https://grain.dev/schemas/grainfiles/common.schema.json#/$defs/ref"
+    }
+  },
+  "required": [
+    "grainfile",
+    "title"
+  ],
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false
+}
