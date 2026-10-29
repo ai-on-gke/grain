@@ -60,6 +60,21 @@ type GitHubWebhookConsumer struct {
 	pending  []ghwebhook.Event
 }
 
+// NewGitHubWebhookConsumer constructs a GitHubWebhookConsumer from cfg and creds.
+func NewGitHubWebhookConsumer(cfg Config, creds *gitproxy.CredentialSet) (*GitHubWebhookConsumer, error) {
+	return newGitHubWebhookConsumer(cfg, creds)
+}
+
+// ListenAddr returns the bound address when running an in-process listener.
+func (c *GitHubWebhookConsumer) ListenAddr() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.localAddr
+}
+
 func newGitHubWebhookConsumer(cfg Config, creds *gitproxy.CredentialSet) (*GitHubWebhookConsumer, error) {
 	if cfg.GithubWebhookURL == "" && cfg.GithubWebhookAddr == "" {
 		return nil, nil
@@ -182,6 +197,9 @@ func (c *GitHubWebhookConsumer) Start(ctx context.Context, wake func(), invalida
 		if err != nil {
 			return fmt.Errorf("listening on -github-webhook-addr %s: %w", c.localAddr, err)
 		}
+		c.mu.Lock()
+		c.localAddr = ln.Addr().String()
+		c.mu.Unlock()
 		srv := &http.Server{
 			Handler: ghwebhook.NewServer(ghwebhook.ServerConfig{
 				Store:             c.localStore,
