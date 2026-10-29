@@ -284,10 +284,14 @@ import "strconv"
 // 60 adds `provider` to `task_run_check_wait`, labelling each recorded CI
 // wait with the CI it was on (grain, github, tap).
 //
-// 61 adds `sandbox_image_mirror` to `grain_config`: an optional OCI
+// 61 adds `reviewers` to `task` and `template`: the person-set reviewer
+// usernames passed to a workspace capability grant and used as the default
+// reviewer list when mailing a changelist (Task.Reviewers, Template.Reviewers).
+//
+// 62 adds `sandbox_image_mirror` to `grain_config`: an optional OCI
 // repository into which grain mirrors the build-stamped sandbox image on
 // upgrade and startup (model.Config.SandboxImageMirror).
-const SchemaVersion = 61
+const SchemaVersion = 62
 
 // externalAgentTokenTable and externalAgentTokenSequenceTable are named
 // once for Tables and for the migration that adds them.
@@ -456,6 +460,7 @@ var Tables = []string{
   ` + "`resume_on_deadline`" + `    INTEGER  NOT NULL DEFAULT 0,
   ` + "`change_target_kind`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1475,6 +1480,7 @@ var Tables = []string{
   ` + "`goal`" + `         TEXT     NOT NULL DEFAULT '',
   ` + "`change_target_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + ` TEXT NOT NULL DEFAULT '',
+  ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

@@ -82,6 +82,9 @@ type Template struct {
 	// to a non-git change target (such as a registered changelist workspace), with
 	// Target == nil and Base == "".
 	ChangeTarget *ChangeTarget
+	// Reviewers is the person-set list of reviewer usernames every task filed
+	// from this template starts with (Task.Reviewers, docs/design/changelists.md §5).
+	Reviewers []string
 	// Base is the branch a bound template's firings target. Only
 	// meaningful alongside Target -- an unbound template's firings take
 	// the caller's own base -- and optional even then: empty means the

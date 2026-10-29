@@ -247,6 +247,9 @@ export default function Declared({ t, config, act }) {
     ]);
   }
   if (t.creator) rows.push(["Creator", t.creator]);
+  if (t.reviewers?.length) {
+    rows.push(["Reviewers", t.reviewers.join(", ")]);
+  }
   // What this task's runs may push besides their own branch, by the
   // `push:` of the repository template it was filed from (grain/task-2536)
   // -- shown only for the tasks that have one.

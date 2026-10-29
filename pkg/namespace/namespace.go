@@ -998,12 +998,13 @@ func (s *Server) serveList(w http.ResponseWriter, r *http.Request, node *Resolve
 		return
 	}
 	var b strings.Builder
+	redactor := s.redactor()
 	for _, e := range node.Entries {
 		name := e.Name
 		if e.Type == "dir" && !strings.HasSuffix(name, "/") {
 			name += "/"
 		}
-		b.WriteString(redactLine(s.Redactor, name))
+		b.WriteString(redactLine(redactor, name))
 		b.WriteByte('\n')
 	}
 	_, _ = io.WriteString(w, b.String())
@@ -1191,8 +1192,9 @@ func (s *Server) serveGlob(w http.ResponseWriter, r *http.Request, scope Scope, 
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	var b strings.Builder
+	redactor := s.redactor()
 	for _, m := range matches {
-		b.WriteString(redactLine(s.Redactor, m))
+		b.WriteString(redactLine(redactor, m))
 		b.WriteByte('\n')
 	}
 	_, _ = io.WriteString(w, b.String())
@@ -1451,10 +1453,11 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 		afterRemaining := 0
 		lastPrintedLine := 0
 		lineNum := 0
+		redactor := s.redactor()
 
 		for scanner.Scan() {
 			lineNum++
-			line := redactLine(s.Redactor, scanner.Text())
+			line := redactLine(redactor, scanner.Text())
 			if re.MatchString(line) {
 				if totalMatches >= maxMatches {
 					truncated = true
@@ -1511,6 +1514,19 @@ func writeGrepLine(out *strings.Builder, fileLabel string, lineNum int, sep byte
 	}
 	out.WriteString(text)
 	out.WriteByte('\n')
+}
+
+func (s *Server) redactor() *redact.Redactor {
+	if s == nil {
+		return nil
+	}
+	if s.Redactor != nil {
+		return s.Redactor
+	}
+	if s.NewRedactor != nil {
+		return s.NewRedactor()
+	}
+	return nil
 }
 
 func redactLine(r *redact.Redactor, s string) string {
@@ -1574,6 +1590,7 @@ func (s *Server) redactWindow(w io.Writer, node *ResolvedNode, start, end int64,
 	br := bufio.NewReaderSize(rc, 32*1024)
 	pos := lineStart
 	next := start
+	redactor := s.redactor()
 	for end < 0 || pos < end {
 		line, rerr := br.ReadString('\n')
 		if line == "" {
@@ -1594,7 +1611,7 @@ func (s *Server) redactWindow(w io.Writer, node *ResolvedNode, start, end int64,
 			}
 			continue
 		}
-		out := redactLine(s.Redactor, line)
+		out := redactLine(redactor, line)
 		if out == line {
 			from, to := max(start, pos), lineEnd
 			if end >= 0 {

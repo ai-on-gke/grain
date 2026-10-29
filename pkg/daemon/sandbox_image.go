@@ -667,6 +667,9 @@ func runSandboxMirrorDocker(ctx context.Context, stdin *strings.Reader, args ...
 }
 
 func checkClusterSandboxImageConnectivity(ctx context.Context, cfg Config, imageRef string) error {
+	if !cfg.K8sSandboxes && !cfg.K8sGranuleSandboxes {
+		return nil
+	}
 	client := k8s.Client{
 		Namespace:  firstNonEmpty(cfg.K8sNamespace, model.DefaultK8sNamespace),
 		Kubectl:    cfg.K8sKubectl,

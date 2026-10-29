@@ -1186,6 +1186,10 @@ func (c Client) CheckImagePullConnectivity(ctx context.Context, imageRef string)
 	if imageRef == "" {
 		return nil
 	}
+	_, imgProject, _ := ImageRegistryProject(imageRef)
+	if imgProject == "" {
+		return nil
+	}
 	clusterProject := c.ClusterProject(ctx)
 	if out, err := c.run(ctx, "get", "pods", "-l", ManagedByLabel+"="+ManagedByValue, "-o", "go-template="+podWaitingImagesFormat); err == nil {
 		for _, line := range strings.Split(out, "\n") {
@@ -1200,7 +1204,7 @@ func (c Client) CheckImagePullConnectivity(ctx context.Context, imageRef string)
 			}
 		}
 	}
-	if _, imgProject, _ := ImageRegistryProject(imageRef); imgProject == "source-project" && clusterProject != "" && clusterProject != imgProject {
+	if clusterProject != "" && clusterProject != imgProject {
 		mirror := SuggestedMirrorRepository(imageRef, clusterProject)
 		return fmt.Errorf(
 			"cluster runs in GCP project %q while sandbox image %s is in %q; if cluster nodes cannot pull across GCP organization boundaries (403 Forbidden), configure a mirror repository with: grain settings -sandbox-image-mirror %s",

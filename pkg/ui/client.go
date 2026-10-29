@@ -31,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -1733,6 +1734,10 @@ type CreateTaskRequest struct {
 	// repo: Repo, Base, Writes, AutoMerge, FixesBaseBranch, merge-with
 	// links and a base-green goal are refused alongside it.
 	ChangeTarget *model.ChangeTarget `json:"changeTarget,omitempty"`
+	// Reviewers is the person-set list of reviewer usernames for this task's
+	// change (model.Task.Reviewers, docs/design/changelists.md §5). Refused to
+	// agents by agentFilingEscalation / externalAgentFilingEscalation.
+	Reviewers []string `json:"reviewers,omitempty"`
 	// ProposalKey and ProposedBy are daemon-internal fields used by an
 	// interactive propose_task call. ProposalKey makes retries and the
 	// end-of-run replay idempotent; ProposedBy records provenance -- and,
@@ -2044,6 +2049,13 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		return Task{}, err
 	}
 	var proposedBy *model.Task
+	if req.ProposedBy != "" && req.Capabilities != nil {
+		// A review grant is grain's to give, on a review it files itself
+		// (orchestrator.SyncCLReviews), never an agent's to ask for.
+		if err := model.RefuseReviewOfGrants(*req.Capabilities); err != nil {
+			return Task{}, validationErrorf("%v", err)
+		}
+	}
 	if req.ProposedBy != "" {
 		parent, err := c.Store.GetTask(ctx, req.ProposedBy)
 		if err != nil {
@@ -2401,6 +2413,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Origin:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
+		Reviewers:            model.NormalizeReviewers(req.Reviewers),
 		Binding:              model.BindingDirective,
 		Base:                 req.Base,
 		Issue:                req.Issue,
@@ -3813,6 +3826,11 @@ type UpdateTaskRequest struct {
 	// GoogleChatSpace links the task to a Google Chat space, or clears
 	// the link when set to "".
 	GoogleChatSpace *string `json:"googleChatSpace,omitempty"`
+	// Reviewers, given, replaces this task's person-set reviewer list
+	// (model.Task.Reviewers, docs/design/changelists.md §5). A non-nil empty
+	// slice clears it. Refused to agents by agentFilingEscalation /
+	// externalAgentFilingEscalation.
+	Reviewers *[]string `json:"reviewers,omitempty"`
 }
 
 // UpdateTask edits a task's fields. Unlike the issue-backed version, this
@@ -4195,6 +4213,9 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		}
 		if req.Writes != nil {
 			task.Writes = writes
+		}
+		if req.Reviewers != nil {
+			task.Reviewers = model.NormalizeReviewers(*req.Reviewers)
 		}
 		if req.GoogleChatSpace != nil {
 			var newLinks []model.Link
@@ -4782,6 +4803,23 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 	}
 	if task == nil {
 		return &NotFoundError{ID: id}
+	}
+	if submitsAsCL(*task) {
+		// A CL is submitted by a person through its provider, never
+		// queued for a merge (change_submit.go).
+		return c.submitChange(ctx, *task)
+	}
+	// A CL whose provider gates Submit on its required reviews
+	// (change.ReviewGate) is submitted only once they have passed on its
+	// current snapshot -- asked before the approvals path below, which
+	// turns auto-merge on by itself once the last approval is in.
+	if ok, reason, err := change.GateSubmit(ctx, *task); err != nil {
+		return fmt.Errorf("checking whether %s may be submitted: %w", id, err)
+	} else if !ok {
+		if reason == "" {
+			reason = "its required reviews have not passed on the current snapshot"
+		}
+		return validationErrorf("%s cannot be submitted yet: %s", id, reason)
 	}
 	if pending := model.PendingApprovals(*task); len(pending) > 0 && !task.AutoMerge {
 		return c.submitWithApprovals(ctx, *task, pending)

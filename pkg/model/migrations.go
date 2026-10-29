@@ -335,6 +335,14 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     61,
+		Description: "add person-set reviewers to task and template",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `reviewers` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `template` ADD COLUMN `reviewers` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     62,
 		Description: "add sandbox_image_mirror to grain_config for mirroring stamped sandbox images",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `sandbox_image_mirror` TEXT NOT NULL DEFAULT ''",

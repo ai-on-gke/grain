@@ -16,6 +16,9 @@ package ui_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -158,5 +161,143 @@ func TestADegradedCLReplyGoesToTheConversation(t *testing.T) {
 	if len(comments) != 1 || !strings.Contains(comments[0].Body, "Renamed.") ||
 		!strings.Contains(comments[0].Body, "cl/42:c3") || !strings.Contains(comments[0].Body, "Critique is read-only here.") {
 		t.Fatalf("comments = %+v, want the reply and the provider's note", comments)
+	}
+}
+
+func TestMailChangeDefaultsReviewersToTaskReviewers(t *testing.T) {
+	client, store, ctx := testClient(t)
+	fake := &fakeCritique{}
+	change.Register(fake)
+	t.Cleanup(func() {
+		change.Unregister(model.LinkChangelist)
+		change.Forget("cl/42")
+	})
+	if err := store.PutTask(ctx, model.Task{
+		ID:           "93",
+		Title:        "t",
+		Intent:       model.IntentImplement,
+		ChangeTarget: &model.ChangeTarget{Kind: "fakecritique"},
+		Reviewers:    []string{"alice", "bob"},
+		Links:        []model.Link{{Kind: model.LinkChangelist, Target: "cl/42"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.MailChange(ctx, "93", "bsalmon", ui.MailChangeRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.mailed) != 1 || fake.mailed[0] != "cl/42|alice,bob|bsalmon" {
+		t.Fatalf("mailed with empty request reviewers = %v, want task's reviewers [alice,bob]", fake.mailed)
+	}
+	if _, err := client.MailChange(ctx, "93", "bsalmon", ui.MailChangeRequest{Reviewers: []string{"carol"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.mailed) != 2 || fake.mailed[1] != "cl/42|carol|bsalmon" {
+		t.Fatalf("mailed with explicit request reviewers = %v, want [carol]", fake.mailed)
+	}
+}
+
+func TestTaskAndTemplateReviewersRoundTripAndRefuseAgents(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+
+	// 1. A person creates a template with reviewers, edits it, and files a task from it.
+	tmpl, err := client.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name:      "cl-tmpl",
+		Title:     "CL work",
+		Repo:      "acme/widgets",
+		Reviewers: []string{"alice, bob", "alice"},
+	})
+	if err != nil {
+		t.Fatalf("CreateTemplate: %v", err)
+	}
+	if !slices.Equal(tmpl.Reviewers, []string{"alice", "bob"}) {
+		t.Fatalf("tmpl.Reviewers = %v, want [alice bob]", tmpl.Reviewers)
+	}
+	filedFromTmpl, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		TemplateID: tmpl.ID,
+		Approved:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask from template: %v", err)
+	}
+	if !slices.Equal(filedFromTmpl.Reviewers, []string{"alice", "bob"}) {
+		t.Fatalf("filedFromTmpl.Reviewers = %v, want [alice bob]", filedFromTmpl.Reviewers)
+	}
+
+	// 2. A person files a task with reviewers, edits it via UpdateTask, and updates it via a reply comment.
+	created, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:     "direct task",
+		Repo:      "acme/widgets",
+		Reviewers: []string{"carol"},
+		Approved:  true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if !slices.Equal(created.Reviewers, []string{"carol"}) {
+		t.Fatalf("created.Reviewers = %v, want [carol]", created.Reviewers)
+	}
+	nextReviewers := []string{"dave, erin"}
+	updated, err := client.UpdateTask(ctx, created.ID, ui.UpdateTaskRequest{
+		Reviewers: &nextReviewers,
+	})
+	if err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+	if !slices.Equal(updated.Reviewers, []string{"dave", "erin"}) {
+		t.Fatalf("updated.Reviewers = %v, want [dave erin]", updated.Reviewers)
+	}
+
+	// 3. Both an in-grain agent and an external agent get 403 when filing, patching, or using a template with reviewers.
+	seedAPITask(t, client, "200", "acme/widgets", "api:tasks:write", "api:templates:write")
+	if err := client.Store.UpdateConfig(ctx, func(cfg *model.Config) error { cfg.ExternalAgentAPI = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "ext-bot",
+		Scopes: []string{"tasks:write", "templates:write"},
+	})
+	if err != nil {
+		t.Fatalf("CreateExternalAgentToken: %v", err)
+	}
+
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","reviewers":["mallory"]}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"` + tmpl.ID + `"}`},
+		{http.MethodPatch, "/api/tasks/" + created.ID, `{"reviewers":["mallory"]}`},
+		{http.MethodPost, "/api/tasks/" + created.ID + "/comments", `{"body":"reply","reviewers":["mallory"]}`},
+		{http.MethodPost, "/api/templates", `{"name":"y","title":"y","reviewers":["mallory"]}`},
+		{http.MethodPatch, "/api/templates/" + tmpl.ID, `{"reviewers":["mallory"]}`},
+	} {
+		if code, resp := asAgent(t, srv, "200", c.method, c.path, c.body, "testing"); code != http.StatusForbidden {
+			t.Errorf("agent %s %s with %s = %d (%s), want 403", c.method, c.path, c.body, code, resp)
+		}
+		req := httptest.NewRequest(c.method, c.path, strings.NewReader(c.body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+issued.Token)
+		req.Header.Set(ui.ActingReasonHeader, "testing")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("external agent %s %s with %s = %d (%s), want 403", c.method, c.path, c.body, rec.Code, rec.Body.String())
+		}
+	}
+
+	// 4. A person's reply comment can update reviewers on the task.
+	personReq := httptest.NewRequest(http.MethodPost, "/api/tasks/"+created.ID+"/comments",
+		strings.NewReader(`{"body":"please ask frank","reviewers":["frank"]}`))
+	personReq.Header.Set("Content-Type", "application/json")
+	personRec := httptest.NewRecorder()
+	srv.ServeHTTP(personRec, personReq)
+	if personRec.Code != http.StatusOK {
+		t.Fatalf("person POST /api/tasks/%s/comments = %d (%s)", created.ID, personRec.Code, personRec.Body.String())
+	}
+	afterReply, err := client.GetTask(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(afterReply.Reviewers, []string{"frank"}) {
+		t.Errorf("afterReply.Reviewers = %v, want [frank]", afterReply.Reviewers)
 	}
 }

@@ -52,6 +52,7 @@ type NamespaceToolsConfig struct {
 	ArtifactDir string
 	SrcDir      string
 	Redactor    *redact.Redactor
+	NewRedactor func() *redact.Redactor
 	WriteFile   func(ctx context.Context, args map[string]any) Result
 }
 
@@ -137,7 +138,7 @@ func (cfg NamespaceToolsConfig) resolvedServer() *namespace.Server {
 		ciStore = namespaceCIRunStoreAdapter{reader: cfg.CIReader}
 	}
 	redactor := cfg.Redactor
-	if redactor == nil {
+	if redactor == nil && cfg.NewRedactor == nil {
 		redactor = redact.New(nil)
 	}
 	return &namespace.Server{
@@ -145,6 +146,7 @@ func (cfg NamespaceToolsConfig) resolvedServer() *namespace.Server {
 		ArtifactDir: cfg.ArtifactDir,
 		SrcDir:      cfg.SrcDir,
 		Redactor:    redactor,
+		NewRedactor: cfg.NewRedactor,
 	}
 }
 

@@ -57,6 +57,8 @@ export default function EditTaskForm({
   const [reviewTemplateId, setReviewTemplateId] = useState(
     t.reviewTemplateId || "",
   );
+  const savedReviewers = (t.reviewers || []).join(", ");
+  const [reviewers, setReviewers] = useState(savedReviewers);
   const reviewFiled = Boolean(t.reviewTask);
   // Which model this task's next run is driven by (grain/task-110),
   // editable here for the reason the review above is: the decision is
@@ -111,6 +113,7 @@ export default function EditTaskForm({
     if (title !== t.title) return true;
     if (description !== (t.description || "")) return true;
     if (reviewTemplateId !== (t.reviewTemplateId || "")) return true;
+    if (reviewers !== savedReviewers) return true;
     if (nothingNeededAction !== savedNothingNeeded) return true;
     if (model !== (t.model || "")) return true;
     if (agentBackendId !== (t.agentBackendId || "")) return true;
@@ -133,6 +136,10 @@ export default function EditTaskForm({
   // than lost with the error (grain/task-1699).
   const save = async () => {
     if (!title.trim()) return;
+    const parsedReviewers = reviewers
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     const saved = await act(
       () =>
         api(`/api/tasks/${t.id}`, {
@@ -141,6 +148,9 @@ export default function EditTaskForm({
             title,
             description,
             reviewTemplateId,
+            ...(reviewers !== savedReviewers
+              ? { reviewers: parsedReviewers }
+              : {}),
             ...(nothingNeededAction !== savedNothingNeeded
               ? { nothingNeededAction }
               : {}),
@@ -177,6 +187,15 @@ export default function EditTaskForm({
         onChange={(e) => setDescription(e.target.value)}
         multiline
         minRows={5}
+        fullWidth
+        size="small"
+      />
+      <TextField
+        label="Reviewers"
+        placeholder="alice, bob"
+        value={reviewers}
+        onChange={(e) => setReviewers(e.target.value)}
+        helperText="comma-separated usernames passed to workspace grants and used when mailing a CL"
         fullWidth
         size="small"
       />

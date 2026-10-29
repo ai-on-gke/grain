@@ -59,6 +59,9 @@ func TemplateWithinTask(acting Task, tmpl Template) error {
 			return fmt.Errorf("template %s grants read access to %s, which the agent's own task cannot read", tmpl.ID, r)
 		}
 	}
+	if len(tmpl.Reviewers) > 0 {
+		return fmt.Errorf("template %s sets reviewers, which only a person may set", tmpl.ID)
+	}
 	return nil
 }
 
