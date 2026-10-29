@@ -276,6 +276,14 @@ let nextId = 0;
 let renderQueue = Promise.resolve();
 const RENDER_TIMEOUT_MS = 10000;
 
+// MAX_DIAGRAM_CHARS is Mermaid's own maxTextSize default. Past it,
+// mermaid.render does not throw: it swaps the source for a stock
+// "Maximum text size in diagram exceeded" graph and resolves, so the
+// reader got that graph and never the source they wrote. Refusing here
+// instead sends the diagram down the same fallback a syntax error takes
+// (DiagramCanvas), which shows the source and says why.
+export const MAX_DIAGRAM_CHARS = 50000;
+
 function withRenderTimeout(promise, ms) {
   let timer = null;
   const timeout = new Promise((_, reject) => {
@@ -302,6 +310,14 @@ export function renderMermaidSvg(source, mode = "light") {
   const trimmed = String(source ?? "").trim();
   if (!trimmed) {
     return Promise.reject(new Error("Empty Mermaid diagram"));
+  }
+  if (trimmed.length > MAX_DIAGRAM_CHARS) {
+    return Promise.reject(
+      new Error(
+        `diagram is ${trimmed.length.toLocaleString("en-US")} characters, ` +
+          `over the ${MAX_DIAGRAM_CHARS.toLocaleString("en-US")} Mermaid renders`,
+      ),
+    );
   }
   const cached = getCachedMermaidSvg(mode, trimmed);
   if (cached) {

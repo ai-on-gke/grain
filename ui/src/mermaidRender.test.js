@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearMermaidCache,
   getCachedMermaidSvg,
+  MAX_DIAGRAM_CHARS,
   mermaidConfigForMode,
   renderMermaidSvg,
   sanitizeMermaidSvg,
@@ -100,5 +101,19 @@ describe("renderMermaidSvg", () => {
     expect(parsed.body.textContent).toContain("Postgres");
     expect(getCachedMermaidSvg("light", valid)).toBe(svg);
     expect(getCachedMermaidSvg("dark", valid)).toBeNull();
+  });
+
+  it("refuses a diagram over Mermaid's text limit rather than rendering its stock error graph", async () => {
+    const huge =
+      "flowchart TD\n" +
+      Array.from(
+        { length: 1500 },
+        (_, i) => `  N${i}[Node ${i}] --> N${i + 1}[Node ${i + 1}]`,
+      ).join("\n");
+    expect(huge.length).toBeGreaterThan(MAX_DIAGRAM_CHARS);
+    await expect(renderMermaidSvg(huge, "light")).rejects.toThrow(
+      /characters, over the 50,000/,
+    );
+    expect(getCachedMermaidSvg("light", huge.trim())).toBeNull();
   });
 });

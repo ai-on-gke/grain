@@ -3614,6 +3614,16 @@ fieldset legend {
   background: var(--surface-hover);
   border-bottom: 1px solid var(--border);
 }
+/* Inline, a diagram or its fallback source is held to a box and scrolls
+   inside it: a long chain renders tens of thousands of pixels tall, and
+   one comment must not become the whole thread. The full-screen viewer
+   (DiagramDialog) is portalled outside .mermaid-block, so it is not
+   capped. */
+.mermaid-block .mermaid-canvas,
+.mermaid-block pre.mermaid-source {
+  max-height: min(70vh, 640px);
+  overflow: auto;
+}
 .mermaid-block pre.mermaid-source {
   margin: 0;
   border: none;
