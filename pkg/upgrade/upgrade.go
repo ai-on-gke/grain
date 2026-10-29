@@ -1261,7 +1261,16 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 					return "", fmt.Errorf("the sandbox image %s that %s expects, so this deployment stays on the image it already runs: %w", sandbox, ref, err)
 				}
 			}
+			mirroredSandbox, err := u.mirrorSandboxImage(ctx, p, stepSandbox, sandbox)
+			if err != nil {
+				return "", fmt.Errorf("mirroring the sandbox image %s that %s expects, so this deployment stays on the image it already runs: %w", sandbox, ref, err)
+			}
 			detail += " and its sandbox image " + sandbox
+			mirrorNote := ""
+			if mirroredSandbox != "" {
+				mirrorNote = " (mirrored to " + mirroredSandbox + ")"
+				detail += mirrorNote
+			}
 			// A pin that is not what this build names means the pull
 			// above bought nothing: the daemon creates every VM from the
 			// pinned image, so the guest stays where it is while grain
@@ -1271,9 +1280,9 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 			// deployment now running Y.
 			if unused := u.unusedSandboxNote(sandbox); unused != "" {
 				detail += unused
-				p.done(stepSandbox, "pulled "+sandbox+unused)
+				p.done(stepSandbox, "pulled "+sandbox+mirrorNote+unused)
 			} else {
-				p.done(stepSandbox, "pulled "+sandbox)
+				p.done(stepSandbox, "pulled "+sandbox+mirrorNote)
 			}
 		}
 	} else {

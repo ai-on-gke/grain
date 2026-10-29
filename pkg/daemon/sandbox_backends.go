@@ -247,15 +247,24 @@ func EffectiveK8sSandboxImage(cfg Config) string {
 
 // EffectiveK8sGranuleImage resolves the packed guest image for
 // kubernetes-granule sandbox pods, falling back to DefaultSandboxImage (or the
-// version-pinned default) when unset.
+// version-pinned default) when unset, and mirroring the stamped guest image to
+// SandboxImageMirror (or a derived cross-project guest mirror repository) when
+// configured.
 func EffectiveK8sGranuleImage(cfg Config) string {
+	base := DefaultSandboxImage
+	if base == model.DefaultSandboxImage {
+		base = ui.DefaultSandboxImageFor(installtrack.TrackOSS, version.Get())
+	}
+	if mirrorRepo := sandboxImageMirrorRepo(cfg); mirrorRepo != "" {
+		if cfg.K8sGranuleImage != "" && !isMirroredGuestRef(cfg.K8sGranuleImage, mirrorRepo) {
+			return cfg.K8sGranuleImage
+		}
+		return resolveOrMirrorSandboxImage(context.Background(), base, mirrorRepo)
+	}
 	if cfg.K8sGranuleImage != "" {
 		return cfg.K8sGranuleImage
 	}
-	if DefaultSandboxImage != model.DefaultSandboxImage {
-		return DefaultSandboxImage
-	}
-	return ui.DefaultSandboxImageFor(installtrack.TrackOSS, version.Get())
+	return base
 }
 
 // parseKeyValues turns repeated "key=value" flag values into the map a
