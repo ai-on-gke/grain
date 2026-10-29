@@ -447,6 +447,11 @@ type Config struct {
 	// commit grain CI last judged, and the merge queue checks the head
 	// again before it merges either way.
 	GitHubPullRequests PullRequestReader
+	// GitHubForkPullRequests is that client asked which open pull request
+	// a fork head label ("owner:branch", model.ForkHead) heads, so a task
+	// filed with one as its branch is resolved to that pull request
+	// (forkhead.go). nil refuses such a task with a message saying so.
+	GitHubForkPullRequests ForkPullRequests
 	// GitHubCredentialAvailable answers through that client's own token source,
 	// including a deployment-wide posting credential when one is configured.
 	GitHubCredentialAvailable func(owner, repo string) bool
