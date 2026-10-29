@@ -56,6 +56,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bwsalmon/granule/pkg/guestforward"
@@ -110,8 +111,10 @@ type Acceptor struct {
 	inner  *sandbox.Acceptor
 	ln     *admitListener
 
-	mu    sync.Mutex
-	creds map[string]registration
+	mu         sync.Mutex
+	creds      map[string]registration
+	admitted   map[string]bool
+	reconnects atomic.Uint64
 }
 
 // New builds an Acceptor serving on ln, a plain TCP listener: TLS is
@@ -131,7 +134,11 @@ func New(cfg Config, ln net.Listener) (*Acceptor, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &Acceptor{cfg: cfg, creds: map[string]registration{}}
+	a := &Acceptor{
+		cfg:      cfg,
+		creds:    map[string]registration{},
+		admitted: map[string]bool{},
+	}
 	a.tlsCfg = &tls.Config{
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{serverCert},
@@ -179,6 +186,16 @@ func (a *Acceptor) Close() error { return a.inner.Close() }
 // Refusals counts the connections refused, here or by granule.
 func (a *Acceptor) Refusals() uint64 { return a.ln.refusals() + a.inner.Refusals() }
 
+// Reconnects counts the times a sandbox wrapper reconnected after its
+// initial admission under the same credentials.
+func (a *Acceptor) Reconnects() uint64 { return a.reconnects.Load() }
+
+// DropActiveSession closes sandbox's current multiplexed transport session
+// without revoking its credentials, forcing the wrapper to reconnect.
+func (a *Acceptor) DropActiveSession(sandboxName string) error {
+	return a.inner.DropActiveSession(sandboxName)
+}
+
 // Mint mints sandbox's credentials, valid for ttl (capped at
 // MaxCredentialLife), and registers the token's hash. Minting again for
 // the same sandbox replaces its earlier credentials.
@@ -201,6 +218,7 @@ func (a *Acceptor) Mint(sandboxName string, ttl time.Duration) (Credentials, err
 	}
 	a.mu.Lock()
 	a.creds[sandboxName] = registration{hash: sha256.Sum256([]byte(token)), notAfter: notAfter}
+	delete(a.admitted, sandboxName)
 	a.mu.Unlock()
 	return Credentials{
 		Sandbox:  sandboxName,
@@ -229,6 +247,7 @@ func (a *Acceptor) Register(sandboxName, tokenHash string, notAfter time.Time) e
 	reg.notAfter = notAfter
 	a.mu.Lock()
 	a.creds[sandboxName] = reg
+	delete(a.admitted, sandboxName)
 	a.mu.Unlock()
 	return nil
 }
@@ -239,6 +258,7 @@ func (a *Acceptor) Register(sandboxName, tokenHash string, notAfter time.Time) e
 func (a *Acceptor) Revoke(sandboxName string) {
 	a.mu.Lock()
 	delete(a.creds, sandboxName)
+	delete(a.admitted, sandboxName)
 	a.mu.Unlock()
 	a.inner.Revoke(sandboxName)
 }
@@ -354,7 +374,16 @@ func (a *Acceptor) registerAdmitted(hs sandbox.HandshakeRequest, notAfter time.T
 	if !ok || subtle.ConstantTimeCompare(sum[:], reg.hash[:]) != 1 {
 		return fmt.Errorf("credentials for sandbox %q were revoked", hs.SandboxID)
 	}
-	return a.inner.RegisterToken(hs.SandboxID, hs.Token, notAfter)
+	if err := a.inner.RegisterToken(hs.SandboxID, hs.Token, notAfter); err != nil {
+		return err
+	}
+	if a.admitted[hs.SandboxID] {
+		n := a.reconnects.Add(1)
+		slog.Info("sandboxaccess: sandbox channel reconnected", "sandbox", hs.SandboxID, "reconnects", n)
+	} else {
+		a.admitted[hs.SandboxID] = true
+	}
+	return nil
 }
 
 // admitListener is the net.Listener granule's Acceptor serves on. It

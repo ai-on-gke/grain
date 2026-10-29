@@ -27,6 +27,7 @@ import (
 
 	gritcache "github.com/ai-on-gke/grain/pkg/grit/cache"
 	gritsteps "github.com/ai-on-gke/grain/pkg/grit/steps"
+	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
@@ -1083,18 +1084,25 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 	if result.Conclusion != workflows.ConclusionSuccess && e.stopping(ctx) {
 		return NewJobRun(pj)
 	}
-	e.collectGoTestLog(jobCtx, runID, pj, sandbox, &result)
+	channelLost := result.Conclusion == workflows.ConclusionErrored && strings.HasPrefix(result.Error, ChannelLostFaultPrefix)
+	if !channelLost {
+		e.collectGoTestLog(jobCtx, runID, pj, sandbox, &result)
+	}
 
 	// A first attempt whose sandbox the kernel OOM-killed is retried
 	// whatever the job declares: under memory overcommit that is the
 	// deployment's doing, not the tree's (docs/design/auto-overcommit.md).
-	oomHow, oomKilled := e.sandboxOOM(ctx, runID, pj, sandbox, result)
+	var oomHow string
+	var oomKilled bool
+	if !channelLost {
+		oomHow, oomKilled = e.sandboxOOM(ctx, runID, pj, sandbox, result)
+	}
 	// So is one whose sandbox the platform took away mid-job -- a pod
 	// preempted for an interactive session's, on a full cluster: the
 	// tree did nothing to earn that either.
 	var preemptHow string
 	var preempted bool
-	if !oomKilled {
+	if !oomKilled && !channelLost {
 		preemptHow, preempted = e.sandboxPreempted(ctx, runID, pj, sandbox, result)
 	}
 	lost := oomKilled || preempted
@@ -1281,7 +1289,9 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 				result.Warning = fmt.Sprintf("passed (retry): flaky failure on initial attempt: %s", firstFailureSummary)
 			}
 		}
-		e.collectArtifacts(jobCtx, runID, pj, sandbox, &result)
+		if !channelLost {
+			e.collectArtifacts(jobCtx, runID, pj, sandbox, &result)
+		}
 		result.FinishedAt = e.instant()
 		result.Attempts = append(result.Attempts, workflows.JobAttempt{
 			Attempt:        initialAttempt,
@@ -1316,6 +1326,10 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 	}
 	return result
 }
+
+// ChannelLostFaultPrefix is the JobRun.Error prefix recorded when a step ends
+// with sandboxaccess.ErrChannelLost (docs/design/grain-on-gke.md#GKE-3).
+const ChannelLostFaultPrefix = "infra: sandbox channel lost"
 
 // OOMRetryReasonPrefix starts a job's RetryReason (and Error, Warning)
 // when its sandbox was OOM-killed, so a reader can tell an infrastructure
@@ -1475,6 +1489,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 		// step a reader is to be sent to.
 		environment    string
 		environmentWhy string
+		channelLost    string
 	)
 	for i, step := range pj.Job.Steps {
 		if e.stopping(ctx) {
@@ -1573,7 +1588,11 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 		if step.Infrastructure {
 			notSuccess = workflows.ConclusionErrored
 		}
+		channelLostStep := errors.Is(err, sandboxaccess.ErrChannelLost)
 		switch {
+		case channelLostStep:
+			record.Conclusion = workflows.ConclusionErrored
+			record.Error = fmt.Sprintf("%s: %v", ChannelLostFaultPrefix, err)
 		case err != nil:
 			record.Conclusion = notSuccess
 			record.Error = err.Error()
@@ -1582,7 +1601,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 		default:
 			record.Conclusion = notSuccess
 		}
-		if record.Conclusion != workflows.ConclusionSuccess {
+		if record.Conclusion != workflows.ConclusionSuccess && !channelLostStep {
 			switch {
 			case ctx.Err() != nil:
 				// The run ended under this job -- cancelled, superseded, a
@@ -1600,6 +1619,12 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 		result.Steps[len(result.Steps)-1] = record
 		if progress != nil {
 			progress(jobRunSnapshot(*result))
+		}
+
+		if channelLostStep {
+			failed = true
+			channelLost = record.Error
+			continue
 		}
 
 		if record.Conclusion != workflows.ConclusionSuccess && !step.ContinueOnError {
@@ -1689,6 +1714,9 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 		if overBound {
 			result.Error = fmt.Sprintf("this job ran past its %s bound", pj.Job.Timeout())
 		}
+	case channelLost != "":
+		result.Conclusion = workflows.ConclusionErrored
+		result.Error = channelLost
 	case environment != "":
 		// Errored rather than failure, and this is the whole point of the
 		// key that got it here: the step that did not succeed is one that
