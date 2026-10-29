@@ -25,7 +25,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"testing"
 
@@ -253,8 +252,9 @@ func TestLogSandboxBudgetUnderKubernetesNamesTheSchedulerNotAFailedReading(t *te
 	cfg.K8sSandboxes = true
 
 	var logs strings.Builder
+	prevLog := log.Writer()
 	log.SetOutput(&logs)
-	defer log.SetOutput(os.Stderr)
+	defer log.SetOutput(prevLog)
 
 	daemon.LogSandboxBudget(cfg)
 

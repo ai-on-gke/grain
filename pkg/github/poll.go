@@ -47,6 +47,7 @@ package github
 //     is what the remaining budget is being kept for.
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -107,6 +108,21 @@ type pollEntry struct {
 	fingerprint string
 	observed    bool
 	asked       time.Time
+	class       PollClass
+	active      bool
+}
+
+// PollStats summarizes the adaptive poll schedule across tracked pull
+// requests (or branches when only branches have been observed): how
+// many are on the schedule, how many have backed off past PollBase, and
+// the median and longest effective poll interval in seconds.
+type PollStats struct {
+	Tracked       int `json:"tracked"`
+	BackedOff     int `json:"backedOff"`
+	BaseSeconds   int `json:"baseSeconds"`
+	CapSeconds    int `json:"capSeconds"`
+	MedianSeconds int `json:"medianSeconds"`
+	MaxSeconds    int `json:"maxSeconds"`
 }
 
 // PollSchedule decides which polls are due. The zero value is ready to
@@ -161,6 +177,8 @@ func (p *PollSchedule) Due(key PollKey, class PollClass, active bool, now time.T
 	p.sweep(now)
 	e := p.entry(key)
 	e.asked = now
+	e.class = class
+	e.active = active
 	switch {
 	case class == PollCritical:
 		return true
@@ -182,7 +200,7 @@ func (p *PollSchedule) Observe(key PollKey, fingerprint string, now time.Time) {
 	defer p.mu.Unlock()
 	e := p.entry(key)
 	switch {
-	case !e.observed || fingerprint != e.fingerprint:
+	case !e.observed || e.class == PollCritical || e.active || fingerprint != e.fingerprint:
 		e.interval = PollBase
 	case e.interval < PollCap:
 		e.interval *= 2
@@ -202,6 +220,90 @@ func (p *PollSchedule) Interval(key PollKey) time.Duration {
 		return e.interval
 	}
 	return PollBase
+}
+
+// Stats summarizes the effective poll intervals of tracked pull requests
+// (or tracked subjects if no pull request subjects are present) at now.
+func (p *PollSchedule) Stats(now time.Time) PollStats {
+	low := p.budgetLow(now)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	type subjKey struct {
+		scope   string
+		subject string
+	}
+	type subjState struct {
+		critical bool
+		interval time.Duration
+		isPR     bool
+	}
+	bySubj := make(map[subjKey]subjState)
+	hasPR := false
+	for k, e := range p.entries {
+		if !e.observed || (!e.asked.IsZero() && now.Sub(e.asked) > pollForget) {
+			continue
+		}
+		iv := e.interval
+		if iv <= 0 {
+			iv = PollBase
+		}
+		switch {
+		case e.class == PollCritical:
+			iv = PollBase
+		case low:
+			if iv < PollCap {
+				iv = PollCap
+			}
+		case e.active:
+			iv = PollBase
+		}
+		sk := subjKey{scope: k.Scope, subject: k.Subject}
+		isPR := strings.Contains(k.Subject, "#")
+		if isPR {
+			hasPR = true
+		}
+		cur, ok := bySubj[sk]
+		if !ok {
+			bySubj[sk] = subjState{
+				critical: e.class == PollCritical,
+				interval: iv,
+				isPR:     isPR,
+			}
+			continue
+		}
+		if e.class == PollCritical {
+			cur.critical = true
+			cur.interval = PollBase
+		} else if !cur.critical && iv > cur.interval {
+			cur.interval = iv
+		}
+		bySubj[sk] = cur
+	}
+	out := PollStats{
+		BaseSeconds: int(PollBase / time.Second),
+		CapSeconds:  int(PollCap / time.Second),
+	}
+	if len(bySubj) == 0 {
+		return out
+	}
+	intervals := make([]time.Duration, 0, len(bySubj))
+	for _, st := range bySubj {
+		if hasPR && !st.isPR {
+			continue
+		}
+		intervals = append(intervals, st.interval)
+		if st.interval > PollBase {
+			out.BackedOff++
+		}
+	}
+	if len(intervals) == 0 {
+		return out
+	}
+	sort.Slice(intervals, func(i, j int) bool { return intervals[i] < intervals[j] })
+	out.Tracked = len(intervals)
+	out.MedianSeconds = int(intervals[(len(intervals)-1)/2] / time.Second)
+	out.MaxSeconds = int(intervals[len(intervals)-1] / time.Second)
+	return out
 }
 
 // Reset makes everything about subject due on its next poll, in every
