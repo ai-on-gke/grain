@@ -504,21 +504,29 @@ func (r *Runner) DialPort(ctx context.Context, port int) (net.Conn, error) {
 	if port <= 0 || port > 65535 {
 		return nil, fmt.Errorf("sandboxaccess: invalid guest port %d", port)
 	}
-	probeLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, err
-	}
-	localAddr := probeLn.Addr().String()
-	_ = probeLn.Close()
-
+	// The forwarder binds the loopback port itself (port 0) and reports
+	// the one it got, rather than being handed a port probed and freed
+	// here first: in between, another process on this host could bind it
+	// and be dialled in the guest's place.
 	fwdCtx, cancel := context.WithCancel(context.Background())
 	fwd, err := r.StartForward(fwdCtx, nil, []guestforward.LocalForward{{
-		Listen: localAddr,
+		Listen: "127.0.0.1:0",
 		Guest:  fmt.Sprintf("127.0.0.1:%d", port),
 	}})
 	if err != nil {
 		cancel()
 		return nil, err
+	}
+	var localAddr string
+	for _, b := range fwd.Bindings() {
+		if b.Direction == "local" {
+			localAddr = b.Listen
+		}
+	}
+	if localAddr == "" {
+		_ = fwd.Close()
+		cancel()
+		return nil, errors.New("sandboxaccess: the guest port forward reported no local listener")
 	}
 
 	var d net.Dialer

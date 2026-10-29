@@ -291,6 +291,31 @@ func TestRunnerPutFilesAndForwardOverChannel(t *testing.T) {
 	if gotFwd != "pong-from-host\n" {
 		t.Fatalf("forwarded read = %q, want %q", gotFwd, "pong-from-host\n")
 	}
+
+	// DialPort reaches a guest port over the same channel, through a
+	// loopback listener the forwarder bound itself.
+	guestLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guestLn.Close()
+	go func() {
+		c, err := guestLn.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = io.WriteString(c, "pong-from-guest\n")
+		_ = c.Close()
+	}()
+	conn, err := runner.DialPort(ctx, guestLn.Addr().(*net.TCPAddr).Port)
+	if err != nil {
+		t.Fatalf("DialPort: %v", err)
+	}
+	b, _ := io.ReadAll(conn)
+	_ = conn.Close()
+	if string(b) != "pong-from-guest\n" {
+		t.Fatalf("DialPort read = %q, want %q", b, "pong-from-guest\n")
+	}
 }
 
 type notifyingWriter struct {
