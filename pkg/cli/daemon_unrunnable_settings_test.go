@@ -29,7 +29,6 @@ package cli
 import (
 	"context"
 	"log"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -75,8 +74,9 @@ func TestLoadConfigRefusesToBePacedByAStoredZero(t *testing.T) {
 	}
 
 	var logs strings.Builder
+	prevLog := log.Writer()
 	log.SetOutput(&logs)
-	defer log.SetOutput(os.Stderr)
+	defer log.SetOutput(prevLog)
 
 	flagCfg := flagsForUnrunnable()
 	got, err := daemon.LoadConfig(ctx, store, flagCfg)

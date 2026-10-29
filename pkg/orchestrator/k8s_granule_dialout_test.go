@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/k8s"
 	granulesandbox "github.com/bwsalmon/granule/pkg/sandbox"
 )
 
@@ -38,9 +39,11 @@ func (neverConnects) WaitClient(ctx context.Context, _ string) (*granulesandbox.
 }
 
 // A sandbox whose wrapper never establishes its dial-out channel fails
-// Acquire -- no silent fallback to kubectl exec -- with the wrapper's own
-// dial-out log in the error, read by one diagnostic exec; its credentials
-// are revoked and its pod deleted (docs/design/grain-on-gke.md#GKE-3).
+// Acquire -- no silent fallback to kubectl exec -- with the tail of the
+// wrapper container's own log in the error, where granule-shim's stderr
+// (and so its dial-out lines) ends up, read by one bounded kubectl logs;
+// its credentials are revoked and its pod deleted
+// (docs/design/grain-on-gke.md#GKE-3).
 func TestK8sGranuleDialoutAcquireFailsWithTheWrapperLogWhenTheChannelNeverConnects(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -49,7 +52,7 @@ func TestK8sGranuleDialoutAcquireFailsWithTheWrapperLogWhenTheChannelNeverConnec
 n=$(ls "` + dir + `" | wc -l)
 printf '%s\n' "$*" > "` + dir + `/$n.args"
 case "$*" in
-	*"granule-dialout.log"*) printf 'dial grain-access.grain.svc:4244: connect: connection refused\n'; exit 0 ;;
+	*"logs "*) printf 'dialing out to the sandbox access controller at grain-access.grain.svc:4244\nsandbox access dial-out stopped: dial tcp 10.0.0.9:4244: connect: connection refused\n'; exit 0 ;;
 	*" -f -"*) cat > "` + dir + `/$n.json"; exit 0 ;;
 	*"jsonpath={.metadata.uid}"*) printf 'uid-1'; exit 0 ;;
 	*" delete "*) exit 0 ;;
@@ -89,7 +92,7 @@ printf 'Running|True|docker-pullable://example/granule@sha256:abc|\n'
 	if err == nil {
 		t.Fatal("Acquire succeeded with a channel that never connected")
 	}
-	for _, want := range []string{"dial-out channel", "connection refused"} {
+	for _, want := range []string{"dial-out channel", "dialing out to the sandbox access controller", "connection refused"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Acquire error does not carry %q: %v", want, err)
 		}
@@ -105,11 +108,25 @@ printf 'Running|True|docker-pullable://example/granule@sha256:abc|\n'
 	}
 	args, _ := filepath.Glob(filepath.Join(dir, "*.args"))
 	var deleted bool
+	var logReads []string
 	for _, f := range args {
 		b, _ := os.ReadFile(f)
-		if strings.Contains(string(b), " delete ") {
+		line := strings.TrimSpace(string(b))
+		if strings.Contains(line, " delete ") {
 			deleted = true
 		}
+		if strings.Contains(line, "logs ") {
+			logReads = append(logReads, line)
+		}
+		if strings.Contains(line, "granule-dialout.log") {
+			t.Errorf("the diagnostic still reads a log file no wrapper writes: %s", line)
+		}
+	}
+	if len(logReads) != 1 {
+		t.Fatalf("the diagnostic read the wrapper log %d times, want once: %q", len(logReads), logReads)
+	}
+	if !strings.Contains(logReads[0], "-c "+k8s.SandboxContainer) || !strings.Contains(logReads[0], "--tail 40") {
+		t.Errorf("the diagnostic read was %q, want a --tail 40 read of container %q", logReads[0], k8s.SandboxContainer)
 	}
 	if !deleted {
 		t.Error("the pod was not deleted")

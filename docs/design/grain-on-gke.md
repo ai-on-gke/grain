@@ -469,13 +469,15 @@ Selection is a flag, `-k8s-granule-access=dialout|kubectl`, defaulting to
 (`KUBERNETES_SERVICE_HOST` is set and `-k8s-sandbox-service` resolves),
 because a cloudtop grain has no address a pod can dial.
 
-**Bootstrap and fallback.** `kubectl exec` is used for exactly three
+**Bootstrap and fallback.** `kubectl` (exec, or logs) is used for exactly three
 things:
 
 1. the readiness probe that already exists (`GranuleReadinessExec`);
 2. if the channel has not come up within `-k8s-granule-access-timeout`
-   (default 60 s) after the pod is Ready, one diagnostic exec that reads
-   the wrapper's dial-out log, which then goes into the acquire error;
+   (default 60 s) after the pod is Ready, one diagnostic read of the
+   wrapper container's log -- a `kubectl logs --tail` rather than an
+   exec, since granule-shim logs its dial-out lines to stderr and writes
+   no log file -- which then goes into the acquire error;
 3. an operator's own debugging.
 
 There is no silent fallback that runs a step over `kubectl exec` when
