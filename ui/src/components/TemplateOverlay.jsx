@@ -203,6 +203,10 @@ function TemplateOverlay({
         : {}),
       reads,
       writes,
+      reviewers: (data.get("reviewers") || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
       capabilities,
       customFields,
       // Always sent, empty list included: the form renders every input
@@ -362,6 +366,16 @@ function TemplateOverlay({
             // its firings target is not decided here, so no read of them
             // can be redundant yet.
             target={template?.repo || ""}
+          />
+          <TextField
+            name="reviewers"
+            label="Reviewers"
+            defaultValue={(template?.reviewers || []).join(", ")}
+            placeholder="alice, bob"
+            helperText="optional -- comma-separated usernames passed to workspace grants and used when mailing a CL"
+            fullWidth
+            margin="normal"
+            size="small"
           />
           <FormControlLabel
             control={

@@ -777,6 +777,10 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if json.Unmarshal(raw, &k) == nil && strings.TrimSpace(k) != "" {
 				return errors.New("an agent cannot set proposalKey directly")
 			}
+		case "reviewers":
+			if hasReviewersField(pattern, raw) {
+				return errAgentReviewers
+			}
 		case "templateid":
 			var id string
 			if json.Unmarshal(raw, &id) != nil || strings.TrimSpace(id) == "" {
@@ -851,6 +855,27 @@ var personOnlyChangeReview = map[string]bool{
 
 var errAgentChangeReview = errors.New("an agent cannot mail a CL or publish its replies: " +
 	"who reviews a change, and when, is a person's decision")
+
+var errAgentReviewers = errors.New("an agent cannot set reviewers: " +
+	"who reviews a change is a person's decision (changelists.md §5)")
+
+func hasReviewersField(pattern string, raw json.RawMessage) bool {
+	if strings.TrimSpace(string(raw)) == "null" {
+		return false
+	}
+	if strings.HasPrefix(pattern, "PATCH ") || pattern == "POST /api/tasks/{id}/comments" {
+		return true
+	}
+	var list []string
+	if json.Unmarshal(raw, &list) == nil {
+		return len(model.NormalizeReviewers(list)) > 0
+	}
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		return strings.TrimSpace(one) != ""
+	}
+	return len(strings.TrimSpace(string(raw))) > 0
+}
 
 // agentMayWrite reports whether the acting task's own runs may push to
 // repo: its target, or a repository its writes name.
@@ -1313,6 +1338,10 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
 				return fmt.Errorf("an agent cannot name somebody else as the %s of work it files", key)
 			}
+		case "reviewers":
+			if hasReviewersField(pattern, raw) {
+				return errAgentReviewers
+			}
 		case "templateid":
 			var id string
 			if json.Unmarshal(raw, &id) != nil || strings.TrimSpace(id) == "" {
@@ -1384,6 +1413,9 @@ func externalTemplateWithin(tok *model.ExternalAgentToken, held []string, tmpl m
 		if !allowedRepo(r.String()) {
 			return fmt.Errorf("template %s grants read access to %s, which external agent %q's credential does not cover", tmpl.ID, r, tok.Name)
 		}
+	}
+	if len(tmpl.Reviewers) > 0 {
+		return fmt.Errorf("template %s sets reviewers, which only a person may set", tmpl.ID)
 	}
 	return nil
 }
