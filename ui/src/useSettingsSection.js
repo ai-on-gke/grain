@@ -78,8 +78,12 @@ export function useSettingsSection({ showError, dismissError, onSaved } = {}) {
     }
   }, [showError]);
 
+  // save's errorKey names the setting a refusal is reported against when
+  // that is not the payload's own key: the auto overcommit bounds are
+  // saved inside sandboxOvercommit, and a bound the daemon refused was
+  // reported as "Couldn't save Overcommit mode".
   const save = useCallback(
-    async (payload) => {
+    async (payload, { errorKey } = {}) => {
       setInFlight((n) => n + 1);
       try {
         const updated = await api("/api/settings", {
@@ -95,13 +99,20 @@ export function useSettingsSection({ showError, dismissError, onSaved } = {}) {
         }
         return true;
       } catch (err) {
-        const field = Object.keys(payload)[0] || "";
-        const message = settingErrorMessage(err?.message || String(err));
+        const sent = Object.keys(payload)[0] || "";
+        const field = errorKey || sent;
+        let raw = err?.message || String(err);
+        // The daemon names the setting it was sent ("sandboxOvercommit:
+        // ..."); the message says the field the refusal is about instead.
+        if (errorKey && sent && raw.startsWith(`${sent}:`)) {
+          raw = `${errorKey}${raw.slice(sent.length)}`;
+        }
+        const message = settingErrorMessage(raw);
         setError({
           key: field,
           field: settingLabel(field),
           message,
-          retry: () => saveChoiceRef.current?.(payload),
+          retry: () => saveChoiceRef.current?.(payload, { errorKey }),
         });
         showError?.(message);
         return false;
@@ -113,13 +124,13 @@ export function useSettingsSection({ showError, dismissError, onSaved } = {}) {
   );
 
   const saveChoice = useCallback(
-    (payload) => {
+    (payload, options) => {
       const current = settingsRef.current || {};
       const previous = Object.fromEntries(
         Object.keys(payload).map((key) => [key, current[key]]),
       );
       setSettings((prev) => ({ ...prev, ...payload }));
-      return save(payload).then((saved) => {
+      return save(payload, options).then((saved) => {
         if (!saved) {
           setSettings((prev) => {
             const rollback = {};
