@@ -712,6 +712,9 @@ func TestPersonGrantedIsNeverCovered(t *testing.T) {
 		t.Fatal("an identical grant is not covered before the method is marked")
 	}
 	RequirePersonGrant(ref.CapabilityID, ref.Method)
+	// personGranted is package-global: unmark the method so a repeated
+	// run (-count>1) starts from an unmarked method again.
+	t.Cleanup(func() { personGranted.Delete(ref.CapabilityID + "#" + ref.Method) })
 	if !PersonGranted(ref) || PersonGranted(other) {
 		t.Errorf("PersonGranted = %v, %v", PersonGranted(ref), PersonGranted(other))
 	}
