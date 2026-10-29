@@ -48,7 +48,10 @@ func grainGranuleDeployment(t *testing.T) k8sDeployment {
 func TestTheKubernetesGranuleManifestShipsNoNamespace(t *testing.T) {
 	objects, _ := manifestDocsForFile(t, "grain-granule.yaml")
 	want := []string{"ServiceAccount", "Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding",
-		"ClusterRole", "ClusterRoleBinding", "PriorityClass", "PriorityClass", "PriorityClass", "PriorityClass", "PersistentVolumeClaim", "Deployment", "Service"}
+		"ClusterRole", "ClusterRoleBinding", "PriorityClass", "PriorityClass", "PriorityClass", "PriorityClass", "PersistentVolumeClaim",
+		// grain-access before the Deployment, so the grain pod starts with
+		// GRAIN_ACCESS_SERVICE_HOST (the acceptor's ClusterIP).
+		"Service", "Deployment", "Service"}
 	var got []string
 	for _, obj := range objects {
 		got = append(got, obj.Kind)
