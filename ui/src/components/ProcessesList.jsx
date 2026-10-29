@@ -625,9 +625,10 @@ function ProcessRow({
           {r.name}
         </RowLink>
         <span className="chips">
-          <DeclaredChip
-            declaredIn={r.kind === "trigger" ? null : r.declaredIn}
-          />
+          {/* A trigger too (§5.1: every row with a declaredIn): it is
+            only ever declared, and the chip's title is the one place the
+            row names the repository and the file it came from. */}
+          <DeclaredChip declaredIn={r.declaredIn} />
           {r.system && (
             <Chip
               size="small"
