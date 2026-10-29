@@ -35,6 +35,7 @@ import ItemGlyph from "./ItemGlyph.jsx";
 import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
 import ReviewBadge from "./ClReview.jsx";
+import { BehindBadge } from "./ClSubmit.jsx";
 import { STATE_SYNC_TITLE, muiSeverity, stateSyncSentence } from "../alerts.js";
 import {
   ackNotification,
@@ -271,12 +272,27 @@ const GROUPS = [
     match: (t) => awaitsHumanSubmit(t) && !t.reviewQuestions,
     // "Asked you to submit owner/repo#12", with the hold that keeps it
     // off the queue where there is one (state.js's askedCase).
-    note: (t) => askedCase(t)?.title || null,
+    // A CL not yet submittable says why instead (ClSubmit.jsx).
+    note: (t) =>
+      t.clSubmit && !t.clSubmit.canSubmit
+        ? `Not submittable yet: ${(t.clSubmit.reasons || []).join("; ")}.`
+        : askedCase(t)?.title || null,
     actions: [
+      {
+        // A CL's Submit, inline only when it is submittable: a person's
+        // submit through its provider, never the merge queue.
+        label: "Submit",
+        variant: "contained",
+        post: "/submit",
+        when: (t) => Boolean(t.clSubmit?.canSubmit),
+        title:
+          "Submit this CL now: its review, presubmit and grain's reviews have all cleared.",
+      },
       {
         label: "Submit",
         variant: "contained",
         post: "/submit",
+        when: (t) => !t.clSubmit,
         title:
           "Put this pull request on grain's merge queue: it is merged once its checks pass.",
         bulk: {
@@ -919,6 +935,9 @@ export default function InboxPage({
                       )}
                       {t.changelists?.length > 0 && t.clReview && (
                         <ReviewBadge review={t.clReview} />
+                      )}
+                      {t.changelists?.length > 0 && t.clSubmit && (
+                        <BehindBadge submit={t.clSubmit} />
                       )}
                       {group.reply && (
                         <Button

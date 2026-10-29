@@ -18,6 +18,7 @@
 # - grain-daemon@... is bound to Kubernetes ServiceAccount grain/grain and gets:
 #   - roles/cloudsql.client and roles/cloudsql.instanceUser (for Cloud SQL IAM auth)
 #   - roles/secretmanager.secretAccessor on each named secret (never project-wide)
+#   - roles/secretmanager.secretVersionAdder on grain-sandbox-ca-key (to bootstrap the sandbox-access CA)
 #   - roles/storage.objectAdmin on the staging/backups bucket (never project-wide)
 #   - nothing else.
 # - Sandbox pods run as Kubernetes ServiceAccount grain-sandbox with NO Workload

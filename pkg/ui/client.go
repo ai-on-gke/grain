@@ -4791,6 +4791,11 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
+	if submitsAsCL(*task) {
+		// A CL is submitted by a person through its provider, never
+		// queued for a merge (change_submit.go).
+		return c.submitChange(ctx, *task)
+	}
 	// A CL whose provider gates Submit on its required reviews
 	// (change.ReviewGate) is submitted only once they have passed on its
 	// current snapshot -- asked before the approvals path below, which
