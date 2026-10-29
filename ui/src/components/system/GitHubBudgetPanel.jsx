@@ -72,6 +72,7 @@ export function GitHubBudgetView({ github, now = Date.now(), sx }) {
       `spending ${Math.round(budget.spendPerHour).toLocaleString()}/h`,
     );
   const callers = (github.callers || []).slice(0, shownCallers);
+  const polls = github.polls?.tracked ? github.polls : budget.polls;
   return (
     <Box sx={sx} data-testid="health-github-budget">
       <Alert severity={severity} sx={{ mb: 1 }}>
@@ -86,6 +87,23 @@ export function GitHubBudgetView({ github, now = Date.now(), sx }) {
           >
             At that rate it runs out in {formatSeconds(runsOut)}, before it
             resets.
+          </Typography>
+        )}
+        {polls?.tracked > 0 && (
+          <Typography
+            variant="body2"
+            component="div"
+            data-testid="health-github-polls"
+          >
+            Idle-poll backoff: {(polls.backedOff || 0).toLocaleString()} of{" "}
+            {polls.tracked.toLocaleString()} tracked{" "}
+            {polls.tracked === 1 ? "PR" : "PRs"} backed off · poll interval
+            median {formatSeconds(polls.medianSeconds || 0)}, max{" "}
+            {formatSeconds(polls.maxSeconds || 0)}
+            {polls.baseSeconds && polls.capSeconds
+              ? ` (${formatSeconds(polls.baseSeconds)} base, ${formatSeconds(polls.capSeconds)} cap)`
+              : ""}
+            .
           </Typography>
         )}
         {budget.low && (

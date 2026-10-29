@@ -38,6 +38,9 @@ for (const [name, viewport] of [
     await expect(page.getByTestId("health-github-runs-out")).toContainText(
       "runs out in",
     );
+    const polls = page.getByTestId("health-github-polls");
+    await expect(polls).toContainText("2 of 3 tracked PRs backed off");
+    await expect(polls).toContainText("poll interval median 2m 0s, max 8m 0s");
     const callers = page.getByTestId("health-github-callers");
     await expect(callers).toContainText("sync");
     await expect(callers).toContainText("review-threads");

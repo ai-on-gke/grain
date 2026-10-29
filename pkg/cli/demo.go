@@ -97,11 +97,15 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	var upgradeVerifyCmd stringSliceFlag
 	fs.Var(&upgradeVerifyCmd, "upgrade-verify-cmd", "one argument of the command that verifies an -upgrade-image image's signature, repeated for every argument, as on grain daemon")
 	accessCodeFile := fs.String("access-code-file", "", "keep the demo's access code, which every caller, loopback included, signs in with, in this file -- written there if it is not already -- rather than beside its throwaway store, where it is logged")
+	githubWebhookURL, githubWebhookAddr := githubWebhookFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return demo.Options{}, err
 	}
 	if err := noArgs(fs, fs.Args()); err != nil {
 		return demo.Options{}, err
+	}
+	if strings.TrimSpace(*githubWebhookURL) != "" && strings.TrimSpace(*githubWebhookAddr) != "" {
+		return demo.Options{}, errors.New("-github-webhook-url and -github-webhook-addr are mutually exclusive")
 	}
 
 	if *upgradeImage == "" {
@@ -171,5 +175,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		Reconcile:              *reconcile,
 		HostExecutor:           *hostExecutor,
 		HostModeInstall:        *hostModeInstall,
+		GithubWebhookURL:       strings.TrimSpace(*githubWebhookURL),
+		GithubWebhookAddr:      strings.TrimSpace(*githubWebhookAddr),
 	}, nil
 }
