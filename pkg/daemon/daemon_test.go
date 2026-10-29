@@ -557,8 +557,9 @@ func TestLoadConfigLogsEveryOverriddenFlag(t *testing.T) {
 	}
 
 	var logs strings.Builder
+	prevLog := log.Writer()
 	log.SetOutput(&logs)
-	defer log.SetOutput(os.Stderr)
+	defer log.SetOutput(prevLog)
 
 	if _, err := LoadConfig(ctx, store, flagCfg); err != nil {
 		t.Fatalf("loadConfig: %v", err)
