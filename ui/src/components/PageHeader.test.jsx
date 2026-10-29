@@ -198,4 +198,51 @@ describe("PageHeader", () => {
       "false",
     );
   });
+
+  it("closes the more menu on Escape, handing focus back to more, and on a press outside the rail", () => {
+    // jsdom lays nothing out, so the slot is told it has wrapped: a
+    // second line under its one-row height, which is what draws "more".
+    const scroll = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockImplementation(function () {
+        return this.classList.contains("page-header-slot") ? 100 : 0;
+      });
+    try {
+      render(
+        <Framed>
+          <PageHeaderActions>
+            <button type="button">New board</button>
+          </PageHeaderActions>
+          <p>body</p>
+        </Framed>,
+      );
+      const more = screen.getByRole("button", { name: "More page actions" });
+      const slot = screen.getByTestId("page-header-actions");
+
+      fireEvent.click(more);
+      expect(more).toHaveAttribute("aria-expanded", "true");
+      const inside = screen.getByRole("button", { name: "New board" });
+      inside.focus();
+      fireEvent.keyDown(inside, { key: "Escape" });
+      expect(more).toHaveAttribute("aria-expanded", "false");
+      expect(slot).not.toHaveClass("page-header-slot-expanded");
+      expect(more).toHaveFocus();
+
+      // A press inside the rail, or in a popup its controls opened,
+      // leaves it open; one on the page below closes it.
+      fireEvent.click(more);
+      fireEvent.pointerDown(inside);
+      const popup = document.createElement("div");
+      popup.className = "MuiPopover-root";
+      popup.appendChild(document.createElement("span"));
+      document.body.appendChild(popup);
+      fireEvent.pointerDown(popup.firstChild);
+      expect(more).toHaveAttribute("aria-expanded", "true");
+      fireEvent.pointerDown(screen.getByText("body"));
+      expect(more).toHaveAttribute("aria-expanded", "false");
+      popup.remove();
+    } finally {
+      scroll.mockRestore();
+    }
+  });
 });

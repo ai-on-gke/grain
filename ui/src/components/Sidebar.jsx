@@ -386,7 +386,8 @@ function NavItem({
 // The dot is the sandbox's state; a host port this page's proxy will not
 // carry is drawn with a warning, and the hover says why and what to do.
 // The pin beside it is a sibling of the link, not inside it, so pinning
-// never also opens the environment. A pinned one is listed under Pinned
+// never also opens the environment; it shows on hover or focus, and
+// always on a screen that cannot hover. A pinned one is listed under Pinned
 // as well as under Staging, the way a pinned view is.
 function StagingItem({ sandbox, config, pinned, onTogglePin }) {
   const link = stagingLink(sandbox, config);
@@ -401,6 +402,10 @@ function StagingItem({ sandbox, config, pinned, onTogglePin }) {
         alignItems: "center",
         "& .staging-pin": { opacity: pinned ? 0.8 : 0 },
         "&:hover .staging-pin, & .staging-pin:focus-visible": { opacity: 1 },
+        // A touch screen has no hover to reveal the pin with, so there it
+        // is always drawn: an invisible button a tap can still land on is
+        // a control nobody knows is there.
+        "@media (hover: none)": { "& .staging-pin": { opacity: 0.8 } },
       }}
     >
       <ListItemButton
