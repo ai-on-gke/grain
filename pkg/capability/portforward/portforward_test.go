@@ -263,3 +263,54 @@ func TestRelayFallsBackToInodeOwnerWhenProcFDsAreUnreadable(t *testing.T) {
 		t.Fatal("InodeOwner was not handed the socket's inode from /proc/net/tcp")
 	}
 }
+
+// TestServeAppliesTheRelaysRulesToAChannelConnection covers Forward.Serve,
+// the path a sandbox's dial-out channel carries a guest connection by
+// (docs/design/grain-on-gke.md#GKE-3): it reaches host_port while the
+// listener belongs to the service, is refused once it does not -- the
+// check runs per connection, not only at Open -- and closing the forward
+// cuts a connection it is carrying (§5.3.2, §5.3.4).
+func TestServeAppliesTheRelaysRulesToAChannelConnection(t *testing.T) {
+	needProc(t)
+	hostPort := echoListener(t)
+	relay := NewRelay()
+	f, err := relay.Open(context.Background(), hostPort, Service{PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	guest, inner := net.Pipe()
+	defer guest.Close()
+	served := make(chan struct{})
+	go func() { f.Serve(context.Background(), inner); close(served) }()
+	guest.SetDeadline(time.Now().Add(10 * time.Second))
+	io.WriteString(guest, "hello over the channel\n")
+	line, err := bufio.NewReader(guest).ReadString('\n')
+	if err != nil || line != "hello over the channel\n" {
+		t.Fatalf("echo through Serve = %q, %v", line, err)
+	}
+	f.Close()
+	if _, err := guest.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a channel connection survived its forward being closed")
+	}
+	select {
+	case <-served:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not return after its forward was closed")
+	}
+
+	// The same forward, its listener now owned outside the service.
+	f, err = relay.Open(context.Background(), hostPort, Service{PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	relay.Owner = func(net.Conn) (int, error) { return 1, nil }
+	guest, inner = net.Pipe()
+	defer guest.Close()
+	go f.Serve(context.Background(), inner)
+	guest.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := guest.Read(make([]byte, 1)); err == nil {
+		t.Fatal("Serve bridged to a host_port listener outside the capability server's service")
+	}
+}
