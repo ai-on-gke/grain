@@ -167,3 +167,26 @@ func TestCatalogueRefusesFilingAndEdit(t *testing.T) {
 		t.Fatalf("a person attaching it: %v", err)
 	}
 }
+
+// Saving the capability policy's rules -- all Settings → Capabilities'
+// rule editor sends -- leaves settings/capabilities.yml's catalogue
+// where it is, rather than erasing every restriction it holds.
+func TestSetCapabilityPolicyKeepsTheCatalogue(t *testing.T) {
+	client, store, ctx := testClient(t)
+	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"gemini-key": {Restrictions: &model.CapabilityRestrictions{CIOnly: true}},
+	}})
+	if err := client.SetCapabilityPolicy(ctx, model.CapabilityPolicy{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.CapabilityPolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Catalogue == nil || got.Catalogue.InProcess["gemini-key"].Restrictions == nil {
+		t.Fatalf("catalogue after saving the rules = %+v, want it kept", got.Catalogue)
+	}
+	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "t", Capabilities: &[]string{"gemini-key"}}); err == nil {
+		t.Fatal("CreateTask with a CI-only grant succeeded after saving the rules; want the catalogue still refusing it")
+	}
+}
