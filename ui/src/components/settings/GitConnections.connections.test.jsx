@@ -644,4 +644,68 @@ describe("GitConnections git connections and input operations", () => {
     expect(screen.getByLabelText("Host")).toHaveValue("");
     expect(screen.getByLabelText("Token (PAT)")).toHaveValue("");
   });
+
+  it("shows an error alert on the page when removing or saving a connection fails", async () => {
+    const user = userEvent.setup();
+    api.mockImplementation((url, opts) => {
+      if (url.includes("/git-connections") && !opts) {
+        return Promise.resolve([
+          {
+            credential: "grain-git-c-1",
+            host: "git.example.test",
+            authType: "pat",
+          },
+        ]);
+      }
+      if (
+        url.includes("/git-connections/grain-git-c-1") &&
+        opts?.method === "DELETE"
+      ) {
+        return Promise.reject(
+          new Error(
+            "GitHub tokens are not available: this UI has no local GitHub credential directory to write to",
+          ),
+        );
+      }
+      if (url.includes("/git-connections") && opts?.method === "POST") {
+        return Promise.reject(
+          new Error(
+            "git connection on git.example.test for all repositories already exists (grain-git-c-1): remove it or edit its scope first",
+          ),
+        );
+      }
+      return Promise.resolve({});
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const showError = vi.fn();
+
+    render(
+      <GitConnections
+        deployment={deployment}
+        onSave={vi.fn()}
+        onDeploymentChanged={vi.fn()}
+        showError={showError}
+      />,
+    );
+
+    const remove = await screen.findByRole("button", { name: "Remove" });
+    await user.click(remove);
+
+    expect(
+      await screen.findByTestId("git-connections-error"),
+    ).toHaveTextContent(
+      "this UI has no local GitHub credential directory to write to",
+    );
+    expect(showError).toHaveBeenCalled();
+
+    await user.click(screen.getByTestId("add-connection-button"));
+    await user.type(screen.getByLabelText("Host"), "git.example.test");
+    await user.type(screen.getByLabelText("Token (PAT)"), "tok-dup");
+    await user.click(screen.getByRole("button", { name: "Save connection" }));
+
+    expect(
+      await screen.findByTestId("git-connections-error"),
+    ).toHaveTextContent("remove it or edit its scope first");
+    confirm.mockRestore();
+  });
 });

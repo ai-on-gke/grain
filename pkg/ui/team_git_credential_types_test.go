@@ -152,6 +152,10 @@ func TestTeamAdminSavesEveryCredentialType(t *testing.T) {
 				}
 				rec = doWithHeaders(t, srv, http.MethodGet, "/api/deployment", "", dana)
 				mustNotEcho(t, "the team", rec.Body.String())
+				rec = doWithHeaders(t, srv, http.MethodDelete, base+"/"+added, "", dana)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("DELETE %s/%s: %d %s", base, added, rec.Code, rec.Body)
+				}
 			})
 		}
 	}
