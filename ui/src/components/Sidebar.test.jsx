@@ -779,6 +779,31 @@ describe("Sidebar", () => {
     ).toHaveAttribute("title", "1 task waiting on you");
   });
 
+  // The Inbox lists the config repository's sync failure as a row of its
+  // own and counts it in its heading, so the rail entry that opens it
+  // counts it too (2026-10-29 intake walkthrough).
+  it("counts the config repository's sync failure, as the Inbox heading does", () => {
+    render(
+      <Sidebar
+        {...baseProps}
+        config={{
+          stateRepoSyncFailure: {
+            since: "2026-10-29T09:00:00Z",
+            error: "git fetch origin: authentication required",
+          },
+        }}
+        tasks={[{ id: 4, state: "awaiting_reply", blocked: false }]}
+      />,
+    );
+    const inbox = screen.getByRole("button", { name: /Inbox 2/ });
+    expect(
+      within(inbox).getByText("2").closest(".MuiChip-root"),
+    ).toHaveAttribute(
+      "title",
+      "1 task waiting on you, settings are not being exported",
+    );
+  });
+
   it("does not show inbox badge when only base branch gates exist and no tasks wait", () => {
     render(
       <Sidebar
