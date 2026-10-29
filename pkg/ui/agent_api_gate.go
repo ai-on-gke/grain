@@ -847,9 +847,12 @@ var errAgentAutoMerge = errors.New("an agent cannot turn on auto-merge or submit
 var personOnlyChangeReview = map[string]bool{
 	"POST /api/tasks/{id}/change-mail":    true,
 	"POST /api/tasks/{id}/change-publish": true,
+	// A CL's Sync (changelists.md §7) is a person's button; the daemon's
+	// own syncs are not made through the API.
+	"POST /api/tasks/{id}/change-sync": true,
 }
 
-var errAgentChangeReview = errors.New("an agent cannot mail a CL or publish its replies: " +
+var errAgentChangeReview = errors.New("an agent cannot mail a CL, publish its replies or sync it: " +
 	"who reviews a change, and when, is a person's decision")
 
 // agentMayWrite reports whether the acting task's own runs may push to

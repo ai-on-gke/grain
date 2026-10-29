@@ -40,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -147,9 +148,90 @@ func checkGoal(ctx context.Context, deps Deps, g model.TaskGoal, now time.Time) 
 			return goalReading{measure: measure, evidence: why}, nil
 		}
 		return goalReading{met: true, measure: measure, evidence: "the pipeline is quiet and no pipeline notification is open"}, nil
+	case model.GoalCLSubmitted:
+		return clSubmittedReading(ctx, store, g, now)
 	}
 	// person-closes: only a person closing the task ends it.
 	return goalReading{evidence: "waiting for a person to close it"}, nil
+}
+
+// CLGoalStore is what a cl-submitted goal reads.
+type CLGoalStore interface {
+	GetTask(ctx context.Context, id string) (*model.Task, error)
+	change.Notifier
+}
+
+// clSubmittedReading is a cl-submitted goal's reading: every CL of the
+// spec's task, or its one CL, as the change provider observes it. A CL
+// that cannot be read -- an error, a CL that is not the operator's,
+// expired credentials -- is never met: the reading says why, and the
+// goal waits.
+func clSubmittedReading(ctx context.Context, store CLGoalStore, g model.TaskGoal, now time.Time) (goalReading, error) {
+	var task model.Task
+	var targets []string
+	what := ""
+	if g.Spec.Task != "" {
+		t, err := store.GetTask(ctx, g.Spec.Task)
+		if err != nil {
+			return goalReading{}, err
+		}
+		if t == nil {
+			return goalReading{measure: "none", evidence: "task " + g.Spec.Task + " does not exist"}, nil
+		}
+		task, targets, what = *t, model.TaskChangelists(*t), "task "+g.Spec.Task+"'s CLs"
+		if len(targets) == 0 {
+			return goalReading{measure: "none", evidence: "task " + g.Spec.Task + " has no CL yet"}, nil
+		}
+	} else {
+		if t, err := store.GetTask(ctx, g.TaskID); err == nil && t != nil {
+			task = *t
+		}
+		targets, what = []string{fmt.Sprintf("cl/%d", g.Spec.CL)}, fmt.Sprintf("cl/%d", g.Spec.CL)
+	}
+	done := 0
+	var waiting, unreadable []string
+	for _, target := range targets {
+		if submittedLinked(task, target) {
+			done++
+			continue
+		}
+		obs, err := change.Observe(ctx, task, model.LinkChangelist, target, store, now)
+		switch {
+		case err != nil:
+			unreadable = append(unreadable, fmt.Sprintf("%s (%v)", target, err))
+		case obs.Status == change.StatusSubmitted:
+			done++
+		default:
+			waiting = append(waiting, fmt.Sprintf("%s (%s)", target, orUnknown(string(obs.Status))))
+		}
+	}
+	measure := fmt.Sprintf("%d/%d", done, len(targets))
+	if len(unreadable) > 0 {
+		return goalReading{measure: measure + " unreadable",
+			evidence: fmt.Sprintf("%s: %s submitted; cannot read %s", what, measure, strings.Join(unreadable, ", "))}, nil
+	}
+	if len(waiting) > 0 {
+		return goalReading{measure: measure,
+			evidence: fmt.Sprintf("%s: %s submitted; still waiting on %s", what, measure, strings.Join(waiting, ", "))}, nil
+	}
+	return goalReading{met: true, measure: measure, evidence: fmt.Sprintf("%s: all %d submitted", what, done)}, nil
+}
+
+// submittedLinked reports whether task records target submitted.
+func submittedLinked(task model.Task, target string) bool {
+	for _, l := range task.Links {
+		if l.Kind == model.LinkChangelistSubmitted && (l.Target == target || strings.HasSuffix(l.Target, "(was "+target+")")) {
+			return true
+		}
+	}
+	return false
+}
+
+func orUnknown(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	return s
 }
 
 // baseGreenReading is a base-green goal's reading of the branch's
