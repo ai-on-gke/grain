@@ -113,6 +113,8 @@ The plan's shared environment passes `-sandbox-port-base=0` to `grain demo`. The
    - Regression tests: the stub `systemctl` now masks the way systemd does (a refusal on the unit's own file, a `/dev/null` link otherwise), plus new cases for the unit moved aside and back, the rollback image, and `--kubeconfig` on every printed `kubectl`. The suite goes from 70 to 79 cases, and the unfixed script fails 14 of them.
 2. **`fix(hostd)`: `pkg/hostd/remote_linux.go`.** `grain hostd -server`'s reconnect backoff is capped at 5 s (`defaultRemoteMaxBackoff`), well inside the daemon's 30 s `dialRetry`. `TestAHostdRedialsInsideTheControllersWaitForIt` asserts the margin and that redials stop growing at the cap; it fails on the old 30 s cap. `pkg/hostd` is not one of the trust-boundary paths (`scripts/setup.sh`, `pkg/runhost/*`), and neither of those was changed.
 
+3. **`test(orchestrator)`: `pkg/orchestrator/k8s_fit_test.go`.** This branch's first grain CI run failed `go orchestrator` on `TestAcquireRequeuesAPodTheSchedulerLeftUnschedulable` with `fork/exec …/kubectl: text file busy` (1 failure in 62 recorded executions). This code is not touched by the branch. The fit tests' fake kubectl was written executable straight from the test process, so a parallel test's fork could inherit the write descriptor. It is now written as data and installed by a child process, as `writeFakeKubectlForGranule` and the priority-class fake already are.
+
 ## Follow-ups proposed
 
 - **Answer Settings → Models at once when no grain hostd is dialed in.** The 5 s cli-run read, the 5.6 s notice and the 30 s `run: host` probe while `Remote.Status().Connected` is false. Depends on task 1800.
