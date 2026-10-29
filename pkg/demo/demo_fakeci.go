@@ -81,7 +81,7 @@ func (f *demoFakeCI) Start(_ context.Context, req ci.Request) (ci.Run, error) {
 		Jobs:        []ci.JobRun{},
 	}
 	for _, job := range req.Jobs {
-		run.Jobs = append(run.Jobs, ci.JobRun{JobID: job, Name: job})
+		run.Jobs = append(run.Jobs, ci.JobRun{JobID: job, Name: job, WorkflowPath: req.Workflow})
 	}
 	f.runs = append(f.runs, run)
 	return run, nil
@@ -165,6 +165,19 @@ func configureFakeCIDemo(ctx context.Context, store *model.Store, cfg ui.Config,
 		StartedAt: time.Now().UTC(),
 	}); err != nil {
 		return cfg, fmt.Errorf("watching %s main: %w", repo, err)
+	}
+	// seedDemoNotifications raises its pending-release notification on
+	// GrainSourceRepo() (bwsalmon/grain), which is not in TargetRepos;
+	// turn grain CI on for that repository so Approve and Reject on the
+	// seeded notification work out of the box without changing repo's
+	// own unset CI mode.
+	if grain := model.GrainSourceRepo(); !repo.Same(grain) {
+		if err := store.PutRepoConfig(ctx, model.RepoConfig{
+			Repo:   grain,
+			CIMode: model.CIModeGrain,
+		}); err != nil {
+			return cfg, fmt.Errorf("enabling grain CI for %s: %w", grain, err)
+		}
 	}
 	return cfg, nil
 }
