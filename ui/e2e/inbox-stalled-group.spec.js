@@ -70,28 +70,30 @@ test("a stuck task's row offers its sub-case's control and leaves the group once
 test("the rail's Inbox count includes the config repository's sync failure", async ({
   page,
 }) => {
-  let failing = false;
   await page.route("**/api/config", async (route) => {
     const res = await route.fetch();
     const config = await res.json();
-    if (failing) {
-      config.stateRepoSyncFailure = {
-        since: "2026-10-29T09:00:00Z",
-        error: "git fetch origin: authentication required",
-      };
-    }
+    config.stateRepoSyncFailure = {
+      since: "2026-10-29T09:00:00Z",
+      error: "git fetch origin: authentication required",
+    };
     await route.fulfill({ response: res, json: config });
   });
+  // Compared with the heading's own count rather than with a reading
+  // taken before the stub: the rail's figure grows as the task list and
+  // the notifications arrive, and a count read mid-load is not a
+  // baseline (the first CI run of this test read 11 and then saw 15).
   await page.goto("/inbox");
-  const rail = page.getByRole("button", { name: /^Inbox \d+/ });
-  const before = Number((await rail.innerText()).replace(/\D/g, ""));
-
-  failing = true;
-  await page.reload();
   await expect(
     page.getByRole("heading", { name: "Settings are not being exported" }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Inbox \d+/ })).toHaveText(
-    new RegExp(`${before + 1}$`),
-  );
+  const heading = page.locator(".content-header .count").first();
+  await expect(heading).toHaveText(/^\d+$/);
+  await expect(async () => {
+    const want = (await heading.innerText()).trim();
+    await expect(page.getByRole("button", { name: /^Inbox \d+/ })).toHaveText(
+      new RegExp(`^Inbox\\s*${want}$`),
+      { timeout: 1000 },
+    );
+  }).toPass();
 });
