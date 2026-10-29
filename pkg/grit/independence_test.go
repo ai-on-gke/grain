@@ -47,6 +47,7 @@ var gritAllowed = []string{
 	"pkg/gritapi",
 	"pkg/granule",
 	"pkg/granule/...",
+	"pkg/sandboxaccess",
 	"pkg/treeid",
 	"pkg/workflows",
 	"pkg/workflows/...",
@@ -64,7 +65,7 @@ var gritAllowed = []string{
 
 // neutral are the packages both sides import. On top of grit's
 // allowlist, none of them may import grain's core.
-var neutral = []string{"pkg/attest", "pkg/gritapi", "pkg/granule", "pkg/treeid", "pkg/workflows"}
+var neutral = []string{"pkg/attest", "pkg/gritapi", "pkg/granule", "pkg/sandboxaccess", "pkg/treeid", "pkg/workflows"}
 
 // grainCore is what a neutral package must never import, even through
 // a dependency the allowlist would otherwise let it have.

@@ -489,7 +489,14 @@ func Run(ctx context.Context, cfg Config) error {
 			forwardedPortsFunc = servicePorts.EndpointPorts
 		}
 		cpuOvercommit, memOvercommit := cfg.overcommitRatios()
-		sandboxes = orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{
+		var access *orchestrator.K8sGranuleAccess
+		var accessLive func(string) bool
+		if cfg.SandboxAccessAddr != "" {
+			if access, err = startSandboxAccess(ctx, cfg, k8sInstance, k8sNamespace, &accessLive); err != nil {
+				return err
+			}
+		}
+		granuleSandboxes := orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{
 			Instance:           k8sInstance,
 			Namespace:          k8sNamespace,
 			Kubectl:            cfg.K8sKubectl,
@@ -511,7 +518,10 @@ func Run(ctx context.Context, cfg Config) error {
 			MemoryOvercommit:     memOvercommit,
 			DiskOvercommit:       cfg.DiskOvercommit,
 			DefaultNetworkAccess: cfg.networkAccess,
+			Access:               access,
 		})
+		accessLive = granuleSandboxes.Live
+		sandboxes = granuleSandboxes
 		log.Printf("grain daemon: Kubernetes granule sandboxing -- one privileged pod per run in namespace %q "+
 			"from image %q, each booting a real cloud-hypervisor VM over /dev/kvm. This is the same isolation "+
 			"-granule-sandboxes gives on a single host, scheduled by the cluster instead.",

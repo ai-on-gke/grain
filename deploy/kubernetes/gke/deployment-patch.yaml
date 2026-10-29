@@ -7,7 +7,7 @@
 # - Digest-pinned images (ghcr.io/bwsalmon/grain/grain@sha256:... and granule@sha256:...)
 # - Cloud SQL Auth Proxy sidecar (IAM auth over private IP)
 # - Secret Manager CSI volume mount (/var/run/grain/secrets)
-# - Granule dial-out acceptor port (7443) and in-clusterService flags
+# - Granule dial-out acceptor port (4244), its CA in Secret Manager, and in-cluster Service flags
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -33,9 +33,10 @@ rules:
     verbs: ["get"]
   # Per-sandbox dial-out mTLS client certificate and token Secrets
   # (grain-access-<pod>), each created with ownerReference set to its pod.
+  # Create and delete only, as in the base Role: grain never reads one back.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "create", "delete"]
+    verbs: ["create", "delete"]
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch"]
@@ -138,6 +139,12 @@ spec:
             - -k8s-node-selector=grain.dev/nested-virt=true
             - -github-webhook-url=http://grain-webhook.grain.svc.cluster.local
             - -k8s-deployment=grain
+            # The sandbox-access acceptor (pkg/sandboxaccess). Its CA is the
+            # grain-sandbox-ca-key secret, read and -- on first start, when it
+            # has no version yet -- written over Workload Identity, which is
+            # why grain-daemon@ holds secretVersionAdder on that one secret.
+            - -sandbox-access-addr=:4244
+            - -sandbox-access-ca-secret=projects/PROJECT_ID/secrets/grain-sandbox-ca-key
             - -k8s-container=grain
             - -default-target-repo=ai-on-gke/grain
           env:
@@ -159,12 +166,6 @@ spec:
               value: "/projects/PROJECT_NUMBER/global/backendServices/BACKEND_SERVICE_ID"
             - name: GRAIN_SECRETS_KEY_FILE
               value: /var/run/grain/secrets/secrets.key
-            - name: GRAIN_SANDBOX_CA_KEY_FILE
-              value: /var/run/grain/secrets/sandbox-ca.key
-            - name: GRAIN_GRANULE_ACCESS_MODE
-              value: dialout
-            - name: GRAIN_SANDBOX_ACCESS_ADDR
-              value: grain-access.grain.svc.cluster.local:7443
             - name: GRAIN_HOSTD_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -185,7 +186,7 @@ spec:
             - name: http
               containerPort: 8080
             - name: sandbox-access
-              containerPort: 7443
+              containerPort: 4244
           resources:
             requests:
               cpu: "2"
@@ -248,3 +249,19 @@ spec:
       containers:
         - name: github-webhook
           image: ghcr.io/bwsalmon/grain/grain@sha256:0000000000000000000000000000000000000000000000000000000000000000
+---
+# The base's grain-access Service, narrowed to the daemon pod: on GKE the
+# daemon carries app.kubernetes.io/component=daemon, and the acceptor is
+# answered from it alone.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grain-access
+  namespace: grain
+  labels:
+    app.kubernetes.io/component: sandbox-access
+spec:
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: grain
+    app.kubernetes.io/component: daemon

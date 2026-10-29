@@ -186,6 +186,9 @@ func check(ctx context.Context, db *sql.DB, dir, scratch string, version int, mi
 	if err := checkConfigPolicy(dir); err != nil {
 		return report, err
 	}
+	if err := checkCapabilities(dir); err != nil {
+		return report, err
+	}
 	warnings, err := describeDump(ctx, db, dir, tables)
 	if err != nil {
 		return report, err
