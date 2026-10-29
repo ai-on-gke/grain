@@ -262,3 +262,7 @@ func argWrites(args map[string]any, key string) []WriteTarget {
 func argCapabilities(args map[string]any, key string) ([]string, error) {
 	return model.CapabilityEntries(args[key])
 }
+
+// refuseReviewOfGrants is model.RefuseReviewOfGrants, for the handlers
+// whose own "model" argument shadows the package.
+func refuseReviewOfGrants(grants []string) error { return model.RefuseReviewOfGrants(grants) }
