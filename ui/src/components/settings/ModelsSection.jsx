@@ -320,6 +320,7 @@ export default function ModelsSection({ config, onSaved, showError }) {
                       <Stack
                         direction="row"
                         spacing={1}
+                        useFlexGap
                         alignItems="center"
                         flexWrap="wrap"
                       >
