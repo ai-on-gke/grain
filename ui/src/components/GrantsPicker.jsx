@@ -558,11 +558,15 @@ export default function GrantsPicker({
       title={m.policyRefusal || m.ref}
       disabled={Boolean(m.policyRefusal)}
       onClick={() => addMethod(m)}
-      sx={{ whiteSpace: "normal", "&.Mui-disabled": { opacity: 0.75 } }}
+      // The reason is read at full contrast; only the name is dimmed.
+      sx={{ whiteSpace: "normal", "&.Mui-disabled": { opacity: 1 } }}
     >
       <ListItemIcon />
       <ListItemText
         primary={methodMenuLabel(m.ref, m.method)}
+        primaryTypographyProps={
+          m.policyRefusal ? { color: "text.disabled" } : undefined
+        }
         secondary={
           m.policyRefusal
             ? `Denied by the capability policy: ${m.policyRefusal}`
