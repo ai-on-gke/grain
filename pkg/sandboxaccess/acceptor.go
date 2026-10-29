@@ -214,8 +214,7 @@ func (a *Acceptor) Mint(sandboxName string, ttl time.Duration) (Credentials, err
 
 // Register restores a sandbox's token hash (TokenHash, hex) minted
 // earlier -- by this process or a previous one -- so its wrapper is
-// admitted when it reconnects. Nothing in grain calls it yet: no hash is
-// persisted across a restart.
+// admitted when it reconnects after a restart.
 func (a *Acceptor) Register(sandboxName, tokenHash string, notAfter time.Time) error {
 	if err := validSandbox(sandboxName); err != nil {
 		return err

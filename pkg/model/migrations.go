@@ -333,6 +333,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `task_run_check_wait` ADD COLUMN `provider` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     61,
+		Description: "persist sandbox-access token hashes and expiry times across restarts",
+		Statements:  []string{sandboxAccessTable},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

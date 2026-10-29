@@ -41,6 +41,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -245,6 +246,9 @@ type K8sGranuleSandboxes struct {
 	// instance is SetInstance's replacement for cfg.Instance.
 	instance liveInstance
 	live     map[string]*k8sGranuleSandbox
+	// readoptable holds sandboxes whose stored access hashes have been
+	// restored at startup while awaiting Readopt or SweepOrphans.
+	readoptable map[string]bool
 	// building holds the pod names an Acquire or Rebuild is creating and
 	// waiting on -- K8sSandboxes.building, for the same reason.
 	building         map[string]bool
@@ -287,12 +291,13 @@ func NewK8sGranuleSandboxes(cfg K8sGranuleConfig) *K8sGranuleSandboxes {
 		Kubeconfig: cfg.Kubeconfig,
 		Namespace:  cfg.Namespace,
 	}
-	return &K8sGranuleSandboxes{
-		cfg:      cfg,
-		client:   client,
-		fit:      newFitChecker(client, cfg.NodeSelector),
-		live:     map[string]*k8sGranuleSandbox{},
-		building: map[string]bool{},
+	k := &K8sGranuleSandboxes{
+		cfg:         cfg,
+		client:      client,
+		fit:         newFitChecker(client, cfg.NodeSelector),
+		live:        map[string]*k8sGranuleSandbox{},
+		readoptable: map[string]bool{},
+		building:    map[string]bool{},
 		defaults: Shape{
 			CPUs: cfg.DefaultCPUs, MemoryMB: cfg.DefaultMemoryMB, DiskGB: cfg.DefaultDiskGB,
 			NetworkAccess: cfg.DefaultNetworkAccess,
@@ -301,6 +306,10 @@ func NewK8sGranuleSandboxes(cfg K8sGranuleConfig) *K8sGranuleSandboxes {
 		memoryOvercommit: cfg.MemoryOvercommit,
 		diskOvercommit:   cfg.DiskOvercommit,
 	}
+	if err := k.RegisterStoredAccess(context.Background()); err != nil {
+		log.Printf("%v", err)
+	}
+	return k
 }
 
 // SetDefaultShape replaces the deployment-wide default the next Acquire
@@ -468,20 +477,21 @@ func (k *K8sGranuleSandboxes) Acquire(ctx context.Context, sandbox string, shape
 		return nil, err
 	}
 	if err := k.waitReady(ctx, name); err != nil {
-		k.revokeAccess(sandbox)
+		k.revokeAccess(ctx, sandbox)
 		k.deleteQuietly(ctx, name)
 		return nil, unschedulableOutcome(ctx, k.fit, name, k.podShape(resolved), err)
 	}
 	sb := &k8sGranuleSandbox{owner: k, name: sandbox, podName: name, shape: shape, runner: k.execRunner(name), startedAt: time.Now()}
 	k.mu.Lock()
 	k.live[sandbox] = sb
+	delete(k.readoptable, sandbox)
 	k.mu.Unlock()
 	if err := sb.startForward(ctx); err != nil {
 		k.mu.Lock()
 		delete(k.live, sandbox)
 		k.mu.Unlock()
 		sb.stopForward()
-		k.revokeAccess(sandbox)
+		k.revokeAccess(ctx, sandbox)
 		k.deleteQuietly(ctx, name)
 		return nil, err
 	}
@@ -511,11 +521,16 @@ func (k *K8sGranuleSandboxes) Readopt(ctx context.Context, sandbox string) (Sand
 		return nil, err
 	}
 	if err := readoptPod(ctx, k.pods(), name); err != nil {
+		k.revokeAccess(ctx, sandbox)
+		return nil, err
+	}
+	if err := k.registerSandboxAccess(ctx, sandbox); err != nil {
 		return nil, err
 	}
 	sb := &k8sGranuleSandbox{owner: k, name: sandbox, podName: name, runner: k.execRunner(name), startedAt: time.Now()}
 	k.mu.Lock()
 	k.live[sandbox] = sb
+	delete(k.readoptable, sandbox)
 	k.mu.Unlock()
 	// A readopted run is already past its setup, and the supervisor goes
 	// on reconnecting in the background, so a forward that is slow to
@@ -545,7 +560,7 @@ func (k *K8sGranuleSandboxes) create(ctx context.Context, sandbox, name string, 
 		return err
 	}
 	opts := k.podOptions(shape)
-	creds, err := k.mintAccess(sandbox, name, &opts)
+	creds, err := k.mintAccess(ctx, sandbox, name, shape.Life, &opts)
 	if err != nil {
 		return err
 	}
@@ -553,18 +568,18 @@ func (k *K8sGranuleSandboxes) create(ctx context.Context, sandbox, name string, 
 		// The old pod's Secret is garbage-collected with it, but not
 		// necessarily yet; the name has to be free for create.
 		if err := k.client.DeleteSecret(ctx, sandboxaccess.SecretName(name)); err != nil {
-			k.revokeAccess(sandbox)
+			k.revokeAccess(ctx, sandbox)
 			return fmt.Errorf("orchestrator: %w", err)
 		}
 	}
 	if err := k.priority.createPod(ctx, k.pods(), name, podShape, opts, k.cfg.StrictPriorityClasses); err != nil {
-		k.revokeAccess(sandbox)
+		k.revokeAccess(ctx, sandbox)
 		return fmt.Errorf("orchestrator: creating granule sandbox pod %q: %w", name, err)
 	}
 	k.fit.Reserve(name, podShape.Requests())
 	if creds != nil {
 		if err := k.createAccessSecret(ctx, name, creds); err != nil {
-			k.revokeAccess(sandbox)
+			k.revokeAccess(ctx, sandbox)
 			return fmt.Errorf("orchestrator: granule sandbox pod %q: %w", name, err)
 		}
 	}
@@ -726,7 +741,8 @@ func (k *K8sGranuleSandboxes) ReapOrphans(ctx context.Context) (int, error) {
 // with its own idea of what it holds. reconcileSandboxes runs it on
 // every tick, which is what reclaims a pod a Release could not delete.
 func (k *K8sGranuleSandboxes) SweepOrphans(ctx context.Context) (int, error) {
-	return sweepOrphanPods(ctx, k.pods(), &k.mu, func(pod string) bool {
+	var orphanSandboxes []string
+	reaped, err := sweepOrphanPods(ctx, k.pods(), &k.mu, func(pod string) bool {
 		if k.building[pod] {
 			return true
 		}
@@ -735,8 +751,16 @@ func (k *K8sGranuleSandboxes) SweepOrphans(ctx context.Context) (int, error) {
 				return true
 			}
 		}
+		if sb, ok := strings.CutPrefix(pod, GranulePodNamePrefix); ok && sb != "" {
+			orphanSandboxes = append(orphanSandboxes, sb)
+		}
 		return false
 	})
+	for _, sb := range orphanSandboxes {
+		k.revokeAccess(ctx, sb)
+	}
+	k.sweepOrphanAccess(ctx)
+	return reaped, err
 }
 
 // k8sGranuleSandbox is one run's pod.
@@ -986,7 +1010,7 @@ func (s *k8sGranuleSandbox) Release(ctx context.Context) error {
 	s.owner.mu.Lock()
 	delete(s.owner.live, s.name)
 	s.owner.mu.Unlock()
-	s.owner.revokeAccess(s.name)
+	s.owner.revokeAccess(ctx, s.name)
 	s.stopForward()
 	s.owner.fit.Release(s.podName)
 	// Detached from ctx: a caller releasing because its run was cancelled

@@ -108,6 +108,9 @@ type SandboxRequest struct {
 	// itself, which a Sandboxes that does not know that name must refuse
 	// rather than run the job's scripts in an ordinary sandbox.
 	Builtin string
+	// Timeout is the job's execution timeout (Job.Timeout), used to bound
+	// per-sandbox credential lifetime when acquiring a sandbox.
+	Timeout time.Duration
 }
 
 // Sandbox is one job's machine, for as long as that job lasts.
