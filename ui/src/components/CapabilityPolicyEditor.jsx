@@ -27,6 +27,7 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../api.js";
+import { invalidateCapabilityMethods } from "./capabilityMethods.js";
 import { UsageList } from "./CapabilityServersPanel.jsx";
 
 // CapabilityPolicyEditor is grain_config.capability_policy
@@ -235,6 +236,7 @@ export default function CapabilityPolicyEditor({ showError, readOnly }) {
         method: "PUT",
         body: JSON.stringify({ policy: policy() }),
       });
+      invalidateCapabilityMethods();
       setRules((data?.policy?.rules || []).map(fromRule));
       setDirty(false);
       setPreview(null);
