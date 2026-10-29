@@ -2,16 +2,16 @@
 #
 #   1. grain-sandbox-network-none: restricts `grain.dev/network: none` sandbox
 #      pods to zero ingress and egress only to the grain daemon pod (proxies,
-#      package cache, and the sandbox-access acceptor on 7443).
+#      package cache, and the sandbox-access acceptor on 4244).
 #   2. grain-sandbox-egress: selects every networked sandbox pod (`app.kubernetes.io/managed-by: grain`,
 #      `app.kubernetes.io/component: sandbox`, the labels `pkg/k8s.Manifest` stamps on every
 #      sandbox pod, and not `grain.dev/network: none`). Empty ingress (nothing dials a sandbox pod). Separate egress rules for:
-#        - the wrapper's dial-out mTLS channel to `grain-access:7443`;
+#        - the wrapper's dial-out mTLS channel to `grain-access:4244`;
 #        - the guest's proxy/package-cache traffic to `grain-sandbox`;
 #        - cluster DNS;
 #        - public internet for open-network sandboxes, explicitly excluding
 #          the metadata server (`169.254.169.254/32`) and private/cluster CIDRs.
-#   3. grain-access-ingress: selects the grain daemon pod. Admits port 7443
+#   3. grain-access-ingress: selects the grain daemon pod. Admits port 4244
 #      and guest-facing proxy ports only from sandbox pods, and port 8080
 #      only from the GKE Gateway proxy-only / health-check ranges.
 #   4. grain-webhook-isolation: selects the unauthenticated GitHub webhook pod
@@ -50,7 +50,7 @@ spec:
         - protocol: TCP
           port: 443
         - protocol: TCP
-          port: 7443
+          port: 4244
         - protocol: TCP
           port: 9728
         - protocol: TCP
@@ -99,9 +99,9 @@ spec:
   ingress: []
   egress:
     # Rule 1 (wrapper only): granule wrapper dial-out mTLS channel to
-    # Service/grain-access (port 7443). Separated from the guest rule below
+    # Service/grain-access (port 4244). Separated from the guest rule below
     # so a change to guest ports never widens access to the acceptor; the
-    # wrapper's in-pod netshim filter drops guest-originated packets to 7443.
+    # wrapper's in-pod netshim filter drops guest-originated packets to 4244.
     - to:
         - podSelector:
             matchLabels:
@@ -109,7 +109,7 @@ spec:
               app.kubernetes.io/component: daemon
       ports:
         - protocol: TCP
-          port: 7443
+          port: 4244
     # Rule 2 (guest proxies and package cache): Service/grain-sandbox ports.
     - to:
         - podSelector:
@@ -170,7 +170,7 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # Wrapper dial-out mTLS acceptor port (7443): only from sandbox pods.
+    # Wrapper dial-out mTLS acceptor port (4244): only from sandbox pods.
     - from:
         - podSelector:
             matchLabels:
@@ -178,7 +178,7 @@ spec:
               app.kubernetes.io/component: sandbox
       ports:
         - protocol: TCP
-          port: 7443
+          port: 4244
     # Guest-facing package cache, git proxy and model proxies: only from
     # sandbox pods.
     - from:

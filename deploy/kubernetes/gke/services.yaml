@@ -4,9 +4,12 @@
 #      git proxy (9728), model proxies (9744-9746) and package cache
 #      interception listeners (53, 80, 443).
 #   2. Service/grain-access: wrapper-facing ClusterIP Service exposing ONLY
-#      the granule dial-out mTLS acceptor port (7443). Never exposed on the
+#      the granule dial-out mTLS acceptor port (4244). Never exposed on the
 #      Gateway, and separated from grain-sandbox so NetworkPolicy and the
 #      in-pod netshim filter can distinguish wrapper egress from guest egress.
+#      It is defined in the base, grain-granule.yaml (ahead of the
+#      Deployment, so the daemon starts with GRAIN_ACCESS_SERVICE_HOST);
+#      deployment-patch.yaml narrows its selector to the daemon pod here.
 #   3. Service/grain-hostd: Gateway backend Service for `/api/hostd/*` and
 #      `/api/executors/*` so the hostd WebSocket/HTTP2 stream gets its own
 #      GCPBackendPolicy with `timeoutSec: 86400` without widening the UI
@@ -59,26 +62,6 @@ spec:
       protocol: TCP
       port: 9746
       targetPort: 9746
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: grain-access
-  namespace: grain
-  labels:
-    app.kubernetes.io/name: grain
-    app.kubernetes.io/component: sandbox-access
-spec:
-  type: ClusterIP
-  publishNotReadyAddresses: true
-  selector:
-    app.kubernetes.io/name: grain
-    app.kubernetes.io/component: daemon
-  ports:
-    - name: sandbox-access
-      protocol: TCP
-      port: 7443
-      targetPort: 7443
 ---
 apiVersion: v1
 kind: Service

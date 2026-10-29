@@ -86,6 +86,18 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # Each sandbox pod's sandbox-access credentials: the Secret
+  # grain-access-<pod>, created after the pod with an ownerReference to
+  # it (so it is garbage-collected with the pod and never outlives it),
+  # and deleted when a pod of the same name is rebuilt. Create and delete
+  # only -- grain never reads a Secret back. Residual risk, stated so a
+  # reviewer need not discover it: RBAC cannot narrow create by name, so
+  # this identity can create any Secret in this namespace. Anyone who can
+  # act as it could already create privileged pods here, so it adds no
+  # reach (docs/design/grain-on-gke.md, Security 4).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete"]
   # Read-only diagnostics, and nothing the daemon itself needs: events
   # (core and events.k8s.io) so `kubectl describe pod` and `get events`
   # show why a sandbox pod was not scheduled or was evicted, and pod
@@ -271,6 +283,28 @@ spec:
     requests:
       storage: 20Gi
 ---
+# The sandbox-access acceptor's own Service, serving nothing else
+# (docs/design/grain-on-gke.md, "Sandbox access"). ClusterIP only, never
+# behind the Gateway: reachable only from the pods
+# sandbox-access-networkpolicy.yaml admits. It is defined before the
+# Deployment so the grain pod is started with GRAIN_ACCESS_SERVICE_HOST,
+# the ClusterIP grain hands granule to drop guest traffic to.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grain-access
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grain
+  ports:
+    - name: sandbox-access
+      port: 4244
+      targetPort: sandbox-access
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -379,6 +413,13 @@ spec:
             # CHANGEME (3 of 3): which repository this deployment files
             # tasks against by default.
             - -default-target-repo=CHANGEME/CHANGEME
+            # The sandbox-access acceptor (pkg/sandboxaccess): every
+            # sandbox pod's wrapper dials out to it over mTLS with its own
+            # certificate and token, minted into the Secret
+            # grain-access-<pod>. The CA is kept in
+            # /data/sandbox-access-ca.pem unless
+            # -sandbox-access-ca-secret names a Secret Manager secret.
+            - -sandbox-access-addr=:4244
           env:
             - name: GRAIN_POD_IP
               valueFrom:
@@ -398,6 +439,8 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            - name: sandbox-access
+              containerPort: 4244
           readinessProbe:
             httpGet:
               path: /api/auth/access-code

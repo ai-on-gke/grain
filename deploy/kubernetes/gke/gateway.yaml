@@ -7,7 +7,7 @@
 #   (IAP enabled, timeoutSec: 86400 so long-lived hostd WebSockets are not reset every 30s)
 # - /webhooks/github -> Service/grain-webhook:80 (GitHub HMAC, no IAP)
 #
-# Service/grain-access (port 7443) is NEVER exposed on the Gateway.
+# Service/grain-access (port 4244) is NEVER exposed on the Gateway.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
