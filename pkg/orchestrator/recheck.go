@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -289,6 +290,43 @@ func startCIRecheck(ctx context.Context, deps Deps, task model.Task, status mode
 	return true, nil
 }
 
+// startChannelLostRecheck re-runs, once and uncached, the jobs of a task's
+// errored required run that lost their sandbox channel
+// (sandboxaccess.ChannelLostFault, docs/design/grain-on-gke.md#GKE-3). The
+// run said nothing about the tree, so the answer is another sample now
+// rather than ciReplacementFor's whole-suite replacement ciRetryDelay later.
+// The merge rules' flake_recheck does not apply: nothing flaked. A commit is
+// re-run once (model.CIStatus.RecheckOf); a re-run that loses its channel
+// again leaves the errored verdict, which ciReplacementFor then owns.
+func startChannelLostRecheck(ctx context.Context, deps Deps, task model.Task, status model.CIStatus,
+	run ci.Run, now time.Time) (bool, error) {
+
+	if status.RecheckOf != "" || task.Target == nil {
+		return false, nil
+	}
+	lost := channelLostJobs(run)
+	if len(lost) == 0 {
+		return false, nil
+	}
+	// The re-run takes every job of the run that did not pass
+	// (recheckTargets), so a job that failed beside the lost one gets
+	// the flake recheck too -- which this change's merge rules may refuse.
+	// Then the run is left to the errored path it took before.
+	if why := flakeRecheckRefusal(task); why != "" && len(recheckTargets(run, nil)) > len(lost) {
+		log.Printf("orchestrator: task %s: grain CI run %s lost a sandbox channel at %s, beside a job that "+
+			"did not pass for its own reasons; not rechecking it: %s", task.ID, run.ID, shortSHA(status.Commit), why)
+		return false, nil
+	}
+	started, rechecking, recheck, err := askCIRecheck(ctx, deps, task, status, run, ciDetail(run), now)
+	if err != nil || !started {
+		return started, err
+	}
+	if recheck.Conclusion.Done() {
+		return true, collectCIRecheck(ctx, deps, task, rechecking, recheck, false, now)
+	}
+	return true, nil
+}
+
 func askCIRecheck(ctx context.Context, deps Deps, task model.Task, status model.CIStatus,
 	run ci.Run, detail string, now time.Time) (bool, model.CIStatus, ci.Run, error) {
 
@@ -373,6 +411,15 @@ func collectCIRecheck(ctx context.Context, deps Deps, task model.Task, status mo
 	}
 	log.Printf("orchestrator: task %s: recheck %s of grain CI run %s: %s at %s -- %s",
 		task.ID, status.RunID, status.RecheckOf, conclusion, shortSHA(status.Commit), detail)
+	// A job whose first run lost its sandbox channel did not flake when it
+	// passed again: the platform took its sandbox away (infraverdict.go).
+	if first, ok := deps.CI.Get(status.RecheckOf); ok && len(flaked) > 0 {
+		lost := map[string]bool{}
+		for _, name := range channelLostJobs(first) {
+			lost[name] = true
+		}
+		flaked = slices.DeleteFunc(flaked, func(name string) bool { return lost[name] })
+	}
 	if len(flaked) > 0 {
 		tests := recordFlake(deps, status.RecheckOf, status.RunID, flaked)
 		outcome := "this commit's grain CI reads green."
