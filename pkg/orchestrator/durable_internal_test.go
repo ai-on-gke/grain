@@ -15,11 +15,9 @@
 package orchestrator
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,9 +234,7 @@ func TestADurableTasksSetupFailureIsASuspension(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var logged bytes.Buffer
-	log.SetOutput(&logged)
-	defer log.SetOutput(os.Stderr)
+	logged := logToTest(t)
 	for i := 1; i <= model.DurableSetupFailingAfter; i++ {
 		at := standingNow.Add(time.Duration(i) * time.Hour)
 		id := "d-" + string(rune('0'+i))
