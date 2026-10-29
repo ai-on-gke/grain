@@ -150,6 +150,7 @@ func TestGitHubMetricsBreakTheSpendDownByCaller(t *testing.T) {
 		},
 		Budget: github.BudgetSnapshot{RateLimitSnapshot: github.RateLimitSnapshot{Limit: 5000, Remaining: 600},
 			SpendPerHour: 900, ExhaustedAt: exhausted, Low: true, Credentials: 1},
+		Polls: github.PollStats{Tracked: 4, BackedOff: 3, BaseSeconds: 30, CapSeconds: 480, MedianSeconds: 120, MaxSeconds: 480},
 		Cache: github.CacheStats{Entries: 300, MaxEntries: 2048, Evicted: 7},
 	}})
 	if len(got.Callers) != 2 || got.Callers[0].Caller != "sync" || got.Callers[0].Spent != 200 {
@@ -161,6 +162,9 @@ func TestGitHubMetricsBreakTheSpendDownByCaller(t *testing.T) {
 	b := got.Budget
 	if !b.Low || b.Remaining != 600 || !b.ExhaustedAt.Equal(exhausted) || b.LowFraction != github.LowBudgetFraction {
 		t.Errorf("budget = %+v", b)
+	}
+	if got.Polls.Tracked != 4 || got.Polls.BackedOff != 3 || got.Budget.Polls != got.Polls {
+		t.Errorf("polls = %+v (budget.Polls = %+v), want 3 of 4 backed off", got.Polls, got.Budget.Polls)
 	}
 	if got.Cache.Evicted != 7 || got.Cache.MaxEntries != 2048 {
 		t.Errorf("cache = %+v", got.Cache)
