@@ -134,6 +134,10 @@ type LiveConfig struct {
 	stockSandboxImage string
 	baseStockImage    string
 	stockMirrorRepo   string
+	// customSandboxImage is the custom image applySandboxImage last
+	// applied, so its log can tell a custom image cleared from the stock
+	// one moving under no custom image at all.
+	customSandboxImage string
 	// sandboxImageLabels reads a custom image's labels for the contract
 	// line logged when it changes; nil logs nothing.
 	sandboxImageLabels sandboximage.LabelReader
@@ -181,6 +185,7 @@ func NewLiveConfig(store *model.Store, sandboxes orchestrator.Sandboxes, cfg Con
 func (l *LiveConfig) WithSandboxImages(src *sandboximage.Source, stock string, labels sandboximage.LabelReader) *LiveConfig {
 	l.sandboxImages, l.stockSandboxImage, l.baseStockImage, l.sandboxImageLabels = src, stock, stock, labels
 	l.stockMirrorRepo = sandboxImageMirrorRepo(l.Applied)
+	l.customSandboxImage = customSandboxImageFor(l.Applied)
 	return l
 }
 
@@ -597,17 +602,17 @@ func (l *LiveConfig) applySandboxImage(ctx context.Context, cfg Config) {
 	if l.stockSandboxImage == "" {
 		return
 	}
+	// A mirror set, changed or cleared moves the stock image itself, so
+	// it is worked out again from cfg either way: baseStockImage, what
+	// this process started with, is the mirrored image on a daemon that
+	// started with a mirror, and is only the answer when cfg gives none.
 	if mirrorRepo := sandboxImageMirrorRepo(cfg); mirrorRepo != l.stockMirrorRepo {
 		l.stockMirrorRepo = mirrorRepo
-		if mirrorRepo != "" || l.baseStockImage == "" {
-			if nextStock := stockSandboxImageFor(cfg); nextStock != "" {
-				l.stockSandboxImage = nextStock
-			}
-		} else {
-			l.stockSandboxImage = l.baseStockImage
-		}
+		l.stockSandboxImage = firstNonEmpty(stockSandboxImageFor(cfg), l.baseStockImage)
 	}
 	custom := customSandboxImageFor(cfg)
+	hadCustom := l.customSandboxImage != ""
+	l.customSandboxImage = custom
 	var changed bool
 	switch setter, ok := l.sandboxes.(orchestrator.SandboxImageSetter); {
 	case l.sandboxImages != nil:
@@ -620,8 +625,10 @@ func (l *LiveConfig) applySandboxImage(ctx context.Context, cfg Config) {
 		return
 	}
 	if changed {
-		if custom == "" {
+		if custom == "" && hadCustom {
 			log.Printf("grain daemon: custom sandbox image cleared; new sandboxes are created from %s", l.stockSandboxImage)
+		} else if custom == "" {
+			log.Printf("grain daemon: stock sandbox image changed; new sandboxes are created from %s", l.stockSandboxImage)
 		} else if l.sandboxImageLabels != nil {
 			go logCustomSandboxImage(context.WithoutCancel(ctx), cfg, custom, l.stockSandboxImage, l.sandboxImageLabels)
 		}

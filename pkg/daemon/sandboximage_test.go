@@ -583,3 +583,38 @@ func TestMirrorSandboxImageChecksTheRegistryBeforeTrustingALocalRepoDigest(t *te
 		t.Errorf("pushed although the mirror already has the digest:\n%s", logged)
 	}
 }
+
+// A daemon started with -sandbox-image-mirror resolves its stock image to
+// the mirrored one; clearing the mirror in Settings must hand the backend
+// the unmirrored stamp again, not the mirrored image it started with.
+// And the line logged for it must not claim a custom image was cleared
+// when none was ever set.
+func TestApplySandboxImageClearingTheMirrorReturnsToTheStamp(t *testing.T) {
+	stamped := "127.0.0.1:5000/src/guest:sha-aaaa111"
+	savedStamp := DefaultSandboxImage
+	DefaultSandboxImage = stamped
+	t.Cleanup(func() { DefaultSandboxImage = savedStamp })
+	digest := "sha256:f97baa533a26513c453a362be331a43eb60214302f449c16571b23cea141dce4"
+	fakeMirrorDocker(t, `["127.0.0.1:5001/mirror/guest@`+digest+`"]`, 0)
+
+	cfg := Config{K8sGranuleSandboxes: true, SandboxImageMirror: "127.0.0.1:5001/mirror/guest"}
+	mirrored := "127.0.0.1:5001/mirror/guest:sha-aaaa111@" + digest
+	stock := stockSandboxImageFor(cfg)
+	if stock != mirrored {
+		t.Fatalf("stock image with a mirror = %q, want %q", stock, mirrored)
+	}
+	backend := &fakeImageBackend{image: stock}
+	live := (&LiveConfig{sandboxes: backend, Applied: cfg}).WithSandboxImages(nil, stock, nil)
+
+	cfg.SandboxImageMirror = ""
+	logged := captureLog(t, func() { live.applySandboxImage(t.Context(), cfg) })
+	if backend.image != stamped {
+		t.Fatalf("after clearing the mirror new sandboxes come from %q, want the stamp %q", backend.image, stamped)
+	}
+	if strings.Contains(logged, "custom sandbox image cleared") {
+		t.Errorf("logged a custom image cleared when none was set:\n%s", logged)
+	}
+	if !strings.Contains(logged, "new sandboxes are created from "+stamped) {
+		t.Errorf("no line saying which image new sandboxes use:\n%s", logged)
+	}
+}
