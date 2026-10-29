@@ -7,7 +7,7 @@ A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy (`docs/d
 - **The access code is the only credential.** `pkg/ui/accesscode.go`: the single-tenant daemon's one secret is `local-api-token`. A browser trades it for the `grain_access` session cookie on the "Enter access code" page. The CLI (`pkg/cli/accesscode.go`, `pkg/cli/cliconn.go`) sends it as `Authorization: Bearer`. `singleTenantGate` lets nobody else in, loopback included (`docs/access-code.md`). Callers that have it run as the deployment's own actor (`AuthMethodTrusted`), and nobody is named.
 - **IAP assertions are verified, then thrown away.** With `-ui-iap-audience` / `GRAIN_IAP_AUDIENCE` set (plus `-ui-iap-issuer` and `-ui-iap-keys-url`), `identifyCaller` in `pkg/ui/principal.go` checks `X-Goog-IAP-JWT-Assertion` against IAP's keys, issuer, audience and expiry. `extractPrincipal` then drops the person it names. `singleTenantRefusesIdentity` uses the verified assertion only to refuse an API call that has no access code, with a better error (`singleTenantProxiedRefusal`).
 - **Programmatic IAP clients already exist.** `pkg/modelexec/iap_auth.go` (`IAPTokenProvider`) mints ID tokens for the IAP audience, so executors and hostd can get through the Gateway. They then present an executor or hostd token in the hello frame.
-- **Seams for wrapper builds.** The Google-internal build (`depot.code.corp.goog/experimental/grain`) imports this module and extends it only through registries (`pkg/change.Register`, `ui.RegisterHostFamily`) and through `IAPConfig.Validator`. Nothing lets it plug in a different signed-header proxy.
+- **Seams for wrapper builds.** A wrapper distribution (such as Google's internal build) imports this module and extends it only through registries (`pkg/change.Register`, `ui.RegisterHostFamily`) and through `IAPConfig.Validator`. Nothing lets it plug in a different signed-header proxy.
 
 Behind IAP, this means every teammate has to share a second password on top of their Google login. Every action is attributed to one anonymous holder of that code. Setting up the CLI, hostd and external agents needs both an IAP token and the access code.
 
@@ -82,12 +82,12 @@ What changes is that the verified IAP principal is recorded as the connection's 
 
 ### `IdentityVerifier`
 
-IAP becomes one implementation of a seam in `pkg/ui`, so that a wrapper build can add a different signed-header proxy. The Google-internal build in `depot.code.corp.goog/experimental/grain` has a companion design doc for ÜberProxy. It plugs in through this seam rather than by patching the gate.
+IAP becomes one implementation of a seam in `pkg/ui`, so that a wrapper build can add a different signed-header proxy. A wrapper build fronted by its own corporate proxy, with a companion design doc in that wrapper's repository, plugs in through this seam rather than by patching the gate.
 
 ```go
 // An IdentityVerifier turns a signed header a trusted proxy adds into a verified identity.
 type IdentityVerifier interface {
-	Name() string     // "iap", "uberproxy"; becomes the AuthMethod
+	Name() string     // "iap", or a wrapper's proxy; becomes the AuthMethod
 	Headers() []string // the headers it reads; also treated as proxy headers (relayedByProxy)
 	// Verify returns ok=false when none of its headers is present, and an
 	// error when one is present but does not verify.
