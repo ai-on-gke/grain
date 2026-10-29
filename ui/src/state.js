@@ -1124,10 +1124,12 @@ export function baseRepairWaitReason(t) {
 }
 
 // redBaseRepairSentence formats the banner and inbox sentence for a waiting
-// base-branch repair pull request: "`main` is red — repair #NNNN is …".
+// base-branch repair pull request: "main is red — repair #NNNN is …".
+// Plain text, not markdown: the alerts panel and the Inbox note both print
+// it as it is, so backticks around the branch were drawn literally.
 export function redBaseRepairSentence(t) {
   if (!waitingBaseRepair(t)) return null;
-  return `\`${t.redBaseBranch}\` is red — repair #${t.id} is ${baseRepairWaitReason(t)}`;
+  return `${t.redBaseBranch} is red — repair #${t.id} is ${baseRepairWaitReason(t)}`;
 }
 
 // awaitsHumanSubmit is a task whose pull request is owed a person's

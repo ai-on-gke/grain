@@ -187,6 +187,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		SandboxDiskFloorShare:   ptr(0.2),
 		SandboxDiskFloorMinMB:   ptr(8192),
 		SandboxImage:            ptr("registry.example/team/sandbox:v1"),
+		SandboxImageMirror:      ptr("us-docker.pkg.dev/acme-project/grain/guest"),
 		K8sNamespace:            ptr("grain-sandboxes"),
 		K8sKubectl:              ptr("/usr/local/bin/kubectl"),
 		K8sSandboxImage:         ptr("ghcr.io/bwsalmon/grain-k8s-sandbox:v1"),

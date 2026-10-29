@@ -997,7 +997,11 @@ func (c Client) WaitReady(ctx context.Context, name string, deadline time.Time, 
 			// kubelet verdict, not a transient scheduling state, so preserve
 			// that useful reason instead of sitting out the readiness timeout.
 			if strings.HasPrefix(st.Reason, "ErrImagePull:") || strings.HasPrefix(st.Reason, "ImagePullBackOff:") {
-				return fmt.Errorf("k8s: sandbox pod %q will never be ready: it is %s%s", name, st.Phase, reasonDetail(st.Reason))
+				hint := ""
+				if h := ImagePullMirrorHint(st.Reason, "", ""); h != "" {
+					hint = " -- " + h
+				}
+				return fmt.Errorf("k8s: sandbox pod %q will never be ready: it is %s%s%s", name, st.Phase, reasonDetail(st.Reason), hint)
 			}
 		}
 		if time.Now().After(deadline) {
@@ -1045,6 +1049,168 @@ func reasonDetail(reason string) string {
 		return ""
 	}
 	return " (" + reason + ")"
+}
+
+// ImageRegistryProject parses a Google Artifact Registry or Container Registry
+// image reference (`<host>/<project>/<repo>[:tag][@digest]`) into its registry
+// host, GCP project, and repository path suffix. Returns empty strings when
+// imageRef is not hosted on pkg.dev or gcr.io.
+func ImageRegistryProject(imageRef string) (host, project, repoSuffix string) {
+	ref, _, _ := strings.Cut(strings.TrimSpace(imageRef), "@")
+	if idx := strings.LastIndex(ref, ":"); idx != -1 && idx > strings.LastIndex(ref, "/") {
+		ref = ref[:idx]
+	}
+	parts := strings.SplitN(ref, "/", 3)
+	if len(parts) < 3 {
+		return "", "", ""
+	}
+	h := strings.ToLower(parts[0])
+	if h != "gcr.io" && !strings.HasSuffix(h, ".gcr.io") && !strings.HasSuffix(h, ".pkg.dev") {
+		return "", "", ""
+	}
+	if parts[1] == "" || parts[2] == "" {
+		return "", "", ""
+	}
+	return h, parts[1], parts[2]
+}
+
+// SuggestedMirrorRepository returns the recommended Artifact Registry mirror
+// repository in clusterProject for imageRef. When clusterProject is unknown or
+// matches imageRef's own project, `<cluster-project>` is used as the placeholder.
+func SuggestedMirrorRepository(imageRef, clusterProject string) string {
+	targetProject := strings.TrimSpace(clusterProject)
+	if host, imgProject, suffix := ImageRegistryProject(imageRef); host != "" && suffix != "" {
+		if targetProject == "" || targetProject == imgProject {
+			targetProject = "<cluster-project>"
+		}
+		return host + "/" + targetProject + "/" + suffix
+	}
+	if targetProject == "" {
+		targetProject = "<cluster-project>"
+	}
+	return "us-docker.pkg.dev/" + targetProject + "/grain/guest"
+}
+
+// ExtractImageFromPullError extracts the image reference quoted inside a
+// kubelet image-pull error message, or returns "" if none is found.
+func ExtractImageFromPullError(reason string) string {
+	for _, marker := range []string{`pull and unpack image "`, `Failed to pull image "`, `for "`} {
+		if _, rest, ok := strings.Cut(reason, marker); ok {
+			if img, _, ok := strings.Cut(rest, `"`); ok && strings.Contains(img, "/") {
+				return img
+			}
+		}
+	}
+	for _, field := range strings.Fields(reason) {
+		trimmed := strings.Trim(field, `"'(),:;`)
+		if h, _, _ := ImageRegistryProject(trimmed); h != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// IsCrossOrgImagePullError reports whether reason describes a kubelet image
+// pull failure against a Google Artifact Registry or GCR repository caused by
+// an authorization / 403 Forbidden failure (such as a GKE cluster in an
+// external GCP organization pulling a Google-track guest image).
+func IsCrossOrgImagePullError(reason string) bool {
+	lower := strings.ToLower(reason)
+	hasGoogleRegistry := strings.Contains(lower, ".pkg.dev") || strings.Contains(lower, "gcr.io")
+	if !hasGoogleRegistry {
+		return false
+	}
+	hasAuthError := strings.Contains(lower, "403 forbidden") ||
+		strings.Contains(lower, "failed to authorize") ||
+		strings.Contains(lower, "downloadartifacts") ||
+		strings.Contains(lower, "permission") ||
+		strings.Contains(lower, "unauthorized")
+	return hasAuthError
+}
+
+// ImagePullMirrorHint returns an actionable suggestion to configure
+// -sandbox-image-mirror when reason is a cross-org / 403 Forbidden image pull
+// failure against Artifact Registry or GCR, or "" otherwise.
+func ImagePullMirrorHint(reason, imageRef, clusterProject string) string {
+	if !IsCrossOrgImagePullError(reason) {
+		return ""
+	}
+	if imageRef == "" {
+		imageRef = ExtractImageFromPullError(reason)
+	}
+	mirror := SuggestedMirrorRepository(imageRef, clusterProject)
+	imgDesc := "the sandbox image"
+	if imageRef != "" {
+		imgDesc = imageRef
+	}
+	return fmt.Sprintf(
+		"cluster nodes cannot pull %s across GCP organization boundaries (403 Forbidden); "+
+			"configure a sandbox image mirror repository in the cluster's GCP project with: "+
+			"grain settings -sandbox-image-mirror %s",
+		imgDesc, mirror)
+}
+
+// ClusterProject best-effort detects the GCP project ID that the target
+// Kubernetes cluster runs in, by inspecting GKE node providerIDs
+// (`gce://<project>/<zone>/<node>`) or the current kubeconfig context name
+// (`gke_<project>_<location>_<cluster>`). Returns "" when the project cannot
+// be determined.
+func (c Client) ClusterProject(ctx context.Context) string {
+	if out, err := c.run(ctx, "get", "nodes", "-o", `jsonpath={range .items[*]}{.spec.providerID}{"\n"}{end}`); err == nil {
+		for _, line := range strings.Split(out, "\n") {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "gce://"); ok {
+				if proj, _, ok := strings.Cut(rest, "/"); ok && proj != "" {
+					return proj
+				}
+			}
+		}
+	}
+	if out, err := c.run(ctx, "config", "current-context"); err == nil {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(out), "gke_"); ok {
+			if proj, _, ok := strings.Cut(rest, "_"); ok && proj != "" {
+				return proj
+			}
+		}
+	}
+	return ""
+}
+
+const podWaitingImagesFormat = `{{range .items}}{{range .status.containerStatuses}}{{if .state.waiting}}{{.image}}|{{.state.waiting.reason}}: {{.state.waiting.message}}{{"\n"}}{{end}}{{end}}{{end}}`
+
+// CheckImagePullConnectivity checks whether the target cluster has reported or
+// is likely to encounter cross-project / cross-organization image pull failures
+// for imageRef, and returns an error with a setup suggestion for
+// -sandbox-image-mirror when connectivity is missing.
+func (c Client) CheckImagePullConnectivity(ctx context.Context, imageRef string) error {
+	imageRef = strings.TrimSpace(imageRef)
+	if imageRef == "" {
+		return nil
+	}
+	_, imgProject, _ := ImageRegistryProject(imageRef)
+	if imgProject == "" {
+		return nil
+	}
+	clusterProject := c.ClusterProject(ctx)
+	if out, err := c.run(ctx, "get", "pods", "-l", ManagedByLabel+"="+ManagedByValue, "-o", "go-template="+podWaitingImagesFormat); err == nil {
+		for _, line := range strings.Split(out, "\n") {
+			img, reason, ok := strings.Cut(strings.TrimSpace(line), "|")
+			if !ok || reason == "" {
+				continue
+			}
+			if img == imageRef || strings.HasPrefix(reason, "ErrImagePull:") || strings.HasPrefix(reason, "ImagePullBackOff:") {
+				if hint := ImagePullMirrorHint(reason, imageRef, clusterProject); hint != "" {
+					return errors.New(hint)
+				}
+			}
+		}
+	}
+	if clusterProject != "" && clusterProject != imgProject {
+		mirror := SuggestedMirrorRepository(imageRef, clusterProject)
+		return fmt.Errorf(
+			"cluster runs in GCP project %q while sandbox image %s is in %q; if cluster nodes cannot pull across GCP organization boundaries (403 Forbidden), configure a mirror repository with: grain settings -sandbox-image-mirror %s",
+			clusterProject, imageRef, imgProject, mirror)
+	}
+	return nil
 }
 
 // WaitTerminal polls until name's pod has finished one way or the other

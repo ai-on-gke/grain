@@ -466,9 +466,17 @@ func (c *Client) resolveK8sImageDefaults(ctx context.Context, cfg *model.Config,
 func (c *Client) resolveK8sImageWarnings(ctx context.Context, effectiveSandbox, effectiveGranule string) (sandboxWarn, granuleWarn string) {
 	if err := c.checkImageManifest(ctx, effectiveSandbox); err != nil {
 		sandboxWarn = fmt.Sprintf("Sandbox pod image %q did not resolve: %v", effectiveSandbox, err)
+	} else if c != nil && c.Config.CheckClusterImageConnectivity != nil {
+		if err := c.Config.CheckClusterImageConnectivity(ctx, effectiveSandbox); err != nil {
+			sandboxWarn = err.Error()
+		}
 	}
 	if err := c.checkImageManifest(ctx, effectiveGranule); err != nil {
 		granuleWarn = fmt.Sprintf("Granule VM pod image %q did not resolve: %v", effectiveGranule, err)
+	} else if c != nil && c.Config.CheckClusterImageConnectivity != nil {
+		if err := c.Config.CheckClusterImageConnectivity(ctx, effectiveGranule); err != nil {
+			granuleWarn = err.Error()
+		}
 	}
 	return sandboxWarn, granuleWarn
 }
@@ -485,6 +493,7 @@ func computeSettingSources(cfg model.Config, s Settings) map[string]string {
 		"k8sSandboxImage":        strSource(cfg.K8sSandboxImage, s.K8sSandboxImageDefault),
 		"k8sGranuleImage":        strSource(cfg.K8sGranuleImage, s.K8sGranuleImageDefault),
 		"sandboxImage":           strSource(cfg.SandboxImage, ""),
+		"sandboxImageMirror":     strSource(cfg.SandboxImageMirror, ""),
 		"k8sWorkspace":           "default",
 		"k8sDeployment":          strSource(cfg.K8sDeployment, s.K8sDeploymentDefault),
 		"k8sContainer":           strSource(cfg.K8sContainer, s.K8sContainerDefault),

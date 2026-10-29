@@ -495,4 +495,36 @@ describe("GrantsPicker", () => {
     expect(within(gone).getByText("server not attached")).toBeTruthy();
     expect(gone.querySelector("input")).toBeNull();
   });
+
+  it("shows the capability policy verdict for the picker's run kind", async () => {
+    serve({
+      current: [
+        { ...hostScript, policy: { task: "denied", ci: "may_be_refused" } },
+      ],
+    });
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[hostScript.ref]}
+        config={config}
+        runKind="ci"
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    const heldLine = await screen.findByLabelText(
+      "example.com › host-script (may be refused by the capability policy for CI jobs)",
+    );
+    expect(within(heldLine).getByText("may be refused")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    const item = await screen.findByRole("menuitem", { name: /host-script/ });
+    expect(item).toHaveTextContent(
+      "may be refused by the capability policy for CI jobs",
+    );
+    expect(
+      within(item).getByRole("link", { name: "Settings → Capabilities" }),
+    ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
+  });
 });

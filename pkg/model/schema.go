@@ -291,7 +291,11 @@ import "strconv"
 // 62 adds the `sandbox_access` table: the SHA-256 token digest and expiry
 // time for each live k8s-granule sandbox's reverse control channel
 // (model.SandboxAccessCredential, docs/design/grain-on-gke.md#GKE-2).
-const SchemaVersion = 62
+//
+// 63 adds `sandbox_image_mirror` to `grain_config`: an optional OCI
+// repository into which grain mirrors the build-stamped sandbox image on
+// upgrade and startup (model.Config.SandboxImageMirror).
+const SchemaVersion = 63
 
 // sandboxAccessTable is the `sandbox_access` table, named once for Tables
 // and for the migration that adds it.
@@ -1967,6 +1971,7 @@ var Tables = []string{
   ` + "`auto_upgrade_time`" + `            TEXT    NOT NULL DEFAULT '',
   ` + "`judgement_model`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`external_agent_api`" + `           INTEGER NOT NULL DEFAULT 0,
+  ` + "`sandbox_image_mirror`" + `         TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

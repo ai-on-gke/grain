@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -285,6 +286,7 @@ type Settings struct {
 	// for on that backend.
 	SandboxImage        string `json:"sandboxImage"`
 	SandboxImageDefault string `json:"sandboxImageDefault"`
+	SandboxImageMirror  string `json:"sandboxImageMirror"`
 	// SandboxImageBackend is the backend those two are answered for --
 	// the one chosen in Settings, else the one running.
 	SandboxImageBackend string `json:"sandboxImageBackend"`
@@ -1012,10 +1014,16 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 	cfg, unrunnable := c.runnableSettings(cfg)
 	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
+	effectiveGranuleForWarn := firstNonEmptyString(cfg.K8sGranuleImage, granuleImgDefault)
+	if mirror := strings.TrimSpace(cfg.SandboxImageMirror); mirror != "" {
+		if mirrored := upgrade.MirrorSandboxRef(effectiveGranuleForWarn, mirror); mirrored != "" {
+			effectiveGranuleForWarn = mirrored
+		}
+	}
 	sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
 		ctx,
 		firstNonEmptyString(cfg.K8sSandboxImage, sandboxImgDefault),
-		firstNonEmptyString(cfg.K8sGranuleImage, granuleImgDefault),
+		effectiveGranuleForWarn,
 	)
 	out := Settings{
 		Configured:               true,
@@ -1054,6 +1062,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		K8sSandboxImageDefault: sandboxImgDefault,
 		K8sGranuleImage:        cfg.K8sGranuleImage,
 		K8sGranuleImageDefault: granuleImgDefault,
+		SandboxImageMirror:     cfg.SandboxImageMirror,
 		DaemonBuildVersion:     buildVersion,
 		K8sSandboxImageWarning: sandboxWarn,
 		K8sGranuleImageWarning: granuleWarn,
@@ -1350,6 +1359,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			K8sKubectlDefault:              model.DefaultK8sKubectl,
 			K8sSandboxImageDefault:         sandboxImgDefault,
 			K8sGranuleImageDefault:         granuleImgDefault,
+			SandboxImageMirror:             def.SandboxImageMirror,
 			DaemonBuildVersion:             buildVersion,
 			K8sSandboxImageWarning:         sandboxWarn,
 			K8sGranuleImageWarning:         granuleWarn,
@@ -1468,6 +1478,7 @@ type UpdateSettingsRequest struct {
 	SandboxDiskFloorShare  *float64                  `json:"sandboxDiskFloorShare"`
 	SandboxDiskFloorMinMB  *int                      `json:"sandboxDiskFloorMinMb"`
 	SandboxImage           *string                   `json:"sandboxImage"`
+	SandboxImageMirror     *string                   `json:"sandboxImageMirror"`
 	K8sNamespace           *string                   `json:"k8sNamespace"`
 	K8sKubectl             *string                   `json:"k8sKubectl"`
 	K8sSandboxImage        *string                   `json:"k8sSandboxImage"`
@@ -1863,8 +1874,21 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		}
 		cfg.SandboxImage = image
 	}
+	if req.SandboxImageMirror != nil {
+		mirror := strings.TrimSpace(*req.SandboxImageMirror)
+		if mirror != "" {
+			if err := sandboximage.ValidateReference(mirror); err != nil {
+				return model.Config{}, validationErrorf("sandboxImageMirror must be an OCI repository reference, such as us-docker.pkg.dev/my-project/grain/guest: %v", err)
+			}
+		}
+		cfg.SandboxImageMirror = mirror
+	}
 	if req.K8sNamespace != nil {
-		cfg.K8sNamespace = strings.TrimSpace(*req.K8sNamespace)
+		ns := strings.TrimSpace(*req.K8sNamespace)
+		if ns != "" && !k8sLabelName.MatchString(ns) {
+			return model.Config{}, validationErrorf("k8sNamespace %q is not a Kubernetes namespace name: at most 63 lowercase letters, digits and '-', starting and ending with a letter or digit", ns)
+		}
+		cfg.K8sNamespace = ns
 	}
 	if req.K8sKubectl != nil {
 		cfg.K8sKubectl = strings.TrimSpace(*req.K8sKubectl)
@@ -1917,13 +1941,25 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.K8sContainer = strings.TrimSpace(*req.K8sContainer)
 	}
 	if req.K8sPriorityClassInteractive != nil {
-		cfg.K8sPriorityClassInteractive = strings.TrimSpace(*req.K8sPriorityClassInteractive)
+		name, err := k8sPriorityClassName("k8sPriorityClassInteractive", *req.K8sPriorityClassInteractive)
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sPriorityClassInteractive = name
 	}
 	if req.K8sPriorityClassAgent != nil {
-		cfg.K8sPriorityClassAgent = strings.TrimSpace(*req.K8sPriorityClassAgent)
+		name, err := k8sPriorityClassName("k8sPriorityClassAgent", *req.K8sPriorityClassAgent)
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sPriorityClassAgent = name
 	}
 	if req.K8sPriorityClassCI != nil {
-		cfg.K8sPriorityClassCI = strings.TrimSpace(*req.K8sPriorityClassCI)
+		name, err := k8sPriorityClassName("k8sPriorityClassCi", *req.K8sPriorityClassCI)
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sPriorityClassCI = name
 	}
 	if req.PackageCacheEnabled != nil {
 		cfg.PackageCacheEnabled = *req.PackageCacheEnabled
@@ -2376,4 +2412,25 @@ func gitHubHostSetting(raw string) (string, error) {
 		}
 	}
 	return host, nil
+}
+
+// k8sLabelName is a Kubernetes DNS-1123 label, what a namespace name
+// must be; k8sSubdomainName a DNS-1123 subdomain, what a PriorityClass
+// name must be. A name outside them is one the API server refuses on
+// every pod grain creates, so it is refused here, where it is typed,
+// instead (the connections and infrastructure settings walkthrough of
+// 2026-10-29 saved "Bad_Class" without a word).
+var (
+	k8sLabelName     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+	k8sSubdomainName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+)
+
+// k8sPriorityClassName trims a priority class setting and refuses a
+// name Kubernetes could never accept. Empty is valid: it sets none.
+func k8sPriorityClassName(key, raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name != "" && (len(name) > 253 || !k8sSubdomainName.MatchString(name)) {
+		return "", validationErrorf("%s %q is not a Kubernetes PriorityClass name: lowercase letters, digits, '-' and '.', starting and ending with a letter or digit", key, name)
+	}
+	return name, nil
 }

@@ -369,7 +369,7 @@ The API behind this:
 
 | Route | What it does |
 |---|---|
-| `GET /api/capability-methods` | Each attached method: `ref`, `capability`, `method`, `description`, `args` (the normalized schema), `requiresArgs`, `releasable`. `/api/config`'s `capabilityMethods` is just the count. |
+| `GET /api/capability-methods` | Each attached method: `ref`, `capability`, `method`, `description`, `args` (the normalized schema), `requiresArgs`, `releasable`, and `policy` (any capability-policy verdict per run kind: `"denied"` or `"may_be_refused"`). `/api/config`'s `capabilityMethods` is just the count. |
 | `POST /api/capability-grants/check` | `{"grants": [{"capability", "with"} or {"grant"}]}` returns, for each grant, `recorded`, `args`, `error`, `fields`, `changed` and `unchecked`. It writes nothing. |
 | `POST /api/tasks/{id}/capabilities` | `{id, attach}` as before, or `{capability, with, attach}`. `{grant, attach: false}` removes one recorded grant exactly. `replace` on an attach swaps one grant for the new one in place. A grant nothing offers any more can still be removed. |
 
