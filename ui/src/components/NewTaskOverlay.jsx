@@ -362,6 +362,11 @@ export default function NewTaskOverlay({
   const [reviewTemplateId, setReviewTemplateId] = useState(
     () => draft?.reviewTemplateId ?? "",
   );
+  const [reviewers, setReviewers] = useState(() =>
+    Array.isArray(draft?.reviewers)
+      ? draft.reviewers.join(", ")
+      : (draft?.reviewers ?? ""),
+  );
   const [promptExtension, setPromptExtension] = useState(
     () => draft?.promptExtension ?? "",
   );
@@ -489,6 +494,7 @@ export default function NewTaskOverlay({
     if (noPort) return true;
     if (fixesBaseBranch) return true;
     if (newBranch || newBranchName.trim() !== "") return true;
+    if (reviewers.trim() !== "") return true;
     if (atFront !== !!config?.newestFirst) return true;
     const defaultFields = fileableFieldValues(config, fields);
     for (const [k, v] of Object.entries(customFields)) {
@@ -539,6 +545,7 @@ export default function NewTaskOverlay({
         networkAccess,
         nothingNeededAction,
         reviewTemplateId,
+        reviewers,
         promptExtension,
         sandboxCpus,
         sandboxMemoryMb,
@@ -571,6 +578,7 @@ export default function NewTaskOverlay({
     networkAccess,
     nothingNeededAction,
     reviewTemplateId,
+    reviewers,
     promptExtension,
     sandboxCpus,
     sandboxMemoryMb,
@@ -608,6 +616,7 @@ export default function NewTaskOverlay({
     setNetworkAccess("");
     setNothingNeededAction("close");
     setReviewTemplateId("");
+    setReviewers("");
     setPromptExtension("");
     setSandboxCpus("");
     setSandboxMemoryMb("");
@@ -689,12 +698,17 @@ export default function NewTaskOverlay({
     // repo's last task, and switching to No repo afterwards left that
     // branch on the task as its target (2026-10-13 walkthrough).
     const creating = newBranch && !none;
+    const parsedReviewers = reviewers
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     const payload = {
       title: title,
       description: description || "",
       repo: none ? "" : pickedRepo,
       noRepo: none && !ct,
       ...(ct ? { changeTarget: { kind: ct } } : {}),
+      ...(parsedReviewers.length > 0 ? { reviewers: parsedReviewers } : {}),
       ...(creating
         ? {
             base: newBranchName.trim(),
@@ -790,6 +804,7 @@ export default function NewTaskOverlay({
       setNetworkAccess("");
       setNothingNeededAction("close");
       setReviewTemplateId("");
+      setReviewers("");
       setPromptExtension("");
       setSandboxCpus("");
       setSandboxMemoryMb("");
@@ -1077,6 +1092,17 @@ export default function NewTaskOverlay({
           // value WriteReposField gets, and "" for a task filed with no
           // repo at all, which has no target for a read to collide with.
           target={noRepo ? "" : repo}
+        />
+        <TextField
+          name="reviewers"
+          label="Reviewers"
+          placeholder="alice, bob"
+          helperText="optional -- comma-separated usernames passed to workspace grants and used when mailing a CL"
+          fullWidth
+          margin="normal"
+          size="small"
+          value={reviewers}
+          onChange={(e) => setReviewers(e.target.value)}
         />
         {changeTarget ? (
           <Typography

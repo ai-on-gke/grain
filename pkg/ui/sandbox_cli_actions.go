@@ -352,6 +352,43 @@ func SandboxAPIRoutes(grants []string, scopeFilter string) []APIRoute {
 	return out
 }
 
+// sandboxGuardReadsBody is the routes sandboxChannelGuard refuses only for
+// some request bodies: reachable from the sandbox CLI, but with arguments
+// (park: true, supersedes, attaching capabilities) that only the model's
+// own tool may pass.
+var sandboxGuardReadsBody = map[string]bool{
+	"POST /api/tasks/{id}/wait-on":      true,
+	"PATCH /api/tasks/{id}":             true,
+	"POST /api/tasks/{id}/capabilities": true,
+	"POST /api/tasks":                   true,
+}
+
+// ModelOnlyAgentAPIToolNames is the api_* tools grants reach that stay on
+// the model's control roster (docs/design/sandbox-first-agent-surface.md
+// §1B): every granted route the sandbox CLI cannot reach -- dangerous and
+// model-only scopes, scope sets that need a person, the model-only control
+// routes -- and those whose sandbox guard depends on the body, so the
+// model keeps the arguments the sandbox credential is refused.
+func ModelOnlyAgentAPIToolNames(grants []string) []string {
+	set := APIGrantsOf(grants)
+	if set.Empty() {
+		return nil
+	}
+	sandbox := map[string]bool{}
+	for _, r := range SandboxAPIRoutes(grants, "") {
+		if !sandboxGuardReadsBody[r.Pattern] {
+			sandbox[r.Pattern] = true
+		}
+	}
+	var names []string
+	for _, r := range AgentAPIRoutes() {
+		if set.Has(r.Scope) && !sandbox[r.Pattern] {
+			names = append(names, r.Tool)
+		}
+	}
+	return names
+}
+
 func (a SandboxCLIActions) ListAPIRoutes(ctx context.Context, callerTaskID string, grants []string, scopeFilter string) ([]gitproxy.CLIAPIRoute, error) {
 	if len(grants) == 0 && a.Client != nil && a.Client.Store != nil && callerTaskID != "" {
 		if t, err := a.Client.Store.GetTask(ctx, callerTaskID); err == nil && t != nil {

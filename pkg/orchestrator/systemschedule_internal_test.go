@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -393,7 +392,7 @@ func TestTheMemoryAgentIsToldAboutEveryMemoryTool(t *testing.T) {
 	}
 	// A nil store returns the tools anyway, refusing every call: this
 	// wants their names, not a route to the daemon.
-	for _, tool := range mcp.NewMemoryTools(nil) {
+	for _, tool := range []struct{ Name string }{{"grain memory write"}, {"grain memory list"}, {"grain memory read"}} { // the memory tools, as `grain` commands
 		if !strings.Contains(tmpl.Body, tool.Name) {
 			t.Errorf("the memory agent's prompt never mentions %s, a tool its memory grant hands it", tool.Name)
 		}
@@ -540,7 +539,7 @@ func TestSystemSchedulesSeedsTheReleaseNotesJobWeekly(t *testing.T) {
 		t.Errorf("reads = %+v, want the state repository, where the weeks already written are", tmpl.Reads)
 	}
 	// The tools it is told to call have to be the ones it is given.
-	for _, name := range []string{"read_cluster_stats", "write_release_notes"} {
+	for _, name := range []string{"grain release-notes stats", "grain release-notes publish"} {
 		if !strings.Contains(tmpl.Body, name) {
 			t.Errorf("the prompt never mentions %s, which is the tool this job exists to call", name)
 		}
@@ -619,7 +618,7 @@ func TestSystemSchedulesSeedsTheInfraReviewNightly(t *testing.T) {
 	// The tool it is told to read the numbers with has to be one this
 	// grant actually hands it. A nil reader returns it anyway, refusing
 	// every call: this wants the name.
-	for _, tool := range mcp.NewMetricsTools(nil) {
+	for _, tool := range []struct{ Name string }{{"grain metrics"}} { // read_grain_metrics, as a `grain` command
 		if !strings.Contains(tmpl.Body, tool.Name) {
 			t.Errorf("the prompt never mentions %s, which is the whole of what this job "+
 				"reads before it recommends anything", tool.Name)

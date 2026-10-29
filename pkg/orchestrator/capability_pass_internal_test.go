@@ -380,3 +380,77 @@ func TestCapabilityAuditRecordsNoteARefusedAudit(t *testing.T) {
 		t.Errorf("records = %+v", got)
 	}
 }
+
+type workspaceMintCaller struct {
+	mu   sync.Mutex
+	args []map[string]any
+}
+
+func (c *workspaceMintCaller) ListTools(context.Context) ([]protocol.Tool, error) {
+	return []protocol.Tool{
+		{Name: "mint_workspace", InputSchema: map[string]any{
+			"type": "object", "required": []any{"attempt_id", "deadline", "args"},
+			"properties": map[string]any{
+				"attempt_id": map[string]any{"type": "string"},
+				"deadline":   map[string]any{"type": "string"},
+				"args": map[string]any{
+					"type": "object", "additionalProperties": false,
+					"properties": map[string]any{
+						"sync_to":   map[string]any{"type": "string", "default": "head"},
+						"reviewers": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					},
+				},
+			},
+		}},
+		{Name: "release_workspace", InputSchema: map[string]any{
+			"type": "object", "required": []any{"attempt_id"},
+			"properties": map[string]any{"attempt_id": map[string]any{"type": "string"}},
+		}},
+	}, nil
+}
+
+func (c *workspaceMintCaller) CallTool(_ context.Context, name string, args map[string]any) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !strings.HasPrefix(name, "release_") {
+		a, _ := args["args"].(map[string]any)
+		c.args = append(c.args, a)
+	}
+	return []byte(`{"status":"ok"}`), nil
+}
+
+func (c *workspaceMintCaller) Close() error { return nil }
+
+func TestAdmissionPassesTaskReviewersToWorkspaceGrant(t *testing.T) {
+	store, ctx := openTreeStore(t)
+	caller := &workspaceMintCaller{}
+	wsCap := "https://github.com/bwsalmon/grain/capabilities/changelist"
+	srv, err := protocol.NewServer(ctx, wsCap, caller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	deps := Deps{Store: store, CapabilityServers: oneServer{srv}, CapabilityPasses: NewCapabilityPasses()}
+	deps.Config.Now = func() time.Time { return now }
+	if err := store.PutTask(ctx, model.Task{
+		ID:        "17",
+		Title:     "needs reviewers",
+		Target:    &widgets,
+		Reviewers: []string{"alice", "bob"},
+		Grants:    []model.Grant{{Capability: wsCap + "#workspace", Via: model.GrantByLabel}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admit := capabilityAdmitter(deps, admitAll)
+	adm, err := admit(ctx, dispatch.Candidate{TaskID: "17", RunID: dispatch.RunID("17", 1), Attempt: 1})
+	if err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v; want admitted", adm, err)
+	}
+	if len(caller.args) != 1 {
+		t.Fatalf("mint args count = %d, want 1", len(caller.args))
+	}
+	got, _ := caller.args[0]["reviewers"].([]string)
+	if len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
+		t.Errorf("workspace mint reviewers = %#v, want [alice bob]", caller.args[0]["reviewers"])
+	}
+}

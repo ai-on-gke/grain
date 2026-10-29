@@ -210,6 +210,8 @@ type Composition struct {
 	// ChangeTarget is the non-git change target (a registered kind) this task is
 	// filed against, nil for git and no-repo tasks.
 	ChangeTarget *ChangeTarget
+	// Reviewers is the person-set reviewer list from the template (Task.Reviewers).
+	Reviewers []string
 	// Base is the branch it bases off, empty for the target repo's own
 	// default branch.
 	Base string
@@ -282,6 +284,8 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 			Reason:      reason,
 		},
 		Target:               c.Target,
+		ChangeTarget:         c.ChangeTarget.Clone(),
+		Reviewers:            slices.Clone(c.Reviewers),
 		Binding:              BindingDirective,
 		Base:                 c.Base,
 		Reads:                c.Reads,
@@ -390,6 +394,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		Body:                 SubstituteFields(tmpl.Body, filled),
 		Target:               targetPointer(repo),
 		ChangeTarget:         changeTarget,
+		Reviewers:            slices.Clone(tmpl.Reviewers),
 		Base:                 branch,
 		Reads:                tmpl.Reads,
 		Writes:               WritesBesides(tmpl.Writes, repo, branch),

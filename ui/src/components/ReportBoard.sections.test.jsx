@@ -740,6 +740,61 @@ describe("the whole report, as the Metrics pane draws it", () => {
     expect(within(bases).getByText("red")).toBeInTheDocument();
   });
 
+  // A job that only skipped or came back neutral decided nothing: its
+  // rates are dashes, not 0% across the row (2026-10-28 test plan §7).
+  it("draws no rates for a GitHub CI job with nothing decided", async () => {
+    const row = (job, counts) => ({
+      source: "github",
+      repo: "acme/widgets",
+      job,
+      jobs: 1,
+      passed: 0,
+      failed: 0,
+      cancelled: 0,
+      skipped: 0,
+      neutral: 0,
+      other: 0,
+      passRate: 0,
+      failRate: 0,
+      cancelRate: 0,
+      flaky: 0,
+      ...counts,
+    });
+    api.mockResolvedValue(
+      withCensus({
+        githubCI: {
+          source: "github",
+          jobs: 2,
+          passed: 1,
+          failed: 0,
+          cancelled: 0,
+          skipped: 1,
+          neutral: 0,
+          other: 0,
+          passRate: 1,
+          failRate: 0,
+          cancelRate: 0,
+          byJob: [
+            row("CI / build", { passed: 1, passRate: 1 }),
+            row("Deploy / release", { skipped: 1 }),
+          ],
+          moreJobs: 0,
+          flaky: [],
+          baseBranches: [],
+        },
+      }),
+    );
+    render(<ReportBoard showError={() => {}} />);
+    const jobs = await screen.findByTestId("github-ci-jobs");
+    const cells = (name) =>
+      within(within(jobs).getByText(name).closest("tr"))
+        .getAllByRole("cell")
+        .slice(2, 5)
+        .map((c) => c.textContent);
+    expect(cells("CI / build")).toEqual(["100%", "0%", "0%"]);
+    expect(cells("Deploy / release")).toEqual(["—", "—", "—"]);
+  });
+
   it("draws no GitHub CI section for a window with no GitHub results", async () => {
     api.mockResolvedValue(withCensus());
     render(<ReportBoard showError={() => {}} />);

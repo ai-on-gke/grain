@@ -94,6 +94,11 @@ type TaskTiming struct {
 	// precisely what somebody waiting on a change is waiting through.
 	PrOpenedAt *time.Time
 	PrMergedAt *time.Time
+	// ChangeKind is the kind of change link the task's work landed as:
+	// "" for a pull request, LinkChangelist for a CL, whose submit sets
+	// PrMergedAt the same way (change.RecordSubmitted). Merge metrics
+	// count landings per forge off it.
+	ChangeKind LinkKind
 	// QueueEnteredAt is when the merge queue first took the task on
 	// (Observation.MergeQueueEnteredAt), and nil for one it never did --
 	// a change merged by hand, and every change that landed before the
@@ -220,10 +225,13 @@ func (s *Store) TaskTimings(ctx context.Context) ([]TaskTiming, error) {
 			"EXISTS (SELECT 1 FROM `task_link` AS `pl` WHERE `pl`.`task_id` = `t`.`id` AND `pl`.`kind` = ?), "+
 			"EXISTS (SELECT 1 FROM `task_tag` AS `pt` WHERE `pt`.`task_id` = `t`.`id` AND `pt`.`tag` = ?), "+
 			"COALESCE((SELECT `ft`.`template_id` FROM `task_filed_template` AS `ft` WHERE `ft`.`task_id` = `t`.`id`), "+
-			"(SELECT SUBSTR(`st`.`tag`, 10) FROM `task_tag` AS `st` WHERE `st`.`task_id` = `t`.`id` AND `st`.`tag` LIKE 'schedule:%' LIMIT 1), '') "+
+			"(SELECT SUBSTR(`st`.`tag`, 10) FROM `task_tag` AS `st` WHERE `st`.`task_id` = `t`.`id` AND `st`.`tag` LIKE 'schedule:%' LIMIT 1), ''), "+
+			// Whether the work is a CL rather than a pull request.
+			"EXISTS (SELECT 1 FROM `task_link` AS `cl` WHERE `cl`.`task_id` = `t`.`id` AND `cl`.`kind` IN (?, ?)) "+
 			"FROM `task` AS `t` "+
 			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` "+
-			"ORDER BY `t`.`id`", []any{string(LinkFixTask), string(LinkPortOf), TagMechanicalPort},
+			"ORDER BY `t`.`id`", []any{string(LinkFixTask), string(LinkPortOf), TagMechanicalPort,
+			string(LinkChangelist), string(LinkChangelistSubmitted)},
 		func(rows *sql.Rows) error {
 			var t TaskTiming
 			var owner, name sql.NullString
@@ -231,10 +239,10 @@ func (s *Store) TaskTimings(ctx context.Context) ([]TaskTiming, error) {
 			var prOpened, prMerged, queueEntered sql.NullTime
 			var repairAt sql.NullTime
 			var repairNote sql.NullString
-			var isPort, mechanical bool
+			var isPort, mechanical, isCL bool
 			if err := rows.Scan(&t.TaskID, &created, &approved, &undeferred, &completed, &closed,
 				&prOpened, &prMerged, &queueEntered, &owner, &name, &t.Author, &t.FixTaskFiled,
-				&repairAt, &repairNote, &isPort, &mechanical, &t.TemplateID); err != nil {
+				&repairAt, &repairNote, &isPort, &mechanical, &t.TemplateID, &isCL); err != nil {
 				return err
 			}
 			t.Targeted = owner.Valid
@@ -246,6 +254,9 @@ func (s *Store) TaskTimings(ctx context.Context) ([]TaskTiming, error) {
 			t.CompletedAt, t.ClosedAt = timePtr(completed), timePtr(closed)
 			t.PrOpenedAt, t.PrMergedAt = timePtr(prOpened), timePtr(prMerged)
 			t.QueueEnteredAt = timePtr(queueEntered)
+			if isCL {
+				t.ChangeKind = LinkChangelist
+			}
 			t.MergeQueueRepairAt = timePtr(repairAt)
 			t.MergeQueueRepairReason = repairNote.String
 			switch {

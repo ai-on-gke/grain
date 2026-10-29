@@ -307,9 +307,16 @@ type Task struct {
 	// Review is the primary CL's review beside its chip, with its Mail
 	// and Publish replies buttons (change_review.go). Nil until observed.
 	CLReview *ChangeReview `json:"clReview,omitempty"`
+	// CLSubmit is the first live CL's Submit and Sync buttons, with why
+	// either is disabled (change_submit.go). Nil for a task with no live
+	// CL.
+	CLSubmit *ChangeSubmit `json:"clSubmit,omitempty"`
 	// ChangeTargetKind is the kind of non-git change this task's work is
 	// ("changelist"), or "" for a git task (model.ChangeTarget).
 	ChangeTargetKind string `json:"changeTargetKind,omitempty"`
+	// Reviewers is the person-set list of reviewer usernames for this task
+	// (model.Task.Reviewers, docs/design/changelists.md §5).
+	Reviewers []string `json:"reviewers,omitempty"`
 	// Stacked is true for a task filed automatically onto another task's
 	// own branch and merged straight back into it once green -- a repair
 	// of a broken pull request (model.ReasonFix) or a review of one
@@ -981,6 +988,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 	if t.ChangeTarget != nil {
 		out.ChangeTargetKind = t.ChangeTarget.Kind
 	}
+	out.Reviewers = slices.Clone(t.Reviewers)
 	for _, l := range t.Links {
 		if l.Kind == model.LinkFixes {
 			out.PullRequest = l.Target
@@ -1047,6 +1055,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 			if len(out.Changelists) == 0 {
 				out.Presubmit = changePresubmit(l.Target)
 				out.CLReview = changeReview(t.ID, l.Target)
+				out.CLSubmit = changeSubmit(t, state)
 			}
 			out.Changelists = append(out.Changelists, l.Target)
 		}
@@ -2338,6 +2347,7 @@ type addCommentRequest struct {
 	Body        string             `json:"body"`
 	Attachments []AttachmentUpload `json:"attachments"`
 	Author      string             `json:"author,omitempty"`
+	Reviewers   *[]string          `json:"reviewers,omitempty"`
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
@@ -2347,6 +2357,12 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Author = actingUser(r, req.Author)
 	id := r.PathValue("id")
+	if req.Reviewers != nil {
+		if _, err := s.tasks.UpdateTask(r.Context(), id, UpdateTaskRequest{Reviewers: req.Reviewers}); err != nil {
+			writeClientError(w, err)
+			return
+		}
+	}
 	if err := s.tasks.AddCommentWithAuthor(r.Context(), id, req.Body, req.Attachments, req.Author); err != nil {
 		writeClientError(w, err)
 		return

@@ -87,6 +87,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/undefer":                                         "Pick a deferred task back up now.",
 	"POST /api/tasks/{id}/submit":                                          "Submit a task's pull request to the merge queue, to be brought up to date and merged.",
 	"POST /api/tasks/{id}/change-mail":                                     "Mail a task's CL to its reviewers. A person's call only: agents are refused.",
+	"POST /api/tasks/{id}/change-sync":                                     "Sync a task's CL to head. A person's call only: agents are refused, and it is refused while the task has a run going.",
 	"POST /api/tasks/{id}/change-publish":                                  "Publish the replies a task's runs left as drafts on its CLs. A person's call only: agents are refused.",
 	"POST /api/tasks/{id}/comments":                                        "Comment on a task's conversation.",
 	"PUT /api/tasks/{id}/secret":                                           "Answer a task's pending secret request with its value, which goes to the secret store and is never shown back.",
@@ -965,4 +966,21 @@ func getTaskAsExternal(ctx context.Context, s *Server, tok *model.ExternalAgentT
 	return detail, nil
 }
 
-func init() { agent.RegisterPublishedToolNames(AgentAPIToolNames) }
+func init() {
+	agent.RegisterPublishedToolNames(AgentAPIToolNames)
+	agent.RegisterPublishedControlToolNames(ModelOnlyAgentAPIRouteToolNames)
+}
+
+// ModelOnlyAgentAPIRouteToolNames is every generated tool that stays on
+// the model's control roster whatever the grants: the routes the sandbox
+// channel refuses outright, and those it refuses for some bodies
+// (ModelOnlyAgentAPIToolNames is the same for one run's grants).
+func ModelOnlyAgentAPIRouteToolNames() []string {
+	var names []string
+	for _, r := range AgentAPIRoutes() {
+		if IsSandboxDeniedScope(r.Scope) || sandboxChannelGuard(r.Pattern, nil) != nil || sandboxGuardReadsBody[r.Pattern] {
+			names = append(names, r.Tool)
+		}
+	}
+	return names
+}

@@ -15,6 +15,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import ReviewBadge, { ReviewActions, reviewLabel } from "./ClReview.jsx";
+import Declared from "./detail/Declared.jsx";
+import EditTaskForm from "./detail/EditTaskForm.jsx";
+import api from "../api.js";
+
+vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
 describe("ReviewBadge", () => {
   it("renders nothing for a CL whose review nobody has observed", () => {
@@ -76,5 +81,41 @@ describe("ReviewActions", () => {
     fireEvent.click(publish);
     expect(act).toHaveBeenCalledTimes(1);
     expect(act.mock.calls[0][1]).toBe("12");
+  });
+});
+
+describe("Reviewers in Declared and EditTaskForm", () => {
+  it("shows reviewers in Declared and edits them in EditTaskForm", async () => {
+    const t = {
+      id: "12",
+      title: "Fix CL",
+      description: "Desc",
+      reviewers: ["alice", "bob"],
+    };
+    render(<Declared t={t} config={null} act={vi.fn()} />);
+    expect(screen.getByText("Reviewers")).toBeInTheDocument();
+    expect(screen.getByText("alice, bob")).toBeInTheDocument();
+
+    const act = vi.fn(async (fn) => {
+      await fn();
+      return true;
+    });
+    const onDone = vi.fn();
+    render(
+      <EditTaskForm
+        t={t}
+        config={null}
+        templates={[]}
+        act={act}
+        onDone={onDone}
+      />,
+    );
+    const input = screen.getByLabelText("Reviewers");
+    expect(input).toHaveValue("alice, bob");
+    fireEvent.change(input, { target: { value: "carol, dave" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(act).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(api.mock.calls.at(-1)[1].body);
+    expect(body.reviewers).toEqual(["carol", "dave"]);
   });
 });

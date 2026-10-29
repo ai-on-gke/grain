@@ -55,6 +55,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -2286,8 +2287,21 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 	localScriptsEnvFile := fs.String("local-scripts-env-file", "",
 		"path of a 0600 JSON file of the secrets -local-scripts' scripts are delivered, by secret name "+
 			"(localscripts.WriteCredentialsFile); never the values themselves in argv")
+	surface := fs.String("mcp-surface", "",
+		"which tools to serve: \"control\" (the sandbox tools, the run-ending and escalation tools and the "+
+			"model-only grants' tools; everything else is a `grain` CLI command inside the sandbox) or \"full\" "+
+			"(every tool, for a client that cannot shell out and for tests). Empty is control when a sandbox "+
+			"flag is set, full otherwise (docs/design/sandbox-first-agent-surface.md §6)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *surface == "" {
+		*surface = os.Getenv(MCPSurfaceEnv)
+	}
+	switch *surface {
+	case "", MCPSurfaceControl, MCPSurfaceFull:
+	default:
+		return fmt.Errorf("grain mcpserver: -mcp-surface %q is neither %q nor %q", *surface, MCPSurfaceControl, MCPSurfaceFull)
 	}
 	if pins != nil {
 		if err := pins.check(*dataDir, *githubHost, *githubInsecureHTTP); err != nil {
@@ -2577,30 +2591,52 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		apiGrants := model.APIGrantsOf(grants)
 		mayReadCI := grants.Has(grainci.CapabilityName) || grants.Has(selfdebug.CapabilityName) || apiGrants.Has("ci:read")
 		mayReadAllCI := ciScope.AllRepos || apiGrants.Allows("ci:read", "")
-		var allowedCIRepos map[string]bool
+		allowedCIRepos := make(map[string]bool)
+		addAllowedRepo := func(r string) {
+			r = strings.TrimSpace(r)
+			if r == "" {
+				return
+			}
+			allowedCIRepos[r] = true
+			allowedCIRepos[strings.ToLower(r)] = true
+		}
+		addAllowedRepo(ciScope.Repo)
+		addAllowedRepo(taskDetail.Task.Repo)
+		for _, r := range taskDetail.Task.Reads {
+			addAllowedRepo(r)
+		}
+		for _, w := range taskDetail.Task.Writes {
+			addAllowedRepo(w.Repo)
+		}
 		for _, name := range grants {
 			parsed, isAPI, err := model.ParseAPIGrant(name)
 			if !isAPI || err != nil || parsed.Repo == "" || !slices.Contains(parsed.Scopes, "ci:read") {
 				continue
 			}
-			if allowedCIRepos == nil {
-				allowedCIRepos = make(map[string]bool)
-			}
-			allowedCIRepos[parsed.Repo] = true
-			allowedCIRepos[strings.ToLower(parsed.Repo)] = true
+			addAllowedRepo(parsed.Repo)
 		}
 		registry.Register(mcp.NewNamespaceTools(mcp.NamespaceToolsConfig{
 			Scope: namespace.Scope{
-				TaskRepo:     ciScope.Repo,
-				MayReadCI:    mayReadCI,
-				MayReadAllCI: mayReadAllCI,
-				AllowedRepos: allowedCIRepos,
-				MayReadSrc:   grants.Has(selfdebug.CapabilityName),
+				TaskIDStr:        strings.TrimSpace(*taskID),
+				TaskRepo:         ciScope.Repo,
+				MayReadCI:        mayReadCI,
+				MayReadAllCI:     mayReadAllCI,
+				AllowedRepos:     allowedCIRepos,
+				MayReadSrc:       grants.Has(selfdebug.CapabilityName),
+				MayReadPlaybooks: grants.Has(bootstrap.CapabilityName) || grants.Has(selfdebug.CapabilityName),
+				MayReadAllTasks:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("tasks:read", ""),
+				MayReadFullConfig: grants.Has(selfdebug.CapabilityName) ||
+					apiGrants.Allows("settings:read", "") || apiGrants.Allows("repos:read", ""),
+				MayReadAllMemory: grants.Has(memory.CapabilityName) || apiGrants.Allows("memory:read", ""),
+				MayReadMetrics:   grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", ""),
+				MayReadPipeline:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", "") || apiGrants.Allows("dispatch:read", ""),
+				MayReadHealth:    grants.Has(deploymenthealth.CapabilityName) || apiGrants.Allows("deployment:read", ""),
+				MayReadGrainLog:  grants.Has(grainlog.CapabilityName),
 			},
 			CIReader:    DaemonGrainCI{Client: client, TaskID: *taskID},
 			ArtifactDir: ciArtifactDir(*dataDir),
 			SrcDir:      *grainSrcDir,
-			Redactor:    buildNamespaceRedactor(*dataDir),
+			NewRedactor: func() *redact.Redactor { return buildNamespaceRedactor(*dataDir) },
 			WriteFile:   writeFile,
 		})...)
 
@@ -2694,6 +2730,12 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 			metricsReader = DaemonMetrics{Client: client}
 		}
 		registry.Register(mcp.NewMetricsTools(metricsReader)...)
+	}
+
+	if ResolveMCPSurface(*surface, *granuleVM != "" || *root != "" || *container != "" || *k8sPod != "") == MCPSurfaceControl {
+		keep := controlRoster(tools, localTools, grants,
+			taskDetail.Task.ChangeTargetKind != "" || len(taskDetail.Task.Changelists) > 0)
+		registry.Retain(func(name string) bool { return keep[name] })
 	}
 
 	// Serve returns io.EOF once its caller closes the write end of our

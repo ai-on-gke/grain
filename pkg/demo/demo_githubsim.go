@@ -86,6 +86,25 @@ func configureGitHubSimDemo(dir string, cfg ui.Config, repo model.RepoRef) (ui.C
 	}
 
 	sim := githubsim.New(repo.Owner, repo.Name, bare, demoGitHubSimDefaultBranch)
+	// Seed an open issue, a comment, and a review comment on the first PR number
+	// (sim.PullRequestBase defaults to 9000) so `grain issue list|read` and
+	// `grain pr reply|resolve` have realistic simulated records in `grain demo`.
+	sim.Issues[1] = &githubsim.Issue{
+		Title:  "Support sandbox CLI subcommands in demo mode",
+		Body:   "Ensure the in-sandbox grain CLI works end-to-end against grain demo.",
+		Author: "operator",
+		Labels: map[string]struct{}{"enhancement": {}, "grain-agent": {}},
+		State:  "open",
+	}
+	sim.Comments[1] = []github.Comment{
+		{ID: 101, User: "operator", Body: "Please verify both /fs/ and /cli/ routes."},
+	}
+	lineOne := 1
+	for _, prNum := range []int{9000, 9001, 9002} {
+		sim.ReviewComments[prNum] = []github.ReviewComment{
+			{ID: 501, Path: "README.md", Line: &lineOne, Body: "Please document this flag.", User: "reviewer"},
+		}
+	}
 	client := github.NewClient(sim, nil)
 	cfg.GitHubBranches = client
 	prReader := demoPullRequests{repo: repo, client: client}
@@ -93,6 +112,9 @@ func configureGitHubSimDemo(dir string, cfg ui.Config, repo model.RepoRef) (ui.C
 		prReader.store = prev.store
 	}
 	cfg.GitHubPullRequests = prReader
+	if prReader.store != nil {
+		cfg.PullRequests = &daemon.PullRequestOpener{Store: prReader.store, Client: client}
+	}
 	// The pull request page a task's "Internal PR" link opens draws its
 	// diff through the daemon's own comparison (merge base first, then
 	// the diff from it), here over the sim's real compare endpoint.

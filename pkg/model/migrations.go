@@ -333,6 +333,14 @@ var Migrations = []Migration{
 			"ALTER TABLE `task_run_check_wait` ADD COLUMN `provider` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     61,
+		Description: "add person-set reviewers to task and template",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `reviewers` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `template` ADD COLUMN `reviewers` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

@@ -160,7 +160,7 @@ ARGUMENTS & FLAGS:
   --template-field <k=v>       Template input field value (repeatable).
   --nothing-needed-action <close|ack>
                                Whether nothing_needed closes the task (default) or leaves it for ack.
-  --goal <json>                Goal spec JSON: {"kind":"base-green|pr-merged|tasks-closed|person-closes|pipeline-healthy","spec":{...},"on_met":"close|rest","on_limit":"hold|notify"}.
+  --goal <json>                Goal spec JSON: {"kind":"base-green|pr-merged|tasks-closed|person-closes|pipeline-healthy|cl-submitted","spec":{...},"on_met":"close|rest","on_limit":"hold|notify"}.
 `
 
 // sandboxCommandHelp is each command's --help.

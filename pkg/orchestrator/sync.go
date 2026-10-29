@@ -3078,7 +3078,7 @@ func grainCINote(grain grainCIVerdict) string {
 	return fmt.Sprintf(
 		"grain's own CI (`.grain/workflows`) is what is red here: %s. It is not a GitHub "+
 			"check and will not appear on the pull request. The failing step's output is "+
-			"in that grain CI run -- `get_ci_log` reads it, and `wait_for_checks` runs it "+
+			"in that grain CI run -- `grain ci log` reads it, and `grain ci wait` runs it "+
 			"again on a push -- and this merges once a push makes that run pass.", detail)
 }
 

@@ -621,3 +621,18 @@ We stage the migration across **five sequential phases** so that every phase is 
     5. **Release Notes & Release Triage (`pkg/model/system_template.go` — `releaseNotesTemplate` & `pkg/orchestrator/releases.go`):** Update to use `grain release-notes`, `grain ci list/log`, and `grain api`.
     6. **Base Branch Repair (`pkg/orchestrator/basebranchci.go` & `pkg/model/basebranchrepair.go`):** Update to use `grain ci list/log/wait`, `grain pr base-status`, and `grain git revert`.
     7. **Console Sessions / Director (`pkg/model/console_session.go`):** Update standing session prompt to reference `grain` CLI commands alongside `chat` and `propose_task`.
+- **Implemented (Task 1440):**
+  - `grain mcpserver -mcp-surface control|full` (`pkg/daemon/mcp_surface.go`). Left empty, it is `control` whenever a sandbox flag is set. That covers every production run, since a sandbox flag is still required. The server builds its roster as before and then keeps only:
+    - the sandbox tools;
+    - the control tools;
+    - `ModelOnlyGrantToolNames` (dispatch-control, pipeline-control, self-upgrade, `execute_grain_db`, `broadcast_team_message`);
+    - the granted `api_*` routes the sandbox channel refuses, plus those whose sandbox guard depends on the body (`ui.ModelOnlyAgentAPIToolNames`), so the model keeps `park`, `supersedes` and capability attachment;
+    - local scripts, which have no CLI command.
+  - Two exceptions keep MCP CI tools. A run without `grain-ci` keeps `pull_request_status`, `wait_for_checks` and `base_branch_status`, because `grain ci`/`grain pr` read grain CI only and its checks are GitHub's. A changelist task keeps `pull_request_status` and `wait_for_checks`. `BuildPrompt` names those tools for such runs and the `grain` commands for grain-ci runs.
+  - `agent.PublishedControlToolNames`, `agent.PublishedCLICommandNames` and `agent.ToolSurface` split the roster. `metrics.ToolUse.Surface` and `metrics.Tools.ControlCalls`/`CLICalls` carry the split into `read_grain_metrics`.
+  - Antigravity:
+    - the PreToolUse hook lets `exit_plan_mode` through, because it is agy's own plan-mode handoff;
+    - it denies `enter_plan_mode` and `schedule`, pointing at `grain ci wait` and `resume_later`;
+    - settings write `planMode: false`;
+    - `toolPreamble` warns the model off all three.
+  - `BuildPrompt` adds `### Grain CLI (grain)`, with one bullet per grant of grain's own capabilities (`grainCLIGrantBullets`). It lives in `run.go` because `capabilityPassPromptSection` does not exist; the external capability servers' commands are already the `<capability-cli>` block.

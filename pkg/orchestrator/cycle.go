@@ -518,6 +518,7 @@ func Reconcilers() []Reconciler {
 		{Name: "review-questions", Reconcile: reconcileReviewQuestions},
 		{Name: "review-threads", Reconcile: reconcileReviewThreads},
 		{Name: "cl-review-threads", Reconcile: reconcileChangeThreads},
+		{Name: "cl-reviews", Reconcile: reconcileCLReviews},
 		// An operator's pause on one task (model.TaskPause): its live
 		// run and grain CI run are ended here, before dispatch, so the
 		// slots they free are free to this cycle's dispatch.
@@ -878,6 +879,15 @@ func reconcileChangeThreads(ctx context.Context, deps Deps, now time.Time) error
 		return nil
 	}
 	return SyncChangeThreads(ctx, deps.Store, now)
+}
+
+// reconcileCLReviews files the required reviews of each snapshot of a
+// task's CL (clreviews.go's SyncCLReviews).
+func reconcileCLReviews(ctx context.Context, deps Deps, now time.Time) error {
+	if deps.Store == nil {
+		return nil
+	}
+	return SyncCLReviews(ctx, deps.Store, now)
 }
 
 // reconcileSync refreshes every pull request grain is still watching --
