@@ -27,7 +27,7 @@ const defaultShapeSettingsJSON = `{"sandboxCpus":0,"sandboxMemoryMb":0,"sandboxD
 
 func runCheckK8sNodeFits(t *testing.T, settings, nodes string) Step {
 	t.Helper()
-	opts := Options{}.withDefaults()
+	opts := Options{Platform: PlatformK8sContainer}.withDefaults()
 	sys := newFakeSystem()
 	sys.onHTTPRequest("GET", "http://"+opts.UIAddr+"/api/settings", 200, []byte(settings), nil)
 	sys.on(nodes, nil, "kubectl", "get", "nodes", "-o", "go-template="+k8sNodeAllocatableFormat)
@@ -57,7 +57,9 @@ func TestCheckK8sNodeFitsReportsADefaultShapeNoNodeCanHold(t *testing.T) {
 			t.Errorf("Detail = %q, want it to mention %q", s.Detail, want)
 		}
 	}
-	want := `curl -s -X PUT http://127.0.0.1:4242/api/settings -H 'Content-Type: application/json' -d '{"sandboxMemoryMb":5120}'`
+	want := `curl -s -X PUT http://127.0.0.1:4242/api/settings ` +
+		`-H "Authorization: Bearer $(kubectl -n grain exec deploy/grain -- grain access-code -data-dir=/data)" ` +
+		`-H 'Content-Type: application/json' -d '{"sandboxMemoryMb":5120}'`
 	if s.Command != want {
 		t.Errorf("Command = %q\nwant      %q", s.Command, want)
 	}
