@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -139,5 +140,26 @@ func TestOpenConfigPullRequestTakesTheRefusalsChange(t *testing.T) {
 	client.Config.StateRepo = nil
 	if rec := do(t, srv, http.MethodPost, "/api/state-repo/pull-requests", string(body)); rec.Code != http.StatusNotImplemented {
 		t.Fatalf("no config repository: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// An operator can opt this host out of the config repository write path
+// (state-repo.json's directConfigWrites), and the API writes directly
+// again.
+func TestDirectConfigWritesLetsTheAPIWriteInInternalMode(t *testing.T) {
+	t.Parallel()
+	_, client := testServer(t)
+	storeSettingsRow(t, client)
+	client.Config.StateRepo = &fakeStateRepo{status: ui.StateRepoStatus{Branch: "main"}}
+	client.Config.DataDir = t.TempDir()
+	srv := ui.NewServerWithClient(client)
+	if rec := do(t, srv, http.MethodPost, "/api/boards", `{"name":"Refused"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("before opting out: %d %s", rec.Code, rec.Body)
+	}
+	if err := staterepo.SaveSettings(client.Config.DataDir, staterepo.Settings{DirectConfigWrites: true}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, srv, http.MethodPost, "/api/boards", `{"name":"Direct"}`); rec.Code >= 300 {
+		t.Fatalf("after opting out: %d %s", rec.Code, rec.Body)
 	}
 }

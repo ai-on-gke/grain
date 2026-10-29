@@ -404,7 +404,7 @@ func (c *Client) configRepoFor(ctx context.Context, bootstrap bool) (remote, bra
 	if remote, branch := c.externalConfigRepo(ctx); remote != "" {
 		return remote, branch, true
 	}
-	if bootstrap || c == nil || c.Config.StateRepo == nil {
+	if bootstrap || c == nil || c.Config.StateRepo == nil || c.directConfigWrites() {
 		return "", "", false
 	}
 	// Only an API caller is sent to the config repository: grain's own
@@ -414,6 +414,18 @@ func (c *Client) configRepoFor(ctx context.Context, bootstrap bool) (remote, bra
 		return "", "", false
 	}
 	return "", "main", true
+}
+
+// directConfigWrites is the host-local opt-out from the config
+// repository write path in internal mode (staterepo.Settings), read on
+// every guarded write so an operator's edit to state-repo.json takes
+// effect without a restart.
+func (c *Client) directConfigWrites() bool {
+	if c.Config.DataDir == "" {
+		return false
+	}
+	s, err := staterepo.LoadSettings(c.Config.DataDir)
+	return err == nil && s.DirectConfigWrites
 }
 
 func (c *Client) guardConfigWrite(ctx context.Context, rehearse, bootstrap bool, tables []string) error {

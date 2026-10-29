@@ -38,6 +38,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -139,6 +140,17 @@ func install() (*deployment, error) {
 	// this exact test helper while all of its tools still cross the real MCP
 	// subprocess and per-run sandbox boundary.
 	if err := os.MkdirAll(d.data, 0o755); err != nil {
+		return nil, err
+	}
+	// These tests configure the installed daemon -- its repositories,
+	// capability servers and git connections -- through its API and CLI,
+	// which a deployment with a grain/config repository otherwise sends
+	// to a config pull request (docs/design/config-repo-settings.md,
+	// section 4.1.1). The host-local opt-out keeps them writing directly.
+	if err := staterepo.SaveSettings(d.data, staterepo.Settings{DirectConfigWrites: true}); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(filepath.Join(d.data, staterepo.SettingsFileName), 0o644); err != nil {
 		return nil, err
 	}
 	d.testAgent = filepath.Join(d.data, "container-e2e-agent")
