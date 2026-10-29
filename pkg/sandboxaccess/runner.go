@@ -55,6 +55,12 @@ type ChannelProvider interface {
 // and does not reconnect within ReattachTimeout.
 var ErrChannelLost = errors.New("sandbox access channel lost")
 
+// ChannelLostFault starts the error a CI job concludes errored with when one
+// of its steps ended in ErrChannelLost: the engine writes it
+// (pkg/grit/engine), and the orchestrator reads it to re-run the job
+// uncached rather than charge the tree (docs/design/grain-on-gke.md#GKE-3).
+const ChannelLostFault = "infra: sandbox channel lost"
+
 // ChannelLostError is the typed error returned for ErrChannelLost, carrying
 // the sandbox name and how long its channel was unreachable.
 type ChannelLostError struct {

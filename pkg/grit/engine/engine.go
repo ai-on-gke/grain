@@ -1330,7 +1330,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 
 // ChannelLostFaultPrefix is the JobRun.Error prefix recorded when a step ends
 // with sandboxaccess.ErrChannelLost (docs/design/grain-on-gke.md#GKE-3).
-const ChannelLostFaultPrefix = "infra: sandbox channel lost"
+const ChannelLostFaultPrefix = sandboxaccess.ChannelLostFault
 
 // OOMRetryReasonPrefix starts a job's RetryReason (and Error, Warning)
 // when its sandbox was OOM-killed, so a reader can tell an infrastructure
