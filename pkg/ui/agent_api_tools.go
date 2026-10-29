@@ -386,6 +386,7 @@ var routeQueries = map[string]map[string]string{
 		"limit": "At most this many entries (default 100, at most 500).",
 		"repo":  "Only this repository's tasks, base branches and merge batches (owner/name); a repository-scoped tasks:read grant must name its own.",
 	},
+	"GET /api/tasks":                            {"repo": "Only this repository's (owner/name) tasks; a repository-scoped tasks:read grant must name its own."},
 	"GET /api/tasks/states":                     {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
 	"GET /api/states":                           {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
 	"GET /api/tasks/{id}/messages":              {"after": "Only messages after this comment id.", "agents": "true to include other tasks' runs' messages to this task's agent (POST /api/tasks/{id}/agent-messages)."},

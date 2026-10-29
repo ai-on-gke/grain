@@ -407,6 +407,18 @@ func (s APIGrantSet) Allows(scope APIScope, repo string) bool {
 	return slices.ContainsFunc(s.scopes[scope], func(r string) bool { return strings.EqualFold(r, repo) })
 }
 
+// Repos is the repositories the set grants scope on, sorted, when it
+// grants it on named repositories only (nil when it grants it on every
+// repository, or on none).
+func (s APIGrantSet) Repos(scope APIScope) []string {
+	if s.all[scope] || len(s.scopes[scope]) == 0 {
+		return nil
+	}
+	out := slices.Clone(s.scopes[scope])
+	slices.Sort(out)
+	return out
+}
+
 // Scopes is every scope the set grants anywhere, sorted.
 func (s APIGrantSet) Scopes() []APIScope {
 	var out []APIScope
