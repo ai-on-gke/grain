@@ -142,6 +142,7 @@ var tablePrimaryKeys = map[string][]string{
 	"credential_access_audit":        {"id"},
 	"notification":                   {"id"},
 	"task_notification_subscription": {"task_id", "family"},
+	"sandbox_access":                 {"sandbox"},
 }
 
 // Auto-increment primary key column for tables that use sequences or SERIAL.

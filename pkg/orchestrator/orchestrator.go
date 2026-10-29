@@ -189,6 +189,11 @@ type Shape struct {
 	// ignores it, and IsZero does too: it asks for nothing a backend
 	// sizes. "" is SandboxClassAgent.
 	Class SandboxClass
+	// Life is the sandbox's expected lifetime (a CI job's timeout, a
+	// persistent sandbox's refresh TTL). Backends that mint per-sandbox
+	// credentials scope their validity to Life, capped at the credential
+	// maximum; zero uses the backend's default.
+	Life time.Duration
 }
 
 // SandboxClass is Shape.Class: which kind of work a sandbox is built for.
@@ -236,6 +241,9 @@ func (s Shape) orDefault(def Shape) Shape {
 	if s.NetworkAccess == "" {
 		s.NetworkAccess = def.NetworkAccess
 	}
+	if s.Life == 0 {
+		s.Life = def.Life
+	}
 	return s
 }
 
@@ -253,6 +261,7 @@ func (s Shape) AtLeast(def Shape) Shape {
 	if s.NetworkAccess == "" {
 		s.NetworkAccess = def.NetworkAccess
 	}
+	s.Life = max(s.Life, def.Life)
 	return s
 }
 

@@ -388,6 +388,10 @@ var notSettings = []string{
 	// nothing a pull request against the state repository proposes.
 	"notification",
 	"task_notification_subscription",
+	// Each live k8s-granule sandbox's reverse-channel token hash and expiry
+	// (model.SandboxAccessCredential): ephemeral runtime state written when
+	// a sandbox is minted and deleted when it is released or reaped.
+	"sandbox_access",
 }
 
 // The converse of TestSettingsTablesAllExist, and the one that catches a
