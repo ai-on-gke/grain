@@ -412,6 +412,16 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 			return nil, &protocol.RefusedError{Grant: g.Ref.String(), Reason: err.Error()}
 		}
 	}
+	if len(task.Reviewers) > 0 {
+		for i := range grants {
+			if grants[i].Ref.Method == "workspace" {
+				if grants[i].Args == nil {
+					grants[i].Args = map[string]any{}
+				}
+				grants[i].Args["reviewers"] = slices.Clone(task.Reviewers)
+			}
+		}
+	}
 	minters := func(id string) (protocol.Minter, error) {
 		srv, err := lookup(id)
 		if err != nil {

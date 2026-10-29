@@ -887,7 +887,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				"goal": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"kind":     map[string]any{"type": "string", "enum": []string{"base-green", "pr-merged", "tasks-closed", "person-closes", "pipeline-healthy"}},
+						"kind":     map[string]any{"type": "string", "enum": []string{"base-green", "pr-merged", "tasks-closed", "person-closes", "pipeline-healthy", "cl-submitted"}},
 						"spec":     map[string]any{"type": "object"},
 						"on_met":   map[string]any{"type": "string", "enum": []string{"close", "rest"}},
 						"on_limit": map[string]any{"type": "string", "enum": []string{"hold", "notify"}},

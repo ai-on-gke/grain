@@ -1249,6 +1249,11 @@ const (
 	// pending CL on submit records the submitted number here. A work tree
 	// reads it as cl-submitted.
 	LinkChangelistSubmitted LinkKind = "changelist-submitted"
+	// LinkChangelistAbandoned records a task's CL that was abandoned
+	// (-> "cl/<number>"), as a poll found it (changelists.md §7). It is
+	// not a change link: a task whose every CL is abandoned no longer
+	// awaits a Submit, and reads awaiting_reply once its run is over.
+	LinkChangelistAbandoned LinkKind = "changelist-abandoned"
 	// LinkCLThread records one review thread on a task's CL that grain
 	// has already sent a run (or a running run's addendum) to deal with
 	// (-> "cl/<number>:<comment id>"): LinkReviewThread's job for a CL.
@@ -1575,8 +1580,14 @@ type Task struct {
 
 	Target       *RepoRef      // the repo this task's own runs push to
 	ChangeTarget *ChangeTarget // non-git change target (e.g. a registered changelist workspace)
-	Binding      RepoBinding
-	Base         string
+	// Reviewers is the person-set list of reviewer usernames for this task's
+	// change (docs/design/changelists.md §5). Passed as the reviewers argument
+	// of a workspace capability grant when the run's capability pass is minted,
+	// and used as the default reviewer list when mailing a changelist. Never set
+	// by an agent.
+	Reviewers []string
+	Binding   RepoBinding
+	Base      string
 	// Writes is every *other* repository this task's work may land in,
 	// with the base branch for each -- WriteTarget's own doc comment has
 	// what one is and why a run does not push to them itself. Empty, the
@@ -1864,6 +1875,22 @@ type Task struct {
 	// next -- Ready, ListTasks, orchestrator.queueOrder -- then reads that
 	// one column, which is the one a human can see and drag.
 	OrderKey float64
+}
+
+// NormalizeReviewers trims, splits on commas, drops blanks and deduplicates a
+// list of reviewer usernames, preserving order. It returns nil when none
+// remain.
+func NormalizeReviewers(in []string) []string {
+	var out []string
+	for _, entry := range in {
+		for _, part := range strings.Split(entry, ",") {
+			u := strings.TrimSpace(part)
+			if u != "" && !slices.Contains(out, u) {
+				out = append(out, u)
+			}
+		}
+	}
+	return out
 }
 
 // Observation is the half grain writes: what it has seen happen.

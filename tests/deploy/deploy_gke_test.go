@@ -15,11 +15,16 @@
 package deploy
 
 import (
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestDeployGKEScriptSyntaxAndHelp(t *testing.T) {
@@ -96,6 +101,7 @@ func TestDeployGKEScriptDryRunAllModes(t *testing.T) {
 		contains(t, out, "gcloud secrets create grain-secrets-key")
 		contains(t, out, "gcloud secrets create grain-sandbox-ca-key")
 		contains(t, out, "roles/secretmanager.secretAccessor")
+		contains(t, out, "roles/secretmanager.secretVersionAdder")
 		contains(t, out, "roles/iam.workloadIdentityUser")
 		// 3. Digest-pinned image from ghcr.io/bwsalmon/grain/...
 		contains(t, out, "ghcr.io/bwsalmon/grain/grain@sha256:")
@@ -237,9 +243,18 @@ func TestDeployGKEManifestsAndBaseSync(t *testing.T) {
 		}
 	}
 
+	// Ensure deploy/kubernetes/gke/networkpolicy.yaml is the single source of truth
+	// for the sandbox-access NetworkPolicies (grain-sandbox-egress, grain-access-ingress).
+	dupNetpol := filepath.Join(root, "deploy", "kubernetes", "sandbox-access-networkpolicy.yaml")
+	if _, err := os.Stat(dupNetpol); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("deploy/kubernetes/sandbox-access-networkpolicy.yaml still exists alongside deploy/kubernetes/gke/networkpolicy.yaml; keep one source of truth for grain-sandbox-egress and grain-access-ingress")
+	}
+
 	if _, err := exec.LookPath("kubectl"); err != nil {
 		t.Skip("kubectl not on PATH; skipping kubectl kustomize check")
 	}
+
+	definedFlags := daemonFlags(t)
 
 	for _, rel := range []string{
 		filepath.Join("deploy", "kubernetes", "gke"),
@@ -260,6 +275,8 @@ func TestDeployGKEManifestsAndBaseSync(t *testing.T) {
 		contains(t, rendered, "kind: SecretProviderClass")
 		contains(t, rendered, "name: grain-access")
 		contains(t, rendered, "port: 4244")
+		contains(t, rendered, "- -sandbox-access-addr=:4244")
+		contains(t, rendered, "- -sandbox-access-ca-secret=projects/PROJECT_ID/secrets/grain-sandbox-ca-key")
 		contains(t, rendered, "name: grain-sandbox-egress")
 		contains(t, rendered, "name: grain-access-ingress")
 		contains(t, rendered, "name: grain-webhook-isolation")
@@ -267,6 +284,101 @@ func TestDeployGKEManifestsAndBaseSync(t *testing.T) {
 		contains(t, rendered, "ghcr.io/bwsalmon/grain/grain@sha256:")
 		contains(t, rendered, "-k8s-granule-image=ghcr.io/bwsalmon/grain/granule@sha256:")
 		contains(t, rendered, "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1@sha256:")
+
+		// Legacy port 7443 and unread env vars must never reappear in the rendered overlay.
+		absent(t, rendered, "7443")
+		absent(t, rendered, "GRAIN_GRANULE_ACCESS_MODE")
+		absent(t, rendered, "GRAIN_SANDBOX_ACCESS_ADDR")
+		absent(t, rendered, "GRAIN_SANDBOX_CA_KEY_FILE")
+
+		// Decode rendered documents to check Deployment flags, Role secrets verbs, and SecretProviderClass.
+		dec := yaml.NewDecoder(strings.NewReader(rendered))
+		var sawDeployment, sawRole, sawSPC bool
+		for {
+			var node yaml.Node
+			if err := dec.Decode(&node); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				t.Fatalf("decoding rendered YAML from %s: %v", rel, err)
+			}
+			var obj k8sObject
+			if err := node.Decode(&obj); err != nil {
+				t.Fatalf("decoding object header from %s: %v", rel, err)
+			}
+			switch {
+			case obj.Kind == "Deployment" && obj.Metadata.Name == "grain":
+				sawDeployment = true
+				var dep k8sDeployment
+				if err := node.Decode(&dep); err != nil {
+					t.Fatalf("decoding Deployment/grain from %s: %v", rel, err)
+				}
+				var c k8sContainer
+				var foundGrain bool
+				for _, cont := range dep.Spec.Template.Spec.Containers {
+					if cont.Name == "grain" {
+						c = cont
+						foundGrain = true
+						break
+					}
+				}
+				if !foundGrain {
+					t.Fatalf("%s Deployment/grain has no container named \"grain\"", rel)
+				}
+				flags := daemonArgs(t, c)
+				for name := range flags {
+					if _, ok := definedFlags[name]; !ok {
+						t.Errorf("%s Deployment/grain passes -%s and pkg/cli/daemon.go defines no such flag", rel, name)
+					}
+				}
+				if got := flagValue(t, flags, "sandbox-access-addr"); got != ":4244" {
+					t.Errorf("%s Deployment/grain -sandbox-access-addr = %q, want %q", rel, got, ":4244")
+				}
+				if got := flagValue(t, flags, "sandbox-access-ca-secret"); got != "projects/PROJECT_ID/secrets/grain-sandbox-ca-key" {
+					t.Errorf("%s Deployment/grain -sandbox-access-ca-secret = %q, want %q", rel, got, "projects/PROJECT_ID/secrets/grain-sandbox-ca-key")
+				}
+			case obj.Kind == "Role" && obj.Metadata.Name == "grain":
+				sawRole = true
+				var role struct {
+					Rules []struct {
+						Resources []string `yaml:"resources"`
+						Verbs     []string `yaml:"verbs"`
+					} `yaml:"rules"`
+				}
+				if err := node.Decode(&role); err != nil {
+					t.Fatalf("decoding Role/grain from %s: %v", rel, err)
+				}
+				var sawSecretsRule bool
+				for _, rule := range role.Rules {
+					if slices.Contains(rule.Resources, "secrets") {
+						sawSecretsRule = true
+						wantVerbs := []string{"create", "delete"}
+						if !slices.Equal(rule.Verbs, wantVerbs) {
+							t.Errorf("%s Role/grain secrets verbs = %v, want %v (pkg/k8s/secret.go never reads or lists Secrets)", rel, rule.Verbs, wantVerbs)
+						}
+					}
+				}
+				if !sawSecretsRule {
+					t.Errorf("%s Role/grain has no secrets rule", rel)
+				}
+			case obj.Kind == "SecretProviderClass" && obj.Metadata.Name == "grain-secrets":
+				sawSPC = true
+				var spc struct {
+					Spec struct {
+						Parameters struct {
+							Secrets string `yaml:"secrets"`
+						} `yaml:"parameters"`
+					} `yaml:"spec"`
+				}
+				if err := node.Decode(&spc); err != nil {
+					t.Fatalf("decoding SecretProviderClass/grain-secrets from %s: %v", rel, err)
+				}
+				absent(t, spc.Spec.Parameters.Secrets, "grain-sandbox-ca-key")
+			}
+		}
+		if !sawDeployment || !sawRole || !sawSPC {
+			t.Errorf("%s rendered objects missing expected resources: Deployment/grain=%v Role/grain=%v SecretProviderClass/grain-secrets=%v",
+				rel, sawDeployment, sawRole, sawSPC)
+		}
 	}
 
 	// Verify NetworkPolicies match pkg/k8s.Manifest sandbox labels and isolate grain-webhook.
@@ -318,6 +430,11 @@ func TestDeployGKETerraformModule(t *testing.T) {
 	contains(t, iamTF, "roles/iam.workloadIdentityUser")
 	contains(t, iamTF, "roles/cloudsql.client")
 	contains(t, iamTF, "roles/cloudsql.instanceUser")
+
+	secretsTF := read(t, "deploy", "gke", "terraform", "secrets.tf")
+	contains(t, secretsTF, "roles/secretmanager.secretAccessor")
+	contains(t, secretsTF, "roles/secretmanager.secretVersionAdder")
+	contains(t, secretsTF, "grain_daemon_sandbox_ca_adder")
 
 	iapTF := stripComments(read(t, "deploy", "gke", "terraform", "iap.tf"))
 	contains(t, iapTF, "google_iap_web_backend_service_iam_member")

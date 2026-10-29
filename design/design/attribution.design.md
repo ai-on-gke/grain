@@ -64,7 +64,7 @@ Grain composes the squash or merge message itself rather than relying on agents 
 
 - **Merge-queue check.** Before merging, grain checks the PR description and the final commit message against the chain union, and repairs them if anything is missing. When Quality by is enabled, the check also covers the `Quality-by:` trailers.
 - **Derivation check.** A spec or tasks PR without a `Derived from:` link fails a check. So does a tasks PR whose link doesn't resolve to a merged spec PR.
-- **Post-merge audit.** A merged commit that still lacks a trailer for a contributor in its union is reported to the team's on-call chat.
+- **Post-merge audit.** A merged commit that still lacks a trailer for a contributor in its union is raised in the grain inbox.
 - **Durable record.** When a task completes, its completion note in the design folder links the implementation PR(s). The contributors are visible there, outside grain's DB.
 
 ## Follow-up work
@@ -74,4 +74,4 @@ Grain composes the squash or merge message itself rather than relying on agents 
 3. `Derived from:` links on spec and tasks PRs; link imported tasks to their tasks PR; inherit the chain over `LinkProposedBy`.
 4. Compose merge messages with `Co-authored-by:` trailers from the chain union, recomputed at merge.
 5. Optional Quality by: record acting on-call and backlog managers on tasks, write `Quality-by:` trailers, and add a per-repo or per-team setting.
-6. Merge-queue and derivation checks, the post-merge audit to on-call chat, and completion notes that link implementation PRs.
+6. Merge-queue and derivation checks, the post-merge audit raised in the grain inbox, and completion notes that link implementation PRs.

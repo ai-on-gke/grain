@@ -87,6 +87,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -104,7 +105,11 @@ type Merges struct {
 	// lands two changes an hour and one that lands eight are different
 	// afternoons, and the same pair of days rounds to a similar-looking
 	// per-day figure.
-	Landed        int
+	Landed int
+	// LandedByForge splits Landed by the forge each change landed on:
+	// "github" for a pull request, and a CL's provider's own name for a
+	// submitted CL (change.ForgeOf).
+	LandedByForge map[string]int
 	LandedPerHour float64
 	LandedPerDay  float64
 	// Buckets is the same count sliced across the window, oldest first,
@@ -588,6 +593,10 @@ func mergesOf(w Window, buckets []Bucket, tasks []model.TaskTiming, records []mo
 			continue
 		}
 		out.Landed++
+		if out.LandedByForge == nil {
+			out.LandedByForge = map[string]int{}
+		}
+		out.LandedByForge[forgeOf(t)]++
 		switch t.Port {
 		case model.PortMechanical:
 			out.Ports.Mechanical++
@@ -879,3 +888,14 @@ func mergeBatchesOf(w Window, records []model.MergeBatchRecord, limit int) Merge
 	}
 	return out
 }
+
+// forgeOf is the forge t's change landed on.
+func forgeOf(t model.TaskTiming) string {
+	if t.ChangeKind == "" {
+		return ForgeGitHub
+	}
+	return change.ForgeOf(t.ChangeKind)
+}
+
+// ForgeGitHub is LandedByForge's key for a merged pull request.
+const ForgeGitHub = "github"

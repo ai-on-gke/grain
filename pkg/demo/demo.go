@@ -1460,8 +1460,62 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		obs.Target, obs.Health, obs.Presubmit, obs.Snapshot = seed.cl, seed.health, seed.presubmit, 1
 		change.Remember(obs)
 	}
+	// One more, approved and passing but behind head: its Submit is
+	// disabled with that reason and its Sync is offered, where the
+	// approved one above is submittable (changelists.md §6-§7).
+	behind, err := create(ago(19*time.Hour), ui.CreateTaskRequest{
+		Title: "Sync the depot retry budget with head", Approved: true, NoRepo: clTarget == nil, ChangeTarget: clTarget,
+		Description: "A changelist task whose approved CL has fallen behind head.",
+	})
+	if err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	if err := store.UpdateTask(ctx, behind.ID, func(t *model.Task) error {
+		t.Links = append(t.Links, model.Link{Kind: model.LinkChangelist, Target: "cl/612400105"})
+		return nil
+	}); err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	behindDone := ago(18 * time.Hour)
+	if err := store.ObserveField(ctx, behind.ID, behindDone, func(o *model.Observation) {
+		o.CompletedAt = &behindDone
+	}); err != nil {
+		return fmt.Errorf("seeding a changelist task: %w", err)
+	}
+	change.Remember(change.Observation{Target: "cl/612400105", Health: change.HealthBehind, Presubmit: change.PresubmitPassed,
+		Snapshot: 2, ReviewState: change.ReviewStateApproved, LGTM: []string{"carol"}})
+	registerDemoChangelists()
 
 	return nil
+}
+
+// demoChangelists answers for the demo's CLs where no edition has
+// registered a provider, so the Submit and Sync buttons have something
+// to answer them: a submit reports the CL submitted as itself, and a
+// sync reports a new snapshot. Nothing leaves the process.
+type demoChangelists struct{}
+
+func registerDemoChangelists() {
+	if _, ok := change.Lookup(model.LinkChangelist); ok {
+		return
+	}
+	change.Register(demoChangelists{})
+}
+
+func (demoChangelists) Kind() model.LinkKind { return model.LinkChangelist }
+func (demoChangelists) Forge() string        { return "demo" }
+func (demoChangelists) Observe(_ context.Context, _ model.Task, target string) (change.Observation, error) {
+	obs, _ := change.LastObserved(target)
+	return obs, nil
+}
+func (demoChangelists) Threads(context.Context, model.Task, string) ([]change.Thread, error) {
+	return nil, nil
+}
+func (demoChangelists) Submit(_ context.Context, _ model.Task, target string, by change.Person) (change.Result, error) {
+	return change.Result{Target: target, Message: fmt.Sprintf("%s submitted %s (demo: nothing left this process).", by.Name, target)}, nil
+}
+func (demoChangelists) Sync(_ context.Context, _ model.Task, _ string) (change.SyncResult, error) {
+	return change.SyncResult{Message: "synced to head (demo)"}, nil
 }
 
 // seedDemoNotifications raises three operator notifications (DT-5), so
