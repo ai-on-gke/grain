@@ -220,10 +220,10 @@ ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
 # build happens to run on: install.sh served amd64 and arm64 users alike,
 # and the published default image is built for both.
 ARG INSTALL_AGY_CLI=1
-ARG AGY_CLI_VERSION=1.4.9
-ARG AGY_CLI_BUILD=4962164969177088
-ARG AGY_CLI_SHA256_AMD64=3d84e3a461b9cbf9ffc9deede155a01921380e964f51a82c0bc505db80ae8525
-ARG AGY_CLI_SHA256_ARM64=0e75190d5aa48b0f7623b201cfef542cd36a1279b3d28afa7fa099983a073493
+ARG AGY_CLI_VERSION=1.2.2
+ARG AGY_CLI_BUILD=6061403484848128
+ARG AGY_CLI_SHA256_AMD64=2cfa5c9a4a1edd96db6d4058f34970be60d3bcacda866e2bdce6aefb2451b48e
+ARG AGY_CLI_SHA256_ARM64=00fc5cb50cd714b81cdf1298fcc90e63a59e3e564a4f8076454ab8457d36e6eb
 RUN if [ "$INSTALL_AGY_CLI" = "1" ]; then \
         set -eu; mkdir -p /opt/antigravity; arch="$(uname -m)"; \
         case "$arch" in \
