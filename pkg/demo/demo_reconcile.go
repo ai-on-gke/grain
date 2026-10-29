@@ -67,6 +67,16 @@ func runDemoReconcile(ctx context.Context, store *model.Store, releases github.C
 func demoReconcileCycle(ctx context.Context, store *model.Store, releases github.Client, now time.Time) error {
 	var errs []error
 	if releases != nil {
+		if v, ok := demoSimClients.Load(releases); ok {
+			if st, _ := v.(*demoSimState); st != nil {
+				if st.events != nil {
+					processDemoGitHubWebhooks(ctx, store, st.events, st.calls, now)
+				}
+				if st.calls != nil {
+					st.calls.pollDemoPullRequests(ctx, store)
+				}
+			}
+		}
 		if err := orchestrator.SyncReleases(ctx, store, releases, now); err != nil {
 			errs = append(errs, fmt.Errorf("releases: %w", err))
 		}
