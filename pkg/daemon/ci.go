@@ -2099,11 +2099,18 @@ func (s ConfigRepoCISource) Workflows(ctx context.Context, repo, _ string) ([]ci
 	// The script is what the step is shown as having run, and it is what
 	// StateCheckSandboxes runs: `grain state check` with these arguments,
 	// in the daemon. It is never handed to a shell.
+	//
+	// pull_request is there for the merge queue's overlap re-check
+	// (orchestrator mergerecheck), which asks for a pull_request run of
+	// grain-merge-queue/<deployment>/main: a native workflow answers only
+	// the events it names, and without it that re-check planned nothing,
+	// tested nothing and errored on every try.
 	body := `name: grain config
 
 on:
   push:
     branches: ["**"]
+  pull_request:
   workflow_dispatch:
 
 jobs:
