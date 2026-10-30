@@ -226,6 +226,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		GitHubBranches:            githubClient,
 		GitHubPullRequestFiles:    githubClient,
 		GitHubPullRequests:        githubClient,
+		GitHubForkPullRequests:    githubClient,
 		GitHubCredentialAvailable: githubTokens.HasCredential,
 		// The System pane's Logs tab: which streams this deployment can
 		// show is a property of the shape it runs as, so logSources

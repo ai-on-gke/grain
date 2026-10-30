@@ -26,6 +26,7 @@ package deploy
 // dropped. It runs nothing, so it costs nothing.
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +35,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
+	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
+	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/repodecl"
 )
@@ -1926,6 +1931,73 @@ func TestTheReleaseTrainRunsDailyWithTheCapabilitiesItUses(t *testing.T) {
 	}
 	if !runsALine(job, func(line string) bool { return line == "bash ./scripts/release-from-trunk.sh" }) {
 		t.Errorf("%s job %s does not run `bash ./scripts/release-from-trunk.sh` in its train mode", releaseTrainPath, job.ID)
+	}
+}
+
+type releaseTrainCredential string
+
+func (c releaseTrainCredential) Resolve(context.Context, string) (string, error) {
+	return string(c), nil
+}
+
+type releaseTrainPackageCredential struct{}
+
+func (releaseTrainPackageCredential) PackageCredential(registry, _, _ string) (packagepublish.Credential, error) {
+	if registry == "" {
+		registry = "ghcr.io"
+	}
+	return packagepublish.Credential{Registry: registry, Username: "bot", Token: "secret", Name: "test"}, nil
+}
+
+// The train's capabilities resolve for the repository it runs in. After
+// the 2026-10-28 cutover the workflow named repo-write:ai-on-gke/grain
+// while release-gate-read was still offered to bwsalmon/grain only, and
+// every train on ai-on-gke/grain was refused before it started (task
+// 1787): release-gate-read's default repository is model.GrainSourceRepo,
+// and that has to be the repository the train is declared in.
+func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.T) {
+	repo := model.GrainSourceRepo()
+	if want := (model.RepoRef{Owner: "ai-on-gke", Name: "grain"}); !repo.Same(want) {
+		t.Fatalf("model.GrainSourceRepo() = %s, want %s", repo, want)
+	}
+	job := releaseTrainWorkflow(t).Jobs[0]
+	gate := ciapi.NewEndpoint()
+	gate.SetURL("http://192.0.2.1:9000")
+	reg := model.NewCapabilityRegistry(
+		ciapi.NewAlias(gate, ciapi.Config{}, model.ReleaseGateReadCapability, ciapi.Aliases[model.ReleaseGateReadCapability]),
+		packagepublish.New(packagepublish.Config{Credentials: releaseTrainPackageCredential{}}),
+		repowrite.New(repo),
+	)
+	creds := releaseTrainCredential(`{"registry":"ghcr.io","username":"bot","token":"secret"}`)
+
+	// An operator's dispatch holds every one of them; grain's own cron
+	// holds all but package-publish, which stays release and dispatch only.
+	for _, tc := range []struct {
+		event   ci.Event
+		trusted bool
+		want    []string
+	}{
+		{ci.EventManual, false, job.Capabilities},
+		{ci.EventSchedule, true, []string{model.RepoWriteCapability(repo), model.ReleaseGateReadCapability}},
+	} {
+		cc, resolved, err := daemon.ResolveCICapabilities(context.Background(), reg, creds, repo, "ci-job", tc.event, tc.trusted, job.Capabilities)
+		if err != nil {
+			t.Fatalf("%s: resolving %s's capabilities for %s: %v", tc.event, releaseTrainPath, repo, err)
+		}
+		for _, r := range resolved {
+			if r.Resolution.Refused {
+				t.Errorf("%s: %s was refused to %s's train: %s", tc.event, r.Grant.Capability, repo, r.Resolution.Reason)
+			}
+		}
+		var granted []string
+		for _, g := range cc.Task.Grants {
+			granted = append(granted, g.Capability)
+		}
+		for _, id := range tc.want {
+			if !slices.Contains(granted, id) {
+				t.Errorf("%s: %s's train holds %v, want %s among them", tc.event, repo, granted, id)
+			}
+		}
 	}
 }
 

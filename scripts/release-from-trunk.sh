@@ -518,7 +518,7 @@ fi
 
 # --- Phase 2 ---
 
-gate_json RELEASE_RUNS_JSON "/api/ci/runs?repo=${GRAIN_CI_REPO:-bwsalmon/grain}&ref=main&limit=500" "$work/runs.json"
+gate_json RELEASE_RUNS_JSON "/api/ci/runs?repo=${GRAIN_CI_REPO:-ai-on-gke/grain}&ref=main&limit=500" "$work/runs.json"
 fetch_tasks
 lkg_status=0
 lkg_out="$(bash "$scripts_dir/candidate-gate.sh" select-lkg --runs-json "$work/runs.json" ${floor:+--floor-sha "$floor"} \

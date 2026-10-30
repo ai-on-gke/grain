@@ -361,3 +361,82 @@ func TestCmdInitGKESandboxesDryRun(t *testing.T) {
 		t.Errorf("cluster step command %q missing hyperdisk-balanced or nested-virt flag", res.Steps[0].Command)
 	}
 }
+
+// TestPrintInitResultClosingCLIHintNamesBinaryPath covers task 1712:
+// grain init does not link a binary into /usr/local/bin, so on a fresh
+// host (especially with -use-binary /home/debian/grain-bin) a bare
+// `grain <command>` under `sudo -u grain env ...` fails with
+// `env: 'grain': No such file or directory`. The closing hint must name
+// the binary path Init used.
+func TestPrintInitResultClosingCLIHintNamesBinaryPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		result hostinit.Result
+		opts   hostinit.Options
+		want   string
+	}{
+		{
+			name: "-use-binary via Result.GrainBinaryPath",
+			result: hostinit.Result{
+				GrainBinaryPath: "/home/debian/grain-bin",
+				Steps: []hostinit.Step{
+					{Name: "start the daemon", Status: hostinit.StepDone, Detail: "grain-daemon.service is running"},
+				},
+			},
+			opts: hostinit.Options{
+				DataDir:   "/var/lib/grain/data",
+				UseBinary: "/home/debian/grain-bin",
+			},
+			want: "sudo -u grain env GRAIN_DATA_DIR=/var/lib/grain/data /home/debian/grain-bin <command>",
+		},
+		{
+			name: "-use-binary via Options.UseBinary fallback",
+			result: hostinit.Result{
+				Steps: []hostinit.Step{
+					{Name: "start the daemon", Status: hostinit.StepSkipped, Detail: "already running"},
+				},
+			},
+			opts: hostinit.Options{
+				DataDir:    "/var/lib/grain/data",
+				DaemonUser: "grain",
+				UseBinary:  "/home/debian/grain-bin",
+			},
+			want: "sudo -u grain env GRAIN_DATA_DIR=/var/lib/grain/data /home/debian/grain-bin <command>",
+		},
+		{
+			name: "built binary via Result.GrainBinaryPath",
+			result: hostinit.Result{
+				GrainBinaryPath: "/srv/grain/bin/grain",
+				Steps: []hostinit.Step{
+					{Name: "start the daemon", Status: hostinit.StepDone, Detail: "grain-daemon.service is running"},
+				},
+			},
+			opts: hostinit.Options{
+				DataDir: "/var/lib/grain/data",
+			},
+			want: "sudo -u grain env GRAIN_DATA_DIR=/var/lib/grain/data /srv/grain/bin/grain <command>",
+		},
+		{
+			name: "empty paths fall back to grain",
+			result: hostinit.Result{
+				Steps: []hostinit.Step{
+					{Name: "start the daemon", Status: hostinit.StepDone, Detail: "grain-daemon.service is running"},
+				},
+			},
+			opts: hostinit.Options{
+				DataDir: "/var/lib/grain/data",
+			},
+			want: "sudo -u grain env GRAIN_DATA_DIR=/var/lib/grain/data grain <command>",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var out strings.Builder
+			fprintInitResult(&out, c.result, c.opts)
+			if !strings.Contains(out.String(), c.want) {
+				t.Errorf("fprintInitResult output:\n%s\nmissing %q", out.String(), c.want)
+			}
+		})
+	}
+}

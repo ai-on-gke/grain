@@ -108,7 +108,7 @@ export function pendingReleaseOf(n) {
   if (!(n.actions || []).includes("approve-release")) return null;
   const version = (n.subject || "").slice(PENDING_RELEASE_FAMILY.length + 1);
   if (!/^v\d+\.\d+\.0$/.test(version)) return null;
-  return { repo: n.repo || "bwsalmon/grain", version };
+  return { repo: n.repo || "ai-on-gke/grain", version };
 }
 
 // decideRelease approves (or rejects) a pending release, after asking:

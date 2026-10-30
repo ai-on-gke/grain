@@ -88,7 +88,7 @@ func TestCatalogueValidateGrants(t *testing.T) {
 		{name: "repo refused", gc: model.GrantContext{Repo: repo("other/repo"), Kind: "task", Grants: []string{"self-debug"}},
 			refused: "not granted on other/repo"},
 		{name: "no-repo refused", gc: model.GrantContext{Kind: "task", Grants: []string{"self-debug"}},
-			refused: "not granted on none"},
+			refused: "not granted on a task with no repository (none)"},
 		{name: "kind refused", gc: model.GrantContext{Repo: repo("ai-on-gke/grain"), Kind: "review", Grants: []string{"self-debug"}},
 			refused: "not granted to a review"},
 		{name: "ci_only refuses a task", gc: model.GrantContext{Kind: "task", Grants: []string{"gcp-key:prod"}},

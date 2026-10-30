@@ -208,8 +208,11 @@ func checkPrebuiltGrain(path string) platformCheck {
 				Command: "chmod +x " + path + "    # if it is the right file and only lacks the execute bit"})
 			return false, false
 		}
-		r.add(Step{Name: name, Status: StepSkipped,
-			Detail: "-use-binary " + describeGrainBinary(path) + "; make and node/npm are not needed"})
+		detail := "-use-binary " + describeGrainBinary(path) + "; make and node/npm are not needed"
+		if owner := nonRootOwner(fi); owner != "" {
+			detail += fmt.Sprintf(" (owned by %s, not root -- that account can replace what grain-daemon.service runs; prefer a root-owned path such as /usr/local/bin/grain)", owner)
+		}
+		r.add(Step{Name: name, Status: StepSkipped, Detail: detail})
 		return true, false
 	}
 }
