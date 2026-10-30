@@ -50,7 +50,11 @@ func TestFormatBranchNameRefusesUnsafeOrAmbiguousTemplates(t *testing.T) {
 		"grain/task-{id}{slug}", "grain/{slug}{id}", "grain/task-{id}1{slug}", "grain/{slug}-{deployment}{id}",
 		"grain/{slug}9{id}", "grain/task-{id}-{slug}-{slug}", "grain/{slug}/task-{id}", "{slug}-task-{id}",
 		"grain/task-{id}x{slug}", "grain/{id}/{deployment}-{slug}", "grain/task-{id}-{slug}-x", "grain/task-{id}/{slug}",
-		"grain/{deployment}-task-{id}-{slug}", "grain/task-{id}-{instance}-{id}-{slug}", "grain/task-{id}.{slug}", "grain/task-{id}_{slug}"} {
+		"grain/{deployment}-task-{id}-{slug}", "grain/task-{id}-{instance}-{id}-{slug}", "grain/task-{id}.{slug}", "grain/task-{id}_{slug}",
+		// Names git check-ref-format refuses within the safe charset: a
+		// component ending in ".lock" or starting with ".", and a name
+		// ending in ".". Settings → Agents saved the first on 2026-10-30.
+		"grain/task-{id}.lock", "grain/.hidden/task-{id}", "grain/task-{id}."} {
 		if _, err := model.FormatBranchName(template, "abc123", "prod-1", "42"); err == nil {
 			t.Errorf("FormatBranchName(%q) succeeded, want an error", template)
 		}
@@ -208,6 +212,28 @@ func TestFormatTaskBranchNameAcceptsASeparatedSlug(t *testing.T) {
 		"grain/{deployment}/{id}/task-{id}-{slug}", "{id}-{slug}"} {
 		if _, err := model.FormatTaskBranchName(template, "abc123", "prod-1", "42", "6 fix"); err != nil {
 			t.Errorf("FormatTaskBranchName(%q) = %v, want it accepted", template, err)
+		}
+	}
+}
+
+// ValidBranchName refuses every name git itself would refuse within the
+// charset it allows, and keeps the dotted names git takes.
+func TestValidBranchNameFollowsGitRefRules(t *testing.T) {
+	for name, want := range map[string]bool{
+		"main":                  true,
+		"release/1.0":           true,
+		"grain/task-42.v2":      true,
+		"feature/x.locked":      true,
+		"grain/task-42.lock":    false,
+		"grain/x.lock/task-42":  false,
+		"grain/.hidden/task-42": false,
+		"grain/task-42.":        false,
+		"grain/task-42/":        false,
+		"grain//task-42":        false,
+		"grain/task..42":        false,
+	} {
+		if got := model.ValidBranchName(name); got != want {
+			t.Errorf("ValidBranchName(%q) = %v, want %v", name, got, want)
 		}
 	}
 }
