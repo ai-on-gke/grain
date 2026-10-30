@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -2621,6 +2622,10 @@ func writeError(w http.ResponseWriter, status int, err error) {
 // database error as "the gateway had trouble" would point an operator at
 // the wrong thing.
 func writeClientError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ci.ErrNotUp) {
+		writeCINotUp(w)
+		return
+	}
 	var fe *ForbiddenError
 	if errors.As(err, &fe) {
 		writeError(w, http.StatusForbidden, err)

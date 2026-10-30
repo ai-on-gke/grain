@@ -1009,7 +1009,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// them) calls grain's API through (pkg/capability/ciapi), on the same
 	// fabric. Not fatal: without it those grants are refused at resolve,
 	// naming this, and nothing else is affected.
-	if endpoint, stopGate, err := fabric.Serve("ci api", CIAPI); err != nil {
+	if endpoint, stopGate, err := fabric.Serve(CIAPIService, CIAPI); err != nil {
 		log.Printf("grain daemon: starting the CI API listener: %v -- CI jobs that declare api grants "+
 			"(%s among them) will be refused", err, model.ReleaseGateReadCapability)
 	} else {

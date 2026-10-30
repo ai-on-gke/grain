@@ -36,7 +36,7 @@ import (
 // mask. Adding a service takes the next free offset and changes no rule
 // anywhere.
 //
-// 256 is far more than the six services there are, deliberately: the
+// 256 is far more than the services there are, deliberately: the
 // point of a block is that it is sized once.
 const SandboxPortBlockSize = 256
 
@@ -64,6 +64,9 @@ const (
 	// OffsetCapabilityPorts is the relay capability grants' ports are
 	// forwarded through (pkg/capability/portforward).
 	OffsetCapabilityPorts = 3
+	// OffsetCIAPI is the listener a CI job holding api grants calls
+	// grain's API through (pkg/capability/ciapi).
+	OffsetCIAPI = 4
 
 	OffsetModelProxyBase = 16
 	OffsetModelProxyEnd  = 48
@@ -72,6 +75,9 @@ const (
 // CapabilityPortsService is the capability port relay's name on the
 // fabric.
 const CapabilityPortsService = "capability ports"
+
+// CIAPIService is the CI API listener's name on the fabric.
+const CIAPIService = "ci api"
 
 // sandboxPortOffsets is the name-to-offset table, with the model proxies
 // derived from modelproxy.Vendors() rather than listed.
@@ -90,6 +96,7 @@ func SandboxPortOffsets() (map[string]int, error) {
 		"Actions cache": OffsetActionsCache,
 
 		CapabilityPortsService: OffsetCapabilityPorts,
+		CIAPIService:           OffsetCIAPI,
 	}
 	for i, vendor := range modelproxy.Vendors() {
 		offset := OffsetModelProxyBase + i

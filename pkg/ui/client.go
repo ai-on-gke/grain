@@ -248,6 +248,19 @@ func (e *NotFoundError) Error() string {
 	return "no task " + e.ID
 }
 
+// UnavailableError is a 503 as HTTPClient reads it back: the server is
+// there but cannot answer yet -- a daemon whose CI service is still
+// starting (ci.ErrNotUp) -- and asking again shortly is the remedy.
+// ci.IsNotUp recognises it by Unavailable.
+type UnavailableError struct {
+	message string
+}
+
+func (e *UnavailableError) Error() string { return e.message }
+
+// Unavailable marks this as a refusal worth retrying.
+func (e *UnavailableError) Unavailable() bool { return true }
+
 // AttachmentUpload is one file carried by a CreateTaskRequest or an
 // AddComment call (bwsalmon/agents#522) -- Content is base64, matching
 // how the frontend already reads a chosen File (FileReader.
