@@ -5241,14 +5241,16 @@ func scanSchedule(scan func(...any) error) (Schedule, error) {
 		t.SuiteID = &suiteID.String
 	}
 	t.TimeZone = timeZone
+	recKind, ghTrigger := ParseStoredRecurrenceKind(kind)
 	t.Recurrence = Recurrence{
-		Kind:          RecurrenceKind(kind),
-		EveryNHours:   int(everyNHours.Int64),
-		EveryNMinutes: int(everyNMinutes.Int64),
-		TimeOfDay:     int(timeOfDay.Int64),
-		Weekday:       time.Weekday(weekday.Int64),
-		DayOfMonth:    int(dayOfMonth.Int64),
-		TimeZone:      timeZone,
+		Kind:              recKind,
+		EveryNHours:       int(everyNHours.Int64),
+		EveryNMinutes:     int(everyNMinutes.Int64),
+		TimeOfDay:         int(timeOfDay.Int64),
+		Weekday:           time.Weekday(weekday.Int64),
+		DayOfMonth:        int(dayOfMonth.Int64),
+		TimeZone:          timeZone,
+		GitHubWorkflowRun: ghTrigger,
 	}
 	t.LastRunAt = timePtr(lastRun)
 	return t, nil
@@ -5295,7 +5297,7 @@ func putSchedule(ctx context.Context, tx *sql.Tx, t Schedule) error {
 		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`"+`
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Body, t.Target.StoredOwner(), t.Target.Name, nullable(t.Base),
-		t.AutoMerge, t.AutoApproveProposals, stringOf(t.TemplateID), stringOf(t.SuiteID), string(r.Kind), everyNHours, timeOfDay, weekday, dayOfMonth,
+		t.AutoMerge, t.AutoApproveProposals, stringOf(t.TemplateID), stringOf(t.SuiteID), r.StoredKind(), everyNHours, timeOfDay, weekday, dayOfMonth,
 		string(overlap), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Enabled, t.NextRunAt.UTC(), timeOf(t.LastRunAt), t.CreatedAt.UTC(), timeZone,
 		string(t.WorkflowReview), everyNMinutes)
 	if err != nil {
@@ -5529,7 +5531,7 @@ func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
 func (s *Store) DueSchedules(ctx context.Context, now time.Time) ([]Schedule, error) {
 	rows, err := s.db.QueryContext(ctx,
 		"SELECT "+scheduleColumns+" FROM `schedule` "+
-			"WHERE `enabled` = 1 AND `next_run_at` <= ? ORDER BY `id`", now.UTC())
+			"WHERE `enabled` = 1 AND `next_run_at` <= ? AND `recurrence_kind` NOT LIKE 'github_workflow_run%' ORDER BY `id`", now.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("listing due schedules: %w", err)
 	}
