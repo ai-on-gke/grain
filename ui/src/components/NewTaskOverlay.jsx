@@ -66,7 +66,11 @@ import {
 } from "../state.js";
 import AttachmentPicker from "./AttachmentPicker.jsx";
 import BranchField from "./BranchField.jsx";
-import { CustomFieldInputs, fileableFieldValues } from "./CustomFields.jsx";
+import {
+  CustomFieldInputs,
+  fileableFieldValues,
+  unfiledLinkValues,
+} from "./CustomFields.jsx";
 import { GlyphLabel } from "./ItemGlyph.jsx";
 import ModelSelect from "./ModelSelect.jsx";
 import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
@@ -458,6 +462,7 @@ export default function NewTaskOverlay({
   });
   const setCustomField = (name, value) =>
     setCustomFields((prev) => ({ ...prev, [name]: value }));
+  const unfiledFromLink = unfiledLinkValues(config, fields);
 
   const [resetKey, setResetKey] = useState(0);
   // repoSeed is what Repos starts from when it is remounted for a reason
@@ -909,6 +914,21 @@ export default function NewTaskOverlay({
             title and the description over them, rather than part of how
             it runs. Nothing renders here on a deployment that declares
             none, which is most of them. */}
+        {/* What a /new link asked for that this form left out
+            (unfiledLinkValues): a value its field does not offer, or a
+            field this deployment does not declare. Said here, beside the
+            fields, so the task filed is not quietly a different one from
+            the task the link's sender meant. */}
+        {unfiledFromLink.length > 0 && (
+          <Alert
+            severity="warning"
+            sx={{ mt: 1 }}
+            data-testid="unfiled-link-values"
+          >
+            This link asked for values this form has left out:{" "}
+            {unfiledFromLink.join("; ")}.
+          </Alert>
+        )}
         <CustomFieldInputs
           config={config}
           values={customFields}
