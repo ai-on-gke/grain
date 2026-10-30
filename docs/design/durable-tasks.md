@@ -804,7 +804,7 @@ tool calls and 150 KB of tool output, against 154 calls and 1.1 MB on wake 1.
   is id, kind, from→to, and at. It ends with the next cursor. It reads the
   existing event sources, and the cursor is an `(at, seq)` pair.
 - **`read_grain_task(view: "summary")`**, the new default: state, title,
-  kind tags (port, repair, session, proposal, durable), base, depends_on,
+  kind tags (port, repair, session, proposal, durable, imported), base, depends_on,
   stall, last three events and the handover's first lines, in about 1 KB.
   `view: "full"` is today's output. `view: "conversation", after: <comment
   id>` pages the conversation.

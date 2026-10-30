@@ -134,6 +134,7 @@ const ORIGIN_LABELS = {
   proposed: "Proposed by an agent",
   schedule: "Scheduled",
   suite: "Suite run",
+  imported: "Imported issue",
   fix: "Merge fix",
   review: "Review",
 };
@@ -151,6 +152,7 @@ export function originOf(t) {
   if (t.stacked) return "fix";
   if (t.scheduled) return "schedule";
   if (t.suiteRun) return "suite";
+  if (t.imported) return "imported";
   if (t.generatedFrom) return "proposed";
   return "hand";
 }
