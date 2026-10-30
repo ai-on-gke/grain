@@ -215,6 +215,14 @@ export function parsePath(pathname, search = "") {
     const newTaskFields = parseNewTaskFields(search);
     return newTaskFields ? { ...parsed, newTaskFields } : parsed;
   }
+  if (
+    parsed.view === "settings" &&
+    parsed.settingsSection === "config-repo" &&
+    !parsed.settingsItem &&
+    params.get("path")
+  ) {
+    return { ...parsed, settingsItem: params.get("path") };
+  }
   if (parsed.view === "system" && parsed.systemTab === "metrics") {
     const metricsNarrowing = parseNarrowing(search);
     const metricsWindow = metricsWindowFromQuery(params);
@@ -541,14 +549,29 @@ function parseSegments(pathname) {
     const settingsSection = settingsSectionFor(segments[1]);
     // One item of a section -- a capability server, by its
     // capability_id -- is the segment after it
-    // (/settings/capabilities/<id>), so a server's page is a link.
+    // (/settings/capabilities/<id>), so a server's page is a link. The
+    // config repo browser's is the file it has open, slashes and all
+    // (/settings/config-repo/settings/capabilities.yml).
     const settingsItem =
-      settingsSection === "capabilities" && segments.length > 2
+      (settingsSection === "capabilities" ||
+        settingsSection === "config-repo") &&
+      segments.length > 2
         ? itemId(segments.slice(2).join("/"))
         : "";
     return settingsItem
       ? { view: "settings", settingsSection, settingsItem }
       : { view: "settings", settingsSection };
+  }
+  // The Config Repo Browser (docs/design/config-repo-settings.md §2.3)
+  // is Settings → Config repo; /config is the address every "View in
+  // config repo" link names, the file in its ?path= (parsePath) or after
+  // it.
+  if (segments[0] === "config") {
+    const settingsItem =
+      segments.length > 1 ? itemId(segments.slice(1).join("/")) : "";
+    return settingsItem
+      ? { view: "settings", settingsSection: "config-repo", settingsItem }
+      : { view: "settings", settingsSection: "config-repo" };
   }
   if (segments[0] === "admin") return oldAdminDestination(segments[1]);
   if (segments[0] === "system") return systemDestination(segments[1]);
@@ -959,7 +982,11 @@ export function buildPath({
   if (view === "settings")
     return settingsSection
       ? `/settings/${encodeURIComponent(settingsSection)}${
-          settingsItem ? `/${encodeURIComponent(settingsItem)}` : ""
+          !settingsItem
+            ? ""
+            : settingsSection === "config-repo"
+              ? `/${settingsItem.split("/").map(encodeURIComponent).join("/")}`
+              : `/${encodeURIComponent(settingsItem)}`
         }`
       : "/settings";
   if (view === "system") {

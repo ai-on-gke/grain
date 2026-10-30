@@ -137,7 +137,7 @@ test.describe("Pinned System and Settings sub-targets", () => {
       ["/system/health", "/system", ["Health"]],
       ["/system/sandboxes", "/system/sandboxes", ["Sandboxes"]],
       ["/system/logs", "/system/logs", ["System"]],
-      ["/settings", "/settings/general", ["General"]],
+      ["/settings", "/settings/models", ["Settings"]],
       ["/settings/general", "/settings/general", ["General"]],
       [
         "/settings/credentials",
