@@ -94,11 +94,21 @@ func (c *Client) ChangeChecks(ctx context.Context, id string, req ChangeChecksRe
 		change.NoteError(ctx, p, err, c.Store, c.now())
 		return ChangeChecksResponse{}, apierror.Expose(err)
 	}
-	// What the agent just read is the freshest the badge can be.
-	change.Remember(change.Observation{
-		Target: target, Health: report.Health, Snapshot: report.Snapshot,
-		Presubmit: report.Presubmit, Checks: failingChecks(report.Failing),
-	})
+	// What the agent just read is the freshest the badge can be. Only
+	// the presubmit half is replaced: the review state, LGTMs and
+	// needs-mailing the last poll saw are not in a checks report, and a
+	// wait narrowed to some checks says nothing about the CL's presubmit.
+	if !report.Selective && len(req.Jobs) == 0 {
+		obs, _ := change.LastObserved(target)
+		if obs.Snapshot != report.Snapshot {
+			// Whether a newer snapshot may be submitted is the next
+			// poll's to say, not the last one's.
+			obs.Submittable, obs.Reasons = false, nil
+		}
+		obs.Target, obs.Health, obs.Snapshot = target, report.Health, report.Snapshot
+		obs.Presubmit, obs.Checks = report.Presubmit, failingChecks(report.Failing)
+		change.Remember(obs)
+	}
 	return ChangeChecksResponse{Report: report}, nil
 }
 

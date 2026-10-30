@@ -55,7 +55,7 @@ if [ -n "$highlights_file" ] && [ ! -f "$highlights_file" ]; then
   exit 2
 fi
 
-repo="${GRAIN_CI_REPO:-bwsalmon/grain}"
+repo="${GRAIN_CI_REPO:-ai-on-gke/grain}"
 
 features=()
 fixes=()

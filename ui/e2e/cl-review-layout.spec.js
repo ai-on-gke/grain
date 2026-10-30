@@ -17,8 +17,9 @@ import { expect, test } from "./fixtures.js";
 // A CL's review badge sits beside its presubmit badge, after the cl/N
 // chip, on the task view and on the task's inbox row; the task view's
 // actions carry Mail and Publish replies. The demo seeds a changelist
-// task in each review state (pkg/demo) and registers no provider, so both
-// buttons are disabled with the reason.
+// task in each review state (pkg/demo); its draft CL needs mailing, so
+// Mail is offered there and Publish replies, with no drafts waiting, is
+// disabled with the reason. cl-mail-publish.spec.js presses them.
 const SEEDS = [
   [
     "Port the retry budget to the depot",
@@ -72,10 +73,10 @@ for (const viewport of [
     }
     expect(b.x + b.width).toBeLessThanOrEqual(viewport.width);
 
-    // No provider on the demo: both buttons say why they do not apply.
+    // Mail applies to a CL that needs mailing; nothing waits to publish.
     const mail = page.getByTestId("cl-mail");
     const publish = page.getByTestId("cl-publish");
-    await expect(mail).toBeDisabled();
+    await expect(mail).toBeEnabled();
     await expect(publish).toBeDisabled();
     const m = await mail.boundingBox();
     const q = await publish.boundingBox();

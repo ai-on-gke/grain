@@ -62,7 +62,11 @@ func seedID(t *testing.T, rec interface{ Result() *http.Response }, body string)
 func TestExternalModeRefusesEachConfigWriteWithTheEditToCommit(t *testing.T) {
 	t.Parallel()
 	fake := &fakeStateRepo{status: ui.StateRepoStatus{Branch: "main"}}
-	srv := stateRepoServer(t, fake)
+	// Seeded with no config repository wired at all: an internal one
+	// refuses these writes from the API too.
+	_, client := testServer(t)
+	storeSettingsRow(t, client)
+	srv := ui.NewServerWithClient(client)
 
 	create := func(path, body string) string {
 		t.Helper()
@@ -83,6 +87,7 @@ func TestExternalModeRefusesEachConfigWriteWithTheEditToCommit(t *testing.T) {
 
 	const remote = "https://github.com/acme/grain-config.git"
 	fake.status = ui.StateRepoStatus{Remote: remote, Branch: "trunk"}
+	client.Config.StateRepo = fake
 
 	for _, tc := range []struct {
 		method, path, body string
@@ -161,10 +166,21 @@ func TestExternalModeRefusesEachConfigWriteWithTheEditToCommit(t *testing.T) {
 		t.Fatalf("a refused write changed the template: %d %s", rec.Code, rec.Body)
 	}
 
-	// And in internal mode the same write simply happens.
+	// In internal mode the same write is refused too, with the edit to
+	// make in grain/config: the config repository is the only write path
+	// for it in either mode.
+	fake.status = ui.StateRepoStatus{Branch: "main"}
+	rec = do(t, srv, http.MethodPatch, "/api/schedules/"+sched, `{"title":"weekly please"}`)
+	var internal configRefusalBody
+	if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &internal) != nil ||
+		internal.Repo != "grain/config" || len(internal.Change) == 0 || !strings.Contains(internal.Change[0].Patch, "+    title: weekly please") {
+		t.Fatalf("internal mode: status %d: %s", rec.Code, rec.Body)
+	}
+	// And with no config repository at all, it simply happens.
+	client.Config.StateRepo = nil
 	rec = do(t, srv, http.MethodPatch, "/api/schedules/"+sched, `{"title":"weekly please"}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "weekly please") {
-		t.Fatalf("internal mode: status %d: %s", rec.Code, rec.Body)
+		t.Fatalf("no config repository: status %d: %s", rec.Code, rec.Body)
 	}
 }
 
@@ -203,7 +219,6 @@ func TestTheRefusalsEditRoundTripsToTheWritesOwnResult(t *testing.T) {
 	fake := &fakeStateRepo{status: ui.StateRepoStatus{Branch: "main"}}
 	_, client := testServer(t)
 	storeSettingsRow(t, client)
-	client.Config.StateRepo = fake
 	srv := ui.NewServerWithClient(client)
 
 	rec := do(t, srv, http.MethodPost, "/api/schedules", `{"title":"nightly","repo":"acme/widgets","recurrence":{"kind":"everyNHours","everyNHours":24}}`)
@@ -211,6 +226,7 @@ func TestTheRefusalsEditRoundTripsToTheWritesOwnResult(t *testing.T) {
 		t.Fatalf("seeding: %d %s", rec.Code, rec.Body)
 	}
 	sched := seedID(t, rec, rec.Body.String())
+	client.Config.StateRepo = fake
 
 	for _, tc := range []struct{ method, path, body string }{
 		{http.MethodPatch, "/api/schedules/" + sched, `{"title":"weekly","enabled":false}`},
@@ -223,8 +239,10 @@ func TestTheRefusalsEditRoundTripsToTheWritesOwnResult(t *testing.T) {
 		}
 
 		fake.status = ui.StateRepoStatus{Remote: "https://github.com/acme/grain-config.git", Branch: "main"}
+		client.Config.StateRepo = fake
 		rec := do(t, srv, tc.method, tc.path, tc.body)
 		fake.status = ui.StateRepoStatus{Branch: "main"}
+		client.Config.StateRepo = nil
 		if rec.Code != http.StatusConflict {
 			t.Fatalf("%s %s: status %d: %s", tc.method, tc.path, rec.Code, rec.Body)
 		}

@@ -292,7 +292,9 @@ describe("RepoPage", () => {
     });
     const routed = api.getMockImplementation();
     api.mockImplementation((path, opts) => {
-      if (path === "/api/capability-methods")
+      // The default grants' picker asks for the listing as this repo's
+      // agent tasks see it (?kind=task&repo=), the CI one for no run.
+      if (path.split("?")[0] === "/api/capability-methods")
         return Promise.resolve([cloudKey]);
       if (path === "/api/capability-grants/check")
         return Promise.resolve(

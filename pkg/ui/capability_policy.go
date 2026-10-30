@@ -83,7 +83,12 @@ func (c *Client) CapabilityPolicy(ctx context.Context) (model.CapabilityPolicy, 
 	return cfg.CapabilityPolicy, nil
 }
 
-// SetCapabilityPolicy replaces the stored policy with p.
+// SetCapabilityPolicy replaces the stored policy's rules with p's. A p
+// with no catalogue keeps the stored one: the catalogue is
+// settings/capabilities.yml's (model.CapabilityPolicy.Catalogue), and
+// Settings → Capabilities' rule editor saves its rules alone, so
+// replacing the whole policy would have erased every catalogue
+// restriction -- and the file with them -- on a save about something else.
 func (c *Client) SetCapabilityPolicy(ctx context.Context, p model.CapabilityPolicy) error {
 	if err := p.Validate(); err != nil {
 		return validationErrorf("%s", err)
@@ -92,6 +97,9 @@ func (c *Client) SetCapabilityPolicy(ctx context.Context, p model.CapabilityPoli
 		return err
 	}
 	return c.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		if p.Catalogue == nil {
+			p.Catalogue = cfg.CapabilityPolicy.Catalogue
+		}
 		cfg.CapabilityPolicy = p
 		return nil
 	})
@@ -114,7 +122,7 @@ func (c *Client) PreviewCapabilityPolicy(ctx context.Context, next model.Capabil
 		configured = cfg.MCPServers
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
-	holders, err := c.capabilityGrantHolders(ctx)
+	holders, err := c.grantHolders(ctx, model.IsCapabilityRef)
 	if err != nil {
 		return CapabilityPolicyPreview{}, err
 	}
@@ -149,7 +157,7 @@ func (c *Client) CapabilityServerUsage(ctx context.Context) ([]CapabilityServerU
 	for id := range configured {
 		byID[id] = &CapabilityServerUsage{ID: id, Holders: []CapabilityGrantHolder{}}
 	}
-	holders, err := c.capabilityGrantHolders(ctx)
+	holders, err := c.grantHolders(ctx, model.IsCapabilityRef)
 	if err != nil {
 		return nil, err
 	}
@@ -186,16 +194,17 @@ func capabilityGrantServer(g string) string {
 	return ref
 }
 
-// capabilityGrantHolders gathers every capability reference grant on an
-// open task, a template, a schedule, and a job of a workflow declared in
-// Settings, each with the runs it is held by (model.CapabilitySubject),
-// sorted by kind and id. A repository's own .grain/workflows files are
-// not read: they live in the repository, not in this deployment.
-func (c *Client) capabilityGrantHolders(ctx context.Context) ([]CapabilityGrantHolder, error) {
+// grantHolders gathers every grant keep admits -- model.IsCapabilityRef
+// for capability references -- on an open task, a template, a schedule,
+// and a job of a workflow declared in Settings, each with the runs it is
+// held by (model.CapabilitySubject), sorted by kind and id. A
+// repository's own .grain/workflows files are not read: they live in the
+// repository, not in this deployment.
+func (c *Client) grantHolders(ctx context.Context, keep func(string) bool) ([]CapabilityGrantHolder, error) {
 	var out []CapabilityGrantHolder
 	addGrants := func(kind, id, name string, repo *model.RepoRef, grants []model.Grant, subjects []model.CapabilitySubject) {
 		for _, g := range grants {
-			if !model.IsCapabilityRef(g.Capability) {
+			if !keep(g.Capability) {
 				continue
 			}
 			h := CapabilityGrantHolder{Kind: kind, ID: id, Name: name, Grant: g.Capability, subjects: subjects}
@@ -371,4 +380,86 @@ func (c *HTTPClient) CapabilityServerUsage(ctx context.Context) ([]CapabilitySer
 	var out []CapabilityServerUsage
 	err := c.do(ctx, http.MethodGet, "/api/capability-servers/usage", nil, &out)
 	return out, err
+}
+
+// capabilityPolicyFor is the stored policy and the configured servers
+// whose aliases it is judged with, the way admission
+// (orchestrator.mintCapabilityPass) reads them.
+func (c *Client) capabilityPolicyFor(ctx context.Context) (model.CapabilityPolicy, map[string]protocol.ServerConfig, error) {
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return model.CapabilityPolicy{}, nil, err
+	}
+	var policy model.CapabilityPolicy
+	var configured map[string]protocol.ServerConfig
+	if cfg != nil {
+		policy = cfg.CapabilityPolicy
+		configured = cfg.MCPServers
+	}
+	configured, _ = intree.EnsureBuiltins(configured)
+	return policy, configured, nil
+}
+
+// policyFilingGrants judges a new agent task's capability references
+// against the capability policy (§4.2.2) before it is written, so a
+// grant admission would only refuse later is refused with the task
+// (400) instead. A default the policy denies -- a repository's default
+// the policy keeps from this run kind, say -- is dropped, since nobody
+// asked for it. Admission asks the policy again when it mints, so a
+// policy saved after a task was filed still has the last word.
+func (c *Client) policyFilingGrants(ctx context.Context, grants []model.Grant, target *model.RepoRef) ([]model.Grant, error) {
+	policy, configured, err := c.capabilityPolicyFor(ctx)
+	if err != nil || len(policy.Rules) == 0 {
+		return grants, err
+	}
+	subject := model.CapabilitySubject{Repo: target, Kind: model.CapabilityRunTask}
+	kept := make([]model.Grant, 0, len(grants))
+	for _, g := range grants {
+		if err := policy.Permits(g.Capability, subject, configured); err != nil {
+			if g.Via == model.GrantByDefault {
+				continue
+			}
+			return nil, validationErrorf("%v", err)
+		}
+		kept = append(kept, g)
+	}
+	return kept, nil
+}
+
+// policyEditRefusalFor is the capability policy's answer to grant being
+// attached to the task stored as id: 400 for one it denies the task. A
+// task that is not there is the edit's own error to report.
+func (c *Client) policyEditRefusalFor(ctx context.Context, id, grant string) error {
+	if !model.IsCapabilityRef(grant) {
+		return nil
+	}
+	task, err := c.Store.GetTask(ctx, model.NormalizeTaskID(id))
+	if err != nil || task == nil {
+		return nil
+	}
+	policy, configured, err := c.capabilityPolicyFor(ctx)
+	if err != nil {
+		return err
+	}
+	subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
+	if err := policy.Permits(grant, subject, configured); err != nil {
+		return validationErrorf("%v", err)
+	}
+	return nil
+}
+
+// markPolicyRefusals sets PolicyRefusal on each method of methods the
+// capability policy denies to subject, so a picker can show it refused
+// rather than offer a grant filing would turn away.
+func (c *Client) markPolicyRefusals(ctx context.Context, methods []CapabilityMethod, subject model.CapabilitySubject) ([]CapabilityMethod, error) {
+	policy, configured, err := c.capabilityPolicyFor(ctx)
+	if err != nil || len(policy.Rules) == 0 {
+		return methods, err
+	}
+	for i := range methods {
+		if err := policy.Permits(methods[i].Ref, subject, configured); err != nil {
+			methods[i].PolicyRefusal = err.Error()
+		}
+	}
+	return methods, nil
 }

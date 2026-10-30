@@ -50,6 +50,7 @@ import {
   knownRepos,
   lastBaseForRepo,
   mergeQueueActive,
+  mergeQueueBatching,
   mergeQueueStall,
   mergeQueueStalled,
   orphanedPullRequest,
@@ -2297,6 +2298,34 @@ describe("outcomeLabel", () => {
     expect(outcomeLabel("nothing_needed")).toBe("Nothing needed");
     expect(outcomeLabel("succeeded")).toBe("Succeeded");
     expect(outcomeLabel("no_action")).toBe("No action");
+  });
+});
+
+describe("mergeQueueBatching", () => {
+  it("returns true for an overlap re-check in waiting_ci and false for ordinary waiting_ci", () => {
+    expect(
+      mergeQueueBatching({
+        state: "completed",
+        mergeQueueState: "waiting_ci",
+        mergeQueueNote:
+          "grain CI is re-checking this change on top of main before it merges, on `grain-merge-queue/dep/main` at abcdef012345",
+      }),
+    ).toBe(true);
+    expect(
+      mergeQueueBatching({
+        state: "completed",
+        mergeQueueState: "waiting_ci",
+        mergeQueueNote: "grain CI run 42 is running",
+      }),
+    ).toBe(false);
+    expect(
+      mergeQueueBatching({
+        state: "closed",
+        mergeQueueState: "waiting_ci",
+        mergeQueueNote:
+          "grain CI is re-checking this change on top of main before it merges",
+      }),
+    ).toBe(false);
   });
 });
 

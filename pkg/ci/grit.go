@@ -115,6 +115,7 @@ var (
 	NewJobRun                        = gritengine.NewJobRun
 	SandboxName                      = gritengine.SandboxName
 	SortJobRuns                      = gritengine.SortJobRuns
+	stepEnv                          = gritengine.StepEnv
 	SummarizeFailure                 = gritengine.SummarizeFailure
 	WithDetach                       = gritengine.WithDetach
 

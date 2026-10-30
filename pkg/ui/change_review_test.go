@@ -301,3 +301,50 @@ func TestTaskAndTemplateReviewersRoundTripAndRefuseAgents(t *testing.T) {
 		t.Errorf("afterReply.Reviewers = %v, want [frank]", afterReply.Reviewers)
 	}
 }
+
+// A person's Mail and Publish replies each leave an entry in the task's
+// conversation, as Sync does, and Mail takes the button away at once
+// rather than offering a second mail until the next poll.
+func TestMailAndPublishRecordThePressInTheConversation(t *testing.T) {
+	client, store, ctx := testClient(t)
+	fake := &fakeCritique{unpub: 2}
+	change.Register(fake)
+	change.Remember(change.Observation{Target: "cl/42", ReviewState: change.ReviewStateDraft, NeedsMailing: true})
+	change.RememberPublish("94", change.PublishResult{CLs: []change.PublishedCL{{CL: "cl/42", Drafts: 2, Reason: "not mailed by grain"}}})
+	t.Cleanup(func() {
+		change.Unregister(model.LinkChangelist)
+		change.Forget("cl/42")
+		change.RememberPublish("94", change.PublishResult{})
+	})
+	if err := store.PutTask(ctx, model.Task{
+		ID: "94", Title: "t", Intent: model.IntentImplement,
+		ChangeTarget: &model.ChangeTarget{Kind: "fakecritique"},
+		Links:        []model.Link{{Kind: model.LinkChangelist, Target: "cl/42"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.MailChange(ctx, "94", "bsalmon", ui.MailChangeRequest{Reviewers: []string{"alice"}}); err != nil {
+		t.Fatal(err)
+	}
+	if obs, _ := change.LastObserved("cl/42"); obs.NeedsMailing || obs.ReviewState != change.ReviewStateInReview {
+		t.Fatalf("after Mail the observation is %+v, want mailed and in review", obs)
+	}
+	if _, err := client.PublishReplies(ctx, "94", "bsalmon"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := change.WaitingDrafts("94"); n != 0 {
+		t.Fatalf("%d drafts still waiting after Publish replies", n)
+	}
+	comments, err := store.Comments(ctx, "94")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 2 || comments[0].Body != "Mailed cl/42 to alice." ||
+		comments[1].Body != "Published 2 replies on cl/42." {
+		var bodies []string
+		for _, c := range comments {
+			bodies = append(bodies, c.Body)
+		}
+		t.Fatalf("conversation = %q, want the Mail and the Publish replies", bodies)
+	}
+}

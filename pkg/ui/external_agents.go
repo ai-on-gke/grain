@@ -23,7 +23,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -213,7 +215,7 @@ func (c *Client) RotateExternalAgentToken(ctx context.Context, id string) (Issue
 		return IssuedExternalAgentToken{}, err
 	}
 	if existing == nil {
-		return IssuedExternalAgentToken{}, &NotFoundError{ID: id}
+		return IssuedExternalAgentToken{}, noExternalAgentToken(id)
 	}
 	if existing.RevokedAt != nil {
 		return IssuedExternalAgentToken{}, validationErrorf("external agent credential %s (%s) is revoked and cannot be rotated", id, existing.Name)
@@ -239,7 +241,7 @@ func (c *Client) RotateExternalAgentToken(ctx context.Context, id string) (Issue
 		return IssuedExternalAgentToken{}, err
 	}
 	if updated == nil {
-		return IssuedExternalAgentToken{}, &NotFoundError{ID: id}
+		return IssuedExternalAgentToken{}, noExternalAgentToken(id)
 	}
 	view := externalAgentTokenViewOf(*updated, now)
 	view.RotatedAt = &now
@@ -249,12 +251,18 @@ func (c *Client) RotateExternalAgentToken(ctx context.Context, id string) (Issue
 	}, nil
 }
 
+// noExternalAgentToken is the 404 for a credential id that names none,
+// rather than NotFoundError's own "no task <id>".
+func noExternalAgentToken(id string) error {
+	return &NotFoundError{ID: id, message: "no external agent credential " + id}
+}
+
 // RevokeExternalAgentToken marks an external agent credential revoked immediately.
 func (c *Client) RevokeExternalAgentToken(ctx context.Context, id string) error {
 	id = strings.TrimSpace(id)
 	if err := c.Store.RevokeExternalAgentToken(ctx, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "not found") {
-			return &NotFoundError{ID: id}
+			return noExternalAgentToken(id)
 		}
 		return err
 	}
@@ -266,7 +274,7 @@ func (c *Client) DeleteExternalAgentToken(ctx context.Context, id string) error 
 	id = strings.TrimSpace(id)
 	if err := c.Store.DeleteExternalAgentToken(ctx, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "not found") {
-			return &NotFoundError{ID: id}
+			return noExternalAgentToken(id)
 		}
 		return err
 	}
@@ -299,9 +307,14 @@ func newExternalAgentLimiter() *externalAgentLimiter {
 	}
 }
 
-func (l *externalAgentLimiter) acquire(tok *model.ExternalAgentToken, now time.Time) (func(), error) {
+// acquire takes one request's slot and rate token for tok. A refusal
+// carries how long the caller should wait before asking again
+// (Retry-After): a full slot frees when a request finishes, but an empty
+// bucket only refills at rateLimit tokens a minute, so at 3/min a caller
+// told to wait one second would be refused again for twenty.
+func (l *externalAgentLimiter) acquire(tok *model.ExternalAgentToken, now time.Time) (func(), time.Duration, error) {
 	if l == nil || tok == nil {
-		return func() {}, nil
+		return func() {}, 0, nil
 	}
 	ratePerMin := tok.EffectiveRateLimit()
 	maxConc := tok.EffectiveMaxConcurrent()
@@ -325,10 +338,11 @@ func (l *externalAgentLimiter) acquire(tok *model.ExternalAgentToken, now time.T
 		}
 	}
 	if b.inFlight >= maxConc {
-		return nil, fmt.Errorf("external agent %q exceeded max concurrent requests (%d)", tok.Name, maxConc)
+		return nil, time.Second, fmt.Errorf("external agent %q exceeded max concurrent requests (%d)", tok.Name, maxConc)
 	}
 	if b.tokens < 1.0 {
-		return nil, fmt.Errorf("external agent %q exceeded rate limit (%d requests/minute)", tok.Name, ratePerMin)
+		wait := time.Duration((1.0 - b.tokens) / float64(ratePerMin) * float64(time.Minute))
+		return nil, wait, fmt.Errorf("external agent %q exceeded rate limit (%d requests/minute)", tok.Name, ratePerMin)
 	}
 	b.tokens -= 1.0
 	b.inFlight++
@@ -342,7 +356,7 @@ func (l *externalAgentLimiter) acquire(tok *model.ExternalAgentToken, now time.T
 			l.mu.Unlock()
 		})
 	}
-	return release, nil
+	return release, 0, nil
 }
 
 func (l *externalAgentLimiter) reset(id string) {
@@ -437,9 +451,9 @@ func (s *Server) authenticateExternalAgent(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusUnauthorized, errors.New("external agent bearer token has expired"))
 		return nil, nil, false
 	}
-	release, err := s.externalLimiter.acquire(tok, now)
+	release, wait, err := s.externalLimiter.acquire(tok, now)
 	if err != nil {
-		w.Header().Set("Retry-After", "1")
+		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(wait.Seconds())))))
 		writeError(w, http.StatusTooManyRequests, err)
 		return nil, nil, false
 	}

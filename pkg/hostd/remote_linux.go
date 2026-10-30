@@ -27,6 +27,14 @@ import (
 // starts again from the shortest backoff.
 const remoteStableSession = 30 * time.Second
 
+// defaultRemoteMaxBackoff is the longest wait between attempts to reach
+// the controller. It is kept well inside dialRetry, the controller's own
+// wait for a hostd that is not connected: a daemon restarted after an
+// outage of any length (an upgrade, a rescheduled pod) waits that long
+// for hostd's hello to adopt the host runs it left, and a backoff that
+// had grown to match it could reconnect only after it gave up.
+const defaultRemoteMaxBackoff = 5 * time.Second
+
 // serveRemote keeps a session to the controller open through s.Remote
 // until ctx is done, reconnecting with backoff whenever it drops or
 // cannot be made. Every stream the controller opens over it is served as
@@ -39,7 +47,7 @@ func (s *Server) serveRemote(ctx context.Context) {
 		minWait = time.Second
 	}
 	if maxWait <= 0 {
-		maxWait = 30 * time.Second
+		maxWait = defaultRemoteMaxBackoff
 	}
 	wait := minWait
 	for ctx.Err() == nil {

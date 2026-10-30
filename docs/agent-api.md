@@ -284,7 +284,9 @@ a person.
 **Granting.** Merging grants nothing. A set reaches a task only through
 an `api:<name>` grant (or `{capability: api, with: {set: <name>}}`),
 which goes through admission and capability policy like any other
-grant. A set that requires a person makes its grant dangerous, so an
+grant. A grant `api:<name>@<repo>` naming a repository none of a
+repo-limited set's scopes reach would grant nothing, so it is refused
+when it is granted. A set that requires a person makes its grant dangerous, so an
 agent can never pass it on. The pickers' Grain API group lists declared
 sets after the presets, each with its resolved scopes, so the operator
 sees what a grant hands out before granting it. `grain mcpserver`, which
@@ -295,7 +297,12 @@ grant written out as the scope grants it resolves to
 **Routes.** `GET /api/api-scope-sets` (`capabilities:read`) lists every
 set in effect with its source, resolved scopes and requires-person flag.
 `PUT /api/api-scope-sets` and `POST /api/api-scope-sets/delete`
-(`capabilities:admin`) write a declared set. Because a set is granted by
+(`capabilities:admin`) write a declared set. `GET
+/api/api-scope-sets/usage` (`capabilities:read`) lists, for each set in
+effect, every open task, template, schedule and Settings workflow job
+holding `api:<name>` or `api:<name>@<repo>`; Settings shows that list
+and asks for confirmation before it removes a set, since every one of
+those grants then grants nothing. Because a set is granted by
 name and resolved when it is used, writing one is granting what it
 resolves to to every task holding it: an agent's `PUT` is held to the
 same rules as any other grant (see Policy below) -- every scope the set
@@ -527,7 +534,12 @@ Each external agent is issued its own scoped bearer token (`gma_<hex>`):
   (`<area>:<level>` or `<area>:*`).
 - **Repository restriction**: an optional `repos` list (`owner/name`).
   When set, every scope granted to the credential is restricted to those
-  repositories; when omitted, scopes apply across all repositories.
+  repositories; when omitted, scopes apply across all repositories. A
+  single scope can be held to one repository on its own instead, as
+  `<area>:<level>@owner/name` in `scopes` (`tasks:write@acme/widgets`).
+  Each level is its own scope: a credential holding only `tasks:write`
+  can file and edit tasks but is offered no `tasks:read` tool to list or
+  read them.
 - **Expiry and limits**: an optional `expiresAt` timestamp, a per-credential
   request rate limit (`rateLimit`, requests per minute, default `60`), and
   an in-flight concurrency cap (`maxConcurrent`, default `8`).
@@ -580,7 +592,7 @@ task" behave as follows:
 | `/api/console/*` and `/api/console-sessions*` | Excluded from `tools/list` and refused by `agentAPIGate` (bound to in-grain sandbox consoles and session tasks). |
 | `POST /api/tasks` (`api_create_task`) | Requires an explicit target in the request body (`repo`, a `templateId` with a target, or `noRepo: true`) because there is no calling task from which to inherit a default repository. |
 | Self-protection on `/api/tasks/{id}/*` | No task ID matches `external:<name>`, so an external agent with the required scope and repository grant can stop, close, retry, pause, or reorder any task in its allowed repositories while still honouring standing-session ownership, pause ownership, and upgrade holds. |
-| Single-repo collection reads (`GET /api/tasks`, `GET /api/ci/runs`, `GET /api/ci/workflows`, `GET /api/merge-batches`, `GET /api/pipeline/changes`, `GET /api/memory/documents/{name}`) | When a credential is restricted to a single repository and omits `?repo=`, the query filter defaults automatically to that repository. |
+| Single-repo collection reads (`GET /api/tasks`, `GET /api/ci/runs`, `GET /api/ci/workflows`, `GET /api/merge-batches`, `GET /api/pipeline/changes`, `GET /api/memory/documents/{name}`) | When a credential is restricted to a single repository and omits `?repo=`, the query filter defaults automatically to that repository, and the answer holds nothing outside it. A credential restricted to several repositories names one in `?repo=` on each read. |
 | External configuration repository (`409 config_managed_externally`) | Works unchanged: when the deployment's configuration lives in an external git repository, configuration-writing tools return `409 Conflict` (`code: "config_managed_externally"`) with the rehearsed git patch to commit. |
 
 ### Worked example
@@ -597,14 +609,14 @@ task" behave as follows:
      -H "Content-Type: application/json" \
      -d '{"externalAgentApi": true}'
 
-   # Issue credential "ops-laptop" with preset grain/task-admin on bwsalmon/grain:
+   # Issue credential "ops-laptop" with preset grain/task-admin on ai-on-gke/grain:
    curl -fsS -X POST "$GRAIN_URL/api/external-agents/tokens" \
      -H "Authorization: Bearer $GRAIN_ACCESS_CODE" \
      -H "Content-Type: application/json" \
      -d '{
        "name": "ops-laptop",
        "scopeSet": "grain/task-admin",
-       "repos": ["bwsalmon/grain"],
+       "repos": ["ai-on-gke/grain"],
        "rateLimit": 60,
        "maxConcurrent": 8
      }'
@@ -673,9 +685,27 @@ task" behave as follows:
      }'
    ```
 
-   Both calls are logged in the journal as `{agent, external:ops-laptop}`
-   and recorded on task 42's conversation on behalf of
-   `external:ops-laptop`.
+   Both calls are logged in the daemon's log (the journal) as
+   `grain api: {agent, external:ops-laptop} <route> scope=... repo=...
+   reason=... -> <status>`, and each one that succeeds is recorded on
+   task 42's conversation as a comment by `grain` on behalf of
+   `external:ops-laptop`. Both tasks must be in a repository the
+   credential reaches (`ai-on-gke/grain` here): a task id that names no
+   task is refused as a call that "does not name a repository it
+   reaches". Moving a standing console session (a director chat) is
+   refused, since an external agent owns none, and `api_start_ci_run`
+   with a `taskId` runs only for a task that holds the `grain-ci`
+   capability -- one filed on a repository whose CI Mode is "Use Grain
+   CI" (Settings -> Repos) -- answering `task 42 does not hold the
+   "grain-ci" capability` otherwise.
+
+   The plain `curl` calls above work without an `initialize` handshake:
+   the endpoint keeps no session, so every request stands on its own.
+   An MCP client (the `mcpServers` entry in step 2, or
+   `npx @modelcontextprotocol/inspector --cli "$GRAIN_URL/mcp"
+   --transport http --header "Authorization: Bearer $GRAIN_MCP_TOKEN"
+   --method tools/list`) sends `initialize` first, which is answered as
+   well.
 
 ### Threat model and safety controls
 
@@ -698,7 +728,9 @@ task" behave as follows:
 - **Rate limits, concurrency caps, and body limits**: each credential has
   an independent token-bucket rate limiter (`rateLimit` req/min) and
   in-flight concurrency cap (`maxConcurrent`), returning
-  `429 Too Many Requests` when exceeded, and `/mcp` bounds request bodies
+  `429 Too Many Requests` when exceeded -- with `Retry-After` set to when
+  the bucket next holds a request (20 seconds at `rateLimit: 3`), or 1
+  second for a full concurrency cap -- and `/mcp` bounds request bodies
   to `4 MiB` (`413 Request Entity Too Large`).
 - **Immediate revocation and kill switch**: revoking or rotating a
   credential takes effect on the next request without restarting the

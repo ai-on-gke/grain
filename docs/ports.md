@@ -100,6 +100,7 @@ explicitly. See [Migrating the sandbox block](#migrating-the-sandbox-block).
 | 9729+ | sandbox | model-proxy capability server's data planes, one per vendor | `intree.DefaultModelProxyPort` (a separate capability server process, not the daemon's block) |
 | 9730 | sandbox | Actions cache (block offset 2) | `daemon.OffsetActionsCache` |
 | 9731 | sandbox | capability port relay (block offset 3) | `daemon.OffsetCapabilityPorts` |
+| 9732 | sandbox | CI API listener for CI jobs' api grants (block offset 4) | `daemon.OffsetCIAPI` (`pkg/capability/ciapi`) |
 | 9744-9746 | sandbox | daemon model proxies: claude, openai, gemini (block offsets 16-18) | `daemon.OffsetModelProxyBase`, `deploy/kubernetes/grain.yaml` |
 | 9728-9983 | sandbox | the whole block (256 ports, aligned) | firewall rules, nftables, `pkg/daemon/sandboxnet.go` |
 | 9727 | sandbox | self-debug capability data plane | `-listen 127.0.0.1:9727` (`pkg/capability/intree/selfdebug.go`) |

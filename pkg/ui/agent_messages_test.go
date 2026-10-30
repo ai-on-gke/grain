@@ -231,3 +231,38 @@ func TestAgentMessageToolDescriptions(t *testing.T) {
 		t.Errorf("/agent-messages route = %+v", agentMessages)
 	}
 }
+
+// GET /api/tasks/{id}/messages is a run's own conversation and the
+// notes other agents left for it: another task's run is refused it
+// (2026-10-28 walkthrough, docs/test-runs/2026-10-28-operator-notifications.md
+// F1, where task 21 read the note child 20 left for its parent 19), and
+// a task holding api:task-admin may still read it.
+func TestAgentAPIMessagesReadIsOwnTaskOnly(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	seedAPITask(t, client, "19", "acme/widgets", "api:tasks:read", "api:tasks:write")
+	seedAPITask(t, client, "20", "acme/widgets", "api:tasks:read", "api:tasks:write")
+	seedAPITask(t, client, "21", "acme/widgets", "api:tasks:read", "api:tasks:write")
+	seedAPITask(t, client, "30", "acme/widgets", "api:task-admin")
+	running(t, client.Store, ctx, "19")
+	if code, body := asAgent(t, srv, "20", http.MethodPost, "/api/tasks/19/agent-messages", `{"body":"for 19's eyes"}`, ""); code != http.StatusOK {
+		t.Fatalf("seeding a note for task 19 answered %d: %s", code, body)
+	}
+
+	for _, path := range []string{"/api/tasks/19/messages", "/api/tasks/19/messages?agents=true"} {
+		code, body := asAgent(t, srv, "21", http.MethodGet, path, "", "")
+		if code != http.StatusForbidden {
+			t.Errorf("task 21 GET %s answered %d, want 403: %s", path, code, body)
+		}
+		if strings.Contains(body, "for 19's eyes") {
+			t.Errorf("task 21 GET %s leaked task 19's note: %s", path, body)
+		}
+	}
+	if code, body := asAgent(t, srv, "19", http.MethodGet, "/api/tasks/19/messages?agents=true", "", ""); code != http.StatusOK ||
+		!strings.Contains(body, "for 19's eyes") {
+		t.Errorf("task 19 reading its own messages answered %d: %s", code, body)
+	}
+	if code, body := asAgent(t, srv, "30", http.MethodGet, "/api/tasks/19/messages?agents=true", "", ""); code != http.StatusOK {
+		t.Errorf("a task-admin reading task 19's messages answered %d: %s", code, body)
+	}
+}

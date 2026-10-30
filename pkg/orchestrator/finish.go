@@ -26,6 +26,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/forkhead"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
@@ -227,7 +228,7 @@ func processResult(ctx context.Context, store *model.Store, reach *gitproxy.Reac
 func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.Reach, client github.Client,
 	appBot AppBotIdentityFunc, task model.Task, result *agent.Result, runID, preRunBranchSHA string, now time.Time) error {
 
-	if err := relayProposedTasks(ctx, store, reach, task, result, now); err != nil {
+	if err := relayProposedTasks(ctx, store, reach, client, task, result, now); err != nil {
 		return err
 	}
 
@@ -1378,8 +1379,8 @@ func proposalConnection(ctx context.Context, store *model.Store, name string) *m
 // task filed since the backlog started, so a proposal an agent split out
 // as an afterthought was dispatched, once approved, before work that had
 // been waiting for it.
-func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy.Reach, task model.Task,
-	result *agent.Result, now time.Time) error {
+func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy.Reach, client github.Client,
+	task model.Task, result *agent.Result, now time.Time) error {
 
 	proposals := proposedTaskCalls(result)
 	if len(proposals) == 0 {
@@ -1787,6 +1788,15 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			if needsPersonWhy != "" {
 				proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", needsPersonWhy)
 			}
+		}
+		// A GitHub fork head label as its branch, resolved to the pull
+		// request it heads as ui.CreateTask resolves the identical call
+		// filed live. One that cannot be resolved is filed for a person,
+		// on its repository's default branch, saying why: the run that
+		// asked for it has ended, so there is nobody else to tell.
+		if why := resolveProposedForkHead(client, &proposal); why != "" {
+			needsPersonWhy = why
+			proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
 		}
 		// The capability catalogue, as ui.CreateTask applies it to the
 		// identical call filed live: a default it refuses this proposal is
@@ -3468,4 +3478,38 @@ func reviewOfGrantRefusedNote(grant string) string {
 	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s` with %q, which only a review "+
 		"grain files itself may hold, so it was filed without that grant.",
 		model.CapabilityGrantRef(grant), model.ReviewOfArg)
+}
+
+// resolveProposedForkHead resolves proposal's base when it is a GitHub
+// fork head label (model.ForkHead): based on what the pull request it
+// heads merges into, linked to that pull request and told about it
+// (forkhead.PR). It returns why it could not, with the base cleared, and
+// "" otherwise -- including for every plain branch, which is left alone.
+func resolveProposedForkHead(client github.Client, proposal *model.Task) string {
+	head, ok, err := model.ParseForkHead(proposal.Base)
+	if !ok {
+		return ""
+	}
+	label := proposal.Base
+	proposal.Base = ""
+	if err != nil {
+		return fmt.Sprintf("its branch is not usable (%v), so it was filed on its repository's default branch", err)
+	}
+	if proposal.Target == nil {
+		return fmt.Sprintf("its branch %q is a GitHub fork head, which names a pull request on a repository, "+
+			"and it was filed with none", label)
+	}
+	finder, _ := client.(forkhead.Finder)
+	if finder == nil {
+		return fmt.Sprintf("its branch %q is a GitHub fork head, and grain cannot read %s's pull requests here "+
+			"to find the one it heads, so it was filed on the repository's default branch", label, proposal.Target)
+	}
+	r, err := forkhead.Resolve(finder, *proposal.Target, head)
+	if err != nil {
+		return fmt.Sprintf("%v; it was filed on the repository's default branch", err)
+	}
+	proposal.Base = r.Base
+	proposal.Links = append(proposal.Links, r.Link())
+	proposal.Body += r.Note()
+	return ""
 }

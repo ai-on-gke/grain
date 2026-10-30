@@ -925,6 +925,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request, scope Scope) 
 		return
 	}
 	q := r.URL.Query()
+	r = r.WithContext(withQuery(r.Context(), q))
 	if grepExpr := q.Get("grep"); grepExpr != "" {
 		s.serveGrep(w, r, scope, scheme, relPath, grepExpr)
 		return

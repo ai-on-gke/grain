@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -990,7 +991,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 	}
 	out.Reviewers = slices.Clone(t.Reviewers)
 	for _, l := range t.Links {
-		if l.Kind == model.LinkFixes {
+		if l.Kind == model.LinkFixes && !model.LinkOffTarget(t, l) {
 			out.PullRequest = l.Target
 		}
 		if l.Kind == model.LinkProposedBy {
@@ -1366,6 +1367,13 @@ type configResponse struct {
 	// settings have not been exported since Since. A standing banner, not
 	// a marker -- it is a condition, and goes away when a sync succeeds.
 	StateRepoSyncFailure *StateRepoSyncFailure `json:"stateRepoSyncFailure,omitempty"`
+	// PendingLocalScripts is how many local-script calls are waiting on
+	// a person (GET /api/local-script-approvals, which only the Inbox
+	// polls). It rides here so the sidebar's Inbox entry can count them
+	// the way the Inbox heading does without a poll of its own on every
+	// page: a run blocked on somebody is the Inbox's business wherever
+	// that somebody is looking (2026-10-29 intake walkthrough, O1).
+	PendingLocalScripts int `json:"pendingLocalScripts,omitempty"`
 	// HostSandboxes is true when the backend this daemon is running is
 	// -host-sandboxes (model.SandboxBackendHost, read off RunningConfig):
 	// every dispatched run happens in a plain directory on the daemon's
@@ -1919,6 +1927,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if s.tasks.Config.StateRepoSyncFailure != nil {
 		resp.StateRepoSyncFailure = s.tasks.Config.StateRepoSyncFailure()
 	}
+	resp.PendingLocalScripts = len(s.tasks.localScriptApprovals().Pending(s.tasks.now()))
 	if s.tasks.Config.StateRepoResetNotice != nil {
 		resp.StateRepoResetNotice = s.tasks.Config.StateRepoResetNotice()
 	}
@@ -1963,9 +1972,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 // that already has it with a 304 and no body at all. taskListCache is
 // where the reasoning for both lives, including why it cannot serve a
 // stale list. A caller who is not a system admin is answered only the
-// tasks of the teams they belong to (bwsalmon/grain#2415).
+// tasks of the teams they belong to (bwsalmon/grain#2415). ?repo=owner/name
+// answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	body, etag, err := s.taskList.response(r.Context(), s.tasks)
+	body, etag, err := s.taskList.response(r.Context(), s.tasks, strings.TrimSpace(r.URL.Query().Get("repo")))
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -2612,6 +2622,10 @@ func writeError(w http.ResponseWriter, status int, err error) {
 // database error as "the gateway had trouble" would point an operator at
 // the wrong thing.
 func writeClientError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ci.ErrNotUp) {
+		writeCINotUp(w)
+		return
+	}
 	var fe *ForbiddenError
 	if errors.As(err, &fe) {
 		writeError(w, http.StatusForbidden, err)

@@ -659,6 +659,13 @@ type Config struct {
 	PackageCacheCA func(ctx context.Context) []byte
 	// PackageCacheDNS returns the controller DNS IP for transparent sandbox DNS interception.
 	PackageCacheDNS func(ctx context.Context) string
+	// SandboxGrainBinary is this deployment's own build of the sandbox's
+	// grain (cmd/grain-sandbox) on the controller's disk, which setup
+	// places at SandboxGrainPath in every sandbox that does not already
+	// carry it (placeSandboxGrain says why). cmd/grain finds it beside its
+	// own executable (SandboxGrainBinaryBeside); "" places nothing, and
+	// runs use whatever grain their image has.
+	SandboxGrainBinary string
 	// GrainSourceDir is the checkout of grain's own source a self-debug
 	// run may read -- cmd/grain's own sourceDir (the copy baked into the
 	// deployment image, or -upgrade-src-dir's checkout), passed on as
