@@ -651,7 +651,13 @@ func (s *Server) handleSyncStateRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	status, err := s.tasks.Config.StateRepo.Sync(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		// Pull now's caller holds settings:write and acts on why the sync
+		// failed, and GET /api/state-repo already shows the same cycle's
+		// error to a settings:read caller as status.error. Withheld here,
+		// the button said only "an upstream service returned an error"
+		// while the panel under it stayed on the last good sync until the
+		// next background tick.
+		writeError(w, http.StatusBadGateway, apierror.Expose(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, normalizeStateRepoStatus(status))

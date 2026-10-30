@@ -1412,4 +1412,9 @@ type StateRepoSyncFailure struct {
 	// Repo names the repository the settings are not reaching, for the
 	// sentence ("not exported to grain/config since ...").
 	Repo string `json:"repo,omitempty"`
+	// External is set when Repo is an external config repository, which
+	// grain only reads from: what is failing there is configuration
+	// merged in that repository not reaching this deployment, not the
+	// UI's settings failing to be exported (UI settings are read-only).
+	External bool `json:"external,omitempty"`
 }
