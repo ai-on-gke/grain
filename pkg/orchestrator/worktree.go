@@ -347,6 +347,13 @@ func syncWorkTree(ctx context.Context, store *model.Store, client github.Client,
 			return nil
 		}
 	}
+	if prev == nil {
+		// An issue the importer filed a task for says nothing on GitHub
+		// until somebody approves that task (OriginOnlyUnapprovedImports).
+		if held, err := store.OriginOnlyUnapprovedImports(ctx, origin); err != nil || held {
+			return err
+		}
+	}
 	body, done, total, err := renderWorkTree(ctx, store, origin)
 	if err != nil || body == "" {
 		return err

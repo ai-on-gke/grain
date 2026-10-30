@@ -370,6 +370,7 @@ func (s *Server) routes() {
 	s.route("PUT /api/repos/{owner}/{name}/workflows", s.handleSetRepoWorkflows)
 	s.route("GET /api/repos/{owner}/{name}/lifecycle", s.handleGetRepoLifecycle)
 	s.route("POST /api/repos/{owner}/{name}/lifecycle/refresh", s.handleRefreshRepoLifecycle)
+	s.route("POST /api/repos/{owner}/{name}/import-issues", s.handleImportIssues)
 
 	s.route("GET /api/repos/{owner}/{name}/releases", s.handleListReleases)
 	s.route("POST /api/repos/{owner}/{name}/releases", s.handleCreateRelease)

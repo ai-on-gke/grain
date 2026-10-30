@@ -174,6 +174,7 @@ var routeScopes = map[string]APIScope{
 	"PUT /api/repos/{owner}/{name}/workflows":                              "repos:write",
 	"GET /api/repos/{owner}/{name}/lifecycle":                              "repos:read",
 	"POST /api/repos/{owner}/{name}/lifecycle/refresh":                     "repos:write",
+	"POST /api/repos/{owner}/{name}/import-issues":                         "tasks:write",
 	"GET /api/repos/{owner}/{name}/releases":                               "releases:read",
 	"POST /api/repos/{owner}/{name}/releases":                              "releases:write",
 	"GET /api/repos/{owner}/{name}/release-creation":                       "releases:read",

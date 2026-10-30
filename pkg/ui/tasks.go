@@ -344,8 +344,18 @@ type Task struct {
 	// (model.ReasonSuite, bwsalmon/agents#642) -- Scheduled's own badge
 	// treatment, so a pass of tasks that appeared with nobody filing
 	// them by hand reads as expected rather than as a mystery.
-	SuiteRun  bool       `json:"suiteRun,omitempty"`
-	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	SuiteRun bool `json:"suiteRun,omitempty"`
+	// Imported is true for a task the GitHub issue importer filed
+	// (model.ReasonImported): the row's "imported" chip, kept after the
+	// task is approved so an imported issue stays identifiable. Origin
+	// names the issue it came from.
+	Imported bool `json:"imported,omitempty"`
+	// AwaitingImportApproval is Imported while nobody has approved the
+	// task -- its explicit "imported" status, standing in for
+	// "proposed": the same Approve action takes it to the queue, and
+	// until then nothing dispatches it.
+	AwaitingImportApproval bool       `json:"awaitingImportApproval,omitempty"`
+	CreatedAt              *time.Time `json:"createdAt,omitempty"`
 	// StartedAt and EndedAt are model.TaskSpan on the wire: when this
 	// task's first attempt began, and when it stopped being work in
 	// progress (that type's own doc comment says which ending counts and
@@ -947,21 +957,24 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		Review:               t.Origin.Reason == model.ReasonReview,
 		Scheduled:            t.Origin.Reason == model.ReasonSchedule,
 		SuiteRun:             t.Origin.Reason == model.ReasonSuite,
-		CreatedAt:            t.CreatedAt,
-		StartedAt:            span.StartedAt,
-		EndedAt:              span.EndedAt,
-		ClosedAt:             span.ClosedAt,
-		PrMergedAt:           span.PrMergedAt,
-		PrClosedAt:           span.PrClosedAt,
-		DeferredUntil:        t.DeferredUntil,
-		Approved:             t.ApprovedAt != nil,
-		MergeQueueBlockedAt:  mergeQueueBlockedAt,
-		Repairing:            repairing,
-		MergeQueueState:      mergeQueue.State,
-		MergeQueueNote:       mergeQueue.Note,
-		MergeQueueStateAt:    mergeQueue.At,
-		MergeQueueStalledAt:  mergeQueue.StalledAt,
-		Stall:                stall,
+		Imported:             t.Origin.Reason == model.ReasonImported,
+		AwaitingImportApproval: t.Origin.Reason == model.ReasonImported && t.ApprovedAt == nil &&
+			state == model.StateProposed,
+		CreatedAt:           t.CreatedAt,
+		StartedAt:           span.StartedAt,
+		EndedAt:             span.EndedAt,
+		ClosedAt:            span.ClosedAt,
+		PrMergedAt:          span.PrMergedAt,
+		PrClosedAt:          span.PrClosedAt,
+		DeferredUntil:       t.DeferredUntil,
+		Approved:            t.ApprovedAt != nil,
+		MergeQueueBlockedAt: mergeQueueBlockedAt,
+		Repairing:           repairing,
+		MergeQueueState:     mergeQueue.State,
+		MergeQueueNote:      mergeQueue.Note,
+		MergeQueueStateAt:   mergeQueue.At,
+		MergeQueueStalledAt: mergeQueue.StalledAt,
+		Stall:               stall,
 	}
 	if activity != nil {
 		out.Activity, out.ActivityAt = activity.Note, activity.At

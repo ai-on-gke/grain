@@ -140,6 +140,7 @@ var routeDocs = map[string]string{
 	"PUT /api/repos/{owner}/{name}/unfixable-checks":                       "Set the checks on a repository that an agent cannot fix, so a failure of one does not hold a merge on the agent.",
 	"PUT /api/repos/{owner}/{name}/workflows":                              "Set a repository's grain CI workflows.",
 	"POST /api/repos/{owner}/{name}/lifecycle/refresh":                     "Re-read a repository's release lifecycle from the repository now.",
+	"POST /api/repos/{owner}/{name}/import-issues":                         "Import a repository's open GitHub issues as tasks now, as its issue importer would on its next poll: one task per issue not already imported, unapproved unless the repository's settings say approved.",
 	"GET /api/repos/{owner}/{name}/releases":                               "List a repository's releases.",
 	"POST /api/repos/{owner}/{name}/releases":                              "Create a release of a repository, by name.",
 	"DELETE /api/repos/{owner}/{name}/releases/{release}":                  "Delete a release.",
