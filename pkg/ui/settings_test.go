@@ -1787,6 +1787,19 @@ func TestK8sSettingsSourcesWarningsAndPendingRestart(t *testing.T) {
 	if slices.Contains(reset.PendingRestart, "k8sSandboxImage") {
 		t.Errorf("PendingRestart after reset still contains k8sSandboxImage: %v", reset.PendingRestart)
 	}
+	rawJSON, err := json.Marshal(reset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rawMap map[string]any
+	if err := json.Unmarshal(rawJSON, &rawMap); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"sandboxImage", "sandboxImageWarning", "sandboxImageCheck", "k8sSandboxImageWarning", "k8sGranuleImageWarning"} {
+		if _, ok := rawMap[key]; !ok {
+			t.Errorf("marshaled Settings after reset omitted %q; frontend state merge requires explicit empty/null key", key)
+		}
+	}
 }
 
 func TestCheckImageManifestHTTPServer(t *testing.T) {

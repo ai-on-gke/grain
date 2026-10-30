@@ -327,8 +327,8 @@ type Settings struct {
 	K8sGranuleImage        string   `json:"k8sGranuleImage"`
 	K8sGranuleImageDefault string   `json:"k8sGranuleImageDefault"`
 	DaemonBuildVersion     string   `json:"daemonBuildVersion,omitempty"`
-	K8sSandboxImageWarning string   `json:"k8sSandboxImageWarning,omitempty"`
-	K8sGranuleImageWarning string   `json:"k8sGranuleImageWarning,omitempty"`
+	K8sSandboxImageWarning string   `json:"k8sSandboxImageWarning"`
+	K8sGranuleImageWarning string   `json:"k8sGranuleImageWarning"`
 	K8sWorkspace           string   `json:"k8sWorkspace"`
 	K8sWorkspaceDefault    string   `json:"k8sWorkspaceDefault"`
 	K8sGitProxyHost        string   `json:"k8sGitProxyHost"`

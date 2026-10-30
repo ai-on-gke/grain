@@ -2512,8 +2512,8 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 		ReleaseSecrets: CiRepoReleaseSecrets(store),
 		DeployedImages: func() []string { return deployedImages(configCheckImage) },
 		SandboxImage: func() string {
-			if setter, ok := sandboxes.(orchestrator.SandboxImageSetter); ok {
-				if img := setter.CurrentImage(); img != "" {
+			if current, ok := sandboxes.(interface{ CurrentImage() string }); ok {
+				if img := current.CurrentImage(); img != "" {
 					return img
 				}
 			}

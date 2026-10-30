@@ -898,8 +898,8 @@ func (c Config) ChangesFrom(prev Config) []string {
 	note("actions-cache", prev.ActionsCacheEnabled, c.ActionsCacheEnabled)
 	note("k8s-namespace", prev.K8sNamespace, c.K8sNamespace)
 	note("k8s-kubectl", prev.K8sKubectl, c.K8sKubectl)
-	note("k8s-sandbox-image", firstNonEmpty(prev.K8sSandboxImage, prev.K8sImage), firstNonEmpty(c.K8sSandboxImage, c.K8sImage))
-	note("k8s-granule-image", prev.K8sGranuleImage, c.K8sGranuleImage)
+	note("k8s-sandbox-image", firstNonEmpty(prev.K8sSandboxImage, prev.K8sImage, DefaultK8sSandboxImage), firstNonEmpty(c.K8sSandboxImage, c.K8sImage, DefaultK8sSandboxImage))
+	note("k8s-granule-image", firstNonEmpty(prev.K8sGranuleImage, DefaultSandboxImage), firstNonEmpty(c.K8sGranuleImage, DefaultSandboxImage))
 	note("k8s-workspace", prev.K8sWorkspace, c.K8sWorkspace)
 	note("k8s-git-proxy-host", prev.K8sGitProxyHost, c.K8sGitProxyHost)
 	note("k8s-sandbox-service", prev.K8sSandboxService, c.K8sSandboxService)
@@ -1464,6 +1464,7 @@ func (c Config) ToModelConfig() model.Config {
 	if c.K8sGranuleImage != DefaultSandboxImage && c.K8sGranuleImage != model.DefaultSandboxImage {
 		mc.K8sGranuleImage = c.K8sGranuleImage
 	}
+	mc.SandboxImage = c.CustomSandboxImage
 	mc.SandboxImageMirror = c.SandboxImageMirror
 	if c.K8sWorkspace != model.DefaultK8sWorkspace {
 		mc.K8sWorkspace = c.K8sWorkspace
@@ -1515,9 +1516,6 @@ func (c Config) withLiveModelConfig(mc model.Config) Config {
 	live.GithubHost, live.GithubInsecureHTTP = c.GithubHost, c.GithubInsecureHTTP
 	live.K8sNamespace = c.K8sNamespace
 	live.K8sKubectl = c.K8sKubectl
-	live.K8sImage = c.K8sImage
-	live.K8sSandboxImage = c.K8sSandboxImage
-	live.K8sGranuleImage = c.K8sGranuleImage
 	live.K8sWorkspace = c.K8sWorkspace
 	live.K8sGitProxyHost = c.K8sGitProxyHost
 	live.K8sSandboxService = c.K8sSandboxService

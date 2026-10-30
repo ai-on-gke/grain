@@ -642,6 +642,11 @@ type Config struct {
 	// with a sandbox pool -- and the pane shows one line fewer, the same
 	// nil-means-unavailable contract Sandboxes above gives.
 	SandboxImage *SandboxImage
+	// SandboxImageFunc, when set, returns the current SandboxImage dynamically
+	// so live changes to model.Config.SandboxImage, k8s_granule_image,
+	// k8s_sandbox_image, or sandbox_image_mirror are reflected immediately in
+	// GET /api/sandboxes and sandbox guest publishing readings.
+	SandboxImageFunc func() *SandboxImage
 	// SandboxShapeIgnored says that the sandbox backend this deployment
 	// actually runs has no shape to apply, so the three deployment-wide
 	// sandbox-shape settings (Settings.SandboxCPUs and friends) are
