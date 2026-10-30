@@ -172,6 +172,52 @@ func TestPollMarksAnAbandonedCLAndReturnsATaskWithNoneLiveToAwaitingReply(t *tes
 	}
 }
 
+func TestPollSendsATaskWhoseOnlyCLIsEmptyOrDeletedToAwaitingReply(t *testing.T) {
+	ctx := context.Background()
+	store := openInternalStore(t)
+	p := &landingCLs{polled: map[string]change.Observation{
+		"cl/10": {Target: "cl/10", Status: change.StatusPending, Empty: true},
+		"cl/11": {Target: "cl/11", Status: change.StatusAbandoned}, // citc_cl_delete: state "deleted"
+		"cl/12": {Target: "cl/12", Status: change.StatusPending, Empty: true},
+	}}
+	registerLanding(t, p)
+	seedCLTask(t, ctx, store, "62", "cl/10")
+	seedCLTask(t, ctx, store, "63", "cl/11")
+	if err := store.PutTask(ctx, model.Task{ID: "64", Title: "t", Intent: model.IntentImplement,
+		Links: []model.Link{{Kind: model.LinkChangelist, Target: "cl/12"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "64-1", TaskID: "64", Attempt: 1, StartedAt: time.Now()}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := store.State(ctx, "64"); st != model.StateRunning {
+		t.Fatalf("task 64 state %s, want running", st)
+	}
+
+	PollChangesOnce(ctx, store)
+	for id, want := range map[string]string{"62": "cl/10 holds no files", "63": "cl/11 was abandoned or deleted."} {
+		if st, _ := store.State(ctx, id); st != model.StateAwaitingReply {
+			t.Fatalf("task %s state %s, want awaiting_reply", id, st)
+		}
+		task, _ := store.GetTask(ctx, id)
+		if live := change.LiveChanges(*task); len(live) != 0 {
+			t.Fatalf("task %s live = %v, want none", id, live)
+		}
+		if c := commentsOf(t, ctx, store, id); !strings.Contains(c, want) || !strings.Contains(c, "no live CL left") {
+			t.Fatalf("task %s comments %q, want %q", id, c, want)
+		}
+	}
+	// A run may still upload to the CL it is working on.
+	task, _ := store.GetTask(ctx, "64")
+	if live := change.LiveChanges(*task); len(live) != 1 {
+		t.Fatalf("running task live = %v, want cl/12 left alone", live)
+	}
+	PollChangesOnce(ctx, store)
+	if n := strings.Count(commentsOf(t, ctx, store, "62"), "holds no files"); n != 1 {
+		t.Fatalf("task 62 told %d times", n)
+	}
+}
+
 func TestAutoSyncFiresOncePerSnapshotNeverDuringARunAndNotAfterAFailure(t *testing.T) {
 	ctx := context.Background()
 	store := openInternalStore(t)

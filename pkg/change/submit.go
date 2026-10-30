@@ -307,10 +307,24 @@ func plural(n int, what string) string {
 	return fmt.Sprintf("%d %ss", n, what)
 }
 
-// RecordAbandoned marks task's CL target abandoned. A task left with no
-// live CL goes back to awaiting_reply (model.AwaitsAck reads a task with
-// no change link as waiting on a person), with a comment saying why.
+// RecordAbandoned marks task's CL target abandoned: abandoned or deleted
+// outside a Submit, by a person or by a run (citc_cl_delete). A task left
+// with no live CL goes back to awaiting_reply (model.AwaitsAck reads a
+// task with no change link as waiting on a person), with a comment saying
+// why.
 func RecordAbandoned(ctx context.Context, st Store, task model.Task, target string, now time.Time) error {
+	return recordDead(ctx, st, task, target, fmt.Sprintf("%s was abandoned or deleted.", target), now)
+}
+
+// RecordEmpty marks task's CL target abandoned because it holds no files
+// (Observation.Empty), which no Submit can land: an empty CL is no change
+// to wait on, so it counts as RecordAbandoned's does.
+func RecordEmpty(ctx context.Context, st Store, task model.Task, target string, now time.Time) error {
+	return recordDead(ctx, st, task, target,
+		fmt.Sprintf("%s holds no files, so there is nothing to submit; grain no longer counts it as this task's CL.", target), now)
+}
+
+func recordDead(ctx context.Context, st Store, task model.Task, target, why string, now time.Time) error {
 	if Settled(task, target) {
 		return nil
 	}
@@ -332,7 +346,7 @@ func RecordAbandoned(ctx context.Context, st Store, task model.Task, target stri
 	}); err != nil {
 		return fmt.Errorf("recording %s abandoned: %w", target, err)
 	}
-	body := fmt.Sprintf("%s was abandoned outside grain.", target)
+	body := why
 	if live == 0 {
 		body += " This task has no live CL left, so it is waiting on a person: reopen it with a comment to have a run upload a new CL, or close it."
 	}

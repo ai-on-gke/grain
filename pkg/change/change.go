@@ -99,6 +99,11 @@ type Observation struct {
 	// SnapshotAt is when the current snapshot was uploaded, which the
 	// stale-snapshot sync trigger reads (stage S6, §7).
 	SnapshotAt time.Time `json:"snapshot_at,omitempty"`
+	// Empty is a pending CL that holds no files: never uploaded to, or
+	// reverted to nothing. No Submit can land it, so outside a run the
+	// poll counts it as abandoned (change.RecordEmpty) rather than leave
+	// the task awaiting a Submit.
+	Empty bool `json:"empty,omitempty"`
 }
 
 // Thread is one review thread on a change.
