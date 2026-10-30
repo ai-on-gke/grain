@@ -255,6 +255,7 @@ var routeScopes = map[string]APIScope{
 	"GET /api/capability-policy":                                           "capabilities:read",
 	"PUT /api/capability-policy":                                           "capabilities:admin",
 	"GET /api/api-scope-sets":                                              "capabilities:read",
+	"GET /api/api-scope-sets/usage":                                        "capabilities:read",
 	"PUT /api/api-scope-sets":                                              "capabilities:admin",
 	"POST /api/api-scope-sets/delete":                                      "capabilities:admin",
 	"POST /api/capability-policy/preview":                                  "capabilities:read",

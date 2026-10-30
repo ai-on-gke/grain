@@ -203,6 +203,7 @@ var routeDocs = map[string]string{
 	"GET /api/capability-servers/gchat-usage":                              "Read each configured space's post counts on a gchat capability server.",
 	"PUT /api/capability-policy":                                           "Set the deployment's capability policy.",
 	"GET /api/api-scope-sets":                                              "List the agent API's scope sets, built-in and declared, with the scopes each resolves to.",
+	"GET /api/api-scope-sets/usage":                                        "List every open task, template, schedule and workflow job holding each API scope set.",
 	"PUT /api/api-scope-sets":                                              "Declare or replace one of the deployment's API scope sets (written to the config repository; grants it to nobody).",
 	"POST /api/api-scope-sets/delete":                                      "Remove one of the deployment's API scope sets.",
 	"POST /api/capability-policy/preview":                                  "Preview a capability policy without saving it: what it would allow and refuse.",

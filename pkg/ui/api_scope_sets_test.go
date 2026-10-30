@@ -93,3 +93,58 @@ func TestScopeSetsAreListedAndOfferedButNotGranted(t *testing.T) {
 		t.Error("a removed set is still in effect")
 	}
 }
+
+// Settings warns before removing a scope set by naming what holds it,
+// so GET /api/api-scope-sets/usage lists every grant of a set, @repo or
+// not (docs/test-runs/2026-10-28-unified-grants-scope-sets.md, O3). And
+// an @repo outside a repo-limited set's own repositories grants nothing,
+// so it is refused when granted rather than recorded silently (O1).
+func TestScopeSetUsageAndGrantsOutsideItsRepos(t *testing.T) {
+	client, _, ctx := testClient(t)
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+	if err := client.PutAPIScopeSet(ctx, model.APIScopeSet{Name: "walk-readers",
+		Scopes: []string{"tasks:read", "ci:read"}, Repos: []string{"acme/widgets"}}); err != nil {
+		t.Fatal(err)
+	}
+	created, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "Read the widgets"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = client.SetCapability(ctx, created.ID, "api:walk-readers@acme/gadgets", true)
+	if err == nil || !strings.Contains(err.Error(), "grants nothing") || !strings.Contains(err.Error(), "acme/widgets") {
+		t.Fatalf("granting walk-readers outside its repositories = %v, want it refused naming them", err)
+	}
+	for _, g := range []string{"api:walk-readers", "api:walk-readers@acme/widgets"} {
+		if err := client.SetCapability(ctx, created.ID, g, true); err != nil {
+			t.Fatalf("granting %s: %v", g, err)
+		}
+	}
+
+	usage, err := client.APIScopeSetUsage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var grants []string
+	for _, u := range usage {
+		switch u.Name {
+		case "walk-readers":
+			for _, h := range u.Holders {
+				if h.Kind != "task" || h.ID != created.ID {
+					t.Errorf("walk-readers held by %+v", h)
+				}
+				grants = append(grants, h.Grant)
+			}
+		case "grain/ci-read":
+			for _, h := range u.Holders {
+				if h.ID == created.ID {
+					t.Errorf("grain/ci-read counted the task's walk-readers grant %s", h.Grant)
+				}
+			}
+		}
+	}
+	slices.Sort(grants)
+	if want := []string{"api:walk-readers", "api:walk-readers@acme/widgets"}; !slices.Equal(grants, want) {
+		t.Errorf("walk-readers holders' grants = %v, want %v", grants, want)
+	}
+}

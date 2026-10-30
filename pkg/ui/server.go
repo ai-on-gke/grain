@@ -478,6 +478,7 @@ func (s *Server) routes() {
 	s.route("GET /api/capability-policy", s.handleGetCapabilityPolicy)
 	s.route("PUT /api/capability-policy", s.handleSetCapabilityPolicy)
 	s.route("GET /api/api-scope-sets", s.handleListAPIScopeSets)
+	s.route("GET /api/api-scope-sets/usage", s.handleAPIScopeSetUsage)
 	s.route("PUT /api/api-scope-sets", s.handlePutAPIScopeSet)
 	s.route("POST /api/api-scope-sets/delete", s.handleDeleteAPIScopeSet)
 	s.route("POST /api/capability-policy/preview", s.handlePreviewCapabilityPolicy)
