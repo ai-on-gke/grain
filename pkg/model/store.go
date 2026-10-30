@@ -4243,6 +4243,30 @@ type NamespaceScope struct {
 	MayReadDB         bool
 }
 
+// TaskCIRef is the repository task id works in and the branch its runs
+// push to, which is what grain CI's runs for it are recorded under:
+// what `grain ci list --task` and `grain pr status --task` look up.
+// found is false, with a nil error, for a task that does not exist.
+func (s *Store) TaskCIRef(ctx context.Context, id string) (repo, branch string, found bool, err error) {
+	id = strings.TrimSpace(strings.TrimPrefix(id, "#"))
+	if id == "" {
+		return "", "", false, nil
+	}
+	var owner, name, stored sql.NullString
+	err = s.db.QueryRowContext(ctx,
+		"SELECT `target_owner`, `target_name`, `branch` FROM `task` WHERE `id` = ?", id).Scan(&owner, &name, &stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("reading task %s: %w", id, err)
+	}
+	if owner.Valid && owner.String != "" {
+		repo = RepoFromStored(owner.String, name.String).String()
+	}
+	return repo, Task{ID: id, Branch: stored.String}.BranchName(), true, nil
+}
+
 // SandboxNamespaceScope returns the namespace access scope of the currently
 // live run on sandbox. live is false, with a nil error, when no run is live on
 // sandbox right now.
