@@ -3441,6 +3441,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                               setReleasesOpen(false);
                               setOpenRelease(null);
                             }}
+                            onOpenTab={(tab) => openRepoPage(openRepo, tab)}
                             onOpenTask={openTask}
                             showError={showError}
                           />
