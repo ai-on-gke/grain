@@ -322,7 +322,11 @@ func changeReview(taskID, target string) *ChangeReview {
 	p, _ := change.Lookup(model.LinkChangelist)
 	if _, ok := p.(change.Mailer); !ok {
 		out.MailReason = "this deployment cannot mail CLs"
-	} else if !obs.NeedsMailing {
+	} else if !obs.NeedsMailing && obs.ReviewState != change.ReviewStateDraft {
+		// A draft has not been mailed, whatever its provider said of
+		// NeedsMailing: mailing is what takes a CL out of draft
+		// (MailChange), and a draft refused Mail as "already mailed"
+		// told its reader something false (task 1860's cl/1010132826).
 		out.MailReason = "already mailed"
 	} else {
 		out.CanMail = true
