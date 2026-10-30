@@ -191,7 +191,7 @@ func bakedSourceArchive(src bakedSource) ([]byte, error) {
 // Never fatal: a deployment with no baked copy, or a placement that
 // fails, leaves a run without grain-src/ and a prompt saying why
 // (grainSourceSection), never a refused task.
-func placeGrainSource(ctx context.Context, task model.Task, srcDir, sandboxRoot string, placer SandboxPlacer, tools []mcp.Tool, out *checkout) {
+func placeGrainSource(ctx context.Context, task model.Task, srcDir, sandboxRoot string, placer SandboxPlacer, tools []mcp.Tool, out *checkout, reused ...bool) {
 	if !hasGrant(task, model.SelfDebugCapability) {
 		out.GrainSource = grainSourceAbsent
 		return
@@ -202,6 +202,10 @@ func placeGrainSource(ctx context.Context, task model.Task, srcDir, sandboxRoot 
 		return
 	}
 	out.GrainSourceRevision, out.GrainSourceCommits = src.Revision, src.Commits
+	if len(reused) > 0 && reused[0] && grainSourcePresent(ctx, sandboxRoot, placer, out) {
+		out.GrainSource = grainSourceReady
+		return
+	}
 	if err := placeBakedSource(ctx, src, sandboxRoot, placer, tools, out); err != nil {
 		out.GrainSource = grainSourceUnavailable
 		out.GrainSourceWhy = err.Error()
@@ -209,6 +213,23 @@ func placeGrainSource(ctx context.Context, task model.Task, srcDir, sandboxRoot 
 		return
 	}
 	out.GrainSource = grainSourceReady
+}
+
+func grainSourcePresent(ctx context.Context, sandboxRoot string, placer SandboxPlacer, out *checkout) bool {
+	if sandboxRoot != "" {
+		info, err := os.Stat(filepath.Join(sandboxRoot, GrainSourceDir))
+		return err == nil && info.IsDir()
+	}
+	commander, ok := placer.(SandboxCommander)
+	if !ok {
+		return false
+	}
+	dest := GrainSourceDir
+	if out.Root != "" {
+		dest = strings.TrimRight(out.Root, "/") + "/" + GrainSourceDir
+	}
+	_, _, code := commander.RunInSandbox(ctx, []string{"sh", "-c", fmt.Sprintf("[ -d '%s' ]", dest)}, "")
+	return code == 0
 }
 
 func placeBakedSource(ctx context.Context, src bakedSource, sandboxRoot string, placer SandboxPlacer, tools []mcp.Tool, out *checkout) error {

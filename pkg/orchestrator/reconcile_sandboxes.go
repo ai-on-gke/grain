@@ -301,6 +301,12 @@ func reconcileSandboxes(ctx context.Context, deps Deps, now time.Time) error {
 			haveLiveRuns = true
 			for _, r := range runs {
 				liveRunIDs[r.ID] = true
+				if r.Sandbox != "" {
+					liveRunIDs[r.Sandbox] = true
+				}
+			}
+			for id := range warmSessionSandboxIDs(deps.Store) {
+				liveRunIDs[id] = true
 			}
 		}
 	}

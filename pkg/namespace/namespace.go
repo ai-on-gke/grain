@@ -361,6 +361,17 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 	}, nil
 }
 
+// repoSegmentCount returns the number of slash-separated segments in a
+// repository name whose first segment is first: 3 for a host-qualified
+// host/owner/repo (whose host contains a dot or colon, as in
+// model.ParseRepo and gitproxy.ParsePath), and 2 for owner/repo.
+func repoSegmentCount(first string) int {
+	if strings.ContainsAny(first, ".:") {
+		return 3
+	}
+	return 2
+}
+
 func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*ResolvedNode, error) {
 	if !scope.PermitsCI("") {
 		return nil, RefuseCapability("ci://"+relPath, "grain-ci")
@@ -382,11 +393,11 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 		}, nil
 	}
 	parts := strings.Split(relPath, "/")
-	if len(parts) == 1 {
-		owner := parts[0]
+	repoSegs := repoSegmentCount(parts[0])
+	if len(parts) < repoSegs {
 		repos := s.permittedCIRepos(scope)
 		var entries []Entry
-		prefix := owner + "/"
+		prefix := relPath + "/"
 		for _, r := range repos {
 			if rest, ok := strings.CutPrefix(r, prefix); ok && rest != "" {
 				entries = append(entries, Entry{Name: rest, Type: "dir"})
@@ -404,11 +415,12 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 		}, nil
 	}
 
-	repo := parts[0] + "/" + parts[1]
+	repo := strings.Join(parts[:repoSegs], "/")
 	if !scope.PermitsCI(repo) {
 		return nil, fmt.Errorf("%w: ci://%s is outside this sandbox's CI read scope", ErrForbidden, repo)
 	}
-	if len(parts) == 2 {
+	rest := parts[repoSegs:]
+	if len(rest) == 0 {
 		page := s.CIStore.Find(ci.RunFilter{Repo: repo, Descending: true}, maxCIRunsListed)
 		entries := make([]Entry, 0, len(page.Runs))
 		for _, run := range page.Runs {
@@ -425,12 +437,12 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 		}, nil
 	}
 
-	runID := parts[2]
+	runID := rest[0]
 	run, ok := s.CIStore.Get(runID)
 	if !ok || run.Repo != repo {
 		return nil, fmt.Errorf("%w: ci://%s/%s", ErrNotFound, repo, runID)
 	}
-	if len(parts) == 3 {
+	if len(rest) == 1 {
 		entries := make([]Entry, 0, len(run.Jobs)+1)
 		seen := make(map[string]bool, len(run.Jobs))
 		hasArtifacts := false
@@ -457,16 +469,16 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 		}, nil
 	}
 
-	if parts[3] == "artifacts" {
-		return s.resolveCIArtifacts(run, relPath, parts[4:])
+	if rest[1] == "artifacts" {
+		return s.resolveCIArtifacts(run, relPath, rest[2:])
 	}
 
-	job, ok := findCIJob(run, parts[3])
+	job, ok := findCIJob(run, rest[1])
 	if !ok {
-		return nil, fmt.Errorf("%w: job %q in ci://%s/%s", ErrNotFound, parts[3], repo, runID)
+		return nil, fmt.Errorf("%w: job %q in ci://%s/%s", ErrNotFound, rest[1], repo, runID)
 	}
 
-	rem := parts[4:]
+	rem := rest[2:]
 	if len(rem) == 0 {
 		att, _ := job.LatestAttempt()
 		entries := attemptEntries(att, true)
@@ -498,7 +510,7 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 		}
 		att, ok := job.GetAttempt(attemptNum)
 		if !ok {
-			return nil, fmt.Errorf("%w: attempt %d in job %q", ErrNotFound, attemptNum, parts[3])
+			return nil, fmt.Errorf("%w: attempt %d in job %q", ErrNotFound, attemptNum, rest[1])
 		}
 		isLatest := attemptNum == len(attempts)
 		growingAttempt := isLatest && !run.Conclusion.Done() && !job.Conclusion.Done() && !att.Conclusion.Done()
