@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -413,5 +414,254 @@ func TestBackendRunnerContract(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+// greenWashingBackend reports every completed job and run as a success in
+// its (unsigned) run status, leaving the signed attestation alone: what a
+// buggy grit or anything between grain and grit could hand the runner.
+type greenWashingBackend struct {
+	gritapi.Backend
+}
+
+func (b greenWashingBackend) GetRun(ctx context.Context, id string) (gritapi.RunStatus, error) {
+	rs, err := b.Backend.GetRun(ctx, id)
+	if rs.Status == "completed" {
+		rs.Conclusion = "success"
+		for i := range rs.Jobs {
+			rs.Jobs[i].Conclusion = "success"
+		}
+	}
+	return rs, err
+}
+
+// TestBackendRunnerRecordsOnlyTheAttestedVerdict is the regression for the
+// 2026-10-29 walkthrough's F2: the runner verified the attestation's
+// signature and subject but recorded the conclusions from the unsigned run
+// status, so a status saying "success" over an attestation signing
+// "failure" was recorded green.
+func TestBackendRunnerRecordsOnlyTheAttestedVerdict(t *testing.T) {
+	for _, mode := range []string{"local", "remote"} {
+		t.Run(mode, func(t *testing.T) {
+			signer, err := attest.LoadOrCreateFileSigner(filepath.Join(t.TempDir(), "attest.key"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := newBackendTestEnv(t, mode, t.TempDir(), signer, "", func(ctx context.Context, jenv grit.JobExecEnv) (grit.JobExecResult, error) {
+				return grit.JobExecResult{Conclusion: "failure", Log: []byte("exit 1")}, nil
+			})
+			defer env.close()
+
+			tree, archive := buildTestTree(t, map[string]string{"a.txt": "a"})
+			var verified []Run
+			runner := NewBackendRunner(BackendRunnerConfig{
+				Backend:  greenWashingBackend{env.backend},
+				StateDir: t.TempDir(),
+				TreeResolver: func(ctx context.Context, req Request) (treeid.ID, []byte, error) {
+					return tree, archive, nil
+				},
+				OnVerdictVerified: func(run Run) { verified = append(verified, run) },
+			})
+			run, err := runner.Start(context.Background(), Request{
+				Repo:   "acme/widgets",
+				Ref:    "main",
+				Commit: "3333333333333333333333333333333333333333",
+				Event:  EventPush,
+				Jobs:   []string{"test"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := waitRunnerRunDone(t, runner, run.ID)
+			if done.Conclusion == ConclusionSuccess || !strings.Contains(done.Error, "attestation signs") {
+				t.Fatalf("done = (conclusion=%q, error=%q), want a refusal naming the attested conclusion", done.Conclusion, done.Error)
+			}
+			if len(verified) != 0 {
+				t.Fatalf("OnVerdictVerified called for a status the attestation contradicts: %+v", verified)
+			}
+			for _, j := range done.Jobs {
+				if j.Conclusion == ConclusionSuccess {
+					t.Errorf("job %s recorded success from an unverified status", j.JobID)
+				}
+			}
+		})
+	}
+}
+
+// TestCheckAttestedVerdict covers the binding's other refusals: a status
+// for another run, and a job set the attestation does not cover.
+func TestCheckAttestedVerdict(t *testing.T) {
+	stmt := &attest.Statement{Predicate: attest.RunPredicate{
+		Request: attest.RequestInfo{Run: "r-1"},
+		Jobs:    []attest.Job{{ID: "a", Result: attest.Result{Conclusion: "success"}}},
+	}}
+	ok := gritapi.RunStatus{ID: "r-1", Jobs: []gritapi.JobStatus{{ID: "a", Conclusion: "success"}}}
+	if err := checkAttestedVerdict(stmt, ok); err != nil {
+		t.Fatalf("matching status refused: %v", err)
+	}
+	for name, rs := range map[string]gritapi.RunStatus{
+		"other run":   {ID: "r-2", Jobs: ok.Jobs},
+		"extra job":   {ID: "r-1", Jobs: []gritapi.JobStatus{{ID: "a", Conclusion: "success"}, {ID: "b", Conclusion: "success"}}},
+		"renamed job": {ID: "r-1", Jobs: []gritapi.JobStatus{{ID: "b", Conclusion: "success"}}},
+		"conclusion":  {ID: "r-1", Jobs: []gritapi.JobStatus{{ID: "a", Conclusion: "failure"}}},
+	} {
+		if err := checkAttestedVerdict(stmt, rs); err == nil {
+			t.Errorf("%s: accepted %+v", name, rs)
+		}
+	}
+}
+
+// flakyAttestationBackend fails the first `fails` attestation fetches with
+// a 503, as grit does while it restarts behind a proxy.
+type flakyAttestationBackend struct {
+	gritapi.Backend
+	mu    sync.Mutex
+	fails int
+}
+
+func (b *flakyAttestationBackend) GetAttestation(ctx context.Context, id string) (*attest.Envelope, error) {
+	b.mu.Lock()
+	fail := b.fails > 0
+	if fail {
+		b.fails--
+	}
+	b.mu.Unlock()
+	if fail {
+		return nil, &gritapi.APIError{StatusCode: http.StatusServiceUnavailable, Code: "http_error"}
+	}
+	return b.Backend.GetAttestation(ctx, id)
+}
+
+// TestBackendRunnerRetriesATransientAttestationFetch is the regression for
+// the 2026-10-29 walkthrough's F3: a 503 fetching the attestation was
+// recorded as the run's verdict ("errored") for good.
+func TestBackendRunnerRetriesATransientAttestationFetch(t *testing.T) {
+	signer, err := attest.LoadOrCreateFileSigner(filepath.Join(t.TempDir(), "attest.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := newBackendTestEnv(t, "remote", t.TempDir(), signer, "", func(ctx context.Context, jenv grit.JobExecEnv) (grit.JobExecResult, error) {
+		return grit.JobExecResult{Conclusion: "success", Log: []byte("ok")}, nil
+	})
+	defer env.close()
+
+	tree, archive := buildTestTree(t, map[string]string{"a.txt": "a"})
+	backend := &flakyAttestationBackend{Backend: env.backend, fails: 3}
+	runner := NewBackendRunner(BackendRunnerConfig{
+		Backend:  backend,
+		StateDir: t.TempDir(),
+		TreeResolver: func(ctx context.Context, req Request) (treeid.ID, []byte, error) {
+			return tree, archive, nil
+		},
+	})
+	run, err := runner.Start(context.Background(), Request{
+		Repo: "acme/widgets", Ref: "main", Commit: "4444444444444444444444444444444444444444",
+		Event: EventPush, Jobs: []string{"go"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitRunnerRunDone(t, runner, run.ID)
+	if done.Conclusion != ConclusionSuccess || done.Error != "" {
+		t.Fatalf("done = (conclusion=%q, error=%q), want success once the attestation could be fetched", done.Conclusion, done.Error)
+	}
+}
+
+// swappableBackend lets a test replace the grit behind a runner, as an
+// operator does by wiping grit's data directory and restarting it.
+type swappableBackend struct {
+	gritapi.Backend
+}
+
+// TestBackendRunnerConcludesARunGritLost is the regression for the
+// 2026-10-29 walkthrough's F4: after grit's state was reset (new epoch,
+// 404 for the old run id) the resync skipped the run, which stayed
+// "running" in grain for ever.
+func TestBackendRunnerConcludesARunGritLost(t *testing.T) {
+	signer, err := attest.LoadOrCreateFileSigner(filepath.Join(t.TempDir(), "attest.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	defer close(release)
+	env1 := newBackendTestEnv(t, "remote", t.TempDir(), signer, "", func(ctx context.Context, jenv grit.JobExecEnv) (grit.JobExecResult, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return grit.JobExecResult{Conclusion: "success"}, nil
+	})
+	defer env1.close()
+	env2 := newBackendTestEnv(t, "remote", t.TempDir(), signer, "", nil)
+	defer env2.close()
+
+	tree, archive := buildTestTree(t, map[string]string{"a.txt": "a"})
+	backend := &swappableBackend{Backend: env1.backend}
+	runner := NewBackendRunner(BackendRunnerConfig{
+		Backend:  backend,
+		StateDir: t.TempDir(),
+		TreeResolver: func(ctx context.Context, req Request) (treeid.ID, []byte, error) {
+			return tree, archive, nil
+		},
+	})
+	ctx := context.Background()
+	run, err := runner.Start(ctx, Request{
+		Repo: "acme/widgets", Ref: "main", Commit: "5555555555555555555555555555555555555555",
+		Event: EventPush, Jobs: []string{"go"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.SyncOnce(ctx, 10*time.Millisecond, 100); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := runner.Get(run.ID); got.Conclusion.Done() {
+		t.Fatalf("run concluded before grit was reset: %+v", got)
+	}
+
+	backend.Backend = env2.backend
+	done := waitRunnerRunDone(t, runner, run.ID)
+	if done.Conclusion != ConclusionErrored || !strings.Contains(done.Error, "no longer has run") {
+		t.Fatalf("done = (conclusion=%q, error=%q), want errored naming the lost run", done.Conclusion, done.Error)
+	}
+}
+
+// TestBackendRunnerConcludesARunLostWhileNoDaemonWatched covers F4's other
+// half: grit was reset while grain was down, so the next daemon starts with
+// a run in flight that no event or epoch change will ever name again.
+func TestBackendRunnerConcludesARunLostWhileNoDaemonWatched(t *testing.T) {
+	signer, err := attest.LoadOrCreateFileSigner(filepath.Join(t.TempDir(), "attest.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	defer close(release)
+	env1 := newBackendTestEnv(t, "remote", t.TempDir(), signer, "", func(ctx context.Context, jenv grit.JobExecEnv) (grit.JobExecResult, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return grit.JobExecResult{Conclusion: "success"}, nil
+	})
+	defer env1.close()
+	env2 := newBackendTestEnv(t, "remote", t.TempDir(), signer, "", nil)
+	defer env2.close()
+
+	tree, archive := buildTestTree(t, map[string]string{"a.txt": "a"})
+	stateDir := t.TempDir()
+	resolver := func(ctx context.Context, req Request) (treeid.ID, []byte, error) { return tree, archive, nil }
+	runner1 := NewBackendRunner(BackendRunnerConfig{Backend: env1.backend, StateDir: stateDir, TreeResolver: resolver})
+	run, err := runner1.Start(context.Background(), Request{
+		Repo: "acme/widgets", Ref: "main", Commit: "6666666666666666666666666666666666666666",
+		Event: EventPush, Jobs: []string{"go"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner2 := NewBackendRunner(BackendRunnerConfig{Backend: env2.backend, StateDir: stateDir, TreeResolver: resolver})
+	done := waitRunnerRunDone(t, runner2, run.ID)
+	if done.Conclusion != ConclusionErrored || !strings.Contains(done.Error, "no longer has run") {
+		t.Fatalf("done = (conclusion=%q, error=%q), want errored naming the lost run", done.Conclusion, done.Error)
 	}
 }

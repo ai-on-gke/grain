@@ -522,18 +522,10 @@ A command print mode refuses *by name* is a command that exists and belongs to t
 
 ## What agy documents about itself
 
-The changelog ships *in* the binary, which makes it the closest thing to release notes there is: a key or a flag appearing here is the announcement of it.
+The changelog is the closest thing to release notes there is: a key or a flag appearing here is the announcement of it. It used to ship *in* the binary, but since 1.4.9 `agy changelog` fetches the vendor's current notes when it has a network and falls back to its own copy when it has none -- so a 1.4.9 binary online lists releases newer than itself. Those entries are cut here, so that the section describes the binary the image pins and does not change every time agy publishes a release.
 
 ``````console
 $ agy changelog
-1.4.10:
-· Improved streaming of agent replies: lines that scroll off the top of the screen are now scrolled into your terminal's scrollback instead of repainting the whole screen, and text wrapping writes whole runs of text at a time, so streaming writes about 70% fewer bytes to the terminal and stays much smoother over slow SSH connections.
-· Improved memory use shortly after startup: the CLI now returns about 100 MB of memory left over from startup to the operating system 15 seconds after the interactive UI opens; print and headless modes are unaffected.
-· Improved the after-compaction size shown in the compaction marker and in `/context` to also count what the summary carries into the next prompt, such as your earlier requests and artifact, subagent, and running-task snapshots, so it is closer to the real size; the `(N summary)` label still shows the summary alone.
-· Fixed subagents losing the task their parent agent gave them, and the parent's ID, after their context was compacted, including with `/compact`; a subagent's summary now keeps the parent agent's 10 most recent messages.
-· Fixed conversations with many or large images, such as screenshots or pasted images, being rejected for exceeding the model's request size limit: images are now capped at 2000 pixels per side and large PNGs are sent as JPEGs when that is much smaller, and an image saved as JPEG but labeled PNG, such as a pasted image or browser screenshot, is no longer rejected for a mismatched type.
-· Fixed the `/browser` subagent not receiving the current page's snapshot when the selected page belongs to an isolated browser context, such as a page opened with `isolatedContext` or attached from an Incognito window.
-
 1.4.9:
 · Added image pasting through your terminal's own paste shortcut, such as `Cmd+V` or `Ctrl+Shift+V` with only an image copied, and by dragging image files into the prompt, which attaches them instead of inserting their paths; image paste now also works over SSH with X11 or Wayland forwarding, and the CLI's paste key now says `No image or video found in the clipboard` when there is nothing to attach and names the clipboard tool to install, such as `wl-clipboard` on Wayland, when one is missing.
 · Improved the `/plugin` Discover tab to group marketplace plugins into the same sections as the Antigravity plugin marketplace instead of one flat list, listing a plugin under every section it belongs to.
@@ -831,6 +823,14 @@ $ agy changelog
 1.2.11:
 · Improved reasoning effort level for models with different support, selectable with `--effort` or from the effort gauge in `/effort` and `/model`.
 · Changed plugins placed directly in `~/.gemini/config/plugins` so that a plugin whose MCP server needs configuration variables now starts disabled until you enable it, matching plugins installed through `/plugin`.
+· Fixed Mermaid diagrams and LaTeX rendering as rows of garbled placeholder characters in WezTerm and the VS Code integrated terminal; these terminals are no longer assumed to support Kitty graphics and now show the ASCII fallback
+· Fixed copying text from the artifact viewer when `Copy on Select` is turned off in `/config`: the viewer no longer captures the mouse, so your terminal's own selection and copy shortcut work, and `Ctrl+C` goes back to interrupting or exiting
+· Fixed project custom agents in .agents/agents/ not being found or selectable in workspaces created in the Desktop App, in already-trusted workspaces, under execution with --agent, in headless (-p / --prompt) runs, and in the /agents panel.
+
+1.2.10:
+· Added `medium` verbosity mode to `/config`, between `high` and `low`, which groups related tool calls and thoughts into concise summaries (such as `Explored N files`) while keeping commands and responses visible; the Verbosity setting and each option now describe what they show
+· Improved Mermaid diagram and LaTeX rendering in the artifact viewer on Kitty-compatible terminals: artifacts are pre-rendered in the background so diagrams appear as soon as the viewer opens, images are uploaded once at a smaller size, and zooming with `Ctrl+=` / `Ctrl+-` no longer flickers between the old and new sizes
+· Improved the artifact viewer footer by combining the separate top and bottom hints into one `g/G top/bottom` entry, labeling `m` with the view it switches to (diagram, LaTeX, ASCII, or raw), and fixing hints that contain arrow symbols wrapping onto a new line too early
 ... [truncated at 65536 bytes by scripts/agy-surface.sh]
 ``````
 

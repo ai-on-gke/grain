@@ -248,6 +248,25 @@ agy_capture() {
   block "agy $*" "$agy_status" "$agy_output"
 }
 
+# through_version drops the changelog entries for releases newer than $1,
+# the binary's own version: an entry is a `1.4.11:` header line and
+# everything up to the next one. A $1 that is not a dotted version (agy
+# --version printed something else) drops nothing.
+through_version() {
+  awk -v want="$1" '
+    function newer(a, b,   x, y, n, i) {
+      n = split(a, x, "."); split(b, y, ".")
+      for (i = 1; i <= n || i in y; i++) {
+        if (x[i] + 0 != y[i] + 0) return x[i] + 0 > y[i] + 0
+      }
+      return 0
+    }
+    /^[0-9]+(\.[0-9]+)*:$/ {
+      skip = want ~ /^[0-9]+(\.[0-9]+)*$/ && newer(substr($0, 1, length($0) - 1), want)
+    }
+    !skip'
+}
+
 # fresh_home is a HOME agy has never seen, which is the only condition
 # under which several of these questions have an answer at all: what it
 # unpacks, what it discovers, and what it reads when nothing else is
@@ -386,6 +405,7 @@ printf '## The binary\n\n'
 
 agy_run "$(fresh_home)" --version
 block "agy --version" "$agy_status" "$agy_output"
+agy_version="$(printf '%s\n' "$agy_output" | head -n1)"
 
 # The install symlinks agy onto $PATH from wherever its installer put it
 # (the Dockerfile and live-agent.yml both *find* it rather than assuming a
@@ -492,8 +512,9 @@ printf 'A command print mode refuses *by name* is a command that exists and belo
 
 printf '## What agy documents about itself\n\n'
 
-printf 'The changelog ships *in* the binary, which makes it the closest thing to release notes there is: a key or a flag appearing here is the announcement of it.\n\n'
-agy_capture "$(fresh_home)" changelog
+printf 'The changelog is the closest thing to release notes there is: a key or a flag appearing here is the announcement of it. It used to ship *in* the binary, but since 1.4.9 `agy changelog` fetches the vendor'"'"'s current notes when it has a network and falls back to its own copy when it has none -- so a 1.4.9 binary online lists releases newer than itself. Those entries are cut here, so that the section describes the binary the image pins and does not change every time agy publishes a release.\n\n'
+agy_run "$(fresh_home)" changelog
+block "agy changelog" "$agy_status" "$(printf '%s\n' "$agy_output" | through_version "$agy_version")"
 
 printf 'The model catalog. Every name here carries a reasoning effort, but that is the catalog'"'"'s spelling rather than the only one agy accepts: `--model` also takes the bare family name (`gemini-3.1-pro`) as long as `--effort` names the other half, which is the pair `antigravity.DefaultModel` and `antigravity.DefaultEffort` ship as. So a deployment may put either form in Settings -- a name from this list, or a family name from it with an effort beside it -- and agy refuses the two mixed.\n\n'
 agy_capture "$(configured_home)" models

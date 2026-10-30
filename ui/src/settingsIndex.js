@@ -263,6 +263,13 @@ export const SETTINGS_INDEX = [
     keywords: ["internet", "egress"],
   },
   {
+    id: "sessionSandboxIdleTtl",
+    section: "sandboxes",
+    anchor: "backend-and-size",
+    label: "Session sandbox idle TTL",
+    keywords: ["chat", "director", "session", "warm", "idle", "ttl"],
+  },
+  {
     id: "sandboxOvercommit",
     section: "sandboxes",
     anchor: "sandbox-budget",
