@@ -714,4 +714,3 @@ func markToolCallsRelayed(result *agent.Result, name string) {
 		}
 	}
 }
-

@@ -3395,8 +3395,8 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			// than begin again. Empty for a first dispatch and for every
 			// framework whose sessions do not outlive a run, which
 			// leaves the dispatch exactly as it has always been.
-			ResumeSession:      resumeSession,
-			SandboxReused:      cfg.sandboxReused,
+			ResumeSession: resumeSession,
+			SandboxReused: cfg.sandboxReused,
 			// And the conversation this run is in, written down the
 			// moment the framework names it (earlySession).
 			OnResumableSession: early.record,

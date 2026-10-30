@@ -1864,5 +1864,3 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 		t.Errorf("in-process continuation (%v) was not faster than warm dispatch (%v)", inProc, warm)
 	}
 }
-
-
