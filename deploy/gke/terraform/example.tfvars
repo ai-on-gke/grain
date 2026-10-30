@@ -29,4 +29,7 @@ cloudsql_availability_type = "REGIONAL"
 domain                     = "grain.example.com"
 dns_managed_zone           = ""
 iap_allowed_members        = ["user:operator@example.com"]
-create_iap_brand           = false
+# Leave unset to use the Google-managed IAP OAuth client. Set both only for a
+# custom client created in the console (Google Auth Platform -> Clients).
+# iap_client_id     = "CHANGE-ME.apps.googleusercontent.com"
+# iap_client_secret = "CHANGE-ME"
