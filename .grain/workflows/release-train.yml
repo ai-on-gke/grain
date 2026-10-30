@@ -82,18 +82,20 @@ jobs:
       memory-mb: 16384
       disk-gb: 60
     steps:
-      # package-publish answers `release` and `workflow_dispatch` only,
-      # and has not opted in to grain's trusted schedules (unlike
-      # repo-write and release-gate-read; docs/ci-capabilities.md), so a
-      # cron run can reach this job with no registry credential. Without
-      # one the train would push an rc or -pending tag and then fail to
-      # publish its images, so it stops here instead, before touching any
-      # ref, and the run's review says why. A dispatch carries it.
+      # package-publish answers `release`, `workflow_dispatch` and, like
+      # repo-write and release-gate-read, the trusted schedule grain
+      # itself fires from this file's cron (docs/ci-capabilities.md). A
+      # run can still reach this job with no registry credential -- a
+      # repository whose ci_capabilities lack package-publish, or a
+      # caller's own `-event schedule` run. Without one the train would
+      # push an rc or -pending tag and then fail to publish its images,
+      # so it stops here instead, before touching any ref, and the run's
+      # review says why.
       - name: Require the publishing credential
         run: |
           if [ ! -s /home/debian/.package-publish-token ] && [ "${RELEASE_IMAGES:-}" != off ]; then
             echo "release-train: no package-publish credential reached this ${GRAIN_CI_EVENT:-} run, so the rc and pending images could not be published; nothing was tagged." >&2
-            echo "release-train: run it by dispatch (see the top of this file), which package-publish answers." >&2
+            echo "release-train: check that package-publish is in this repository's ci_capabilities (grain repo ci-capabilities), or run it by dispatch (see the top of this file)." >&2
             exit 1
           fi
       - name: Run the release train

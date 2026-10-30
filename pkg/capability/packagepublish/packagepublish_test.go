@@ -193,3 +193,19 @@ func TestPackagePublishUsesTheConfiguredRegistry(t *testing.T) {
 		t.Errorf("registry placed as %q, want the deployment's own", m.Placements[0].Content)
 	}
 }
+
+// The daily release train is a cron grain fires from main, and it
+// publishes the rc and pending images, so package-publish opts in to
+// trusted schedules alongside repo-write and release-gate-read. The
+// event gate itself still refuses `schedule`: an untrusted caller's
+// `-event schedule` run gets nothing.
+func TestTrustedScheduleIsAdmittedButAPlainScheduleIsNot(t *testing.T) {
+	var p model.CapabilityProvider = New(Config{})
+	trusted, ok := p.(model.TrustedScheduleCapability)
+	if !ok || !trusted.SupportsTrustedSchedule() {
+		t.Fatal("package-publish does not opt in to trusted schedules, so the release train's cron cannot publish")
+	}
+	if New(Config{}).SupportsCIEvent("schedule") {
+		t.Fatal("package-publish accepts any schedule run, including one a caller asked for")
+	}
+}
