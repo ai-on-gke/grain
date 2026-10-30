@@ -145,9 +145,7 @@ type CiGate struct{}
 func (CiGate) Start(ctx context.Context, req ci.Request) (ci.Run, error) {
 	service := LiveCI.Load()
 	if service == nil {
-		return ci.Run{}, errors.New(
-			"this daemon's CI service is not up yet: its reconcile loop has not started " +
-				"(or has failed -- check the daemon log)")
+		return ci.Run{}, ci.ErrNotUp
 	}
 	return service.Start(ctx, req)
 }
@@ -155,12 +153,17 @@ func (CiGate) Start(ctx context.Context, req ci.Request) (ci.Run, error) {
 func (CiGate) WorkflowOptions(ctx context.Context, req ci.Request) ([]ci.WorkflowOption, error) {
 	service := LiveCI.Load()
 	if service == nil {
-		return nil, errors.New(
-			"this daemon's CI service is not up yet: its reconcile loop has not started " +
-				"(or has failed -- check the daemon log)")
+		return nil, ci.ErrNotUp
 	}
 	return service.WorkflowOptions(ctx, req)
 }
+
+// Ready is ci.Readiness: whether runDaemon has published the service
+// yet. It is what lets a Get answering false before then be served as
+// "not up yet" (503) rather than "no such run" (404) -- the difference
+// between a wait that keeps going across a restart and one that is told
+// the run it was waiting on has been forgotten.
+func (CiGate) Ready() bool { return LiveCI.Load() != nil }
 
 func (CiGate) Get(id string) (ci.Run, bool) {
 	if service := LiveCI.Load(); service != nil {

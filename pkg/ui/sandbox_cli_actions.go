@@ -94,6 +94,13 @@ func (a SandboxCLIActions) CIRun(_ context.Context, id string) (ci.Run, bool) {
 	return a.Client.Config.CI.Get(id)
 }
 
+// Ready is ci.Readiness for the CI this answers from: false while the
+// daemon's CI service is not up yet, so a CIRun answering false then is
+// not read as a run that has been forgotten.
+func (a SandboxCLIActions) Ready() bool {
+	return a.Client.Config.CI != nil && ci.IsUp(a.Client.Config.CI)
+}
+
 func (a SandboxCLIActions) OpenPullRequest(ctx context.Context, taskID string) (gitproxy.CLIActionResult, error) {
 	status, err := a.Client.OpenPullRequest(ctx, taskID)
 	var landed interface{ NothingToPropose() bool }

@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -235,6 +236,12 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 		BaseCommit: baseCommit,
 	})
 	if err != nil {
+		// A daemon still starting is not a fact about the request: left
+		// as the ErrNotUp it is, so it is served as 503 and a waiting
+		// caller asks again rather than giving up on a 400.
+		if ci.IsNotUp(err) {
+			return ci.Run{}, err
+		}
 		// A fact about the request, as handleStartCIRun says of the same
 		// refusal: a 400 that carries Start's reason, rather than a 500
 		// whose reason apierror.Body keeps to the daemon's log.
@@ -1075,8 +1082,12 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		WithholdReleaseSecrets: withhold != "",
 		WithholdReason:         withhold,
 	})
+	if ci.IsNotUp(err) {
+		writeCINotUp(w)
+		return
+	}
 	if err != nil {
-		// Everything Start refuses is a fact about the request -- a
+		// Everything else Start refuses is a fact about the request -- a
 		// branch that does not resolve, a workflow file that does not
 		// parse, a repo with no name -- and the caller is who can fix
 		// it.
@@ -1325,6 +1336,13 @@ func ciRunFilterFrom(query url.Values, now time.Time) (ci.RunFilter, error) {
 	return filter, nil
 }
 
+// writeCINotUp answers a CI request this daemon cannot answer yet
+// (ci.ErrNotUp): 503, carrying the reason, which is a fixed sentence
+// and safe to show anyone.
+func writeCINotUp(w http.ResponseWriter) {
+	writeError(w, http.StatusServiceUnavailable, apierror.Public(ci.ErrNotUp.Error()))
+}
+
 func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {
 	runner := s.tasks.Config.CI
 	if runner == nil {
@@ -1333,6 +1351,13 @@ func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run, ok := runner.Get(r.PathValue("id"))
 	if !ok {
+		// A daemon whose CI service is not up yet remembers nothing, so
+		// its false is not "forgotten": saying so would end every wait
+		// that was polling this run across a restart (grain/task-1863).
+		if !ci.IsUp(runner) {
+			writeCINotUp(w)
+			return
+		}
 		writeError(w, http.StatusNotFound, fmt.Errorf("no CI run %q -- a run is remembered for a while and then forgotten", r.PathValue("id")))
 		return
 	}
