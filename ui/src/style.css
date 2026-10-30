@@ -2910,6 +2910,7 @@ html[data-phone="true"] .gantt-body {
    by hand -- so they share the treatment. */
 .chip-scheduled,
 .chip-suite,
+.chip-imported,
 .chip-stacked {
   background: var(--accent-subtle);
   color: var(--accent);
