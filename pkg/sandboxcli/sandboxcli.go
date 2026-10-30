@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cli
-
-// sandboxcli.go is the grain CLI as an agent's sandbox sees it
+// Package sandboxcli is the grain CLI as an agent's sandbox sees it
 // (docs/design/sandbox-first-agent-surface.md, §4): read commands that
 // reach this deployment over the sandbox's own scoped proxy
 // (http://127.0.0.1:9728, the same address and credential git uses), with
@@ -26,6 +24,7 @@ package cli
 // enforce, not this file's: a run without the grant a command needs gets
 // the proxy's refusal, which says which capability is missing in the
 // words of pkg/mcp's unknownToolMessage, printed as it came.
+package sandboxcli
 
 import (
 	"bufio"
@@ -51,6 +50,9 @@ const (
 	sandboxCLIEnv       = "GRAIN_SANDBOX_CLI"
 	sandboxProxyAddr    = "127.0.0.1:9728"
 	sandboxGitCredsPath = "/home/debian/.git-credentials"
+	// serverEnvVar is pkg/cli's own: a CLI pointed at a daemon is not in
+	// sandbox mode, wherever it runs.
+	serverEnvVar = "GRAIN_SERVER"
 )
 
 // sandboxEnv is what sandbox mode is detected from, injectable for tests.
@@ -171,6 +173,18 @@ func isSandboxCommand(args []string) bool {
 }
 
 func isHelpFlag(a string) bool { return a == "-h" || a == "--help" || a == "help" }
+
+// Main runs args as a sandbox command when this process is in a sandbox
+// and args name one; handled is false otherwise, and nothing is printed.
+// Both the full grain binary (pkg/cli) and the sandbox image's own
+// /usr/local/bin/grain (cmd/grain-sandbox) answer through it.
+func Main(args []string, stdout, stderr io.Writer) (code int, handled bool) {
+	return maybeRunSandboxCLI(args, osSandboxEnv(), stdout, stderr)
+}
+
+// IsCommand reports whether args name a command sandbox mode serves,
+// whether or not this process is in a sandbox to serve it.
+func IsCommand(args []string) bool { return isSandboxCommand(args) }
 
 // maybeRunSandboxCLI runs args as a sandbox command when this process is in
 // a sandbox and args name one; handled is false otherwise.

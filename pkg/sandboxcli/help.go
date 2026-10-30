@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cli
+package sandboxcli
 
 const sandboxHelpText = `grain -- sandbox CLI for this grain deployment (proxy: %s)
 
