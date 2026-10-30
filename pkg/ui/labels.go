@@ -324,6 +324,11 @@ type Config struct {
 	// deployment need not repeat itself on every task.
 	DefaultTarget *model.RepoRef
 	Capabilities  []Capability
+	// IssueImporter imports one repository's open GitHub issues now
+	// (Client.ImportIssues). nil -- a deployment with no GitHub client, or
+	// a test that wires none -- refuses the manual trigger; the periodic
+	// importer runs in the orchestrator either way.
+	IssueImporter IssueImporter
 	// RepoComparer supplies the read-only half of Grain's native pull
 	// request view. It talks in Git refs and unified diff rather than
 	// forge-specific pull-request numbers.

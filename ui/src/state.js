@@ -342,6 +342,11 @@ export function stateLabel(t) {
   if (isTaskMerged(t)) return "Merged";
   if (isTaskPaused(t)) return "Paused";
   if (isBlockedWaiting(t)) return "Blocked";
+  // A GitHub issue the importer filed, waiting for somebody to approve it
+  // (ui.Task.AwaitingImportApproval): its own status rather than
+  // "Proposed", so an operator can see at a glance which held tasks came
+  // in from GitHub. Approve takes it to the queue the same way.
+  if (t.awaitingImportApproval && t.state === "proposed") return "Imported";
   const label = STATE_LABELS[t.state] || t.state;
   if (!t.repairing && t.interactive && t.state === "running")
     return "Interactive";

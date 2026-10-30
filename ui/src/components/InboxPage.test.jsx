@@ -658,7 +658,8 @@ describe("InboxPage", () => {
   // (docs/design/durable-tasks.md, DT-5), but the rows they map keep
   // appearing until they are removed: a stalled merge shows both its
   // pipeline.merge-stalled notification and its "Unblock a merge" row.
-  it("keeps a stalled merge's row beside its merge-stalled notification", () => {
+  it("keeps a stalled merge's row beside its merge-stalled notification", async () => {
+    const user = userEvent.setup();
     const { container } = renderInbox({
       tasks: [
         task({
@@ -686,6 +687,8 @@ describe("InboxPage", () => {
         },
       ],
     });
+
+    await user.click(screen.getByRole("button", { name: /Notifications/i }));
 
     expect(screen.getAllByTestId("inbox-notification")).toHaveLength(1);
     expect(
@@ -1407,6 +1410,170 @@ describe("InboxPage", () => {
     expect(api).toHaveBeenCalledWith("/api/tasks/323/force-merge", {
       method: "POST",
       body: JSON.stringify({ reason: "unblock main" }),
+    });
+  });
+
+  describe("collapsible sections", () => {
+    const sampleNotifications = [
+      {
+        id: 1,
+        subject: "pipeline.merge-stalled:11",
+        family: "pipeline.merge-stalled",
+        severity: "warning",
+        title: "The merge of task 11 has stalled",
+        body: "acme/widgets#15 has been in `merging` past its patience.",
+        taskId: "11",
+        raisedAt: "2026-09-01T11:00:00Z",
+        raiseCount: 1,
+        actions: ["retry-merge", "open-task"],
+      },
+      {
+        id: 2,
+        subject: "agent.4:flaky-e2e",
+        severity: "info",
+        title: "The webkit e2e job looks flaky",
+        body: "It failed once and passed on retry.",
+        taskId: "4",
+        raisedAt: "2026-09-01T11:30:00Z",
+      },
+    ];
+
+    it("starts Notifications collapsed with its count visible and its items unrendered until expanded", async () => {
+      const user = userEvent.setup();
+      const { container } = renderInbox({
+        notifications: sampleNotifications,
+      });
+
+      const section = screen.getByTestId("inbox-notifications");
+      const toggle = within(section).getByRole("button", {
+        name: /Notifications/i,
+      });
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(toggle).toHaveAttribute(
+        "aria-controls",
+        "inbox-group-notifications",
+      );
+      expect(within(toggle).getByText("2")).toHaveClass("count");
+      expect(toggle.querySelector(".inbox-group-chevron")).toBeInTheDocument();
+      // The Inbox header count still includes the collapsed notifications.
+      expect(
+        container.querySelector(".content-header .count"),
+      ).toHaveTextContent("8");
+      expect(screen.queryAllByTestId("inbox-notification")).toHaveLength(0);
+      expect(
+        screen.queryByText("The merge of task 11 has stalled"),
+      ).not.toBeInTheDocument();
+
+      await user.click(toggle);
+
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getAllByTestId("inbox-notification")).toHaveLength(2);
+      expect(
+        screen.getByText("The merge of task 11 has stalled"),
+      ).toBeInTheDocument();
+    });
+
+    it("starts every other section expanded and shows its count when collapsed", async () => {
+      api.mockImplementation((path) =>
+        path === "/api/local-script-approvals"
+          ? Promise.resolve([
+              {
+                id: "ls-1",
+                taskId: "4",
+                script: "deploy",
+                args: ["--env=staging"],
+              },
+            ])
+          : Promise.resolve(null),
+      );
+      const user = userEvent.setup();
+      const { container } = renderInbox({
+        config: {
+          stateRepoSyncFailure: {
+            since: "2026-10-06T08:57:32Z",
+            error: "staterepo: sync error",
+            repo: "grain/config",
+          },
+        },
+      });
+
+      await screen.findByText("Local scripts waiting for approval");
+
+      const toggles = [
+        ...container.querySelectorAll(
+          ".inbox-group-header .inbox-group-toggle",
+        ),
+      ];
+      expect(toggles.length).toBeGreaterThanOrEqual(8);
+      for (const toggle of toggles) {
+        expect(toggle).toHaveAttribute("aria-expanded", "true");
+        const bodyId = toggle.getAttribute("aria-controls");
+        expect(bodyId).toBeTruthy();
+        expect(document.getElementById(bodyId)).not.toHaveAttribute("hidden");
+      }
+
+      const unblockSection = container.querySelector(
+        '[data-section-id="merge_blocked"]',
+      );
+      const unblockToggle = within(unblockSection).getByRole("button", {
+        name: /Unblock a merge/i,
+      });
+      expect(
+        screen.getByText("Add pagination to the tasks API"),
+      ).toBeInTheDocument();
+
+      await user.click(unblockToggle);
+
+      expect(unblockToggle).toHaveAttribute("aria-expanded", "false");
+      expect(within(unblockToggle).getByText("1")).toHaveClass("count");
+      expect(
+        screen.queryByText("Add pagination to the tasks API"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("persists each section's collapsed choice across a remount and supports keyboard toggling", async () => {
+      const user = userEvent.setup();
+      const { unmount } = renderInbox({
+        notifications: sampleNotifications,
+      });
+
+      const notifToggle = screen.getByRole("button", {
+        name: /Notifications/i,
+      });
+      const proposalToggle = screen.getByRole("button", {
+        name: /Approve a proposal/i,
+      });
+      expect(notifToggle).toHaveAttribute("aria-expanded", "false");
+      expect(proposalToggle).toHaveAttribute("aria-expanded", "true");
+
+      // Toggle from the keyboard (Enter / Space on the real button).
+      notifToggle.focus();
+      await user.keyboard("{Enter}");
+      expect(notifToggle).toHaveAttribute("aria-expanded", "true");
+
+      proposalToggle.focus();
+      await user.keyboard(" ");
+      expect(proposalToggle).toHaveAttribute("aria-expanded", "false");
+      expect(
+        screen.queryByText("Add a dark mode toggle"),
+      ).not.toBeInTheDocument();
+
+      unmount();
+
+      renderInbox({
+        notifications: sampleNotifications,
+      });
+
+      expect(
+        screen.getByRole("button", { name: /Notifications/i }),
+      ).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getAllByTestId("inbox-notification")).toHaveLength(2);
+      expect(
+        screen.getByRole("button", { name: /Approve a proposal/i }),
+      ).toHaveAttribute("aria-expanded", "false");
+      expect(
+        screen.queryByText("Add a dark mode toggle"),
+      ).not.toBeInTheDocument();
     });
   });
 });
