@@ -23,16 +23,16 @@ import (
 // TestLinksFollowTheRepoHost: a pull request on a repository off the
 // default host is linked on that host, never under github.com.
 func TestLinksFollowTheRepoHost(t *testing.T) {
-	pr := model.PullRequestRef{Repo: model.RepoRef{Host: "depot.code.corp.goog", Owner: "experimental", Name: "grain"}, Number: 26}
-	const want = "https://depot.code.corp.goog/experimental/grain/pull/26"
+	pr := model.PullRequestRef{Repo: model.RepoRef{Host: "git.example.com", Owner: "experimental", Name: "grain"}, Number: 26}
+	const want = "https://git.example.com/experimental/grain/pull/26"
 
-	if got, w := statusWithLink(model.TreeStatusPROpen, &pr), model.TreeStatusPROpen+" [depot.code.corp.goog/experimental/grain#26]("+want+")"; got != w {
+	if got, w := statusWithLink(model.TreeStatusPROpen, &pr), model.TreeStatusPROpen+" [git.example.com/experimental/grain#26]("+want+")"; got != w {
 		t.Errorf("statusWithLink = %q, want %q", got, w)
 	}
 	if got := reviewPage(pr, ""); got != want+"/files" {
 		t.Errorf("reviewPage = %q, want %q", got, want+"/files")
 	}
-	if got := repoWebURL("", pr.Repo); got != "https://depot.code.corp.goog/experimental/grain" {
+	if got := repoWebURL("", pr.Repo); got != "https://git.example.com/experimental/grain" {
 		t.Errorf("repoWebURL = %q", got)
 	}
 

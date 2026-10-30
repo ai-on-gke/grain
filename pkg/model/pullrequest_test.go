@@ -55,8 +55,8 @@ func TestPullRequestRefWebURLUsesTheRepoHost(t *testing.T) {
 	}{
 		{model.PullRequestRef{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, Number: 42},
 			"https://github.com/acme/widgets", "https://github.com/acme/widgets/pull/42"},
-		{model.PullRequestRef{Repo: model.RepoRef{Host: "depot.code.corp.goog", Owner: "experimental", Name: "grain"}, Number: 26},
-			"https://depot.code.corp.goog/experimental/grain", "https://depot.code.corp.goog/experimental/grain/pull/26"},
+		{model.PullRequestRef{Repo: model.RepoRef{Host: "git.example.com", Owner: "experimental", Name: "grain"}, Number: 26},
+			"https://git.example.com/experimental/grain", "https://git.example.com/experimental/grain/pull/26"},
 	} {
 		if got := tc.ref.Repo.WebURL(); got != tc.repo {
 			t.Errorf("%s: Repo.WebURL() = %q, want %q", tc.ref, got, tc.repo)

@@ -425,8 +425,8 @@ describe("pullRequestUrl", () => {
 
 describe("pullRequestUrl on another git host", () => {
   it("links a host-qualified repo's pull request on that host", () => {
-    expect(pullRequestUrl("depot.code.corp.goog/experimental/grain#26")).toBe(
-      "https://depot.code.corp.goog/experimental/grain/pull/26",
+    expect(pullRequestUrl("git.example.com/experimental/grain#26")).toBe(
+      "https://git.example.com/experimental/grain/pull/26",
     );
   });
 });
@@ -436,8 +436,8 @@ describe("issueUrl", () => {
     expect(issueUrl("acme/widgets#7")).toBe(
       "https://github.com/acme/widgets/issues/7",
     );
-    expect(issueUrl("depot.code.corp.goog/experimental/grain#26")).toBe(
-      "https://depot.code.corp.goog/experimental/grain/issues/26",
+    expect(issueUrl("git.example.com/experimental/grain#26")).toBe(
+      "https://git.example.com/experimental/grain/issues/26",
     );
   });
 });
