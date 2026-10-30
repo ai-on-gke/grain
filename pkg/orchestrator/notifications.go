@@ -27,9 +27,7 @@ import (
 // (docs/design/durable-tasks.md, DT-5): every open notification with a
 // clears_when is checked, and cleared ("condition") once it holds --
 // a task closed or merged, a base branch's latest grain CI verdict
-// green, or its ttl passed. An open warning or critical one the director
-// has not been given yet (no director when it was raised, or a delivery
-// that failed) is delivered again here.
+// green, or its ttl passed.
 //
 // It is also where the standing pipeline conditions are raised and
 // cleared (pipelinenotifications.go, stewardarms.go): a base branch
@@ -57,9 +55,8 @@ func reconcileNotifications(ctx context.Context, deps Deps, now time.Time) error
 
 // ClearMetNotifications is reconcileNotifications' sweep of the open
 // notifications on store: each whose clears_when holds now is cleared
-// ("condition"), and an open warning or critical one the director has
-// not been given yet is delivered again. It needs nothing but the store,
-// which is what lets `grain demo -notifications` run it on its own.
+// ("condition"). It needs nothing but the store, which is what lets
+// `grain demo -notifications` run it on its own.
 func ClearMetNotifications(ctx context.Context, store *model.Store, now time.Time) error {
 	open, err := store.ListNotifications(ctx, model.NotificationFilter{Open: true, Limit: 1000})
 	if err != nil {
@@ -77,11 +74,6 @@ func ClearMetNotifications(ctx context.Context, store *model.Store, now time.Tim
 					return fmt.Errorf("clearing notification %d: %w", n.ID, err)
 				}
 				continue
-			}
-		}
-		if n.Delivered.Director == 0 && n.Severity.Rank() >= model.NotificationWarning.Rank() {
-			if _, err := store.DeliverNotificationToDirector(ctx, n, now); err != nil {
-				log.Printf("grain: notification %d: delivering to the director: %v", n.ID, err)
 			}
 		}
 	}

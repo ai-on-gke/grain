@@ -17,9 +17,78 @@ package model_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
+
+// DeliverNotificationToDirector is a no-op so warning and critical
+// notifications never post into or wake the director console session, while
+// WakeNotificationSubscribers still wakes standing tasks subscribed to the
+// notification's family.
+func TestDeliverNotificationToDirectorIsNoOpAndSubscribersStillWake(t *testing.T) {
+	t.Parallel()
+	store, ctx := open(t)
+	now := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+
+	directorID, err := model.FileConsoleSessionTask(ctx, store, model.DefaultConsoleSessions()[0], model.FileConsoleSessionOptions{
+		Now: now,
+	})
+	if err != nil {
+		t.Fatalf("FileConsoleSessionTask: %v", err)
+	}
+	initialComments, err := store.Comments(ctx, directorID)
+	if err != nil {
+		t.Fatalf("Comments(director): %v", err)
+	}
+
+	sched := pipelineStewardSchedule(t, ctx, store)
+	firing, err := store.FireSchedule(ctx, sched, now, time.UTC, model.RepoRef{})
+	if err != nil {
+		t.Fatalf("FireSchedule: %v", err)
+	}
+	stewardID := firing.TaskID
+	done := now.Add(time.Minute)
+	if err := store.ObserveField(ctx, stewardID, done, func(o *model.Observation) {
+		o.CompletedAt = &done
+	}); err != nil {
+		t.Fatalf("ObserveField(steward): %v", err)
+	}
+
+	raised, err := store.RaiseNotification(ctx, model.Notification{
+		Subject:  "pipeline.base-red:acme/widgets@main",
+		Severity: model.NotificationCritical,
+		Title:    "acme/widgets main is red",
+		Body:     "unit test failed",
+		RaisedBy: "automation:base-branch-ci",
+		RaisedAt: done,
+	})
+	if err != nil {
+		t.Fatalf("RaiseNotification: %v", err)
+	}
+	delivered, err := store.DeliverNotificationToDirector(ctx, raised.Notification, done)
+	if err != nil || delivered {
+		t.Fatalf("DeliverNotificationToDirector = %v, %v; want false, nil", delivered, err)
+	}
+	afterComments, err := store.Comments(ctx, directorID)
+	if err != nil {
+		t.Fatalf("Comments(director): %v", err)
+	}
+	if len(afterComments) != len(initialComments) {
+		t.Errorf("director comments = %+v, want unchanged (%d)", afterComments, len(initialComments))
+	}
+	if st, err := store.State(ctx, directorID); err != nil || st != model.StateAwaitingReply {
+		t.Errorf("director state = %q (%v), want %q", st, err, model.StateAwaitingReply)
+	}
+
+	woke, err := store.WakeNotificationSubscribers(ctx, raised.Notification, done.Add(time.Second))
+	if err != nil {
+		t.Fatalf("WakeNotificationSubscribers: %v", err)
+	}
+	if len(woke) != 1 || woke[0] != stewardID {
+		t.Errorf("WakeNotificationSubscribers woke %v, want [%s]", woke, stewardID)
+	}
+}
 
 // The director's notification line is grain-authored, but a run wrote
 // its title and body (notify_operator): it names the raiser so a run's
