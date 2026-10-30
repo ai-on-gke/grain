@@ -1908,13 +1908,25 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.K8sWorkspace = strings.TrimSpace(*req.K8sWorkspace)
 	}
 	if req.K8sGitProxyHost != nil {
-		cfg.K8sGitProxyHost = strings.TrimSpace(*req.K8sGitProxyHost)
+		host := strings.TrimSpace(*req.K8sGitProxyHost)
+		if host != "" && !k8sAddress.MatchString(host) {
+			return model.Config{}, validationErrorf("k8sGitProxyHost %q is not a host name or IP address", host)
+		}
+		cfg.K8sGitProxyHost = host
 	}
 	if req.K8sSandboxService != nil {
-		cfg.K8sSandboxService = strings.TrimSpace(*req.K8sSandboxService)
+		name, err := k8sObjectName("k8sSandboxService", *req.K8sSandboxService, k8sLabelName, "Service")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sSandboxService = name
 	}
 	if req.K8sServiceAccount != nil {
-		cfg.K8sServiceAccount = strings.TrimSpace(*req.K8sServiceAccount)
+		name, err := k8sObjectName("k8sServiceAccount", *req.K8sServiceAccount, k8sSubdomainName, "ServiceAccount")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sServiceAccount = name
 	}
 	if req.K8sNodeSelector != nil {
 		selectors := make([]string, 0, len(*req.K8sNodeSelector))
@@ -1940,10 +1952,18 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.K8sNetworkPolicy = *req.K8sNetworkPolicy
 	}
 	if req.K8sDeployment != nil {
-		cfg.K8sDeployment = strings.TrimSpace(*req.K8sDeployment)
+		name, err := k8sObjectName("k8sDeployment", *req.K8sDeployment, k8sSubdomainName, "Deployment")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sDeployment = name
 	}
 	if req.K8sContainer != nil {
-		cfg.K8sContainer = strings.TrimSpace(*req.K8sContainer)
+		name, err := k8sObjectName("k8sContainer", *req.K8sContainer, k8sLabelName, "container")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sContainer = name
 	}
 	if req.K8sPriorityClassInteractive != nil {
 		name, err := k8sPriorityClassName("k8sPriorityClassInteractive", *req.K8sPriorityClassInteractive)
@@ -2429,6 +2449,26 @@ var (
 	k8sLabelName     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 	k8sSubdomainName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
+
+// k8sAddress is what the git proxy host a sandbox pod is handed may be:
+// a host name or an IP address, with no scheme, path or space in it.
+var k8sAddress = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.:-]*[A-Za-z0-9])?$`)
+
+// k8sObjectName trims a setting naming a Kubernetes object of kind and
+// refuses a name re says the API server never accepts (the 2026-10-30
+// walkthrough saved the ServiceAccount "Bad SA"). Empty is valid: the
+// setting's default or none applies.
+func k8sObjectName(key, raw string, re *regexp.Regexp, kind string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name != "" && (len(name) > 253 || !re.MatchString(name)) {
+		chars := "lowercase letters, digits and '-'"
+		if re == k8sSubdomainName {
+			chars = "lowercase letters, digits, '-' and '.'"
+		}
+		return "", validationErrorf("%s %q is not a Kubernetes %s name: %s, starting and ending with a letter or digit", key, name, kind, chars)
+	}
+	return name, nil
+}
 
 // k8sPriorityClassName trims a priority class setting and refuses a
 // name Kubernetes could never accept. Empty is valid: it sets none.
