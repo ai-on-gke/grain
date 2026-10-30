@@ -634,11 +634,6 @@ func reposWantingGitHubWorkflowRunPoll(ctx context.Context, store *model.Store) 
 			add(row.Repo)
 		}
 	}
-	for _, raw := range allowed {
-		if r, err := model.ParseRepo(raw); err == nil {
-			add(r)
-		}
-	}
 	return out, nil
 }
 
