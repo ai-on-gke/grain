@@ -863,6 +863,15 @@ export function MergesSection({ report }) {
     return null;
   }
   const buckets = (merges.buckets || []).map((b) => b.landed);
+  // Landings split by forge (a pull request is "github", a CL its
+  // provider's name), shown once anything landed somewhere other than a
+  // pull request: a GitHub-only deployment has nothing to split.
+  const byForge = merges.landedByForge || {};
+  const forges = Object.keys(byForge).some((f) => f !== "github")
+    ? Object.entries(byForge).sort(
+        (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+      )
+    : [];
   return (
     <>
       <Typography
@@ -897,6 +906,21 @@ export function MergesSection({ report }) {
           <Trend label="Landed over window" data={buckets} color="#2e7d32" />
         )}
       </Box>
+      {forges.length > 0 && (
+        <Box
+          data-testid="merges-by-forge"
+          sx={{ display: "flex", flexWrap: "wrap", gap: 1, mb: 2 }}
+        >
+          {forges.map(([forge, n]) => (
+            <Chip
+              key={forge}
+              size="small"
+              variant="outlined"
+              label={`${forge}: ${n} landed`}
+            />
+          ))}
+        </Box>
+      )}
 
       {merges.batches?.batches > 0 && (
         <>
