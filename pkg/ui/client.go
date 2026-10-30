@@ -1127,9 +1127,9 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	detail.Parked = detail.Blocked && streak != nil && streak.LastOutcome == model.ParkedOutcome
 	if streak != nil && streak.Count > 0 && !completedOrClosed {
 		detail.FailedAttempts = streak.Count
-		lastFailureAt := streak.LastFinishedAt
+		lastFailureAt := streak.LastFailureAt
 		detail.LastFailureAt = &lastFailureAt
-		detail.LastFailureReason = streak.LastDetail
+		detail.LastFailureReason = streak.LastFailureDetail
 	}
 	// One query for every attempt's prompt size rather than one per
 	// attempt, and sizes rather than the prompts themselves: a task with
