@@ -270,3 +270,58 @@ func TestReviewTaskThreadsAreResolvedWhenOwnerRunKeepsAsIsWithoutPushing(t *test
 		t.Fatal("expected PR to merge after keep-as-is run resolved the relayed review thread")
 	}
 }
+
+// A person who replies inside a thread grain's review relay opened has
+// joined the conversation, and it is theirs to resolve: neither the merge
+// queue nor the owner's decision having been recorded resolves it, and the
+// merge waits naming them.
+func TestGrainRelayedThreadAPersonRepliedInIsNeverAutoResolved(t *testing.T) {
+	t.Parallel()
+	store, ctx, sim, client, reviewed, review := reviewedAndReviewing(t)
+	sim.RequireConversationResolution = true
+
+	findingResult := toolResult(
+		reviewFinding("Consider renaming this helper.", "pkg/thing/thing.go", 12),
+	)
+	if err := orchestrator.ProcessResult(ctx, store, client, review, findingResult, review.ID+"-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult (review): %v", err)
+	}
+	relayed := model.RelayedReviewThreadsOf(reloaded(t, ctx, store, reviewed.ID))
+	if len(relayed) != 1 {
+		t.Fatalf("RelayedReviewThreadsOf = %+v, want 1", relayed)
+	}
+	threadID := relayed[0].ThreadID
+
+	prNum := sim.PullRequests[0].Number
+	sim.ReviewComments[prNum] = append(sim.ReviewComments[prNum], github.ReviewComment{
+		ID: 9901, InReplyTo: relayed[0].CommentID, User: "alice",
+		Body: "I disagree -- the name is load-bearing elsewhere.",
+	})
+
+	if err := store.UpdateTask(ctx, reviewed.ID, func(tk *model.Task) error {
+		tk.AutoMerge = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	say(t, ctx, store, reviewed.ID, owner, "Keep as is.", baseTime.Add(time.Minute))
+	if err := orchestrator.SyncReviewQuestions(ctx, store, baseTime.Add(2*time.Minute)); err != nil {
+		t.Fatalf("SyncReviewQuestions: %v", err)
+	}
+
+	markMergeable(sim)
+	_ = orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(3*time.Minute))
+	if sim.ResolvedThreads[threadID] {
+		t.Fatalf("thread %s that alice replied in must not be auto-resolved", threadID)
+	}
+	if sim.PullRequests[0].Merged {
+		t.Fatal("PR must not merge while a thread a person replied in is unresolved")
+	}
+	obs, err := store.GetObservation(ctx, reviewed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "unresolved review conversations by alice"; !strings.Contains(obs.MergeQueueNote, want) {
+		t.Errorf("MergeQueueNote = %q, want %q", obs.MergeQueueNote, want)
+	}
+}
