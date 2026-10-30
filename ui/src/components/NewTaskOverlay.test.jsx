@@ -116,7 +116,6 @@ describe("NewTaskOverlay", () => {
         nothingNeededAction: "close",
         promptExtension: "",
         reviewTemplateId: "",
-        capabilities: [],
         dependsOn: [],
         reads: [],
         writes: [],

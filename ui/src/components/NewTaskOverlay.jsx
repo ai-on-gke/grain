@@ -15,7 +15,7 @@
 import { isApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import GrantChip from "./GrantChip.jsx";
-import { localGrantHandlers } from "./capabilityMethods.js";
+import { checkGrants, localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -326,6 +326,54 @@ export default function NewTaskOverlay({
   // failure a re-seed can cause, and it would put a capability on a task
   // that whoever filed it had already said no to.
   const capabilitiesEdited = useRef(Boolean(draft?.capabilitiesEdited));
+  // catalogueRefusals is, per grant held above, why
+  // settings/capabilities.yml refuses it to the task this form would
+  // file (POST /api/capability-grants/check with a subject): a default
+  // restricted to other repos, say, on a task with No repo. Each is
+  // marked where it is ticked, before Create rather than as the 400
+  // filing would answer. catalogueSubject is that task's repo -- "" for
+  // none -- and null while Repos holds nothing the server could judge
+  // (blank, or an Other… name still being typed).
+  const policyTarget = noRepo
+    ? ""
+    : (repo || "").trim() || config?.defaultTarget || "";
+  const catalogueSubject = noRepo
+    ? ""
+    : /^[^/\s]+\/[^/\s]+$/.test(policyTarget)
+      ? policyTarget
+      : null;
+  const [catalogueRefusals, setCatalogueRefusals] = useState({});
+  const grantsKey = capabilities.join("\n");
+  useEffect(() => {
+    const none = (prev) => (Object.keys(prev).length ? {} : prev);
+    if (catalogueSubject === null || grantsKey === "") {
+      setCatalogueRefusals(none);
+      return undefined;
+    }
+    let current = true;
+    Promise.resolve()
+      .then(() =>
+        checkGrants(
+          grantsKey.split("\n").map((grant) => ({ grant })),
+          { repo: catalogueSubject },
+        ),
+      )
+      .then((res) => {
+        if (!current || !Array.isArray(res)) return;
+        const out = {};
+        res.forEach((r) => {
+          if (r && r.catalogueRefusal) out[r.grant] = r.catalogueRefusal;
+        });
+        setCatalogueRefusals(out);
+      })
+      .catch(() => {
+        if (current) setCatalogueRefusals(none);
+      });
+    return () => {
+      current = false;
+    };
+  }, [grantsKey, catalogueSubject]);
+  const refusedGrants = capabilities.filter((g) => catalogueRefusals[g]);
   // attachments is File objects, not yet read -- AttachmentPicker's own
   // doc comment on why that read is deferred to submit.
   const [attachments, setAttachments] = useState([]);
@@ -755,7 +803,16 @@ export default function NewTaskOverlay({
       // "" is no review at all, which is what most tasks want and what
       // the picker below starts on (model.Task.ReviewTemplateID).
       reviewTemplateId: (templates || []).length === 0 ? "" : reviewTemplateId,
-      capabilities,
+      // Named only once somebody has changed the picker. Until then
+      // what it shows is this form's copy of the defaults, and the
+      // server's own are what the task gets: it applies them for the
+      // target it files the task against and drops any default the
+      // capability catalogue refuses there (catalogueFilingGrants),
+      // where a list naming the same ids is somebody asking for them,
+      // and refused. A No repo task under a gcp-key restricted to one
+      // repo was refused that way, with nothing on the form to untick
+      // the reason from (2026-10-29 test run, Bug 3).
+      ...(capabilitiesEdited.current ? { capabilities } : {}),
       // Every field the form rendered, blanks included: the server
       // drops the empty ones (model.NormalizeCustomFieldValues), so
       // what is filed is exactly what was filled in. Left out of the
@@ -1204,6 +1261,15 @@ export default function NewTaskOverlay({
                     grant={id}
                     config={config}
                     tabIndex={-1}
+                    {...(catalogueRefusals[id]
+                      ? {
+                          note: catalogueRefusals[id],
+                          color: "warning",
+                          variant: "outlined",
+                          ariaSuffix: " (refused here)",
+                          "data-catalogue-refused": "true",
+                        }
+                      : {})}
                   />
                 ))}
               </Box>
@@ -1213,11 +1279,17 @@ export default function NewTaskOverlay({
               <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
             )}
             {capabilityOptions.map((c) => {
-              const unavailable = capabilityUnavailableHint(c);
+              const refused = catalogueRefusals[c.id] || "";
+              const unavailable = refused || capabilityUnavailableHint(c);
               return (
                 <MenuItem
                   key={c.id}
                   value={c.id}
+                  // One the catalogue refuses here is not offered, but
+                  // one already ticked stays enabled: its own row is
+                  // the only way to untick it.
+                  disabled={Boolean(refused) && !capabilityIds.includes(c.id)}
+                  data-catalogue-refused={refused ? "true" : undefined}
                   title={
                     unavailable
                       ? `${c.description}\n\n${unavailable}`
@@ -1243,6 +1315,16 @@ export default function NewTaskOverlay({
               deployment&apos;s (Settings &gt; Tasks), plus anything the repo
               itself adds (Repos &gt; Capabilities). Untick any this task should
               not have.
+            </FormHelperText>
+          )}
+          {refusedGrants.length > 0 && (
+            <FormHelperText
+              data-testid="new-task-catalogue-refused"
+              sx={{ color: "warning.main" }}
+            >
+              {capabilitiesEdited.current
+                ? `settings/capabilities.yml refuses ${refusedGrants.join(", ")} on ${noRepo ? "a task with no repo" : policyTarget}: untick ${refusedGrants.length === 1 ? "it" : "them"}, or the task will not be filed.`
+                : `settings/capabilities.yml refuses ${refusedGrants.join(", ")} on ${noRepo ? "a task with no repo" : policyTarget}, so ${refusedGrants.length === 1 ? "that default is" : "those defaults are"} left off this task.`}
             </FormHelperText>
           )}
           <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
