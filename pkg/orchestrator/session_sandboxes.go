@@ -36,7 +36,12 @@ type warmSessionSandbox struct {
 	SandboxID string
 	// Key is sessionSandboxKey for the run that built the sandbox: a
 	// later turn reuses it only under the same key.
-	Key         string
+	Key string
+	// Grants is sessionGrantsKey for the task as the run that built the
+	// sandbox saw it: reconcileSessionSandboxes releases the sandbox as
+	// soon as the task's grants no longer match, rather than leaving what
+	// a withdrawn grant placed in it until the next turn or the TTL.
+	Grants      string
 	Sandbox     Sandbox
 	Counted     func(context.Context)
 	RevokeToken func(string) error
@@ -166,7 +171,7 @@ func releaseWarmSandboxEntry(ctx context.Context, entry *warmSessionSandbox) {
 	}
 }
 
-func parkWarmSessionSandbox(deps Deps, taskID, sandboxID, key string, sb Sandbox, counted func(context.Context), shape model.Commitment, now time.Time, ttl time.Duration) {
+func parkWarmSessionSandbox(deps Deps, taskID, sandboxID, key, grants string, sb Sandbox, counted func(context.Context), shape model.Commitment, now time.Time, ttl time.Duration) {
 	if deps.Store == nil || taskID == "" || sb == nil || ttl <= 0 {
 		return
 	}
@@ -181,6 +186,7 @@ func parkWarmSessionSandbox(deps Deps, taskID, sandboxID, key string, sb Sandbox
 		TaskID:      taskID,
 		SandboxID:   sandboxID,
 		Key:         key,
+		Grants:      grants,
 		Sandbox:     sb,
 		Counted:     counted,
 		RevokeToken: deps.RevokeSandboxToken,
@@ -209,23 +215,36 @@ func sessionSandboxKey(shape Shape, task model.Task, prepared []model.Materializ
 	if task.Target != nil {
 		fmt.Fprintf(&b, "|target=%s/%s", task.Target.StoredOwner(), task.Target.Name)
 	}
-	grant := func(g model.Grant) string {
-		s := g.Capability + ":" + string(g.Via)
-		if g.Folder != nil {
-			s += ":" + g.Folder.String()
-		}
-		return s
-	}
 	var grants []string
 	for _, g := range task.Grants {
-		grants = append(grants, "task:"+grant(g))
+		grants = append(grants, "task:"+grantKey(g))
 	}
 	for _, m := range prepared {
-		grants = append(grants, "run:"+grant(m.Grant))
+		grants = append(grants, "run:"+grantKey(m.Grant))
 	}
 	sort.Strings(grants)
 	fmt.Fprintf(&b, "|grants=%s", strings.Join(grants, ","))
 	return b.String()
+}
+
+// sessionGrantsKey is the task-grant part of sessionSandboxKey: what
+// reconcileSessionSandboxes can check between turns, when no run is
+// there to say what it would materialize.
+func sessionGrantsKey(task model.Task) string {
+	grants := make([]string, 0, len(task.Grants))
+	for _, g := range task.Grants {
+		grants = append(grants, grantKey(g))
+	}
+	sort.Strings(grants)
+	return strings.Join(grants, ",")
+}
+
+func grantKey(g model.Grant) string {
+	s := g.Capability + ":" + string(g.Via)
+	if g.Folder != nil {
+		s += ":" + g.Folder.String()
+	}
+	return s
 }
 
 func parkWarmSessionInLedger(deps Deps, taskID string) {
@@ -381,6 +400,14 @@ func reconcileSessionSandboxes(ctx context.Context, deps Deps, now time.Time) {
 		}
 		st, err := deps.Store.State(ctx, entry.TaskID)
 		if err != nil {
+			continue
+		}
+		// A grant withdrawn (or added) since the sandbox was built: what
+		// the old grants placed there must not outlive them while the
+		// sandbox waits for a turn that would not reuse it anyway.
+		if task, terr := deps.Store.GetTask(ctx, entry.TaskID); terr == nil && task != nil &&
+			sessionGrantsKey(*task) != entry.Grants {
+			releaseWarmSessionSandbox(ctx, deps, entry.TaskID, true)
 			continue
 		}
 		if st == "" || st == model.StateClosed || st == model.StateFailed ||

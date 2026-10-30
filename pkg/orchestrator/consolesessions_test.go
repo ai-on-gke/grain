@@ -1962,3 +1962,68 @@ func (s *shapeRecordingSandboxes) Acquire(ctx context.Context, name string, shap
 	shape.CPUs, shape.MemoryMB, shape.DiskGB = 0, 0, 0
 	return s.countingSandboxes.Acquire(ctx, name, shape)
 }
+
+// A grant changed while a session's sandbox is held warm releases the
+// sandbox on the next cycle, before any reply: what the old grants
+// placed in it must not sit there until a turn or the TTL ends it.
+func TestWarmSessionSandboxReleasedWhenItsGrantsChange(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID: model.DirectorSessionID, Title: "Director",
+			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+	ag := &recordingSessionAgent{}
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  sbx,
+		Framework:  orchestrator.StaticFramework(ag),
+		MaxWorkers: 2,
+		Config: orchestrator.Config{
+			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			SessionSandboxIdleTTL: 30 * time.Minute,
+		},
+	}
+
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("turn 1 cycle: %v", err)
+	}
+	if orchestrator.WarmSessionSandboxID(store, director.ID) == "" {
+		t.Fatal("expected director's sandbox to be held warm after turn 1")
+	}
+	releases := sbx.releases
+
+	// Unchanged grants: a cycle keeps it warm.
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Minute)); err != nil {
+		t.Fatalf("idle cycle: %v", err)
+	}
+	if orchestrator.WarmSessionSandboxID(store, director.ID) == "" {
+		t.Fatal("an idle cycle with unchanged grants released the warm sandbox")
+	}
+
+	if err := store.UpdateTask(ctx, director.ID, func(task *model.Task) error {
+		task.Grants = append(task.Grants, model.Grant{Capability: "gcp-key", Via: model.GrantByLabel})
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(2*time.Minute)); err != nil {
+		t.Fatalf("cycle after the grant change: %v", err)
+	}
+	if id := orchestrator.WarmSessionSandboxID(store, director.ID); id != "" {
+		t.Fatalf("warm sandbox %s still held after the task's grants changed", id)
+	}
+	if sbx.releases <= releases {
+		t.Fatalf("releases = %d, want the warm sandbox released (was %d)", sbx.releases, releases)
+	}
+}
