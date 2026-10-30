@@ -312,6 +312,23 @@ func TestSandboxLogAndMetricsFlagsBecomeTheirQuery(t *testing.T) {
 		"&since=2026-10-29T00%3A00%3A00Z&tail=40&until=2026-10-29T06%3A00%3A00Z"; got != want {
 		t.Errorf("grain log query = %s, want %s", got, want)
 	}
+	p, err = parseSandboxArgs([]string{"--source", "dmesg", "--priority", "warning", "--max-lines", "50"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := grainLogSource(p); got != "dmesg" {
+		t.Errorf("grain log --source dmesg reads source %q", got)
+	}
+	if got, want := grainLogQuery(p).Encode(), "max_lines=50&min_priority=warning"; got != want {
+		t.Errorf("grain log query = %s, want %s", got, want)
+	}
+	p, err = parseSandboxArgs([]string{"summary", "--since", "2026-10-28", "--until", "2026-10-29"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := metricsQuery(p).Encode(), "since=2026-10-28&until=2026-10-29"; got != want {
+		t.Errorf("grain metrics query = %s, want %s", got, want)
+	}
 	p, err = parseSandboxArgs([]string{"summary", "--window", "7d", "--repo", "acme/a,acme/b", "--repo", "acme/c", "--author", "task"})
 	if err != nil {
 		t.Fatal(err)
