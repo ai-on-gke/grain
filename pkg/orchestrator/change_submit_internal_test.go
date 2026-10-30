@@ -179,6 +179,7 @@ func TestPollSendsATaskWhoseOnlyCLIsEmptyOrDeletedToAwaitingReply(t *testing.T) 
 		"cl/10": {Target: "cl/10", Status: change.StatusPending, Empty: true},
 		"cl/11": {Target: "cl/11", Status: change.StatusAbandoned}, // citc_cl_delete: state "deleted"
 		"cl/12": {Target: "cl/12", Status: change.StatusPending, Empty: true},
+		"cl/13": {Target: "cl/13", Status: change.StatusPending, Empty: true},
 	}}
 	registerLanding(t, p)
 	seedCLTask(t, ctx, store, "62", "cl/10")
@@ -192,6 +193,14 @@ func TestPollSendsATaskWhoseOnlyCLIsEmptyOrDeletedToAwaitingReply(t *testing.T) 
 	}
 	if st, _ := store.State(ctx, "64"); st != model.StateRunning {
 		t.Fatalf("task 64 state %s, want running", st)
+	}
+	if err := store.PutTask(ctx, model.Task{ID: "65", Title: "t", Intent: model.IntentImplement,
+		Links:    []model.Link{{Kind: model.LinkChangelist, Target: "cl/13"}},
+		Approval: &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := store.State(ctx, "65"); st != model.StateQueued {
+		t.Fatalf("task 65 state %s, want queued", st)
 	}
 
 	PollChangesOnce(ctx, store)
@@ -207,10 +216,13 @@ func TestPollSendsATaskWhoseOnlyCLIsEmptyOrDeletedToAwaitingReply(t *testing.T) 
 			t.Fatalf("task %s comments %q, want %q", id, c, want)
 		}
 	}
-	// A run may still upload to the CL it is working on.
-	task, _ := store.GetTask(ctx, "64")
-	if live := change.LiveChanges(*task); len(live) != 1 {
-		t.Fatalf("running task live = %v, want cl/12 left alone", live)
+	// A run may still upload to the CL it is working on, and a queued
+	// task's next run may upload to its CL.
+	for id, cl := range map[string]string{"64": "cl/12", "65": "cl/13"} {
+		task, _ := store.GetTask(ctx, id)
+		if live := change.LiveChanges(*task); len(live) != 1 {
+			t.Fatalf("task %s live = %v, want %s left alone", id, live, cl)
+		}
 	}
 	PollChangesOnce(ctx, store)
 	if n := strings.Count(commentsOf(t, ctx, store, "62"), "holds no files"); n != 1 {
