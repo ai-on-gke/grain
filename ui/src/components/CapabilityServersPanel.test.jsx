@@ -1127,4 +1127,125 @@ describe("CapabilityServersPanel", () => {
       await within(row).findByTestId("hostd-unreachable"),
     ).toHaveTextContent("grain hostd is not reachable");
   });
+
+  it("shortens long server summaries and puts server, method, and field descriptions in (i) popovers", async () => {
+    const leaseId = "https://grain.dev/capabilities/workspace-lease";
+    const longSummary =
+      "Leased workspaces on the host machine, provisioned per attempt with narrow proxy access — gives sandboxes a read/write view of a single checkout without exposing the host's full credentials or other workspaces.";
+    const longMethodDesc =
+      "Lease a dedicated workspace on the host for this attempt and mount it through a narrow proxy that only serves that single workspace.";
+    const longFieldDesc =
+      "Prefix used when naming workspaces leased for task attempts; each workspace is named <prefix>-<attempt_id> so reaping can identify orphaned directories.";
+    const leaseServer = {
+      id: leaseId,
+      config: {
+        command: "grain-workspace-lease",
+        run: "host",
+        builtin: "workspace-lease",
+        config: { client_prefix: "grain" },
+      },
+      secrets: [],
+      builtin: {
+        name: "workspace-lease",
+        id: leaseId,
+        summary: longSummary,
+      },
+      status: {
+        id: leaseId,
+        state: "attached",
+        transport: "stdio",
+        builtin: "workspace-lease",
+        methods: ["workspace-lease"],
+        methodDetails: [
+          {
+            name: "workspace-lease",
+            description: longMethodDesc,
+            releasable: true,
+            args: {
+              type: "object",
+              properties: {
+                base_rev: {
+                  type: "string",
+                  description: "Optional base revision to sync.",
+                },
+              },
+            },
+          },
+        ],
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            client_prefix: {
+              type: "string",
+              description: longFieldDesc,
+            },
+          },
+        },
+      },
+    };
+    serve({
+      ...base,
+      "GET /api/capability-servers": [leaseServer],
+    });
+    const user = userEvent.setup();
+    render(<CapabilityServersPanel showError={vi.fn()} />);
+
+    // In the server list row, only the first clause is inline; the full summary is in (i).
+    await waitFor(() => expect(rowOf(leaseId)).not.toBeNull());
+    const r = within(rowOf(leaseId));
+    const rowSummary = r.getByTestId("capability-server-summary");
+    expect(rowSummary).toHaveTextContent(
+      "Leased workspaces on the host machine, provisioned per attempt with narrow proxy access",
+    );
+    expect(rowSummary).not.toHaveTextContent("without exposing the host's");
+    await user.hover(r.getByRole("button", { name: "About workspace-lease" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(longSummary);
+    await user.unhover(
+      r.getByRole("button", { name: "About workspace-lease" }),
+    );
+
+    // Open the server detail card.
+    const c = await card(leaseId);
+    const detailSummary = within(c).getByTestId("capability-server-summary");
+    expect(detailSummary).not.toHaveTextContent("without exposing the host's");
+    await user.hover(
+      within(c).getByRole("button", { name: "About workspace-lease server" }),
+    );
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(longSummary);
+    await user.unhover(
+      within(c).getByRole("button", { name: "About workspace-lease server" }),
+    );
+
+    // Method descriptions are in (i) popovers, not inline.
+    const methodsSection = within(c).getByTestId("capability-server-methods");
+    expect(methodsSection).not.toHaveTextContent(longMethodDesc);
+    await user.hover(
+      within(methodsSection).getByRole("button", {
+        name: "About workspace-lease",
+      }),
+    );
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      longMethodDesc,
+    );
+    await user.unhover(
+      within(methodsSection).getByRole("button", {
+        name: "About workspace-lease",
+      }),
+    );
+
+    // Configure schema field descriptions are in (i) popovers, not inline.
+    await user.click(
+      within(c).getByRole("button", { name: "Edit server settings" }),
+    );
+    const form = within(c).getByTestId("capability-server-config");
+    expect(form).not.toHaveTextContent(longFieldDesc);
+    const fieldInfo = within(form).getByRole("button", {
+      name: "About client_prefix",
+    });
+    fieldInfo.focus();
+    await waitFor(() =>
+      expect(screen.getByRole("tooltip")).toHaveTextContent(longFieldDesc),
+    );
+  });
 });

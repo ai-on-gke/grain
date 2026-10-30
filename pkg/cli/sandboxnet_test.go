@@ -425,6 +425,27 @@ func TestServeTakesTheReservedPort(t *testing.T) {
 	}
 }
 
+// TestTheCIAPIListenerIsServedUnderAPortBlock: it was published under a
+// name the table did not have, so on every daemon with -sandbox-port-base
+// Serve refused it and every release-gate-read job was refused with it --
+// which is how the release train never cut a release candidate.
+func TestTheCIAPIListenerIsServedUnderAPortBlock(t *testing.T) {
+	base := freeAlignedBlock(t)
+	fabric, err := daemon.NewDirectWithPortBlock("", base)
+	if err != nil {
+		t.Fatalf("NewDirectWithPortBlock: %v", err)
+	}
+	endpoint, stop, err := fabric.Serve(daemon.CIAPIService, http.NotFoundHandler())
+	if err != nil {
+		t.Fatalf("Serve(%q): %v", daemon.CIAPIService, err)
+	}
+	defer stop(context.Background())
+	wantPort := base + daemon.OffsetCIAPI
+	if _, port, _ := net.SplitHostPort(endpoint.Bound); port != strconv.Itoa(wantPort) {
+		t.Errorf("bound %s, want port %d", endpoint.Bound, wantPort)
+	}
+}
+
 // TestAnUnreservedNameIsRefusedRatherThanGivenAnEphemeralPort: falling
 // back would put the service outside the block, where no firewall rule
 // covers it -- unreachable anyway, with nothing said about why.
