@@ -94,10 +94,25 @@ test("adds, tests, configures, edits, grants, denies by policy and removes a cap
     `/settings/capabilities/${encodeURIComponent(NEW)}`,
   );
 
+  // Method descriptions sit in an (i) popover rather than inline prose.
+  const methodsSection = card.getByTestId("capability-server-methods");
+  await expect(methodsSection).not.toContainText(
+    "Mint a short-lived cloud service-account key",
+  );
+  await methodsSection.getByRole("button", { name: "About cloud-key" }).hover();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "Mint a short-lived cloud service-account key for one account and place it in the sandbox.",
+  );
+
   // Server settings: a value the server's schema refuses is shown on
-  // its field.
+  // its field, and field descriptions sit in (i) popovers.
   await card.getByRole("button", { name: "Edit server settings" }).click();
   const config = card.getByTestId("capability-server-config");
+  await expect(config).not.toContainText("The project keys are minted in.");
+  await config.getByRole("button", { name: "About project" }).hover();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "The project keys are minted in.",
+  );
   await expect(config.getByTestId("secret-state-apiToken")).toHaveText(
     "not set",
   );

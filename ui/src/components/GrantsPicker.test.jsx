@@ -527,4 +527,55 @@ describe("GrantsPicker", () => {
       within(item).getByRole("link", { name: "Settings → Capabilities" }),
     ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
   });
+
+  it("shows method and argument descriptions in (i) popovers rather than inline", async () => {
+    const describedGcpKey = {
+      ...gcpKey,
+      description: "Mint a short-lived GCP key.",
+    };
+    const describedCloudKey = {
+      ...cloudKey,
+      description: "Mint a cloud account key.",
+    };
+    serve({ current: [describedGcpKey, describedCloudKey] });
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[
+          describedGcpKey.ref,
+          `${describedCloudKey.ref}={"account":"dev"}`,
+        ]}
+        config={config}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    const line = await screen.findByLabelText("github.com › gcp-key");
+    expect(line).not.toHaveTextContent(describedGcpKey.description);
+    await user.hover(
+      within(line).getByRole("button", { name: "About github.com › gcp-key" }),
+    );
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      describedGcpKey.description,
+    );
+    await user.unhover(
+      within(line).getByRole("button", { name: "About github.com › gcp-key" }),
+    );
+
+    const section = await screen.findByLabelText(
+      "example.com › cloud-key · account: dev",
+    );
+    expect(section).not.toHaveTextContent(describedCloudKey.description);
+    await user.hover(
+      within(section).getByRole("button", {
+        name: "About cloud-key",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("tooltip")).toHaveTextContent(
+        describedCloudKey.description,
+      ),
+    );
+  });
 });

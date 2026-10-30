@@ -309,12 +309,28 @@ describe("CapabilityArgsForm", () => {
     ).toBeNull();
 
     // enum: a select, required marked (its error until it is set), its
-    // description as help once it is.
+    // description in an (i) popover rather than inline.
     expect(screen.getAllByText("is required").length).toBeGreaterThan(0);
     await user.click(screen.getByRole("combobox", { name: /account/ }));
     await user.click(screen.getByRole("option", { name: "prod" }));
     expect(value().account).toBe("prod");
-    expect(screen.getByText("Which account.")).toBeTruthy();
+    expect(screen.queryByText("Which account.")).toBeNull();
+    await user.hover(screen.getByRole("button", { name: "About account" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Which account.",
+    );
+    await user.unhover(screen.getByRole("button", { name: "About account" }));
+
+    // Boolean field description is in an (i) popover, not inline.
+    expect(screen.queryByText("Viewer only.")).toBeNull();
+    const readOnlyInfo = screen.getByRole("button", {
+      name: "About read_only",
+    });
+    readOnlyInfo.focus();
+    await expect
+      .poll(() => screen.queryByRole("tooltip")?.textContent)
+      .toContain("Viewer only.");
+    readOnlyInfo.blur();
 
     // boolean: a switch, on from its default.
     const sw = screen.getByRole("switch", { name: /read_only/ });

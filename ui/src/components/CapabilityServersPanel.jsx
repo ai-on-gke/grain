@@ -35,6 +35,7 @@ import api from "../api.js";
 import CapabilityArgsForm from "./CapabilityArgsForm.jsx";
 import { invalidateCapabilityMethods } from "./capabilityMethods.js";
 import CapabilityMethodTable from "./CapabilityMethodTable.jsx";
+import InfoPopover from "./InfoPopover.jsx";
 import ConfigMapList, {
   ConfigMapConfigEditor,
   configMapEditorValue,
@@ -422,6 +423,11 @@ export function UsageList({ holders }) {
 function ProbeResult({ result }) {
   if (!result) return null;
   const configRows = argumentRows(result.configSchema);
+  const methodReports = (result.methods || [])
+    .map((m) =>
+      (m.description || "").split("\n\n").slice(1).join("\n\n").trim(),
+    )
+    .filter(Boolean);
   return (
     <Box sx={{ mt: 1 }} data-testid="capability-test-result">
       <Alert
@@ -441,6 +447,17 @@ function ProbeResult({ result }) {
         >
           {w}
         </Alert>
+      ))}
+      {methodReports.map((rep, i) => (
+        <Typography
+          key={i}
+          variant="body2"
+          color="text.secondary"
+          sx={{ mt: 1, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}
+          data-testid="capability-test-report"
+        >
+          {rep}
+        </Typography>
       ))}
       {result.methods?.length > 0 && (
         <CapabilityMethodTable details={result.methods} />
@@ -463,7 +480,12 @@ function ProbeResult({ result }) {
                   {isSecretSchema(result.configSchema.properties?.[row.name])
                     ? ", secret"
                     : ""}
-                  {row.description ? ` — ${row.description}` : ""}
+                  {row.description && (
+                    <>
+                      {" "}
+                      <InfoPopover title={row.description} label={row.name} />
+                    </>
+                  )}
                 </Typography>
               ))}
             </Box>
@@ -898,12 +920,66 @@ function serverName(server) {
 // serverSummary is a row's one line on what the server gives a task.
 function serverSummary(server) {
   if (server.builtin?.summary) return server.builtin.summary;
+  if (server.status?.summary) return server.status.summary;
+  if (server.config?.summary) return server.config.summary;
   const methods = server.status?.methods || [];
   if (methods.length)
     return `Gives tasks: ${methods.map((m) => `#${m}`).join(", ")}`;
   return server.config.command
     ? [server.config.command, ...(server.config.args || [])].join(" ")
     : server.config.serverUrl || "";
+}
+
+const SUMMARY_MAX_CHARS = 120;
+
+// summarizeServer returns a one-sentence/one-clause short summary when text
+// exceeds SUMMARY_MAX_CHARS or spans multiple sentences/lines, and keeps
+// the full text for an InfoPopover.
+export function summarizeServer(text, max = SUMMARY_MAX_CHARS) {
+  const full = (text || "").trim();
+  if (!full) return { short: "", full: "", truncated: false };
+  const firstLine = full.split(/\r?\n/)[0].trim();
+  const sentenceMatch = firstLine.match(/^(.+?[.!?])(?=\s+\S)/);
+  if (sentenceMatch && sentenceMatch[1].length <= max) {
+    const short = sentenceMatch[1].trim();
+    return { short, full, truncated: short !== full };
+  }
+  if (firstLine.length <= max) {
+    return { short: firstLine, full, truncated: firstLine !== full };
+  }
+  const head = firstLine.slice(0, max);
+  for (const sep of [" — ", " -- ", "; ", ": ", ", "]) {
+    const idx = head.lastIndexOf(sep);
+    if (idx >= 24) {
+      const short = head.slice(0, idx).trim();
+      return { short, full, truncated: true };
+    }
+  }
+  const spaceIdx = head.lastIndexOf(" ");
+  const short = `${(spaceIdx >= 24 ? head.slice(0, spaceIdx) : head).trim()}…`;
+  return { short, full, truncated: true };
+}
+
+function ServerSummaryLine({ text, label }) {
+  const { short, full, truncated } = summarizeServer(text);
+  if (!short) return null;
+  return (
+    <Typography
+      variant="body2"
+      color="text.secondary"
+      component="div"
+      data-testid="capability-server-summary"
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        gap: 0.5,
+        flexWrap: "wrap",
+      }}
+    >
+      <span>{short}</span>
+      {truncated && <InfoPopover title={full} label={label} />}
+    </Typography>
+  );
 }
 
 export function serverPath(id) {
@@ -1024,13 +1100,10 @@ function ServerRow({ server, holders, onOpen }) {
         <Typography variant="body1" sx={{ fontWeight: 600 }}>
           {serverName(server)}
         </Typography>
-        <Typography
-          variant="body2"
-          color="text.secondary"
-          data-testid="capability-server-summary"
-        >
-          {serverSummary(server)}
-        </Typography>
+        <ServerSummaryLine
+          text={serverSummary(server)}
+          label={serverName(server)}
+        />
         {builtin && (
           <Typography
             variant="caption"
@@ -1277,10 +1350,17 @@ export default function CapabilityServersPanel({
           <Typography variant="h6" component="h4">
             {builtin ? `${server.builtin.name} server` : server.id}
           </Typography>
-          {builtin && (
-            <Typography variant="body2" color="text.secondary">
-              {server.builtin.summary}
-            </Typography>
+          {(server.builtin?.summary ||
+            server.status?.summary ||
+            server.config?.summary) && (
+            <ServerSummaryLine
+              text={
+                server.builtin?.summary ||
+                server.status?.summary ||
+                server.config?.summary
+              }
+              label={builtin ? `${server.builtin.name} server` : server.id}
+            />
           )}
           <Typography
             variant="body2"
