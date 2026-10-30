@@ -307,6 +307,8 @@ func (r TestHistoryReport) Render() string {
 	repoClause := ""
 	if r.Repo != "" {
 		repoClause = fmt.Sprintf(" (repo: %s)", r.Repo)
+	} else if r.RunsExamined > 0 {
+		repoClause = " (across all readable repos)"
 	}
 	fmt.Fprintf(&b, "Test History: %s%s\n", r.TestName, repoClause)
 	fmt.Fprintf(&b, "Runs examined: %d | Executions found: %d\n", r.RunsExamined, r.Executions)
@@ -344,6 +346,10 @@ func (r TestHistoryReport) Render() string {
 				commitShort = commitShort[:7]
 			}
 			refInfo := exec.Ref
+			if r.Repo == "" && exec.Repo != "" {
+				// A report over every repository names each run's.
+				refInfo = exec.Repo + " " + refInfo
+			}
 			if commitShort != "" {
 				refInfo = fmt.Sprintf("%s @ %s", exec.Ref, commitShort)
 			}

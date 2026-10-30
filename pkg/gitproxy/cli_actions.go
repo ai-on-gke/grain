@@ -496,7 +496,7 @@ func requireOwnCI(scope namespace.Scope) error {
 		return namespace.RefuseCapability("grain ci", "grain-ci")
 	}
 	if scope.TaskRepo == "" || scope.TaskBranch == "" {
-		return fmt.Errorf("%w: this task has no repository and branch of its own for grain CI to run on", namespace.ErrBadRequest)
+		return errNoTaskRepo
 	}
 	return nil
 }

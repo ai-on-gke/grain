@@ -159,6 +159,11 @@ func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope n
 	case route == "pr/status":
 		p.servePRStatus(w, r, scope)
 	case route == "pr/base-status":
+		if scope.TaskRepo == "" {
+			// Without a repository "main" is every repository's main.
+			cliError(w, errNoTaskRepo)
+			return
+		}
 		base := scope.TaskBase
 		if base == "" {
 			base = "main"
@@ -322,6 +327,11 @@ func cliLimit(q url.Values, key string, def, max int) int {
 	return n
 }
 
+// errNoTaskRepo answers a command about this task's own branch on a task
+// with no repository (no_repo): its scope may still name a branch, but no
+// repository has it, so nothing is reported about it.
+var errNoTaskRepo = fmt.Errorf("%w: this task has no repository or branch; pass --repo <owner/repo> [--ref <b>] or use `grain ci list --repo ...`", namespace.ErrBadRequest)
+
 // TaskRefLookup is what a NamespaceScopeLookup also implements to name
 // another task's repository and branch, for /cli/ci/runs?task= and
 // /cli/pr/status?task=. Implemented by *model.Store.
@@ -375,6 +385,10 @@ func (p *GitProxy) serveCIRuns(w http.ResponseWriter, r *http.Request, scope nam
 		return
 	}
 	if ref == "@branch" {
+		if scope.TaskRepo == "" {
+			cliError(w, errNoTaskRepo)
+			return
+		}
 		ref = scope.TaskBranch
 	}
 	f := ci.RunFilter{Repo: repo, Ref: ref, Job: q.Get("job"), Descending: true}
@@ -411,6 +425,15 @@ func (p *GitProxy) serveCIRuns(w http.ResponseWriter, r *http.Request, scope nam
 	}
 	page := store.Find(f, limit)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if repo == "" {
+		// No repository filter: the runs are every readable repository's,
+		// so each row says whose it is.
+		fmt.Fprintf(w, "%d of %d matching run(s) across all readable repos, newest first:\n", len(page.Runs), page.Matched)
+		for _, run := range page.Runs {
+			fmt.Fprintln(w, run.Repo+" "+formatCIRunLine(run))
+		}
+		return
+	}
 	fmt.Fprintf(w, "%d of %d matching run(s) in %s, newest first:\n", len(page.Runs), page.Matched, repo)
 	for _, run := range page.Runs {
 		fmt.Fprintln(w, formatCIRunLine(run))
@@ -510,6 +533,10 @@ func (p *GitProxy) servePRStatus(w http.ResponseWriter, r *http.Request, scope n
 	case ref != "":
 		p.serveBranchStatus(w, scope, repo, ref, "branch")
 	default:
+		if scope.TaskRepo == "" {
+			cliError(w, errNoTaskRepo)
+			return
+		}
 		p.serveBranchStatus(w, scope, repo, scope.TaskBranch, "this task's branch")
 	}
 }
@@ -520,6 +547,12 @@ func (p *GitProxy) serveBranchStatus(w http.ResponseWriter, scope namespace.Scop
 	repo, store, err := p.ciReadRepo(scope, repo)
 	if err != nil {
 		cliError(w, err)
+		return
+	}
+	if repo == "" {
+		// --ref with no --repo on a task without one: a branch name
+		// alone would match that name in every repository.
+		cliError(w, errNoTaskRepo)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
