@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ITEM_GLYPH_PATHS } from "../brand/item-glyph-paths.js";
@@ -309,13 +309,14 @@ describe("BoardsPage", () => {
       });
     });
 
-    it("drops a dragged board onto a folder's own heading", () => {
+    it("drops a dragged board onto a folder's own heading", async () => {
       const onMoveBoard = vi.fn();
       renderPage(onMoveBoard);
       const row = screen.getByText("Waiting on me").closest("li");
       const heading = screen.getByText("Reports").closest("li");
 
       fireEvent.dragStart(row);
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
       fireEvent.dragOver(heading);
       fireEvent.drop(heading);
 
@@ -324,6 +325,41 @@ describe("BoardsPage", () => {
         folder: "Reports",
         beforeId: "board-2",
       });
+    });
+
+    // Chromium hit-tests the point a drag began at as soon as dragstart
+    // returns, and cancels the drag if the row is no longer under it.
+    // Marking the drag draws a drop zone closing every section, which
+    // pushes every board below the first section down -- so nothing may
+    // render inside the handler, or no filed board can be dragged at all.
+    it("leaves the rows where they are until dragstart has returned", async () => {
+      renderPage(vi.fn());
+      const row = screen.getByText("Flaky tests").closest("li");
+
+      fireEvent.dragStart(row);
+      expect(document.querySelector(".board-drop-end")).toBeNull();
+      expect(row.querySelector(".task-row-dragging")).toBeNull();
+
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+      expect(document.querySelector(".board-drop-end")).not.toBeNull();
+      expect(row.querySelector(".task-row-dragging")).not.toBeNull();
+
+      fireEvent.dragEnd(row);
+      expect(document.querySelector(".board-drop-end")).toBeNull();
+    });
+
+    // A drag the browser cancels at once ends before it was ever marked,
+    // and must not be marked afterwards by the start it left pending.
+    it("forgets a drag that ended before it was marked", async () => {
+      renderPage(vi.fn());
+      const row = screen.getByText("Flaky tests").closest("li");
+
+      fireEvent.dragStart(row);
+      fireEvent.dragEnd(row);
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+      expect(document.querySelector(".board-drop-end")).toBeNull();
+      expect(row.querySelector(".task-row-dragging")).toBeNull();
     });
 
     // Nothing to move it with, and nothing to move it to, on a page
