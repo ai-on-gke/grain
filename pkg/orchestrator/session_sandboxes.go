@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -31,8 +32,11 @@ import (
 // warmSessionSandbox is an interactive session task's sandbox held warm
 // between turns while the task awaits the person's next message.
 type warmSessionSandbox struct {
-	TaskID      string
-	SandboxID   string
+	TaskID    string
+	SandboxID string
+	// Key is sessionSandboxKey for the run that built the sandbox: a
+	// later turn reuses it only under the same key.
+	Key         string
 	Sandbox     Sandbox
 	Counted     func(context.Context)
 	RevokeToken func(string) error
@@ -162,7 +166,7 @@ func releaseWarmSandboxEntry(ctx context.Context, entry *warmSessionSandbox) {
 	}
 }
 
-func parkWarmSessionSandbox(deps Deps, taskID, sandboxID string, sb Sandbox, counted func(context.Context), shape model.Commitment, now time.Time, ttl time.Duration) {
+func parkWarmSessionSandbox(deps Deps, taskID, sandboxID, key string, sb Sandbox, counted func(context.Context), shape model.Commitment, now time.Time, ttl time.Duration) {
 	if deps.Store == nil || taskID == "" || sb == nil || ttl <= 0 {
 		return
 	}
@@ -176,6 +180,7 @@ func parkWarmSessionSandbox(deps Deps, taskID, sandboxID string, sb Sandbox, cou
 	entry := &warmSessionSandbox{
 		TaskID:      taskID,
 		SandboxID:   sandboxID,
+		Key:         key,
 		Sandbox:     sb,
 		Counted:     counted,
 		RevokeToken: deps.RevokeSandboxToken,
@@ -192,6 +197,35 @@ func parkWarmSessionSandbox(deps Deps, taskID, sandboxID string, sb Sandbox, cou
 	if prev != nil {
 		releaseWarmSandboxEntry(context.Background(), prev)
 	}
+}
+
+// sessionSandboxKey names what a sandbox was built for: its shape, the
+// task's target, and the capability grants the task holds and the run
+// materialized. Two runs with the same key may share a warm sandbox; a
+// run whose key differs from the warm sandbox's gets a fresh one.
+func sessionSandboxKey(shape Shape, task model.Task, prepared []model.Materialized) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "shape=%+v", shape)
+	if task.Target != nil {
+		fmt.Fprintf(&b, "|target=%s/%s", task.Target.StoredOwner(), task.Target.Name)
+	}
+	grant := func(g model.Grant) string {
+		s := g.Capability + ":" + string(g.Via)
+		if g.Folder != nil {
+			s += ":" + g.Folder.String()
+		}
+		return s
+	}
+	var grants []string
+	for _, g := range task.Grants {
+		grants = append(grants, "task:"+grant(g))
+	}
+	for _, m := range prepared {
+		grants = append(grants, "run:"+grant(m.Grant))
+	}
+	sort.Strings(grants)
+	fmt.Fprintf(&b, "|grants=%s", strings.Join(grants, ","))
+	return b.String()
 }
 
 func parkWarmSessionInLedger(deps Deps, taskID string) {
@@ -591,7 +625,7 @@ func continueSessionTurns(
 		}
 
 		now := cfg.now()
-		if err := relayProposedTasks(daemonCtx, store, nil, nil, task, turnResult, now); err != nil {
+		if err := relayProposedTasks(daemonCtx, store, cfg.sessionReach, cfg.sessionClient, task, turnResult, now); err != nil {
 			log.Printf("orchestrator: run %s: relaying proposed tasks in-process: %v", runID, err)
 			break
 		}
@@ -707,10 +741,7 @@ func markToolCallsRelayed(result *agent.Result, name string) {
 	}
 	for i := range result.ToolCalls {
 		if result.ToolCalls[i].Name == name && !result.ToolCalls[i].IsError {
-			if result.ToolCalls[i].Arguments == nil {
-				result.ToolCalls[i].Arguments = map[string]any{}
-			}
-			result.ToolCalls[i].Arguments["_relayed"] = true
+			result.ToolCalls[i].Relayed = true
 		}
 	}
 }

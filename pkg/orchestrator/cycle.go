@@ -2193,25 +2193,6 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// this run may push. Pinning it is what stops a repo edit made while
 	// the run is in flight from moving the proxy's answer out from under
 	// it: see SetRunSandbox and GitScope.
-	var warmSandbox *warmSessionSandbox
-	var sandboxReclaimed bool
-	if task.Interactive {
-		warmSandbox, sandboxReclaimed = claimWarmSessionSandbox(deps, task.ID, now)
-		if !sandboxReclaimed && warmSandbox == nil && d.Attempt > 1 {
-			sandboxReclaimed = true
-		}
-	}
-	sandboxReused := warmSandbox != nil
-	sandboxName := d.RunID
-	if sandboxReused {
-		sandboxName = warmSandbox.SandboxID
-	}
-	if err := deps.Store.SetRunSandbox(ctx, d.RunID, sandboxName, task.Target); err != nil {
-		if warmSandbox != nil {
-			releaseWarmSandboxEntry(context.WithoutCancel(ctx), warmSandbox)
-		}
-		return fmt.Errorf("orchestrator: recording run %s's sandbox: %w", d.RunID, err)
-	}
 
 	// A task's own SandboxCPUs/SandboxMemoryMB/SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) is a create-time argument now
@@ -2239,11 +2220,43 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// as the owner (GSA1-05).
 	if isUnisolated(deps.Sandboxes) {
 		if shape.OperatorEnv, err = localTask(ctx, deps.Store, deps.Policy, *task); err != nil {
-			if warmSandbox != nil {
-				releaseWarmSandboxEntry(context.WithoutCancel(ctx), warmSandbox)
-			}
 			return fmt.Errorf("orchestrator: deciding whose task %s is: %w", d.TaskID, err)
 		}
+	}
+	// An interactive session's previous turn may have left its sandbox
+	// warm (session_sandboxes.go). It is reused only when it was built for
+	// exactly what this run is: the same shape (network access, class,
+	// operator env, grain-src), the same target, and the same capability
+	// grants. Anything else -- a grant a person withdrew between turns, a
+	// task narrowed to no network -- gets a fresh sandbox, since whatever
+	// the old grants placed in the warm one would otherwise outlive them.
+	// Claimed after the shape is decided, and before SetRunSandbox, so the
+	// name recorded is the sandbox this run actually uses.
+	var warmSandbox *warmSessionSandbox
+	var sandboxReclaimed bool
+	sandboxKey := sessionSandboxKey(shape, *task, prepared)
+	if task.Interactive {
+		warmSandbox, sandboxReclaimed = claimWarmSessionSandbox(deps, task.ID, now)
+		if warmSandbox != nil && warmSandbox.Key != sandboxKey {
+			log.Printf("orchestrator: run %s (task %s): not reusing warm sandbox %s: its shape, target or grants changed",
+				d.RunID, d.TaskID, warmSandbox.SandboxID)
+			releaseWarmSandboxEntry(context.WithoutCancel(ctx), warmSandbox)
+			warmSandbox, sandboxReclaimed = nil, true
+		}
+		if !sandboxReclaimed && warmSandbox == nil && d.Attempt > 1 {
+			sandboxReclaimed = true
+		}
+	}
+	sandboxReused := warmSandbox != nil
+	sandboxName := d.RunID
+	if sandboxReused {
+		sandboxName = warmSandbox.SandboxID
+	}
+	if err := deps.Store.SetRunSandbox(ctx, d.RunID, sandboxName, task.Target); err != nil {
+		if warmSandbox != nil {
+			releaseWarmSandboxEntry(context.WithoutCancel(ctx), warmSandbox)
+		}
+		return fmt.Errorf("orchestrator: recording run %s's sandbox: %w", d.RunID, err)
 	}
 	var sandbox Sandbox
 	var sandboxCounted func(context.Context)
@@ -2523,6 +2536,8 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	limitsForShape := model.Limits{AgentShape: deps.AgentShape}
 	cfg.sessionShape = limitsForShape.TaskShape(*task)
 	cfg.sessionLedger = deps.Ledger
+	cfg.sessionReach = deps.GitReach
+	cfg.sessionClient = deps.Client
 	framework, cfg, err = consoleDispatch(framework, *task, d.RunID, cfg)
 	if err != nil {
 		return err
@@ -2617,7 +2632,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			if st, serr := deps.Store.State(cleanupCtx, task.ID); serr == nil && st != "" &&
 				st != model.StateClosed && st != model.StateFailed &&
 				st != model.StateCompleted && st != model.StateAwaitingSubmit {
-				parkWarmSessionSandbox(deps, task.ID, sandboxName, sandbox, sandboxCounted, cfg.sessionShape, finishNow, ttl)
+				parkWarmSessionSandbox(deps, task.ID, sandboxName, sandboxKey, sandbox, sandboxCounted, cfg.sessionShape, finishNow, ttl)
 				keptWarm = true
 			}
 		}

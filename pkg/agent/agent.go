@@ -798,6 +798,14 @@ type ToolCall struct {
 	Arguments map[string]any
 	Text      string
 	IsError   bool
+	// Relayed is set by the orchestrator, never by a framework, once it
+	// has already acted on this call while the run was still going (an
+	// interactive session's in-process turns: orchestrator's
+	// continueSessionTurns), so the end-of-run pass does not act on it
+	// twice. A field rather than a key in Arguments because Arguments is
+	// the agent's own, and an agent must not be able to hide a call from
+	// the orchestrator by naming such a key itself.
+	Relayed bool `json:"-"`
 }
 
 // Result is what a run produced: the agent's final text answer plus every

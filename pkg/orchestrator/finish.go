@@ -54,7 +54,7 @@ import (
 // no_action detail below, so the place to stop it is where it is read.
 func firstToolCallArg(result *agent.Result, name, key string) (string, bool) {
 	for _, c := range result.ToolCalls {
-		if c.Name != name || c.IsError || c.Arguments["_relayed"] == true {
+		if c.Name != name || c.IsError || c.Relayed {
 			continue
 		}
 		v, ok := c.Arguments[key].(string)
@@ -75,7 +75,7 @@ func firstToolCallArg(result *agent.Result, name, key string) (string, bool) {
 func lastToolCallArg(result *agent.Result, name, key string) (string, bool) {
 	value, found := "", false
 	for _, c := range result.ToolCalls {
-		if c.Name != name || c.IsError || c.Arguments["_relayed"] == true {
+		if c.Name != name || c.IsError || c.Relayed {
 			continue
 		}
 		if v, ok := c.Arguments[key].(string); ok {
@@ -88,7 +88,7 @@ func lastToolCallArg(result *agent.Result, name, key string) (string, bool) {
 // firstToolCallArgs returns all arguments from the first successful call.
 func firstToolCallArgs(result *agent.Result, name string) map[string]any {
 	for _, c := range result.ToolCalls {
-		if c.Name == name && !c.IsError && c.Arguments["_relayed"] != true {
+		if c.Name == name && !c.IsError && !c.Relayed {
 			return c.Arguments
 		}
 	}
@@ -99,7 +99,7 @@ func firstToolCallArgs(result *agent.Result, name string) map[string]any {
 func proposedTaskCalls(result *agent.Result) []map[string]any {
 	var out []map[string]any
 	for _, c := range result.ToolCalls {
-		if c.Name == "propose_task" && !c.IsError && c.Arguments["_relayed"] != true {
+		if c.Name == "propose_task" && !c.IsError && !c.Relayed {
 			out = append(out, c.Arguments)
 		}
 	}

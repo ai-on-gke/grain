@@ -60,6 +60,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/console"
 	"github.com/ai-on-gke/grain/pkg/forge"
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -976,6 +977,11 @@ type Config struct {
 	sessionSandboxName   string
 	sessionShape         model.Commitment
 	sessionLedger        *model.Ledger
+	// sessionReach and sessionClient are Deps.GitReach and Deps.Client,
+	// for the proposals continueSessionTurns relays mid-run: they get the
+	// same reach and fork-head checks processResult gives the rest.
+	sessionReach  *gitproxy.Reach
+	sessionClient github.Client
 }
 
 func (c Config) cancelPollInterval() time.Duration {

@@ -1864,3 +1864,82 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 		t.Errorf("in-process continuation (%v) was not faster than warm dispatch (%v)", inProc, warm)
 	}
 }
+
+// A warm session sandbox is reused only for a turn that would have been
+// given the same sandbox anyway: a task whose sandbox shape changed between
+// turns (here, its memory) gets a fresh one built to its new shape, never
+// the old one. sessionSandboxKey's own test covers grants and the target.
+func TestSessionSandboxNotReusedWhenTheTaskChangedBetweenTurns(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID: model.DirectorSessionID, Title: "Director",
+			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+	var shapes []orchestrator.Shape
+	recording := &shapeRecordingSandboxes{countingSandboxes: sbx, shapes: &shapes}
+	ag := &recordingSessionAgent{}
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  recording,
+		Framework:  orchestrator.StaticFramework(ag),
+		MaxWorkers: 2,
+		Config: orchestrator.Config{
+			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			SessionSandboxIdleTTL: 30 * time.Minute,
+		},
+	}
+
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("turn 1 cycle: %v", err)
+	}
+	if orchestrator.WarmSessionSandboxID(store, director.ID) == "" {
+		t.Fatal("expected director's sandbox to be held warm after turn 1")
+	}
+
+	if err := store.UpdateTask(ctx, director.ID, func(task *model.Task) error {
+		task.SandboxMemoryMB = 4096
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+
+	t2 := baseTime.Add(10 * time.Minute)
+	replyToSession(t, store, director.ID, t2)
+	if err := orchestrator.RunCycle(ctx, deps, t2.Add(time.Second)); err != nil {
+		t.Fatalf("turn 2 cycle: %v", err)
+	}
+	if sbx.acquires != 2 || sbx.releases < 1 {
+		t.Fatalf("after a changed turn 2 (%d agent turns): acquires=%d releases=%d, want a second acquire and the warm one released",
+			len(ag.configs), sbx.acquires, sbx.releases)
+	}
+	if len(ag.configs) != 2 || ag.configs[1].SandboxReused {
+		t.Fatalf("turn 2 reused the warm sandbox built for a different shape (turns=%d)", len(ag.configs))
+	}
+	if got := shapes[len(shapes)-1].MemoryMB; got != 4096 {
+		t.Errorf("turn 2 sandbox MemoryMB = %d, want 4096", got)
+	}
+}
+
+type shapeRecordingSandboxes struct {
+	*countingSandboxes
+	shapes *[]orchestrator.Shape
+}
+
+func (s *shapeRecordingSandboxes) Acquire(ctx context.Context, name string, shape orchestrator.Shape) (orchestrator.Sandbox, error) {
+	*s.shapes = append(*s.shapes, shape)
+	// Recorded, then built unsized: a host-directory sandbox has no
+	// shape of its own to give it.
+	shape.CPUs, shape.MemoryMB, shape.DiskGB = 0, 0, 0
+	return s.countingSandboxes.Acquire(ctx, name, shape)
+}
