@@ -809,6 +809,15 @@ func AmbientToken(host, source string) (token, from string, err error) {
 	return token, from, err
 }
 
+// AmbientLogin is AmbientToken for a host reached on baseURL (a host
+// record's BaseURL), with the username `git credential fill` answered
+// with beside the token when git is the source that answered: the whole
+// login a plain git host behind basic auth checks.
+func AmbientLogin(host, baseURL, source string) (token, user string, err error) {
+	token, _, user, err = ambientTokenVia(host, baseURL, source)
+	return token, user, err
+}
+
 // ambientToken is AmbientToken with the username `git credential fill`
 // answered with, when git is the source that answered.
 func ambientToken(host, source string) (token, from, user string, err error) {
