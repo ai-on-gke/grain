@@ -2072,16 +2072,42 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		SupersedeKept:  supersedeKept(created.SupersedeKept),
 		// Approval rather than state: a proposal filed deferred
 		// (not_before) reads "deferred" either way, and only its
-		// approval says whether a human still has to look at it. The
-		// state is the fallback for a daemon that does not report
-		// approval.
-		Queued: created.Approved ||
-			(created.State != model.StateProposed && created.State != model.StateDeferred),
+		// approval says whether a human still has to look at it.
+		Queued: filedApproved(created),
 		// The daemon's own account of why it is not queued, which only it
 		// can give: it is the side that read the parent's permission.
 		Held:         created.HeldBy != "",
 		ApprovalNote: created.ApprovalNote,
+		Parked:       filedParked(created),
 	}, nil
+}
+
+// filedApproved is whether a proposal CreateTask just filed carries an
+// approval. Task.Approved says so whenever it is set; it is omitted when
+// false, so the state stands in for it only as far as it can -- queued
+// or running is a task that was approved, and every other state
+// (proposed, deferred, and awaiting_reply above all, which filing parks a
+// task in whatever its approval: a repo off the target repo list) proves
+// nothing either way and is read as unapproved. Reading those as queued
+// told a run that had held its proposal that the hold had not worked
+// (grain/task-2050).
+func filedApproved(created ui.Task) bool {
+	return created.Approved ||
+		created.State == model.StateQueued || created.State == model.StateRunning
+}
+
+// filedParked is why filing parked a proposal awaiting a reply, or "".
+// The daemon's own comment when it reports one (Task.ParkNote); a daemon
+// that does not still shows the park in the state, and is relayed as a
+// park with the thread named as the place to read why.
+func filedParked(created ui.Task) string {
+	if created.ParkNote != "" {
+		return created.ParkNote
+	}
+	if created.State == model.StateAwaitingReply {
+		return "filing parked it awaiting a reply; grain's comment on its thread says what lifts that."
+	}
+	return ""
 }
 
 // mcpGitHubPins is the daemon's own answer to where a tunnelled MCP

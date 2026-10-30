@@ -401,6 +401,13 @@ type Task struct {
 	// to the run that filed it. Set by CreateTask only; empty on every
 	// other read, like SupersedeMoved.
 	ApprovalNote string `json:"approvalNote,omitempty"`
+	// ParkNote is, on the response to a task just filed, the comment
+	// filing parked it awaiting a reply on -- a repo off the target repo
+	// list, or one nothing here can reach -- and "" for one filing did
+	// not park. propose_task relays it, since a parked proposal is not
+	// dispatched in its turn whatever its approval says. Set by
+	// CreateTask only, like ApprovalNote.
+	ParkNote string `json:"parkNote,omitempty"`
 	// DependsOn is every task this one has declared a depends-on link to,
 	// resolved or not -- the definition. Blocked and BlockedBy are the
 	// signal: whether any of it (or a child-of link) is still open right
