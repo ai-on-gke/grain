@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -235,6 +236,12 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 		BaseCommit: baseCommit,
 	})
 	if err != nil {
+		// A daemon still starting is not a fact about the request: left
+		// as the ErrNotUp it is, so it is served as 503 and a waiting
+		// caller asks again rather than giving up on a 400.
+		if errors.Is(err, ci.ErrNotUp) {
+			return ci.Run{}, err
+		}
 		// A fact about the request, as handleStartCIRun says of the same
 		// refusal: a 400 that carries Start's reason, rather than a 500
 		// whose reason apierror.Body keeps to the daemon's log.
@@ -1063,6 +1070,18 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	withholdCapabilities := withhold
+	if withholdCapabilities == "" && event == "" {
+		withholdCapabilities, err = s.tasks.withholdReleaseSecrets(r.Context(), repo, ci.EventManual)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+	}
+	withholdReason := withhold
+	if withholdReason == "" {
+		withholdReason = withholdCapabilities
+	}
 	run, err := runner.Start(r.Context(), ci.Request{
 		Repo:                   repo.String(),
 		Ref:                    strings.TrimSpace(ref),
@@ -1072,11 +1091,16 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		Workflow:               strings.TrimSpace(req.Workflow),
 		Jobs:                   req.Jobs,
 		Recheck:                req.Recheck,
+		WithholdEventGated:     withholdCapabilities != "",
 		WithholdReleaseSecrets: withhold != "",
-		WithholdReason:         withhold,
+		WithholdReason:         withholdReason,
 	})
+	if errors.Is(err, ci.ErrNotUp) {
+		writeCINotUp(w)
+		return
+	}
 	if err != nil {
-		// Everything Start refuses is a fact about the request -- a
+		// Everything else Start refuses is a fact about the request -- a
 		// branch that does not resolve, a workflow file that does not
 		// parse, a repo with no name -- and the caller is who can fix
 		// it.
@@ -1089,15 +1113,17 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // withholdReleaseSecrets is why a by-hand run of event on repo is to be
-// handed none of the repository's release secrets, "" when it may be.
+// handed none of the repository's capabilities or release secrets, ""
+// when it may be.
 //
 // A workflow_dispatch -- and a release, which this route can be asked
-// for by name -- is the event release secrets are placed into, on
-// whatever branch the caller names, including a task branch nobody has
-// reviewed. GitHub lets only somebody with write access fire one;
-// grain's equivalent is the line StartRepoRelease already draws: a
-// person, the deployment's owner, rather than an agent. An agent's run
-// still runs, and a job that needs a secret says why it did not get one.
+// for by name -- is the event capabilities and release secrets are
+// placed into, on whatever branch the caller names, including a task
+// branch nobody has reviewed. GitHub lets only somebody with write
+// access fire one; grain's equivalent is the line StartRepoRelease
+// already draws: a person, the deployment's owner, rather than an agent.
+// An agent's run still runs, and a job that needs a capability or a
+// secret says why it did not get one.
 func (c *Client) withholdReleaseSecrets(ctx context.Context, repo model.RepoRef, event ci.Event) (string, error) {
 	if event != ci.EventManual && event != ci.EventRelease {
 		return "", nil
@@ -1105,7 +1131,7 @@ func (c *Client) withholdReleaseSecrets(ctx context.Context, repo model.RepoRef,
 	if c.actor(ctx).Kind == model.PrincipalHuman {
 		return "", nil
 	}
-	return fmt.Sprintf("a %s run of %s started by a caller that is not a person places no release secrets",
+	return fmt.Sprintf("a %s run of %s started by a caller that is not a person places no capabilities or release secrets",
 		event, repo), nil
 }
 
@@ -1325,6 +1351,13 @@ func ciRunFilterFrom(query url.Values, now time.Time) (ci.RunFilter, error) {
 	return filter, nil
 }
 
+// writeCINotUp answers a CI request this daemon cannot answer yet
+// (ci.ErrNotUp): 503, carrying the reason, which is a fixed sentence
+// and safe to show anyone.
+func writeCINotUp(w http.ResponseWriter) {
+	writeError(w, http.StatusServiceUnavailable, apierror.Public(ci.ErrNotUp.Error()))
+}
+
 func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {
 	runner := s.tasks.Config.CI
 	if runner == nil {
@@ -1333,6 +1366,13 @@ func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run, ok := runner.Get(r.PathValue("id"))
 	if !ok {
+		// A daemon whose CI service is not up yet remembers nothing, so
+		// its false is not "forgotten": saying so would end every wait
+		// that was polling this run across a restart (grain/task-1863).
+		if !ci.IsUp(runner) {
+			writeCINotUp(w)
+			return
+		}
 		writeError(w, http.StatusNotFound, fmt.Errorf("no CI run %q -- a run is remembered for a while and then forgotten", r.PathValue("id")))
 		return
 	}

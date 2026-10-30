@@ -181,6 +181,16 @@ major="${RELEASE_MAJOR:-$(conf_value RELEASE_MAJOR)}"
 major="${major:-${highest_major:-0}}"
 [[ "$major" =~ ^[0-9]+$ ]] || die "RELEASE_MAJOR is \"$major\", which is not a number; nothing was done"
 [[ "$floor_minor" =~ ^[0-9]+$ ]] || die "RELEASE_FLOOR_MINOR is \"$floor_minor\", which is not a number; nothing was done"
+# Version numbers never go backwards: a RELEASE_MAJOR behind the newest
+# released (or pending) major is stale, so the train releases that major
+# instead, as scripts/build-version.sh does. The floor is RELEASE_MAJOR's,
+# so a major the conf does not name has none.
+released_major="$(git tag -l 'v[0-9]*' | sed -nE 's/^v([0-9]+)\.[0-9]+\.[0-9]+(-pending)?$/\1/p' | sort -n | tail -n 1)"
+if [ -n "$released_major" ] && [ "$major" -lt "$released_major" ]; then
+  say "RELEASE_MAJOR $major is behind the released v$released_major; releasing major $released_major (raise RELEASE_MAJOR in scripts/release.conf)"
+  major="$released_major"
+  floor_minor=0
+fi
 export RELEASE_NEVER_PROMOTE="$never"
 
 never_promotes() { # never_promotes <tag>

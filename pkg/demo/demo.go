@@ -910,8 +910,8 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return fmt.Errorf("seeding a task awaiting submit: %w", err)
 	}
 
-	// The merge queue testing those two pull requests together: one
-	// speculative batch on acme/widgets main, still running, so the repo
+	// The merge queue re-checking that pull request on top of main: one
+	// overlap re-check on acme/widgets main, still running, so the repo
 	// page's Merge batches panel has a batch to draw. The demo runs no
 	// queue, so nothing ever advances it; the row is the one the queue
 	// itself writes (model.Store.PutMergeBatch), read back through the
@@ -929,32 +929,28 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		BaseCommit: "1234567890abcdef1234567890abcdef12345678",
 		Commit:     "abcdef0123456789abcdef0123456789abcdef01",
 		StartedAt:  batchStartedAt,
+		Queued:     1,
 		Members: []model.MergeBatchMember{
 			{TaskID: completed.ID, Number: 101, HeadRef: completedTask.BranchName(), HeadSHA: "fedcba9876543210fedcba9876543210fedcba98"},
-			{TaskID: awaitingSubmit.ID, Number: 102, HeadRef: awaitingSubmitTask.BranchName(), HeadSHA: "0123456789fedcba0123456789fedcba01234567"},
 		},
 	}); err != nil {
 		return fmt.Errorf("seeding a merge batch: %w", err)
 	}
-	// Every member carries the batching state, as the queue writes it on
-	// each one (orchestrator's batch note): a task page draws its Merge
-	// batch panel only for a task in that state, so a member seeded
-	// without it opened from the repo page's batch list with no batch.
-	for i, member := range []string{completed.ID, awaitingSubmit.ID} {
-		note := fmt.Sprintf(
-			"grain CI is testing this change together with 1 other(s) at the front of the %s main queue, "+
-				"on `%s` at abcdef012345: one suite for the batch, and all of them merge if it passes",
-			cfg.DefaultTarget, batchRef)
-		if i == 0 {
-			note += " -- this change is first in the batch, so a failure is bisected towards it"
-		}
-		if err := store.ObserveField(ctx, member, batchStartedAt, func(o *model.Observation) {
-			o.MergeQueueState, o.MergeQueueReason = "batching", "batching/batch_run"
-			o.MergeQueueStateAt = &batchStartedAt
-			o.MergeQueueNote = note
-		}); err != nil {
-			return fmt.Errorf("seeding batch state on task %s: %w", member, err)
-		}
+	// The member carries the overlap re-check state, as the queue writes it
+	// (orchestrator's setRecheckState): a task page draws its Merge batch
+	// panel only for a task in that state, so a member seeded without it
+	// opened from the repo page's batch list with no batch.
+	recheckNote := fmt.Sprintf(
+		"grain CI is re-checking this change on top of main before it merges, "+
+			"on `%s` at abcdef012345: what it changes overlaps what has landed on main "+
+			"since the commit its own run tested, and it merges if this passes",
+		batchRef)
+	if err := store.ObserveField(ctx, completed.ID, batchStartedAt, func(o *model.Observation) {
+		o.MergeQueueState, o.MergeQueueReason = "waiting_ci", "waiting_ci/grain_running"
+		o.MergeQueueStateAt = &batchStartedAt
+		o.MergeQueueNote = recheckNote
+	}); err != nil {
+		return fmt.Errorf("seeding batch state on task %s: %w", completed.ID, err)
 	}
 
 	// The third post-run state: a run that answered on the task itself

@@ -50,7 +50,7 @@ No browser route interception (`page.route`) was used anywhere.
    - GitHub PAT: "Token accepted as @walk-bot by github.com · scopes: repo, workflow · ✓ acme/widgets read, push" (stub).
    - GitHub App: "no installation token could be minted…", as expected with a fake key.
    - SSH key: said **"Token accepted by ssh.walk.test"** for a host that does not resolve. This is bug 1 (below), and is fixed.
-   - Plain-git PAT: "could not reach GitHub: Get http://git.walk.test/rate_limit…". This is bug 5, filed as a follow-up.
+   - Plain-git PAT: "could not reach GitHub: Get http://git.walk.test/rate_limit…". This is bug 5, now fixed.
 3. **Remove** asks first: "Remove the git.walk.test connection …? A credential stored for it is deleted with it and
    cannot be read back…". Dismissing it kept the row, and accepting removed it. Keyboard focus plus Enter on Remove raised
    the same confirmation. After a reload only the seeded connection was left.
@@ -177,7 +177,7 @@ aborted (`ERR_ABORTED`) by navigation.
 | 2 | `grain demo -unconfigured` keeps the seeded `default` connection, so `hasGitCredential` stays true and the no-git-connection notice never shows | `grain demo -unconfigured`, then Repos / New task | **Fixed** (`cd0eea2`): the connection is dropped after seeding. `TestDemoScenariosRaiseTheSetupAndPauseBanners` asserts it |
 | 3 | The needs-configuring reason says "open Configure", a control that does not exist | Any unconfigured built-in server's page | **Fixed** (`ba28828`): it names *Edit server settings*. Asserted in `TestABuiltinWaitingForConfigurationNeedsConfigAndAliasesResolve` |
 | 4 | A daemon-refused auto overcommit bound is reported as "Couldn't save Overcommit mode" | Overcommit auto, Auto CPU minimum 8 (max 6) | **Fixed** (`5d974e5`): `save`/`saveChoice` take an `errorKey`. Tests in `useSettingsSection.test.jsx` and `SandboxesSection.test.jsx` |
-| 5 | Git → Test on a plain-git PAT connection probes the host as GitHub (`/rate_limit`) instead of reading a repository | Add a plain git PAT connection, then press Test | **Follow-up proposed** (needs an HTTPS ls-remote probe through the git proxy's forwarder) |
+| 5 | Git → Test on a plain-git PAT connection probes the host as GitHub (`/rate_limit`) instead of reading a repository | Add a plain git PAT connection, then press Test | **Fixed** (task 1809): a connection on a `kind: git` host is tested with an authenticated smart-HTTP `info/refs` (upload-pack for read, receive-pack for push) per repository, through the git proxy's forwarder for that host, and with none in reach says nothing was tested. Regression test `TestPlainGitPATCheckReadsTheRepository` (`pkg/ui`) |
 | 6 | The capability picker offers, and filing accepts, a grant the capability policy denies; it is refused only at admission | Deny `…/cloud#cloud-viewer` for agent tasks, then New task → Add grant… | **Follow-up proposed** (the picker has to evaluate policy per repo and run kind) |
 | 7 | Settings → Sandboxes saves Kubernetes namespace and PriorityClass names that Kubernetes refuses | Type `Bad_Class` into Priority class for CI jobs | **Fixed** (`ebbfed4`): DNS-1123 checks in `UpdateSettings`, extending `TestUpdateSettingsRoundTripsKubernetesSettingsAndValidatesNodeSelector` |
 

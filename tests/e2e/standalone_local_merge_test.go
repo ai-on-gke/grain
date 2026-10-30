@@ -29,6 +29,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -110,6 +111,12 @@ jobs:
 		t.Fatalf("grain init workstation: %v\n%s", err, out)
 	}
 	dataDir := filepath.Join(home, ".grain")
+	// The test configures the daemon through its API, which a deployment
+	// with a grain/config repository otherwise sends to a config pull
+	// request (docs/design/config-repo-settings.md, section 4.1.1).
+	if err := staterepo.SaveSettings(dataDir, staterepo.Settings{DirectConfigWrites: true}); err != nil {
+		t.Fatal(err)
+	}
 
 	// The fake agent: it reads its request, edits NOTES.md in the
 	// checkout grain cloned under the sandbox it was given

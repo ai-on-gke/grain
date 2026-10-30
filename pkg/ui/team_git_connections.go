@@ -589,11 +589,36 @@ func (c *Client) CheckTeamGitConnection(ctx context.Context, id string, req Chec
 	name := strings.TrimSpace(req.Credential)
 	value := strings.TrimSpace(req.Value)
 
+	// What an unsaved credential is tested as: the host as this
+	// deployment already records it (its base URL and proxy), of the
+	// kind the editor names. A plain git host has no API, so a token for
+	// one is tested by reading its repositories, never as GitHub.
+	unsavedHost := gitproxy.CredentialHost{Host: normHost, Kind: model.GitHostGitHub}
+	if rec := c.Config.Credentials.HostOf(normHost); rec.Recorded && model.SameGitHost(rec.Host, normHost, model.DefaultGitHost) {
+		unsavedHost = rec
+	}
+	if strings.TrimSpace(req.Kind) != "" {
+		kind, err := model.ParseGitHostKind(req.Kind)
+		if err != nil {
+			return TeamGitHubCredentialCheck{}, validationErrorf("invalid kind: %w", err)
+		}
+		unsavedHost.Kind = kind
+	}
+
 	// An ambient connection typed into the editor and not saved yet: ask
 	// the host's own login for a token now, and probe with it.
 	if (GitCredentialInput{Type: req.Type}).authType() == gitproxy.AuthTypeAmbient && name == "" {
 		if err := c.requireAmbientAvailable(); err != nil {
 			return TeamGitHubCredentialCheck{}, err
+		}
+		if unsavedHost.Kind == model.GitHostGit {
+			token, user, err := gitproxy.AmbientLogin(normHost, unsavedHost.BaseURL, req.Source)
+			if err != nil {
+				return TeamGitHubCredentialCheck{Host: normHost, CheckedAt: c.now(),
+					Report: githubtoken.Report{Error: err.Error()}}, nil
+			}
+			return c.checkPlainGitCredential(unsavedHost, gitproxy.Credential{Token: &token,
+				Ambient: &gitproxy.AmbientCredential{Host: normHost, Source: req.Source, User: user}}, reposToCheck, false), nil
 		}
 		token, _, err := gitproxy.AmbientToken(normHost, req.Source)
 		if err != nil {
@@ -627,6 +652,8 @@ func (c *Client) CheckTeamGitConnection(ctx context.Context, id string, req Chec
 
 	if value == "" {
 		name = saved
+	} else if unsavedHost.Kind == model.GitHostGit {
+		return c.checkPlainGitCredential(unsavedHost, gitproxy.Credential{Token: &value}, reposToCheck, false), nil
 	}
 
 	return c.checkGitHubCredentialForHost(ctx, name, value, normHost, reposToCheck)
@@ -671,6 +698,11 @@ func (c *Client) checkGitHubCredentialForHost(ctx context.Context, name, value, 
 			return out, nil
 		}
 		token = strings.TrimSpace(*cred.Token)
+		if h := c.Config.Credentials.HostOf(name); h.Kind == model.GitHostGit {
+			// A plain git host has no GitHub API to probe: the
+			// token is tested the way the git proxy uses it.
+			return c.checkPlainGitCredential(h, cred, repos, true), nil
+		}
 	}
 
 	transport := githubtoken.ProbeTransport(probeHost, insecure)

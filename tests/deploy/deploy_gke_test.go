@@ -154,6 +154,37 @@ func TestDeployGKEScriptDryRunAllModes(t *testing.T) {
 		absent(t, out, "gcloud sql instances create")
 	})
 
+	t.Run("adopt cluster requires network policy enforcement", func(t *testing.T) {
+		args := []string{
+			"--project=example-proj",
+			"--dns-name=grain.example.com",
+			"--adopt-cluster",
+			"--dry-run",
+		}
+		out := runDry(t, nil, args...)
+		contains(t, out, "Would verify that adopted cluster 'grain-gke' enforces NetworkPolicy")
+		for _, mode := range []string{"ADVANCED_DATAPATH", "CALICO"} {
+			out := runDry(t, []string{"GRAIN_GKE_ASSUME_NETWORK_POLICY=" + mode}, args...)
+			contains(t, out, "enforces NetworkPolicy ("+mode+")")
+			contains(t, out, "gcloud container clusters update grain-gke")
+		}
+
+		// A cluster that would accept grain's NetworkPolicies and then
+		// ignore them -- leaving the acceptor port open to every pod and
+		// network-none sandboxes on the internet -- is refused before
+		// anything is changed on it.
+		cmd := exec.Command(script, args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GRAIN_GKE_ASSUME_NETWORK_POLICY=NONE")
+		refusal, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("expected --adopt-cluster to refuse a cluster without NetworkPolicy enforcement, but it exited 0:\n%s", refusal)
+		}
+		contains(t, string(refusal), "refusing to adopt cluster 'grain-gke'")
+		absent(t, string(refusal), "DRY-RUN: gcloud container clusters update")
+		absent(t, string(refusal), "DRY-RUN: kubectl apply")
+	})
+
 	t.Run("migrate mode", func(t *testing.T) {
 		out := runDry(t, nil,
 			"--project=example-proj",
@@ -425,6 +456,8 @@ func TestDeployGKETerraformModule(t *testing.T) {
 	clusterTF := read(t, "deploy", "gke", "terraform", "cluster.tf")
 	contains(t, clusterTF, "enable_nested_virtualization = true")
 	contains(t, clusterTF, `mode = "GKE_METADATA"`)
+	// An adopted cluster must enforce the NetworkPolicies it is given.
+	contains(t, clusterTF, `self.datapath_provider == "ADVANCED_DATAPATH" || try(self.network_policy[0].enabled, false)`)
 
 	iamTF := read(t, "deploy", "gke", "terraform", "iam.tf")
 	contains(t, iamTF, "roles/iam.workloadIdentityUser")

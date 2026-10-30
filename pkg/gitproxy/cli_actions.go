@@ -112,7 +112,9 @@ type CLIActions interface {
 	// StartTaskCI starts grain CI on taskID's own branch, or attaches to
 	// the identical run already in flight.
 	StartTaskCI(ctx context.Context, taskID string, req CIStartRequest) (ci.Run, error)
-	// CIRun reads one run by id.
+	// CIRun reads one run by id. Its false is "not remembered" -- unless
+	// the actions are a ci.Readiness saying CI is not up yet, when it is
+	// that instead (served as 503, not 404).
 	CIRun(ctx context.Context, id string) (ci.Run, bool)
 	// OpenPullRequest opens (or finds) the pull request for taskID's
 	// branch and reports it.
@@ -550,27 +552,6 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	}
 	ctx := r.Context()
 
-	var run ci.Run
-	if id := strings.TrimSpace(req.ResumeRunID); id != "" {
-		got, ok := p.CLIActions.CIRun(ctx, id)
-		if !ok {
-			cliError(w, fmt.Errorf("%w: no CI run %q -- a run is remembered for a while and then forgotten", namespace.ErrNotFound, id))
-			return
-		}
-		if !strings.EqualFold(got.Repo, scope.TaskRepo) || got.Ref != scope.TaskBranch {
-			cliError(w, fmt.Errorf("%w: CI run %s is not on this task's branch (%s in %s)", namespace.ErrForbidden, id, scope.TaskBranch, scope.TaskRepo))
-			return
-		}
-		run = got
-	} else {
-		started, err := p.CLIActions.StartTaskCI(ctx, scope.TaskIDStr, CIStartRequest{Jobs: jobs})
-		if err != nil {
-			cliError(w, err)
-			return
-		}
-		run = started
-	}
-
 	slice := DefaultCLIWaitSlice
 	if req.TimeoutSeconds > 0 {
 		slice = min(slice, time.Duration(req.TimeoutSeconds)*time.Second)
@@ -580,6 +561,24 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	if deadline, ok := ctx.Deadline(); ok {
 		if d := deadline.Add(-cliWaitDeadlineMargin); d.Before(end) {
 			end = d
+		}
+	}
+
+	// A daemon that has just restarted serves this route before its CI
+	// service is up (ci.ErrNotUp), for as long as adopting its runs
+	// takes -- over a minute on a busy one. That is the wait's own
+	// business to sit out, inside its slice, rather than a reason to
+	// stop waiting: the run it was asked about is still there.
+	var run ci.Run
+	for {
+		got, err := p.startCIWait(ctx, scope, req.ResumeRunID, jobs)
+		if err == nil {
+			run = got
+			break
+		}
+		if !ci.IsNotUp(err) || !p.napBefore(ctx, end) {
+			cliError(w, err)
+			return
 		}
 	}
 
@@ -660,6 +659,48 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	}
 	p.recordCheckWait(ctx, scope.RunID, verdict, waited)
 	writeCLIJSON(w, http.StatusOK, resp)
+}
+
+// startCIWait is the run a wait follows: resumeID's, or the one
+// StartTaskCI starts (or joins) on the task's branch. A resumeID CIRun
+// cannot find while CI is not up yet is ci.ErrNotUp, not a run that has
+// been forgotten.
+func (p *GitProxy) startCIWait(ctx context.Context, scope namespace.Scope, resumeID string, jobs []string) (ci.Run, error) {
+	id := strings.TrimSpace(resumeID)
+	if id == "" {
+		return p.CLIActions.StartTaskCI(ctx, scope.TaskIDStr, CIStartRequest{Jobs: jobs})
+	}
+	got, ok := p.CLIActions.CIRun(ctx, id)
+	if !ok {
+		if !ci.IsUp(p.CLIActions) {
+			return ci.Run{}, ci.ErrNotUp
+		}
+		return ci.Run{}, fmt.Errorf("%w: no CI run %q -- a run is remembered for a while and then forgotten", namespace.ErrNotFound, id)
+	}
+	if !strings.EqualFold(got.Repo, scope.TaskRepo) || got.Ref != scope.TaskBranch {
+		return ci.Run{}, fmt.Errorf("%w: CI run %s is not on this task's branch (%s in %s)", namespace.ErrForbidden, id, scope.TaskBranch, scope.TaskRepo)
+	}
+	return got, nil
+}
+
+// napBefore sleeps one poll before asking again, reporting false --
+// with nothing slept -- when there is no room for one before end, or
+// the request or the proxy is ending.
+func (p *GitProxy) napBefore(ctx context.Context, end time.Time) bool {
+	nap := cliWaitPoll
+	if time.Until(end) < nap {
+		return false
+	}
+	timer := time.NewTimer(nap)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-p.ShutdownStarted:
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func (p *GitProxy) shuttingDown() bool {

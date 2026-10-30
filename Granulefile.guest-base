@@ -44,14 +44,18 @@ ENV GOTOOLCHAIN=local
 COPY cmd/grain-connect/main.go /tmp/grain-connect/main.go
 RUN CGO_ENABLED=0 go build -o /out/grain-connect /tmp/grain-connect/main.go \
     && chmod 0755 /out/grain-connect
-# The sandbox's own grain (cmd/grain-sandbox: `grain host-script`), built
-# from standard-library packages alone: a go.mod naming the module is all
-# it needs, so the repository's own (and every go.mod bump) stays out of
-# this image's inputs (scripts/granule/guest-inputs.sh).
-COPY pkg/hostscriptcli /src/pkg/hostscriptcli
+# The sandbox's own grain (cmd/grain-sandbox: `grain host-script` and the
+# sandbox CLI, pkg/sandboxcli), built against the repository's own module:
+# go.mod, go.sum, the granule its replace directive names, and the
+# packages the CLI imports. Only the CLI's own code keys this image
+# (scripts/granule/guest-inputs.sh says why its imports do not): sandbox
+# setup replaces this copy with the daemon's own build of it anyway.
+COPY go.mod /src/go.mod
+COPY go.sum /src/go.sum
+COPY third_party/granule /src/third_party/granule
+COPY pkg /src/pkg
 COPY cmd/grain-sandbox /src/cmd/grain-sandbox
-RUN cd /src && printf 'module github.com/ai-on-gke/grain\n\ngo 1.26\n' > go.mod \
-    && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/grain ./cmd/grain-sandbox \
+RUN cd /src && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/grain ./cmd/grain-sandbox \
     && chmod 0755 /out/grain
 
 FROM ${BASE_IMAGE} AS guest_base_rootfs

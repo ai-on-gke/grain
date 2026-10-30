@@ -16,7 +16,8 @@
 #   - Stage `k8s-sandbox-base` (ghcr.io/bwsalmon/grain/k8s-sandbox-base):
 #     minimal base container carrying ONLY what Grain requires to drive a
 #     container/pod sandbox (debian:bookworm-slim, bash, ca-certificates, curl,
-#     findutils, git, tar, python3-minimal for GuestForwarder, user debian
+#     findutils, git, tar, python3-minimal for GuestForwarder, the sandbox's
+#     own grain at /usr/local/bin/grain (cmd/grain-sandbox), user debian
 #     uid 1000, /home/agent -> /home/debian, and /etc/grain/sandbox-contract).
 #   - Stage `k8s-sandbox` (ghcr.io/bwsalmon/grain/k8s-sandbox):
 #     the default full Kubernetes/container sandbox image, layering OCR and
@@ -29,6 +30,25 @@
 # repoint, and the digest is what is fetched. This is the same value as
 # that file's RUNTIME_IMAGE -- bump both together.
 ARG BASE_IMAGE=debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+# The Go image the sandbox's own grain is built with: the main Dockerfile's
+# GO_VERSION and GO_IMAGE_DIGEST -- bump all three together.
+ARG GO_VERSION=1.26.10
+ARG GO_IMAGE=golang
+ARG GO_IMAGE_DIGEST=sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af
+
+# The sandbox's own grain (cmd/grain-sandbox): `grain host-script` and the
+# sandbox CLI (pkg/sandboxcli) -- `grain ls`, `read`, `ci wait`, `pr open`
+# and the rest every run's prompt tells it to use. The granule guest
+# carries the same binary (Granulefile.guest-base), and sandbox setup
+# places the daemon's own build of it over either.
+FROM ${GO_IMAGE}:${GO_VERSION}-bookworm@${GO_IMAGE_DIGEST} AS grain_sandbox_builder
+ENV GOTOOLCHAIN=local
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY third_party/granule third_party/granule
+COPY pkg pkg
+COPY cmd/grain-sandbox cmd/grain-sandbox
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/grain ./cmd/grain-sandbox
 
 # ==============================================================================
 # Stage 1: Minimal base sandbox container (k8s-sandbox-base)
@@ -59,6 +79,8 @@ ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 # Stamp the Grain sandbox contract version (pkg/sandboximage.Contract).
 RUN install -d -m0755 /etc/grain \
     && printf '1\n' > /etc/grain/sandbox-contract
+
+COPY --from=grain_sandbox_builder /out/grain /usr/local/bin/grain
 
 # The sandbox user is debian, uid 1000, in /home/debian: the user and home
 # capability materialization writes into (docs/capabilities-spec.md §5.1,
@@ -220,10 +242,10 @@ ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
 # build happens to run on: install.sh served amd64 and arm64 users alike,
 # and the published default image is built for both.
 ARG INSTALL_AGY_CLI=1
-ARG AGY_CLI_VERSION=1.4.9
-ARG AGY_CLI_BUILD=4962164969177088
-ARG AGY_CLI_SHA256_AMD64=3d84e3a461b9cbf9ffc9deede155a01921380e964f51a82c0bc505db80ae8525
-ARG AGY_CLI_SHA256_ARM64=0e75190d5aa48b0f7623b201cfef542cd36a1279b3d28afa7fa099983a073493
+ARG AGY_CLI_VERSION=1.2.2
+ARG AGY_CLI_BUILD=6061403484848128
+ARG AGY_CLI_SHA256_AMD64=2cfa5c9a4a1edd96db6d4058f34970be60d3bcacda866e2bdce6aefb2451b48e
+ARG AGY_CLI_SHA256_ARM64=00fc5cb50cd714b81cdf1298fcc90e63a59e3e564a4f8076454ab8457d36e6eb
 RUN if [ "$INSTALL_AGY_CLI" = "1" ]; then \
         set -eu; mkdir -p /opt/antigravity; arch="$(uname -m)"; \
         case "$arch" in \

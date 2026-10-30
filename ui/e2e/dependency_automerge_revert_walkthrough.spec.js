@@ -265,28 +265,40 @@ test.describe("Multi-Task Dependency Chains, Auto-Merge Lifecycle and Revert Wor
     ).toBeVisible();
 
     // The batch `grain demo` seeds (pkg/demo/demo.go): the merge queue
-    // testing acme/widgets#101 and #102 together on main, read through the
-    // real GET /api/merge-batches -- member order and the throwaway ref.
+    // re-checking acme/widgets#101 on top of main, read through the real
+    // GET /api/merge-batches -- single-change overlap re-check on the
+    // throwaway ref.
     await expect(
       page.getByRole("heading", { name: "Merge batches" }),
     ).toBeVisible();
     const batchPanel = page
       .getByRole("heading", { name: "Merge batches" })
       .locator("xpath=..");
-    await expect(batchPanel.getByText(/2 changes on main/i)).toBeVisible();
+    const countLabel = batchPanel.getByText(/1 change on main/i);
+    const statusChip = batchPanel.getByText("Testing", { exact: true });
+    await expect(countLabel).toBeVisible();
+    await expect(statusChip).toBeVisible();
+    const [countBox, statusBox] = await Promise.all([
+      countLabel.boundingBox(),
+      statusChip.boundingBox(),
+    ]);
+    expect(
+      Math.abs(
+        countBox.y + countBox.height / 2 - (statusBox.y + statusBox.height / 2),
+      ),
+    ).toBeLessThanOrEqual(4);
     await expect(
       batchPanel.getByText(/grain-merge-queue\/[a-z0-9-]+\/main/i),
     ).toBeVisible();
     await expect(
-      batchPanel.getByText("first -- a failure is halved towards this end"),
+      batchPanel.getByText("Rotate the Gemini signing key"),
     ).toBeVisible();
-    // The queue halves from the front, so the order members are drawn in
-    // is the order they were batched in.
-    const panelText = await batchPanel.innerText();
-    const first = panelText.indexOf("Rotate the Gemini signing key");
-    const second = panelText.indexOf("Cache the capability readiness probe");
-    expect(first).toBeGreaterThanOrEqual(0);
-    expect(second).toBeGreaterThan(first);
+    await expect(
+      batchPanel.getByText("Cache the capability readiness probe"),
+    ).toHaveCount(0);
+    await expect(
+      batchPanel.getByText("first -- a failure is halved towards this end"),
+    ).toHaveCount(0);
 
     // -----------------------------------------------------------------------
     // PHASE 4: Task Revert Lifecycle Operations

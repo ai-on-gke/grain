@@ -53,10 +53,16 @@ field that does not validate, a repository or schedule that does not
 exist -- is still answered `409` with the same `code`, `path` and
 `description`, but with an empty `change`: there is no edit to commit
 for it, and external mode refuses every configuration write with `409`
-whatever else is wrong with it. Fix the request in internal mode, or
+whatever else is wrong with it. Fix the request and send it again, or
 write the edit by hand from `description`. (A route that looks up what
 it was asked to change before it reaches the guard -- deleting a console
 session that does not exist, say -- still answers `404`.)
+
+Internal mode answers the same way for every setting outside Models and
+Sandboxes: the refusal names `grain/config` (`"internal": true`), and
+`POST /api/state-repo/pull-requests` with `{"changes": <its change>}`
+opens a validated pull request there, held for a person to submit
+(`docs/design/config-repo-settings.md`, section 4.1.1).
 
 ## Trying it
 

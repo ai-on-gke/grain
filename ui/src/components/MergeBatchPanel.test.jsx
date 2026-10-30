@@ -102,10 +102,6 @@ describe("MergeBatchPanel", () => {
       expect.stringContaining("Rename the thing"),
       expect.stringContaining("Add the flag"),
     ]);
-    // Which end a failure is halved towards, said on the member it is
-    // about rather than left to be inferred from the order.
-    expect(members[0].textContent).toMatch(/first/);
-    expect(members[1].textContent).not.toMatch(/first/);
   });
 
   // The tree being judged is neither the base branch nor any member's

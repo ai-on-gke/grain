@@ -147,18 +147,18 @@ func TestRepoReleaseRunIsAPersonsToStart(t *testing.T) {
 func TestCIRunReleaseSecretsAreAPersonsToFire(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name, user, event string
-		withheld          bool
+		name, user, event                string
+		withheldSecrets, withheldCapGate bool
 	}{
-		{"agent's manual run", agentPrefix + "run-1", "workflow_dispatch", true},
-		{"agent asking for a release by name", agentPrefix + "run-1", "release", true},
-		{"ci:write agent's manual run", actingAgentPrefix + "ci-writer", "workflow_dispatch", true},
-		{"ci:write agent asking for a release by name", actingAgentPrefix + "ci-writer", "release", true},
-		{"ci:write agent's push run", actingAgentPrefix + "ci-writer", "push", false},
-		{"agent's push run", agentPrefix + "run-1", "push", false},
-		{"agent naming no event", agentPrefix + "run-1", "", false},
-		{"person's manual run", "carol", "workflow_dispatch", false},
-		{"person asking for a release by name", "carol", "release", false},
+		{"agent's manual run", agentPrefix + "run-1", "workflow_dispatch", true, true},
+		{"agent asking for a release by name", agentPrefix + "run-1", "release", true, true},
+		{"ci:write agent's manual run", actingAgentPrefix + "ci-writer", "workflow_dispatch", true, true},
+		{"ci:write agent asking for a release by name", actingAgentPrefix + "ci-writer", "release", true, true},
+		{"ci:write agent's push run", actingAgentPrefix + "ci-writer", "push", false, false},
+		{"agent's push run", agentPrefix + "run-1", "push", false, false},
+		{"agent naming no event", agentPrefix + "run-1", "", false, true},
+		{"person's manual run", "carol", "workflow_dispatch", false, false},
+		{"person asking for a release by name", "carol", "release", false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -174,10 +174,13 @@ func TestCIRunReleaseSecretsAreAPersonsToFire(t *testing.T) {
 				t.Fatalf("started = %+v", runner.started)
 			}
 			got := runner.started[0]
-			if got.WithholdReleaseSecrets != tc.withheld {
-				t.Fatalf("WithholdReleaseSecrets = %v, want %v", got.WithholdReleaseSecrets, tc.withheld)
+			if got.WithholdReleaseSecrets != tc.withheldSecrets {
+				t.Fatalf("WithholdReleaseSecrets = %v, want %v", got.WithholdReleaseSecrets, tc.withheldSecrets)
 			}
-			if tc.withheld && !strings.Contains(got.WithholdReason, "not a person") {
+			if got.WithholdEventGated != tc.withheldCapGate {
+				t.Fatalf("WithholdEventGated = %v, want %v", got.WithholdEventGated, tc.withheldCapGate)
+			}
+			if (tc.withheldSecrets || tc.withheldCapGate) && !strings.Contains(got.WithholdReason, "not a person") {
 				t.Fatalf("WithholdReason = %q", got.WithholdReason)
 			}
 		})

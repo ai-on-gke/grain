@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cli
+package sandboxcli
 
 // sandboxcli_cap.go is grain cap: the sandbox-callable tools of the
 // external capability servers granted to this run (docs/capabilities-spec.md

@@ -17,11 +17,14 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -565,6 +568,152 @@ func TestAgentAPIFromTemplateIsHeldToTaskFilingsOwnGate(t *testing.T) {
 	if code, resp := asAgent(t, srv, "2", http.MethodPost, "/api/tasks/from-template", body, ""); code != http.StatusForbidden ||
 		!strings.Contains(resp, "tasks:from-template") {
 		t.Errorf("tasks:write alone reached from-template: %d %s", code, resp)
+	}
+}
+
+type staticCISource struct {
+	workflows []ci.Workflow
+	commit    string
+}
+
+func (s staticCISource) Workflows(context.Context, string, string) ([]ci.Workflow, string, error) {
+	return s.workflows, s.commit, nil
+}
+
+type recordingCISandboxes struct {
+	mu       sync.Mutex
+	acquired []ci.SandboxRequest
+}
+
+func (r *recordingCISandboxes) Acquire(_ context.Context, req ci.SandboxRequest) (ci.Sandbox, error) {
+	r.mu.Lock()
+	r.acquired = append(r.acquired, req)
+	r.mu.Unlock()
+	return noopCISandbox{name: req.Name}, nil
+}
+
+type noopCISandbox struct{ name string }
+
+func (s noopCISandbox) Name() string { return s.name }
+func (noopCISandbox) Exec(context.Context, ci.Command) (ci.CommandResult, error) {
+	return ci.CommandResult{}, nil
+}
+func (noopCISandbox) Release(context.Context) error { return nil }
+
+// An agent holding api:task-admin (which carries ci:write) posting
+// POST /api/ci/runs with event: workflow_dispatch on a branch whose
+// workflow declares repo-write:<repo> and package-publish gets a run
+// whose job records both as unmet and resolves no capability; the same
+// request from a human principal does not withhold them.
+func TestAgentAPIWorkflowDispatchWithholdsEventGatedCapabilities(t *testing.T) {
+	w, err := ci.Parse(".grain/workflows/x.yml", []byte(
+		"on: workflow_dispatch\n"+
+			"jobs:\n"+
+			"  publish:\n"+
+			"    cache: false\n"+
+			"    capabilities: [\"repo-write:acme/widgets\", package-publish]\n"+
+			"    steps:\n"+
+			"      - run: true\n",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandboxes := &recordingCISandboxes{}
+	finished := make(chan string, 8)
+	service := &ci.Service{
+		Source: staticCISource{workflows: []ci.Workflow{w}, commit: "abc1234"},
+		Engine: &ci.Engine{Sandboxes: sandboxes},
+		Capabilities: func(context.Context, string) ([]string, error) {
+			return []string{"package-publish"}, nil
+		},
+		Log: func(format string, args ...any) {
+			if line := fmt.Sprintf(format, args...); strings.Contains(line, "ci: run ") {
+				id, _, _ := strings.Cut(strings.TrimPrefix(line, "ci: run "), ":")
+				select {
+				case finished <- id:
+				default:
+				}
+			}
+		},
+	}
+	awaitRun := func(id string) ci.Run {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for {
+			if run, ok := service.Get(id); ok && run.Conclusion.Done() {
+				return run
+			}
+			select {
+			case <-finished:
+			case <-deadline:
+				t.Fatalf("timed out waiting for CI run %s", id)
+			}
+		}
+	}
+
+	srv, client, store := releaseServer(t, service)
+	ctx := context.Background()
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:           repo,
+		CIMode:         model.CIModeGrain,
+		CICapabilities: []string{"package-publish"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "admin-agent", "acme/widgets", "api:task-admin")
+
+	reqBody := `{"repo":"acme/widgets","ref":"grain/049f1e09/task-1359","event":"workflow_dispatch","workflow":".grain/workflows/x.yml"}`
+
+	// 1. Agent holding api:task-admin: both repo-write:acme/widgets and
+	// package-publish are recorded as unmet, and no sandbox or capability is acquired.
+	code, resp := asAgent(t, srv, "admin-agent", http.MethodPost, "/api/ci/runs", reqBody, "")
+	if code != http.StatusAccepted {
+		t.Fatalf("agent POST /api/ci/runs: %d %s, want 202", code, resp)
+	}
+	var started ci.Run
+	if err := json.Unmarshal([]byte(resp), &started); err != nil {
+		t.Fatal(err)
+	}
+	agentRun := awaitRun(started.ID)
+	if len(agentRun.Jobs) != 1 || agentRun.Jobs[0].Conclusion != ci.ConclusionErrored {
+		t.Fatalf("agent run jobs = %+v, want 1 errored job", agentRun.Jobs)
+	}
+	jobErr := agentRun.Jobs[0].Error
+	for _, capID := range []string{`"repo-write:acme/widgets"`, `"package-publish"`} {
+		if !strings.Contains(jobErr, capID) || !strings.Contains(jobErr, "not a person") {
+			t.Errorf("agent job error = %q, want unmet requirement naming %s and 'not a person'", jobErr, capID)
+		}
+	}
+	sandboxes.mu.Lock()
+	nAcquired := len(sandboxes.acquired)
+	sandboxes.mu.Unlock()
+	if nAcquired != 0 {
+		t.Fatalf("agent run acquired %d sandboxes, want 0", nAcquired)
+	}
+
+	// 2. Human principal making the same request: neither capability is withheld.
+	rec := doAs(t, srv, "operator@example.com", http.MethodPost, "/api/ci/runs", reqBody)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("human POST /api/ci/runs: %d %s, want 202", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	humanRun := awaitRun(started.ID)
+	if len(humanRun.Jobs) != 1 || humanRun.Jobs[0].Conclusion != ci.ConclusionSuccess {
+		t.Fatalf("human run jobs = %+v, want 1 succeeded job", humanRun.Jobs)
+	}
+	sandboxes.mu.Lock()
+	defer sandboxes.mu.Unlock()
+	if len(sandboxes.acquired) != 1 ||
+		!slices.Equal(sandboxes.acquired[0].Capabilities, []string{"repo-write:acme/widgets", "package-publish"}) ||
+		sandboxes.acquired[0].WithholdEventGated {
+		t.Fatalf("human run acquired = %+v, want [repo-write:acme/widgets package-publish] with WithholdEventGated=false",
+			sandboxes.acquired)
 	}
 }
 
