@@ -27,7 +27,7 @@ import {
   sourceOf,
   withKinds,
 } from "./processFilters.js";
-import { operatorsFor, optionsFor } from "./taskFilters.js";
+import { directionLabels, operatorsFor, optionsFor } from "./taskFilters.js";
 
 // The same four schedules pkg/schedulefilter's filter_test.go asks its
 // questions of, at the same moment, so the two readings can be checked
@@ -111,6 +111,21 @@ const ids = (narrowing) =>
 const only = (...filters) => ids({ sort: [], filters });
 
 describe("processFilters", () => {
+  // A next run is still to come, so "oldest first" would name the run
+  // furthest off as the old one; a last run has happened, and keeps
+  // the date wording.
+  it("words the next run's sort as soonest and latest, and the last run's as oldest and newest", () => {
+    const attr = (id) => PROCESS_ATTRIBUTES.find((a) => a.id === id);
+    expect(directionLabels(attr("next"))).toEqual({
+      asc: "Soonest first",
+      desc: "Latest first",
+    });
+    expect(directionLabels(attr("last"))).toEqual({
+      asc: "Oldest first",
+      desc: "Newest first",
+    });
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
