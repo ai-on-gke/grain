@@ -72,8 +72,10 @@ upgrade's hold.
 (the director's capability pane). The bare name it had as an in-process
 capability is an alias for the preset, and is recorded as
 `api:dispatch-control` wherever it is granted; schema migration 68
-rewrote the grants already stored. A run holding it is served the
-routes as `api_*` tools, called as `{agent, <task id>}`:
+rewrote the grants already stored. A run holding it reaches these
+routes as `{agent, <task id>}`: the `dispatch:write` ones as `api_*` MCP
+tools (`api_pause_pipeline`, `api_resume_pipeline`, `api_run_now`), which
+are model-only, and defer through `grain api` in its sandbox:
 
 - `POST /api/pipeline-pause` (`reason`): pause the whole deployment;
 - `DELETE /api/pipeline-pause`: lift the pause. An agent may lift only a
