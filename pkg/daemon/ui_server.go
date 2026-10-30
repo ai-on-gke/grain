@@ -426,6 +426,18 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// when it was dispatched. No gate, unlike PullRequests above --
 		// see sandboxRecreations' own doc comment.
 		SandboxRecreate: sandboxRecreateAdapter{sandboxRecreations},
+		// SandboxProbe builds one throwaway sandbox from the same backend
+		// runs use, admitted and metered as they are, for `grain sandbox
+		// probe` (scripts/deploy-gke.sh --check). Gated by its route's
+		// scope, not here.
+		SandboxProbe: sandboxProbeAdapter{
+			sandboxes: sandboxes,
+			meter:     orchestrator.MeterFor(store),
+			cache: orchestrator.PackageCacheSource{
+				Base: pkgCache.sandboxURL(live), CA: pkgCache.sandboxCA(live), DNS: pkgCache.SandboxDNS(live),
+			},
+			config: live.Current,
+		},
 		// StandingSandboxes is what the reconcile loop's own supervisor
 		// is running, for GET /api/sandboxes. No gate, for the reason
 		// SandboxRecreate needs none (standingSandboxes' doc comment).

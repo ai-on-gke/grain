@@ -302,6 +302,7 @@ var routeScopes = map[string]APIScope{
 	"GET /api/persistent-sandboxes":                                        "sandboxes:read",
 	"GET /api/persistent-sandboxes/{name}/logs":                            "deployment:read",
 	"POST /api/persistent-sandboxes/{name}/{action}":                       "deployment:restart",
+	"POST /api/sandbox-probe":                                              "deployment:restart",
 	"/staging/{name}/{path...}":                                            "internal",
 	"GET /api/metrics":                                                     "deployment:read",
 	"GET /api/unmatched-failures":                                          "deployment:read",

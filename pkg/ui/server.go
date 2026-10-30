@@ -248,6 +248,7 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/run-now", s.handleRunNow)
 	s.route("POST /api/tasks/{id}/pull-request", s.handleOpenPullRequest)
 	s.route("POST /api/tasks/{id}/sandbox/recreate", s.handleRecreateSandbox)
+	s.route("POST /api/sandbox-probe", s.handleSandboxProbe)
 	s.route("POST /api/tasks/{id}/activity", s.handleSetTaskActivity)
 	// A standing session's own run retitling its chat (mcp's
 	// rename_session): the title write PUT /api/console-sessions/{id}
