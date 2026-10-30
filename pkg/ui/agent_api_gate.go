@@ -536,10 +536,16 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 		if err != nil {
 			return notHeld
 		}
+		// A scope set limited to some repositories grants each scope on
+		// those alone, so that is what the agent must hold: read through
+		// ReposOf, not g.Repo, or a repo-limited set could never be passed
+		// on by the very task holding it.
 		set := APIGrantsOf(held)
 		for _, scope := range g.Scopes {
-			if !set.Allows(scope, g.Repo) {
-				return notHeld
+			for _, repo := range g.ReposOf(scope) {
+				if !set.Allows(scope, repo) {
+					return notHeld
+				}
 			}
 		}
 		return nil

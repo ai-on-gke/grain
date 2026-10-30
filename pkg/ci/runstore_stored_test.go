@@ -172,7 +172,7 @@ func TestRecoveringInterruptedRunsMarksThemRatherThanLosingThem(t *testing.T) {
 	storedTestStore(t, dir, StoredRunStoreOptions{}).Put(run)
 
 	restarted := storedTestStore(t, dir, StoredRunStoreOptions{})
-	stamped, err := restarted.RecoverInterrupted(context.Background(), time.Now().UTC())
+	stamped, err := restarted.RecoverUnattachable(context.Background(), time.Now().UTC(), nil)
 	if err != nil {
 		t.Fatalf("recovering: %v", err)
 	}

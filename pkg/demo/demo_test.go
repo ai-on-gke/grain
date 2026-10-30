@@ -1403,3 +1403,115 @@ func TestDemoForceMergeOnRunningTaskAndStackedBaseRetargeting(t *testing.T) {
 			updatedStacked.Base, updatedStacked.AutoMerge)
 	}
 }
+
+// seedDemoNotifications raises release.pending:v2.4.0 on model.GrainSourceRepo(),
+// which is not in TargetRepos; configureFakeCIDemo enables grain CI for that
+// repository so approving or rejecting the seeded pending release works out of
+// the box while leaving acme/widgets' CI mode unset for its own refusal checks.
+func TestFakeCIDemoPendingReleaseApproval(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(dir))
+	if err != nil {
+		t.Fatalf("opening embedded sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("applying schema: %v", err)
+	}
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cfg := ui.Config{
+		Actor:         ui.DefaultActor("demo-operator"),
+		DefaultTarget: &repo,
+		Capabilities:  append(ui.OfferedCapabilities(), ui.APICapabilities()...),
+	}
+	cfg, err = configureFakeCIDemo(ctx, store, cfg, repo)
+	if err != nil {
+		t.Fatalf("configureFakeCIDemo: %v", err)
+	}
+	if err := seedDemo(ctx, store, cfg); err != nil {
+		t.Fatalf("seedDemo: %v", err)
+	}
+
+	srv := ui.NewServer(withAccessCode(cfg), store)
+	do := func(method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:40000"
+		presentAccessCode(req)
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// acme/widgets still has CI mode unset until walked.
+	rec := do(http.MethodPost, "/api/repos/acme/widgets/release-runs", `{"branch":"main"}`, nil)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "grain CI is not enabled for acme/widgets") {
+		t.Fatalf("POST /api/repos/acme/widgets/release-runs: %d %s, want 403", rec.Code, rec.Body)
+	}
+
+	grain := model.GrainSourceRepo()
+	approvePath := fmt.Sprintf("/api/repos/%s/%s/pending-releases/v2.4.0/approve", grain.Owner, grain.Name)
+	rejectPath := fmt.Sprintf("/api/repos/%s/%s/pending-releases/v2.4.0/reject", grain.Owner, grain.Name)
+
+	// Agent callers (even with api:releases:write attached) are refused.
+	rec = do(http.MethodPost, "/api/tasks/1/capabilities", `{"id":"api:releases:write","attach":true}`, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("attaching api:releases:write to task 1: %d %s", rec.Code, rec.Body)
+	}
+	rec = do(http.MethodPost, approvePath, "", map[string]string{"X-Grain-Acting-Task": "1"})
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "only a person may approve a release") {
+		t.Fatalf("agent approve: %d %s, want 403 only a person may approve a release", rec.Code, rec.Body)
+	}
+
+	// Human approval starts promote-release.yml:promote and clears the notification.
+	rec = do(http.MethodPost, approvePath, "", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("human approve: %d %s, want 202", rec.Code, rec.Body)
+	}
+	var decision ui.ReleaseDecision
+	if err := json.Unmarshal(rec.Body.Bytes(), &decision); err != nil {
+		t.Fatalf("decoding approved decision: %v", err)
+	}
+	if !decision.Approve || decision.Version != "v2.4.0" {
+		t.Errorf("decision = %+v, want approve v2.4.0", decision)
+	}
+	if decision.Run.Repo != grain.String() || decision.Run.Ref != "main" || decision.Run.Event != "workflow_dispatch" || decision.Run.RequestedBy != "demo-operator" {
+		t.Errorf("approved run = %+v, want %s main workflow_dispatch by demo-operator", decision.Run, grain)
+	}
+	if len(decision.Run.Jobs) != 1 || decision.Run.Jobs[0].JobID != ".grain/workflows/promote-release.yml:promote" || decision.Run.Jobs[0].WorkflowPath != ".grain/workflows/promote-release.yml" {
+		t.Errorf("approved run jobs = %+v, want [.grain/workflows/promote-release.yml:promote]", decision.Run.Jobs)
+	}
+
+	ns, err := store.ListNotifications(ctx, model.NotificationFilter{})
+	if err != nil {
+		t.Fatalf("ListNotifications: %v", err)
+	}
+	var pending *model.Notification
+	for i := range ns {
+		if ns[i].Subject == "release.pending:v2.4.0" {
+			pending = &ns[i]
+			break
+		}
+	}
+	if pending == nil || pending.ClearedAt == nil || pending.ClearedBy != "human:demo-operator" {
+		t.Errorf("release.pending:v2.4.0 after approve = %+v, want cleared by human:demo-operator", pending)
+	}
+
+	// Human rejection starts promote-release.yml:reject.
+	rec = do(http.MethodPost, rejectPath, "", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("human reject: %d %s, want 202", rec.Code, rec.Body)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decision); err != nil {
+		t.Fatalf("decoding rejected decision: %v", err)
+	}
+	if decision.Approve || len(decision.Run.Jobs) != 1 || decision.Run.Jobs[0].JobID != ".grain/workflows/promote-release.yml:reject" || decision.Run.Jobs[0].WorkflowPath != ".grain/workflows/promote-release.yml" {
+		t.Errorf("rejected run jobs = %+v, want [.grain/workflows/promote-release.yml:reject]", decision.Run.Jobs)
+	}
+}

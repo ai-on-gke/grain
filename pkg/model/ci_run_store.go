@@ -864,7 +864,12 @@ func (s *Store) RecoverInterruptedCIRunsExcept(ctx context.Context, conclusion, 
 			return err
 		}
 		stamped = int(n)
-		return nil
+		// Nothing is left to reattach in a run that has concluded,
+		// whether it was just stamped or finished before the restart
+		// without its job clearing its own rows.
+		_, err = tx.ExecContext(ctx, "DELETE FROM `ci_step_attachment` WHERE `run_id` NOT IN "+
+			"(SELECT `id` FROM `ci_run` WHERE `conclusion` = '')")
+		return err
 	})
 	if err != nil {
 		return 0, fmt.Errorf("recovering interrupted CI runs: %w", err)
