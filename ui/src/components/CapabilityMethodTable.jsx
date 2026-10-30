@@ -23,6 +23,7 @@ import {
   Typography,
 } from "@mui/material";
 import { argumentRows } from "../capabilityArgs.js";
+import InfoPopover from "./InfoPopover.jsx";
 
 // CapabilityMethodTable is one attached server's methods as Settings →
 // Capability servers lists them (servers.Status.methodDetails): each
@@ -40,7 +41,7 @@ export default function CapabilityMethodTable({ details }) {
               sx={{
                 display: "flex",
                 alignItems: "center",
-                gap: 1,
+                gap: 0.5,
                 flexWrap: "wrap",
               }}
             >
@@ -50,6 +51,7 @@ export default function CapabilityMethodTable({ details }) {
               >
                 {m.name}
               </Typography>
+              <InfoPopover title={m.description} label={m.name} />
               <Chip
                 size="small"
                 variant="outlined"
@@ -61,11 +63,6 @@ export default function CapabilityMethodTable({ details }) {
                 }
               />
             </Box>
-            {m.description && (
-              <Typography variant="body2" color="text.secondary">
-                {m.description}
-              </Typography>
-            )}
             {rows.length === 0 ? (
               <Typography variant="caption" color="text.secondary">
                 Takes no arguments.

@@ -340,6 +340,7 @@ func toNamespaceScope(modelScope model.NamespaceScope) namespace.Scope {
 		AllowedRepos:      modelScope.AllowedRepos,
 		MayReadSrc:        modelScope.MayReadSrc,
 		MayReadAllTasks:   modelScope.MayReadAllTasks,
+		TaskReadRepos:     modelScope.TaskReadRepos,
 		MayReadFullConfig: modelScope.MayReadFullConfig,
 		MayReadAllMemory:  modelScope.MayReadAllMemory,
 		MayReadMetrics:    modelScope.MayReadMetrics,

@@ -74,6 +74,7 @@ var settingsAppliedLive = map[string]string{
 	"sandboxMemoryOvercommit": "the budget the next sandbox is admitted against (liveConfig.refresh, via config.budget)",
 	"sandboxDiskOvercommit":   "the budget the next sandbox is admitted against, and on Kubernetes the next pod's ephemeral-storage request (liveConfig.refresh, via config.budget and SetOvercommit)",
 	"sandboxOvercommit":       "the auto overcommit controller's mode and bounds (runOvercommit reconfigures it each step, and config.budget reads its ratios)",
+	"sessionSandboxIdleTtl":   "how long a session's sandbox and in-process agent wait stay warm between turns (RunCycle refreshes deps.Config.SessionSandboxIdleTTL from grain_config each cycle)",
 	"sandboxMemoryReserveMb":  "the budget the next sandbox is admitted against (liveConfig.refresh, via config.budget)",
 	"sandboxDiskFloorShare": "how much of each volume the next admission is held over (cmd/grain's diskWatch, which asks " +
 		"liveConfig.diskFloor per reading rather than holding the one it was built with)",

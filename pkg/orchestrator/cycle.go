@@ -783,8 +783,12 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
 			deps.Config.TimeZone = mc.TimeZone
+			if deps.Config.SessionSandboxIdleTTL == 0 {
+				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
+			}
 		}
 	}
+	reconcileSessionSandboxes(ctx, deps, now)
 	syncSandboxLedger(ctx, deps)
 	var errs []error
 	reconcilers := Reconcilers()
@@ -1116,7 +1120,9 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	// would be wrong until something re-derived it, and this is the
 	// something (model.Ledger.Sync).
 	syncSandboxLedger(ctx, deps)
+	restoreWarm := prepareWarmSandboxesForDispatch(ctx, deps, now)
 	dispatches, cycleErr := dispatch.Cycle(ctx, deps.Store, limits, now, opts...)
+	restoreWarm(dispatches)
 	if cycleErr != nil && len(dispatches) == 0 {
 		for _, f := range frameworks {
 			releaseFramework(f.framework)
@@ -1150,12 +1156,14 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 			fw := frameworks[d.RunID]
 			delete(frameworks, d.RunID)
 			deps.Runs.Go(d.RunID, d.TaskID, func() {
-				// The sandbox this run holds stops being charged when the
-				// run is over, whatever it is over by: a normal finish, a
-				// setup failure, a panic recovered below. Held until then,
-				// including while the result is being written up, because
-				// the sandbox is still there until runOne releases it.
-				defer deps.Ledger.Release(model.PoolAgent, d.RunID)
+				// The sandbox this run holds stops being charged under RunID
+				// when the run is over; if the run kept its session sandbox
+				// warm between turns, park that sandbox as an idle entry in
+				// the ledger so capacity is still accounted for honestly.
+				defer func() {
+					deps.Ledger.Release(model.PoolAgent, d.RunID)
+					parkWarmSessionInLedger(deps, d.TaskID)
+				}()
 				defer releaseRunCapabilities(context.WithoutCancel(ctx), deps, d.TaskID, d.RunID)
 				if err := recoverRunOneWithFramework(ctx, deps, d, reserved, fw, now); err != nil {
 					log.Printf("orchestrator: run %s (task %s): %v", d.RunID, d.TaskID, err)
@@ -1185,7 +1193,10 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 		wg.Add(1)
 		go func(d dispatch.Dispatch, reserved []model.Materialized, fw reservedFramework) {
 			defer wg.Done()
-			defer deps.Ledger.Release(model.PoolAgent, d.RunID)
+			defer func() {
+				deps.Ledger.Release(model.PoolAgent, d.RunID)
+				parkWarmSessionInLedger(deps, d.TaskID)
+			}()
 			defer releaseRunCapabilities(context.WithoutCancel(ctx), deps, d.TaskID, d.RunID)
 			if err := recoverRunOneWithFramework(ctx, deps, d, reserved, fw, now); err != nil {
 				errsMu.Lock()
@@ -1237,6 +1248,9 @@ func syncSandboxLedger(ctx context.Context, deps Deps) {
 			}
 		}
 		live[r.ID] = shape
+	}
+	for id, shape := range warmSessionSandboxIDs(deps.Store) {
+		live[id] = shape
 	}
 	deps.Ledger.Sync(model.PoolAgent, live)
 }
@@ -2182,10 +2196,6 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// this run may push. Pinning it is what stops a repo edit made while
 	// the run is in flight from moving the proxy's answer out from under
 	// it: see SetRunSandbox and GitScope.
-	sandboxName := d.RunID
-	if err := deps.Store.SetRunSandbox(ctx, d.RunID, sandboxName, task.Target); err != nil {
-		return fmt.Errorf("orchestrator: recording run %s's sandbox: %w", d.RunID, err)
-	}
 
 	// A task's own SandboxCPUs/SandboxMemoryMB/SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) is a create-time argument now
@@ -2216,27 +2226,70 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			return fmt.Errorf("orchestrator: deciding whose task %s is: %w", d.TaskID, err)
 		}
 	}
-	notes.say(ctx, buildingSandboxNote)
-	// Acquired through the meter, which counts this sandbox against the
-	// deployment's lifetime figures on the way past and hands back the
-	// backend's own sandbox untouched (sandboxmeter.go). sandboxCounted
-	// is the other half of that measurement -- how long this one lived --
-	// and is called from the release below, which is the one path every
-	// dispatch leaves by.
-	//
-	// A sandbox that never comes up is counted too, before this returns:
-	// the run fails either way, and a deployment whose sandboxes fail to
-	// start has spent real time and real machine on them.
-	meter := MeterFor(deps.Store)
-	sandbox, sandboxCounted, err := meter.Acquire(ctx, deps.Sandboxes, model.SandboxKindAgent, sandboxName, shape)
-	if err != nil {
-		return fmt.Errorf("orchestrator: acquiring a sandbox for run %s: %w", d.RunID, err)
+	// An interactive session's previous turn may have left its sandbox
+	// warm (session_sandboxes.go). It is reused only when it was built for
+	// exactly what this run is: the same shape (network access, class,
+	// operator env, grain-src), the same target, and the same capability
+	// grants. Anything else -- a grant a person withdrew between turns, a
+	// task narrowed to no network -- gets a fresh sandbox, since whatever
+	// the old grants placed in the warm one would otherwise outlive them.
+	// Claimed after the shape is decided, and before SetRunSandbox, so the
+	// name recorded is the sandbox this run actually uses.
+	var warmSandbox *warmSessionSandbox
+	var sandboxReclaimed bool
+	sandboxKey := sessionSandboxKey(shape, *task, prepared)
+	if task.Interactive {
+		warmSandbox, sandboxReclaimed = claimWarmSessionSandbox(deps, task.ID, now)
+		if warmSandbox != nil && warmSandbox.Key != sandboxKey {
+			log.Printf("orchestrator: run %s (task %s): not reusing warm sandbox %s: its shape, target or grants changed",
+				d.RunID, d.TaskID, warmSandbox.SandboxID)
+			releaseWarmSandboxEntry(context.WithoutCancel(ctx), warmSandbox)
+			warmSandbox, sandboxReclaimed = nil, true
+		}
+		if !sandboxReclaimed && warmSandbox == nil && d.Attempt > 1 {
+			sandboxReclaimed = true
+		}
+	}
+	sandboxReused := warmSandbox != nil
+	sandboxName := d.RunID
+	if sandboxReused {
+		sandboxName = warmSandbox.SandboxID
+	}
+	if err := deps.Store.SetRunSandbox(ctx, d.RunID, sandboxName, task.Target); err != nil {
+		if warmSandbox != nil {
+			releaseWarmSandboxEntry(context.WithoutCancel(ctx), warmSandbox)
+		}
+		return fmt.Errorf("orchestrator: recording run %s's sandbox: %w", d.RunID, err)
+	}
+	var sandbox Sandbox
+	var sandboxCounted func(context.Context)
+	if sandboxReused {
+		sandbox = warmSandbox.Sandbox
+		sandboxCounted = warmSandbox.Counted
+	} else {
+		notes.say(ctx, buildingSandboxNote)
+		// Acquired through the meter, which counts this sandbox against the
+		// deployment's lifetime figures on the way past and hands back the
+		// backend's own sandbox untouched (sandboxmeter.go). sandboxCounted
+		// is the other half of that measurement -- how long this one lived --
+		// and is called from the release below, which is the one path every
+		// dispatch leaves by.
+		//
+		// A sandbox that never comes up is counted too, before this returns:
+		// the run fails either way, and a deployment whose sandboxes fail to
+		// start has spent real time and real machine on them.
+		meter := MeterFor(deps.Store)
+		sandbox, sandboxCounted, err = meter.Acquire(ctx, deps.Sandboxes, model.SandboxKindAgent, sandboxName, shape)
+		if err != nil {
+			return fmt.Errorf("orchestrator: acquiring a sandbox for run %s: %w", d.RunID, err)
+		}
 	}
 
 	// stopTokenRefresh ends the refresher started once this sandbox's
 	// token is minted below; the release stops it before revoking, so a
 	// refresh can never race the revoke that is meant to be the token's end.
 	stopTokenRefresh := func() {}
+	keptWarm := false
 
 	// The sandbox is released once this dispatch is done with it, whether
 	// or not the run succeeded -- a failed or cancelled run is exactly the
@@ -2267,7 +2320,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// which is what that pass is for.
 	defer func() {
 		stopTokenRefresh()
-		if detached {
+		if detached || keptWarm {
 			return
 		}
 		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
@@ -2479,6 +2532,15 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	cfg.sandboxEnv = sandboxEnv
 	cfg.sandboxEnvFile = sandboxEnvFile
 	cfg.sandboxHide = sandboxHide
+	cfg.sandboxReused = sandboxReused
+	cfg.sandboxReclaimed = sandboxReclaimed
+	cfg.inProcessSessionWait = task.Interactive && (deps.Runs != nil || cfg.WaitForSessionReply)
+	cfg.sessionSandboxName = sandboxName
+	limitsForShape := model.Limits{AgentShape: deps.AgentShape}
+	cfg.sessionShape = limitsForShape.TaskShape(*task)
+	cfg.sessionLedger = deps.Ledger
+	cfg.sessionReach = deps.GitReach
+	cfg.sessionClient = deps.Client
 	framework, cfg, err = consoleDispatch(framework, *task, d.RunID, cfg)
 	if err != nil {
 		return err
@@ -2562,7 +2624,23 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		return runErr
 	}
 
-	return afterAgentRun(ctx, deps, *task, d.RunID, result, runErr, preRunBranchSHA, preRunBranchSHA, now)
+	afterErr := afterAgentRun(ctx, deps, *task, d.RunID, result, runErr, preRunBranchSHA, preRunBranchSHA, now)
+	if afterErr == nil && runErr == nil && task.Interactive && deps.Store != nil {
+		cleanupCtx := context.WithoutCancel(ctx)
+		finishNow := now
+		if deps.Config.Now != nil {
+			finishNow = deps.Config.Now()
+		}
+		if ttl := sessionSandboxIdleTTL(cleanupCtx, deps); ttl > 0 && !taskPaused(cleanupCtx, deps.Store, task.ID) {
+			if st, serr := deps.Store.State(cleanupCtx, task.ID); serr == nil && st != "" &&
+				st != model.StateClosed && st != model.StateFailed &&
+				st != model.StateCompleted && st != model.StateAwaitingSubmit {
+				parkWarmSessionSandbox(deps, task.ID, sandboxName, sandboxKey, sessionGrantsKey(*task), sandbox, sandboxCounted, cfg.sessionShape, finishNow, ttl)
+				keptWarm = true
+			}
+		}
+	}
+	return afterErr
 }
 
 // afterAgentRun is what follows a run whose row RunDispatch has finished:
