@@ -804,6 +804,35 @@ describe("Sidebar", () => {
     );
   });
 
+  // A local-script call waiting for approval is listed and counted on
+  // the Inbox; /api/config says how many there are, so the rail counts
+  // them too -- including when nothing else waits, where it used to show
+  // no count while a run was blocked on a person (task 1808).
+  it("counts local-script calls waiting for approval, as the Inbox heading does", () => {
+    const { rerender } = render(
+      <Sidebar {...baseProps} config={{ pendingLocalScripts: 1 }} tasks={[]} />,
+    );
+    let inbox = screen.getByRole("button", { name: /Inbox 1/ });
+    expect(
+      within(inbox).getByText("1").closest(".MuiChip-root"),
+    ).toHaveAttribute("title", "1 local script waiting for approval");
+
+    rerender(
+      <Sidebar
+        {...baseProps}
+        config={{ pendingLocalScripts: 2 }}
+        tasks={[{ id: 4, state: "awaiting_reply", blocked: false }]}
+      />,
+    );
+    inbox = screen.getByRole("button", { name: /Inbox 3/ });
+    expect(
+      within(inbox).getByText("3").closest(".MuiChip-root"),
+    ).toHaveAttribute(
+      "title",
+      "1 task waiting on you, 2 local scripts waiting for approval",
+    );
+  });
+
   it("does not show inbox badge when only base branch gates exist and no tasks wait", () => {
     render(
       <Sidebar

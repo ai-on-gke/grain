@@ -212,7 +212,7 @@ func TestRelayProposedTasksTuningValidationAndRecording(t *testing.T) {
 		},
 	}
 
-	if err := relayProposedTasks(ctx, store, nil, infraTask, validResult, now); err != nil {
+	if err := relayProposedTasks(ctx, store, nil, nil, infraTask, validResult, now); err != nil {
 		t.Fatalf("relayProposedTasks with valid proposal failed: %v", err)
 	}
 
@@ -258,7 +258,7 @@ func TestRelayProposedTasksTuningValidationAndRecording(t *testing.T) {
 		},
 	}
 
-	if err := relayProposedTasks(ctx, store, nil, infraTask, invalidResult, now); err != nil {
+	if err := relayProposedTasks(ctx, store, nil, nil, infraTask, invalidResult, now); err != nil {
 		t.Fatalf("relayProposedTasks with invalid proposal failed: %v", err)
 	}
 

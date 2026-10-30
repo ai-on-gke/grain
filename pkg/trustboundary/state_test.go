@@ -136,6 +136,37 @@ func TestClassifyStateNeverAutoMergePathsCeiling(t *testing.T) {
 	}
 }
 
+// TestNeverAutoMergePathsCoverGrantAndSecretTables pins the tables the
+// 2026-10-29 security review found missing from the ceiling: rows that
+// bind a deployment secret into a sandbox, name a GCP key, or grant a
+// template or schedule a capability or a write repository. Listing one
+// in auto_merge_paths must be refused, and must not release it.
+func TestNeverAutoMergePathsCoverGrantAndSecretTables(t *testing.T) {
+	for _, p := range []string{
+		"tables/standing_sandbox.json",
+		"tables/standing_sandbox_secret.json",
+		"tables/standing_sandbox_env.json",
+		"tables/persistent_sandbox.json",
+		"tables/gcp_key.json",
+		"tables/template_grant.json",
+		"tables/template_write.json",
+		"tables/schedule_grant.json",
+		"tables/schedule_write.json",
+	} {
+		if !IsNeverAutoMergePath(p) {
+			t.Errorf("IsNeverAutoMergePath(%q) = false, want true", p)
+		}
+		got := ClassifyState([]string{p}, p)
+		if len(got) != 1 || got[0].Category.ID != StatePrivilege.ID || !reflect.DeepEqual(got[0].Paths, []string{p}) {
+			t.Errorf("ClassifyState([%q], %q) = %+v, want a StatePrivilege match holding it", p, p, got)
+		}
+		err := ValidateConfigPolicy(ConfigPolicy{AutoMergePaths: []string{p}})
+		if err == nil || !strings.Contains(err.Error(), "NeverAutoMergePaths entry \""+p+"\"") {
+			t.Errorf("ValidateConfigPolicy(%q) = %v, want an error naming the ceiling entry", p, err)
+		}
+	}
+}
+
 func TestParseAndCheckConfigPolicy(t *testing.T) {
 	// Empty or comment-only policy is valid with zero exceptions.
 	for _, empty := range []string{"", "   \n", "# comment only\n"} {

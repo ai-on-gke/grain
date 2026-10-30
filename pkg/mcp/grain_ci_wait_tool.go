@@ -493,14 +493,26 @@ func NewGrainCIWaitTools(runner GrainCIRunner, scope CIRepoScope, branch ...stri
 }
 
 func waitForGrainCI(ctx context.Context, runner GrainCIRunner, jobs []string, timeout time.Duration) (string, error) {
-	run, err := runner.StartGrainCI(ctx, jobs)
-	if err != nil {
-		return "", fmt.Errorf("starting grain CI: %w", err)
-	}
 	started := time.Now()
 	credit := startWaitCredit(ctx)
 	defer func() { _, _ = credit(ctx, time.Since(started)) }()
 	deadline := started.Add(timeout)
+	// A daemon that has just restarted answers before its CI service is
+	// up (ci.ErrNotUp, a 503 across the wire), for as long as adopting
+	// its runs takes. That is sat out like any other wait for CI rather
+	// than reported: giving up on it is what ended every wait that was
+	// polling across a restart (grain/task-1863).
+	var run ci.Run
+	for {
+		var err error
+		run, err = runner.StartGrainCI(ctx, jobs)
+		if err == nil {
+			break
+		}
+		if !ci.IsNotUp(err) || !napBeforeDeadline(ctx, deadline) {
+			return "", fmt.Errorf("starting grain CI: %w", err)
+		}
+	}
 	// The verdict, plus -- for a run with something red in it -- whose red
 	// it is. The faults are fetched per answer rather than once, because
 	// the answer is given at most once and only a failing one asks.
@@ -535,10 +547,15 @@ func waitForGrainCI(ctx context.Context, runner GrainCIRunner, jobs []string, ti
 	followed := map[string]bool{}
 	for {
 		latest, err := runner.GrainCIRun(ctx, run.ID)
-		if err != nil {
+		switch {
+		case err == nil:
+			run = latest
+		case ci.IsNotUp(err):
+			// The daemon restarted under the wait: the run is still there,
+			// and this keeps the last answer until it can be read again.
+		default:
 			return "", fmt.Errorf("reading grain CI run %s: %w", run.ID, err)
 		}
-		run = latest
 		if next, ok := followSupersede(ctx, runner, jobs, run); ok && !followed[next.ID] {
 			followed[run.ID] = true
 			run = next
@@ -561,6 +578,16 @@ func waitForGrainCI(ctx context.Context, runner GrainCIRunner, jobs []string, ti
 			return "", fmt.Errorf("waiting for grain CI run %s: %w", run.ID, err)
 		}
 	}
+}
+
+// napBeforeDeadline sleeps one poll interval before CI is asked again,
+// reporting false -- with nothing slept -- when there is no room for one
+// before deadline or ctx has ended.
+func napBeforeDeadline(ctx context.Context, deadline time.Time) bool {
+	if time.Until(deadline) < checkPollInterval {
+		return false
+	}
+	return sleepUntilCancelled(ctx, checkPollInterval) == nil
 }
 
 // followSupersede is the run a full-suite wait should be waiting on

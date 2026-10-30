@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ApiScopeSetsPanel from "./ApiScopeSetsPanel.jsx";
@@ -121,5 +121,76 @@ describe("ApiScopeSetsPanel", () => {
       deny: ["tasks:admin"],
       scopes: [],
     });
+  });
+
+  it("names what holds a set before removing it, and Cancel keeps it", async () => {
+    const calls = [];
+    api.mockImplementation(async (path, opts) => {
+      calls.push(`${opts?.method || "GET"} ${path}`);
+      if (path === "/api/api-scope-sets/usage")
+        return [
+          { name: "grain/ci-read", holders: [] },
+          {
+            name: "ops/triage",
+            holders: [
+              {
+                kind: "task",
+                id: "42",
+                name: "Triage nightly",
+                grant: "api:ops/triage",
+              },
+              {
+                kind: "template",
+                id: "t1",
+                name: "triage",
+                grant: "api:ops/triage@bwsalmon/grain",
+              },
+            ],
+          },
+        ];
+      return { sets: [BUILTIN, TRIAGE] };
+    });
+    render(<ApiScopeSetsPanel showError={() => {}} />);
+    const user = userEvent.setup();
+    const row = await screen.findByTestId("api-scope-set-ops/triage");
+    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText("Remove scope set ops/triage?"),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        "2 grants hold api:ops/triage, and will grant nothing once it is removed:",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByText("api:ops/triage@bwsalmon/grain"),
+    ).toBeTruthy();
+    expect(calls).not.toContain("POST /api/api-scope-sets/delete");
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls).not.toContain("POST /api/api-scope-sets/delete");
+
+    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Remove",
+      }),
+    );
+    expect(calls).toContain("POST /api/api-scope-sets/delete");
+  });
+
+  it("still confirms when the usage cannot be read", async () => {
+    api.mockImplementation(async (path) => {
+      if (path === "/api/api-scope-sets/usage") throw new Error("boom");
+      return { sets: [BUILTIN, TRIAGE] };
+    });
+    render(<ApiScopeSetsPanel showError={() => {}} />);
+    const user = userEvent.setup();
+    const row = await screen.findByTestId("api-scope-set-ops/triage");
+    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/could not count/)).toBeTruthy();
   });
 });

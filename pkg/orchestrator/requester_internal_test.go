@@ -102,7 +102,7 @@ func TestEndOfRunProposalsInheritTheProposersRequester(t *testing.T) {
 		Name:      "propose_task",
 		Arguments: map[string]any{"title": "Follow up", "body": "And then this.", "auto_merge": true},
 	}}}
-	if err := relayProposedTasks(ctx, store, nil, source, result, now); err != nil {
+	if err := relayProposedTasks(ctx, store, nil, nil, source, result, now); err != nil {
 		t.Fatal(err)
 	}
 	tasks, err := store.ListTasks(ctx)
@@ -145,7 +145,7 @@ func TestRelayProposedTasksCarriesInteractiveFromTemplate(t *testing.T) {
 		Name:      "propose_task",
 		Arguments: map[string]any{"template_id": tmpl.ID},
 	}}}
-	if err := relayProposedTasks(ctx, store, nil, source, result, now); err != nil {
+	if err := relayProposedTasks(ctx, store, nil, nil, source, result, now); err != nil {
 		t.Fatalf("relayProposedTasks: %v", err)
 	}
 	tasks, err := store.ListTasks(ctx)

@@ -1462,12 +1462,9 @@ export default function RepoPage({
           />
 
           {/* And what that queue is actually doing right now, under the
-              settings that shape it (grain/task-301): the batches in
-              flight, which is the one part of the queue's state that is
-              not visible on any task's row. A member's row says it is
-              being tested with others; only this says which others, which
-              of them is first, and where the one run deciding all of them
-              is. */}
+              settings that shape it (grain/task-301): any overlap re-check
+              in flight on the merge queue's throwaway ref, and where the
+              run deciding it is. */}
           <MergeBatchPanel
             repo={repo}
             onOpenRun={onOpenCIRun}
@@ -2196,6 +2193,7 @@ export default function RepoPage({
                     onRemove={capsMethods.onRemove}
                     disabled={readOnly}
                     idPrefix="repo-default"
+                    policyRepo={repo}
                   />
                 </Box>
                 <Typography variant="body2" color="text.secondary">

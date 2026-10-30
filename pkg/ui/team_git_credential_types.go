@@ -384,19 +384,9 @@ func (c *Client) gitCredentialStatus(name string) GitCredentialStatus {
 // paired, the same API probe a token gets.
 func (c *Client) checkSSHCredential(ctx context.Context, cred gitproxy.Credential, repos []string, saved bool) TeamGitHubCredentialCheck {
 	out := TeamGitHubCredentialCheck{Saved: saved, Host: cred.SSH.Host, CheckedAt: c.now()}
-	out.OK = true
-	for _, entry := range repos {
-		repo, err := model.ParseRepo(entry)
-		if err != nil || strings.ContainsAny(repo.Owner+repo.Name, "*?[") {
-			continue
-		}
-		if len(out.Repos) == githubtoken.MaxProbedRepos {
-			out.Skipped++
-			continue
-		}
-		verdict := githubtoken.RepoProbe{Repo: repo.String()}
-		lsRemote := func(service string) (bool, string) {
-			resp, refusal, err := gitproxy.SSHForward(ctx, cred, repo.Owner, repo.Name, "info/refs",
+	lsRemoteVerdicts(&out, repos, "an SSH key", "the SSH key could not read every repository",
+		func(owner, name, service string) (bool, string) {
+			resp, refusal, err := gitproxy.SSHForward(ctx, cred, owner, name, "info/refs",
 				"service="+service, map[string]string{}, nil, gitproxy.DefaultMaxFetchBodyBytes)
 			switch {
 			case err != nil:
@@ -408,35 +398,7 @@ func (c *Client) checkSSHCredential(ctx context.Context, cred gitproxy.Credentia
 				resp.Stream.Close()
 			}
 			return resp.Status == http.StatusOK, ""
-		}
-		verdict.Read, verdict.Error = lsRemote("git-upload-pack")
-		if verdict.Read {
-			verdict.Push, _ = lsRemote("git-receive-pack")
-		} else {
-			out.OK = false
-		}
-		out.Repos = append(out.Repos, verdict)
-	}
-	// An SSH key is only ever checked by reading a repository with it:
-	// with none in reach of the check nothing was dialled at all, which
-	// is not the same as the key working, and reporting it as accepted
-	// told an operator a key for a host that does not even resolve was
-	// fine.
-	if len(out.Repos) == 0 && out.Skipped == 0 {
-		out.OK = false
-		out.Error = "nothing was tested: an SSH key is checked by reading a repository with it, and no repository on " +
-			cred.SSH.Host + " is in this check's reach -- give the connection an owner/repo scope, or add a repository on " +
-			cred.SSH.Host + " to this deployment"
-	}
-	if !out.OK && out.Error == "" {
-		out.Error = "the SSH key could not read every repository"
-		for _, r := range out.Repos {
-			if r.Error != "" {
-				out.Error = r.Error
-				break
-			}
-		}
-	}
+		})
 	if out.OK && cred.SSH.APICredential != "" {
 		if api, ok := c.Config.Credentials.APICredential(cred); ok && api.Token != nil {
 			host, insecure := c.gitHubHost(ctx)
@@ -450,4 +412,67 @@ func (c *Client) checkSSHCredential(ctx context.Context, cred gitproxy.Credentia
 		}
 	}
 	return out
+}
+
+// checkPlainGitCredential is Test for a token (or a host's own login) on a
+// plain git host, which has no API to ask who the token is: the
+// authenticated smart-HTTP ref advertisement for each repo, upload-pack
+// for read and receive-pack for push, sent through the same forwarder the
+// git proxy uses for h -- its base URL and its proxy -- exactly as a clone
+// or push would be.
+func (c *Client) checkPlainGitCredential(h gitproxy.CredentialHost, cred gitproxy.Credential, repos []string, saved bool) TeamGitHubCredentialCheck {
+	out := TeamGitHubCredentialCheck{Saved: saved, Host: h.Host, CheckedAt: c.now()}
+	lsRemoteVerdicts(&out, repos, "a credential on a plain git host", "the credential could not read every repository",
+		func(owner, name, service string) (bool, string) {
+			return gitproxy.SmartHTTPAdvertises(h, cred, owner, name, service)
+		})
+	return out
+}
+
+// lsRemoteVerdicts fills out's per-repo verdicts from lsRemote, asked of
+// each repo for git-upload-pack (read) and, when that passes,
+// git-receive-pack (push). what names the credential for the "nothing was
+// tested" sentence; failed is the error when a repo could not be read and
+// gave no reason of its own.
+func lsRemoteVerdicts(out *TeamGitHubCredentialCheck, repos []string, what, failed string,
+	lsRemote func(owner, name, service string) (bool, string)) {
+	out.OK = true
+	for _, entry := range repos {
+		repo, err := model.ParseRepo(entry)
+		if err != nil || strings.ContainsAny(repo.Owner+repo.Name, "*?[") {
+			continue
+		}
+		if len(out.Repos) == githubtoken.MaxProbedRepos {
+			out.Skipped++
+			continue
+		}
+		verdict := githubtoken.RepoProbe{Repo: repo.String()}
+		verdict.Read, verdict.Error = lsRemote(repo.Owner, repo.Name, "git-upload-pack")
+		if verdict.Read {
+			verdict.Push, _ = lsRemote(repo.Owner, repo.Name, "git-receive-pack")
+		} else {
+			out.OK = false
+		}
+		out.Repos = append(out.Repos, verdict)
+	}
+	// Such a credential is only ever checked by reading a repository
+	// with it: with none in reach of the check nothing was dialled at
+	// all, which is not the same as the credential working, and
+	// reporting it as accepted told an operator a key for a host that
+	// does not even resolve was fine.
+	if len(out.Repos) == 0 && out.Skipped == 0 {
+		out.OK = false
+		out.Error = "nothing was tested: " + what + " is checked by reading a repository with it, and no repository on " +
+			out.Host + " is in this check's reach -- give the connection an owner/repo scope, or add a repository on " +
+			out.Host + " to this deployment"
+	}
+	if !out.OK && out.Error == "" {
+		out.Error = failed
+		for _, r := range out.Repos {
+			if r.Error != "" {
+				out.Error = r.Error
+				break
+			}
+		}
+	}
 }

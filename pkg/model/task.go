@@ -815,7 +815,7 @@ const SelfDebugCapability = "self-debug"
 // read of it implicitly: a self-debug run is given the deployment's
 // baked-in copy instead, and a task that wants the repository itself
 // names it in its reads or a repo-read: grant like any other.
-func GrainSourceRepo() RepoRef { return RepoRef{Owner: "bwsalmon", Name: "grain"} }
+func GrainSourceRepo() RepoRef { return RepoRef{Owner: "ai-on-gke", Name: "grain"} }
 
 // RepoReadCapabilityPrefix marks a capability id as a cross-repository
 // read grant for CI.

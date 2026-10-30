@@ -895,20 +895,21 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		// tidiness: this same list is what Admission reserves finite
 		// credentials from, so a job that does not use the scarce one no
 		// longer queues for it.
-		Capabilities:    workflows.JobCapabilities(pj.Job, plan.Request.Capabilities, e.ExplicitOnlyCapability),
-		ReleaseSecrets:  workflows.JobSecrets(pj.Job, plan.Request.ReleaseSecrets),
-		Event:           plan.Request.Event,
-		TrustedSchedule: plan.Request.TrustedSchedule,
-		Name:            SandboxName(runID, plan, pj),
-		RunID:           runID,
-		JobAttempt:      jobIndex(plan, pj),
-		Untrusted:       plan.Request.UntrustedCommit() != "",
-		Repo:            plan.Request.Repo,
-		Ref:             plan.Request.Ref,
-		Commit:          plan.Request.Commit,
-		Shape:           pj.Job.Sandbox,
-		Builtin:         pj.Job.Builtin,
-		Timeout:         pj.Job.Timeout(),
+		Capabilities:       workflows.JobCapabilities(pj.Job, plan.Request.Capabilities, e.ExplicitOnlyCapability),
+		ReleaseSecrets:     workflows.JobSecrets(pj.Job, plan.Request.ReleaseSecrets),
+		Event:              plan.Request.Event,
+		TrustedSchedule:    plan.Request.TrustedSchedule,
+		WithholdEventGated: plan.Request.WithholdEventGated,
+		Name:               SandboxName(runID, plan, pj),
+		RunID:              runID,
+		JobAttempt:         jobIndex(plan, pj),
+		Untrusted:          plan.Request.UntrustedCommit() != "",
+		Repo:               plan.Request.Repo,
+		Ref:                plan.Request.Ref,
+		Commit:             plan.Request.Commit,
+		Shape:              pj.Job.Sandbox,
+		Builtin:            pj.Job.Builtin,
+		Timeout:            pj.Job.Timeout(),
 	}
 	if adopted == nil && e.GuestCache != nil && pj.GuestKey != "" {
 		warmCtx, cancel := context.WithTimeout(queueCtx, pj.Job.Timeout())
@@ -1575,7 +1576,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 		out, err := e.execStep(stepCtx, sandbox, gritsteps.Command{
 			Script:  step.Run,
 			Dir:     step.WorkingDirectory,
-			Env:     stepEnv(plan, pj, step),
+			Env:     StepEnv(plan, pj, step),
 			Timeout: stepTimeout(stepCtx, step),
 			StepID:  stepID,
 			Attach:  attach,
@@ -1904,17 +1905,21 @@ func stepTimeout(ctx context.Context, step workflows.Step) time.Duration {
 	return remaining
 }
 
-// stepEnv is the environment one step sees: grain's own variables at
+// StepEnv is the environment one step sees: grain's own variables at
 // the bottom, then the workflow's, the job's and the step's, each
-// layering over the last -- GitHub's own precedence.
-//
-// grain's own go at the bottom deliberately: a workflow that wants to
-// override GRAIN_CI_REF for a step of its own is doing something odd
-// but not dangerous, and nothing here reads these back.
-func stepEnv(plan workflows.Plan, pj workflows.PlannedJob, step workflows.Step) map[string]string {
+// layering over the last -- GitHub's own precedence -- except for the
+// caller-identity variables (GRAIN_CI_REQUESTED_BY_KIND,
+// GRAIN_CI_REQUESTED_BY and GRAIN_CI_RELEASE_VERSION), which a
+// person-only release workflow reads to verify that a person started it
+// and which a workflow file's own env: may neither set nor replace.
+func StepEnv(plan workflows.Plan, pj workflows.PlannedJob, step workflows.Step) map[string]string {
 	env := workflows.RunEnv(plan.Request, pj.Workflow, pj.Job.ID)
 	for _, layer := range []map[string]string{pj.WorkflowEnv, pj.Job.Env, step.Env} {
 		for k, v := range layer {
+			switch k {
+			case workflows.RequestedByKindEnv, workflows.RequestedByEnv, workflows.ReleaseVersionEnv:
+				continue
+			}
 			env[k] = v
 		}
 	}

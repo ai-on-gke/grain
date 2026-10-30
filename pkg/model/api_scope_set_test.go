@@ -263,3 +263,33 @@ func openScopeSetStore(t *testing.T) *Store {
 	}
 	return store
 }
+
+// An @repo none of a repo-limited set's scopes reach grants nothing,
+// which OutsideRepoLimit names; one some of its scopes reach, or a set
+// with no limit, does not.
+func TestAPIGrantOutsideRepoLimit(t *testing.T) {
+	if err := InstallAPIScopeSets([]APIScopeSet{
+		{Name: "walk-readers", Scopes: []string{"tasks:read"}, Repos: []string{"acme/widgets"}},
+		{Name: "walk-mixed", Scopes: []string{"ci:read"}, Includes: []string{"walk-readers"}},
+		{Name: "walk-open", Scopes: []string{"tasks:read"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = InstallAPIScopeSets(nil) })
+	for name, outside := range map[string]bool{
+		"api:walk-readers@acme/gadgets": true,
+		"api:walk-readers@ACME/widgets": false,
+		"api:walk-readers":              false,
+		"api:walk-mixed@acme/gadgets":   false,
+		"api:walk-open@acme/gadgets":    false,
+		"api:tasks:read@acme/gadgets":   false,
+	} {
+		g, ok, err := ParseAPIGrant(name)
+		if !ok || err != nil {
+			t.Fatalf("ParseAPIGrant(%q) = %v, %v", name, ok, err)
+		}
+		if got := g.OutsideRepoLimit(); (got != nil) != outside {
+			t.Errorf("%s: OutsideRepoLimit() = %v, want outside %v", name, got, outside)
+		}
+	}
+}

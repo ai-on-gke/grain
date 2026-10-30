@@ -226,6 +226,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		GitHubBranches:         githubClient,
 		GitHubPullRequestFiles: githubClient,
 		GitHubPullRequests:     githubClient,
+		GitHubForkPullRequests: githubClient,
 		// The manual "Import issues now" (POST .../import-issues): the
 		// orchestrator's own pass, read through the UI's GitHub client.
 		IssueImporter: func(ctx context.Context, repo model.RepoRef) (model.IssueImportResult, error) {

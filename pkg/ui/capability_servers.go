@@ -961,7 +961,7 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 	if req.Kind != "env" && req.Kind != "header" {
 		return validationErrorf(`kind must be "env" or "header", not %q`, req.Kind)
 	}
-	if err := c.checkSettingsWritableUnrehearsed(ctx, "grain_config"); err != nil {
+	if err := c.checkBootstrapWritableUnrehearsed(ctx, "grain_config"); err != nil {
 		return err
 	}
 	if req.Value != "" {

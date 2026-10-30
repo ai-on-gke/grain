@@ -314,10 +314,10 @@ func (c *Client) GetTeam(ctx context.Context, id string) (Team, error) {
 // UpdateTeam writes req onto the deployment's settings (grain_config)
 // and is the deployment as it then stands. id must be the default team's.
 func (c *Client) UpdateTeam(ctx context.Context, id string, req UpdateTeamRequest) (Team, error) {
-	if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
-		return Team{}, err
-	}
 	if _, err := c.existingTeam(ctx, id); err != nil {
+		if guard := c.checkGrainConfigWritable(ctx, nil, nil); guard != nil {
+			return Team{}, guard
+		}
 		return Team{}, err
 	}
 	settings, err := c.deploymentSettings(ctx)
@@ -343,12 +343,32 @@ func (c *Client) UpdateTeam(ctx context.Context, id string, req UpdateTeamReques
 			}
 		}
 	}
-	if err := c.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
+	apply := func(cfg *model.Config) error {
 		if err := c.applyDeploymentSettings(cfg, req); err != nil {
 			return err
 		}
 		if req.TargetRepos != nil {
 			cfg.TargetRepos = targetRepos
+		}
+		return nil
+	}
+	// The default model and per-model settings are written here; the
+	// agent's git identity and the target repositories only through the
+	// config repository.
+	before := cloneConfig(settings)
+	after := cloneConfig(settings)
+	if err := apply(&after); err != nil {
+		if guard := c.checkGrainConfigWritable(ctx, &before, nil); guard != nil {
+			return Team{}, guard
+		}
+		return Team{}, err
+	}
+	if err := c.checkGrainConfigWritable(ctx, &before, &after); err != nil {
+		return Team{}, err
+	}
+	if err := c.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		if err := apply(cfg); err != nil {
+			return err
 		}
 		settings = *cfg
 		return nil

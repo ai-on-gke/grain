@@ -547,6 +547,8 @@ func (c *HTTPClient) httpError(resp *http.Response) error {
 		return validationErrorf("%s", message)
 	case http.StatusForbidden:
 		return forbiddenErrorf("%s", message)
+	case http.StatusServiceUnavailable:
+		return &UnavailableError{message: message}
 	default:
 		return fmt.Errorf("grain server: %s (%s)", message, resp.Status)
 	}

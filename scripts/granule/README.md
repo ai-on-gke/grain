@@ -670,7 +670,8 @@ what makes this build cost nothing on most commits. `guest-inputs.sh`
 names the paths that decide what comes out of here -- today the three
 Granulefiles, `scripts/granule/build-granule-image.sh`,
 `third_party/granule`, `cmd/grain-connect/main.go`, `cmd/grain-sandbox`,
-`pkg/hostscriptcli`, and the four
+`pkg/hostscriptcli`, `pkg/sandboxcli` (the sandbox CLI's own code, not
+the packages it imports: `guest-inputs.sh` says why), and the four
 dependency manifests (`go.mod`, `go.sum`, `ui/package.json`,
 `ui/package-lock.json`). Run it rather than trusting this list, which
 has moved twice in three days. `third_party/granule` being on it is what

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cli
+package sandboxcli
 
 // sandboxcli_actions.go is the acting half of the sandbox CLI
 // (docs/design/sandbox-first-agent-surface.md, Stage 2): grain ci wait,

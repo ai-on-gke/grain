@@ -460,6 +460,11 @@ func capabilityRefusal(id string) string {
 			return err.Error()
 		}
 	}
+	if g, ok, err := model.ParseAPIGrant(id); ok && err == nil {
+		if err := g.OutsideRepoLimit(); err != nil {
+			return err.Error()
+		}
+	}
 	return "unknown capability " + id
 }
 

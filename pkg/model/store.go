@@ -4719,25 +4719,119 @@ type TaskPullRequestLink struct {
 // running with nothing watching the deadline it is running against. It
 // keeps its head position instead, exactly as it did when the repair was
 // a separate fix task stacked on its branch.
+//
+// A link to a pull request in a repository the task no longer targets
+// (PullRequestOffTarget: a task moved to another repo after a run had
+// opened one in the old) is not returned: it is not the task's change, and
+// every reader of this list reconciles what it finds against the task's
+// one observation row, its one security hold and its one merge-queue
+// place. Reconciling both the stale and the current pull request against
+// them had each cycle overwrite the other's head, file a fresh security
+// review for whichever it read last, repair a conflict that only the stale
+// one had, and close the task when somebody closed the stale one.
+// PruneOffTargetPullRequestLinks removes such links for good.
 func (s *Store) OpenPullRequestLinks(ctx context.Context) ([]TaskPullRequestLink, error) {
-	var out []TaskPullRequestLink
-	err := each(ctx, s.db,
-		"SELECT `l`.`task_id`, `l`.`target` FROM `task_link` AS `l` "+
+	kept, _, err := s.openPullRequestLinks(ctx)
+	return kept, err
+}
+
+// PruneOffTargetPullRequestLinks removes, from every task
+// OpenPullRequestLinks covers, the LinkFixes links it leaves out for being
+// off the task's target, and returns the links it removed. It heals a
+// task retargeted before a retarget dropped them itself.
+func (s *Store) PruneOffTargetPullRequestLinks(ctx context.Context) ([]TaskPullRequestLink, error) {
+	_, off, err := s.openPullRequestLinks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var pruned []TaskPullRequestLink
+	for _, l := range off {
+		removed := false
+		if err := s.UpdateTask(ctx, l.TaskID, func(t *Task) error {
+			removed = false
+			t.Links = slices.DeleteFunc(t.Links, func(link Link) bool {
+				if link.Target == l.PullRequest && LinkOffTarget(*t, link) {
+					removed = true
+					return true
+				}
+				return false
+			})
+			return nil
+		}); err != nil {
+			return pruned, fmt.Errorf("model: dropping %s, off %s's target, from it: %w", l.PullRequest, l.TaskID, err)
+		}
+		if removed {
+			pruned = append(pruned, l)
+		}
+	}
+	return pruned, nil
+}
+
+// openPullRequestLinks is OpenPullRequestLinks' query, split into the
+// links it returns and those it leaves out for being off target.
+func (s *Store) openPullRequestLinks(ctx context.Context) (kept, off []TaskPullRequestLink, err error) {
+	type row struct {
+		link   TaskPullRequestLink
+		target *RepoRef
+	}
+	var rows []row
+	err = each(ctx, s.db,
+		"SELECT `l`.`task_id`, `l`.`target`, `t`.`target_owner`, `t`.`target_name` FROM `task_link` AS `l` "+
 			"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
+			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
 			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
 			"WHERE `l`.`kind` = ? AND (`st`.`state` IN (?, ?) OR ("+
 			"`o`.`merge_queue_repair_at` IS NOT NULL AND `o`.`completed_at` IS NULL "+
 			"AND `o`.`closed_at` IS NULL)) ORDER BY `l`.`task_id`",
 		[]any{string(LinkFixes), string(StateCompleted), string(StateAwaitingSubmit)},
-		func(rows *sql.Rows) error {
+		func(r *sql.Rows) error {
 			var l TaskPullRequestLink
-			if err := rows.Scan(&l.TaskID, &l.PullRequest); err != nil {
+			var owner, name sql.NullString
+			if err := r.Scan(&l.TaskID, &l.PullRequest, &owner, &name); err != nil {
 				return err
 			}
-			out = append(out, l)
+			var target *RepoRef
+			if owner.String != "" && name.String != "" {
+				repo := RepoFromStored(owner.String, name.String)
+				target = &repo
+			}
+			rows = append(rows, row{link: l, target: target})
 			return nil
 		})
-	return out, err
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, r := range rows {
+		ref, perr := ParsePullRequestRef(r.link.PullRequest)
+		if perr != nil || r.target == nil || ref.Repo.Same(*r.target) {
+			// One that will not parse is still returned, for its
+			// readers to report as they always have.
+			kept = append(kept, r.link)
+			continue
+		}
+		// Rare -- only a pull request outside the task's own target
+		// gets here -- so its write targets are read one task at a
+		// time rather than joined into every row.
+		task := Task{ID: r.link.TaskID, Target: r.target}
+		if err := each(ctx, s.db,
+			"SELECT `owner`,`name` FROM `task_write` WHERE `task_id` = ?",
+			[]any{r.link.TaskID}, func(w *sql.Rows) error {
+				var owner, name string
+				if err := w.Scan(&owner, &name); err != nil {
+					return err
+				}
+				task.Writes = append(task.Writes, WriteTarget{Repo: RepoFromStored(owner, name)})
+				return nil
+			}); err != nil {
+			return nil, nil, err
+		}
+		if PullRequestOffTarget(task, ref) {
+			off = append(off, r.link)
+			continue
+		}
+		kept = append(kept, r.link)
+	}
+	return kept, off, nil
 }
 
 // OpenBlockers is how many unclosed tasks stand in front of this one.

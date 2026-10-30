@@ -325,7 +325,7 @@ func (s *Service) Start(ctx context.Context, req Request) (Run, error) {
 	}
 	req.Capabilities = nil
 	req.ReleaseSecrets = nil
-	if s.Capabilities != nil {
+	if !req.WithholdEventGated && s.Capabilities != nil {
 		ids, err := s.Capabilities(ctx, req.Repo)
 		if err != nil {
 			return Run{}, fmt.Errorf("ci: reading %s's capabilities: %w", req.Repo, err)
@@ -546,6 +546,7 @@ type persistedPlan struct {
 	TrustedRelease         bool     `json:"trusted_release,omitempty"`
 	TrustedSchedule        bool     `json:"trusted_schedule,omitempty"`
 	ReleaseSecrets         []string `json:"release_secrets,omitempty"`
+	WithholdEventGated     bool     `json:"withhold_event_gated,omitempty"`
 	WithholdReleaseSecrets bool     `json:"withhold_release_secrets,omitempty"`
 	WithholdReason         string   `json:"withhold_reason,omitempty"`
 	ReleaseRefVouched      bool     `json:"release_ref_vouched,omitempty"`
@@ -581,6 +582,7 @@ func (s *Service) savePlan(runID string, plan Plan) {
 		TrustedRelease:         req.TrustedRelease,
 		TrustedSchedule:        req.TrustedSchedule,
 		ReleaseSecrets:         req.ReleaseSecrets,
+		WithholdEventGated:     req.WithholdEventGated,
 		WithholdReleaseSecrets: req.WithholdReleaseSecrets,
 		WithholdReason:         req.WithholdReason,
 		ReleaseRefVouched:      req.ReleaseRefVouched,
@@ -622,6 +624,7 @@ func (s *Service) loadPlan(runID string) (Plan, bool) {
 	plan.Request.TrustedRelease = wrapped.TrustedRelease
 	plan.Request.TrustedSchedule = wrapped.TrustedSchedule
 	plan.Request.ReleaseSecrets = wrapped.ReleaseSecrets
+	plan.Request.WithholdEventGated = wrapped.WithholdEventGated
 	plan.Request.WithholdReleaseSecrets = wrapped.WithholdReleaseSecrets
 	plan.Request.WithholdReason = wrapped.WithholdReason
 	plan.Request.ReleaseRefVouched = wrapped.ReleaseRefVouched
