@@ -68,7 +68,7 @@ func current() map[string]string {
 
 func TestACustomImageAtTheCurrentContractIsNotWarnedAbout(t *testing.T) {
 	for _, backend := range []string{"granule", "kubernetes-granule", "kubernetes", "container"} {
-		got := CheckCustomImage("registry.example/team/img:v1", backend, "base", current(), nil)
+		got := CheckCustomImage("registry.example/team/img:v1", backend, "base", "", current(), nil)
 		if got.Warning != "" || !got.Verified || !got.Contract.OK {
 			t.Errorf("%s: %+v, want a verified image with no warning", backend, got)
 		}
@@ -76,7 +76,7 @@ func TestACustomImageAtTheCurrentContractIsNotWarnedAbout(t *testing.T) {
 }
 
 func TestACustomImageWithNoContractLabelSaysWhenTheBaseHasToChange(t *testing.T) {
-	got := CheckCustomImage("registry.example/team/img:v1", "kubernetes", "ghcr.io/bwsalmon/grain/k8s-sandbox-base:sha-1", map[string]string{}, nil)
+	got := CheckCustomImage("registry.example/team/img:v1", "kubernetes", "ghcr.io/bwsalmon/grain/k8s-sandbox-base:sha-1", "", map[string]string{}, nil)
 	if !got.Contract.NeedsBaseRebuild {
 		t.Fatalf("an undeclared contract does not need a base rebuild: %+v", got.Contract)
 	}
@@ -89,18 +89,18 @@ func TestACustomImageWithNoContractLabelSaysWhenTheBaseHasToChange(t *testing.T)
 
 func TestAGranuleCustomImageIsCheckedAgainstBothContracts(t *testing.T) {
 	labels := map[string]string{ContractLabel: strconv.Itoa(Contract)}
-	got := CheckCustomImage("registry.example/team/guest:v1", "granule", "base", labels, nil)
+	got := CheckCustomImage("registry.example/team/guest:v1", "granule", "base", "", labels, nil)
 	if got.Warning == "" || !strings.Contains(got.Warning, GranuleContractLabel) {
 		t.Errorf("a VM image without %s is not warned about it: %q", GranuleContractLabel, got.Warning)
 	}
 	// The same labels on a pod backend are fine: there is no guest contract there.
-	if got := CheckCustomImage("registry.example/team/img:v1", "kubernetes", "base", labels, nil); got.Warning != "" {
+	if got := CheckCustomImage("registry.example/team/img:v1", "kubernetes", "base", "", labels, nil); got.Warning != "" {
 		t.Errorf("a pod image is warned about the Granule guest contract: %q", got.Warning)
 	}
 }
 
 func TestAnUnreadableCustomImageIsReportedUnverified(t *testing.T) {
-	got := CheckCustomImage("registry.example/team/img:v1", "container", "base", nil, errors.New("no such image"))
+	got := CheckCustomImage("registry.example/team/img:v1", "container", "base", "", nil, errors.New("no such image"))
 	if got.Verified {
 		t.Error("an image whose labels could not be read is reported verified")
 	}
@@ -111,7 +111,7 @@ func TestAnUnreadableCustomImageIsReportedUnverified(t *testing.T) {
 
 func TestACustomImageAheadOfThisGrainAsksForAnUpgrade(t *testing.T) {
 	labels := map[string]string{ContractLabel: strconv.Itoa(Contract + 1)}
-	got := CheckCustomImage("registry.example/team/img:v9", "kubernetes", "base", labels, nil)
+	got := CheckCustomImage("registry.example/team/img:v9", "kubernetes", "base", "", labels, nil)
 	if !strings.Contains(got.Warning, "Upgrade grain") {
 		t.Errorf("warning = %q, want it to ask for a grain upgrade", got.Warning)
 	}
@@ -164,5 +164,55 @@ func TestValidateReferenceRefusesWhatIsNotOneImageReference(t *testing.T) {
 		if err := ValidateReference(bad); err == nil {
 			t.Errorf("ValidateReference(%q) = nil, want an error", bad)
 		}
+	}
+}
+
+func TestStaleStockPin(t *testing.T) {
+	const stamped = "ghcr.io/bwsalmon/grain/guest:sha-e5544d6"
+	rev := func(r string) map[string]string { return map[string]string{RevisionLabel: r} }
+	for _, tc := range []struct {
+		name, image, stamped string
+		labels               map[string]string
+		stale                bool
+	}{
+		{"older commit mirrored elsewhere", "us-docker.pkg.dev/gke-adaptive-orchestration/grain/guest:sha-31d0973", stamped, nil, true},
+		{"older commit pinned by digest", "ghcr.io/bwsalmon/grain/guest:sha-31d0973@sha256:0123", stamped, nil, true},
+		{"release tag against a commit stamp", "ghcr.io/bwsalmon/grain/guest:v2.1.0", stamped, nil, true},
+		{"older release", "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.1.0", "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.2.0", nil, true},
+		{"moving tag whose revision is another build", "us-docker.pkg.dev/p/grain/guest:latest", stamped, rev("31d0973aa0b1c2d3"), true},
+		{"the stamped build in a mirror", "us-docker.pkg.dev/p/grain/guest:sha-e5544d6", stamped, nil, false},
+		{"moving tag at the stamped revision", "us-docker.pkg.dev/p/grain/guest:latest", stamped, rev("e5544d6aa0b1c2d3"), false},
+		{"moving tag with no revision", "us-docker.pkg.dev/p/grain/guest:latest", stamped, nil, false},
+		{"a team's own image", "registry.example/team/guest:sha-31d0973", stamped, nil, false},
+		{"another flavour", "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-31d0973", stamped, nil, false},
+		{"dev build stamped latest", "ghcr.io/bwsalmon/grain/guest:sha-31d0973", "ghcr.io/bwsalmon/grain/guest:latest", nil, false},
+		{"nothing configured", "", stamped, nil, false},
+		{"nothing stamped", "ghcr.io/bwsalmon/grain/guest:sha-31d0973", "", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := StaleStockPin(tc.image, tc.stamped, tc.labels)
+			if (got != "") != tc.stale {
+				t.Fatalf("StaleStockPin(%q, %q) = %q, want stale=%v", tc.image, tc.stamped, got, tc.stale)
+			}
+			if tc.stale && !strings.Contains(got, imageTag(tc.stamped)) {
+				t.Errorf("StaleStockPin(%q) = %q, want it to name the stamped tag", tc.image, got)
+			}
+		})
+	}
+}
+
+// A contract-current image that is the stock one at another build is
+// still warned about: its contract label cannot say it was left behind.
+func TestCheckCustomImageFlagsAStaleStockPinWhateverItsContract(t *testing.T) {
+	labels := map[string]string{ContractLabel: ContractValue(), GranuleContractLabel: strconv.Itoa(GranuleContract)}
+	got := CheckCustomImage("us-docker.pkg.dev/p/grain/guest:sha-31d0973", "granule", "base",
+		"ghcr.io/bwsalmon/grain/guest:sha-e5544d6", labels, nil)
+	if !got.Contract.OK || got.Stale == "" || got.Warning != got.Stale {
+		t.Errorf("CheckCustomImage = %+v, want a contract-OK verdict whose warning is the stale pin", got)
+	}
+	got = CheckCustomImage("us-docker.pkg.dev/p/grain/guest:sha-e5544d6", "granule", "base",
+		"ghcr.io/bwsalmon/grain/guest:sha-e5544d6", labels, nil)
+	if got.Stale != "" || got.Warning != "" {
+		t.Errorf("CheckCustomImage(mirror of the stamp) = %+v, want no warning", got)
 	}
 }

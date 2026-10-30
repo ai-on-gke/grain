@@ -1033,6 +1033,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		firstNonEmptyString(cfg.K8sSandboxImage, sandboxImgDefault),
 		effectiveGranuleForWarn,
 	)
+	sandboxWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sSandboxImage, sandboxImgDefault, nil), sandboxWarn)
+	granuleWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sGranuleImage, granuleImgDefault, nil), granuleWarn)
 	out := Settings{
 		Configured:               true,
 		PollInterval:             cfg.PollInterval.String(),
