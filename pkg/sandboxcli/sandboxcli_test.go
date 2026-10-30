@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -108,11 +110,10 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	store.Put(ci.Run{ID: "run-1", Repo: "bwsalmon/grain", Ref: "grain/task-7", Conclusion: ci.ConclusionFailure, StartedAt: &at,
 		Jobs: []ci.JobRun{{Name: "go", Conclusion: ci.ConclusionFailure, Steps: []ci.StepRun{
 			{Name: "Test", Conclusion: ci.ConclusionFailure, Output: "--- FAIL: TestWidget (0.01s)\nFAIL\n"}}}}})
+	// No playbooks/ here: src://playbooks is the binary's embedded copy.
 	src := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(src, "playbooks"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(src, "playbooks", "gke.md"), []byte("# GKE\n"), 0o644); err != nil {
+	gke, err := fs.ReadFile(playbooks.FS, "gke-sandbox-cluster.md")
+	if err != nil {
 		t.Fatal(err)
 	}
 	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
@@ -164,11 +165,19 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	if out, errOut, code := run("pr", "status"); code != 0 || !strings.Contains(out, "go: failure") {
 		t.Errorf("pr status: %d %q %s", code, out, errOut)
 	}
-	if out, errOut, code := run("playbooks"); code != 0 || !strings.Contains(out, "gke.md") {
+	if out, errOut, code := run("playbooks"); code != 0 || !strings.Contains("\n"+out, "\ngke-sandbox-cluster\n") || strings.Contains(out, ".md") {
 		t.Errorf("playbooks: %d %q %s", code, out, errOut)
 	}
-	if out, errOut, code := run("read", "src://playbooks/gke.md"); code != 0 || out != "# GKE\n" {
-		t.Errorf("read playbook: %d %q %s", code, out, errOut)
+	for _, name := range []string{"gke-sandbox-cluster", "gke-sandbox-cluster.md"} {
+		if out, errOut, code := run("playbooks", name); code != 0 || out != string(gke) {
+			t.Errorf("playbooks %s: %d, %d bytes, %s", name, code, len(out), errOut)
+		}
+	}
+	if _, errOut, code := run("playbooks", "nope"); code != 1 || !strings.Contains(errOut, "not found") {
+		t.Errorf("playbooks nope: %d %s", code, errOut)
+	}
+	if out, errOut, code := run("read", "src://playbooks/gke-sandbox-cluster.md"); code != 0 || out != string(gke) {
+		t.Errorf("read playbook: %d, %d bytes, %s", code, len(out), errOut)
 	}
 	// Refusals come back in unknownToolMessage's words.
 	_, errOut, code := run("read", "src://pkg/ci/engine.go")

@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/safepath"
@@ -293,6 +294,9 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 		}
 		return nil, RefuseCapability("src://"+relPath, "self-debug")
 	}
+	if trimmed := strings.TrimPrefix(strings.TrimSuffix(relPath, "/"), "/"); trimmed == "playbooks" || strings.HasPrefix(trimmed, "playbooks/") {
+		return resolvePlaybook(relPath, strings.TrimPrefix(strings.TrimPrefix(trimmed, "playbooks"), "/"))
+	}
 	if s == nil || strings.TrimSpace(s.SrcDir) == "" {
 		return nil, fmt.Errorf("%w: src:// is not configured on this daemon", ErrNotFound)
 	}
@@ -357,6 +361,51 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 		Growing: false,
 		Open: func() (io.ReadCloser, error) {
 			return os.Open(target)
+		},
+	}, nil
+}
+
+// resolvePlaybook serves src://playbooks out of the playbooks embedded
+// in this binary (pkg/capability/bootstrap/playbooks) rather than out of
+// SrcDir: no daemon's source tree has a playbooks/ at its root, and the
+// embedded copy is the one the bootstrap-playbooks grant is about. name
+// is "" for the listing, and is read with or without its .md.
+func resolvePlaybook(relPath, name string) (*ResolvedNode, error) {
+	if name == "" {
+		dirEntries, err := fs.ReadDir(playbooks.FS, ".")
+		if err != nil {
+			return nil, err
+		}
+		entries := make([]Entry, 0, len(dirEntries))
+		for _, de := range dirEntries {
+			if de.IsDir() || !strings.HasSuffix(de.Name(), ".md") {
+				continue
+			}
+			var sz int64
+			if fi, err := de.Info(); err == nil {
+				sz = fi.Size()
+			}
+			entries = append(entries, Entry{Name: de.Name(), Type: "file", Size: sz})
+		}
+		sortEntries(entries)
+		return &ResolvedNode{Scheme: "src", Path: relPath, IsDir: true, Entries: entries}, nil
+	}
+	if !strings.HasSuffix(name, ".md") {
+		name += ".md"
+	}
+	data, err := fs.ReadFile(playbooks.FS, name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrInvalid) {
+			return nil, fmt.Errorf("%w: src://%s", ErrNotFound, relPath)
+		}
+		return nil, err
+	}
+	return &ResolvedNode{
+		Scheme: "src",
+		Path:   relPath,
+		Size:   int64(len(data)),
+		Open: func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(data)), nil
 		},
 	}, nil
 }
