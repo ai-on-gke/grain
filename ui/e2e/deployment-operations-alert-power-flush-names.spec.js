@@ -61,6 +61,25 @@ test("a stopped reconcile loop's alert opens System → Power, from the bell and
     .filter({ hasText: "Reconcile loop stopped" });
   await healthRow.getByRole("button", { name: "Power" }).click();
   await expect(page).toHaveURL(/\/system\/power$/);
+
+  // On a phone the button sits inside its row, which stays inside the
+  // popover rather than pushing it wider than the screen.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/inbox");
+  await page.getByTestId("alerts-button").first().click();
+  const phoneRow = page
+    .getByTestId("alerts-panel")
+    .getByTestId("alert-row")
+    .filter({ hasText: "Reconcile loop stopped" });
+  const button = await phoneRow
+    .getByRole("button", { name: "Power" })
+    .boundingBox();
+  const rowBox = await phoneRow.boundingBox();
+  expect(button.x).toBeGreaterThanOrEqual(rowBox.x);
+  expect(button.x + button.width).toBeLessThanOrEqual(
+    rowBox.x + rowBox.width + 0.5,
+  );
+  expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(390);
 });
 
 test("the two whole-cache flush buttons on System → Caches are named apart", async ({
