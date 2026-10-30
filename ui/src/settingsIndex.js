@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { fuzzyScore } from "./fuzzy.js";
+import { isConfigRepoSection } from "./settingsSections.js";
 
 // settingsIndex is what the Settings filter searches
 // (docs/design/settings-panel.md §3.3): one entry per field and per
@@ -798,5 +799,13 @@ export function matchSettings(query) {
   const kept = scored.some((x) => x.exact)
     ? scored.filter((x) => x.exact)
     : scored;
-  return kept.sort((a, b) => b.score - a.score).map((x) => x.entry);
+  // A field of a config-repo-only section is still found -- its value is
+  // shown -- but says it is read-only here (configRepo).
+  return kept
+    .sort((a, b) => b.score - a.score)
+    .map((x) =>
+      isConfigRepoSection(x.entry.section)
+        ? { ...x.entry, configRepo: true }
+        : x.entry,
+    );
 }
