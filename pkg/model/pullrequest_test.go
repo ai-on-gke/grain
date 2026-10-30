@@ -46,3 +46,27 @@ func TestParsePullRequestRefRejectsBadNumber(t *testing.T) {
 		t.Fatal("expected an error for a non-numeric #suffix")
 	}
 }
+
+// A task's links come back ordered by their target's text, where
+// "o/r#100" sorts before "o/r#99". The task's pull request is the newest
+// by number, in its own target ahead of a write repository's.
+func TestTaskPullRequestComparesNumbersAsNumbers(t *testing.T) {
+	repo := model.RepoRef{Owner: "ai-on-gke", Name: "grain"}
+	other := model.RepoRef{Owner: "ai-on-gke", Name: "zz-other"}
+	task := model.Task{ID: "t1", Target: &repo, Writes: []model.WriteTarget{{Repo: other}}}
+	for _, target := range []string{"ai-on-gke/grain#100", "ai-on-gke/grain#99", "ai-on-gke/zz-other#7"} {
+		task.Links = append(task.Links, model.Link{Kind: model.LinkFixes, Target: target})
+	}
+	got := model.TaskPullRequest(task)
+	want := model.PullRequestRef{Repo: repo, Number: 100}
+	if got == nil || !model.SamePullRequest(*got, want) {
+		t.Fatalf("TaskPullRequest = %v, want %v", got, want)
+	}
+
+	if !model.PullRequestRefLess(model.PullRequestRef{Repo: repo, Number: 99}, want) {
+		t.Fatal("#99 does not order before #100")
+	}
+	if model.PullRequestRefLess(want, model.PullRequestRef{Repo: repo, Number: 99}) {
+		t.Fatal("#100 orders before #99")
+	}
+}
