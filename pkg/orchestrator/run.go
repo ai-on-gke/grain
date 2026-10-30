@@ -3409,7 +3409,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
 		result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
-		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, comments, result, runErr)
+		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)
 		agentRan = true
 		if result != nil {
 			resumableSession = result.ResumableSession

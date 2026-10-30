@@ -83,6 +83,13 @@ type Store struct {
 	proxyCalls      map[string][]ProxyToolCall
 	proxyAPICalls   map[string][]RunAPICall
 
+	// commentAdded is, per task, the channel CommentAdded handed out and
+	// AddComment closes (and forgets) once a comment on that task has
+	// committed. Process-local: a comment another process writes reaches
+	// a waiter only through that waiter's own poll.
+	commentMu    sync.Mutex
+	commentAdded map[string]chan struct{}
+
 	// SettingsRepo is the deployment's own state repository, whose merged
 	// changes the daemon applies to itself on its next tick
 	// (staterepo.Apply) -- which is why the security hold judges a pull
@@ -817,7 +824,41 @@ func (s *Store) AddComment(ctx context.Context, c Comment) (id int64, err error)
 		id, err = addComment(ctx, tx, c)
 		return err
 	})
+	if err == nil {
+		s.signalCommentAdded(c.TaskID)
+	}
 	return id, err
+}
+
+// CommentAdded returns a channel closed the next time AddComment commits
+// a comment on taskID through this Store: what something waiting on a
+// conversation (orchestrator's in-process session wait) selects on so it
+// wakes the moment a person writes, rather than at its next poll. Take
+// the channel before reading the conversation, so a comment landing
+// between the read and the wait is not missed. Only AddComment signals,
+// and only in this process; a waiter still polls, at its own interval,
+// for everything else.
+func (s *Store) CommentAdded(taskID string) <-chan struct{} {
+	s.commentMu.Lock()
+	defer s.commentMu.Unlock()
+	if s.commentAdded == nil {
+		s.commentAdded = map[string]chan struct{}{}
+	}
+	ch, ok := s.commentAdded[taskID]
+	if !ok {
+		ch = make(chan struct{})
+		s.commentAdded[taskID] = ch
+	}
+	return ch
+}
+
+func (s *Store) signalCommentAdded(taskID string) {
+	s.commentMu.Lock()
+	defer s.commentMu.Unlock()
+	if ch, ok := s.commentAdded[taskID]; ok {
+		close(ch)
+		delete(s.commentAdded, taskID)
+	}
 }
 
 func addComment(ctx context.Context, tx *sql.Tx, c Comment) (int64, error) {
@@ -848,9 +889,17 @@ func addComment(ctx context.Context, tx *sql.Tx, c Comment) (int64, error) {
 // same instant still have an order, and it is the one they were written
 // in.
 func (s *Store) Comments(ctx context.Context, taskID string) ([]Comment, error) {
+	return s.CommentsAfter(ctx, taskID, 0)
+}
+
+// CommentsAfter is Comments for only the comments whose id is greater
+// than after: what a reader holding a cursor into the conversation asks
+// for, rather than reading the whole thread again to find the tail.
+func (s *Store) CommentsAfter(ctx context.Context, taskID string, after int64) ([]Comment, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT "+
 		"`id`, `author_kind`, `author_id`, `author_behalf_kind`, `author_behalf_id`, "+
-		"`body`, `created_at`, `handover`, `summary` FROM `task_comment` WHERE `task_id` = ? ORDER BY `id`", taskID)
+		"`body`, `created_at`, `handover`, `summary` FROM `task_comment` WHERE `task_id` = ? AND `id` > ? ORDER BY `id`",
+		taskID, after)
 	if err != nil {
 		return nil, fmt.Errorf("reading comments on task %s: %w", taskID, err)
 	}
@@ -2270,6 +2319,10 @@ func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, ou
 	// through grain hostd (HostdCursorKey).
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_spool_cursor` WHERE `run_id` IN (?, ?)",
 		runID, HostdCursorKey(runID)); err != nil {
+		return err
+	}
+	// Nor anything left for an adopting daemon to skip (RelayedCalls).
+	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_relayed_call` WHERE `run_id` = ?", runID); err != nil {
 		return err
 	}
 	if err := recordSuspensionTx(ctx, tx, runID, taskID, outcome, detail, at, susp); err != nil {

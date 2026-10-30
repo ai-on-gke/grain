@@ -16,8 +16,12 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -600,6 +604,24 @@ func (c Config) sessionSandboxIdleTTL() time.Duration {
 	return model.DefaultSessionSandboxIdleTTL
 }
 
+// sessionTurnReserve is how much of a run's wall clock an in-process
+// session keeps in hand for the turn a message would wake: a session
+// whose deadline is nearer than its idle TTL plus this does not wait
+// in-process at all (continueSessionTurns), since a message arriving late
+// in the wait would start a turn the clock could cancel mid-answer. Its
+// run ends instead, and the next message is answered by a fresh dispatch
+// on the warm sandbox, with a clock of its own.
+const sessionTurnReserve = 30 * time.Minute
+
+// continueSessionTurns keeps an interactive session's run alive between
+// turns: it relays the turn's answer (and proposals and handover), waits
+// up to the idle TTL for a person's next message, and resumes the same
+// agent session with it.
+//
+// deadline is the run's wall clock as it stands (runClock.deadline): the
+// idle wait is not credited to it, so a run too close to it to wait a
+// full TTL and still answer stops here instead (sessionTurnReserve). nil,
+// or a zero time, is no deadline.
 func continueSessionTurns(
 	hostCtx, daemonCtx context.Context,
 	store *model.Store,
@@ -608,6 +630,7 @@ func continueSessionTurns(
 	runCfg agent.RunConfig,
 	task model.Task,
 	runID string,
+	deadline func() time.Time,
 	comments []model.Comment,
 	result *agent.Result,
 	runErr error,
@@ -622,6 +645,9 @@ func continueSessionTurns(
 	}
 
 	turnResult := result
+	// turnAfter is where the conversation in the turn's own prompt ends
+	// (agent.RunConfig.AddendaAfter): what the turn was dispatched with.
+	turnAfter := runCfg.AddendaAfter
 	for {
 		if runErr != nil || turnResult == nil || turnResult.ResumableSession == "" || hostCtx.Err() != nil || daemonCtx.Err() != nil {
 			break
@@ -656,12 +682,12 @@ func continueSessionTurns(
 			log.Printf("orchestrator: run %s: relaying proposed tasks in-process: %v", runID, err)
 			break
 		}
-		markToolCallsRelayed(result, "propose_task")
+		recordRelayedInProcess(daemonCtx, store, runID, result, "propose_task")
 		if err := relayHandover(daemonCtx, store, task, turnResult, now); err != nil {
 			log.Printf("orchestrator: run %s: relaying handover in-process: %v", runID, err)
 			break
 		}
-		markToolCallsRelayed(result, "write_handover")
+		recordRelayedInProcess(daemonCtx, store, runID, result, "write_handover")
 
 		replyBody := commentText
 		var attachments []mcp.ResponseAttachment
@@ -670,7 +696,6 @@ func continueSessionTurns(
 			var dropped []mcp.DroppedAttachment
 			attachments, dropped = mcp.ResponseAttachmentsTolerant(firstToolCallArgs(turnResult, "comment_on_issue"), staged)
 			replyBody = withDroppedAttachments(commentText, dropped)
-			markToolCallsRelayed(result, "comment_on_issue")
 		} else {
 			replyBody = finalText
 		}
@@ -678,72 +703,104 @@ func continueSessionTurns(
 			log.Printf("orchestrator: run %s: relaying session answer in-process: %v", runID, err)
 			break
 		}
+		if hasComment {
+			recordRelayedInProcess(daemonCtx, store, runID, result, "comment_on_issue")
+		}
 		inProcessRelayedRuns.Store(runID, true)
 
-		allComments, err := store.Comments(daemonCtx, task.ID)
-		if err == nil {
-			comments = allComments
+		// What the turn was actually shown: its prompt, and every
+		// comment its forked mcpserver handed it since as an addendum on
+		// a tool result (Observation.DeliveredCommentID, which that
+		// server reports through ui.Client.RecordDelivered). Not the
+		// whole conversation as it stands now: a person's message posted
+		// after the turn's last tool call, while it wrote this answer,
+		// reached it by neither route, and is what wakes the next turn
+		// below at once rather than being counted as read
+		// (undeliveredHumanComment, grain/task-1774).
+		lastID := turnAfter
+		if obs, err := store.GetObservation(daemonCtx, task.ID); err != nil {
+			log.Printf("orchestrator: run %s: reading what the turn was shown: %v", runID, err)
+		} else if obs != nil && obs.DeliveredCommentID != nil && *obs.DeliveredCommentID > lastID {
+			lastID = *obs.DeliveredCommentID
 		}
-		lastID := lastCommentID(comments)
 		if err := store.AdvanceDelivered(daemonCtx, task.ID, lastID, now); err != nil {
 			log.Printf("orchestrator: run %s: advancing delivered comment in-process: %v", runID, err)
+		}
+		// The conversation through lastID, and nothing after it: what
+		// this returns is what RunDispatch marks delivered once the run
+		// ends, so a message the wait below gives up on stays undelivered
+		// and gets a dispatch of its own.
+		if all, err := store.Comments(daemonCtx, task.ID); err == nil {
+			comments = comments[:0:0]
+			for _, c := range all {
+				if c.ID <= lastID {
+					comments = append(comments, c)
+				}
+			}
+		}
+
+		// A run whose clock would not survive a full wait and the turn
+		// after it stops here: its answer is relayed, and the next
+		// message is a fresh dispatch's (sessionTurnReserve).
+		if deadline != nil {
+			if d := deadline(); !d.IsZero() && time.Until(d) < ttl+sessionTurnReserve {
+				log.Printf("orchestrator: run %s: %s left on its clock, too little to wait %s for the session's next message in-process; "+
+					"ending the run so the next message is a fresh dispatch's", runID, time.Until(d).Round(time.Second), ttl)
+				break
+			}
 		}
 
 		waitCtx, cancelWait := context.WithTimeout(hostCtx, ttl)
 		unmark := markInProcessSessionIdle(store, cfg.sessionLedger, runID, cfg.sessionSandboxName, cfg.sessionShape, now, cancelWait)
 
-		var newHumanComments []model.Comment
-		pollInterval := cfg.cancelPollInterval()
-		if pollInterval <= 0 || pollInterval > 100*time.Millisecond {
-			pollInterval = 25 * time.Millisecond
-		}
-		ticker := time.NewTicker(pollInterval)
+		// Woken by AddComment the moment a comment lands in this process
+		// (Store.CommentAdded), and otherwise polled at the deployment's
+		// own interval for a comment another process wrote, a pause or a
+		// close -- reading only the conversation after lastID, never the
+		// whole thread again.
+		var fresh []model.Comment
+		ticker := time.NewTicker(cfg.cancelPollInterval())
 	waitLoop:
 		for {
+			added := store.CommentAdded(task.ID)
 			if closed, _ := taskClosed(daemonCtx, store, task.ID); closed {
 				break waitLoop
 			}
 			if taskPaused(daemonCtx, store, task.ID) {
 				break waitLoop
 			}
-			latest, err := store.Comments(daemonCtx, task.ID)
-			if err == nil {
-				var fresh []model.Comment
-				for _, c := range latest {
-					if c.ID > lastID && c.Author.Actor.Kind == model.PrincipalHuman {
-						fresh = append(fresh, c)
-					}
-				}
-				if len(fresh) > 0 {
-					newHumanComments = fresh
-					comments = latest
-					break waitLoop
-				}
+			latest, err := store.CommentsAfter(daemonCtx, task.ID, lastID)
+			if err == nil && slices.ContainsFunc(latest, func(c model.Comment) bool {
+				return c.Author.Actor.Kind == model.PrincipalHuman
+			}) {
+				fresh = latest
+				break waitLoop
 			}
 			select {
 			case <-waitCtx.Done():
 				break waitLoop
 			case <-ticker.C:
+			case <-added:
 			}
 		}
 		ticker.Stop()
 		cancelWait()
 		unmark()
 
-		if len(newHumanComments) == 0 {
+		if len(fresh) == 0 {
 			break
 		}
 		inProcessRelayedRuns.Delete(runID)
 
 		// Only a person's message wakes the session, but the turn is told
-		// everything said since its answer, each with who said it
+		// everything said since what it last saw, each with who said it
 		// (addendumText) -- as a mid-run comment is and a redispatch's
 		// prompt is -- rather than bare bodies, so a grain notice or
 		// another task's message is neither dropped nor read as the
 		// person's own words. This task's own relayed answers are left out.
 		var promptBuilder strings.Builder
-		for _, c := range comments {
-			if c.ID <= lastID || ownRelayedAnswer(c, task.ID) {
+		for _, c := range fresh {
+			if ownRelayedAnswer(c, task.ID) {
 				continue
 			}
 			if promptBuilder.Len() > 0 {
@@ -751,11 +808,22 @@ func continueSessionTurns(
 			}
 			promptBuilder.WriteString(addendumText(c))
 		}
+		comments = append(comments, fresh...)
 		nextCfg := runCfg
 		nextCfg.ResumeSession = turnResult.ResumableSession
 		nextCfg.ContinuePrompt = promptBuilder.String()
 		nextCfg.Addenda = addendaPoller(store, task.ID, comments)
 		nextCfg.AddendaAfter = lastCommentID(comments)
+		turnAfter = nextCfg.AddendaAfter
+		// The messages are in front of the turn from here on, in its
+		// prompt, as a redispatch's are: marked delivered as it starts
+		// rather than once the run ends, since a daemon that adopts the
+		// run part-way through this turn finishes it without knowing
+		// what its prompt held, and would otherwise read the very
+		// message it is answering as one no run was shown.
+		if err := store.AdvanceDelivered(daemonCtx, task.ID, turnAfter, cfg.now()); err != nil {
+			log.Printf("orchestrator: run %s: recording the messages its next turn is given: %v", runID, err)
+		}
 
 		nextResult, nextErr := framework.Run(hostCtx, nextCfg)
 		nextResult, nextErr = continueStoppedRun(hostCtx, framework, nextCfg, nextResult, nextErr)
@@ -778,13 +846,81 @@ func ownRelayedAnswer(c model.Comment, taskID string) bool {
 		c.Author.OnBehalfOf.ID == taskID
 }
 
-func markToolCallsRelayed(result *agent.Result, name string) {
+// markToolCallsRelayed marks every successful call to name in result
+// that is not already marked, and returns their fingerprints
+// (toolCallFingerprint).
+func markToolCallsRelayed(result *agent.Result, name string) []string {
 	if result == nil {
+		return nil
+	}
+	var marked []string
+	for i := range result.ToolCalls {
+		c := &result.ToolCalls[i]
+		if c.Name == name && !c.IsError && !c.Relayed {
+			c.Relayed = true
+			marked = append(marked, toolCallFingerprint(*c))
+		}
+	}
+	return marked
+}
+
+// recordRelayedInProcess is markToolCallsRelayed, written down as well
+// (model.Store.RecordRelayedCalls): the mark on result lives only in
+// this daemon's memory, and a daemon that adopts the run reads every
+// turn's calls back out of its transcript (markRecordedRelayed). A
+// failure to write is logged; at worst the adopting daemon relays the
+// call a second time, as it did before this was recorded at all.
+func recordRelayedInProcess(ctx context.Context, store *model.Store, runID string, result *agent.Result, name string) {
+	marked := markToolCallsRelayed(result, name)
+	if store == nil || len(marked) == 0 {
+		return
+	}
+	if err := store.RecordRelayedCalls(ctx, runID, marked); err != nil {
+		log.Printf("orchestrator: run %s: recording the %s calls relayed in-process: %v", runID, name, err)
+	}
+}
+
+// markRecordedRelayed marks the calls in result that runID's in-process
+// turns already acted on (recordRelayedInProcess), for a daemon that has
+// parsed them back out of the run's transcript (ResumeAdoptedRun): the
+// earlier turns' answers and proposals are on the task already, and the
+// end-of-run pass must act only on the turn still in flight. Matched by
+// fingerprint and counted, so a call made twice and relayed once is
+// relayed once more.
+func markRecordedRelayed(ctx context.Context, store *model.Store, runID string, result *agent.Result) {
+	if store == nil || result == nil {
+		return
+	}
+	relayed, err := store.RelayedCalls(ctx, runID)
+	if err != nil {
+		log.Printf("orchestrator: run %s: reading the calls relayed in-process: %v", runID, err)
+		return
+	}
+	if len(relayed) == 0 {
 		return
 	}
 	for i := range result.ToolCalls {
-		if result.ToolCalls[i].Name == name && !result.ToolCalls[i].IsError {
-			result.ToolCalls[i].Relayed = true
+		c := &result.ToolCalls[i]
+		if c.IsError || c.Relayed {
+			continue
+		}
+		fp := toolCallFingerprint(*c)
+		if relayed[fp] > 0 {
+			relayed[fp]--
+			c.Relayed = true
 		}
 	}
+}
+
+// toolCallFingerprint identifies a tool call by its name and arguments,
+// the same however the call was read: from the live run's result, or
+// parsed again out of its transcript by an adopting daemon. encoding/json
+// writes a map's keys in order, so equal arguments give equal bytes.
+func toolCallFingerprint(c agent.ToolCall) string {
+	args, err := json.Marshal(c.Arguments)
+	if err != nil {
+		args = []byte(fmt.Sprint(c.Arguments))
+	}
+	sum := sha256.Sum256(append([]byte(c.Name+"\x00"), args...))
+	return hex.EncodeToString(sum[:])
 }
