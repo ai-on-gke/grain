@@ -640,6 +640,8 @@ var (
 		"watch_default_branch",
 		"merge_on_green",
 		"base_repair_bypasses_human_gates",
+		"issue_import_enabled",
+		"issue_import_approved",
 		"triggered",
 		"rechecked",
 		"caught",

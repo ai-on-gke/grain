@@ -604,6 +604,12 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		CICapabilities:      []string{"gcp-key"},
 		PromptExtension:     awkward,
 		SetupCommand:        "",
+		// Every one of the issue importer's columns set off its
+		// default, so the round trip has to carry each of them.
+		IssueImport: model.IssueImport{
+			Enabled: true, Repo: "kubernetes/autoscaler", Label: "good first issue",
+			Approved: true, IntervalSeconds: 900,
+		},
 	}); err != nil {
 		t.Fatalf("putting repo config: %v", err)
 	}

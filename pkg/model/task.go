@@ -125,6 +125,17 @@ const (
 	// waiting for somebody -- are exactly the ones
 	// orchestrator.reconcileConsoleSessions exempts it from.
 	ReasonConsoleSession OriginReason = "console-session"
+	// ReasonImported is an open GitHub issue the periodic issue importer
+	// turned into a task (orchestrator.reconcileIssueImports, configured
+	// per repository by RepoConfig.IssueImport). The task names the issue
+	// it came from in Issue and WorkOrigin, which is also what keeps the
+	// importer from filing the same issue twice.
+	//
+	// Its own reason for ReasonUpgradeCheck's reason: "somebody opened an
+	// issue on GitHub and grain picked it up" is not "somebody filed this
+	// here", and the person deciding whether to approve it is entitled to
+	// be told that the words in it came from outside.
+	ReasonImported OriginReason = "imported"
 )
 
 // Origin is two orthogonal facts kept together: who created a task, and

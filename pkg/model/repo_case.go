@@ -316,7 +316,7 @@ var repoCaseTables = []repoCaseTable{
 		// repository are folded together, which is how clone_url,
 		// unfixable_checks and base_branch_ci_jobs came to be missing
 		// from it before grain/task-340 noticed.
-		values: []string{"default_capabilities", "prompt_extension", "setup_command", "ci_capabilities", "release_workflows_disabled", "release_secrets", "declarations", "require_branch_up_to_date", "ignore_github_ci", "watch_default_branch", "clone_url", "unfixable_checks", "base_branch_ci_jobs", "declared_prompt_extension", "declared_setup_command", "post_merge_dispatch_jobs", "work_ownership", "work_overrides", "ci_mode", "repair_template_id", "port_branches", "declared_port_branches", "port_types", "declared_port_types", "git_credential", "merge_on_green", "base_repair_bypasses_human_gates", "merge_recheck"},
+		values: []string{"default_capabilities", "prompt_extension", "setup_command", "ci_capabilities", "release_workflows_disabled", "release_secrets", "declarations", "require_branch_up_to_date", "ignore_github_ci", "watch_default_branch", "clone_url", "unfixable_checks", "base_branch_ci_jobs", "declared_prompt_extension", "declared_setup_command", "post_merge_dispatch_jobs", "work_ownership", "work_overrides", "ci_mode", "repair_template_id", "port_branches", "declared_port_branches", "port_types", "declared_port_types", "git_credential", "merge_on_green", "base_repair_bypasses_human_gates", "merge_recheck", "issue_import_enabled", "issue_import_repo", "issue_import_label", "issue_import_approved", "issue_import_interval_seconds"},
 		merge:  mergeRepoConfigRow,
 	},
 	// What grain CI last made of a branch things merge into
@@ -946,6 +946,17 @@ func mergeRepoConfigRow(canonical, divergent []string) ([]string, string) {
 		return nil, "both spellings set different merge_recheck"
 	}
 	out[27] = canonical[27]
+	// The issue importer's settings (RepoConfig.IssueImport): whether
+	// GitHub issues become tasks here, and whether those queue unread,
+	// is a decision somebody made on purpose, so any disagreement is a
+	// question for a person.
+	for i, col := range []string{"issue_import_enabled", "issue_import_repo", "issue_import_label",
+		"issue_import_approved", "issue_import_interval_seconds"} {
+		if canonical[28+i] != divergent[28+i] {
+			return nil, "both spellings set different " + col
+		}
+		out[28+i] = canonical[28+i]
+	}
 	return out, ""
 }
 

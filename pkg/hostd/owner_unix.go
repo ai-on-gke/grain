@@ -28,22 +28,28 @@ import (
 // written: it must be a regular file (not a symlink to one), owned by one
 // of owners, and writable by neither its group nor anyone else.
 func checkOwnedBy(path string, owners []uint32) error {
+	return checkFileOwnedBy("hostd allowlist", path, owners)
+}
+
+// checkFileOwnedBy is checkOwnedBy for any file, what naming it in the
+// error.
+func checkFileOwnedBy(what, path string, owners []uint32) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("hostd allowlist %s is not a regular file", path)
+		return fmt.Errorf("%s %s is not a regular file", what, path)
 	}
 	if info.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("hostd allowlist %s is writable by group or others (mode %s); make it 0644 or tighter", path, info.Mode().Perm())
+		return fmt.Errorf("%s %s is writable by group or others (mode %s); make it 0644 or tighter", what, path, info.Mode().Perm())
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		return fmt.Errorf("hostd allowlist %s: cannot read its owner", path)
+		return fmt.Errorf("%s %s: cannot read its owner", what, path)
 	}
 	if !slices.Contains(owners, st.Uid) {
-		return fmt.Errorf("hostd allowlist %s is owned by uid %d; only %v may own it", path, st.Uid, owners)
+		return fmt.Errorf("%s %s is owned by uid %d; only %v may own it", what, path, st.Uid, owners)
 	}
 	return nil
 }

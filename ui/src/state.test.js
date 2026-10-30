@@ -1633,6 +1633,19 @@ describe("stateLabel", () => {
     expect(stateLabel({ state: "completed" })).toBe("Merging");
   });
 
+  it("calls an unapproved GitHub issue import Imported", () => {
+    expect(
+      stateLabel({
+        state: "proposed",
+        imported: true,
+        awaitingImportApproval: true,
+      }),
+    ).toBe("Imported");
+    // Approved, it reads as its state like any other task.
+    expect(stateLabel({ state: "queued", imported: true })).toBe("Waiting");
+    expect(stateLabel({ state: "proposed" })).toBe("Proposed");
+  });
+
   it("says what a merge-queue repair is doing instead", () => {
     expect(stateLabel({ state: "running", repairing: true })).toBe("Repairing");
     expect(stateLabel({ state: "queued", repairing: true })).toBe(

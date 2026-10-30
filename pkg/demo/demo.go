@@ -1217,6 +1217,32 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 
+	// An open GitHub issue the issue importer filed and nobody has
+	// approved yet (model.ReasonImported): the "Imported" status and
+	// chip the task list shows for one.
+	imported, err := create(ago(25*time.Minute), ui.CreateTaskRequest{
+		Title: "[#42] Search results drop the last page",
+		Description: "Imported from GitHub issue acme/widgets#42: https://github.com/acme/widgets/issues/42\n\n" +
+			"Author: @reporter\nLabels: bug\n\n## Description\n\nThe last page of search results is never shown.",
+	})
+	if err != nil {
+		return fmt.Errorf("seeding imported task: %w", err)
+	}
+	if err := store.UpdateTask(ctx, imported.ID, func(t *model.Task) error {
+		t.Origin = model.Origin{
+			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"}},
+			Reason:      model.ReasonImported,
+		}
+		if t.Target != nil {
+			t.Issue = 42
+			t.WorkOrigin = model.GitHubOrigin(*t.Target, 42)
+		}
+		t.Approval, t.ApprovedAt = nil, nil
+		return nil
+	}); err != nil {
+		return err
+	}
+
 	// Director session task tagged with console-session:director.
 	directorTask, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:       "Director Session",
