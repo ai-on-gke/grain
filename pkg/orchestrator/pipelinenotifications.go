@@ -55,11 +55,10 @@ const (
 	repairFailingFor  = 12 * time.Hour
 )
 
-// raisePipelineNotification raises n as of now, and delivers a new or
-// risen one the way the API's raise does: into the director's chat, and
-// to the durable tasks subscribed to its family. A failed delivery is
-// logged -- the notification is raised either way, and
-// reconcileNotifications tries the director again.
+// raisePipelineNotification raises n as of now, and delivers a new one
+// the way the API's raise does: to the durable tasks subscribed to its
+// family. A failed delivery is logged -- the notification is raised
+// either way.
 func raisePipelineNotification(ctx context.Context, store *model.Store, n model.Notification,
 	now time.Time) (model.NotificationRaise, error) {
 
@@ -70,9 +69,6 @@ func raisePipelineNotification(ctx context.Context, store *model.Store, n model.
 	}
 	if raised.New || raised.Rose {
 		log.Printf("orchestrator: raised notification %s (%s): %s", n.Subject, raised.Notification.Severity, n.Title)
-		if _, err := store.DeliverNotificationToDirector(ctx, raised.Notification, now); err != nil {
-			log.Printf("orchestrator: delivering notification %d to the director: %v", raised.Notification.ID, err)
-		}
 	}
 	if raised.New {
 		if _, err := store.WakeNotificationSubscribers(ctx, raised.Notification, now); err != nil {

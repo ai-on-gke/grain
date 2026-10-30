@@ -76,13 +76,15 @@ func (s *Store) WakeRestingTask(ctx context.Context, id, reason string, now time
 	} else if !resting && obs.CompletedAt == nil {
 		return false, nil
 	}
-	if _, err := s.AddComment(ctx, Comment{
-		TaskID:    id,
-		Author:    Attribution{Actor: SchedulePrincipal},
-		Body:      StandingWakeComment(reason),
-		CreatedAt: now,
-	}); err != nil {
-		return false, fmt.Errorf("noting the wake on task %s: %w", id, err)
+	if strings.TrimSpace(reason) != "" {
+		if _, err := s.AddComment(ctx, Comment{
+			TaskID:    id,
+			Author:    Attribution{Actor: SchedulePrincipal},
+			Body:      StandingWakeComment(reason),
+			CreatedAt: now,
+		}); err != nil {
+			return false, fmt.Errorf("noting the wake on task %s: %w", id, err)
+		}
 	}
 	if resting {
 		if err := s.SetDeferred(ctx, id, nil, nil, now); err != nil {
@@ -158,42 +160,11 @@ func InvestigateNotificationBody(n Notification) string {
 	return b.String()
 }
 
-// DeliverNotificationToDirector posts a warning or critical notification
-// into the director session's conversation as a grain-authored line
-// (ConsoleSessionPrincipal, so it is not a person's message the
-// director owes an answer), once per instance, and wakes a resting
-// director for a critical one. It reports whether it delivered.
+// DeliverNotificationToDirector is a no-op: notifications surface in the
+// Inbox and wake subscribed standing tasks (WakeNotificationSubscribers)
+// rather than posting into the director console session's chat.
 func (store *Store) DeliverNotificationToDirector(ctx context.Context, n Notification, now time.Time) (bool, error) {
-	if n.Severity.Rank() < NotificationWarning.Rank() || n.Delivered.Director != 0 || !n.Open() {
-		return false, nil
-	}
-	sessions, err := store.OpenConsoleSessionTaskIDs(ctx)
-	if err != nil {
-		return false, err
-	}
-	director := sessions[DirectorSessionID]
-	if director == "" {
-		return false, nil
-	}
-	id, err := store.AddComment(ctx, Comment{
-		TaskID:    director,
-		Author:    Attribution{Actor: ConsoleSessionPrincipal},
-		Body:      NotificationChatLine(n),
-		CreatedAt: now,
-	})
-	if err != nil {
-		return false, err
-	}
-	n.Delivered.Director = id
-	if err := store.SetNotificationDelivered(ctx, n.ID, n.Delivered); err != nil {
-		return false, err
-	}
-	if n.Severity == NotificationCritical {
-		if _, err := store.WakeRestingTask(ctx, director, "a critical notification: "+notificationLine(n.Title), now); err != nil {
-			return true, err
-		}
-	}
-	return true, nil
+	return false, nil
 }
 
 // NotificationChatLine is how a notification reads in a conversation:

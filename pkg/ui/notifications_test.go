@@ -266,3 +266,80 @@ func TestMessageTaskWakesARestingDurableParent(t *testing.T) {
 		t.Errorf("parent's conversation = %+v, want the child's note and grain's wake note", comments)
 	}
 }
+
+func TestRaiseNotificationDoesNotPostToDirectorChat(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	now := time.Now().UTC()
+	directorID, err := model.FileConsoleSessionTask(ctx, store, model.DefaultConsoleSessions()[0], model.FileConsoleSessionOptions{
+		Now: now,
+	})
+	if err != nil {
+		t.Fatalf("FileConsoleSessionTask: %v", err)
+	}
+	initialComments, err := store.Comments(ctx, directorID)
+	if err != nil {
+		t.Fatalf("Comments(director): %v", err)
+	}
+
+	for _, sev := range []string{"warning", "critical"} {
+		if _, err := client.RaiseNotification(ctx, ui.RaiseNotificationRequest{
+			Subject:  "ops:alert-" + sev,
+			Title:    "alert " + sev,
+			Severity: sev,
+		}); err != nil {
+			t.Fatalf("RaiseNotification(%s): %v", sev, err)
+		}
+	}
+
+	afterComments, err := store.Comments(ctx, directorID)
+	if err != nil {
+		t.Fatalf("Comments(director): %v", err)
+	}
+	if len(afterComments) != len(initialComments) {
+		t.Errorf("director comments = %+v, want no notification or wake comments added", afterComments)
+	}
+	if st, err := store.State(ctx, directorID); err != nil || st != model.StateAwaitingReply {
+		t.Errorf("director state = %q (%v), want %q", st, err, model.StateAwaitingReply)
+	}
+}
+
+func TestMessageTaskToConsoleSessionWakesWithoutSyntheticWakeComment(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	now := time.Now().UTC()
+	directorID, err := model.FileConsoleSessionTask(ctx, store, model.DefaultConsoleSessions()[0], model.FileConsoleSessionOptions{
+		Now: now,
+	})
+	if err != nil {
+		t.Fatalf("FileConsoleSessionTask: %v", err)
+	}
+	child := create(t, client, ctx)
+	grantTask(t, store, child.ID, func(m *model.Task) {
+		m.Links = append(m.Links, model.Link{Kind: model.LinkProposedBy, Target: directorID})
+	})
+
+	note, err := client.PostTaskNote(ctx, directorID, child.ID, "finished the check")
+	if err != nil {
+		t.Fatalf("PostTaskNote: %v", err)
+	}
+	obs, err := store.GetObservation(ctx, directorID)
+	if err != nil || obs == nil || obs.PendingQuestionCommentID != nil || obs.RetryRequestedAt == nil {
+		t.Errorf("director observation = %+v (%v), want woken and re-queued", obs, err)
+	}
+	comments, err := store.Comments(ctx, directorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawNote, sawSyntheticWake bool
+	for _, c := range comments {
+		sawNote = sawNote || (c.ID == note.ID && c.Body == "finished the check")
+		sawSyntheticWake = sawSyntheticWake || (c.Author.Actor == model.SchedulePrincipal && strings.Contains(c.Body, "_Woken early:_"))
+	}
+	if !sawNote {
+		t.Errorf("director comments = %+v, want the child's note", comments)
+	}
+	if sawSyntheticWake {
+		t.Errorf("director comments = %+v, want no synthetic _Woken early:_ comment on console session", comments)
+	}
+}
