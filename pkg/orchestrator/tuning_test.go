@@ -296,3 +296,114 @@ func TestRelayProposedTasksTuningValidationAndRecording(t *testing.T) {
 		}
 	}
 }
+
+func TestRelayProposedTasksAllowsInfraReviewCodeProposalsForSourceRepo(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStoreForTuning(t)
+
+	sourceRepo := model.RepoRef{Owner: "ai-on-gke", Name: "grain"}
+	if err := store.SetTargetRepos(ctx, []string{sourceRepo.String()}); err != nil {
+		t.Fatalf("SetTargetRepos: %v", err)
+	}
+
+	now := time.Date(2026, 10, 30, 3, 0, 0, 0, time.UTC)
+	extStateRepo := model.RepoRef{Owner: "bwsalmon", Name: "grain-home"}
+	infraTask := model.Task{
+		ID:         "infra-review-run-2",
+		TemplateID: model.InfraReviewTemplateID,
+		Title:      "Nightly infra review",
+		Reads:      []model.RepoRef{model.ConfigRepo(), extStateRepo},
+	}
+
+	result := &agent.Result{
+		ToolCalls: []agent.ToolCall{
+			{
+				Name: "propose_task",
+				Arguments: map[string]any{
+					"title": "fix(orchestrator): handle transient sandbox setup timeout",
+					"body":  "Classify granule forward timeout as infrastructure rather than test failure.",
+					"repo":  sourceRepo.String(),
+				},
+			},
+			{
+				Name: "propose_task",
+				Arguments: map[string]any{
+					"title": "fix(orchestrator): tune retry backoff on transient error",
+					"body":  "Adjust backoff in pkg/orchestrator/run.go.",
+					"repo":  sourceRepo.String(),
+				},
+			},
+			{
+				Name: "propose_task",
+				Arguments: map[string]any{
+					"title": "Update config without naming a parameter",
+					"body":  "Targets grain/config without a recognized parameter.",
+					"repo":  model.ConfigRepo().String(),
+				},
+			},
+			{
+				Name: "propose_task",
+				Arguments: map[string]any{
+					"title": "Update external state repo without naming a parameter",
+					"body":  "Targets external state repo in task.Reads without a recognized parameter.",
+					"repo":  extStateRepo.String(),
+				},
+			},
+		},
+	}
+
+	if err := relayProposedTasks(ctx, store, nil, infraTask, result, now); err != nil {
+		t.Fatalf("relayProposedTasks failed: %v", err)
+	}
+
+	// Both source-repo code proposals should be filed targeting ai-on-gke/grain.
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatalf("ListTasks failed: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 code tasks filed, got %d: %+v", len(tasks), tasks)
+	}
+	for _, tk := range tasks {
+		if tk.Target == nil || !tk.Target.Same(sourceRepo) {
+			t.Errorf("filed task %q target = %v, want %v", tk.Title, tk.Target, sourceRepo)
+		}
+	}
+
+	// No tuning recommendations should be recorded for code proposals or refused proposals.
+	recs, err := store.ListTuningRecommendations(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("ListTuningRecommendations failed: %v", err)
+	}
+	if len(recs) != 0 {
+		t.Errorf("expected 0 tuning recommendations recorded, got %d: %+v", len(recs), recs)
+	}
+
+	// Only the two state-repo proposals missing a parameter should be noted as refused.
+	comments, err := store.Comments(ctx, infraTask.ID)
+	if err != nil {
+		t.Fatalf("Comments failed: %v", err)
+	}
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 refusal comment on infraTask, got %d: %+v", len(comments), comments)
+	}
+	for _, want := range []string{
+		"grain did not file 2 proposals from this run",
+		"Update config without naming a parameter",
+		"Update external state repo without naming a parameter",
+		"it names no grain_config parameter to change",
+	} {
+		if !strings.Contains(comments[0].Body, want) {
+			t.Errorf("refusal comment does not contain %q:\n%s", want, comments[0].Body)
+		}
+	}
+	for _, notWant := range []string{
+		"handle transient sandbox setup timeout",
+		"tune retry backoff on transient error",
+	} {
+		if strings.Contains(comments[0].Body, notWant) {
+			t.Errorf("refusal comment unexpectedly mentions code proposal %q:\n%s", notWant, comments[0].Body)
+		}
+	}
+}
