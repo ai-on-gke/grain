@@ -433,15 +433,20 @@ func TestBuildPromptOffersOpenPullRequestOnlyToARunThatHasIt(t *testing.T) {
 		Target: &model.RepoRef{Owner: "acme", Name: "widgets"},
 	}
 	prompt := orchestrator.BuildPrompt(task, orchestrator.CheckoutDir, "", true, orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
-	for _, want := range []string{"open_pull_request", "push again", "never opens a second one"} {
+	for _, want := range []string{"run `grain pr open`", "push again", "never opens a second one"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt does not mention %q: %q", want, prompt)
 		}
 	}
+	// The control surface leaves open_pull_request off the roster, so the
+	// prompt names the command that replaced it and never the tool.
+	if strings.Contains(prompt, "open_pull_request") {
+		t.Errorf("prompt names open_pull_request, which the control surface removed: %q", prompt)
+	}
 
 	without := orchestrator.BuildPrompt(task, orchestrator.CheckoutDir, "", false, orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
-	if strings.Contains(without, "open_pull_request") {
-		t.Errorf("prompt names a tool this run's mcpserver never registered: %q", without)
+	if strings.Contains(without, "never opens a second one") {
+		t.Errorf("prompt offers to open a pull request with no daemon to open it: %q", without)
 	}
 
 	// A task with no repo has no branch, no pull request and no CI, so
@@ -449,7 +454,7 @@ func TestBuildPromptOffersOpenPullRequestOnlyToARunThatHasIt(t *testing.T) {
 	// registered -- registration turns on -server/-task, neither of which
 	// knows whether the task has a target.
 	bare := orchestrator.BuildPrompt(model.Task{ID: "t2", Title: "Think", Body: "details"}, "", "", true, orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
-	if strings.Contains(bare, "open_pull_request") {
+	if strings.Contains(bare, "never opens a second one") {
 		t.Errorf("prompt offers to open a pull request for a task with no repo: %q", bare)
 	}
 }
@@ -525,8 +530,8 @@ func TestRunDispatchTellsARunItCanOpenItsOwnPullRequest(t *testing.T) {
 	if _, err := orchestrator.RunDispatch(ctx, store, fw, orchestrator.Config{}, *task, d, nil, t.TempDir(), "", nil, baseTime); err != nil {
 		t.Fatalf("RunDispatch: %v", err)
 	}
-	if !strings.Contains(gotPrompt, "open_pull_request") {
-		t.Errorf("prompt = %q, want it to name open_pull_request -- this framework's runs have it", gotPrompt)
+	if !strings.Contains(gotPrompt, "run `grain pr open`") {
+		t.Errorf("prompt = %q, want it to name grain pr open -- this framework's runs can open one", gotPrompt)
 	}
 }
 

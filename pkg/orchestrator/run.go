@@ -507,15 +507,19 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		// on pull requests has none until one is open, and grain does not
 		// open it until the run has already exited. A run that opens it
 		// itself sees those checks while it still has turns left to fix
-		// them -- which is the whole reason open_pull_request exists, and
+		// them -- which is the whole reason `grain pr open` exists, and
 		// is exactly as undiscoverable from a tool description as the
-		// loop above.
+		// loop above. It is named as the CLI command, not the
+		// open_pull_request tool: the control surface every sandboxed run
+		// now gets (pkg/daemon/mcp_surface.go's controlRoster) leaves that
+		// tool off the roster, and the command answers through the same
+		// daemon route (gitproxy's /cli/pr/open) the tool did.
 		if canOpenPullRequest {
-			prompt += "\n\nOnce you have pushed, you can call `open_pull_request` to open the " +
+			prompt += "\n\nOnce you have pushed, you can run `grain pr open` to open the " +
 				"pull request for that branch without waiting for your run to end, and " +
 				"see what CI says about it there and then -- then fix what it reports, " +
-				"push again, and call it again for the next round. It is the same pull " +
-				"request grain opens for you when this run finishes, and calling it more " +
+				"push again, and run it again for the next round. It is the same pull " +
+				"request grain opens for you when this run finishes, and running it more " +
 				"than once never opens a second one."
 		}
 		// Where the loop ends, said in words for the same reason the loop
@@ -560,6 +564,18 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	return prompt
 }
 
+// suspendedCLINote leads the grain CLI reference in a resumed session's
+// delta prompt. The session's own history may predate the control surface
+// (pkg/daemon/mcp_surface.go), so its earlier turns can name MCP tools --
+// wait_for_checks, run_ci_job, open_pull_request -- that are no longer on
+// its roster; a resumed run that is not told reaches for them, gets "No
+// such tool available", and parks without ever running CI.
+const suspendedCLINote = "\n\nYour tools may have changed since this session last ran: " +
+	"CI, pull request and namespace work now goes through the `grain` CLI below, so a " +
+	"tool an earlier turn called that now answers \"No such tool available\" has a " +
+	"`grain` command instead (`wait_for_checks` is `grain ci wait`, `run_ci_job` is " +
+	"`grain ci run-job`, `open_pull_request` is `grain pr open`)."
+
 // BuildSuspendedPrompt builds the delta prompt sent after
 // agent.SuspendedPreamble when a dispatch resumes a suspended CLI session
 // (agent.RunConfig.ResumeSession). Because the CLI's on-disk conversation
@@ -571,7 +587,8 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 // Instead, this carries the current task description (in case it was edited),
 // the fresh sandbox checkout orientation, any new attempt or park history,
 // any comments added since the last delivered turn, active base/repair
-// notices, and dynamic per-dispatch sections (placed attachments and capability
+// notices, the grain CLI reference (suspendedCLINote says why a resumed
+// session needs it again), and dynamic per-dispatch sections (placed attachments and capability
 // prompt sections). The full prompt in RunConfig.Prompt remains the fallback
 // whenever session resume is refused or lost.
 func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
@@ -632,6 +649,7 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	if task.Target != nil && !grainci.Granted(task.Grants) && (history.Repair || model.FixesBaseBranch(task)) {
 		prompt += repairCISection()
 	}
+	prompt += suspendedCLINote + grainCLISection(task)
 	for _, section := range extraSections {
 		if trimmed := strings.Trim(section, "\n"); trimmed != "" {
 			prompt += "\n\n" + trimmed
