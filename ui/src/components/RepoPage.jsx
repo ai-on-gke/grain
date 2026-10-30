@@ -2137,6 +2137,7 @@ export default function RepoPage({
                     onRemove={capsMethods.onRemove}
                     disabled={readOnly}
                     idPrefix="repo-default"
+                    policyRepo={repo}
                   />
                 </Box>
                 <Typography variant="body2" color="text.secondary">

@@ -25,48 +25,64 @@ import api from "../api.js";
 // listing is never kept for the page's lifetime.
 export const METHODS_TTL_MS = 30000;
 
-let methodsCache = null; // {promise, at, settled}
+// methodsCache is one entry ({promise, at, settled}) per listing asked
+// for: the plain one, and one per run a picker names (runKind and policyRepo).
+const methodsCache = new Map();
+
+// methodsPath is the listing for subject: with ?kind= (and ?repo=) each
+// method says whether the capability policy denies it to that run
+// (policyRefusal); without one, nothing about policy.
+function methodsPath(subject) {
+  if (!subject?.kind) return "/api/capability-methods";
+  const q = new URLSearchParams({ kind: subject.kind });
+  if (subject.repo) q.set("repo", subject.repo);
+  return `/api/capability-methods?${q}`;
+}
 
 // capabilityMethods is GET /api/capability-methods, shared by every form
 // on the page for METHODS_TTL_MS. fresh skips a settled listing -- the
 // grant menu opening, a grant naming a method the listing lacks -- but
 // still joins a fetch already in flight rather than starting another.
-export function capabilityMethods({ fresh = false } = {}) {
+// subject ({repo, kind}) is the run the grants are for, when the form
+// knows it: a task on a repo is kind "task".
+export function capabilityMethods({ fresh = false, subject = null } = {}) {
   const now = Date.now();
+  const path = methodsPath(subject);
+  const cached = methodsCache.get(path);
   if (
-    methodsCache &&
+    cached &&
     (fresh
-      ? methodsCache.settled
-      : methodsCache.settled && now - methodsCache.at > METHODS_TTL_MS)
+      ? cached.settled
+      : cached.settled && now - cached.at > METHODS_TTL_MS)
   )
-    methodsCache = null;
-  if (!methodsCache) {
+    methodsCache.delete(path);
+  if (!methodsCache.has(path)) {
     const entry = { at: now, settled: false };
-    entry.promise = api("/api/capability-methods").then(
+    entry.promise = api(path).then(
       (m) => {
         entry.settled = true;
         return m;
       },
       (err) => {
-        if (methodsCache === entry) methodsCache = null;
+        if (methodsCache.get(path) === entry) methodsCache.delete(path);
         throw err;
       },
     );
-    methodsCache = entry;
+    methodsCache.set(path, entry);
   }
-  return methodsCache.promise;
+  return methodsCache.get(path).promise;
 }
 
-// invalidateCapabilityMethods forgets the fetched listing, so the next
+// invalidateCapabilityMethods forgets every fetched listing, so the next
 // read fetches it again: Settings calls it after every change it makes
-// to a capability server.
+// to a capability server or the capability policy.
 export function invalidateCapabilityMethods() {
-  methodsCache = null;
+  methodsCache.clear();
 }
 
-// resetCapabilityMethodsForTest forgets the fetched listing.
+// resetCapabilityMethodsForTest forgets the fetched listings.
 export function resetCapabilityMethodsForTest() {
-  methodsCache = null;
+  methodsCache.clear();
 }
 
 const asList = (m) => (Array.isArray(m) ? m : []);

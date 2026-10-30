@@ -141,8 +141,12 @@ func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) 
 }
 
 // catalogueEditRefusalFor is catalogueEditRefusal for the task stored as
-// id; a task that is not there is the edit's own error to report.
+// id, after the capability policy's own refusal (policyEditRefusalFor);
+// a task that is not there is the edit's own error to report.
 func (c *Client) catalogueEditRefusalFor(ctx context.Context, id, grant string) error {
+	if err := c.policyEditRefusalFor(ctx, id, grant); err != nil {
+		return err
+	}
 	task, err := c.Store.GetTask(ctx, model.NormalizeTaskID(id))
 	if err != nil || task == nil {
 		return nil

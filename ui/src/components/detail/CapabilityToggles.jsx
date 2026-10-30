@@ -173,6 +173,7 @@ export default function CapabilityToggles({ t, config, act }) {
         onSubmit={submitGrant}
         onRemove={removeGrant}
         idPrefix={`task-${t.id}`}
+        policyRepo={t.repo || ""}
       />
       {t.state === "running" && capabilitiesChanged && (
         <Alert
