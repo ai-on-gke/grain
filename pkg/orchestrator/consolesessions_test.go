@@ -1690,6 +1690,15 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 				// post the human's second message shortly after.
 				go func() {
 					time.Sleep(80 * time.Millisecond)
+					// A message from another task's run arrives first: it does
+					// not wake the session, but the turn a person's message
+					// wakes is told it too, as not a human's.
+					_, _ = store.AddComment(ctx, model.Comment{
+						TaskID:    director.ID,
+						Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "other-task"}},
+						Body:      "a note from another task",
+						CreatedAt: baseTime.Add(2 * time.Minute),
+					})
 					_, _ = store.AddComment(ctx, model.Comment{
 						TaskID:    director.ID,
 						Author:    aliceSays,
@@ -1730,8 +1739,18 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 	if len(ag.configs) != 2 {
 		t.Fatalf("framework.Run calls = %d, want 2 (turn 1 + in-process continuation)", len(ag.configs))
 	}
-	if seenPrompts[1] != "follow-up question in the same run" {
-		t.Fatalf("turn 2 ContinuePrompt = %q, want %q", seenPrompts[1], "follow-up question in the same run")
+	for _, want := range []string{
+		"the run of another task (task other-task), not a human",
+		"a note from another task",
+		"a human (alice)",
+		"follow-up question in the same run",
+	} {
+		if !strings.Contains(seenPrompts[1], want) {
+			t.Fatalf("turn 2 ContinuePrompt = %q, want it to contain %q", seenPrompts[1], want)
+		}
+	}
+	if strings.Contains(seenPrompts[1], "in-process answer 1") {
+		t.Fatalf("turn 2 ContinuePrompt = %q, want the run's own relayed answer left out", seenPrompts[1])
 	}
 	if ag.configs[1].ResumeSession != "sess-live-1" {
 		t.Fatalf("turn 2 ResumeSession = %q, want sess-live-1", ag.configs[1].ResumeSession)

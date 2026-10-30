@@ -708,12 +708,21 @@ func continueSessionTurns(
 		}
 		inProcessRelayedRuns.Delete(runID)
 
+		// Only a person's message wakes the session, but the turn is told
+		// everything said since its answer, each with who said it
+		// (addendumText) -- as a mid-run comment is and a redispatch's
+		// prompt is -- rather than bare bodies, so a grain notice or
+		// another task's message is neither dropped nor read as the
+		// person's own words. This task's own relayed answers are left out.
 		var promptBuilder strings.Builder
-		for i, c := range newHumanComments {
-			if i > 0 {
+		for _, c := range comments {
+			if c.ID <= lastID || ownRelayedAnswer(c, task.ID) {
+				continue
+			}
+			if promptBuilder.Len() > 0 {
 				promptBuilder.WriteString("\n\n")
 			}
-			promptBuilder.WriteString(strings.TrimSpace(c.Body))
+			promptBuilder.WriteString(addendumText(c))
 		}
 		nextCfg := runCfg
 		nextCfg.ResumeSession = turnResult.ResumableSession
@@ -733,6 +742,13 @@ func continueSessionTurns(
 	}
 
 	return result, runErr, comments
+}
+
+// ownRelayedAnswer reports whether c is one of taskID's own run's answers,
+// relayed on its behalf (relayQuestion).
+func ownRelayedAnswer(c model.Comment, taskID string) bool {
+	return c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.Kind == model.PrincipalAgent &&
+		c.Author.OnBehalfOf.ID == taskID
 }
 
 func markToolCallsRelayed(result *agent.Result, name string) {
