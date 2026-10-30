@@ -48,6 +48,7 @@ import { identifierField } from "../identifierField.js";
 import NoGitConnectionNotice from "./NoGitConnectionNotice.jsx";
 import { useInPageHeader } from "./PageHeader.jsx";
 import ChipStrip from "./ChipStrip.jsx";
+import NewRepoDialog from "./NewRepoDialog.jsx";
 
 // SORTS is this page's own toolbar Select, TaskList's own shape
 // (taskFilters.js) with "custom" standing where the task list's
@@ -215,6 +216,7 @@ export default function RepoList({
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("custom");
   const [reach, setReach] = useState({ loading: true });
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -481,6 +483,16 @@ export default function RepoList({
               <Button type="submit" variant="outlined" size="small">
                 Add repo
               </Button>
+              {/* Beside connect-existing: makes the repo on the forge
+                  and connects it in one step (NewRepoDialog). */}
+              <Button
+                variant="contained"
+                size="small"
+                onClick={() => setCreating(true)}
+                sx={{ whiteSpace: "nowrap" }}
+              >
+                New repository
+              </Button>
             </Stack>
             {!inRail && discoveryCaption}
           </Stack>
@@ -496,6 +508,11 @@ export default function RepoList({
           git connection, and a repo added anyway has its tasks wait: say
           so, and where to add one, rather than leave an empty picker. */}
       {inRail && discoveryCaption}
+      <NewRepoDialog
+        open={creating}
+        onClose={() => setCreating(false)}
+        onCreated={() => onRefreshConfig()}
+      />
       <NoGitConnectionNotice
         deployment={config?.deployment}
         onOpenSettings={onOpenSettings}

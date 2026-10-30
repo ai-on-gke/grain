@@ -18,19 +18,22 @@ import (
 	"context"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net/url"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github/ghrepos"
 )
 
 // apiVersion pins every request against GitHub's own dated REST
 // contract -- the same "field shapes are pinned against GitHub's own
-// reference, not guessed" bar pkg/github's own doc comment sets.
-const apiVersion = "2022-11-28"
+// reference, not guessed" bar pkg/github's own doc comment sets. The
+// repository calls themselves live in pkg/github/ghrepos, which
+// pkg/repocreate shares.
+const apiVersion = ghrepos.APIVersion
 
 // Installation is the one GitHub App installation FindInstallation
 // expects to find -- an installation id (MintToken's own path
@@ -143,15 +146,7 @@ func (c *realAppClient) appRequest(method, path string, body []byte) (github.Api
 }
 
 func (c *realAppClient) request(method, path, authorization string, body []byte) (github.ApiResponse, error) {
-	headers := map[string]string{
-		"Authorization":        authorization,
-		"Accept":               "application/vnd.github+json",
-		"X-GitHub-Api-Version": apiVersion,
-	}
-	if body != nil {
-		headers["Content-Type"] = "application/json"
-	}
-	return c.transport.Request(method, path, headers, body)
+	return ghrepos.Request(c.transport, method, path, authorization, body)
 }
 
 // expectStatus returns an error describing resp unless its status is
@@ -222,59 +217,38 @@ func (c *realAppClient) MintToken(ctx context.Context, installationID int64, rep
 }
 
 func (c *realAppClient) CreateRepo(ctx context.Context, token, org, name string) (Repo, error) {
-	data, err := json.Marshal(map[string]any{"name": name, "private": true})
+	repo, err := ghrepos.CreateInOrg(c.transport, token, org, ghrepos.CreateOptions{Name: name, Private: true})
 	if err != nil {
-		return Repo{}, err
+		return Repo{}, fmt.Errorf("creating repo: %w", statusError(err))
 	}
-	resp, err := c.request("POST", "/orgs/"+url.PathEscape(org)+"/repos", "Bearer "+token, data)
-	if err != nil {
-		return Repo{}, err
-	}
-	if err := expectStatus(resp, 201); err != nil {
-		return Repo{}, fmt.Errorf("creating repo: %w", err)
-	}
-	var out struct {
-		Name     string `json:"name"`
-		FullName string `json:"full_name"`
-	}
-	if err := json.Unmarshal(resp.Body, &out); err != nil {
-		return Repo{}, fmt.Errorf("parsing created repo: %w", err)
-	}
-	return Repo{Name: out.Name, FullName: out.FullName}, nil
+	return Repo{Name: repo.Name, FullName: repo.FullName}, nil
 }
 
 func (c *realAppClient) DeleteRepo(ctx context.Context, token, owner, name string) error {
-	resp, err := c.request("DELETE", "/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name), "Bearer "+token, nil)
-	if err != nil {
-		return err
-	}
-	if resp.Status == 404 {
-		return nil
-	}
-	if err := expectStatus(resp, 204); err != nil {
-		return fmt.Errorf("deleting repo: %w", err)
+	if err := ghrepos.Delete(c.transport, token, owner, name); err != nil {
+		return fmt.Errorf("deleting repo: %w", statusError(err))
 	}
 	return nil
 }
 
 func (c *realAppClient) ListRepos(ctx context.Context, token, org string) ([]RepoSummary, error) {
-	resp, err := c.request("GET", "/orgs/"+url.PathEscape(org)+"/repos?type=private&per_page=100", "Bearer "+token, nil)
+	repos, err := ghrepos.ListOrgPrivate(c.transport, token, org)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("listing repos: %w", statusError(err))
 	}
-	if err := expectStatus(resp, 200); err != nil {
-		return nil, fmt.Errorf("listing repos: %w", err)
-	}
-	var raw []struct {
-		Name      string    `json:"name"`
-		CreatedAt time.Time `json:"created_at"`
-	}
-	if err := json.Unmarshal(resp.Body, &raw); err != nil {
-		return nil, fmt.Errorf("parsing repo list: %w", err)
-	}
-	out := make([]RepoSummary, len(raw))
-	for i, r := range raw {
+	out := make([]RepoSummary, len(repos))
+	for i, r := range repos {
 		out[i] = RepoSummary{Name: r.Name, CreatedAt: r.CreatedAt}
 	}
 	return out, nil
+}
+
+// statusError keeps this package's "unexpected status N: body" wording
+// for a refusal ghrepos returned as a *github.Error.
+func statusError(err error) error {
+	var apiErr *github.Error
+	if errors.As(err, &apiErr) {
+		return fmt.Errorf("unexpected status %d: %s", apiErr.Status, apiErr.Body)
+	}
+	return err
 }
