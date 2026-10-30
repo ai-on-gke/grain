@@ -87,10 +87,22 @@ type RevokeAllExternalAgentTokensResponse struct {
 
 func externalAgentTokenViewOf(t model.ExternalAgentToken, now time.Time) ExternalAgentTokenView {
 	_, set, _, _ := model.ResolveExternalAgentGrants(t.ScopeSet, t.Scopes, t.Repos)
-	scopes := set.Scopes()
-	resolved := make([]string, len(scopes))
-	for i, s := range scopes {
-		resolved[i] = string(s)
+	// A scope held on named repositories only is listed once per
+	// repository (tasks:write@acme/widgets), so the view never reads as
+	// a grant on every repository.
+	var resolved []string
+	for _, s := range set.Scopes() {
+		repos := set.Repos(s)
+		if len(repos) == 0 {
+			resolved = append(resolved, string(s))
+			continue
+		}
+		for _, r := range repos {
+			resolved = append(resolved, string(s)+"@"+r)
+		}
+	}
+	if resolved == nil {
+		resolved = []string{}
 	}
 	return ExternalAgentTokenView{
 		ID:             t.ID,
