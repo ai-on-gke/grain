@@ -37,7 +37,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/memory"
-	"github.com/ai-on-gke/grain/pkg/capability/pipelinecontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
@@ -403,51 +402,6 @@ func selfUpgradeStatus(status ui.UpgradeStatus) selfupgrade.Status {
 		}
 	}
 	return out
-}
-
-// daemonPipelineControl is pipeline-control's Controller over the
-// daemon's REST API. There is one pause, the deployment's own: team
-// pipeline pauses were removed with the rest of multi-tenant mode
-// (grain/task-4682, single-tenant reset stage 3). Only a task holding
-// pipeline-control deployment-wide (ui.TaskDetail.DeploymentWide) may
-// take it, asked at the moment of the call; any other task is refused
-// rather than reaching a pause wider than its grant.
-type daemonPipelineControl struct {
-	client *ui.HTTPClient
-	taskID string
-}
-
-// authorize refuses a run whose pipeline-control is not deployment-wide.
-func (d daemonPipelineControl) authorize(ctx context.Context) error {
-	detail, err := d.client.GetTask(ctx, d.taskID)
-	if err != nil {
-		return fmt.Errorf("reading task %s to see what its pipeline-control reaches: %w", d.taskID, err)
-	}
-	if !slices.Contains(detail.DeploymentWide, pipelinecontrol.CapabilityName) {
-		return fmt.Errorf("task %s holds %s only for its team, and team pipeline pauses no longer exist: "+
-			"only a task granted it deployment-wide pauses the deployment", d.taskID, pipelinecontrol.CapabilityName)
-	}
-	return nil
-}
-
-func (d daemonPipelineControl) PausePipeline(ctx context.Context, repo, reason string) (string, error) {
-	fullReason := reason
-	if repo != "" {
-		fullReason = fmt.Sprintf("[%s] %s", repo, reason)
-	}
-	if err := d.authorize(ctx); err != nil {
-		return "", err
-	}
-	_, _, err := d.client.PausePipeline(ctx, fullReason)
-	return "", err
-}
-
-func (d daemonPipelineControl) ResumePipeline(ctx context.Context, repo, reason string) (string, error) {
-	if err := d.authorize(ctx); err != nil {
-		return "", err
-	}
-	_, _, err := d.client.ResumePipeline(ctx)
-	return "", err
 }
 
 type daemonDB struct {
@@ -1584,7 +1538,7 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 var servedGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
 	memory.CapabilityName, grainci.CapabilityName, deploymenthealth.CapabilityName,
-	selfupgrade.CapabilityName, pipelinecontrol.CapabilityName,
+	selfupgrade.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 }
@@ -1676,16 +1630,6 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 			TaskID:     taskID,
 			Deployment: deployment,
 			Confirm:    confirm,
-		})...)
-	}
-	if grants.Has(pipelinecontrol.CapabilityName) {
-		var controller pipelinecontrol.Controller
-		if client != nil {
-			controller = daemonPipelineControl{client: client, taskID: taskID}
-		}
-		tools = append(tools, pipelinecontrol.Tools(pipelinecontrol.Config{
-			TaskID:     taskID,
-			Controller: controller,
 		})...)
 	}
 	if grants.Has(dbaccess.CapabilityDBRead) || grants.Has(dbaccess.CapabilityDBWrite) {

@@ -44,7 +44,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/pipelinecontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
@@ -140,7 +139,6 @@ func PublishedToolNames() []string {
 	add(grainlog.Tools(grainlog.Config{}))
 	add(deploymenthealth.Tools(deploymenthealth.Config{}))
 	add(selfupgrade.Tools(selfupgrade.Config{}))
-	add(pipelinecontrol.Tools(pipelinecontrol.Config{}))
 	add(bootstrap.PlaybookTools())
 	add(dbaccess.Tools(dbaccess.Config{AllowWrite: true}))
 
@@ -238,8 +236,8 @@ func SandboxToolNames() []string {
 func IsControlTool(name string) bool { return controlTools[name] }
 
 // ModelOnlyGrantToolNames is the tools of the grants a sandbox process
-// must never reach -- pipeline-control, self-upgrade and db-write --
-// which stay on the MCP roster of a run holding them. (dispatch-control's
+// must never reach -- self-upgrade and db-write -- which stay on the MCP
+// roster of a run holding them. (dispatch-control's, pipeline-control's
 // and team-broadcast's are api tools now, kept off the sandbox by their
 // scopes, dispatch:write and teams:broadcast: model.IsSandboxDeniedAPIScope.) db-read's query_grain_db is `grain db query`, so only
 // execute_grain_db is here.
@@ -250,7 +248,6 @@ func ModelOnlyGrantToolNames() []string {
 			names = append(names, t.Name)
 		}
 	}
-	add(pipelinecontrol.Tools(pipelinecontrol.Config{}))
 	add(selfupgrade.Tools(selfupgrade.Config{}))
 	names = append(names, "execute_grain_db")
 	return dedupeToolNames(names)

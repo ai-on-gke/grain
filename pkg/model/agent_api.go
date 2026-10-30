@@ -140,7 +140,7 @@ var apiPresets = []APIPreset{
 		Scopes: []APIScope{"tasks:read", "deployment:read"}},
 	{Name: "self-upgrade", Description: "What the self-upgrade capability grants: read and start upgrades",
 		Scopes: []APIScope{"deployment:read", "deployment:upgrade"}},
-	{Name: "pipeline-control", Description: "What the pipeline-control capability grants: pause and resume dispatch",
+	{Name: "pipeline-control", Description: "What the pipeline-control capability granted: pause and resume dispatch",
 		Scopes: []APIScope{"dispatch:read", "dispatch:write"}},
 	{Name: "team-broadcast", Description: "What the team-broadcast capability granted: post a comment to every active task",
 		Scopes: []APIScope{"teams:broadcast"}},
@@ -173,6 +173,7 @@ var apiAliasCapabilities = map[string]string{
 var legacyGrantReplacements = map[string]string{
 	"team-broadcast":   APIGrantPrefix + "team-broadcast",
 	"dispatch-control": APIGrantPrefix + "dispatch-control",
+	"pipeline-control": APIGrantPrefix + "pipeline-control",
 }
 
 // CanonicalLegacyGrant is name, or the api grant a retired in-process

@@ -126,8 +126,6 @@ var capabilityForTool = map[string]string{
 	"deployment_upgrade_status":  "self-upgrade",
 	"upgrade_deployment":         "self-upgrade",
 	"cancel_deployment_upgrade":  "self-upgrade",
-	"pause_pipeline":             "pipeline-control",
-	"resume_pipeline":            "pipeline-control",
 	"list_issues":                "read-issues",
 	"read_issue":                 "read-issues",
 }

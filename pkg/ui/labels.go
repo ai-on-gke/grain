@@ -207,8 +207,6 @@ func OfferedCapabilities() []Capability {
 			Description: "Let this task run commands on grain's own host -- restart services, edit config, call the grain CLI -- each one needing a live reply in the task's chat before it runs"},
 		{ID: selfupgrade.CapabilityName, Name: "Self upgrade",
 			Description: selfupgrade.Description},
-		{ID: "pipeline-control", Name: "Pipeline control",
-			Description: "Emergency controls to pause or resume automated merges and pipeline dispatch on repositories"},
 		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
 			Description: prioritydispatch.Description},
 		{ID: durable.CapabilityName, Name: "Durable",

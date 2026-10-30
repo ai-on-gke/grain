@@ -83,6 +83,7 @@ var retiredGrants = []struct {
 }{
 	{67, "team-broadcast", "api:team-broadcast"},
 	{68, "dispatch-control", "api:dispatch-control"},
+	{69, "pipeline-control", "api:pipeline-control"},
 }
 
 // Each retiring migration rewrites every stored grant of its capability

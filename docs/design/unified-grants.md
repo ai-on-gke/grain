@@ -185,7 +185,7 @@ per-capability list, with what each one becomes:
 | `deployment-health` | `…/api#deployment:read` plus `…/grain#health` for the host/sandbox probes | api scope + new method |
 | `self-repair` | `…/grain#host-exec` (each command still needs a live chat reply) | new method, dangerous (Q7) |
 | `self-upgrade` | `…/api#self-upgrade` preset | api preset (alias today) |
-| `pipeline-control` | `…/api#pipeline-control` preset | api preset (alias today) |
+| `pipeline-control` | `…/api#pipeline-control` preset | **done** (task 2004): provider and its two tools removed, stored grants rewritten to `api:pipeline-control` by schema migration 69 |
 | `dispatch-control` | `…/api#dispatch-control` preset | **done** (task 2004): provider and its four tools removed, stored grants rewritten to `api:dispatch-control` by schema migration 68 |
 | `test-quarantine` | `…/api#tests:write` (new scope) | api scope |
 | `read-issues` | `…/github#read-issues` | new method on `github` server |

@@ -173,21 +173,23 @@ table only so the table stays total.
 | `team-broadcast` | `teams:broadcast` |
 | `release-gate-read` | `ci:read`, `tasks:read`, `sandboxes:read`, `tasks:from-template` limited to the `release-notes` template |
 
-The `self-debug`, `self-upgrade` and `pipeline-control` capabilities are
-now aliases. A task holding any of them is also served its preset's
-routes, and keeps the tools it always had under their old names
-(`list_grain_tasks`, `read_grain_metrics`, `start_upgrade`,
-`pause_pipeline`, ...).
+The `self-debug` and `self-upgrade` capabilities are now aliases. A task
+holding either is also served its preset's routes, and keeps the tools
+it always had under their old names (`list_grain_tasks`,
+`read_grain_metrics`, `start_upgrade`, ...).
 
-`team-broadcast` and `dispatch-control` are aliases too, but their
+`team-broadcast`, `dispatch-control` and `pipeline-control` are aliases
+too, but their
 in-process capabilities are retired (docs/design/unified-grants.md §4):
 they have no tools of their own any longer, and a run holding one is
 served its preset's `api_*` tools instead (`api_deployment_broadcast`
 for `broadcast_team_message`; the pipeline-pause, run-now and defer
 routes for `pause_pipeline`, `resume_pipeline`, `run_task_now` and
-`defer_task`). Every place a grant is recorded writes it as
+`defer_task`; for pipeline-control, the pipeline-pause routes, which an
+agent calls as itself, so it lifts only a pause it took and never an
+upgrade's hold). Every place a grant is recorded writes it as
 `api:<preset>` (`model.CanonicalLegacyGrant`), importing a grain/config
-does the same, and schema migrations 67 and 68 rewrote the grants
+does the same, and schema migrations 67, 68 and 69 rewrote the grants
 already stored -- tasks, templates, schedules, the default capability
 lists and the standing sessions. The bare name keeps granting the preset
 wherever it is still written, such as a repository's own `.grain`

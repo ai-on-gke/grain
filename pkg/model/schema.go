@@ -318,7 +318,9 @@ import "strconv"
 // (rewriteLegacyGrants, docs/design/unified-grants.md §4).
 //
 // 68 is 67 again for `dispatch-control`, now `api:dispatch-control`.
-const SchemaVersion = 68
+//
+// 69 is 67 again for `pipeline-control`, now `api:pipeline-control`.
+const SchemaVersion = 69
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

@@ -297,7 +297,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"image-signing":       "Image signing",
 	"memory":              "Memory",
 	"release-notes":       "Release notes",
-	"pipeline-control":    "Pipeline control",
 	"git-push-any-ref":    "Push any ref",
 	"console":             "Interactive console",
 	"test-quarantine":     "Test quarantine",
