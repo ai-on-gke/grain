@@ -881,12 +881,64 @@ func TestTaskReadsTasksInTheScopesRepositories(t *testing.T) {
 			t.Errorf("task://%s outside the scope's repositories: %d %q", id, rec.Code, rec.Body.String())
 		}
 	}
-	// A scope with only its own repository still reads its siblings.
+	// A scope with only its own repository and no grant reads its own
+	// task, and none of its siblings.
 	bare := Scope{TaskID: 100, TaskIDStr: "100", TaskRepo: "acme/widgets"}
-	if rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/101/record.md", nil); rec.Code != http.StatusOK {
-		t.Errorf("task://101 in the task's own repository: %d %q", rec.Code, rec.Body.String())
+	if rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/100/record.md", nil); rec.Code != http.StatusOK {
+		t.Errorf("task://100, the scope's own task: %d %q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/102/record.md", nil); rec.Code != http.StatusForbidden {
-		t.Errorf("task://102 in a repository the bare scope does not reach: %d", rec.Code)
+	for _, id := range []string{"101", "102"} {
+		if rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/"+id+"/record.md", nil); rec.Code != http.StatusForbidden {
+			t.Errorf("task://%s with no tasks:read grant: %d", id, rec.Code)
+		}
+	}
+}
+
+// TestTaskReadsSiblingsOnlyWithATasksReadGrant pins that working in a
+// repository does not open its other tasks: a run with no grant is
+// refused every file of a sibling's task://, and told which grant to ask
+// for, until an api:tasks:read grant names the repository (or the scope
+// may read every task).
+func TestTaskReadsSiblingsOnlyWithATasksReadGrant(t *testing.T) {
+	srv := &Server{Tasks: stubTaskProvider{tasks: map[string]*TaskView{
+		"101": {
+			ID: "101", Repo: "acme/widgets", Record: "Task 101 record\n",
+			Prompt: "Task 101 prompt\n", Conversation: "Task 101 conversation\n",
+			Transcript: "Task 101 transcript\n",
+			Attempts: []TaskAttemptView{{Number: 1, Prompt: "Task 101 attempt prompt\n", Transcript: "Task 101 attempt transcript\n"}},
+		},
+	}}}
+	files := []string{"record.md", "prompt.md", "conversation.md", "transcript.md", "attempts/1/transcript.md", "attempts/1/prompt.md", ""}
+
+	bare := Scope{TaskID: 100, TaskIDStr: "100", TaskRepo: "acme/widgets"}
+	for _, f := range files {
+		rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/101/"+f, nil)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("task://101/%s with no grant: %d %q", f, rec.Code, rec.Body.String())
+			continue
+		}
+		body := rec.Body.String()
+		if strings.Contains(body, "Task 101") {
+			t.Errorf("task://101/%s refusal leaks the sibling: %q", f, body)
+		}
+		if !strings.Contains(body, `"self-debug"`) || !strings.Contains(body, "api:tasks:read@") {
+			t.Errorf("task://101/%s refusal does not name the grants: %q", f, body)
+		}
+	}
+
+	granted := bare
+	granted.TaskReadRepos = map[string]bool{"acme/widgets": true}
+	all := bare
+	all.MayReadAllTasks = true
+	for name, scope := range map[string]Scope{"api:tasks:read@acme/widgets": granted, "MayReadAllTasks": all} {
+		for _, f := range files {
+			if f == "" {
+				continue
+			}
+			rec := serveRequest(srv, scope, http.MethodGet, "/fs/task/101/"+f, nil)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Task 101") {
+				t.Errorf("%s: task://101/%s: %d %q", name, f, rec.Code, rec.Body.String())
+			}
+		}
 	}
 }

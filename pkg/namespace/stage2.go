@@ -168,9 +168,11 @@ func (s Scope) PermitsTask(taskID string) bool {
 }
 
 // PermitsTaskRepo reports whether this scope may read the task:// record
-// of a task working in repo: one in the scope's own repository, or one
-// it reads or writes, or one an api:tasks:read@repo grant names. A task
-// with no repository is only MayReadAllTasks'.
+// of another task working in repo: only one an api:tasks:read@repo grant
+// names. Working in, reading or writing a repository does not open its
+// other tasks -- their prompts, conversations and transcripts are no more
+// this run's than the agent API's GET /api/tasks/{id} is. A task with no
+// repository is only MayReadAllTasks'.
 func (s Scope) PermitsTaskRepo(repo string) bool {
 	if s.MayReadAllTasks {
 		return true
@@ -179,16 +181,23 @@ func (s Scope) PermitsTaskRepo(repo string) bool {
 	if repo == "" {
 		return false
 	}
-	if s.TaskRepo != "" && strings.EqualFold(s.TaskRepo, repo) {
-		return true
-	}
 	return s.TaskReadRepos[repo] || s.TaskReadRepos[strings.ToLower(repo)]
 }
 
 // mayReadRepoTasks reports whether this scope may read some other tasks'
 // records, by their repository.
 func (s Scope) mayReadRepoTasks() bool {
-	return s.TaskRepo != "" || len(s.TaskReadRepos) > 0
+	return len(s.TaskReadRepos) > 0
+}
+
+// refuseTaskRead refuses task://<relPath> for a task other than the run's
+// own, naming both ways in: the self-debug capability, or an
+// api:tasks:read@<repo> grant.
+func refuseTaskRead(relPath string) error {
+	return fmt.Errorf(
+		"%w: task://%s: another task's record needs the %q capability or an %q grant naming its repository, and this run holds neither. "+
+			"Nothing you can do from inside this run will add one -- a human attaches it to the task.",
+		ErrForbidden, relPath, "self-debug", "api:tasks:read@<owner/repo>")
 }
 
 // PermitsConfig reports whether this scope may read config://<relPath>.
@@ -279,17 +288,17 @@ func (s *Server) resolveTask(ctx context.Context, scope Scope, relPath string) (
 	taskID := strings.TrimPrefix(parts[0], "#")
 	own := scope.PermitsTask(taskID)
 	if !own && !scope.mayReadRepoTasks() {
-		return nil, RefuseCapability("task://"+relPath, "self-debug")
+		return nil, refuseTaskRead(relPath)
 	}
 	if s == nil || s.Tasks == nil {
 		return nil, fmt.Errorf("%w: task:// is not configured on this daemon", ErrNotFound)
 	}
 	tv, err := s.Tasks.ReadTaskView(ctx, taskID)
 	if !own && (err != nil || tv == nil || !scope.PermitsTaskRepo(tv.Repo)) {
-		// Another task is readable where it works in a repository this
-		// scope reaches; anything else -- including a task that does not
+		// Another task is readable where an api:tasks:read grant names
+		// its repository; anything else -- including a task that does not
 		// exist -- is refused alike, so the refusal says nothing about it.
-		return nil, RefuseCapability("task://"+relPath, "self-debug")
+		return nil, refuseTaskRead(relPath)
 	}
 	if err != nil || tv == nil {
 		if err != nil && !errors.Is(err, ErrNotFound) {

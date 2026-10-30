@@ -2615,13 +2615,8 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 				taskReadRepos[strings.ToLower(r)] = true
 			}
 		}
-		addTaskRepo(taskDetail.Task.Repo)
-		for _, r := range taskDetail.Task.Reads {
-			addTaskRepo(r)
-		}
-		for _, w := range taskDetail.Task.Writes {
-			addTaskRepo(w.Repo)
-		}
+		// Only an api:tasks:read@repo grant opens other tasks' records;
+		// the task's own target, reads and writes do not.
 		for _, r := range apiGrants.Repos("tasks:read") {
 			addTaskRepo(r)
 		}
