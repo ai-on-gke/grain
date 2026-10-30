@@ -11,6 +11,19 @@
 > being built now. `grain-on-gke.md` §"What happens to the grit work"
 > says what a later split would reuse. The rest of this document is kept
 > as the record of that design.
+>
+> **`grain daemon -grit-url` is experimental** (task 1829) and is refused
+> unless `-grit-experimental` is also set. It is GS-2's plumbing only,
+> and the 2026-10-29 walkthrough (`docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md`,
+> U1–U3) found it runs no repository's CI. No tree resolver uploads the
+> checkout at the commit. `grit serve`'s local executor does not plan
+> `.grain/workflows`, so every run errors `no_executor`. Grit's
+> attestation key is read from grit's own `/v1/info`, with no flag to pin
+> it. No grain process mounts `/v1/session` for the reverse tunnel. A
+> resumed split builds those first: a real tree resolver, workflow
+> planning and execution in grit (GS-3), a `-grit-attestation-key` pin,
+> and a `-grit-reverse` mode serving `gritapi.SessionHub` behind its own
+> token check. Only then is the opt-in dropped.
 
 Status (before it was superseded): proposed. Nothing in this document is built yet. Its requirements
 are the stages at the end (GS-1 to GS-5). Task 1327 has already filed

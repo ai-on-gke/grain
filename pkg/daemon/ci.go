@@ -17,6 +17,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -3160,6 +3161,52 @@ func deployedImages(configCheckImage func() string) []string {
 // ciClusterFullRetry is how long a CI job whose pod the cluster had no
 // room for waits before asking again.
 var ciClusterFullRetry = 15 * time.Second
+
+// GritFlags are `grain daemon`'s flags for a remote grit server, read
+// into Config by Apply.
+type GritFlags struct {
+	url, clientToken *string
+	experimental     *bool
+}
+
+// RegisterGritFlags declares -grit-url, -grit-client-token and
+// -grit-experimental on fs.
+func RegisterGritFlags(fs *flag.FlagSet) GritFlags {
+	return GritFlags{
+		url: fs.String("grit-url", "", "EXPERIMENTAL, refused without -grit-experimental: remote grit server base `url` "+
+			"(e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet "+
+			"(docs/design/grit-split.md, GS-3 to GS-5 deferred)"),
+		clientToken: fs.String("grit-client-token", "", "client `token` (<id>.<secret>) sent in Grit-Client when -grit-url is set"),
+		experimental: fs.Bool("grit-experimental", false,
+			"allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, "+
+				"and has no reverse-tunnel mode: for developing the grit split, not for a deployment's CI"),
+	}
+}
+
+// Apply copies the parsed flags into cfg.
+func (g GritFlags) Apply(cfg *Config) {
+	cfg.GritURL, cfg.GritClientToken, cfg.GritExperimental = *g.url, *g.clientToken, *g.experimental
+}
+
+// CheckGritURL refuses -grit-url unless -grit-experimental is set too
+// (task 1829). The remote grit path is GS-2's plumbing only, and the
+// 2026-10-29 walkthrough (U1-U3) found it runs no repository's CI: no
+// tree resolver uploads the checkout, grit's local executor does not plan
+// .grain/workflows (so every run errors no_executor), grit's attestation
+// key is read from grit itself rather than pinned, and nothing mounts
+// /v1/session for the reverse tunnel. Refused unless asked for by name,
+// so nobody points a deployment's CI at it as a second way of running
+// the same thing (docs/design/grit-split.md).
+func CheckGritURL(cfg Config) error {
+	if strings.TrimSpace(cfg.GritURL) == "" || cfg.GritExperimental {
+		return nil
+	}
+	return errors.New("-grit-url is experimental and refused without -grit-experimental: a remote grit server " +
+		"runs none of a repository's .grain/workflows (no checkout is uploaded and grit plans no workflows, so " +
+		"every run errors), its attestation key is taken from grit itself rather than pinned, and there is no " +
+		"reverse-tunnel mode (docs/design/grit-split.md: GS-3 to GS-5 are deferred). Drop -grit-url to run CI " +
+		"in-process")
+}
 
 // BuildGritBackendRunner constructs a `ci.BackendRunner` connected to a remote
 // `grit serve` endpoint (`cfg.GritURL`) and starts its background `/v1/events`
