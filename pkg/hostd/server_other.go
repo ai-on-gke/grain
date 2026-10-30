@@ -39,6 +39,9 @@ type Server struct {
 
 	Remote                             func(ctx context.Context) (net.Conn, error)
 	RemoteMinBackoff, RemoteMaxBackoff time.Duration
+
+	Builtins       []BuiltinEntry
+	BuiltinCommand string
 }
 
 // Drain does nothing off Linux.
