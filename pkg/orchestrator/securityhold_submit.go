@@ -122,6 +122,7 @@ func pinHumanSubmit(ctx context.Context, store *model.Store, client github.Clien
 		}
 		t.Links = withoutLinks(t.Links, model.LinkHumanSubmitted, model.LinkTrustBoundaryCleared,
 			model.LinkClearanceInheritedFrom, model.LinkHumanOnlyHold)
+		t.Links = markRelayedReviewThreadsDecided(t.Links, "")
 		if cleared != "" && t.AutoMerge {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkTrustBoundaryCleared, Target: cleared})
 		}
@@ -138,6 +139,8 @@ func pinHumanSubmit(ctx context.Context, store *model.Store, client github.Clien
 		}
 		return *current, true, nil
 	}
+	resolveHandledRelayedThreads(ctx, store, client, *out, ref,
+		fmt.Sprintf("Resolved per owner decision on task %s (kept as is).", task.ID))
 	if cleared != "" {
 		log.Printf("orchestrator: %s was submitted by a human; its clearance is pinned to %s", ref, shortSHA(headSHA))
 	}

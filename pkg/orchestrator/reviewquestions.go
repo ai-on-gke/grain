@@ -131,6 +131,7 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 		}
 		reopened = true
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
+		t.Links = markRelayedReviewThreadsDecided(t.Links, questions.ReviewTaskID)
 		// Answering a review's questions is not the Submit a human-only
 		// trust-boundary hold waits for.
 		if questions.RestoreAutoMerge && !heldForHuman(*t) {
@@ -164,7 +165,9 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 	body := fmt.Sprintf(
 		"The owner answered the open questions from review task %s, so this task is back in the "+
 			"queue: the next run carries out that decision -- fix what was decided, commit and "+
-			"push to this task's branch, and leave nothing it could have fixed as a comment. %s",
+			"push to this task's branch, reply to each relayed review thread with a one-line "+
+			"summary of what was done and resolve it (`resolve_review_thread` or `grain pr resolve`), "+
+			"and leave nothing it could have fixed as a comment. %s",
 		questions.ReviewTaskID, then)
 	log.Printf("orchestrator: %s's owner answered the questions from review %s; redispatching it",
 		task.ID, questions.ReviewTaskID)
@@ -197,6 +200,7 @@ func dropReviewQuestions(ctx context.Context, store *model.Store, taskID string,
 	if err := store.UpdateTask(ctx, taskID, func(t *model.Task) error {
 		if current, ok := model.ReviewQuestionsOf(*t); ok && current == questions {
 			t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
+			t.Links = markRelayedReviewThreadsDecided(t.Links, questions.ReviewTaskID)
 		}
 		return nil
 	}); err != nil {

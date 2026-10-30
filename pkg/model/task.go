@@ -1114,6 +1114,10 @@ const (
 	// so the inline comments it carries are never mistaken for review
 	// threads somebody else opened (orchestrator's reviewthreads.go).
 	LinkDraftReview LinkKind = "draft-review"
+	// LinkRelayedReviewThread maps a grain-relayed inline review comment on
+	// this task's pull request to its GitHub review thread ID and records
+	// whether the finding's decision has been made (-> RelayedReviewThread.Target()).
+	LinkRelayedReviewThread LinkKind = "relayed-review-thread"
 	// LinkReviewThread records one GitHub review thread on this task's
 	// pull request that grain has already sent a run to deal with (-> the
 	// REST ID of the comment that opened it). One run per new batch of
