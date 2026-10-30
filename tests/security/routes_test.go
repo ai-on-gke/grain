@@ -345,6 +345,7 @@ var routeAuthorization = map[string]authLevel{
 	"PUT /api/capability-policy":                  trusted,
 	"POST /api/capability-policy/preview":         trusted,
 	"GET /api/api-scope-sets":                     trusted,
+	"GET /api/api-scope-sets/usage":               trusted,
 	"PUT /api/api-scope-sets":                     trusted,
 	"POST /api/api-scope-sets/delete":             trusted,
 	"GET /api/gcp-keys":                           trusted,
