@@ -40,7 +40,8 @@ const gcpKey = {
 // at the time, so a test can attach a server after the first read.
 function serve(listing) {
   api.mockImplementation(async (path, opts) => {
-    if (path === "/api/capability-methods") return listing.current;
+    if (path.split("?")[0] === "/api/capability-methods")
+      return listing.current;
     if (path === "/api/capability-grants/check")
       return JSON.parse(opts.body).grants.map(({ grant }) => ({
         grant,
@@ -526,5 +527,76 @@ describe("GrantsPicker", () => {
     expect(
       within(item).getByRole("link", { name: "Settings → Capabilities" }),
     ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
+  });
+  // grain/task-1810: a method the capability policy denies the form's
+  // run is listed disabled with the policy's reason, not offered; a
+  // held grant of one is flagged.
+  it("shows a method the policy denies disabled, with the rule as reason", async () => {
+    const reason = `the capability policy denies ${hostScript.ref} to this task on acme/widgets (rule 1: deny ${hostScript.ref})`;
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/capability-methods?kind=task&repo=acme%2Fwidgets")
+        return [{ ...hostScript, policyRefusal: reason }, gcpKey];
+      if (path === "/api/capability-grants/check")
+        return JSON.parse(opts.body).grants.map(({ grant }) => ({
+          grant,
+          recorded: grant,
+        }));
+      throw new Error(`unexpected ${path}`);
+    });
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[hostScript.ref]}
+        config={{ capabilityMethods: 2 }}
+        onApiChange={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={vi.fn()}
+        policyRepo="acme/widgets"
+      />,
+    );
+    expect(
+      await screen.findByLabelText(
+        "example.com › host-script (denied by the capability policy)",
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    const menu = await screen.findByRole("menu", { name: "Grants to add" });
+    const denied = await within(menu).findByText("host-script");
+    const row = denied.closest('[role="menuitem"]');
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).toHaveAttribute("data-policy-denied", "true");
+    expect(row).toHaveTextContent(reason);
+    expect(
+      within(row).getByRole("link", { name: "Settings → Capabilities" }),
+    ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
+    const allowed = within(menu)
+      .getByText("gcp-key")
+      .closest('[role="menuitem"]');
+    expect(allowed).not.toHaveAttribute("aria-disabled");
+    await user.click(allowed);
+    expect(onSubmit).toHaveBeenCalledWith(
+      { capability: gcpKey.ref, with: undefined },
+      null,
+    );
+  });
+
+  it("asks about no repo while the one typed is not owner/name", async () => {
+    serve({ current: [hostScript] });
+    render(
+      <GrantsPicker
+        grants={[]}
+        config={{ capabilityMethods: 1 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+        policyRepo="not a repo"
+      />,
+    );
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/capability-methods"),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

@@ -488,6 +488,17 @@ var NeverAutoMergePaths = []string{
     "tables/agent_backend.json",
     "tables/console_session.json",
     "tables/repo_workflow.json",
+    // Templates and schedules as tables: their reads, writes, grants, fields.
+    "tables/template.json", "tables/template_read.json", "tables/template_write.json",
+    "tables/template_grant.json", "tables/template_field.json",
+    "tables/template_custom_field.json", "tables/template_sequence.json",
+    "tables/schedule.json", "tables/schedule_read.json", "tables/schedule_write.json",
+    "tables/schedule_grant.json", "tables/schedule_custom_field.json",
+    "tables/schedule_sequence.json",
+    // Sandbox images and the secrets bound into them; GCP keys.
+    "tables/standing_sandbox.json", "tables/standing_sandbox_secret.json",
+    "tables/standing_sandbox_env.json", "tables/persistent_sandbox.json",
+    "tables/gcp_key.json",
     "scripts/**",
     "workflows/**",
     ".github/**",
@@ -496,6 +507,7 @@ var NeverAutoMergePaths = []string{
 }
 ```
 
+- **Every table `staterepo.Apply` imports is under the ceiling unless it is benign.** `TestSettingsTablesAreHeldUnlessBenign` (`pkg/staterepo`) fails when a name in `staterepo.SettingsTables` is neither covered by `NeverAutoMergePaths` nor on its explicit benign list (`board*`, `suite*`, `custom_field`, `qualification_*`), so a table added to the apply list later is held until somebody decides it grants nothing.
 - **Who may change `settings/config-policy.yml`:** Because `settings/config-policy.yml` is the first entry in `NeverAutoMergePaths`, any PR that creates, modifies, or deletes `settings/config-policy.yml` is unconditionally classified with `RequiresHuman: true`. Only a human operator clicking **Approve** / **Submit** in the UI can land a change to the exception list.
 - **Evaluator uses base branch's exception list:** When evaluating whether a candidate PR on `grain/config` may auto-merge, `orchestrator/securityhold.go` reads `settings/config-policy.yml` from `grain/config`'s **base branch (`main`)**, never from the unmerged PR head.
 

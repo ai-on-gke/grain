@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -62,8 +63,16 @@ func newFitCluster(t *testing.T, allocatableCPU, usedCPU, podStatus string) fitC
 		"  'apply --validate=false') cat >/dev/null;;\n" +
 		"esac\nexit 0\n"
 	kubectl := filepath.Join(dir, "kubectl")
-	if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
+	// Written as data and made executable by a child process, for the
+	// ETXTBSY reason writeFakeKubectlForGranule gives: a fork elsewhere
+	// in the test binary can inherit the write descriptor, and exec of
+	// the stub then fails with "text file busy".
+	src := kubectl + ".src"
+	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if out, err := exec.Command("install", "-m", "0755", src, kubectl).CombinedOutput(); err != nil {
+		t.Fatalf("installing fake kubectl: %v: %s", err, out)
 	}
 	return fitCluster{kubectl: kubectl, log: log}
 }

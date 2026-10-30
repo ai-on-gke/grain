@@ -74,7 +74,7 @@ type Server struct {
 	// "" for no local listener at all.
 	Remote func(ctx context.Context) (net.Conn, error)
 	// RemoteMinBackoff and RemoteMaxBackoff bound the wait between
-	// reconnects to Remote: 1s and 30s when zero.
+	// reconnects to Remote: 1s and defaultRemoteMaxBackoff (5s) when zero.
 	RemoteMinBackoff, RemoteMaxBackoff time.Duration
 
 	uid uint32
