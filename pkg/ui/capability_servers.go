@@ -725,7 +725,9 @@ func (c *Client) TestCapabilityServer(ctx context.Context, req TestCapabilitySer
 	if err := cfg.Validate(id); err != nil {
 		return servers.ProbeResult{}, validationErrorf("%s", err)
 	}
-	if err := c.checkRunLocation(ctx, cfg); err != nil {
+	// A test says at once that no dialing-in hostd is connected, rather
+	// than waiting one out the way a run does (hostd.ForDisplay).
+	if err := c.checkRunLocation(hostd.ForDisplay(ctx), cfg); err != nil {
 		return servers.ProbeResult{}, err
 	}
 	// Typed-in secrets are offered under names of their own, which only
@@ -1123,7 +1125,7 @@ func (s *Server) handleGChatUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCapabilityServerHostEntries(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.tasks.HostCapabilityEntries(r.Context()))
+	writeJSON(w, http.StatusOK, s.tasks.HostCapabilityEntries(hostd.ForDisplay(r.Context())))
 }
 
 // wakeReconciler asks the reconcile loop for a tick now, so a saved
