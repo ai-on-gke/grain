@@ -582,9 +582,13 @@ type MetricsCIQueueBucket struct {
 // recorded the moment each one measures from, which is not always all of
 // them.
 type MetricsMerges struct {
-	Landed        int     `json:"landed"`
-	LandedPerHour float64 `json:"landedPerHour"`
-	LandedPerDay  float64 `json:"landedPerDay"`
+	Landed int `json:"landed"`
+	// LandedByForge splits landed by the forge each change landed on:
+	// "github" for a pull request, a CL provider's own name for a
+	// submitted CL (metrics.Merges.LandedByForge).
+	LandedByForge map[string]int `json:"landedByForge,omitempty"`
+	LandedPerHour float64        `json:"landedPerHour"`
+	LandedPerDay  float64        `json:"landedPerDay"`
 	// The three stretches of a change's life after it is filed, in
 	// seconds: the whole of it, what happened after the agent stopped,
 	// and the merge queue's own share. filedToLanded is latency's
@@ -1894,6 +1898,7 @@ func metricsReportFrom(rep metrics.Report, cycles bool) MetricsReport {
 	out.GitHubCI = gitHubCIWireFrom(rep.GitHubCI)
 	out.Merges = MetricsMerges{
 		Landed:            rep.Merges.Landed,
+		LandedByForge:     rep.Merges.LandedByForge,
 		LandedPerHour:     rep.Merges.LandedPerHour,
 		LandedPerDay:      rep.Merges.LandedPerDay,
 		FiledToLanded:     distributionOf(rep.Merges.FiledToLanded),

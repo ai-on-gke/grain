@@ -15,6 +15,7 @@
 package gitproxy_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -119,5 +120,107 @@ func TestCLIRoutesScopeNarrateAndAnswer(t *testing.T) {
 	want := "list_ci_runs pull_request_status base_branch_status list_ci_runs query_grain_db list_ci_runs"
 	if got := strings.Join(tools, " "); got != want {
 		t.Errorf("recorded tools = %q, want %q", got, want)
+	}
+}
+
+// fakeTaskRefScopes is fakeNamespaceScopes that also names other tasks'
+// repositories and branches (gitproxy.TaskRefLookup).
+type fakeTaskRefScopes struct {
+	fakeNamespaceScopes
+	refs map[string][2]string
+}
+
+func (f fakeTaskRefScopes) TaskCIRef(_ context.Context, id string) (string, string, bool, error) {
+	ref, ok := f.refs[id]
+	return ref[0], ref[1], ok, nil
+}
+
+// A task reads the CI of a sibling task, by its id, or of any branch, in
+// its own repository or one it reads -- and a run of either by its id
+// alone -- and nothing outside them.
+func TestCLIReadsOtherTasksAndBranchesCI(t *testing.T) {
+	store := ci.NewRunStore(20)
+	at := time.Now().Add(-time.Hour)
+	later := time.Now()
+	store.Put(ci.Run{ID: "run-sib-old", Repo: "acme/widgets", Ref: "grain/dep/task-19", Conclusion: ci.ConclusionFailure, StartedAt: &at,
+		Jobs: []ci.JobRun{{Name: "go", Conclusion: ci.ConclusionFailure}}})
+	store.Put(ci.Run{ID: "run-sib", Repo: "acme/widgets", Ref: "grain/dep/task-19", Conclusion: ci.ConclusionSuccess, StartedAt: &later,
+		Jobs: []ci.JobRun{{Name: "go", Conclusion: ci.ConclusionSuccess}, {Name: "lint", Conclusion: ci.ConclusionSuccess}}})
+	store.Put(ci.Run{ID: "run-190", Repo: "acme/widgets", Ref: "grain/dep/task-190", Conclusion: ci.ConclusionSuccess, StartedAt: &later})
+	store.Put(ci.Run{ID: "run-lib", Repo: "acme/library", Ref: "feature/x", Conclusion: ci.ConclusionFailure, StartedAt: &later,
+		Jobs: []ci.JobRun{{Name: "test", Conclusion: ci.ConclusionFailure}}})
+	store.Put(ci.Run{ID: "run-lib-task", Repo: "acme/library", Ref: "grain/dep/task-30", Conclusion: ci.ConclusionSuccess, StartedAt: &later})
+	store.Put(ci.Run{ID: "run-gadget", Repo: "acme/gadgets", Ref: "grain/dep/task-40", Conclusion: ci.ConclusionSuccess, StartedAt: &later})
+
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb": "tok"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: store, Redactor: redact.New(nil)},
+		NamespaceScopes: fakeTaskRefScopes{
+			fakeNamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+				"sb": {TaskID: "7", RunID: "run-a", TaskRepo: "acme/widgets", TaskBranch: "grain/dep/task-7", TaskBase: "main",
+					MayReadCI: true, AllowedRepos: map[string]bool{"acme/widgets": true, "acme/library": true}},
+			}},
+			refs: map[string][2]string{
+				"19": {"acme/widgets", "grain/dep/task-19"},
+				"30": {"acme/library", "grain/dep/task-30"},
+				"40": {"acme/gadgets", "grain/dep/task-40"},
+			},
+		},
+		Activity: &fakeActivity{},
+	}
+	h := gitproxy.NewHandler(proxy)
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", basicAuthHeader("tok"))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := get("/cli/ci/runs?task=%2319")
+	if body := rec.Body.String(); rec.Code != http.StatusOK || !strings.Contains(body, "run-sib ") ||
+		!strings.Contains(body, "run-sib-old") || strings.Contains(body, "run-190") {
+		t.Errorf("ci runs of a sibling task: %d %s", rec.Code, body)
+	}
+	rec = get("/cli/ci/runs?task=30")
+	if body := rec.Body.String(); rec.Code != http.StatusOK || !strings.Contains(body, "run-lib-task") || strings.Contains(body, "run-lib ") {
+		t.Errorf("ci runs of a task in a reads repository: %d %s", rec.Code, body)
+	}
+	for _, path := range []string{"/cli/ci/runs?task=40", "/cli/ci/runs?task=99", "/cli/pr/status?task=40"} {
+		if rec := get(path); rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "run-gadget") {
+			t.Errorf("%s outside the scope: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	rec = get("/cli/pr/status?task=19")
+	if body := rec.Body.String(); rec.Code != http.StatusOK || !strings.Contains(body, "task 19's branch") ||
+		!strings.Contains(body, "run-sib ") || !strings.Contains(body, "lint: success") {
+		t.Errorf("pr status of a sibling task: %d %s", rec.Code, body)
+	}
+	rec = get("/cli/pr/status?ref=feature/x&repo=acme/library")
+	if body := rec.Body.String(); rec.Code != http.StatusOK || !strings.Contains(body, "run-lib") || !strings.Contains(body, "test: failure") {
+		t.Errorf("pr status of a branch in a reads repository: %d %s", rec.Code, body)
+	}
+	if rec := get("/cli/pr/status?ref=grain/dep/task-40&repo=acme/gadgets"); rec.Code != http.StatusForbidden {
+		t.Errorf("pr status of a branch outside the scope: %d %s", rec.Code, rec.Body)
+	}
+
+	rec = get("/cli/ci/run?id=run-lib")
+	var named map[string]string
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &named) != nil || named["repo"] != "acme/library" {
+		t.Errorf("ci run lookup in a reads repository: %d %s", rec.Code, rec.Body)
+	}
+	for _, id := range []string{"run-gadget", "no-such-run"} {
+		if rec := get("/cli/ci/run?id=" + id); rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "acme/gadgets") {
+			t.Errorf("ci run lookup of %s: %d %s", id, rec.Code, rec.Body)
+		}
 	}
 }

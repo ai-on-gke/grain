@@ -672,13 +672,20 @@ export function probeNote(sandbox) {
 // quiet cases stay quiet.
 function SandboxStatus({ sandbox }) {
   const probe = probeNote(sandbox);
+  const isIdleSession =
+    sandbox.terminationReason === "idle session" ||
+    sandbox.kind === "idle session";
   return (
     <>
       <Chip
         size="small"
-        color={sandbox.error ? "error" : "success"}
-        label={sandbox.error || "ready"}
-        title={probe?.title}
+        color={sandbox.error ? "error" : isIdleSession ? "info" : "success"}
+        label={sandbox.error || (isIdleSession ? "idle session" : "ready")}
+        title={
+          isIdleSession && !sandbox.error
+            ? "Warm session sandbox held idle awaiting the next message"
+            : probe?.title
+        }
       />
       {probe?.text && (
         <Typography

@@ -68,6 +68,7 @@ import {
 import ItemGlyph from "./ItemGlyph.jsx";
 import NotifyRunningDialog from "./NotifyRunningDialog.jsx";
 import StateDot from "./StateDot.jsx";
+import ChipStrip from "./ChipStrip.jsx";
 
 const FILTER_TITLES = {
   all: "All tasks",
@@ -747,7 +748,7 @@ export function TaskRow({
           <time dateTime={mergedAt}>{formatDateTime(mergedAt, zone)}</time>
         </span>
       )}
-      <span className="chips">
+      <ChipStrip>
         {/* What this deployment's own fields say about the task, first
             in the row: on a list sorted by one of them it is the answer
             the order was made of, and it is what somebody scanning a
@@ -873,7 +874,7 @@ export function TaskRow({
         {t.capabilities.map((id) => (
           <GrantChip key={id} grant={id} config={config} />
         ))}
-      </span>
+      </ChipStrip>
       {stall && (
         <Chip
           size="small"

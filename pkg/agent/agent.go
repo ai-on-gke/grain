@@ -442,6 +442,13 @@ type RunConfig struct {
 	// for any ResumeSession, by starting the task from Prompt.
 	ContinuePrompt string
 
+	// SandboxReused reports that this dispatch is reusing the warm sandbox
+	// left by the task's previous turn rather than starting in a fresh
+	// sandbox. When ResumeSession is also set, ResumeMessage uses
+	// SuspendedReusedSandboxPreamble instead of SuspendedPreamble so the
+	// agent knows the sandbox is the same one.
+	SandboxReused bool
+
 	// OnResumableSession, when set, is called with the conversation this
 	// run is in as soon as its CLI names it -- the same token
 	// Result.ResumableSession will carry, under the same rule that it is
@@ -561,15 +568,25 @@ func (c RunConfig) EffectiveSuspendedPrompt() string {
 	return c.Prompt
 }
 
+// EffectiveSuspendedPreamble returns SuspendedReusedSandboxPreamble when the
+// run is reusing the previous turn's warm sandbox, and SuspendedPreamble when
+// the run is starting in a fresh sandbox.
+func (c RunConfig) EffectiveSuspendedPreamble() string {
+	if c.SandboxReused {
+		return SuspendedReusedSandboxPreamble
+	}
+	return SuspendedPreamble
+}
+
 // ResumeMessage is the user turn a Framework sends on joining
 // ResumeSession: ContinuePrompt alone when the stop rule is resuming a
-// session that has only just ended, and otherwise SuspendedPreamble in
-// front of EffectiveSuspendedPrompt.
+// session that has only just ended, and otherwise
+// EffectiveSuspendedPreamble in front of EffectiveSuspendedPrompt.
 func (c RunConfig) ResumeMessage() string {
 	if c.ContinuePrompt != "" {
 		return c.ContinuePrompt
 	}
-	return SuspendedPreamble + c.EffectiveSuspendedPrompt()
+	return c.EffectiveSuspendedPreamble() + c.EffectiveSuspendedPrompt()
 }
 
 // AddendaArgs is the "-addenda-after <id>" pair a Framework passes its
@@ -781,6 +798,14 @@ type ToolCall struct {
 	Arguments map[string]any
 	Text      string
 	IsError   bool
+	// Relayed is set by the orchestrator, never by a framework, once it
+	// has already acted on this call while the run was still going (an
+	// interactive session's in-process turns: orchestrator's
+	// continueSessionTurns), so the end-of-run pass does not act on it
+	// twice. A field rather than a key in Arguments because Arguments is
+	// the agent's own, and an agent must not be able to hide a call from
+	// the orchestrator by naming such a key itself.
+	Relayed bool `json:"-"`
 }
 
 // Result is what a run produced: the agent's final text answer plus every

@@ -59,8 +59,21 @@ test("grants a method with arguments on a new task, twice, and refuses an invali
   ).toHaveCount(0);
   let section = draftSection(grants);
   await expect(section).toBeVisible();
-  // The form says with: never carries a secret.
+  // The form says with: never carries a secret, and keeps method/field
+  // descriptions in (i) popovers rather than inline paragraphs.
   await expect(section.getByText(/Never put a secret/)).toBeVisible();
+  await expect(section).not.toContainText(
+    "Mint a short-lived cloud service-account key",
+  );
+  await expect(section).not.toContainText("Which account the key is for.");
+  await section.getByRole("button", { name: "About cloud-key" }).hover();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "Mint a short-lived cloud service-account key for one account and place it in the sandbox.",
+  );
+  await section.getByRole("button", { name: "About account" }).hover();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "Which account the key is for.",
+  );
   await expect(
     section.getByText("Fill in the arguments marked to grant it"),
   ).toBeVisible();
@@ -189,7 +202,11 @@ test("Settings lists each method's arguments and whether it is stateful", async 
   const key = page.locator("[data-method-detail='cloud-key']");
   await expect(key).toBeVisible();
   await expect(key.getByText("stateful")).toBeVisible();
-  await expect(key.getByText(/Mint a short-lived cloud/)).toBeVisible();
+  await expect(key).not.toContainText("Mint a short-lived cloud");
+  await key.getByRole("button", { name: "About cloud-key" }).hover();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "Mint a short-lived cloud",
+  );
   const table = key.getByRole("table", { name: "cloud-key arguments" });
   const row = (name) =>
     table

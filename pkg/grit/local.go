@@ -820,9 +820,21 @@ func defaultLocalJobRunner(ctx context.Context, env JobExecEnv) (JobExecResult, 
 			Log:        out,
 		}, nil
 	}
+	// Nothing here can run the job: grit serve's local executor does not
+	// read .grain/workflows (that is GS-3, deferred -- docs/design/grit-split.md),
+	// so a tree without .grain/grit-job.sh has no command to execute. Reporting
+	// that as success signed a green attestation for work that never ran, and
+	// `grain daemon -grit-url` recorded it as a passing verdict for every
+	// commit whatever its workflows said (docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md, F1).
+	msg := fmt.Sprintf("grit: job %s on %s@%s was not run: grit serve's local executor runs only a tree's .grain/grit-job.sh, and this tree has none\n", env.JobID, env.Repo, env.Commit)
 	return JobExecResult{
-		Conclusion: "success",
-		Log:        []byte(fmt.Sprintf("job %s completed on %s@%s\n", env.JobID, env.Repo, env.Commit)),
+		Conclusion: "errored",
+		Log:        []byte(msg),
+		Fault: &gritapi.FaultSummary{
+			Kind:    "no_executor",
+			Step:    env.JobID,
+			Message: strings.TrimSpace(msg),
+		},
 	}, nil
 }
 
