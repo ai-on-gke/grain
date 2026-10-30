@@ -40,6 +40,7 @@ import {
   Typography,
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import api from "../api.js";
 import { useHeldIds } from "../useHeldIds.js";
 import fileToAttachment from "../attachments.js";
@@ -1261,11 +1262,20 @@ export default function NewTaskOverlay({
                     grant={id}
                     config={config}
                     tabIndex={-1}
+                    // Marked by its border and icon, its label left at
+                    // full contrast: warning-coloured text on a light
+                    // chip is too faint to read at this size.
                     {...(catalogueRefusals[id]
                       ? {
                           note: catalogueRefusals[id],
-                          color: "warning",
                           variant: "outlined",
+                          icon: (
+                            <WarningAmberIcon
+                              fontSize="small"
+                              color="warning"
+                            />
+                          ),
+                          sx: { borderColor: "warning.main" },
                           ariaSuffix: " (refused here)",
                           "data-catalogue-refused": "true",
                         }
