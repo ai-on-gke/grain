@@ -178,7 +178,9 @@ func NewNamespaceTools(cfg NamespaceToolsConfig) []Tool {
 		{
 			Name: "grain_ls",
 			Description: "List a directory or match a glob in the grain namespace (e.g. \"ci://owner/repo\", " +
-				"\"ci://owner/repo/<run>/go/tests\", \"src://pkg\"). Results are capped at the normal tool-result limit; " +
+				"\"ci://owner/repo/<run>/go/tests\", \"src://pkg\"). On a daemon whose own module builds on grain core, " +
+				"core's source is also under \"src://core\" and answers src:// paths that module lacks. " +
+				"Results are capped at the normal tool-result limit; " +
 				"for uncapped listings in the sandbox, curl http://127.0.0.1:9728/fs/<scheme>/<path>?list.",
 			InputSchema: map[string]any{
 				"type": "object",

@@ -168,8 +168,16 @@ type Server struct {
 	CIStore     ci.RunStore
 	ArtifactDir string
 	SrcDir      string
-	Tasks       TaskProvider
-	ConfigDir   string
+	// CoreSrcDir, when set, is the source of github.com/ai-on-gke/grain
+	// on a daemon whose own module (SrcDir) builds on it rather than
+	// being it: served under src://core/..., and beneath SrcDir for a
+	// path SrcDir does not have (resolveSrc). CoreModule is that
+	// dependency as module@version, which a not-found names when
+	// CoreSrcDir is empty because the source did not ship (CoreSource).
+	CoreSrcDir string
+	CoreModule string
+	Tasks      TaskProvider
+	ConfigDir  string
 	// ConfigAllow, when set, is the whole of what config:// serves out of
 	// ConfigDir: a slash path relative to it is listed and read only if
 	// this says so. ConfigDir is a working tree a deployment keeps more in
@@ -301,12 +309,83 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 			return nil, fmt.Errorf("%w: .git is not accessible via src://", ErrForbidden)
 		}
 	}
+	if within, ok := s.coreSrcPath(relPath); ok {
+		return resolveSrcIn(s.CoreSrcDir, relPath, within)
+	}
+	node, err := resolveSrcIn(s.SrcDir, relPath, relPath)
+	if s.CoreSrcDir == "" {
+		if errors.Is(err, ErrNotFound) && s.CoreModule != "" {
+			return nil, s.coreNotShipped(relPath)
+		}
+		return node, err
+	}
+	// A daemon whose own module builds on core (CoreSrcDir) overlays
+	// core's tree under its own, so that src://pkg/... -- which is where
+	// most of grain is, and what every example names -- reads core on a
+	// layer that has no pkg/ of its own. The layer wins a path both
+	// trees have; src://core/... is the unambiguous way to core's copy.
+	coreNode, coreErr := resolveSrcIn(s.CoreSrcDir, relPath, relPath)
+	switch {
+	case err != nil && errors.Is(err, ErrNotFound) && coreErr == nil:
+		return coreNode, nil
+	case err != nil:
+		return nil, err
+	case node.IsDir && coreErr == nil && coreNode.IsDir:
+		node.Entries = mergeEntries(node.Entries, coreNode.Entries)
+	}
+	if relPath == "" && !hasEntry(node.Entries, coreSrcRoot) {
+		node.Entries = append(node.Entries, Entry{Name: coreSrcRoot, Type: "dir"})
+		sortEntries(node.Entries)
+	}
+	return node, nil
+}
+
+// coreSrcRoot is the top-level src:// directory core's own source is
+// served under on a daemon whose module builds on core.
+const coreSrcRoot = "core"
+
+// coreSrcPath reports whether relPath names src://core/... on a daemon
+// that serves core's source there, and if so the path within core. A
+// layer with a real top-level core/ of its own keeps it.
+func (s *Server) coreSrcPath(relPath string) (string, bool) {
+	if s.CoreSrcDir == "" {
+		return "", false
+	}
+	within, ok := strings.CutPrefix(relPath, coreSrcRoot)
+	if !ok || (within != "" && within[0] != '/') {
+		return "", false
+	}
+	if _, err := os.Lstat(filepath.Join(s.SrcDir, coreSrcRoot)); err == nil {
+		return "", false
+	}
+	return strings.TrimPrefix(within, "/"), true
+}
+
+// coreNotShipped is the not-found for a src:// path on a daemon whose
+// module builds on core when core's source did not ship with it: the
+// path is most likely core's, so it says where core's source is to be
+// had rather than leaving the reader to guess why src://pkg is empty.
+func (s *Server) coreNotShipped(relPath string) error {
+	mod, ver, _ := strings.Cut(s.CoreModule, "@")
+	where := mod
+	if ver != "" {
+		where = mod + "@" + ver
+	}
+	return fmt.Errorf("%w: src://%s -- src:// serves this daemon's own module, which builds on %s, "+
+		"and that source did not ship with this daemon. To read core: `go mod download -json %s` "+
+		"in grain-src/ (or any checkout of this module) and read the Dir it prints, or clone %s if your task reads it",
+		ErrNotFound, relPath, where, where, strings.TrimPrefix(mod, "github.com/"))
+}
+
+// resolveSrcIn resolves within, a slash path under root, as the
+// src:// node relPath.
+func resolveSrcIn(root, relPath, within string) (*ResolvedNode, error) {
 	var target string
 	var err error
-	if relPath == "" {
-		target = s.SrcDir
+	if within == "" {
+		target = root
 	} else {
-		target, err = safepath.Within(s.SrcDir, filepath.FromSlash(relPath))
+		target, err = safepath.Within(root, filepath.FromSlash(within))
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrBadRequest, err)
 		}
@@ -359,6 +438,28 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 			return os.Open(target)
 		},
 	}, nil
+}
+
+// mergeEntries is the union of two directory listings by name, the
+// first's entry winning a name both have.
+func mergeEntries(primary, secondary []Entry) []Entry {
+	out := append([]Entry(nil), primary...)
+	for _, e := range secondary {
+		if !hasEntry(primary, e.Name) {
+			out = append(out, e)
+		}
+	}
+	sortEntries(out)
+	return out
+}
+
+func hasEntry(entries []Entry, name string) bool {
+	for _, e := range entries {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // repoSegmentCount returns the number of slash-separated segments in a
