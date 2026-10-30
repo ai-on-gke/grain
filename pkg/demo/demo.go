@@ -25,6 +25,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -1525,15 +1526,79 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	change.Remember(change.Observation{Target: "cl/612400105", Health: change.HealthBehind, Presubmit: change.PresubmitPassed,
 		Snapshot: 2, ReviewState: change.ReviewStateApproved, LGTM: []string{"carol"}})
 	registerDemoChangelists()
+	// The failed CL's run left two replies to its reviewer as drafts, so
+	// its Publish replies button has something to publish (§5).
+	demoDrafts.leave(clTask.ID, "cl/612400001", 2, "the run ended while its reviewer was still commenting")
 
 	return nil
 }
 
 // demoChangelists answers for the demo's CLs where no edition has
-// registered a provider, so the Submit and Sync buttons have something
-// to answer them: a submit reports the CL submitted as itself, and a
-// sync reports a new snapshot. Nothing leaves the process.
+// registered a provider, so the Submit, Sync, Mail and Publish replies
+// buttons and a run's checks and review tools have something to answer
+// them: a submit reports the CL submitted as itself, a sync a new
+// snapshot, presubmit what was last observed, and a mail or publish
+// updates what the task view reads. Nothing leaves the process.
 type demoChangelists struct{}
+
+// demoDrafts is the replies runs left as drafts on the demo's CLs, per
+// task and CL, until a publish clears them.
+var demoDrafts = &demoDraftStore{byTask: map[string]map[string]int{}}
+
+type demoDraftStore struct {
+	mu     sync.Mutex
+	byTask map[string]map[string]int
+}
+
+// leave records n more drafts on cl for taskID, and offers them on its
+// Publish replies button with reason.
+func (d *demoDraftStore) leave(taskID, cl string, n int, reason string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.byTask[taskID] == nil {
+		d.byTask[taskID] = map[string]int{}
+	}
+	d.byTask[taskID][cl] += n
+	change.RememberPublish(taskID, d.resultLocked(taskID, 0, reason))
+}
+
+// publish takes every draft left for taskID, as a PublishResult saying
+// published of them were published.
+func (d *demoDraftStore) publish(taskID string, reason string) change.PublishResult {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	res := d.resultLocked(taskID, -1, reason)
+	if reason == "" {
+		delete(d.byTask, taskID)
+	}
+	return res
+}
+
+// resultLocked is taskID's drafts as a PublishResult: published -1 marks
+// every one published, 0 none (each then carrying reason).
+func (d *demoDraftStore) resultLocked(taskID string, published int, reason string) change.PublishResult {
+	var res change.PublishResult
+	cls := slices.Sorted(maps.Keys(d.byTask[taskID]))
+	for _, cl := range cls {
+		n := d.byTask[taskID][cl]
+		c := change.PublishedCL{CL: cl, Drafts: n}
+		if published < 0 && reason == "" {
+			c.Published = n
+		} else {
+			c.Reason = reason
+		}
+		res.CLs = append(res.CLs, c)
+	}
+	return res
+}
+
+// What the demo's CL tasks offer a person and a run.
+var (
+	_ change.Checks    = demoChangelists{}
+	_ change.Replier   = demoChangelists{}
+	_ change.Publisher = demoChangelists{}
+	_ change.Mailer    = demoChangelists{}
+)
 
 func registerDemoChangelists() {
 	if _, ok := change.Lookup(model.LinkChangelist); ok {
@@ -1556,6 +1621,89 @@ func (demoChangelists) Submit(_ context.Context, _ model.Task, target string, by
 }
 func (demoChangelists) Sync(_ context.Context, _ model.Task, _ string) (change.SyncResult, error) {
 	return change.SyncResult{Message: "synced to head (demo)"}, nil
+}
+
+// ChecksStatus and WaitChecks answer with what was last observed: a
+// running presubmit stays running, so a wait on it times out at once.
+func (demoChangelists) ChecksStatus(_ context.Context, _ model.Task, target string) (change.ChecksReport, error) {
+	return demoChecksReport(target, nil), nil
+}
+
+func (demoChangelists) WaitChecks(_ context.Context, _ model.Task, target string, req change.ChecksWait) (change.ChecksReport, error) {
+	r := demoChecksReport(target, req.Jobs)
+	r.TimedOut = r.Presubmit == change.PresubmitRunning
+	r.Selective = len(req.Jobs) > 0
+	r.SatisfiesGate = !r.Selective && r.Presubmit == change.PresubmitPassed
+	return r, nil
+}
+
+func (demoChangelists) GrainCIRefusal(tool string) string {
+	return tool + " is grain CI's; this demo CL's presubmit is the demo provider's, " +
+		"so use pull_request_status and wait_for_checks instead."
+}
+
+func demoChecksReport(target string, jobs []string) change.ChecksReport {
+	obs, _ := change.LastObserved(target)
+	r := change.ChecksReport{Health: obs.Health, Presubmit: obs.Presubmit, Snapshot: obs.Snapshot, Provider: "demo"}
+	if r.Presubmit == "" {
+		r.Presubmit = change.PresubmitUnknown
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s snapshot %d: presubmit %s (demo provider).\n", target, obs.Snapshot, r.Presubmit)
+	for _, c := range obs.Checks {
+		if len(jobs) > 0 && !slices.Contains(jobs, c.Name) {
+			continue
+		}
+		fmt.Fprintf(&b, "  %s: %s\n", c.Name, c.State)
+		if c.State == "failed" {
+			r.Failing = append(r.Failing, c.Name)
+		}
+	}
+	if r.Presubmit == change.PresubmitFailed && len(r.Failing) == 0 && len(jobs) == 0 {
+		r.Failing = obs.Failing()
+	}
+	r.Text = b.String()
+	return r
+}
+
+// Reply and Resolve leave a draft on the thread's CL for the next
+// publish.
+func (demoChangelists) Reply(_ context.Context, task model.Task, _, threadID, _ string) (change.ReplyResult, error) {
+	cl, _, _ := strings.Cut(threadID, ":")
+	demoDrafts.leave(task.ID, cl, 1, "the demo publishes only when a person presses Publish replies")
+	return change.ReplyResult{Thread: threadID, Draft: "demo draft on " + cl}, nil
+}
+
+func (p demoChangelists) Resolve(ctx context.Context, task model.Task, attemptID, threadID string) (change.ReplyResult, error) {
+	return p.Reply(ctx, task, attemptID, threadID, "")
+}
+
+// PublishRun leaves a run's drafts for a person's Publish replies, and
+// PublishReplies publishes them.
+func (demoChangelists) PublishRun(_ context.Context, task model.Task, _ string) (change.PublishResult, error) {
+	return demoDrafts.publish(task.ID, "the demo publishes only when a person presses Publish replies"), nil
+}
+
+func (demoChangelists) PublishReplies(_ context.Context, task model.Task, _ change.Person) (change.PublishResult, error) {
+	return demoDrafts.publish(task.ID, ""), nil
+}
+
+// Mail marks target mailed: its review is in review from now on.
+func (demoChangelists) Mail(_ context.Context, _ model.Task, target string, reviewers, cc []string, by change.Person) (change.Result, error) {
+	obs, _ := change.LastObserved(target)
+	obs.Target, obs.NeedsMailing = target, false
+	if obs.ReviewState == "" || obs.ReviewState == change.ReviewStateDraft {
+		obs.ReviewState = change.ReviewStateInReview
+	}
+	change.Remember(obs)
+	to := "the deployment's default reviewers"
+	if len(reviewers) > 0 {
+		to = strings.Join(reviewers, ", ")
+	}
+	if len(cc) > 0 {
+		to += " (cc " + strings.Join(cc, ", ") + ")"
+	}
+	return change.Result{Target: target, Message: fmt.Sprintf("%s mailed %s to %s (demo: nothing left this process).", by.Name, target, to)}, nil
 }
 
 // seedDemoNotifications raises three operator notifications (DT-5), so

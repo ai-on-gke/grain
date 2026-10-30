@@ -199,7 +199,41 @@ func (c *Client) PublishReplies(ctx context.Context, id, by string) (change.Publ
 		return change.PublishResult{}, apierror.Expose(err)
 	}
 	change.RememberPublish(task.ID, res)
+	// Like Sync, the press is the person's, so it is in the conversation.
+	if _, err := c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: c.actor(ctx)},
+		Body: publishedNote(res), CreatedAt: c.now()}); err != nil {
+		return change.PublishResult{}, err
+	}
 	return res, nil
+}
+
+// publishedNote is a Publish replies press as the task's conversation
+// says it: how many replies went out on which CLs, and what is left.
+func publishedNote(res change.PublishResult) string {
+	published, cls := 0, []string{}
+	for _, c := range res.CLs {
+		if c.Published > 0 {
+			published += c.Published
+			cls = append(cls, c.CL)
+		}
+	}
+	var b strings.Builder
+	switch published {
+	case 0:
+		b.WriteString("Pressed Publish replies; no replies were published.")
+	case 1:
+		fmt.Fprintf(&b, "Published 1 reply on %s.", strings.Join(cls, ", "))
+	default:
+		fmt.Fprintf(&b, "Published %d replies on %s.", published, strings.Join(cls, ", "))
+	}
+	if n, reason := res.Waiting(); n > 0 {
+		fmt.Fprintf(&b, " %d still waiting", n)
+		if reason != "" {
+			b.WriteString(": " + reason)
+		}
+		b.WriteString(".")
+	}
+	return b.String()
 }
 
 // MailChangeRequest is POST /api/tasks/{id}/change-mail.
@@ -224,10 +258,36 @@ func (c *Client) MailChange(ctx context.Context, id, by string, req MailChangeRe
 	if len(reviewers) == 0 {
 		reviewers = task.Reviewers
 	}
-	res, err := mailer.Mail(ctx, *task, change.Primary(*task), reviewers, req.CC, change.Person{Name: by})
+	target := change.Primary(*task)
+	res, err := mailer.Mail(ctx, *task, target, reviewers, req.CC, change.Person{Name: by})
 	if err != nil {
 		change.NoteError(ctx, p, err, c.Store, c.now())
 		return change.Result{}, apierror.Expose(err)
+	}
+	// The CL is mailed now, whatever the last poll saw: the Mail button
+	// goes until the next observation says otherwise, rather than
+	// offering a second mail for up to a poll interval.
+	if obs, ok := change.LastObserved(target); ok && obs.NeedsMailing {
+		obs.NeedsMailing = false
+		if obs.ReviewState == change.ReviewStateDraft {
+			obs.ReviewState = change.ReviewStateInReview
+		}
+		change.Remember(obs)
+	}
+	body := "Mailed " + target
+	if len(reviewers) > 0 {
+		body += " to " + strings.Join(reviewers, ", ")
+	}
+	if len(req.CC) > 0 {
+		body += " (cc " + strings.Join(req.CC, ", ") + ")"
+	}
+	body += "."
+	if res.Message != "" {
+		body += " " + res.Message
+	}
+	if _, err := c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: c.actor(ctx)},
+		Body: body, CreatedAt: c.now()}); err != nil {
+		return change.Result{}, err
 	}
 	return res, nil
 }
