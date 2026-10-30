@@ -219,7 +219,7 @@ func refusalStatus(r forge.MergeRefusal, ref model.PullRequestRef, prURL string)
 // reviewPage is where a person approves the pull request.
 func reviewPage(ref model.PullRequestRef, prURL string) string {
 	if prURL == "" {
-		prURL = fmt.Sprintf("https://github.com/%s/%s/pull/%d", ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		prURL = ref.WebURL()
 	}
 	return strings.TrimSuffix(prURL, "/") + "/files"
 }
