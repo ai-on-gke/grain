@@ -1599,6 +1599,14 @@ type configResponse struct {
 	Deployment           *Team  `json:"deployment,omitempty"`
 	ExternalConfigRepo   string `json:"externalConfigRepo,omitempty"`
 	ExternalConfigBranch string `json:"externalConfigBranch,omitempty"`
+	// ConfigRepoOnly is whether a non-bootstrap settings write from the
+	// API is refused with a config pull request (configRepoFor): an
+	// external config repository, or the internal grain/config without
+	// the directConfigWrites opt-out. The UI draws the config-repo-only
+	// settings read-only exactly then (docs/design/config-repo-settings.md
+	// §2.1); a UI with no config repository (`grain demo`) still edits
+	// them, since there is nowhere else to.
+	ConfigRepoOnly bool `json:"configRepoOnly,omitempty"`
 }
 
 // CustomFieldDeclaration is one declared field on the wire -- the JSON
@@ -1825,6 +1833,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		resp.ConfigRepo = s.tasks.Config.StateRepoRef().String()
 	}
 	resp.ExternalConfigRepo, resp.ExternalConfigBranch = s.tasks.externalConfigRepo(r.Context())
+	resp.ConfigRepoOnly = s.tasks.configRepoOnly(r.Context())
 	resp.AgentFramework = model.AgentFrameworkAntigravity
 	resp.NetworkAccess = string(model.NetworkOpen)
 	// Same reading of "no row yet" the AgentFramework line above takes:
