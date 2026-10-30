@@ -112,6 +112,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/gitrefs"
 	"github.com/ai-on-gke/grain/pkg/hostscriptcli"
+	"github.com/ai-on-gke/grain/pkg/sandboxcli"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -137,9 +138,9 @@ func Main() {
 	args := os.Args[1:]
 	// Inside an agent's sandbox, the read commands of
 	// docs/design/sandbox-first-agent-surface.md answer over the
-	// sandbox's own proxy (sandboxcli.go); anything else runs as it
+	// sandbox's own proxy (pkg/sandboxcli); anything else runs as it
 	// always has.
-	if code, handled := maybeRunSandboxCLI(args, osSandboxEnv(), os.Stdout, os.Stderr); handled {
+	if code, handled := sandboxcli.Main(args, os.Stdout, os.Stderr); handled {
 		os.Exit(code)
 	}
 	if len(args) > 0 {

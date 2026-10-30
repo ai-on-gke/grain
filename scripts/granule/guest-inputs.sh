@@ -40,6 +40,16 @@
 # Granulefile does -- and the granule doing the packing and the guest-side
 # pieces it lays down have to come from one commit.
 #
+# The guest's /usr/local/bin/grain (cmd/grain-sandbox) is the one
+# deliberate exception, and only in part: its own code is named below
+# (cmd/grain-sandbox, pkg/sandboxcli, pkg/hostscriptcli), the rest of the
+# packages it imports -- gitproxy, mcp, ci, model, about thirty that
+# nearly every merge touches -- are not. Keyed on all of them, the guest
+# would rebuild on almost half of all merges for a binary no run uses as
+# built: sandbox setup places the daemon's own build of it over this one
+# in every sandbox (pkg/orchestrator/sandbox_grain.go), so what a cached
+# guest carries there is only ever a fallback.
+#
 # Usage:
 #   ./guest-inputs.sh          # what the guest build reads
 #   ./guest-inputs.sh base     # what base build alone reads
@@ -53,7 +63,8 @@ case "${1:-guest}" in
       third_party/granule \
       cmd/grain-connect/main.go \
       cmd/grain-sandbox \
-      pkg/hostscriptcli
+      pkg/hostscriptcli \
+      pkg/sandboxcli
     ;;
   guest)
     printf '%s\n' \
@@ -64,6 +75,7 @@ case "${1:-guest}" in
       cmd/grain-connect/main.go \
       cmd/grain-sandbox \
       pkg/hostscriptcli \
+      pkg/sandboxcli \
       go.mod \
       go.sum \
       ui/package.json \

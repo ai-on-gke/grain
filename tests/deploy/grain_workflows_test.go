@@ -1385,7 +1385,7 @@ func underPath(tree *ci.Tree, input string) []string {
 // guest-resolving job pastes into its own `guest-cache:`, and what makes
 // a guest input added to guest-inputs.sh fail here rather than only in
 // whichever workflow happens to declare one that day. What it checks is
-// the part of writing them that can go wrong quietly -- that these ten
+// the part of writing them that can go wrong quietly -- that these eleven
 // patterns select every file the script names.
 func TestTheGuestInputGlobsCoverWhatTheGuestIsBuiltFrom(t *testing.T) {
 	root := repoRoot(t)
@@ -1397,6 +1397,7 @@ func TestTheGuestInputGlobsCoverWhatTheGuestIsBuiltFrom(t *testing.T) {
 		"cmd/grain-connect/main.go",
 		"cmd/grain-sandbox/**",
 		"pkg/hostscriptcli/**",
+		"pkg/sandboxcli/**",
 		"go.mod",
 		"go.sum",
 		"ui/package.json",

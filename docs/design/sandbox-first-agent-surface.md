@@ -286,7 +286,7 @@ Because every `grain` CLI call goes through `http://127.0.0.1:9728/{fs,cli,api,c
 
 ### `grain` CLI Command Hierarchy & Help Surface
 
-The `grain` binary is already built and baked into the sandbox image (`/usr/local/bin/grain`). When invoked inside a sandbox (detected automatically via `GRAIN_SANDBOX_PROXY=http://127.0.0.1:9728` or the presence of `127.0.0.1:9728` in `/home/debian/.git-credentials`), `grain` operates in sandbox mode and offers a cohesive, self-documenting command tree:
+The sandbox's `grain` is `cmd/grain-sandbox` (`host-script` plus the sandbox CLI in `pkg/sandboxcli`), baked into every sandbox image at `/usr/local/bin/grain` (`Granulefile.guest-base`, `Granulefile`, `Dockerfile.k8s-sandbox`). Because an image is not rebuilt when the daemon is, sandbox setup also places the daemon's own build of it (`/usr/local/bin/grain-sandbox` in the daemon image) at `/home/debian/.grain/bin/grain`, first on `run_command`'s `PATH`, whenever the sandbox does not already carry those exact bytes (`pkg/orchestrator/sandbox_grain.go`). When invoked inside a sandbox (detected automatically via `GRAIN_SANDBOX_PROXY=http://127.0.0.1:9728` or the presence of `127.0.0.1:9728` in `/home/debian/.git-credentials`), `grain` operates in sandbox mode and offers a cohesive, self-documenting command tree:
 
 ```text
 $ grain help
