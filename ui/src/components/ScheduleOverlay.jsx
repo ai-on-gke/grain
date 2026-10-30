@@ -799,9 +799,14 @@ function ScheduleOverlay({
               grain and change when grain is upgraded, so the title and
               description stored on this schedule are a copy of them rather than
               what actually runs -- editing that copy, here or in the config
-              repository, changes neither. You can change how often it runs,
-              what it does when a firing overlaps the last one, and whether it
-              runs at all.
+              repository, changes neither.{" "}
+              {/* A repository's own workflow schedule is one of these too,
+                and none of the three is changeable here: the declared
+                notice above says so and Pause and Save are off, so this
+                says where they are changed instead. */}
+              {declaredIn
+                ? `How often it runs, what it does when a firing overlaps the last one, and whether it runs at all are set in ${declaredIn.path}.`
+                : "You can change how often it runs, what it does when a firing overlaps the last one, and whether it runs at all."}
             </Typography>
           ) : firesSuite ? (
             <FormControl fullWidth margin="normal" size="small">

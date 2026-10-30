@@ -397,7 +397,7 @@ describe("SandboxHealthPage", () => {
     // The buttons went with the figures: two places to press flush is
     // two places to keep agreeing about what it did.
     expect(
-      screen.queryByRole("button", { name: "Flush the whole cache" }),
+      screen.queryByRole("button", { name: /^Flush the whole/ }),
     ).not.toBeInTheDocument();
   });
 

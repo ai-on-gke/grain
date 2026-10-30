@@ -44,6 +44,11 @@ const (
 	// in a repository whose merge gate is grain CI (ci_mode: grain), are
 	// checks grain is not running and does not read.
 	RefusalRequiredChecks RefusalKind = "required_checks"
+	// RefusalUnresolvedThreads is a merge GitHub holds because the branch's
+	// protection or ruleset requires review conversations to be resolved
+	// ("All comments must be resolved") and unresolved review threads remain
+	// on the pull request.
+	RefusalUnresolvedThreads RefusalKind = "unresolved_threads"
 	// RefusalRule is every other rule a repository can set on GitHub:
 	// signed commits, linear history, a merge method it does not allow,
 	// restricted file paths, a credential without permission to merge.
@@ -95,6 +100,10 @@ func ClassifyMergeRefusal(err error) RefusalKind {
 	case has("approving review", "review required", "code owner", "required reviewer",
 		"changes requested", "review is required", "reviews are required", "approval"):
 		return RefusalApproval
+	case has("all comments must be resolved", "all conversations must be resolved",
+		"conversation resolution", "conversations must be resolved",
+		"review threads must be resolved", "unresolved review"):
+		return RefusalUnresolvedThreads
 	case has("rule violation", "repository rule", "protected branch", "signed", "signature",
 		"linear history", "merge commits are not allowed", "merge method", "not allowed",
 		"file path", "restricted", "resource not accessible", "must not contain",
@@ -182,6 +191,14 @@ type MergeRequirements struct {
 	// CodeOwnerReview is a rule requiring review from the code owners of
 	// the files the pull request touches (CODEOWNERS).
 	CodeOwnerReview bool
+	// RequireConversationResolution is a rule requiring all review threads
+	// on the pull request to be resolved before merging.
+	RequireConversationResolution bool
+	// UnresolvedThreadCount and UnresolvedThreadAuthors record the remaining
+	// unresolved review conversations on the pull request when a merge is
+	// refused for want of conversation resolution.
+	UnresolvedThreadCount   int
+	UnresolvedThreadAuthors []string
 	// Rulesets names the rulesets whose rules ask for a review.
 	Rulesets []string
 	// Approvers is who has an approving review standing on the pull
@@ -266,9 +283,10 @@ func (c *RESTClient) readBranchRules(owner, repo, branch string, req *MergeRequi
 		Type       string `json:"type"`
 		RulesetID  int    `json:"ruleset_id"`
 		Parameters struct {
-			RequiredApprovingReviewCount int  `json:"required_approving_review_count"`
-			RequireCodeOwnerReview       bool `json:"require_code_owner_review"`
-			RequiredReviewers            []struct {
+			RequiredApprovingReviewCount   int  `json:"required_approving_review_count"`
+			RequireCodeOwnerReview         bool `json:"require_code_owner_review"`
+			RequiredReviewThreadResolution bool `json:"required_review_thread_resolution"`
+			RequiredReviewers              []struct {
 				MinimumApprovals int `json:"minimum_approvals"`
 			} `json:"required_reviewers"`
 			RequiredStatusChecks []struct {
@@ -286,6 +304,7 @@ func (c *RESTClient) readBranchRules(owner, repo, branch string, req *MergeRequi
 			p := rule.Parameters
 			req.ApprovalsRequired = max(req.ApprovalsRequired, p.RequiredApprovingReviewCount)
 			req.CodeOwnerReview = req.CodeOwnerReview || p.RequireCodeOwnerReview
+			req.RequireConversationResolution = req.RequireConversationResolution || p.RequiredReviewThreadResolution
 			for _, r := range p.RequiredReviewers {
 				req.ApprovalsRequired = max(req.ApprovalsRequired, r.MinimumApprovals)
 			}
