@@ -401,6 +401,14 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 			return configValidationError(err)
 		}
 	}
+	// A built-in's own rules beyond its schema are checked here too, so a
+	// save its configure would refuse never reaches the store and takes
+	// the server out of use.
+	if len(cfg.Config) > 0 {
+		if err := intree.CheckBuiltinConfig(cfg.Builtin, cfg.Config); err != nil {
+			return validationErrorf("%s", err)
+		}
+	}
 	if len(writes) > 0 {
 		// Unrehearsed: the secrets below are set before the store write
 		// a rehearsal would stop at, and would outlive its refusal.

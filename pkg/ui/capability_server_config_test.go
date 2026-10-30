@@ -313,3 +313,46 @@ func TestOnlyConfigMapSecretValuesAreMergedIntoTheStoredSecret(t *testing.T) {
 		t.Errorf("configured secret keys = %q, want creds/a,creds/c", got)
 	}
 }
+
+// A built-in's own rules beyond its schema -- a config map's name and
+// mode, a host script's unique name -- refuse the save, rather than
+// storing what the server then refuses on its next start, which would
+// take an attached server out of use.
+func TestABuiltinsOwnConfigRulesRefuseTheSave(t *testing.T) {
+	_, hc, _, _ := configTestServer(t, &fakeProber{})
+	ctx := context.Background()
+
+	const cm = "https://grain.dev/capabilities/config-map"
+	configMap := func(name, mode string) protocol.ServerConfig {
+		return protocol.ServerConfig{Command: "grain", Args: []string{"capability", "config-map"}, Builtin: "config-map", Config: map[string]any{
+			"config_maps": []any{map[string]any{"name": name, "data": map[string]any{"walk.toml": map[string]any{"content": "a = 1\n", "mode": mode}}}},
+		}}
+	}
+	for _, tc := range []struct{ name, mode, want string }{
+		{"Walk Settings", "", `name "Walk Settings" does not match`},
+		{"walk-settings", "999", `mode "999" must be a four-digit octal mode`},
+	} {
+		_, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: cm, Config: configMap(tc.name, tc.mode)})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("saving config map %q mode %q: err = %v, want one containing %q", tc.name, tc.mode, err, tc.want)
+		}
+	}
+	list, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: cm, Config: configMap("walk-settings", "0640")})
+	if err != nil {
+		t.Fatalf("saving a valid config map: %v", err)
+	}
+	for _, row := range list {
+		if row.ID == cm && len(row.Config.Config) == 0 {
+			t.Errorf("valid config map not saved: %+v", row.Config)
+		}
+	}
+
+	const hs = "https://grain.dev/capabilities/host-script"
+	script := map[string]any{"name": "walk-echo", "description": "d", "script": "echo hi", "timeout": 10}
+	twice := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "host-script"}, Builtin: "host-script", Config: map[string]any{
+		"scripts": []any{script, script},
+	}}
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: hs, Config: twice}); err == nil || !strings.Contains(err.Error(), "configured twice") {
+		t.Errorf("saving two host scripts named walk-echo: err = %v, want configured twice", err)
+	}
+}
