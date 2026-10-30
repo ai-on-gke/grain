@@ -132,7 +132,6 @@ var capabilityForTool = map[string]string{
 	"defer_task":                 "dispatch-control",
 	"list_issues":                "read-issues",
 	"read_issue":                 "read-issues",
-	"broadcast_team_message":     "team-broadcast",
 }
 
 // CapabilityForTool names the capability that puts tool on a run's

@@ -115,7 +115,6 @@ func PublishedToolNames() []string {
 	add(mcp.NewWaitForTaskTools(nil, nil))
 	add(mcp.NewResumeLaterTools(nil, nil))
 	add(mcp.NewNotifyTools(nil))
-	add(mcp.NewBroadcastTools(nil))
 	add(mcp.NewMergeQueueTools(nil))
 	add(mcp.NewRevertTools(nil))
 	add(mcp.NewMemoryTools(nil))
@@ -241,9 +240,10 @@ func SandboxToolNames() []string {
 func IsControlTool(name string) bool { return controlTools[name] }
 
 // ModelOnlyGrantToolNames is the tools of the grants a sandbox process
-// must never reach -- dispatch-control, pipeline-control, self-upgrade,
-// db-write and team-broadcast -- which stay on the MCP roster of a run
-// holding them. db-read's query_grain_db is `grain db query`, so only
+// must never reach -- dispatch-control, pipeline-control, self-upgrade
+// and db-write -- which stay on the MCP roster of a run holding them.
+// (team-broadcast's is an api tool now, kept off the sandbox by its
+// scope, teams:broadcast: model.IsSandboxDeniedAPIScope.) db-read's query_grain_db is `grain db query`, so only
 // execute_grain_db is here.
 func ModelOnlyGrantToolNames() []string {
 	var names []string
@@ -255,7 +255,6 @@ func ModelOnlyGrantToolNames() []string {
 	add(dispatchcontrol.Tools(dispatchcontrol.Config{}))
 	add(pipelinecontrol.Tools(pipelinecontrol.Config{}))
 	add(selfupgrade.Tools(selfupgrade.Config{}))
-	add(mcp.NewBroadcastTools(nil))
 	names = append(names, "execute_grain_db")
 	return dedupeToolNames(names)
 }

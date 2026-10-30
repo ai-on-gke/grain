@@ -44,7 +44,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -216,21 +215,6 @@ func (d DaemonTasks) TaskPrompt(ctx context.Context, id string) (mcp.TaskPromptR
 
 func (d DaemonTasks) AttemptTranscript(ctx context.Context, id string, attempt int) (string, error) {
 	return d.Client.AttemptTranscript(ctx, id, attempt)
-}
-
-// BroadcastTeamMessage broadcasts to the deployment's active tasks.
-func (d DaemonTasks) BroadcastTeamMessage(ctx context.Context, message string) (mcp.BroadcastResult, error) {
-	resp, err := d.Client.BroadcastDeploymentMessage(ctx, ui.BroadcastTeamRequest{
-		Message: message,
-		Task:    d.taskID,
-	})
-	if err != nil {
-		return mcp.BroadcastResult{}, err
-	}
-	return mcp.BroadcastResult{
-		DeliveredCount: resp.DeliveredCount,
-		TaskIDs:        resp.TaskIDs,
-	}, nil
 }
 
 // daemonMetrics implements mcp.MetricsReader by asking a running "grain
@@ -1691,7 +1675,7 @@ var servedGrants = []string{
 	memory.CapabilityName, grainci.CapabilityName, deploymenthealth.CapabilityName,
 	selfupgrade.CapabilityName, pipelinecontrol.CapabilityName, dispatchcontrol.CapabilityName,
 	readissues.CapabilityName,
-	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite, teambroadcast.CapabilityName,
+	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -2503,13 +2487,6 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		// notify_operator and message_task are every run's, with no
 		// grant: the daemon applies their rules for -task.
 		registry.Register(mcp.NewNotifyTools(daemonNotifier{client: client, taskID: *taskID})...)
-		// broadcast_team_message writes into other tasks' conversations,
-		// so it is the team-broadcast grant's (pkg/capability/
-		// teambroadcast). The daemon is told which task is asking and
-		// checks the grant itself.
-		if grants.Has(teambroadcast.CapabilityName) {
-			registry.Register(mcp.NewBroadcastTools(DaemonTasks{Client: client, taskID: *taskID})...)
-		}
 		if grants.Has(grainci.CapabilityName) {
 			taskBranch := strings.TrimSpace(*prBranch)
 			if taskBranch == "" {

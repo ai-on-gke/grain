@@ -376,6 +376,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `session_sandbox_idle_ttl_ms` INTEGER NOT NULL DEFAULT 0",
 		},
 	},
+	{
+		Version:     67,
+		Description: "rewrite stored team-broadcast grants to api:team-broadcast (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"team-broadcast": "api:team-broadcast"}),
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

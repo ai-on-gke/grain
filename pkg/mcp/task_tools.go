@@ -284,19 +284,11 @@ type TaskPromptRecord struct {
 // -- that is the point of these tools. There is no scope to pin the way
 // PullRequestScope pins a branch: a debugging question is about whichever
 // task went wrong, which is never known when the process starts.
-// BroadcastResult reports the outcome of a broadcast to the deployment's
-// active tasks.
-type BroadcastResult struct {
-	DeliveredCount int
-	TaskIDs        []string
-}
-
 type TaskReader interface {
 	ListTasks(ctx context.Context) ([]TaskSummary, error)
 	Task(ctx context.Context, id string) (TaskRecord, error)
 	TaskPrompt(ctx context.Context, id string) (TaskPromptRecord, error)
 	AttemptTranscript(ctx context.Context, id string, attempt int) (string, error)
-	BroadcastTeamMessage(ctx context.Context, message string) (BroadcastResult, error)
 }
 
 // NewTaskTools returns the tools a self-debug or director run gets for
@@ -316,22 +308,6 @@ func NewTaskTools(reader TaskReader) []Tool {
 		readTaskTranscriptTool(reader),
 	}
 }
-
-// NewBroadcastTools returns the broadcast_team_message tool for sending
-// a message to every active task of the deployment -- the team-broadcast
-// grant's one tool (pkg/capability/teambroadcast). The daemon checks the
-// grant again on the request (ui.Client.BroadcastTeamMessage).
-func NewBroadcastTools(reader TaskReader) []Tool {
-	return []Tool{
-		broadcastTeamMessageTool(reader),
-	}
-}
-
-// noBroadcaster is broadcast_team_message's answer with no route to the
-// daemon, for noTaskReader's reason.
-const noBroadcaster = "This run cannot broadcast: it holds the team-broadcast grant but was " +
-	"dispatched with no route back to the grain daemon that owns the task store. Say so if it " +
-	"matters to what you were asked to do; nothing you can do from here will change it."
 
 // noTaskReader is the answer every one of these tools gives when it has
 // no route to the store -- a sentence about this run rather than "unknown
@@ -1237,47 +1213,4 @@ func indent(s string) string {
 		fmt.Fprintf(&b, "  %s\n", line)
 	}
 	return b.String()
-}
-
-var broadcastTeamMessageInputSchema = map[string]any{
-	"type":                 "object",
-	"additionalProperties": false,
-	"properties": map[string]any{
-		"message": map[string]any{
-			"type":        "string",
-			"description": "the message text to broadcast to every active task",
-		},
-	},
-	"required": []string{"message"},
-}
-
-func broadcastTeamMessageTool(reader TaskReader) Tool {
-	return Tool{
-		Name: "broadcast_team_message",
-		Description: "Broadcast a message or directive to every active task in this deployment " +
-			"(tasks that are queued, running, awaiting reply, awaiting submit, or awaiting ack). " +
-			"The message is added as a comment to each active task, automatically un-parking tasks " +
-			"awaiting reply and delivering the message into active sandbox sessions.",
-		InputSchema: broadcastTeamMessageInputSchema,
-		Handler: func(ctx context.Context, args map[string]any) Result {
-			if reader == nil {
-				return Result{Text: noBroadcaster, IsError: true}
-			}
-			message, ok := argString(args, "message")
-			if !ok || strings.TrimSpace(message) == "" {
-				return Result{Text: "A non-empty \"message\" is required to broadcast.", IsError: true}
-			}
-			res, err := reader.BroadcastTeamMessage(ctx, message)
-			if err != nil {
-				return Result{Text: fmt.Sprintf("Error broadcasting the message: %v", err), IsError: true}
-			}
-			if res.DeliveredCount == 0 {
-				return Result{Text: "Broadcast sent: this deployment has no active tasks."}
-			}
-			return Result{
-				Text: fmt.Sprintf("Broadcast delivered to %d active task(s): %s",
-					res.DeliveredCount, strings.Join(res.TaskIDs, ", ")),
-			}
-		},
-	}
 }

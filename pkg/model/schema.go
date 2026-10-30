@@ -310,7 +310,13 @@ import "strconv"
 // interactive chat/session task's sandbox (and in-process agent session)
 // stays warm awaiting a reply after a turn ends before being released
 // (model.Config.SessionSandboxIdleTTL).
-const SchemaVersion = 66
+//
+// 67 changes no table: it rewrites every stored `team-broadcast` grant
+// (the grant tables, the default capability lists and the console
+// sessions) to `api:team-broadcast`, the in-process capability having
+// been retired for the agent API's teams:broadcast scope
+// (rewriteLegacyGrants, docs/design/unified-grants.md §4).
+const SchemaVersion = 67
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

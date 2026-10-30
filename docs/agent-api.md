@@ -117,6 +117,7 @@ every `DELETE`.
 | `ci:read` | read CI runs (job logs included), artifacts, merge batches, base-branch gates | |
 | `ci:write` | start, re-run and cancel CI runs, base-branch and release runs | |
 | `notifications:write` | raise and clear operator notifications (`POST /api/notifications`, `/{id}/clear`); acknowledging and Investigate are a person's | no |
+| `teams:broadcast` | post a comment to every active task (`POST /api/deployment/broadcast`), un-parking the ones awaiting a reply; signed as the broadcasting task, and model-only (never on the sandbox channel) | |
 | `dispatch:read` | read whether dispatch is paused | |
 | `dispatch:write` | pause and resume dispatch, run a task now | |
 | `schedules:read` | read schedules and what they compose | |
@@ -169,6 +170,7 @@ table only so the table stays total.
 | `self-debug` | `tasks:read`, `deployment:read` |
 | `self-upgrade` | `deployment:read`, `deployment:upgrade` |
 | `pipeline-control` | `dispatch:read`, `dispatch:write` |
+| `team-broadcast` | `teams:broadcast` |
 | `release-gate-read` | `ci:read`, `tasks:read`, `sandboxes:read`, `tasks:from-template` limited to the `release-notes` template |
 
 The `self-debug`, `self-upgrade` and `pipeline-control` capabilities are
@@ -176,6 +178,17 @@ now aliases. A task holding any of them is also served its preset's
 routes, and keeps the tools it always had under their old names
 (`list_grain_tasks`, `read_grain_metrics`, `start_upgrade`,
 `pause_pipeline`, ...).
+
+`team-broadcast` is an alias too, but its in-process capability is
+retired (docs/design/unified-grants.md §4): it has no tool of its own
+any longer, and a run holding it is served
+`api_deployment_broadcast` in place of `broadcast_team_message`. Every
+place a grant is recorded writes it as `api:team-broadcast`
+(`model.CanonicalLegacyGrant`), importing a grain/config does the same,
+and schema migration 67 rewrote the grants already stored -- tasks,
+templates, schedules, the default capability lists and the standing
+sessions. The bare name keeps granting the preset wherever it is still
+written, such as a repository's own `.grain` declarations.
 
 The per-ability capabilities that were queued separately are presets over
 this mechanism rather than new tool plumbing:

@@ -42,7 +42,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -159,7 +158,6 @@ var toolGrants = []string{
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead,
 	dbaccess.CapabilityDBWrite,
-	teambroadcast.CapabilityName,
 }
 
 // grantImplies is the one grant that carries another's tools: write

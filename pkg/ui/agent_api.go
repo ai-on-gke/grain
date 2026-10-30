@@ -173,7 +173,22 @@ func (p apiProvider) Spec() model.CapabilitySpec {
 // provider (model.CapabilityRegistry.RegisterDynamic), so a task
 // holding one dispatches rather than being refused for a capability no
 // provider answers to.
+//
+// A bare name that is an alias for a preset (model.APIAliasPreset) and
+// has no in-process provider of its own any longer -- team-broadcast,
+// held by a declaration or an older grain/config nothing has rewritten
+// -- resolves to its preset's provider under its own name, so it keeps
+// dispatching. An alias whose provider is still registered never gets
+// here: the registry answers it first.
 func AgentAPIDynamicProvider(name string) (model.CapabilityProvider, bool) {
+	if preset := APIAliasPreset(name); preset != "" {
+		g, ok, err := ParseAPIGrant(APIGrantPrefix + preset)
+		if !ok || err != nil {
+			return nil, false
+		}
+		g.Name = name
+		return apiProvider{grant: g}, true
+	}
 	g, ok, err := ParseAPIGrant(name)
 	if !ok || err != nil {
 		return nil, false

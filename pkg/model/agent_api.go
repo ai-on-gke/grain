@@ -63,6 +63,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "ci:read", Description: "Read grain CI runs, their job logs and artifacts, merge batches and base-branch gates"},
 	{Scope: "ci:write", Description: "Start, re-run and cancel grain CI runs, base-branch and release runs"},
 	{Scope: "notifications:write", Description: "Raise and clear operator notifications"},
+	{Scope: "teams:broadcast", Description: "Post a comment to every active task of the deployment"},
 	{Scope: "dispatch:read", Description: "Read whether dispatch is paused"},
 	{Scope: "dispatch:write", Description: "Pause and resume dispatch, and run a task now"},
 	{Scope: "schedules:read", Description: "Read schedules and what they compose"},
@@ -141,6 +142,8 @@ var apiPresets = []APIPreset{
 		Scopes: []APIScope{"deployment:read", "deployment:upgrade"}},
 	{Name: "pipeline-control", Description: "What the pipeline-control capability grants: pause and resume dispatch",
 		Scopes: []APIScope{"dispatch:read", "dispatch:write"}},
+	{Name: "team-broadcast", Description: "What the team-broadcast capability granted: post a comment to every active task",
+		Scopes: []APIScope{"teams:broadcast"}},
 	{Name: ReleaseGateReadCapability, Description: "What a release workflow reads and files: its repository's CI runs " +
 		"and tasks, the persistent sandboxes' status, and its release-notes task",
 		Scopes:    []APIScope{"ci:read", "tasks:read", "sandboxes:read", "tasks:from-template"},
@@ -154,6 +157,28 @@ var apiAliasCapabilities = map[string]string{
 	"self-debug":       "self-debug",
 	"self-upgrade":     "self-upgrade",
 	"pipeline-control": "pipeline-control",
+	"team-broadcast":   "team-broadcast",
+}
+
+// legacyGrantReplacements are the bare capabilities converted to api
+// grants (docs/design/unified-grants.md §4) whose in-process provider is
+// gone: each is written as its api preset wherever a grant is recorded
+// (CanonicalLegacyGrant), and the store migration that retired it
+// rewrote the rows already stored. The bare name stays in
+// apiAliasCapabilities as well, so a grant nothing rewrote -- a
+// repository's own .grain declaration, an older grain/config -- keeps
+// granting what it did.
+var legacyGrantReplacements = map[string]string{
+	"team-broadcast": APIGrantPrefix + "team-broadcast",
+}
+
+// CanonicalLegacyGrant is name, or the api grant a retired in-process
+// capability of that name became.
+func CanonicalLegacyGrant(name string) string {
+	if to, ok := legacyGrantReplacements[strings.TrimSpace(name)]; ok {
+		return to
+	}
+	return name
 }
 
 // APIAliasPreset returns the preset name that a bare capability name aliases,
@@ -204,15 +229,16 @@ func IsDangerousAPIScope(scope APIScope) bool {
 // sandboxModelOnlyScopes are non-dangerous scopes that remain model-only
 // (never reachable via the sandbox proxy credential / X-Grain-Channel: sandbox-cli).
 var sandboxModelOnlyScopes = map[APIScope]bool{
-	"dispatch:write": true,
-	"repos:write":    true,
-	"sessions:write": true,
+	"dispatch:write":  true,
+	"repos:write":     true,
+	"sessions:write":  true,
+	"teams:broadcast": true,
 }
 
 // IsSandboxDeniedAPIScope reports whether scope is refused on the sandbox
 // proxy channel (X-Grain-Channel: sandbox-cli): every Dangerous scope, plus
-// model-only scopes (dispatch:write, repos:write, sessions:write, and any
-// deployment:* scope other than deployment:read).
+// model-only scopes (dispatch:write, repos:write, sessions:write,
+// teams:broadcast, and any deployment:* scope other than deployment:read).
 func IsSandboxDeniedAPIScope(scope APIScope) bool {
 	if scope == "" || scope == APIScopeInternal {
 		return true

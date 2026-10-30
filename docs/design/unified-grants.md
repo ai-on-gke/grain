@@ -191,7 +191,7 @@ per-capability list, with what each one becomes:
 | `read-issues` | `…/github#read-issues` | new method on `github` server |
 | `release-notes` | `…/api#releases:read` + `…/api#releases:write` | api scopes |
 | `memory` | `…/api#memory:write` (new scope) | api scope |
-| `team-broadcast` | `…/api#teams:broadcast` (new scope) | api scope |
+| `team-broadcast` | `…/api#teams:broadcast` (new scope), preset `team-broadcast` | **done** (task 2004): provider and `broadcast_team_message` removed, stored grants rewritten to `api:team-broadcast` by schema migration 67 |
 | `bootstrap-playbooks` | `…/skill#skill` `{dir: bootstrap}` | existing server method |
 | `console` | stays a task setting, not a grant (it changes how the run is hosted, not what it may reach) | moved out of grants (Q8) |
 | `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | new method, `write: true` dangerous |

@@ -50,7 +50,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
@@ -225,8 +224,6 @@ func OfferedCapabilities() []Capability {
 			Description: "Let this task write down what grain has learned about working here -- notes added to the prompt of every run dispatched afterwards"},
 		{ID: "release-notes", Name: "Release notes",
 			Description: "Let this task read how much work this deployment has done over a week -- pull requests merged, tasks completed, runs, and the same counts per repository -- and publish that week's release notes, shown in the UI and exported to the state repository"},
-		{ID: teambroadcast.CapabilityName, Name: "Team broadcast",
-			Description: teambroadcast.Description},
 		{ID: "github-sandbox", Name: "GitHub sandbox",
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
 		{ID: "console", Name: "Interactive console",

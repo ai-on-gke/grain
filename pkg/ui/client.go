@@ -355,9 +355,12 @@ func (c *Client) capabilityLookup() protocol.Lookup {
 }
 
 // normalizeCapabilityID is id as a task records it: an in-process name
-// as it is, a capability reference resolved and validated against its
-// server and in recorded form (model.NormalizeCapabilityNames).
+// as it is -- or, for a retired one, as the api grant it became
+// (model.CanonicalLegacyGrant) -- and a capability reference resolved and
+// validated against its server and in recorded form
+// (model.NormalizeCapabilityNames).
 func (c *Client) normalizeCapabilityID(id string) (string, error) {
+	id = model.CanonicalLegacyGrant(id)
 	if !model.IsCapabilityRef(id) {
 		return id, nil
 	}
