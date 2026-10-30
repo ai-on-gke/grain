@@ -39,6 +39,8 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/runhost"
@@ -312,6 +314,55 @@ func hostdMissing(offers []hostd.Offer) []ui.HostdMissingEntry {
 	return ui.MissingHostdBuiltins(have)
 }
 
+// OnlyNeeded narrows Hostd.Missing to the entries servers -- the
+// deployment's capability servers, grain_config.mcp_servers -- would
+// run: grain's own entries that are not a capability server's
+// (host-git), and each built-in's that an enabled run: host entry names,
+// once a built-in that needs configuring has been. A built-in nobody has
+// set up, or has set to run in the container, is not broken for want of
+// its host entry: it waits in Settings as needing configuring, and
+// System -> Health says nothing about it.
+func (st *HostExecutorStatus) OnlyNeeded(servers map[string]protocol.ServerConfig) {
+	if st.Hostd == nil || len(st.Hostd.Missing) == 0 {
+		return
+	}
+	ensured, _ := intree.EnsureBuiltins(servers)
+	kept := st.Hostd.Missing[:0]
+	for _, m := range st.Hostd.Missing {
+		if hostdEntryNeeded(m.Name, ensured) {
+			kept = append(kept, m)
+		}
+	}
+	st.Hostd.Missing = kept
+	if len(kept) == 0 {
+		st.Hostd.Missing = nil
+	}
+}
+
+// hostdEntryNeeded says whether servers would run hostd's entry name.
+func hostdEntryNeeded(name string, servers map[string]protocol.ServerConfig) bool {
+	var builtin intree.Builtin
+	isServer := false
+	for _, b := range intree.Builtins() {
+		if intree.HostEntry(b.Name) == name {
+			builtin, isServer = b, true
+		}
+	}
+	if !isServer {
+		return true
+	}
+	for _, cfg := range servers {
+		if cfg.Disabled || !cfg.OnHost() || cfg.Command != name {
+			continue
+		}
+		if cfg.Builtin == builtin.Name && builtin.NeedsConfig && len(cfg.Config) == 0 {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // HostdProcess is one row of hostd's listing, for Settings.
 type HostdProcess struct {
 	ID       string    `json:"id"`
@@ -409,6 +460,22 @@ func (c Config) HostExecutorStatus(ctx context.Context) HostExecutorStatus {
 	out.Hostd.Suggest = c.hostdSuggestions(offers)
 	out.Hostd.Missing = hostdMissing(offers)
 	return out
+}
+
+// hostExecutorStatus is c.HostExecutorStatus as Settings and System ->
+// Health show it: missing only the entries store's capability servers
+// would run (HostExecutorStatus.OnlyNeeded).
+func hostExecutorStatus(ctx context.Context, c Config, store *model.Store) HostExecutorStatus {
+	st := c.HostExecutorStatus(ctx)
+	if st.Hostd == nil || len(st.Hostd.Missing) == 0 || store == nil {
+		return st
+	}
+	stored, err := store.GetConfig(ctx)
+	if err != nil || stored == nil {
+		return st
+	}
+	st.OnlyNeeded(stored.MCPServers)
+	return st
 }
 
 // hostdSuggestions are the cli entries an edition puts on the host by

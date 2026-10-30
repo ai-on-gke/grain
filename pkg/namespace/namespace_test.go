@@ -852,3 +852,41 @@ func TestThreeSegmentHostQualifiedRepoCI(t *testing.T) {
 		t.Errorf("out-of-scope refusal = %q, want full 3-segment repo name", got)
 	}
 }
+
+// task://<id> reads another task's record where that task works in a
+// repository the scope reaches -- its own, one it reads, or one an
+// api:tasks:read@repo grant names -- and refuses every other task, and
+// one that does not exist, alike.
+func TestTaskReadsTasksInTheScopesRepositories(t *testing.T) {
+	srv := &Server{Tasks: stubTaskProvider{tasks: map[string]*TaskView{
+		"100": {ID: "100", Repo: "acme/widgets", Record: "Task 100\n"},
+		"101": {ID: "101", Repo: "acme/widgets", Record: "Task 101: sibling\n"},
+		"102": {ID: "102", Repo: "acme/library", Record: "Task 102: library\n"},
+		"103": {ID: "103", Repo: "acme/gadgets", Record: "Task 103: gadgets\n"},
+		"104": {ID: "104", Record: "Task 104: no repository\n"},
+	}}}
+	scope := Scope{
+		TaskID: 100, TaskIDStr: "100", TaskRepo: "acme/widgets",
+		TaskReadRepos: map[string]bool{"acme/widgets": true, "acme/library": true},
+	}
+	for _, id := range []string{"101", "102"} {
+		if rec := serveRequest(srv, scope, http.MethodGet, "/fs/task/"+id+"/record.md", nil); rec.Code != http.StatusOK ||
+			!strings.Contains(rec.Body.String(), "Task "+id) {
+			t.Errorf("task://%s in a repository the scope reaches: %d %q", id, rec.Code, rec.Body.String())
+		}
+	}
+	for _, id := range []string{"103", "104", "999"} {
+		if rec := serveRequest(srv, scope, http.MethodGet, "/fs/task/"+id+"/record.md", nil); rec.Code != http.StatusForbidden ||
+			!strings.Contains(rec.Body.String(), `"self-debug"`) {
+			t.Errorf("task://%s outside the scope's repositories: %d %q", id, rec.Code, rec.Body.String())
+		}
+	}
+	// A scope with only its own repository still reads its siblings.
+	bare := Scope{TaskID: 100, TaskIDStr: "100", TaskRepo: "acme/widgets"}
+	if rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/101/record.md", nil); rec.Code != http.StatusOK {
+		t.Errorf("task://101 in the task's own repository: %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/102/record.md", nil); rec.Code != http.StatusForbidden {
+		t.Errorf("task://102 in a repository the bare scope does not reach: %d", rec.Code)
+	}
+}

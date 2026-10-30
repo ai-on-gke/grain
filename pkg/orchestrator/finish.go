@@ -54,7 +54,7 @@ import (
 // no_action detail below, so the place to stop it is where it is read.
 func firstToolCallArg(result *agent.Result, name, key string) (string, bool) {
 	for _, c := range result.ToolCalls {
-		if c.Name != name || c.IsError {
+		if c.Name != name || c.IsError || c.Relayed {
 			continue
 		}
 		v, ok := c.Arguments[key].(string)
@@ -75,7 +75,7 @@ func firstToolCallArg(result *agent.Result, name, key string) (string, bool) {
 func lastToolCallArg(result *agent.Result, name, key string) (string, bool) {
 	value, found := "", false
 	for _, c := range result.ToolCalls {
-		if c.Name != name || c.IsError {
+		if c.Name != name || c.IsError || c.Relayed {
 			continue
 		}
 		if v, ok := c.Arguments[key].(string); ok {
@@ -88,7 +88,7 @@ func lastToolCallArg(result *agent.Result, name, key string) (string, bool) {
 // firstToolCallArgs returns all arguments from the first successful call.
 func firstToolCallArgs(result *agent.Result, name string) map[string]any {
 	for _, c := range result.ToolCalls {
-		if c.Name == name && !c.IsError {
+		if c.Name == name && !c.IsError && !c.Relayed {
 			return c.Arguments
 		}
 	}
@@ -99,7 +99,7 @@ func firstToolCallArgs(result *agent.Result, name string) map[string]any {
 func proposedTaskCalls(result *agent.Result) []map[string]any {
 	var out []map[string]any
 	for _, c := range result.ToolCalls {
-		if c.Name == "propose_task" && !c.IsError {
+		if c.Name == "propose_task" && !c.IsError && !c.Relayed {
 			out = append(out, c.Arguments)
 		}
 	}
@@ -418,6 +418,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if err != nil {
 		return err
 	}
+	relayedInProcess := takeInProcessRelayed(runID)
 
 	// A goal task (model.TaskGoal, docs/design/durable-tasks.md#DT-4) is
 	// never completed or closed on its agent's word: a closing comment,
@@ -426,9 +427,9 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// an ordinary comment; reconcileTaskGoals closes it once the goal is
 	// met, and a person may close it any time.
 	if !waitingMessage {
-		finalText := !hasComment && !hasNothingNeeded && result != nil && strings.TrimSpace(result.FinalText) != "" &&
+		finalText := !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && strings.TrimSpace(result.FinalText) != "" &&
 			!taskPaused(ctx, store, task.ID)
-		if hasComment || hasNothingNeeded || finalText {
+		if relayedInProcess || hasComment || hasNothingNeeded || finalText {
 			goal, err := store.TaskGoal(ctx, task.ID)
 			if err != nil {
 				return err
@@ -1455,11 +1456,16 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// Parameter allowlist validation in the system tuning runner:
 		// verify proposed changes target recognized grain_config parameters
 		// before filing state-repo pull requests or proposed tasks.
-		isTuningTask := task.TemplateID == model.InfraReviewTemplateID
-		// Only the tuning runner's own proposals are read for a parameter
-		// in their title: any other task's split-out work that merely says
-		// "tune" there is not a recommendation, and reading it as one
-		// refused it, unfiled, as a parameter outside the allowlist.
+		// Code proposals from infra-review that explicitly target a source
+		// repository (e.g. reliability bug fixes) are not tuning
+		// recommendations unless they explicitly name a parameter field.
+		isTuningTask := task.TemplateID == model.InfraReviewTemplateID &&
+			!proposalTargetsSourceRepo(ctx, store, p, task)
+		// Only the tuning runner's own tuning proposals are read for a
+		// parameter in their title: any other task's split-out work (or a
+		// source-repo code proposal) that merely says "tune" there is not
+		// a recommendation, and reading it as one refused it, unfiled, as
+		// a parameter outside the allowlist.
 		tuningTitle, tuningBody := "", ""
 		if isTuningTask {
 			tuningTitle, tuningBody = title, body
@@ -2350,6 +2356,49 @@ func proposedTarget(ctx context.Context, store *model.Store, args map[string]any
 		return task.Target, branchNamed, named, nil
 	}
 	return &repo, branchNamed, "", nil
+}
+
+// proposalTargetsSourceRepo reports whether a propose_task call p explicitly
+// targets a source repository rather than the deployment's configuration/state
+// repository (or no repository at all).
+func proposalTargetsSourceRepo(ctx context.Context, store *model.Store, p map[string]any, task model.Task) bool {
+	if noRepo, _ := p["no_repo"].(bool); noRepo {
+		return false
+	}
+	if ct, err := mcp.ProposedChangeTarget(p); err == nil && ct != nil {
+		return true
+	}
+	named, _ := p["repo"].(string)
+	named = strings.TrimSpace(named)
+	if repoPart, _, hasAt := strings.Cut(named, "@"); hasAt {
+		named = strings.TrimSpace(repoPart)
+	}
+	if named == "" {
+		return false
+	}
+	repo, err := model.ParseRepo(named)
+	if err != nil || isSettingsRepo(store, repo) {
+		return false
+	}
+	hasSettingsRepo := store != nil && store.SettingsRepo != nil && store.SettingsRepo() != (model.RepoRef{})
+	if !hasSettingsRepo {
+		for _, r := range task.Reads {
+			if r.Same(repo) {
+				return false
+			}
+		}
+	}
+	if task.Target != nil && repo.Same(*task.Target) {
+		return true
+	}
+	if _, ok := model.WriteTargetFor(task, repo); ok {
+		return true
+	}
+	if store == nil {
+		return false
+	}
+	known, err := store.WorksInRepoForTeam(ctx, model.DefaultTeamID, repo)
+	return err == nil && known
 }
 
 // unknownProposalRepoNote is what a human approving the proposal reads
@@ -3349,8 +3398,11 @@ func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
 		return susp, false, err
 	}
 	if len(targets) > 0 {
-		when, _, _ := resumedLater(result)
+		when, reason, _ := resumedLater(result)
 		susp.Detail = model.ParkedDetail(targets)
+		if reason = strings.TrimSpace(reason); reason != "" {
+			susp.Detail += ": " + reason
+		}
 		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged}.JSON()
 		return susp, true, nil
 	}
@@ -3367,6 +3419,9 @@ func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
 	susp.Detail = model.RequestedDetail(reason, when)
 	if when.At != nil && when.CI == "" && !when.Message {
 		susp.Detail = model.ParkedUntilDetail(*when.At)
+		if r := strings.TrimSpace(reason); r != "" {
+			susp.Detail += ": " + r
+		}
 	}
 	susp.ResumeOn = when.JSON()
 	susp.ResumeAt = when.At

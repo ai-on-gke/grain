@@ -2160,9 +2160,10 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	// supplied, only the delta since the suspended run (without repeating
 	// toolPreamble or the static full prompt already in the conversation);
 	// otherwise the whole prompt behind agent.SuspendedPreamble.
-	suspendedBody := toolPreamble(cfg) + agent.SuspendedPreamble + cfg.Prompt
+	preamble := cfg.EffectiveSuspendedPreamble()
+	suspendedBody := toolPreamble(cfg) + preamble + cfg.Prompt
 	if cfg.SuspendedPrompt != "" {
-		suspendedBody = agent.SuspendedPreamble + cfg.SuspendedPrompt
+		suspendedBody = preamble + cfg.SuspendedPrompt
 	}
 	// Or, for the stop rule's one resumed turn, the nudge alone
 	// (agent.RunConfig.ContinuePrompt): the conversation ended seconds

@@ -369,6 +369,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_interval_seconds` INTEGER NOT NULL DEFAULT 0",
 		},
 	},
+	{
+		Version:     66,
+		Description: "add session_sandbox_idle_ttl_ms to grain_config for keeping session sandboxes warm between turns",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `session_sandbox_idle_ttl_ms` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

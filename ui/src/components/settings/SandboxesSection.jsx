@@ -277,6 +277,20 @@ export default function SandboxesSection({ s }) {
             </option>
           ))}
         </TextField>
+        <TextField
+          key={`sessionSandboxIdleTtl-${settings.sessionSandboxIdleTtl || ""}`}
+          name="sessionSandboxIdleTtl"
+          data-setting-id="sessionSandboxIdleTtl"
+          label="Session sandbox idle TTL"
+          helperText="how long an interactive chat or director session's sandbox (and in-process agent session) stays warm awaiting a reply after a turn ends before being released. A new message within this window continues in the same sandbox; the oldest idle session sandbox is evicted first under capacity pressure. Blank uses grain's default (30m); a negative duration (-1s) disables warm retention."
+          defaultValue={settings.sessionSandboxIdleTtl || ""}
+          placeholder={settings.sessionSandboxIdleTtlDefault || undefined}
+          onBlur={onTextBlur("sessionSandboxIdleTtl")}
+          onKeyDown={onEnterKey}
+          autoComplete="off"
+          fullWidth
+          margin="normal"
+        />
       </SettingsCard>
       <SettingsCard title="Sandbox budget" anchor="sandbox-budget">
         <TextField

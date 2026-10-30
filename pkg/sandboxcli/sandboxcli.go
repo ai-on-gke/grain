@@ -287,7 +287,7 @@ func (c *sandboxCLI) run(args []string) error {
 		q.Set("n", "1")
 		return c.fs(uri, q)
 	case "ci list":
-		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "since", "limit", "repo"), c.out)
+		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "since", "limit", "repo", "task"), c.out)
 	case "ci test-history":
 		test, err := p.arg(0, "test-name")
 		if err != nil {
@@ -301,7 +301,7 @@ func (c *sandboxCLI) run(args []string) error {
 	case "ci artifact":
 		return c.ciArtifact(p)
 	case "pr status":
-		return c.get("/cli/pr/status", nil, c.out)
+		return c.get("/cli/pr/status", p.query("task", "ref", "repo"), c.out)
 	case "pr base-status":
 		return c.get("/cli/pr/base-status", nil, c.out)
 	case "ci wait":
@@ -518,32 +518,70 @@ func (c *sandboxCLI) context() (runContext, error) {
 	return rc, nil
 }
 
-// latestRun is the newest grain CI run on this task's branch.
-func (c *sandboxCLI) latestRun() (string, error) {
+// latestRun is the newest grain CI run on this task's branch, or on task's
+// when one is named.
+func (c *sandboxCLI) latestRun(task string) (string, error) {
+	q := url.Values{"ref": {"@branch"}, "limit": {"1"}}
+	what := "this task's branch"
+	if task != "" {
+		q = url.Values{"task": {task}, "limit": {"1"}}
+		what = "task " + strings.TrimPrefix(task, "#") + "'s branch"
+	}
 	var buf strings.Builder
-	if err := c.get("/cli/ci/runs", url.Values{"ref": {"@branch"}, "limit": {"1"}}, &buf); err != nil {
+	if err := c.get("/cli/ci/runs", q, &buf); err != nil {
 		return "", err
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) < 2 {
-		return "", fmt.Errorf("this task's branch has no grain CI run yet")
+		return "", fmt.Errorf("%s has no grain CI run yet", what)
 	}
 	id, _, _ := strings.Cut(lines[1], " ")
 	return id, nil
 }
 
-func (c *sandboxCLI) ciLog(p sandboxArgs) error {
+// ciRun is the run a ci log or ci artifact command reads and the
+// repository it is in: the run named (or the latest on --task's branch,
+// or on this task's), in --repo or wherever the proxy finds it.
+func (c *sandboxCLI) ciRun(p sandboxArgs, run string) (repo, id string, err error) {
 	rc, err := c.context()
+	if err != nil {
+		return "", "", err
+	}
+	if run == "" {
+		if run, err = c.latestRun(p.get("task")); err != nil {
+			return "", "", err
+		}
+	}
+	if repo = p.get("repo"); repo != "" {
+		return repo, run, nil
+	}
+	var buf strings.Builder
+	if err := c.get("/cli/ci/run", url.Values{"id": {run}}, &buf); err != nil {
+		if rc.Repo == "" {
+			return "", "", err
+		}
+		// A proxy that cannot say is asked about this task's own
+		// repository, as before it could.
+		return rc.Repo, run, nil
+	}
+	var named struct {
+		Repo string `json:"repo"`
+	}
+	if err := json.Unmarshal([]byte(buf.String()), &named); err != nil || named.Repo == "" {
+		if rc.Repo == "" {
+			return "", "", fmt.Errorf("finding the repository of CI run %s: %q", run, buf.String())
+		}
+		return rc.Repo, run, nil
+	}
+	return named.Repo, run, nil
+}
+
+func (c *sandboxCLI) ciLog(p sandboxArgs) error {
+	repo, run, err := c.ciRun(p, p.optArg(0))
 	if err != nil {
 		return err
 	}
-	run := p.optArg(0)
-	if run == "" {
-		if run, err = c.latestRun(); err != nil {
-			return err
-		}
-	}
-	uri := "ci://" + rc.Repo + "/" + run
+	uri := "ci://" + repo + "/" + run
 	job := p.get("job")
 	if job == "" {
 		return c.fs(uri, url.Values{"list": {""}})
@@ -571,17 +609,11 @@ func (c *sandboxCLI) ciArtifact(p sandboxArgs) error {
 	if err != nil {
 		return err
 	}
-	rc, err := c.context()
+	repo, run, err := c.ciRun(p, p.get("run"))
 	if err != nil {
 		return err
 	}
-	run := p.get("run")
-	if run == "" {
-		if run, err = c.latestRun(); err != nil {
-			return err
-		}
-	}
-	path, err := fsPath("ci://" + rc.Repo + "/" + run + "/artifacts/" + job + "/" + name)
+	path, err := fsPath("ci://" + repo + "/" + run + "/artifacts/" + job + "/" + name)
 	if err != nil {
 		return err
 	}

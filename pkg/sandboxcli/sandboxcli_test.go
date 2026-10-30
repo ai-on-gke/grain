@@ -320,3 +320,77 @@ func TestSandboxLogAndMetricsFlagsBecomeTheirQuery(t *testing.T) {
 		t.Errorf("grain metrics query = %s, want %s", got, want)
 	}
 }
+
+// cliTaskRefScopes is cliTestScopes that also names other tasks'
+// repositories and branches (gitproxy.TaskRefLookup).
+type cliTaskRefScopes struct {
+	cliTestScopes
+	refs map[string][2]string
+}
+
+func (s cliTaskRefScopes) TaskCIRef(_ context.Context, id string) (string, string, bool, error) {
+	ref, ok := s.refs[id]
+	return ref[0], ref[1], ok, nil
+}
+
+// A task reads the CI of a sibling task and of a run in a repository it
+// only reads: ci list and pr status by --task and --ref, and ci log by a
+// run id alone, which is found in the run's own repository.
+func TestSandboxCLIReadsOtherTasksCI(t *testing.T) {
+	store := ci.NewRunStore(10)
+	at := time.Now()
+	store.Put(ci.Run{ID: "run-sib", Repo: "acme/widgets", Ref: "grain/dep/task-19", Conclusion: ci.ConclusionSuccess, StartedAt: &at,
+		Jobs: []ci.JobRun{{Name: "go", Conclusion: ci.ConclusionSuccess, Steps: []ci.StepRun{
+			{Name: "Test", Conclusion: ci.ConclusionSuccess, Output: "ok sibling\n"}}}}})
+	store.Put(ci.Run{ID: "run-lib", Repo: "acme/library", Ref: "feature/x", Conclusion: ci.ConclusionFailure, StartedAt: &at,
+		Jobs: []ci.JobRun{{Name: "test", Conclusion: ci.ConclusionFailure, Steps: []ci.StepRun{
+			{Name: "Unit", Conclusion: ci.ConclusionFailure, Output: "--- FAIL: TestLibrary\n"}}}}})
+	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb": "tok"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: store, Redactor: redact.New(nil)},
+		NamespaceScopes: cliTaskRefScopes{
+			cliTestScopes: cliTestScopes{"sb": {TaskID: "7", RunID: "r", TaskRepo: "acme/widgets", TaskBranch: "grain/dep/task-7",
+				MayReadCI: true, AllowedRepos: map[string]bool{"acme/widgets": true, "acme/library": true}}},
+			refs: map[string][2]string{"19": {"acme/widgets", "grain/dep/task-19"}},
+		},
+	}
+	srv := httptest.NewServer(gitproxy.NewHandler(proxy))
+	defer srv.Close()
+	env := fakeSandboxEnv(map[string]string{"GRAIN_SANDBOX_PROXY": srv.URL, "GRAIN_SANDBOX_TOKEN": "tok"}, "")
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		code, handled := maybeRunSandboxCLI(args, env, &out, &errOut)
+		if !handled {
+			t.Fatalf("%q not handled in sandbox mode", args)
+		}
+		return out.String(), errOut.String(), code
+	}
+
+	if out, errOut, code := run("ci", "list", "--task", "19"); code != 0 || !strings.Contains(out, "run-sib grain/dep/task-19") {
+		t.Errorf("ci list --task: %d %q %s", code, out, errOut)
+	}
+	if out, errOut, code := run("pr", "status", "--task", "19"); code != 0 || !strings.Contains(out, "go: success") {
+		t.Errorf("pr status --task: %d %q %s", code, out, errOut)
+	}
+	if out, errOut, code := run("pr", "status", "--ref", "feature/x", "--repo", "acme/library"); code != 0 || !strings.Contains(out, "test: failure") {
+		t.Errorf("pr status --ref --repo: %d %q %s", code, out, errOut)
+	}
+	if out, errOut, code := run("ci", "log", "run-lib", "--job", "test", "--step", "Unit"); code != 0 || !strings.Contains(out, "--- FAIL: TestLibrary") {
+		t.Errorf("ci log <run-id> in a reads repository: %d %q %s", code, out, errOut)
+	}
+	if out, errOut, code := run("ci", "log", "run-lib", "--repo", "acme/library", "--job", "test", "--step", "Unit"); code != 0 || !strings.Contains(out, "TestLibrary") {
+		t.Errorf("ci log --repo: %d %q %s", code, out, errOut)
+	}
+	if out, errOut, code := run("ci", "log", "--task", "19", "--job", "go", "--step", "Test"); code != 0 || !strings.Contains(out, "ok sibling") {
+		t.Errorf("ci log --task: %d %q %s", code, out, errOut)
+	}
+}

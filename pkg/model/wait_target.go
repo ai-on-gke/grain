@@ -50,13 +50,15 @@ func ParkedDetail(ids []string) string {
 }
 
 // ParkedTargets is the ids a ParkedOutcome run's detail names, or nil for
-// any other detail.
+// any other detail. An optional ": <reason>" suffix (written when the park
+// came from resume_later rather than wait_for_task) is stripped first.
 func ParkedTargets(detail string) []string {
 	rest, ok := strings.CutPrefix(detail, parkedDetailPrefix)
 	if !ok {
 		return nil
 	}
-	return strings.Fields(rest)
+	ids, _, _ := strings.Cut(rest, ": ")
+	return strings.Fields(ids)
 }
 
 // parkedUntilPrefix starts the detail of a run that parked until a time.
@@ -70,13 +72,15 @@ func ParkedUntilDetail(until time.Time) string {
 }
 
 // ParkedUntil is the wake time a ParkedOutcome run's detail names, or
-// false for any other detail.
+// false for any other detail. An optional ": <reason>" suffix (written
+// when the timed park came from resume_later) is stripped before parsing.
 func ParkedUntil(detail string) (time.Time, bool) {
 	rest, ok := strings.CutPrefix(detail, parkedUntilPrefix)
 	if !ok {
 		return time.Time{}, false
 	}
-	until, err := time.Parse(time.RFC3339, strings.TrimSpace(rest))
+	rawTime, _, _ := strings.Cut(rest, ": ")
+	until, err := time.Parse(time.RFC3339, strings.TrimSpace(rawTime))
 	if err != nil {
 		return time.Time{}, false
 	}
