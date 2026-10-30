@@ -738,11 +738,16 @@ func (c *HTTPClient) AddCommentWithAuthor(ctx context.Context, id, body string, 
 // than saying so.
 func (c *HTTPClient) Close(ctx context.Context, id string, opts CloseOptions) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/close",
-		closeRequest{ClosePullRequest: opts.ClosePullRequest}, nil)
+		closeRequest{ClosePullRequest: opts.ClosePullRequest, Reason: opts.Reason}, nil)
 }
 
 func (c *HTTPClient) Reopen(ctx context.Context, id string) error {
-	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/reopen", nil, nil)
+	return c.ReopenBecause(ctx, id, "")
+}
+
+// ReopenBecause is Client.ReopenBecause over the wire.
+func (c *HTTPClient) ReopenBecause(ctx context.Context, id, reason string) error {
+	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/reopen", reopenRequest{Reason: reason}, nil)
 }
 
 func (c *HTTPClient) Retry(ctx context.Context, id string) error {

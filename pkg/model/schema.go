@@ -310,7 +310,28 @@ import "strconv"
 // interactive chat/session task's sandbox (and in-process agent session)
 // stays warm awaiting a reply after a turn ends before being released
 // (model.Config.SessionSandboxIdleTTL).
-const SchemaVersion = 66
+//
+// 67 adds the `task_event` table: who closed or reopened a task, when,
+// why, and what the close cancelled (model.TaskEvent).
+const SchemaVersion = 67
+
+// taskEventTable is the `task_event` table, named once for Tables and
+// for the migration that adds it: one row per close or reopen of a task
+// by somebody (model.TaskEvent). actor_kind/actor_id are the
+// model.Principal that asked; reason is what they said, ” for nothing;
+// detail is what grain did because of it -- the live run and CI runs a
+// close cancelled. Observation.ClosedAt only ever holds the current
+// closure, so this is the only record of a close somebody later undid.
+const taskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+  ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`kind`" + `       TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`actor_kind`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
+)`
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -3664,6 +3685,12 @@ var Tables = []string{
 	// when the step starts and checkpointed as it runs, so a restarted
 	// daemon reattaches the step instead of interrupting its run.
 	ciStepAttachmentTable,
+
+	// Every close and reopen of a task somebody asked for, with who, when
+	// and why (model.TaskEvent).
+	taskEventTable,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_event_at`" + ` ON ` + "`task_event`" + ` (` + "`at`" + `)`,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and

@@ -376,6 +376,12 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `session_sandbox_idle_ttl_ms` INTEGER NOT NULL DEFAULT 0",
 		},
 	},
+	{
+		// task_event is new, so Statements() creates it and its indexes.
+		Version:     67,
+		Description: "record who closed or reopened each task, when and why",
+		Statements:  []string{taskEventTable},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
