@@ -79,20 +79,24 @@ var (
 
 // Scope is the caller's authorization scope for reading namespace roots.
 type Scope struct {
-	TaskID            int64
-	TaskIDStr         string
-	RunID             string
-	Attempt           int
-	TaskRepo          string
-	TaskBranch        string
-	TaskBase          string
-	ConfigRepo        string
-	Grants            []string
-	MayReadCI         bool
-	MayReadAllCI      bool
-	AllowedRepos      map[string]bool
-	MayReadSrc        bool
-	MayReadAllTasks   bool
+	TaskID          int64
+	TaskIDStr       string
+	RunID           string
+	Attempt         int
+	TaskRepo        string
+	TaskBranch      string
+	TaskBase        string
+	ConfigRepo      string
+	Grants          []string
+	MayReadCI       bool
+	MayReadAllCI    bool
+	AllowedRepos    map[string]bool
+	MayReadSrc      bool
+	MayReadAllTasks bool
+	// TaskReadRepos are the repositories whose tasks this scope may read
+	// under task:// without MayReadAllTasks: the task's own, its reads
+	// and writes, and any an api:tasks:read@owner/repo grant names.
+	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
 	MayReadMetrics    bool
