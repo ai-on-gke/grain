@@ -239,7 +239,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 		// A daemon still starting is not a fact about the request: left
 		// as the ErrNotUp it is, so it is served as 503 and a waiting
 		// caller asks again rather than giving up on a 400.
-		if ci.IsNotUp(err) {
+		if errors.Is(err, ci.ErrNotUp) {
 			return ci.Run{}, err
 		}
 		// A fact about the request, as handleStartCIRun says of the same
@@ -1082,7 +1082,7 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		WithholdReleaseSecrets: withhold != "",
 		WithholdReason:         withhold,
 	})
-	if ci.IsNotUp(err) {
+	if errors.Is(err, ci.ErrNotUp) {
 		writeCINotUp(w)
 		return
 	}

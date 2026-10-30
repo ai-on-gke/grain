@@ -271,7 +271,7 @@ func writeToolResult(w http.ResponseWriter, res mcp.Result) {
 func cliError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	switch {
-	case ci.IsNotUp(err):
+	case errors.Is(err, ci.ErrNotUp):
 		// The daemon is restarting: ask again shortly.
 		status = http.StatusServiceUnavailable
 	case errors.Is(err, namespace.ErrForbidden):

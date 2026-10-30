@@ -2613,7 +2613,7 @@ func writeError(w http.ResponseWriter, status int, err error) {
 // database error as "the gateway had trouble" would point an operator at
 // the wrong thing.
 func writeClientError(w http.ResponseWriter, err error) {
-	if ci.IsNotUp(err) {
+	if errors.Is(err, ci.ErrNotUp) {
 		writeCINotUp(w)
 		return
 	}
