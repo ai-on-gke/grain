@@ -23,6 +23,8 @@ package orchestrator_test
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -1350,5 +1352,678 @@ func TestASessionIsAskedToNameItselfOnlyWhileTitledByItsFirstMessage(t *testing.
 	}
 	if b := body(5 * time.Minute); strings.Contains(b, "rename_session") || !strings.Contains(b, "director") {
 		t.Errorf("after the agent named the session its prompt still asks for a name:\n%s", b)
+	}
+}
+
+type countingSandboxes struct {
+	inner    orchestrator.Sandboxes
+	acquires int
+	releases int
+}
+
+type countingSandbox struct {
+	orchestrator.Sandbox
+	parent *countingSandboxes
+}
+
+func (s *countingSandbox) Release(ctx context.Context) error {
+	s.parent.releases++
+	return s.Sandbox.Release(ctx)
+}
+
+func (s *countingSandbox) Root() (string, error) {
+	if r, ok := s.Sandbox.(interface{ Root() (string, error) }); ok {
+		return r.Root()
+	}
+	return "", nil
+}
+
+func (c *countingSandboxes) Acquire(ctx context.Context, name string, shape orchestrator.Shape) (orchestrator.Sandbox, error) {
+	c.acquires++
+	sbx, err := c.inner.Acquire(ctx, name, shape)
+	if err != nil {
+		return nil, err
+	}
+	return &countingSandbox{Sandbox: sbx, parent: c}, nil
+}
+
+type recordingSessionAgent struct {
+	configs []agent.RunConfig
+	onTurn  func(turn int, cfg agent.RunConfig) (*agent.Result, error)
+}
+
+func (a *recordingSessionAgent) Run(_ context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+	a.configs = append(a.configs, cfg)
+	turn := len(a.configs)
+	if a.onTurn != nil {
+		return a.onTurn(turn, cfg)
+	}
+	return &agent.Result{
+		FinalText:        fmt.Sprintf("answer %d", turn),
+		Transcript:       fmt.Sprintf("answer %d", turn),
+		ResumableSession: "sess-token-1",
+	}, nil
+}
+
+func TestSessionSandboxReusedWithinIdleTTLFallbackAndReclaimedAfterTTL(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID: model.DirectorSessionID, Title: "Director",
+			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+	ag := &recordingSessionAgent{
+		onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
+			marker := filepath.Join(cfg.SandboxRoot, "marker.txt")
+			if turn == 1 {
+				if err := os.WriteFile(marker, []byte("kept-across-turns"), 0644); err != nil {
+					t.Errorf("turn 1 WriteFile: %v", err)
+				}
+			} else if turn == 2 {
+				got, err := os.ReadFile(marker)
+				if err != nil || !strings.Contains(string(got), "kept-across-turns") {
+					t.Errorf("turn 2 ReadFile(marker.txt) = %q, %v; want kept-across-turns in reused sandbox", string(got), err)
+				}
+			}
+			return &agent.Result{
+				FinalText:        fmt.Sprintf("answer %d", turn),
+				Transcript:       fmt.Sprintf("answer %d", turn),
+				ResumableSession: "sess-1",
+			}, nil
+		},
+	}
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  sbx,
+		Framework:  orchestrator.StaticFramework(ag),
+		MaxWorkers: 2,
+		Config: orchestrator.Config{
+			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			SessionSandboxIdleTTL: 30 * time.Minute,
+		},
+	}
+
+	// Turn 1: user sends a message at t=1m; cycle dispatches attempt 1 and parks the session.
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("turn 1 cycle: %v", err)
+	}
+	if sbx.acquires != 1 || sbx.releases != 0 {
+		t.Fatalf("after turn 1: acquires=%d releases=%d, want 1 acquire and 0 releases (held warm)", sbx.acquires, sbx.releases)
+	}
+	warmID := orchestrator.WarmSessionSandboxID(store, director.ID)
+	if warmID == "" {
+		t.Fatal("expected director's sandbox to be held warm after turn 1")
+	}
+	if !orchestrator.IsIdleSessionSandbox(warmID) {
+		t.Fatalf("expected IsIdleSessionSandbox(%q) to be true while parked", warmID)
+	}
+
+	// Turn 2: user replies within the 30m TTL (at t=10m); cycle reuses the same sandbox.
+	t2 := baseTime.Add(10 * time.Minute)
+	replyToSession(t, store, director.ID, t2)
+	if err := orchestrator.RunCycle(ctx, deps, t2.Add(time.Second)); err != nil {
+		t.Fatalf("turn 2 cycle: %v", err)
+	}
+	if sbx.acquires != 1 || sbx.releases != 0 {
+		t.Fatalf("after turn 2 within TTL: acquires=%d releases=%d, want 1 acquire and 0 releases (reused)", sbx.acquires, sbx.releases)
+	}
+	if len(ag.configs) != 2 {
+		t.Fatalf("agent turns = %d, want 2", len(ag.configs))
+	}
+	if !ag.configs[1].SandboxReused {
+		t.Error("turn 2 RunConfig.SandboxReused = false, want true")
+	}
+	if !strings.Contains(ag.configs[1].Prompt, "The sandbox is the same one") {
+		t.Errorf("turn 2 Prompt missing reused-sandbox orientation:\n%s", ag.configs[1].Prompt)
+	}
+	if !strings.Contains(ag.configs[1].SuspendedPrompt, "The sandbox is the same one") {
+		t.Errorf("turn 2 SuspendedPrompt missing reused-sandbox orientation:\n%s", ag.configs[1].SuspendedPrompt)
+	}
+	if got := orchestrator.WarmSessionSandboxID(store, director.ID); got != warmID {
+		t.Fatalf("WarmSessionSandboxID after turn 2 = %q, want %q", got, warmID)
+	}
+
+	// Turn 3: 35 minutes pass with no message (past the 30m TTL), then user replies.
+	tExpired := t2.Add(35 * time.Minute)
+	if err := orchestrator.RunCycle(ctx, deps, tExpired); err != nil {
+		t.Fatalf("expiry cycle: %v", err)
+	}
+	if sbx.releases != 1 {
+		t.Fatalf("after TTL expiry: releases=%d, want 1", sbx.releases)
+	}
+	if got := orchestrator.WarmSessionSandboxID(store, director.ID); got != "" {
+		t.Fatalf("WarmSessionSandboxID after TTL expiry = %q, want empty", got)
+	}
+
+	t3 := tExpired.Add(time.Minute)
+	replyToSession(t, store, director.ID, t3)
+	if err := orchestrator.RunCycle(ctx, deps, t3.Add(time.Second)); err != nil {
+		t.Fatalf("turn 3 cycle: %v", err)
+	}
+	if sbx.acquires != 2 {
+		t.Fatalf("after turn 3 past TTL: acquires=%d, want 2 (new sandbox acquired)", sbx.acquires)
+	}
+	if ag.configs[2].SandboxReused {
+		t.Error("turn 3 RunConfig.SandboxReused = true, want false after TTL reclaim")
+	}
+	if !strings.Contains(ag.configs[2].Prompt, "The sandbox is not the same one") {
+		t.Errorf("turn 3 Prompt missing reclaimed-sandbox orientation:\n%s", ag.configs[2].Prompt)
+	}
+}
+
+func TestClosingOrPausingSessionReleasesWarmSandbox(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"pause", "close"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			store, ctx := openStore(t)
+			settings(t, store, func(cfg *model.Config) {
+				cfg.SessionSandboxIdleTTL = 30 * time.Minute
+				cfg.ConsoleSessions = []model.ConsoleSession{{
+					ID: model.DirectorSessionID, Title: "Director",
+					Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+				}}
+			})
+			runSessions(t, store, baseTime)
+			director := sessionTasks(t, store)[0]
+
+			sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+			deps := orchestrator.Deps{
+				Store:      store,
+				Sandboxes:  sbx,
+				Framework:  orchestrator.StaticFramework(textAnswer("ready")),
+				MaxWorkers: 2,
+				Config: orchestrator.Config{
+					StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+					Capabilities:          model.NewCapabilityRegistry(durable.New()),
+					SessionSandboxIdleTTL: 30 * time.Minute,
+				},
+			}
+
+			t1 := baseTime.Add(time.Minute)
+			replyToSession(t, store, director.ID, t1)
+			if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+				t.Fatalf("turn 1 cycle: %v", err)
+			}
+			if orchestrator.WarmSessionSandboxID(store, director.ID) == "" {
+				t.Fatal("expected warm sandbox after turn 1")
+			}
+
+			tAction := t1.Add(2 * time.Minute)
+			if mode == "pause" {
+				if _, err := store.Pause(ctx, model.TaskPause{
+					TaskID:    director.ID,
+					PausedAt:  tAction,
+					PausedBy:  aliceSays.Actor,
+					FromState: model.StateAwaitingReply,
+					Immediate: true,
+				}); err != nil {
+					t.Fatalf("Pause: %v", err)
+				}
+			} else {
+				closeSession(t, store, director.ID, tAction)
+			}
+
+			if err := orchestrator.RunCycle(ctx, deps, tAction.Add(time.Second)); err != nil {
+				t.Fatalf("post-%s cycle: %v", mode, err)
+			}
+			if got := orchestrator.WarmSessionSandboxID(store, director.ID); got != "" {
+				t.Fatalf("WarmSessionSandboxID after %s = %q, want empty", mode, got)
+			}
+			if sbx.releases != 1 {
+				t.Fatalf("releases after %s = %d, want 1", mode, sbx.releases)
+			}
+		})
+	}
+}
+
+func TestSessionWarmSandboxCapacityEvictionEvictsOldestIdleFirst(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.ConsoleSessions = []model.ConsoleSession{
+			{ID: "session-a", Title: "Session A", Capabilities: []string{}, NetworkAccess: model.NetworkOpen},
+			{ID: "session-b", Title: "Session B", Capabilities: []string{}, NetworkAccess: model.NetworkOpen},
+			{ID: "session-c", Title: "Session C", Capabilities: []string{}, NetworkAccess: model.NetworkOpen},
+		}
+	})
+	runSessions(t, store, baseTime)
+	sessions := sessionTasks(t, store)
+	if len(sessions) != 3 {
+		t.Fatalf("filed %d sessions, want 3", len(sessions))
+	}
+	var sessA, sessB, sessC model.Task
+	for _, s := range sessions {
+		switch {
+		case slices.Contains(s.Tags, model.ConsoleSessionTag("session-a")):
+			sessA = s
+		case slices.Contains(s.Tags, model.ConsoleSessionTag("session-b")):
+			sessB = s
+		default:
+			sessC = s
+		}
+	}
+
+	sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+	ledger := &model.Ledger{}
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  sbx,
+		Framework:  orchestrator.StaticFramework(textAnswer("session reply")),
+		Ledger:     ledger,
+		AgentShape: model.Commitment{CPUs: 2, MemoryMB: 2048, DiskGB: 10},
+		MaxWorkers: 2,
+		Config: orchestrator.Config{
+			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			SessionSandboxIdleTTL: 30 * time.Minute,
+		},
+	}
+
+	// Park session A at t=1m (oldest idle).
+	tA := baseTime.Add(time.Minute)
+	replyToSession(t, store, sessA.ID, tA)
+	if err := orchestrator.RunCycle(ctx, deps, tA.Add(time.Second)); err != nil {
+		t.Fatalf("session A cycle: %v", err)
+	}
+	// Park session B at t=2m (newer idle).
+	tB := baseTime.Add(2 * time.Minute)
+	replyToSession(t, store, sessB.ID, tB)
+	if err := orchestrator.RunCycle(ctx, deps, tB.Add(time.Second)); err != nil {
+		t.Fatalf("session B cycle: %v", err)
+	}
+
+	if got := orchestrator.WarmSessionSandboxCount(store); got != 2 {
+		t.Fatalf("WarmSessionSandboxCount = %d, want 2", got)
+	}
+	if got := ledger.IdleCount(model.PoolAgent); got != 2 {
+		t.Fatalf("ledger.IdleCount = %d, want 2 (held session sandboxes counted against capacity)", got)
+	}
+
+	// Reply to session C at t=3m while MaxWorkers=2 is full of the two warm session sandboxes.
+	tC := baseTime.Add(3 * time.Minute)
+	replyToSession(t, store, sessC.ID, tC)
+	if err := orchestrator.RunCycle(ctx, deps, tC.Add(time.Second)); err != nil {
+		t.Fatalf("capacity eviction cycle: %v", err)
+	}
+
+	// Session A (the oldest idle session sandbox) must be evicted first, while Session B stays warm!
+	if got := orchestrator.WarmSessionSandboxID(store, sessA.ID); got != "" {
+		t.Fatalf("oldest idle session A sandbox = %q, want evicted (empty)", got)
+	}
+	if got := orchestrator.WarmSessionSandboxID(store, sessB.ID); got == "" {
+		t.Fatal("newer idle session B sandbox was evicted, want kept warm")
+	}
+}
+
+func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID: model.DirectorSessionID, Title: "Director",
+			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+	var seenPrompts []string
+	ag := &recordingSessionAgent{
+		onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
+			seenPrompts = append(seenPrompts, cfg.ContinuePrompt)
+			if turn == 1 {
+				// While the run is about to enter its in-process idle wait after turn 1,
+				// post the human's second message shortly after.
+				go func() {
+					time.Sleep(80 * time.Millisecond)
+					// A message from another task's run arrives first: it does
+					// not wake the session, but the turn a person's message
+					// wakes is told it too, as not a human's.
+					_, _ = store.AddComment(ctx, model.Comment{
+						TaskID:    director.ID,
+						Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "other-task"}},
+						Body:      "a note from another task",
+						CreatedAt: baseTime.Add(2 * time.Minute),
+					})
+					_, _ = store.AddComment(ctx, model.Comment{
+						TaskID:    director.ID,
+						Author:    aliceSays,
+						Body:      "follow-up question in the same run",
+						CreatedAt: baseTime.Add(2 * time.Minute),
+					})
+				}()
+			}
+			return &agent.Result{
+				FinalText:        fmt.Sprintf("in-process answer %d", turn),
+				Transcript:       fmt.Sprintf("in-process answer %d", turn),
+				ResumableSession: "sess-live-1",
+			}, nil
+		},
+	}
+
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  sbx,
+		Framework:  orchestrator.StaticFramework(ag),
+		MaxWorkers: 1,
+		Config: orchestrator.Config{
+			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			SessionSandboxIdleTTL: 350 * time.Millisecond,
+			WaitForSessionReply:   true,
+			CancelPollInterval:    20 * time.Millisecond,
+		},
+	}
+
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("in-process cycle: %v", err)
+	}
+
+	// Both turns must have executed inside a single dispatch (1 sandbox acquire, 1 run row, 2 framework.Run calls).
+	if len(ag.configs) != 2 {
+		t.Fatalf("framework.Run calls = %d, want 2 (turn 1 + in-process continuation)", len(ag.configs))
+	}
+	for _, want := range []string{
+		"the run of another task (task other-task), not a human",
+		"a note from another task",
+		"a human (alice)",
+		"follow-up question in the same run",
+	} {
+		if !strings.Contains(seenPrompts[1], want) {
+			t.Fatalf("turn 2 ContinuePrompt = %q, want it to contain %q", seenPrompts[1], want)
+		}
+	}
+	if strings.Contains(seenPrompts[1], "in-process answer 1") {
+		t.Fatalf("turn 2 ContinuePrompt = %q, want the run's own relayed answer left out", seenPrompts[1])
+	}
+	if ag.configs[1].ResumeSession != "sess-live-1" {
+		t.Fatalf("turn 2 ResumeSession = %q, want sess-live-1", ag.configs[1].ResumeSession)
+	}
+	runs, err := store.Runs(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("recorded runs = %d, want 1 (both turns served by the same live attempt)", len(runs))
+	}
+	comments, err := store.Comments(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotFirst, gotSecond bool
+	for _, c := range comments {
+		if c.Body == "in-process answer 1" {
+			gotFirst = true
+		}
+		if c.Body == "in-process answer 2" {
+			gotSecond = true
+		}
+	}
+	if !gotFirst || !gotSecond {
+		t.Fatalf("comments = %+v, want both in-process answers relayed", comments)
+	}
+}
+
+type delayedAcquireSandboxes struct {
+	inner        orchestrator.Sandboxes
+	acquireDelay time.Duration
+}
+
+func (d *delayedAcquireSandboxes) Acquire(ctx context.Context, name string, shape orchestrator.Shape) (orchestrator.Sandbox, error) {
+	if d.acquireDelay > 0 {
+		time.Sleep(d.acquireDelay)
+	}
+	return d.inner.Acquire(ctx, name, shape)
+}
+
+func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
+	t.Parallel()
+	measure := func(name string, idleTTL time.Duration, inProcess bool, acquireDelay time.Duration) time.Duration {
+		store, ctx := openStore(t)
+		settings(t, store, func(cfg *model.Config) {
+			cfg.SessionSandboxIdleTTL = idleTTL
+			cfg.ConsoleSessions = []model.ConsoleSession{{
+				ID: model.DirectorSessionID, Title: "Director",
+				Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+			}}
+		})
+		runSessions(t, store, baseTime)
+		director := sessionTasks(t, store)[0]
+
+		sbx := &delayedAcquireSandboxes{
+			inner:        orchestrator.NewHostSandboxes(t.TempDir()),
+			acquireDelay: acquireDelay,
+		}
+		var messagePostedAt time.Time
+		var firstToolCallAt time.Time
+		ag := &recordingSessionAgent{
+			onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
+				if turn == 2 {
+					// Simulate the agent's first tool call on turn 2.
+					if len(cfg.Tools) > 0 {
+						_ = cfg.Tools[0].Handler(ctx, map[string]any{"path": "."})
+					}
+					firstToolCallAt = time.Now()
+				}
+				if turn == 1 && inProcess {
+					go func() {
+						time.Sleep(30 * time.Millisecond)
+						messagePostedAt = time.Now()
+						_, _ = store.AddComment(ctx, model.Comment{
+							TaskID:    director.ID,
+							Author:    aliceSays,
+							Body:      "second turn message",
+							CreatedAt: baseTime.Add(2 * time.Minute),
+						})
+					}()
+				}
+				return &agent.Result{
+					FinalText:        fmt.Sprintf("answer %d", turn),
+					Transcript:       fmt.Sprintf("answer %d", turn),
+					ResumableSession: "sess-measure-1",
+				}, nil
+			},
+		}
+		deps := orchestrator.Deps{
+			Store:      store,
+			Sandboxes:  sbx,
+			Framework:  orchestrator.StaticFramework(ag),
+			MaxWorkers: 1,
+			Config: orchestrator.Config{
+				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+				Capabilities:          model.NewCapabilityRegistry(durable.New()),
+				SessionSandboxIdleTTL: idleTTL,
+				WaitForSessionReply:   inProcess,
+				CancelPollInterval:    5 * time.Millisecond,
+			},
+		}
+
+		t1 := baseTime.Add(time.Minute)
+		replyToSession(t, store, director.ID, t1)
+		if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+			t.Fatalf("%s turn 1: %v", name, err)
+		}
+		if !inProcess {
+			t2 := baseTime.Add(2 * time.Minute)
+			messagePostedAt = time.Now()
+			replyToSession(t, store, director.ID, t2)
+			if err := orchestrator.RunCycle(ctx, deps, t2.Add(time.Second)); err != nil {
+				t.Fatalf("%s turn 2: %v", name, err)
+			}
+		}
+		d := firstToolCallAt.Sub(messagePostedAt)
+		t.Logf("%s: time from message to first tool call = %v", name, d)
+		return d
+	}
+
+	cold := measure("before (cold sandbox acquire + setup)", -1*time.Second, false, 200*time.Millisecond)
+	warm := measure("after (warm sandbox reuse)", 30*time.Minute, false, 200*time.Millisecond)
+	inProc := measure("after (in-process session continuation)", 350*time.Millisecond, true, 200*time.Millisecond)
+
+	if warm >= cold {
+		t.Errorf("warm sandbox reuse (%v) was not faster than cold sandbox acquire (%v)", warm, cold)
+	}
+	if inProc >= warm {
+		t.Errorf("in-process continuation (%v) was not faster than warm dispatch (%v)", inProc, warm)
+	}
+}
+
+// A warm session sandbox is reused only for a turn that would have been
+// given the same sandbox anyway: a task whose sandbox shape changed between
+// turns (here, its memory) gets a fresh one built to its new shape, never
+// the old one. sessionSandboxKey's own test covers grants and the target.
+func TestSessionSandboxNotReusedWhenTheTaskChangedBetweenTurns(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID: model.DirectorSessionID, Title: "Director",
+			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+	var shapes []orchestrator.Shape
+	recording := &shapeRecordingSandboxes{countingSandboxes: sbx, shapes: &shapes}
+	ag := &recordingSessionAgent{}
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  recording,
+		Framework:  orchestrator.StaticFramework(ag),
+		MaxWorkers: 2,
+		Config: orchestrator.Config{
+			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			SessionSandboxIdleTTL: 30 * time.Minute,
+		},
+	}
+
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("turn 1 cycle: %v", err)
+	}
+	if orchestrator.WarmSessionSandboxID(store, director.ID) == "" {
+		t.Fatal("expected director's sandbox to be held warm after turn 1")
+	}
+
+	if err := store.UpdateTask(ctx, director.ID, func(task *model.Task) error {
+		task.SandboxMemoryMB = 4096
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+
+	t2 := baseTime.Add(10 * time.Minute)
+	replyToSession(t, store, director.ID, t2)
+	if err := orchestrator.RunCycle(ctx, deps, t2.Add(time.Second)); err != nil {
+		t.Fatalf("turn 2 cycle: %v", err)
+	}
+	if sbx.acquires != 2 || sbx.releases < 1 {
+		t.Fatalf("after a changed turn 2 (%d agent turns): acquires=%d releases=%d, want a second acquire and the warm one released",
+			len(ag.configs), sbx.acquires, sbx.releases)
+	}
+	if len(ag.configs) != 2 || ag.configs[1].SandboxReused {
+		t.Fatalf("turn 2 reused the warm sandbox built for a different shape (turns=%d)", len(ag.configs))
+	}
+	if got := shapes[len(shapes)-1].MemoryMB; got != 4096 {
+		t.Errorf("turn 2 sandbox MemoryMB = %d, want 4096", got)
+	}
+}
+
+type shapeRecordingSandboxes struct {
+	*countingSandboxes
+	shapes *[]orchestrator.Shape
+}
+
+func (s *shapeRecordingSandboxes) Acquire(ctx context.Context, name string, shape orchestrator.Shape) (orchestrator.Sandbox, error) {
+	*s.shapes = append(*s.shapes, shape)
+	// Recorded, then built unsized: a host-directory sandbox has no
+	// shape of its own to give it.
+	shape.CPUs, shape.MemoryMB, shape.DiskGB = 0, 0, 0
+	return s.countingSandboxes.Acquire(ctx, name, shape)
+}
+
+// A grant changed while a session's sandbox is held warm releases the
+// sandbox on the next cycle, before any reply: what the old grants
+// placed in it must not sit there until a turn or the TTL ends it.
+func TestWarmSessionSandboxReleasedWhenItsGrantsChange(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID: model.DirectorSessionID, Title: "Director",
+			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+	ag := &recordingSessionAgent{}
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  sbx,
+		Framework:  orchestrator.StaticFramework(ag),
+		MaxWorkers: 2,
+		Config: orchestrator.Config{
+			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			SessionSandboxIdleTTL: 30 * time.Minute,
+		},
+	}
+
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("turn 1 cycle: %v", err)
+	}
+	if orchestrator.WarmSessionSandboxID(store, director.ID) == "" {
+		t.Fatal("expected director's sandbox to be held warm after turn 1")
+	}
+	releases := sbx.releases
+
+	// Unchanged grants: a cycle keeps it warm.
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Minute)); err != nil {
+		t.Fatalf("idle cycle: %v", err)
+	}
+	if orchestrator.WarmSessionSandboxID(store, director.ID) == "" {
+		t.Fatal("an idle cycle with unchanged grants released the warm sandbox")
+	}
+
+	if err := store.UpdateTask(ctx, director.ID, func(task *model.Task) error {
+		task.Grants = append(task.Grants, model.Grant{Capability: "gcp-key", Via: model.GrantByLabel})
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(2*time.Minute)); err != nil {
+		t.Fatalf("cycle after the grant change: %v", err)
+	}
+	if id := orchestrator.WarmSessionSandboxID(store, director.ID); id != "" {
+		t.Fatalf("warm sandbox %s still held after the task's grants changed", id)
+	}
+	if sbx.releases <= releases {
+		t.Fatalf("releases = %d, want the warm sandbox released (was %d)", sbx.releases, releases)
 	}
 }

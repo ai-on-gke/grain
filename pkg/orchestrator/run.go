@@ -371,6 +371,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	prompt += timezoneSection(task)
 	prompt += issueSection(task)
 	prompt += setupSection(setup)
+	prompt += sessionSandboxSection(task, history)
 	// The two history sections, together and in that order: what the
 	// attempts before this one did, then what has been said about the
 	// task. Both are the same kind of fact -- something a run would
@@ -609,10 +610,17 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 		)
 	}
 	if checkoutDir != "" {
-		prompt += fmt.Sprintf(
-			" That repo is freshly cloned for you at ./%s with %q checked out.",
-			checkoutDir, branch,
-		)
+		if history.SandboxReused {
+			prompt += fmt.Sprintf(
+				" That repo is already checked out for you at ./%s with %q checked out.",
+				checkoutDir, branch,
+			)
+		} else {
+			prompt += fmt.Sprintf(
+				" That repo is freshly cloned for you at ./%s with %q checked out.",
+				checkoutDir, branch,
+			)
+		}
 	}
 	if sandboxRoot != "" {
 		if checkoutDir != "" {
@@ -634,6 +642,7 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	prompt += timezoneSection(task)
 	prompt += issueSection(task)
 	prompt += setupSection(setup)
+	prompt += sessionSandboxSection(task, history)
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
 	}
@@ -2256,6 +2265,26 @@ type History struct {
 	// until through wait_for_task's resume_at -- zero unless that attempt
 	// ended model.ParkedOutcome that way. See parkedResumeSection.
 	ResumedUntil time.Time
+	// SandboxReused is true when a session task's previous warm sandbox was
+	// reused across turns rather than torn down and rebuilt.
+	SandboxReused bool
+	// SandboxReclaimed is true when a session task had a warm sandbox that was
+	// reclaimed (TTL expiry or capacity eviction) before this turn started.
+	SandboxReclaimed bool
+}
+
+func sessionSandboxSection(task model.Task, h History) string {
+	if h.SandboxReused {
+		return "\n\nThe sandbox is the same one as your previous turn: your filesystem, installed " +
+			"packages, clones and uncommitted changes are still in place, so do not redo setup, " +
+			"re-clone or reinstall packages that are already there."
+	}
+	if h.SandboxReclaimed || (task.Interactive && len(h.Attempts) > 0) {
+		return "\n\nThe sandbox is not the same one: your previous session sandbox was reclaimed, " +
+			"so this run has a new sandbox with a fresh clone and only what you committed and " +
+			"pushed still exists."
+	}
+	return ""
 }
 
 // parkedResumeSection tells a run that its task is back from a park: which
@@ -2912,12 +2941,12 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// there is actually a clone to make: prepareCheckout returns a
 		// zero checkout and does nothing at all for a task with no target
 		// or a deployment running no git proxy.
-		if (cfg.GitRemoteBase != "" || cloneURL != "") && task.Target != nil {
+		if (cfg.GitRemoteBase != "" || cloneURL != "") && task.Target != nil && !cfg.sandboxReused {
 			notes.say(ctx, cloningNote(*task.Target))
 		}
-		prepared, checkoutErr = prepareCheckoutFrom(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, notes, cfg.settingsRepo())
+		prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
 		if checkoutErr == nil {
-			placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared)
+			placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
 		}
 	}
 
@@ -2926,7 +2955,14 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	// (checkoutCommits). Only for a redispatch, and only where there is a
 	// checkout: a first attempt's branch has nothing on it that is not
 	// the base's, so this would be a tool call spent proving that.
-	history := History{Attempt: d.Attempt, Attempts: previous, Comments: comments, Repair: repair}
+	history := History{
+		Attempt:          d.Attempt,
+		Attempts:         previous,
+		Comments:         comments,
+		Repair:           repair,
+		SandboxReused:    cfg.sandboxReused,
+		SandboxReclaimed: cfg.sandboxReclaimed,
+	}
 	history.BaseIncident = baseIncidentNote(ctx, store, task)
 	history.Resumed = ResumedFrom(ctx, store, previous)
 	history.ResumedUntil = ResumedUntil(previous)
@@ -3362,6 +3398,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			// framework whose sessions do not outlive a run, which
 			// leaves the dispatch exactly as it has always been.
 			ResumeSession: resumeSession,
+			SandboxReused: cfg.sandboxReused,
 			// And the conversation this run is in, written down the
 			// moment the framework names it (earlySession).
 			OnResumableSession: early.record,
@@ -3372,6 +3409,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
 		result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
+		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, comments, result, runErr)
 		agentRan = true
 		if result != nil {
 			resumableSession = result.ResumableSession

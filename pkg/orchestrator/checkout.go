@@ -281,13 +281,18 @@ func prepareCheckout(ctx context.Context, tools []mcp.Tool, remoteBase string, t
 
 func prepareCheckoutFrom(ctx context.Context, tools []mcp.Tool, remoteBase, cloneURL string, task model.Task,
 	setup string, notes setupNotes, settingsRepos ...model.RepoRef) (checkout, error) {
+	return prepareCheckoutWithReuse(ctx, tools, remoteBase, cloneURL, task, setup, false, notes, settingsRepos...)
+}
+
+func prepareCheckoutWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase, cloneURL string, task model.Task,
+	setup string, reused bool, notes setupNotes, settingsRepos ...model.RepoRef) (checkout, error) {
 
 	var settings model.RepoRef
 	if len(settingsRepos) != 0 {
 		settings = settingsRepos[0]
 	}
 	if id, ok := model.ConsoleSessionIDOf(task); ok && id == model.DirectorSessionID && task.Target == nil {
-		return prepareDirectorState(ctx, tools, remoteBase, task, settings), nil
+		return prepareDirectorStateWithReuse(ctx, tools, remoteBase, task, settings, reused), nil
 	}
 
 	if (remoteBase == "" && cloneURL == "") || task.Target == nil {
@@ -299,6 +304,20 @@ func prepareCheckoutFrom(ctx context.Context, tools []mcp.Tool, remoteBase, clon
 		// (and a second entry in the narration setupNotes keeps) on it.
 		out := checkout{Root: sandboxWorkingDir(ctx, tools)}
 		return out, nil
+	}
+	if reused {
+		if run, ok := runCommandTool(tools); ok {
+			checkExisting := fmt.Sprintf("set -e\n%s\nif [ -d '%s/.git' ]; then\n  cd '%s'\n  echo 'grain-reused-checkout:yes'\n  %s\nfi",
+				sandboxRootEcho(), CheckoutDir, CheckoutDir, stateRepoCheck())
+			res := run(ctx, map[string]any{"command": checkExisting})
+			if !res.IsError && strings.Contains(res.Text, "grain-reused-checkout:yes") {
+				return checkout{
+					Dir:       CheckoutDir,
+					Root:      sandboxRootFrom(res.Text),
+					StateRepo: strings.Contains(res.Text, stateRepoMarker),
+				}, nil
+			}
+		}
 	}
 	branch := task.BranchName()
 	for _, v := range []string{task.Target.Owner, task.Target.Name, branch} {
@@ -387,6 +406,10 @@ fi
 }
 
 func prepareDirectorState(ctx context.Context, tools []mcp.Tool, remoteBase string, task model.Task, repo model.RepoRef) checkout {
+	return prepareDirectorStateWithReuse(ctx, tools, remoteBase, task, repo, false)
+}
+
+func prepareDirectorStateWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase string, task model.Task, repo model.RepoRef, reused bool) checkout {
 	out := checkout{DirectorStateRepo: repo, ProxyBase: proxyBaseWithoutCredentials(remoteBase)}
 	if repo.Owner == "" {
 		out.DirectorState = directorStateAbsent
@@ -415,6 +438,16 @@ func prepareDirectorState(ctx context.Context, tools []mcp.Tool, remoteBase stri
 rm -rf '%s'
 git clone --quiet '%s' '%s' && git -C '%s' remote set-url --push origin grain-read-only`,
 		sandboxRootEcho(), DirectorStateDir, CloneURL(out.ProxyBase, repo), DirectorStateDir, DirectorStateDir)
+	if reused {
+		script = fmt.Sprintf(`%s
+if [ -d '%s/.git' ]; then
+  git -C '%s' pull --ff-only --quiet 2>/dev/null || true
+else
+  rm -rf '%s'
+  git clone --quiet '%s' '%s' && git -C '%s' remote set-url --push origin grain-read-only
+fi`,
+			sandboxRootEcho(), DirectorStateDir, DirectorStateDir, DirectorStateDir, CloneURL(out.ProxyBase, repo), DirectorStateDir, DirectorStateDir)
+	}
 	result := run(ctx, map[string]any{"command": script})
 	out.Root = sandboxRootFrom(result.Text)
 	if result.IsError {
