@@ -148,6 +148,17 @@ the image this build of grain is stamped for.
   appears when grain cannot read the labels at all, for example a private
   registry the daemon has no credentials for; check those images with
   `grain sandbox-image check`.
+- **A copy of the stock image is not a custom image.** When
+  `sandbox_image`, `k8s_sandbox_image` or `k8s_granule_image` names grain's
+  own stock image (the same `<owner>/grain/guest` or
+  `<owner>/grain/k8s-sandbox` repository, in any registry) at a
+  `sha-<short>` or `vX.Y.Z` tag other than the one this daemon is stamped
+  for, the pin holds every sandbox at that build while upgrades move the
+  daemon on. On a moving tag, the same applies when its
+  `org.opencontainers.image.revision` label names a different commit.
+  Settings shows a warning beside the field, and **System → Sandboxes**
+  shows one for each pinned setting. Clear the setting to follow the
+  stamp, or move the pin to the stamped tag.
 
 This setting replaces the old **Sandbox setup script**
 (`grain_config.sandbox_setup_script` / `scripts/guest-customization.sh`).
