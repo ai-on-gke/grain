@@ -267,7 +267,7 @@ func EffectiveK8sGranuleImage(cfg Config) string {
 		if pinned != "" && !isMirroredGuestRef(pinned, mirrorRepo) {
 			return pinned
 		}
-		return resolveOrMirrorSandboxImage(context.Background(), base, mirrorRepo)
+		return resolveOrMirrorSandboxImage(context.Background(), cfg, base, mirrorRepo)
 	}
 	if cfg.K8sGranuleImage != "" {
 		return cfg.K8sGranuleImage
