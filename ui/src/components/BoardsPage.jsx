@@ -22,6 +22,7 @@ import {
   ListHeader,
   RowLink,
 } from "./ListPrimitives.jsx";
+import ChipStrip from "./ChipStrip.jsx";
 
 // BoardsPage is the list of saved dashboards: what boards this
 // deployment has, filed under their folders, and -- the part this page
@@ -83,9 +84,9 @@ function Row({ board, handle, dragging, picked, onOpen }) {
           theirs in (grain/task-294) -- a board's kind is short enough
           that nothing here is ever dropped, and the strip is what makes
           "chips on this row live in .chips" true without exceptions. */}
-      <span className="chips">
+      <ChipStrip>
         <Chip size="small" label={boardKindLabel(board.kind)} />
-      </span>
+      </ChipStrip>
       <span className="template-title hint">
         {board.description || (board.query ? board.query : "every task")}
       </span>

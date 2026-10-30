@@ -47,6 +47,7 @@ import ItemGlyph from "./ItemGlyph.jsx";
 import { identifierField } from "../identifierField.js";
 import NoGitConnectionNotice from "./NoGitConnectionNotice.jsx";
 import { useInPageHeader } from "./PageHeader.jsx";
+import ChipStrip from "./ChipStrip.jsx";
 
 // SORTS is this page's own toolbar Select, TaskList's own shape
 // (taskFilters.js) with "custom" standing where the task list's
@@ -596,7 +597,7 @@ export default function RepoList({
               >
                 {r.repo}
               </RowLink>
-              <span className="chips">
+              <ChipStrip>
                 {/* Each chip here counts a repo's tasks in one state, not one
                       task's own status, so "running" keeps the plain CSS spin
                       (style.css's .badge-running) rather than StateDot's grain
@@ -625,7 +626,7 @@ export default function RepoList({
                     title="No tasks, and not on this deployment's target repos -- listed here because it has configuration of its own, which its own page edits."
                   />
                 )}
-              </span>
+              </ChipStrip>
               <Typography
                 variant="caption"
                 color="text.secondary"
