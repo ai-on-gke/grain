@@ -1470,8 +1470,8 @@ func grainCLISection(task model.Task) string {
 // team-broadcast) is not here: the tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
 	{model.SelfDebugCapability, "`grain ls/read/grep src://...`, `grain task list`, `grain task read <id>`, " +
-		"`grain task transcript <id>`, `grain metrics [<section>]`, `grain read deploy://pipeline-changes`"},
-	{"grain-log", "`grain log [--tail N]`"},
+		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d] [--repo <r>]`, `grain read deploy://pipeline-changes`"},
+	{"grain-log", "`grain log [--since <t>] [--min-priority err] [--contains <s>] [--max-lines N]`"},
 	{"deployment-health", "`grain health`, `grain read deploy://state`"},
 	{"bootstrap-playbooks", "`grain playbooks [<name>]`"},
 	{"memory", "`grain memory list`, `grain memory read <key>`, `grain memory write [--repo owner/name] --file <f>`, " +

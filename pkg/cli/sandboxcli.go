@@ -364,9 +364,9 @@ func (c *sandboxCLI) run(args []string) error {
 		return c.quarantine(p)
 	case "metrics":
 		if section := p.optArg(0); section != "" {
-			return c.fs("deploy://metrics/"+section, nil)
+			return c.fs("deploy://metrics/"+section, metricsQuery(p))
 		}
-		return c.fs("deploy://metrics", nil)
+		return c.fs("deploy://metrics", metricsQuery(p))
 	case "health":
 		return c.fs("deploy://health", nil)
 	case "log":
@@ -374,7 +374,7 @@ func (c *sandboxCLI) run(args []string) error {
 		if source := p.optArg(0); source != "" {
 			uri += "/" + source
 		}
-		return c.fs(uri, p.query("tail"))
+		return c.fs(uri, grainLogQuery(p))
 	case "playbooks":
 		if name := p.optArg(0); name != "" {
 			return c.fs("src://playbooks/"+name, nil)
@@ -655,6 +655,34 @@ func (p sandboxArgs) get(name string) string { return p.flags[name] }
 func (p sandboxArgs) getAll(name string) []string { return p.multiFlags[name] }
 
 func (p sandboxArgs) has(name string) bool { _, ok := p.flags[name]; return ok }
+
+// grainLogQuery is `grain log`'s flags as deploy://grain.log's query:
+// the window, priority, substring and line cap read_grain_log takes, and
+// --tail, which the namespace applies to whatever that answers.
+func grainLogQuery(p sandboxArgs) url.Values {
+	q := p.query("tail", "since", "until", "contains")
+	if v := p.get("min-priority"); v != "" {
+		q.Set("min_priority", v)
+	}
+	for _, name := range []string{"max-lines", "lines"} {
+		if v := p.get(name); v != "" {
+			q.Set("max_lines", v)
+		}
+	}
+	return q
+}
+
+// metricsQuery is `grain metrics`' flags as deploy://metrics' query;
+// --repo and --author may each be repeated or comma-separated.
+func metricsQuery(p sandboxArgs) url.Values {
+	q := p.query("window", "since", "until")
+	for _, name := range []string{"repo", "author"} {
+		for _, v := range p.getAll(name) {
+			q.Add(name, v)
+		}
+	}
+	return q
+}
 
 // query copies the named flags into a query; "list" is always set bare.
 func (p sandboxArgs) query(names ...string) url.Values {

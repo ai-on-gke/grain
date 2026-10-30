@@ -299,3 +299,24 @@ func TestSandboxCLIIssuesAndDBAgainstTheProxy(t *testing.T) {
 		t.Errorf("issue list without read-issues: %d %s", code, errOut)
 	}
 }
+
+// `grain log` and `grain metrics` hand their window and filter flags to
+// deploy:// as its query, so a read is not stuck on the default tail.
+func TestSandboxLogAndMetricsFlagsBecomeTheirQuery(t *testing.T) {
+	p, err := parseSandboxArgs([]string{"daemon", "--since", "2026-10-29T00:00:00Z", "--until=2026-10-29T06:00:00Z",
+		"--min-priority", "err", "--contains", "dispatch failed", "--lines", "900", "--tail", "40"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := grainLogQuery(p).Encode(), "contains=dispatch+failed&max_lines=900&min_priority=err"+
+		"&since=2026-10-29T00%3A00%3A00Z&tail=40&until=2026-10-29T06%3A00%3A00Z"; got != want {
+		t.Errorf("grain log query = %s, want %s", got, want)
+	}
+	p, err = parseSandboxArgs([]string{"summary", "--window", "7d", "--repo", "acme/a,acme/b", "--repo", "acme/c", "--author", "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := metricsQuery(p).Encode(), "author=task&repo=acme%2Fa%2Cacme%2Fb&repo=acme%2Fc&window=7d"; got != want {
+		t.Errorf("grain metrics query = %s, want %s", got, want)
+	}
+}
