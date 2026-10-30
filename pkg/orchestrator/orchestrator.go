@@ -949,6 +949,26 @@ type Config struct {
 	// the upgrade proceeds, interrupting active runs non-destructively so they can
 	// resume on the upgraded daemon.
 	UpgradeDrainWindow time.Duration
+	// SessionSandboxIdleTTL bounds how long an interactive session task's
+	// sandbox (and in-process agent session) stays warm awaiting a reply
+	// after a turn ends before being released. Zero reads from
+	// grain_config.session_sandbox_idle_ttl_ms (defaulting to
+	// model.DefaultSessionSandboxIdleTTL, 30m); a negative value turns warm
+	// retention off.
+	SessionSandboxIdleTTL time.Duration
+	// WaitForSessionReply keeps an interactive session's run alive in-process
+	// waiting for the next human message (up to SessionSandboxIdleTTL) when
+	// the agent ends a turn with an answer and a resumable session, even when
+	// Deps.Runs is nil. When Deps.Runs is non-nil (an asynchronous daemon loop),
+	// in-process session continuation is enabled automatically.
+	WaitForSessionReply bool
+
+	sandboxReused        bool
+	sandboxReclaimed     bool
+	inProcessSessionWait bool
+	sessionSandboxName   string
+	sessionShape         model.Commitment
+	sessionLedger        *model.Ledger
 }
 
 func (c Config) cancelPollInterval() time.Duration {

@@ -442,6 +442,13 @@ type RunConfig struct {
 	// for any ResumeSession, by starting the task from Prompt.
 	ContinuePrompt string
 
+	// SandboxReused reports that this dispatch is reusing the warm sandbox
+	// left by the task's previous turn rather than starting in a fresh
+	// sandbox. When ResumeSession is also set, ResumeMessage uses
+	// SuspendedReusedSandboxPreamble instead of SuspendedPreamble so the
+	// agent knows the sandbox is the same one.
+	SandboxReused bool
+
 	// OnResumableSession, when set, is called with the conversation this
 	// run is in as soon as its CLI names it -- the same token
 	// Result.ResumableSession will carry, under the same rule that it is
@@ -561,15 +568,25 @@ func (c RunConfig) EffectiveSuspendedPrompt() string {
 	return c.Prompt
 }
 
+// EffectiveSuspendedPreamble returns SuspendedReusedSandboxPreamble when the
+// run is reusing the previous turn's warm sandbox, and SuspendedPreamble when
+// the run is starting in a fresh sandbox.
+func (c RunConfig) EffectiveSuspendedPreamble() string {
+	if c.SandboxReused {
+		return SuspendedReusedSandboxPreamble
+	}
+	return SuspendedPreamble
+}
+
 // ResumeMessage is the user turn a Framework sends on joining
 // ResumeSession: ContinuePrompt alone when the stop rule is resuming a
-// session that has only just ended, and otherwise SuspendedPreamble in
-// front of EffectiveSuspendedPrompt.
+// session that has only just ended, and otherwise
+// EffectiveSuspendedPreamble in front of EffectiveSuspendedPrompt.
 func (c RunConfig) ResumeMessage() string {
 	if c.ContinuePrompt != "" {
 		return c.ContinuePrompt
 	}
-	return SuspendedPreamble + c.EffectiveSuspendedPrompt()
+	return c.EffectiveSuspendedPreamble() + c.EffectiveSuspendedPrompt()
 }
 
 // AddendaArgs is the "-addenda-after <id>" pair a Framework passes its

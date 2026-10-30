@@ -300,7 +300,12 @@ import "strconv"
 // exec id and output cursor, so a restarted grain reattaches the step
 // rather than marking its run interrupted (model.CIStepAttachment,
 // docs/design/grain-on-gke.md#GKE-4).
-const SchemaVersion = 64
+//
+// 65 adds `session_sandbox_idle_ttl_ms` to `grain_config`: how long an
+// interactive chat/session task's sandbox (and in-process agent session)
+// stays warm awaiting a reply after a turn ends before being released
+// (model.Config.SessionSandboxIdleTTL).
+const SchemaVersion = 65
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -1990,6 +1995,7 @@ var Tables = []string{
   ` + "`judgement_model`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`external_agent_api`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`sandbox_image_mirror`" + `         TEXT    NOT NULL DEFAULT '',
+  ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

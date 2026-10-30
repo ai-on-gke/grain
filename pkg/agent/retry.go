@@ -336,6 +336,16 @@ const SuspendedPreamble = "Before the task below: you have worked on this task b
 	"where it differs from what you remember, it wins. Then carry on with what is left rather " +
 	"than repeating work you have already pushed.\n\n"
 
+// SuspendedReusedSandboxPreamble is SuspendedPreamble's counterpart for a
+// session dispatch that reuses the warm sandbox left by the previous turn.
+const SuspendedReusedSandboxPreamble = "Before the task below: you have worked on this task before. The " +
+	"conversation above is your own -- grain suspended it when your previous run ended and has " +
+	"now resumed you in it rather than starting you from nothing.\n\n" +
+	"The sandbox is the same one. Your filesystem, installed packages, clones and uncommitted " +
+	"changes from your previous turn are still in place -- do not redo setup, re-clone or " +
+	"reinstall packages that are already there.\n\n" +
+	"The updates since your last turn are below. Read them and carry on from where you left off.\n\n"
+
 // SuspendedResumeRefusedNote is what a run says in its transcript when
 // the session a previous run left suspended turned out not to be
 // resumable after all -- the CLI refused the invocation, or no longer
