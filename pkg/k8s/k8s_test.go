@@ -1235,3 +1235,35 @@ func TestCheckImagePullConnectivitySuggestsMirrorWhenClusterInDifferentProject(t
 		t.Errorf("CheckImagePullConnectivity = %q, want %q", err.Error(), want)
 	}
 }
+
+// Every managed pod's waiting reason is listed, whatever image it runs: a
+// 403 pulling the sandbox image is not the guest image's to report, and
+// is the sandbox image's own.
+func TestCheckImagePullConnectivityAttributesA403ToTheImageThatFailed(t *testing.T) {
+	sandboxImage := "us-docker.pkg.dev/source-project/grain/sandbox:sha-31d0973"
+	guestImage := "us-docker.pkg.dev/cluster-project/grain/guest:sha-31d0973@sha256:053664f0a62cf642aff3b59530eaee5b22441cdfd9ba74ff6af2632a50f8891a"
+	pullErr := `ErrImagePull: failed to pull and unpack image "` + sandboxImage + `": failed to authorize: failed to fetch oauth token: unexpected status from GET request to https://us-docker.pkg.dev/v2/token?scope=repository%3Asource-project%2Fgrain%2Fsandbox%3Apull&service=us-docker.pkg.dev: 403 Forbidden`
+	pods := sandboxImage + "|" + pullErr + "\n" + guestImage + "|ContainerCreating: \n"
+	dir := t.TempDir()
+	kubectl := filepath.Join(dir, "kubectl")
+	script := "#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"  *\"get pods\"*) printf '%s' '" + pods + "' ;;\n" +
+		"  *\"get nodes\"*) echo gce://cluster-project/us-central1-a/gke-node-1 ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing the fake kubectl: %v", err)
+	}
+	c := Client{Kubectl: kubectl, Namespace: "grain"}
+
+	if err := c.CheckImagePullConnectivity(context.Background(), guestImage); err != nil {
+		t.Errorf("CheckImagePullConnectivity(guest) = %q, want nil: the 403 was the sandbox image's", err)
+	}
+	err := c.CheckImagePullConnectivity(context.Background(), sandboxImage)
+	if err == nil {
+		t.Fatal("CheckImagePullConnectivity(sandbox) succeeded, want its 403 reported")
+	}
+	if want := "cluster nodes cannot pull " + sandboxImage + " "; !strings.Contains(err.Error(), want) {
+		t.Errorf("CheckImagePullConnectivity(sandbox) = %q, want %q", err.Error(), want)
+	}
+}
