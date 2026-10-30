@@ -83,7 +83,12 @@ func (c *Client) CapabilityPolicy(ctx context.Context) (model.CapabilityPolicy, 
 	return cfg.CapabilityPolicy, nil
 }
 
-// SetCapabilityPolicy replaces the stored policy with p.
+// SetCapabilityPolicy replaces the stored policy's rules with p's. A p
+// with no catalogue keeps the stored one: the catalogue is
+// settings/capabilities.yml's (model.CapabilityPolicy.Catalogue), and
+// Settings → Capabilities' rule editor saves its rules alone, so
+// replacing the whole policy would have erased every catalogue
+// restriction -- and the file with them -- on a save about something else.
 func (c *Client) SetCapabilityPolicy(ctx context.Context, p model.CapabilityPolicy) error {
 	if err := p.Validate(); err != nil {
 		return validationErrorf("%s", err)
@@ -92,6 +97,9 @@ func (c *Client) SetCapabilityPolicy(ctx context.Context, p model.CapabilityPoli
 		return err
 	}
 	return c.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		if p.Catalogue == nil {
+			p.Catalogue = cfg.CapabilityPolicy.Catalogue
+		}
 		cfg.CapabilityPolicy = p
 		return nil
 	})

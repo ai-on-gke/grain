@@ -4614,6 +4614,9 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	if task.Approval != nil {
 		return nil
 	}
+	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
+		return err
+	}
 	return c.Store.Approve(ctx, id, model.Attribution{Actor: c.actor(ctx)}, c.now())
 }
 
@@ -5893,6 +5896,9 @@ func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
 	by := c.actor(ctx)
 	if by.Kind != model.PrincipalAgent {
 		return nil
+	}
+	if err := c.catalogueApprovalRefusal(ctx, task); err != nil {
+		return err
 	}
 	requester, err := c.Store.GetTask(ctx, by.ID)
 	if err != nil {

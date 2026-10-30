@@ -103,6 +103,43 @@ func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, gran
 	return nil
 }
 
+// catalogueApprovalRefusal refuses an agent approving a task that holds a
+// grant the catalogue marks as a person's decision. Filing leaves such a
+// task proposed for a person to approve (catalogueFilingGrants), and
+// nothing at dispatch asks again whether a person did: without this, an
+// agent holding api:tasks:admin could file the task and approve it
+// itself, and the run would hold the grant with no person deciding.
+// A grant the catalogue refuses outright is not this check's business:
+// dispatch holds that task whoever approves it (orchestrator.catalogueHold).
+func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) error {
+	if c.actor(ctx).Kind != model.PrincipalAgent {
+		return nil
+	}
+	cat, err := c.capabilityCatalogue(ctx)
+	if err != nil || cat == nil {
+		return err
+	}
+	gc := model.TaskGrantContext(task)
+	if gc.TemplateID != "" {
+		if tmpl, err := c.Store.GetTemplate(ctx, gc.TemplateID); err == nil && tmpl != nil {
+			gc.TemplateName = tmpl.Name
+		}
+	}
+	var needsPerson []string
+	for _, g := range gc.Grants {
+		one := gc
+		one.Grants = []string{g}
+		if verdict, err := cat.ValidateGrants(one); err == nil {
+			needsPerson = append(needsPerson, verdict.RequiresPerson...)
+		}
+	}
+	if len(needsPerson) == 0 {
+		return nil
+	}
+	return forbiddenErrorf("task %s holds %s, which settings/capabilities.yml marks as a person's decision (requires_person): only a person may approve it",
+		task.ID, strings.Join(needsPerson, ", "))
+}
+
 // catalogueEditRefusalFor is catalogueEditRefusal for the task stored as
 // id; a task that is not there is the edit's own error to report.
 func (c *Client) catalogueEditRefusalFor(ctx context.Context, id, grant string) error {
