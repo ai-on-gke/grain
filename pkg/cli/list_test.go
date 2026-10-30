@@ -378,6 +378,9 @@ func TestConditionsRejectWhatNobodyCanActOn(t *testing.T) {
 		{name: "a comparison nothing makes", raw: "repo:startswith:acme", says: "takes no comparison"},
 		{name: "a comparison this type does not take", raw: "title:any:flake", says: "takes no comparison"},
 		{name: "a value outside a fixed vocabulary", raw: "state:any:in_progress", says: "unknown state"},
+		// The alias the UI's "Asked" stands for is one of the words that
+		// work, so the refusal names it too (2026-10-28 walkthrough).
+		{name: "a state the alias list names", raw: "state:any:waiting", says: "asked (awaiting_reply or awaiting_submit)"},
 		{name: "an origin nobody files from", raw: "origin:any:robot", says: "unknown origin"},
 		{name: "none of an attribute that always has one", raw: "state:any:none", says: "not one of its values"},
 		{name: "a condition with no value", raw: "repo:any:", says: "needs a value"},
