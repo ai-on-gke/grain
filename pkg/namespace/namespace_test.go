@@ -759,6 +759,100 @@ func TestNewRedactorAppliesToReadRedactedGrepAndGrainLog(t *testing.T) {
 	}
 }
 
+func TestThreeSegmentHostQualifiedRepoCI(t *testing.T) {
+	t.Parallel()
+
+	const repo = "git.forge.example/experimental/grain"
+	store := ci.NewRunStore(10)
+	now := time.Now().UTC()
+	artDir := t.TempDir()
+	artPath := filepath.Join(artDir, "run-forge-1", "go", "cover.out")
+	if err := os.MkdirAll(filepath.Dir(artPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artPath, []byte("mode: set\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store.Put(ci.Run{
+		ID:         "run-forge-1",
+		Repo:       repo,
+		Ref:        "main",
+		Commit:     "abc123456789",
+		Conclusion: ci.ConclusionFailure,
+		StartedAt:  &now,
+		FinishedAt: &now,
+		Jobs: []ci.JobRun{
+			{
+				JobID:      "go",
+				Name:       "go",
+				Conclusion: ci.ConclusionFailure,
+				Steps: []ci.StepRun{
+					{
+						Name:       "Test",
+						Conclusion: ci.ConclusionFailure,
+						Output:     "--- FAIL: TestForgeNamespace (0.02s)\n",
+					},
+				},
+				Artifacts: []ci.Artifact{
+					{Name: "cover.out", Job: "go", Stored: true, Bytes: 10},
+				},
+				Attempts: []ci.JobAttempt{
+					{
+						Attempt:    1,
+						Conclusion: ci.ConclusionFailure,
+						Steps: []ci.StepRun{
+							{
+								Name:       "Test",
+								Conclusion: ci.ConclusionFailure,
+								Output:     "--- FAIL: TestForgeNamespace (0.02s)\n",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	srv := newTestServer(t, store, "", nil)
+	srv.ArtifactDir = artDir
+	scope := Scope{TaskRepo: repo, MayReadCI: true}
+
+	for _, tc := range []struct {
+		url  string
+		want string
+	}{
+		{"/fs/ci/?list", "git.forge.example/experimental/grain/\n"},
+		{"/fs/ci/git.forge.example?list", "experimental/grain/\n"},
+		{"/fs/ci/git.forge.example/experimental?list", "grain/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain?list", "run-forge-1/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1?list", "go/\nartifacts/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go?list", "attempts/\nTest.log\ngotest.log\ntests/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/attempts?list", "1/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/Test.log", "--- FAIL: TestForgeNamespace (0.02s)\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/attempts/1/Test.log", "--- FAIL: TestForgeNamespace (0.02s)\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/artifacts/go/cover.out", "mode: set\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/Test.log?grep=FAIL", "--- FAIL: TestForgeNamespace (0.02s)\n"},
+	} {
+		rec := serveRequest(srv, scope, http.MethodGet, tc.url, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d: %s", tc.url, rec.Code, rec.Body.String())
+		}
+		if got := rec.Body.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.url, got, tc.want)
+		}
+	}
+
+	// Out-of-scope 3-segment repo reports the full 3-segment name in the refusal.
+	forbiddenRec := serveRequest(srv, scope, http.MethodGet, "/fs/ci/git.forge.example/experimental/other/run-forge-1", nil)
+	if forbiddenRec.Code != http.StatusForbidden {
+		t.Fatalf("out-of-scope 3-segment repo status = %d, want 403", forbiddenRec.Code)
+	}
+	if got := forbiddenRec.Body.String(); !strings.Contains(got, "ci://git.forge.example/experimental/other is outside this sandbox's CI read scope") {
+		t.Errorf("out-of-scope refusal = %q, want full 3-segment repo name", got)
+	}
+}
+
 // task://<id> reads another task's record where that task works in a
 // repository the scope reaches -- its own, one it reads, or one an
 // api:tasks:read@repo grant names -- and refuses every other task, and
