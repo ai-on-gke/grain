@@ -303,12 +303,12 @@ func TestRelayProposedTasksAllowsInfraReviewCodeProposalsForSourceRepo(t *testin
 	store := openTestStoreForTuning(t)
 
 	sourceRepo := model.RepoRef{Owner: "ai-on-gke", Name: "grain"}
-	if err := store.SetTargetRepos(ctx, []string{sourceRepo.String()}); err != nil {
+	extStateRepo := model.RepoRef{Owner: "bwsalmon", Name: "grain-home"}
+	if err := store.SetTargetRepos(ctx, []string{sourceRepo.String(), extStateRepo.String()}); err != nil {
 		t.Fatalf("SetTargetRepos: %v", err)
 	}
 
 	now := time.Date(2026, 10, 30, 3, 0, 0, 0, time.UTC)
-	extStateRepo := model.RepoRef{Owner: "bwsalmon", Name: "grain-home"}
 	infraTask := model.Task{
 		ID:         "infra-review-run-2",
 		TemplateID: model.InfraReviewTemplateID,
@@ -350,6 +350,14 @@ func TestRelayProposedTasksAllowsInfraReviewCodeProposalsForSourceRepo(t *testin
 					"repo":  extStateRepo.String(),
 				},
 			},
+			{
+				Name: "propose_task",
+				Arguments: map[string]any{
+					"title": "Update unknown repo without naming a parameter",
+					"body":  "Targets an unknown repository outside TargetRepos.",
+					"repo":  "unknown/nonexistent",
+				},
+			},
 		},
 	}
 
@@ -380,7 +388,7 @@ func TestRelayProposedTasksAllowsInfraReviewCodeProposalsForSourceRepo(t *testin
 		t.Errorf("expected 0 tuning recommendations recorded, got %d: %+v", len(recs), recs)
 	}
 
-	// Only the two state-repo proposals missing a parameter should be noted as refused.
+	// The state-repo and unknown-repo proposals missing a parameter should be noted as refused.
 	comments, err := store.Comments(ctx, infraTask.ID)
 	if err != nil {
 		t.Fatalf("Comments failed: %v", err)
@@ -389,9 +397,10 @@ func TestRelayProposedTasksAllowsInfraReviewCodeProposalsForSourceRepo(t *testin
 		t.Fatalf("expected 1 refusal comment on infraTask, got %d: %+v", len(comments), comments)
 	}
 	for _, want := range []string{
-		"grain did not file 2 proposals from this run",
+		"grain did not file 3 proposals from this run",
 		"Update config without naming a parameter",
 		"Update external state repo without naming a parameter",
+		"Update unknown repo without naming a parameter",
 		"it names no grain_config parameter to change",
 	} {
 		if !strings.Contains(comments[0].Body, want) {

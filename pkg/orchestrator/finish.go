@@ -2376,23 +2376,28 @@ func proposalTargetsSourceRepo(ctx context.Context, store *model.Store, p map[st
 		return false
 	}
 	repo, err := model.ParseRepo(named)
-	if err != nil || model.IsConfigRepo(repo) {
+	if err != nil || isSettingsRepo(store, repo) {
 		return false
 	}
-	for _, r := range task.Reads {
-		if r.Same(repo) {
-			if store != nil {
-				if works, err := store.WorksInRepo(ctx, repo); err == nil && works {
-					return true
-				}
-				if targets, err := store.TargetRepos(ctx); err == nil && len(targets) > 0 && model.RepoAllowed(targets, repo) {
-					return true
-				}
+	hasSettingsRepo := store != nil && store.SettingsRepo != nil && store.SettingsRepo() != (model.RepoRef{})
+	if !hasSettingsRepo {
+		for _, r := range task.Reads {
+			if r.Same(repo) {
+				return false
 			}
-			return false
 		}
 	}
-	return true
+	if task.Target != nil && repo.Same(*task.Target) {
+		return true
+	}
+	if _, ok := model.WriteTargetFor(task, repo); ok {
+		return true
+	}
+	if store == nil {
+		return false
+	}
+	known, err := store.WorksInRepoForTeam(ctx, model.DefaultTeamID, repo)
+	return err == nil && known
 }
 
 // unknownProposalRepoNote is what a human approving the proposal reads
