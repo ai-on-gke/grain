@@ -1,0 +1,97 @@
+name: Update agent CLI clients
+title: Check and update pinned agent CLI client versions (claude, agy, codex)
+base: main
+auto-merge: true
+body: |
+  Check for newer upstream releases of the three pinned agent CLI clients
+  (`claude`, `agy`, and `codex`). If any of the three have a newer upstream
+  release than what `Dockerfile` currently pins, update them and all of their
+  cross-file pins and surface captures in a single pull request. If all three
+  are already on the latest upstream release, call `nothing_needed` reporting
+  the current versions checked.
+
+  ## 1. Claude Code CLI (`claude`)
+
+  - **Upstream release & digests**:
+    - Check the latest version from `https://downloads.claude.ai/claude-code-releases/latest`
+      (or npm `@anthropic-ai/claude-code`) and fetch its release manifest at
+      `https://downloads.claude.ai/claude-code-releases/<version>/manifest.json`
+      for the `linux-x64` (`amd64`) and `linux-arm64` (`arm64`) SHA-256 digests.
+  - **Cross-file pins**:
+    - Update `ARG CLAUDE_CLI_VERSION`, `ARG CLAUDE_CLI_SHA256_AMD64`, and
+      `ARG CLAUDE_CLI_SHA256_ARM64` in both `Dockerfile` and `Dockerfile.k8s-sandbox`
+      (`TestBothImagesPinTheSameAgentCLIs` in `tests/deploy/deploy_test.go`).
+    - Update `DefaultClaudeCLIVersion`, `DefaultClaudeCLISHA256Amd64`, and
+      `DefaultClaudeCLISHA256Arm64` in `pkg/hostinit/hostinit.go`
+      (`TestClaudeCLIDefaultsMatchDockerfile` in `pkg/hostinit/claudepin_test.go`).
+  - **Surface capture & reconciliation**:
+    - Install the new `claude` binary and regenerate `docs/claude-surface.md`
+      using `scripts/claude-surface.sh -o docs/claude-surface.md` (or via
+      `.grain/workflows/claude-surface.yml`) so
+      `TestCapturedClaudeIsTheClaudeTheImagePins` in
+      `pkg/agent/claude/surface_capture_test.go` passes.
+    - Reconcile any flag, subcommand, or tool changes surfaced by
+      `go test ./pkg/agent/claude/...` in `pkg/agent/claude`.
+
+  ## 2. Antigravity CLI (`agy`)
+
+  - **Upstream release & digests**:
+    - Inspect the upstream installer at `https://antigravity.google/cli/install.sh`
+      to find the latest `AGY_CLI_VERSION` and `AGY_CLI_BUILD`, and verify the
+      `linux-x64/cli_linux_x64.tar.gz` (`amd64`) and
+      `linux-arm/cli_linux_arm64.tar.gz` (`arm64`) archives and SHA-256 digests from
+      `https://storage.googleapis.com/antigravity-public/antigravity-cli/${AGY_CLI_VERSION}-${AGY_CLI_BUILD}/${platform}/${archive}`.
+  - **Cross-file pins**:
+    - Update `ARG AGY_CLI_VERSION`, `ARG AGY_CLI_BUILD`,
+      `ARG AGY_CLI_SHA256_AMD64`, and `ARG AGY_CLI_SHA256_ARM64` in both
+      `Dockerfile` and `Dockerfile.k8s-sandbox`
+      (`TestBothImagesPinTheSameAgentCLIs` in `tests/deploy/deploy_test.go`).
+    - Update `measuredAgyVersion` in `pkg/agent/antigravity/live_retry_stub_test.go`
+      (`TestMeasuredAgyIsTheAgyTheImagePins`) and verify retry probe assertions if
+      applicable.
+  - **Surface capture & reconciliation**:
+    - Install the new `agy` binary and regenerate `docs/agy-surface.md` using
+      `scripts/agy-surface.sh -o docs/agy-surface.md` (or via
+      `.grain/workflows/agy-surface.yml`) so
+      `TestCapturedAgyIsTheAgyTheImagePins` in
+      `pkg/agent/antigravity/surface_capture_test.go` passes.
+    - Reconcile any flag, subcommand, or tool changes surfaced by
+      `go test ./pkg/agent/antigravity/...` in `pkg/agent/antigravity`.
+
+  ## 3. Codex CLI (`codex`)
+
+  - **Upstream release & digests**:
+    - Check `https://github.com/openai/codex/releases` for the latest stable
+      `rust-v<version>` release tag and compute the SHA-256 digests for
+      `codex-x86_64-unknown-linux-musl.tar.gz`,
+      `codex-aarch64-unknown-linux-musl.tar.gz`,
+      `codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz`, and
+      `codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz`.
+  - **Cross-file pins**:
+    - Update `ARG CODEX_CLI_VERSION`, `ARG CODEX_CLI_SHA256_AMD64`,
+      `ARG CODEX_CLI_SHA256_ARM64`, `ARG CODEX_CODE_MODE_HOST_SHA256_AMD64`,
+      and `ARG CODEX_CODE_MODE_HOST_SHA256_ARM64` in both `Dockerfile` and
+      `Dockerfile.k8s-sandbox` (`TestBothImagesPinTheSameAgentCLIs` in
+      `tests/deploy/deploy_test.go`).
+    - Update `ReviewedCLIVersion` in `pkg/agent/codex/runtime.go` (checked by
+      `TestReviewedRuntimeMatchesImage` in `pkg/agent/codex/isolation_live_test.go`)
+      if applicable, after reviewing tool/runtime changes.
+  - **Surface capture & reconciliation**:
+    - Install the new `codex` binary and regenerate `docs/codex-surface.md`
+      using `scripts/codex-surface.sh -o docs/codex-surface.md` (or via
+      `.grain/workflows/codex-surface.yml`) so
+      `TestCapturedCodexIsTheCodexTheImagePins` in
+      `pkg/agent/codex/surface_capture_test.go` passes.
+    - Reconcile any flag, subcommand, or tool changes surfaced by
+      `go test ./pkg/agent/codex/...` in `pkg/agent/codex`.
+
+  ## 4. Verification
+
+  - Run the cross-file pin and surface capture tests:
+    ```bash
+    go test ./pkg/hostinit/... ./pkg/agent/claude/... ./pkg/agent/antigravity/... ./pkg/agent/codex/... ./tests/deploy/...
+    ```
+  - If any CLI was updated, commit all changes onto the task branch, push, and
+    run `grain ci wait` until CI passes.
+  - If all three CLIs are already at their latest upstream release, call
+    `nothing_needed` with the verified versions.

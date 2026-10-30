@@ -52,7 +52,12 @@ import { identifierField } from "../identifierField.js";
 const resetValueCount = (notice) =>
   (notice.values?.length || 0) + (notice.moreValues || 0);
 
-export default function StateRepoPanel({ showError, onStatusChange }) {
+export default function StateRepoPanel({
+  showError,
+  onStatusChange,
+  openPath = "",
+  onOpenPath,
+}) {
   const zone = useTimeZone();
   const [status, setStatus] = useState(null);
   // A restored secrets file may arrive before the key that opens it, so
@@ -422,6 +427,8 @@ export default function StateRepoPanel({ showError, onStatusChange }) {
         showError={showError}
         status={status}
         onSync={() => act("/api/state-repo/sync")}
+        openPath={openPath}
+        onOpenPath={onOpenPath}
       />
 
       <Typography variant="subtitle2" sx={{ mt: 3 }}>

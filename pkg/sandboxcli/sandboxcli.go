@@ -385,7 +385,7 @@ func (c *sandboxCLI) run(args []string) error {
 		return c.fs("deploy://health", nil)
 	case "log":
 		uri := "deploy://grain.log"
-		if source := p.optArg(0); source != "" {
+		if source := grainLogSource(p); source != "" {
 			uri += "/" + source
 		}
 		return c.fs(uri, grainLogQuery(p))
@@ -707,8 +707,10 @@ func (p sandboxArgs) has(name string) bool { _, ok := p.flags[name]; return ok }
 // --tail, which the namespace applies to whatever that answers.
 func grainLogQuery(p sandboxArgs) url.Values {
 	q := p.query("tail", "since", "until", "contains")
-	if v := p.get("min-priority"); v != "" {
-		q.Set("min_priority", v)
+	for _, name := range []string{"priority", "min-priority"} {
+		if v := p.get(name); v != "" {
+			q.Set("min_priority", v)
+		}
 	}
 	for _, name := range []string{"max-lines", "lines"} {
 		if v := p.get(name); v != "" {
@@ -716,6 +718,15 @@ func grainLogQuery(p sandboxArgs) url.Values {
 		}
 	}
 	return q
+}
+
+// grainLogSource is the journal `grain log` reads: --source when given,
+// else its first argument, else "" for the daemon's own.
+func grainLogSource(p sandboxArgs) string {
+	if v := p.get("source"); v != "" {
+		return v
+	}
+	return p.optArg(0)
 }
 
 // metricsQuery is `grain metrics`' flags as deploy://metrics' query;

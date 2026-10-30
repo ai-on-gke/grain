@@ -24,9 +24,9 @@ async function openFromGear(page) {
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
   await page.getByTestId("top-bar-settings").click();
   await expect(
-    page.getByRole("heading", { name: "General", level: 1 }),
+    page.getByRole("heading", { name: "Models", level: 1 }),
   ).toBeVisible();
-  await expect(page).toHaveURL(/\/settings\/general$/);
+  await expect(page).toHaveURL(/\/settings\/models$/);
 }
 
 async function section(page, id, title) {
@@ -77,6 +77,7 @@ test("edits one setting in each section, and every one survives a reload", async
     await openFromGear(page);
 
     // General
+    await section(page, "general", "General");
     await commitBox(page, "Environment name", "walkthrough");
     // Access: what this section has to show is how this browser is signed in.
     await section(page, "access", "Access");
@@ -234,7 +235,7 @@ test("every old path lands where §3.5 says, and Back skips it", async ({
     ["/system/integrations", "/settings/credentials"],
     ["/system/state", "/settings/config-repo"],
     ["/system/nonsense", "/system"],
-    ["/settings", "/settings/general"],
+    ["/settings", "/settings/models"],
     ["/memory", "/settings/memory"],
     ["/sandboxes", "/system/sandboxes"],
     ["/caches", "/system/caches"],
@@ -270,6 +271,7 @@ test("filtering 'overcommit' finds CPU overcommit and focuses it", async ({
 
 test("a toggle autosaves and survives a reload", async ({ page }) => {
   await openFromGear(page);
+  await section(page, "general", "General");
   const toggle = page.getByRole("checkbox", {
     name: /Show closed tasks by default/,
   });
@@ -471,7 +473,7 @@ test("pinned Settings shortcut highlights on desktop and Back returns to Tasks",
     hasText: "Settings",
   });
   await pinnedSettings.click();
-  await expect(page).toHaveURL(/\/settings\/general$/);
+  await expect(page).toHaveURL(/\/settings\/models$/);
   await expect(pinnedSettings).toHaveClass(/Mui-selected/);
 
   await page.goBack();
