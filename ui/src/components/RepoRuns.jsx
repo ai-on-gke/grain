@@ -122,8 +122,8 @@ export default function RepoRuns({ repo, onOpenRun, showError }) {
       {data !== null && !data.enabled && (
         <Alert severity="info">
           This deployment does not run grain CI: its daemon was started with
-          -ci=false, so the workflows on this repository's CI tab are stored
-          but never run.
+          -ci=false, so the workflows on this repository's CI tab are stored but
+          never run.
         </Alert>
       )}
       {/* The repo is not a question here, so the form is a branch and a
