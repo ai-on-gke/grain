@@ -362,6 +362,22 @@ func TestTaskOriginTellsAReviewFromAMergeFix(t *testing.T) {
 	}
 }
 
+// An external agent's filing is created as the deployment's person, so
+// read off Creator alone it is indistinguishable from one filed by hand
+// (docs/test-runs/2026-10-29-external-agent-mcp.md, follow-up 1).
+func TestTaskOriginTellsAnExternalAgentsFilingFromAHandFiledOne(t *testing.T) {
+	t.Parallel()
+	tasks := []ui.Task{
+		{ID: "1", Title: "By hand", State: model.StateQueued, Creator: "debian", Author: "debian", AuthorKind: "human"},
+		{ID: "2", Title: "By an agent", State: model.StateQueued, Creator: "debian", Author: "external:widgets-writer", AuthorKind: "agent"},
+	}
+	for origin, want := range map[string][]string{"hand": {"1"}, "external": {"2"}} {
+		if got := asked(t, "origin:any:"+origin).apply(tasks); !equal(ids(got), want) {
+			t.Fatalf("apply(origin:any:%s) = %v, want %v", origin, ids(got), want)
+		}
+	}
+}
+
 // A word nobody can act on is answered with the words that work, rather
 // than with an empty listing that reads like a deployment with no such
 // tasks. Unlike the frontend -- which drops a clause it cannot answer so
