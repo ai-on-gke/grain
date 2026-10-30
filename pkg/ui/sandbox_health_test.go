@@ -172,6 +172,31 @@ func TestGetSandboxHealthReportsTheSandboxImageAndTheStampItShouldMatch(t *testi
 	if strings.Contains(body, "sandboxImage") {
 		t.Errorf("body = %s, want no sandboxImage for a deployment that has none", body)
 	}
+
+	// When SandboxImageFunc is wired (as in the running daemon over
+	// live.Current()), GET /api/sandboxes reflects setting and clearing a
+	// custom sandbox image without a restart.
+	current := &ui.SandboxImage{
+		Image:    "registry.example/team/guest:v1",
+		Expected: "ghcr.io/bwsalmon/grain/guest:sha-e5544d6",
+	}
+	client.Config.SandboxImageFunc = func() *ui.SandboxImage { return current }
+	got = decode[struct {
+		SandboxImage *ui.SandboxImage `json:"sandboxImage"`
+	}](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))
+	if got.SandboxImage == nil || got.SandboxImage.Image != "registry.example/team/guest:v1" {
+		t.Fatalf("sandboxImage with custom set = %+v, want registry.example/team/guest:v1", got.SandboxImage)
+	}
+	current = &ui.SandboxImage{
+		Image:    "ghcr.io/bwsalmon/grain/guest:sha-e5544d6",
+		Expected: "ghcr.io/bwsalmon/grain/guest:sha-e5544d6",
+	}
+	got = decode[struct {
+		SandboxImage *ui.SandboxImage `json:"sandboxImage"`
+	}](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))
+	if got.SandboxImage == nil || got.SandboxImage.Image != "ghcr.io/bwsalmon/grain/guest:sha-e5544d6" {
+		t.Fatalf("sandboxImage after clearing custom = %+v, want stamped default", got.SandboxImage)
+	}
 }
 
 func TestGetSandboxHealthReportsHostErrorWithoutHidingSandboxes(t *testing.T) {

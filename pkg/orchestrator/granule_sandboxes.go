@@ -584,6 +584,7 @@ type GranuleSandboxes struct {
 	// piece of a GranuleSandboxes' configuration that changes after
 	// construction, so it is the only one that needs mu.
 	defaults Shape
+	image    string
 	// breakers is what the last health probe of each live sandbox found,
 	// keyed by sandbox name, so that a guest which has stopped answering
 	// is not re-probed at full price by every sweep for as long as it
@@ -656,6 +657,44 @@ func (k *GranuleSandboxes) SetDefaultShape(shape Shape) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.defaults = shape
+}
+
+// SetImage implements SandboxImageSetter: the guest image the next VM is
+// created from when GranuleConfig.SandboxImage is not wired.
+func (k *GranuleSandboxes) SetImage(image string) {
+	k.mu.Lock()
+	k.image = strings.TrimSpace(image)
+	k.mu.Unlock()
+}
+
+// CurrentImage implements SandboxImageSetter: the guest image new VMs are
+// created from right now, consulting GranuleConfig.SandboxImage when wired and
+// falling back to SetImage or any -kontur-image flag in CreateArgs.
+func (k *GranuleSandboxes) CurrentImage() string {
+	if k == nil {
+		return ""
+	}
+	if k.cfg.SandboxImage != nil {
+		if img, err := k.cfg.SandboxImage(context.Background()); err == nil && strings.TrimSpace(img) != "" {
+			return strings.TrimSpace(img)
+		}
+	}
+	k.mu.Lock()
+	img := k.image
+	k.mu.Unlock()
+	if img != "" {
+		return img
+	}
+	for i := 0; i < len(k.cfg.CreateArgs); i++ {
+		arg := k.cfg.CreateArgs[i]
+		if strings.HasPrefix(arg, granuleImageFlag+"=") {
+			return strings.TrimSpace(strings.TrimPrefix(arg, granuleImageFlag+"="))
+		}
+		if arg == granuleImageFlag && i+1 < len(k.cfg.CreateArgs) {
+			return strings.TrimSpace(k.cfg.CreateArgs[i+1])
+		}
+	}
+	return ""
 }
 
 // DefaultShape reads back the deployment-wide default VM shape currently in
@@ -902,7 +941,13 @@ func (k *GranuleSandboxes) create(ctx context.Context, name string, shape Shape,
 	// Before the stale VM is torn down, not after: this is the step that
 	// can wait minutes for a guest build, and a delete followed by a
 	// long wait would leave the slot with nothing in it for no reason.
-	args, err := k.cfg.createArgsWithImage(ctx, shape.orDefault(k.defaultShape()), image)
+	override := image
+	if override == "" && k.cfg.SandboxImage == nil {
+		k.mu.Lock()
+		override = k.image
+		k.mu.Unlock()
+	}
+	args, err := k.cfg.createArgsWithImage(ctx, shape.orDefault(k.defaultShape()), override)
 	if err != nil {
 		return err
 	}

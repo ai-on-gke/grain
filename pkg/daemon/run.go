@@ -970,6 +970,12 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	ReclaimWith(disks, ctx, NewDiskReclaim(sandboxes, &DockerPruner{
 		ActiveSandboxImage: chooseSandboxImage(cfg).image,
 		ActiveGrainImage:   DefaultGrainImage,
+		KeepImages: func() []string {
+			if img := live.CurrentSandboxImage(); img != "" {
+				return []string{img}
+			}
+			return nil
+		},
 	}))
 
 	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)

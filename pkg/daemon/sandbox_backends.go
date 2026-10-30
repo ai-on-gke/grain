@@ -233,10 +233,10 @@ func EffectiveK8sGitProxyHost(cfg Config) string {
 // pods, falling back to DefaultK8sSandboxImage (or the version-pinned default)
 // when unset.
 func EffectiveK8sSandboxImage(cfg Config) string {
-	if cfg.K8sSandboxImage != "" {
+	if cfg.K8sSandboxImage != "" && (cfg.K8sSandboxImage != model.DefaultK8sSandboxImage || DefaultK8sSandboxImage == model.DefaultK8sSandboxImage) {
 		return cfg.K8sSandboxImage
 	}
-	if cfg.K8sImage != "" {
+	if cfg.K8sImage != "" && (cfg.K8sImage != model.DefaultK8sSandboxImage || DefaultK8sSandboxImage == model.DefaultK8sSandboxImage) {
 		return cfg.K8sImage
 	}
 	if DefaultK8sSandboxImage != model.DefaultK8sSandboxImage {
@@ -269,7 +269,7 @@ func EffectiveK8sGranuleImage(cfg Config) string {
 		}
 		return resolveOrMirrorSandboxImage(context.Background(), base, mirrorRepo)
 	}
-	if cfg.K8sGranuleImage != "" {
+	if cfg.K8sGranuleImage != "" && (cfg.K8sGranuleImage != model.DefaultSandboxImage || DefaultSandboxImage == model.DefaultSandboxImage) {
 		return cfg.K8sGranuleImage
 	}
 	return base

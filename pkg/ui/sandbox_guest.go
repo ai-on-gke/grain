@@ -281,7 +281,7 @@ const guestCacheDispatch = model.SandboxGuestCacheJob
 // silences, and each of them is also "no line in the pane", which is the
 // same nil-means-unavailable contract the rest of this response gives.
 func (c *Client) sandboxGuestPublishing(ctx context.Context) *SandboxGuestPublishing {
-	if c.Config.SandboxImage == nil || c.Store == nil {
+	if c.sandboxImage() == nil || c.Store == nil {
 		return nil
 	}
 	image := c.sandboxGuestImage()
@@ -367,19 +367,30 @@ func (c *Client) publishesSandboxGuest(repo model.RepoRef) bool {
 	return ok && publisher.Same(repo)
 }
 
+func (c *Client) sandboxImage() *SandboxImage {
+	if c == nil {
+		return nil
+	}
+	if c.Config.SandboxImageFunc != nil {
+		return c.Config.SandboxImageFunc()
+	}
+	return c.Config.SandboxImage
+}
+
 // sandboxGuestImage is the guest reference every reading here is about:
 // what sandboxes are really created from, falling back to what this
 // build is stamped for when the deployment could not say. "" for a
 // deployment with no sandbox image at all, which attributes the guest to
 // no repository and is how the host-directory backend answers.
 func (c *Client) sandboxGuestImage() string {
-	if c.Config.SandboxImage == nil {
+	img := c.sandboxImage()
+	if img == nil {
 		return ""
 	}
-	if c.Config.SandboxImage.Image != "" {
-		return c.Config.SandboxImage.Image
+	if img.Image != "" {
+		return img.Image
 	}
-	return c.Config.SandboxImage.Expected
+	return img.Expected
 }
 
 // watchedBaseBranch is grain's own row for the base branch it is
