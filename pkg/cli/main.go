@@ -334,6 +334,8 @@ Commands:
                                        back to an agent for more work on its own branch
   config                               show the capabilities this deployment offers
   settings [flags]                     show, or change, the daemon's stored configuration (bwsalmon/agents#320)
+  sandbox-budget                       whether one sandbox of this deployment's shape fits in its sandbox budget,
+                                       and the settings that would fit when it does not (see sandbox_budget_cmd.go)
   repo <subcommand> [args]             list repos, and read or change one repo's own settings --
                                        capabilities, standing instructions and setup command (see repo.go)
   metrics [-window 7d] [-repo R]       throughput and latency over a window -- or over an absolute
@@ -542,6 +544,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdDeclarations(ctx, c, out, cmdArgs)
 	case "settings":
 		return cmdSettings(ctx, c, out, cmdArgs)
+	case "sandbox-budget":
+		return cmdSandboxBudget(ctx, c, out, cmdArgs)
 	case "repo":
 		return cmdRepo(ctx, c, out, cmdArgs)
 	case "gcp-key":
