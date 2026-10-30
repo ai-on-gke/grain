@@ -257,7 +257,8 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	}
 	call.grants = set
 	capAllowed := agentCapabilityAllowsRoute(held, set, pattern, scope)
-	if !set.Has(scope) && !capAllowed {
+	ciCap := grainCIReadsRoute(held, pattern)
+	if !set.Has(scope) && !capAllowed && !ciCap {
 		return call, fmt.Errorf("task %s holds no api grant for scope %s, which %s needs: "+
 			"ask a person to grant api:%s or a preset that includes it (docs/agent-api.md)", taskID, scope, pattern, scope)
 	}
@@ -269,9 +270,14 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if target := r.PathValue("id"); target != "" && strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") {
 		call.targetTask = target
 	}
-	call.repo, err = s.agentCallRepo(ctx, r, pattern, call.targetTask, body)
+	call.repo, err = s.agentCallRepo(ctx, r, pattern, call.targetTask, body, acting, set, scope, ciCap)
 	if err != nil {
 		return call, err
+	}
+	if ciCap && !capAllowed && !set.Allows(scope, call.repo) && call.repo != "" && agentMayRead(acting, call.repo) {
+		// grain-ci reads CI of the repositories the task's runs may
+		// read, as it does over /fs/ci/ and /cli/ci/.
+		capAllowed = true
 	}
 	if !set.Allows(scope, call.repo) && !capAllowed {
 		if call.repo == "" {
@@ -325,6 +331,37 @@ func agentCapabilityAllowsRoute(held []string, set APIGrantSet, pattern string, 
 		}
 	}
 	return false
+}
+
+// grainCIReadRoutes are the agent API's CI reads the grain-ci capability
+// reaches on its own, for the repositories its task's runs may read
+// (Task.Repo, Reads and Writes): the same records /fs/ci/ and /cli/ci/
+// serve a run holding it.
+var grainCIReadRoutes = map[string]bool{
+	"GET /api/ci/runs":                             true,
+	"GET /api/ci/runs/{id}":                        true,
+	"GET /api/ci/runs/{id}/artifacts":              true,
+	"GET /api/ci/runs/{id}/artifacts/{job}/{name}": true,
+	"GET /api/ci/workflows":                        true,
+}
+
+// grainCIReadsRoute reports whether held includes grain-ci and pattern is
+// one of the CI reads it opens. Which repository is the caller's to
+// check once it is known (authorizeAgentCall).
+func grainCIReadsRoute(held []string, pattern string) bool {
+	return grainCIReadRoutes[pattern] && slices.Contains(held, "grain-ci")
+}
+
+// agentRepoDefaultRoutes are the read-only collection routes that filter
+// by ?repo=, and that a caller reaching only one repository may call
+// without naming it.
+var agentRepoDefaultRoutes = map[string]bool{
+	"GET /api/tasks":                   true,
+	"GET /api/ci/runs":                 true,
+	"GET /api/ci/workflows":            true,
+	"GET /api/merge-batches":           true,
+	"GET /api/pipeline/changes":        true,
+	"GET /api/memory/documents/{name}": true,
 }
 
 // sandboxChannelGuard enforces the additional restrictions required when an
@@ -926,7 +963,8 @@ func agentMayRead(acting *model.Task, repo string) bool {
 // template, ...) acts on that thing's repository whatever the body or
 // query claim, so for those "" is returned: none is known, and only a
 // grant for every repository reaches it.
-func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, target string, body []byte) (string, error) {
+func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, target string, body []byte,
+	acting *model.Task, set APIGrantSet, scope APIScope, ciCap bool) (string, error) {
 	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
 		return owner + "/" + name, nil
 	}
@@ -937,7 +975,15 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 		}
 		return taskRepo(t), nil
 	}
-	if pathParam.MatchString(pathOf(pattern)) {
+	if pattern == "GET /api/ci/runs/{id}" || pattern == "DELETE /api/ci/runs/{id}" || strings.HasPrefix(pathOf(pattern), "/api/ci/runs/{id}/") {
+		// A CI run is its repository's, as externalAgentCallRepo reads it.
+		if s.tasks != nil && s.tasks.Config.CI != nil {
+			if run, ok := s.tasks.Config.CI.Get(r.PathValue("id")); ok && run.Repo != "" {
+				return run.Repo, nil
+			}
+		}
+	}
+	if pathParam.MatchString(pathOf(pattern)) && !agentRepoDefaultRoutes[pattern] {
 		return "", nil
 	}
 	var fields struct {
@@ -957,7 +1003,37 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 	if repo := r.URL.Query().Get("repo"); repo != "" && r.Method == http.MethodGet {
 		return repo, nil
 	}
+	if pathParam.MatchString(pathOf(pattern)) {
+		return "", nil
+	}
+	// A read-only collection asked for without ?repo= by a task that
+	// reaches it on some repositories only lists the one it reaches --
+	// the single repository its grant names, or its own -- rather than
+	// being refused for naming none.
+	if r.Method == http.MethodGet && agentRepoDefaultRoutes[pattern] && !set.Allows(scope, "") {
+		repo := agentDefaultRepo(acting, set.Repos(scope), ciCap)
+		if repo != "" {
+			q := r.URL.Query()
+			q.Set("repo", repo)
+			r.URL.RawQuery = q.Encode()
+			return repo, nil
+		}
+	}
 	return "", nil
+}
+
+// agentDefaultRepo is the repository a collection read by acting is
+// narrowed to when it names none: the one repository granted, or the
+// task's own where that is among those granted (or grain-ci reaches it).
+func agentDefaultRepo(acting *model.Task, granted []string, ciCap bool) string {
+	own := taskRepo(acting)
+	if own != "" && (ciCap || slices.ContainsFunc(granted, func(g string) bool { return strings.EqualFold(g, own) })) {
+		return own
+	}
+	if len(granted) == 1 {
+		return granted[0]
+	}
+	return ""
 }
 
 // recordAgentCall writes the attribution: a line in the daemon's journal
