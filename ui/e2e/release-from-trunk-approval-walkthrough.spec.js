@@ -67,6 +67,7 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   await page.goto("/inbox");
   const section = page.getByTestId("inbox-notifications");
   await expect(section).toBeVisible();
+  await section.locator(".inbox-group-toggle").click();
   const v240Row = section
     .getByTestId("inbox-notification")
     .filter({ hasText: "v2.4.0 is ready to promote" });

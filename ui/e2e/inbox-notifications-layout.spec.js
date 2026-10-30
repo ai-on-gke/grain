@@ -46,7 +46,35 @@ test("the Inbox lists open notifications above the tasks, with their actions in 
     await page.goto("/inbox");
     const section = page.getByTestId("inbox-notifications");
     await expect(section).toBeVisible();
+    const toggle = section.locator(".inbox-group-toggle");
+    await expect(toggle).toBeVisible();
+
+    // Chevron, heading and count sit on one horizontal centre line inside
+    // the toggle button.
+    const chevronBox = await toggle
+      .locator(".inbox-group-chevron")
+      .boundingBox();
+    const headingBox = await toggle.locator("h3").boundingBox();
+    const countBox = await toggle.locator(".count").boundingBox();
+    const headingMid = headingBox.y + headingBox.height / 2;
+    expect(
+      Math.abs(chevronBox.y + chevronBox.height / 2 - headingMid),
+    ).toBeLessThanOrEqual(2);
+    expect(
+      Math.abs(countBox.y + countBox.height / 2 - headingMid),
+    ).toBeLessThanOrEqual(2);
+    expect(chevronBox.x).toBeLessThan(headingBox.x);
+    expect(headingBox.x).toBeLessThan(countBox.x);
+
     const rows = section.getByTestId("inbox-notification");
+    if (viewport === DESKTOP) {
+      // Notifications starts collapsed by default; expanding it persists
+      // across the reload into the phone viewport below.
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect(rows).toHaveCount(0);
+      await toggle.click();
+    }
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(rows).toHaveCount(3);
 
     const warning = rows.filter({ hasText: "A merge has been stalled" });
