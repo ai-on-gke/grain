@@ -125,6 +125,17 @@ const (
 	// waiting for somebody -- are exactly the ones
 	// orchestrator.reconcileConsoleSessions exempts it from.
 	ReasonConsoleSession OriginReason = "console-session"
+	// ReasonImported is an open GitHub issue the periodic issue importer
+	// turned into a task (orchestrator.reconcileIssueImports, configured
+	// per repository by RepoConfig.IssueImport). The task names the issue
+	// it came from in Issue and WorkOrigin, which is also what keeps the
+	// importer from filing the same issue twice.
+	//
+	// Its own reason for ReasonUpgradeCheck's reason: "somebody opened an
+	// issue on GitHub and grain picked it up" is not "somebody filed this
+	// here", and the person deciding whether to approve it is entitled to
+	// be told that the words in it came from outside.
+	ReasonImported OriginReason = "imported"
 )
 
 // Origin is two orthogonal facts kept together: who created a task, and
@@ -804,7 +815,7 @@ const SelfDebugCapability = "self-debug"
 // read of it implicitly: a self-debug run is given the deployment's
 // baked-in copy instead, and a task that wants the repository itself
 // names it in its reads or a repo-read: grant like any other.
-func GrainSourceRepo() RepoRef { return RepoRef{Owner: "bwsalmon", Name: "grain"} }
+func GrainSourceRepo() RepoRef { return RepoRef{Owner: "ai-on-gke", Name: "grain"} }
 
 // RepoReadCapabilityPrefix marks a capability id as a cross-repository
 // read grant for CI.

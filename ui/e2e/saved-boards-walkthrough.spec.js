@@ -745,10 +745,31 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     });
     seededBoards.push(reportBoard.id);
 
+    // A cold load asks the report under the board's own scope and only
+    // that: it used to ask the whole deployment's first, before the
+    // board's question had been seeded (grain/task-1755). That only
+    // happened when the boards list answered after the tasks had, so the
+    // list is held back a second here to make it happen every time.
+    await page.route("**/api/boards", async (route) => {
+      if (route.request().method() === "GET") {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      await route.continue();
+    });
+    const metricsAsked = [];
+    page.on("request", (req) => {
+      const url = new URL(req.url());
+      if (url.pathname === "/api/metrics") metricsAsked.push(url.search);
+    });
     await page.goto(`/boards/${reportBoard.id}`);
     await expect(
       page.getByRole("heading", { name: `WT Report ${stamp}` }),
     ).toBeVisible();
+    await expect.poll(() => metricsAsked.length).toBeGreaterThan(0);
+    for (const search of metricsAsked) {
+      expect(new URLSearchParams(search).get("repo")).toBe("acme/widgets");
+    }
+    await page.unroute("**/api/boards");
     await expect(
       page.locator(".repo-page-header").getByText("Report", { exact: true }),
     ).toBeVisible();

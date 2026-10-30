@@ -370,6 +370,7 @@ func (s *Server) routes() {
 	s.route("PUT /api/repos/{owner}/{name}/workflows", s.handleSetRepoWorkflows)
 	s.route("GET /api/repos/{owner}/{name}/lifecycle", s.handleGetRepoLifecycle)
 	s.route("POST /api/repos/{owner}/{name}/lifecycle/refresh", s.handleRefreshRepoLifecycle)
+	s.route("POST /api/repos/{owner}/{name}/import-issues", s.handleImportIssues)
 
 	s.route("GET /api/repos/{owner}/{name}/releases", s.handleListReleases)
 	s.route("POST /api/repos/{owner}/{name}/releases", s.handleCreateRelease)
@@ -478,6 +479,7 @@ func (s *Server) routes() {
 	s.route("GET /api/capability-policy", s.handleGetCapabilityPolicy)
 	s.route("PUT /api/capability-policy", s.handleSetCapabilityPolicy)
 	s.route("GET /api/api-scope-sets", s.handleListAPIScopeSets)
+	s.route("GET /api/api-scope-sets/usage", s.handleAPIScopeSetUsage)
 	s.route("PUT /api/api-scope-sets", s.handlePutAPIScopeSet)
 	s.route("POST /api/api-scope-sets/delete", s.handleDeleteAPIScopeSet)
 	s.route("POST /api/capability-policy/preview", s.handlePreviewCapabilityPolicy)
@@ -505,6 +507,7 @@ func (s *Server) routes() {
 	s.route("GET /api/state-repo/files", s.handleListStateRepoFiles)
 	s.route("GET /api/state-repo/file", s.handleGetStateRepoFile)
 	s.route("POST /api/state-repo/sync", s.handleSyncStateRepo)
+	s.route("POST /api/state-repo/pull-requests", s.handleOpenConfigPullRequest)
 	s.route("POST /api/state-repo/remote", s.handleSetStateRepoRemote)
 	s.route("POST /api/state-repo/secrets-key", s.handleImportSecretsKey)
 	s.route("POST /api/state-repo/import-key", s.handleImportSecretsKey)

@@ -75,13 +75,13 @@ func (u *upstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/tasks":
 		// grain's own task list, which ignores ?repo= and answers every
 		// repository's tasks.
-		_, _ = w.Write([]byte(`[{"id":"1","repo":"bwsalmon/grain"},{"id":"2","repo":"acme/widgets"},{"id":"3"}]`))
+		_, _ = w.Write([]byte(`[{"id":"1","repo":"ai-on-gke/grain"},{"id":"2","repo":"acme/widgets"},{"id":"3"}]`))
 	case r.Method == http.MethodGet && r.URL.Path == "/api/ci/runs":
-		_, _ = w.Write([]byte(`{"enabled":true,"runs":[{"id":"a","repo":"bwsalmon/grain","n":12345678901234567},{"id":"b","repo":"acme/widgets"}]}`))
+		_, _ = w.Write([]byte(`{"enabled":true,"runs":[{"id":"a","repo":"ai-on-gke/grain","n":12345678901234567},{"id":"b","repo":"acme/widgets"}]}`))
 	case r.Method == http.MethodGet && r.URL.Path == "/api/ci/runs/theirs":
 		_, _ = w.Write([]byte(`{"id":"theirs","repo":"acme/widgets"}`))
 	case r.Method == http.MethodGet && r.URL.Path == "/api/ci/runs/ours":
-		_, _ = w.Write([]byte(`{"id":"ours","repo":"bwsalmon/grain"}`))
+		_, _ = w.Write([]byte(`{"id":"ours","repo":"ai-on-gke/grain"}`))
 	default:
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}
@@ -129,11 +129,11 @@ func TestReleaseGateReadAnswersItsRequestsNarrowedToTheTokensRepo(t *testing.T) 
 		method, target, body string
 		wantPath, wantRepo   string
 	}{
-		{method: "GET", target: "/api/ci/runs?repo=bwsalmon/grain&ref=main&limit=100", wantPath: "/api/ci/runs", wantRepo: "bwsalmon/grain"},
-		{method: "GET", target: "/api/ci/runs?ref=main", wantPath: "/api/ci/runs", wantRepo: "bwsalmon/grain"},
-		{method: "GET", target: "/api/persistent-sandboxes", wantPath: "/api/persistent-sandboxes", wantRepo: "bwsalmon/grain"},
-		{method: "GET", target: "/api/system/persistent-sandboxes", wantPath: "/api/persistent-sandboxes", wantRepo: "bwsalmon/grain"},
-		{method: "GET", target: "/api/tasks?repo=BWSalmon/Grain&limit=100", wantPath: "/api/tasks", wantRepo: "bwsalmon/grain"},
+		{method: "GET", target: "/api/ci/runs?repo=ai-on-gke/grain&ref=main&limit=100", wantPath: "/api/ci/runs", wantRepo: "ai-on-gke/grain"},
+		{method: "GET", target: "/api/ci/runs?ref=main", wantPath: "/api/ci/runs", wantRepo: "ai-on-gke/grain"},
+		{method: "GET", target: "/api/persistent-sandboxes", wantPath: "/api/persistent-sandboxes", wantRepo: "ai-on-gke/grain"},
+		{method: "GET", target: "/api/system/persistent-sandboxes", wantPath: "/api/persistent-sandboxes", wantRepo: "ai-on-gke/grain"},
+		{method: "GET", target: "/api/tasks?repo=AI-On-GKE/Grain&limit=100", wantPath: "/api/tasks", wantRepo: "ai-on-gke/grain"},
 	} {
 		w := call(e, tc.method, tc.target, token, tc.body)
 		if w.Code != http.StatusOK {
@@ -169,7 +169,7 @@ func TestCrossRepoResultsAreFilteredOut(t *testing.T) {
 		t.Fatalf("decoding %s: %v", w.Body, err)
 	}
 	if len(tasks) != 2 || tasks[0].ID != "1" || tasks[1].ID != "3" {
-		t.Errorf("GET /api/tasks answered %+v, want bwsalmon/grain's task 1 and the repository-less 3", tasks)
+		t.Errorf("GET /api/tasks answered %+v, want ai-on-gke/grain's task 1 and the repository-less 3", tasks)
 	}
 
 	w = call(e, "GET", "/api/ci/runs", token, "")
@@ -198,7 +198,7 @@ func TestARouteNamingAnotherRepositoryInItsPathIsRefused(t *testing.T) {
 	if len(up.got) != 0 {
 		t.Fatalf("the refused request reached the API")
 	}
-	if w := call(e, "GET", "/api/repos/BWSalmon/grain/config", token, ""); w.Code != http.StatusOK {
+	if w := call(e, "GET", "/api/repos/AI-On-GKE/grain/config", token, ""); w.Code != http.StatusOK {
 		t.Errorf("the job's own repository's config = %d %s", w.Code, w.Body)
 	}
 }
@@ -217,8 +217,8 @@ func TestReleaseGateReadFilesOnlyTheReleaseNotesTemplate(t *testing.T) {
 	if err := json.Unmarshal([]byte(up.body[len(up.body)-1]), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["template"] != "release-notes" || body["repo"] != "bwsalmon/grain" || body["approved"] != true {
-		t.Errorf("body = %v, want the approved release-notes template of bwsalmon/grain", body)
+	if body["template"] != "release-notes" || body["repo"] != "ai-on-gke/grain" || body["approved"] != true {
+		t.Errorf("body = %v, want the approved release-notes template of ai-on-gke/grain", body)
 	}
 	if fields, _ := body["fields"].(map[string]any); fields["version"] != "v2.4.0" {
 		t.Errorf("fields = %v, want version passed through", body["fields"])
@@ -275,9 +275,9 @@ func TestReleaseGateReadRaisesOnlyTheReleasePendingNotification(t *testing.T) {
 	if err := json.Unmarshal([]byte(up.body[len(up.body)-1]), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Subject != "release.pending:v2.4.0" || body.Repo != "bwsalmon/grain" || body.Severity != "warning" ||
+	if body.Subject != "release.pending:v2.4.0" || body.Repo != "ai-on-gke/grain" || body.Severity != "warning" ||
 		body.Body != "soak PASS" || !strings.Contains(body.Title, "v2.4.0 is ready to promote") {
-		t.Errorf("body = %+v, want release.pending:v2.4.0 about bwsalmon/grain", body)
+		t.Errorf("body = %+v, want release.pending:v2.4.0 about ai-on-gke/grain", body)
 	}
 	if strings.Join(body.Actions, ",") != "approve-release,reject-release" {
 		t.Errorf("actions = %v, want Approve and Reject", body.Actions)
@@ -306,9 +306,9 @@ func TestTheListenerRefusesEverythingElse(t *testing.T) {
 		{"GET", "/api/ci/runs", ""},
 		{"GET", "/api/ci/runs", "ga_nope_nope"},
 		{"GET", "/api/ci/runs?repo=acme/widgets", token},
-		{"GET", "/api/ci/runs?repo=bwsalmon/grain&repo=acme/widgets", token},
+		{"GET", "/api/ci/runs?repo=ai-on-gke/grain&repo=acme/widgets", token},
 		{"GET", "/api/tasks?repo=acme/widgets", token},
-		{"GET", "/api/tasks?repo=bwsalmon/grain&repo=acme/widgets", token},
+		{"GET", "/api/tasks?repo=ai-on-gke/grain&repo=acme/widgets", token},
 		{"POST", "/api/tasks", token},
 		{"POST", "/api/ci/runs", token},
 		{"DELETE", "/api/ci/runs/run1", token},
@@ -402,7 +402,7 @@ func TestDangerousAndUnnarrowableScopesAreRefusedInCI(t *testing.T) {
 	if e.Tokens.Len() != 0 {
 		t.Errorf("%d tokens minted for refused grants", e.Tokens.Len())
 	}
-	for _, name := range []string{"api:ci:read", "api:ci-read", "api:tasks:read@bwsalmon/grain", "api:sandboxes:read"} {
+	for _, name := range []string{"api:ci:read", "api:ci-read", "api:tasks:read@ai-on-gke/grain", "api:sandboxes:read"} {
 		p, _ := DynamicProvider(e, Config{})(name)
 		if res, err := p.Resolve(ctx, cc); err != nil || res.Refused {
 			t.Errorf("%s refused for a CI job: %+v, %v", name, res, err)
@@ -430,7 +430,7 @@ func TestTheProviderMintsOneTokenForAllOfAJobsGrantsForAllowedReposOnly(t *testi
 	}
 	e.SetURL("http://192.0.2.1:9000/")
 	if res, err := p.Resolve(ctx, cc); err != nil || res.Refused {
-		t.Fatalf("Resolve for bwsalmon/grain = %+v, %v", res, err)
+		t.Fatalf("Resolve for ai-on-gke/grain = %+v, %v", res, err)
 	}
 	other := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if res, _ := p.Resolve(ctx, model.CapabilityContext{Task: model.Task{Target: &other}, CI: true}); !res.Refused {

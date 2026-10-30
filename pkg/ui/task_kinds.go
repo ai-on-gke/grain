@@ -33,10 +33,11 @@ const (
 	TaskKindSession  = "session"
 	TaskKindProposal = "proposal"
 	TaskKindDurable  = "durable"
+	TaskKindImported = model.TaskKindImported
 )
 
 // TaskKinds lists the vocabulary in its documented order.
-var TaskKinds = []string{TaskKindPort, TaskKindRepair, TaskKindSession, TaskKindProposal, TaskKindDurable}
+var TaskKinds = []string{TaskKindPort, TaskKindRepair, TaskKindSession, TaskKindProposal, TaskKindDurable, TaskKindImported}
 
 // DurableCapability is the grant that makes a task durable (DT-1). It is
 // named here before its provider lands so the tag reads it from day one.
@@ -59,6 +60,9 @@ func TaskKindTags(t Task) []string {
 	}
 	if slices.Contains(t.Capabilities, DurableCapability) {
 		out = append(out, TaskKindDurable)
+	}
+	if t.Imported {
+		out = append(out, TaskKindImported)
 	}
 	return out
 }

@@ -227,6 +227,55 @@ func TestAHostdReconnectsAfterTheSessionDrops(t *testing.T) {
 	}
 }
 
+// A hostd that has been retrying through a long controller outage still
+// redials well inside the window a restarted controller waits for its
+// hello (dialRetry) before giving up on adopting the host runs it left.
+// With the backoff capped at 30s, the same as that window, a daemon
+// restarted after a ~40s outage met its hostd only 18s after it was
+// serving (docs/test-runs/2026-10-29-hostd-dial-out-model-server.md).
+func TestAHostdRedialsInsideTheControllersWaitForIt(t *testing.T) {
+	if got := 2 * defaultRemoteMaxBackoff; got > dialRetry {
+		t.Fatalf("twice the default reconnect backoff (%s) is longer than the controller's wait for a hostd (%s)", got, dialRetry)
+	}
+	var mu sync.Mutex
+	var at []time.Time
+	srv := &Server{
+		Remote: func(ctx context.Context) (net.Conn, error) {
+			mu.Lock()
+			at = append(at, time.Now())
+			mu.Unlock()
+			return nil, errors.New("connection refused")
+		},
+		RemoteMinBackoff: 3 * time.Second,
+		Logf:             func(string, ...any) {},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { srv.serveRemote(ctx); close(done) }()
+	// 3s doubles to 6s, past the 5s cap: the third attempt comes 5s
+	// after the second.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		mu.Lock()
+		n := len(at)
+		mu.Unlock()
+		if n >= 3 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if len(at) < 3 {
+		t.Fatalf("only %d attempts in 15s", len(at))
+	}
+	if gap := at[2].Sub(at[1]); gap > defaultRemoteMaxBackoff+500*time.Millisecond {
+		t.Errorf("the third attempt came %s after the second, want at most %s", gap, defaultRemoteMaxBackoff)
+	}
+}
+
 // A controller that does not take the hostd's token refuses it, and
 // nothing reaches the hostd; with none connected a request says so.
 func TestAControllerRefusesAHostdWithTheWrongToken(t *testing.T) {

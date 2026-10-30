@@ -87,6 +87,10 @@ type SandboxRequest struct {
 	// and it is one grain itself fired rather than one a caller asked
 	// for, which a model.TrustedScheduleCapability may be released to.
 	TrustedSchedule bool
+	// WithholdEventGated is Request.WithholdEventGated: the dispatch came
+	// from a caller that is not a person, so event-gated CI capabilities
+	// (model.CIEventCapability) must be refused.
+	WithholdEventGated bool
 	// Name is what the sandbox should be called -- unique per job per
 	// run, derived by the engine (sandboxName) so a backend does not
 	// have to invent one and an operator reading a VM list can tell

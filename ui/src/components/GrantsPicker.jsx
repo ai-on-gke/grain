@@ -89,6 +89,14 @@ import {
 // attached server offers any more, arguments the server's current schema
 // no longer accepts, or now normalizes differently. An api grant is
 // flagged when its scope is dangerous, or when it is no longer offered.
+//
+// runKind is the kind of run the grants are for ("task", "process" or
+// "ci"): each method carries the capability policy's verdict per kind
+// (docs/capabilities-spec.md §4.2.2), shown on it. policyRepo, where the
+// form knows the repository too, has the listing judge that one run: a
+// method the policy denies it is listed disabled with the policy's own
+// reason rather than offered as a grant filing would refuse, and a held
+// grant of one is flagged.
 
 const asList = (m) => (Array.isArray(m) ? m : []);
 
@@ -135,6 +143,7 @@ export default function GrantsPicker({
   disabled = false,
   idPrefix = "grant",
   runKind = "task",
+  policyRepo = "",
 }) {
   const all = grants || [];
   const apiHeld = useMemo(() => all.filter(isApiGrant), [all]);
@@ -171,20 +180,29 @@ export default function GrantsPicker({
       live.current = false;
     };
   }, []);
-  const load = useCallback((fresh) => {
-    return capabilityMethods({ fresh })
-      .then((m) => {
-        if (!live.current) return null;
-        loaded.current = true;
-        setLoadError("");
-        setMethods(asList(m));
-        return asList(m);
-      })
-      .catch((err) => {
-        if (live.current) setLoadError(err.message);
-        return null;
-      });
-  }, []);
+  // A repo still being typed, or mistyped, is no run to ask about: the
+  // listing names none rather than fail, and filing reports the repo.
+  const typedRepo = (policyRepo || "").trim();
+  const subjectRepo =
+    runKind && /^[^/\s]+\/[^/\s]+$/.test(typedRepo) ? typedRepo : "";
+  const load = useCallback(
+    (fresh) => {
+      const subject = subjectRepo ? { kind: runKind, repo: subjectRepo } : null;
+      return capabilityMethods({ fresh, subject })
+        .then((m) => {
+          if (!live.current) return null;
+          loaded.current = true;
+          setLoadError("");
+          setMethods(asList(m));
+          return asList(m);
+        })
+        .catch((err) => {
+          if (live.current) setLoadError(err.message);
+          return null;
+        });
+    },
+    [runKind, subjectRepo],
+  );
   useEffect(() => {
     if (wanted) load(loaded.current);
   }, [wanted, count, load]);
@@ -336,6 +354,23 @@ export default function GrantsPicker({
   };
 
   const policyState = (ref) => {
+    const refused = byRef[ref]?.policyRefusal;
+    if (refused)
+      return {
+        severity: "warning",
+        badge: "denied by policy",
+        suffix: " (denied by the capability policy)",
+        textNote: `${refused}. Remove this grant, or change the capability policy (Settings → Capabilities).`,
+        note: (
+          <>
+            {refused}. Remove this grant, or change the capability policy (
+            <Link href="/settings/capabilities#capability-policy">
+              Settings → Capabilities
+            </Link>
+            ).
+          </>
+        ),
+      };
     const verdict = runKind ? byRef[ref]?.policy?.[runKind] : undefined;
     if (!verdict) return null;
     const policyNote = policyVerdictText(verdict, runKind);
@@ -568,9 +603,17 @@ export default function GrantsPicker({
     );
   };
 
+  // A method the policy denies the one run this picker is for (a repo
+  // is known: policyRepo) is listed disabled, with the policy's own
+  // reason; one it may deny some run of the kind carries the verdict.
   const methodItem = (m) => {
-    const verdict = runKind ? m.policy?.[runKind] : undefined;
-    const policyNote = policyVerdictText(verdict, runKind);
+    const refused = m.policyRefusal || "";
+    const verdict = refused
+      ? "denied"
+      : runKind
+        ? m.policy?.[runKind]
+        : undefined;
+    const policyNote = refused || policyVerdictText(verdict, runKind);
     const refSummary = `${splitRef(m.ref).capability.replace(/^https:\/\//, "")}${m.requiresArgs ? " · needs arguments" : ""}`;
     return (
       <MenuItem
@@ -578,9 +621,17 @@ export default function GrantsPicker({
         className="method-grant-row"
         data-method={m.ref}
         data-policy-verdict={verdict || undefined}
+        data-policy-denied={refused ? "true" : undefined}
         title={policyNote ? `${m.ref} — ${policyNote}` : m.ref}
-        onClick={() => addMethod(m)}
-        sx={{ whiteSpace: "normal", alignItems: "flex-start" }}
+        disabled={Boolean(refused)}
+        onClick={refused ? undefined : () => addMethod(m)}
+        sx={{
+          whiteSpace: "normal",
+          alignItems: "flex-start",
+          // Disabled, but its reason reads at full contrast and its
+          // Settings link still follows.
+          "&.Mui-disabled": { opacity: 1, pointerEvents: "auto" },
+        }}
       >
         <ListItemIcon sx={{ pt: 0.25 }}>
           {verdict ? (
@@ -590,6 +641,9 @@ export default function GrantsPicker({
         <ListItemText
           sx={{ minWidth: 0 }}
           primary={methodMenuLabel(m.ref, m.method)}
+          primaryTypographyProps={
+            refused ? { color: "text.disabled" } : undefined
+          }
           secondary={
             policyNote ? (
               <>

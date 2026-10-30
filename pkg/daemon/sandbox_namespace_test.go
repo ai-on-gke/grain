@@ -300,3 +300,25 @@ func urlQuery(s string) string {
 	r := strings.NewReplacer(" ", "%20", "'", "%27", "=", "%3D", ",", "%2C")
 	return r.Replace(s)
 }
+
+// deploy://grain.log's query reaches read_grain_log as that tool's own
+// arguments, and a field left empty is left out so the tool's default
+// stands (the 200-line tail every read used to be stuck on).
+func TestGrainLogArgsCarryTheQuery(t *testing.T) {
+	got := grainLogArgs("", namespace.GrainLogQuery{})
+	if len(got) != 1 || got["source"] != "daemon" {
+		t.Errorf("grainLogArgs(empty) = %v, want only source=daemon", got)
+	}
+	got = grainLogArgs("upgrade", namespace.GrainLogQuery{Since: "2026-10-29T00:00:00Z", Until: "2026-10-29T06:00:00Z",
+		MinPriority: "err", Contains: "dispatch", MaxLines: 900})
+	want := map[string]any{"source": "upgrade", "since": "2026-10-29T00:00:00Z", "until": "2026-10-29T06:00:00Z",
+		"min_priority": "err", "contains": "dispatch", "max_lines": 900}
+	if len(got) != len(want) {
+		t.Fatalf("grainLogArgs = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("grainLogArgs[%q] = %v, want %v", k, got[k], v)
+		}
+	}
+}

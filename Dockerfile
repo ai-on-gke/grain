@@ -244,7 +244,8 @@ RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_I
 # moves the failed build four lines down.
 RUN vcs="$(./scripts/buildvcs.sh ${BUILDVCS})" && mkdir -p /out \
 	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/granule github.com/bwsalmon/granule/cmd/granule \
-	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/github-webhook ./cmd/github-webhook
+	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/github-webhook ./cmd/github-webhook \
+	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/grain-sandbox ./cmd/grain-sandbox
 
 # kubectl, for a deployment running -k8s-sandboxes: pkg/k8s creates,
 # inspects and deletes sandbox pods through it, pkg/mcp's kubectl-exec
@@ -377,6 +378,12 @@ COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /src/bin/grain /usr/local/bin/grain
 COPY --from=build /out/granule /usr/local/bin/granule
 COPY --from=build /out/github-webhook /usr/local/bin/github-webhook
+# The sandbox's own grain (cmd/grain-sandbox), beside the daemon's: sandbox
+# setup places it at /usr/local/bin/grain in every sandbox
+# (pkg/orchestrator/sandbox_grain.go), so a guest image built before the
+# sandbox CLI it carries learned a command still answers with this
+# daemon's.
+COPY --from=build /out/grain-sandbox /usr/local/bin/grain-sandbox
 COPY --from=build /out/kubectl /usr/local/bin/kubectl
 COPY --from=cosign /ko-app/cosign /usr/local/bin/cosign
 # pkg/cli/daemon.go's defaultSourceDir -- keep the two in step.

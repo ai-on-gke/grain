@@ -55,7 +55,7 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
           severity: "warning",
           title: `${version} is ready to promote (${version}-rc.1 passed its soak)`,
           body: `${version}-rc.1 passed its 24h staging soak and is staged as ${version}-pending.`,
-          repo: "bwsalmon/grain",
+          repo: "ai-on-gke/grain",
           actions: ["approve-release", "reject-release"],
         },
       }),
@@ -67,6 +67,7 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   await page.goto("/inbox");
   const section = page.getByTestId("inbox-notifications");
   await expect(section).toBeVisible();
+  await section.locator(".inbox-group-toggle").click();
   const v240Row = section
     .getByTestId("inbox-notification")
     .filter({ hasText: "v2.4.0 is ready to promote" });
@@ -85,7 +86,7 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   expect(runs).toHaveLength(1);
   expect(runs[0]).toMatchObject({
     id: "fake-ci-1",
-    repo: "bwsalmon/grain",
+    repo: "ai-on-gke/grain",
     ref: "main",
     event: "workflow_dispatch",
     jobs: [
@@ -119,7 +120,7 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   expect(runs).toHaveLength(2);
   expect(runs[0]).toMatchObject({
     id: "fake-ci-2",
-    repo: "bwsalmon/grain",
+    repo: "ai-on-gke/grain",
     ref: "main",
     event: "workflow_dispatch",
     jobs: [
@@ -154,7 +155,7 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   expect(runs).toHaveLength(3);
   expect(runs[0]).toMatchObject({
     id: "fake-ci-3",
-    repo: "bwsalmon/grain",
+    repo: "ai-on-gke/grain",
     ref: "main",
     event: "workflow_dispatch",
     jobs: [
@@ -177,7 +178,7 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   );
   for (const verb of ["approve", "reject"]) {
     const res = await page.request.post(
-      `/api/repos/bwsalmon/grain/pending-releases/v2.7.0/${verb}`,
+      `/api/repos/ai-on-gke/grain/pending-releases/v2.7.0/${verb}`,
       {
         headers: { "X-Grain-Acting-Task": "1" },
       },

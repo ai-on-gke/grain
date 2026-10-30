@@ -197,8 +197,23 @@ test("adds, tests, configures, edits, grants, denies by policy and removes a cap
     { capability: `${NEW}#*`, runKinds: ["task"], deny: true },
   ]);
 
-  // The deny rule reaches the New task grant picker, marking the server's
-  // methods as denied for agent tasks and linking back to the policy.
+  // From then on filing refuses a grant the rule denies, naming the
+  // rule, rather than accepting a task admission would only park.
+  const refused = await request.post("/api/tasks", {
+    data: {
+      title: `E2E denied grant ${Date.now()}`,
+      approved: true,
+      noRepo: true,
+      capabilities: [`${NEW}#cloud-viewer`],
+    },
+  });
+  expect(refused.status()).toBe(400);
+  expect((await refused.json()).error).toContain(`rule 1: deny ${NEW}#*`);
+
+  // The deny rule reaches the New task grant picker: on the demo's
+  // default repo the server's methods are listed disabled with the
+  // policy's reason and a link back to the policy, beside the demo
+  // server's method it does not cover.
   await page.getByRole("button", { name: "+ New task" }).click();
   await page
     .getByTestId("new-task-grants")
@@ -206,12 +221,16 @@ test("adds, tests, configures, edits, grants, denies by policy and removes a cap
     .click();
   const grantMenu = page.getByRole("menu", { name: "Grants to add" });
   const deniedItem = grantMenu.locator(`[data-method="${NEW}#cloud-viewer"]`);
+  await expect(deniedItem).toHaveAttribute("aria-disabled", "true");
   await expect(deniedItem).toContainText(
-    "denied by the capability policy for agent tasks",
+    `the capability policy denies ${NEW}#cloud-viewer to this task`,
   );
   await expect(
     deniedItem.getByRole("link", { name: "Settings → Capabilities" }),
   ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
+  await expect(
+    grantMenu.locator(`[data-method="${DEMO}#cloud-viewer"]`),
+  ).not.toHaveAttribute("aria-disabled", "true");
   await deniedItem.scrollIntoViewIfNeeded();
   const itemBox = await deniedItem.boundingBox();
   const verdictBox = await deniedItem

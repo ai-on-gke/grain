@@ -56,6 +56,11 @@ async function makeUnjudgedGate(request) {
 async function expectInboxWithoutGate(page) {
   await page.goto("/inbox");
   await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+  for (const toggle of await page
+    .locator('.inbox-group-toggle[aria-expanded="false"]')
+    .all()) {
+    await toggle.click();
+  }
   await expect(
     page.getByText(/Nothing is testing|nothing is judging/),
   ).toHaveCount(0);

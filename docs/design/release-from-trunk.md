@@ -374,7 +374,7 @@ With `main` as the single release line, keeping `main` green is what keeps relea
 
 ### Version Numbering Rules Under Release-from-Trunk
 
-1. **Major version (`M`):** Read from `RELEASE_MAJOR` in `scripts/release.conf` (currently `2`).
+1. **Major version (`M`):** Read from `RELEASE_MAJOR` in `scripts/release.conf` (currently `3`). A `RELEASE_MAJOR` behind the newest released major is stale: the train, like `scripts/build-version.sh`, releases that major instead, so the version never goes backwards.
 2. **Minor version (`Y` in `vM.Y.0`):**
    - Let $P$ be the highest minor number among **promoted** release tags `vM.<P>.0` (tags matching `^v2\.[0-9]+\.0$` without an `-rc.` suffix). For choosing the *train's* next target, a pending `vM.<P>.0-pending` counts too (the minor is taken); for versioning builds it does not.
    - The next target minor release is always **`vM.(P+1).0`** (skipping any version listed in `RELEASE_NEVER_PROMOTE`).

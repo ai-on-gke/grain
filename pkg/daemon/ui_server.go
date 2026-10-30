@@ -222,10 +222,16 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// What each of those credentials reaches on GitHub, so a task is
 		// refused at filing against a repository its team cannot reach
 		// and the New task pickers can offer what it can (grain/task-1850).
-		GitReach:                  &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: cfg.GithubHost},
-		GitHubBranches:            githubClient,
-		GitHubPullRequestFiles:    githubClient,
-		GitHubPullRequests:        githubClient,
+		GitReach:               &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: cfg.GithubHost},
+		GitHubBranches:         githubClient,
+		GitHubPullRequestFiles: githubClient,
+		GitHubPullRequests:     githubClient,
+		GitHubForkPullRequests: githubClient,
+		// The manual "Import issues now" (POST .../import-issues): the
+		// orchestrator's own pass, read through the UI's GitHub client.
+		IssueImporter: func(ctx context.Context, repo model.RepoRef) (model.IssueImportResult, error) {
+			return orchestrator.ImportIssues(ctx, store, githubClient, repo, time.Now().UTC())
+		},
 		GitHubCredentialAvailable: githubTokens.HasCredential,
 		// The System pane's Logs tab: which streams this deployment can
 		// show is a property of the shape it runs as, so logSources
@@ -388,7 +394,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 			return resolving.ResolveCLIRuns(ctx)
 		},
 		CLIRunCheck:  cfg.CheckCLIRunSettings,
-		HostExecutor: func(ctx context.Context) any { return cfg.HostExecutorStatus(ctx) },
+		HostExecutor: func(ctx context.Context) any { return hostExecutorStatus(ctx, cfg, store) },
 		// PullRequests is how a dispatched run opens its own pull request
 		// before it exits (ui.Config.PullRequests' own doc comment): its
 		// mcpserver asks this API, which asks the daemon's GitHub client.

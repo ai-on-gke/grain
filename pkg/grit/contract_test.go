@@ -279,6 +279,38 @@ func waitForRunCompleted(t *testing.T, b gritapi.Backend, runID string) gritapi.
 	}
 }
 
+// waitForRunCompletedEvent polls the event stream until runID's
+// run.completed event is visible. The backend persists the completed run
+// status before it appends run.attested and run.completed, so a test that
+// asserts on the event stream right after waitForRunCompleted must wait for
+// the event too rather than race the append.
+func waitForRunCompletedEvent(t *testing.T, b gritapi.Backend, runID string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var after int64
+	for {
+		batch, err := b.Events(ctx, after, 0, 100)
+		if err != nil {
+			t.Fatalf("Events(after=%d): %v", after, err)
+		}
+		for _, ev := range batch.Events {
+			if ev.RunID == runID && ev.Kind == gritapi.EventRunCompleted {
+				return
+			}
+			after = ev.Seq
+		}
+		if len(batch.Events) > 0 {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %s event for run %s", gritapi.EventRunCompleted, runID)
+		case <-time.After(15 * time.Millisecond):
+		}
+	}
+}
+
 // TestBackendContract runs the full GS-2 contract suite against in-process
 // `grit.Local`, `gritapi.Client` over HTTP, `gritapi.Client` over `/v1/session`,
 // and reverse-tunnel `/v1/session` (`grit serve -grain-url ...`).
@@ -428,6 +460,7 @@ func TestBackendContract(t *testing.T) {
 				}
 
 				// Event stream must contain run.queued, job.started, job.completed, run.attested, and run.completed.
+				waitForRunCompletedEvent(t, h.backend, run1.ID)
 				batch, err := h.backend.Events(ctx, 0, 0, 100)
 				if err != nil {
 					t.Fatalf("Events: %v", err)
@@ -541,6 +574,7 @@ func TestBackendContract(t *testing.T) {
 					t.Fatal(err)
 				}
 				waitForRunCompleted(t, h.backend, run.ID)
+				waitForRunCompletedEvent(t, h.backend, run.ID)
 
 				// Client reads just the first event (seq=1), then "restarts" and reads the rest.
 				batch1, err := h.backend.Events(ctx, 0, 0, 1)

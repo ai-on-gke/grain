@@ -28,7 +28,7 @@ import (
 
 // taskKindVocabulary is ui.TaskKinds restated, since pkg/ui imports this
 // package: the tags list_grain_tasks' kind filter accepts.
-var taskKindVocabulary = []string{"port", "repair", "session", "proposal", "durable"}
+var taskKindVocabulary = []string{"port", "repair", "session", "proposal", "durable", "imported"}
 
 // summaryEventCount is how many of a task's latest events the summary
 // carries, and the byte bounds keep each of them, and the handover's head,

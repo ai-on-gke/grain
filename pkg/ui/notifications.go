@@ -224,25 +224,19 @@ func (c *Client) raise(ctx context.Context, req RaiseNotificationRequest, raised
 	return NotificationRaiseResponse{Notification: raised.Notification, New: raised.New}, nil
 }
 
-// afterRaise delivers a new or risen notification: into the director's
-// chat, and to the durable tasks subscribed to its family. A delivery
-// that fails is logged, not returned -- the notification is raised
-// either way, and reconcileNotifications tries the director again.
+// afterRaise delivers a new notification to the durable tasks subscribed
+// to its family. A delivery that fails is logged, not returned -- the
+// notification is raised either way.
 func (c *Client) afterRaise(ctx context.Context, raised model.NotificationRaise) {
-	if !raised.New && !raised.Rose {
+	if !raised.New {
 		return
 	}
-	if _, err := c.Store.DeliverNotificationToDirector(ctx, raised.Notification, c.now()); err != nil {
-		log.Printf("grain: delivering notification %d to the director: %v", raised.Notification.ID, err)
+	woke, err := c.Store.WakeNotificationSubscribers(ctx, raised.Notification, c.now())
+	if err != nil {
+		log.Printf("grain: waking subscribers of notification %d: %v", raised.Notification.ID, err)
 	}
-	if raised.New {
-		woke, err := c.Store.WakeNotificationSubscribers(ctx, raised.Notification, c.now())
-		if err != nil {
-			log.Printf("grain: waking subscribers of notification %d: %v", raised.Notification.ID, err)
-		}
-		if len(woke) > 0 && c.Config.Wake != nil {
-			c.Config.Wake()
-		}
+	if len(woke) > 0 && c.Config.Wake != nil {
+		c.Config.Wake()
 	}
 }
 
@@ -410,7 +404,11 @@ func (c *Client) PostTaskNote(ctx context.Context, target, from, body string) (M
 		return Message{}, err
 	}
 	if model.IsDurableTask(*recipient) {
-		woke, err := c.Store.WakeRestingTask(ctx, target, "a note from task "+from, now)
+		reason := "a note from task " + from
+		if recipient.IsConsoleSession() {
+			reason = ""
+		}
+		woke, err := c.Store.WakeRestingTask(ctx, target, reason, now)
 		if err != nil {
 			return Message{}, err
 		}

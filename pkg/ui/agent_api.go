@@ -76,10 +76,11 @@ var (
 
 // apiCapability is the picker row for an api grant name -- presets and
 // scopes alike, and a repo-limited name described as one -- or false
-// for a name that is not a valid api grant.
+// for a name that is not a valid api grant, or that grants nothing
+// (APIGrant.OutsideRepoLimit) -- which capabilityRefusal then explains.
 func apiCapability(id string) (Capability, bool) {
 	g, ok, err := ParseAPIGrant(id)
-	if !ok || err != nil {
+	if !ok || err != nil || g.OutsideRepoLimit() != nil {
 		return Capability{}, false
 	}
 	var name, description, summary string
