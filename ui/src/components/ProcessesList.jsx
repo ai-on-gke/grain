@@ -62,6 +62,7 @@ import {
 import ItemGlyph from "./ItemGlyph.jsx";
 import { DeclaredChip } from "./Declared.jsx";
 import LastWorkflowRun from "./LastWorkflowRun.jsx";
+import ChipStrip from "./ChipStrip.jsx";
 
 const DECLARATIONS_DOC =
   "https://github.com/ai-on-gke/grain/blob/main/docs/declarations.md";
@@ -427,7 +428,7 @@ export default function ProcessesList({
                     suites.find((s) => s.id === run.suiteId)?.name ||
                     run.suiteId}
                 </RowLink>
-                <span className="chips">
+                <ChipStrip>
                   <RunStatusChip run={run} />
                   <Chip size="small" label={run.repo} />
                   <Chip size="small" variant="outlined" label={run.base} />
@@ -437,7 +438,7 @@ export default function ProcessesList({
                       onOpenSchedule={openScheduleFromRun}
                     />
                   )}
-                </span>
+                </ChipStrip>
                 <span className="template-title hint">
                   pass {run.pass} · {describeRunPlan(run)}
                 </span>
