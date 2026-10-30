@@ -75,6 +75,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "releases:write", Description: "Create releases, cut and promote candidates, approve qualification, request release merges"},
 	{Scope: "repos:read", Description: "Read repository settings, branches and declarations"},
 	{Scope: "repos:write", Description: "Add and remove repositories, change their settings, create branches"},
+	{Scope: "repos:create", Description: "Create a new repository on a forge and connect it to the deployment", Dangerous: true},
 	{Scope: "boards:read", Description: "Read boards"},
 	{Scope: "boards:write", Description: "Create, edit and delete boards"},
 	{Scope: "memory:read", Description: "Read memory documents and release notes"},

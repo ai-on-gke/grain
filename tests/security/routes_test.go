@@ -185,6 +185,8 @@ var routeAuthorization = map[string]authLevel{
 
 	// Repos: their configuration, releases and branches.
 	"POST /api/repos":                                                      trusted,
+	"POST /api/repos/create":                                               trusted,
+	"GET /api/repo-hosts":                                                  trusted,
 	"DELETE /api/repos/{owner}/{name}":                                     trusted,
 	"GET /api/repos/{owner}/{name}/ci-capabilities":                        trusted,
 	"PUT /api/repos/{owner}/{name}/ci-capabilities":                        trusted,

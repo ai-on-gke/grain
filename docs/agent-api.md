@@ -129,6 +129,7 @@ every `DELETE`.
 | `releases:write` | create releases, cut and promote candidates, approve qualification, request release merges | |
 | `repos:read` | read repository settings, branches, declarations | |
 | `repos:write` | add and remove repositories, change their settings, create branches | |
+| `repos:create` | create a new repository on a forge and connect it (`POST /api/repos/create`) | yes |
 | `boards:read` | read boards | |
 | `boards:write` | create, edit and delete boards | |
 | `memory:read` | read memory documents and release notes | |
@@ -233,7 +234,7 @@ A set is a row:
 | `includes` | JSON list of other sets, built-in or declared. Their resolved scopes are added, each keeping the repository limits it had. A missing set or a cycle (`a -> b -> a`, or a set including itself) is an error naming the path. |
 | `repos` | JSON list of `owner/name`. Limits every scope of the set, included ones too: a scope already limited by an included set keeps only the repositories in both, and one left with none is dropped. Empty means no limit of the set's own. |
 | `deny` | JSON list in the `scopes` syntax. Removed after composition. |
-| `requires_person` | 1 means only a person may grant the set. **Forced on** when the resolved set holds any dangerous scope (`capabilities:admin`, `secrets:write`, `settings:write`, `connections:write`, `merge:force`, `tasks:admin`, `deployment:*` except `deployment:read`). A set can turn it on, never off. |
+| `requires_person` | 1 means only a person may grant the set. **Forced on** when the resolved set holds any dangerous scope (`capabilities:admin`, `secrets:write`, `settings:write`, `connections:write`, `repos:create`, `merge:force`, `tasks:admin`, `deployment:*` except `deployment:read`). A set can turn it on, never off. |
 | `version` | the author's revision number, shown in the check and in Settings |
 | `deprecated` | 1 to flag the set in Settings and the pickers. It still resolves and still grants. |
 
@@ -477,6 +478,23 @@ and query parameters each route declares are the ones its handler's
 source reads, so a new UI action is fully described to agents as soon
 as its route is scoped. Every generated name is published to the
 frameworks' allowed-tool lists (`agent.RegisterPublishedToolNames`).
+
+## Creating a repository
+
+`POST /api/repos/create` (tool `api_create_repo`) creates a repository on
+a forge and connects it to the deployment: `targetRepos` and a
+`repo_config` row. Its scope, `repos:create`, is **dangerous**: only a
+person grants it, and every call needs a `reason`. An agent never
+creates a repository on its own authority. Without the grant, it files a
+proposal held for a person instead, saying which repository it needs and
+why. A task filed against a repository the deployment does not target is
+parked with a comment saying that an operator can create or connect the
+repository from Settings → Repos.
+
+The request, the step-by-step answer, and what each GitHub owner kind
+needs are in [creating-repos.md](creating-repos.md).
+`GET /api/repo-hosts` (`repos:read`) lists the hosts a repository can be
+created on.
 
 ## Messaging another task's agent
 

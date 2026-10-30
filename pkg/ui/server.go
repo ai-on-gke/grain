@@ -326,6 +326,8 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/{id}/tree", s.handleGetTaskTree)
 
 	s.route("POST /api/repos", s.handleAddTargetRepo)
+	s.route("POST /api/repos/create", s.handleCreateRepo)
+	s.route("GET /api/repo-hosts", s.handleRepoHosts)
 	s.route("DELETE /api/repos/{owner}/{name}", s.handleRemoveTargetRepo)
 
 	s.route("GET /api/repos/{owner}/{name}/ci-capabilities", s.handleGetRepoCapabilities)

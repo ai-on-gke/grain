@@ -131,7 +131,8 @@ func OffAllowlistRefusal(target RepoRef, allowed []string, consequence string) s
 	return fmt.Sprintf(
 		"%s is not on this deployment's target repo list, so %s: nothing here can clone, push "+
 			"to, or open a pull request against a repo the list does not name. The list currently "+
-			"holds %s -- an operator widens targetRepos under Settings.",
+			"holds %s -- an operator widens it, or creates the repo if it does not exist yet, "+
+			"from Settings → Repos.",
 		target, consequence, QuotedRepoList(allowed))
 }
 
@@ -145,8 +146,9 @@ func OffAllowlistParkComment(target RepoRef) string {
 	return fmt.Sprintf(
 		"`%s` is not on this deployment's target repo list, so nothing here "+
 			"can clone, push to, or open a pull request against it. An operator "+
-			"widens targetRepos under Settings, then replies here to let this "+
-			"task run.", target)
+			"can connect it, or create it if it does not exist yet, from "+
+			"Settings → Repos (Add repo, or New repository), then reply here to "+
+			"let this task run.", target)
 }
 
 // OffAllowlistAgainComment is what a reply that skipped the first of
@@ -159,8 +161,8 @@ func OffAllowlistAgainComment(target RepoRef, allowed []string) string {
 		"`%s` is still not on this deployment's target repo list, so this task "+
 			"stays parked: replying does not widen the list, and nothing here can "+
 			"clone or push to a repo the list does not name. The list currently "+
-			"holds %s. An operator adds the repo under Settings, and a reply after "+
-			"that lets this task run.", target, QuotedRepoList(allowed))
+			"holds %s. An operator adds the repo (or creates it) under Settings → "+
+			"Repos, and a reply after that lets this task run.", target, QuotedRepoList(allowed))
 }
 
 // OffAllowlistAtDispatchComment is the fourth moment, and the one where
