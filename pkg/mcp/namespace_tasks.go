@@ -90,6 +90,7 @@ func (n NamespaceTasks) ReadTaskView(ctx context.Context, id string) (*namespace
 	now := n.now()
 	view := &namespace.TaskView{
 		ID:           task.ID,
+		Repo:         task.Repo,
 		Record:       renderTaskRecord(task, now) + "\n",
 		Summary:      renderTaskSummary(task, now) + "\n",
 		Conversation: renderTaskConversationFile(task),
