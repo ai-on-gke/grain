@@ -108,6 +108,12 @@ func TestResumeOnRoundTrips(t *testing.T) {
 	if got := model.RequestedDetail("waiting on review", r); got != want {
 		t.Fatalf("RequestedDetail = %q, want %q", got, want)
 	}
+	if ids := model.ParkedTargets(model.ParkedDetail([]string{"11", "12"}) + ": waiting on migration"); len(ids) != 2 || ids[0] != "11" || ids[1] != "12" {
+		t.Fatalf("ParkedTargets with reason = %v, want [11 12]", ids)
+	}
+	if until, ok := model.ParkedUntil(model.ParkedUntilDetail(at) + ": waiting out rate window"); !ok || !until.Equal(at) {
+		t.Fatalf("ParkedUntil with reason = %v, %v; want %v, true", until, ok, at)
+	}
 }
 
 // A resume_later on ci or message holds its task deferred until the
