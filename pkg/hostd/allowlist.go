@@ -33,8 +33,11 @@
 //     checked against the entry, and then streams the process's stdio over
 //     the same connection until it exits.
 //
-// Anything not on the allowlist, or not accepted by its entry, is refused
-// and logged. Nothing here runs as root, and nothing here forwards the
+// The one addition is grain's own: each capabilities entry hostd's build
+// ships for its own servers (Server.Builtins) that the file lacks is
+// offered as hostd's own root-owned binary, exactly as the installer would
+// write it there. Anything else not on the allowlist, or not accepted by
+// its entry, is refused and logged. Nothing here runs as root, and nothing here forwards the
 // daemon's own environment: a child's environment is built from the entry.
 // docs/design/cli-run-location.md ("Host CLIs through grain hostd") is the
 // design and its security argument.

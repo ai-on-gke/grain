@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -59,11 +60,13 @@ func SyncReviewQuestions(ctx context.Context, store *model.Store, now time.Time)
 		return fmt.Errorf("orchestrator: reading open pull request links: %w", err)
 	}
 	var errs []error
+	seen := map[string]bool{}
 	for _, link := range links {
 		if err := ctx.Err(); err != nil {
 			errs = append(errs, err)
 			break
 		}
+		seen[link.TaskID] = true
 		task, err := store.GetTask(ctx, link.TaskID)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: reading task %s: %w", link.TaskID, err))
@@ -78,6 +81,27 @@ func SyncReviewQuestions(ctx context.Context, store *model.Store, now time.Time)
 		}
 		if err := settleReviewQuestions(ctx, store, *task, questions, now); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	// A task whose change is a CL has no pull request link, and its CL
+	// review's questions (relayCLReviewFeedback) hold its Submit the same
+	// way: without this its owner's answer would never release them.
+	if _, ok := change.Lookup(model.LinkChangelist); ok {
+		tasks, err := store.ListTasks(ctx)
+		if err != nil {
+			return errors.Join(append(errs, fmt.Errorf("orchestrator: listing tasks for CL review questions: %w", err))...)
+		}
+		for _, task := range tasks {
+			if seen[task.ID] || change.Primary(task) == "" {
+				continue
+			}
+			questions, ok := model.ReviewQuestionsOf(task)
+			if !ok {
+				continue
+			}
+			if err := settleReviewQuestions(ctx, store, task, questions, now); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	return errors.Join(errs...)
@@ -162,13 +186,17 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 		then = "It touches a path of grain's own trust boundary that only a human may release, " +
 			"so it waits for a Submit again once that run has pushed."
 	}
+	publish := "commit and push to this task's branch, reply to each relayed review thread with a " +
+		"one-line summary of what was done and resolve it (`resolve_review_thread` or `grain pr resolve`)"
+	if change.Primary(task) != "" && !hasPullRequest(task) {
+		publish = "upload it as a new snapshot of its CL with open_pull_request"
+		then = "Its new snapshot is reviewed again, and it waits for a Submit once that review has passed."
+	}
 	body := fmt.Sprintf(
 		"The owner answered the open questions from review task %s, so this task is back in the "+
-			"queue: the next run carries out that decision -- fix what was decided, commit and "+
-			"push to this task's branch, reply to each relayed review thread with a one-line "+
-			"summary of what was done and resolve it (`resolve_review_thread` or `grain pr resolve`), "+
+			"queue: the next run carries out that decision -- fix what was decided, %s, "+
 			"and leave nothing it could have fixed as a comment. %s",
-		questions.ReviewTaskID, then)
+		questions.ReviewTaskID, publish, then)
 	log.Printf("orchestrator: %s's owner answered the questions from review %s; redispatching it",
 		task.ID, questions.ReviewTaskID)
 	return reviewComment(ctx, store, task.ID, body, now)

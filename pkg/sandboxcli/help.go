@@ -24,13 +24,13 @@ NAMESPACE & FILES (no size cap; pipe to grep, jq, head, or redirect to files):
                                          Search a file or subtree with an RE2 regex
 
 CI & PULL REQUEST (scoped to this task's repository and branch):
-  grain ci list [--ref <b>] [--conclusion <c>] [--job <j>] [--since <d>] [--limit N]
+  grain ci list [--task <id> | --ref <b>] [--conclusion <c>] [--job <j>] [--since <d>] [--limit N]
                                          List recent grain CI runs
-  grain ci log [<run-id>] [--job <j>] [--step <s>] [--attempt K] [--tail N]
+  grain ci log [<run-id> | --task <id>] [--repo <r>] [--job <j>] [--step <s>] [--attempt K] [--tail N]
                                          List a run's jobs and steps, or print one step's log
   grain ci test-history <test-name> [--limit N]
                                          Pass/fail/flake history across recent CI runs
-  grain ci artifact <job> <name> [-o <dest>] [--run <run-id>]
+  grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>] [--repo <r>]
                                          Download a CI artifact
   grain ci wait [--jobs j1,j2] [--timeout 9m] [--resume <run-id>]
                                          Start or attach to grain CI for this branch and wait for its verdict
@@ -39,7 +39,8 @@ CI & PULL REQUEST (scoped to this task's repository and branch):
                                          Run a single named CI job against the current branch commit and wait
   grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]
                                          Rerun failed (or named) jobs fresh and uncached
-  grain pr status                        Latest grain CI verdict on this task's branch
+  grain pr status [--task <id> | --ref <branch> [--repo <r>]]
+                                         Latest grain CI verdict on this task's branch, or another task's or branch's
   grain pr base-status                   Latest grain CI verdict on the base branch
   grain pr open                          Open or update the pull request for this branch from its commit messages
   grain pr reply <body|--file f> [--comment-id <id>]
@@ -173,11 +174,11 @@ var sandboxCommandHelp = map[string]string{
 	"ls":              "grain ls <uri> [--glob <pat>]\n\nList a namespace directory.\n\n  grain ls ci://bwsalmon/grain\n  grain ls task://\n  grain ls src://pkg --glob '*_test.go'\n",
 	"read":            "grain read <uri> [--tail N] [--offset N --limit N]\n\nPrint a namespace file to stdout, whole: there is no size cap.\n\n  grain read task://1436/record.md\n  grain read ci://bwsalmon/grain/<run>/go/gotest.log --tail 4000\n",
 	"grep":            "grain grep <pattern> <uri> [-i] [-C N] [--glob <pat>]\n\nSearch a namespace file or subtree with an RE2 regular expression.\n\n  grain grep -- '--- FAIL' ci://bwsalmon/grain/<run>/go/gotest.log\n  grain grep -i -C 2 TODO src://pkg/ci --glob '*.go'\n",
-	"ci list":         "grain ci list [--ref <branch>] [--conclusion failure,errored] [--job <j>] [--since 24h] [--limit N] [--repo owner/name]\n\nList recent grain CI runs, newest first. --ref @branch is this task's own branch.\n",
-	"ci log":          "grain ci log [<run-id>] [--job <j>] [--step <s>] [--attempt K] [--tail N]\n\nWith no run, the latest run on this task's branch. With no job, list the run's jobs;\nwith a job and no step, list its step logs; with both, print that step's log.\n\n  grain ci log --job go\n  grain ci log --job go --step Test --tail 8000\n",
+	"ci list":         "grain ci list [--task <id> | --ref <branch>] [--conclusion failure,errored] [--job <j>] [--since 24h] [--limit N] [--repo owner/name]\n\nList recent grain CI runs, newest first. --ref @branch is this task's own branch;\n--task <id> is that task's branch, in any repository this task may read CI for.\n",
+	"ci log":          "grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [--step <s>] [--attempt K] [--tail N]\n\nWith no run, the latest run on this task's branch (or --task's). A run is found in whichever\nrepository it belongs to that this task may read CI for; --repo names it outright. With no job, list the run's jobs;\nwith a job and no step, list its step logs; with both, print that step's log.\n\n  grain ci log --job go\n  grain ci log --job go --step Test --tail 8000\n",
 	"ci test-history": "grain ci test-history <test-name> [--limit N]\n\nPass, fail and flake history of one test across recent CI runs.\n",
-	"ci artifact":     "grain ci artifact <job> <name> [-o <dest>] [--run <run-id>]\n\nDownload a stored CI artifact, to <dest> or stdout. With no run, the latest run on this task's branch.\n",
-	"pr status":       "grain pr status\n\nThe latest grain CI run on this task's branch and each job's verdict.\n",
+	"ci artifact":     "grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>] [--repo owner/name]\n\nDownload a stored CI artifact, to <dest> or stdout. With no run, the latest run on this task's branch (or --task's).\n",
+	"pr status":       "grain pr status [--task <id> | --ref <branch> [--repo owner/name]]\n\nThe latest grain CI run on this task's branch and each job's verdict -- or on another task's\nbranch (--task), or any branch (--ref, in --repo or this task's repository), where this task may read CI.\n",
 	"pr base-status":  "grain pr base-status\n\nThe latest grain CI run on this task's base branch and each job's verdict.\n",
 	"ci wait": "grain ci wait [--jobs j1,j2] [--timeout 9m] [--resume <run-id>]\n\n" +
 		"Start grain CI on this task's branch (or attach to the identical run in flight) and wait for\n" +

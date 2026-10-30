@@ -1455,7 +1455,9 @@ func grainCLISection(task model.Task) string {
 			"`grain ci run-job <job>`, `grain ci retrigger`, `grain ci list`, `grain ci log [<run-id>] " +
 			"[--job <j>] [--step <s>] [--tail N]`, `grain ci test-history <test>`, `grain pr status`, " +
 			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
-			"`grain pr review-comment`.\n"
+			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
+			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +
+			"`grain ci log <run-id>`.\n"
 	}
 	s += "- **Task & collaboration:** `grain status \"<note>\"`, `grain handover write --file <path>`, " +
 		"`grain task wait <id>`, `grain task message <id> \"<body>\"`, `grain notify --subject <s> " +
