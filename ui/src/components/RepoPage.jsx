@@ -275,6 +275,17 @@ function RepoOverview({ upToDate, branches, gates, onShowTab }) {
       tab: "merge-queue",
     },
     {
+      label: "Issue import",
+      value: upToDate?.issueImport
+        ? upToDate.issueImport.enabled
+          ? upToDate.issueImport.approved
+            ? "On, approved"
+            : "On, held for approval"
+          : "Off"
+        : "…",
+      tab: "agents",
+    },
+    {
       label: "Base repair bypass",
       value: upToDate
         ? upToDate.baseRepairBypassesHumanGates
@@ -422,6 +433,13 @@ export default function RepoPage({
   // is a real and different answer, and the expensive one to get wrong
   // in either direction.
   const [upToDate, setUpToDate] = useState(null);
+  // The GitHub issue importer's text settings as typed and not yet saved
+  // (source repository, label, poll interval), null until upToDate has
+  // loaded them; and what the last "Import issues now" did, or why it
+  // could not.
+  const [importDraft, setImportDraft] = useState(null);
+  const [importOutcome, setImportOutcome] = useState(null);
+  const [importing, setImporting] = useState(false);
   // And the checks in this repository that will never pass for a pull
   // request grain's agents author, whatever is pushed to the branch --
   // `cla/google` and its kind (grain/task-291): what GET /api/repos/
@@ -899,6 +917,44 @@ export default function RepoPage({
       await onRefreshConfig();
     } catch (err) {
       showError(err);
+    }
+  };
+
+  // saveIssueImport writes some of the GitHub issue importer's settings
+  // (model.RepoConfig.IssueImport) through PUT .../settings, which
+  // leaves every field it is not sent alone. The orchestrator's next
+  // cycle reads the row; nothing is imported here.
+  const saveIssueImport = async (fields) => {
+    try {
+      setUpToDate(
+        await api(`${root}/settings`, {
+          method: "PUT",
+          body: JSON.stringify(fields),
+        }),
+      );
+      setImportDraft(null);
+      await onRefreshConfig();
+    } catch (err) {
+      showError(err);
+    }
+  };
+
+  // importIssuesNow runs one import pass immediately
+  // (POST .../import-issues), on top of the periodic one, and says what
+  // it did.
+  const importIssuesNow = async () => {
+    setImporting(true);
+    setImportOutcome(null);
+    try {
+      const out = await api(`${root}/import-issues`, { method: "POST" });
+      const n = (out.imported || []).length;
+      let text = `Read ${out.open} open issue${out.open === 1 ? "" : "s"} on ${out.source}: imported ${n}, ${out.skipped} already imported.`;
+      if (out.error) text += ` Some could not be imported: ${out.error}`;
+      setImportOutcome({ error: Boolean(out.error), text });
+    } catch (err) {
+      setImportOutcome({ error: true, text: String(err?.message || err) });
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -2310,6 +2366,175 @@ export default function RepoPage({
                   </Typography>
                 ) : null}
               </Stack>
+            )}
+          </Box>
+          <Box sx={{ mt: 3 }}>
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+              GitHub issue import
+            </Typography>
+            {upToDate === null || !upToDate.issueImport ? (
+              <Typography variant="body2" color="text.secondary">
+                Loading issue import settings…
+              </Typography>
+            ) : (
+              (() => {
+                const imp = upToDate.issueImport;
+                const draft = importDraft || {
+                  repo: imp.repo || "",
+                  label: imp.label || "",
+                  interval: imp.intervalSeconds
+                    ? String(Math.round(imp.intervalSeconds / 60))
+                    : "",
+                };
+                const dirty =
+                  importDraft !== null &&
+                  (draft.repo !== (imp.repo || "") ||
+                    draft.label !== (imp.label || "") ||
+                    draft.interval !==
+                      (imp.intervalSeconds
+                        ? String(Math.round(imp.intervalSeconds / 60))
+                        : ""));
+                const edit = (field) => (e) =>
+                  setImportDraft({ ...draft, [field]: e.target.value });
+                return (
+                  <Stack spacing={1.5} data-testid="repo-issue-import">
+                    <Stack direction="row" alignItems="flex-start" spacing={1}>
+                      <Checkbox
+                        size="small"
+                        sx={{ mt: -0.5 }}
+                        checked={Boolean(imp.enabled)}
+                        onChange={(e) =>
+                          saveIssueImport({
+                            issueImportEnabled: e.target.checked,
+                          })
+                        }
+                        disabled={readOnly}
+                        inputProps={{
+                          "aria-label": `Import open GitHub issues as tasks in ${repo}`,
+                          "aria-describedby": refusedBy(readOnly),
+                        }}
+                      />
+                      <Typography variant="body2" color="text.secondary">
+                        Import open GitHub issues as tasks. Every{" "}
+                        {Math.round(imp.effectiveIntervalSeconds / 60)} minutes
+                        grain reads the open issues of {imp.repo || repo}
+                        {imp.label ? ` labelled “${imp.label}”` : ""} and files
+                        a task targeting {repo} for each one it has not imported
+                        before. An issue is imported once, however its task
+                        ends.
+                      </Typography>
+                    </Stack>
+                    <Stack direction="row" alignItems="flex-start" spacing={1}>
+                      <Checkbox
+                        size="small"
+                        sx={{ mt: -0.5 }}
+                        checked={Boolean(imp.approved)}
+                        onChange={(e) =>
+                          saveIssueImport({
+                            issueImportApproved: e.target.checked,
+                          })
+                        }
+                        disabled={readOnly}
+                        inputProps={{
+                          "aria-label": `Queue imported issues in ${repo} without approval`,
+                          "aria-describedby": refusedBy(readOnly),
+                        }}
+                      />
+                      <Typography variant="body2" color="text.secondary">
+                        Queue imported tasks at once. With this off, each
+                        imported task waits as <strong>Imported</strong> until
+                        somebody approves it. Turn it on only if you trust
+                        everybody who can open an issue on {imp.repo || repo}:
+                        they write what the agent is told to do.
+                      </Typography>
+                    </Stack>
+                    <Stack
+                      component="form"
+                      direction={{ xs: "column", sm: "row" }}
+                      spacing={1}
+                      alignItems={{ sm: "flex-start" }}
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const minutes = draft.interval.trim();
+                        saveIssueImport({
+                          issueImportRepo: draft.repo.trim(),
+                          issueImportLabel: draft.label.trim(),
+                          issueImportIntervalSeconds: minutes
+                            ? Math.round(Number(minutes) * 60)
+                            : 0,
+                        });
+                      }}
+                    >
+                      <TextField
+                        size="small"
+                        label="Source repository"
+                        placeholder={repo}
+                        value={draft.repo}
+                        onChange={edit("repo")}
+                        disabled={readOnly}
+                        helperText="owner/name; empty for this repository"
+                        sx={{ flexGrow: 1 }}
+                      />
+                      <TextField
+                        size="small"
+                        label="Label"
+                        placeholder="any"
+                        value={draft.label}
+                        onChange={edit("label")}
+                        disabled={readOnly}
+                        helperText="only issues carrying it"
+                      />
+                      <TextField
+                        size="small"
+                        label="Every (minutes)"
+                        type="number"
+                        placeholder={String(
+                          Math.round(imp.effectiveIntervalSeconds / 60),
+                        )}
+                        value={draft.interval}
+                        onChange={edit("interval")}
+                        disabled={readOnly}
+                        inputProps={{ min: 1 }}
+                        helperText="empty for the default"
+                        sx={{ maxWidth: { sm: 150 } }}
+                      />
+                      <Button
+                        type="submit"
+                        variant="contained"
+                        size="small"
+                        disabled={readOnly || !dirty}
+                        aria-describedby={refusedBy(readOnly)}
+                        sx={{ mt: { sm: 0.5 }, whiteSpace: "nowrap" }}
+                      >
+                        Save
+                      </Button>
+                    </Stack>
+                    <Stack direction="row" alignItems="center" spacing={1.5}>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={importIssuesNow}
+                        disabled={readOnly || !imp.enabled || importing}
+                        aria-describedby={refusedBy(readOnly)}
+                        sx={{ whiteSpace: "nowrap" }}
+                      >
+                        {importing ? "Importing…" : "Import issues now"}
+                      </Button>
+                      {importOutcome ? (
+                        <Typography
+                          variant="body2"
+                          color={
+                            importOutcome.error ? "error" : "text.secondary"
+                          }
+                          role="status"
+                        >
+                          {importOutcome.text}
+                        </Typography>
+                      ) : null}
+                    </Stack>
+                  </Stack>
+                );
+              })()
             )}
           </Box>
         </RepoTabPanel>

@@ -453,6 +453,10 @@ type RepoDefaults struct {
 	// default filled in: "off", "observe" or "enforce"
 	// (model.MergeRecheckModeOf, docs/merge-queue-behind.md).
 	MergeRecheck string `json:"mergeRecheck"`
+	// IssueImport is the periodic GitHub issue importer's settings here
+	// (model.RepoConfig.IssueImport): off, and unapproved when on,
+	// unless somebody here said otherwise.
+	IssueImport RepoIssueImport `json:"issueImport"`
 	// UnfixableChecks names this repository's checks that will never pass
 	// for a pull request grain's agents author, whatever is pushed to the
 	// branch -- `cla/google` and its kind (model.RepoConfig.
@@ -539,6 +543,26 @@ type SetRepoDeclarationsRequest struct {
 	Declarations bool `json:"declarations"`
 }
 
+// RepoIssueImport is model.IssueImport on the wire. IntervalSeconds is
+// what is stored, 0 for the default; EffectiveIntervalSeconds is what the
+// importer actually waits between polls.
+type RepoIssueImport struct {
+	Enabled                  bool   `json:"enabled"`
+	Repo                     string `json:"repo"`
+	Label                    string `json:"label"`
+	Approved                 bool   `json:"approved"`
+	IntervalSeconds          int    `json:"intervalSeconds"`
+	EffectiveIntervalSeconds int    `json:"effectiveIntervalSeconds"`
+}
+
+func repoIssueImportOf(i model.IssueImport) RepoIssueImport {
+	return RepoIssueImport{
+		Enabled: i.Enabled, Repo: i.Repo, Label: i.Label, Approved: i.Approved,
+		IntervalSeconds:          i.IntervalSeconds,
+		EffectiveIntervalSeconds: int(i.Interval() / time.Second),
+	}
+}
+
 // SetRepoRequireBranchUpToDateRequest is PUT /api/repos/{owner}/{name}/
 // require-branch-up-to-date's body: whether the merge queue insists a
 // branch contain its base before it merges, a plain bool for the reason
@@ -578,6 +602,14 @@ type SetRepoSettingsRequest struct {
 	RepairTemplateID    *string   `json:"repairTemplateID,omitempty"`
 	SetupCommand        *string   `json:"setupCommand,omitempty"`
 	UnfixableChecks     *[]string `json:"unfixableChecks,omitempty"`
+	// The GitHub issue importer's settings (model.RepoConfig.IssueImport),
+	// each left alone when omitted. IssueImportRepo is owner/name, "" for
+	// this repository; IssueImportIntervalSeconds 0 is the default.
+	IssueImportEnabled         *bool   `json:"issueImportEnabled,omitempty"`
+	IssueImportRepo            *string `json:"issueImportRepo,omitempty"`
+	IssueImportLabel           *string `json:"issueImportLabel,omitempty"`
+	IssueImportApproved        *bool   `json:"issueImportApproved,omitempty"`
+	IssueImportIntervalSeconds *int    `json:"issueImportIntervalSeconds,omitempty"`
 }
 
 // SetRepoWatchDefaultBranchRequest is PUT /api/repos/{owner}/{name}/
@@ -673,7 +705,9 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		return RepoDefaults{}, err
 	}
 	out.MergeRecheck = string(model.MergeRecheckModeOf(stored))
+	out.IssueImport = repoIssueImportOf(model.IssueImport{})
 	if stored != nil {
+		out.IssueImport = repoIssueImportOf(stored.IssueImport)
 		out.DefaultCapabilities = stored.DefaultCapabilities
 		out.CICapabilities = stored.CICapabilities
 		out.PromptExtension = stored.PromptExtension
@@ -1044,7 +1078,34 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 			return RepoDefaults{}, err
 		}
 	}
+	var importRepo string
+	if req.IssueImportRepo != nil {
+		if importRepo, err = c.cleanIssueImportRepo(*req.IssueImportRepo); err != nil {
+			return RepoDefaults{}, err
+		}
+	}
+	if req.IssueImportIntervalSeconds != nil {
+		if n := *req.IssueImportIntervalSeconds; n != 0 && (n < 0 || time.Duration(n)*time.Second < model.MinIssueImportInterval) {
+			return RepoDefaults{}, validationErrorf("issueImportIntervalSeconds: must be 0 for the default or at least %d",
+				int(model.MinIssueImportInterval/time.Second))
+		}
+	}
 	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) {
+		if req.IssueImportEnabled != nil {
+			rc.IssueImport.Enabled = *req.IssueImportEnabled
+		}
+		if req.IssueImportRepo != nil {
+			rc.IssueImport.Repo = importRepo
+		}
+		if req.IssueImportLabel != nil {
+			rc.IssueImport.Label = strings.TrimSpace(*req.IssueImportLabel)
+		}
+		if req.IssueImportApproved != nil {
+			rc.IssueImport.Approved = *req.IssueImportApproved
+		}
+		if req.IssueImportIntervalSeconds != nil {
+			rc.IssueImport.IntervalSeconds = *req.IssueImportIntervalSeconds
+		}
 		if req.MergeRecheck != nil {
 			rc.MergeRecheck = recheck
 		}
