@@ -25,7 +25,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-// approvalServer is a deployment with grain CI on bwsalmon/grain and a
+// approvalServer is a deployment with grain CI on ai-on-gke/grain and a
 // fake runner recording what the approval routes start.
 func approvalServer(t *testing.T) (*ui.Server, *ui.Client, *model.Store, *fakeCIRunner) {
 	t.Helper()
@@ -33,7 +33,7 @@ func approvalServer(t *testing.T) (*ui.Server, *ui.Client, *model.Store, *fakeCI
 	srv, client, store := releaseServer(t, runner)
 	ctx := context.Background()
 	cfg := model.DefaultConfig()
-	cfg.TargetRepos = []string{"bwsalmon/grain"}
+	cfg.TargetRepos = []string{"ai-on-gke/grain"}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -49,10 +49,10 @@ func approvalServer(t *testing.T) (*ui.Server, *ui.Client, *model.Store, *fakeCI
 // is started for either.
 func TestAnAgentMayNotApproveAPendingRelease(t *testing.T) {
 	srv, client, _, runner := approvalServer(t)
-	seedAPITask(t, client, "7", "bwsalmon/grain", "api:releases:write")
+	seedAPITask(t, client, "7", "ai-on-gke/grain", "api:releases:write")
 
 	for _, verb := range []string{"approve", "reject"} {
-		path := "/api/repos/bwsalmon/grain/pending-releases/v2.4.0/" + verb
+		path := "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/" + verb
 		code, body := asAgent(t, srv, "7", http.MethodPost, path, "", "")
 		if code != http.StatusForbidden || !strings.Contains(body, "only a person may "+verb) {
 			t.Errorf("an agent holding releases:write %ss: %d %s, want 403 saying only a person may", verb, code, body)
@@ -80,7 +80,7 @@ func TestAPersonApprovesOrRejectsAPendingRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec := do(t, srv, http.MethodPost, "/api/repos/bwsalmon/grain/pending-releases/v2.4.0/approve", "")
+	rec := do(t, srv, http.MethodPost, "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/approve", "")
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("a person's approval: %d %s, want 202", rec.Code, rec.Body)
 	}
@@ -106,7 +106,7 @@ func TestAPersonApprovesOrRejectsAPendingRelease(t *testing.T) {
 		}
 	}
 
-	if rec := do(t, srv, http.MethodPost, "/api/repos/bwsalmon/grain/pending-releases/v2.4.0/reject", ""); rec.Code != http.StatusAccepted {
+	if rec := do(t, srv, http.MethodPost, "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/reject", ""); rec.Code != http.StatusAccepted {
 		t.Fatalf("a person's rejection: %d %s, want 202", rec.Code, rec.Body)
 	}
 	if last := runner.started[len(runner.started)-1]; len(last.Jobs) != 1 || last.Jobs[0] != ui.PromoteReleaseWorkflow+":reject" {
@@ -114,7 +114,7 @@ func TestAPersonApprovesOrRejectsAPendingRelease(t *testing.T) {
 	}
 
 	for _, bad := range []string{"v2.4.1", "latest", "v2.4.0-rc.1"} {
-		if rec := do(t, srv, http.MethodPost, "/api/repos/bwsalmon/grain/pending-releases/"+bad+"/approve", ""); rec.Code != http.StatusBadRequest {
+		if rec := do(t, srv, http.MethodPost, "/api/repos/ai-on-gke/grain/pending-releases/"+bad+"/approve", ""); rec.Code != http.StatusBadRequest {
 			t.Errorf("approving %q: %d %s, want 400", bad, rec.Code, rec.Body)
 		}
 	}
