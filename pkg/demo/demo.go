@@ -1649,10 +1649,26 @@ func (demoChangelists) Observe(_ context.Context, _ model.Task, target string) (
 func (demoChangelists) Threads(context.Context, model.Task, string) ([]change.Thread, error) {
 	return nil, nil
 }
+
+// Submit and Sync remember what the forge would report afterwards, since
+// the demo has no poll to read it back: a submitted CL observes as
+// submitted (what a cl-submitted goal naming its number reads), and a
+// synced one as a new snapshot, up to date with head, whose presubmit has
+// not run yet.
 func (demoChangelists) Submit(_ context.Context, _ model.Task, target string, by change.Person) (change.Result, error) {
+	obs, _ := change.LastObserved(target)
+	obs.Target, obs.Status = target, change.StatusSubmitted
+	change.Remember(obs)
 	return change.Result{Target: target, Message: fmt.Sprintf("%s submitted %s (demo: nothing left this process).", by.Name, target)}, nil
 }
-func (demoChangelists) Sync(_ context.Context, _ model.Task, _ string) (change.SyncResult, error) {
+func (demoChangelists) Sync(_ context.Context, task model.Task, _ string) (change.SyncResult, error) {
+	if live := change.LiveChanges(task); len(live) > 0 {
+		obs, _ := change.LastObserved(live[0])
+		obs.Target, obs.Health, obs.Presubmit, obs.Checks = live[0], change.HealthOK, change.PresubmitNotRun, nil
+		obs.Snapshot++
+		obs.SnapshotAt = time.Now().UTC()
+		change.Remember(obs)
+	}
 	return change.SyncResult{Message: "synced to head (demo)"}, nil
 }
 
