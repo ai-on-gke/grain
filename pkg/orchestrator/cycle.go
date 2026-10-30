@@ -2523,7 +2523,6 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	limitsForShape := model.Limits{AgentShape: deps.AgentShape}
 	cfg.sessionShape = limitsForShape.TaskShape(*task)
 	cfg.sessionLedger = deps.Ledger
-	cfg.client = deps.Client
 	framework, cfg, err = consoleDispatch(framework, *task, d.RunID, cfg)
 	if err != nil {
 		return err

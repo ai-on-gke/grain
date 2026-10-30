@@ -591,7 +591,7 @@ func continueSessionTurns(
 		}
 
 		now := cfg.now()
-		if err := relayProposedTasks(daemonCtx, store, nil, task, turnResult, now); err != nil {
+		if err := relayProposedTasks(daemonCtx, store, nil, nil, task, turnResult, now); err != nil {
 			log.Printf("orchestrator: run %s: relaying proposed tasks in-process: %v", runID, err)
 			break
 		}
