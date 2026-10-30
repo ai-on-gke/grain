@@ -328,10 +328,10 @@ func TestPlainGitPATCheckReadsTheRepository(t *testing.T) {
 	}
 	admitUser(t, store, "dana")
 	dana := map[string]string{"Content-Type": "application/json", "X-Grain-User": "dana"}
-	connect := func(token string) string {
+	connect := func(token, scope string) string {
 		t.Helper()
 		body, _ := json.Marshal(map[string]string{"type": "pat", "host": hostPort, "kind": "git",
-			"baseUrl": upstream.URL, "value": token})
+			"baseUrl": upstream.URL, "scope": scope, "value": token})
 		rec := doWithHeaders(t, srv, http.MethodPost, "/api/deployment/git-connections", string(body), dana)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("saving the %s connection: %d %s", token, rec.Code, rec.Body)
@@ -362,7 +362,7 @@ func TestPlainGitPATCheckReadsTheRepository(t *testing.T) {
 		return fmt.Sprintf("%s read=%v push=%v", res.Repos[0].Repo, res.Repos[0].Read, res.Repos[0].Push)
 	}
 
-	good, push, bad := connect("good-token"), connect("push-token"), connect("bad-token")
+	good, push, bad := connect("good-token", ""), connect("push-token", "acme"), connect("bad-token", "acme/widgets")
 
 	if res := check(map[string]string{"host": hostPort, "credential": good, "scope": "acme/widgets"}); !res.OK ||
 		verdict(res) != "acme/widgets read=true push=false" {

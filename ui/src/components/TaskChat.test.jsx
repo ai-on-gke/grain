@@ -65,6 +65,55 @@ describe("TaskChat", () => {
     expect(screen.getByText("grain on behalf of run-7")).toBeInTheDocument();
   });
 
+  it("hides synthetic wake notices and console-session notifications from the chat", () => {
+    render(
+      <TaskChat
+        t={task({
+          comments: [
+            {
+              id: 1,
+              author: "schedule",
+              authorKind: "automation",
+              body: "_Woken early:_ a note from task 20. Read the queue again and act on what has changed since your handover.",
+              createdAt: "2026-09-08T10:01:00Z",
+            },
+            {
+              id: 2,
+              author: "schedule",
+              authorKind: "automation",
+              body: "_Scheduled wake._ Read the queue again and act on what has changed since your handover.",
+              createdAt: "2026-09-08T10:02:00Z",
+            },
+            {
+              id: 3,
+              author: "console-session",
+              authorKind: "automation",
+              body: "**Notification (critical):** Nothing is publishing from acme/widgets main",
+              createdAt: "2026-09-08T10:03:00Z",
+            },
+            {
+              id: 4,
+              author: "grain",
+              authorKind: "automation",
+              onBehalfOf: "run-7",
+              body: "Here is the update from task 20.",
+              createdAt: "2026-09-08T10:04:00Z",
+            },
+          ],
+        })}
+        act={act}
+      />,
+    );
+    expect(
+      screen.getByText("Here is the update from task 20."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Woken early/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Scheduled wake/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Nothing is publishing from acme\/widgets main/),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders a message body as markdown, the way every other relayed answer is", () => {
     render(
       <TaskChat
