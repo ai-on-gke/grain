@@ -176,7 +176,7 @@ type Run struct {
 	Error string `json:"error,omitempty"`
 	// Interrupted is a run that never concluded on its own because the
 	// daemon running it stopped -- read back out of a durable store by
-	// the process that came after (StoredRunStore.RecoverInterrupted),
+	// the process that came after (StoredRunStore.RecoverUnattachable),
 	// and impossible on a run this process has watched from start to
 	// finish.
 	//

@@ -1558,6 +1558,39 @@ func TestTheAgySurfaceJobInstallsTheAgyAnImageWouldAndRunsTheScriptAsItIs(t *tes
 	}
 }
 
+// Each surface workflow's "The capture has to have captured something" step
+// guards publish against an empty or broken capture, and the workflow itself
+// runs only on workflow_dispatch -- so a check that looks for headings or
+// probe lines the script never wrote is invisible until someone dispatches
+// it. Running the step's shell against the committed capture keeps the
+// workflow's check and the script's output in agreement.
+func TestTheSurfaceCaptureChecksAcceptTheCommittedCaptures(t *testing.T) {
+	root := repoRoot(t)
+	for _, wf := range []string{
+		".grain/workflows/agy-surface.yml",
+		".grain/workflows/claude-surface.yml",
+		".grain/workflows/codex-surface.yml",
+	} {
+		job := grainJob(t, wf, "capture")
+		var checkScript string
+		for _, step := range job.Steps {
+			if step.Name == "The capture has to have captured something" {
+				checkScript = step.Run
+				break
+			}
+		}
+		if checkScript == "" {
+			t.Errorf("%s: capture job has no \"The capture has to have captured something\" step", wf)
+			continue
+		}
+		cmd := exec.Command("bash", "-c", checkScript)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s capture check rejected the committed capture: %v\n%s", wf, err, out)
+		}
+	}
+}
+
 // A deployment is told nothing about its sandbox image.
 //
 // One image, not two: the guest a task runs and the container it runs in

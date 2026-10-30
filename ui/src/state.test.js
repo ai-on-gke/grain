@@ -50,6 +50,7 @@ import {
   knownRepos,
   lastBaseForRepo,
   mergeQueueActive,
+  mergeQueueBatching,
   mergeQueueStall,
   mergeQueueStalled,
   orphanedPullRequest,
@@ -1632,6 +1633,19 @@ describe("stateLabel", () => {
     expect(stateLabel({ state: "completed" })).toBe("Merging");
   });
 
+  it("calls an unapproved GitHub issue import Imported", () => {
+    expect(
+      stateLabel({
+        state: "proposed",
+        imported: true,
+        awaitingImportApproval: true,
+      }),
+    ).toBe("Imported");
+    // Approved, it reads as its state like any other task.
+    expect(stateLabel({ state: "queued", imported: true })).toBe("Waiting");
+    expect(stateLabel({ state: "proposed" })).toBe("Proposed");
+  });
+
   it("says what a merge-queue repair is doing instead", () => {
     expect(stateLabel({ state: "running", repairing: true })).toBe("Repairing");
     expect(stateLabel({ state: "queued", repairing: true })).toBe(
@@ -2297,6 +2311,34 @@ describe("outcomeLabel", () => {
     expect(outcomeLabel("nothing_needed")).toBe("Nothing needed");
     expect(outcomeLabel("succeeded")).toBe("Succeeded");
     expect(outcomeLabel("no_action")).toBe("No action");
+  });
+});
+
+describe("mergeQueueBatching", () => {
+  it("returns true for an overlap re-check in waiting_ci and false for ordinary waiting_ci", () => {
+    expect(
+      mergeQueueBatching({
+        state: "completed",
+        mergeQueueState: "waiting_ci",
+        mergeQueueNote:
+          "grain CI is re-checking this change on top of main before it merges, on `grain-merge-queue/dep/main` at abcdef012345",
+      }),
+    ).toBe(true);
+    expect(
+      mergeQueueBatching({
+        state: "completed",
+        mergeQueueState: "waiting_ci",
+        mergeQueueNote: "grain CI run 42 is running",
+      }),
+    ).toBe(false);
+    expect(
+      mergeQueueBatching({
+        state: "closed",
+        mergeQueueState: "waiting_ci",
+        mergeQueueNote:
+          "grain CI is re-checking this change on top of main before it merges",
+      }),
+    ).toBe(false);
   });
 });
 

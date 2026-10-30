@@ -15,9 +15,12 @@
 package daemon
 
 import (
+	"context"
+	"errors"
 	"log"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -29,8 +32,9 @@ import (
 func captureLog(t *testing.T, f func()) string {
 	t.Helper()
 	var logs strings.Builder
+	prevLog := log.Writer()
 	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(prevLog) })
 	f()
 	return logs.String()
 }
@@ -450,5 +454,168 @@ exit 0
 	}
 	if got := EffectiveK8sGranuleImage(derivedCfg); got != wantMirrored {
 		t.Fatalf("EffectiveK8sGranuleImage(derived) = %q, want %q", got, wantMirrored)
+	}
+}
+
+// fakeMirrorDocker installs a fake docker for the mirror path whose
+// `image inspect` of any ref answers repoDigests and whose push exits
+// pushExit, and returns the file it logs its argv to.
+func fakeMirrorDocker(t *testing.T, repoDigests string, pushExit int) string {
+	t.Helper()
+	ResetMirroredSandboxImageCacheForTest()
+	t.Cleanup(ResetMirroredSandboxImageCacheForTest)
+	dir := t.TempDir()
+	logFile := dir + "/docker.log"
+	script := `#!/bin/sh
+echo "$@" >> "` + logFile + `"
+case "$1 $2" in
+  "image inspect") echo '` + repoDigests + `'; exit 0 ;;
+esac
+if [ "$1" = push ]; then
+  echo "The push refers to repository [$2]"
+  echo "denied: Permission \"artifactregistry.repositories.uploadArtifacts\" denied" >&2
+  exit ` + strconv.Itoa(pushExit) + `
+fi
+exit 0
+`
+	if err := os.WriteFile(dir+"/docker", []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake docker: %v", err)
+	}
+	savedDocker, savedToken, savedRemote := sandboxMirrorDockerCmd, sandboxMirrorTokenSource, sandboxMirrorRegistryDigest
+	sandboxMirrorDockerCmd = []string{dir + "/docker"}
+	sandboxMirrorTokenSource = nil
+	sandboxMirrorRegistryDigest = func(context.Context, string) (string, error) {
+		return "", errors.New("HTTP 404 (fake registry)")
+	}
+	t.Cleanup(func() {
+		sandboxMirrorDockerCmd, sandboxMirrorTokenSource, sandboxMirrorRegistryDigest = savedDocker, savedToken, savedRemote
+	})
+	return logFile
+}
+
+// The -k8s-granule-image flag defaults to the stamp, so a daemon started
+// with only -sandbox-image-mirror has the stamp in K8sGranuleImage on its
+// first start. That must still be mirrored rather than read as a pin:
+// the walkthrough in docs/test-runs/2026-10-29-sandbox-image-mirror-registry-auth.md
+// found the daemon creating pods from the source image instead.
+func TestEffectiveK8sGranuleImageMirrorsWhenTheFlagDefaultIsTheStamp(t *testing.T) {
+	stamped := "127.0.0.1:5000/src/guest:sha-aaaa111"
+	savedStamp := DefaultSandboxImage
+	DefaultSandboxImage = stamped
+	t.Cleanup(func() { DefaultSandboxImage = savedStamp })
+	digest := "sha256:f97baa533a26513c453a362be331a43eb60214302f449c16571b23cea141dce4"
+	logFile := fakeMirrorDocker(t, `["127.0.0.1:5001/mirror/guest@`+digest+`"]`, 0)
+
+	cfg := Config{
+		K8sGranuleSandboxes: true,
+		K8sGranuleImage:     stamped,
+		SandboxImageMirror:  "127.0.0.1:5001/mirror/guest",
+	}
+	want := "127.0.0.1:5001/mirror/guest:sha-aaaa111@" + digest
+	if got := EffectiveK8sGranuleImage(cfg); got != want {
+		t.Fatalf("EffectiveK8sGranuleImage = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(logFile); err != nil {
+		t.Fatalf("the mirror never asked docker anything: %v", err)
+	}
+
+	// A pin of the operator's own, from elsewhere, still wins.
+	cfg.K8sGranuleImage = "registry.example/own/guest:v1"
+	if got := EffectiveK8sGranuleImage(cfg); got != cfg.K8sGranuleImage {
+		t.Fatalf("EffectiveK8sGranuleImage(own pin) = %q, want %q", got, cfg.K8sGranuleImage)
+	}
+}
+
+// A `docker tag` carries the source repository's RepoDigest over to the
+// mirror tag before anything is pushed. After a push that failed, the
+// next start must push again rather than pin to that digest in a mirror
+// that never received it.
+func TestMirrorSandboxImageDoesNotPinASourceDigestThatWasNeverPushed(t *testing.T) {
+	source := "127.0.0.1:5000/src/guest:sha-aaaa111"
+	target := "127.0.0.1:5001/mirror/guest:sha-aaaa111"
+	logFile := fakeMirrorDocker(t, `["127.0.0.1:5000/src/guest@sha256:f97baa533a26513c453a362be331a43eb60214302f449c16571b23cea141dce4"]`, 1)
+
+	pinned, err := defaultMirrorSandboxImage(t.Context(), source, "127.0.0.1:5001/mirror/guest", target)
+	if err == nil {
+		t.Fatalf("defaultMirrorSandboxImage = %q, nil; want the failed push reported", pinned)
+	}
+	if !strings.Contains(err.Error(), "denied") {
+		t.Errorf("error %q does not carry docker's own reason", err)
+	}
+	logged, _ := os.ReadFile(logFile)
+	if !strings.Contains(string(logged), "push "+target) {
+		t.Errorf("no push was attempted:\n%s", logged)
+	}
+}
+
+// A RepoDigest for the mirror is only docker's memory of an earlier
+// push. When the mirror no longer answers it -- the repository was
+// emptied or recreated -- the image is pushed again rather than pinned
+// to a digest the cluster cannot pull; when it does, nothing is pushed.
+func TestMirrorSandboxImageChecksTheRegistryBeforeTrustingALocalRepoDigest(t *testing.T) {
+	source := "127.0.0.1:5000/src/guest:sha-aaaa111"
+	target := "127.0.0.1:5001/mirror/guest:sha-aaaa111"
+	digest := "sha256:f97baa533a26513c453a362be331a43eb60214302f449c16571b23cea141dce4"
+	logFile := fakeMirrorDocker(t, `["127.0.0.1:5001/mirror/guest@`+digest+`"]`, 0)
+
+	pinned, err := defaultMirrorSandboxImage(t.Context(), source, "127.0.0.1:5001/mirror/guest", target)
+	if err != nil || pinned != target+"@"+digest {
+		t.Fatalf("defaultMirrorSandboxImage = %q, %v; want %q", pinned, err, target+"@"+digest)
+	}
+	logged, _ := os.ReadFile(logFile)
+	if !strings.Contains(string(logged), "push "+target) {
+		t.Fatalf("a mirror answering 404 was not pushed to again:\n%s", logged)
+	}
+
+	if err := os.Remove(logFile); err != nil {
+		t.Fatal(err)
+	}
+	sandboxMirrorRegistryDigest = func(_ context.Context, ref string) (string, error) {
+		if ref != target {
+			t.Errorf("registry asked for %q, want %q", ref, target)
+		}
+		return digest, nil
+	}
+	if pinned, err := defaultMirrorSandboxImage(t.Context(), source, "127.0.0.1:5001/mirror/guest", target); err != nil || pinned != target+"@"+digest {
+		t.Fatalf("defaultMirrorSandboxImage(present) = %q, %v", pinned, err)
+	}
+	logged, _ = os.ReadFile(logFile)
+	if strings.Contains(string(logged), "push") {
+		t.Errorf("pushed although the mirror already has the digest:\n%s", logged)
+	}
+}
+
+// A daemon started with -sandbox-image-mirror resolves its stock image to
+// the mirrored one; clearing the mirror in Settings must hand the backend
+// the unmirrored stamp again, not the mirrored image it started with.
+// And the line logged for it must not claim a custom image was cleared
+// when none was ever set.
+func TestApplySandboxImageClearingTheMirrorReturnsToTheStamp(t *testing.T) {
+	stamped := "127.0.0.1:5000/src/guest:sha-aaaa111"
+	savedStamp := DefaultSandboxImage
+	DefaultSandboxImage = stamped
+	t.Cleanup(func() { DefaultSandboxImage = savedStamp })
+	digest := "sha256:f97baa533a26513c453a362be331a43eb60214302f449c16571b23cea141dce4"
+	fakeMirrorDocker(t, `["127.0.0.1:5001/mirror/guest@`+digest+`"]`, 0)
+
+	cfg := Config{K8sGranuleSandboxes: true, SandboxImageMirror: "127.0.0.1:5001/mirror/guest"}
+	mirrored := "127.0.0.1:5001/mirror/guest:sha-aaaa111@" + digest
+	stock := stockSandboxImageFor(cfg)
+	if stock != mirrored {
+		t.Fatalf("stock image with a mirror = %q, want %q", stock, mirrored)
+	}
+	backend := &fakeImageBackend{image: stock}
+	live := (&LiveConfig{sandboxes: backend, Applied: cfg}).WithSandboxImages(nil, stock, nil)
+
+	cfg.SandboxImageMirror = ""
+	logged := captureLog(t, func() { live.applySandboxImage(t.Context(), cfg) })
+	if backend.image != stamped {
+		t.Fatalf("after clearing the mirror new sandboxes come from %q, want the stamp %q", backend.image, stamped)
+	}
+	if strings.Contains(logged, "custom sandbox image cleared") {
+		t.Errorf("logged a custom image cleared when none was set:\n%s", logged)
+	}
+	if !strings.Contains(logged, "new sandboxes are created from "+stamped) {
+		t.Errorf("no line saying which image new sandboxes use:\n%s", logged)
 	}
 }

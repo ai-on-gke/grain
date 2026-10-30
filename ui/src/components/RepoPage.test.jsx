@@ -130,6 +130,7 @@ function routeApi({
   workOwnership = ownsItsWork,
   ciRuns = { enabled: true, runs: [] },
 } = {}) {
+  let savedImport = null;
   api.mockImplementation((path, opts) => {
     if (!opts && /\/branches$/.test(path)) return Promise.resolve(branches);
     if (!opts && /\/capabilities$/.test(path)) return Promise.resolve(caps);
@@ -144,6 +145,28 @@ function routeApi({
       return Promise.resolve(upToDate);
     if (opts && /\/require-branch-up-to-date$/.test(path))
       return Promise.resolve({ ...upToDate, requireBranchUpToDate: true });
+    if (opts && /\/settings$/.test(path)) {
+      // Each save answers with every earlier one applied, as the
+      // server's row would.
+      const body = JSON.parse(opts.body);
+      const imp = savedImport || upToDate.issueImport || {};
+      savedImport = {
+        ...imp,
+        enabled: body.issueImportEnabled ?? imp.enabled,
+        approved: body.issueImportApproved ?? imp.approved,
+        repo: body.issueImportRepo ?? imp.repo,
+        label: body.issueImportLabel ?? imp.label,
+      };
+      return Promise.resolve({ ...upToDate, issueImport: savedImport });
+    }
+    if (opts && /\/import-issues$/.test(path))
+      return Promise.resolve({
+        repo: "acme/widgets",
+        source: "acme/widgets",
+        open: 3,
+        imported: ["7", "8"],
+        skipped: 1,
+      });
     if (opts && /\/merge-on-green$/.test(path))
       return Promise.resolve({ ...upToDate, mergeOnGreen: true });
     if (opts && /\/base-repair-bypasses-human-gates$/.test(path))
@@ -292,7 +315,9 @@ describe("RepoPage", () => {
     });
     const routed = api.getMockImplementation();
     api.mockImplementation((path, opts) => {
-      if (path === "/api/capability-methods")
+      // The default grants' picker asks for the listing as this repo's
+      // agent tasks see it (?kind=task&repo=), the CI one for no run.
+      if (path.split("?")[0] === "/api/capability-methods")
         return Promise.resolve([cloudKey]);
       if (path === "/api/capability-grants/check")
         return Promise.resolve(
@@ -1958,6 +1983,65 @@ describe("RepoPage", () => {
     });
     expect(props.onRefreshConfig).toHaveBeenCalled();
     expect(box).toBeChecked();
+  });
+
+  it("switches on GitHub issue import, held for approval unless asked otherwise", async () => {
+    const off = {
+      enabled: false,
+      approved: false,
+      repo: "",
+      label: "",
+      intervalSeconds: 0,
+      effectiveIntervalSeconds: 600,
+    };
+    routeApi({ upToDate: { repo: "acme/widgets", issueImport: off } });
+    const user = userEvent.setup();
+    const props = renderPage({ tab: "agents" });
+
+    const enable = await screen.findByLabelText(
+      "Import open GitHub issues as tasks in acme/widgets",
+    );
+    const approve = screen.getByLabelText(
+      "Queue imported issues in acme/widgets without approval",
+    );
+    const now = screen.getByRole("button", { name: "Import issues now" });
+    expect(enable).not.toBeChecked();
+    expect(approve).not.toBeChecked();
+    expect(now).toBeDisabled();
+
+    await user.click(enable);
+    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
+      method: "PUT",
+      body: JSON.stringify({ issueImportEnabled: true }),
+    });
+    expect(props.onRefreshConfig).toHaveBeenCalled();
+    expect(enable).toBeChecked();
+    expect(approve).not.toBeChecked();
+
+    await user.type(
+      screen.getByLabelText("Source repository"),
+      "kubernetes/autoscaler",
+    );
+    await user.type(screen.getByLabelText("Label"), "bug");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        issueImportRepo: "kubernetes/autoscaler",
+        issueImportLabel: "bug",
+        issueImportIntervalSeconds: 0,
+      }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Import issues now" }));
+    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/import-issues", {
+      method: "POST",
+    });
+    expect(
+      await screen.findByText(
+        "Read 3 open issues on acme/widgets: imported 2, 1 already imported.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("shows merge when green as on for a repo that has it on", async () => {

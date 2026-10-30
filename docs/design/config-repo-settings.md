@@ -323,6 +323,16 @@ Under this design:
 2. **Optional one-click Config PR creation (`POST /api/state-repo/pull-requests`):**
    - For any `FileChange` list returned by a `409` rehearsal (or edited in the Config Repo Browser), a human operator can POST `{ title, summary, changes }` to `POST /api/state-repo/pull-requests`, which applies `changes` onto a new branch in `grain/config`, runs the validation pipeline (§4.4), and opens a config PR ready for review and Submit.
 
+#### 4.1.1 As Implemented (Slice 3)
+
+- **When internal mode refuses.** `checkSettingsWritable` / `checkSettingsWritableUnrehearsed` (`pkg/ui/config_refusal.go`) refuse a non-bootstrap write with the rehearsed `409` whenever the daemon has a controller-local `grain/config` (`ui.Config.StateRepo` set) *and* the write came through the HTTP API (its context carries the request's `configWriteRehearsal`). The refusal carries `repo: "grain/config"`, `internal: true` and `url: "/repos/grain/config"`. grain's own code (applying a merged change, daemon loops) and a UI with no config repository at all (`grain demo`) still write directly: neither has a pull request to open.
+- **Bootstrap guards.** `checkBootstrapWritable` / `checkBootstrapWritableUnrehearsed` keep the old external-only refusal for `PUT/DELETE /api/deployment/agent-backends/{id}`, `/api/gcp-keys`, `PUT /api/settings/cli-run` and `POST /api/capability-servers/bind-secret`. Secret, token, access and operational routes were never guarded and are unchanged.
+- **The split.** `PUT/POST /api/settings` and `PUT /api/deployment` compute the row the request would write and compare it with the current one after clearing the Models and Sandboxes fields (`pkg/ui/config_bootstrap.go`: agent backends, default/judgement model and per-model settings, `MaxWorkers`, the `Sandbox*`, `K8s*`, network-access, image and CLI-run fields). A bootstrap-only request is written; any other is refused whole (its bootstrap half included) with the patch. The first save of a row nothing but `grain connections import` has written counts as bootstrap, since it seeds the whole row.
+- **Validation.** `staterepo.ValidateCandidateConfig` (`pkg/staterepo/validate_pr.go`) runs `Check` on a `VACUUM INTO` snapshot of the live database (which already includes the capability catalogue checks), then `CheckDispatchLiveness` (`max_parallel` ≥ 1, at least one enabled connection, `default_model` and the director session's model served by an enabled connection that lists its models, the `director` session present), then `RehearseApply` (`ImportTables` over the settings and memory tables into a second snapshot, as `Apply` does).
+- **Direct PRs.** `POST /api/state-repo/pull-requests` (`settings:write`, people only) takes `{title, body, changes}` where `changes` is a refusal's `change` array. `daemon.StateManager.OpenConfigPullRequest` applies it to the base branch's tree, validates it (`422` with the report when it fails), commits it through a private index to `grain/task-<id>` without touching the sync's working tree, and files task `<id>` on `grain/config`, completed and not submitted, so it sits in `awaiting_submit` until a person submits it. External mode is refused: the pull request belongs in the external repository.
+- **Opt-out.** `"directConfigWrites": true` in `<data-dir>/state-repo.json` (host-local, read on every guarded write) lets the API write directly in internal mode again, for an operator mid-migration and for the e2e and installer harnesses that configure a real daemon through its API and CLI (`grain server`, `grain git-ambient`). External mode ignores it.
+- **Not done here.** The §7.1 one-time migration commit is not needed for internal mode (the sync already exports every settings table into `grain/config` on each tick). The UI still offers the departing editors; Slice 4 replaces them.
+
 ### 4.2 Writable Config Repo Checkout for the Director
 
 Today in `pkg/orchestrator/checkout.go`:
@@ -478,6 +488,17 @@ var NeverAutoMergePaths = []string{
     "tables/agent_backend.json",
     "tables/console_session.json",
     "tables/repo_workflow.json",
+    // Templates and schedules as tables: their reads, writes, grants, fields.
+    "tables/template.json", "tables/template_read.json", "tables/template_write.json",
+    "tables/template_grant.json", "tables/template_field.json",
+    "tables/template_custom_field.json", "tables/template_sequence.json",
+    "tables/schedule.json", "tables/schedule_read.json", "tables/schedule_write.json",
+    "tables/schedule_grant.json", "tables/schedule_custom_field.json",
+    "tables/schedule_sequence.json",
+    // Sandbox images and the secrets bound into them; GCP keys.
+    "tables/standing_sandbox.json", "tables/standing_sandbox_secret.json",
+    "tables/standing_sandbox_env.json", "tables/persistent_sandbox.json",
+    "tables/gcp_key.json",
     "scripts/**",
     "workflows/**",
     ".github/**",
@@ -486,6 +507,7 @@ var NeverAutoMergePaths = []string{
 }
 ```
 
+- **Every table `staterepo.Apply` imports is under the ceiling unless it is benign.** `TestSettingsTablesAreHeldUnlessBenign` (`pkg/staterepo`) fails when a name in `staterepo.SettingsTables` is neither covered by `NeverAutoMergePaths` nor on its explicit benign list (`board*`, `suite*`, `custom_field`, `qualification_*`), so a table added to the apply list later is held until somebody decides it grants nothing.
 - **Who may change `settings/config-policy.yml`:** Because `settings/config-policy.yml` is the first entry in `NeverAutoMergePaths`, any PR that creates, modifies, or deletes `settings/config-policy.yml` is unconditionally classified with `RequiresHuman: true`. Only a human operator clicking **Approve** / **Submit** in the UI can land a change to the exception list.
 - **Evaluator uses base branch's exception list:** When evaluating whether a candidate PR on `grain/config` may auto-merge, `orchestrator/securityhold.go` reads `settings/config-policy.yml` from `grain/config`'s **base branch (`main`)**, never from the unmerged PR head.
 

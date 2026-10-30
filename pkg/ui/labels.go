@@ -324,6 +324,11 @@ type Config struct {
 	// deployment need not repeat itself on every task.
 	DefaultTarget *model.RepoRef
 	Capabilities  []Capability
+	// IssueImporter imports one repository's open GitHub issues now
+	// (Client.ImportIssues). nil -- a deployment with no GitHub client, or
+	// a test that wires none -- refuses the manual trigger; the periodic
+	// importer runs in the orchestrator either way.
+	IssueImporter IssueImporter
 	// RepoComparer supplies the read-only half of Grain's native pull
 	// request view. It talks in Git refs and unified diff rather than
 	// forge-specific pull-request numbers.
@@ -447,6 +452,11 @@ type Config struct {
 	// commit grain CI last judged, and the merge queue checks the head
 	// again before it merges either way.
 	GitHubPullRequests PullRequestReader
+	// GitHubForkPullRequests is that client asked which open pull request
+	// a fork head label ("owner:branch", model.ForkHead) heads, so a task
+	// filed with one as its branch is resolved to that pull request
+	// (forkhead.go). nil refuses such a task with a message saying so.
+	GitHubForkPullRequests ForkPullRequests
 	// GitHubCredentialAvailable answers through that client's own token source,
 	// including a deployment-wide posting credential when one is configured.
 	GitHubCredentialAvailable func(owner, repo string) bool

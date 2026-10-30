@@ -353,6 +353,22 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `sandbox_image_mirror` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     64,
+		Description: "persist running CI steps' exec ids and cursors so a restart reattaches them",
+		Statements:  []string{ciStepAttachmentTable},
+	},
+	{
+		Version:     65,
+		Description: "add each repository's GitHub issue importer settings to repo_config",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_enabled` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_repo` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_label` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_approved` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_interval_seconds` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

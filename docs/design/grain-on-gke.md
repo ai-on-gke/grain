@@ -469,13 +469,15 @@ Selection is a flag, `-k8s-granule-access=dialout|kubectl`, defaulting to
 (`KUBERNETES_SERVICE_HOST` is set and `-k8s-sandbox-service` resolves),
 because a cloudtop grain has no address a pod can dial.
 
-**Bootstrap and fallback.** `kubectl exec` is used for exactly three
+**Bootstrap and fallback.** `kubectl` (exec, or logs) is used for exactly three
 things:
 
 1. the readiness probe that already exists (`GranuleReadinessExec`);
 2. if the channel has not come up within `-k8s-granule-access-timeout`
-   (default 60 s) after the pod is Ready, one diagnostic exec that reads
-   the wrapper's dial-out log, which then goes into the acquire error;
+   (default 60 s) after the pod is Ready, one diagnostic read of the
+   wrapper container's log -- a `kubectl logs --tail` rather than an
+   exec, since granule-shim logs its dial-out lines to stderr and writes
+   no log file -- which then goes into the acquire error;
 3. an operator's own debugging.
 
 There is no silent fallback that runs a step over `kubectl exec` when
@@ -833,15 +835,25 @@ keep it from being a way in.
    same port succeeds.
 3. **Dial-out only.** Nothing dials a sandbox pod. Two NetworkPolicies
    apply:
-   - **`grain-sandbox-egress`** selects every sandbox pod. Its egress
+   - **`grain-sandbox-egress`** selects every sandbox pod except
+     `grain.dev/network: none` ones, which only
+     `grain-sandbox-network-none` selects (policies are additive, so
+     selecting them here would hand them the internet rule). Its egress
      allows `grain-sandbox`'s ports, `grain-access:4244`, DNS, and the
      internet for open-network tasks. It denies the metadata server
      (`169.254.169.254/32`), the node and pod CIDRs other than grain's,
      and the GKE control plane. Its ingress is empty.
    - **`grain-access-ingress`** selects the grain pod. Its ingress
-     admits port 4244 only from pods labelled `app=grain-sandbox`, the
-     guest-facing ports only from the same pods, and port 8080 only from
-     the Gateway's proxy-only subnet and `grain-webhook`.
+     admits port 4244 only from sandbox pods (the
+     `app.kubernetes.io/managed-by=grain`,
+     `app.kubernetes.io/component=sandbox` labels `pkg/k8s` stamps on
+     every one), the guest-facing ports only from the same pods, and
+     port 8080 only from the Google load balancer ranges the Gateway's
+     traffic and health checks come from. Nothing in the namespace
+     reaches 8080: grain polls `grain-webhook`, not the other way round.
+   - These policies are only objects on a cluster that does not
+     enforce NetworkPolicy, so `scripts/deploy-gke.sh` refuses to adopt
+     one that runs neither Dataplane V2 nor network policy enforcement.
    - The wrapper's egress requirement (4244) and the guest's (the
      proxies and the internet) are separate rules with separate
      comments, so a later change to one cannot widen the other without

@@ -34,7 +34,8 @@ const smallHostSettingsJSON = `{"sandboxCommitment":{"cpusPerSandbox":2,"memoryM
 
 func runCheckSandboxBudget(t *testing.T, settings string) Step {
 	t.Helper()
-	opts := Options{}.withDefaults()
+	t.Setenv(localAPITokenFileEnv, "")
+	opts := Options{DataDir: "/var/lib/grain/data"}.withDefaults()
 	sys := newFakeSystem()
 	sys.onHTTPRequest("GET", "http://"+opts.UIAddr+"/api/settings", 200, []byte(settings), nil)
 	var r Result
@@ -65,7 +66,8 @@ func TestCheckSandboxBudgetReportsABudgetThatAdmitsNothing(t *testing.T) {
 	}
 	// A quarter of 7987 MiB, rounded down to 256, is the reserve; the
 	// largest whole GiB of what that leaves is the shape.
-	want := `curl -s -X PUT http://127.0.0.1:4242/api/settings -H 'Content-Type: application/json' -d '{"sandboxMemoryMb":6144,"sandboxMemoryReserveMb":1792}'`
+	want := `curl -s -X PUT http://127.0.0.1:4242/api/settings -H "Authorization: Bearer $(sudo cat /var/lib/grain/data/local-api-token)" ` +
+		`-H 'Content-Type: application/json' -d '{"sandboxMemoryMb":6144,"sandboxMemoryReserveMb":1792}'`
 	if s.Command != want {
 		t.Errorf("Command = %q\nwant      %q", s.Command, want)
 	}
@@ -136,5 +138,41 @@ func TestCheckSandboxBudgetDryRunAndDaemonDown(t *testing.T) {
 	checkSandboxBudget(context.Background(), newFakeSystem(), Options{}.withDefaults(), &r, false)
 	if r.Steps[0].Status != StepSkipped {
 		t.Errorf("daemon down: %+v, want %s", r.Steps[0], StepSkipped)
+	}
+}
+
+// The 10-28 walkthrough's 2 vCPU / 7.8 GiB e2-standard-2: half the
+// memory reserved and both cores eaten by the controller's reserve
+// (docs/test-runs/2026-10-28-install-upgrade-walkthrough.md). setup.sh
+// prints SettingsCommand, so it has to name `grain settings` flags that
+// exist and apply all three changes.
+func TestCheckSandboxBudgetSettingsCommandForTheTwoCoreHost(t *testing.T) {
+	v, err := CheckSandboxBudget([]byte(`{"sandboxCommitment":{"cpusPerSandbox":2,"memoryMbPerSandbox":8192,"hostCpus":2,"hostMemoryMb":7987,
+		"budget":{"cpuOvercommit":2,"memoryOvercommit":1,"reserveMemoryMb":3993,"cpus":0,"cpusBounded":true,"memoryMb":3994,"memoryBounded":true}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Checked || v.Fits {
+		t.Fatalf("verdict = %+v, want checked and not fitting", v)
+	}
+	want := "grain settings -sandbox-cpu-overcommit 0 -sandbox-memory-mb 6144 -sandbox-memory-reserve-mb 1792"
+	if got := v.SettingsCommand(); got != want {
+		t.Errorf("SettingsCommand() = %q\nwant              %q", got, want)
+	}
+}
+
+func TestCheckSandboxBudgetSettingsCommandEmptyWhenNothingToSet(t *testing.T) {
+	for name, settings := range map[string]string{
+		"fits":      roomySettingsJSON,
+		"too small": `{"sandboxCommitment":{"cpusPerSandbox":1,"memoryMbPerSandbox":2048,"hostCpus":4,"hostMemoryMb":1200,"budget":{"cpuOvercommit":2,"memoryOvercommit":1,"reserveMemoryMb":8192,"cpus":4,"cpusBounded":true,"memoryMb":0,"memoryBounded":true}}}`,
+		"unchecked": `{}`,
+	} {
+		v, err := CheckSandboxBudget([]byte(settings))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if cmd := v.SettingsCommand(); cmd != "" {
+			t.Errorf("%s: SettingsCommand() = %q, want none", name, cmd)
+		}
 	}
 }

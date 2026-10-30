@@ -696,7 +696,7 @@ func ciStatusOf(obs *model.Observation) *model.CIStatus {
 // runs in memory and has restarted -- or it may have it stamped
 // interrupted, which is what a stored run left in flight by a daemon
 // that stopped is turned into at the next startup
-// (ci.StoredRunStore.RecoverInterrupted). Either way the task is waiting
+// (ci.StoredRunStore.RecoverUnattachable). Either way the task is waiting
 // on an answer that is never coming.
 //
 // Forgetting the status leaves the task pending until the next reconciliation

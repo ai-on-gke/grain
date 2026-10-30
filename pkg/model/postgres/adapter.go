@@ -143,6 +143,7 @@ var tablePrimaryKeys = map[string][]string{
 	"notification":                   {"id"},
 	"task_notification_subscription": {"task_id", "family"},
 	"sandbox_access":                 {"sandbox"},
+	"ci_step_attachment":             {"run_id", "job_id", "step_id"},
 }
 
 // Auto-increment primary key column for tables that use sequences or SERIAL.
@@ -639,6 +640,8 @@ var (
 		"watch_default_branch",
 		"merge_on_green",
 		"base_repair_bypasses_human_gates",
+		"issue_import_enabled",
+		"issue_import_approved",
 		"triggered",
 		"rechecked",
 		"caught",

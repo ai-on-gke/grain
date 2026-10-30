@@ -44,6 +44,47 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// apiCurlCommand is the Step.Command for a request to the daemon's API
+// that a step could not make, or decided an operator should: a curl that
+// carries the access code as a bearer token, the way sys.HTTPRequest's
+// own request did. A daemon is single-tenant and answers every caller
+// without it -- loopback included -- with 401, so a bare curl printed
+// here was a fix that could not work (task 1710). body is nil for none.
+func apiCurlCommand(opts Options, method, url string, body []byte) string {
+	cmd := "curl -s"
+	if method != http.MethodGet {
+		cmd += " -X " + method
+	}
+	cmd += " " + url + ` -H "Authorization: Bearer ` + accessCodeShell(opts) + `"`
+	if body != nil {
+		cmd += " -H 'Content-Type: application/json' -d " + shQuote(string(body))
+	}
+	return cmd
+}
+
+// accessCodeShell is a shell command substitution that prints the
+// daemon's access code, for apiCurlCommand. On the host platforms it reads
+// the token file this run's own requests present ($GRAIN_LOCAL_API_TOKEN_FILE,
+// which cmd/grain's init points at -data-dir's), under sudo since the
+// file is readable only by grain's account and root. On the Kubernetes
+// platforms that file is on the pod's volume, so it asks the pod.
+func accessCodeShell(opts Options) string {
+	switch opts.Platform {
+	case PlatformK8sContainer, PlatformK8sGranule:
+		ns, deploy := opts.K8s.Namespace, opts.K8s.Deployment
+		if opts.Platform == PlatformK8sGranule {
+			ns, deploy = opts.K8sGranule.Namespace, opts.K8sGranule.Deployment
+		}
+		// deploy/kubernetes/grain*.yaml run the daemon with -data-dir=/data.
+		return "$(" + kubectlCommand(opts.K8s, "-n", ns, "exec", "deploy/"+deploy, "--", "grain", "access-code", "-data-dir=/data") + ")"
+	}
+	path := strings.TrimSpace(os.Getenv(localAPITokenFileEnv))
+	if path == "" {
+		path = filepath.Join(opts.DataDir, localAPITokenFileName)
+	}
+	return "$(sudo cat " + shellWord(path) + ")"
+}
+
 // installApt get-or-creates pkgs: a no-op if they are already installed,
 // an apt-get update+install if this process is root, and a StepManual
 // naming the exact command otherwise. Returns whether pkgs ended up
@@ -1907,7 +1948,7 @@ func ensureTeamTargetRepos(ctx context.Context, sys System, opts Options, r *Res
 	if err != nil || status != http.StatusOK {
 		r.add(Step{Name: name, Status: StepManual,
 			Detail:  fmt.Sprintf("GET %s: status %d: %v: %s", url, status, err, strings.TrimSpace(string(body))),
-			Command: fmt.Sprintf("curl -s %s", url)})
+			Command: apiCurlCommand(opts, http.MethodGet, url, nil)})
 		return
 	}
 	if len(current.TargetRepos) > 0 {
@@ -1918,7 +1959,7 @@ func ensureTeamTargetRepos(ctx context.Context, sys System, opts Options, r *Res
 	reqBody, _ := json.Marshal(struct {
 		TargetRepos []string `json:"targetRepos"`
 	}{opts.GitHubRepos})
-	manualCmd := fmt.Sprintf("curl -s -X PUT %s -H 'Content-Type: application/json' -d %s", url, shQuote(string(reqBody)))
+	manualCmd := apiCurlCommand(opts, http.MethodPut, url, reqBody)
 	status, respBody, err := sys.HTTPRequest(ctx, http.MethodPut, url, reqBody)
 	if err != nil || status != http.StatusOK {
 		r.add(Step{Name: name, Status: StepManual,
@@ -1978,7 +2019,7 @@ func ensureTeamGitCredential(ctx context.Context, sys System, opts Options, r *R
 	if err != nil || status != http.StatusOK {
 		r.add(Step{Name: name, Status: StepManual,
 			Detail:  fmt.Sprintf("GET %s: status %d: %v: %s", url, status, err, strings.TrimSpace(string(body))),
-			Command: fmt.Sprintf("curl -s %s", url)})
+			Command: apiCurlCommand(opts, http.MethodGet, url, nil)})
 		return
 	}
 	if has, what := current.gitCredential(); has {
@@ -1990,7 +2031,7 @@ func ensureTeamGitCredential(ctx context.Context, sys System, opts Options, r *R
 		Credential string `json:"credential"`
 		Host       string `json:"host"`
 	}{opts.GitHubCredentialName, "github.com"})
-	manualCmd := fmt.Sprintf("curl -s -X POST %s -H 'Content-Type: application/json' -d %s", connURL, shQuote(string(reqBody)))
+	manualCmd := apiCurlCommand(opts, http.MethodPost, connURL, reqBody)
 	status, respBody, err := sys.HTTPRequest(ctx, http.MethodPost, connURL, reqBody)
 	if err != nil || status != http.StatusOK {
 		r.add(Step{Name: name, Status: StepManual,
@@ -2001,34 +2042,6 @@ func ensureTeamGitCredential(ctx context.Context, sys System, opts Options, r *R
 	r.add(Step{Name: name, Status: StepDone, Detail: fmt.Sprintf("git connection to github.com with %s", opts.GitHubCredentialName)})
 }
 
-// sandboxBudgetSettings is the slice of GET /api/settings that
-// checkSandboxBudget reads: ui.SandboxCommitment and its Budget, trimmed
-// to the fields that say whether one sandbox of the deployment's own
-// shape fits inside the budget at all.
-type sandboxBudgetSettings struct {
-	SandboxCommitment *struct {
-		Uncapped           bool `json:"uncapped"`
-		CPUsPerSandbox     int  `json:"cpusPerSandbox"`
-		MemoryMBPerSandbox int  `json:"memoryMbPerSandbox"`
-		HostCPUs           int  `json:"hostCpus"`
-		HostMemoryMB       int  `json:"hostMemoryMb"`
-		Budget             *struct {
-			CPUOvercommit    float64 `json:"cpuOvercommit"`
-			MemoryOvercommit float64 `json:"memoryOvercommit"`
-			ReserveMemoryMB  int     `json:"reserveMemoryMb"`
-			CPUs             float64 `json:"cpus"`
-			CPUsBounded      bool    `json:"cpusBounded"`
-			MemoryMB         int     `json:"memoryMb"`
-			MemoryBounded    bool    `json:"memoryBounded"`
-		} `json:"budget"`
-	} `json:"sandboxCommitment"`
-}
-
-// minSuggestedReserveMB is the smallest memory reserve
-// checkSandboxBudget will suggest: what the 10-04 walkthrough's 7.8 GiB
-// host was brought to dispatching with (docs/test-runs/2026-10-04-grain-init-platforms.md).
-const minSuggestedReserveMB = 512
-
 // checkSandboxBudget reads the deployment's sandbox budget back off the
 // daemon it just brought up and reports a manual step when that budget
 // cannot hold even one sandbox of the deployment's own shape. Such a
@@ -2038,7 +2051,9 @@ const minSuggestedReserveMB = 512
 //
 // It never writes the settings itself. A reserve and a shape are an
 // operator's trade-off on their own machine. So this prints the PUT
-// that would fit, and the operator decides.
+// that would fit, and the operator decides. The verdict itself is
+// CheckSandboxBudget's, which `grain sandbox-budget` -- and through it
+// scripts/setup.sh's readiness report -- reads too.
 func checkSandboxBudget(ctx context.Context, sys System, opts Options, r *Result, daemonUp bool) {
 	const name = "check the sandbox budget can admit a run"
 	url := fmt.Sprintf("http://%s/api/settings", opts.UIAddr)
@@ -2056,83 +2071,30 @@ func checkSandboxBudget(ctx context.Context, sys System, opts Options, r *Result
 	if err != nil || status != http.StatusOK {
 		r.add(Step{Name: name, Status: StepManual,
 			Detail:  fmt.Sprintf("GET %s: status %d: %v: %s", url, status, err, strings.TrimSpace(string(body))),
-			Command: fmt.Sprintf("curl -s %s", url)})
+			Command: apiCurlCommand(opts, http.MethodGet, url, nil)})
 		return
 	}
-	var s sandboxBudgetSettings
-	if err := json.Unmarshal(body, &s); err != nil {
+	v, err := CheckSandboxBudget(body)
+	if err != nil {
 		r.add(Step{Name: name, Status: StepManual,
 			Detail:  fmt.Sprintf("parsing %s's response: %v", url, err),
-			Command: fmt.Sprintf("curl -s %s", url)})
+			Command: apiCurlCommand(opts, http.MethodGet, url, nil)})
 		return
 	}
-	c := s.SandboxCommitment
 	switch {
-	case c == nil:
-		// GET /api/settings answers the same for every caller; it omits
-		// the commitment while the deployment's own max_workers is 0.
-		r.add(Step{Name: name, Status: StepSkipped, Detail: "the daemon reports no sandbox commitment -- none while the " +
-			"deployment has no worker slots, and none at all where it cannot count its host's cores and memory (a Kubernetes " +
-			"cluster, or a daemon not on Linux), so there is no budget to check"})
+	case !v.Checked:
+		r.add(Step{Name: name, Status: StepSkipped, Detail: v.Detail})
 		return
-	case c.Budget == nil:
-		r.add(Step{Name: name, Status: StepSkipped, Detail: "the daemon reports no sandbox budget on this host -- nothing bounds a run"})
-		return
-	case c.Uncapped:
-		r.add(Step{Name: name, Status: StepSkipped, Detail: "host sandboxing -- runs are not shaped, so there is no budget to fit"})
+	case v.Fits:
+		r.add(Step{Name: name, Status: StepDone, Detail: v.Detail})
 		return
 	}
-	b := c.Budget
-
-	var problems []string
-	fix := map[string]any{}
-	tooSmall := false
-	if b.MemoryBounded && c.MemoryMBPerSandbox > 0 && b.MemoryMB < c.MemoryMBPerSandbox {
-		problems = append(problems, fmt.Sprintf("%d MiB of sandbox memory (%d MiB host less %d MiB reserved, at %.2fx) cannot hold one %d MiB sandbox",
-			b.MemoryMB, c.HostMemoryMB, b.ReserveMemoryMB, b.MemoryOvercommit, c.MemoryMBPerSandbox))
-		reserve, shape := fittingMemory(c.HostMemoryMB, b.ReserveMemoryMB, b.MemoryOvercommit, c.MemoryMBPerSandbox)
-		if reserve != b.ReserveMemoryMB {
-			fix["sandboxMemoryReserveMb"] = reserve
-		}
-		switch {
-		case shape == 0:
-			tooSmall = true
-		case shape != c.MemoryMBPerSandbox:
-			fix["sandboxMemoryMb"] = shape
-		}
+	step := Step{Name: name, Status: StepManual, Detail: v.Detail}
+	if len(v.Fix) > 0 {
+		reqBody, _ := json.Marshal(v.Fix)
+		step.Detail += ", or run the command below"
+		step.Command = apiCurlCommand(opts, http.MethodPut, url, reqBody)
 	}
-	if b.CPUsBounded && c.CPUsPerSandbox > 0 && b.CPUs < float64(c.CPUsPerSandbox) {
-		problems = append(problems, fmt.Sprintf("%.1f vCPU of sandbox cpu (%d host vCPU less the controller's reserve, at %.2fx) cannot hold one %d vCPU sandbox",
-			b.CPUs, c.HostCPUs, b.CPUOvercommit, c.CPUsPerSandbox))
-		if cpus := int(b.CPUs); cpus >= 1 {
-			fix["sandboxCpus"] = cpus
-		} else {
-			// The cpu reserve is not a setting, so a host it eats whole
-			// can only be unbounded in cpu (model.Budget.CPUBudget).
-			fix["sandboxCpuOvercommit"] = 0
-		}
-	}
-	if len(problems) == 0 {
-		detail := fmt.Sprintf("one %d MiB sandbox fits", c.MemoryMBPerSandbox)
-		if b.MemoryBounded {
-			detail += fmt.Sprintf(" in %d MiB of sandbox memory", b.MemoryMB)
-		}
-		r.add(Step{Name: name, Status: StepDone, Detail: detail})
-		return
-	}
-
-	detail := "no run can ever be admitted, so every approved task would stay queued: " + strings.Join(problems, "; ") +
-		". Lower the reserve or the sandbox shape in Settings → Sandbox"
-	step := Step{Name: name, Status: StepManual}
-	if tooSmall {
-		detail += " -- though this host has too little memory left for even a 1 GiB sandbox"
-	}
-	if len(fix) > 0 && !tooSmall {
-		reqBody, _ := json.Marshal(fix)
-		detail += ", or run the command below"
-		step.Command = fmt.Sprintf("curl -s -X PUT %s -H 'Content-Type: application/json' -d %s", url, shQuote(string(reqBody)))
-	}
-	step.Detail = detail
 	r.add(step)
 }
 

@@ -46,6 +46,14 @@ type Request struct {
 	// never caller input. It carries names only; values are resolved directly
 	// into each eligible job sandbox.
 	ReleaseSecrets []string `json:"-"`
+	// WithholdEventGated asks Service.Start to place none of the
+	// repository's CI capabilities on this run, UnmetRequirements to
+	// report required capabilities (including declared-only event-gated
+	// ones such as repo-write:) as unmet with WithholdReason, and
+	// daemon.ResolveCICapabilities to refuse every model.CIEventCapability
+	// provider. Set by pkg/ui when a caller that is not a person starts a
+	// manual or release run, never from JSON.
+	WithholdEventGated bool `json:"-"`
 	// WithholdReleaseSecrets keeps Service from attaching the repository's
 	// release secrets to this run even though its event would otherwise
 	// carry them. The guest-cache warmer sets it: a warm run is a
@@ -54,10 +62,10 @@ type Request struct {
 	// cache never needs a signing key or a publish token. Set only by
 	// grain's own callers, never from JSON.
 	WithholdReleaseSecrets bool `json:"-"`
-	// WithholdReason is the clause a job that needed a withheld release
-	// secret is told, finishing "and ..." -- empty for the guest-cache
-	// warmer, which has a sentence of its own. pkg/ui sets it for a by-hand
-	// manual run from somebody who is not one of the repository's admins.
+	// WithholdReason is the clause a job that needed a withheld capability
+	// or release secret is told, finishing "and ..." -- empty for the
+	// guest-cache warmer, which has a sentence of its own. pkg/ui sets it
+	// for a by-hand manual run from a caller that is not a person.
 	WithholdReason string `json:"-"`
 	// ReleaseRefVouched exempts a TrustedRelease request from
 	// Service.ReleaseRefRefusal: a person -- the deployment's owner --

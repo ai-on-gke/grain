@@ -489,39 +489,40 @@ func TestParseMintResponse(t *testing.T) {
 
 	big := strings.Repeat("x", MaxPlacementBytes+1)
 	for name, raw := range map[string]string{
-		"unknown field":        `{"status":"ok","extra":1}`,
-		"unknown status":       `{"status":"maybe"}`,
-		"refused no reason":    `{"status":"refused"}`,
-		"refused w/ payload":   `{"status":"refused","reason":"x","placements":[{"path":"/a","content":""}]}`,
-		"bad retry_after":      `{"status":"resource_exhausted","retry_after":"soon"}`,
-		"relative path":        `{"status":"ok","placements":[{"path":"home/x","content":""}]}`,
-		"dotdot path":          `{"status":"ok","placements":[{"path":"/home/debian/../x","content":""}]}`,
-		"reserved grain":       `{"status":"ok","placements":[{"path":"/home/debian/.grain/mcp.json","content":""}]}`,
-		"reserved grain bin/":  `{"status":"ok","placements":[{"path":"/home/debian/.grain/bin/x/y","content":""}]}`,
-		"reserved grain bin .": `{"status":"ok","placements":[{"path":"/home/debian/.grain/bin/.hidden","content":""}]}`,
-		"reserved claude":      `{"status":"ok","placements":[{"path":"/home/debian/.claude/x","content":""}]}`,
-		"reserved sudoers":     `{"status":"ok","placements":[{"path":"/etc/sudoers.d/x","content":""}]}`,
-		"reserved cron":        `{"status":"ok","placements":[{"path":"/etc/crontab","content":""}]}`,
-		"reserved proc":        `{"status":"ok","placements":[{"path":"/proc/1/mem","content":""}]}`,
-		"reserved claude cfg":  `{"status":"ok","placements":[{"path":"/home/debian/.claude.json","content":""}]}`,
-		"reserved bashrc":      `{"status":"ok","placements":[{"path":"/home/debian/.bashrc","content":""}]}`,
-		"reserved profile":     `{"status":"ok","placements":[{"path":"/home/debian/.profile","content":""}]}`,
-		"reserved git creds":   `{"status":"ok","placements":[{"path":"/home/debian/.git-credentials","content":""}]}`,
-		"reserved gitconfig":   `{"status":"ok","placements":[{"path":"/home/debian/.gitconfig","content":""}]}`,
-		"setuid":               `{"status":"ok","placements":[{"path":"/a","mode":"4755","content":""}]}`,
-		"short mode":           `{"status":"ok","placements":[{"path":"/a","mode":"755","content":""}]}`,
-		"bad base64":           `{"status":"ok","placements":[{"path":"/a","encoding":"base64","content":"!!"}]}`,
-		"bad encoding":         `{"status":"ok","placements":[{"path":"/a","encoding":"latin1","content":""}]}`,
-		"same path twice":      `{"status":"ok","placements":[{"path":"/a","content":""},{"path":"/a","content":""}]}`,
-		"too big":              `{"status":"ok","placements":[{"path":"/a","content":"` + big + `"}]}`,
-		"other endpoint":       `{"status":"ok","mcp_endpoint":"/runs/other/mcp"}`,
-		"absolute endpoint":    `{"status":"ok","mcp_endpoint":"http://h/runs/a/mcp"}`,
-		"low port":             `{"status":"ok","ports":[{"host_port":80}]}`,
-		"high port":            `{"status":"ok","ports":[{"host_port":19811,"sandbox_port":70000}]}`,
-		"port twice":           `{"status":"ok","ports":[{"host_port":19811},{"host_port":19812,"sandbox_port":19811}]}`,
-		"relative setup":       `{"status":"ok","setup":"setup.sh"}`,
-		"unclean setup_root":   `{"status":"ok","setup_root":"/home/debian/./s.sh"}`,
-		"big prompt":           `{"status":"ok","prompt_section":"` + strings.Repeat("x", MaxPromptSectionBytes+1) + `"}`,
+		"unknown field":            `{"status":"ok","extra":1}`,
+		"unknown status":           `{"status":"maybe"}`,
+		"refused no reason":        `{"status":"refused"}`,
+		"refused w/ payload":       `{"status":"refused","reason":"x","placements":[{"path":"/a","content":""}]}`,
+		"bad retry_after":          `{"status":"resource_exhausted","retry_after":"soon"}`,
+		"relative path":            `{"status":"ok","placements":[{"path":"home/x","content":""}]}`,
+		"dotdot path":              `{"status":"ok","placements":[{"path":"/home/debian/../x","content":""}]}`,
+		"reserved grain":           `{"status":"ok","placements":[{"path":"/home/debian/.grain/mcp.json","content":""}]}`,
+		"reserved grain bin/":      `{"status":"ok","placements":[{"path":"/home/debian/.grain/bin/x/y","content":""}]}`,
+		"reserved grain bin .":     `{"status":"ok","placements":[{"path":"/home/debian/.grain/bin/.hidden","content":""}]}`,
+		"reserved grain bin grain": `{"status":"ok","placements":[{"path":"/home/debian/.grain/bin/grain","content":""}]}`,
+		"reserved claude":          `{"status":"ok","placements":[{"path":"/home/debian/.claude/x","content":""}]}`,
+		"reserved sudoers":         `{"status":"ok","placements":[{"path":"/etc/sudoers.d/x","content":""}]}`,
+		"reserved cron":            `{"status":"ok","placements":[{"path":"/etc/crontab","content":""}]}`,
+		"reserved proc":            `{"status":"ok","placements":[{"path":"/proc/1/mem","content":""}]}`,
+		"reserved claude cfg":      `{"status":"ok","placements":[{"path":"/home/debian/.claude.json","content":""}]}`,
+		"reserved bashrc":          `{"status":"ok","placements":[{"path":"/home/debian/.bashrc","content":""}]}`,
+		"reserved profile":         `{"status":"ok","placements":[{"path":"/home/debian/.profile","content":""}]}`,
+		"reserved git creds":       `{"status":"ok","placements":[{"path":"/home/debian/.git-credentials","content":""}]}`,
+		"reserved gitconfig":       `{"status":"ok","placements":[{"path":"/home/debian/.gitconfig","content":""}]}`,
+		"setuid":                   `{"status":"ok","placements":[{"path":"/a","mode":"4755","content":""}]}`,
+		"short mode":               `{"status":"ok","placements":[{"path":"/a","mode":"755","content":""}]}`,
+		"bad base64":               `{"status":"ok","placements":[{"path":"/a","encoding":"base64","content":"!!"}]}`,
+		"bad encoding":             `{"status":"ok","placements":[{"path":"/a","encoding":"latin1","content":""}]}`,
+		"same path twice":          `{"status":"ok","placements":[{"path":"/a","content":""},{"path":"/a","content":""}]}`,
+		"too big":                  `{"status":"ok","placements":[{"path":"/a","content":"` + big + `"}]}`,
+		"other endpoint":           `{"status":"ok","mcp_endpoint":"/runs/other/mcp"}`,
+		"absolute endpoint":        `{"status":"ok","mcp_endpoint":"http://h/runs/a/mcp"}`,
+		"low port":                 `{"status":"ok","ports":[{"host_port":80}]}`,
+		"high port":                `{"status":"ok","ports":[{"host_port":19811,"sandbox_port":70000}]}`,
+		"port twice":               `{"status":"ok","ports":[{"host_port":19811},{"host_port":19812,"sandbox_port":19811}]}`,
+		"relative setup":           `{"status":"ok","setup":"setup.sh"}`,
+		"unclean setup_root":       `{"status":"ok","setup_root":"/home/debian/./s.sh"}`,
+		"big prompt":               `{"status":"ok","prompt_section":"` + strings.Repeat("x", MaxPromptSectionBytes+1) + `"}`,
 	} {
 		if _, err := ParseMintResponse([]byte(raw[:min(len(raw), 2<<20)]), "a"); err == nil {
 			t.Errorf("%s: ParseMintResponse accepted it", name)
@@ -712,6 +713,9 @@ func TestPersonGrantedIsNeverCovered(t *testing.T) {
 		t.Fatal("an identical grant is not covered before the method is marked")
 	}
 	RequirePersonGrant(ref.CapabilityID, ref.Method)
+	// personGranted is package-global: unmark the method again so a
+	// second run in this process (-count=2) starts unmarked.
+	t.Cleanup(func() { personGranted.Delete(ref.CapabilityID + "#" + ref.Method) })
 	if !PersonGranted(ref) || PersonGranted(other) {
 		t.Errorf("PersonGranted = %v, %v", PersonGranted(ref), PersonGranted(other))
 	}

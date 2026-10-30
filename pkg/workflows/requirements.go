@@ -277,6 +277,19 @@ func UnmetRequirements(job Job, req Request) []string {
 		return out
 	}
 	for _, id := range job.Capabilities {
+		if req.WithholdEventGated {
+			if IsCapabilityRef(id) || strings.HasPrefix(id, "repo-read:") {
+				continue
+			}
+			if !slices.Contains(req.Capabilities, id) {
+				reason := req.WithholdReason
+				if reason == "" {
+					reason = fmt.Sprintf("a %s run started by a caller that is not a person places no capabilities", req.Event)
+				}
+				out = append(out, fmt.Sprintf("this job requires the capability %q, and %s", id, reason))
+			}
+			continue
+		}
 		// Repository access is met by the declaration itself; what the
 		// team's credential can actually do is GitHub's to answer, when
 		// the job's git asks (JobCapabilities). A capability reference

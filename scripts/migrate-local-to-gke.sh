@@ -80,6 +80,10 @@ PRINT_MANIFEST=false
 
 DEFAULT_IMAGE="ghcr.io/bwsalmon/grain/grain:main"
 DAEMON_UNIT=grain-daemon.service
+# Where Stage 2 moves DAEMON_UNIT's file so that it can be masked:
+# systemctl mask refuses ("File ... already exists") a unit whose own
+# file is in /etc/systemd/system, which is where setup.sh installs it.
+ASIDE_SUFFIX=.pre-gke
 HOSTD_UNIT=grain-hostd.service
 FORWARD_UNIT=grain-gke-forward.service
 MODEL_UNIT=grain-model-server.service
@@ -267,18 +271,31 @@ parse_args() {
 
 # --- What the local install looks like -----------------------------------
 
+# unit_file UNIT prints UNIT's own file: the one in SYSTEMD_DIR, or --
+# once Stage 2 has moved it aside to mask the unit -- UNIT.pre-gke there.
+unit_file() {
+  local file="${SYSTEMD_DIR}/$1"
+  if [[ -f "${file}" && ! -L "${file}" ]]; then
+    printf '%s\n' "${file}"
+  elif [[ -f "${file}${ASIDE_SUFFIX}" ]]; then
+    printf '%s\n' "${file}${ASIDE_SUFFIX}"
+  fi
+}
+
 # unit_value UNIT KEY prints the first KEY= value in UNIT's own file.
 unit_value() {
-  local file="${SYSTEMD_DIR}/$1"
-  [[ -f "${file}" ]] || return 0
+  local file
+  file="$(unit_file "$1")"
+  [[ -n "${file}" ]] || return 0
   sed -n "s/^$2=//p" "${file}" | head -n1
 }
 
 # unit_execstart UNIT prints UNIT's ExecStart, joining '\'-continued
 # lines, with systemd's own prefixes (-@:+!) stripped.
 unit_execstart() {
-  local file="${SYSTEMD_DIR}/$1"
-  [[ -f "${file}" ]] || return 0
+  local file
+  file="$(unit_file "$1")"
+  [[ -n "${file}" ]] || return 0
   awk '
     /^[[:space:]]*ExecStart=/ { on = 1; sub(/^[[:space:]]*ExecStart=[-@:+!]*/, "") }
     on {
@@ -555,7 +572,7 @@ render_manifest() {
 
 drain_and_stop() {
   log "Stage 2: drain and stop the local ${DAEMON_UNIT}"
-  if [[ ! -f "${SYSTEMD_DIR}/${DAEMON_UNIT}" ]]; then
+  if [[ -z "$(unit_file "${DAEMON_UNIT}")" ]]; then
     log "  no ${DAEMON_UNIT} on this host: nothing to stop"
   elif systemctl is-active --quiet "${DAEMON_UNIT}" 2>/dev/null; then
     if command -v grain >/dev/null 2>&1; then
@@ -570,12 +587,14 @@ drain_and_stop() {
   else
     log "  ${DAEMON_UNIT} is already stopped"
   fi
-  if [[ -f "${SYSTEMD_DIR}/${DAEMON_UNIT}" ]]; then
+  if [[ -f "${SYSTEMD_DIR}/${DAEMON_UNIT}" && ! -L "${SYSTEMD_DIR}/${DAEMON_UNIT}" ]]; then
     # Disabled and masked: two controllers must never run against one
     # state repository, and a masked unit is one nothing -- not a reboot,
     # not a re-run of setup.sh's enable -- starts again until --rollback
-    # unmasks it.
+    # unmasks it. Masking puts a link to /dev/null where the unit's own
+    # file is, so that file moves aside first; --rollback moves it back.
     run systemctl disable "${DAEMON_UNIT}"
+    run mv "${SYSTEMD_DIR}/${DAEMON_UNIT}" "${SYSTEMD_DIR}/${DAEMON_UNIT}${ASIDE_SUFFIX}"
     run systemctl mask "${DAEMON_UNIT}"
   fi
   if command -v docker >/dev/null 2>&1 && docker container inspect grain-daemon >/dev/null 2>&1; then
@@ -616,8 +635,8 @@ ensure_token() {
 apply_secret() {
   log "  Secret/${SECRET_NAME}: secrets.key and the shared token"
   if [[ "${DRY_RUN}" == "true" ]]; then
-    printf '+ kubectl -n %q create secret generic %q --from-file=secrets.key=%q --from-file=hostd-token=%q --dry-run=client -o yaml | kubectl apply -f -\n' \
-      "${NAMESPACE}" "${SECRET_NAME}" "${SECRETS_KEY}" "${TOKEN_FILE}"
+    printf '+ kubectl --kubeconfig=%q -n %q create secret generic %q --from-file=secrets.key=%q --from-file=hostd-token=%q --dry-run=client -o yaml | kubectl --kubeconfig=%q -n %q apply -f -\n' \
+      "${KUBECONFIG_PATH}" "${NAMESPACE}" "${SECRET_NAME}" "${SECRETS_KEY}" "${TOKEN_FILE}" "${KUBECONFIG_PATH}" "${NAMESPACE}"
     return 0
   fi
   kc create secret generic "${SECRET_NAME}" \
@@ -682,7 +701,7 @@ start_transfer_pod() {
   log "  starting pod/${TRANSFER_POD} (${TRANSFER_IMAGE}, uid 1000) on the grain-data PVC"
   run kc delete pod "${TRANSFER_POD}" --ignore-not-found --wait=true
   if [[ "${DRY_RUN}" == "true" ]]; then
-    printf '+ kubectl -n %q apply -f <pod/%s>\n' "${NAMESPACE}" "${TRANSFER_POD}"
+    printf '+ kubectl --kubeconfig=%q -n %q apply -f <pod/%s>\n' "${KUBECONFIG_PATH}" "${NAMESPACE}" "${TRANSFER_POD}"
   else
     transfer_pod_manifest | kc apply -f - >/dev/null
   fi
@@ -706,9 +725,9 @@ copy_data() {
   fi
   log "  copying ${DATA_DIR} into the grain-data PVC"
   if [[ "${DRY_RUN}" == "true" ]]; then
-    printf '+ tar -C %q -cf - --exclude=./kubeconfig --exclude=./scratch . | kubectl -n %q exec -i %s -- tar -C /data -xf - --no-same-owner --no-same-permissions\n' \
-      "${DATA_DIR}" "${NAMESPACE}" "${TRANSFER_POD}"
-    printf '+ kubectl -n %q exec %s -- touch /data/%s\n' "${NAMESPACE}" "${TRANSFER_POD}" "${marker}"
+    printf '+ tar -C %q -cf - --exclude=./kubeconfig --exclude=./scratch . | kubectl --kubeconfig=%q -n %q exec -i %s -- tar -C /data -xf - --no-same-owner\n' \
+      "${DATA_DIR}" "${KUBECONFIG_PATH}" "${NAMESPACE}" "${TRANSFER_POD}"
+    printf '+ kubectl --kubeconfig=%q -n %q exec %s -- sh -c %q\n' "${KUBECONFIG_PATH}" "${NAMESPACE}" "${TRANSFER_POD}" "date -u > /data/${marker}"
     return 0
   fi
   tar -C "${DATA_DIR}" -cf - --exclude=./kubeconfig --exclude=./scratch . |
@@ -934,6 +953,8 @@ rollback() {
     KUBECONFIG_PATH="${GRAIN_ETC_DIR}/gke-admin.kubeconfig"
   fi
   [[ -n "${KUBECONFIG_PATH}" ]] || die "pass --kubeconfig: rollback has to stop the cluster controller first"
+  # The transfer pod's image, as the migration chose it.
+  resolve_local_daemon
 
   log "  Step 1: stop Deployment/grain"
   run kc scale deployment/grain --replicas=0
@@ -952,7 +973,7 @@ rollback() {
     run mv "${DATA_DIR}" "${aside}"
     run mkdir -p "${DATA_DIR}"
     if [[ "${DRY_RUN}" == "true" ]]; then
-      printf '+ kubectl -n %q exec %s -- tar -C /data -cf - . | tar -C %q -xf -\n' "${NAMESPACE}" "${TRANSFER_POD}" "${DATA_DIR}"
+      printf '+ kubectl --kubeconfig=%q -n %q exec %s -- tar -C /data -cf - . | tar -C %q -xf -\n' "${KUBECONFIG_PATH}" "${NAMESPACE}" "${TRANSFER_POD}" "${DATA_DIR}"
     else
       kc exec "${TRANSFER_POD}" -- tar -C /data -cf - . | tar -C "${DATA_DIR}" -xf -
       rm -f "${DATA_DIR}/.migrated-from-local"
@@ -977,6 +998,17 @@ rollback() {
 
   log "  Step 4: restart ${DAEMON_UNIT}"
   run systemctl unmask "${DAEMON_UNIT}"
+  # Stage 2 moved the unit's own file aside to mask it; unmask has taken
+  # the mask away (a dry run only prints it), so the file goes back.
+  local unit_path="${SYSTEMD_DIR}/${DAEMON_UNIT}"
+  if [[ -f "${unit_path}${ASIDE_SUFFIX}" ]]; then
+    if [[ "${DRY_RUN}" == "true" || ! -e "${unit_path}" ]]; then
+      run mv "${unit_path}${ASIDE_SUFFIX}" "${unit_path}"
+      run systemctl daemon-reload
+    else
+      warn "${unit_path} was written again since the migration; leaving it, and the migration's copy at ${unit_path}${ASIDE_SUFFIX}"
+    fi
+  fi
   run systemctl enable --now "${DAEMON_UNIT}"
   if command -v grain >/dev/null 2>&1; then
     run grain pause -resume || warn "could not lift the dispatch pause: run grain pause -resume once the daemon answers"

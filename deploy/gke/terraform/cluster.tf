@@ -17,6 +17,17 @@ data "google_container_cluster" "existing" {
   name     = var.cluster_name
   location = var.region
   project  = var.project_id
+
+  # grain's sandbox NetworkPolicies (the acceptor port, `network: none`
+  # pods, the metadata server) are only objects on a cluster that does
+  # not enforce them, so an adopted cluster must run Dataplane V2 or
+  # network policy enforcement (docs/design/grain-on-gke.md, Security).
+  lifecycle {
+    postcondition {
+      condition     = self.datapath_provider == "ADVANCED_DATAPATH" || try(self.network_policy[0].enabled, false)
+      error_message = "The adopted cluster does not enforce NetworkPolicy (neither Dataplane V2 nor network policy enforcement); grain's sandbox NetworkPolicies would be ignored."
+    }
+  }
 }
 
 resource "google_container_cluster" "grain" {

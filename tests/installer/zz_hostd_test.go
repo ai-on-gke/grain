@@ -170,7 +170,6 @@ func TestGoogleTrackRunsAgyThroughHostdAndMigratesFromHostMode(t *testing.T) {
 		t.Errorf("the containerised daemon refused a plain-git ambient connection beside a hostd offering host-git: %s", added)
 	}
 
-	approved := false
 	backends := []model.AgentBackend{
 		{ID: "hostd-agy", Name: "agy through hostd", Framework: model.AgentFrameworkAntigravity,
 			AuthMode: model.AntigravityAuthAmbient, Models: []string{"fake-agy-model"}},
@@ -181,7 +180,7 @@ func TestGoogleTrackRunsAgyThroughHostdAndMigratesFromHostMode(t *testing.T) {
 		{ID: "detached-codex", Name: "codex detached", Framework: model.AgentFrameworkCodex,
 			AuthMode: model.CodexAuthSubscription, Models: []string{"fake-codex-model"}},
 	}
-	if _, err := f.client.UpdateSettings(ctx, ui.UpdateSettingsRequest{ApprovedByDefault: &approved, AgentBackends: &backends}); err != nil {
+	if _, err := f.client.UpdateSettings(ctx, ui.UpdateSettingsRequest{AgentBackends: &backends}); err != nil {
 		t.Fatalf("configuring the fake agy and claude backends: %v", err)
 	}
 

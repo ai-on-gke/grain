@@ -142,6 +142,7 @@ jobs:
       - cmd/grain-connect/main.go
       - cmd/grain-sandbox/**
       - pkg/hostscriptcli/**
+      - pkg/sandboxcli/**
       - go.mod
       - go.sum
       - ui/package.json

@@ -84,6 +84,14 @@ printf '%s\\n' \
   // keeps rather than making one: the worker's access session then
   // signs the browser in here too.
   await writeAccessCode(path.join(dataDir, "local-api-token"));
+  // These specs configure the daemon through its API, which a deployment
+  // with a grain/config repository otherwise answers with a config pull
+  // request to open (docs/design/config-repo-settings.md, section
+  // 4.1.1); the host-local opt-out keeps those writes direct.
+  await fs.writeFile(
+    path.join(dataDir, "state-repo.json"),
+    JSON.stringify({ directConfigWrites: true }, null, 2) + "\n",
+  );
 
   const proc = spawn(
     bin,

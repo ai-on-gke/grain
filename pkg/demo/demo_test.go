@@ -366,7 +366,7 @@ func TestSeedDemoWritesADocumentLongEnoughToScroll(t *testing.T) {
 // stopped counting it in days, and a demo whose notes were all written
 // this week would show that mark to nobody.
 // TestSeedDemoMarksEveryMergeBatchMemberBatching: the queue writes the
-// batching state on every change it puts in a batch, and a task page
+// overlap re-check state on the change it re-checks, and a task page
 // draws its Merge batch panel only for a task in that state, so a member
 // the seed left without it opened from the repo page's batch list with
 // no batch on it (the 2026-10-23 repository walkthrough).
@@ -399,18 +399,22 @@ func TestSeedDemoMarksEveryMergeBatchMemberBatching(t *testing.T) {
 		t.Fatal("the demo seeds no merge batch")
 	}
 	for _, batch := range batches {
+		if len(batch.Members) != 1 {
+			t.Errorf("batch on %s %s has %d members, want 1 (single-change overlap re-check)",
+				batch.Repo, batch.Branch, len(batch.Members))
+		}
 		for i, member := range batch.Members {
 			obs, err := store.GetObservation(ctx, member.TaskID)
 			if err != nil {
 				t.Fatalf("reading task %s: %v", member.TaskID, err)
 			}
-			if obs == nil || obs.MergeQueueState != "batching" {
-				t.Errorf("batch member %d (task %s) is not batching: %+v", i, member.TaskID, obs)
+			if obs == nil || obs.MergeQueueState != "waiting_ci" || obs.MergeQueueReason != "waiting_ci/grain_running" {
+				t.Errorf("batch member %d (task %s) is not in waiting_ci/grain_running: %+v", i, member.TaskID, obs)
 				continue
 			}
-			first := strings.Contains(obs.MergeQueueNote, "first in the batch")
-			if first != (i == 0) {
-				t.Errorf("task %s at position %d: note %q", member.TaskID, i, obs.MergeQueueNote)
+			wantPrefix := "grain CI is re-checking this change on top of " + batch.Branch + " before it merges"
+			if !strings.HasPrefix(obs.MergeQueueNote, wantPrefix) {
+				t.Errorf("task %s note = %q, want prefix %q", member.TaskID, obs.MergeQueueNote, wantPrefix)
 			}
 		}
 	}
@@ -1397,5 +1401,117 @@ func TestDemoForceMergeOnRunningTaskAndStackedBaseRetargeting(t *testing.T) {
 	if updatedStacked.Base != "main" || updatedStacked.AutoMerge {
 		t.Errorf("stacked task after upstream merge: base=%q autoMerge=%v, want base=main autoMerge=false",
 			updatedStacked.Base, updatedStacked.AutoMerge)
+	}
+}
+
+// seedDemoNotifications raises release.pending:v2.4.0 on model.GrainSourceRepo(),
+// which is not in TargetRepos; configureFakeCIDemo enables grain CI for that
+// repository so approving or rejecting the seeded pending release works out of
+// the box while leaving acme/widgets' CI mode unset for its own refusal checks.
+func TestFakeCIDemoPendingReleaseApproval(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(dir))
+	if err != nil {
+		t.Fatalf("opening embedded sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("applying schema: %v", err)
+	}
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cfg := ui.Config{
+		Actor:         ui.DefaultActor("demo-operator"),
+		DefaultTarget: &repo,
+		Capabilities:  append(ui.OfferedCapabilities(), ui.APICapabilities()...),
+	}
+	cfg, err = configureFakeCIDemo(ctx, store, cfg, repo)
+	if err != nil {
+		t.Fatalf("configureFakeCIDemo: %v", err)
+	}
+	if err := seedDemo(ctx, store, cfg); err != nil {
+		t.Fatalf("seedDemo: %v", err)
+	}
+
+	srv := ui.NewServer(withAccessCode(cfg), store)
+	do := func(method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:40000"
+		presentAccessCode(req)
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// acme/widgets still has CI mode unset until walked.
+	rec := do(http.MethodPost, "/api/repos/acme/widgets/release-runs", `{"branch":"main"}`, nil)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "grain CI is not enabled for acme/widgets") {
+		t.Fatalf("POST /api/repos/acme/widgets/release-runs: %d %s, want 403", rec.Code, rec.Body)
+	}
+
+	grain := model.GrainSourceRepo()
+	approvePath := fmt.Sprintf("/api/repos/%s/%s/pending-releases/v2.4.0/approve", grain.Owner, grain.Name)
+	rejectPath := fmt.Sprintf("/api/repos/%s/%s/pending-releases/v2.4.0/reject", grain.Owner, grain.Name)
+
+	// Agent callers (even with api:releases:write attached) are refused.
+	rec = do(http.MethodPost, "/api/tasks/1/capabilities", `{"id":"api:releases:write","attach":true}`, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("attaching api:releases:write to task 1: %d %s", rec.Code, rec.Body)
+	}
+	rec = do(http.MethodPost, approvePath, "", map[string]string{"X-Grain-Acting-Task": "1"})
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "only a person may approve a release") {
+		t.Fatalf("agent approve: %d %s, want 403 only a person may approve a release", rec.Code, rec.Body)
+	}
+
+	// Human approval starts promote-release.yml:promote and clears the notification.
+	rec = do(http.MethodPost, approvePath, "", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("human approve: %d %s, want 202", rec.Code, rec.Body)
+	}
+	var decision ui.ReleaseDecision
+	if err := json.Unmarshal(rec.Body.Bytes(), &decision); err != nil {
+		t.Fatalf("decoding approved decision: %v", err)
+	}
+	if !decision.Approve || decision.Version != "v2.4.0" {
+		t.Errorf("decision = %+v, want approve v2.4.0", decision)
+	}
+	if decision.Run.Repo != grain.String() || decision.Run.Ref != "main" || decision.Run.Event != "workflow_dispatch" || decision.Run.RequestedBy != "demo-operator" {
+		t.Errorf("approved run = %+v, want %s main workflow_dispatch by demo-operator", decision.Run, grain)
+	}
+	if len(decision.Run.Jobs) != 1 || decision.Run.Jobs[0].JobID != ".grain/workflows/promote-release.yml:promote" || decision.Run.Jobs[0].WorkflowPath != ".grain/workflows/promote-release.yml" {
+		t.Errorf("approved run jobs = %+v, want [.grain/workflows/promote-release.yml:promote]", decision.Run.Jobs)
+	}
+
+	ns, err := store.ListNotifications(ctx, model.NotificationFilter{})
+	if err != nil {
+		t.Fatalf("ListNotifications: %v", err)
+	}
+	var pending *model.Notification
+	for i := range ns {
+		if ns[i].Subject == "release.pending:v2.4.0" {
+			pending = &ns[i]
+			break
+		}
+	}
+	if pending == nil || pending.ClearedAt == nil || pending.ClearedBy != "human:demo-operator" {
+		t.Errorf("release.pending:v2.4.0 after approve = %+v, want cleared by human:demo-operator", pending)
+	}
+
+	// Human rejection starts promote-release.yml:reject.
+	rec = do(http.MethodPost, rejectPath, "", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("human reject: %d %s, want 202", rec.Code, rec.Body)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decision); err != nil {
+		t.Fatalf("decoding rejected decision: %v", err)
+	}
+	if decision.Approve || len(decision.Run.Jobs) != 1 || decision.Run.Jobs[0].JobID != ".grain/workflows/promote-release.yml:reject" || decision.Run.Jobs[0].WorkflowPath != ".grain/workflows/promote-release.yml" {
+		t.Errorf("rejected run jobs = %+v, want [.grain/workflows/promote-release.yml:reject]", decision.Run.Jobs)
 	}
 }

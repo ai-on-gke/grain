@@ -150,6 +150,8 @@ func hostdCmd(args []string) {
 		DisconnectGrace: *grace,
 		Build:           version.Get().Release,
 		CurrentLink:     hostd.CurrentLinkFor(os.Args[0]),
+		Builtins:        intree.HostdBuiltins(),
+		BuiltinCommand:  hostdSelf(),
 	}
 	if remote != nil {
 		srv.Remote = remote.Dial
@@ -165,6 +167,23 @@ func hostdCmd(args []string) {
 		fmt.Fprintln(os.Stderr, "grain hostd: "+err.Error())
 		os.Exit(1)
 	}
+}
+
+// hostdSelf is the binary this hostd runs, every link resolved: the
+// installer's versions/<version>/grain rather than the current link that
+// moves on the next upgrade. It is what the build's own entries the
+// allowlist lacks run (hostd.Server.Builtins), so they are always this
+// build's servers. "" when it cannot be found.
+func hostdSelf() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return ""
+	}
+	return resolved
 }
 
 // hostdDialer is -server's way out to the daemon: the shared token from

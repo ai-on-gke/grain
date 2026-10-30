@@ -295,7 +295,30 @@ import "strconv"
 // 63 adds `sandbox_image_mirror` to `grain_config`: an optional OCI
 // repository into which grain mirrors the build-stamped sandbox image on
 // upgrade and startup (model.Config.SandboxImageMirror).
-const SchemaVersion = 63
+//
+// 64 adds the `ci_step_attachment` table: each running CI step's sandbox,
+// exec id and output cursor, so a restarted grain reattaches the step
+// rather than marking its run interrupted (model.CIStepAttachment,
+// docs/design/grain-on-gke.md#GKE-4).
+//
+// 65 adds `repo_config`.`issue_import_enabled`, `issue_import_repo`,
+// `issue_import_label`, `issue_import_approved` and
+// `issue_import_interval_seconds`: the periodic GitHub issue importer's
+// per-repository settings (model.RepoConfig.IssueImport).
+const SchemaVersion = 65
+
+// ciStepAttachmentTable is the `ci_step_attachment` table, named once for
+// Tables and for the migration that adds it.
+const ciStepAttachmentTable = `CREATE TABLE IF NOT EXISTS ` + "`ci_step_attachment`" + ` (
+  ` + "`run_id`" + `     TEXT     NOT NULL,
+  ` + "`job_id`" + `     TEXT     NOT NULL,
+  ` + "`step_id`" + `    TEXT     NOT NULL,
+  ` + "`sandbox`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`exec_id`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`cursor`" + `     INTEGER  NOT NULL DEFAULT 0,
+  ` + "`updated_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`job_id`" + `, ` + "`step_id`" + `)
+)`
 
 // sandboxAccessTable is the `sandbox_access` table, named once for Tables
 // and for the migration that adds it.
@@ -2684,6 +2707,11 @@ var Tables = []string{
 	// merge_recheck is RepoConfig.MergeRecheck: off, observe or enforce
 	// for the merge queue's overlap re-check (grain/task-985, schema 41).
 	// DEFAULT '' reads as observe.
+	//
+	// issue_import_* is RepoConfig.IssueImport: the periodic GitHub
+	// issue importer (schema 65). DEFAULT 0 / '' imports nothing, and
+	// issue_import_approved DEFAULT 0 files what it does import
+	// unapproved.
 	`CREATE TABLE IF NOT EXISTS ` + "`repo_config`" + ` (
   ` + "`owner`" + `                TEXT NOT NULL,
   ` + "`name`" + `                 TEXT NOT NULL,
@@ -2715,6 +2743,11 @@ var Tables = []string{
   ` + "`merge_on_green`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`base_repair_bypasses_human_gates`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`merge_recheck`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`issue_import_enabled`" + `     INTEGER NOT NULL DEFAULT 0,
+  ` + "`issue_import_repo`" + `        TEXT NOT NULL DEFAULT '',
+  ` + "`issue_import_label`" + `       TEXT NOT NULL DEFAULT '',
+  ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
+  ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
@@ -3619,6 +3652,12 @@ var Tables = []string{
 	// its acceptor before their wrappers reconnect. The raw token is never
 	// stored.
 	sandboxAccessTable,
+
+	// Each running CI step's sandbox, exec id and output cursor
+	// (model.CIStepAttachment, docs/design/grain-on-gke.md#GKE-4), written
+	// when the step starts and checkpointed as it runs, so a restarted
+	// daemon reattaches the step instead of interrupting its run.
+	ciStepAttachmentTable,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and

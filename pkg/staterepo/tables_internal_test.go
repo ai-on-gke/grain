@@ -392,6 +392,10 @@ var notSettings = []string{
 	// (model.SandboxAccessCredential): ephemeral runtime state written when
 	// a sandbox is minted and deleted when it is released or reaped.
 	"sandbox_access",
+	// Each running CI step's exec id and output cursor
+	// (model.CIStepAttachment): written while a step runs so a restart
+	// can reattach it, and deleted when its job is done.
+	"ci_step_attachment",
 }
 
 // The converse of TestSettingsTablesAllExist, and the one that catches a
