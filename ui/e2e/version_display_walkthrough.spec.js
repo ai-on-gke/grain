@@ -61,6 +61,7 @@ test.describe("Settings version display walkthrough", () => {
     await expect(
       page.getByRole("heading", { name: "Settings", exact: true }),
     ).toBeVisible();
+    await page.getByTestId("settings-nav-general").click();
     await expect(page.getByRole("heading", { name: "About" })).toBeVisible();
 
     const versionDisplay = page.getByTestId("settings-version-display");
