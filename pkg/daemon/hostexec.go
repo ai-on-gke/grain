@@ -440,7 +440,9 @@ func (c Config) HostExecutorStatus(ctx context.Context) HostExecutorStatus {
 	if exec.Kind != HostExecutorHostd {
 		return out
 	}
-	hctx, cancel := context.WithTimeout(ctx, hostdStatusTimeout)
+	// A dialing-in hostd that is not connected is said at once, not
+	// after hostdStatusTimeout of waiting for it (hostd.ForDisplay).
+	hctx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdStatusTimeout)
 	defer cancel()
 	offers, err := exec.hostdClient().Offers(hctx)
 	out.Hostd = &HostdStatus{Reachable: err == nil}

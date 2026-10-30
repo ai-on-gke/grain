@@ -21,9 +21,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -47,6 +49,8 @@ type fakeProber struct {
 	resolved    []string
 	hostEntries []string
 	noHostd     bool
+	// hostd, when set, is asked for hostEntries as the registry asks it.
+	hostd *hostd.Client
 }
 
 func (f *fakeProber) Statuses() []servers.Status {
@@ -63,9 +67,14 @@ func (f *fakeProber) Probe(_ context.Context, id string, cfg protocol.ServerConf
 	return servers.ProbeResult{ID: id, OK: true, ConfigSchema: cloudConfigSchema, Methods: []servers.MethodDetail{{Name: "key", Releasable: true}}}
 }
 
-func (f *fakeProber) HostCapabilityEntries(context.Context) ([]string, error) {
+func (f *fakeProber) HostCapabilityEntries(ctx context.Context) ([]string, error) {
 	if f.noHostd {
 		return nil, servers.ErrNoHostd
+	}
+	if f.hostd != nil {
+		if _, err := f.hostd.Offers(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return f.hostEntries, nil
 }
@@ -311,5 +320,23 @@ func TestOnlyConfigMapSecretValuesAreMergedIntoTheStoredSecret(t *testing.T) {
 	}
 	if got := strings.Join(row(list).ConfiguredSecretKeys, ","); got != "creds/a,creds/c" {
 		t.Errorf("configured secret keys = %q, want creds/a,creds/c", got)
+	}
+}
+
+// With no dialing-in hostd connected, a run: host server's test says so
+// at once, rather than after the 30 s a run waits for one to dial in
+// (hostd.ForDisplay).
+func TestTestingAHostServerWithNoHostdConnectedAnswersAtOnce(t *testing.T) {
+	c := hostd.Client{Dial: (&hostd.Remote{Token: "x"}).Dial}
+	_, hc, _, _ := configTestServer(t, &fakeProber{hostd: &c})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := hc.TestCapabilityServer(ctx, ui.TestCapabilityServerRequest{ID: configCap, Config: &protocol.ServerConfig{Command: "cloud", Run: protocol.RunHost}})
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("test took %s with no hostd connected, want it at once", took)
+	}
+	if err == nil || !strings.Contains(err.Error(), hostd.ErrRemoteNotConnected.Error()) {
+		t.Fatalf("err = %v, want it to say no hostd is connected", err)
 	}
 }
