@@ -750,6 +750,18 @@ function BoardCard({
             label="suite"
           />
         )}
+        {t.imported && (
+          <Chip
+            size="small"
+            className="chip-imported"
+            title={
+              t.origin
+                ? `imported from GitHub issue ${t.origin}`
+                : "imported from a GitHub issue"
+            }
+            label="imported"
+          />
+        )}
         {t.stacked && (
           <Chip size="small" className="chip-stacked" {...stackedChip(t)} />
         )}

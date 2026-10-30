@@ -68,3 +68,49 @@ func TestReconcileNotificationsClearsOnTheirConditions(t *testing.T) {
 		}
 	}
 }
+
+// Raising pipeline notifications and running reconcileNotifications never
+// posts notification lines into the director console session or wakes it.
+func TestNotificationsDoNotPostToOrWakeDirectorSession(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	now := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	deps := Deps{Store: store}
+	if err := reconcileConsoleSessions(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileConsoleSessions: %v", err)
+	}
+	directorID, err := store.TaskIDWithTag(ctx, model.ConsoleSessionTag(model.DirectorSessionID))
+	if err != nil || directorID == "" {
+		t.Fatalf("finding director session task: id=%q err=%v", directorID, err)
+	}
+	initialComments, err := store.Comments(ctx, directorID)
+	if err != nil {
+		t.Fatalf("Comments(director): %v", err)
+	}
+
+	for _, sev := range []model.NotificationSeverity{model.NotificationWarning, model.NotificationCritical} {
+		if _, err := raisePipelineNotification(ctx, store, model.Notification{
+			Subject:  "pipeline.base-red:acme/widgets@" + string(sev),
+			Severity: sev,
+			Title:    "acme/widgets is red",
+			RaisedBy: baseCINotifier,
+		}, now.Add(time.Minute)); err != nil {
+			t.Fatalf("raisePipelineNotification(%s): %v", sev, err)
+		}
+	}
+	if err := reconcileNotifications(ctx, deps, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("reconcileNotifications: %v", err)
+	}
+
+	afterComments, err := store.Comments(ctx, directorID)
+	if err != nil {
+		t.Fatalf("Comments(director): %v", err)
+	}
+	if len(afterComments) != len(initialComments) {
+		t.Errorf("director comments = %+v, want no notification or wake comments added (initial %d)", afterComments, len(initialComments))
+	}
+	if st, err := store.State(ctx, directorID); err != nil || st != model.StateAwaitingReply {
+		t.Errorf("director state = %q (%v), want %q", st, err, model.StateAwaitingReply)
+	}
+}
