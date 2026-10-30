@@ -535,6 +535,23 @@ func ResetMirroredSandboxImageCacheForTest() {
 	clear(mirroredSandboxWarned)
 }
 
+// mirroredSandboxImageIfKnown is resolveOrMirrorSandboxImage without the
+// copy: the digest-pinned reference sourceRef was already mirrored to,
+// else its tag in mirrorRepo.
+func mirroredSandboxImageIfKnown(sourceRef, mirrorRepo string) string {
+	mirrorRepo = imageRepository(strings.TrimSpace(mirrorRepo))
+	targetTagRef := upgrade.MirrorSandboxRef(sourceRef, mirrorRepo)
+	if targetTagRef == "" {
+		return sourceRef
+	}
+	mirroredSandboxImagesMu.Lock()
+	defer mirroredSandboxImagesMu.Unlock()
+	if cached, ok := mirroredSandboxImages[sourceRef+"|"+mirrorRepo]; ok {
+		return cached
+	}
+	return targetTagRef
+}
+
 // resolveOrMirrorSandboxImage resolves the mirrored guest image reference in
 // mirrorRepo corresponding to sourceRef (pulling sourceRef, tagging and
 // pushing it to mirrorRepo, and pinning to mirrorRepo's RepoDigest when local

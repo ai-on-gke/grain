@@ -1014,16 +1014,10 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 	cfg, unrunnable := c.runnableSettings(cfg)
 	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
-	effectiveGranuleForWarn := firstNonEmptyString(cfg.K8sGranuleImage, granuleImgDefault)
-	if mirror := strings.TrimSpace(cfg.SandboxImageMirror); mirror != "" {
-		if mirrored := upgrade.MirrorSandboxRef(effectiveGranuleForWarn, mirror); mirrored != "" {
-			effectiveGranuleForWarn = mirrored
-		}
-	}
 	sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
 		ctx,
 		firstNonEmptyString(cfg.K8sSandboxImage, sandboxImgDefault),
-		effectiveGranuleForWarn,
+		c.k8sGranuleImageForWarn(cfg, granuleImgDefault),
 	)
 	out := Settings{
 		Configured:               true,

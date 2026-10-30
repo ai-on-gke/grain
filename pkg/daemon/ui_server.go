@@ -489,6 +489,12 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 			}
 			return checkClusterSandboxImageConnectivity(ctx, live.Current(), imageRef)
 		},
+		// The Granule VM image the Settings pane probes is the one this
+		// daemon resolves -- its stamp, mirrored -- not the UI's
+		// version-derived default (k8sGranuleImageForSettings).
+		K8sGranuleImage: func(mc model.Config) string {
+			return k8sGranuleImageForSettings(live.Current(), mc)
+		},
 		// The Settings pane's sandbox image check reads labels the way
 		// the daemon's own startup check does: local docker first, then
 		// the registry (FetchImageLabels), Google-authenticated for an
