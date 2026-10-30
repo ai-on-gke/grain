@@ -146,6 +146,7 @@ func configureGitHubSimDemo(dir string, cfg ui.Config, repo model.RepoRef) (ui.C
 	client := github.NewClient(demoGitHubSimTransport{sim: sim, calls: ghCalls}, nil)
 	demoSimClients.Store(client, &demoSimState{calls: ghCalls})
 	cfg.GitHubBranches = client
+	cfg.GitHubForkPullRequests = client
 	prReader := demoPullRequests{repo: repo, client: client}
 	if prev, ok := cfg.GitHubPullRequests.(demoPullRequests); ok {
 		prReader.store = prev.store

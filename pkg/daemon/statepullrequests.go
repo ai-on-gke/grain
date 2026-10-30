@@ -491,6 +491,22 @@ func (c *StateRepoPullRequestClient) DeleteBranch(owner, name, branch string) er
 	})
 }
 
+// FindOpenPullRequestForHead is forkhead.Finder's lookup: a fork head
+// label resolved on GitHub. The config repository has no forks, so no
+// label heads anything there.
+func (c *StateRepoPullRequestClient) FindOpenPullRequestForHead(owner, name, head string) (*github.PullRequest, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	finder, ok := c.Client.(interface {
+		FindOpenPullRequestForHead(owner, repo, head string) (*github.PullRequest, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("this deployment's GitHub client cannot look up a pull request by its head label")
+	}
+	return finder.FindOpenPullRequestForHead(owner, name, head)
+}
+
 func (c *StateRepoPullRequestClient) FindOpenPullRequestForBranch(owner, name, branch string) (*github.PullRequest, error) {
 	if c.isDisabledConfigRepo(owner, name) {
 		return nil, errExternalConfigRepoNoNativePR
