@@ -203,6 +203,12 @@ func (r RepoRef) GitHost() string {
 	return DefaultRepoHost()
 }
 
+// WebURL is r's page on its git host: https://<host>/<owner>/<name>, on
+// the deployment's default host when r names none.
+func (r RepoRef) WebURL() string {
+	return "https://" + r.GitHost() + "/" + r.Owner + "/" + r.Name
+}
+
 // StoredOwner is what r's owner column holds: Owner, or host/Owner for a
 // repository off the default host. An owner can never contain a slash
 // (validRepoSegment), so RepoFromStored splits it back unambiguously,

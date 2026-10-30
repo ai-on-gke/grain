@@ -159,12 +159,12 @@ func uniqueImagePath(filename string, taken map[string]bool) string {
 
 // repoWebURL is where repo's pages live, read off a pull request's own
 // link so a GitHub Enterprise host is linked to itself rather than to
-// github.com.
+// github.com, or else off repo's own host.
 func repoWebURL(htmlURL string, repo model.RepoRef) string {
 	if i := strings.LastIndex(htmlURL, "/pull/"); i > 0 {
 		return htmlURL[:i]
 	}
-	return fmt.Sprintf("https://github.com/%s/%s", repo.Owner, repo.Name)
+	return repo.WebURL()
 }
 
 // renderImages is the description's section for one published note.

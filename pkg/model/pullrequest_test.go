@@ -46,3 +46,23 @@ func TestParsePullRequestRefRejectsBadNumber(t *testing.T) {
 		t.Fatal("expected an error for a non-numeric #suffix")
 	}
 }
+
+func TestPullRequestRefWebURLUsesTheRepoHost(t *testing.T) {
+	for _, tc := range []struct {
+		ref  model.PullRequestRef
+		repo string
+		pr   string
+	}{
+		{model.PullRequestRef{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, Number: 42},
+			"https://github.com/acme/widgets", "https://github.com/acme/widgets/pull/42"},
+		{model.PullRequestRef{Repo: model.RepoRef{Host: "depot.code.corp.goog", Owner: "experimental", Name: "grain"}, Number: 26},
+			"https://depot.code.corp.goog/experimental/grain", "https://depot.code.corp.goog/experimental/grain/pull/26"},
+	} {
+		if got := tc.ref.Repo.WebURL(); got != tc.repo {
+			t.Errorf("%s: Repo.WebURL() = %q, want %q", tc.ref, got, tc.repo)
+		}
+		if got := tc.ref.WebURL(); got != tc.pr {
+			t.Errorf("%s: WebURL() = %q, want %q", tc.ref, got, tc.pr)
+		}
+	}
+}
