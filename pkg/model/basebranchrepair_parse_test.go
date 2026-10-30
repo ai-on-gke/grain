@@ -23,7 +23,7 @@ import "testing"
 func TestParseBaseRepairBranchTagRoundTrip(t *testing.T) {
 	for _, repo := range []RepoRef{
 		{Owner: "acme", Name: "app"},
-		{Host: "depot.code.corp.goog", Owner: "experimental", Name: "grain"},
+		{Host: "git.example.com", Owner: "acme", Name: "app"},
 		{Host: "git.example.com:8443", Owner: "acme", Name: "app"},
 	} {
 		tag := BaseRepairBranchTag(repo, "release-1.2")
@@ -47,7 +47,7 @@ func TestParseBaseRepairBranchTagRoundTrip(t *testing.T) {
 
 // A persistent sandbox may be defined on a repo off the default git host.
 func TestValidatePersistentSandboxHostQualifiedRepo(t *testing.T) {
-	for _, repo := range []string{"acme/app", "depot.code.corp.goog/experimental/grain"} {
+	for _, repo := range []string{"acme/app", "git.example.com/acme/app"} {
 		sb := PersistentSandbox{Name: "a", Repo: repo, Command: "x"}
 		if err := ValidatePersistentSandbox(sb); err != nil {
 			t.Errorf("repo %q refused: %v", repo, err)

@@ -515,9 +515,9 @@ exec "$@"
 func TestPersistentCloneURLKeepsTheHost(t *testing.T) {
 	for _, c := range []struct{ base, repo, want string }{
 		{"http://127.0.0.1:9728", "acme/app", "http://127.0.0.1:9728/acme/app.git"},
-		{"http://127.0.0.1:9728/", "depot.code.corp.goog/experimental/grain", "http://127.0.0.1:9728/depot.code.corp.goog/experimental/grain.git"},
+		{"http://127.0.0.1:9728/", "git.example.com/acme/app", "http://127.0.0.1:9728/git.example.com/acme/app.git"},
 		{"", "acme/app", "https://" + model.DefaultRepoHost() + "/acme/app.git"},
-		{"", "depot.code.corp.goog/experimental/grain", "https://depot.code.corp.goog/experimental/grain.git"},
+		{"", "git.example.com/acme/app", "https://git.example.com/acme/app.git"},
 	} {
 		got, err := persistentCloneURL(c.base, c.repo)
 		if err != nil || got != c.want {
