@@ -1091,6 +1091,18 @@ func RepoSettingsSchema() Schema {
 				Columns: []string{"merge_recheck"},
 			},
 
+			// issue-import turns GitHub issues into tasks here, and with
+			// issue_import_approved it queues them unread: whoever can
+			// open an issue on the source then decides what an agent is
+			// dispatched to do. Authority, because a repository cannot
+			// grant its own issue authors that.
+			{
+				Model: "IssueImport",
+				Keys:  []Key{settingsOnly("issue-import", Authority)},
+				Columns: []string{"issue_import_enabled", "issue_import_repo", "issue_import_label",
+					"issue_import_approved", "issue_import_interval_seconds"},
+			},
+
 			// ci-mode configures the unified CI mode (grain, github, none).
 			// Verdict, deciding which CI system gates merges.
 			{

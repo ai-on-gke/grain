@@ -360,6 +360,17 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     65,
+		Description: "add each repository's GitHub issue importer settings to repo_config",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_enabled` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_repo` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_label` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_approved` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_interval_seconds` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     66,
 		Description: "add session_sandbox_idle_ttl_ms to grain_config for keeping session sandboxes warm between turns",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `session_sandbox_idle_ttl_ms` INTEGER NOT NULL DEFAULT 0",

@@ -76,6 +76,19 @@ type Server struct {
 	// RemoteMinBackoff and RemoteMaxBackoff bound the wait between
 	// reconnects to Remote: 1s and defaultRemoteMaxBackoff (5s) when zero.
 	RemoteMinBackoff, RemoteMaxBackoff time.Duration
+	// Builtins are this build's own capabilities entries
+	// (intree.HostdBuiltins). Each one the allowlist has no entry of that
+	// name for is offered anyway, running BuiltinCommand -- this hostd's
+	// own binary -- so a server a new build registers runs on the host as
+	// soon as hostd is on that build, whether or not anything has written
+	// its entry into the file yet (EnsureBuiltins, which adds the same
+	// entries as root at every start, so this offers nothing the file
+	// would not soon hold). Only while BuiltinCommand is a regular file
+	// that only AllowlistOwners can write, as the installer's versions
+	// are: hostd never runs a binary the daemon's user could have
+	// replaced. An entry the file has always wins.
+	Builtins       []BuiltinEntry
+	BuiltinCommand string
 
 	uid uint32
 	wg  sync.WaitGroup
@@ -126,6 +139,22 @@ func (s *Server) logf(format string, args ...any) {
 	log.Printf(format, args...)
 }
 
+// loadAllowlist is LoadAllowlist of s.Allowlist, with the build's own
+// entries it lacks (Builtins), and their names.
+func (s *Server) loadAllowlist() (*Allowlist, []string, error) {
+	a, err := LoadAllowlist(s.Allowlist, s.owners())
+	if err != nil || len(s.Builtins) == 0 || s.BuiltinCommand == "" {
+		return a, nil, err
+	}
+	if !filepath.IsAbs(s.BuiltinCommand) || filepath.Clean(s.BuiltinCommand) != s.BuiltinCommand {
+		return a, nil, nil
+	}
+	if err := checkFileOwnedBy("grain hostd's own binary", s.BuiltinCommand, s.owners()); err != nil {
+		return a, nil, nil
+	}
+	return a, a.withBuiltins(s.Builtins, s.BuiltinCommand), nil
+}
+
 func (s *Server) owners() []uint32 {
 	if s.AllowlistOwners != nil {
 		return s.AllowlistOwners
@@ -155,11 +184,19 @@ func (s *Server) Serve(ctx context.Context) error {
 		s.ReapRecorded()
 		s.loadSpools()
 	}
-	a, err := LoadAllowlist(s.Allowlist, s.owners())
+	a, implicit, err := s.loadAllowlist()
 	if err != nil {
 		return err
 	}
 	s.logf("hostd: allowlist %s offers %d entries", s.Allowlist, len(a.Offers()))
+	if len(implicit) > 0 {
+		s.logf("hostd: offering grain's own entries %s, which the allowlist lacks, as %s (grain-hostd-allowlist.service adds them to the file)",
+			strings.Join(implicit, ", "), s.BuiltinCommand)
+	} else if len(s.Builtins) > 0 && s.BuiltinCommand != "" {
+		if err := checkFileOwnedBy("grain hostd's own binary", s.BuiltinCommand, s.owners()); err != nil {
+			s.logf("hostd: offering only the allowlist's own entries, not grain's built-in ones it may lack: %v", err)
+		}
+	}
 	if s.Socket == "" && s.Remote == nil {
 		return errors.New("grain hostd: nothing to serve: no -socket to listen on and no -server to dial out to")
 	}
@@ -326,7 +363,7 @@ func (s *Server) runningLocked() int {
 // are done, and the daemon's capability registry starts it again on the
 // new hostd.
 func (s *Server) waitDrained(ctx context.Context) {
-	a, _ := LoadAllowlist(s.Allowlist, s.owners())
+	a, _, _ := s.loadAllowlist()
 	limit := a.drainCap()
 	timer := time.NewTimer(limit)
 	defer timer.Stop()
@@ -466,7 +503,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		s.refuse(conn, fmt.Sprintf("malformed request: %v", err))
 		return
 	}
-	a, err := LoadAllowlist(s.Allowlist, s.owners())
+	a, _, err := s.loadAllowlist()
 	if err != nil {
 		s.refuse(conn, err.Error())
 		return

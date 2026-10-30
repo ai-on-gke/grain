@@ -65,15 +65,24 @@ export function chatEntries(t) {
   }
 
   (t.comments || []).forEach((c, i) => {
-    // Synthetic resting comments between console session exchanges
-    // are not conversation messages and TaskChat already shows a persistent
-    // header indicator ("waiting for your reply") when awaiting reply.
-    // Only grain's own line (model.ConsoleSessionPrincipal): a person who
-    // types the same words still sees what they sent.
+    const trimmed = (c.body || "").trim();
+    // Synthetic resting comments between console session exchanges,
+    // system notification lines, and synthetic wake comments are not
+    // conversation messages. Only grain's own automation lines
+    // (model.ConsoleSessionPrincipal, model.SchedulePrincipal): a person
+    // or relayed agent who types the same words still sees what they sent.
     if (
       c.authorKind === "automation" &&
       c.author === "console-session" &&
-      (c.body || "").trim() === "_Waiting for you._"
+      (trimmed === "_Waiting for you._" ||
+        trimmed.startsWith("**Notification ("))
+    )
+      return;
+    if (
+      c.authorKind === "automation" &&
+      c.author === "schedule" &&
+      (trimmed.startsWith("_Woken early:_") ||
+        trimmed.startsWith("_Scheduled wake._"))
     )
       return;
 

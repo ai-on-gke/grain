@@ -530,6 +530,9 @@ func Reconcilers() []Reconciler {
 		{Name: "scheduled-upgrade", Reconcile: reconcileScheduledUpgrade},
 		{Name: "upgrade-check", Reconcile: reconcileUpgradeCheck},
 		{Name: "target-repos", Reconcile: reconcileTargetRepos},
+		// Before dispatch, so an issue imported approved this tick can be
+		// dispatched this tick (reconcileIssueImports).
+		{Name: "issue-imports", Reconcile: reconcileIssueImports},
 		{Name: dispatchReconciler, Reconcile: reconcileDispatch},
 		{Name: "ci", Reconcile: reconcileCI},
 		// Before "sync", so that a base branch found red this tick holds

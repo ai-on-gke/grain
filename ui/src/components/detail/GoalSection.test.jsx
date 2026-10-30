@@ -80,6 +80,47 @@ describe("GoalSection", () => {
       "Met; the task was closed.",
     );
   });
+
+  it("distinguishes hold vs notify when the goal is at its progress limit", () => {
+    const { rerender } = render(
+      <GoalSection
+        t={{
+          id: "7",
+          state: "deferred",
+          goal: {
+            ...goal,
+            onLimit: "hold",
+            limitNotifiedAt: "2026-10-26T18:00:00Z",
+          },
+        }}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("goal-progress").textContent).toContain(
+      "Held at its limit: a person has to act.",
+    );
+
+    rerender(
+      <GoalSection
+        t={{
+          id: "7",
+          state: "deferred",
+          goal: {
+            ...goal,
+            onLimit: "notify",
+            limitNotifiedAt: "2026-10-26T18:00:00Z",
+          },
+        }}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("goal-progress").textContent).toContain(
+      "Limit reached: operator notified, backing off.",
+    );
+    expect(screen.getByTestId("goal-progress").textContent).not.toContain(
+      "Held at its limit",
+    );
+  });
 });
 
 describe("bodyOf and goalSummary", () => {

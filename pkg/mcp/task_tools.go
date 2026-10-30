@@ -104,7 +104,7 @@ type TaskSummary struct {
 	// ordinary reading and never means nothing was checked.
 	Stall string
 	// Kinds is the task's kind tags (ui.TaskKindTags: port, repair,
-	// session, proposal, durable) -- the fixed vocabulary a report about
+	// session, proposal, durable, imported) -- the fixed vocabulary a report about
 	// the task is held to, so a reader never has to infer "this is a port"
 	// from a title.
 	Kinds []string
@@ -373,7 +373,7 @@ var listTasksInputSchema = map[string]any{
 		},
 		"kind": map[string]any{
 			"type":        "string",
-			"description": "only tasks carrying this kind tag: port, repair, session, proposal or durable",
+			"description": "only tasks carrying this kind tag: port, repair, session, proposal, durable or imported",
 		},
 	},
 }
@@ -699,7 +699,7 @@ func readTaskTool(reader TaskReader) Tool {
 		Name:          "read_grain_task",
 		ElisionAdvice: elisionAdviceTaskRecord,
 		Description: "Read one grain task. The default view, summary, is about a kilobyte: state, title, kind tags " +
-			"(port, repair, session, proposal, durable), base, depends_on, stall, the last three events and the " +
+			"(port, repair, session, proposal, durable, imported), base, depends_on, stall, the last three events and the " +
 			"head of its handover -- re-read it immediately before acting on a task or naming it in a report. " +
 			"view \"full\" is the whole record: what it asked for, who filed it, which " +
 			"capabilities it holds, every attempt it has had with how each one ended (the error " +
