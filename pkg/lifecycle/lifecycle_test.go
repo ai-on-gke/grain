@@ -653,3 +653,20 @@ func TestSQLCensusCountsPins(t *testing.T) {
 		t.Errorf("pins.Attention = %d, want 1", pins.Attention)
 	}
 }
+
+// A version on a repository off the default git host reads back with its
+// host, equal to the Version that wrote it.
+func TestParseVersionHostQualifiedRoundTrip(t *testing.T) {
+	r := model.RepoRef{Host: "depot.code.corp.goog", Owner: "experimental", Name: "grain"}
+	for _, v := range []Version{{Repo: r, Commit: "abc123"}, {Repo: r, Digest: testDigest}} {
+		back, err := ParseVersion(v.String())
+		if err != nil || back != v || !back.Repo.Same(r) {
+			t.Errorf("ParseVersion(%q) = %+v, %v; want %+v", v.String(), back, err, v)
+		}
+	}
+	for _, s := range []string{"acme@commit:abc", "a/b/c/d@commit:abc", "acme/app", "acme/app@"} {
+		if v, err := ParseVersion(s); err == nil {
+			t.Errorf("ParseVersion(%q) = %+v; want an error", s, v)
+		}
+	}
+}
