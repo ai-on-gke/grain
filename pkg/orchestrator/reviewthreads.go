@@ -629,8 +629,9 @@ func resolveHandledRelayedThreads(ctx context.Context, store *model.Store, clien
 // person other than the grain identity that opened the relayed review thread.
 // It fails closed: a comment whose author cannot be read (missing from the
 // listing, or with no login) counts as a person's, and so does a login that
-// merely looks like grain's -- only the root comment's own author, or a GitHub
-// App ("[bot]"), is grain's.
+// merely looks like grain's, or belongs to some other GitHub App ("[bot]"): a
+// third-party reviewer bot replying in the thread is not grain, and only the
+// root comment's own author is.
 func threadHasHumanComment(th github.ReviewThread, commentByID map[int]github.ReviewComment, rootAuthor string) bool {
 	if rootAuthor == "" {
 		return true
@@ -640,10 +641,9 @@ func threadHasHumanComment(th github.ReviewThread, commentByID map[int]github.Re
 		if !ok || c.User == "" {
 			return true
 		}
-		if c.User == rootAuthor || strings.HasSuffix(c.User, "[bot]") {
-			continue
+		if c.User != rootAuthor {
+			return true
 		}
-		return true
 	}
 	return false
 }
@@ -791,11 +791,11 @@ func unresolvedReviewThreads(client github.Client, task model.Task, ref model.Pu
 			if root.User != "" {
 				author = root.User
 			}
-			// If a person commented inside a thread opened by the bot, attribute
-			// the human participant.
+			// If anyone else commented inside a thread grain opened, attribute
+			// that participant: it is their reply that keeps the thread open.
 			if relayed[root.ID] || (root.ReviewID != 0 && drafts[root.ReviewID]) {
 				for _, cid := range th.CommentIDs {
-					if c, ok := commentByID[cid]; ok && c.User != "" && c.User != root.User && !strings.HasSuffix(c.User, "[bot]") {
+					if c, ok := commentByID[cid]; ok && c.User != "" && c.User != root.User {
 						author = c.User
 						break
 					}

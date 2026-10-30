@@ -277,6 +277,17 @@ func TestReviewTaskThreadsAreResolvedWhenOwnerRunKeepsAsIsWithoutPushing(t *test
 // merge waits naming them.
 func TestGrainRelayedThreadAPersonRepliedInIsNeverAutoResolved(t *testing.T) {
 	t.Parallel()
+	// A reply from another GitHub App -- a third-party reviewer bot -- is
+	// not grain's either, and keeps the thread open just as a person's does.
+	for _, replier := range []string{"alice", "acme-reviewer[bot]"} {
+		t.Run(replier, func(t *testing.T) {
+			t.Parallel()
+			grainRelayedThreadSomeoneRepliedInIsNeverAutoResolved(t, replier)
+		})
+	}
+}
+
+func grainRelayedThreadSomeoneRepliedInIsNeverAutoResolved(t *testing.T, replier string) {
 	store, ctx, sim, client, reviewed, review := reviewedAndReviewing(t)
 	sim.RequireConversationResolution = true
 
@@ -294,7 +305,7 @@ func TestGrainRelayedThreadAPersonRepliedInIsNeverAutoResolved(t *testing.T) {
 
 	prNum := sim.PullRequests[0].Number
 	sim.ReviewComments[prNum] = append(sim.ReviewComments[prNum], github.ReviewComment{
-		ID: 9901, InReplyTo: relayed[0].CommentID, User: "alice",
+		ID: 9901, InReplyTo: relayed[0].CommentID, User: replier,
 		Body: "I disagree -- the name is load-bearing elsewhere.",
 	})
 
@@ -312,7 +323,7 @@ func TestGrainRelayedThreadAPersonRepliedInIsNeverAutoResolved(t *testing.T) {
 	markMergeable(sim)
 	_ = orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(3*time.Minute))
 	if sim.ResolvedThreads[threadID] {
-		t.Fatalf("thread %s that alice replied in must not be auto-resolved", threadID)
+		t.Fatalf("thread %s that %s replied in must not be auto-resolved", threadID, replier)
 	}
 	if sim.PullRequests[0].Merged {
 		t.Fatal("PR must not merge while a thread a person replied in is unresolved")
@@ -321,7 +332,7 @@ func TestGrainRelayedThreadAPersonRepliedInIsNeverAutoResolved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "unresolved review conversations by alice"; !strings.Contains(obs.MergeQueueNote, want) {
+	if want := "unresolved review conversations by " + replier; !strings.Contains(obs.MergeQueueNote, want) {
 		t.Errorf("MergeQueueNote = %q, want %q", obs.MergeQueueNote, want)
 	}
 }
