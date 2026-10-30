@@ -4215,19 +4215,23 @@ func (s *Store) GitPushAnyRef(ctx context.Context, sandbox string) (bool, error)
 // NamespaceScope describes the namespace roots and repositories a sandbox's
 // currently live run may read over /fs/<scheme>/<path> and /cli/ on the sandbox proxy.
 type NamespaceScope struct {
-	TaskID            string
-	RunID             string
-	Attempt           int
-	TaskRepo          string
-	TaskBranch        string
-	TaskBase          string
-	ConfigRepo        string
-	Grants            []string
-	MayReadCI         bool
-	MayReadAllCI      bool
-	AllowedRepos      map[string]bool
-	MayReadSrc        bool
-	MayReadAllTasks   bool
+	TaskID          string
+	RunID           string
+	Attempt         int
+	TaskRepo        string
+	TaskBranch      string
+	TaskBase        string
+	ConfigRepo      string
+	Grants          []string
+	MayReadCI       bool
+	MayReadAllCI    bool
+	AllowedRepos    map[string]bool
+	MayReadSrc      bool
+	MayReadAllTasks bool
+	// TaskReadRepos are the repositories whose tasks the run may read
+	// under task:// without MayReadAllTasks: its task's target, reads
+	// and writes, and any api:tasks:read@owner/repo names.
+	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
 	MayReadMetrics    bool
@@ -4264,6 +4268,7 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	taskBase := strings.TrimSpace(storedBase.String)
 
 	allowed := make(map[string]bool)
+	taskRepos := make(map[string]bool)
 	addRepo := func(r string) {
 		r = strings.TrimSpace(r)
 		if r == "" {
@@ -4272,16 +4277,27 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		allowed[r] = true
 		allowed[strings.ToLower(r)] = true
 	}
+	addTaskRepo := func(r string) {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			return
+		}
+		taskRepos[r] = true
+		taskRepos[strings.ToLower(r)] = true
+	}
 	var taskRepo string
 	if target != nil {
 		taskRepo = target.String()
 		addRepo(taskRepo)
+		addTaskRepo(taskRepo)
 	}
 	for _, r := range reads {
 		addRepo(r.String())
+		addTaskRepo(r.String())
 	}
 	for _, w := range writes {
 		addRepo(w.String())
+		addTaskRepo(w.String())
 	}
 
 	cfgRepo := ConfigRepo()
@@ -4368,6 +4384,9 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	if apiSet.Allows("tasks:read", "") {
 		mayReadAllTasks = true
 	}
+	for _, r := range apiSet.Repos("tasks:read") {
+		addTaskRepo(r)
+	}
 	if apiSet.Allows("settings:read", "") || apiSet.Allows("repos:read", "") {
 		mayReadFullConfig = true
 	}
@@ -4397,6 +4416,7 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		AllowedRepos:      allowed,
 		MayReadSrc:        mayReadSrc,
 		MayReadAllTasks:   mayReadAllTasks,
+		TaskReadRepos:     taskRepos,
 		MayReadFullConfig: mayReadFullConfig,
 		MayReadAllMemory:  mayReadAllMemory,
 		MayReadMetrics:    mayReadMetrics,

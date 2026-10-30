@@ -2608,6 +2608,23 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		for _, w := range taskDetail.Task.Writes {
 			addAllowedRepo(w.Repo)
 		}
+		taskReadRepos := make(map[string]bool)
+		addTaskRepo := func(r string) {
+			if r = strings.TrimSpace(r); r != "" {
+				taskReadRepos[r] = true
+				taskReadRepos[strings.ToLower(r)] = true
+			}
+		}
+		addTaskRepo(taskDetail.Task.Repo)
+		for _, r := range taskDetail.Task.Reads {
+			addTaskRepo(r)
+		}
+		for _, w := range taskDetail.Task.Writes {
+			addTaskRepo(w.Repo)
+		}
+		for _, r := range apiGrants.Repos("tasks:read") {
+			addTaskRepo(r)
+		}
 		for _, name := range grants {
 			parsed, isAPI, err := model.ParseAPIGrant(name)
 			if !isAPI || err != nil || parsed.Repo == "" || !slices.Contains(parsed.Scopes, "ci:read") {
@@ -2625,6 +2642,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 				MayReadSrc:       grants.Has(selfdebug.CapabilityName),
 				MayReadPlaybooks: grants.Has(bootstrap.CapabilityName) || grants.Has(selfdebug.CapabilityName),
 				MayReadAllTasks:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("tasks:read", ""),
+				TaskReadRepos:    taskReadRepos,
 				MayReadFullConfig: grants.Has(selfdebug.CapabilityName) ||
 					apiGrants.Allows("settings:read", "") || apiGrants.Allows("repos:read", ""),
 				MayReadAllMemory: grants.Has(memory.CapabilityName) || apiGrants.Allows("memory:read", ""),
