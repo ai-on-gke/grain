@@ -15,6 +15,7 @@
 package antigravity
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -23,7 +24,9 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/credhealth"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A made-up host-tool grant, so that the seam is tested without any real
@@ -237,6 +240,7 @@ func TestToolPreambleCarriesAGrantsWordsAfterTheBuiltIns(t *testing.T) {
 // as, and an auth failure carries the grant's hint.
 func TestReportHostToolCalls(t *testing.T) {
 	registerMadeUpGrant(t)
+	t.Cleanup(credhealth.Reset)
 	r := &agent.Result{ToolCalls: []agent.ToolCall{
 		{Name: "wiki_search", IsError: true, Text: "credential lapsed: please renew-lookups"},
 	}}
@@ -268,4 +272,61 @@ func TestRegisterHostToolGrantRefusesADuplicate(t *testing.T) {
 		}
 	}()
 	RegisterHostToolGrant(HostToolGrant{Capability: madeUpGrant, Tools: []string{"x"}})
+}
+
+// recordingNotifier counts the notifications credhealth raises and
+// clears.
+type recordingNotifier struct {
+	raised  []model.Notification
+	cleared []string
+}
+
+func (n *recordingNotifier) RaiseNotification(_ context.Context, no model.Notification) (model.NotificationRaise, error) {
+	n.raised = append(n.raised, no)
+	return model.NotificationRaise{Notification: no, New: true}, nil
+}
+
+func (n *recordingNotifier) ClearNotification(_ context.Context, subject, _ string) (bool, error) {
+	n.cleared = append(n.cleared, subject)
+	return true, nil
+}
+
+// A host tool failing on auth raises one deployment-level notification,
+// however many runs see it, and the next successful call under the same
+// grant clears it.
+func TestHostToolAuthFailureRaisesOneNotification(t *testing.T) {
+	registerMadeUpGrant(t)
+	credhealth.Reset()
+	t.Cleanup(credhealth.Reset)
+	n := &recordingNotifier{}
+	credhealth.Bind(n)
+
+	failing := func() *agent.Result {
+		return &agent.Result{ToolCalls: []agent.ToolCall{
+			{Name: "wiki_search", IsError: true, Text: "credential lapsed: please renew-lookups"},
+			{Name: "doc_lookup", IsError: true, Text: "credential lapsed: please renew-lookups"},
+		}}
+	}
+	calls := []HostToolCall{{Tool: "wiki_search", Host: "ctl-1"}, {Tool: "doc_lookup", Host: "ctl-1"}}
+	reportHostToolCalls(failing(), calls, "fallback")
+	reportHostToolCalls(failing(), calls, "fallback")
+
+	if len(n.raised) != 1 {
+		t.Fatalf("raised %d notifications, want exactly one: %+v", len(n.raised), n.raised)
+	}
+	want := credhealth.Subject("host-tool:" + madeUpGrant)
+	if got := n.raised[0]; got.Subject != want || got.Severity != model.NotificationWarning || got.Body != madeUpHint("ctl-1") {
+		t.Errorf("notification = %+v, want a warning on %s saying %q", got, want, madeUpHint("ctl-1"))
+	}
+	if f := credhealth.Failures(); len(f) != 1 || f[0].Count != 2 {
+		t.Errorf("failures = %+v, want one spell seen twice", f)
+	}
+
+	reportHostToolCalls(&agent.Result{ToolCalls: []agent.ToolCall{{Name: "doc_lookup", Text: "ok"}}}, nil, "ctl-1")
+	if !slices.Equal(n.cleared, []string{want}) {
+		t.Errorf("cleared = %q, want %q", n.cleared, want)
+	}
+	if f := credhealth.Failures(); len(f) != 0 {
+		t.Errorf("failures after a successful call = %+v, want none", f)
+	}
 }

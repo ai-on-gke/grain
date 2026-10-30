@@ -275,8 +275,38 @@ func (d sandboxDeploy) ReadState(ctx context.Context, table string) (string, err
 	args := map[string]any{}
 	if table != "" {
 		args["path"] = "tables/" + table + ".json"
+		return toolText(d.health()[1].Handler(ctx, args))
 	}
-	return toolText(d.health()[1].Handler(ctx, args))
+	text, err := toolText(d.health()[1].Handler(ctx, args))
+	if err != nil {
+		return text, err
+	}
+	return d.withCredentials(ctx, text), nil
+}
+
+// withCredentials adds the deployment's credentials section
+// (ui.CredentialsHealth) to the state listing, so a reader of
+// deploy://state learns that the operator's credentials have lapsed
+// without also having to read deploy://health. The listing is returned
+// as it was when there is nothing to add or health cannot be read.
+func (d sandboxDeploy) withCredentials(ctx context.Context, listing string) string {
+	if d.client == nil {
+		return listing
+	}
+	health, err := d.client.SandboxHealth(ctx)
+	if err != nil || health.Credentials == nil {
+		return listing
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(listing), &m); err != nil {
+		return listing
+	}
+	m["credentials"] = health.Credentials
+	b, err := json.Marshal(m)
+	if err != nil {
+		return listing
+	}
+	return string(b)
 }
 
 func (d sandboxDeploy) ListStateTables(ctx context.Context) ([]string, error) {

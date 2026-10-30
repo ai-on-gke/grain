@@ -17,6 +17,7 @@ package daemon
 import (
 	"context"
 	"github.com/ai-on-gke/grain/pkg/change"
+	"github.com/ai-on-gke/grain/pkg/credhealth"
 	"log"
 
 	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
@@ -124,6 +125,10 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		// 5 minutes until it clears.
 		change.Bind(changeControl{reg: reg})
 		go change.Watch(ctx, store)
+		// Host tools failing on auth, and any proactive credential check a
+		// deployment layer registers (credhealth.RegisterCheck), raise and
+		// clear their notifications on store.
+		go credhealth.Watch(ctx, store)
 		// Every live CL is handed to its provider's poller once a minute,
 		// for the task view's presubmit badge (changelists.md §3).
 		go orchestrator.PollChanges(ctx, store)

@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/change"
+	"github.com/ai-on-gke/grain/pkg/credhealth"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -62,5 +64,49 @@ func TestSandboxHealthSaysToRenewHostCredentialsOnceForTheHost(t *testing.T) {
 	if !strings.Contains(got.HostCredentials.Detail, "run `renew-host-creds`") || got.HostCredentials.Runs != 1 ||
 		got.HostCredentials.TaskID != task.ID {
 		t.Errorf("hostCredentials = %+v, want the renewal sentence, one run, on %s", got.HostCredentials, task.ID)
+	}
+}
+
+// A change kind blocked on expired credentials, and a host tool failing
+// on auth, are both in the health payload's credentials section -- and
+// the section is gone once neither is.
+func TestSandboxHealthReportsBlockedChangeProvidersAndHostToolFailures(t *testing.T) {
+	srv, _ := testServer(t)
+	t.Cleanup(credhealth.Reset)
+	t.Cleanup(func() { change.ClearBlocked("fakehealthcl") })
+
+	since := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	change.MarkBlocked("fakehealthcl", change.BlockedCredentials, "credentials expired: run gcert", since)
+	credhealth.Fail(context.Background(), "host-tool:made-up", "Host tools failing on auth", "run renew on h1", since)
+
+	got := decode[ui.SandboxHealthResponse](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))
+	if got.Credentials == nil {
+		t.Fatal("credentials absent while a change kind is blocked")
+	}
+	var found bool
+	for _, b := range got.Credentials.ChangeProviders {
+		if b.Kind == "fakehealthcl" {
+			found = true
+			if b.Blocked != change.BlockedCredentials || !b.Since.Equal(since) || b.Detail != "credentials expired: run gcert" {
+				t.Errorf("blocked kind = %+v, want credentials since %v", b, since)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("changeProviders = %+v, want fakehealthcl", got.Credentials.ChangeProviders)
+	}
+	if len(got.Credentials.Failures) != 1 || got.Credentials.Failures[0].Source != "host-tool:made-up" {
+		t.Errorf("failures = %+v, want the host tool's", got.Credentials.Failures)
+	}
+
+	change.ClearBlocked("fakehealthcl")
+	credhealth.Clear(context.Background(), "host-tool:made-up")
+	got = decode[ui.SandboxHealthResponse](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))
+	if got.Credentials != nil {
+		for _, b := range got.Credentials.ChangeProviders {
+			if b.Kind == "fakehealthcl" {
+				t.Errorf("fakehealthcl still reported after ClearBlocked: %+v", got.Credentials)
+			}
+		}
 	}
 }
