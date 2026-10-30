@@ -2895,6 +2895,12 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		cfg.PreparedCapabilities, sandboxRoot, placer)
 	cfg.SandboxRecreations.setMaterialized(d.TaskID, materialized)
 	recordMaterializedLeases(ctx, store, d.RunID, materialized)
+	// Before the clone, so the CLI every prompt names is there whatever
+	// the clone does. After the grants' own placements, so nothing a
+	// grant installs in the same directory is placed over it.
+	if err := placeSandboxGrain(ctx, cfg.SandboxGrainBinary, sandboxRoot, placer); err != nil {
+		log.Printf("orchestrator: task %s: the sandbox keeps its image's grain: %v", task.ID, err)
+	}
 
 	var prepared checkout
 	var checkoutErr error

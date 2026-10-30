@@ -1374,6 +1374,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// Framework starts, which is where a self-debug run's tools
 			// are actually served from (agent.RunConfig.GrainSourceDir).
 			GrainSourceDir: grainSrcDir,
+			// The sandbox's own grain, placed into every sandbox whose
+			// image's copy is not this build (cmd/grain-sandbox, which
+			// the daemon image installs beside grain).
+			SandboxGrainBinary: sandboxGrainBinary(),
 			// Where the forked "grain mcpserver" of a grain-log run
 			// reads the credentials it redacts out of the journal
 			// before answering with any of it. It is not material for
@@ -1713,4 +1717,18 @@ func drainInFlight(runs *orchestrator.InFlight) int {
 	}
 	log.Printf("grain daemon: every run in flight at shutdown has finished")
 	return 0
+}
+
+// sandboxGrainBinary is the grain-sandbox binary installed beside this
+// executable, or "" when there is none (a laptop's `go run`, a build
+// that installed grain alone).
+func sandboxGrainBinary() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return orchestrator.SandboxGrainBinaryBeside(exe)
 }
