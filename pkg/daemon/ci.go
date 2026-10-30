@@ -486,7 +486,7 @@ func (g *CiGrantReservations) Acquire(ctx context.Context, req ci.SandboxRequest
 		if reg == nil {
 			err = &model.ResourceExhaustedError{Err: errors.New("CI capability providers are not configured")}
 		} else {
-			cc, resolved, err = ResolveCICapabilities(ctx, reg, g.Credentials, repo, req.Name, req.Event, req.TrustedSchedule, req.Capabilities)
+			cc, resolved, err = ResolveCICapabilities(ctx, reg, g.Credentials, repo, req.Name, req.Event, req.TrustedSchedule, req.Capabilities, req.WithholdEventGated)
 		}
 		var materialized []model.Materialized
 		if err == nil {
@@ -699,7 +699,7 @@ func (s CiSandboxes) Acquire(ctx context.Context, req ci.SandboxRequest) (ci.San
 
 	// From here on every failure has a sandbox to destroy, and a scope
 	// and a token that must not outlive it.
-	if err := sandbox.prepareJob(ctx, repo, checkoutRef, req.Event, req.TrustedSchedule, req.Capabilities, req.ReleaseSecrets); err != nil {
+	if err := sandbox.prepareJob(ctx, repo, checkoutRef, req.Event, req.TrustedSchedule, req.WithholdEventGated, req.Capabilities, req.ReleaseSecrets); err != nil {
 		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ciReleaseTimeout)
 		defer cancel()
 		if rerr := sandbox.Release(releaseCtx); rerr != nil {
@@ -738,7 +738,7 @@ func (s CiSandboxes) Readopt(ctx context.Context, req ci.SandboxRequest) (ci.San
 		return nil, fmt.Errorf("sandbox %s could not be readopted from backend %T: %w", req.Name, s.Sandboxes, err)
 	}
 	sandbox := &CiSandbox{Owner: s, Backing: backing, SandboxName: backing.Name()}
-	if err := sandbox.readoptJob(ctx, repo, req.Event, req.TrustedSchedule, req.Capabilities); err != nil {
+	if err := sandbox.readoptJob(ctx, repo, req.Event, req.TrustedSchedule, req.Capabilities, req.WithholdEventGated); err != nil {
 		return nil, err
 	}
 	return sandbox, nil
@@ -930,8 +930,8 @@ func (s *CiSandbox) prepare(ctx context.Context, repo model.RepoRef, checkoutRef
 	return nil
 }
 
-func (s *CiSandbox) prepareJob(ctx context.Context, repo model.RepoRef, ref string, event ci.Event, trustedSchedule bool, ids, releaseSecrets []string) error {
-	if err := s.registerWithProxy(ctx, repo, event, trustedSchedule, ids); err != nil {
+func (s *CiSandbox) prepareJob(ctx context.Context, repo model.RepoRef, ref string, event ci.Event, trustedSchedule, withholdEventGated bool, ids, releaseSecrets []string) error {
+	if err := s.registerWithProxy(ctx, repo, event, trustedSchedule, ids, withholdEventGated); err != nil {
 		return err
 	}
 	if err := s.prepare(ctx, repo, ref); err != nil {
@@ -945,7 +945,7 @@ func (s *CiSandbox) prepareJob(ctx context.Context, repo model.RepoRef, ref stri
 		if reg == nil {
 			return errors.New("CI capability providers are not configured")
 		}
-		cc, resolved, err := ResolveCICapabilities(ctx, reg, s.Owner.Credentials, repo, s.SandboxName, event, trustedSchedule, ids)
+		cc, resolved, err := ResolveCICapabilities(ctx, reg, s.Owner.Credentials, repo, s.SandboxName, event, trustedSchedule, ids, withholdEventGated)
 		if err != nil {
 			return err
 		}
@@ -1012,8 +1012,8 @@ func (s *CiSandbox) prepareJob(ctx context.Context, repo model.RepoRef, ref stri
 	return orchestrator.ApplyCapabilityPlacements(ctx, root, placer, placements)
 }
 
-func (s *CiSandbox) readoptJob(ctx context.Context, repo model.RepoRef, event ci.Event, trustedSchedule bool, ids []string) error {
-	if err := s.registerWithProxy(ctx, repo, event, trustedSchedule, ids); err != nil {
+func (s *CiSandbox) readoptJob(ctx context.Context, repo model.RepoRef, event ci.Event, trustedSchedule bool, ids []string, withholdEventGated ...bool) error {
+	if err := s.registerWithProxy(ctx, repo, event, trustedSchedule, ids, withholdEventGated...); err != nil {
 		return err
 	}
 	if s.Owner.Scopes != nil {
@@ -1049,7 +1049,7 @@ func (s *CiSandbox) readoptJob(ctx context.Context, repo model.RepoRef, event ci
 	if reg == nil {
 		return errors.New("CI capability providers are not configured")
 	}
-	_, resolved, err := ResolveCICapabilities(ctx, reg, s.Owner.Credentials, repo, s.SandboxName, event, trustedSchedule, ids)
+	_, resolved, err := ResolveCICapabilities(ctx, reg, s.Owner.Credentials, repo, s.SandboxName, event, trustedSchedule, ids, withholdEventGated...)
 	if err != nil {
 		return err
 	}
@@ -1079,8 +1079,8 @@ func (s *CiSandbox) readoptJob(ctx context.Context, repo model.RepoRef, event ci
 // single-tenant reset is the deployment (stage 1 keeps the deployment's
 // git connections on that team's row, and stage 4c gave CI runs no team
 // of their own).
-func (s *CiSandbox) registerWithProxy(ctx context.Context, repo model.RepoRef, event ci.Event, trustedSchedule bool, ids []string) error {
-	if ciHoldsRepoAccess(s.Owner.Capabilities, event, trustedSchedule, ids) {
+func (s *CiSandbox) registerWithProxy(ctx context.Context, repo model.RepoRef, event ci.Event, trustedSchedule bool, ids []string, withholdEventGated ...bool) error {
+	if ciHoldsRepoAccess(s.Owner.Capabilities, event, trustedSchedule, ids, withholdEventGated...) {
 		if s.Owner.TeamGitCredential != nil {
 			for _, target := range ciRepoAccessTargets(repo, ids) {
 				if _, err := s.Owner.TeamGitCredential(ctx, model.DefaultTeamID, target.Owner, target.Name); err != nil {
@@ -1103,7 +1103,8 @@ func (s *CiSandbox) registerWithProxy(ctx context.Context, repo model.RepoRef, e
 // event gate admits this run (resolveCICapabilities applies the same
 // gate, so an untrusted run's declared write is never granted and is
 // not counted here).
-func ciHoldsRepoAccess(capabilities func() *model.CapabilityRegistry, event ci.Event, trustedSchedule bool, ids []string) bool {
+func ciHoldsRepoAccess(capabilities func() *model.CapabilityRegistry, event ci.Event, trustedSchedule bool, ids []string, withholdEventGated ...bool) bool {
+	withhold := len(withholdEventGated) > 0 && withholdEventGated[0]
 	var reg *model.CapabilityRegistry
 	for _, id := range ids {
 		if _, ok := model.RepoReadTarget(id); ok {
@@ -1123,9 +1124,10 @@ func ciHoldsRepoAccess(capabilities func() *model.CapabilityRegistry, event ci.E
 		if !ok {
 			continue
 		}
-		if events, ok := provider.(model.CIEventCapability); ok && !events.SupportsCIEvent(string(event)) &&
-			!ciTrustedScheduleAdmits(provider, event, trustedSchedule) {
-			continue
+		if events, ok := provider.(model.CIEventCapability); ok {
+			if withhold || (!events.SupportsCIEvent(string(event)) && !ciTrustedScheduleAdmits(provider, event, trustedSchedule)) {
+				continue
+			}
 		}
 		return true
 	}
@@ -1191,7 +1193,8 @@ func CiScarceCapability(capabilities func() *model.CapabilityRegistry) func(stri
 // context names none, which reads as the deployment wherever a team is
 // still asked for.
 func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, credentials model.CredentialResolver,
-	repo model.RepoRef, runID string, event ci.Event, trustedSchedule bool, ids []string) (model.CapabilityContext, []model.GrantResolution, error) {
+	repo model.RepoRef, runID string, event ci.Event, trustedSchedule bool, ids []string, withholdEventGated ...bool) (model.CapabilityContext, []model.GrantResolution, error) {
+	withhold := len(withholdEventGated) > 0 && withholdEventGated[0]
 	now := time.Now().UTC()
 	cc := model.CapabilityContext{
 		Task: model.Task{Target: &repo}, Run: model.Run{ID: runID, Sandbox: runID, StartedAt: now},
@@ -1221,9 +1224,10 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 		if !provider.Spec().SupportsCI() {
 			return cc, nil, fmt.Errorf("capability %q is not supported for CI", id)
 		}
-		if events, ok := provider.(model.CIEventCapability); ok && !events.SupportsCIEvent(string(event)) &&
-			!ciTrustedScheduleAdmits(provider, event, trustedSchedule) {
-			continue
+		if events, ok := provider.(model.CIEventCapability); ok {
+			if withhold || (!events.SupportsCIEvent(string(event)) && !ciTrustedScheduleAdmits(provider, event, trustedSchedule)) {
+				continue
+			}
 		}
 		cc.Task.Grants = append(cc.Task.Grants, model.Grant{Capability: id, Via: model.GrantByDefault})
 	}
@@ -2812,6 +2816,9 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 				Commit:          run.Commit,
 				Event:           run.Event,
 				TrustedSchedule: plan.Request.TrustedSchedule,
+				// A run started with event-gated capabilities withheld
+				// keeps them withheld when its job is readopted.
+				WithholdEventGated: plan.Request.WithholdEventGated,
 				// Narrowed to this job exactly as runJob narrowed the
 				// request its sandbox was acquired with: the run's whole
 				// set would hand a readopted job repository scopes (and
