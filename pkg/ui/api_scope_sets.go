@@ -63,6 +63,50 @@ type DeleteAPIScopeSetRequest struct {
 	Name string `json:"name"`
 }
 
+// APIScopeSetUsage is GET /api/api-scope-sets/usage: each set in effect
+// with every holder of a grant of it, api:<name> or api:<name>@<repo>,
+// so Settings can say what removing it takes away before it does. A set
+// nothing grants is listed with no holders.
+type APIScopeSetUsage struct {
+	Name    string                  `json:"name"`
+	Holders []CapabilityGrantHolder `json:"holders"`
+}
+
+// apiGrantSetName is the scope set or preset an api grant names, without
+// its @repo, or "" for a grant that is not an api grant.
+func apiGrantSetName(grant string) string {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(grant), model.APIGrantPrefix)
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(rest, "@")
+	return name
+}
+
+// APIScopeSetUsage lists who holds each set in effect.
+func (c *Client) APIScopeSetUsage(ctx context.Context) ([]APIScopeSetUsage, error) {
+	if c.Store == nil {
+		return nil, errors.New("this server has no store to read grants from")
+	}
+	sets := model.APIScopeSetsInEffect()
+	out := make([]APIScopeSetUsage, len(sets))
+	index := make(map[string]int, len(sets))
+	for i, set := range sets {
+		out[i] = APIScopeSetUsage{Name: set.Name, Holders: []CapabilityGrantHolder{}}
+		index[set.Name] = i
+	}
+	holders, err := c.grantHolders(ctx, func(g string) bool { return apiGrantSetName(g) != "" })
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range holders {
+		if i, ok := index[apiGrantSetName(h.Grant)]; ok {
+			out[i].Holders = append(out[i].Holders, h)
+		}
+	}
+	return out, nil
+}
+
 // APIScopeSets lists the sets in effect.
 func (c *Client) APIScopeSets(ctx context.Context) APIScopeSetsResponse {
 	out := APIScopeSetsResponse{Path: APIScopeSetsFile, Sets: []APIScopeSetRow{}}
@@ -114,6 +158,15 @@ func (c *Client) DeleteAPIScopeSet(ctx context.Context, name string) error {
 
 func (s *Server) handleListAPIScopeSets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.tasks.APIScopeSets(r.Context()))
+}
+
+func (s *Server) handleAPIScopeSetUsage(w http.ResponseWriter, r *http.Request) {
+	out, err := s.tasks.APIScopeSetUsage(r.Context())
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handlePutAPIScopeSet(w http.ResponseWriter, r *http.Request) {

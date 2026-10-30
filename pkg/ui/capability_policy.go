@@ -122,7 +122,7 @@ func (c *Client) PreviewCapabilityPolicy(ctx context.Context, next model.Capabil
 		configured = cfg.MCPServers
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
-	holders, err := c.capabilityGrantHolders(ctx)
+	holders, err := c.grantHolders(ctx, model.IsCapabilityRef)
 	if err != nil {
 		return CapabilityPolicyPreview{}, err
 	}
@@ -157,7 +157,7 @@ func (c *Client) CapabilityServerUsage(ctx context.Context) ([]CapabilityServerU
 	for id := range configured {
 		byID[id] = &CapabilityServerUsage{ID: id, Holders: []CapabilityGrantHolder{}}
 	}
-	holders, err := c.capabilityGrantHolders(ctx)
+	holders, err := c.grantHolders(ctx, model.IsCapabilityRef)
 	if err != nil {
 		return nil, err
 	}
@@ -194,16 +194,17 @@ func capabilityGrantServer(g string) string {
 	return ref
 }
 
-// capabilityGrantHolders gathers every capability reference grant on an
-// open task, a template, a schedule, and a job of a workflow declared in
-// Settings, each with the runs it is held by (model.CapabilitySubject),
-// sorted by kind and id. A repository's own .grain/workflows files are
-// not read: they live in the repository, not in this deployment.
-func (c *Client) capabilityGrantHolders(ctx context.Context) ([]CapabilityGrantHolder, error) {
+// grantHolders gathers every grant keep admits -- model.IsCapabilityRef
+// for capability references -- on an open task, a template, a schedule,
+// and a job of a workflow declared in Settings, each with the runs it is
+// held by (model.CapabilitySubject), sorted by kind and id. A
+// repository's own .grain/workflows files are not read: they live in the
+// repository, not in this deployment.
+func (c *Client) grantHolders(ctx context.Context, keep func(string) bool) ([]CapabilityGrantHolder, error) {
 	var out []CapabilityGrantHolder
 	addGrants := func(kind, id, name string, repo *model.RepoRef, grants []model.Grant, subjects []model.CapabilitySubject) {
 		for _, g := range grants {
-			if !model.IsCapabilityRef(g.Capability) {
+			if !keep(g.Capability) {
 				continue
 			}
 			h := CapabilityGrantHolder{Kind: kind, ID: id, Name: name, Grant: g.Capability, subjects: subjects}

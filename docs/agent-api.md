@@ -284,7 +284,9 @@ a person.
 **Granting.** Merging grants nothing. A set reaches a task only through
 an `api:<name>` grant (or `{capability: api, with: {set: <name>}}`),
 which goes through admission and capability policy like any other
-grant. A set that requires a person makes its grant dangerous, so an
+grant. A grant `api:<name>@<repo>` naming a repository none of a
+repo-limited set's scopes reach would grant nothing, so it is refused
+when it is granted. A set that requires a person makes its grant dangerous, so an
 agent can never pass it on. The pickers' Grain API group lists declared
 sets after the presets, each with its resolved scopes, so the operator
 sees what a grant hands out before granting it. `grain mcpserver`, which
@@ -295,7 +297,12 @@ grant written out as the scope grants it resolves to
 **Routes.** `GET /api/api-scope-sets` (`capabilities:read`) lists every
 set in effect with its source, resolved scopes and requires-person flag.
 `PUT /api/api-scope-sets` and `POST /api/api-scope-sets/delete`
-(`capabilities:admin`) write a declared set. Because a set is granted by
+(`capabilities:admin`) write a declared set. `GET
+/api/api-scope-sets/usage` (`capabilities:read`) lists, for each set in
+effect, every open task, template, schedule and Settings workflow job
+holding `api:<name>` or `api:<name>@<repo>`; Settings shows that list
+and asks for confirmation before it removes a set, since every one of
+those grants then grants nothing. Because a set is granted by
 name and resolved when it is used, writing one is granting what it
 resolves to to every task holding it: an agent's `PUT` is held to the
 same rules as any other grant (see Policy below) -- every scope the set
