@@ -472,4 +472,16 @@ func TestDeployGKETerraformModule(t *testing.T) {
 	iapTF := stripComments(read(t, "deploy", "gke", "terraform", "iap.tf"))
 	contains(t, iapTF, "google_iap_web_backend_service_iam_member")
 	absent(t, iapTF, "google_iap_web_iam_member ")
+	// The IAP OAuth Admin API behind google_iap_brand/google_iap_client was
+	// shut down on 2026-03-19, so the module must not create either; a custom
+	// client comes in through iap_client_id/iap_client_secret instead.
+	absent(t, iapTF, "google_iap_brand")
+	absent(t, iapTF, "google_iap_client")
+	contains(t, vars, `variable "iap_client_id"`)
+	contains(t, vars, `variable "iap_client_secret"`)
+	absent(t, vars, `variable "create_iap_brand"`)
+	absent(t, vars, `variable "iap_support_email"`)
+	exampleTFVars := stripComments(read(t, "deploy", "gke", "terraform", "example.tfvars"))
+	absent(t, exampleTFVars, "create_iap_brand")
+	absent(t, exampleTFVars, "iap_support_email")
 }

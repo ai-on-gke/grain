@@ -49,6 +49,8 @@ Every option can be supplied either as a CLI flag or in a `--config <path>` envi
 | `--use-terraform` | `GRAIN_GKE_USE_TERRAFORM` | `false` | Provision GCP infrastructure through `deploy/gke/terraform` before applying manifests. |
 | `--dry-run` | — | `false` | Print every command and action without modifying any GCP, Kubernetes, or host state. |
 
+**IAP OAuth client.** By default IAP uses a Google-managed OAuth client and nothing has to be created. For a client of your own, create it in the console (Google Auth Platform -> Clients) and pass it with `--iap-client-id`/`--iap-client-secret-file`, or the Terraform module's `iap_client_id`/`iap_client_secret`. The module no longer has `create_iap_brand`/`iap_support_email`: the `google_iap_brand` and `google_iap_client` resources wrap the IAP OAuth Admin API, which Google shut down on 2026-03-19. A state that still holds them from an earlier apply should drop them with `terraform state rm 'google_iap_client.grain[0]' 'google_iap_brand.grain[0]'` rather than let Terraform try to delete them through that API.
+
 ---
 
 ## Step-by-Step Workflow

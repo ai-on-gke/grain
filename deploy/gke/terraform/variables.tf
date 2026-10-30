@@ -164,26 +164,14 @@ variable "iap_backend_services" {
   default     = []
 }
 
-variable "create_iap_brand" {
-  description = "Whether to create the project's OAuth consent screen brand and IAP OAuth client via Terraform."
-  type        = bool
-  default     = false
-}
-
-variable "iap_support_email" {
-  description = "Support email address for the IAP OAuth brand when create_iap_brand is true."
-  type        = string
-  default     = ""
-}
-
 variable "iap_client_id" {
-  description = "Existing IAP OAuth 2.0 client ID when create_iap_brand is false."
+  description = "Optional custom IAP OAuth 2.0 client ID, created in the console. Leave empty to use the Google-managed IAP OAuth client."
   type        = string
   default     = ""
 }
 
 variable "iap_client_secret" {
-  description = "Existing IAP OAuth 2.0 client secret when create_iap_brand is false (prefer passing viaSecret Manager or kubectl secret outside Terraform state)."
+  description = "Secret for iap_client_id, when set (prefer passing via Secret Manager or kubectl secret outside Terraform state)."
   type        = string
   default     = ""
   sensitive   = true
