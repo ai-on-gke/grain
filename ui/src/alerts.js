@@ -371,7 +371,10 @@ export function collectAlerts(config, zone = "", tasks = []) {
         "This deployment's reconcile loop has stopped -- no tasks are being dispatched or checked. Restart the daemon to recover.",
       scope: { kind: "deployment" },
       impact: "No task is dispatched or checked until the daemon restarts.",
-      actions: [],
+      // The restart it asks for is System → Power's "Restart grain";
+      // without this the alert named the fix and left the reader to
+      // find where it lives.
+      actions: [{ kind: "open-power", label: "Power" }],
     });
   }
 
