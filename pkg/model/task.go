@@ -244,6 +244,20 @@ func (r RepoRef) Same(other RepoRef) bool {
 		r.OffDefaultHost() == other.OffDefaultHost()
 }
 
+// SameRepoText reports whether two written repositories name the same
+// one: parsed and compared with Same where both parse (so
+// git@host:owner/name, https://host/owner/name.git and host/owner/name
+// are one repository however they are cased), and compared as text,
+// case-insensitively, where either does not.
+func SameRepoText(a, b string) bool {
+	ra, errA := ParseRepo(a)
+	rb, errB := ParseRepo(b)
+	if errA != nil || errB != nil {
+		return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+	}
+	return ra.Same(rb)
+}
+
 // ParseRepo reads the written form of a repository: owner/name, or
 // host/owner/name for one on a git host other than the default. A first
 // segment containing a dot or a colon is a host -- GitHub owners can

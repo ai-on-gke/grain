@@ -1641,16 +1641,16 @@ func (c *HTTPClient) ResumePipeline(ctx context.Context) (
 // approve|reject vX.Y.0`: a person approving or rejecting a pending trunk
 // release.
 func (c *HTTPClient) DecideRelease(ctx context.Context, repo, version string, approve bool) (ReleaseDecision, error) {
-	owner, name, ok := strings.Cut(repo, "/")
-	if !ok {
-		return ReleaseDecision{}, fmt.Errorf("repo %q is not owner/name", repo)
+	ref, err := model.ParseRepo(repo)
+	if err != nil {
+		return ReleaseDecision{}, err
 	}
 	verb := "reject"
 	if approve {
 		verb = "approve"
 	}
 	var resp ReleaseDecision
-	err := c.do(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name)+
+	err = c.do(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(ref.StoredOwner())+"/"+url.PathEscape(ref.Name)+
 		"/pending-releases/"+url.PathEscape(version)+"/"+verb, nil, &resp)
 	return resp, err
 }

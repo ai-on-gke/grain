@@ -39,6 +39,18 @@ one). The daemon's gate then:
    task, a note in that task's conversation, signed by grain on behalf of
    the run.
 
+A repository off the default git host is `host/owner/name`. In a
+`/api/repos/{owner}/{name}/...` path its `{owner}` is `host/owner`
+escaped into one segment, as the UI writes it:
+`/api/repos/git.forge.example%2Fexperimental/grain/releases`. The
+unescaped `/api/repos/<host>/<owner>/<name>/...` is read as that same
+route when no other matches (a first segment holding a `.` or a `:` is
+a host, as `model.ParseRepo` reads one). The gate reads every
+repository a call names -- in its path, a `repo` in its body, or a
+`?repo=` -- the way the deployment spells it, so an SSH remote, a URL
+or another capitalisation matches the grant naming that repository.
+Text that is not a repository is refused with 400.
+
 The header can only narrow a request. A request without it is whatever
 the access gate already let in, so anyone able to send the header could
 also have left it off.

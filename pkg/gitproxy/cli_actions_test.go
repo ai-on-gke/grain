@@ -722,3 +722,38 @@ func TestCLIWaitEndsRunningWhenDaemonShutdownStarts(t *testing.T) {
 		t.Errorf("answer = %+v, want status=running with resume_run_id=run-new", resp)
 	}
 }
+
+// TestAPIForwardKeepsAnEscapedSlash is a host-qualified repository's
+// route reached through the sandbox proxy: /api/repos/<host>%2F<owner>/
+// <name>/... reaches the agent API with the %2F still one {owner}
+// segment, not three segments no route matches.
+func TestAPIForwardKeepsAnEscapedSlash(t *testing.T) {
+	gitproxy.LogToTest(t)
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-1": "tok-1"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owner, name string
+	api := http.NewServeMux()
+	api.HandleFunc("GET /api/repos/{owner}/{name}/x", func(w http.ResponseWriter, r *http.Request) {
+		owner, name = r.PathValue("owner"), r.PathValue("name")
+	})
+	h := gitproxy.NewHandler(&gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: ci.NewRunStore(10)},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-1": {TaskID: "7", RunID: "run-a", TaskRepo: "h.example/o/n", TaskBranch: "grain/task-7"},
+		}},
+		API: api,
+	})
+	rec := send(h, http.MethodGet, "tok-1", "/api/repos/h.example%2Fo/n/x", "")
+	if rec.Code != http.StatusOK || owner != "h.example/o" || name != "n" {
+		t.Errorf("GET /api/repos/h.example%%2Fo/n/x: %d %s, owner=%q name=%q; want 200, owner h.example/o, name n",
+			rec.Code, rec.Body, owner, name)
+	}
+}
