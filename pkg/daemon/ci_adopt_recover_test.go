@@ -35,7 +35,7 @@ func (s *unlistableRunStore) LiveRuns(context.Context) ([]ci.Run, error) {
 	return nil, errors.New("database is locked")
 }
 
-func (s *unlistableRunStore) RecoverInterruptedExcept(_ context.Context, _ time.Time, keep []string) (int, error) {
+func (s *unlistableRunStore) RecoverUnattachable(_ context.Context, _ time.Time, keep []string) (int, error) {
 	s.recovered++
 	s.kept = keep
 	return 1, nil
@@ -54,6 +54,6 @@ func TestAdoptCIRunsStillRecoversWhenLiveRunsCannotBeListed(t *testing.T) {
 		t.Fatalf("adopted %v, lost %v; want neither", adopted, lost)
 	}
 	if runs.recovered != 1 || len(runs.kept) != 0 {
-		t.Fatalf("RecoverInterruptedExcept called %d time(s) keeping %v; want once, keeping none", runs.recovered, runs.kept)
+		t.Fatalf("RecoverUnattachable called %d time(s) keeping %v; want once, keeping none", runs.recovered, runs.kept)
 	}
 }

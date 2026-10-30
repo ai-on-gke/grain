@@ -327,7 +327,7 @@ const DefaultStoredRunTimeout = 10 * time.Second
 // NewStoredRunStore returns a RunStore backed by store.
 //
 // It does not recover interrupted runs by itself -- see
-// RecoverInterrupted, which a daemon calls once at startup and which is
+// RecoverUnattachable, which a daemon calls once at startup and which is
 // separate precisely because it is a decision about a *previous*
 // process's runs, not something a constructor should be doing behind a
 // caller's back.
@@ -363,6 +363,11 @@ func (s *StoredRunStore) ctx() (context.Context, context.CancelFunc) {
 	// finished must not be cancelled because whoever asked for the run
 	// has since closed their browser.
 	return context.WithTimeout(context.Background(), s.timeout)
+}
+
+// bound is ctx, cut to the store's own timeout.
+func (s *StoredRunStore) bound(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, s.timeout)
 }
 
 func (s *StoredRunStore) logf(format string, args ...any) {
@@ -728,31 +733,66 @@ func (s *StoredRunStore) LiveRuns(ctx context.Context) ([]Run, error) {
 	return out, nil
 }
 
-// RecoverInterrupted resolves the runs a previous process left in
-// flight, and reports how many there were.
+// RecoverUnattachable resolves the runs a previous process left in
+// flight that nothing could reattach, and reports how many there were.
 //
-// Called once at startup, before anything reads a run back. A run with
-// no conclusion means "still going", which was self-evidently true of an
-// in-memory store and is not true of a stored one: nothing is running
-// those jobs any more, and left alone such a row would deduplicate a
-// fresh request against a dead run (Live) and leave the task waiting on
-// it waiting forever (orchestrator.collectCIRun).
+// Called once at startup, after the adoption pass (daemon.AdoptCIRuns) has
+// reattached what it could and before anything reads a run back. A run
+// with no conclusion means "still going", which was self-evidently true
+// of an in-memory store and is not true of a stored one: nothing is
+// running those jobs any more, and left alone such a row would
+// deduplicate a fresh request against a dead run (Live) and leave the
+// task waiting on it waiting forever (orchestrator.collectCIRun).
 //
-// They are stamped cancelled-and-interrupted rather than deleted. What a
-// daemon was in the middle of when it stopped is worth being able to
-// look at -- it is one of the two things this whole store exists for --
-// and Run.Interrupted is what tells the reconciler to run the branch
-// again rather than to treat the cancellation as a verdict. A run a
-// restarted daemon readopted (daemon.AdoptCIRuns) is still going, and is
-// spared through RecoverInterruptedExcept.
-func (s *StoredRunStore) RecoverInterrupted(ctx context.Context, now time.Time) (int, error) {
-	return s.RecoverInterruptedExcept(ctx, now, nil)
+// attached names the runs the adoption pass took back -- every run with
+// a step to reattach by exec id, or a readopted sandbox whose step runner
+// is still there (docs/design/grain-on-gke.md#GKE-4) -- and those are
+// still going. What is left has nothing to attach: a run that was queued
+// and had no sandbox yet, or one on a backend that cannot give a sandbox
+// back. Those are stamped cancelled-and-interrupted rather than deleted.
+// What a daemon was in the middle of when it stopped is worth being able
+// to look at, and Run.Interrupted is what tells the reconciler to run the
+// branch again rather than to treat the cancellation as a verdict.
+func (s *StoredRunStore) RecoverUnattachable(ctx context.Context, now time.Time, attached []string) (int, error) {
+	return s.store.RecoverInterruptedCIRunsExcept(ctx, string(ConclusionCancelled), InterruptedRunError, now, attached)
 }
 
-// RecoverInterruptedExcept marks unconcluded runs not in keepRunIDs as
-// cancelled and interrupted.
-func (s *StoredRunStore) RecoverInterruptedExcept(ctx context.Context, now time.Time, keepRunIDs []string) (int, error) {
-	return s.store.RecoverInterruptedCIRunsExcept(ctx, string(ConclusionCancelled), InterruptedRunError, now, keepRunIDs)
+// PutStepAttachment implements StepAttachments: it records where a running
+// step's exec stands, so a restart can reattach it.
+func (s *StoredRunStore) PutStepAttachment(ctx context.Context, a StepAttachment) error {
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
+	return s.store.PutCIStepAttachment(ctx, model.CIStepAttachment{
+		RunID: a.RunID, JobID: a.JobID, StepID: a.StepID, Sandbox: a.Sandbox,
+		ExecID: a.ExecID, Cursor: a.Cursor, UpdatedAt: s.now(),
+	})
+}
+
+// ClearStepAttachments implements StepAttachments: a job done with its
+// sandbox has nothing left to reattach.
+func (s *StoredRunStore) ClearStepAttachments(ctx context.Context, runID, jobID string) error {
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
+	return s.store.DeleteCIStepAttachments(ctx, runID, jobID)
+}
+
+// StepAttachments returns what run's steps were last attached to, for the
+// adoption pass after a restart.
+func (s *StoredRunStore) StepAttachments(ctx context.Context, runID string) ([]StepAttachment, error) {
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
+	stored, err := s.store.CIStepAttachments(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]StepAttachment, 0, len(stored))
+	for _, a := range stored {
+		out = append(out, StepAttachment{
+			RunID: a.RunID, JobID: a.JobID, StepID: a.StepID, Sandbox: a.Sandbox,
+			ExecID: a.ExecID, Cursor: a.Cursor,
+		})
+	}
+	return out, nil
 }
 
 // storedRun is a Run as the store keeps it: the same facts, with pkg/ci's

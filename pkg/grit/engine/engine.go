@@ -144,6 +144,16 @@ type Engine struct {
 	// steps, or automatic retries, and records jobs that fail in the
 	// shutdown window as interrupted rather than errored or failed.
 	Stopping <-chan struct{}
+	// Attachments, when set, is where each running step's exec id and
+	// output cursor are kept, so a grain that restarts mid-step can
+	// reattach the step rather than interrupt its run
+	// (docs/design/grain-on-gke.md#GKE-4). nil keeps nothing: a restart
+	// can then only rerun the step through its in-sandbox step runner.
+	Attachments StepAttachments
+	// AttachmentCheckpoint is how often a running step's cursor is
+	// written to Attachments while it moves. Zero means
+	// DefaultAttachmentCheckpoint.
+	AttachmentCheckpoint time.Duration
 
 	// flightMu and inFlight coalesce concurrent cacheable executions of the
 	// same job Key across runs on this Engine.
@@ -236,6 +246,17 @@ func (e *Engine) withStoppingCancel(parent context.Context) (context.Context, co
 type AdoptedJob struct {
 	Job     workflows.JobRun
 	Sandbox gritsteps.Sandbox
+	// Attachment, when set, is the stored exec of the step that was
+	// running when grain stopped: that step is reattached by its exec id
+	// from its cursor rather than started again
+	// (docs/design/grain-on-gke.md#GKE-4).
+	Attachment *StepAttachment
+	// Lost, when set, is why the job's sandbox did not come back across
+	// the restart. Sandbox is then nil, and the step that was running ends
+	// with sandboxaccess.ErrChannelLost: the job errors with
+	// ChannelLostFaultPrefix and goes the infra way, re-run uncached,
+	// instead of its run being stamped interrupted.
+	Lost error
 }
 
 func (e *Engine) claimFlight(key workflows.Key, runID string) (flight *jobFlight, mine bool) {
@@ -1010,8 +1031,14 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		jobCtx, cancel = context.WithTimeout(ctx, remaining)
 		defer cancel()
 		sandbox = adopted.Sandbox
+		if adopted.Lost != nil || sandbox == nil {
+			name := result.Sandbox
+			sandbox = lostSandbox{name: name, err: lostErr(name, adopted.Lost)}
+			e.log("ci: run %s: job %s: sandbox %s did not come back across the restart: %v", runID, pj.ID, name, adopted.Lost)
+		} else {
+			e.log("ci: run %s: job %s: resumed in sandbox %s", runID, pj.ID, sandbox.Name())
+		}
 		result.Sandbox = sandbox.Name()
-		e.log("ci: run %s: job %s: resumed in sandbox %s", runID, pj.ID, sandbox.Name())
 	} else {
 		if e.stopping(ctx) {
 			return NewJobRun(pj)
@@ -1064,9 +1091,11 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		}
 	}
 	activeSandbox := sandbox
+	attacher := e.attacherFor(runID, pj.ID, sandbox, adopted)
 	defer func() {
 		if activeSandbox != nil {
 			releaseSandbox(activeSandbox)
+			attacher.clear(ctx)
 		}
 	}()
 	if adopted == nil && e.stopping(ctx) {
@@ -1076,7 +1105,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 	// Run steps in initial (or readopted) sandbox
 	initialAttempt := len(result.Attempts) + 1
 	attempt1StartedAt := result.StartedAt
-	e.runSteps(ctx, newJobClock(jobCtx, pj.Job), plan, pj, sandbox, initialAttempt, &result, progress)
+	e.runSteps(ctx, newJobClock(jobCtx, pj.Job), plan, pj, sandbox, initialAttempt, &result, progress, attacher)
 	if IsDetaching(ctx) && result.Conclusion == "" {
 		activeSandbox = nil
 		keepLeaseOnDetach = true
@@ -1197,7 +1226,8 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			progress(jobRunSnapshot(result))
 		}
 
-		e.runSteps(ctx, newJobClock(retryCtx, pj.Job), plan, pj, sandbox2, 2, &result, progress)
+		attacher = e.attacherFor(runID, pj.ID, sandbox2, nil)
+		e.runSteps(ctx, newJobClock(retryCtx, pj.Job), plan, pj, sandbox2, 2, &result, progress, attacher)
 		if IsDetaching(ctx) && result.Conclusion == "" {
 			activeSandbox = nil
 			keepLeaseOnDetach = true
@@ -1477,7 +1507,7 @@ const sandboxReleaseTimeout = 2 * time.Minute
 // the miss, the slow rebuild it forced, the registry that would not
 // answer, the credential the warm did not have -- is an infrastructure
 // condition, and an infrastructure condition is ConclusionErrored.
-func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.Plan, pj workflows.PlannedJob, sandbox gritsteps.Sandbox, attempt int, result *workflows.JobRun, progress func(workflows.JobRun)) {
+func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.Plan, pj workflows.PlannedJob, sandbox gritsteps.Sandbox, attempt int, result *workflows.JobRun, progress func(workflows.JobRun), attacher *stepAttacher) {
 	var (
 		failed bool
 		// cancelled is the run ending under this job, or the job spending
@@ -1540,13 +1570,17 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 		// back to the job afterwards.
 		stepCtx, spent := clock.bound(ctx, pj.Job, step)
 		started := e.now()
+		stepID := gritsteps.StepIDFor(attempt, i)
+		attach, attached := attacher.forStep(ctx, stepID)
 		out, err := e.execStep(stepCtx, sandbox, gritsteps.Command{
 			Script:  step.Run,
 			Dir:     step.WorkingDirectory,
 			Env:     stepEnv(plan, pj, step),
 			Timeout: stepTimeout(stepCtx, step),
-			StepID:  gritsteps.StepIDFor(attempt, i),
+			StepID:  stepID,
+			Attach:  attach,
 		}, jobRunSnapshot(*result), progress)
+		attached()
 		// Read before the bound is released, since releasing it cancels
 		// the context and would make every expiry look the same. Also
 		// check the wall-clock deadline directly in case the guest-side
