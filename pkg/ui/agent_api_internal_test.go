@@ -883,6 +883,39 @@ func TestAgentGrantRefusalComparesGrants(t *testing.T) {
 	}
 }
 
+// A scope set limited to some repositories grants its scopes on those
+// alone, so a task holding it may pass it on, and one holding the same
+// scopes only on another repository may not. The 2026-10-28 walkthrough
+// (docs/test-runs/2026-10-28-unified-grants-scope-sets.md) found the
+// first refused: the check read the grant's own @repo, which a set
+// granted by name never has.
+func TestAgentMayPassOnARepoLimitedScopeSetItHolds(t *testing.T) {
+	if err := model.InstallAPIScopeSets([]model.APIScopeSet{{
+		Name: "walk-readers", Scopes: []string{"tasks:read", "ci:read"}, Repos: []string{"acme/widgets"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+	for _, c := range []struct {
+		held []string
+		name string
+		ok   bool
+	}{
+		{[]string{"api:walk-readers"}, "api:walk-readers", true},
+		{[]string{"api:walk-readers"}, "api:walk-readers@acme/widgets", true},
+		{[]string{"api:tasks:read@acme/widgets", "api:ci:read@acme/widgets"}, "api:walk-readers", true},
+		{[]string{"api:tasks:read@acme/gadgets", "api:ci:read@acme/gadgets"}, "api:walk-readers", false},
+		{[]string{"api:tasks:read@acme/widgets"}, "api:walk-readers", false},
+		{[]string{"api:walk-readers"}, "api:tasks:read", false},
+		{[]string{"api:walk-readers"}, "api:grain/ci-read", false},
+	} {
+		err := agentGrantRefusal(c.held, c.name, nil)
+		if (err == nil) != c.ok {
+			t.Errorf("holding %v, agentGrantRefusal(%q) = %v, want allowed %v", c.held, c.name, err, c.ok)
+		}
+	}
+}
+
 // priority-dispatch lets a task jump the queue, so an agent cannot grant
 // it -- not even one whose own task holds it (the pipeline steward).
 func TestAnAgentCannotGrantPriorityDispatchEvenHoldingIt(t *testing.T) {

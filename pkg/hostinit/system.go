@@ -214,6 +214,13 @@ func mergeEnv(base, overrides []string) []string {
 	return append(out, overrides...)
 }
 
+// localAPITokenFileEnv and localAPITokenFileName are pkg/ui's
+// LocalAPITokenFileEnv and LocalAPITokenFileName.
+const (
+	localAPITokenFileEnv  = "GRAIN_LOCAL_API_TOKEN_FILE"
+	localAPITokenFileName = "local-api-token"
+)
+
 // withLocalAPIToken adds the daemon's local API token to a request for
 // a loopback address, when $GRAIN_LOCAL_API_TOKEN_FILE names one this
 // process can read (cmd/grain's init sets it to -data-dir's): what lets
@@ -222,7 +229,7 @@ func mergeEnv(base, overrides []string) []string {
 // two names are spelled out here rather than imported so this package
 // keeps out of pkg/ui.
 func withLocalAPIToken(req *http.Request) {
-	path := strings.TrimSpace(os.Getenv("GRAIN_LOCAL_API_TOKEN_FILE"))
+	path := strings.TrimSpace(os.Getenv(localAPITokenFileEnv))
 	if path == "" || req.Header.Get("Authorization") != "" {
 		return
 	}

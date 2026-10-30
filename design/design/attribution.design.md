@@ -1,8 +1,11 @@
 # Attribution: crediting the people behind a change
 
-`contributions.design.md` defines how work flows through this repository: human-written design docs, agent-written specifications that humans review, agent-written task grainfiles that humans audit, and autonomous implementation PRs, with clarifications raised as PRs against the design folder. It leaves attribution to a second design. This is that design. The goal is that the people who shaped a change are credited on every implementation PR that comes out of it and on the merged commit. That covers PMs, engineers, and reviewers whose comments changed the outcome. The doc also proposes checks that make sure this happens, not just conventions.
+`contributions.design.md` defines how work flows through this repository: human-written design docs, agent-written specifications that humans review, agent-written task grainfiles that humans audit, and implementation PRs that are either written autonomously by grain agents or opened externally and adopted by grain, with clarifications raised as PRs against the design folder. It leaves attribution to a second design. This is that design. The goal is that the people who shaped a change are credited on every implementation PR that comes out of it and on the merged commit. That covers PMs, engineers, and reviewers whose comments changed the outcome. The doc also proposes checks that make sure this happens, not just conventions.
 
-**The core rule:** contributors come only from the design-folder PRs: design, spec, tasks and clarification PRs. On those PRs, a contributor is a human author, a reviewer whose comments changed something, a person added with `/contributors`, or a commenter whose request an agent carried out. Contributors never come from the implementation (code) PRs themselves. An implementation PR's Contributors section and its `Co-authored-by:` trailers are exactly the union of the contributor sets of the design, spec and tasks PRs in its chain. The code PR's own commit authors and reviewers are not added.
+**The core rule:** contributors come from the design-folder PRs: design, spec, tasks and clarification PRs. On those PRs, a contributor is a human author, a reviewer whose comments changed something, a person added with `/contributors`, or a commenter whose request an agent carried out. How an implementation (code) PR is credited depends on which of the two implementation paths in `contributions.design.md` it came from:
+
+- **Grain-implemented code PRs** take their contributors strictly from the chain. The PR's Contributors section and its `Co-authored-by:` trailers are exactly the union of the contributor sets of the design, spec and tasks PRs in its chain. The code PR's own commit authors and reviewers are not added: they are agents, or people whose input belongs on a clarification PR.
+- **Externally authored code PRs**, opened by a person and adopted by grain, also credit the people who wrote the code. Their set is the PR's own human contributors plus the union of the chain behind any design, spec or task the PR is linked to. The PR's own contributors are its human commit authors and `Co-authored-by:` trailers, and human reviewers whose comments changed the PR. An external PR linked to nothing credits only its own contributors.
 
 ## Identity
 
@@ -18,7 +21,7 @@ Instead, every design-folder PR (design, spec, tasks, clarification, playbook) h
 - reviewers whose comments led to a change, meaning a commit pushed after the comment that addresses its thread. A review that only approves, without changing anything, does not count;
 - anything added with the commands below.
 
-Grain shows the set in a **Contributors** section of the PR description and keeps it up to date as commits and comments arrive. An implementation PR shows the derived chain union in the same section, read-only. Where a role is obvious, grain shows it next to the name: `author` for commit authors, `editor` for someone who pushed to another person's PR, and `reviewer` for someone whose comments changed the PR. Roles are never required.
+Grain shows the set in a **Contributors** section of the PR description and keeps it up to date as commits and comments arrive. An implementation PR shows the derived chain union in the same section, read-only. An adopted external PR also shows its own human contributors there, derived the same way as on a design-folder PR. Where a role is obvious, grain shows it next to the name: `author` for commit authors, `editor` for someone who pushed to another person's PR, and `reviewer` for someone whose comments changed the PR. Roles are never required.
 
 ## Adding and removing contributors by comment
 
@@ -31,7 +34,7 @@ On a **design-folder PR**, anyone with write access to the repository can adjust
 /contributors add --quality-by @oncall-handle
 ```
 
-`remove` only removes names that were added by hand. Derived contributors (commit authors, trailers, reviewers whose comments changed the PR) can't be removed this way, so a typo can't undo real credit. Grain replies on the comment with the resulting set and updates the description. Commands from people without write access, and commands from agents, get a reply explaining why they were ignored. On implementation PRs, `/contributors` is refused with a reply that points at the design-folder PRs in the chain. The one exception is `--quality-by`, which is per task (below) and so is accepted there.
+`remove` only removes names that were added by hand. Derived contributors (commit authors, trailers, reviewers whose comments changed the PR) can't be removed this way, so a typo can't undo real credit. Grain replies on the comment with the resulting set and updates the description. Commands from people without write access, and commands from agents, get a reply explaining why they were ignored. On implementation PRs, `/contributors` is refused with a reply that points at the design-folder PRs in the chain. This includes adopted external PRs: their own contributors come only from commits, trailers and comment-driven changes. The one exception is `--quality-by`, which is per task (below) and so is accepted there.
 
 ## Agents listen on design-folder PRs
 
@@ -45,6 +48,7 @@ Each stage's PR records the PR it derives from:
 - A task imported from a grainfile is linked to the tasks PR that merged that grainfile.
 - Sub-tasks an agent decomposes a task into (`propose_task`, recorded as `LinkProposedBy`) inherit their parent's chain automatically, so an agent can't drop it by forgetting to copy it.
 - An implementation PR's contributors are the **union** of the sets of the design, spec and tasks PRs in its chain. If several tasks push to one code PR, the union covers each of those tasks' chains; it does not include whoever pushed. Entries are de-duplicated by email and kept in chain order.
+- An adopted external PR gets its chain from what it is linked to when grain adopts it: the task it implements, or the spec or design it cites. Its own human contributors are listed first, followed by the chain union, de-duplicated by email. When grain dispatches a follow-up run to carry out review feedback on an external PR, the human whose comment asked for the change counts as a reviewer whose comment changed the PR. The agent that pushed the fix does not count.
 
 A clarification PR is a design-folder PR, so its contributors count. They flow into every code PR whose chain includes it. For bug-driven work, the bug issue or PR plays the design-folder role. Its contributors are whoever filed it, commented on it substantively, or tagged it into the pipeline. The contributors of a design the bug cites are not credited.
 
@@ -58,11 +62,11 @@ A repo or team can enable a separate **Quality by** credit for the person who ma
 
 ## The merge commit
 
-Grain composes the squash or merge message itself rather than relying on agents to write trailers. It recomputes the chain union at merge time and writes one `Co-authored-by:` trailer per contributor, so GitHub credits each of them. This extends what `pkg/orchestrator/takeover.go` already does for a taken-over PR's original author.
+Grain composes the squash or merge message itself rather than relying on agents to write trailers. It recomputes the chain union at merge time and writes one `Co-authored-by:` trailer per contributor, so GitHub credits each of them. For an adopted external PR the recomputed set also includes the PR's own human contributors. The commit's author stays the external PR's author, so they keep authorship on GitHub, and the trailers credit everyone else. This extends what `pkg/orchestrator/takeover.go` already does for a taken-over PR's original author.
 
 ## Making sure it happens
 
-- **Merge-queue check.** Before merging, grain checks the PR description and the final commit message against the chain union, and repairs them if anything is missing. When Quality by is enabled, the check also covers the `Quality-by:` trailers.
+- **Merge-queue check.** Before merging, grain checks the PR description and the final commit message against the chain union (plus, for an adopted external PR, its own human contributors), and repairs them if anything is missing. When Quality by is enabled, the check also covers the `Quality-by:` trailers.
 - **Derivation check.** A spec or tasks PR without a `Derived from:` link fails a check. So does a tasks PR whose link doesn't resolve to a merged spec PR.
 - **Post-merge audit.** A merged commit that still lacks a trailer for a contributor in its union is raised in the grain inbox.
 - **Durable record.** When a task completes, its completion note in the design folder links the implementation PR(s). The contributors are visible there, outside grain's DB.
@@ -73,5 +77,6 @@ Grain composes the squash or merge message itself rather than relying on agents 
 2. `/contributors add|remove` command handling, with write-access checks and replies.
 3. `Derived from:` links on spec and tasks PRs; link imported tasks to their tasks PR; inherit the chain over `LinkProposedBy`.
 4. Compose merge messages with `Co-authored-by:` trailers from the chain union, recomputed at merge.
-5. Optional Quality by: record acting on-call and backlog managers on tasks, write `Quality-by:` trailers, and add a per-repo or per-team setting.
-6. Merge-queue and derivation checks, the post-merge audit raised in the grain inbox, and completion notes that link implementation PRs.
+5. Contributor sets for adopted external PRs: derive the PR's own human contributors, resolve its chain from the task, spec or design it links to, and combine them.
+6. Optional Quality by: record acting on-call and backlog managers on tasks, write `Quality-by:` trailers, and add a per-repo or per-team setting.
+7. Merge-queue and derivation checks, the post-merge audit raised in the grain inbox, and completion notes that link implementation PRs.
