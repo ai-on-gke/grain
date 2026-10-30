@@ -83,9 +83,11 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
                                          Call one (--help lists its flags, generated from its input schema)
   grain quarantine <pkg> <test> --reason <why> [--no-follow-up]
                                          Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (quarantine-test)
-  grain metrics [<section>]              grain's own measurements (self-debug)
+  grain metrics [<section>] [--window 7d | --since <d> --until <d>]
+                                         grain's own measurements (self-debug)
   grain health                           This deployment's health (deployment-health)
-  grain log [<source>] [--tail N]        grain's own log, redacted (grain-log)
+  grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority <p>] [--contains <s>] [--lines N]
+                                         grain's own log, redacted (grain-log)
   grain playbooks [<name>]               Bootstrap playbooks (bootstrap-playbooks)
   grain issue list | grain issue read <n>
                                          GitHub issues (read-issues)
@@ -245,10 +247,11 @@ var sandboxCommandHelp = map[string]string{
 		"  --since, --until  an absolute span instead: a date or an RFC 3339 timestamp\n" +
 		"  --repo, --author  only tasks on these repositories / by these authors (repeat or comma-separate)\n",
 	"health": "grain health\n\nThis deployment's health (deploy://health). Needs deployment-health.\n",
-	"log": "grain log [<source>] [--since <rfc3339>] [--until <rfc3339>] [--min-priority err|warning|...] [--contains <text>] [--max-lines N] [--tail N]\n\n" +
+	"log": "grain log [<source> | --source daemon|dmesg] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--max-lines N] [--tail N]\n\n" +
 		"grain's own log, redacted (deploy://grain.log). Needs grain-log.\n\n" +
 		"  --since, --until  the window, as RFC 3339 timestamps (default: the latest entries)\n" +
-		"  --min-priority    least severe journald priority to return (err, warning, info, ...)\n" +
+		"  --source          which journal: daemon (the default) or dmesg (the kernel's)\n" +
+		"  --priority        least severe journald priority to return (err, warning, info, ...; alias --min-priority)\n" +
 		"  --contains        only entries containing this text (plain, case-insensitive)\n" +
 		"  --max-lines N     most entries to return (alias --lines; default 200, at most 1000)\n" +
 		"  --tail N          the last N lines of what that returns\n",
