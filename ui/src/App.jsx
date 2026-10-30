@@ -3303,6 +3303,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       onChanged={() => Promise.all([refreshConfig(), reloadNotifications()])}
       showError={showError}
       onOpenConfigRepo={() => openSettings("config-repo")}
+      onOpenPower={() => openSystem("power")}
       onOpenConnection={() => openDeploymentSettings("models")}
       onOpenSetup={({ tab, view: target }) =>
         target ? setViewAndCloseOpen(target) : openDeploymentSettings(tab)
