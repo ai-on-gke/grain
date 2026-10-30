@@ -1297,6 +1297,15 @@ const (
 // opened mid-run is the run's to deal with before it ends.
 var CLThreadsPrincipal = Principal{Kind: PrincipalAutomation, ID: "cl-review-threads"}
 
+// CapabilityChangePrincipal is who tells a task with a live run that its
+// grants changed (orchestrator's reconcileCapabilityChanges). Like
+// CLThreadsPrincipal, its comments reach a live run as addenda: a notice
+// saying the run is about to be restarted, or that a new `api:*` route
+// arrives only with the next run, is written for the run. An interactive
+// task's chat draws it as a system line rather than as a message
+// (ui/src/chat.js).
+var CapabilityChangePrincipal = Principal{Kind: PrincipalAutomation, ID: "capability-change"}
+
 // IsChange reports whether a link of kind k is the task's own change --
 // a pull request (LinkFixes) or a changelist (LinkChangelist) -- which
 // is what parks a finished task on awaiting_submit rather than on a
