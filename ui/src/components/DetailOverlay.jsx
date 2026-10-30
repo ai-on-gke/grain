@@ -731,13 +731,10 @@ export default function DetailOverlay({
             </div>
           )}
 
-          {/* And, when the queue is testing this change together with
-              others, the batch itself (grain/task-301). The line above
-              says this change is in one and how many others there are;
-              this says which others, in the order a failure is halved
-              towards, and links to the single run deciding all of them.
-              It draws nothing for a task that is not in a batch, which is
-              almost every task almost always. */}
+          {/* And, when the queue is re-checking this change on top of its
+              base branch, the re-check batch itself (grain/task-301) and a
+              link to the run deciding it. It draws nothing for a task that
+              is not in a batch, which is almost every task almost always. */}
           {/* What the repository's merge rules require of this change,
               and which rule asked (grain/task-1993). */}
           <MergePolicy t={t} />

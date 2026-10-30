@@ -366,7 +366,7 @@ func TestSeedDemoWritesADocumentLongEnoughToScroll(t *testing.T) {
 // stopped counting it in days, and a demo whose notes were all written
 // this week would show that mark to nobody.
 // TestSeedDemoMarksEveryMergeBatchMemberBatching: the queue writes the
-// batching state on every change it puts in a batch, and a task page
+// overlap re-check state on the change it re-checks, and a task page
 // draws its Merge batch panel only for a task in that state, so a member
 // the seed left without it opened from the repo page's batch list with
 // no batch on it (the 2026-10-23 repository walkthrough).
@@ -399,18 +399,22 @@ func TestSeedDemoMarksEveryMergeBatchMemberBatching(t *testing.T) {
 		t.Fatal("the demo seeds no merge batch")
 	}
 	for _, batch := range batches {
+		if len(batch.Members) != 1 {
+			t.Errorf("batch on %s %s has %d members, want 1 (single-change overlap re-check)",
+				batch.Repo, batch.Branch, len(batch.Members))
+		}
 		for i, member := range batch.Members {
 			obs, err := store.GetObservation(ctx, member.TaskID)
 			if err != nil {
 				t.Fatalf("reading task %s: %v", member.TaskID, err)
 			}
-			if obs == nil || obs.MergeQueueState != "batching" {
-				t.Errorf("batch member %d (task %s) is not batching: %+v", i, member.TaskID, obs)
+			if obs == nil || obs.MergeQueueState != "waiting_ci" || obs.MergeQueueReason != "waiting_ci/grain_running" {
+				t.Errorf("batch member %d (task %s) is not in waiting_ci/grain_running: %+v", i, member.TaskID, obs)
 				continue
 			}
-			first := strings.Contains(obs.MergeQueueNote, "first in the batch")
-			if first != (i == 0) {
-				t.Errorf("task %s at position %d: note %q", member.TaskID, i, obs.MergeQueueNote)
+			wantPrefix := "grain CI is re-checking this change on top of " + batch.Branch + " before it merges"
+			if !strings.HasPrefix(obs.MergeQueueNote, wantPrefix) {
+				t.Errorf("task %s note = %q, want prefix %q", member.TaskID, obs.MergeQueueNote, wantPrefix)
 			}
 		}
 	}
