@@ -353,7 +353,7 @@ func TestRelayProposedTasksAllowsInfraReviewCodeProposalsForSourceRepo(t *testin
 		},
 	}
 
-	if err := relayProposedTasks(ctx, store, nil, infraTask, result, now); err != nil {
+	if err := relayProposedTasks(ctx, store, nil, nil, infraTask, result, now); err != nil {
 		t.Fatalf("relayProposedTasks failed: %v", err)
 	}
 
