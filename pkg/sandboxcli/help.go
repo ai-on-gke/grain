@@ -67,7 +67,8 @@ GIT, TASK & COLLABORATION:
                                          Commit a git revert of a task's merge or of one commit
 
 TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this run's grants do not cover):
-  grain task list                        Tasks this run may read
+  grain task list [--state s] [--search t] [--limit N]
+                                         Tasks this run may read, one line each
   grain task read <id>                   A task's record
   grain task prompt <id> [--attempt N]   A task's prompt
   grain task transcript <id> [--attempt N]
@@ -217,7 +218,7 @@ var sandboxCommandHelp = map[string]string{
 	"handover":        "grain handover write (<text> | --file <f>)\n\nWrite or replace this task's standing handover summary for future runs on this task.\n",
 	"handover write":  "grain handover write (<text> | --file <f>)\n\nWrite or replace this task's standing handover summary for future runs on this task.\nUse '--file -' to read from stdin.\n",
 	"notify":          "grain notify --subject <key> --title <one-line> [--body <md> | --file <f>] [--severity info|warning|critical] [--task <id>] [--clears-when <json>]\n\nRaise an operator notification without parking this task.\n",
-	"task list":       "grain task list\n\nThe tasks this run may read: its own, or every task with self-debug.\n",
+	"task list":       sandboxTaskListHelp,
 	"task read":       "grain task read <id>\n\nA task's record (task://<id>/record.md). grain ls task://<id> shows its other files.\n",
 	"task prompt":     "grain task prompt <id> [--attempt N]\n\nA task's latest prompt, or attempt N's.\n",
 	"task transcript": "grain task transcript <id> [--attempt N]\n\nA task's latest transcript, or attempt N's.\n",
@@ -263,3 +264,14 @@ var sandboxCommandHelp = map[string]string{
 	"issue":      "grain issue (list | read) ...\n",
 	"db":         "grain db query <sql>\n",
 }
+
+// sandboxTaskListHelp is grain task list --help.
+const sandboxTaskListHelp = "grain task list [--state <s>[,<s>...]] [--repo <owner/name>] [--search <title text>]\n" +
+	"                [--kind <k>] [--changed-since <30m|24h|7d|time>] [--stalled] [--limit N] [--json]\n\n" +
+	"The tasks this run may read (its own, or every task with self-debug), one line each:\n" +
+	"id, state, repo, title, then \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
+	"Oldest first by filing; --limit (default 50) keeps the newest. The count, and how many\n" +
+	"were left out, go to stderr. --state may be repeated or comma-separated (proposed, queued,\n" +
+	"running, awaiting_reply, failed, awaiting_submit, completed, closed); --kind is one of\n" +
+	"port, repair, session, proposal, durable, imported. Example, before filing a fix:\n" +
+	"  grain task list --state proposed --search 'go-long'\n"

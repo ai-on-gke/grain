@@ -56,7 +56,7 @@ func stewardAuditBody(stateRepo RepoRef) string {
 		stateNote = fmt.Sprintf(
 			"You have read access to `%s`, this deployment's state repository (settings, templates, and schedules exported as text). "+
 				"Note that tasks, runs, and comments live in the daemon's database rather than the state export: "+
-				"use the `self-debug` task tools (`list_grain_tasks`, `read_grain_task`, `read_grain_task_prompt`, `read_grain_task_transcript`) and CI tools (`list_ci_runs`, `get_ci_log`) to read the steward task and the tasks or CI runs its wakes cited.\n\n",
+				"use the `self-debug` task commands (`grain task list`, `grain task read <id>`, `grain task prompt <id>`, `grain task transcript <id>`) and CI tools (`list_ci_runs`, `get_ci_log`) to read the steward task and the tasks or CI runs its wakes cited.\n\n",
 			stateRepo)
 	}
 	return strings.TrimSpace("You are the weekly sampled audit for the pipeline steward (`" + PipelineStewardTemplateID + "`).\n\n" +
@@ -64,7 +64,7 @@ func stewardAuditBody(stateRepo RepoRef) string {
 		"checking for confabulated claims, unread citations, and attribute mismatches that go beyond the fixed-vocabulary post-run check.\n\n" +
 		stateNote +
 		"### How to audit\n\n" +
-		"1. Find the pipeline steward task (template `" + PipelineStewardTemplateID + "`) using `list_grain_tasks` and `read_grain_task`, and list its wakes from the past 7 days in chronological order.\n" +
+		"1. Find the pipeline steward task (template `" + PipelineStewardTemplateID + "`) using `grain task list --search` and `grain task read <id>`, and list its wakes from the past 7 days in chronological order.\n" +
 		"2. Sample one wake in ten (every 10th wake: wake 1, 11, 21, ..., or the most recent wake if fewer than 10 wakes ran in the window).\n" +
 		"3. For each sampled wake (`<run_id>`):\n" +
 		"   - Read the wake's report comment, its transcript (`read_grain_task_transcript`), and the record of every task or CI run it mentions (`read_grain_task`, `list_ci_runs`, `get_ci_log`).\n" +
