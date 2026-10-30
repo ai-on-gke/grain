@@ -143,3 +143,22 @@ func MissingEntryHelp(name string) string {
 		"so nothing restarts and no run is touched; on an install whose setup.sh predates that service, re-run setup.sh once. "+
 		"Or add it by hand under capabilities: in %s:\n%s", name, EnsureCommand, DefaultAllowlistPath, b.YAML(DefaultGrainCommand, "  ", "  "))
 }
+
+// withBuiltins gives a each entry of builtins it has no capabilities
+// entry of that name for, running command, and says which it gave. An
+// entry the file has is never replaced, however it differs: the
+// operator's entry is the one hostd runs.
+func (a *Allowlist) withBuiltins(builtins []BuiltinEntry, command string) []string {
+	var added []string
+	for _, b := range builtins {
+		if _, ok := a.Capabilities[b.Name]; ok {
+			continue
+		}
+		if a.Capabilities == nil {
+			a.Capabilities = map[string]*Entry{}
+		}
+		a.Capabilities[b.Name] = b.Entry(command)
+		added = append(added, b.Name)
+	}
+	return added
+}

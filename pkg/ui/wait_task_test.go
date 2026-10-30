@@ -202,3 +202,101 @@ func TestParkUntilDefersTheTaskWithItsWakeTime(t *testing.T) {
 		t.Fatalf("comments = %+v, want one saying the task is parked until %s", comments, want.Format(time.RFC3339))
 	}
 }
+
+func TestClearAndReplaceGoalClearsNoProgressNotificationAndDeferral(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	self := create(t, c, ctx)
+	now := c.Now().UTC()
+
+	decl := model.GoalDecl{
+		Kind:    model.GoalBaseGreen,
+		Spec:    model.GoalSpec{Repo: "acme/widgets", Branch: "main"},
+		OnMet:   model.GoalCloseOnMet,
+		OnLimit: model.GoalHoldOnLimit,
+	}
+	if err := c.SetGoal(ctx, self.ID, decl); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+
+	// Simulate reaching the goal progress limit: raise task.no-progress:<id>,
+	// record LimitNotifiedAt on the goal, and defer the task.
+	subject := model.NotificationSubject(model.FamilyNoProgress, self.ID)
+	if _, err := store.RaiseNotification(ctx, model.Notification{
+		Subject:  subject,
+		Family:   model.FamilyNoProgress,
+		Severity: model.NotificationWarning,
+		Title:    "Task is not making progress",
+		Body:     "Held at limit",
+		TaskID:   self.ID,
+		RaisedBy: "automation:grain",
+	}); err != nil {
+		t.Fatalf("RaiseNotification: %v", err)
+	}
+	goal, err := store.TaskGoal(ctx, self.ID)
+	if err != nil || goal == nil {
+		t.Fatalf("TaskGoal = %v, %v", goal, err)
+	}
+	goal.LimitNotifiedAt = &now
+	if err := store.SaveTaskGoalProgress(ctx, *goal); err != nil {
+		t.Fatalf("SaveTaskGoalProgress: %v", err)
+	}
+	if err := store.SetDeferred(ctx, self.ID, &now, nil, now); err != nil {
+		t.Fatalf("SetDeferred: %v", err)
+	}
+
+	// Replacing the goal via SetGoal clears the open no-progress notification
+	// and un-defers the held task.
+	if err := c.SetGoal(ctx, self.ID, model.GoalDecl{Kind: model.GoalPersonCloses}); err != nil {
+		t.Fatalf("SetGoal (replace): %v", err)
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open != nil {
+		t.Fatalf("OpenNotification after SetGoal = %+v, %v; want nil", open, err)
+	}
+	if task, err := store.GetTask(ctx, self.ID); err != nil || task.DeferredAt != nil {
+		t.Fatalf("DeferredAt after SetGoal = %v (%v), want nil", task.DeferredAt, err)
+	}
+
+	// Now simulate the task resting on its goal after a run finishes and
+	// raising no-progress again, then ClearGoal (DELETE /api/tasks/{id}/goal).
+	if _, err := store.RaiseNotification(ctx, model.Notification{
+		Subject:  subject,
+		Family:   model.FamilyNoProgress,
+		Severity: model.NotificationWarning,
+		Title:    "Task is not making progress",
+		Body:     "Held at limit",
+		TaskID:   self.ID,
+		RaisedBy: "automation:grain",
+	}); err != nil {
+		t.Fatalf("RaiseNotification 2: %v", err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: self.ID + "-1", TaskID: self.ID, Sandbox: "s1", Attempt: 1, StartedAt: now}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, self.ID+"-1", now, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Suspend(ctx, model.Suspension{
+		RunID:     self.ID + "-1",
+		TaskID:    self.ID,
+		Kind:      model.SuspendRequested,
+		CreatedAt: now,
+		Detail:    "the agent ended its run; the task rests on its person-closes goal",
+		ResumeOn:  (model.ResumeOn{Message: true}).JSON(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetDeferred(ctx, self.ID, &now, nil, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.ClearGoal(ctx, self.ID); err != nil {
+		t.Fatalf("ClearGoal: %v", err)
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open != nil {
+		t.Fatalf("OpenNotification after ClearGoal = %+v, %v; want nil", open, err)
+	}
+	if task, err := store.GetTask(ctx, self.ID); err != nil || task.DeferredAt != nil {
+		t.Fatalf("DeferredAt after ClearGoal = %v (%v), want nil", task.DeferredAt, err)
+	}
+}
