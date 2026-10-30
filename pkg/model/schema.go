@@ -316,7 +316,9 @@ import "strconv"
 // sessions) to `api:team-broadcast`, the in-process capability having
 // been retired for the agent API's teams:broadcast scope
 // (rewriteLegacyGrants, docs/design/unified-grants.md §4).
-const SchemaVersion = 67
+//
+// 68 is 67 again for `dispatch-control`, now `api:dispatch-control`.
+const SchemaVersion = 68
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

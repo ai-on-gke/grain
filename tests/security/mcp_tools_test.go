@@ -605,7 +605,7 @@ func TestControlRoster(t *testing.T) {
 	if !control(true, "grain-ci")["chat"] {
 		t.Errorf("an interactive run's control roster has no chat")
 	}
-	if !control(false, "grain-ci", "dispatch-control")["pause_pipeline"] {
-		t.Errorf("dispatch-control's tools are model-only, and missing from the control roster")
+	if !control(false, "grain-ci", "pipeline-control")["pause_pipeline"] {
+		t.Errorf("pipeline-control's tools are model-only, and missing from the control roster")
 	}
 }

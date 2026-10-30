@@ -186,7 +186,7 @@ per-capability list, with what each one becomes:
 | `self-repair` | `…/grain#host-exec` (each command still needs a live chat reply) | new method, dangerous (Q7) |
 | `self-upgrade` | `…/api#self-upgrade` preset | api preset (alias today) |
 | `pipeline-control` | `…/api#pipeline-control` preset | api preset (alias today) |
-| `dispatch-control` | `…/api#dispatch-control` preset | api preset |
+| `dispatch-control` | `…/api#dispatch-control` preset | **done** (task 2004): provider and its four tools removed, stored grants rewritten to `api:dispatch-control` by schema migration 68 |
 | `test-quarantine` | `…/api#tests:write` (new scope) | api scope |
 | `read-issues` | `…/github#read-issues` | new method on `github` server |
 | `release-notes` | `…/api#releases:read` + `…/api#releases:write` | api scopes |

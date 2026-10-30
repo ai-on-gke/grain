@@ -73,37 +73,58 @@ func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 	}
 }
 
-// Migration 67 rewrites every stored team-broadcast grant -- the three
-// grant tables, the deployment's and a repository's default
-// capabilities, and the standing sessions' -- to api:team-broadcast, and
-// each row grants exactly what it did before.
-func TestMigrationRewritesRetiredTeamBroadcastGrants(t *testing.T) {
+// retiredGrants are the in-process capabilities a store migration
+// rewrote, each with the schema version the migration produces and the
+// api grant it wrote.
+var retiredGrants = []struct {
+	version int
+	legacy  string
+	api     string
+}{
+	{67, "team-broadcast", "api:team-broadcast"},
+	{68, "dispatch-control", "api:dispatch-control"},
+}
+
+// Each retiring migration rewrites every stored grant of its capability
+// -- the three grant tables, the deployment's and a repository's default
+// capabilities, and the standing sessions' -- to the api grant it
+// became, and each row grants exactly what it did before.
+func TestMigrationRewritesRetiredGrants(t *testing.T) {
 	t.Parallel()
+	for _, r := range retiredGrants {
+		t.Run(r.legacy, func(t *testing.T) {
+			t.Parallel()
+			testMigrationRewrites(t, r.version, r.legacy, r.api)
+		})
+	}
+}
+
+func testMigrationRewrites(t *testing.T, version int, legacy, api string) {
 	store, db, ctx := openStore(t)
 
 	cfg := testConfig()
-	cfg.DefaultCapabilities = []string{"team-broadcast", "gcp-key"}
+	cfg.DefaultCapabilities = []string{legacy, "gcp-key"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
-		{ID: "director", Title: "Director", Capabilities: []string{"self-debug", "team-broadcast"}},
-		{ID: "steward", Title: "Steward", Capabilities: []string{"api:team-broadcast", "team-broadcast"}},
+		{ID: "director", Title: "Director", Capabilities: []string{"self-debug", legacy}},
+		{ID: "steward", Title: "Steward", Capabilities: []string{api, legacy}},
 		{ID: "quiet", Title: "Quiet"},
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
-	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{"memory", "team-broadcast"},
-		CICapabilities: []string{"team-broadcast"}}); err != nil {
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{"memory", legacy},
+		CICapabilities: []string{legacy}}); err != nil {
 		t.Fatal(err)
 	}
 	fixture := map[string]map[string][]string{
 		"task_grant": {
-			"1": {"team-broadcast", "self-debug"},
-			"2": {"team-broadcast", "api:team-broadcast"},
+			"1": {legacy, "self-debug"},
+			"2": {legacy, api},
 			"3": {"api:tasks:write"},
 		},
-		"template_grant": {"t": {"team-broadcast"}},
-		"schedule_grant": {"s": {"team-broadcast", "gcp-key"}},
+		"template_grant": {"t": {legacy}},
+		"schedule_grant": {"s": {legacy, "gcp-key"}},
 	}
 	owners := map[string]string{"task_grant": "task_id", "template_grant": "template_id", "schedule_grant": "schedule_id"}
 	for table, byOwner := range fixture {
@@ -116,11 +137,11 @@ func TestMigrationRewritesRetiredTeamBroadcastGrants(t *testing.T) {
 		}
 	}
 
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 66 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = ? WHERE `id` = 1", version-1); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-66 store: %v", err)
+		t.Fatalf("migrating a version-%d store: %v", version-1, err)
 	}
 
 	for table, byOwner := range fixture {
@@ -129,7 +150,7 @@ func TestMigrationRewritesRetiredTeamBroadcastGrants(t *testing.T) {
 			sameGrantMeaning(t, table+" "+id, before, got[id])
 		}
 	}
-	if got := grantRows(t, ctx, db, "task_grant", "task_id")["2"]; !slices.Equal(got, []string{"api:team-broadcast"}) {
+	if got := grantRows(t, ctx, db, "task_grant", "task_id")["2"]; !slices.Equal(got, []string{api}) {
 		t.Errorf("task 2, holding both spellings, holds %v after the migration, want the api grant once", got)
 	}
 
@@ -137,7 +158,7 @@ func TestMigrationRewritesRetiredTeamBroadcastGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"api:team-broadcast", "gcp-key"}; !slices.Equal(after.DefaultCapabilities, want) {
+	if want := []string{api, "gcp-key"}; !slices.Equal(after.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", after.DefaultCapabilities, want)
 	}
 	if len(after.ConsoleSessions) != len(cfg.ConsoleSessions) {
@@ -150,7 +171,7 @@ func TestMigrationRewritesRetiredTeamBroadcastGrants(t *testing.T) {
 		}
 		sameGrantMeaning(t, "console session "+s.ID, was.Capabilities, s.Capabilities)
 	}
-	if got, want := after.ConsoleSessions[1].Capabilities, []string{"api:team-broadcast"}; !slices.Equal(got, want) {
+	if got, want := after.ConsoleSessions[1].Capabilities, []string{api}; !slices.Equal(got, want) {
 		t.Errorf("steward capabilities = %v, want %v", got, want)
 	}
 
@@ -158,12 +179,12 @@ func TestMigrationRewritesRetiredTeamBroadcastGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"memory", "api:team-broadcast"}; !slices.Equal(repo.DefaultCapabilities, want) {
+	if want := []string{"memory", api}; !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
-	// A CI job's api grant is a CIAPI token, which team-broadcast never
+	// A CI job's api grant is a CIAPI token, which none of these ever
 	// was, so ci_capabilities is not a list the migration speaks for.
-	if want := []string{"team-broadcast"}; !slices.Equal(repo.CICapabilities, want) {
+	if want := []string{legacy}; !slices.Equal(repo.CICapabilities, want) {
 		t.Errorf("repo CI capabilities = %v, want %v left alone", repo.CICapabilities, want)
 	}
 }

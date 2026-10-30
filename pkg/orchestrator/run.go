@@ -34,7 +34,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
@@ -1477,8 +1476,8 @@ func grainCLISection(task model.Task) string {
 
 // grainCLIGrants is the `grain` commands each of grain's own capability
 // grants unlocks, in the order grainCLIGrantBullets lists them. A grant
-// whose tools stay model tools (dispatch-control, self-upgrade, db-write,
-// team-broadcast) is not here: the tool roster already names those.
+// whose tools stay model tools (self-upgrade, db-write) is not here: the
+// tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
 	{model.SelfDebugCapability, "`grain ls/read/grep src://...`, `grain task list`, `grain task read <id>`, " +
 		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d] [--repo <r>]`, `grain read deploy://pipeline-changes`"},
@@ -4107,7 +4106,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 var toolGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName, memory.CapabilityName,
 	grainci.CapabilityName, deploymenthealth.CapabilityName, selfupgrade.CapabilityName,
-	dispatchcontrol.CapabilityName, readissues.CapabilityName,
+	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 }
 

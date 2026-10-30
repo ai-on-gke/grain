@@ -166,7 +166,8 @@ func pipelineStewardBody() string {
 
 	b.WriteString("## Each wake\n\n")
 	b.WriteString("Read and act through the `grain` CLI in your sandbox (`grain help`); only " +
-		"`propose_task`, `resume_later`, `comment_on_issue` and your dispatch-control tools " +
+		"`propose_task`, `resume_later`, `comment_on_issue` and the `api_*` tools your " +
+		"dispatch-control preset serves (pausing, resuming, Run now) " +
 		"are tool calls.\n\n")
 	b.WriteString("1. **Work from deltas.** Read your handover's cursor, then run " +
 		"`grain api GET '/api/pipeline/changes?after=<cursor>'` (no cursor: leave `after` off). " +

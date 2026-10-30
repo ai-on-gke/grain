@@ -152,12 +152,14 @@ var apiPresets = []APIPreset{
 
 // apiAliasCapabilities are the older capabilities that are now aliases
 // for a preset: a task holding one is granted that preset's routes as
-// well as the tools it always had, under their old names.
+// well as whatever tools it still has under their old names (none, for
+// one legacyGrantReplacements retires).
 var apiAliasCapabilities = map[string]string{
 	"self-debug":       "self-debug",
 	"self-upgrade":     "self-upgrade",
 	"pipeline-control": "pipeline-control",
 	"team-broadcast":   "team-broadcast",
+	"dispatch-control": "dispatch-control",
 }
 
 // legacyGrantReplacements are the bare capabilities converted to api
@@ -169,7 +171,8 @@ var apiAliasCapabilities = map[string]string{
 // repository's own .grain declaration, an older grain/config -- keeps
 // granting what it did.
 var legacyGrantReplacements = map[string]string{
-	"team-broadcast": APIGrantPrefix + "team-broadcast",
+	"team-broadcast":   APIGrantPrefix + "team-broadcast",
+	"dispatch-control": APIGrantPrefix + "dispatch-control",
 }
 
 // CanonicalLegacyGrant is name, or the api grant a retired in-process

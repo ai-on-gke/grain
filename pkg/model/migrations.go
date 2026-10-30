@@ -381,6 +381,11 @@ var Migrations = []Migration{
 		Description: "rewrite stored team-broadcast grants to api:team-broadcast (the in-process capability is retired)",
 		Up:          rewriteLegacyGrants(map[string]string{"team-broadcast": "api:team-broadcast"}),
 	},
+	{
+		Version:     68,
+		Description: "rewrite stored dispatch-control grants to api:dispatch-control (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"dispatch-control": "api:dispatch-control"}),
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

@@ -43,7 +43,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/pipelinecontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
@@ -142,7 +141,6 @@ func PublishedToolNames() []string {
 	add(deploymenthealth.Tools(deploymenthealth.Config{}))
 	add(selfupgrade.Tools(selfupgrade.Config{}))
 	add(pipelinecontrol.Tools(pipelinecontrol.Config{}))
-	add(dispatchcontrol.Tools(dispatchcontrol.Config{}))
 	add(bootstrap.PlaybookTools())
 	add(dbaccess.Tools(dbaccess.Config{AllowWrite: true}))
 
@@ -240,10 +238,10 @@ func SandboxToolNames() []string {
 func IsControlTool(name string) bool { return controlTools[name] }
 
 // ModelOnlyGrantToolNames is the tools of the grants a sandbox process
-// must never reach -- dispatch-control, pipeline-control, self-upgrade
-// and db-write -- which stay on the MCP roster of a run holding them.
-// (team-broadcast's is an api tool now, kept off the sandbox by its
-// scope, teams:broadcast: model.IsSandboxDeniedAPIScope.) db-read's query_grain_db is `grain db query`, so only
+// must never reach -- pipeline-control, self-upgrade and db-write --
+// which stay on the MCP roster of a run holding them. (dispatch-control's
+// and team-broadcast's are api tools now, kept off the sandbox by their
+// scopes, dispatch:write and teams:broadcast: model.IsSandboxDeniedAPIScope.) db-read's query_grain_db is `grain db query`, so only
 // execute_grain_db is here.
 func ModelOnlyGrantToolNames() []string {
 	var names []string
@@ -252,7 +250,6 @@ func ModelOnlyGrantToolNames() []string {
 			names = append(names, t.Name)
 		}
 	}
-	add(dispatchcontrol.Tools(dispatchcontrol.Config{}))
 	add(pipelinecontrol.Tools(pipelinecontrol.Config{}))
 	add(selfupgrade.Tools(selfupgrade.Config{}))
 	names = append(names, "execute_grain_db")

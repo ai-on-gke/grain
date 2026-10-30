@@ -773,8 +773,8 @@ func (c *HTTPClient) RunNow(ctx context.Context, id string) error {
 }
 
 // RunNowAs is RunNow asked for by the agent by names, which the approval
-// and the note on the task are attributed to (dispatch-control's
-// run_task_now). The zero Principal is RunNow.
+// and the note on the task are attributed to. The zero Principal is
+// RunNow.
 func (c *HTTPClient) RunNowAs(ctx context.Context, id string, by model.Principal) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+url.PathEscape(id)+"/run-now",
 		runNowRequest{RequestedBy: by.ID, RequestedByKind: string(by.Kind)}, nil)
@@ -1613,7 +1613,7 @@ func (c *HTTPClient) PausePipeline(ctx context.Context, reason string) (
 }
 
 // PausePipelineAs is PausePipeline taken by the agent by names, which the
-// pause row records as who paused (dispatch-control's pause_pipeline).
+// pause row records as who paused.
 // The zero Principal is PausePipeline.
 func (c *HTTPClient) PausePipelineAs(ctx context.Context, reason string, by model.Principal) (
 	status PipelinePauseStatus, paused bool, err error) {

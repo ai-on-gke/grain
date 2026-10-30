@@ -179,16 +179,19 @@ routes, and keeps the tools it always had under their old names
 (`list_grain_tasks`, `read_grain_metrics`, `start_upgrade`,
 `pause_pipeline`, ...).
 
-`team-broadcast` is an alias too, but its in-process capability is
-retired (docs/design/unified-grants.md §4): it has no tool of its own
-any longer, and a run holding it is served
-`api_deployment_broadcast` in place of `broadcast_team_message`. Every
-place a grant is recorded writes it as `api:team-broadcast`
-(`model.CanonicalLegacyGrant`), importing a grain/config does the same,
-and schema migration 67 rewrote the grants already stored -- tasks,
-templates, schedules, the default capability lists and the standing
-sessions. The bare name keeps granting the preset wherever it is still
-written, such as a repository's own `.grain` declarations.
+`team-broadcast` and `dispatch-control` are aliases too, but their
+in-process capabilities are retired (docs/design/unified-grants.md §4):
+they have no tools of their own any longer, and a run holding one is
+served its preset's `api_*` tools instead (`api_deployment_broadcast`
+for `broadcast_team_message`; the pipeline-pause, run-now and defer
+routes for `pause_pipeline`, `resume_pipeline`, `run_task_now` and
+`defer_task`). Every place a grant is recorded writes it as
+`api:<preset>` (`model.CanonicalLegacyGrant`), importing a grain/config
+does the same, and schema migrations 67 and 68 rewrote the grants
+already stored -- tasks, templates, schedules, the default capability
+lists and the standing sessions. The bare name keeps granting the preset
+wherever it is still written, such as a repository's own `.grain`
+declarations.
 
 The per-ability capabilities that were queued separately are presets over
 this mechanism rather than new tool plumbing:

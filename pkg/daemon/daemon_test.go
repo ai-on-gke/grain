@@ -147,22 +147,22 @@ func TestCapabilityProviders(t *testing.T) {
 		{
 			name: "no gcp project configured still registers the built-in capabilities and the three model proxies",
 			cfg:  Config{},
-			want: []string{"github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "pipeline-control", "dispatch-control", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "pipeline-control", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
 		},
 		{
 			name: "an agent service account without a gcp project does not add either gcp capability",
 			cfg:  Config{GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "pipeline-control", "dispatch-control", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "pipeline-control", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
 		},
 		{
 			name: "a gcp project with no agent service account only adds gemini-key to the built-in capabilities",
 			cfg:  Config{GcpProject: "proj"},
-			want: []string{"gemini-key", "github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "pipeline-control", "dispatch-control", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"gemini-key", "github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "pipeline-control", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
 		},
 		{
 			name: "a gcp project with an agent service account adds both gcp capabilities to the built-in capabilities",
 			cfg:  Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"gcp-key", "gemini-key", "github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "pipeline-control", "dispatch-control", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"gcp-key", "gemini-key", "github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "pipeline-control", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
 		},
 	}
 	for _, tc := range cases {

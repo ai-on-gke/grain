@@ -42,7 +42,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
@@ -210,8 +209,6 @@ func OfferedCapabilities() []Capability {
 			Description: selfupgrade.Description},
 		{ID: "pipeline-control", Name: "Pipeline control",
 			Description: "Emergency controls to pause or resume automated merges and pipeline dispatch on repositories"},
-		{ID: dispatchcontrol.CapabilityName, Name: "Dispatch control",
-			Description: dispatchcontrol.Description},
 		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
 			Description: prioritydispatch.Description},
 		{ID: durable.CapabilityName, Name: "Durable",
