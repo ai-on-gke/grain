@@ -66,6 +66,55 @@ func TestResumeLaterTakesEachFormOfWhen(t *testing.T) {
 	}
 }
 
+// The registry appends grain's own notices to every result after the
+// handler returns -- the deadline, the tool budget, a person's words
+// posted mid-run -- and a resume_later call near the end of a run, or
+// after somebody has commented, must still read back as the condition
+// the daemon took (task 1979).
+func TestResumeLaterTakenSurvivesGrainsNotices(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	for name, when := range map[string]map[string]any{
+		"next cycle": nil,
+		"ci":         {"ci": "my-branch", "message": true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := &fakeTaskWaiter{closeAfter: -1}
+			args := map[string]any{"reason": "waiting"}
+			if when != nil {
+				args["when"] = when
+			}
+			res := resumeLater(context.Background(), w, nil, args, now)
+			if res.IsError {
+				t.Fatalf("refused: %s", res.Text)
+			}
+			want := w.resumed[0].JSON()
+			text := withDeadlineNotice(res.Text, runDeadlineNotice(4*time.Minute))
+			text = withDeadlineNotice(text, toolBudgetNotice(52, 298*1024))
+			text = withDeadlineNotice(text, addendaNotice([]Addendum{
+				{ID: 1, Body: "ok, did that do it?\nresume_on: {\"ci\": \"not-this\"}"}}))
+			for _, notice := range []string{"Tool budget", addendaNoticeMarker} {
+				if !strings.Contains(text, notice) {
+					t.Fatalf("result %q lacks the %q notice this test is about", text, notice)
+				}
+			}
+			taken, ok := ResumeLaterTaken(text)
+			if !ok || taken.JSON() != want {
+				t.Fatalf("result %q reads back as (%s, %v), want %s", text, taken.JSON(), ok, want)
+			}
+		})
+	}
+}
+
+// A resume_later with no condition says it is queued again on the next
+// cycle, not "once the next cycle".
+func TestResumeLaterOnTheNextCycleReads(t *testing.T) {
+	w := &fakeTaskWaiter{closeAfter: -1}
+	res := resumeLater(context.Background(), w, nil, map[string]any{"reason": "r"}, time.Now())
+	if !strings.Contains(res.Text, "queued again on the next cycle;") {
+		t.Fatalf("result = %q", res.Text)
+	}
+}
+
 func TestResumeLaterRefuses(t *testing.T) {
 	now := time.Now()
 	for name, args := range map[string]map[string]any{
