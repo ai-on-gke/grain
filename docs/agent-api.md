@@ -564,6 +564,13 @@ Credentials are managed through:
 | `DELETE /api/external-agents/tokens/{id}` | `capabilities:admin` | Delete a credential record (`204 No Content`). |
 | `POST /api/external-agents/tokens/revoke-all` | `capabilities:admin` | Emergency kill switch: revoke every active external agent credential immediately. |
 
+A credential's view (listed, created or rotated) carries
+`resolvedScopes`: every scope it holds after expanding scope sets and
+implied scopes. A scope held on named repositories only is listed once
+per repository as `scope@owner/name` (a credential issued with
+`"scopes": ["tasks:write@acme/widgets"]` lists `tasks:write@acme/widgets`);
+a bare scope is held on every repository.
+
 ### Attribution
 
 Every call made with an external agent credential executes as
