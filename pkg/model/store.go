@@ -2159,7 +2159,7 @@ func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
 
 func computeStreakForTask(ctx context.Context, q querier, taskID string, retryRequestedAt *time.Time) (int, *time.Time, *time.Time, error) {
 	rows, err := q.QueryContext(ctx,
-		"SELECT `outcome`, `started_at`, `finished_at`, `suspend_kind` FROM `task_run` "+
+		"SELECT `outcome`, `started_at`, `finished_at`, `detail`, `suspend_kind` FROM `task_run` "+
 			"WHERE `task_id` = ? AND `finished_at` IS NOT NULL ORDER BY `started_at` DESC", taskID)
 	if err != nil {
 		return 0, nil, nil, err
@@ -2173,14 +2173,16 @@ func computeStreakForTask(ctx context.Context, q querier, taskID string, retryRe
 	for rows.Next() {
 		var outcome string
 		var startedAt, finishedAt time.Time
-		var suspended sql.NullString
-		if err := rows.Scan(&outcome, &startedAt, &finishedAt, &suspended); err != nil {
+		var detail, suspended sql.NullString
+		if err := rows.Scan(&outcome, &startedAt, &finishedAt, &detail, &suspended); err != nil {
 			return 0, nil, nil, err
 		}
-		if suspended.Valid || outcome == EnvironmentOutcome {
+		if suspended.Valid || outcome == EnvironmentOutcome || StoppedByPerson(outcome, detail.String) {
 			// Neither counts towards the streak nor breaks it: a
 			// suspension (model.SuspensionKind) is not a judgement of the
-			// task, and nor is a host held for a person (OutcomeHeld).
+			// task, nor is a host held for a person (OutcomeHeld), nor a
+			// run a person ended by closing the task or stopping its turn
+			// (StoppedByPerson).
 			continue
 		}
 		if SucceededOutcome(outcome) {
@@ -3012,6 +3014,19 @@ func (s *Store) FailureStreak(ctx context.Context, taskID string) (*FailureStrea
 			// no retry here to space out.
 			continue
 		}
+		if StoppedByPerson(outcome, detail.String) {
+			// Skipped from Count and from BackoffCount, and not a
+			// boundary either: a person closing the task under a live run
+			// (TaskClosedDetail) or stopping its turn (TurnStoppedDetail)
+			// made a decision about the task, which says nothing about
+			// whether it fails. Reopening it, or replying, should
+			// dispatch it at once rather than wait out a backoff.
+			continue
+		}
+		if streak.Count == 0 {
+			streak.LastFailureAt = finishedAt
+			streak.LastFailureDetail = detail.String
+		}
 		streak.Count++
 		streak.BackoffCount++
 	}
@@ -3130,6 +3145,12 @@ type FailureStreak struct {
 	LastFinishedAt time.Time
 	LastOutcome    string
 	LastDetail     string
+	// LastFailureAt and LastFailureDetail are the most recent run Count
+	// counts -- not necessarily the most recent run, which may be one
+	// the streak passes over (a suspension, or a run a person stopped).
+	// Zero while Count is.
+	LastFailureAt     time.Time
+	LastFailureDetail string
 }
 
 // LiveLease is one outstanding lease, joined to the run holding it.
