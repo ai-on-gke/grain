@@ -219,6 +219,20 @@ expect "placeholder" "cuts no v2.5.0 rc" eq "$(remote_tag v2.5.0-rc.1)" ""
 expect "placeholder" "leaves latest alone" eq "$(remote_tag latest)" "$c0"
 expect "placeholder" "publishes only the rc" images_were "rc v2.6.0-rc.1"
 
+# --- a stale RELEASE_MAJOR never moves the version backwards ---
+# v3.0.0 is promoted while release.conf still says RELEASE_MAJOR=2 (and
+# RELEASE_FLOOR_MINOR=3, which is v2's floor, not v3's).
+setup ""
+tag_remote v3.0.0 "$c1"
+runs "$c3"
+train
+expect "stale major" "exits 0" eq "$status" 0
+expect "stale major" "says RELEASE_MAJOR is behind" has "RELEASE_MAJOR 2 is behind the released v3"
+expect "stale major" "targets v3.1.0, notes from v3.0.0" has "target v3.1.0; its notes are from v3.0.0"
+expect "stale major" "cuts v3.1.0-rc.1" eq "$(remote_tag v3.1.0-rc.1)" "$c3"
+expect "stale major" "cuts no v2 rc" eq "$(remote_tag v2.3.0-rc.1)" ""
+expect "stale major" "publishes only the rc" images_were "rc v3.1.0-rc.1"
+
 # --- a dropped rc with nothing newer known-good: nothing to cut ---
 setup "v2.3.0-rc.1"
 tag_remote v2.3.0-rc.1 "$c3" 40
