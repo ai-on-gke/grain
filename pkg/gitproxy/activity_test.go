@@ -64,6 +64,7 @@ func TestNamespaceRouteActivityMatchesMCPToolNames(t *testing.T) {
 		path, query, tool string
 	}{
 		{"/fs/ci/bwsalmon/grain/run-1/go/gotest.log", "", "get_ci_log"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-1/go/gotest.log", "", "get_ci_log"},
 		{"/fs/ci/bwsalmon/grain/run-1/go/artifacts/cover.out", "", "get_ci_artifact"},
 		{"/fs/ci/bwsalmon/grain", "list", "grain_ls"},
 		{"/fs/ci/bwsalmon/grain/run-1/go/gotest.log", "grep=FAIL", "grain_grep"},
@@ -94,6 +95,11 @@ func TestNamespaceRouteActivityMatchesMCPToolNames(t *testing.T) {
 		}
 		if got.Phrase == "calling "+tc.tool {
 			t.Errorf("%s: %s has no phrase in pkg/mcp's toolActivityNotes", tc.path, tc.tool)
+		}
+		if tc.path == "/fs/ci/git.forge.example/experimental/grain/run-1/go/gotest.log" {
+			if len(got.Targets) != 1 || got.Targets[0] != "run-1" {
+				t.Errorf("%s: targets = %v, want [run-1]", tc.path, got.Targets)
+			}
 		}
 	}
 }
