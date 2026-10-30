@@ -23,6 +23,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
@@ -224,6 +225,11 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	scope := runPauseScope(framework, *task, cfg)
 	stopPause := cfg.Pause.register(runID, scope, cfg.now(), cancelRun)
 	stopTokenRefresh := keepSandboxTokenFresh(ctx, deps.RefreshSandboxToken, a.Sandbox.Name(), deps.SandboxTokenRefreshInterval)
+	// Recreatable as runOne's runs are (recreate_sandbox): unregistered
+	// before releaseAdoptedSandbox below, which waits out a rebuild in
+	// flight before the sandbox it was building is destroyed.
+	stopRecreating := registerAdoptedRecreation(ctx, deps, *task, *run, a.Sandbox)
+	defer stopRecreating()
 
 	// The live transcript the previous daemon was writing, appended to
 	// from the cursor it persisted -- and read first, for what the run's
@@ -314,8 +320,68 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	default:
 		errs = append(errs, afterAgentRun(ctx, deps, *task, runID, result, end.runErr, preRunBranchSHA, "", cfg.now()))
 	}
+	stopRecreating()
 	releaseAdoptedSandbox(ctx, deps, a.Sandbox, runID, run)
 	return errors.Join(errs...)
+}
+
+// registerAdoptedRecreation registers an adopted run with
+// Config.SandboxRecreations, as runOne does a run it dispatched, and
+// returns what unregisters it.
+//
+// What runOne records after registering -- the capabilities RunDispatch
+// materialized and the pass it applied -- was held only by the daemon
+// that started the run, so a rebuild cannot put that back. It names
+// those capabilities instead (sandboxRecreation.unrestorable): the
+// task's grants and the leases recorded against the run.
+func registerAdoptedRecreation(ctx context.Context, deps Deps, task model.Task, run model.Run, sb Sandbox) func() {
+	if deps.Config.SandboxRecreations == nil {
+		return func() {}
+	}
+	tools, err := sb.Tools(ctx)
+	if err != nil {
+		log.Printf("orchestrator: adopted run %s: reading its sandbox's tools, so it cannot be recreated: %v", run.ID, err)
+		return func() {}
+	}
+	var sandboxRoot string
+	if rooted, ok := sb.(rootedSandbox); ok {
+		if sandboxRoot, err = rooted.Root(); err != nil {
+			log.Printf("orchestrator: adopted run %s: reading its sandbox's root, so it cannot be recreated: %v", run.ID, err)
+			return func() {}
+		}
+	}
+	placer, _ := sb.(SandboxPlacer)
+	seen := map[string]bool{}
+	var unrestorable []string
+	add := func(capability string) {
+		if capability != "" && !seen[capability] {
+			seen[capability] = true
+			unrestorable = append(unrestorable, capability)
+		}
+	}
+	for _, g := range task.Grants {
+		add(g.Capability)
+	}
+	if deps.Store != nil {
+		if leases, err := deps.Store.RunLeases(ctx, run.ID); err == nil {
+			for _, l := range leases {
+				add(l.Capability)
+			}
+		}
+	}
+	sort.Strings(unrestorable)
+	return deps.Config.SandboxRecreations.register(task.ID, &sandboxRecreation{
+		store:              deps.Store,
+		cfg:                deps.Config,
+		task:               task,
+		sandbox:            sb,
+		tools:              tools,
+		sandboxRoot:        sandboxRoot,
+		placer:             placer,
+		mint:               deps.MintSandboxToken,
+		credentialIdentity: deps.CredentialGitIdentity,
+		unrestorable:       unrestorable,
+	})
 }
 
 // adoptedClockStart is where run's own clock started, which is where its
