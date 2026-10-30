@@ -44,6 +44,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/policy"
+	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 )
 
 // ciReadScopes is the registry of read-only git scopes CI jobs hold
@@ -1443,6 +1444,7 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 		result, err := s.shell.RunShell(ctx, orchestrator.ShellRequest{
 			Script: cmd.Script, Dir: within, Env: cmd.Env, Timeout: cmd.Timeout,
 			StepID: cmd.StepID,
+			Attach: cmd.Attach,
 			Output: ciStepFollower(out),
 		})
 		if err != nil {
@@ -1452,6 +1454,11 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 			return ci.CommandResult{Output: result.Output}, fmt.Errorf("running a step in %s: %w", s.SandboxName, err)
 		}
 		return ci.CommandResult{Output: result.Output, ExitCode: result.ExitCode}, nil
+	}
+	if cmd.Attach != nil && cmd.Attach.ExecID != "" {
+		// No channel, so no exec to find (orchestrator.ShellRequest.Attach).
+		return ci.CommandResult{ExitCode: -1}, fmt.Errorf("running a step in %s: %w", s.SandboxName,
+			&sandboxaccess.ChannelLostError{Sandbox: s.SandboxName, Cause: fmt.Errorf("no channel to reattach exec %s over", cmd.Attach.ExecID)})
 	}
 	args := map[string]any{
 		"command":     ciStepScript(dir, cmd.Env, cmd.Script),
@@ -2642,6 +2649,11 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 		Get:   service.Get,
 		Log:   log.Printf,
 	}
+	// Each running step's exec id and cursor go where its run does, so a
+	// restart can reattach the step (docs/design/grain-on-gke.md#GKE-4).
+	if attachments, ok := service.Runs.(ci.StepAttachments); ok {
+		service.Engine.Attachments = attachments
+	}
 	adopted, lost := AdoptCIRuns(ctx, service)
 	if cfg.runHostUpgrade != nil && (len(adopted) > 0 || len(lost) > 0) {
 		cfg.runHostUpgrade.setCIAdoption(adopted, lost)
@@ -2650,21 +2662,43 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 }
 
 // AdoptCIRuns inspects unconcluded CI runs in service.Runs before ReapOrphans
-// runs: for each run, it attempts to readopt any in-flight job's sandbox and
-// verify its in-sandbox detached step runner, then resumes the run in place via
-// service.Adopt. Runs that cannot be resumed are finished as interrupted via
-// RecoverInterruptedExcept.
+// runs, and reattaches what it can before anything is recovered
+// (docs/design/grain-on-gke.md, "Restart: reattach rather than interrupt").
+//
+// For each run it rebuilds the engine's job state from the store (the run's
+// jobs and steps as last written, and each running step's attachment),
+// readopts every in-flight job's sandbox, and resumes the run in place via
+// service.Adopt:
+//
+//   - a step with a stored attachment is reattached by its exec id from its
+//     cursor over the sandbox's dial-out channel, which waits up to the
+//     reattach timeout for the wrapper to dial the new acceptor. A step
+//     still running carries on, and one that finished while grain was down
+//     answers with its real exit code;
+//   - a step with a stored attachment whose sandbox did not come back is
+//     still adopted: it ends with sandboxaccess.ErrChannelLost, and its job
+//     goes the infra way (errored, re-run uncached) rather than its run
+//     being stamped interrupted;
+//   - a step without one is rerun through its in-sandbox step runner, which
+//     re-attaches from byte 0 without starting the script twice.
+//
+// What is left is resolved by RecoverUnattachable: a run that was queued
+// with no sandbox yet, or one whose sandbox a backend without the channel
+// could not give back.
 func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orchestrator.AdoptedCIJobNote) {
 	if service == nil || service.Runs == nil || service.Engine == nil || service.IsStopping() {
 		return nil, nil
 	}
 	lister, ok := service.Runs.(interface {
 		LiveRuns(context.Context) ([]ci.Run, error)
-		RecoverInterruptedExcept(context.Context, time.Time, []string) (int, error)
+		RecoverUnattachable(context.Context, time.Time, []string) (int, error)
 	})
 	if !ok {
 		return nil, nil
 	}
+	attachments, _ := service.Runs.(interface {
+		StepAttachments(context.Context, string) ([]ci.StepAttachment, error)
+	})
 	liveRuns, err := lister.LiveRuns(ctx)
 	if err != nil {
 		// Nothing can be adopted, but what the previous process left in
@@ -2673,7 +2707,7 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 		// for the same plan with (RunStore.Live), so its branch would
 		// never be put through CI again.
 		log.Printf("ci: listing live runs for adoption, so adopting none: %v", err)
-		if stamped, rerr := lister.RecoverInterruptedExcept(ctx, time.Now().UTC(), nil); rerr != nil {
+		if stamped, rerr := lister.RecoverUnattachable(ctx, time.Now().UTC(), nil); rerr != nil {
 			log.Printf("ci: resolving runs a previous process left in flight: %v", rerr)
 		} else if stamped > 0 {
 			log.Printf("ci: %d run(s) were still going when this deployment last stopped; "+
@@ -2711,9 +2745,32 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 			plannedByJobID[pj.Job.ID] = pj
 		}
 
+		// Each running step's exec, as the previous process last wrote it.
+		stepAttachments := map[string]ci.StepAttachment{}
+		if attachments != nil {
+			stored, err := attachments.StepAttachments(ctx, run.ID)
+			if err != nil {
+				log.Printf("ci: run %s: reading its step attachments, so reattaching none: %v", run.ID, err)
+			}
+			for _, a := range stored {
+				if a.ExecID != "" {
+					stepAttachments[a.JobID+"/"+a.StepID] = a
+				}
+			}
+		}
+
 		adoptedJobs := map[string]ci.AdoptedJob{}
 		var runAdoptedNotes, runLostNotes []orchestrator.AdoptedCIJobNote
 		canAdoptRun := true
+		// A run none of whose jobs ever got a sandbox has nothing to
+		// attach, and is left to RecoverUnattachable.
+		hadSandbox := false
+		for _, j := range run.Jobs {
+			hadSandbox = hadSandbox || j.Sandbox != ""
+		}
+		if !hadSandbox {
+			continue
+		}
 
 		for i, j := range run.Jobs {
 			if (j.Conclusion == ci.ConclusionErrored || j.Conclusion == ci.ConclusionFailure) && ci.JobFailedOnDaemonService(j) {
@@ -2766,7 +2823,34 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 				Shape:          pj.Job.Sandbox,
 				Timeout:        pj.Job.Timeout(),
 			}
+			// Find the step that was in flight (or about to start), and the
+			// exec it was attached to if the previous process wrote one.
+			inFlightStepIdx := -1
+			for si, st := range j.Steps {
+				if !st.Conclusion.Done() && st.StartedAt != nil {
+					inFlightStepIdx = si
+					break
+				}
+			}
+			var attachment *ci.StepAttachment
+			if inFlightStepIdx >= 0 {
+				if a, ok := stepAttachments[pj.ID+"/"+ci.StepIDFor(j.RetryCount+1, inFlightStepIdx)]; ok {
+					attachment = &a
+				}
+			}
 			sb, err := readopter.Readopt(ctx, sbReq)
+			if err != nil && attachment != nil {
+				// The step had an exec to reattach and its sandbox did not
+				// come back: the infra path, not an interrupted run. The
+				// job errors with the channel-lost fault and is re-run
+				// uncached (orchestrator.startChannelLostRecheck).
+				adoptedJobs[pj.ID] = ci.AdoptedJob{Job: j, Attachment: attachment, Lost: err}
+				runAdoptedNotes = append(runAdoptedNotes, orchestrator.AdoptedCIJobNote{
+					Run: run.ID, Job: j.JobID, Repo: run.Repo, Ref: run.Ref, Sandbox: j.Sandbox,
+					Reason: fmt.Sprintf("sandbox %s gone (%v); the job is re-run as an infrastructure fault", j.Sandbox, err),
+				})
+				continue
+			}
 			if err != nil {
 				canAdoptRun = false
 				runLostNotes = append(runLostNotes, orchestrator.AdoptedCIJobNote{
@@ -2775,16 +2859,9 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 				})
 				break
 			}
-			// Find the step that was in flight (or about to start) and check its
-			// detached step runner directory if a step was already started.
-			inFlightStepIdx := -1
-			for si, st := range j.Steps {
-				if !st.Conclusion.Done() && st.StartedAt != nil {
-					inFlightStepIdx = si
-					break
-				}
-			}
-			if inFlightStepIdx >= 0 {
+			// A step reattached by exec id needs no step runner: the
+			// wrapper's exec is the authority on whether it is still there.
+			if inFlightStepIdx >= 0 && attachment == nil {
 				attempt := j.RetryCount + 1
 				stepID := ci.StepIDFor(attempt, inFlightStepIdx)
 				var backing orchestrator.Sandbox
@@ -2809,8 +2886,9 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 				}
 			}
 			adoptedJobs[pj.ID] = ci.AdoptedJob{
-				Sandbox: sb,
-				Job:     j,
+				Sandbox:    sb,
+				Job:        j,
+				Attachment: attachment,
 			}
 			runAdoptedNotes = append(runAdoptedNotes, orchestrator.AdoptedCIJobNote{
 				Run: run.ID, Job: j.JobID, Repo: run.Repo, Ref: run.Ref, Sandbox: j.Sandbox,
@@ -2842,7 +2920,7 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 		adopted = append(adopted, runAdoptedNotes...)
 	}
 
-	stamped, err := lister.RecoverInterruptedExcept(ctx, time.Now().UTC(), adoptedRunIDs)
+	stamped, err := lister.RecoverUnattachable(ctx, time.Now().UTC(), adoptedRunIDs)
 	switch {
 	case err != nil:
 		log.Printf("ci: resolving runs a previous process left in flight: %v", err)
@@ -2915,7 +2993,7 @@ func CiCacheFillingJobs(store *model.Store, guestImage string) func(repo string)
 // Two things happen here that only a daemon can do, which is why the
 // wiring is not inside pkg/ci. The runs a *previous* process left in
 // flight are resolved before anything reads one back
-// (RecoverInterrupted: a row saying "no conclusion" means "still going",
+// (RecoverUnattachable: a row saying "no conclusion" means "still going",
 // and nothing is going any more), and a failure to do that is logged
 // rather than fatal -- a deployment whose CI history cannot be tidied
 // should still run CI, and every unresolved run costs at most the extra

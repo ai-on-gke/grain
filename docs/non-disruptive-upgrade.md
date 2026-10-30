@@ -40,7 +40,7 @@ This proposes a third.
 | --- | --- | --- | --- |
 | an agent run | a goroutine in the daemon (`orchestrator.runOne`) holding the agent CLI as a subprocess and its forked `mcpserver`, killed as a process group (`pkg/procgroup`) | cancelled with the daemon's context. The row is finished `interrupted` (`model.InterruptedOutcome`) by the drain, or by the next startup if the drain ran out or the process was killed (`RecoverOrphanedRuns`, `pkg/orchestrator/recover.go`) | the whole conversation and the sandbox. An `interrupted` ending does not count toward the task's streak, whichever of the two finished it (`b660114c6`, `6e0b3c0e9`) |
 | the sandbox that run was using | a granule VM, a container, or a pod | every VM under the prefix is deleted at startup (`GranuleSandboxes.ReapOrphans`, which is `SweepOrphans` with nothing yet in flight; `k8s_sandboxes.go` for pods) | a boot, a checkout, and whatever had been built in it |
-| a grain CI run | `ci.Engine` goroutines in the daemon, one sandbox per job | stamped cancelled-and-interrupted at the next startup (`ci.StoredRunStore.RecoverInterrupted`). The task forgets the verdict and the branch is started again (`orchestrator.collectCIRun`) | the jobs that were in flight. The finished ones replay from the job cache, which is the one part of this that already works |
+| a grain CI run | `ci.Engine` goroutines in the daemon, one sandbox per job | stamped cancelled-and-interrupted at the next startup (`ci.StoredRunStore.RecoverUnattachable`; a run with a step to reattach is reattached instead, docs/design/grain-on-gke.md#GKE-4). The task forgets the verdict and the branch is started again (`orchestrator.collectCIRun`) | the jobs that were in flight. The finished ones replay from the job cache, which is the one part of this that already works |
 | a console or Director session | a process tree held by `pkg/console` | killed | somebody's terminal, mid-sentence |
 | the UI, the API, the git proxy, the model proxy | one process, `--network host`, one bind each | connections refused for the length of the restart (measured per mode: `upgrade.GapRecorder`). Model-proxy tokens persist across it (`pkg/modelproxy/tokens.go`) | a `git push` in flight, an agent's model call; grain's own clients (`mcpserver`, the CLI, the UI's poll) wait it out |
 | the merge queue, sync, schedules, branches, reviews | level-triggered reconcilers over the store | nothing: the next tick reaches the same conclusions | latency |
@@ -916,7 +916,7 @@ of piece 2. The order within each:
 > run in place (`ci.Service.AdoptRun`): finished jobs replay from the run
 > row, the in-flight job re-attaches to its spooled step output from where
 > it was, and downstream jobs waiting in `needs:` run once it completes.
-> `StoredRunStore.RecoverInterruptedExcept` marks only the runs that could
+> `StoredRunStore.RecoverUnattachable` (formerly `RecoverInterruptedExcept`) marks only the runs that could
 > not be adopted as `interrupted`, and the post-upgrade check reports
 > `"N CI jobs adopted, M lost"` beside the agent-run counts. (Merge
 > batching has since been removed from the orchestrator, so there is no
