@@ -17,6 +17,7 @@ package ci
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -377,6 +378,120 @@ func githubJobNewer(a, b model.GitHubCIJob) bool {
 		return ta.After(tb)
 	}
 	return a.CheckRunID > b.CheckRunID
+}
+
+// GitHubCIRun synthesizes a ci.Run from the stored GitHubCIJob rows belonging
+// to a single GitHub Actions workflow run (RunID). This allows grain ci log
+// and GET /api/ci/runs/{id} to read GitHub Actions job logs and failure tails.
+func GitHubCIRun(jobs []model.GitHubCIJob) (Run, bool) {
+	if len(jobs) == 0 {
+		return Run{}, false
+	}
+	sorted := append([]model.GitHubCIJob(nil), jobs...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].JobName != sorted[j].JobName {
+			return sorted[i].JobName < sorted[j].JobName
+		}
+		return sorted[i].CheckRunID < sorted[j].CheckRunID
+	})
+	first := sorted[0]
+	runIDStr := strconv.FormatInt(first.RunID, 10)
+	if first.RunID == 0 {
+		runIDStr = strconv.FormatInt(first.CheckRunID, 10)
+	}
+	wf := first.Workflow
+	if wf == "" {
+		wf = "github-actions"
+	}
+	t0 := githubJobTime(first)
+	var startedPtr, finishedPtr *time.Time
+	if !t0.IsZero() {
+		ts, tf := t0, t0
+		startedPtr = &ts
+		finishedPtr = &tf
+	}
+	run := Run{
+		ID:         runIDStr,
+		Source:     FaultSourceGitHub,
+		Repo:       strings.TrimSpace(first.Repo),
+		Event:      "workflow_run",
+		Ref:        strings.TrimPrefix(strings.TrimSpace(first.Ref), "refs/heads/"),
+		Commit:     strings.TrimSpace(first.Commit),
+		Conclusion: ConclusionSuccess,
+		StartedAt:  startedPtr,
+		FinishedAt: finishedPtr,
+	}
+	for _, j := range sorted {
+		jc := githubConclusionToCI(j.Conclusion)
+		if jc == ConclusionFailure && run.Conclusion != ConclusionFailure {
+			run.Conclusion = ConclusionFailure
+		} else if jc == ConclusionCancelled && run.Conclusion == ConclusionSuccess {
+			run.Conclusion = ConclusionCancelled
+		}
+		stepName := strings.TrimSpace(j.FailingStep)
+		if stepName == "" {
+			stepName = strings.TrimSpace(j.JobName)
+		}
+		if stepName == "" {
+			stepName = "job"
+		}
+		output := j.FailureTail
+		if output == "" && j.JobURL != "" {
+			output = fmt.Sprintf("job %q concluded %s (%s)\n", j.JobName, j.Conclusion, j.JobURL)
+		}
+		exitCode := 0
+		if jc == ConclusionFailure {
+			exitCode = 1
+		}
+		t := githubJobTime(j)
+		var jtPtr *time.Time
+		if !t.IsZero() {
+			jt := t
+			jtPtr = &jt
+			if run.StartedAt == nil || t.Before(*run.StartedAt) {
+				ts := t
+				run.StartedAt = &ts
+			}
+			if run.FinishedAt == nil || t.After(*run.FinishedAt) {
+				tf := t
+				run.FinishedAt = &tf
+			}
+		}
+		jobName := strings.TrimSpace(j.JobName)
+		if jobName == "" {
+			jobName = j.JobKey()
+		}
+		if jobName == "" {
+			jobName = wf
+		}
+		run.Jobs = append(run.Jobs, JobRun{
+			JobID:      jobName,
+			Name:       jobName,
+			Conclusion: jc,
+			StartedAt:  j.StartedAt,
+			FinishedAt: jtPtr,
+			Steps: []StepRun{{
+				Name:       stepName,
+				Conclusion: jc,
+				ExitCode:   exitCode,
+				Output:     output,
+			}},
+		})
+	}
+	return run, true
+}
+
+func githubConclusionToCI(conclusion string) Conclusion {
+	switch strings.ToLower(strings.TrimSpace(conclusion)) {
+	case "success":
+		return ConclusionSuccess
+	case "cancelled":
+		return ConclusionCancelled
+	case "skipped", "neutral":
+		return ConclusionSkipped
+	default:
+		return ConclusionFailure
+	}
 }
 
 // Summary is the sentence a fault is said in, from the point of view of

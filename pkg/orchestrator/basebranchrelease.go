@@ -19,7 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -838,4 +840,118 @@ func baseBranchReleaseTriageBody(row model.BaseBranchRelease) string {
 	b.WriteString("- Repair the release pipeline or repository files so releases succeed.\n")
 	b.WriteString("\n" + model.RedCIProcedureReminder + "\n")
 	return b.String()
+}
+
+func isGitHubReleaseWorkflow(name, wfPath, event string) bool {
+	if strings.EqualFold(strings.TrimSpace(event), "release") {
+		return true
+	}
+	for _, cand := range []string{name, path.Base(wfPath)} {
+		s := strings.ToLower(strings.TrimSpace(cand))
+		s = strings.TrimSuffix(strings.TrimSuffix(s, ".yml"), ".yaml")
+		if s == "release" || s == "publish" ||
+			strings.HasPrefix(s, "release-") || strings.HasSuffix(s, "-release") ||
+			strings.HasPrefix(s, "publish-") || strings.HasSuffix(s, "-publish") {
+			return true
+		}
+	}
+	return false
+}
+
+func isGitHubBaseBranch(ctx context.Context, deps Deps, repo model.RepoRef, branch string) bool {
+	branch = strings.TrimSpace(strings.TrimPrefix(branch, "refs/heads/"))
+	if branch == "" {
+		return false
+	}
+	if deps.Client != nil {
+		return isTrunk(deps, repo, branch)
+	}
+	if deps.Store != nil {
+		if existing, err := deps.Store.GetBaseBranchRelease(ctx, repo, branch); err == nil && existing != nil {
+			return true
+		}
+		if existing, err := deps.Store.GetBaseBranchCI(ctx, repo, branch); err == nil && existing != nil {
+			return true
+		}
+	}
+	return branch == "main" || branch == "master"
+}
+
+// recordGitHubBaseBranchRelease updates BaseBranchRelease state when a
+// GitHub Actions release/publish workflow concludes on a base branch, raising
+// pipeline.not-publishing notifications and filing/closing release-triage
+// tasks on parity with grain CI release workflows.
+func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun, jobs []model.GitHubCIJob, now time.Time) error {
+	if deps.Store == nil || run.RunID == 0 {
+		return nil
+	}
+	if !isGitHubReleaseWorkflow(run.WorkflowName, run.WorkflowPath, run.Event) {
+		return nil
+	}
+	branch := strings.TrimPrefix(run.Ref, "refs/heads/")
+	if !isGitHubBaseBranch(ctx, deps, run.Repo, branch) {
+		return nil
+	}
+
+	existing, err := deps.Store.GetBaseBranchRelease(ctx, run.Repo, branch)
+	if err != nil {
+		return err
+	}
+	row := model.BaseBranchRelease{
+		Repo:   run.Repo,
+		Branch: branch,
+	}
+	if existing != nil {
+		row = *existing
+	}
+
+	conclusion := gitHubConclusionToCI(run.Conclusion)
+	started := now
+	if run.StartedAt != nil && !run.StartedAt.IsZero() {
+		started = *run.StartedAt
+	}
+	finished := now
+	if run.CompletedAt != nil && !run.CompletedAt.IsZero() {
+		finished = *run.CompletedAt
+	}
+
+	row.Commit = run.HeadSHA
+	row.RunID = strconv.FormatInt(run.RunID, 10)
+	row.Attempts = max(1, run.Attempt)
+	row.StartedAt = started
+	row.FinishedAt = &finished
+	row.Conclusion = string(conclusion)
+	row.Detail = gitHubWorkflowRunDetail(run, jobs)
+	noteBaseBranchReleaseOutcome(&row, conclusion)
+
+	if err := deps.Store.PutBaseBranchRelease(ctx, row); err != nil {
+		return err
+	}
+
+	switch conclusion {
+	case ci.ConclusionSuccess:
+		ids, err := deps.Store.OpenTasksWithTag(ctx, BaseReleaseTriageBranchTag(run.Repo, branch))
+		if err != nil {
+			return err
+		}
+		return closeSupersededTasks(ctx, deps.Store, ids, BaseReleaseTriager, fmt.Sprintf(
+			"Closed as superseded: GitHub Actions release workflow `%s` published `%s` on %s at %s (run `%s`), so its releases are working again and there is nothing left for this task to triage.",
+			run.WorkflowName, branch, run.Repo, shortSHA(row.Commit), row.RunID), now)
+	case ci.ConclusionFailure:
+		if err := fileBaseBranchReleaseTriage(ctx, deps, row, now); err != nil {
+			return err
+		}
+		// Attach the GitHub workflow run summary and failure tails to the open
+		// release-triage task so the triage agent has the run URL, failing
+		// job/step, and failure tail immediately.
+		summarySection := gitHubWorkflowRunSummarySection(run, jobs)
+		commitTag := BaseReleaseTriageTag(run.Repo, branch, row.Commit)
+		if t, err := deps.Store.OpenTaskWithTag(ctx, commitTag); err == nil && t != nil {
+			if !strings.Contains(t.Body, summarySection) {
+				t.Body = strings.TrimRight(t.Body, "\n") + "\n\n" + summarySection
+				_ = deps.Store.PutTask(ctx, *t)
+			}
+		}
+	}
+	return nil
 }

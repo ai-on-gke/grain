@@ -782,6 +782,26 @@ func recurrenceNode(row map[string]any) (string, *yaml.Node, error) {
 		if !hoursSet && !minutesSet && atSet && !weekdaySet && daySet && timeOfDay(at) != "" {
 			return "monthly", block(key("day"), number(day), key("at"), clock(at)), nil
 		}
+	default:
+		if recKind, ghTrig := model.ParseStoredRecurrenceKind(kind); recKind == model.RecurrenceGitHubWorkflowRun &&
+			ghTrig != nil && !hoursSet && !minutesSet && !atSet && !weekdaySet && !daySet {
+			inner := block(key("workflow"), str(ghTrig.Workflow))
+			if len(ghTrig.Conclusions) > 0 {
+				seq := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+				for _, c := range ghTrig.Conclusions {
+					seq.Content = append(seq.Content, str(c))
+				}
+				inner.Content = append(inner.Content, key("conclusions"), seq)
+			}
+			if len(ghTrig.Branches) > 0 {
+				seq := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+				for _, b := range ghTrig.Branches {
+					seq.Content = append(seq.Content, str(b))
+				}
+				inner.Content = append(inner.Content, key("branches"), seq)
+			}
+			return "trigger", block(key("github_workflow_run"), inner), nil
+		}
 	}
 	out := block()
 	for _, c := range []string{
@@ -1251,8 +1271,23 @@ func decodeRecurrence(path, id string, node *yaml.Node, row map[string]any) erro
 			row["day_of_month"] = v
 		}
 		return nil
+	case "trigger":
+		ghNode, ok := inside["github_workflow_run"]
+		if !ok {
+			ghNode, ok = inside["github-workflow-run"]
+		}
+		if !ok || ghNode.Kind != yaml.MappingNode {
+			return fail("`trigger` needs `github_workflow_run`")
+		}
+		var trig model.GitHubWorkflowRunTrigger
+		if err := ghNode.Decode(&trig); err != nil {
+			return fail(err.Error())
+		}
+		r := model.Recurrence{Kind: model.RecurrenceGitHubWorkflowRun, GitHubWorkflowRun: &trig}
+		row["recurrence_kind"] = r.StoredKind()
+		return nil
 	}
-	return fail("a cadence is one of `every`, `daily`, `weekly`, `monthly` or `recurrence`")
+	return fail("a cadence is one of `every`, `daily`, `weekly`, `monthly`, `trigger` or `recurrence`")
 }
 
 func minutesOfDay(at string) (int64, error) {
