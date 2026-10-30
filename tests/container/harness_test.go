@@ -80,6 +80,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // image is the deployment image under test. Empty means every test here
@@ -286,6 +288,15 @@ func newDaemon(t *testing.T, root string, opts options) *Daemon {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("laying out the data directory: %v", err)
 		}
+	}
+	// These tests configure the daemon -- its git connection above all,
+	// which every task they file needs -- through its API, which a
+	// deployment with a grain/config repository otherwise answers with a
+	// config pull request to open (docs/design/config-repo-settings.md,
+	// section 4.1.1). The host-local opt-out keeps those writes direct, as
+	// it does for the e2e and installer harnesses.
+	if err := staterepo.SaveSettings(d.Data, staterepo.Settings{DirectConfigWrites: true}); err != nil {
+		t.Fatalf("opting the data directory out of config pull requests: %v", err)
 	}
 
 	d.network = opts.network
