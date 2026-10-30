@@ -905,7 +905,7 @@ func TestTaskReadsSiblingsOnlyWithATasksReadGrant(t *testing.T) {
 			ID: "101", Repo: "acme/widgets", Record: "Task 101 record\n",
 			Prompt: "Task 101 prompt\n", Conversation: "Task 101 conversation\n",
 			Transcript: "Task 101 transcript\n",
-			Attempts: []TaskAttemptView{{Number: 1, Prompt: "Task 101 attempt prompt\n", Transcript: "Task 101 attempt transcript\n"}},
+			Attempts:   []TaskAttemptView{{Number: 1, Prompt: "Task 101 attempt prompt\n", Transcript: "Task 101 attempt transcript\n"}},
 		},
 	}}}
 	files := []string{"record.md", "prompt.md", "conversation.md", "transcript.md", "attempts/1/transcript.md", "attempts/1/prompt.md", ""}
