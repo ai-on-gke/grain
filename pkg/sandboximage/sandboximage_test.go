@@ -175,7 +175,7 @@ func TestStaleStockPin(t *testing.T) {
 		labels               map[string]string
 		stale                bool
 	}{
-		{"older commit mirrored elsewhere", "us-docker.pkg.dev/gke-adaptive-orchestration/grain/guest:sha-31d0973", stamped, nil, true},
+		{"older commit mirrored elsewhere", "us-docker.pkg.dev/example-project/grain/guest:sha-31d0973", stamped, nil, true},
 		{"older commit pinned by digest", "ghcr.io/bwsalmon/grain/guest:sha-31d0973@sha256:0123", stamped, nil, true},
 		{"release tag against a commit stamp", "ghcr.io/bwsalmon/grain/guest:v2.1.0", stamped, nil, true},
 		{"older release", "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.1.0", "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.2.0", nil, true},

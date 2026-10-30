@@ -52,7 +52,7 @@ func TestSettingsWarnAboutAStaleStockImagePin(t *testing.T) {
 	c, _, ctx := testClient(t)
 	stampedAt(c)
 	putImages(t, c, func(cfg *model.Config) {
-		cfg.K8sGranuleImage = "us-docker.pkg.dev/gke-adaptive-orchestration/grain/guest:sha-31d0973"
+		cfg.K8sGranuleImage = "us-docker.pkg.dev/example-project/grain/guest:sha-31d0973"
 		cfg.K8sSandboxImage = "registry.example/team/k8s-sandbox:v1"
 	})
 
@@ -70,7 +70,7 @@ func TestSettingsWarnAboutAStaleStockImagePin(t *testing.T) {
 	}
 
 	putImages(t, c, func(cfg *model.Config) {
-		cfg.K8sGranuleImage = "us-docker.pkg.dev/gke-adaptive-orchestration/grain/guest:sha-e5544d6"
+		cfg.K8sGranuleImage = "us-docker.pkg.dev/example-project/grain/guest:sha-e5544d6"
 	})
 	if s, err = c.GetSettings(ctx); err != nil {
 		t.Fatal(err)
