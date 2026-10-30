@@ -1971,9 +1971,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 // that already has it with a 304 and no body at all. taskListCache is
 // where the reasoning for both lives, including why it cannot serve a
 // stale list. A caller who is not a system admin is answered only the
-// tasks of the teams they belong to (bwsalmon/grain#2415).
+// tasks of the teams they belong to (bwsalmon/grain#2415). ?repo=owner/name
+// answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	body, etag, err := s.taskList.response(r.Context(), s.tasks)
+	body, etag, err := s.taskList.response(r.Context(), s.tasks, strings.TrimSpace(r.URL.Query().Get("repo")))
 	if err != nil {
 		writeClientError(w, err)
 		return

@@ -1098,7 +1098,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	if !set.Allows(scope, call.repo) {
 		if call.repo == "" {
 			return call, fmt.Errorf("%s holds %s only for %s, and %s does not name a repository it reaches",
-				principal, scope, strings.Join(tok.Repos, ", "), pattern)
+				principal, scope, strings.Join(set.Repos(scope), ", "), pattern)
 		}
 		return call, fmt.Errorf("%s holds %s, but not on %s", principal, scope, call.repo)
 	}

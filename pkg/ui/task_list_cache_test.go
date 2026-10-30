@@ -209,3 +209,40 @@ func TestTaskListOfAnEmptyStoreIsAnEmptyArray(t *testing.T) {
 		t.Errorf("empty task list = %q, want []", got)
 	}
 }
+
+// TestTaskListNarrowsToTheAskedRepo: ?repo= answers only that
+// repository's tasks, compared case-insensitively, under its own ETag --
+// the agent API gate admits a repository-scoped agent on the strength of
+// the ?repo= it names, so the answer may hold nothing outside it.
+func TestTaskListNarrowsToTheAskedRepo(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets")
+	seedAPITask(t, client, "2", "acme/gadgets")
+
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status %d", path, rec.Code)
+		}
+		return rec
+	}
+	whole := get("/api/tasks")
+	for _, path := range []string{"/api/tasks?repo=acme/widgets", "/api/tasks?repo=ACME/Widgets"} {
+		narrowed := get(path)
+		body := narrowed.Body.String()
+		if !strings.Contains(body, `"acme/widgets"`) || strings.Contains(body, "acme/gadgets") {
+			t.Errorf("GET %s = %s, want only acme/widgets' task", path, body)
+		}
+		if narrowed.Header().Get("ETag") == whole.Header().Get("ETag") {
+			t.Errorf("GET %s carries the whole list's ETag", path)
+		}
+	}
+	if body := get("/api/tasks?repo=acme/nothing").Body.String(); strings.TrimSpace(body) != "[]" {
+		t.Errorf("a repo with no tasks answered %s, want []", body)
+	}
+	if body := whole.Body.String(); !strings.Contains(body, "acme/gadgets") || !strings.Contains(body, "acme/widgets") {
+		t.Errorf("the unfiltered list lost a repo: %s", body)
+	}
+}
