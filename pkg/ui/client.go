@@ -4156,6 +4156,10 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	}
 	if err := c.mutate(ctx, id, func(task *model.Task) error {
 		submitted = false
+		// Whether this edit moves the task off a repository it had a
+		// target in, which takes the pull requests it opened there off
+		// it (below).
+		retargeted := false
 		if req.Title != nil {
 			titleChanged = *req.Title != task.Title
 			task.Title = *req.Title
@@ -4194,6 +4198,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 					}
 				}
 			}
+			retargeted = task.Target != nil && !task.Target.Same(*target)
 			task.Target = target
 		}
 		if req.Base != nil {
@@ -4280,6 +4285,22 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		}
 		if req.Reviewers != nil {
 			task.Reviewers = model.NormalizeReviewers(*req.Reviewers)
+		}
+		if retargeted {
+			// A pull request a run opened in the repository the task is
+			// moving off is not its change any more: left linked, the
+			// merge queue would go on reconciling it against this task
+			// beside whatever the next run opens, and closing it on
+			// GitHub would close the task. What was pinned to that pull
+			// request's head -- the classification of it, the hold it
+			// earned, a person's Submit of it -- goes with it; the next
+			// pull request is classified afresh.
+			if links, dropped := model.WithoutOffTargetPullRequests(*task); dropped {
+				task.Links = slices.DeleteFunc(links, func(l model.Link) bool {
+					return l.Kind == model.LinkSecurityHold || l.Kind == model.LinkTrustBoundaryCleared ||
+						l.Kind == model.LinkHumanSubmitted
+				})
+			}
 		}
 		if req.GoogleChatSpace != nil {
 			var newLinks []model.Link
@@ -6086,7 +6107,7 @@ func runNowComment(state model.State, ref string) string {
 func pullRequestRefOf(task model.Task) string {
 	var ref string
 	for _, l := range task.Links {
-		if l.Kind == model.LinkFixes {
+		if l.Kind == model.LinkFixes && !model.LinkOffTarget(task, l) {
 			ref = l.Target
 		}
 	}
