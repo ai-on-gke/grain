@@ -70,7 +70,7 @@ import SessionsPage from "./components/SessionsPage.jsx";
 import PanelBoard from "./components/PanelBoard.jsx";
 import ReportBoard from "./components/ReportBoard.jsx";
 import RepoList from "./components/RepoList.jsx";
-import RepoPage from "./components/RepoPage.jsx";
+import RepoPage, { REPO_TABS } from "./components/RepoPage.jsx";
 import PullRequestPage from "./components/PullRequestPage.jsx";
 import ProcessesList from "./components/ProcessesList.jsx";
 import { declaringRepos, triggersOf } from "./processes.js";
@@ -210,6 +210,16 @@ const BOARDS_REPO = "grain/config";
 
 function missingMessage(kind, id) {
   return `no ${kind} "${id}"`;
+}
+
+// repoTabCrumb is the crumb a repository page's tab adds after the
+// repository's name -- " / ci" on /repos/<o>/<n>/settings/ci -- so the
+// rail says which tab a shared link opened. Overview is the page itself
+// and adds nothing.
+function repoTabCrumb(tab) {
+  if (!tab || tab === "overview") return "";
+  const label = REPO_TABS.find((t) => t.id === tab)?.label || tab;
+  return ` / ${label.toLowerCase()}`;
 }
 
 // VIEW_LABELS names each view in the top bar's breadcrumb, in lower case
@@ -3256,7 +3266,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
             ? " / releases"
             : repoComparison !== null
               ? " / pull request"
-              : ""
+              : repoTabCrumb(repoTab)
         }`
       : view === "settings"
         ? `settings / ${settingsSectionLabel(settingsSection || "general").toLowerCase()}`

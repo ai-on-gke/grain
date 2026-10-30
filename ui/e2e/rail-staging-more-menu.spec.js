@@ -133,6 +133,30 @@ test.describe("on a touch phone", () => {
       .first()
       .tap();
   });
+
+  // Customize opens its overlay over the drawer rather than navigating:
+  // closing it lands back in the rail it customized, with focus on the
+  // button that opened it. Before the fix the tap closed the drawer, and
+  // Escape out of Customize left the reader on the bare page.
+  test("Customize keeps the drawer open under it and hands focus back", async ({
+    page,
+  }) => {
+    await page.goto("/inbox");
+    await page.getByRole("button", { name: "Open navigation" }).tap();
+    const drawer = page.getByRole("dialog", { name: "Navigation" });
+    const customize = drawer.getByRole("button", {
+      name: "Customize sidebar",
+    });
+    await expect(customize).toHaveAttribute("aria-haspopup", "dialog");
+    await customize.tap();
+    const overlay = page.getByRole("dialog", { name: "Customize sidebar" });
+    await expect(overlay).toBeVisible();
+    await expect(page.locator(".MuiDrawer-paper")).toBeAttached();
+    await page.keyboard.press("Escape");
+    await expect(overlay).toHaveCount(0);
+    await expect(drawer).toBeVisible();
+    await expect(customize).toBeFocused();
+  });
 });
 
 test("the header's More page actions menu closes on Escape and on a press outside it", async ({
