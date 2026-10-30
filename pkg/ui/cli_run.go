@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -51,6 +52,9 @@ func (c *Client) cliRunSettings(ctx context.Context) (CLIRunSettings, error) {
 			out.Settings[k] = v
 		}
 	}
+	// The pane shows a dialing-in hostd that is not connected at once,
+	// rather than after the wait a run would give it (hostd.ForDisplay).
+	ctx = hostd.ForDisplay(ctx)
 	if c.Config.CLIRuns != nil {
 		out.Resolved = c.Config.CLIRuns(ctx, out.Settings)
 	}
