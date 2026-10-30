@@ -432,6 +432,65 @@ func TestAFinishedExchangeLeavesTheDirectorTalkableTo(t *testing.T) {
 	}
 }
 
+// A director session that calls resume_later is queued again on the next
+// cycle, not rested on its person-closes goal -- even when grain has put
+// its own notices after the tool's answer, as it always does with the
+// tool budget a durable session runs under (task 1979: task 1933 sat
+// parked until its operator asked twice whether anything had happened).
+func TestASessionsResumeLaterSurvivesGrainsNotices(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	said := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, said)
+	started := said.Add(time.Second)
+	runID := director.ID + "-1"
+	if err := store.StartRun(ctx, model.Run{
+		ID: runID, TaskID: director.ID, Attempt: 1, StartedAt: started,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AdvanceDelivered(ctx, director.ID, lastComment(t, store, director.ID).ID, started); err != nil {
+		t.Fatal(err)
+	}
+	done := started.Add(time.Minute)
+	if err := store.FinishRun(ctx, runID, done, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	result := &agent.Result{ToolCalls: []agent.ToolCall{{
+		Name:      "resume_later",
+		Arguments: map[string]any{"reason": "restart on a fresh sandbox", "force": true},
+		Text: "Parked. This task is queued again on the next cycle; the next run's prompt says this one " +
+			"was suspended, and why. This ends your run: stop here and take no further actions." +
+			"\n\nresume_on: {}" +
+			"\n\n[grain] 4m left before grain cancels this run and destroys its sandbox." +
+			"\n\n[grain] Tool budget: this wake has made 52 tool calls and 298 KB of tool output.",
+	}}}
+	if err := orchestrator.ProcessResult(ctx, store, client, director, result, runID, done); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+
+	susps, err := store.Suspensions(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(susps) != 1 || susps[0].Kind != model.SuspendRequested || susps[0].ResumeOn != "" ||
+		!strings.Contains(susps[0].Detail, "restart on a fresh sandbox") {
+		t.Fatalf("Suspensions = %+v, want one requested suspension on the next cycle, with the run's reason", susps)
+	}
+	state, err := store.State(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != model.StateQueued {
+		t.Fatalf("state = %q, want %q -- queued again on the next cycle, not rested on its goal",
+			state, model.StateQueued)
+	}
+}
+
 // grain does not ask its own session for an isolation this deployment
 // cannot provide. The director ships asking for no network at all, and a
 // host-directory backend refuses such a run outright -- which on a
