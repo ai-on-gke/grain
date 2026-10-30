@@ -632,8 +632,14 @@ func resolveHandledRelayedThreads(ctx context.Context, store *model.Store, clien
 // merely looks like grain's, or belongs to some other GitHub App ("[bot]"): a
 // third-party reviewer bot replying in the thread is not grain, and only the
 // root comment's own author is.
+// reviewThreadCommentsPage is how many comments of each thread
+// github.ListReviewThreads reads (its query's comments(first: 100)).
+const reviewThreadCommentsPage = 100
+
 func threadHasHumanComment(th github.ReviewThread, commentByID map[int]github.ReviewComment, rootAuthor string) bool {
-	if rootAuthor == "" {
+	// ListReviewThreads reads at most a page of comments per thread, so a
+	// thread that fills one may hold replies it never saw.
+	if rootAuthor == "" || len(th.CommentIDs) >= reviewThreadCommentsPage {
 		return true
 	}
 	for _, id := range th.CommentIDs {
