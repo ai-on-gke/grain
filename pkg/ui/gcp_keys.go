@@ -65,7 +65,7 @@ func (c *Client) GetGCPKeyWithUser(ctx context.Context, name, user string) (mode
 
 // SetGCPKeyWithUser creates or updates one of the deployment's GCP keys.
 func (c *Client) SetGCPKeyWithUser(ctx context.Context, req SetGCPKeyRequest, user string) (model.GCPKey, error) {
-	if err := c.checkSettingsWritableUnrehearsed(ctx, "gcp_key"); err != nil {
+	if err := c.checkBootstrapWritableUnrehearsed(ctx, "gcp_key"); err != nil {
 		return model.GCPKey{}, err
 	}
 	name := strings.TrimSpace(req.Name)
@@ -127,7 +127,7 @@ func (c *Client) SetGCPKeyWithUser(ctx context.Context, req SetGCPKeyRequest, us
 
 // DeleteGCPKeyWithUser removes one of the deployment's GCP keys.
 func (c *Client) DeleteGCPKeyWithUser(ctx context.Context, name, user string) error {
-	if err := c.checkSettingsWritableUnrehearsed(ctx, "gcp_key"); err != nil {
+	if err := c.checkBootstrapWritableUnrehearsed(ctx, "gcp_key"); err != nil {
 		return err
 	}
 	return c.Store.DeleteGCPKey(ctx, name)

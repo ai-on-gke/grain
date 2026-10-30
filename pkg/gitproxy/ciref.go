@@ -22,10 +22,10 @@ package gitproxy
 // `latest` tag, moved on every promotion; and refs/heads/candidate, the
 // staging pointer, force-moved onto each cut. All three are allowed, the
 // two moving refs force-pushes included. What no CI job may do is
-// rewrite trunk: an update of a protected branch (CIProtectedBranches)
-// is let through only where the push shows it is a fast-forward, and a
-// deletion of one is refused outright. Every other ref is the job's
-// declaration to push, as it was before these rules.
+// move trunk: an update (including a fast-forward) or a deletion of a
+// protected branch (CIProtectedBranches) is refused outright. Every
+// other ref is the job's declaration to push, as it was before these
+// rules.
 //
 // The question is answered here rather than by a workflow's own
 // allowlist because a workflow file is a file any branch can rewrite:
@@ -37,7 +37,8 @@ import (
 	"strings"
 )
 
-// CIProtectedBranches are the branches a CI job may only fast-forward.
+// CIProtectedBranches are the branches a CI job may neither update nor
+// delete.
 var CIProtectedBranches = map[string]bool{
 	"refs/heads/main": true,
 }
@@ -47,9 +48,7 @@ var CIProtectedBranches = map[string]bool{
 const ciRefVia = "repo-write"
 
 // CIRefUpdates returns why a CI job with write access to owner/repo may
-// not make updates, or "" when it may make all of them. check is the
-// push in hand, for the fast-forward a protected branch's update must
-// show; nil shows none, so every such update is refused.
+// not make updates, or "" when it may make all of them.
 func CIRefUpdates(check *pushCheck, owner, repo string, updates []RefUpdate) string {
 	var problems []string
 	var grants []RefGrant
@@ -64,7 +63,7 @@ func CIRefUpdates(check *pushCheck, owner, repo string, updates []RefUpdate) str
 	if len(problems) > 0 {
 		return fmt.Sprintf("refusing to update %s/%s: %s. A CI job's repo-write grant may create and move tags "+
 			"(refs/tags/v*, a force-moved refs/tags/latest) and other branches (a force-moved refs/heads/candidate), "+
-			"but may only fast-forward %s", owner, repo, strings.Join(problems, "; "), protectedList())
+			"but may not update or delete %s", owner, repo, strings.Join(problems, "; "), protectedList())
 	}
 	check.grant(grants...)
 	return ""
@@ -72,7 +71,7 @@ func CIRefUpdates(check *pushCheck, owner, repo string, updates []RefUpdate) str
 
 // ciRefUpdate is one update's kind when CIRefUpdates allows it, or why
 // not.
-func ciRefUpdate(check *pushCheck, u RefUpdate) (kind, problem string) {
+func ciRefUpdate(_ *pushCheck, u RefUpdate) (kind, problem string) {
 	kind = updateKind(u)
 	if !CIProtectedBranches[u.Ref] {
 		if kind == "update" && strings.HasPrefix(u.Ref, "refs/tags/") {
@@ -86,19 +85,9 @@ func ciRefUpdate(check *pushCheck, u RefUpdate) (kind, problem string) {
 		return kind, ""
 	case "delete":
 		return "", fmt.Sprintf("%s may not be deleted from CI", u.Ref)
+	default:
+		return "", fmt.Sprintf("%s may not be updated from CI", u.Ref)
 	}
-	var why string
-	if check != nil {
-		var ok bool
-		if ok, why = check.fastForward(u.New, u.Old); ok {
-			return kind, ""
-		}
-	}
-	if why != "" {
-		why = " (asking the repository for the commits it already has: " + why + ")"
-	}
-	return "", fmt.Sprintf("%s: could not show %s is a fast-forward of %s%s, and a force-push to it is refused from CI",
-		u.Ref, shortCommit(u.New), shortCommit(u.Old), why)
 }
 
 func protectedList() string {

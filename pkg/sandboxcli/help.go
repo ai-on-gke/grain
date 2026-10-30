@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cli
+package sandboxcli
 
 const sandboxHelpText = `grain -- sandbox CLI for this grain deployment (proxy: %s)
 
@@ -239,16 +239,26 @@ var sandboxCommandHelp = map[string]string{
 	"release-notes stats":   "grain release-notes stats [--since <rfc3339>] [--until <rfc3339>]\n\nCompute task and PR statistics for a release window. Needs release-notes.\n",
 	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--since <rfc3339>] [--until <rfc3339>]\n\nPublish release notes for a version. Needs release-notes.\n",
 	"quarantine":            "grain quarantine <package> <test-name> --reason <why> [--expires <YYYY-MM-DD>] [--Follow-up-title <t>] [--no-follow-up] [-C <dir>]\n\nAdd a flaky test entry to .grain/quarantine.yml in the workspace and file a follow-up task.\nNeeds quarantine-test.\n",
-	"metrics":               "grain metrics [<section>]\n\ngrain's own measurements (deploy://metrics). Needs self-debug.\n",
-	"health":                "grain health\n\nThis deployment's health (deploy://health). Needs deployment-health.\n",
-	"log":                   "grain log [<source>] [--tail N]\n\ngrain's own log, redacted (deploy://grain.log). Needs grain-log.\n",
-	"playbooks":             "grain playbooks [<name>]\n\nList the bootstrap playbooks, or print one (src://playbooks). Needs bootstrap-playbooks.\n",
-	"issue list":            "grain issue list [--repo owner/name]\n\nGitHub issues. Needs read-issues.\n",
-	"issue read":            "grain issue read <number> [--repo owner/name]\n\nOne GitHub issue. Needs read-issues.\n",
-	"db query":              "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",
-	"ci":                    "grain ci (list | log | test-history | artifact | wait | run-job | retrigger) ...\n\nRun 'grain ci <command> --help' for each.\n",
-	"pr":                    "grain pr (status | base-status | open | reply | resolve | review-comment)\n",
-	"task":                  "grain task (list | read | prompt | transcript | wait | message | propose) ...\n",
-	"issue":                 "grain issue (list | read) ...\n",
-	"db":                    "grain db query <sql>\n",
+	"metrics": "grain metrics [<section>] [--window 7d | --since <date> [--until <date>]] [--repo owner/name]... [--author <a>]...\n\n" +
+		"grain's own measurements (deploy://metrics). Needs self-debug.\n\n" +
+		"  --window   how far back to measure: 36h, 7d, 2w (default: the daemon's own)\n" +
+		"  --since, --until  an absolute span instead: a date or an RFC 3339 timestamp\n" +
+		"  --repo, --author  only tasks on these repositories / by these authors (repeat or comma-separate)\n",
+	"health": "grain health\n\nThis deployment's health (deploy://health). Needs deployment-health.\n",
+	"log": "grain log [<source>] [--since <rfc3339>] [--until <rfc3339>] [--min-priority err|warning|...] [--contains <text>] [--max-lines N] [--tail N]\n\n" +
+		"grain's own log, redacted (deploy://grain.log). Needs grain-log.\n\n" +
+		"  --since, --until  the window, as RFC 3339 timestamps (default: the latest entries)\n" +
+		"  --min-priority    least severe journald priority to return (err, warning, info, ...)\n" +
+		"  --contains        only entries containing this text (plain, case-insensitive)\n" +
+		"  --max-lines N     most entries to return (alias --lines; default 200, at most 1000)\n" +
+		"  --tail N          the last N lines of what that returns\n",
+	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks, or print one (src://playbooks). Needs bootstrap-playbooks.\n",
+	"issue list": "grain issue list [--repo owner/name]\n\nGitHub issues. Needs read-issues.\n",
+	"issue read": "grain issue read <number> [--repo owner/name]\n\nOne GitHub issue. Needs read-issues.\n",
+	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",
+	"ci":         "grain ci (list | log | test-history | artifact | wait | run-job | retrigger) ...\n\nRun 'grain ci <command> --help' for each.\n",
+	"pr":         "grain pr (status | base-status | open | reply | resolve | review-comment)\n",
+	"task":       "grain task (list | read | prompt | transcript | wait | message | propose) ...\n",
+	"issue":      "grain issue (list | read) ...\n",
+	"db":         "grain db query <sql>\n",
 }

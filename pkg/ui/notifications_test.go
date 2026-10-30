@@ -24,6 +24,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -203,5 +204,65 @@ func TestNotifyHopsEscapeTheirTaskIDs(t *testing.T) {
 	want := []string{"/api/tasks/42%2Fmessages%3Fx=/notes|", "/api/tasks/7%2F..%2F42/notify|"}
 	if strings.Join(paths, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("paths = %q, want %q", paths, want)
+	}
+}
+
+// message_task to a resting durable task wakes it (2026-10-28
+// walkthrough, docs/test-runs/2026-10-28-operator-notifications.md step
+// 3): a child's note to a parent resting deferred on its met goal
+// re-queues the parent, with grain's note saying who woke it, and the
+// child's note is on the parent's conversation.
+func TestMessageTaskWakesARestingDurableParent(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	parent := create(t, client, ctx)
+	child := create(t, client, ctx)
+	grantTask(t, store, parent.ID, func(m *model.Task) {
+		m.Grants = append(m.Grants, model.Grant{Capability: model.DurableCapability})
+	})
+	grantTask(t, store, child.ID, func(m *model.Task) {
+		m.Links = append(m.Links, model.Link{Kind: model.LinkProposedBy, Target: parent.ID})
+	})
+	now := time.Now().UTC()
+	if err := store.SetTaskGoal(ctx, parent.ID, *model.PipelineStewardGoal(), "test", now); err != nil {
+		t.Fatal(err)
+	}
+	g, err := store.TaskGoal(ctx, parent.ID)
+	if err != nil || g == nil {
+		t.Fatalf("TaskGoal: %v %v", g, err)
+	}
+	g.MetAt = &now
+	if err := store.SaveTaskGoalProgress(ctx, *g); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetDeferred(ctx, parent.ID, &now, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if resting, err := store.RestingTask(ctx, parent.ID); err != nil || !resting {
+		t.Fatalf("RestingTask = %v, %v; want the parent resting", resting, err)
+	}
+
+	note, err := client.PostTaskNote(ctx, parent.ID, child.ID, "the base is green again")
+	if err != nil {
+		t.Fatalf("PostTaskNote: %v", err)
+	}
+	if resting, err := store.RestingTask(ctx, parent.ID); err != nil || resting {
+		t.Errorf("RestingTask after the note = %v, %v; want the parent woken", resting, err)
+	}
+	obs, err := store.GetObservation(ctx, parent.ID)
+	if err != nil || obs == nil || obs.RetryRequestedAt == nil {
+		t.Errorf("observation = %+v (%v), want the parent re-queued", obs, err)
+	}
+	comments, err := store.Comments(ctx, parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawNote, sawWake bool
+	for _, c := range comments {
+		sawNote = sawNote || (c.ID == note.ID && c.Body == "the base is green again")
+		sawWake = sawWake || strings.Contains(c.Body, "a note from task "+child.ID)
+	}
+	if !sawNote || !sawWake {
+		t.Errorf("parent's conversation = %+v, want the child's note and grain's wake note", comments)
 	}
 }

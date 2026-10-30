@@ -2042,34 +2042,6 @@ func ensureTeamGitCredential(ctx context.Context, sys System, opts Options, r *R
 	r.add(Step{Name: name, Status: StepDone, Detail: fmt.Sprintf("git connection to github.com with %s", opts.GitHubCredentialName)})
 }
 
-// sandboxBudgetSettings is the slice of GET /api/settings that
-// checkSandboxBudget reads: ui.SandboxCommitment and its Budget, trimmed
-// to the fields that say whether one sandbox of the deployment's own
-// shape fits inside the budget at all.
-type sandboxBudgetSettings struct {
-	SandboxCommitment *struct {
-		Uncapped           bool `json:"uncapped"`
-		CPUsPerSandbox     int  `json:"cpusPerSandbox"`
-		MemoryMBPerSandbox int  `json:"memoryMbPerSandbox"`
-		HostCPUs           int  `json:"hostCpus"`
-		HostMemoryMB       int  `json:"hostMemoryMb"`
-		Budget             *struct {
-			CPUOvercommit    float64 `json:"cpuOvercommit"`
-			MemoryOvercommit float64 `json:"memoryOvercommit"`
-			ReserveMemoryMB  int     `json:"reserveMemoryMb"`
-			CPUs             float64 `json:"cpus"`
-			CPUsBounded      bool    `json:"cpusBounded"`
-			MemoryMB         int     `json:"memoryMb"`
-			MemoryBounded    bool    `json:"memoryBounded"`
-		} `json:"budget"`
-	} `json:"sandboxCommitment"`
-}
-
-// minSuggestedReserveMB is the smallest memory reserve
-// checkSandboxBudget will suggest: what the 10-04 walkthrough's 7.8 GiB
-// host was brought to dispatching with (docs/test-runs/2026-10-04-grain-init-platforms.md).
-const minSuggestedReserveMB = 512
-
 // checkSandboxBudget reads the deployment's sandbox budget back off the
 // daemon it just brought up and reports a manual step when that budget
 // cannot hold even one sandbox of the deployment's own shape. Such a
@@ -2079,7 +2051,9 @@ const minSuggestedReserveMB = 512
 //
 // It never writes the settings itself. A reserve and a shape are an
 // operator's trade-off on their own machine. So this prints the PUT
-// that would fit, and the operator decides.
+// that would fit, and the operator decides. The verdict itself is
+// CheckSandboxBudget's, which `grain sandbox-budget` -- and through it
+// scripts/setup.sh's readiness report -- reads too.
 func checkSandboxBudget(ctx context.Context, sys System, opts Options, r *Result, daemonUp bool) {
 	const name = "check the sandbox budget can admit a run"
 	url := fmt.Sprintf("http://%s/api/settings", opts.UIAddr)
@@ -2100,80 +2074,27 @@ func checkSandboxBudget(ctx context.Context, sys System, opts Options, r *Result
 			Command: apiCurlCommand(opts, http.MethodGet, url, nil)})
 		return
 	}
-	var s sandboxBudgetSettings
-	if err := json.Unmarshal(body, &s); err != nil {
+	v, err := CheckSandboxBudget(body)
+	if err != nil {
 		r.add(Step{Name: name, Status: StepManual,
 			Detail:  fmt.Sprintf("parsing %s's response: %v", url, err),
 			Command: apiCurlCommand(opts, http.MethodGet, url, nil)})
 		return
 	}
-	c := s.SandboxCommitment
 	switch {
-	case c == nil:
-		// GET /api/settings answers the same for every caller; it omits
-		// the commitment while the deployment's own max_workers is 0.
-		r.add(Step{Name: name, Status: StepSkipped, Detail: "the daemon reports no sandbox commitment -- none while the " +
-			"deployment has no worker slots, and none at all where it cannot count its host's cores and memory (a Kubernetes " +
-			"cluster, or a daemon not on Linux), so there is no budget to check"})
+	case !v.Checked:
+		r.add(Step{Name: name, Status: StepSkipped, Detail: v.Detail})
 		return
-	case c.Budget == nil:
-		r.add(Step{Name: name, Status: StepSkipped, Detail: "the daemon reports no sandbox budget on this host -- nothing bounds a run"})
-		return
-	case c.Uncapped:
-		r.add(Step{Name: name, Status: StepSkipped, Detail: "host sandboxing -- runs are not shaped, so there is no budget to fit"})
+	case v.Fits:
+		r.add(Step{Name: name, Status: StepDone, Detail: v.Detail})
 		return
 	}
-	b := c.Budget
-
-	var problems []string
-	fix := map[string]any{}
-	tooSmall := false
-	if b.MemoryBounded && c.MemoryMBPerSandbox > 0 && b.MemoryMB < c.MemoryMBPerSandbox {
-		problems = append(problems, fmt.Sprintf("%d MiB of sandbox memory (%d MiB host less %d MiB reserved, at %.2fx) cannot hold one %d MiB sandbox",
-			b.MemoryMB, c.HostMemoryMB, b.ReserveMemoryMB, b.MemoryOvercommit, c.MemoryMBPerSandbox))
-		reserve, shape := fittingMemory(c.HostMemoryMB, b.ReserveMemoryMB, b.MemoryOvercommit, c.MemoryMBPerSandbox)
-		if reserve != b.ReserveMemoryMB {
-			fix["sandboxMemoryReserveMb"] = reserve
-		}
-		switch {
-		case shape == 0:
-			tooSmall = true
-		case shape != c.MemoryMBPerSandbox:
-			fix["sandboxMemoryMb"] = shape
-		}
-	}
-	if b.CPUsBounded && c.CPUsPerSandbox > 0 && b.CPUs < float64(c.CPUsPerSandbox) {
-		problems = append(problems, fmt.Sprintf("%.1f vCPU of sandbox cpu (%d host vCPU less the controller's reserve, at %.2fx) cannot hold one %d vCPU sandbox",
-			b.CPUs, c.HostCPUs, b.CPUOvercommit, c.CPUsPerSandbox))
-		if cpus := int(b.CPUs); cpus >= 1 {
-			fix["sandboxCpus"] = cpus
-		} else {
-			// The cpu reserve is not a setting, so a host it eats whole
-			// can only be unbounded in cpu (model.Budget.CPUBudget).
-			fix["sandboxCpuOvercommit"] = 0
-		}
-	}
-	if len(problems) == 0 {
-		detail := fmt.Sprintf("one %d MiB sandbox fits", c.MemoryMBPerSandbox)
-		if b.MemoryBounded {
-			detail += fmt.Sprintf(" in %d MiB of sandbox memory", b.MemoryMB)
-		}
-		r.add(Step{Name: name, Status: StepDone, Detail: detail})
-		return
-	}
-
-	detail := "no run can ever be admitted, so every approved task would stay queued: " + strings.Join(problems, "; ") +
-		". Lower the reserve or the sandbox shape in Settings → Sandbox"
-	step := Step{Name: name, Status: StepManual}
-	if tooSmall {
-		detail += " -- though this host has too little memory left for even a 1 GiB sandbox"
-	}
-	if len(fix) > 0 && !tooSmall {
-		reqBody, _ := json.Marshal(fix)
-		detail += ", or run the command below"
+	step := Step{Name: name, Status: StepManual, Detail: v.Detail}
+	if len(v.Fix) > 0 {
+		reqBody, _ := json.Marshal(v.Fix)
+		step.Detail += ", or run the command below"
 		step.Command = apiCurlCommand(opts, http.MethodPut, url, reqBody)
 	}
-	step.Detail = detail
 	r.add(step)
 }
 

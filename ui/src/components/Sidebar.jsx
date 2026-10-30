@@ -639,16 +639,29 @@ export default function Sidebar({
   // Inbox lists as a row of its own and counts in its heading
   // (InboxPage.jsx's StateSyncGroup). Without it a deployment whose
   // only trouble was that sync showed a bare Inbox entry here while
-  // the page it opens said 1 (2026-10-29 intake walkthrough).
+  // the page it opens said 1 (2026-10-29 intake walkthrough). Local
+  // -script calls waiting for approval count too, as the Inbox heading
+  // counts them (its LocalScriptsGroup): the server puts how many on
+  // /api/config (pendingLocalScripts) so this entry needs no poll of
+  // its own on every page.
   const waitingTasks = inboxTasks(tasks).length;
   const syncFailing = config?.stateRepoSyncFailure ? 1 : 0;
-  const inboxCount = waitingTasks + notificationCount + syncFailing;
+  const localScripts =
+    typeof config?.pendingLocalScripts === "number" &&
+    config.pendingLocalScripts > 0
+      ? config.pendingLocalScripts
+      : 0;
+  const inboxCount =
+    waitingTasks + notificationCount + syncFailing + localScripts;
   const inboxTitle = [
     waitingTasks > 0
       ? `${waitingTasks} task${waitingTasks === 1 ? "" : "s"} waiting on you`
       : "",
     notificationCount > 0
       ? `${notificationCount} notification${notificationCount === 1 ? "" : "s"}`
+      : "",
+    localScripts > 0
+      ? `${localScripts} local script${localScripts === 1 ? "" : "s"} waiting for approval`
       : "",
     syncFailing ? "settings are not being exported" : "",
   ]

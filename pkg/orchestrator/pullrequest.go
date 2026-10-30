@@ -17,6 +17,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -218,8 +219,25 @@ func OpenPullRequestForTask(ctx context.Context, store *model.Store, client gith
 // editing the task from the UI in between would lose their edit to this
 // write. Re-checking the link inside the closure is also what makes it
 // idempotent across a retry.
+//
+// It also keeps a task to one repository's pull requests: linking ref
+// drops any LinkFixes link to a pull request in another repository.
 func linkPullRequest(ctx context.Context, store *model.Store, taskID string, ref model.PullRequestRef) error {
 	if err := store.UpdateTask(ctx, taskID, func(t *model.Task) error {
+		// A pull request in another repository is one the task was moved
+		// off: it is not this task's change any more, and leaving it
+		// linked beside this one has every reader of the task's links
+		// reconcile two pull requests against its one observation row.
+		// Earlier pull requests in this same repository stay -- a merged
+		// one is how a reopened task knows its work already landed
+		// (mergedPullRequestOf).
+		t.Links = slices.DeleteFunc(t.Links, func(l model.Link) bool {
+			if l.Kind != model.LinkFixes || l.Target == ref.String() {
+				return false
+			}
+			other, err := model.ParsePullRequestRef(l.Target)
+			return err == nil && !other.Repo.Same(ref.Repo)
+		})
 		for _, l := range t.Links {
 			if l.Kind == model.LinkFixes && l.Target == ref.String() {
 				return nil

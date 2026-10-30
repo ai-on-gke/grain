@@ -18,13 +18,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -763,5 +766,163 @@ func TestExternalAgentCredentialNamesAreUnique(t *testing.T) {
 	req.Name = "OPS-laptop"
 	if _, err := client.CreateExternalAgentToken(humanCtx, req); err == nil {
 		t.Fatal("a second credential named ops-laptop was issued")
+	}
+}
+
+// TestExternalAgentSingleRepoCredentialListsOnlyItsRepo pins the
+// walkthrough finding of docs/test-runs/2026-10-29-external-agent-mcp.md:
+// the gate admits a credential restricted to one repository to
+// GET /api/tasks by defaulting ?repo= to that repository, so the list it is
+// answered must hold no task of any other -- GET /api/tasks used to ignore
+// ?repo= and answer every task in the deployment.
+func TestExternalAgentSingleRepoCredentialListsOnlyItsRepo(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+
+	seedAPITask(t, client, "10", "bwsalmon/grain")
+	seedAPITask(t, client, "11", "other/repo")
+
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "one-repo",
+		Scopes: []string{"tasks:read"},
+		Repos:  []string{"bwsalmon/grain"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := func(path string) []string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+issued.Token)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status %d (%s)", path, rec.Code, rec.Body.String())
+		}
+		var tasks []ui.Task
+		if err := json.Unmarshal(rec.Body.Bytes(), &tasks); err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, task := range tasks {
+			ids = append(ids, task.ID)
+		}
+		return ids
+	}
+	for _, path := range []string{"/api/tasks", "/api/tasks?repo=bwsalmon/grain", "/api/tasks?repo=BWSalmon/Grain"} {
+		if got := listed(path); !slices.Equal(got, []string{"10"}) {
+			t.Errorf("GET %s as a bwsalmon/grain credential listed %v, want only [10]", path, got)
+		}
+	}
+
+	_, res := callMCPTool(t, srv, issued.Token, "api_list_tasks", map[string]any{})
+	if res.IsError || len(res.Content) == 0 {
+		t.Fatalf("api_list_tasks: %+v", res)
+	}
+	if strings.Contains(res.Content[0].Text, "other/repo") || !strings.Contains(res.Content[0].Text, "bwsalmon/grain") {
+		t.Errorf("api_list_tasks as a bwsalmon/grain credential answered %s", res.Content[0].Text)
+	}
+}
+
+// TestExternalAgentConcurrencyCapRefusesASecondRequest holds one request
+// open -- authenticated, its body not yet sent -- and checks that a
+// credential with maxConcurrent 1 is refused a second until it finishes.
+func TestExternalAgentConcurrencyCapRefusesASecondRequest(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:          "one-at-a-time",
+		Scopes:        []string{"tasks:read"},
+		RateLimit:     1000,
+		MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pr, pw := io.Pipe()
+	held := httptest.NewRequest(http.MethodPost, "/mcp", pr)
+	held.Header.Set("Authorization", "Bearer "+issued.Token)
+	heldRec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.ServeHTTP(heldRec, held)
+	}()
+
+	// The held request takes its slot before it reads its body; until it
+	// has, a second request may still be let through.
+	var refused *httptest.ResponseRecorder
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if rec, _ := doMCP(t, srv, issued.Token, "ping", map[string]any{}); rec.Code == http.StatusTooManyRequests {
+			refused = rec
+			break
+		}
+	}
+	if refused == nil {
+		t.Fatal("a second request was never refused while the first held the only slot")
+	}
+	if !strings.Contains(refused.Body.String(), "exceeded max concurrent requests (1)") {
+		t.Errorf("refusal = %s, want the concurrency cap named", refused.Body.String())
+	}
+
+	_, _ = pw.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	_ = pw.Close()
+	<-done
+	if heldRec.Code != http.StatusOK {
+		t.Fatalf("held request: status %d (%s)", heldRec.Code, heldRec.Body.String())
+	}
+	if rec, _ := doMCP(t, srv, issued.Token, "ping", map[string]any{}); rec.Code != http.StatusOK {
+		t.Errorf("after the held request finished: status %d, want 200", rec.Code)
+	}
+}
+
+// TestExternalAgentRateLimitRetryAfterCoversTheRefill: a caller told to
+// retry after the Retry-After it was given must not be refused again
+// because the bucket has not refilled yet -- at 2 requests a minute that is
+// 30 seconds, not 1.
+func TestExternalAgentRateLimitRetryAfterCoversTheRefill(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:      "slow-bot",
+		Scopes:    []string{"tasks:read"},
+		RateLimit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec *httptest.ResponseRecorder
+	for range 3 {
+		rec, _ = doMCP(t, srv, issued.Token, "ping", map[string]any{})
+	}
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("third request at 2/min: status %d, want 429", rec.Code)
+	}
+	retry, err := strconv.Atoi(rec.Header().Get("Retry-After"))
+	if err != nil || retry < 25 || retry > 30 {
+		t.Errorf("Retry-After = %q, want about 30 seconds at 2 requests/minute", rec.Header().Get("Retry-After"))
+	}
+}
+
+// TestExternalAgentCredentialNotFoundNamesTheCredential: a 404 from the
+// credential routes says which kind of thing was missing.
+func TestExternalAgentCredentialNotFoundNamesTheCredential(t *testing.T) {
+	srv, _ := testServer(t)
+	for _, c := range []struct{ method, path string }{
+		{http.MethodPost, "/api/external-agents/tokens/999/rotate"},
+		{http.MethodPost, "/api/external-agents/tokens/999/revoke"},
+		{http.MethodDelete, "/api/external-agents/tokens/999"},
+	} {
+		rec := do(t, srv, c.method, c.path, "")
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "no external agent credential 999") {
+			t.Errorf("%s %s: %d %s, want 404 naming the credential", c.method, c.path, rec.Code, rec.Body.String())
+		}
 	}
 }

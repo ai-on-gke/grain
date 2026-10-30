@@ -952,15 +952,21 @@ export function reasonControl(t) {
   return null;
 }
 
-// mergeQueueBatching is the one merge-queue state that is about more than
-// this task: grain is testing it together with the other changes at the
-// front of its repository's queue, on a throwaway ref of its own. It is
-// singled out because the batch is a thing with a page's worth to say
-// about it (MergeBatchPanel, GET /api/merge-batches) and this is what
-// decides whether to go and ask -- a task in no batch should not be
-// making that call on every open.
+// mergeQueueBatching reports whether this task is in a merge batch or
+// overlap re-check on the merge queue's throwaway ref (orchestrator's
+// setRecheckState). It decides whether DetailOverlay fetches
+// MergeBatchPanel (GET /api/merge-batches) -- a task in no re-check should
+// not make that call on every open.
 export function mergeQueueBatching(t) {
-  return t.state !== "closed" && t.mergeQueueState === "batching";
+  if (!t || t.state === "closed") return false;
+  if (t.mergeQueueState === "batching") return true;
+  return (
+    t.mergeQueueState === "waiting_ci" &&
+    typeof t.mergeQueueNote === "string" &&
+    t.mergeQueueNote.startsWith(
+      "grain CI is re-checking this change on top of ",
+    )
+  );
 }
 
 // relativeAge renders how long ago an ISO timestamp was, as short as it

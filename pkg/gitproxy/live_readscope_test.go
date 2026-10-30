@@ -237,15 +237,18 @@ func TestLiveACISandboxWithWriteScopeMayPushGrantedRepository(t *testing.T) {
 	run(t, clone, "git", "add", "RELEASE.md")
 	run(t, clone, "git", "commit", "-q", "-m", "release commit")
 
-	if out, err := ciGit(t, clone, "push", "origin", "HEAD:main"); err != nil {
-		t.Fatalf("a CI sandbox with write scope should be able to push:\n%v\n%s", err, out)
+	if out, err := ciGit(t, clone, "push", "origin", "HEAD:main"); err == nil {
+		t.Fatalf("a CI sandbox with write scope should not be able to update main:\n%s", out)
+	}
+	if out, err := ciGit(t, clone, "push", "origin", "HEAD:refs/heads/candidate"); err != nil {
+		t.Fatalf("a CI sandbox with write scope should be able to push candidate:\n%v\n%s", err, out)
 	}
 
 	// Verify the push reached upstream.
 	tip := runOutput(t, rig.upstreamDir, "git", "--git-dir",
-		filepath.Join(rig.upstreamDir, "owner", "widgets.git"), "log", "-1", "--format=%s", "main")
+		filepath.Join(rig.upstreamDir, "owner", "widgets.git"), "log", "-1", "--format=%s", "candidate")
 	if strings.TrimSpace(tip) != "release commit" {
-		t.Errorf("upstream main tip = %q, want 'release commit'", strings.TrimSpace(tip))
+		t.Errorf("upstream candidate tip = %q, want 'release commit'", strings.TrimSpace(tip))
 	}
 }
 

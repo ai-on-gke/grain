@@ -83,6 +83,8 @@ type (
 	GateRequest        = gritengine.GateRequest
 	OOMReporter        = gritengine.OOMReporter
 	PreemptionReporter = gritengine.PreemptionReporter
+	StepAttachment     = gritengine.StepAttachment
+	StepAttachments    = gritengine.StepAttachments
 )
 
 const (
@@ -113,6 +115,7 @@ var (
 	NewJobRun                        = gritengine.NewJobRun
 	SandboxName                      = gritengine.SandboxName
 	SortJobRuns                      = gritengine.SortJobRuns
+	stepEnv                          = gritengine.StepEnv
 	SummarizeFailure                 = gritengine.SummarizeFailure
 	WithDetach                       = gritengine.WithDetach
 

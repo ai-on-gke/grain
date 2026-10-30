@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/k8s"
-	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 )
@@ -62,6 +61,7 @@ type SandboxAccessStore interface {
 	DeleteSandboxAccess(ctx context.Context, sandbox string) error
 	GetSandboxAccess(ctx context.Context, sandbox string) (model.SandboxAccessCredential, bool, error)
 	SandboxAccessCredentials(ctx context.Context) ([]model.SandboxAccessCredential, error)
+	DeleteFinishedSandboxAccess(ctx context.Context) error
 }
 
 // K8sGranuleAccess turns on granule's dial-out sandbox access channel
@@ -317,6 +317,11 @@ func (k *K8sGranuleSandboxes) sweepOrphanAccess(ctx context.Context) {
 		if ctx == nil {
 			ctx = context.Background()
 		}
+		// Rows of sandboxes whose run has finished are not in the list
+		// below, so they are cleared here or never.
+		if err := k.cfg.Access.Store.DeleteFinishedSandboxAccess(ctx); err != nil {
+			log.Printf("orchestrator: clearing finished sandboxes' access credentials: %v", err)
+		}
 		if creds, err := k.cfg.Access.Store.SandboxAccessCredentials(ctx); err == nil {
 			for _, c := range creds {
 				candidates[c.Sandbox] = true
@@ -336,8 +341,8 @@ func (k *K8sGranuleSandboxes) sweepOrphanAccess(ctx context.Context) {
 
 // waitAccessChannel waits up to AccessTimeout after the pod is Ready for the
 // wrapper's dial-out channel to connect on the Acceptor. If the channel does
-// not come up in time, it runs one diagnostic kubectl exec to read the
-// wrapper's dial-out log and includes that log in the returned error.
+// not come up in time, it reads the tail of the wrapper container's log
+// with one diagnostic kubectl logs and includes it in the returned error.
 func (k *K8sGranuleSandboxes) waitAccessChannel(ctx context.Context, sandbox, podName string) error {
 	if !k.isDialout() {
 		return nil
@@ -356,7 +361,7 @@ func (k *K8sGranuleSandboxes) waitAccessChannel(ctx context.Context, sandbox, po
 		}
 		diag := k.readDialoutDiagnosticLog(ctx, podName)
 		if diag != "" {
-			return fmt.Errorf("orchestrator: waiting for granule sandbox pod %q dial-out channel (timeout %s): %w (wrapper dial-out log: %s)",
+			return fmt.Errorf("orchestrator: waiting for granule sandbox pod %q dial-out channel (timeout %s): %w (wrapper container log: %s)",
 				podName, timeout, err, diag)
 		}
 		return fmt.Errorf("orchestrator: waiting for granule sandbox pod %q dial-out channel (timeout %s): %w",
@@ -365,34 +370,28 @@ func (k *K8sGranuleSandboxes) waitAccessChannel(ctx context.Context, sandbox, po
 	return nil
 }
 
-// diagnosticExecRunner returns a KubectlExecRunner into the pod's wrapper
-// container (without granuleExecPrefix) used only for one-shot diagnostic
-// inspection when the dial-out channel fails to connect.
-func (k *K8sGranuleSandboxes) diagnosticExecRunner(podName string) *mcp.KubectlExecRunner {
-	return &mcp.KubectlExecRunner{
-		Kubectl:    k.cfg.Kubectl,
-		Kubeconfig: k.cfg.Kubeconfig,
-		Namespace:  k.client.NamespaceOrDefault(),
-		Pod:        podName,
-		Container:  k8s.SandboxContainer,
-	}
-}
+// dialoutDiagnosticLogLines bounds how much of the wrapper container's log
+// readDialoutDiagnosticLog reads: enough to cover granule-shim's boot and
+// its dial-out lines, short enough to sit in an Acquire error.
+const dialoutDiagnosticLogLines = 40
 
-// readDialoutDiagnosticLog runs a single diagnostic kubectl exec via
-// KubectlExecRunner to read the wrapper's dial-out log when a sandbox channel
-// fails to connect within AccessTimeout.
+// readDialoutDiagnosticLog reads the tail of the sandbox pod's wrapper
+// container log -- one kubectl logs call, bounded to 15s -- when a sandbox
+// channel fails to connect within AccessTimeout. granule-shim logs to
+// stderr, so its dial-out lines ("dialing out to the sandbox access
+// controller at ...", "sandbox access dial-out stopped: ...") land in the
+// container log and nowhere else. The shim never logs the access token: it
+// reads GRANULE_ACCESS_TOKEN(_FILE), scrubs it, and only names the
+// variables in its messages. Best-effort: a failed read is reported in
+// the text rather than replacing the caller's error.
 func (k *K8sGranuleSandboxes) readDialoutDiagnosticLog(ctx context.Context, podName string) string {
 	diagCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 
-	stdout, stderr, _ := k.diagnosticExecRunner(podName).Run(
-		diagCtx,
-		[]string{"sh", "-c", "cat /var/log/granule-dialout.log /tmp/granule-dialout.log 2>/dev/null || true"},
-		"",
-	)
-	out := strings.TrimSpace(stdout)
-	if out == "" {
-		out = strings.TrimSpace(stderr)
+	out, err := k.client.TailLogs(diagCtx, podName, k8s.SandboxContainer, dialoutDiagnosticLogLines)
+	out = strings.TrimSpace(out)
+	if out == "" && err != nil {
+		return fmt.Sprintf("unavailable: %v", err)
 	}
 	return out
 }

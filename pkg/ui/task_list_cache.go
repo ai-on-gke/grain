@@ -105,8 +105,8 @@ type taskListCache struct {
 	token string // the ChangeToken everything below was built at
 	// tasks is the whole list the body below was encoded from.
 	tasks []Task
-	// bodies holds the one answer, under taskListKey: every caller is
-	// served the whole list.
+	// bodies holds the answers built at token: the whole list under
+	// taskListKey, and each ?repo= narrowing of it under taskListRepoKey.
 	bodies map[string]taskListBody
 
 	// builds counts the times this went to the store, for the test that
@@ -119,14 +119,24 @@ type taskListBody struct {
 	etag string
 }
 
-// taskListKey is the one key bodies is kept under: every caller the
-// daemon serves reads the whole list.
+// taskListKey is the key the whole list is kept under.
 const taskListKey = "*"
+
+// taskListRepoKey is the key the list narrowed to one repository is kept
+// under. Repository names compare case-insensitively, as an agent's
+// repository grant does (model.APIGrantSet.Allows).
+func taskListRepoKey(repo string) string {
+	return "repo:" + strings.ToLower(repo)
+}
 
 // response is the body and ETag for one GET /api/tasks,
 // from the cache when the store says nothing has been committed since it
-// was built and from the store otherwise.
-func (c *taskListCache) response(ctx context.Context, client *Client) ([]byte, string, error) {
+// was built and from the store otherwise. A non-empty repo narrows the
+// answer to that repository's tasks: the agent API gate admits a
+// repository-scoped caller on the strength of the ?repo= it names
+// (agentCallRepo, externalAgentCallRepo), so the list must hold no task
+// outside it.
+func (c *taskListCache) response(ctx context.Context, client *Client, repo string) ([]byte, string, error) {
 	// Before the build, never after -- see the type's own doc comment for
 	// what reading it afterwards would cost.
 	token := ""
@@ -142,6 +152,9 @@ func (c *taskListCache) response(ctx context.Context, client *Client) ([]byte, s
 		// long as the condition lasted.
 	}
 	key := taskListKey
+	if repo != "" {
+		key = taskListRepoKey(repo)
+	}
 	var tasks []Task
 	if token != "" {
 		var body []byte
@@ -160,6 +173,14 @@ func (c *taskListCache) response(ctx context.Context, client *Client) ([]byte, s
 		tasks = all
 	}
 	visible := tasks
+	if repo != "" {
+		visible = nil
+		for _, t := range tasks {
+			if strings.EqualFold(t.Repo, repo) {
+				visible = append(visible, t)
+			}
+		}
+	}
 	// An empty list is [], never null: the UI maps over the answer, and a
 	// deployment with no tasks in it yet would otherwise fail to draw at
 	// all.

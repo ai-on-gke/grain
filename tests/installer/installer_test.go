@@ -38,6 +38,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -139,6 +140,17 @@ func install() (*deployment, error) {
 	// this exact test helper while all of its tools still cross the real MCP
 	// subprocess and per-run sandbox boundary.
 	if err := os.MkdirAll(d.data, 0o755); err != nil {
+		return nil, err
+	}
+	// These tests configure the installed daemon -- its repositories,
+	// capability servers and git connections -- through its API and CLI,
+	// which a deployment with a grain/config repository otherwise sends
+	// to a config pull request (docs/design/config-repo-settings.md,
+	// section 4.1.1). The host-local opt-out keeps them writing directly.
+	if err := staterepo.SaveSettings(d.data, staterepo.Settings{DirectConfigWrites: true}); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(filepath.Join(d.data, staterepo.SettingsFileName), 0o644); err != nil {
 		return nil, err
 	}
 	d.testAgent = filepath.Join(d.data, "container-e2e-agent")
@@ -647,7 +659,6 @@ func TestInstalledContainerBackendRunsAndCleansUpACompleteTask(t *testing.T) {
 	defer cancel()
 	client := ui.NewHTTPClient(fmt.Sprintf("http://127.0.0.1:%d", d.port))
 	client.Token = d.accessCode(t)
-	approved, autoMerge := false, false
 	backends := []model.AgentBackend{{
 		ID: "installer-container-e2e", Name: "installer container e2e",
 		Framework: model.AgentFrameworkCustom, Command: d.testAgent,
@@ -655,10 +666,12 @@ func TestInstalledContainerBackendRunsAndCleansUpACompleteTask(t *testing.T) {
 		// empty list has no models -- its tasks wait for one to be set.
 		Models: []string{"installer-test-model"},
 	}}
+	// Only the connection: it is a Models setting, which a deployment
+	// with a grain/config repository still takes from the API. The
+	// approved/auto-merge defaults are the New Task form's starting
+	// state, and the task below is filed with both given explicitly.
 	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{
-		ApprovedByDefault:  &approved,
-		AutoMergeByDefault: &autoMerge,
-		AgentBackends:      &backends,
+		AgentBackends: &backends,
 	}); err != nil {
 		t.Fatalf("configuring the deterministic custom backend: %v", err)
 	}
@@ -819,12 +832,9 @@ func TestInstalledContainerBackendRunsAndCleansUpACompleteTask(t *testing.T) {
 		t.Fatalf("finished task state = %q, %v; want closed", current.State, err)
 	}
 
-	defaultApproved, defaultAutoMerge := true, true
 	noBackends := []model.AgentBackend{}
 	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{
-		ApprovedByDefault:  &defaultApproved,
-		AutoMergeByDefault: &defaultAutoMerge,
-		AgentBackends:      &noBackends,
+		AgentBackends: &noBackends,
 	}); err != nil {
 		t.Fatalf("restoring deployment defaults after the lifecycle task: %v", err)
 	}

@@ -553,3 +553,23 @@ func TestPromptOpensWithTheSuspension(t *testing.T) {
 		t.Errorf("a prompt after a failed run names a suspension:\n%s", prompt)
 	}
 }
+
+// A resumed session can predate the control surface, so its own earlier
+// turns name MCP tools that are gone (task 1715's resume called
+// wait_for_checks, open_pull_request and run_ci_job, got "No such tool
+// available" for each, and parked without running CI). The delta prompt
+// carries the grain CLI reference so the resumed run knows what replaced
+// them.
+func TestSuspendedPromptCarriesTheGrainCLI(t *testing.T) {
+	tk := stdTask("subject")
+	tk.Target = &model.RepoRef{Owner: "acme", Name: "widgets"}
+	prompt := BuildSuspendedPrompt(tk, "", "", History{}, nil, nil)
+	for _, want := range []string{
+		"### Grain CLI (`grain`)", "`grain ci wait", "`wait_for_checks` is `grain ci wait`",
+		"`open_pull_request` is `grain pr open`", "`run_ci_job` is `grain ci run-job`",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("suspended prompt does not mention %q:\n%s", want, prompt)
+		}
+	}
+}

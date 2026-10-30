@@ -67,6 +67,43 @@ func RemoteBranches(h CredentialHost, credential Credential, owner, repo string)
 	return names, nil
 }
 
+// SmartHTTPAdvertises is whether owner/repo on h answers credential's
+// smart-HTTP ref advertisement for service ("git-upload-pack" for read,
+// "git-receive-pack" for push), asked through the same transport the git
+// proxy forwards that credential's requests with. It is how a credential
+// on a plain git host is tested, that host having no API to ask: a host
+// that refuses the credential, or only lets it read, answers the
+// receive-pack advertisement with a 401 or 403. When it does not, the
+// string says why.
+func SmartHTTPAdvertises(h CredentialHost, credential Credential, owner, repo, service string) (bool, string) {
+	if credential.SSH != nil {
+		return false, fmt.Sprintf("%s/%s is reached over SSH, not HTTP(S)", owner, repo)
+	}
+	upstream, err := hostForwarder(h, credential).Forward("GET", fmt.Sprintf("/%s/%s.git/info/refs", owner, repo),
+		"service="+service, nil, nil, credential.Token)
+	if err != nil {
+		return false, fmt.Sprintf("could not reach %s: %v", h.Host, err)
+	}
+	var body io.Reader = strings.NewReader(string(upstream.Body))
+	if upstream.Stream != nil {
+		defer upstream.Stream.Close()
+		body = upstream.Stream
+	}
+	switch upstream.Status {
+	case 200:
+	case 401, 403:
+		return false, fmt.Sprintf("%s refused the credential for %s on %s/%s (HTTP %d)", h.Host, service, owner, repo, upstream.Status)
+	case 404:
+		return false, fmt.Sprintf("%s has no repository %s/%s that this credential can see (HTTP 404)", h.Host, owner, repo)
+	default:
+		return false, fmt.Sprintf("%s answered HTTP %d for %s/%s", h.Host, upstream.Status, owner, repo)
+	}
+	if _, err := readRefAdvertisement(io.LimitReader(body, maxRefAdvertisementBytes)); err != nil {
+		return false, fmt.Sprintf("%s/%s on %s: %v", owner, repo, h.Host, err)
+	}
+	return true, ""
+}
+
 // remoteRefs is owner/repo's ref advertisement on h, read with credential:
 // the first half of any clone.
 func remoteRefs(h CredentialHost, credential Credential, owner, repo string) (map[string]string, error) {

@@ -34,7 +34,7 @@ func TestDemoMergeReasonsAreClassified(t *testing.T) {
 			t.Errorf("%q is seeded with state %q, which it is not a sub-case of", reason, state)
 		}
 	}
-	for _, reason := range []string{"batching/batch_run", "waiting_ci/github_checks_pending", "merge_failed/given_up"} {
+	for _, reason := range []string{"waiting_ci/grain_running", "waiting_ci/github_checks_pending", "merge_failed/given_up"} {
 		if got := orchestrator.MergeReason(reason); got.Reason != reason {
 			t.Errorf("%q is not a merge-queue sub-case the orchestrator classifies", reason)
 		}

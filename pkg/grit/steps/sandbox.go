@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
@@ -86,6 +87,10 @@ type SandboxRequest struct {
 	// and it is one grain itself fired rather than one a caller asked
 	// for, which a model.TrustedScheduleCapability may be released to.
 	TrustedSchedule bool
+	// WithholdEventGated is Request.WithholdEventGated: the dispatch came
+	// from a caller that is not a person, so event-gated CI capabilities
+	// (model.CIEventCapability) must be refused.
+	WithholdEventGated bool
 	// Name is what the sandbox should be called -- unique per job per
 	// run, derived by the engine (sandboxName) so a backend does not
 	// have to invent one and an operator reading a VM list can tell
@@ -179,6 +184,14 @@ type Command struct {
 	// shell script runs in a detached in-sandbox step runner that spools
 	// output to disk and can be reattached across a daemon restart.
 	StepID string
+	// Attach, when non-nil, ties the command to the exec a sandbox reached
+	// over its dial-out channel runs it as: the sandbox reports the exec
+	// id and output cursor through it as the step runs, and when its
+	// ExecID is set the sandbox reattaches to that exec -- started by a
+	// grain that has since restarted -- instead of running Script again
+	// (docs/design/grain-on-gke.md#GKE-4). A sandbox with no channel
+	// ignores the reporting and refuses a reattach.
+	Attach *sandboxaccess.Attachment
 }
 
 // StepIDFor returns the deterministic in-sandbox step runner identifier
