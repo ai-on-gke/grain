@@ -1522,13 +1522,18 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // effect below -- which is what a page *loaded* on /boards/board-3
   // goes through -- does not undo a narrowing this click just applied,
   // or a narrowing the reader has since made of the board on screen.
-  const seededBoard = useRef(null);
+  //
+  // It is state rather than a ref so that it lands in the same render as
+  // the narrowing it seeds: the board panes below wait on it
+  // (boardAwaitingSeed), and a ref written in the effect was visible to
+  // a render the seeded narrowing had not reached yet.
+  const [seededBoard, setSeededBoard] = useState(null);
   const openBoard = useCallback(
     (board) => {
       if (leavingLosesEdits() && !window.confirm(DISCARD_PROMPT)) return;
       closeRepoPage();
       closeOpenItems();
-      seededBoard.current = board.id;
+      setSeededBoard(board.id);
       setAskedNarrowing(boardNarrowing(board));
       setOpenBoardId(board.id);
       setBoardWindow(null);
@@ -1545,12 +1550,12 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // exactly askedNarrowing being null (the list is on its default).
   useEffect(() => {
     if (view !== "boards" || openBoardId === null) return;
-    if (seededBoard.current === openBoardId) return;
+    if (seededBoard === openBoardId) return;
     const board = boards.find((b) => b.id === openBoardId);
     if (!board) return;
-    seededBoard.current = openBoardId;
+    setSeededBoard(openBoardId);
     if (askedNarrowing === null) setAskedNarrowing(boardNarrowing(board));
-  }, [view, openBoardId, boards, askedNarrowing]);
+  }, [view, openBoardId, boards, askedNarrowing, seededBoard]);
 
   // The two buttons that change a board, and the whole of how a board is
   // made: they open the new-task form on a task that is already written
@@ -1761,7 +1766,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       // them, not back to whichever one was last open.
       setOpenBoardId(null);
       setBoardWindow(null);
-      seededBoard.current = null;
+      setSeededBoard(null);
       setView(v);
     },
     [closeRepoPage, closeOpenItems],
@@ -2833,7 +2838,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       // narrowing only when the path it arrived on narrowed nothing.
       setOpenBoardId(parsed.boardId || null);
       setBoardWindow(parsed.boardWindow || null);
-      seededBoard.current = null;
+      setSeededBoard(null);
       setOpenScheduleId(parsed.scheduleId || null);
       setOpenTemplateId(parsed.templateId || null);
       setOpenSuiteId(parsed.suiteId || null);
@@ -3058,6 +3063,21 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // list rather than fetched, the same way an open schedule is: App
   // already holds every board.
   const openBoardRow = boards.find((b) => b.id === openBoardId) || null;
+
+  // A board loaded cold from its URL is found here a render before the
+  // effect above seeds its question into the narrowing, and a pane that
+  // asks the daemon for something on mount -- a report board, or a
+  // dashboard's metrics panel -- asked /api/metrics once over the whole
+  // deployment before asking again under the board's own scope
+  // (grain/task-1755). The answer was discarded, but the computation was
+  // not. Until the seed lands those two panes wait; a board asking
+  // nothing of its own (boardNarrowing null) seeds nothing, so has
+  // nothing to wait for.
+  const boardAwaitingSeed =
+    openBoardRow !== null &&
+    askedNarrowing === null &&
+    seededBoard !== openBoardRow.id &&
+    boardNarrowing(openBoardRow) !== null;
 
   // openNewTaskWithFields is the task pane's "File a task with these
   // fields" link (grain/task-53), followed in-app: the same /new path
@@ -3564,7 +3584,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
                          (PanelBoard.jsx, grain/task-88). It takes every
                          task for the reason the board does -- what a
                          panel is about is its own narrowing. */
-                                    panelBoardPane(openBoardRow)
+                                    boardAwaitingSeed
+                                    ? null
+                                    : panelBoardPane(openBoardRow)
                                   : openBoardRow.kind === "report"
                                     ? /* The one kind that is not a view of these
                            tasks at all (ReportBoard.jsx,
@@ -3573,7 +3595,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
                            says. It takes no tasks for that reason --
                            a percentile is not something this page can
                            compute from rows it holds. */
-                                      reportBoardPane(openBoardRow)
+                                      boardAwaitingSeed
+                                      ? null
+                                      : reportBoardPane(openBoardRow)
                                     : openBoardRow.kind === "tree"
                                       ? taskTreePane(tasks, { landmark: false })
                                       : taskListPane(tasks, "all", {
