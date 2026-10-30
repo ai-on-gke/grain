@@ -102,6 +102,75 @@ function HostdWhere({ executor }) {
   );
 }
 
+// The daemon does not know a URL hostd can reach it at: the browser's
+// origin may be a proxy (UberProxy, say) that hostd cannot dial.
+const DIAL_IN_FLAGS =
+  "-server <this daemon's URL> -token-file <the hostd token>";
+
+// CommandBlock is a command to paste: kept whole on a wide screen, and
+// broken anywhere on a phone rather than pushed off its edge.
+function CommandBlock({ children, testid }) {
+  return (
+    <Box
+      component="pre"
+      data-testid={testid}
+      sx={{
+        my: 0.5,
+        fontFamily: "monospace",
+        fontSize: "0.8125rem",
+        whiteSpace: "pre-wrap",
+        overflowWrap: "anywhere",
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
+// HostdDialInHelp is what to run for a hostd to dial in, for each kind of
+// host: the installer's grain-hostd.service takes the flags in a drop-in
+// (as scripts/migrate-local-to-gke.sh Stage 5 writes one) -- a second,
+// hand-started hostd beside it would share its -state-dir -- and a hand-
+// run one needs -socket= and its own -allowlist, since the defaults
+// (/run/grain-hostd, /etc/grain/hostd.yaml) are the installer's.
+function HostdDialInHelp() {
+  return (
+    <Alert
+      severity="warning"
+      data-testid="cli-run-hostd-status"
+      sx={{ "& .MuiAlert-message": { minWidth: 0 } }}
+    >
+      This daemon takes a grain hostd that dials in to it, but none is
+      connected. A CLI set to host fails its runs until one does.{" "}
+      <code>&lt;the hostd token&gt;</code> is a file holding the token in this
+      daemon&apos;s <code>-hostd-token-file</code>; this daemon logs a hostd it
+      refuses for its token.
+      <Box component="p" sx={{ mt: 1, mb: 0 }}>
+        On a host where grain&apos;s installer runs{" "}
+        <code>grain-hostd.service</code>, add the flags to its ExecStart in a
+        drop-in, rather than starting a second hostd beside it (the two would
+        share one state directory). Run{" "}
+        <code>sudo systemctl edit grain-hostd.service</code> and write, with the
+        unit&apos;s own ExecStart from{" "}
+        <code>systemctl cat grain-hostd.service</code>:
+      </Box>
+      <CommandBlock testid="cli-run-hostd-dropin">
+        {`[Service]\nExecStart=\nExecStart=<the unit's ExecStart> ${DIAL_IN_FLAGS}`}
+      </CommandBlock>
+      Then run <code>sudo systemctl restart grain-hostd.service</code>.
+      <Box component="p" sx={{ mt: 1, mb: 0 }}>
+        On a host without the installer, run hostd by hand with no socket of its
+        own and an allowlist of what this host may run (root-owned, not group-
+        or world-writable): the defaults, <code>/run/grain-hostd</code> and{" "}
+        <code>/etc/grain/hostd.yaml</code>, are the installer&apos;s.
+      </Box>
+      <CommandBlock testid="cli-run-hostd-command">
+        {`grain hostd ${DIAL_IN_FLAGS} -socket= -allowlist <file>`}
+      </CommandBlock>
+    </Alert>
+  );
+}
+
 // HostExecutorNotice says what "host" means for this deployment when it
 // is not the bare machine: why there is no host to run on (Kubernetes, or
 // a container with no grain hostd), or whether grain hostd answers.
@@ -152,17 +221,7 @@ export function HostExecutorNotice({ executor }) {
   if (executor.remote && !hostd?.remote?.connected) {
     // A hostd on another machine dials in (hostd -server); none has, or
     // the one that did has dropped and not yet reconnected.
-    return (
-      <Alert severity="warning" data-testid="cli-run-hostd-status">
-        This daemon takes a grain hostd that dials in to it, but none is
-        connected. On the host, run{" "}
-        <code>
-          grain hostd -server &lt;this daemon&apos;s URL&gt; -token-file &lt;the
-          hostd token&gt;
-        </code>
-        . A CLI set to host fails its runs until it connects.
-      </Alert>
-    );
+    return <HostdDialInHelp />;
   }
   if (executor.remote) {
     const host = hostd.remote.host;

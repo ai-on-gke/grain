@@ -34,6 +34,7 @@ import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import CapabilityArgsForm from "./CapabilityArgsForm.jsx";
+import InfoPopover from "./InfoPopover.jsx";
 import { capabilityMethods, checkGrants } from "./capabilityMethods.js";
 import {
   DANGEROUS_API_HINT,
@@ -450,7 +451,7 @@ export default function GrantsPicker({
             label={label}
             ariaLabel={`${label}${state?.suffix || ""}`}
             tip={`${state ? `${state.textNote || state.note}\n\n` : ""}${d.lines.join("\n")}`}
-            caption={method?.description || ""}
+            info={method?.description || ""}
             badge={
               state
                 ? {
@@ -866,6 +867,7 @@ function GrantLine({
   ariaLabel,
   tip,
   caption,
+  info,
   badge,
   onRemove,
 }) {
@@ -914,6 +916,7 @@ function GrantLine({
           {label}
         </Typography>
       </Tooltip>
+      <InfoPopover title={info} label={label} />
       {caption && (
         <Typography
           variant="caption"
@@ -1079,14 +1082,17 @@ function ArgsSection({
         }}
       >
         <Box sx={{ flex: "1 1 0", minWidth: 0, pt: 0.5 }}>
-          <Typography
-            variant="body2"
-            component="div"
-            className="grant-label"
-            sx={{ fontWeight: 500 }}
-          >
-            {label}
-          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+            <Typography
+              variant="body2"
+              component="div"
+              className="grant-label"
+              sx={{ fontWeight: 500 }}
+            >
+              {label}
+            </Typography>
+            <InfoPopover title={method.description} label={label} />
+          </Box>
           <Typography
             variant="caption"
             color="text.secondary"
@@ -1095,15 +1101,6 @@ function ArgsSection({
           >
             {method.ref}
           </Typography>
-          {method.description && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              component="div"
-            >
-              {method.description}
-            </Typography>
-          )}
         </Box>
         {(status || !grant) && (
           <Typography

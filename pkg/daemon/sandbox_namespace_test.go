@@ -208,7 +208,8 @@ func TestSandboxProxyServesTheStage2Roots(t *testing.T) {
 		{token: "own", path: "/fs/task/t-7/attempts/1/prompt.md", status: 200, want: []string{"prompt of attempt 1"}},
 		{token: "own", path: "/fs/task/t-7/attempts/1/transcript.md", status: 200, want: []string{"transcript of attempt 1"}},
 		{token: "own", path: "/fs/task/t-7/attempts?list", status: 200, want: []string{"1/", "2/"}},
-		{token: "own", path: "/fs/task/t-8/record.md", status: 403},
+		// A sibling task in the run's own repository is readable too.
+		{token: "own", path: "/fs/task/t-8/record.md", status: 200, want: []string{"Widget task t-8"}},
 		{token: "debug", path: "/fs/task/t-8/record.md", status: 200, want: []string{"Widget task t-8"}},
 		{token: "debug", path: "/fs/task/?list", status: 200, want: []string{"t-7/", "t-8/"}},
 		{token: "debug", path: "/fs/task/t-404/record.md", status: 404},

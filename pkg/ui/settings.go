@@ -229,6 +229,14 @@ type Settings struct {
 	// adjustments and OOM kills are SandboxCommitment.Budget.Overcommit.
 	SandboxOvercommit model.OvercommitSettings `json:"sandboxOvercommit"`
 	ExternalAgentAPI  bool                     `json:"externalAgentApi"`
+	// SessionSandboxIdleTTL is model.Config.SessionSandboxIdleTTL: how long
+	// an interactive chat/session task's sandbox (and in-process agent run)
+	// stays warm awaiting a reply after a turn ends before being released,
+	// as a Go duration string ("30m"). Empty means grain's own default
+	// (SessionSandboxIdleTTLDefault); a negative duration ("-1s") turns warm
+	// retention off.
+	SessionSandboxIdleTTL        string `json:"sessionSandboxIdleTtl"`
+	SessionSandboxIdleTTLDefault string `json:"sessionSandboxIdleTtlDefault"`
 	// SandboxMemoryReserveMBDefault is what a negative reserve comes to
 	// on the host this process can speak for (model.DefaultReserveMemoryMB),
 	// so the pane's blank field can say what blank means. Zero, and so
@@ -1131,6 +1139,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxMemoryReserveMBDefault:      c.sandboxMemoryReserveDefault(),
 		SandboxOvercommit:                  cfg.SandboxOvercommit.Resolved(),
 		ExternalAgentAPI:                   cfg.ExternalAgentAPI,
+		SessionSandboxIdleTTL:              durationSetting(cfg.SessionSandboxIdleTTL),
+		SessionSandboxIdleTTLDefault:       model.DefaultSessionSandboxIdleTTL.String(),
 		SandboxDiskFloorShare:              cfg.SandboxDiskFloorShare,
 		SandboxDiskFloorMinMB:              cfg.SandboxDiskFloorMinMB,
 		SandboxDiskFloorShareDefault:       model.DefaultDiskFloorShare,
@@ -1346,6 +1356,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			SandboxDiskOvercommitDefault:   model.DefaultDiskOvercommit,
 			SandboxOvercommit:              def.SandboxOvercommit.Resolved(),
 			ExternalAgentAPI:               def.ExternalAgentAPI,
+			SessionSandboxIdleTTL:          durationSetting(def.SessionSandboxIdleTTL),
+			SessionSandboxIdleTTLDefault:   model.DefaultSessionSandboxIdleTTL.String(),
 			SandboxDiskFloorShare:          def.SandboxDiskFloorShare,
 			SandboxDiskFloorMinMB:          def.SandboxDiskFloorMinMB,
 			SandboxDiskFloorShareDefault:   model.DefaultDiskFloorShare,
@@ -1474,6 +1486,7 @@ type UpdateSettingsRequest struct {
 	// (model.OvercommitSettings); zero bounds are grain's defaults.
 	SandboxOvercommit      *model.OvercommitSettings `json:"sandboxOvercommit"`
 	ExternalAgentAPI       *bool                     `json:"externalAgentApi"`
+	SessionSandboxIdleTTL  *string                   `json:"sessionSandboxIdleTtl"`
 	SandboxMemoryReserveMB *int                      `json:"sandboxMemoryReserveMb"`
 	SandboxDiskFloorShare  *float64                  `json:"sandboxDiskFloorShare"`
 	SandboxDiskFloorMinMB  *int                      `json:"sandboxDiskFloorMinMb"`
@@ -1824,6 +1837,19 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	}
 	if req.ExternalAgentAPI != nil {
 		cfg.ExternalAgentAPI = *req.ExternalAgentAPI
+	}
+	if req.SessionSandboxIdleTTL != nil {
+		d, err := parseDurationSetting("sessionSandboxIdleTtl", *req.SessionSandboxIdleTTL)
+		if err != nil {
+			return model.Config{}, err
+		}
+		if d != 0 && d > -time.Millisecond && d < time.Millisecond {
+			return model.Config{}, validationErrorf("sessionSandboxIdleTtl is stored in whole "+
+				"milliseconds, so %s would be kept as 0 -- which means grain's own default rather "+
+				"than what you asked for. Use a negative duration (-1s) to turn warm retention off, "+
+				"or blank for the default", d)
+		}
+		cfg.SessionSandboxIdleTTL = d
 	}
 	// A negative reserve is grain's own (an eighth of the machine), so
 	// what there is to refuse here is the other end: a reserve at or

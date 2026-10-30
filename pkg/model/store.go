@@ -4215,19 +4215,23 @@ func (s *Store) GitPushAnyRef(ctx context.Context, sandbox string) (bool, error)
 // NamespaceScope describes the namespace roots and repositories a sandbox's
 // currently live run may read over /fs/<scheme>/<path> and /cli/ on the sandbox proxy.
 type NamespaceScope struct {
-	TaskID            string
-	RunID             string
-	Attempt           int
-	TaskRepo          string
-	TaskBranch        string
-	TaskBase          string
-	ConfigRepo        string
-	Grants            []string
-	MayReadCI         bool
-	MayReadAllCI      bool
-	AllowedRepos      map[string]bool
-	MayReadSrc        bool
-	MayReadAllTasks   bool
+	TaskID          string
+	RunID           string
+	Attempt         int
+	TaskRepo        string
+	TaskBranch      string
+	TaskBase        string
+	ConfigRepo      string
+	Grants          []string
+	MayReadCI       bool
+	MayReadAllCI    bool
+	AllowedRepos    map[string]bool
+	MayReadSrc      bool
+	MayReadAllTasks bool
+	// TaskReadRepos are the repositories whose tasks the run may read
+	// under task:// without MayReadAllTasks: its task's target, reads
+	// and writes, and any api:tasks:read@owner/repo names.
+	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
 	MayReadMetrics    bool
@@ -4237,6 +4241,30 @@ type NamespaceScope struct {
 	MayReadPlaybooks  bool
 	MayReadIssues     bool
 	MayReadDB         bool
+}
+
+// TaskCIRef is the repository task id works in and the branch its runs
+// push to, which is what grain CI's runs for it are recorded under:
+// what `grain ci list --task` and `grain pr status --task` look up.
+// found is false, with a nil error, for a task that does not exist.
+func (s *Store) TaskCIRef(ctx context.Context, id string) (repo, branch string, found bool, err error) {
+	id = strings.TrimSpace(strings.TrimPrefix(id, "#"))
+	if id == "" {
+		return "", "", false, nil
+	}
+	var owner, name, stored sql.NullString
+	err = s.db.QueryRowContext(ctx,
+		"SELECT `target_owner`, `target_name`, `branch` FROM `task` WHERE `id` = ?", id).Scan(&owner, &name, &stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("reading task %s: %w", id, err)
+	}
+	if owner.Valid && owner.String != "" {
+		repo = RepoFromStored(owner.String, name.String).String()
+	}
+	return repo, Task{ID: id, Branch: stored.String}.BranchName(), true, nil
 }
 
 // SandboxNamespaceScope returns the namespace access scope of the currently
@@ -4264,6 +4292,7 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	taskBase := strings.TrimSpace(storedBase.String)
 
 	allowed := make(map[string]bool)
+	taskRepos := make(map[string]bool)
 	addRepo := func(r string) {
 		r = strings.TrimSpace(r)
 		if r == "" {
@@ -4272,16 +4301,27 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		allowed[r] = true
 		allowed[strings.ToLower(r)] = true
 	}
+	addTaskRepo := func(r string) {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			return
+		}
+		taskRepos[r] = true
+		taskRepos[strings.ToLower(r)] = true
+	}
 	var taskRepo string
 	if target != nil {
 		taskRepo = target.String()
 		addRepo(taskRepo)
+		addTaskRepo(taskRepo)
 	}
 	for _, r := range reads {
 		addRepo(r.String())
+		addTaskRepo(r.String())
 	}
 	for _, w := range writes {
 		addRepo(w.String())
+		addTaskRepo(w.String())
 	}
 
 	cfgRepo := ConfigRepo()
@@ -4368,6 +4408,9 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	if apiSet.Allows("tasks:read", "") {
 		mayReadAllTasks = true
 	}
+	for _, r := range apiSet.Repos("tasks:read") {
+		addTaskRepo(r)
+	}
 	if apiSet.Allows("settings:read", "") || apiSet.Allows("repos:read", "") {
 		mayReadFullConfig = true
 	}
@@ -4397,6 +4440,7 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		AllowedRepos:      allowed,
 		MayReadSrc:        mayReadSrc,
 		MayReadAllTasks:   mayReadAllTasks,
+		TaskReadRepos:     taskRepos,
 		MayReadFullConfig: mayReadFullConfig,
 		MayReadAllMemory:  mayReadAllMemory,
 		MayReadMetrics:    mayReadMetrics,
@@ -4886,7 +4930,7 @@ const configColumns = "`poll_interval_ms`,`max_workers`,`max_mergers`,`max_merge
 	"`k8s_privileged`,`k8s_network_policy`,`k8s_deployment`,`k8s_container`," +
 	"`mcp_servers`,`capability_policy`,`cli_run`,`sandbox_overcommit`,`base_ci_red_streak`," +
 	"`k8s_priority_class_interactive`,`k8s_priority_class_agent`,`k8s_priority_class_ci`,`sandbox_disk_overcommit`," +
-	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`"
+	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`"
 
 func scanConfig(scan func(...any) error) (Config, error) {
 	var c Config
@@ -4899,6 +4943,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	// The merge queue's gather window, in milliseconds for the same
 	// reason (grain/task-360).
 	var gatherWindowMS int64
+	var sessionIdleTTLMS int64
 	var defaultCapabilities string
 	var networkAccess string
 	var consoleSessions string
@@ -4944,7 +4989,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 		&c.K8sPrivileged, &c.K8sNetworkPolicy, &c.K8sDeployment, &c.K8sContainer,
 		&mcpServers, &capabilityPolicy, &cliRun, &sandboxOvercommit, &c.BaseCIRedStreak,
 		&c.K8sPriorityClassInteractive, &c.K8sPriorityClassAgent, &c.K8sPriorityClassCI, &c.SandboxDiskOvercommit,
-		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror); err != nil {
+		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS); err != nil {
 		return Config{}, err
 	}
 	backends, err := DecodeAgentBackends(agentBackends)
@@ -4981,6 +5026,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	c.MergeGatherWindow = time.Duration(gatherWindowMS) * time.Millisecond
 	c.CIAgeBoost = time.Duration(ageBoostMS) * time.Millisecond
 	c.CIReserveAfter = time.Duration(reserveAfterMS) * time.Millisecond
+	c.SessionSandboxIdleTTL = time.Duration(sessionIdleTTLMS) * time.Millisecond
 	c.DefaultCapabilities = splitCapabilities(defaultCapabilities)
 	c.TargetRepos = splitCSV(targetRepos)
 	c.K8sNodeSelector = splitCSV(k8sNodeSelector)
@@ -5053,7 +5099,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
-		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		c.PollInterval.Milliseconds(), c.MaxWorkers, c.MaxMergers, c.MaxMergesPerRepo, c.MergeBatchSize,
 		c.MergeGatherWindow.Milliseconds(), c.MaxCIJobs, c.MaxAgentTurns,
 		c.GitHubHost, c.GitHubInsecureHTTP, c.GCPProject, c.GCPServiceAccountEmail,
@@ -5088,7 +5134,8 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		strings.TrimSpace(c.K8sPriorityClassInteractive), strings.TrimSpace(c.K8sPriorityClassAgent),
 		strings.TrimSpace(c.K8sPriorityClassCI), c.SandboxDiskOvercommit,
 		strings.TrimSpace(c.AutoUpgradeChannel), strings.TrimSpace(c.AutoUpgradeTime),
-		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI, strings.TrimSpace(c.SandboxImageMirror))
+		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI, strings.TrimSpace(c.SandboxImageMirror),
+		c.SessionSandboxIdleTTL.Milliseconds())
 	return err
 }
 

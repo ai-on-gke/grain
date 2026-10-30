@@ -5214,3 +5214,48 @@ func TestAChangelistIsTheTasksChangeLikeAPullRequest(t *testing.T) {
 		}
 	}
 }
+
+// TaskCIRef names the repository a task works in and the branch fixed
+// on it, which is what `grain ci list --task` and `grain pr status --task`
+// read CI under; and a live run's scope may read the task:// records of
+// tasks in its own repository, the ones it reads, and any an
+// api:tasks:read@repo grant names.
+func TestTaskCIRefAndTaskReadRepos(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	tk := task("f1e2", true)
+	tk.Branch = "grain/dep/task-f1e2"
+	tk.Reads = []model.RepoRef{{Owner: "owner", Name: "shared-lib"}}
+	tk.Grants = []model.Grant{{Capability: "api:tasks:read@other/repo", Via: model.GrantByLabel}}
+	if err := store.PutTask(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+	repo, branch, found, err := store.TaskCIRef(ctx, "#f1e2")
+	if err != nil || !found || repo != tk.Target.String() || branch != "grain/dep/task-f1e2" {
+		t.Errorf("TaskCIRef = (%q, %q, %v, %v), want (%q, grain/dep/task-f1e2, true, nil)", repo, branch, found, err, tk.Target.String())
+	}
+	if _, _, found, err := store.TaskCIRef(ctx, "nope"); found || err != nil {
+		t.Errorf("TaskCIRef of a missing task = (found %v, %v), want (false, nil)", found, err)
+	}
+
+	if err := store.StartRun(ctx, model.Run{
+		ID: "f1e2-r1", TaskID: "f1e2", Sandbox: "sandbox-taskrepos", Attempt: 1, StartedAt: now,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	scope, live, err := store.SandboxNamespaceScope(ctx, "sandbox-taskrepos")
+	if err != nil || !live {
+		t.Fatalf("SandboxNamespaceScope = (live %v, %v)", live, err)
+	}
+	if scope.MayReadAllTasks {
+		t.Errorf("a repository-limited tasks:read reads every task: %+v", scope)
+	}
+	for _, r := range []string{tk.Target.String(), "owner/shared-lib", "other/repo"} {
+		if !scope.TaskReadRepos[r] {
+			t.Errorf("%s not in TaskReadRepos %v", r, scope.TaskReadRepos)
+		}
+	}
+	if scope.TaskReadRepos["unrelated/repo"] {
+		t.Errorf("TaskReadRepos %v holds a repository nothing granted", scope.TaskReadRepos)
+	}
+}
