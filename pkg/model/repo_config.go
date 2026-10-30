@@ -752,7 +752,7 @@ type RepoConfig struct {
 	// IssueImport is the periodic GitHub issue importer's settings for
 	// this repository: whether grain files a task for each open issue it
 	// has not imported yet, from where, and whether those tasks wait for
-	// a person (orchestrator.reconcileIssueImports, schema 64).
+	// a person (orchestrator.reconcileIssueImports, schema 65).
 	IssueImport IssueImport
 }
 

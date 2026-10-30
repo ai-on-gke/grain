@@ -355,6 +355,11 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     64,
+		Description: "persist running CI steps' exec ids and cursors so a restart reattaches them",
+		Statements:  []string{ciStepAttachmentTable},
+	},
+	{
+		Version:     65,
 		Description: "add each repository's GitHub issue importer settings to repo_config",
 		Statements: []string{
 			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_enabled` INTEGER NOT NULL DEFAULT 0",

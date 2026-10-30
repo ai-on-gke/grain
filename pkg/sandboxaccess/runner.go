@@ -170,33 +170,54 @@ func (r *Runner) RunStream(ctx context.Context, argv []string, stdin string, out
 	return stdout, stderr, exitCode
 }
 
+// Attachment ties one exec to a record that outlives this process, so a
+// grain that restarts mid-step can find the command again
+// (docs/design/grain-on-gke.md, "Restart: reattach rather than interrupt").
+//
+// The wrapper keeps an exec, its spool and, once it ends, its exit status
+// across the acceptor going away; what it cannot keep is which of grain's
+// steps the exec was. That is what the caller persists, from Started and
+// Progress, and hands back as ExecID and Cursor after a restart.
+type Attachment struct {
+	// ExecID, when set, names an exec already started in the sandbox --
+	// by a grain process that has since gone -- to reattach to rather than
+	// starting argv again. A wrapper that no longer knows it, or a
+	// sandbox whose channel never comes back, ends the call with
+	// ErrChannelLost.
+	ExecID string
+	// Cursor is how many bytes of the exec's output the caller already
+	// has, the offset a reattach resumes from.
+	Cursor int64
+	// Started, when non-nil, is told the exec id once the wrapper has
+	// started the command (or, for a reattach, the id reattached to).
+	Started func(execID string)
+	// Progress, when non-nil, is told the cursor -- the bytes of output
+	// delivered so far, from the start of the exec -- each time more
+	// arrives. It is called from the goroutine reading the exec and must
+	// not block for long.
+	Progress func(cursor int64)
+}
+
 // Exec executes argv in the guest over the sandbox access channel and returns
 // the terminal exit code along with any transport error (such as ErrChannelLost
 // when a dropped channel does not reconnect within ReattachTimeout).
 func (r *Runner) Exec(ctx context.Context, argv []string, stdin string, out io.Writer) (stdout, stderr string, exitCode int, err error) {
+	return r.ExecAttached(ctx, argv, stdin, out, nil)
+}
+
+// ExecAttached is Exec with an Attachment: it reports the exec's id and
+// cursor as it goes, and when att.ExecID is set it reattaches to that exec
+// from att.Cursor instead of starting argv, waiting up to ReattachTimeout
+// for the sandbox's wrapper to dial in first. A reattached exec that has
+// already finished answers with its real exit status, which the wrapper
+// keeps for a while after the command ends.
+func (r *Runner) ExecAttached(ctx context.Context, argv []string, stdin string, out io.Writer, att *Attachment) (stdout, stderr string, exitCode int, err error) {
 	if r == nil || r.Acceptor == nil {
 		err := errors.New("sandboxaccess: Runner has no Acceptor")
 		return "", err.Error(), -1, err
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err.Error(), -1, err
-	}
-
-	client, proc, err := r.startExecWithReattachWindow(ctx, sandbox.ExecRequest{
-		Argv: argv,
-		User: r.user(),
-	})
-	if err != nil {
-		return "", err.Error(), -1, err
-	}
-
-	if stdin != "" {
-		go func(p *sandbox.ExecProcess) {
-			_, _ = io.Copy(p.Stdin(), strings.NewReader(stdin))
-			_ = p.Stdin().Close()
-		}(proc)
-	} else {
-		_ = proc.Stdin().Close()
 	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -207,9 +228,53 @@ func (r *Runner) Exec(ctx context.Context, argv []string, stdin string, out io.W
 		stderrWriter = io.MultiWriter(&stderrBuf, out)
 	}
 
+	var (
+		client *sandbox.Client
+		proc   *sandbox.ExecProcess
+		offset int64
+	)
+	if att != nil && att.ExecID != "" {
+		offset = att.Cursor
+		proc, err = r.reattachWithinWindow(ctx, nil, att.ExecID, offset, nil)
+		if err != nil {
+			return "", err.Error(), -1, err
+		}
+		if offset > 0 {
+			fmt.Fprintf(stderrWriter, "[grain reattached to this step after a restart; the first %d bytes of its output were streamed before it and are not repeated here]\n", offset)
+		}
+	} else {
+		client, proc, err = r.startExecWithReattachWindow(ctx, sandbox.ExecRequest{
+			Argv: argv,
+			User: r.user(),
+		})
+		if err != nil {
+			return "", err.Error(), -1, err
+		}
+		if stdin != "" {
+			go func(p *sandbox.ExecProcess) {
+				_, _ = io.Copy(p.Stdin(), strings.NewReader(stdin))
+				_ = p.Stdin().Close()
+			}(proc)
+		} else {
+			_ = proc.Stdin().Close()
+		}
+	}
+
 	procID := proc.ID()
-	var offset int64
 	curProc := proc
+	if att != nil && att.Started != nil {
+		att.Started(procID)
+	}
+	if att != nil && att.Progress != nil {
+		// The wrapper's own count rather than the bytes written here: a
+		// note frame reaches stderr without moving the offset a reattach
+		// resumes from, and ReceivedBytes is already up to date by the
+		// time a chunk is handed on. Wait writes on this goroutine, so
+		// offset and curProc are read here as they stand.
+		report := func() { att.Progress(offset + curProc.ReceivedBytes()) }
+		stdoutWriter = progressWriter{stdoutWriter, report}
+		stderrWriter = progressWriter{stderrWriter, report}
+	}
 
 	for {
 		done := make(chan struct{})
@@ -555,6 +620,19 @@ func (c *forwardedConn) Close() error {
 	err := c.Conn.Close()
 	c.once.Do(c.closeFn)
 	return err
+}
+
+// progressWriter hands every write on and then reports, for
+// Attachment.Progress.
+type progressWriter struct {
+	w      io.Writer
+	report func()
+}
+
+func (p progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	p.report()
+	return n, err
 }
 
 func appendStderr(stderr string, err error) string {
