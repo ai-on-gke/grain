@@ -428,8 +428,8 @@ func TestThreeSegmentHostQualifiedRepoConfigAndMemory(t *testing.T) {
 				"git.forge.example/experimental/other",
 			},
 			configs: map[string]string{
-				"ai-on-gke/grain": `{"repo":"ai-on-gke/grain"}` + "\n",
-				forgeRepo:          `{"repo":"git.forge.example/experimental/grain"}` + "\n",
+				"ai-on-gke/grain":                      `{"repo":"ai-on-gke/grain"}` + "\n",
+				forgeRepo:                              `{"repo":"git.forge.example/experimental/grain"}` + "\n",
 				"git.forge.example/experimental/other": `{"repo":"other"}` + "\n",
 			},
 		},
