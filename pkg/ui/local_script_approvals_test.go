@@ -21,6 +21,7 @@ package ui_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -144,6 +145,59 @@ func TestLocalScriptApprovalIsAnsweredByAPersonAndRecorded(t *testing.T) {
 	last := detail.Comments[len(detail.Comments)-1].Body
 	if !strings.Contains(last, "Approved local script call 1") || !strings.Contains(last, `"$(rm -rf /)"`) {
 		t.Fatalf("last comment %q: want the answer recorded with the call's arguments", last)
+	}
+}
+
+// GET /api/config says how many local-script calls wait on a person, so
+// the sidebar's Inbox entry can count them on every page without polling
+// the approvals list itself; an answered call stops counting (task 1808).
+func TestConfigCountsPendingLocalScriptCalls(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := localScriptsClient(t)
+	task := create(t, client, ctx)
+	grantLocalScripts(t, store, ctx, task.ID)
+	handler := ui.NewServerWithClient(client)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	run := serverAccessClient(handler, srv.URL)
+
+	pending := func() int {
+		t.Helper()
+		rec := doWithHeaders(t, handler, http.MethodGet, "/api/config", "",
+			map[string]string{"Authorization": "Bearer " + testAccessCode})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/config: %d %s", rec.Code, rec.Body.String())
+		}
+		var resp struct {
+			PendingLocalScripts int `json:"pendingLocalScripts"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp.PendingLocalScripts
+	}
+
+	if n := pending(); n != 0 {
+		t.Fatalf("pendingLocalScripts before any call = %d, want 0", n)
+	}
+	var ids []string
+	for _, id := range []string{"1", "2"} {
+		a, err := run.RequestLocalScriptApproval(ctx, task.ID, approvalRequest{
+			ID: id, Tool: "local_deploy", Script: "deploy", Deadline: time.Now().Add(time.Minute),
+		})
+		if err != nil {
+			t.Fatalf("requesting approval: %v", err)
+		}
+		ids = append(ids, a.ID)
+	}
+	if n := pending(); n != 2 {
+		t.Fatalf("pendingLocalScripts with two calls waiting = %d, want 2", n)
+	}
+	if _, err := run.AnswerLocalScriptApproval(ctx, task.ID, ids[0], false); err != nil {
+		t.Fatalf("answering: %v", err)
+	}
+	if n := pending(); n != 1 {
+		t.Fatalf("pendingLocalScripts after one was answered = %d, want 1", n)
 	}
 }
 
