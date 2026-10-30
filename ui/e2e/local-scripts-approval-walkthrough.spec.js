@@ -171,3 +171,64 @@ test("a task without the capability cannot ask for a local-script approval", asy
   );
   await run.dispose();
 });
+
+// The rail's Inbox entry counts a call waiting for approval, as the
+// Inbox heading does (GET /api/config's pendingLocalScripts; task
+// 1808): a run blocked on a person shows on every page, not only on the
+// one that lists it.
+test("the rail's Inbox count includes local-script calls waiting for approval", async ({
+  page,
+  playwright,
+  baseURL,
+}) => {
+  const task = await fileTask(page.request, "Count my local script call", [
+    "local-scripts:ops",
+  ]);
+  const run = await playwright.request.newContext({ baseURL });
+  const call = await askForApproval(run, task.id, "1", ["main"]);
+  try {
+    await page.goto("/inbox");
+    const group = page.locator(".inbox-group", {
+      hasText: "Local scripts waiting for approval",
+    });
+    await expect(group).toBeVisible();
+    const heading = page.locator(".content-header .count").first();
+    const rail = page.getByRole("button", { name: /^Inbox\b/ });
+    // Compared with the heading's own figure rather than a fixed one:
+    // the demo's other waiting tasks and notifications count in both.
+    const railMatchesHeading = async () => {
+      const want = (await heading.innerText()).trim();
+      await expect(rail).toHaveText(new RegExp(`^Inbox\\s*${want}$`), {
+        timeout: 1000,
+      });
+      return Number(want);
+    };
+    let before = 0;
+    await expect(async () => {
+      before = await railMatchesHeading();
+    }).toPass();
+    expect(before).toBeGreaterThanOrEqual(1);
+    await expect(rail.locator(".MuiChip-root")).toHaveAttribute(
+      "title",
+      /1 local script waiting for approval/,
+    );
+
+    // Answering it takes it out of both.
+    await group
+      .locator(`.local-script-approval[data-approval="${call.id}"]`)
+      .getByRole("button", { name: "Deny" })
+      .click();
+    await expect(group).toHaveCount(0);
+    await expect(async () => {
+      const after = await railMatchesHeading();
+      expect(after).toBe(before - 1);
+    }).toPass();
+  } finally {
+    // Leave nothing waiting on the worker's shared demo server.
+    await page.request.post(
+      `/api/tasks/${task.id}/local-script-approvals/${call.id}/answer`,
+      { data: { approve: false } },
+    );
+    await run.dispose();
+  }
+});

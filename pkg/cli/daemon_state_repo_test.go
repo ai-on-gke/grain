@@ -228,10 +228,7 @@ func TestAMergedSettingsChangeTakesEffectWithoutARestart(t *testing.T) {
 
 	// A template this deployment already has, so the repository holds a
 	// row to change rather than only a file to create.
-	if code, body := postBody(t, "http://"+uiAddr+"/api/templates",
-		`{"name":"nightly","title":"Run the nightly sweep"}`); code != http.StatusCreated {
-		t.Fatalf("creating a template returned %d: %s", code, body)
-	}
+	seedThroughConfigRepo(t, uiAddr, dataDir, "/api/templates", `{"name":"nightly","title":"Run the nightly sweep"}`)
 	created, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "A task a run is holding", Repo: "owner/payments-api"})
 	if err != nil {
 		t.Fatalf("filing a task: %v", err)
@@ -472,10 +469,7 @@ func TestADivergedStateRepositoryRecoversOnTheNextSync(t *testing.T) {
 	client := accessCodeClient("http://" + uiAddr)
 	waitForUI(t, ctx, client)
 
-	if code, body := postBody(t, "http://"+uiAddr+"/api/templates",
-		`{"name":"nightly","title":"Run the nightly sweep"}`); code != http.StatusCreated {
-		t.Fatalf("creating a template returned %d: %s", code, body)
-	}
+	seedThroughConfigRepo(t, uiAddr, dataDir, "/api/templates", `{"name":"nightly","title":"Run the nightly sweep"}`)
 	if code, body := post(t, "http://"+uiAddr+"/api/state-repo/sync"); code != http.StatusOK {
 		t.Fatalf("sync returned %d: %s", code, body)
 	}
@@ -917,11 +911,9 @@ func TestDaemonExternalConfigRepoPullsAndRefusesSettingsEditsViaAPI(t *testing.T
 	client := accessCodeClient("http://" + uiAddr)
 	waitForUI(t, ctx, client)
 
-	// In Internal mode, creating a template and exporting to local grain/config succeeds.
-	if code, body := postBody(t, "http://"+uiAddr+"/api/templates",
-		`{"name":"internal-tmpl","title":"Internal local sweep"}`); code != http.StatusCreated {
-		t.Fatalf("creating template in internal mode returned %d: %s", code, body)
-	}
+	// In Internal mode, a template is created through local grain/config:
+	// the API refuses the write with the edit, which merges there.
+	seedThroughConfigRepo(t, uiAddr, dataDir, "/api/templates", `{"name":"internal-tmpl","title":"Internal local sweep"}`)
 	if code, body := post(t, "http://"+uiAddr+"/api/state-repo/sync"); code != http.StatusOK {
 		t.Fatalf("sync in internal mode returned %d: %s", code, body)
 	}
@@ -984,9 +976,42 @@ func TestDaemonExternalConfigRepoPullsAndRefusesSettingsEditsViaAPI(t *testing.T
 		t.Fatalf("expected internal mode with empty Remote after clearing, got %+v", clearedStatus)
 	}
 
-	// Verify POST /api/settings is allowed again in Internal mode.
-	code, body = postBody(t, "http://"+uiAddr+"/api/settings", `{"githubHost":"github.com","environmentName":"staging"}`)
+	// Back in Internal mode, POST /api/settings writes a bootstrap field
+	// directly, and sends any other to local grain/config.
+	code, body = postBody(t, "http://"+uiAddr+"/api/settings", `{"githubHost":"github.com","maxWorkers":2}`)
 	if code != http.StatusOK {
-		t.Fatalf("POST /api/settings after switching back to internal mode returned %d: %s", code, body)
+		t.Fatalf("POST /api/settings (bootstrap) after switching back to internal mode returned %d: %s", code, body)
+	}
+	code, body = postBody(t, "http://"+uiAddr+"/api/settings", `{"environmentName":"staging"}`)
+	if code != http.StatusConflict || !strings.Contains(body, `"repo":"grain/config"`) {
+		t.Fatalf("POST /api/settings (non-bootstrap) after switching back to internal mode returned %d: %s", code, body)
+	}
+}
+
+// seedThroughConfigRepo makes a configuration write the way internal
+// mode takes one: the API refuses it with the edit, the edit is merged
+// into local grain/config's main, and a sync applies it.
+func seedThroughConfigRepo(t *testing.T, uiAddr, dataDir, route, reqBody string) {
+	t.Helper()
+	code, body := postBody(t, "http://"+uiAddr+route, reqBody)
+	var refusal struct {
+		Code   string                 `json:"code"`
+		Change []staterepo.FileChange `json:"change"`
+	}
+	if code != http.StatusConflict || json.Unmarshal([]byte(body), &refusal) != nil || len(refusal.Change) == 0 {
+		t.Fatalf("POST %s in internal mode returned %d, want the refusal with its edit: %s", route, code, body)
+	}
+	work := daemon.StateRepoDir(dataDir)
+	gitIn(t, work, "checkout", "-b", "seed-change")
+	if err := staterepo.ApplyChanges(work, refusal.Change); err != nil {
+		t.Fatalf("applying the refusal's edit: %v", err)
+	}
+	gitIn(t, work, "add", "-A")
+	gitIn(t, work, "-c", "user.email=ops@grain", "-c", "user.name=ops", "commit", "-m", "Seed "+route)
+	gitIn(t, work, "checkout", "main")
+	gitIn(t, work, "merge", "--ff-only", "seed-change")
+	gitIn(t, work, "branch", "-d", "seed-change")
+	if code, body := post(t, "http://"+uiAddr+"/api/state-repo/sync"); code != http.StatusOK {
+		t.Fatalf("sync returned %d: %s", code, body)
 	}
 }

@@ -22,8 +22,12 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -272,5 +276,121 @@ func TestSSHKeyCheckWithNothingToReadIsNotAccepted(t *testing.T) {
 	}
 	if res.OK || !strings.Contains(res.Error, "nothing was tested") || len(res.Repos) != 0 {
 		t.Errorf("check = %+v, want not OK, saying nothing was tested", res)
+	}
+}
+
+// Test on a PAT connection to a plain git host reads its repositories
+// over smart HTTP, the way the git proxy will use the token -- never as
+// GitHub, whose /rate_limit such a host does not have (the walkthrough of
+// 2026-10-29 saw "could not reach GitHub" for a working token). The host
+// here takes "good-token" for reading and "push-token" for pushing too,
+// and refuses anything else.
+func TestPlainGitPATCheckReadsTheRepository(t *testing.T) {
+	var gitHubAsked atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/acme/widgets.git/info/refs" {
+			if strings.HasPrefix(r.URL.Path, "/rate_limit") || strings.HasPrefix(r.URL.Path, "/user") ||
+				strings.HasPrefix(r.URL.Path, "/repos/") || strings.HasPrefix(r.URL.Path, "/api/") {
+				gitHubAsked.Store(true)
+			}
+			http.NotFound(w, r)
+			return
+		}
+		user, pass, _ := r.BasicAuth()
+		token := user
+		if pass != "" {
+			token = pass
+		}
+		service := r.URL.Query().Get("service")
+		allowed := token == "push-token" || (token == "good-token" && service == "git-upload-pack")
+		if !allowed {
+			w.Header().Set("WWW-Authenticate", `Basic realm="git"`)
+			http.Error(w, "denied", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-"+service+"-advertisement")
+		pkt := func(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
+		io.WriteString(w, pkt("# service="+service+"\n")+"0000"+
+			pkt(strings.Repeat("a", 40)+" refs/heads/main\x00report-status\n")+"0000")
+	}))
+	defer upstream.Close()
+	hostPort := strings.TrimPrefix(upstream.URL, "http://")
+
+	client, store, _ := testClient(t)
+	credentials, err := gitproxy.LoadCredentialSet(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Config.Credentials = credentials
+	srv := ui.NewServerWithClient(client)
+	if err := store.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval}); err != nil {
+		t.Fatal(err)
+	}
+	admitUser(t, store, "dana")
+	dana := map[string]string{"Content-Type": "application/json", "X-Grain-User": "dana"}
+	connect := func(token, scope string) string {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"type": "pat", "host": hostPort, "kind": "git",
+			"baseUrl": upstream.URL, "scope": scope, "value": token})
+		rec := doWithHeaders(t, srv, http.MethodPost, "/api/deployment/git-connections", string(body), dana)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("saving the %s connection: %d %s", token, rec.Code, rec.Body)
+		}
+		var team ui.Team
+		if err := json.Unmarshal(rec.Body.Bytes(), &team); err != nil {
+			t.Fatal(err)
+		}
+		return team.GitConnections[len(team.GitConnections)-1].Credential
+	}
+	check := func(req map[string]string) ui.TeamGitHubCredentialCheck {
+		t.Helper()
+		body, _ := json.Marshal(req)
+		rec := doWithHeaders(t, srv, http.MethodPost, "/api/deployment/git-connections/check", string(body), dana)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("checking %v: %d %s", req, rec.Code, rec.Body)
+		}
+		var res ui.TeamGitHubCredentialCheck
+		if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	verdict := func(res ui.TeamGitHubCredentialCheck) string {
+		if len(res.Repos) != 1 {
+			return fmt.Sprintf("%d repos", len(res.Repos))
+		}
+		return fmt.Sprintf("%s read=%v push=%v", res.Repos[0].Repo, res.Repos[0].Read, res.Repos[0].Push)
+	}
+
+	good, push, bad := connect("good-token", ""), connect("push-token", "acme"), connect("bad-token", "acme/widgets")
+
+	if res := check(map[string]string{"host": hostPort, "credential": good, "scope": "acme/widgets"}); !res.OK ||
+		verdict(res) != "acme/widgets read=true push=false" {
+		t.Errorf("read-only token: %+v (%s), want OK, read but not push", res, verdict(res))
+	}
+	if res := check(map[string]string{"host": hostPort, "credential": push, "scope": "acme/widgets"}); !res.OK ||
+		verdict(res) != "acme/widgets read=true push=true" {
+		t.Errorf("push token: %+v (%s), want OK, read and push", res, verdict(res))
+	}
+	if res := check(map[string]string{"host": hostPort, "credential": bad, "scope": "acme/widgets"}); res.OK ||
+		verdict(res) != "acme/widgets read=false push=false" || !strings.Contains(res.Error, "refused") {
+		t.Errorf("refused token: %+v (%s), want not OK, saying it was refused", res, verdict(res))
+	}
+	if res := check(map[string]string{"host": hostPort, "credential": good, "scope": "acme/missing"}); res.OK ||
+		!strings.Contains(res.Error, "404") {
+		t.Errorf("missing repo: %+v, want not OK with the 404", res)
+	}
+	// Typed into the editor and not saved yet: the same test.
+	if res := check(map[string]string{"host": hostPort, "kind": "git", "type": "pat", "value": "push-token",
+		"scope": "acme/widgets"}); !res.OK || res.Saved || verdict(res) != "acme/widgets read=true push=true" {
+		t.Errorf("unsaved push token: %+v (%s), want OK, read and push", res, verdict(res))
+	}
+	// No repository in reach: nothing was read, so nothing was accepted.
+	if res := check(map[string]string{"host": hostPort, "credential": good}); res.OK ||
+		!strings.Contains(res.Error, "nothing was tested") || len(res.Repos) != 0 {
+		t.Errorf("no repo in reach: %+v, want not OK, saying nothing was tested", res)
+	}
+	if gitHubAsked.Load() {
+		t.Error("the plain git host was asked GitHub's REST API")
 	}
 }

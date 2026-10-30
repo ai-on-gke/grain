@@ -17,7 +17,7 @@
 // copy, never a clone. Driven through a real orchestrator.RunDispatch with
 // a real gitproxy in front of real bare upstream repos and pkg/mcp's real
 // exec-backed sandbox tools: what the agent finds in its sandbox, that
-// the proxy still will not serve it bwsalmon/grain, and what the prompt
+// the proxy still will not serve it ai-on-gke/grain, and what the prompt
 // said.
 package e2e
 
@@ -47,13 +47,13 @@ type grainSourceRun struct {
 
 // grainSourceProbe is the agent's whole turn: everything the walkthrough
 // records about grain-src/, from inside the sandbox, in one command --
-// including a fetch of bwsalmon/grain straight through the proxy, which
+// including a fetch of GrainSourceRepo() straight through the proxy, which
 // no self-debug run may make now that nothing is cloned for it.
 func grainSourceProbe(proxyURL string) string {
 	return "ls grain-src; echo head=$(git -C grain-src log -1 --format=%H); " +
 		"echo commits=$(git -C grain-src rev-list --count HEAD); " +
 		"git -C grain-src push origin HEAD:refs/heads/probe 2>&1; echo push-exit=$?; " +
-		"git ls-remote " + proxyURL + "/bwsalmon/grain.git 2>&1; echo fetch-exit=$?"
+		"git ls-remote " + proxyURL + "/" + model.GrainSourceRepo().String() + ".git 2>&1; echo fetch-exit=$?"
 }
 
 func dispatchForGrainSource(t *testing.T, w *world, id, srcDir string, grants []model.Grant, reads []model.RepoRef, at time.Time) grainSourceRun {
@@ -137,7 +137,7 @@ func TestGrainSourceCheckoutWalkthrough(t *testing.T) {
 		t.Helper()
 		w := newWorld(t)
 		w.newRepo("acme", "widgets")
-		w.newRepo("bwsalmon", "grain")
+		w.newRepo(grain.Owner, grain.Name)
 		return w
 	}
 
@@ -156,7 +156,7 @@ func TestGrainSourceCheckoutWalkthrough(t *testing.T) {
 			t.Errorf("a push from grain-src succeeded:\n%s", run.output)
 		}
 		if !strings.Contains(run.output, "not in scope for this sandbox") || strings.Contains(run.output, "fetch-exit=0") {
-			t.Errorf("a self-debug run fetched bwsalmon/grain through the proxy:\n%s", run.output)
+			t.Errorf("a self-debug run fetched %s through the proxy:\n%s", grain, run.output)
 		}
 		for _, want := range []string{head, "last 3 commits"} {
 			if !strings.Contains(run.prompt, want) {
@@ -178,7 +178,7 @@ func TestGrainSourceCheckoutWalkthrough(t *testing.T) {
 		}
 	})
 
-	t.Run("reads bwsalmon/grain without self-debug", func(t *testing.T) {
+	t.Run("reads ai-on-gke/grain without self-debug", func(t *testing.T) {
 		t.Parallel()
 		w := newGrainWorld(t)
 		src, _ := bakeGrainSource(t)
@@ -188,6 +188,9 @@ func TestGrainSourceCheckoutWalkthrough(t *testing.T) {
 		}
 		if section := grainSourcePromptSection(run.prompt); strings.Contains(section, "baked-in") {
 			t.Errorf("prompt describes a grain-src the task does not have:%s", section)
+		}
+		if !strings.Contains(run.output, "fetch-exit=0") {
+			t.Errorf("a task reading %s could not fetch it through the proxy:\n%s", grain, run.output)
 		}
 	})
 }

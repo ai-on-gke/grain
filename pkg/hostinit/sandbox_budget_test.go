@@ -140,3 +140,39 @@ func TestCheckSandboxBudgetDryRunAndDaemonDown(t *testing.T) {
 		t.Errorf("daemon down: %+v, want %s", r.Steps[0], StepSkipped)
 	}
 }
+
+// The 10-28 walkthrough's 2 vCPU / 7.8 GiB e2-standard-2: half the
+// memory reserved and both cores eaten by the controller's reserve
+// (docs/test-runs/2026-10-28-install-upgrade-walkthrough.md). setup.sh
+// prints SettingsCommand, so it has to name `grain settings` flags that
+// exist and apply all three changes.
+func TestCheckSandboxBudgetSettingsCommandForTheTwoCoreHost(t *testing.T) {
+	v, err := CheckSandboxBudget([]byte(`{"sandboxCommitment":{"cpusPerSandbox":2,"memoryMbPerSandbox":8192,"hostCpus":2,"hostMemoryMb":7987,
+		"budget":{"cpuOvercommit":2,"memoryOvercommit":1,"reserveMemoryMb":3993,"cpus":0,"cpusBounded":true,"memoryMb":3994,"memoryBounded":true}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Checked || v.Fits {
+		t.Fatalf("verdict = %+v, want checked and not fitting", v)
+	}
+	want := "grain settings -sandbox-cpu-overcommit 0 -sandbox-memory-mb 6144 -sandbox-memory-reserve-mb 1792"
+	if got := v.SettingsCommand(); got != want {
+		t.Errorf("SettingsCommand() = %q\nwant              %q", got, want)
+	}
+}
+
+func TestCheckSandboxBudgetSettingsCommandEmptyWhenNothingToSet(t *testing.T) {
+	for name, settings := range map[string]string{
+		"fits":      roomySettingsJSON,
+		"too small": `{"sandboxCommitment":{"cpusPerSandbox":1,"memoryMbPerSandbox":2048,"hostCpus":4,"hostMemoryMb":1200,"budget":{"cpuOvercommit":2,"memoryOvercommit":1,"reserveMemoryMb":8192,"cpus":4,"cpusBounded":true,"memoryMb":0,"memoryBounded":true}}}`,
+		"unchecked": `{}`,
+	} {
+		v, err := CheckSandboxBudget([]byte(settings))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if cmd := v.SettingsCommand(); cmd != "" {
+			t.Errorf("%s: SettingsCommand() = %q, want none", name, cmd)
+		}
+	}
+}

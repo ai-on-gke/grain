@@ -109,7 +109,7 @@ func TestRelayedProposalHoldsARequiresPersonGrant(t *testing.T) {
 			Arguments: map[string]any{"title": "Follow up", "body": "And then this.",
 				"capabilities": []any{"self-debug"}},
 		}}}
-		if err := relayProposedTasks(ctx, store, nil, source, result, now); err != nil {
+		if err := relayProposedTasks(ctx, store, nil, nil, source, result, now); err != nil {
 			t.Fatal(err)
 		}
 		tasks, err := store.ListTasks(ctx)

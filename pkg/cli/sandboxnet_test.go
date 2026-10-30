@@ -334,7 +334,7 @@ func TestEveryServicePublishedTodayHasAReservedOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sandboxPortOffsets: %v", err)
 	}
-	want := []string{"git proxy", "package cache", "Actions cache", daemon.CapabilityPortsService}
+	want := []string{"git proxy", "package cache", "Actions cache", daemon.CapabilityPortsService, daemon.CIAPIService}
 	for _, vendor := range modelproxy.Vendors() {
 		want = append(want, vendor.Name+" proxy")
 	}
@@ -378,7 +378,8 @@ func TestModelProxyOffsetsDoNotMoveWhenASingletonIsAdded(t *testing.T) {
 		}
 	}
 	// And the singletons stay clear of that band.
-	for _, offset := range []int{daemon.OffsetGitProxy, daemon.OffsetPackageCache, daemon.OffsetActionsCache} {
+	for _, offset := range []int{daemon.OffsetGitProxy, daemon.OffsetPackageCache, daemon.OffsetActionsCache,
+		daemon.OffsetCapabilityPorts, daemon.OffsetCIAPI} {
 		if offset >= daemon.OffsetModelProxyBase {
 			t.Errorf("a singleton is at offset %d, inside the vendor band", offset)
 		}

@@ -303,6 +303,10 @@ func planKey(req Request, jobs []PlannedJob) Key {
 		// so it is not the same run as an explicit manual dispatch of the
 		// same jobs, and must not be handed back as one (or handed one).
 		EventDefaulted bool `json:"event_defaulted,omitempty"`
+		// A by-hand run started by a caller that is not a person withholds
+		// capabilities and release secrets, so it is not the same run as a
+		// person's dispatch of the same jobs.
+		WithholdEventGated bool `json:"withhold_event_gated,omitempty"`
 	}{
 		Version: fingerprintVersion,
 		Repo:    req.Repo,
@@ -316,7 +320,8 @@ func planKey(req Request, jobs []PlannedJob) Key {
 		Jobs:     keys,
 		Recheck:  req.Recheck,
 
-		EventDefaulted: req.eventDefaulted,
+		EventDefaulted:     req.eventDefaulted,
+		WithholdEventGated: req.WithholdEventGated,
 	})
 }
 

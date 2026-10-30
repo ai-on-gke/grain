@@ -392,6 +392,31 @@ var NeverAutoMergePaths = []string{
 	"tables/agent_backend.json",
 	"tables/console_session.json",
 	"tables/repo_workflow.json",
+	// Templates and schedules, for a dump that still carries them as
+	// tables rather than settings/{templates,schedules}.yml: the repos
+	// they read and land work in, the capabilities they grant and what
+	// their firings run.
+	"tables/template.json",
+	"tables/template_read.json",
+	"tables/template_write.json",
+	"tables/template_grant.json",
+	"tables/template_field.json",
+	"tables/template_custom_field.json",
+	"tables/template_sequence.json",
+	"tables/schedule.json",
+	"tables/schedule_read.json",
+	"tables/schedule_write.json",
+	"tables/schedule_grant.json",
+	"tables/schedule_custom_field.json",
+	"tables/schedule_sequence.json",
+	// Standing and persistent sandboxes -- the image a sandbox runs and
+	// the secret-store keys bound into it as env vars -- and the
+	// deployment's GCP keys.
+	"tables/standing_sandbox.json",
+	"tables/standing_sandbox_secret.json",
+	"tables/standing_sandbox_env.json",
+	"tables/persistent_sandbox.json",
+	"tables/gcp_key.json",
 	// Extracted scripts, CI workflows, and schema version.
 	"scripts/**",
 	"workflows/**",

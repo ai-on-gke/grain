@@ -259,10 +259,10 @@ type APIGrant struct {
 	Templates []string
 }
 
-// reposOf is the repositories g grants scope on: [""] for every one, nil
+// ReposOf is the repositories g grants scope on: [""] for every one, nil
 // for none -- which is a set limited to repositories the grant's own
 // @repo is not among.
-func (g APIGrant) reposOf(scope APIScope) []string {
+func (g APIGrant) ReposOf(scope APIScope) []string {
 	lim, limited := g.ScopeRepos[scope]
 	switch {
 	case !limited && g.Repo == "":
@@ -275,6 +275,32 @@ func (g APIGrant) reposOf(scope APIScope) []string {
 		return []string{g.Repo}
 	}
 	return nil
+}
+
+// OutsideRepoLimit is why g grants nothing at all: it names a scope set
+// limited to some repositories, on an @repo none of the set's scopes
+// reach. Nil for every other grant, including one some of whose scopes
+// reach g.Repo and some do not. Refused when a grant is recorded rather
+// than left to grant nothing silently; a grant already recorded keeps
+// parsing, so a set narrowed later only stops granting.
+func (g APIGrant) OutsideRepoLimit() error {
+	if g.Repo == "" || len(g.ScopeRepos) == 0 {
+		return nil
+	}
+	var reach []string
+	for _, scope := range g.Scopes {
+		if len(g.ReposOf(scope)) > 0 {
+			return nil
+		}
+		for _, r := range g.ScopeRepos[scope] {
+			if !containsFold(reach, r) {
+				reach = append(reach, r)
+			}
+		}
+	}
+	sort.Strings(reach)
+	return fmt.Errorf("api grant %q grants nothing: scope set %s reaches only %s, not %s",
+		g.Name, g.Preset, strings.Join(reach, ", "), g.Repo)
 }
 
 // ParseAPIGrant reads an api grant name. ok is false for a name that is
@@ -364,7 +390,7 @@ func apiGrantsOf(names []string, sandboxChannel bool) APIGrantSet {
 			continue
 		}
 		for _, scope := range g.Scopes {
-			for _, repo := range g.reposOf(scope) {
+			for _, repo := range g.ReposOf(scope) {
 				for _, s := range append([]APIScope{scope}, impliedAPIScopes[scope]...) {
 					if sandboxChannel && IsSandboxDeniedAPIScope(s) {
 						continue
@@ -405,6 +431,18 @@ func (s APIGrantSet) Allows(scope APIScope, repo string) bool {
 		return false
 	}
 	return slices.ContainsFunc(s.scopes[scope], func(r string) bool { return strings.EqualFold(r, repo) })
+}
+
+// Repos is the repositories the set grants scope on, sorted, when it
+// grants it on named repositories only (nil when it grants it on every
+// repository, or on none).
+func (s APIGrantSet) Repos(scope APIScope) []string {
+	if s.all[scope] || len(s.scopes[scope]) == 0 {
+		return nil
+	}
+	out := slices.Clone(s.scopes[scope])
+	slices.Sort(out)
+	return out
 }
 
 // Scopes is every scope the set grants anywhere, sorted.

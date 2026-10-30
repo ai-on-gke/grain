@@ -164,8 +164,20 @@ case "$1" in
     touch "$u/$2.enabled"
     if $now; then touch "$u/$2.active"; fi ;;
   disable) rm -f "$u/$2.enabled"; if $now; then rm -f "$u/$2.active"; fi ;;
-  mask) touch "$u/$2.masked" ;;
-  unmask) rm -f "$u/$2.masked" ;;
+  mask)
+    # As systemd does: masking links the unit to /dev/null in
+    # /etc/systemd/system, and is refused where the unit's own file is.
+    f="${GRAIN_SYSTEMD_DIR:?}/$2"
+    if [ -e "$f" ] && [ ! -L "$f" ]; then
+      echo "Failed to mask unit: File $f already exists." >&2
+      exit 1
+    fi
+    ln -sfn /dev/null "$f"
+    touch "$u/$2.masked" ;;
+  unmask)
+    f="${GRAIN_SYSTEMD_DIR:?}/$2"
+    if [ -L "$f" ]; then rm -f "$f"; fi
+    rm -f "$u/$2.masked" ;;
   daemon-reload) ;;
 esac
 EOF
@@ -297,6 +309,11 @@ lacks "a dry run applies nothing" "$(calls)" "kubectl apply"
 truth "a dry run leaves the daemon running" test -f "$work/stub/units/grain-daemon.service.active"
 truth "a dry run writes no drop-in" test ! -e "$sysd/grain-hostd.service.d/gke.conf"
 truth "a dry run takes no backup" test -z "$(ls "$work/host/backups")"
+# What a dry run prints is what an operator may paste: every kubectl in it
+# names the migration's kubeconfig, not whatever context is current.
+lacks "every kubectl it prints names the kubeconfig" "$(grep -E '(^[+] |[|] )kubectl' <<<"$out" | grep -v -- 'kubectl --kubeconfig=' || true)" "kubectl"
+lacks "its copy keeps file modes as the real copy does" "$out" "--no-same-permissions"
+holds "the unit is moved aside before it is masked" "$out" "+ mv $sysd/grain-daemon.service $sysd/grain-daemon.service.pre-gke"
 
 fresh
 rm "$work/host/var/lib/grain/data/secrets/secrets.key"
@@ -330,6 +347,8 @@ holds "the daemon container is removed" "$c" "docker rm -f grain-daemon"
 truth "the local daemon is stopped" test ! -e "$work/stub/units/grain-daemon.service.active"
 truth "and disabled" test ! -e "$work/stub/units/grain-daemon.service.enabled"
 truth "and masked" test -e "$work/stub/units/grain-daemon.service.masked"
+truth "by a link to /dev/null" test "$(readlink "$sysd/grain-daemon.service")" = /dev/null
+truth "with its own file kept aside" test -f "$sysd/grain-daemon.service.pre-gke"
 truth "a backup was taken" test -n "$(ls "$work/host/backups"/grain-data-*.tar.gz)"
 truth "the store is on the PVC" test -f "$work/stub/cluster/pvc/store/grain.db"
 truth "the installation id is on the PVC" test -f "$work/stub/cluster/pvc/installation-id"
@@ -385,6 +404,13 @@ check "a capability server that never attaches fails the check" 1 "did not all a
 fresh
 migrate --agy "$work/agy"
 echo "written in the cluster" >"$work/stub/cluster/pvc/from-gke"
+status=0
+out="$(env PATH="$stubs:$PATH" STUB="$work/stub" GRAIN_ROOT_DIR="$work/host/var/lib/grain" \
+  GRAIN_ETC_DIR="$work/host/etc/grain" GRAIN_SYSTEMD_DIR="$sysd" GRAIN_MIGRATE_SKIP_ROOT_CHECK=1 \
+  bash "$script" --kubeconfig "$work/host/etc/grain/admin.kubeconfig" --rollback --dry-run 2>&1)" || status=$?
+check "a rollback dry run names the transfer pod's image" 0 "pod/grain-data-transfer (ghcr.io/bwsalmon/grain/grain:main, uid 1000)" \
+  "+ mv $sysd/grain-daemon.service.pre-gke $sysd/grain-daemon.service"
+lacks "and every kubectl it prints names the kubeconfig" "$(grep -E '(^[+] |[|] )kubectl' <<<"$out" | grep -v -- 'kubectl --kubeconfig=' || true)" "kubectl"
 migrate --rollback
 check "a rollback completes" 0 "Step 1: stop Deployment/grain" "Step 2: copy the cluster's data directory back" "runs here again"
 truth "the controller is at 0" test "$(cat "$work/stub/cluster/replicas")" = 0
@@ -396,6 +422,8 @@ truth "the hostd drop-in is gone" test ! -e "$sysd/grain-hostd.service.d/gke.con
 truth "the model server is gone" test ! -e "$sysd/grain-model-server.service"
 truth "the forward is gone" test ! -e "$sysd/grain-gke-forward.service"
 truth "the daemon is unmasked" test ! -e "$work/stub/units/grain-daemon.service.masked"
+truth "with its own unit file back" test -f "$sysd/grain-daemon.service" -a ! -L "$sysd/grain-daemon.service"
+truth "and none left aside" test ! -e "$sysd/grain-daemon.service.pre-gke"
 truth "and running" test -f "$work/stub/units/grain-daemon.service.active"
 holds "dispatch is resumed locally" "$(calls)" "grain pause -resume"
 

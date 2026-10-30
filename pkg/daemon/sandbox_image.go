@@ -521,6 +521,9 @@ var (
 	sandboxMirrorDockerCmd   = []string{"docker"}
 	sandboxMirrorTokenSource = registryauth.Token
 	mirrorSandboxImageFunc   = defaultMirrorSandboxImage
+	// sandboxMirrorRegistryDigest is what the mirror registry answers
+	// for a tag; tests replace it.
+	sandboxMirrorRegistryDigest = upgrade.RegistryManifestDigest
 )
 
 // ResetMirroredSandboxImageCacheForTest clears the in-memory mirrored sandbox
@@ -583,12 +586,18 @@ func defaultMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo, targe
 
 	// Fast path: if stageImage (or an earlier startup) already pushed
 	// targetTagRef and local docker has its RepoDigest for mirrorRepo,
-	// resolve the digest directly without re-pushing.
-	if pinned := inspectMirroredRepoDigest(ctx, targetTagRef, mirrorRepo, targetTagRef); pinned != "" {
-		return pinned, nil
-	}
-	if pinned := inspectMirroredRepoDigest(ctx, sourceRef, mirrorRepo, targetTagRef); pinned != "" {
-		return pinned, nil
+	// resolve the digest directly without re-pushing -- once the mirror
+	// itself still answers that digest for the tag. A RepoDigest is only
+	// docker's memory of a push; the repository may since have been
+	// emptied or recreated, and the cluster pulls from the registry.
+	for _, inspectRef := range []string{targetTagRef, sourceRef} {
+		if pinned := inspectMirroredRepoDigest(ctx, inspectRef, mirrorRepo, targetTagRef); pinned != "" {
+			_, digest, _ := strings.Cut(pinned, "@")
+			if remote, err := sandboxMirrorRegistryDigest(ctx, targetTagRef); err == nil && remote == digest {
+				return pinned, nil
+			}
+			break
+		}
 	}
 
 	// Ensure sourceRef is present locally before tagging.
@@ -622,17 +631,17 @@ func inspectMirroredRepoDigest(ctx context.Context, inspectRef, mirrorRepo, targ
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &digests); err != nil || len(digests) == 0 {
 		return ""
 	}
+	// Only a RepoDigest docker recorded for mirrorRepo itself says the
+	// image is there: one for the source repository is what a local
+	// `docker tag` carries over before any push, and pinning to it after
+	// a push that failed would hand the cluster a reference the mirror
+	// does not have.
 	prefix := mirrorRepo + "@"
 	for _, d := range digests {
 		if strings.HasPrefix(d, prefix) {
 			if _, digest, ok := strings.Cut(d, "@"); ok && digest != "" {
 				return targetTagRef + "@" + digest
 			}
-		}
-	}
-	if inspectRef == targetTagRef && len(digests) == 1 {
-		if _, digest, ok := strings.Cut(digests[0], "@"); ok && digest != "" {
-			return targetTagRef + "@" + digest
 		}
 	}
 	return ""
@@ -663,7 +672,24 @@ func runSandboxMirrorDocker(ctx context.Context, stdin *strings.Reader, args ...
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
+	if err != nil {
+		// docker's own words -- "denied", "connection refused" -- are
+		// what the mirror warning is read for; an exit status alone
+		// says nothing about which.
+		if msg := strings.TrimSpace(out.String()); msg != "" {
+			err = fmt.Errorf("%w: %s", err, lastLine(msg))
+		}
+	}
 	return out.String(), err
+}
+
+// lastLine is the last line of s, which is where docker puts the error
+// a failed pull or push ended on, after its progress output.
+func lastLine(s string) string {
+	if i := strings.LastIndex(s, "\n"); i >= 0 {
+		return strings.TrimSpace(s[i+1:])
+	}
+	return s
 }
 
 func checkClusterSandboxImageConnectivity(ctx context.Context, cfg Config, imageRef string) error {

@@ -672,3 +672,66 @@ func TestK8sGranuleCredentialLifeUsesSandboxLifeCappedAtMax(t *testing.T) {
 		t.Fatalf("912-1 ttl = %s, want 2h (Access.Life fallback)", got)
 	}
 }
+
+// A sandbox_access row whose run had already finished is left out of
+// SandboxAccessCredentials, so before DeleteFinishedSandboxAccess no sweep
+// ever saw it to clear it: a daemon that died between finishing a run and
+// releasing its sandbox left the token hash behind for good (seen across a
+// real daemon restart in docs/test-runs/2026-10-29-gke-sandbox-access.md).
+func TestK8sGranuleSweepClearsFinishedRunsStoredHash(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openAccessTestStore(t)
+	notAfter := time.Now().Add(time.Hour)
+	hash := sandboxaccess.TokenHash("tok")
+	for _, sb := range []string{"905-1", "906-1", "907-1", "908-1"} {
+		if err := store.SetSandboxAccess(ctx, sb, hash, notAfter); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started := time.Now().Add(-time.Hour).UTC()
+	finished := time.Now().Add(-time.Minute).UTC()
+	for _, r := range []struct {
+		id, task, sandbox string
+		finished          any
+	}{
+		{"r905", "905", "905-1", finished}, // finished: cleared
+		{"r906", "906", "906-1", nil},      // still running: kept
+		{"r908a", "908a", "908-1", finished},
+		{"r908b", "908b", "908-1", nil}, // a live run still claims it: kept
+	} {
+		if _, err := store.DB().ExecContext(ctx,
+			"INSERT INTO task_run (id, task_id, sandbox, attempt, started_at, finished_at) VALUES (?, ?, ?, 1, ?, ?)",
+			r.id, r.task, r.sandbox, started, r.finished); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := store.DeleteFinishedSandboxAccess(ctx); err != nil {
+		t.Fatalf("DeleteFinishedSandboxAccess: %v", err)
+	}
+	for sb, want := range map[string]bool{"905-1": false, "906-1": true, "907-1": true, "908-1": true} {
+		if _, ok, err := store.GetSandboxAccess(ctx, sb); err != nil || ok != want {
+			t.Errorf("GetSandboxAccess(%q) after DeleteFinishedSandboxAccess = %v, %v; want %v", sb, ok, err, want)
+		}
+	}
+
+	// The backend's orphan sweep is what runs it: at startup (ReapOrphans)
+	// and on every reconcile tick.
+	if err := store.SetSandboxAccess(ctx, "905-1", hash, notAfter); err != nil {
+		t.Fatal(err)
+	}
+	minter := &fakeMinter{}
+	k := NewK8sGranuleSandboxes(K8sGranuleConfig{
+		Namespace: "grain",
+		Kubectl:   writeRecordingKubectl(t, t.TempDir()),
+		Image:     "example/granule:latest",
+		Access:    &K8sGranuleAccess{Acceptor: minter, Store: store, Dial: "127.0.0.1:1"},
+	})
+	if _, err := k.ReapOrphans(ctx); err != nil {
+		t.Fatalf("ReapOrphans: %v", err)
+	}
+	if _, ok, err := store.GetSandboxAccess(ctx, "905-1"); err != nil || ok {
+		t.Fatalf("finished run's stored hash after ReapOrphans: ok=%v, err=%v; want cleared", ok, err)
+	}
+}

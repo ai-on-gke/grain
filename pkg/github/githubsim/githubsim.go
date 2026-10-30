@@ -1321,7 +1321,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		}
 		if m := pullsRe.FindStringSubmatch(p); m != nil && qs.Get("head") != "" {
 			s.mustOwn(m[1], m[2])
-			return jsonResponse(200, s.findOpenPullRequestsForHead(qs.Get("head"))), nil
+			return jsonResponse(200, s.findOpenPullRequestsForHead(m[1], qs.Get("head"))), nil
 		}
 		if m := pullRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
@@ -2262,14 +2262,22 @@ func (s *Sim) pullRequest(number int) (PullRequest, bool) {
 // GitHub allows at most one open PR per head branch, but this returns a
 // list either way, matching the real endpoint's own shape (a filtered
 // list, never a single object).
-func (s *Sim) findOpenPullRequestsForHead(head string) []map[string]any {
-	_, branch, ok := strings.Cut(head, ":")
+//
+// The label's owner is matched the way GitHub matches it: against the
+// owner of the fork a pull request's head lives in (HeadRepo), or repo's
+// own owner for a head branch in repo itself.
+func (s *Sim) findOpenPullRequestsForHead(owner, head string) []map[string]any {
+	headOwner, branch, ok := strings.Cut(head, ":")
 	if !ok {
-		branch = head
+		headOwner, branch = owner, head
 	}
 	var out []map[string]any
 	for _, pr := range s.PullRequests {
-		if pr.Head == branch && pr.State == "open" {
+		prOwner := owner
+		if fork, _, ok := strings.Cut(pr.HeadRepo, "/"); ok {
+			prOwner = fork
+		}
+		if pr.Head == branch && pr.State == "open" && strings.EqualFold(prOwner, headOwner) {
 			out = append(out, map[string]any{
 				"number": pr.Number, "title": pr.Title, "body": pr.Body,
 				"head": pr.Head, "base": pr.Base, "html_url": pr.HTMLURL,

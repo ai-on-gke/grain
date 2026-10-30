@@ -34,6 +34,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/cifault"
+	"github.com/ai-on-gke/grain/pkg/forkhead"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -246,6 +247,19 @@ func (e *NotFoundError) Error() string {
 	}
 	return "no task " + e.ID
 }
+
+// UnavailableError is a 503 as HTTPClient reads it back: the server is
+// there but cannot answer yet -- a daemon whose CI service is still
+// starting (ci.ErrNotUp) -- and asking again shortly is the remedy.
+// ci.IsNotUp recognises it by Unavailable.
+type UnavailableError struct {
+	message string
+}
+
+func (e *UnavailableError) Error() string { return e.message }
+
+// Unavailable marks this as a refusal worth retrying.
+func (e *UnavailableError) Unavailable() bool { return true }
 
 // AttachmentUpload is one file carried by a CreateTaskRequest or an
 // AddComment call (bwsalmon/agents#522) -- Content is base64, matching
@@ -1930,12 +1944,34 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		req.Base = strings.TrimSpace(req.Base)
 		req.NewBranchFrom = strings.TrimSpace(req.NewBranchFrom)
 	}
-	if err := validateBase("base", req.Base); err != nil {
+	// A GitHub fork head label ("andrzejfudro:chore/bump-agy-1.4.9", what
+	// a pull request's page shows as its head) is not a branch name, but
+	// it is what people copy: it is resolved to the open pull request it
+	// heads once the task's repo is known (forkhead.go), and refused with
+	// what is wrong with it when it is not a well-formed label.
+	forkHead, isForkHead, err := splitForkHead("base", req.Base)
+	if err != nil {
 		return Task{}, err
+	}
+	if isForkHead && req.NewBranch {
+		return Task{}, validationErrorf("new branch %q cannot be created: it is a GitHub fork head (<owner>:<branch>), "+
+			"not a branch name; leave new branch off to work on the pull request it heads", req.Base)
+	}
+	if !isForkHead {
+		if err := validateBase("base", req.Base); err != nil {
+			return Task{}, err
+		}
 	}
 	if req.NewBranch {
 		if req.Base == "" {
 			return Task{}, validationErrorf("a new branch needs a name")
+		}
+		if _, fromFork, err := splitForkHead("newBranchFrom", req.NewBranchFrom); err != nil {
+			return Task{}, err
+		} else if fromFork {
+			return Task{}, validationErrorf("newBranchFrom %q is a GitHub fork head (<owner>:<branch>): grain cannot cut "+
+				"a branch from a fork; file the task with %q as its branch, and no new branch, to work on the pull "+
+				"request it heads", req.NewBranchFrom, req.NewBranchFrom)
 		}
 		if err := validateBase("newBranchFrom", req.NewBranchFrom); err != nil {
 			return Task{}, err
@@ -1975,6 +2011,14 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, validationErrorf(
 				"no repo given, and this deployment has no default target repo configured")
 		}
+	}
+
+	var forkPR *forkhead.PR
+	if isForkHead {
+		if forkPR, err = c.resolveForkHead("base", target, forkHead); err != nil {
+			return Task{}, err
+		}
+		req.Base = forkPR.Base
 	}
 
 	if err := validateSandboxShape(req.SandboxCPUs, req.SandboxMemoryMB, req.SandboxDiskGB); err != nil {
@@ -2047,6 +2091,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	links, err := c.dependsOnLinks(ctx, dependsOn, "")
 	if err != nil {
 		return Task{}, err
+	}
+	forkNote := ""
+	if forkPR != nil {
+		links = append(links, forkPR.Link())
+		forkNote = forkPR.Note()
 	}
 	var proposedBy *model.Task
 	if req.ProposedBy != "" && req.Capabilities != nil {
@@ -2153,6 +2202,12 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// a proposal or an agent's own filing holding one is left for a
 	// person to approve, whatever permission it would otherwise inherit.
 	grants, catalogueNeedsPerson, err := c.catalogueFilingGrants(ctx, grants, target, req.TemplateID)
+	if err != nil {
+		return Task{}, err
+	}
+	// So does the capability policy (§4.2.2), which admission would
+	// otherwise only apply once the task is dispatched.
+	grants, err = c.policyFilingGrants(ctx, grants, target)
 	if err != nil {
 		return Task{}, err
 	}
@@ -2409,7 +2464,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + ungrantedNote + reviewTemplateNote + limitNote + heldNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
+		Body:                 req.Description + forkNote + ungrantedNote + reviewTemplateNote + limitNote + heldNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
 		Origin:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
@@ -3856,8 +3911,32 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 		return Task{}, validationErrorf("title cannot be empty")
 	}
+	// A fork head label is resolved to the pull request it heads the way
+	// CreateTask resolves one (forkhead.go): the edit stores that pull
+	// request's base and links the task to it.
+	var forkPR *forkhead.PR
 	if req.Base != nil {
-		if err := validateBase("base", *req.Base); err != nil {
+		head, isForkHead, err := splitForkHead("base", *req.Base)
+		if err != nil {
+			return Task{}, err
+		}
+		if isForkHead {
+			repo := target
+			if repo == nil {
+				existing, err := c.Store.GetTask(ctx, id)
+				if err != nil {
+					return Task{}, err
+				}
+				if existing != nil {
+					repo = existing.Target
+				}
+			}
+			if forkPR, err = c.resolveForkHead("base", repo, head); err != nil {
+				return Task{}, err
+			}
+			base := forkPR.Base
+			req.Base = &base
+		} else if err := validateBase("base", *req.Base); err != nil {
 			return Task{}, err
 		}
 	}
@@ -4096,6 +4175,10 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	}
 	if err := c.mutate(ctx, id, func(task *model.Task) error {
 		submitted = false
+		// Whether this edit moves the task off a repository it had a
+		// target in, which takes the pull requests it opened there off
+		// it (below).
+		retargeted := false
 		if req.Title != nil {
 			titleChanged = *req.Title != task.Title
 			task.Title = *req.Title
@@ -4134,10 +4217,15 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 					}
 				}
 			}
+			retargeted = task.Target != nil && !task.Target.Same(*target)
 			task.Target = target
 		}
 		if req.Base != nil {
 			task.Base = *req.Base
+		}
+		if forkPR != nil && !hasLinkTo(task.Links, forkPR.Link()) {
+			task.Links = append(task.Links, forkPR.Link())
+			task.Body += forkPR.Note()
 		}
 		if req.Issue != nil {
 			task.Issue = *req.Issue
@@ -4216,6 +4304,22 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		}
 		if req.Reviewers != nil {
 			task.Reviewers = model.NormalizeReviewers(*req.Reviewers)
+		}
+		if retargeted {
+			// A pull request a run opened in the repository the task is
+			// moving off is not its change any more: left linked, the
+			// merge queue would go on reconciling it against this task
+			// beside whatever the next run opens, and closing it on
+			// GitHub would close the task. What was pinned to that pull
+			// request's head -- the classification of it, the hold it
+			// earned, a person's Submit of it -- goes with it; the next
+			// pull request is classified afresh.
+			if links, dropped := model.WithoutOffTargetPullRequests(*task); dropped {
+				task.Links = slices.DeleteFunc(links, func(l model.Link) bool {
+					return l.Kind == model.LinkSecurityHold || l.Kind == model.LinkTrustBoundaryCleared ||
+						l.Kind == model.LinkHumanSubmitted
+				})
+			}
 		}
 		if req.GoogleChatSpace != nil {
 			var newLinks []model.Link
@@ -4613,6 +4717,9 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	}
 	if task.Approval != nil {
 		return nil
+	}
+	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
+		return err
 	}
 	return c.Store.Approve(ctx, id, model.Attribution{Actor: c.actor(ctx)}, c.now())
 }
@@ -5894,6 +6001,9 @@ func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
 	if by.Kind != model.PrincipalAgent {
 		return nil
 	}
+	if err := c.catalogueApprovalRefusal(ctx, task); err != nil {
+		return err
+	}
 	requester, err := c.Store.GetTask(ctx, by.ID)
 	if err != nil {
 		return err
@@ -6016,7 +6126,7 @@ func runNowComment(state model.State, ref string) string {
 func pullRequestRefOf(task model.Task) string {
 	var ref string
 	for _, l := range task.Links {
-		if l.Kind == model.LinkFixes {
+		if l.Kind == model.LinkFixes && !model.LinkOffTarget(task, l) {
 			ref = l.Target
 		}
 	}

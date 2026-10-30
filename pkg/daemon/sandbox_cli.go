@@ -84,6 +84,14 @@ func (g sandboxCLIGate) CIRun(ctx context.Context, id string) (ci.Run, bool) {
 	return a.CIRun(ctx, id)
 }
 
+// Ready is ci.Readiness: false until the UI/API server is wired and its
+// CI service is up, so that a CIRun answering false before then is
+// served as "not up yet" rather than as a forgotten run.
+func (g sandboxCLIGate) Ready() bool {
+	a, err := g.actions()
+	return err == nil && a.Ready()
+}
+
 func (g sandboxCLIGate) OpenPullRequest(ctx context.Context, taskID string) (gitproxy.CLIActionResult, error) {
 	a, err := g.actions()
 	if err != nil {

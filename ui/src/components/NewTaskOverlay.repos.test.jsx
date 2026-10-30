@@ -263,6 +263,50 @@ describe("NewTaskOverlay", () => {
     });
   });
 
+  // A pull request's head as GitHub shows it, "owner:branch", is what
+  // people paste for an external contributor's PR: the box explains it
+  // rather than warning it is no branch, and files it as typed for the
+  // server to resolve to that pull request (pkg/forkhead).
+  it("accepts a GitHub fork head label as the base branch", async () => {
+    const config = { capabilities: [], targetRepos: ["ai-on-gke/grain"] };
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={config}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    await user.type(screen.getByLabelText(/Title/), "Finish the bump");
+    await user.selectOptions(
+      screen.getByLabelText(/^Repos/),
+      "ai-on-gke/grain",
+    );
+    const base = screen.getByLabelText(/^Base branch/);
+    await user.type(base, "a:b:c");
+    expect(screen.getByText(/has more than one ':'/)).toBeInTheDocument();
+    expect(base).toHaveAttribute("aria-invalid", "true");
+
+    await user.clear(base);
+    await user.type(base, "andrzejfudro:chore/bump-agy-1.4.9");
+    expect(screen.getByTestId("fork-head-help")).toHaveTextContent(
+      "branch chore/bump-agy-1.4.9 on andrzejfudro's fork",
+    );
+    expect(screen.getByTestId("fork-head-help")).toHaveTextContent(
+      "open pull request on ai-on-gke/grain it heads",
+    );
+    expect(base).toHaveAttribute("aria-invalid", "false");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+
+    const payload = JSON.parse(
+      api.mock.calls.find(([path]) => path === "/api/tasks")[1].body,
+    );
+    expect(payload.base).toBe("andrzejfudro:chore/bump-agy-1.4.9");
+    expect(payload.newBranch).toBeUndefined();
+  });
+
   it("files a plain base when the new-branch box is left unticked", async () => {
     const config = { capabilities: [], targetRepos: ["acme/widgets"] };
     const user = userEvent.setup();

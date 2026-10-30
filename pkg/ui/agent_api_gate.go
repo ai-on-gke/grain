@@ -90,6 +90,12 @@ var ownTaskOnlyRoutes = map[string]string{
 	"POST /api/tasks/{id}/messages": "it says something to the human watching your own task and parks it on their reply",
 }
 
+// ownMessagesReadRoute is the read half of a run's conversation: what the
+// person watching it said, and (agents=true) the notes other tasks'
+// agents left for it. It is the run's own to read; any other task's
+// needs api:task-admin, as message_task to an unrelated task does.
+const ownMessagesReadRoute = "GET /api/tasks/{id}/messages"
+
 // agentMessageRail refuses the two ways round a run can reach the wrong
 // conversation: an own-task-only route on another task, which it points
 // at POST /api/tasks/{id}/agent-messages instead, and that route on the
@@ -361,6 +367,11 @@ func sandboxChannelGuard(pattern string, body []byte) error {
 // honours an upgrade's hold on dispatch.
 func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, method string, scope APIScope,
 	target, sessionID string) error {
+	if pattern == ownMessagesReadRoute && target != "" && model.NormalizeTaskID(target) != acting.ID && !isTaskAdmin(acting) {
+		return fmt.Errorf("task %s cannot read task %s's messages: %s is a run's own conversation and the notes "+
+			"other tasks' agents left for it (message_task), so it takes only your own task's id (%s). "+
+			"Reading another task's needs api:task-admin", acting.ID, target, pattern, acting.ID)
+	}
 	if method == http.MethodGet {
 		return nil
 	}
@@ -536,10 +547,16 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 		if err != nil {
 			return notHeld
 		}
+		// A scope set limited to some repositories grants each scope on
+		// those alone, so that is what the agent must hold: read through
+		// ReposOf, not g.Repo, or a repo-limited set could never be passed
+		// on by the very task holding it.
 		set := APIGrantsOf(held)
 		for _, scope := range g.Scopes {
-			if !set.Allows(scope, g.Repo) {
-				return notHeld
+			for _, repo := range g.ReposOf(scope) {
+				if !set.Allows(scope, repo) {
+					return notHeld
+				}
 			}
 		}
 		return nil
@@ -1092,7 +1109,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	if !set.Allows(scope, call.repo) {
 		if call.repo == "" {
 			return call, fmt.Errorf("%s holds %s only for %s, and %s does not name a repository it reaches",
-				principal, scope, strings.Join(tok.Repos, ", "), pattern)
+				principal, scope, strings.Join(set.Repos(scope), ", "), pattern)
 		}
 		return call, fmt.Errorf("%s holds %s, but not on %s", principal, scope, call.repo)
 	}

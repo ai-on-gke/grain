@@ -353,6 +353,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `sandbox_image_mirror` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     64,
+		Description: "persist running CI steps' exec ids and cursors so a restart reattaches them",
+		Statements:  []string{ciStepAttachmentTable},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
