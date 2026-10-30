@@ -394,7 +394,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 			return resolving.ResolveCLIRuns(ctx)
 		},
 		CLIRunCheck:  cfg.CheckCLIRunSettings,
-		HostExecutor: func(ctx context.Context) any { return cfg.HostExecutorStatus(ctx) },
+		HostExecutor: func(ctx context.Context) any { return hostExecutorStatus(ctx, cfg, store) },
 		// PullRequests is how a dispatched run opens its own pull request
 		// before it exits (ui.Config.PullRequests' own doc comment): its
 		// mcpserver asks this API, which asks the daemon's GitHub client.
