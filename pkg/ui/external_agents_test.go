@@ -926,3 +926,47 @@ func TestExternalAgentCredentialNotFoundNamesTheCredential(t *testing.T) {
 		}
 	}
 }
+
+// TestExternalAgentViewKeepsPerScopeRepos checks that a scope granted on
+// one repository (tasks:write@acme/widgets) is listed with that
+// repository in resolvedScopes -- on create, rotate and list -- rather
+// than as a bare scope that reads as a grant on every repository.
+func TestExternalAgentViewKeepsPerScopeRepos(t *testing.T) {
+	_, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "widgets-writer",
+		Scopes: []string{"tasks:write@acme/widgets", "ci:read"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(where string, got []string) {
+		t.Helper()
+		if !slices.Contains(got, "tasks:write@acme/widgets") || slices.Contains(got, "tasks:write") {
+			t.Errorf("%s: resolvedScopes %v, want tasks:write@acme/widgets and no bare tasks:write", where, got)
+		}
+		if !slices.Contains(got, "ci:read") {
+			t.Errorf("%s: resolvedScopes %v, want the unlimited ci:read listed bare", where, got)
+		}
+	}
+	check("create", issued.ResolvedScopes)
+
+	rotated, err := client.RotateExternalAgentToken(humanCtx, issued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("rotate", rotated.ResolvedScopes)
+
+	views, err := client.ListExternalAgentTokens(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("listed %d credentials, want 1", len(views))
+	}
+	check("list", views[0].ResolvedScopes)
+}
