@@ -191,7 +191,9 @@ failure picks up where the last run stopped:
    `grain-daemon.service` is stopped, disabled and **masked**, and a
    `grain-daemon` container is removed. Masking means a reboot or a
    re-run of `setup.sh` cannot start a second controller against the
-   same state repository. A `tar.gz` of the data directory goes to
+   same state repository. `systemctl mask` refuses a unit whose own
+   file is in `/etc/systemd/system`, where `setup.sh` puts it, so that
+   file is moved to `grain-daemon.service.pre-gke` first. A `tar.gz` of the data directory goes to
    `/var/backups/grain/grain-data-<UTC timestamp>.tar.gz`.
 4. **State and secrets.** `Secret/grain-migration` carries
    `secrets.key` and the shared token (`/etc/grain/hostd.token`,
@@ -231,8 +233,9 @@ failure picks up where the last run stopped:
 copies the PVC back into the data directory and moves the local copy
 aside to `<data-dir>.pre-rollback-<timestamp>`; `--no-sync-back` skips
 the copy. It removes the drop-in, the forward unit and the model-server
-unit, restarts hostd on its socket, unmasks and starts
-`grain-daemon.service`, and lifts the pause.
+unit, restarts hostd on its socket, unmasks `grain-daemon.service`,
+moves its unit file back from `grain-daemon.service.pre-gke`, starts it,
+and lifts the pause.
 
 `scripts/migrate-local-to-gke_test.sh` runs every stage against a local
 install laid out in a scratch directory and stubbed `kubectl`,
