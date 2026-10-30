@@ -98,9 +98,9 @@ func TestCheck(t *testing.T) {
 		{"other capability", func(t model.Task) model.Task { t.Grants = []model.Grant{{Capability: "github-sandbox"}}; return t }, ""},
 		{"self-debug reads no repository", func(t model.Task) model.Task { t.Grants = []model.Grant{{Capability: "self-debug"}}; return t }, ""},
 		{"capability reading an unlisted repo", func(t model.Task) model.Task {
-			t.Grants = []model.Grant{{Capability: "repo-read:bwsalmon/grain"}}
+			t.Grants = []model.Grant{{Capability: "repo-read:ai-on-gke/grain"}}
 			return t
-		}, "repository bwsalmon/grain"},
+		}, "repository ai-on-gke/grain"},
 		{"capability writing an unlisted repo", func(t model.Task) model.Task {
 			t.Grants = []model.Grant{{Capability: "repo-write:evil/z"}}
 			return t
@@ -125,7 +125,7 @@ func TestCheck(t *testing.T) {
 }
 
 func TestCheckAllowList(t *testing.T) {
-	p := mustParse(t, "repos: [acme/widgets, bwsalmon/grain]\ncapabilities:\n  allow: [self-debug]\n")
+	p := mustParse(t, "repos: [acme/widgets, ai-on-gke/grain]\ncapabilities:\n  allow: [self-debug]\n")
 	task := model.Task{Target: &model.RepoRef{Owner: "acme", Name: "widgets"}, Grants: []model.Grant{{Capability: "gcp-key"}}}
 	if err := p.Check(task, ""); err == nil || !strings.Contains(err.Error(), "does not allow capability") {
 		t.Fatalf("Check = %v, want the allow list to refuse gcp-key", err)
@@ -160,7 +160,7 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{"allow: [\"*\"]\n  deny: [gcp-key]", "gcp-key:x", "forbids capability"},
 	}
 	for _, c := range cases {
-		p := mustParse(t, "repos: [acme/widgets, other/widgets, bwsalmon/grain]\ncapabilities:\n  "+c.rules+"\n")
+		p := mustParse(t, "repos: [acme/widgets, other/widgets, ai-on-gke/grain]\ncapabilities:\n  "+c.rules+"\n")
 		task := model.Task{Target: &model.RepoRef{Owner: "acme", Name: "widgets"}, Grants: []model.Grant{{Capability: c.grant}}}
 		err := p.Check(task, "")
 		if c.wantErr == "" {
@@ -179,7 +179,7 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 // repository of its own -- a repo-read: or repo-write: grant -- answers
 // to repos like the task's own Target and Reads. self-debug reaches
 // none: its grain-src/ is the deployment's baked-in copy, not a clone of
-// bwsalmon/grain, so a policy that does not list grain admits it.
+// ai-on-gke/grain, so a policy that does not list grain admits it.
 func TestCheckCapabilityRepos(t *testing.T) {
 	widgets := &model.RepoRef{Owner: "acme", Name: "widgets"}
 	task := model.Task{Target: widgets, Grants: []model.Grant{{Capability: model.SelfDebugCapability}}}
@@ -207,7 +207,7 @@ func TestCheckCapabilityRepos(t *testing.T) {
 	}
 
 	task.Grants = []model.Grant{{Capability: model.RepoReadCapability(model.GrainSourceRepo())}}
-	listed := mustParse(t, "repos: [acme/*, bwsalmon/grain]\ncapabilities:\n  allow: [\"*\"]\n")
+	listed := mustParse(t, "repos: [acme/*, ai-on-gke/grain]\ncapabilities:\n  allow: [\"*\"]\n")
 	if err := listed.Check(task, ""); err != nil {
 		t.Fatalf("Check = %v, want nil once %s is listed", err, model.GrainSourceRepo())
 	}

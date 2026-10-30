@@ -209,7 +209,7 @@ func TestTheCIAPIIsAnsweredByGrainsOwnAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range []string{"/api/tasks?repo=bwsalmon/grain&limit=100", "/api/ci/runs?ref=main&limit=100",
+	for _, target := range []string{"/api/tasks?repo=ai-on-gke/grain&limit=100", "/api/ci/runs?ref=main&limit=100",
 		"/api/persistent-sandboxes"} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
 		req.RemoteAddr = "10.0.0.5:4242"
