@@ -157,7 +157,10 @@ export default function GoalSection({ t, act }) {
               ? ` (limit ${goal.maxResumes || "∞"} resumes or ${seconds(goal.maxStall) || "no stall limit"}, then ${goal.onLimit})`
               : " (no progress limit)"}
             .
-            {goal.limitNotifiedAt && " Held at its limit: a person has to act."}
+            {goal.limitNotifiedAt &&
+              (goal.onLimit === "notify"
+                ? " Limit reached: operator notified, backing off."
+                : " Held at its limit: a person has to act.")}
           </p>
         </div>
       )}
