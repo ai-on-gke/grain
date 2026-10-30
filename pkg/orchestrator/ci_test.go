@@ -233,7 +233,7 @@ func (f *fakeCI) Cancel(id, reason string, by ci.CancelSource) bool {
 
 // interrupt ends a run the way a restart does: cancelled, because
 // nothing concluded it, and marked as nobody's decision
-// (ci.StoredRunStore.RecoverInterrupted).
+// (ci.StoredRunStore.RecoverUnattachable).
 func (f *fakeCI) interrupt(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
