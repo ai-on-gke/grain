@@ -1007,6 +1007,11 @@ type Config struct {
 	// nil-means-unavailable contract PullRequests and Sandboxes above
 	// already give.
 	SandboxRecreate SandboxRecreator
+	// SandboxProbe, when set, is what POST /api/sandbox-probe builds a
+	// throwaway sandbox through (sandbox_probe.go): pkg/daemon's adapter
+	// over orchestrator.ProbeSandbox and the daemon's own backend. nil
+	// answers 404, the contract SandboxRecreate above gives.
+	SandboxProbe SandboxProber
 	// StandingSandboxes, when set, reports the standing sandboxes the
 	// daemon's reconcile loop is supervising, for GET /api/sandboxes'
 	// standingSandboxes -- pkg/cli/daemon.go's adapter over the same

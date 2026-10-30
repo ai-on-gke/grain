@@ -148,7 +148,7 @@ every `DELETE`.
 | `deployment:read` | read host, sandbox, log, metric and upgrade status | |
 | `sandboxes:read` | read the persistent sandboxes' status (`GET /api/persistent-sandboxes`); `deployment:read` implies it | |
 | `deployment:upgrade` | upgrade grain and its database, or cancel a scheduled upgrade | yes |
-| `deployment:restart` | restart grain, act on persistent sandboxes | yes |
+| `deployment:restart` | restart grain, act on persistent sandboxes, run sandbox probes | yes |
 | `deployment:reboot` | reboot or shut down the host | yes |
 
 `internal` marks grain's own plumbing, which no agent can ever reach.
