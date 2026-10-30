@@ -61,6 +61,13 @@ describe("ChipStrip", () => {
     expect(hidden(el)).toEqual([false, true, true]);
   });
 
+  it("hides nothing in a strip that is not clipped to one line", () => {
+    const el = strip([0, 30, 60]);
+    el.style.maxHeight = "none";
+    fitChipStrips([el]);
+    expect(hidden(el)).toEqual([false, false, false]);
+  });
+
   it("puts a hidden chip back when the row has room for it again", () => {
     const el = strip([0, 30]);
     fitChipStrips([el]);

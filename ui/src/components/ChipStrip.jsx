@@ -40,6 +40,10 @@ export const OVERFLOW = "chip-overflow";
 export function firstWrapped(strip) {
   const chips = strip.children;
   if (chips.length < 2) return -1;
+  // A strip that is not clipped to one line shows what it wraps -- a
+  // phone's task row gives its chips lines of their own (style.css's
+  // data-phone rules) -- and has nothing to hide.
+  if (getComputedStyle(strip).maxHeight === "none") return -1;
   const top = chips[0].getBoundingClientRect().top;
   for (let i = 1; i < chips.length; i++) {
     // A pixel of slack: chips on one line share a top, and a wrapped one
