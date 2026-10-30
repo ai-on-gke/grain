@@ -123,4 +123,14 @@ func TestGetSandboxHealthReportsStaleSandboxImagePins(t *testing.T) {
 	if len(got.Warnings) != 1 || !strings.HasPrefix(got.Warnings[0], "k8s_sandbox_image: ") || !strings.Contains(got.Warnings[0], "v2.1.0") {
 		t.Errorf("sandboxImageWarnings = %q, want one for k8s_sandbox_image naming v2.1.0", got.Warnings)
 	}
+
+	// A deployment with no pool to report on still says it: the pin is
+	// in its settings, not in the pool.
+	c.Config.Sandboxes = nil
+	got = decode[struct {
+		Warnings []string `json:"sandboxImageWarnings"`
+	}](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))
+	if len(got.Warnings) != 1 {
+		t.Errorf("sandboxImageWarnings with no pool = %q, want the same one", got.Warnings)
+	}
 }
