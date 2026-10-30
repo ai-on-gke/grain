@@ -499,8 +499,29 @@ func manualFollowUps(manual []hostinit.Step) []string {
 	return lines
 }
 
+// initCLIBinary is the grain binary path the closing CLI hint names:
+// whatever binary Init actually ran or built (Result.GrainBinaryPath,
+// which is opts.UseBinary when -use-binary is set and <repo-root>/bin/grain
+// otherwise), falling back to opts' own fields and finally a bare "grain"
+// when a caller passes an empty Result and Options in tests. grain init
+// does not link a binary into /usr/local/bin, so naming a bare "grain"
+// fails with `env: 'grain': No such file or directory` under sudo's
+// secure_path.
+func initCLIBinary(result hostinit.Result, opts hostinit.Options) string {
+	for _, p := range []string{result.GrainBinaryPath, opts.UseBinary, opts.GrainBinaryPath} {
+		if p != "" {
+			return absDataDir(p)
+		}
+	}
+	return "grain"
+}
+
 func printInitResult(result hostinit.Result, opts hostinit.Options) {
-	fmt.Println("grain init:")
+	fprintInitResult(os.Stdout, result, opts)
+}
+
+func fprintInitResult(w io.Writer, result hostinit.Result, opts hostinit.Options) {
+	fmt.Fprintln(w, "grain init:")
 	var manual []hostinit.Step
 	daemonUp := false
 	for _, s := range result.Steps {
@@ -509,26 +530,26 @@ func printInitResult(result hostinit.Result, opts hostinit.Options) {
 		}
 		switch s.Status {
 		case hostinit.StepDone:
-			fmt.Printf("  [done]    %-55s %s\n", s.Name, s.Detail)
+			fmt.Fprintf(w, "  [done]    %-55s %s\n", s.Name, s.Detail)
 		case hostinit.StepSkipped:
-			fmt.Printf("  [skipped] %-55s %s\n", s.Name, s.Detail)
+			fmt.Fprintf(w, "  [skipped] %-55s %s\n", s.Name, s.Detail)
 		case hostinit.StepWould:
-			fmt.Printf("  [would]   %-55s %s\n", s.Name, s.Detail)
+			fmt.Fprintf(w, "  [would]   %-55s %s\n", s.Name, s.Detail)
 		case hostinit.StepManual:
-			fmt.Printf("  [manual]  %-55s %s\n", s.Name, s.Detail)
+			fmt.Fprintf(w, "  [manual]  %-55s %s\n", s.Name, s.Detail)
 			manual = append(manual, s)
 		case hostinit.StepRefused:
-			fmt.Printf("  [refused] %-55s %s\n", s.Name, s.Detail)
+			fmt.Fprintf(w, "  [refused] %-55s %s\n", s.Name, s.Detail)
 		}
 		if s.Command != "" && !strings.Contains(s.Detail, s.Command) {
-			fmt.Printf("            $ %s\n", s.Command)
+			fmt.Fprintf(w, "            $ %s\n", s.Command)
 		}
 	}
 	if len(manual) > 0 {
-		fmt.Println("\nSome steps are not done yet -- either they need more access than this ran with, or " +
+		fmt.Fprintln(w, "\nSome steps are not done yet -- either they need more access than this ran with, or "+
 			"grain init will never perform them itself. Run these, then re-run this command:")
 		for _, line := range manualFollowUps(manual) {
-			fmt.Printf("  %s\n", line)
+			fmt.Fprintf(w, "  %s\n", line)
 		}
 	}
 	if result.SandboxGitProxyHost != "" {
@@ -536,7 +557,7 @@ func printInitResult(result hostinit.Result, opts hostinit.Options) {
 		if opts.Platform == hostinit.PlatformLinuxContainer {
 			flagName = "-container-git-proxy-host"
 		}
-		fmt.Printf("\n%s resolved to %s\n", flagName, result.SandboxGitProxyHost)
+		fmt.Fprintf(w, "\n%s resolved to %s\n", flagName, result.SandboxGitProxyHost)
 	}
 	// Every caller presents the access code, this host's CLI included.
 	if daemonUp {
@@ -545,8 +566,9 @@ func printInitResult(result hostinit.Result, opts hostinit.Options) {
 			daemonUser = hostinit.DefaultDaemonUser
 		}
 		dataDir := opts.DataDir
-		fmt.Println("\nTo run the grain CLI against this daemon, authenticate with the local API token:")
-		fmt.Printf("  sudo -u %s env GRAIN_DATA_DIR=%s grain <command>\n", daemonUser, dataDir)
+		grainBin := initCLIBinary(result, opts)
+		fmt.Fprintln(w, "\nTo run the grain CLI against this daemon, authenticate with the local API token:")
+		fmt.Fprintf(w, "  sudo -u %s env GRAIN_DATA_DIR=%s %s <command>\n", daemonUser, dataDir, grainBin)
 	}
 }
 
