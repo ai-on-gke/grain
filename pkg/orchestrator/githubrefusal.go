@@ -84,7 +84,8 @@ func readMergeRequirements(client github.Client, ref model.PullRequestRef, base 
 		// independent, and a credential that may not read rulesets can
 		// still read reviews.
 		empty := len(req.Approvers) == 0 && len(req.RequestedUsers) == 0 && len(req.RequestedTeams) == 0 &&
-			req.ApprovalsRequired == 0 && len(req.RequiredChecks) == 0 && len(req.OtherRules) == 0
+			req.ApprovalsRequired == 0 && len(req.RequiredChecks) == 0 && len(req.OtherRules) == 0 &&
+			!req.RequireConversationResolution
 		return req, !empty
 	}
 	return req, true
@@ -195,6 +196,12 @@ func holdRefusedMerge(client github.Client, e queueEntry, detail github.PullRequ
 		return len(missingRequiredChecks(required, runs)) > 0
 	case github.RefusalRule:
 		return true
+	case github.RefusalUnresolvedThreads:
+		if !poll() {
+			return true
+		}
+		count, _ := unresolvedReviewThreads(client, e.task, ref)
+		return count > 0
 	}
 	if r.Exhausted(now) {
 		return true
@@ -212,6 +219,8 @@ func refusalStatus(r forge.MergeRefusal, ref model.PullRequestRef, prURL string)
 		return queueStatus{state: mergeStateFailed, note: requiredChecksNote(r)}
 	case github.RefusalRule:
 		return queueStatus{state: mergeStateFailed, note: ruleNote(r)}
+	case github.RefusalUnresolvedThreads:
+		return queueStatus{state: mergeStateFailed, note: unresolvedThreadsNote(r, ref, prURL)}
 	}
 	return queueStatus{state: mergeStateFailed, note: refusalNote(r)}
 }
@@ -297,11 +306,35 @@ func ruleNote(r forge.MergeRefusal) string {
 		"then press Retry merge; grain does not retry a rule on its own.", rules, refusalLine(r.Reason, 160))
 }
 
+// unresolvedThreadsSummary formats the blocked unresolved review conversations summary.
+func unresolvedThreadsSummary(req github.MergeRequirements) string {
+	n := req.UnresolvedThreadCount
+	if n < 1 {
+		n = 1
+	}
+	who := "reviewers"
+	if len(req.UnresolvedThreadAuthors) > 0 {
+		who = strings.Join(req.UnresolvedThreadAuthors, ", ")
+	}
+	return fmt.Sprintf("blocked: %d unresolved review conversations by %s", n, who)
+}
+
+// unresolvedThreadsNote is the row for unresolved human review conversations.
+func unresolvedThreadsNote(r forge.MergeRefusal, ref model.PullRequestRef, prURL string) string {
+	return fmt.Sprintf("%s on %s (%s). Resolve them on GitHub and grain merges on its own, or press \"Retry merge\" once resolved.",
+		unresolvedThreadsSummary(r.Requirements), ref, reviewPage(ref, prURL))
+}
+
 // refusalComment is what the task's thread is told when the queue hands a
 // refusal to a person.
 func refusalComment(ref model.PullRequestRef, r forge.MergeRefusal, now time.Time) string {
 	said := refusalLine(r.Reason, 400)
 	switch r.Kind {
+	case github.RefusalUnresolvedThreads:
+		return fmt.Sprintf("GitHub refused to merge %s because of unresolved review conversations (%s):\n\n> %s\n\n"+
+			"grain never auto-resolves review threads written by people. Resolve the remaining conversations on GitHub "+
+			"(or press Retry merge once resolved) and the queue will merge %s.",
+			ref, unresolvedThreadsSummary(r.Requirements), said, ref)
 	case github.RefusalRequiredChecks:
 		checks := "status checks"
 		if len(r.Requirements.RequiredChecks) > 0 {

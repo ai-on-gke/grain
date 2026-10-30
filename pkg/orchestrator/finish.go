@@ -386,6 +386,12 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		}
 	}
 	if !staleBranch && !inPlace {
+		pushedCommit := true
+		if preRunBranchSHA != "" && client != nil && task.Target != nil {
+			if head, herr := client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName()); herr == nil && head != nil {
+				pushedCommit = head.SHA != preRunBranchSHA
+			}
+		}
 		handled, err := salvagePushedBranch(ctx, store, client, task, now)
 		if empty, ok := emptyBranch(err); ok {
 			// The task has already been told, and parked (noteEmptyBranch).
@@ -404,6 +410,9 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			return err
 		}
 		if handled {
+			if pushedCommit || hasComment || hasNothingNeeded || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != "")) {
+				resolveRelayedThreadsAfterOwnerRun(ctx, store, client, task, proxyResult, pushedCommit)
+			}
 			return nil
 		}
 	}

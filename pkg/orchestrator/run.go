@@ -397,6 +397,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	}
 	if task.Target != nil {
 		prompt += pairedBranchesSection(history.PairedBranches)
+		prompt += relayedReviewThreadsSection(task)
 	}
 	// Said out loud because neither half is discoverable from the tools
 	// alone. Nothing stops a run pushing repeatedly -- the branch is its
@@ -654,6 +655,9 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	}
 	if history.BaseIncident != "" {
 		prompt += "\n\n" + strings.TrimRight(history.BaseIncident, "\n")
+	}
+	if task.Target != nil {
+		prompt += relayedReviewThreadsSection(task)
 	}
 	if task.Target != nil && !grainci.Granted(task.Grants) && (history.Repair || model.FixesBaseBranch(task)) {
 		prompt += repairCISection()

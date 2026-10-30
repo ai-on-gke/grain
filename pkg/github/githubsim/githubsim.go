@@ -444,6 +444,12 @@ type Sim struct {
 	// merges once it does -- which is what lets a test show the queue
 	// waiting for an approval and merging when it arrives.
 	RequireApprovals int
+	// RequireConversationResolution, when true, is GitHub's "Require
+	// conversation resolution before merging" branch protection / ruleset
+	// rule: PUT .../merge answers 405 "Repository rule violations found\n\nAll
+	// comments must be resolved." while any review thread on the pull
+	// request is unresolved.
+	RequireConversationResolution bool
 	// RefuseLabels, when non-zero, is the status GitHub answers POST
 	// .../issues/N/labels with instead of applying them -- a 403 for a
 	// token without the permission, a 422 for a label the repository will
@@ -1736,7 +1742,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			s.nextReviewID++
 			s.Reviews = append(s.Reviews, Review{Number: number, Event: payload.Event, Body: payload.Body, Comments: comments})
-			if payload.Event != "" && len(comments) > 0 {
+			if (payload.Event != "" || s.conversationResolutionRequiredForPR(number)) && len(comments) > 0 {
 				if s.ReviewComments == nil {
 					s.ReviewComments = map[int][]github.ReviewComment{}
 				}
@@ -1744,10 +1750,12 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 					s.nextCommentID++
 					line := c.Line
 					s.ReviewComments[number] = append(s.ReviewComments[number], github.ReviewComment{
-						ID:   s.nextCommentID,
-						Path: c.Path,
-						Line: &line,
-						Body: c.Body,
+						ID:       s.nextCommentID,
+						User:     "grain-agent",
+						ReviewID: s.nextReviewID,
+						Path:     c.Path,
+						Line:     &line,
+						Body:     c.Body,
 					})
 				}
 			}
@@ -2093,6 +2101,10 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 						return jsonResponse(405, map[string]string{"message": fmt.Sprintf(
 							"Repository rule violations found\n\nReview required: at least %d approving review is required by reviewers with write access.",
 							s.RequireApprovals)}), nil
+					}
+					if s.conversationResolutionRequired(s.PullRequests[i].Base) && s.hasUnresolvedReviewThreads(number) {
+						return jsonResponse(405, map[string]string{"message": "Repository rule violations found\n\n" +
+							"All comments must be resolved."}), nil
 					}
 					// GitHub's own message: commit_title (its default
 					// when empty), a blank line, then commit_message.
@@ -2447,6 +2459,43 @@ func (s *Sim) reviewThreadExists(id string) bool {
 			if c.InReplyTo == 0 && id == fmt.Sprintf("thread-%d", c.ID) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func (s *Sim) conversationResolutionRequiredForPR(number int) bool {
+	if s.RequireConversationResolution {
+		return true
+	}
+	pr, ok := s.pullRequest(number)
+	if !ok {
+		return false
+	}
+	return s.conversationResolutionRequired(pr.Base)
+}
+
+func (s *Sim) conversationResolutionRequired(base string) bool {
+	if s.RequireConversationResolution {
+		return true
+	}
+	for _, rule := range s.BranchRules[base] {
+		if rule["type"] != "pull_request" {
+			continue
+		}
+		if params, ok := rule["parameters"].(map[string]any); ok {
+			if req, _ := params["required_review_thread_resolution"].(bool); req {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Sim) hasUnresolvedReviewThreads(number int) bool {
+	for _, c := range s.ReviewComments[number] {
+		if c.InReplyTo == 0 && !s.ResolvedThreads[fmt.Sprintf("thread-%d", c.ID)] {
+			return true
 		}
 	}
 	return false
