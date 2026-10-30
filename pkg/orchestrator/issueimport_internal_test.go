@@ -70,6 +70,10 @@ func openIssue(n int, title string, labels ...string) github.Issue {
 
 func putImportConfig(t *testing.T, ctx context.Context, store *model.Store, imp model.IssueImport) {
 	t.Helper()
+	// issueImportPolled is keyed by the store's address, which a later
+	// test's store may reuse once this one is gone.
+	issueImportPolled.Clear()
+	t.Cleanup(issueImportPolled.Clear)
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, IssueImport: imp}); err != nil {
 		t.Fatal(err)
 	}
