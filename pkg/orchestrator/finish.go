@@ -1455,11 +1455,16 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// Parameter allowlist validation in the system tuning runner:
 		// verify proposed changes target recognized grain_config parameters
 		// before filing state-repo pull requests or proposed tasks.
-		isTuningTask := task.TemplateID == model.InfraReviewTemplateID
-		// Only the tuning runner's own proposals are read for a parameter
-		// in their title: any other task's split-out work that merely says
-		// "tune" there is not a recommendation, and reading it as one
-		// refused it, unfiled, as a parameter outside the allowlist.
+		// Code proposals from infra-review that explicitly target a source
+		// repository (e.g. reliability bug fixes) are not tuning
+		// recommendations unless they explicitly name a parameter field.
+		isTuningTask := task.TemplateID == model.InfraReviewTemplateID &&
+			!proposalTargetsSourceRepo(ctx, store, p, task)
+		// Only the tuning runner's own tuning proposals are read for a
+		// parameter in their title: any other task's split-out work (or a
+		// source-repo code proposal) that merely says "tune" there is not
+		// a recommendation, and reading it as one refused it, unfiled, as
+		// a parameter outside the allowlist.
 		tuningTitle, tuningBody := "", ""
 		if isTuningTask {
 			tuningTitle, tuningBody = title, body
@@ -2350,6 +2355,49 @@ func proposedTarget(ctx context.Context, store *model.Store, args map[string]any
 		return task.Target, branchNamed, named, nil
 	}
 	return &repo, branchNamed, "", nil
+}
+
+// proposalTargetsSourceRepo reports whether a propose_task call p explicitly
+// targets a source repository rather than the deployment's configuration/state
+// repository (or no repository at all).
+func proposalTargetsSourceRepo(ctx context.Context, store *model.Store, p map[string]any, task model.Task) bool {
+	if noRepo, _ := p["no_repo"].(bool); noRepo {
+		return false
+	}
+	if ct, err := mcp.ProposedChangeTarget(p); err == nil && ct != nil {
+		return true
+	}
+	named, _ := p["repo"].(string)
+	named = strings.TrimSpace(named)
+	if repoPart, _, hasAt := strings.Cut(named, "@"); hasAt {
+		named = strings.TrimSpace(repoPart)
+	}
+	if named == "" {
+		return false
+	}
+	repo, err := model.ParseRepo(named)
+	if err != nil || isSettingsRepo(store, repo) {
+		return false
+	}
+	hasSettingsRepo := store != nil && store.SettingsRepo != nil && store.SettingsRepo() != (model.RepoRef{})
+	if !hasSettingsRepo {
+		for _, r := range task.Reads {
+			if r.Same(repo) {
+				return false
+			}
+		}
+	}
+	if task.Target != nil && repo.Same(*task.Target) {
+		return true
+	}
+	if _, ok := model.WriteTargetFor(task, repo); ok {
+		return true
+	}
+	if store == nil {
+		return false
+	}
+	known, err := store.WorksInRepoForTeam(ctx, model.DefaultTeamID, repo)
+	return err == nil && known
 }
 
 // unknownProposalRepoNote is what a human approving the proposal reads
