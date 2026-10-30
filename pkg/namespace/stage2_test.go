@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -69,13 +70,20 @@ type stubDeployProvider struct {
 	health          string
 	state           map[string]string
 	grainLog        string
+	// gotMetrics and gotLog, when set, record the query each read was
+	// asked with.
+	gotMetrics *MetricsQuery
+	gotLog     *GrainLogQuery
 }
 
 func (s stubDeployProvider) ReadMergeQueue(ctx context.Context) (string, error) {
 	return s.mergeQueue, nil
 }
 
-func (s stubDeployProvider) ReadMetrics(ctx context.Context, section string) (string, error) {
+func (s stubDeployProvider) ReadMetrics(ctx context.Context, section string, q MetricsQuery) (string, error) {
+	if s.gotMetrics != nil {
+		*s.gotMetrics = q
+	}
 	if v, ok := s.metrics[section]; ok {
 		return v, nil
 	}
@@ -107,7 +115,10 @@ func (s stubDeployProvider) ListStateTables(ctx context.Context) ([]string, erro
 	return out, nil
 }
 
-func (s stubDeployProvider) ReadGrainLog(ctx context.Context, source string) (string, error) {
+func (s stubDeployProvider) ReadGrainLog(ctx context.Context, source string, q GrainLogQuery) (string, error) {
+	if s.gotLog != nil {
+		*s.gotLog = q
+	}
 	return s.grainLog, nil
 }
 
@@ -277,5 +288,47 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(logRec.Body.String()), "[redacted") {
 		t.Fatalf("deploy://grain.log expected redacted marker: %q", logRec.Body.String())
+	}
+}
+
+// deploy://grain.log and deploy://metrics pass a read's window and filters
+// on to their provider, so `grain log --since ... --contains ...` and
+// `grain metrics --repo ...` reach past the default tail and report
+// rather than only ever reading it.
+func TestDeployReadsForwardTheirQuery(t *testing.T) {
+	t.Parallel()
+	var gotLog GrainLogQuery
+	var gotMetrics MetricsQuery
+	srv := &Server{Deploy: stubDeployProvider{
+		metrics: map[string]string{"all": "All metrics\n"}, grainLog: "a line\n",
+		gotLog: &gotLog, gotMetrics: &gotMetrics,
+	}}
+	scope := Scope{TaskID: 1, TaskIDStr: "1", MayReadGrainLog: true, MayReadMetrics: true}
+
+	rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/grain.log/daemon.log?since=2026-10-29T00:00:00Z"+
+		"&until=2026-10-29T06:00:00Z&min_priority=err&contains=dispatch+failed&max_lines=900", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("deploy://grain.log: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if want := (GrainLogQuery{Since: "2026-10-29T00:00:00Z", Until: "2026-10-29T06:00:00Z",
+		MinPriority: "err", Contains: "dispatch failed", MaxLines: 900}); gotLog != want {
+		t.Errorf("grain.log query = %+v, want %+v", gotLog, want)
+	}
+	if rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/grain.log?lines=50", nil); rec.Code != http.StatusOK || gotLog.MaxLines != 50 {
+		t.Errorf("?lines=50: status=%d, max lines %d, want 50", rec.Code, gotLog.MaxLines)
+	}
+	if rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/grain.log?max_lines=lots", nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("?max_lines=lots: status=%d, want 400; body=%q", rec.Code, rec.Body.String())
+	}
+
+	rec = serveRequest(srv, scope, http.MethodGet, "/fs/deploy/metrics/summary.txt?window=7d&since=2026-10-01"+
+		"&until=2026-10-08&repo=acme/a,acme/b&repo=acme/c&author=task", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("deploy://metrics: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	want := MetricsQuery{Window: "7d", Since: "2026-10-01", Until: "2026-10-08",
+		Repos: []string{"acme/a", "acme/b", "acme/c"}, Authors: []string{"task"}}
+	if !reflect.DeepEqual(gotMetrics, want) {
+		t.Errorf("metrics query = %+v, want %+v", gotMetrics, want)
 	}
 }

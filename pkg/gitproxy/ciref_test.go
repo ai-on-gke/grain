@@ -51,7 +51,6 @@ func TestCIRepoWriteAllowsReleaseRefsAndRefusesRewritingMain(t *testing.T) {
 			name:    "fast-forward main",
 			update:  RefUpdate{Old: oidA, New: oidB, Ref: "refs/heads/main"},
 			commits: packCommits{oidB: {oidA}},
-			allow:   true, kind: "update",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

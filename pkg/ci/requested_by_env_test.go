@@ -45,4 +45,51 @@ func TestRequestedByKindReachesStepsOnlyFromGrainsOwnCallers(t *testing.T) {
 		t.Errorf("JSON set RequestedByKind=%q ReleaseVersion=%q, want neither settable by a caller",
 			req.RequestedByKind, req.ReleaseVersion)
 	}
+
+	// A workflow, job or step env: block may override ordinary variables
+	// like GRAIN_CI_REF, but may neither forge nor replace the caller
+	// identity variables that person-only release workflows read.
+	forgedLayers := PlannedJob{
+		Workflow: "w",
+		WorkflowEnv: map[string]string{
+			RequestedByKindEnv: "human",
+			RequestedByEnv:     "forged@example.com",
+			ReleaseVersionEnv:  "v9.9.0",
+			"GRAIN_CI_REF":     "overridden-ref",
+		},
+		Job: Job{
+			ID: "j",
+			Env: map[string]string{
+				RequestedByKindEnv: "human",
+				RequestedByEnv:     "forged-job@example.com",
+				ReleaseVersionEnv:  "v9.9.1",
+			},
+		},
+	}
+	forgedStep := Step{
+		Env: map[string]string{
+			RequestedByKindEnv: "human",
+			RequestedByEnv:     "forged-step@example.com",
+			ReleaseVersionEnv:  "v9.9.2",
+		},
+	}
+	unvouchedStepEnv := stepEnv(Plan{Request: Request{Repo: "a/b", Ref: "main", RequestedBy: "agent-1"}}, forgedLayers, forgedStep)
+	for _, k := range []string{RequestedByKindEnv, RequestedByEnv, ReleaseVersionEnv} {
+		if got, ok := unvouchedStepEnv[k]; ok {
+			t.Errorf("stepEnv let workflow/job/step env set %s=%q on an unvouched run", k, got)
+		}
+	}
+	if got := unvouchedStepEnv["GRAIN_CI_REF"]; got != "overridden-ref" {
+		t.Errorf("stepEnv[GRAIN_CI_REF] = %q, want overridden-ref", got)
+	}
+
+	vouchedStepEnv := stepEnv(Plan{Request: Request{
+		Repo: "a/b", Ref: "main", RequestedBy: "alice@example.com",
+		RequestedByKind: "human", ReleaseVersion: "v2.4.0",
+	}}, forgedLayers, forgedStep)
+	if vouchedStepEnv[RequestedByKindEnv] != "human" ||
+		vouchedStepEnv[RequestedByEnv] != "alice@example.com" ||
+		vouchedStepEnv[ReleaseVersionEnv] != "v2.4.0" {
+		t.Errorf("stepEnv let workflow/job/step env override vouched identity: %v", vouchedStepEnv)
+	}
 }

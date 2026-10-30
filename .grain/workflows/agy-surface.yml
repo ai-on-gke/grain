@@ -71,24 +71,24 @@ jobs:
             echo "the capture is $bytes bytes: agy answered almost nothing, and publishing this would replace a real capture with an empty one" >&2
             exit 1
           fi
-          for heading in '## The binary' '## Commands and flags' '## Where each flag lives' \
-                         '## The flags pkg/agent/antigravity passes' \
-                         '## Print mode and the introspection subcommands' \
-                         '## What a live agy loads from HOME' \
-                         '## What a live agy does with its native tools'; do
+          for heading in '## The binary' '## Commands and flags' '## Interactive mode' \
+                         '## What agy documents about itself' '## A HOME agy has never seen' \
+                         '## What it reads back' '## Which paths it reads' \
+                         '## What it drops without a word' \
+                         '## The config schema, out of the string table'; do
             if ! grep -qF -- "$heading" docs/agy-surface.md; then
               echo "the capture has no \"$heading\" section; scripts/agy-surface.sh did not run to the end" >&2
               exit 1
             fi
           done
           missing=""
-          grep -q '^### .agy auth.$' docs/agy-surface.md || missing="$missing no-subcommand-help"
-          grep -q '^agy -p /tools' docs/agy-surface.md || missing="$missing no-tools-probe"
-          grep -q '^agy -p /hooks' docs/agy-surface.md || missing="$missing no-hooks-probe"
-          grep -q '^agy -p /permissions' docs/agy-surface.md || missing="$missing no-permissions-probe"
-          grep -q '^custom: `denied`' docs/agy-surface.md || missing="$missing no-denial-probe"
-          grep -q '^native: `denied`' docs/agy-surface.md || missing="$missing no-native-denial-probe"
-          grep -q '^captured here' docs/agy-surface.md || missing="$missing no-version"
+          grep -q '^### .agy mcp.$' docs/agy-surface.md || missing="$missing no-subcommand-help"
+          grep -qE '^native tools: [1-9]' docs/agy-surface.md || missing="$missing no-tools-probe"
+          grep -q '^agy-surface-probe	enabled	PreToolUse' docs/agy-surface.md || missing="$missing no-hooks-probe"
+          grep -q '^global	deny	run_command$' docs/agy-surface.md || missing="$missing no-permissions-probe"
+          grep -q '^READ       ~/\.gemini/' docs/agy-surface.md || missing="$missing no-paths-probe"
+          grep -qE '^(loaded|DROPPED)  ' docs/agy-surface.md || missing="$missing no-drop-probe"
+          grep -qE '^sha256 [0-9a-f]{64}$' docs/agy-surface.md || missing="$missing no-version"
           if [ -n "$missing" ]; then
             echo "the capture ran to the end but answered nothing for:$missing -- agy's shape has moved under scripts/agy-surface.sh, and publishing this would replace measurements with silence" >&2
             exit 1

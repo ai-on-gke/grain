@@ -79,7 +79,7 @@ const pending = {
   severity: "warning",
   title: "v2.4.0 is ready to promote (v2.4.0-rc.2 passed its soak)",
   body: "v2.4.0-rc.2 passed its 24h staging soak.",
-  repo: "bwsalmon/grain",
+  repo: "ai-on-gke/grain",
   actions: ["approve-release", "reject-release"],
   raiseCount: 1,
   raisedAt: "2026-10-26T08:00:00Z",
@@ -97,7 +97,15 @@ describe("pending releases", () => {
       "Investigate",
     ]);
     expect(row.actions[0].release).toEqual({
-      repo: "bwsalmon/grain",
+      repo: "ai-on-gke/grain",
+      version: "v2.4.0",
+    });
+  });
+
+  it("fall back to grain's own repository when the notification names none", () => {
+    const { repo: _repo, ...unnamed } = pending;
+    expect(pendingReleaseOf(unnamed)).toEqual({
+      repo: "ai-on-gke/grain",
       version: "v2.4.0",
     });
   });
@@ -118,7 +126,7 @@ describe("pending releases", () => {
     vi.spyOn(window, "confirm").mockReturnValueOnce(true);
     expect(await decideRelease(pendingReleaseOf(pending), true)).toBe(true);
     expect(api).toHaveBeenCalledWith(
-      "/api/repos/bwsalmon/grain/pending-releases/v2.4.0/approve",
+      "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/approve",
       { method: "POST" },
     );
   });

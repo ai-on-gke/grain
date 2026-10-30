@@ -466,12 +466,12 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 	}
 	ref := CapabilityGrantRef(g)
 	refs := equivalentCapabilityRefs(ref, servers)
-	for _, r := range p.Rules {
+	for i, r := range p.Rules {
 		if !r.Deny || !r.namesAny(refs) {
 			continue
 		}
 		if r.covers(s) {
-			return fmt.Errorf("the capability policy denies %s to this %s", ref, s.describe())
+			return fmt.Errorf("the capability policy denies %s to this %s (rule %d: deny %s)", ref, s.describe(), i+1, r.Capability)
 		}
 	}
 	named := false

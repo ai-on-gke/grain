@@ -19,39 +19,29 @@ import { REFRESH_MS } from "./CIPage.jsx";
 import { buildPath } from "../paths.js";
 import { pullRequestUrl } from "../state.js";
 
-// The merge queue's speculative batches, shown as the thing they are
+// The merge queue's overlap re-checks, shown as the thing they are
 // (GET /api/merge-batches, grain/task-301).
 //
-// Batching (grain/task-294) tests several queued changes together on a
-// throwaway ref of grain's own and merges the lot on one pass. Each
-// member's row says so -- "Testing with the rest of the batch", with a
-// sentence behind it naming the ref, the commit and how many others there
-// are -- and that is everything a row can say about a thing that is not
-// the row. Three of them do not say they are the *same* batch, which one
-// is first, or where the single run that decides all three is; a person
-// watching had to infer a batch from three rows that happened to agree.
+// When a finished change overlaps what has landed on its base branch since
+// the commit its own run tested, the merge queue merges it onto a throwaway
+// ref of grain's own and runs grain CI against that tree before merging
+// (orchestrator's startMergeRecheck).
 //
-// So this draws the batch. One card per batch in flight: the ref and the
-// commit that is actually being judged, the run as a link, how long it
-// has been going against the bound past which the queue gives up on it,
-// and the members in the queue's own order with the first marked. It is
-// mounted twice -- on a repo's own page, where "what is my queue doing"
-// is asked, and on a member's task page, where "who else is in this with
-// me" is -- and it is the same card both times, because it is the same
-// question with a different way in.
+// So this draws the re-check in flight: the ref and the commit that is
+// actually being judged, the run as a link, how long it has been going
+// against the bound past which the queue gives up on it, and the change
+// being re-checked. It is mounted twice -- on a repo's own page, where
+// "what is my queue doing" is asked, and on the change's task page -- and
+// it is the same card both times.
 //
-// Read-only, deliberately. Nothing here cancels a batch or drops a
-// member: the batch is the reconciler's own state machine, it ends on its
-// own within the age bound whatever happens, and a button in the middle
-// of it would be a second thing deciding what the queue is testing. The
-// way to stop batching is the setting that turns it off
-// (Settings, merge batch size), which is a decision about future batches
-// rather than a hand on this one.
+// Read-only, deliberately. Nothing here cancels a re-check: it is the
+// reconciler's own state machine, and it ends on its own within the age
+// bound whatever happens.
 
 // batchAge is how long a batch has been holding its members, against how
 // long it may. "22m" alone says nothing -- a full suite here is 20-45
 // minutes -- and "22m of 90m" says how much rope is left before the queue
-// abandons it and falls back to merging one at a time.
+// abandons it.
 //
 // maxAgeSeconds comes from the API (ui.MergeBatches.MaxAgeSeconds,
 // model.MaxMergeBatchAge) rather than being written in here, so changing
@@ -69,26 +59,26 @@ export function batchAge(batch, maxAgeSeconds, now = Date.now()) {
 // batchStanding is the one word beside the branch name, and the sentence
 // behind it.
 //
-// A batch that is still going is the interesting case and the common one.
-// The rest are the moments after a verdict, which a card that polls every
-// few seconds does catch: only "failure" means the combination is broken
-// (model.MergeBatch.Failed) -- everything else that is not a pass is a
-// run that said nothing about the tree, which ends the batch without
-// blaming anybody and lets the ordinary one-at-a-time queue take over.
+// A re-check that is still going is the interesting case and the common
+// one. The rest are the moments after a verdict, which a card that polls
+// every few seconds does catch: only "failure" means the merged tree is
+// broken (model.MergeBatch.Failed) -- everything else that is not a pass
+// is a run that said nothing about the tree, which discards the re-check
+// without blaming the change.
 export function batchStanding(batch) {
   if (batch.running) {
     return {
       label: "Testing",
       color: "info",
       title:
-        "One grain CI run is judging the base branch with all of these changes merged into it. They all merge if it passes; none of them has landed yet.",
+        "One grain CI run is judging the base branch with this change merged into it. It merges if the run passes; nothing has landed yet.",
     };
   }
   if (batch.conclusion === "success") {
     return {
       label: "Passed",
       color: "success",
-      title: "The combination was green, so every member merges.",
+      title: "The re-check was green, so the change merges.",
     };
   }
   if (batch.conclusion === "failure") {
@@ -96,14 +86,14 @@ export function batchStanding(batch) {
       label: "Failed",
       color: "error",
       title:
-        "The combination is broken. The queue halves the batch from the front and tests again, until one change is left holding the failure -- that one goes back to its own agent and the rest carry on.",
+        "The change broke grain CI when merged on top of the base branch. It goes back to its own agent for repair and the rest of the queue carries on.",
     };
   }
   return {
     label: "Abandoned",
     color: "warning",
     title:
-      "The run said nothing about the tree -- it errored, was cancelled, was lost, or took longer than the queue waits. No culprit can be read out of that, so the members were released and this repository merges one at a time for a few minutes.",
+      "The run said nothing about the tree -- it errored, was cancelled, was lost, or took longer than the queue waits. No failure can be read out of that, so the re-check was discarded.",
   };
 }
 
@@ -183,30 +173,24 @@ function MergeBatchCard({
       </Stack>
       {/* The ref and the commit, because they are what makes the verdict
           a verdict about anything: the tree being judged is neither the
-          base branch nor any member's head, and nobody's pull request
+          base branch nor the change's head, and nobody's pull request
           points at it. */}
       <Typography
         variant="caption"
         color="text.secondary"
         component="div"
         sx={{ mt: 0.5 }}
-        title={`Built on ${batch.ref} from ${batch.branch} at ${shortSHA(batch.baseCommit)}. Nothing merges from this ref -- it is where the combination is tested, and what lands is each member's own pull request.`}
+        title={`Built on ${batch.ref} from ${batch.branch} at ${shortSHA(batch.baseCommit)}. Nothing merges from this ref -- it is where the re-check is run, and what lands is the change's own pull request.`}
       >
         {batch.ref} at {shortSHA(batch.commit)}
       </Typography>
-      {batch.splits > 0 && (
-        <Typography variant="caption" color="text.secondary" component="div">
-          Halved {batch.splits} {batch.splits === 1 ? "time" : "times"} out of a
-          bigger batch that failed.
-        </Typography>
-      )}
       {batch.detail && !batch.running && (
         <Typography variant="caption" color="text.secondary" component="div">
           {batch.detail}
         </Typography>
       )}
       <Box component="ol" sx={{ pl: 3, my: 0.5 }}>
-        {batch.members.map((m, i) => (
+        {batch.members.map((m) => (
           <Box
             component="li"
             key={m.task}
@@ -253,19 +237,10 @@ function MergeBatchCard({
                   target="_blank"
                   rel="noreferrer"
                   href={pullRequestUrl(`${batch.repo}#${m.number}`, m.headRef)}
-                  title={`Merged into the batch pinned to ${shortSHA(m.head)}: a push landing on ${m.headRef} while this runs takes this change out of the batch rather than merging a commit the batch never contained.`}
+                  title={`Merged onto the re-check ref pinned to ${shortSHA(m.head)}: a push landing on ${m.headRef} while this runs discards the re-check rather than merging a commit it never tested.`}
                 >
                   #{m.number}
                 </Link>
-              )}
-              {/* Which half a failure is bisected towards, said on the
-                  member it is about. The queue halves from the front, so
-                  the first change is in every subdivision until it is
-                  either cleared or left holding the failure on its own. */}
-              {i === 0 && batch.members.length > 1 && (
-                <Typography variant="caption" color="text.secondary">
-                  first -- a failure is halved towards this end
-                </Typography>
               )}
             </Stack>
           </Box>
@@ -358,11 +333,10 @@ export default function MergeBatchPanel({
         </Typography>
       ) : batches.length === 0 ? (
         <Typography variant="caption" color="text.secondary">
-          No batch is in flight. When several finished changes are queued
-          together, grain merges them onto a throwaway ref and runs one suite
-          over the lot -- they all land if it passes, and a failure names a
-          culprit without anything having reached the base branch. What appears
-          here is that bet while it is being made.
+          No batch is in flight. When a finished change overlaps what has landed
+          on its base branch since the commit its own run tested, grain merges
+          it onto a throwaway ref and re-checks it before it lands. What appears
+          here is that re-check while it is running.
         </Typography>
       ) : (
         batches.map((b) => (

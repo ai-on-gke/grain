@@ -127,12 +127,12 @@ type MemoryProvider interface {
 // DeployProvider backs the deploy:// namespace root.
 type DeployProvider interface {
 	ReadMergeQueue(ctx context.Context) (string, error)
-	ReadMetrics(ctx context.Context, section string) (string, error)
+	ReadMetrics(ctx context.Context, section string, q MetricsQuery) (string, error)
 	ReadPipelineChanges(ctx context.Context) (string, error)
 	ReadHealth(ctx context.Context) (string, error)
 	ReadState(ctx context.Context, table string) (string, error)
 	ListStateTables(ctx context.Context) ([]string, error)
-	ReadGrainLog(ctx context.Context, source string) (string, error)
+	ReadGrainLog(ctx context.Context, source string, q GrainLogQuery) (string, error)
 	ListGrainLogSources(ctx context.Context) ([]string, error)
 }
 
@@ -868,7 +868,11 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 		} else if len(parts) > 2 {
 			return nil, fmt.Errorf("%w: deploy://%s", ErrNotFound, relPath)
 		}
-		text, err := s.Deploy.ReadGrainLog(ctx, source)
+		q, err := grainLogQueryFrom(ctx)
+		if err != nil {
+			return nil, err
+		}
+		text, err := s.Deploy.ReadGrainLog(ctx, source, q)
 		if err != nil {
 			return nil, fmt.Errorf("%w: deploy://%s: %v", ErrNotFound, relPath, err)
 		}
@@ -938,7 +942,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 			return nil, fmt.Errorf("%w: deploy://metrics is not configured on this daemon", ErrNotFound)
 		}
 		if len(parts) == 1 {
-			text, err := s.Deploy.ReadMetrics(ctx, "all")
+			text, err := s.Deploy.ReadMetrics(ctx, "all", metricsQueryFrom(ctx))
 			if err != nil {
 				return nil, err
 			}
@@ -955,7 +959,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 		}
 		if len(parts) == 2 {
 			sec := strings.TrimSuffix(strings.TrimSuffix(parts[1], ".txt"), ".md")
-			text, err := s.Deploy.ReadMetrics(ctx, sec)
+			text, err := s.Deploy.ReadMetrics(ctx, sec, metricsQueryFrom(ctx))
 			if err != nil {
 				return nil, fmt.Errorf("%w: deploy://%s: %v", ErrNotFound, relPath, err)
 			}

@@ -16,7 +16,9 @@ package cli
 
 import (
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -322,7 +324,11 @@ func checkValue(attr *attribute, value string) error {
 		return nil
 	}
 	if len(attr.order) > 0 && !contains(attr.order, value) {
-		return fmt.Errorf("unknown %s %q: one of %s", attr.id, value, strings.Join(attr.order, ", "))
+		names := slices.Clone(attr.order)
+		for _, alias := range slices.Sorted(maps.Keys(attr.aliases)) {
+			names = append(names, alias+" ("+strings.Join(attr.aliases[alias], " or ")+")")
+		}
+		return fmt.Errorf("unknown %s %q: one of %s", attr.id, value, strings.Join(names, ", "))
 	}
 	return nil
 }

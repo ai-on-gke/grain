@@ -228,14 +228,17 @@ func (d sandboxDeploy) ReadMergeQueue(ctx context.Context) (string, error) {
 	return toolText(tool.Handler(ctx, map[string]any{"view": "full"}))
 }
 
-func (d sandboxDeploy) ReadMetrics(ctx context.Context, section string) (string, error) {
+func (d sandboxDeploy) ReadMetrics(ctx context.Context, section string, q namespace.MetricsQuery) (string, error) {
 	if section == "all" {
 		section = ""
 	}
 	if section != "" && !slices.Contains(mcp.MetricsSections, section) {
 		return "", fmt.Errorf("%q is not a metrics section (%s)", section, strings.Join(mcp.MetricsSections, ", "))
 	}
-	text, err := DaemonMetrics{Client: d.client}.Metrics(ctx, mcp.MetricsQuery{Section: section})
+	text, err := DaemonMetrics{Client: d.client}.Metrics(ctx, mcp.MetricsQuery{
+		Window: q.Window, Since: q.Since, Until: q.Until,
+		Repos: q.Repos, Authors: q.Authors, Section: section,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -294,13 +297,33 @@ func (d sandboxDeploy) ListStateTables(ctx context.Context) ([]string, error) {
 	return tables, nil
 }
 
-func (d sandboxDeploy) ReadGrainLog(ctx context.Context, source string) (string, error) {
+// ReadGrainLog is read_grain_log's answer for one source, with every
+// window and filter `grain log` was given passed on as that tool's own
+// arguments -- so a read can reach past the tool's default tail instead of
+// only ever seeing it.
+func (d sandboxDeploy) ReadGrainLog(ctx context.Context, source string, q namespace.GrainLogQuery) (string, error) {
 	tool := grainlog.Tools(grainlog.Config{Redactor: grainLogRedactor(d.secretsDir), Sources: d.logSources})[0]
+	return toolText(tool.Handler(ctx, grainLogArgs(source, q)))
+}
+
+// grainLogArgs is q as read_grain_log's arguments; a field left zero is
+// left out, which is that tool's own default for it.
+func grainLogArgs(source string, q namespace.GrainLogQuery) map[string]any {
 	if source == "" {
 		source = "daemon"
 	}
 	args := map[string]any{"source": source}
-	return toolText(tool.Handler(ctx, args))
+	for key, v := range map[string]string{
+		"since": q.Since, "until": q.Until, "min_priority": q.MinPriority, "contains": q.Contains,
+	} {
+		if v != "" {
+			args[key] = v
+		}
+	}
+	if q.MaxLines > 0 {
+		args["max_lines"] = q.MaxLines
+	}
+	return args
 }
 
 func (d sandboxDeploy) ListGrainLogSources(context.Context) ([]string, error) {

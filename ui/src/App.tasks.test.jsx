@@ -1107,6 +1107,55 @@ describe("App", () => {
     );
   });
 
+  // A report board, or a dashboard's metrics panel, loaded cold from its
+  // URL asks the daemon under the board's own scope and nothing else: it
+  // used to send one /api/metrics over the whole deployment first, before
+  // the board's question had been seeded (grain/task-1755).
+  it.each([
+    [
+      "a report board",
+      {
+        id: "board-1",
+        name: "Widgets report",
+        kind: "report",
+        query: "f=repo:any:acme/widgets",
+        folder: "",
+        orderKey: 1,
+      },
+    ],
+    [
+      "a dashboard's metrics panel",
+      {
+        id: "board-1",
+        name: "Widgets dashboard",
+        kind: "panels",
+        query: "f=repo:any:acme/widgets",
+        folder: "",
+        orderKey: 1,
+        panels: [{ kind: "metrics", title: "Throughput" }],
+      },
+    ],
+  ])("asks only the scoped metrics on a fresh load of %s", async (_, board) => {
+    window.history.replaceState(null, "", "/boards/board-1");
+    setupApi(initialTasks, [], [], [], [board]);
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: board.name }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/api\/metrics\?repo=acme%2Fwidgets&/),
+      ),
+    );
+    const metrics = api.mock.calls
+      .map(([path]) => path)
+      .filter((path) => path.startsWith("/api/metrics"));
+    expect(metrics.every((path) => path.includes("repo=acme%2Fwidgets"))).toBe(
+      true,
+    );
+  });
+
   // Clicking through from a panel is the ordinary view, asking exactly
   // what the panel was asking -- and it is a real URL, so it can be sent
   // as well as clicked.

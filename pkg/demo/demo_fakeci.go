@@ -205,7 +205,7 @@ func configureFakeCIDemo(ctx context.Context, store *model.Store, cfg ui.Config,
 		return cfg, fmt.Errorf("watching %s main: %w", repo, err)
 	}
 	// seedDemoNotifications raises its pending-release notification on
-	// GrainSourceRepo() (bwsalmon/grain), which is not in TargetRepos;
+	// GrainSourceRepo() (ai-on-gke/grain), which is not in TargetRepos;
 	// turn grain CI on for that repository so Approve and Reject on the
 	// seeded notification work out of the box without changing repo's
 	// own unset CI mode.

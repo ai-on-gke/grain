@@ -19,12 +19,17 @@ import {
   Button,
   Checkbox,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControlLabel,
   Stack,
   TextField,
   Typography,
 } from "@mui/material";
 import api from "../api.js";
+import { UsageList } from "./CapabilityServersPanel.jsx";
 
 // ApiScopeSetsPanel is Settings → Capabilities → API scope sets
 // (docs/agent-api.md, "Scope sets"): every named set of agent API scopes
@@ -128,6 +133,10 @@ export default function ApiScopeSetsPanel({ showError, readOnly }) {
   const [data, setData] = useState(null);
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState(false);
+  // confirm is the removal waiting on its usage warning: the set, and
+  // who holds it (GET /api/api-scope-sets/usage), null when that could
+  // not be read.
+  const [confirm, setConfirm] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -187,7 +196,27 @@ export default function ApiScopeSetsPanel({ showError, readOnly }) {
     }
   };
 
+  // askRemove counts the set's grants before anything is removed: every
+  // one of them grants nothing afterwards.
+  const askRemove = async (set) => {
+    setBusy(true);
+    let holders = null;
+    try {
+      const usage = await api("/api/api-scope-sets/usage");
+      const own = (Array.isArray(usage) ? usage : []).find(
+        (u) => u.name === set.name,
+      );
+      holders = own?.holders || [];
+    } catch {
+      // The count is the warning's detail; removing works without it.
+    } finally {
+      setBusy(false);
+    }
+    setConfirm({ set, holders });
+  };
+
   const remove = async (set) => {
+    setConfirm(null);
     setBusy(true);
     try {
       setData(
@@ -235,7 +264,7 @@ export default function ApiScopeSetsPanel({ showError, readOnly }) {
           set={set}
           readOnly={readOnly || busy}
           onEdit={edit}
-          onDelete={remove}
+          onDelete={askRemove}
         />
       ))}
       {!readOnly && !form && (
@@ -295,6 +324,53 @@ export default function ApiScopeSetsPanel({ showError, readOnly }) {
           </Stack>
         </Stack>
       )}
+      <Dialog
+        open={Boolean(confirm)}
+        onClose={() => setConfirm(null)}
+        maxWidth="sm"
+        fullWidth
+      >
+        {confirm && (
+          <RemoveConfirmation
+            confirm={confirm}
+            onCancel={() => setConfirm(null)}
+            onRemove={() => remove(confirm.set)}
+          />
+        )}
+      </Dialog>
     </Box>
+  );
+}
+
+function RemoveConfirmation({ confirm, onCancel, onRemove }) {
+  const { set, holders } = confirm;
+  const grant = `api:${set.name}`;
+  let summary;
+  if (holders === null) {
+    summary = `Grain could not count what grants ${grant}. Every grant of it will grant nothing once it is removed.`;
+  } else if (holders.length === 0) {
+    summary = `Nothing grants ${grant}.`;
+  } else {
+    const n = holders.length;
+    summary = `${n} ${n === 1 ? "grant holds" : "grants hold"} ${grant}, and will grant nothing once it is removed:`;
+  }
+  return (
+    <>
+      <DialogTitle sx={{ overflowWrap: "anywhere" }}>
+        Remove scope set {set.name}?
+      </DialogTitle>
+      <DialogContent data-testid="api-scope-set-remove-dialog">
+        <Typography variant="body2" sx={{ mb: 1, overflowWrap: "anywhere" }}>
+          {summary}
+        </Typography>
+        {holders?.length > 0 && <UsageList holders={holders} />}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel}>Cancel</Button>
+        <Button color="error" variant="contained" onClick={onRemove}>
+          Remove
+        </Button>
+      </DialogActions>
+    </>
   );
 }

@@ -384,7 +384,7 @@ func (r *CapabilityRestrictions) judge(name string, gc GrantContext, with map[st
 			name, kindWord(gc.Kind), listWord(r.Kinds))
 	}
 	if r.Repos != nil && !matchesRepo(r.Repos, gc.Repo) {
-		repo := CatalogueNoRepo
+		repo := "a task with no repository (" + CatalogueNoRepo + ")"
 		if gc.Repo != nil {
 			repo = gc.Repo.Owner + "/" + gc.Repo.Name
 		}

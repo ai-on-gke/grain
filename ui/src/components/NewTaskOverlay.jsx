@@ -1068,6 +1068,10 @@ export default function NewTaskOverlay({
                 repo={noRepo ? "" : repo}
                 options={branchesInUse(tasks, repo)}
                 warnMissing="push it first, or have the task depend on the one that cuts it"
+                // A pull request's head as GitHub shows it ("owner:branch")
+                // is filed against that pull request (pkg/forkhead); a new
+                // branch cannot be cut from one, which the server says.
+                forkHeads={noRepo || !newBranch}
                 value={base}
                 onChange={(next) => {
                   baseEdited.current = true;
@@ -1233,6 +1237,7 @@ export default function NewTaskOverlay({
           onSubmit={methodGrants.onSubmit}
           onRemove={methodGrants.onRemove}
           idPrefix="new-task"
+          policyRepo={noRepo ? "" : repo || config?.defaultTarget || ""}
         />
         {/* The model this one task runs on. Its choices are what the
             target team's connections advertise; a model only disabled

@@ -34,7 +34,7 @@ import (
 // connections. id names the deployment (the default team); credentials
 // may be reused (CredentialBackendID) only from another saved connection.
 func (c *Client) PutTeamAgentBackend(ctx context.Context, id, backendID string, backend model.AgentBackend, user string) (model.AgentBackend, error) {
-	if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
+	if err := c.checkBootstrapWritable(ctx, "grain_config"); err != nil {
 		return model.AgentBackend{}, err
 	}
 	if _, err := c.existingTeam(ctx, id); err != nil {
@@ -101,7 +101,7 @@ func (c *Client) PutTeamAgentBackend(ctx context.Context, id, backendID string, 
 // credential stored for it. A connection another one still borrows its
 // credential from is refused, as the settings page refuses it.
 func (c *Client) DeleteTeamAgentBackend(ctx context.Context, id, backendID, user string) error {
-	if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
+	if err := c.checkBootstrapWritable(ctx, "grain_config"); err != nil {
 		return err
 	}
 	if _, err := c.existingTeam(ctx, id); err != nil {

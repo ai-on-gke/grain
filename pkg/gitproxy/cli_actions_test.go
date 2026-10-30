@@ -42,11 +42,26 @@ type fakeCLIActions struct {
 	started  []gitproxy.CIStartRequest
 	replies  []string
 	refuse   bool
+	// downStarts and downReads are how many StartTaskCI and CIRun calls
+	// are answered as a daemon whose CI is not up yet; lastDown is
+	// whether the latest CIRun was, which is what Ready reports.
+	downStarts, downReads int
+	lastDown              bool
+}
+
+func (f *fakeCLIActions) Ready() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.lastDown
 }
 
 func (f *fakeCLIActions) StartTaskCI(_ context.Context, taskID string, req gitproxy.CIStartRequest) (ci.Run, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.downStarts > 0 {
+		f.downStarts--
+		return ci.Run{}, ci.ErrNotUp
+	}
 	f.started = append(f.started, req)
 	run := ci.Run{ID: "run-new", Repo: "bwsalmon/grain", Ref: "grain/task-7", Commit: "abcdef0123456789",
 		Jobs: []ci.JobRun{{Name: "go"}, {Name: "lint", Conclusion: ci.ConclusionSuccess}}}
@@ -57,6 +72,11 @@ func (f *fakeCLIActions) StartTaskCI(_ context.Context, taskID string, req gitpr
 func (f *fakeCLIActions) CIRun(_ context.Context, id string) (ci.Run, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastDown = f.downReads > 0
+	if f.lastDown {
+		f.downReads--
+		return ci.Run{}, false
+	}
 	run, ok := f.runs[id]
 	if !ok {
 		return ci.Run{}, false
@@ -228,6 +248,48 @@ func TestCLIWaitBlocksUntilVerdictCreditsAndRecords(t *testing.T) {
 	}
 	if len(act.toolRows) != 1 || act.toolRows[0].tool != "wait_for_checks" {
 		t.Errorf("tool rows = %+v", act.toolRows)
+	}
+}
+
+// grain/task-1863: a grain ci wait started, or resumed, while the
+// daemon's CI service is not up yet -- the first minute or so after a
+// restart -- sits that out inside its slice, rather than being refused
+// (start) or told its run has been forgotten (resume).
+func TestCLIWaitSitsOutCINotBeingUpYet(t *testing.T) {
+	defer gitproxy.SetCLIWaitIntervals(5*time.Millisecond, 10*time.Millisecond)()
+	actions := &fakeCLIActions{runs: map[string]ci.Run{}, finishAt: 3, downStarts: 3}
+	h, _, _ := newActionProxy(t, actions)
+
+	rec := send(h, http.MethodPost, "tok-ci", "/cli/ci/wait", `{"timeout_seconds":30}`)
+	var resp gitproxy.CLIWaitResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("wait: %d %s", rec.Code, rec.Body)
+	}
+	if resp.Status != "passed" || len(actions.started) != 1 {
+		t.Errorf("answer = %+v (started %d), want the run started once CI was up, passed", resp, len(actions.started))
+	}
+
+	actions.mu.Lock()
+	actions.downReads, actions.reads = 3, 0
+	actions.mu.Unlock()
+	rec = send(h, http.MethodPost, "tok-ci", "/cli/ci/wait", `{"resume_run_id":"run-new","timeout_seconds":30}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resume while CI is not up: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// One that is still not up when its slice ends is a 503 saying so --
+// never the 404 "forgotten" that ended waits across a restart.
+func TestCLIWaitIsUnavailableNotForgottenWhileCIStaysDown(t *testing.T) {
+	defer gitproxy.SetCLIWaitIntervals(5*time.Millisecond, 10*time.Millisecond)()
+	actions := &fakeCLIActions{runs: map[string]ci.Run{}, downStarts: 1 << 30, downReads: 1 << 30}
+	h, _, _ := newActionProxy(t, actions)
+
+	for _, body := range []string{`{"timeout_seconds":1}`, `{"resume_run_id":"run-new","timeout_seconds":1}`} {
+		rec := send(h, http.MethodPost, "tok-ci", "/cli/ci/wait", body)
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "not up yet") {
+			t.Errorf("wait %s: %d %s, want 503 saying CI is not up yet", body, rec.Code, rec.Body)
+		}
 	}
 }
 

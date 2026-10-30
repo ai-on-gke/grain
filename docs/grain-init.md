@@ -159,7 +159,11 @@ host instead, and nothing is built:
   npm or Go. `linux-kvm` still installs Go for the granule CLI and still
   demands `/dev/kvm`;
 - `CAP_NET_BIND_SERVICE` is granted to `<path>`, and `grain-daemon.service`
-  runs `<path>` itself, so keep it where it is.
+  runs `<path>` itself, so keep it where it is -- ideally at a root-owned
+  path such as `/usr/local/bin/grain` (`sudo install -o root -g root -m
+  0755 <binary> /usr/local/bin/grain`), since whoever owns `<path>` can
+  replace what the daemon runs (and what holds `CAP_NET_BIND_SERVICE`),
+  and `/usr/local/bin/grain` also puts `grain` on `PATH`.
 
 `-use-binary` replaces `-grain-binary` (passing both with different paths
 is refused) and applies only to the two Linux host platforms.
@@ -350,17 +354,18 @@ and the command that removes each. Run them as root, in this order.
 | What `grain init` installed | How to remove it |
 |---|---|
 | `grain-daemon.service` (`/etc/systemd/system/grain-daemon.service`) | `systemctl disable --now grain-daemon.service && rm /etc/systemd/system/grain-daemon.service && systemctl daemon-reload` |
+| the CLI connection file (`/etc/grain/cli.env`) | `rm -f /etc/grain/cli.env && rmdir --ignore-fail-on-non-empty /etc/grain` |
 | the sandbox docker network (`grain-sandboxes`, or `-sandbox-network`) | `docker network rm grain-sandboxes` (once no sandbox container is on it) |
 | `linux-kvm` only: the three images it built, `granule:vendored`, `granule-guest-base:vendored` and `grain-guest:dev` (or the `-granule-runtime-image`/`-guest-base-image`/`-guest-image` you named) | `docker rmi grain-guest:dev granule-guest-base:vendored granule:vendored` |
-| `linux-container` only: the sandbox image the daemon pulled on first use (`grain container-sandbox-image` names it) | `docker rmi "$(<repo-root>/bin/grain container-sandbox-image)"` |
-| `CAP_NET_BIND_SERVICE` on the grain binary (`<repo-root>/bin/grain`) | `setcap -r <repo-root>/bin/grain`, or delete the binary |
+| `linux-container` only: the sandbox image the daemon pulled on first use (`grain container-sandbox-image` names it) | `docker rmi "$(<repo-root>/bin/grain container-sandbox-image)"` (or substitute the `-use-binary` path for `<repo-root>/bin/grain`) |
+| `CAP_NET_BIND_SERVICE` on the grain binary (`<repo-root>/bin/grain`, or the `-use-binary` / `-grain-binary` path) | `setcap -r <repo-root>/bin/grain` (or `setcap -r <use-binary-path>`), or delete the binary |
 | the build output in the checkout: `bin/grain`, `bin/granule`, `pkg/ui/static`, `ui/node_modules` (owned by root) | `rm -rf <repo-root>/bin <repo-root>/ui/node_modules`, `git -C <repo-root> checkout pkg/ui/static`, or delete the checkout |
 | the claude CLI, installed under `-claude-home` (`<data-dir>/claude` by default) and linked as `/usr/local/bin/claude` | `rm /usr/local/bin/claude`; the rest goes with `-claude-home` |
 | Go, in `/usr/local/go` | `rm -rf /usr/local/go` |
 | docker: `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin` from Docker's apt repository (`/etc/apt/sources.list.d/docker.list`, `/etc/apt/keyrings/docker.asc`) | `apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && rm /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.asc` -- only if nothing else on the host uses docker; `/var/lib/docker` is left behind by the purge |
 | `git` | `apt-get purge git` -- again only if nothing else needs it |
 | the daemon account (`grain`, or `-daemon-user`) and its `docker` group membership | `userdel grain` (and `groupdel grain` if its group is left) |
-| `-data-dir`: the task store, the secrets and `secrets/secrets.key` | **Keep it** unless you mean to lose the deployment: a later `grain init` on the same `-data-dir` picks it up again. Copy `secrets/secrets.key` somewhere safe first; without it the secrets database cannot be read. Then `rm -rf <data-dir>` |
+| `-data-dir`: the task store, the secrets and `secrets/secrets.key` | **Keep it** unless you mean to lose the deployment: a later `grain init` on the same `-data-dir` picks it up again. Copy `secrets/secrets.key` somewhere safe first; without it the secrets database cannot be read. Then `rm -rf <data-dir>` (and `rmdir --ignore-fail-on-non-empty /var/lib/grain` if `-data-dir` was `/var/lib/grain/data`) |
 
 `grain init` does not install a sleep or suspend policy, a metadata-server
 block, or a `/usr/local/bin/grain` wrapper. Those are `scripts/setup.sh`'s,

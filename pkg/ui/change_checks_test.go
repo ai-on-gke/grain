@@ -100,3 +100,43 @@ func TestChangeChecksAnswersThroughTheRegisteredChecks(t *testing.T) {
 		t.Fatalf("status while blocked = %v, want credentials_expired", err)
 	}
 }
+
+// A run reading its CL's checks refreshes the presubmit badge without
+// erasing the review the last poll saw -- the review badge, Mail and
+// Publish replies all read it -- and a wait narrowed to some checks
+// leaves the badge alone (docs/test-runs/2026-10-29-changelist-checks-review-mail.md F3).
+func TestChangeChecksKeepsTheObservedReview(t *testing.T) {
+	client, store, ctx := testClient(t)
+	change.Register(&fakeTAP{})
+	t.Cleanup(func() { change.Unregister(model.LinkChangelist); change.Forget("cl/43") })
+	if err := store.PutTask(ctx, model.Task{ID: "82", Title: "t", Intent: model.IntentImplement,
+		ChangeTarget: &model.ChangeTarget{Kind: "faketap"},
+		Links:        []model.Link{{Kind: model.LinkChangelist, Target: "cl/43"}}}); err != nil {
+		t.Fatal(err)
+	}
+	change.Remember(change.Observation{Target: "cl/43", Presubmit: change.PresubmitRunning, Snapshot: 2,
+		ReviewState: change.ReviewStateDraft, NeedsMailing: true, LGTM: []string{"alice"}})
+
+	if _, err := client.ChangeChecks(ctx, "82", ui.ChangeChecksRequest{Op: ui.ChangeChecksStatus}); err != nil {
+		t.Fatal(err)
+	}
+	obs, _ := change.LastObserved("cl/43")
+	if obs.Presubmit != change.PresubmitFailed || obs.ReviewState != change.ReviewStateDraft || !obs.NeedsMailing ||
+		len(obs.LGTM) != 1 {
+		t.Fatalf("after a status read the observation is %+v, want presubmit failed and the draft review kept", obs)
+	}
+	got, err := client.GetTask(ctx, "82")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CLReview == nil || !got.CLReview.NeedsMailing {
+		t.Fatalf("clReview after a status read = %+v, want it still offering Mail", got.CLReview)
+	}
+
+	if _, err := client.ChangeChecks(ctx, "82", ui.ChangeChecksRequest{Op: ui.ChangeChecksWait, Jobs: []string{"//a:lint"}}); err != nil {
+		t.Fatal(err)
+	}
+	if obs, _ := change.LastObserved("cl/43"); obs.Presubmit != change.PresubmitFailed {
+		t.Fatalf("a narrowed wait moved the badge to %q, want it left at failed", obs.Presubmit)
+	}
+}

@@ -85,6 +85,55 @@ func TestCatalogueRequiresPersonHoldsAProposal(t *testing.T) {
 	}
 }
 
+// The task an agent's filing leaves proposed for a person is not
+// approved by that agent either: neither Approve nor Run now from an
+// agent queues a task holding a requires_person grant, so a run never
+// holds one without a person deciding. A person still may.
+func TestCatalogueRequiresPersonRefusesAnAgentsApproval(t *testing.T) {
+	client, store, ctx := testClient(t)
+	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "the whole job", Approved: true,
+		Capabilities: &[]string{"gemini-key", "api:tasks:admin"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"gemini-key": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+	}})
+	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: parent.ID})
+	held, err := client.CreateTask(agentCtx, ui.CreateTaskRequest{
+		Title: "direct", Approved: true, Capabilities: &[]string{"gemini-key"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.State != model.StateProposed {
+		t.Fatalf("agent's own filing is %s, want proposed", held.State)
+	}
+	for name, approve := range map[string]func(context.Context, string) error{
+		"Approve": client.Approve,
+		"RunNow":  client.RunNow,
+	} {
+		err := approve(agentCtx, held.ID)
+		var ferr *ui.ForbiddenError
+		if !errors.As(err, &ferr) || !strings.Contains(err.Error(), "requires_person") ||
+			!strings.Contains(err.Error(), "gemini-key") {
+			t.Errorf("agent %s = %v, want a 403 naming gemini-key and requires_person", name, err)
+		}
+		if state, err := store.State(ctx, held.ID); err != nil || state != model.StateProposed {
+			t.Errorf("after agent %s: state = %s (%v), want proposed", name, state, err)
+		}
+	}
+
+	if err := client.Approve(ctx, held.ID); err != nil {
+		t.Fatalf("a person approving it: %v", err)
+	}
+	if state, err := store.State(ctx, held.ID); err != nil || state != model.StateQueued {
+		t.Fatalf("after a person's approval: state = %s (%v), want queued", state, err)
+	}
+}
+
 // A grant the catalogue refuses is refused with the task, and attaching
 // one later is refused the same way; an agent may not attach a
 // requires_person capability at all.
@@ -116,5 +165,28 @@ func TestCatalogueRefusesFilingAndEdit(t *testing.T) {
 	}
 	if err := client.SetCapability(ctx, task.ID, "gemini-key", true); err != nil {
 		t.Fatalf("a person attaching it: %v", err)
+	}
+}
+
+// Saving the capability policy's rules -- all Settings → Capabilities'
+// rule editor sends -- leaves settings/capabilities.yml's catalogue
+// where it is, rather than erasing every restriction it holds.
+func TestSetCapabilityPolicyKeepsTheCatalogue(t *testing.T) {
+	client, store, ctx := testClient(t)
+	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"gemini-key": {Restrictions: &model.CapabilityRestrictions{CIOnly: true}},
+	}})
+	if err := client.SetCapabilityPolicy(ctx, model.CapabilityPolicy{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.CapabilityPolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Catalogue == nil || got.Catalogue.InProcess["gemini-key"].Restrictions == nil {
+		t.Fatalf("catalogue after saving the rules = %+v, want it kept", got.Catalogue)
+	}
+	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "t", Capabilities: &[]string{"gemini-key"}}); err == nil {
+		t.Fatal("CreateTask with a CI-only grant succeeded after saving the rules; want the catalogue still refusing it")
 	}
 }

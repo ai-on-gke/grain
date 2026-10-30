@@ -24,6 +24,7 @@ import {
 } from "@mui/material";
 import api from "../api.js";
 import { branchRefs, clearBranchRefCache } from "../branchRefs.js";
+import { forkHeadHelp, parseForkHead } from "../forkHead.js";
 import { GlyphLabel } from "./ItemGlyph.jsx";
 import { identifierField } from "../identifierField.js";
 import { repoApiRoot } from "../repoApi.js";
@@ -153,6 +154,12 @@ export default function BranchField({
   // the server already refuses the one write where a missing branch can
   // only fail, a task filed with nothing to wait on.
   warnMissing,
+  // forkHeads marks a box whose value may be a GitHub fork head label
+  // ("owner:branch", forkHead.js) -- the new-task form's base, which the
+  // server resolves to the open pull request the label heads. Such a
+  // value is explained rather than warned about as a missing branch, and
+  // a malformed one is shown in the server's own words.
+  forkHeads = false,
 }) {
   const controlled = value !== undefined;
   const [own, setOwn] = useState(defaultValue);
@@ -194,10 +201,12 @@ export default function BranchField({
   // create counts as there, since the branches reconciler is about to
   // cut it.
   const settledText = (text || "").trim();
+  const forkHead = forkHeads ? parseForkHead(settledText) : null;
   const [missing, setMissing] = useState("");
   useEffect(() => {
     setMissing("");
     if (!warnMissing || !askable || settledText === "") return;
+    if (forkHeads && parseForkHead(settledText)) return;
     let live = true;
     const timer = setTimeout(async () => {
       try {
@@ -213,7 +222,7 @@ export default function BranchField({
       live = false;
       clearTimeout(timer);
     };
-  }, [warnMissing, askable, target, settledText]);
+  }, [warnMissing, askable, target, settledText, forkHeads]);
 
   // A repo change invalidates what is on offer immediately, rather than
   // leaving the last repo's branches under a box that is now about a
@@ -305,13 +314,25 @@ export default function BranchField({
         <TextField
           name={name}
           label={label}
+          error={!!forkHead?.error}
           helperText={
-            missing
-              ? `No branch "${missing}" on ${target}: ${warnMissing}`
-              : helperText
+            forkHead?.error
+              ? forkHead.error
+              : forkHead
+                ? forkHeadHelp(forkHead, askable ? target : "")
+                : missing
+                  ? `No branch "${missing}" on ${target}: ${warnMissing}`
+                  : helperText
           }
           FormHelperTextProps={
-            missing ? { sx: { color: "warning.main" } } : undefined
+            forkHead && !forkHead.error
+              ? {
+                  sx: { color: "info.main" },
+                  "data-testid": "fork-head-help",
+                }
+              : missing
+                ? { sx: { color: "warning.main" } }
+                : undefined
           }
           placeholder={placeholder}
           required={required}

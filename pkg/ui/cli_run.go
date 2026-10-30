@@ -69,7 +69,7 @@ func (c *Client) UpdateCLIRunSettings(ctx context.Context, settings map[string]m
 	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
 		return CLIRunSettings{}, forbiddenErrorf("%q is not a person, so it may not change where agent CLIs run", p.ID)
 	}
-	if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
+	if err := c.checkBootstrapWritable(ctx, "grain_config"); err != nil {
 		return CLIRunSettings{}, err
 	}
 	check := model.ValidateCLIRun

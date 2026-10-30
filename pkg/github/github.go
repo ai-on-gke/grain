@@ -2336,8 +2336,16 @@ func (c *RESTClient) ClosePullRequest(owner, repo string, number int) error {
 // grain only ever pushes to branches in the target repo itself (never a
 // fork), so the head owner is always owner.
 func (c *RESTClient) FindOpenPullRequestForBranch(owner, repo, branch string) (*PullRequest, error) {
+	return c.FindOpenPullRequestForHead(owner, repo, owner+":"+branch)
+}
+
+// FindOpenPullRequestForHead returns the open PR on owner/repo whose head
+// label is head ("<head-owner>:<branch>", GitHub's head.label), if there
+// is one. Unlike FindOpenPullRequestForBranch the head owner is the
+// caller's to say, so it finds a pull request opened from a fork.
+func (c *RESTClient) FindOpenPullRequestForHead(owner, repo, head string) (*PullRequest, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls?state=open&head=%s",
-		owner, repo, quoteAll(owner+":"+branch))
+		owner, repo, quoteAll(head))
 	resp, err := c.get(owner, repo, path)
 	if err != nil {
 		return nil, err

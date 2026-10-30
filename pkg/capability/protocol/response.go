@@ -215,13 +215,18 @@ const SandboxBinDir = "/home/debian/.grain/bin"
 // sandboxCommandName is a file name a placement may take in SandboxBinDir.
 var sandboxCommandName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 
+// SandboxGrainName is the one command in SandboxBinDir that is grain's
+// own: sandbox setup places the sandbox's grain (cmd/grain-sandbox) there,
+// so no grant may install a command by that name over it.
+const SandboxGrainName = "grain"
+
 // ReservedPath reports whether a clean absolute path is one Grain refuses
 // to place a file at (§5.1.2). A command directly in SandboxBinDir is the
-// one exception to /home/debian/.grain: grain writes nothing of its own
-// there.
+// one exception to /home/debian/.grain, other than SandboxGrainName, the
+// one grain places there itself.
 func ReservedPath(p string) bool {
 	if name, ok := strings.CutPrefix(p, SandboxBinDir+"/"); ok && sandboxCommandName.MatchString(name) {
-		return false
+		return name == SandboxGrainName
 	}
 	for _, f := range reservedFiles {
 		if p == f {
