@@ -149,23 +149,23 @@ jobs:
           make frontend || exit 1
           case "${{ matrix.shard }}" in
             1)
-              PKGS="./pkg/ui/... ./cmd/grain/... ./ui/e2e/..."
+              PKGS=(./pkg/ui/... ./cmd/grain/... ./ui/e2e/...)
               ;;
             2)
-              PKGS="./tests/e2e/... ./tests/deploy/..."
+              PKGS=(./tests/e2e/... ./tests/deploy/...)
               ;;
             3)
-              PKGS="./pkg/orchestrator/... ./pkg/model/... ./pkg/staterepo/... ./tests/security/..."
+              PKGS=(./pkg/orchestrator/... ./pkg/model/... ./pkg/staterepo/... ./tests/security/...)
               ;;
             4)
-              PKGS="$(go list ./... | grep -vE '^github\.com/ai-on-gke/grain/(pkg/ui|cmd/grain|ui/e2e|tests/e2e|tests/deploy|pkg/orchestrator|pkg/model|pkg/staterepo|tests/security)(/|$)' | tr '\n' ' ')"
+              mapfile -t PKGS < <(go list ./... | grep -vE '^github\.com/ai-on-gke/grain/(pkg/ui|cmd/grain|ui/e2e|tests/e2e|tests/deploy|pkg/orchestrator|pkg/model|pkg/staterepo|tests/security)(/|$)')
               ;;
           esac
           GRAIN_GOTEST_LOG=/tmp/go-long.log ./scripts/run-go-tests.sh \
-            go test -race -shuffle=on -count=2 -timeout 80m $PKGS | tee /tmp/go-long.out
+            go test -race -shuffle=on -count=2 -timeout 80m "${PKGS[@]}" | tee /tmp/go-long.out
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            python3 - /tmp/go-long.out go-long <<'PY'
+            if ! python3 - /tmp/go-long.out go-long <<'PY'; then
           import sys
           text = open(sys.argv[1], errors="replace").read()
           title = sys.argv[2]
@@ -196,7 +196,6 @@ jobs:
                       emitted += 1
           sys.exit(0 if emitted > 0 else 1)
           PY
-            if [ "$?" -ne 0 ]; then
               grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-long.log | tail -n 10 | while IFS= read -r line; do
                 echo "::error title=go-long::$line"
               done
