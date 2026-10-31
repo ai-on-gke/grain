@@ -208,6 +208,47 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 	}
 }
 
+// TestAgentAPICapabilitiesAdminMayDetachUnheldCapability verifies that an
+// agent holding api:capabilities:admin can detach (attach: false) a capability
+// from a task even when the acting task does not hold that capability, while
+// still refusing attach: true or replace: <unheld>.
+func TestAgentAPICapabilitiesAdminMayDetachUnheldCapability(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:capabilities:admin")
+	capRef := `https://github.com/acme/caps/gcp#key={"project":"p"}`
+	seedAPITask(t, client, "2", "acme/widgets", "grain-ci", "self-debug", capRef)
+
+	for _, body := range []string{
+		`{"id":"grain-ci","attach":true}`,
+		`{"grant":"self-debug","attach":true}`,
+		`{"capability":"https://github.com/acme/caps/gcp#key","with":{"project":"p"},"attach":true}`,
+		`{"id":"grain-ci","attach":false,"replace":"self-debug"}`,
+		`{"grant":"grain-ci","attach":false,"replace":"self-debug"}`,
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusForbidden {
+			t.Errorf("POST /api/tasks/2/capabilities with %s answered an agent %d, want 403: %s", body, code, resp)
+		}
+	}
+
+	for _, body := range []string{
+		`{"id":"grain-ci","attach":false}`,
+		`{"grant":"self-debug","attach":false}`,
+		`{"capability":"https://github.com/acme/caps/gcp#key","with":{"project":"p"},"attach":false}`,
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusOK {
+			t.Errorf("POST /api/tasks/2/capabilities detach with %s answered %d, want 200: %s", body, code, resp)
+		}
+	}
+
+	task, err := client.Store.GetTask(context.Background(), "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(task.Grants) != 0 {
+		t.Errorf("task 2 grants after detach = %v, want empty", task.Grants)
+	}
+}
+
 // TestAgentAPICannotFileAroundTheProposalGate holds tasks:write to what
 // propose_task allows a run: work it files or edits through the API
 // cannot carry push or read access its own task lacks, auto-merge (or a
