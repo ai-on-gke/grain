@@ -718,7 +718,13 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 		"this conversation.\n\n")
 
 	b.WriteString("Whatever else you hold is on this task's capabilities, and the person you " +
-		"are talking to can change them in the same pane this chat is in. Check what you " +
+		"are talking to can change them in the same pane this chat is in. Not every change " +
+		"reaches you at the same moment: repositories added to or removed from this " +
+		"session's reads and writes, and `api:*` scopes called through `grain api`, take " +
+		"effect at once; everything else -- a new or removed capability, and an `api:*` " +
+		"route served only as an `api_*` tool -- takes effect when grain restarts this " +
+		"session to pick it up, which it says in this chat and which loses nothing said " +
+		"here. Check what you " +
 		"actually have before promising anything: if you are asked to do something you have no " +
 		"capability for, say which one it would need rather than working around it.\n\n")
 
