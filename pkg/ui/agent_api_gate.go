@@ -704,6 +704,20 @@ func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, 
 	var names []string
 	for key, raw := range fields {
 		lower := strings.ToLower(key)
+		if lower == "priority" {
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on {
+				names = append(names, model.PriorityDispatchCapability)
+			}
+			continue
+		}
+		if lower == "keeprunning" || lower == "keep_running" {
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on {
+				names = append(names, model.DurableCapability)
+			}
+			continue
+		}
 		if !strings.Contains(lower, "capabilit") && !strings.EqualFold(key, "grants") {
 			continue
 		}

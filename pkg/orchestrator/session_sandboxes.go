@@ -790,6 +790,16 @@ func continueSessionTurns(
 		if len(fresh) == 0 {
 			break
 		}
+		if latestTask, err := store.GetTask(daemonCtx, task.ID); err == nil && latestTask != nil {
+			if !slices.Equal(latestTask.Grants, task.Grants) ||
+				!slices.Equal(latestTask.Reads, task.Reads) ||
+				!slices.Equal(latestTask.Writes, task.Writes) ||
+				latestTask.Model != task.Model ||
+				latestTask.NetworkAccess != task.NetworkAccess {
+				break
+			}
+			task = *latestTask
+		}
 		inProcessRelayedRuns.Delete(runID)
 
 		// Only a person's message wakes the session, but the turn is told

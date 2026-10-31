@@ -1395,6 +1395,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	if len(proposals) == 0 {
 		return nil
 	}
+	if latest, err := store.GetTask(ctx, task.ID); err == nil && latest != nil {
+		task = *latest
+	}
 	atFront, err := newestFirst(ctx, store)
 	if err != nil {
 		return err
