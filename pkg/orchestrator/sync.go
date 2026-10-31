@@ -1770,8 +1770,9 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			}
 			if recheck.held != "" {
 				// A batch just started has written its own row
-				// (setBatchState); anything else is said here.
-				if recheck.held != "started" {
+				// (setBatchState); a task already blocked keeps its
+				// merge_failed row; anything else is said here.
+				if recheck.held != "started" && recheck.held != "blocked" {
 					if err := setMergeQueueState(ctx, store, e.obs, task.ID,
 						queueStatus{state: mergeStateWaitingQueue, note: recheck.held}, now); err != nil {
 						return err
