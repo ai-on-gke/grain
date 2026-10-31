@@ -147,10 +147,13 @@ export default function SettingsPage({
   // request.
   const external = Boolean(externalConfigRepo) && !NOT_CONFIG.has(current);
   // GET /api/config's configRepoOnly: the API refuses these sections'
-  // writes in favour of a config pull request. Without a config repo
-  // (`grain demo`) they stay editable -- there is nowhere else to.
-  const configRepoOnly =
-    Boolean(config?.configRepoOnly) || Boolean(externalConfigRepo);
+  // writes in favour of a config pull request when settings are locked.
+  // By default (settingsLocked: false) they stay editable in the UI.
+  const lockedInUI =
+    settings && typeof settings.settingsLocked === "boolean"
+      ? settings.settingsLocked
+      : Boolean(config?.configRepoOnly) || Boolean(config?.settingsLocked);
+  const configRepoOnly = lockedInUI || Boolean(externalConfigRepo);
   const configManaged = configRepoOnly && isConfigRepoSection(current);
   const readOnly = external || configManaged;
   s.readOnly = readOnly;

@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/url"
@@ -749,6 +750,10 @@ type Settings struct {
 	// is managed in read-only Infrastructure-as-Code mode (state-repo.json).
 	ExternalConfigRepo   string `json:"externalConfigRepo,omitempty"`
 	ExternalConfigBranch string `json:"externalConfigBranch,omitempty"`
+	// SettingsLocked is model.Config.SettingsLocked: whether non-bootstrap
+	// settings are locked in the UI and REST API in favour of config
+	// repository pull requests. False by default.
+	SettingsLocked bool `json:"settingsLocked"`
 }
 
 type UnrunnableSetting struct {
@@ -1148,6 +1153,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxShapeIgnored:                c.Config.SandboxShapeIgnored,
 		SandboxCommitment:                  c.sandboxCommitment(cfg),
 		ShowClosedByDefault:                cfg.ShowClosedByDefault,
+		SettingsLocked:                     cfg.SettingsLocked,
 		EnvironmentName:                    cfg.EnvironmentName,
 		PromptExtension:                    cfg.PromptExtension,
 		RepairTemplateID:                   cfg.RepairTemplateID,
@@ -1436,6 +1442,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
+			SettingsLocked:                     def.SettingsLocked,
 			RestartRequired:                    restartRequiredKeys(),
 		}
 		c.resolveSandboxImageFields(ctx, def, sandboxImgDefault, granuleImgDefault).apply(&out)
@@ -1546,6 +1553,29 @@ type UpdateSettingsRequest struct {
 	TaskBranchTemplate  *string               `json:"taskBranchTemplate"`
 	DeploymentID        *string               `json:"deploymentId"`
 	DefaultCapabilities *[]string             `json:"defaultCapabilities"`
+	SettingsLocked      *bool                 `json:"settingsLocked"`
+}
+
+func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
+	type plain UpdateSettingsRequest
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = UpdateSettingsRequest(p)
+	var snake struct {
+		SettingsLocked      *bool     `json:"settings_locked"`
+		DefaultCapabilities *[]string `json:"default_capabilities"`
+	}
+	if err := json.Unmarshal(data, &snake); err == nil {
+		if r.SettingsLocked == nil && snake.SettingsLocked != nil {
+			r.SettingsLocked = snake.SettingsLocked
+		}
+		if r.DefaultCapabilities == nil && snake.DefaultCapabilities != nil {
+			r.DefaultCapabilities = snake.DefaultCapabilities
+		}
+	}
+	return nil
 }
 
 func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
@@ -2130,6 +2160,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	}
 	if req.ShowClosedByDefault != nil {
 		cfg.ShowClosedByDefault = *req.ShowClosedByDefault
+	}
+	if req.SettingsLocked != nil {
+		cfg.SettingsLocked = *req.SettingsLocked
 	}
 	if req.EnvironmentName != nil {
 		name := strings.TrimSpace(*req.EnvironmentName)

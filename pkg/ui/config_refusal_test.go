@@ -166,21 +166,25 @@ func TestExternalModeRefusesEachConfigWriteWithTheEditToCommit(t *testing.T) {
 		t.Fatalf("a refused write changed the template: %d %s", rec.Code, rec.Body)
 	}
 
-	// In internal mode the same write is refused too, with the edit to
-	// make in grain/config: the config repository is the only write path
-	// for it in either mode.
+	// In internal mode with settingsLocked enabled, the same write is
+	// refused too, with the edit to make in grain/config.
 	fake.status = ui.StateRepoStatus{Branch: "main"}
+	if rec := do(t, srv, http.MethodPut, "/api/settings", `{"settingsLocked":true}`); rec.Code >= 300 {
+		t.Fatalf("locking settings: status %d: %s", rec.Code, rec.Body)
+	}
 	rec = do(t, srv, http.MethodPatch, "/api/schedules/"+sched, `{"title":"weekly please"}`)
 	var internal configRefusalBody
 	if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &internal) != nil ||
 		internal.Repo != "grain/config" || len(internal.Change) == 0 || !strings.Contains(internal.Change[0].Patch, "+    title: weekly please") {
-		t.Fatalf("internal mode: status %d: %s", rec.Code, rec.Body)
+		t.Fatalf("internal mode (locked): status %d: %s", rec.Code, rec.Body)
 	}
-	// And with no config repository at all, it simply happens.
-	client.Config.StateRepo = nil
+	// When unlocked (default), or with no config repository at all, it simply happens.
+	if rec := do(t, srv, http.MethodPut, "/api/settings", `{"settingsLocked":false}`); rec.Code >= 300 {
+		t.Fatalf("unlocking settings: status %d: %s", rec.Code, rec.Body)
+	}
 	rec = do(t, srv, http.MethodPatch, "/api/schedules/"+sched, `{"title":"weekly please"}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "weekly please") {
-		t.Fatalf("no config repository: status %d: %s", rec.Code, rec.Body)
+		t.Fatalf("internal mode (unlocked): status %d: %s", rec.Code, rec.Body)
 	}
 }
 
