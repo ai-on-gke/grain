@@ -324,7 +324,17 @@ import "strconv"
 // 70 adds `settings_locked` to `grain_config`: whether non-bootstrap settings
 // are locked in the UI and REST API in favour of config repository pull
 // requests (off by default).
-const SchemaVersion = 70
+//
+// 71 changes no table: it upgrades `grain_config`.`task_branch_template`
+// from the pre-slug default `grain/{deployment}/task-{id}`
+// (model.UnsluggedTaskBranchTemplate, seeded by NewDeploymentConfig
+// before grain/task-56) to `grain/{deployment}/task-{id}-{slug}`
+// (model.DefaultTaskBranchTemplate), so deployments created before
+// {slug} was added include a portion of the task's title in new task
+// branch names in addition to the deployment and task-id uniquifiers.
+// Existing tasks keep the branch recorded on their row, and any other
+// template is left alone.
+const SchemaVersion = 71
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

@@ -1053,3 +1053,30 @@ func TestCheckMigrationSummarizesDroppedRollbackRowsInsteadOfWarningPerFile(t *t
 		}
 	}
 }
+
+func TestADumpBefore71UpgradesUnsluggedTaskBranchTemplate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "dump")
+	if err := os.CopyFS(dir, os.DirFS(goldenDump(t))); err != nil {
+		t.Fatal(err)
+	}
+	if err := staterepo.WriteSchemaVersion(dir, 70); err != nil {
+		t.Fatal(err)
+	}
+	configs := readTable(t, dir, "grain_config")
+	configs[0]["task_branch_template"] = model.UnsluggedTaskBranchTemplate
+	writeTable(t, dir, "grain_config", configs)
+
+	store, db := openRealDB(t)
+	if _, err := staterepo.CheckMigration(ctx, db, dir, t.TempDir(), model.SchemaVersion); err != nil {
+		t.Fatalf("CheckMigration: %v", err)
+	}
+	cfg, err := store.GetConfig(ctx)
+	if err != nil || cfg == nil {
+		t.Fatalf("the config row did not arrive: %v", err)
+	}
+	if cfg.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
+		t.Errorf("TaskBranchTemplate arrived as %q, want %q", cfg.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
+	}
+}

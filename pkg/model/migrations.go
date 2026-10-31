@@ -398,6 +398,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `settings_locked` INTEGER NOT NULL DEFAULT 0",
 		},
 	},
+	{
+		Version:     71,
+		Description: "upgrade the pre-slug default task_branch_template (grain/{deployment}/task-{id}) to grain/{deployment}/task-{id}-{slug}",
+		Statements: []string{
+			"UPDATE `grain_config` SET `task_branch_template` = '" + DefaultTaskBranchTemplate + "' WHERE `task_branch_template` = '" + UnsluggedTaskBranchTemplate + "'",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
