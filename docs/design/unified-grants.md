@@ -187,7 +187,7 @@ per-capability list, with what each one becomes:
 | `self-upgrade` | `…/api#self-upgrade` preset | **done** (task 2036): provider and its three tools removed, stored grants rewritten to `api:self-upgrade` by schema migration 75 |
 | `pipeline-control` | `…/api#pipeline-control` preset | **done** (task 2004): provider and its two tools removed, stored grants rewritten to `api:pipeline-control` by schema migration 69 |
 | `dispatch-control` | `…/api#dispatch-control` preset | **done** (task 2004): provider and its four tools removed, stored grants rewritten to `api:dispatch-control` by schema migration 68 |
-| `test-quarantine` | `…/api#tests:write` (new scope) | api scope |
+| `test-quarantine` | `…/api#tests:write` (new scope), preset `test-quarantine` | **done** (task 2036): provider and `quarantine_test` removed, `POST /api/tests/quarantine` added under `tests:write` and `grain quarantine` gated on it, stored grants rewritten to `api:test-quarantine` by schema migration 76 |
 | `read-issues` | `…/github#read-issues` | new method on `github` server |
 | `release-notes` | `…/api#release-notes` preset (`release-notes:read` + `release-notes:write`) | **done** (task 2035): provider and its tools removed, `/api/release-notes*` routes moved to `release-notes:read`/`release-notes:write`, stored grants rewritten to `api:release-notes` by schema migration 72 |
 | `memory` | `…/api#memory` preset (`memory:read` + `memory:write`) | **done** (task 2035): provider and its tools removed, stored grants rewritten to `api:memory` by schema migration 71 |

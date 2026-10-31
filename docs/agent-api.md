@@ -128,6 +128,7 @@ every `DELETE`.
 | `merge:force` | force-merge past the gate | yes |
 | `ci:read` | read CI runs (job logs included), artifacts, merge batches, base-branch gates | |
 | `ci:write` | start, re-run and cancel CI runs, base-branch and release runs | |
+| `tests:write` | quarantine flaky or failing tests (`POST /api/tests/quarantine` and `grain quarantine`) and file held follow-up repair tasks | |
 | `notifications:write` | raise and clear operator notifications (`POST /api/notifications`, `/{id}/clear`); acknowledging and Investigate are a person's | no |
 | `teams:broadcast` | post a comment to every active task (`POST /api/deployment/broadcast`), un-parking the ones awaiting a reply; signed as the broadcasting task, and model-only (never on the sandbox channel) | |
 | `dispatch:read` | read whether dispatch is paused | |
@@ -187,6 +188,7 @@ table only so the table stays total.
 | `team-broadcast` | `teams:broadcast` |
 | `memory` | `memory:read`, `memory:write` |
 | `release-notes` | `release-notes:read`, `release-notes:write` |
+| `test-quarantine` | `tests:write` |
 | `release-gate-read` | `ci:read`, `tasks:read`, `sandboxes:read`, `tasks:from-template` limited to the `release-notes` template |
 
 The `self-debug` capability is now an alias. A task holding it is also
@@ -194,7 +196,7 @@ served its preset's routes, and keeps the tools it always had under
 their old names (`list_grain_tasks`, `read_grain_metrics`, ...).
 
 `team-broadcast`, `dispatch-control`, `pipeline-control`, `memory`,
-`release-notes` and `self-upgrade` are aliases
+`release-notes`, `self-upgrade` and `test-quarantine` are aliases
 too, but their
 in-process capabilities are retired (docs/design/unified-grants.md §4):
 they have no tools of their own any longer, and a run holding one is
@@ -206,9 +208,10 @@ agent calls as itself, so it lifts only a pause it took and never an
 upgrade's hold; for `memory` and `release-notes`, the `/api/memory*` and
 `/api/release-notes*` routes and `grain memory` / `grain release-notes`;
 for `self-upgrade`, `api_start_upgrade` and `api_cancel_scheduled_upgrade`
-plus `GET /api/upgrade` via `grain api`). Every place a grant is recorded writes it as
+plus `GET /api/upgrade` via `grain api`; for `test-quarantine`,
+`POST /api/tests/quarantine` (`api_quarantine_test`) and `grain quarantine`). Every place a grant is recorded writes it as
 `api:<preset>` (`model.CanonicalLegacyGrant`), importing a grain/config
-does the same, and schema migrations 67, 68, 69, 71, 72 and 75 rewrote the grants
+does the same, and schema migrations 67, 68, 69, 71, 72, 75 and 76 rewrote the grants
 already stored -- tasks, templates, schedules, the default capability
 lists and the standing sessions. The bare name keeps granting the preset
 wherever it is still written, such as a repository's own `.grain`

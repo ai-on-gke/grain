@@ -316,6 +316,8 @@ func TestAPIPresetsExpand(t *testing.T) {
 	has("api:memory", "memory:read", "memory:write")
 	has("release-notes", "release-notes:read", "release-notes:write")
 	has("api:release-notes", "release-notes:read", "release-notes:write")
+	has("test-quarantine", "tests:write")
+	has("api:test-quarantine", "tests:write")
 	for _, p := range model.APIPresets() {
 		for _, s := range p.Scopes {
 			if _, ok := apiScopeInfo(s); !ok {

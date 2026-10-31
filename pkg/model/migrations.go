@@ -430,6 +430,11 @@ var Migrations = []Migration{
 		Description: "rewrite stored self-upgrade grants to api:self-upgrade (the in-process capability is retired)",
 		Up:          rewriteLegacyGrants(map[string]string{"self-upgrade": "api:self-upgrade"}),
 	},
+	{
+		Version:     76,
+		Description: "rewrite stored test-quarantine grants to api:test-quarantine (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"test-quarantine": "api:test-quarantine"}),
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

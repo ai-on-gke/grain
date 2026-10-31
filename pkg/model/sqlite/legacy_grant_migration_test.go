@@ -87,6 +87,7 @@ var retiredGrants = []struct {
 	{71, "memory", "api:memory"},
 	{72, "release-notes", "api:release-notes"},
 	{75, "self-upgrade", "api:self-upgrade"},
+	{76, "test-quarantine", "api:test-quarantine"},
 }
 
 // Each retiring migration rewrites every stored grant of its capability

@@ -114,7 +114,6 @@ func PublishedToolNames() []string {
 	add(mcp.NewNotifyTools(nil))
 	add(mcp.NewMergeQueueTools(nil))
 	add(mcp.NewRevertTools(nil))
-	add(mcp.NewQuarantineTools(mcp.QuarantineToolConfig{}))
 
 	// chat needs that daemon and a task somebody is sitting with; the
 	// live proposal tools need the daemon and register propose_task over

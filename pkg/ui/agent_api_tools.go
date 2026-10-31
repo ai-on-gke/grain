@@ -248,6 +248,7 @@ var routeDocs = map[string]string{
 	"GET /api/ci/runs/{id}":                                                "Read one grain CI run in full, every job's steps and their log output included.",
 	"DELETE /api/ci/runs/{id}":                                             "Cancel a grain CI run.",
 	"DELETE /api/ci/cache":                                                 "Empty grain CI's job cache, so every job of the next runs does its work again.",
+	"POST /api/tests/quarantine":                                           "Quarantine a flaky or failing test (returning the rendered .grain/quarantine.yml entry to commit in the workspace) and optionally file a held follow-up repair task.",
 	"POST /api/package-cache/flush":                                        "Empty the package cache: query kind (apt, pypi, docker, npm or go) for one ecosystem, or all of them without.",
 	"POST /api/actions-cache/flush":                                        "Empty the actions cache: query repo (owner/name) for one repository's entries, or every repository's without.",
 	"POST /api/pipeline-pause":                                             "Pause the pipeline: nothing new is dispatched until it is resumed.",
@@ -377,6 +378,7 @@ var routeBodies = map[string]any{
 	"POST /api/console-sessions/{id}/restart":                        RestartConsoleSessionRequest{},
 	"POST /api/ci/runs":                                              CIRunRequest{},
 	"DELETE /api/ci/runs/{id}":                                       CICancelRequest{},
+	"POST /api/tests/quarantine":                                     QuarantineTestRequest{},
 	"POST /api/pipeline-pause":                                       pausePipelineRequest{},
 	"POST /api/external-agents/tokens":                               CreateExternalAgentTokenRequest{},
 }

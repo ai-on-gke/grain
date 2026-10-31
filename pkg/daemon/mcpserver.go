@@ -36,7 +36,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/change"
@@ -2185,24 +2184,6 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		}
 		registry.Register(mcp.NewLiveProposalTools(escapeSink, proposeRepoList.Nameable(), *taskID,
 			liveFiler)...)
-		if grants.Has(quarantine.CapabilityName) {
-			ws := *root
-			if ws == "" {
-				ws = *workspace
-			}
-			var filer mcp.ProposalFiler
-			if client != nil {
-				filer = &daemonProposalFiler{client: client, parent: *taskID, baseURL: *server, filed: map[string]string{}}
-			}
-			registry.Register(mcp.NewQuarantineTools(mcp.QuarantineToolConfig{
-				WorkspaceDir: ws,
-				TaskID:       *taskID,
-				Repo:         *prRepo,
-				Branch:       *prBranch,
-				Sink:         escapeSink,
-				Filer:        filer,
-			})...)
-		}
 	}
 
 	registry.Register(GrantedDaemonTools(grants, *grainSrcDir, *grainSecretsDir, *grainStateDir, *taskID, client)...)

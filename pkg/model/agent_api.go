@@ -62,6 +62,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "merge:force", Description: "Force-merge a task's pull request past its gate", Dangerous: true},
 	{Scope: "ci:read", Description: "Read grain CI runs, their job logs and artifacts, merge batches and base-branch gates"},
 	{Scope: "ci:write", Description: "Start, re-run and cancel grain CI runs, base-branch and release runs"},
+	{Scope: "tests:write", Description: "Quarantine flaky or failing tests and file their follow-up repair tasks"},
 	{Scope: "notifications:write", Description: "Raise and clear operator notifications"},
 	{Scope: "teams:broadcast", Description: "Post a comment to every active task of the deployment"},
 	{Scope: "dispatch:read", Description: "Read whether dispatch is paused"},
@@ -148,6 +149,8 @@ var apiPresets = []APIPreset{
 		Scopes: []APIScope{"memory:read", "memory:write"}},
 	{Name: "release-notes", Description: "What the release-notes capability granted: read cluster stats and weekly release notes, and publish weekly release notes",
 		Scopes: []APIScope{"release-notes:read", "release-notes:write"}},
+	{Name: "test-quarantine", Description: "What the test-quarantine capability granted: quarantine flaky or failing tests and file follow-up repair tasks",
+		Scopes: []APIScope{"tests:write"}},
 	{Name: ReleaseGateReadCapability, Description: "What a release workflow reads and files: its repository's CI runs " +
 		"and tasks, the persistent sandboxes' status, and its release-notes task",
 		Scopes:    []APIScope{"ci:read", "tasks:read", "sandboxes:read", "tasks:from-template"},
@@ -166,6 +169,7 @@ var apiAliasCapabilities = map[string]string{
 	"dispatch-control": "dispatch-control",
 	"memory":           "memory",
 	"release-notes":    "release-notes",
+	"test-quarantine":  "test-quarantine",
 }
 
 // legacyGrantReplacements are the bare capabilities converted to api
@@ -183,6 +187,7 @@ var legacyGrantReplacements = map[string]string{
 	"memory":           APIGrantPrefix + "memory",
 	"release-notes":    APIGrantPrefix + "release-notes",
 	"self-upgrade":     APIGrantPrefix + "self-upgrade",
+	"test-quarantine":  APIGrantPrefix + "test-quarantine",
 }
 
 // CanonicalLegacyGrant is name, or the api grant a retired in-process

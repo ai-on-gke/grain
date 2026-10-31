@@ -36,7 +36,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -130,9 +129,7 @@ var interactiveRunTool = map[string]string{
 
 // daemonToolGrants is toolGrants plus the grants whose tools exist only
 // with a daemon to ask.
-var daemonToolGrants = append(slices.Clone(toolGrants),
-	quarantine.CapabilityName,
-)
+var daemonToolGrants = slices.Clone(toolGrants)
 
 // knownUngatedTools are tools every run is offered today that act beyond
 // its own task with no grant. Remove each from here when it is gated;

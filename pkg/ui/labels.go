@@ -221,8 +221,6 @@ func OfferedCapabilities() []Capability {
 		// repository's tasks itself (pkg/capability/grainci's package
 		// doc). Every place a capability is chosen refuses it with
 		// grainci.Refusal, by way of capabilityRefusal.
-		{ID: "test-quarantine", Name: "Test quarantine",
-			Description: "Quarantine flaky or failing tests and file follow-up repair tasks"},
 		{ID: readissues.CapabilityName, Name: "Read issues",
 			Description: "Let this task read issues and comments from GitHub"},
 		{ID: dbaccess.CapabilityDBRead, Name: "Grain DB read",

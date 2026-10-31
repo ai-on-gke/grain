@@ -1515,6 +1515,9 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	if apiSet.Has("release-notes:read") || apiSet.Has("release-notes:write") {
 		held["release-notes"] = true
 	}
+	if apiSet.Has("tests:write") {
+		held["test-quarantine"] = true
+	}
 	var b strings.Builder
 	for _, c := range grainCLIGrants {
 		if held[c.grant] {
