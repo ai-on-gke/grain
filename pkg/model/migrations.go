@@ -391,6 +391,13 @@ var Migrations = []Migration{
 		Description: "rewrite stored pipeline-control grants to api:pipeline-control (the in-process capability is retired)",
 		Up:          rewriteLegacyGrants(map[string]string{"pipeline-control": "api:pipeline-control"}),
 	},
+	{
+		Version:     70,
+		Description: "upgrade the pre-slug default task_branch_template (grain/{deployment}/task-{id}) to grain/{deployment}/task-{id}-{slug}",
+		Statements: []string{
+			"UPDATE `grain_config` SET `task_branch_template` = '" + DefaultTaskBranchTemplate + "' WHERE `task_branch_template` = '" + UnsluggedTaskBranchTemplate + "'",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

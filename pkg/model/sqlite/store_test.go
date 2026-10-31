@@ -2132,6 +2132,75 @@ func TestNewTaskBranchesCarryTheDeploymentID(t *testing.T) {
 	}
 }
 
+// A deployment seeded before grain/task-56 has UnsluggedTaskBranchTemplate
+// ("grain/{deployment}/task-{id}") stored in grain_config. Migration 70
+// upgrades that stored default to DefaultTaskBranchTemplate
+// ("grain/{deployment}/task-{id}-{slug}") so newly created tasks include
+// a portion of the task's title in their branch name in addition to the
+// deployment and task-id uniquifiers, while keeping existing tasks'
+// branches untouched and leaving custom or empty templates alone.
+func TestMigrationUpgradesUnsluggedDefaultTaskBranchTemplate(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+
+	cfg := model.DefaultConfig()
+	cfg.DeploymentID = "prod"
+	cfg.TaskBranchTemplate = model.UnsluggedTaskBranchTemplate
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, task("7", true)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 69 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-69 store: %v", err)
+	}
+
+	after, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
+		t.Fatalf("migrated template = %q, want %q", after.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
+	}
+	// Existing task keeps its pre-migration branch.
+	if got, err := store.GetTask(ctx, "7"); err != nil || got.BranchName() != "grain/prod/task-7" {
+		t.Fatalf("existing task branch = %v, %v; want grain/prod/task-7", got, err)
+	}
+	// Newly created task gets the title slug in addition to the uniquifiers.
+	if err := store.PutTask(ctx, task("8", true)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.GetTask(ctx, "8"); err != nil || got.BranchName() != "grain/prod/task-8-rename-the-endpoint" {
+		t.Fatalf("new task branch = %v, %v; want grain/prod/task-8-rename-the-endpoint", got, err)
+	}
+
+	// Custom and empty templates are left untouched by the migration.
+	for _, custom := range []string{"", "alice/{deployment}/task-{id}"} {
+		after.TaskBranchTemplate = custom
+		if err := store.PutConfig(ctx, *after); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 69 WHERE `id` = 1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.New(db).Init(ctx); err != nil {
+			t.Fatalf("migrating a version-69 store with template %q: %v", custom, err)
+		}
+		got, err := store.GetConfig(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.TaskBranchTemplate != custom {
+			t.Fatalf("migrated custom template %q = %q, want it left alone", custom, got.TaskBranchTemplate)
+		}
+	}
+}
+
 func TestNewTaskIDAllocatesDistinctIncreasingIDs(t *testing.T) {
 	t.Parallel()
 	store, _, ctx := openStore(t)

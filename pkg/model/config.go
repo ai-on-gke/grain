@@ -1121,6 +1121,14 @@ func NewDeploymentConfig() Config {
 // what they are about rather than only which task they are.
 const DefaultTaskBranchTemplate = "grain/{deployment}/task-{id}-{slug}"
 
+// UnsluggedTaskBranchTemplate is the DefaultTaskBranchTemplate
+// NewDeploymentConfig seeded before grain/task-56 added {slug} to it.
+// Schema migration 70 upgrades a stored grain_config row still holding
+// this template to DefaultTaskBranchTemplate so existing deployments
+// include a slug of the task's title on new task branches in addition
+// to the deployment and task-id uniquifiers.
+const UnsluggedTaskBranchTemplate = "grain/{deployment}/task-{id}"
+
 // DefaultPollInterval is Config.PollInterval for a deployment that has
 // never chosen one -- named here rather than repeated at each of the
 // places that have to agree on it: DefaultConfig above, cmd/grain
