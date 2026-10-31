@@ -21,6 +21,7 @@ import {
   planChanges,
   settingErrorMessage,
   settingLabel,
+  settingLocation,
   settingMin,
 } from "./settingsPlan.js";
 
@@ -55,6 +56,27 @@ describe("settingLabel", () => {
     expect(ids.size).toBeGreaterThan(40);
     const unlabelled = [...ids].filter((id) => settingLabel(id) === id);
     expect(unlabelled).toEqual([]);
+    const unlocated = [...ids].filter((id) => !settingLocation(id));
+    expect(unlocated).toEqual([]);
+  });
+
+  it("maps each setting key to its Settings section and card anchor", () => {
+    expect(settingLocation("pollInterval")).toEqual({
+      section: "engine",
+      anchor: "polling",
+      href: "/settings/engine#polling",
+    });
+    expect(settingLocation("ciJobsPerRun")).toEqual({
+      section: "ci",
+      anchor: "ci-queue",
+      href: "/settings/ci#ci-queue",
+    });
+    expect(settingLocation("sandboxBackend")).toEqual({
+      section: "sandboxes",
+      anchor: "backend-and-size",
+      href: "/settings/sandboxes#backend-and-size",
+    });
+    expect(settingLocation("somethingNewerThanThisBuild")).toBeNull();
   });
 
   // A UI running against a newer daemon: the setting still gets a line,
