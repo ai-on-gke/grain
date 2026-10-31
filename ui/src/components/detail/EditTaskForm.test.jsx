@@ -504,4 +504,34 @@ describe("DetailOverlay edit form", () => {
       confirm.mockRestore();
     });
   });
+
+  it("shows the priority badge and edits Task priority via PATCH", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, priority: 7 }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    expect(screen.getByTestId("detail-priority-badge")).toHaveTextContent(
+      "priority: 7",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const priorityInput = screen.getByLabelText("Task priority");
+    expect(priorityInput).toHaveValue(7);
+
+    await user.clear(priorityInput);
+    await user.type(priorityInput, "9");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(9);
+  });
 });

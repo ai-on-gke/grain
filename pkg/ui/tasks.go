@@ -92,6 +92,7 @@ type Task struct {
 	// piece missing.
 	Writes               []WriteTarget `json:"writes,omitempty"`
 	Base                 string        `json:"base,omitempty"`
+	Priority             int           `json:"priority"`
 	AutoMerge            bool          `json:"autoMerge"`
 	AutoApproveProposals bool          `json:"autoApproveProposals"`
 	// Interactive mirrors model.Task's own field of the same name
@@ -955,6 +956,10 @@ type AttemptStartup struct {
 func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueueBlockedAt *time.Time,
 	repairing bool, mergeQueue model.MergeQueueActivity, activity *model.RunActivity,
 	reviewTemplateName string, span model.TaskSpan, stall string) Task {
+	priority := t.Priority
+	if priority == 0 {
+		priority = model.DefaultTaskPriority
+	}
 	out := Task{
 		ID:                   t.ID,
 		Title:                t.Title,
@@ -963,6 +968,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		AuthorKind:           string(t.Origin.Attribution.Actor.Kind),
 		State:                state,
 		Base:                 t.Base,
+		Priority:             priority,
 		Issue:                t.Issue,
 		AutoMerge:            t.AutoMerge,
 		AutoApproveProposals: t.AutoApproveProposals,
@@ -2860,11 +2866,28 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return readJSONLimit(w, r, v, maxJSONBody)
 }
 
+func ensureJSONEOF(dec *json.Decoder) error {
+	var extra any
+	err := dec.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return errors.New("unexpected trailing JSON data after request body")
+}
+
 // readJSONLimit is readJSON with the body bound set by the caller, for
 // the few routes whose bodies are legitimately larger than maxJSONBody.
 func readJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	defer r.Body.Close()
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(v); err != nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	if err := dec.Decode(v); err != nil {
+		writeBodyError(w, err)
+		return false
+	}
+	if err := ensureJSONEOF(dec); err != nil {
 		writeBodyError(w, err)
 		return false
 	}
@@ -2882,7 +2905,12 @@ func readJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) b
 func readAttachmentJSON[T any](w http.ResponseWriter, r *http.Request, v *T, uploads func(*T) []AttachmentUpload) bool {
 	defer r.Body.Close()
 	body := &countingReader{r: http.MaxBytesReader(w, r.Body, maxAttachmentJSONBody)}
-	if err := json.NewDecoder(body).Decode(v); err != nil {
+	dec := json.NewDecoder(body)
+	if err := dec.Decode(v); err != nil {
+		writeBodyError(w, err)
+		return false
+	}
+	if err := ensureJSONEOF(dec); err != nil {
 		writeBodyError(w, err)
 		return false
 	}
@@ -2929,11 +2957,16 @@ func writeBodyError(w http.ResponseWriter, err error) {
 // nothing to decode", and is the only error swallowed here.
 func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	defer r.Body.Close()
-	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(v)
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
+	err := dec.Decode(v)
 	if errors.Is(err, io.EOF) {
 		return true
 	}
 	if err != nil {
+		writeBodyError(w, err)
+		return false
+	}
+	if err := ensureJSONEOF(dec); err != nil {
 		writeBodyError(w, err)
 		return false
 	}

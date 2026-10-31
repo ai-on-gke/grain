@@ -35,7 +35,8 @@ func TestSessionSandboxKeyChangesWithWhatTheSandboxWasBuiltFor(t *testing.T) {
 			{Repo: model.RepoRef{Owner: "acme", Name: "infra"}, Base: "prod"},
 			{Repo: model.RepoRef{Owner: "acme", Name: "tools"}, Base: "main"},
 		},
-		Grants: []model.Grant{{Capability: "gcp-key"}, {Capability: "durable", Via: "grain"}},
+		Grants:        []model.Grant{{Capability: "gcp-key"}, {Capability: "durable", Via: "grain"}},
+		NetworkAccess: model.NetworkOpen,
 	}
 	shape := Shape{NetworkAccess: model.NetworkOpen, Class: "interactive"}
 	prepared := []model.Materialized{{Grant: model.Grant{Capability: "gcp-key"}}}
@@ -47,10 +48,10 @@ func TestSessionSandboxKeyChangesWithWhatTheSandboxWasBuiltFor(t *testing.T) {
 	reordered.Reads = []model.RepoRef{base.Reads[1], base.Reads[0]}
 	reordered.Writes = []model.WriteTarget{base.Writes[1], base.Writes[0]}
 	if got := sessionSandboxKey(shape, reordered, prepared); got != key {
-		t.Errorf("reordering grants/reads/writes changed the key:\n%s\n%s", key, got)
+		t.Errorf("reordering the same grants/reads/writes changed the key:\n%s\n%s", key, got)
 	}
 	if got := sessionGrantsKey(reordered); got != grantsKey {
-		t.Errorf("reordering grants/reads/writes changed sessionGrantsKey:\n%s\n%s", grantsKey, got)
+		t.Errorf("reordering the same grants/reads/writes changed sessionGrantsKey:\n%s\n%s", grantsKey, got)
 	}
 
 	withdrawn := base
@@ -84,6 +85,9 @@ func TestSessionSandboxKeyChangesWithWhatTheSandboxWasBuiltFor(t *testing.T) {
 			t.Errorf("%s left the key unchanged: %s", name, key)
 		}
 	}
+
+	netNarrowedTask := base
+	netNarrowedTask.NetworkAccess = model.NetworkNone
 	for name, got := range map[string]string{
 		"a task grant withdrawn":    sessionGrantsKey(withdrawn),
 		"another target":            sessionGrantsKey(retarget),
@@ -91,6 +95,7 @@ func TestSessionSandboxKeyChangesWithWhatTheSandboxWasBuiltFor(t *testing.T) {
 		"a read repo withdrawn":     sessionGrantsKey(readWithdrawn),
 		"a write repo withdrawn":    sessionGrantsKey(writeWithdrawn),
 		"a write repo base changed": sessionGrantsKey(writeRebased),
+		"task network narrowed":     sessionGrantsKey(netNarrowedTask),
 	} {
 		if got == grantsKey {
 			t.Errorf("%s left sessionGrantsKey unchanged: %s", name, grantsKey)

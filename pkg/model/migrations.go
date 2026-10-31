@@ -410,6 +410,14 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     73,
+		Description: "add numeric priority to task (default 5) and template",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 5",
+			"ALTER TABLE `template` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     74,
 		Description: "add keep_running flag to task, template and schedule",
 		Statements: []string{
 			"ALTER TABLE `task` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",

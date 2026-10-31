@@ -214,6 +214,11 @@ func taskBlock(t ui.Task) string {
 	if t.DeferredUntil != nil {
 		fmt.Fprintf(&b, "deferred until: %s\n", t.DeferredUntil.Format(time.RFC3339))
 	}
+	priority := t.Priority
+	if priority <= 0 {
+		priority = 5
+	}
+	fmt.Fprintf(&b, "priority:   %d\n", priority)
 	fmt.Fprintf(&b, "auto-merge: %t\n", t.AutoMerge)
 	if len(t.Capabilities) > 0 {
 		fmt.Fprintf(&b, "capabilities: %s\n", strings.Join(t.Capabilities, ", "))

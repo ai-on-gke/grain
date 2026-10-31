@@ -144,6 +144,9 @@ type rawTemplate struct {
 	// KeepRunning is model.Template.KeepRunning: every task filed from
 	// this template immediately restarts when its run exits.
 	KeepRunning bool `yaml:"keep-running"`
+	// Priority is model.Template.Priority: optional default priority for
+	// tasks filed from this template.
+	Priority *int `yaml:"priority"`
 	// NothingNeeded is model.Template.NothingNeededAction: "close" (what
 	// empty means) or "ack".
 	NothingNeeded string              `yaml:"nothing-needed"`
@@ -273,6 +276,16 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 	if err := checkTeam(f, raw.Team); err != nil {
 		return model.Template{}, raw, err
 	}
+	var priority *int
+	if raw.Priority != nil {
+		if *raw.Priority < 0 {
+			return model.Template{}, raw, fmt.Errorf("%s: priority must be a positive integer, got %d", f.path, *raw.Priority)
+		}
+		if *raw.Priority > 0 {
+			p := *raw.Priority
+			priority = &p
+		}
+	}
 	target := repo
 	tmpl := model.Template{
 		ID:            model.RepoDeclaredID(model.DeclaredTemplate, repo, f.stem),
@@ -291,6 +304,7 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 
 		Interactive:         raw.Interactive,
 		KeepRunning:         raw.KeepRunning,
+		Priority:            priority,
 		NothingNeededAction: nothingNeeded,
 	}
 	if raw.AutoMerge != nil {

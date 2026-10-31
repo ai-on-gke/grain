@@ -333,6 +333,7 @@ func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID 
 		KeepRunning:     req.KeepRunning,
 		Origin:          req.Origin,
 		DeferredUntil:   req.NotBefore,
+		Priority:        req.Priority,
 	})
 	if err != nil {
 		return gitproxy.CLIProposeResult{}, cliActionError(err)

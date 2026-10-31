@@ -329,9 +329,12 @@ import "strconv"
 //
 // 72 is 67 again for `release-notes`, now `api:release-notes`.
 //
-// 73 adds `keep_running` to `task`, `template` and `schedule`
+// 73 adds `priority` to `task` (default 5) and `template`: numeric task
+// priority where higher numbers mean higher dispatch priority.
+//
+// 74 adds `keep_running` to `task`, `template` and `schedule`
 // (model.Task.KeepRunning, model.Template.KeepRunning, model.Schedule.KeepRunning).
-const SchemaVersion = 73
+const SchemaVersion = 74
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -523,6 +526,7 @@ var Tables = []string{
   ` + "`change_target_kind`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
@@ -1576,6 +1580,7 @@ var Tables = []string{
   ` + "`change_target_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,

@@ -240,6 +240,7 @@ type CLIProposeRequest struct {
 	HoldForApproval *bool               `json:"hold_for_approval,omitempty"`
 	AutoMerge       *bool               `json:"auto_merge,omitempty"`
 	Supersedes      string              `json:"supersedes,omitempty"`
+	Priority        *int                `json:"priority,omitempty"`
 }
 
 // CLIProposeResult is POST /cli/proposals' answer.

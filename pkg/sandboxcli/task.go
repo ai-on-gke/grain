@@ -229,6 +229,13 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 		}
 		req.NotBefore = &t
 	}
+	if rawPri := strings.TrimSpace(p.get("priority")); rawPri != "" {
+		pri, err := strconv.Atoi(rawPri)
+		if err != nil || pri < 0 {
+			return fmt.Errorf("--priority %q must be a non-negative integer", rawPri)
+		}
+		req.Priority = &pri
+	}
 	var buf bytes.Buffer
 	if err := c.post("/cli/proposals", req, &buf); err != nil {
 		return err

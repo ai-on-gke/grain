@@ -232,7 +232,11 @@ func sessionSandboxKey(shape Shape, task model.Task, prepared []model.Materializ
 // what reconcileSessionSandboxes can check between turns, when no run is there
 // to say what it would materialize.
 func sessionGrantsKey(task model.Task) string {
-	return sessionTaskAccessKey(task)
+	out := sessionTaskAccessKey(task)
+	if task.NetworkAccess != "" {
+		out += "|net=" + string(task.NetworkAccess)
+	}
+	return out
 }
 
 func sessionTaskAccessKey(task model.Task) string {
@@ -628,13 +632,18 @@ func markInProcessSessionIdle(store *model.Store, ledger *model.Ledger, runID, s
 	}
 }
 
+type relayedRunKey struct {
+	store *model.Store
+	runID string
+}
+
 var inProcessRelayedRuns sync.Map
 
-func takeInProcessRelayed(runID string) bool {
-	if runID == "" {
+func takeInProcessRelayed(store *model.Store, runID string) bool {
+	if store == nil || runID == "" {
 		return false
 	}
-	_, ok := inProcessRelayedRuns.LoadAndDelete(runID)
+	_, ok := inProcessRelayedRuns.LoadAndDelete(relayedRunKey{store: store, runID: runID})
 	return ok
 }
 
@@ -753,7 +762,7 @@ func continueSessionTurns(
 		if hasComment {
 			recordRelayedInProcess(daemonCtx, store, runID, result, "comment_on_issue")
 		}
-		inProcessRelayedRuns.Store(runID, true)
+		inProcessRelayedRuns.Store(relayedRunKey{store: store, runID: runID}, true)
 
 		// What the turn was actually shown: its prompt, and every
 		// comment its forked mcpserver handed it since as an addendum on
@@ -837,7 +846,17 @@ func continueSessionTurns(
 		if len(fresh) == 0 {
 			break
 		}
-		inProcessRelayedRuns.Delete(runID)
+		if latestTask, err := store.GetTask(daemonCtx, task.ID); err == nil && latestTask != nil {
+			if !slices.Equal(latestTask.Grants, task.Grants) ||
+				!slices.Equal(latestTask.Reads, task.Reads) ||
+				!slices.Equal(latestTask.Writes, task.Writes) ||
+				latestTask.Model != task.Model ||
+				latestTask.NetworkAccess != task.NetworkAccess {
+				break
+			}
+			task = *latestTask
+		}
+		inProcessRelayedRuns.Delete(relayedRunKey{store: store, runID: runID})
 
 		// Only a person's message wakes the session, but the turn is told
 		// everything said since what it last saw, each with who said it

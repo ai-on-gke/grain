@@ -87,6 +87,8 @@ export default function EditTaskForm({
     useState(savedNothingNeeded);
   const savedKeepRunning = Boolean(t.keepRunning);
   const [keepRunning, setKeepRunning] = useState(savedKeepRunning);
+  const savedPriority = t.priority ?? 5;
+  const [priority, setPriority] = useState(String(savedPriority));
   // The deployment's connections and default model: a task names no
   // team of its own.
   const connections = config?.agentBackends || [];
@@ -125,6 +127,7 @@ export default function EditTaskForm({
     if (reviewers !== savedReviewers) return true;
     if (nothingNeededAction !== savedNothingNeeded) return true;
     if (keepRunning !== savedKeepRunning) return true;
+    if (String(priority).trim() !== String(savedPriority)) return true;
     if (model !== (t.model || "")) return true;
     if (agentBackendId !== (t.agentBackendId || "")) return true;
     return false;
@@ -150,6 +153,7 @@ export default function EditTaskForm({
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+    const parsedPriority = parseInt(String(priority).trim(), 10);
     const saved = await act(
       () =>
         api(`/api/tasks/${t.id}`, {
@@ -165,6 +169,10 @@ export default function EditTaskForm({
               ? { nothingNeededAction }
               : {}),
             ...(keepRunning !== savedKeepRunning ? { keepRunning } : {}),
+            ...(!Number.isNaN(parsedPriority) &&
+            parsedPriority !== savedPriority
+              ? { priority: parsedPriority }
+              : {}),
             // Sent on every save, like the review beside it: what the
             // pickers hold is this task's whole answer, and "" is the
             // real edit that hands it back to the deployment's default model
@@ -333,6 +341,16 @@ export default function EditTaskForm({
         label="Keep running (immediately restart when a run exits)"
         sx={{ display: "flex", m: 0 }}
         slotProps={{ typography: { fontSize: "0.8rem" } }}
+      />
+      <TextField
+        label="Task priority"
+        type="number"
+        inputProps={{ min: 1, step: 1 }}
+        value={priority}
+        onChange={(e) => setPriority(e.target.value)}
+        helperText="default 5; higher numbers run first"
+        fullWidth
+        size="small"
       />
       <Stack direction="row" spacing={1} justifyContent="flex-end">
         <Button onClick={onDone}>Cancel</Button>

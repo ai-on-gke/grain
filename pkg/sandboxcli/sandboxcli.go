@@ -15,7 +15,8 @@
 // Package sandboxcli is the grain CLI as an agent's sandbox sees it
 // (docs/design/sandbox-first-agent-surface.md, §4): read commands that
 // reach this deployment over the sandbox's own scoped proxy
-// (http://127.0.0.1:9728, the same address and credential git uses), with
+// (http://127.0.0.1:9728 or the guest's bridge gateway on :9728, the same
+// address and credential git uses), with
 // no size cap, so a run can pipe a CI log to grep or redirect a transcript
 // to a file instead of paging through an MCP tool's 16 KB results.
 //
@@ -34,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -50,12 +52,43 @@ const (
 	sandboxProxyEnv     = "GRAIN_SANDBOX_PROXY"
 	sandboxTokenEnv     = "GRAIN_SANDBOX_TOKEN"
 	sandboxCLIEnv       = "GRAIN_SANDBOX_CLI"
-	sandboxProxyAddr    = "127.0.0.1:9728"
+	sandboxProxyPort    = "9728"
 	sandboxGitCredsPath = "/home/debian/.git-credentials"
 	// serverEnvVar is pkg/cli's own: a CLI pointed at a daemon is not in
 	// sandbox mode, wherever it runs.
 	serverEnvVar = "GRAIN_SERVER"
 )
+
+var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
+
+func isSandboxProxyCredential(u *url.URL) bool {
+	if (u.Scheme != "http" && u.Scheme != "https") || u.User == nil {
+		return false
+	}
+	host, port := u.Hostname(), u.Port()
+	if host == "" || port == "" {
+		return false
+	}
+	if port == sandboxProxyPort {
+		return true
+	}
+	return u.User.Username() == "sandbox" && isSandboxProxyHost(host)
+}
+
+func isSandboxProxyHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap()
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || cgnatPrefix.Contains(ip)
+	}
+	lower := strings.ToLower(host)
+	return !strings.Contains(lower, ".") ||
+		strings.HasSuffix(lower, ".internal") ||
+		strings.HasSuffix(lower, ".local") ||
+		strings.HasSuffix(lower, ".svc")
+}
 
 // sandboxEnv is what sandbox mode is detected from, injectable for tests.
 type sandboxEnv struct {
@@ -106,7 +139,7 @@ func detectSandboxProxy(env sandboxEnv) (base, token string, ok bool) {
 			if err != nil || u.User == nil {
 				continue
 			}
-			if base == "" && u.Host != sandboxProxyAddr && (u.User.Username() != "sandbox" || !strings.HasPrefix(u.Host, "127.0.0.1:")) {
+			if base == "" && !isSandboxProxyCredential(u) {
 				continue
 			}
 			if base != "" && !strings.HasSuffix(base, "//"+u.Host) {

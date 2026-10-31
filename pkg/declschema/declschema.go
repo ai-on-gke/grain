@@ -621,6 +621,11 @@ func templateSchema() Schema {
 				Keys:    []Key{settingsOnly("reviewers", Reach)},
 				Columns: []string{"reviewers"},
 			},
+			{
+				Model:   "Priority",
+				Keys:    carried("priority"),
+				Columns: []string{"priority"},
+			},
 			{Model: "Reads", Keys: []Key{settingsOnly("reads", Reach)}, Table: "template_read"},
 			{Model: "Writes", Keys: []Key{settingsOnly("writes", Reach)}, Table: "template_write"},
 			{Model: "Grants", Keys: []Key{settingsOnly("grants", Reach)}, Table: "template_grant"},

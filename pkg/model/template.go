@@ -168,8 +168,15 @@ type Template struct {
 	Interactive bool
 	KeepRunning bool
 
+	// Priority is the optional default numeric priority for tasks filed from
+	// this template (nil or 0 leaves the task on DefaultTaskPriority).
+	Priority *int `json:"priority,omitempty"`
+
 	CreatedAt time.Time
 }
+
+// TaskTemplate is an alias for Template.
+type TaskTemplate = Template
 
 // FiringTarget is the repo and branch a task filed from this template
 // targets, given the target and base the caller would otherwise have

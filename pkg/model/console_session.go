@@ -197,8 +197,28 @@ func ConsoleSessionQueuesProposals(sessions []ConsoleSession, task Task) bool {
 		return false
 	}
 	session, ok := ConsoleSessionByID(sessions, id)
-	return ok && session.QueuesProposals()
+	if !ok {
+		return false
+	}
+	if slices.Contains(task.Tags, ConsoleSessionTasksApprovedTag) {
+		return true
+	}
+	if slices.Contains(task.Tags, ConsoleSessionTasksUnapprovedTag) {
+		return false
+	}
+	return session.QueuesProposals() || task.AutoApproveProposals
 }
+
+const (
+	// ConsoleSessionTasksApprovedTag records an operator's explicit decision on
+	// an active console-session task to queue its proposed tasks without waiting
+	// for approval, overriding the static ConsoleSession.TasksApproved template.
+	ConsoleSessionTasksApprovedTag = "console-session-tasks-approved"
+	// ConsoleSessionTasksUnapprovedTag records an operator's explicit decision on
+	// an active console-session task to hold its proposed tasks for approval,
+	// overriding the static ConsoleSession.TasksApproved template.
+	ConsoleSessionTasksUnapprovedTag = "console-session-tasks-unapproved"
+)
 
 // DirectorSessionID names the director: the standing session grain
 // ships, and the one a deployment gets if it has never chosen otherwise.
@@ -872,6 +892,61 @@ func ConsoleSessionNetworkAccess(session ConsoleSession, networkIsolates bool) N
 	return NetworkOpen
 }
 
+// ConsoleSessionConfigSnapshot records the static ConsoleSession config values
+// last applied to a console session task, so syncConsoleSessionTask can distinguish
+// config changes in grain_config from operator edits made directly on the active
+// session task.
+type ConsoleSessionConfigSnapshot struct {
+	Capabilities    []string
+	Defaults        []string
+	Reads           []RepoRef
+	Writes          []WriteTarget
+	NetworkAccess   NetworkAccess
+	Model           string
+	Title           string
+	TasksApproved   bool
+	KeepRunning     bool
+	GoogleChatSpace string
+}
+
+type consoleSessionSnapshotKey struct {
+	store  *Store
+	taskID string
+}
+
+var (
+	consoleSessionSnapshotsMu sync.Mutex
+	consoleSessionSnapshots   = map[consoleSessionSnapshotKey]ConsoleSessionConfigSnapshot{}
+)
+
+// LastSyncedConsoleSession returns the ConsoleSessionConfigSnapshot last synced
+// onto taskID in store, if any.
+func LastSyncedConsoleSession(store *Store, taskID string) (ConsoleSessionConfigSnapshot, bool) {
+	consoleSessionSnapshotsMu.Lock()
+	defer consoleSessionSnapshotsMu.Unlock()
+	snap, ok := consoleSessionSnapshots[consoleSessionSnapshotKey{store: store, taskID: taskID}]
+	return snap, ok
+}
+
+// RecordSyncedConsoleSession stores the ConsoleSessionConfigSnapshot last synced
+// onto taskID in store.
+func RecordSyncedConsoleSession(store *Store, taskID string, snap ConsoleSessionConfigSnapshot) {
+	consoleSessionSnapshotsMu.Lock()
+	defer consoleSessionSnapshotsMu.Unlock()
+	consoleSessionSnapshots[consoleSessionSnapshotKey{store: store, taskID: taskID}] = ConsoleSessionConfigSnapshot{
+		Capabilities:    slices.Clone(snap.Capabilities),
+		Defaults:        slices.Clone(snap.Defaults),
+		Reads:           slices.Clone(snap.Reads),
+		Writes:          slices.Clone(snap.Writes),
+		NetworkAccess:   snap.NetworkAccess,
+		Model:           snap.Model,
+		Title:           snap.Title,
+		TasksApproved:   snap.TasksApproved,
+		KeepRunning:     snap.KeepRunning,
+		GoogleChatSpace: snap.GoogleChatSpace,
+	}
+}
+
 // FileConsoleSessionTask files a new underlying task for session, optionally
 // linking it to opts.PreviousTaskID and carrying over its handover summary
 // when opts.CarryHandoverSummary is true, and parks it on
@@ -933,6 +1008,18 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 	if err := store.PutTask(ctx, task); err != nil {
 		return "", err
 	}
+	RecordSyncedConsoleSession(store, id, ConsoleSessionConfigSnapshot{
+		Capabilities:    session.Capabilities,
+		Defaults:        defaults,
+		Reads:           session.Reads,
+		Writes:          session.Writes,
+		NetworkAccess:   task.NetworkAccess,
+		Model:           task.Model,
+		Title:           task.Title,
+		TasksApproved:   session.TasksApproved,
+		KeepRunning:     session.KeepRunning,
+		GoogleChatSpace: session.GoogleChatSpace,
+	})
 	if err := store.SetTaskGoal(ctx, id, GoalDecl{Kind: GoalPersonCloses}, PrincipalString(ConsoleSessionPrincipal), now); err != nil {
 		return "", err
 	}
