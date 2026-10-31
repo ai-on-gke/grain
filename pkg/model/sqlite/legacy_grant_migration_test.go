@@ -84,6 +84,8 @@ var retiredGrants = []struct {
 	{67, "team-broadcast", "api:team-broadcast"},
 	{68, "dispatch-control", "api:dispatch-control"},
 	{69, "pipeline-control", "api:pipeline-control"},
+	{71, "memory", "api:memory"},
+	{72, "release-notes", "api:release-notes"},
 }
 
 // Each retiring migration rewrites every stored grant of its capability
@@ -114,7 +116,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy, api string) {
 		t.Fatal(err)
 	}
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
-	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{"memory", legacy},
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{"self-debug", legacy},
 		CICapabilities: []string{legacy}}); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +182,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy, api string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"memory", api}; !slices.Equal(repo.DefaultCapabilities, want) {
+	if want := []string{"self-debug", api}; !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
 	// A CI job's api grant is a CIAPI token, which none of these ever
