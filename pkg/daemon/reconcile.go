@@ -210,8 +210,14 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 			fastPending := false
 			runFast := func() {
 				lastFastWake = time.Now()
-				if err := orchestrator.RunDispatchCycle(ctx, snapshotDeps(), time.Now().UTC()); err != nil {
+				d := snapshotDeps()
+				hadInFlight := d.Runs != nil && d.Runs.Len() > 0
+				if err := orchestrator.RunDispatchCycle(ctx, d, time.Now().UTC()); err != nil {
 					log.Printf("grain daemon: woken dispatch cycle: %v", err)
+				}
+				if hadInFlight && !fastPending {
+					fastPending = true
+					fastTimer.Reset(minWakeInterval)
 				}
 				select {
 				case forwarded <- struct{}{}:
@@ -282,7 +288,7 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 				// RunDispatchCycle has already dispatched ready work;
 				// give newly spawned runs a brief head start on the
 				// store before running the full background cycle.
-				wait = max(wait, 2*time.Second)
+				wait = max(wait, 500*time.Millisecond)
 			}
 			woken.Reset(wait)
 		case <-woken.C:
