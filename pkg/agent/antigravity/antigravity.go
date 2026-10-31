@@ -125,6 +125,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
+	"github.com/ai-on-gke/grain/pkg/credhealth"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
@@ -2498,16 +2499,51 @@ func reportHostToolCalls(r *agent.Result, calls []HostToolCall, fallbackHost str
 				n, grantLabel(g), host, identity))
 		}
 	}
+	// authFailed is each grant's last word in this run: true for a call
+	// that failed on auth, false for one that succeeded. A call that
+	// failed some other way says nothing about the credential.
+	authFailed := map[string]bool{}
+	hints := map[string]string{}
+	noted := false
 	for _, tc := range r.ToolCalls {
 		g, ok := hostToolGrantFor(tc.Name)
-		if ok && tc.IsError && g.IsAuthFailure != nil && g.AuthHint != nil && g.IsAuthFailure(tc.Text) {
+		if !ok {
+			continue
+		}
+		if !tc.IsError {
+			authFailed[g.Capability] = false
+			continue
+		}
+		if g.IsAuthFailure != nil && g.AuthHint != nil && g.IsAuthFailure(tc.Text) {
 			hint := g.AuthHint(host)
-			log.Printf("antigravity: %s failed on auth: %s", tc.Name, hint)
-			notes = append(notes, "grain: "+tc.Name+" failed on auth -- "+hint)
-			break
+			authFailed[g.Capability], hints[g.Capability] = true, hint
+			if !noted {
+				log.Printf("antigravity: %s failed on auth: %s", tc.Name, hint)
+				notes = append(notes, "grain: "+tc.Name+" failed on auth -- "+hint)
+				noted = true
+			}
 		}
 	}
+	noteHostToolCredentials(authFailed, hints, host)
 	return notes
+}
+
+// noteHostToolCredentials puts each grant's auth outcome on the
+// deployment's record (credhealth), not only the run's: a failure raises
+// one warning notification for the operator until a later call under the
+// same grant succeeds, which clears it.
+func noteHostToolCredentials(authFailed map[string]bool, hints map[string]string, host string) {
+	ctx, now := context.Background(), time.Now()
+	for capability, failed := range authFailed {
+		source := "host-tool:" + capability
+		if !failed {
+			credhealth.Clear(ctx, source)
+			continue
+		}
+		credhealth.Fail(ctx, source,
+			fmt.Sprintf("Host tools under the %s grant are failing on auth on %s", capability, host),
+			hints[capability], now)
+	}
 }
 
 // grantLabel is g's capability for a log line or a note, or a stand-in
