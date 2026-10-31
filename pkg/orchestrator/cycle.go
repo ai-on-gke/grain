@@ -877,29 +877,13 @@ func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
 			}
 		}
 	}
-	reconcileSessionSandboxes(ctx, deps, now)
-	syncSandboxLedger(ctx, deps)
-	fast := []Reconciler{
-		{Name: "console-sessions", Reconcile: reconcileConsoleSessions},
-		{Name: "wake", Reconcile: reconcileWake},
-		{Name: "task-pauses", Reconcile: reconcileTaskPauses},
-		{Name: "pause", Reconcile: reconcilePipelinePause},
-		{Name: "target-repos", Reconcile: reconcileTargetRepos},
-		{Name: dispatchReconciler, Reconcile: reconcileDispatch},
+	r := Reconciler{Name: dispatchReconciler, Reconcile: reconcileDispatch}
+	rdeps := deps
+	rdeps.Client = github.WithCaller(deps.Client, r.Name)
+	if err := recoverReconcile(ctx, r, rdeps, now); err != nil {
+		return fmt.Errorf("%s: %w", r.Name, err)
 	}
-	var errs []error
-	for _, r := range fast {
-		if err := ctx.Err(); err != nil {
-			errs = append(errs, err)
-			break
-		}
-		rdeps := deps
-		rdeps.Client = github.WithCaller(deps.Client, r.Name)
-		if err := recoverReconcile(ctx, r, rdeps, now); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", r.Name, err))
-		}
-	}
-	return errors.Join(errs...)
+	return nil
 }
 
 // recoverReconcile calls r.Reconcile and turns a panic into an error the

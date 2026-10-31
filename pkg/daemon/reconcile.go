@@ -277,7 +277,14 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 				continue
 			}
 			wakePending = true
-			woken.Reset(max(0, minWakeInterval-time.Since(lastTick)))
+			wait := max(0, minWakeInterval-time.Since(lastTick))
+			if deps.Runs != nil {
+				// RunDispatchCycle has already dispatched ready work;
+				// give newly spawned runs a brief head start on the
+				// store before running the full background cycle.
+				wait = max(wait, 2*time.Second)
+			}
+			woken.Reset(wait)
 		case <-woken.C:
 			wakePending = false
 			// The periodic tick is pushed out a whole interval by a woken
