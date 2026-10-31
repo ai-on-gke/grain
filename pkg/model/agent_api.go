@@ -123,9 +123,7 @@ type APIPreset struct {
 // apiPresets are the bundles a picker offers first. Each is what one of
 // the per-ability capabilities that used to be filed one at a time asked
 // for (tasks 399, 420, 421, 422, 425), plus the older capabilities
-// whose own tools are kept for compatibility (self-debug, self-upgrade
-// and pipeline-control, which now also grant their preset's routes -- see
-// apiAliasCapabilities).
+// that now also grant their preset's routes (see apiAliasCapabilities).
 var apiPresets = []APIPreset{
 	{Name: "task-admin", Description: "Edit, reorder, retry and close tasks, open and retry their merges, and re-run CI",
 		Scopes: []APIScope{"tasks:read", "tasks:write", "merge:write", "ci:read", "ci:write", "notifications:write"}},
@@ -140,7 +138,7 @@ var apiPresets = []APIPreset{
 			"schedules:read", "schedules:write", "releases:read", "releases:write", "repos:read"}},
 	{Name: "self-debug", Description: "What the self-debug capability grants: read tasks, runs and deployment status",
 		Scopes: []APIScope{"tasks:read", "deployment:read"}},
-	{Name: "self-upgrade", Description: "What the self-upgrade capability grants: read and start upgrades",
+	{Name: "self-upgrade", Description: "What the self-upgrade capability granted: read and start upgrades",
 		Scopes: []APIScope{"deployment:read", "deployment:upgrade"}},
 	{Name: "pipeline-control", Description: "What the pipeline-control capability granted: pause and resume dispatch",
 		Scopes: []APIScope{"dispatch:read", "dispatch:write"}},
@@ -184,6 +182,7 @@ var legacyGrantReplacements = map[string]string{
 	"pipeline-control": APIGrantPrefix + "pipeline-control",
 	"memory":           APIGrantPrefix + "memory",
 	"release-notes":    APIGrantPrefix + "release-notes",
+	"self-upgrade":     APIGrantPrefix + "self-upgrade",
 }
 
 // CanonicalLegacyGrant is name, or the api grant a retired in-process

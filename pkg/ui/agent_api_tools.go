@@ -227,7 +227,7 @@ var routeDocs = map[string]string{
 	"POST /api/host/reboot":                                                "Reboot the machine grain runs on.",
 	"POST /api/host/shutdown":                                              "Power off the machine grain runs on; it does not come back on its own.",
 	"POST /api/host/restart":                                               "Restart the grain service, without touching the machine it runs on.",
-	"POST /api/upgrade":                                                    "Start upgrading grain, to a branch or image; afterTasksFinish waits for running tasks first.",
+	"POST /api/upgrade":                                                    "Start or schedule upgrading grain to a branch or image; set afterTasksFinish: true to drain running tasks and CI jobs first (your own run counts, so finish rather than polling), as false restarts grain immediately and discards in-flight work.",
 	"DELETE /api/upgrade/scheduled":                                        "Cancel an upgrade waiting for running tasks to finish.",
 	"POST /api/database/test":                                              "Check grain can connect to a database DSN.",
 	"POST /api/database/upgrade":                                           "Move grain's store to a Postgres DSN; the first call answers with a confirmation token, which a second identical call must carry.",

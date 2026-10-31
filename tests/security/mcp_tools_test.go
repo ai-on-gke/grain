@@ -39,7 +39,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -149,7 +148,6 @@ var toolGrants = []string{
 	grainlog.CapabilityName,
 	deploymenthealth.CapabilityName,
 	bootstrap.CapabilityName,
-	selfupgrade.CapabilityName,
 	grainci.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead,
@@ -601,7 +599,7 @@ func TestControlRoster(t *testing.T) {
 	if !control(true, "grain-ci")["chat"] {
 		t.Errorf("an interactive run's control roster has no chat")
 	}
-	if !control(false, "grain-ci", "self-upgrade")["upgrade_deployment"] {
-		t.Errorf("self-upgrade's tools are model-only, and missing from the control roster")
+	if up := control(false, "grain-ci", "api:self-upgrade"); !up["api_start_upgrade"] || !up["api_cancel_scheduled_upgrade"] || up["api_get_upgrade_status"] {
+		t.Errorf("api:self-upgrade's deployment:upgrade tools are model-only on the control roster while deployment:read stays on the CLI; got %v", up)
 	}
 }

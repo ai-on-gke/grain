@@ -189,13 +189,12 @@ table only so the table stays total.
 | `release-notes` | `release-notes:read`, `release-notes:write` |
 | `release-gate-read` | `ci:read`, `tasks:read`, `sandboxes:read`, `tasks:from-template` limited to the `release-notes` template |
 
-The `self-debug` and `self-upgrade` capabilities are now aliases. A task
-holding either is also served its preset's routes, and keeps the tools
-it always had under their old names (`list_grain_tasks`,
-`read_grain_metrics`, `start_upgrade`, ...).
+The `self-debug` capability is now an alias. A task holding it is also
+served its preset's routes, and keeps the tools it always had under
+their old names (`list_grain_tasks`, `read_grain_metrics`, ...).
 
-`team-broadcast`, `dispatch-control`, `pipeline-control`, `memory` and
-`release-notes` are aliases
+`team-broadcast`, `dispatch-control`, `pipeline-control`, `memory`,
+`release-notes` and `self-upgrade` are aliases
 too, but their
 in-process capabilities are retired (docs/design/unified-grants.md §4):
 they have no tools of their own any longer, and a run holding one is
@@ -205,9 +204,11 @@ routes for `pause_pipeline`, `resume_pipeline`, `run_task_now` and
 `defer_task`; for pipeline-control, the pipeline-pause routes, which an
 agent calls as itself, so it lifts only a pause it took and never an
 upgrade's hold; for `memory` and `release-notes`, the `/api/memory*` and
-`/api/release-notes*` routes and `grain memory` / `grain release-notes`). Every place a grant is recorded writes it as
+`/api/release-notes*` routes and `grain memory` / `grain release-notes`;
+for `self-upgrade`, `api_start_upgrade` and `api_cancel_scheduled_upgrade`
+plus `GET /api/upgrade` via `grain api`). Every place a grant is recorded writes it as
 `api:<preset>` (`model.CanonicalLegacyGrant`), importing a grain/config
-does the same, and schema migrations 67, 68, 69, 71 and 72 rewrote the grants
+does the same, and schema migrations 67, 68, 69, 71, 72 and 75 rewrote the grants
 already stored -- tasks, templates, schedules, the default capability
 lists and the standing sessions. The bare name keeps granting the preset
 wherever it is still written, such as a repository's own `.grain`

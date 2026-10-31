@@ -184,7 +184,7 @@ per-capability list, with what each one becomes:
 | `grain-log` | `…/grain#journal` | new in-process server method; deliberately not part of any api preset (journal may hold secrets; its redaction stays) |
 | `deployment-health` | `…/api#deployment:read` plus `…/grain#health` for the host/sandbox probes | api scope + new method |
 | `self-repair` | `…/grain#host-exec` (each command still needs a live chat reply) | new method, dangerous (Q7) |
-| `self-upgrade` | `…/api#self-upgrade` preset | api preset (alias today) |
+| `self-upgrade` | `…/api#self-upgrade` preset | **done** (task 2036): provider and its three tools removed, stored grants rewritten to `api:self-upgrade` by schema migration 75 |
 | `pipeline-control` | `…/api#pipeline-control` preset | **done** (task 2004): provider and its two tools removed, stored grants rewritten to `api:pipeline-control` by schema migration 69 |
 | `dispatch-control` | `…/api#dispatch-control` preset | **done** (task 2004): provider and its four tools removed, stored grants rewritten to `api:dispatch-control` by schema migration 68 |
 | `test-quarantine` | `…/api#tests:write` (new scope) | api scope |

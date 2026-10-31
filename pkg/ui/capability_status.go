@@ -288,7 +288,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"deployment-health":   "Deployment health",
 	"grain-log":           "Grain log",
 	"self-repair":         "Self repair",
-	"self-upgrade":        "Self upgrade",
 	"bootstrap-playbooks": "Bootstrap playbooks",
 	"grain-ci":            "grain CI",
 	"registry-push":       "Registry push",

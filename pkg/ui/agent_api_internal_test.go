@@ -30,7 +30,6 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -310,7 +309,8 @@ func TestAPIPresetsExpand(t *testing.T) {
 	// The old capabilities are aliases for their presets.
 	has("self-debug", "tasks:read", "deployment:read")
 	has("api:self-debug", "tasks:read", "deployment:read")
-	has(selfupgrade.CapabilityName, "deployment:read", "deployment:upgrade")
+	has("self-upgrade", "deployment:read", "deployment:upgrade")
+	has("api:self-upgrade", "deployment:read", "deployment:upgrade")
 	has("pipeline-control", "dispatch:write")
 	has("memory", "memory:read", "memory:write")
 	has("api:memory", "memory:read", "memory:write")
@@ -325,14 +325,6 @@ func TestAPIPresetsExpand(t *testing.T) {
 	}
 	if APIGrantsOf([]string{"api:task-admin"}).Has("merge:force") {
 		t.Error("task-admin grants merge:force")
-	}
-
-	// The old self-upgrade tool names are still published and served.
-	published := agent.PublishedToolNames()
-	for _, tool := range selfupgrade.Tools(selfupgrade.Config{}) {
-		if !slices.Contains(published, tool.Name) {
-			t.Errorf("self-upgrade's %s is no longer published", tool.Name)
-		}
 	}
 }
 

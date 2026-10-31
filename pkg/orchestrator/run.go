@@ -40,7 +40,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -1480,7 +1479,7 @@ func grainCLISection(task model.Task) string {
 
 // grainCLIGrants is the `grain` commands each of grain's own capability
 // grants unlocks, in the order grainCLIGrantBullets lists them. A grant
-// whose tools stay model tools (self-upgrade, db-write) is not here: the
+// whose tools stay model tools (db-write) is not here: the
 // tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
 	{model.SelfDebugCapability, "`grain ls/read/grep src://...`, `grain task list`, `grain task read <id>`, " +
@@ -4158,13 +4157,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 //
 // selfrepair's own grant is absent because its one tool blocks on a
 // human's reply in the task's chat, and that needs a store handle the
-// mcpserver process deliberately does not have. self-upgrade is here
-// precisely because it does not block on one: its three tools act on
-// this deployment's own upgrade through the daemon's REST API, which is
-// a hop the mcpserver process already makes, and a task granted it is
-// usually a scheduled one with nobody watching its chat
-// (pkg/capability/selfupgrade's own doc comment on why it is not a
-// relaxation of self-repair).
+// mcpserver process deliberately does not have.
 //
 // A fixed order, so that a run's own arguments read the same way twice
 // for the same task rather than following whatever order the grants were
@@ -4174,7 +4167,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
-	grainci.CapabilityName, deploymenthealth.CapabilityName, selfupgrade.CapabilityName,
+	grainci.CapabilityName, deploymenthealth.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 }

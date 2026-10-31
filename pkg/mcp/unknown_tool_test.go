@@ -17,7 +17,7 @@ package mcp
 // What a run is told when it calls a tool this server does not serve.
 // For most names that is nothing but the name; for a tool grain only ever
 // serves behind a capability grant it is the capability, because "unknown
-// tool upgrade_deployment" reads as a tool grain does not have and sends
+// tool run_host_command" reads as a tool grain does not have and sends
 // an agent looking for another way to do the job it was given.
 
 import (
@@ -32,11 +32,11 @@ func TestAnUnknownToolNamesTheCapabilityThatWouldServeIt(t *testing.T) {
 	client := NewInProcess(context.Background(), registry)
 	t.Cleanup(func() { client.Close() })
 
-	_, err := client.CallTool(context.Background(), "upgrade_deployment", map[string]any{"branch": "main"})
+	_, err := client.CallTool(context.Background(), "run_host_command", map[string]any{"command": "uptime"})
 	if err == nil {
 		t.Fatal("calling a tool this server does not serve succeeded")
 	}
-	if !strings.Contains(err.Error(), "self-upgrade") {
+	if !strings.Contains(err.Error(), "self-repair") {
 		t.Errorf("the refusal does not name the capability that serves it: %v", err)
 	}
 	if !strings.Contains(err.Error(), "a human attaches it") {
