@@ -1566,3 +1566,39 @@ func TestTaskScopedCIRunRetargetedReviewLosesAutoMerge(t *testing.T) {
 		t.Fatal("review retargeted onto candidate kept AutoMerge; want it cleared")
 	}
 }
+
+func TestStartTaskCIRunOptRefusesFullSuiteWhenRepoUsesGitHubCIMode(t *testing.T) {
+	t.Parallel()
+	runner := &fakeCIRunner{
+		run: ci.Run{ID: "run-1", Repo: "acme/widgets", Ref: "grain/task-21"},
+	}
+	srv, store := ciServer(t, runner)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	ctx := context.Background()
+
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:   repo,
+		CIMode: model.CIModeGitHub,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID:     "21",
+		Branch: "grain/task-21",
+		Intent: model.IntentImplement,
+		Title:  "pre-existing task with default grant",
+		Target: &repo,
+		Base:   "main",
+		Grants: []model.Grant{{Capability: "grain-ci", Via: model.GrantByDefault}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, srv, http.MethodPost, "/api/ci/runs", `{"taskId":"21"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /api/ci/runs on CIModeGitHub repo: status = %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if len(runner.started) != 0 {
+		t.Fatalf("started %d Grain CI runs on CIModeGitHub repo, want 0", len(runner.started))
+	}
+}

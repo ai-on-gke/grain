@@ -123,6 +123,7 @@ type sandboxWaitAnswer struct {
 	Commit      string `json:"commit"`
 	Conclusion  string `json:"conclusion"`
 	Error       string `json:"error"`
+	Report      string `json:"report"`
 	Selective   bool   `json:"selective"`
 	Jobs        []struct {
 		Name       string `json:"name"`
@@ -163,6 +164,13 @@ func (c *sandboxCLI) ciWait(p sandboxArgs, single string) error {
 }
 
 func (c *sandboxCLI) reportWait(ans sandboxWaitAnswer) error {
+	if ans.Report != "" {
+		fmt.Fprintln(c.out, strings.TrimRight(ans.Report, "\n"))
+		if ans.Status == "failed" {
+			return errSandboxReported
+		}
+		return nil
+	}
 	waited := (time.Duration(ans.WaitedMS) * time.Millisecond).Round(time.Second)
 	credit := ""
 	if ans.CreditLive {
