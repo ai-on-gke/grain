@@ -153,6 +153,10 @@ type Task struct {
 	// what a run ending on nothing_needed does to this task, "close" or
 	// "ack", with "" meaning close.
 	NothingNeededAction string `json:"nothingNeededAction,omitempty"`
+	// KeepRunning is model.Task.KeepRunning: when true, the orchestrator
+	// immediately restarts the task when its run exits rather than completing
+	// or parking it.
+	KeepRunning bool `json:"keepRunning,omitempty"`
 	// NoPort is model.Task.NoPort: this task's change is not ported to
 	// its repository's other paired branches.
 	NoPort bool `json:"noPort,omitempty"`
@@ -979,6 +983,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		ModelSource:          string(t.ModelSource),
 		NetworkAccess:        string(t.NetworkAccess),
 		NothingNeededAction:  string(t.NothingNeededAction),
+		KeepRunning:          t.KeepRunning,
 		NoPort:               t.NoPort,
 		FixesBaseBranch:      model.FixesBaseBranch(t),
 		GrainBaseRepair:      model.GrainBaseRepair(t),

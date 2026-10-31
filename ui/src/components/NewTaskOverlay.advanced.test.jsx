@@ -407,6 +407,27 @@ describe("NewTaskOverlay", () => {
     expect(JSON.parse(createCall()[1].body).nothingNeededAction).toBe("ack");
   });
 
+  it("files a task with keepRunning when the checkbox is ticked", async () => {
+    api.mockResolvedValueOnce({ id: "42" });
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={{}}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    await user.type(screen.getByLabelText(/Title/), "Keep worker warm");
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await user.click(screen.getByRole("button", { name: "Advanced options" }));
+    await user.click(screen.getByRole("checkbox", { name: /Keep running/ }));
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+
+    expect(JSON.parse(createCall()[1].body).keepRunning).toBe(true);
+  });
+
   // Left alone it sends "", which follows the deployment rather than
   // pinning this task to whatever the deployment happens to say today --
   // the same reading the framework picker above has.

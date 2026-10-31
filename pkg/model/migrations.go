@@ -418,6 +418,15 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     74,
+		Description: "add keep_running flag to task, template and schedule",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `template` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `schedule` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     75,
 		Description: "upgrade the pre-slug default task_branch_template (grain/{deployment}/task-{id}) to grain/{deployment}/task-{id}-{slug}",
 		Statements: []string{
 			"UPDATE `grain_config` SET `task_branch_template` = '" + DefaultTaskBranchTemplate + "' WHERE `task_branch_template` = '" + UnsluggedTaskBranchTemplate + "'",
@@ -489,7 +498,8 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		for _, stmt := range m.Statements {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
 				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
-					strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") {
+					(strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") ||
+						strings.Contains(strings.ToLower(err.Error()), "already exists")) {
 					continue
 				}
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)

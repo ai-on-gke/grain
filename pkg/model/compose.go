@@ -188,6 +188,7 @@ type CompositionSources struct {
 	AutoApproveProposals CompositionLayer
 	Approved             CompositionLayer
 	Interactive          CompositionLayer
+	KeepRunning          CompositionLayer
 }
 
 // Composition is one task a firing will file, resolved: every value it
@@ -249,6 +250,9 @@ type Composition struct {
 	// Interactive is whether the task is a live chat (Task.Interactive).
 	// Only a template says so: an inline schedule's firing never is one.
 	Interactive bool
+	// KeepRunning is whether the task immediately restarts when its run
+	// exits (Task.KeepRunning).
+	KeepRunning bool
 	// Priority is the resolved numeric priority for the task (DefaultTaskPriority = 5).
 	Priority int
 
@@ -301,6 +305,7 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 		Model:                c.Model,
 		TemplateID:           c.TemplateID,
 		Interactive:          c.Interactive,
+		KeepRunning:          c.KeepRunning,
 		CreatedAt:            &now,
 	}
 	if c.Model != "" {
@@ -419,6 +424,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		AutoApproveProposals: approveProp,
 		Approved:             approved,
 		Interactive:          tmpl.Interactive,
+		KeepRunning:          tmpl.KeepRunning,
 		Priority:             priority,
 		TemplateID:           tmpl.ID,
 		TemplateName:         tmpl.Name,
@@ -438,6 +444,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 			AutoApproveProposals: approvePropFrom,
 			Approved:             approvedBy,
 			Interactive:          LayerTemplate,
+			KeepRunning:          LayerTemplate,
 		},
 	}
 }
@@ -512,6 +519,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		AutoMerge:            sched.AutoMerge,
 		AutoApproveProposals: sched.AutoApproveProposals,
 		Approved:             true,
+		KeepRunning:          sched.KeepRunning,
 		Priority:             DefaultTaskPriority,
 		Sources: CompositionSources{
 			Title:                LayerSchedule,
@@ -529,6 +537,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 			AutoApproveProposals: LayerSchedule,
 			Approved:             LayerSchedule,
 			Interactive:          LayerSchedule,
+			KeepRunning:          LayerSchedule,
 		},
 	}
 }

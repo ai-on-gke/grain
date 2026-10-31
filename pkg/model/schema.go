@@ -332,7 +332,10 @@ import "strconv"
 // 73 adds `priority` to `task` (default 5) and `template`: numeric task
 // priority where higher numbers mean higher dispatch priority.
 //
-// 74 changes no table: it upgrades `grain_config`.`task_branch_template`
+// 74 adds `keep_running` to `task`, `template` and `schedule`
+// (model.Task.KeepRunning, model.Template.KeepRunning, model.Schedule.KeepRunning).
+//
+// 75 changes no table: it upgrades `grain_config`.`task_branch_template`
 // from the pre-slug default `grain/{deployment}/task-{id}`
 // (model.UnsluggedTaskBranchTemplate, seeded by NewDeploymentConfig
 // before grain/task-56) to `grain/{deployment}/task-{id}-{slug}`
@@ -341,7 +344,7 @@ import "strconv"
 // branch names in addition to the deployment and task-id uniquifiers.
 // Existing tasks keep the branch recorded on their row, and any other
 // template is left alone.
-const SchemaVersion = 74
+const SchemaVersion = 75
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -534,6 +537,7 @@ var Tables = []string{
   ` + "`change_target_spec`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
   ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1469,6 +1473,7 @@ var Tables = []string{
   ` + "`last_run_at`" + `           DATETIME NULL,
   ` + "`created_at`" + `            DATETIME NOT NULL,
   ` + "`every_n_minutes`" + `       INTEGER  NULL,
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1586,6 +1591,7 @@ var Tables = []string{
   ` + "`change_target_spec`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
+  ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
