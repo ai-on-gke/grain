@@ -62,3 +62,81 @@ func TestParseWorkflowJobAndCheckRunDeliveries(t *testing.T) {
 		t.Fatalf("check_run event = %+v", ev)
 	}
 }
+
+func TestParseWorkflowRunTimedOutStepAndStatusPushDeliveries(t *testing.T) {
+	// 1. workflow_run delivery with run_attempt=0 defaults RunAttempt to 1 and populates workflow metadata.
+	ev, err := ParsePayload("workflow_run", "d-wr-1", []byte(`{
+		"action": "completed",
+		"repository": {"full_name": "ai-on-gke/grain"},
+		"workflow_run": {
+			"id": 9001,
+			"name": "Nightly",
+			"path": ".github/workflows/nightly.yml",
+			"event": "schedule",
+			"head_branch": "main",
+			"head_sha": "deadbeef1234",
+			"status": "completed",
+			"conclusion": "timed_out",
+			"run_attempt": 0,
+			"html_url": "https://github.com/ai-on-gke/grain/actions/runs/9001",
+			"run_started_at": "2026-10-31T01:00:00Z",
+			"updated_at": "2026-10-31T02:00:00Z"
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.WorkflowRun != 9001 || ev.RunAttempt != 1 || ev.WorkflowName != "Nightly" ||
+		ev.WorkflowPath != ".github/workflows/nightly.yml" || ev.WorkflowEvent != "schedule" ||
+		ev.HeadRef != "main" || ev.HeadSHA != "deadbeef1234" || ev.CheckConclusion != "timed_out" ||
+		ev.CheckApp != "github-actions" || ev.CheckStartedAt == nil || ev.CheckCompletedAt == nil {
+		t.Fatalf("workflow_run event = %+v", ev)
+	}
+
+	// 2. workflow_job with a timed_out step records that step as FailingStep and falls back to job.ID when check_run_url is absent.
+	ev, err = ParsePayload("workflow_job", "d-wj-timeout", []byte(`{
+		"action": "completed",
+		"repository": {"full_name": "ai-on-gke/grain"},
+		"workflow_job": {
+			"id": 7777,
+			"run_id": 9001,
+			"run_attempt": 1,
+			"workflow_name": "Nightly",
+			"head_branch": "main",
+			"head_sha": "deadbeef1234",
+			"name": "go-long",
+			"status": "completed",
+			"conclusion": "timed_out",
+			"steps": [
+				{"name": "Checkout", "status": "completed", "conclusion": "success"},
+				{"name": "Run go-long shard", "status": "completed", "conclusion": "timed_out"}
+			]
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.CheckRunID != 7777 || ev.FailingStep != "Run go-long shard" || ev.CheckConclusion != "timed_out" {
+		t.Fatalf("timed_out workflow_job event = %+v", ev)
+	}
+
+	// 3. push and status deliveries populate HeadRef/HeadSHA and CheckName/CheckConclusion.
+	pushEv, err := ParsePayload("push", "d-push", []byte(`{
+		"ref": "refs/heads/main",
+		"after": "cafebabe5678",
+		"repository": {"full_name": "ai-on-gke/grain"}
+	}`))
+	if err != nil || pushEv.HeadRef != "main" || pushEv.HeadSHA != "cafebabe5678" {
+		t.Fatalf("push event = %+v, err = %v", pushEv, err)
+	}
+
+	statusEv, err := ParsePayload("status", "d-status", []byte(`{
+		"sha": "cafebabe5678",
+		"context": "cla/google",
+		"state": "success",
+		"repository": {"full_name": "ai-on-gke/grain"}
+	}`))
+	if err != nil || statusEv.HeadSHA != "cafebabe5678" || statusEv.CheckName != "cla/google" || statusEv.CheckConclusion != "success" {
+		t.Fatalf("status event = %+v, err = %v", statusEv, err)
+	}
+}
