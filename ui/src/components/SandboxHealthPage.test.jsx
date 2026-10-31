@@ -28,6 +28,7 @@ import SandboxHealthPage, {
   probeNote,
   sandboxImageDrifted,
   startsScope,
+  StaleSandboxImageAlerts,
 } from "./SandboxHealthPage.jsx";
 import api from "../api.js";
 
@@ -2679,5 +2680,31 @@ describe("HostdHealthNote", () => {
       r(<HostdHealthNote hostExecutor={{ hostd: { reachable: true } }} />)
         .container,
     ).toBeEmptyDOMElement();
+  });
+});
+
+describe("StaleSandboxImageAlerts", () => {
+  it("warns once per stale pin, linking to Settings", () => {
+    render(
+      <StaleSandboxImageAlerts
+        warnings={[
+          "k8s_granule_image: Sandbox image us-docker.pkg.dev/p/grain/guest:sha-31d0973 is grain's stock sandbox image from another build.",
+          "sandbox_image: Sandbox image ghcr.io/bwsalmon/grain/guest:v2.1.0 is grain's stock sandbox image from another build.",
+        ]}
+      />,
+    );
+    const alerts = screen.getAllByTestId("stale-sandbox-image");
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]).toHaveTextContent("k8s_granule_image");
+    expect(
+      within(alerts[0]).getByRole("link", { name: "Settings → Sandboxes" }),
+    ).toHaveAttribute("href", "/settings/sandboxes");
+  });
+
+  it("says nothing without a stale pin", () => {
+    const { container } = render(<StaleSandboxImageAlerts warnings={[]} />);
+    expect(container).toBeEmptyDOMElement();
+    render(<StaleSandboxImageAlerts />);
+    expect(screen.queryByTestId("stale-sandbox-image")).toBeNull();
   });
 });

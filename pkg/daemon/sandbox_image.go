@@ -747,7 +747,7 @@ func logCustomSandboxImage(ctx context.Context, cfg Config, image, stock string,
 	backend := string(cfg.SandboxBackend())
 	base := sandboximage.BaseImageForBackend(backend, stock)
 	labels, err := read(ctx, image)
-	check := sandboximage.CheckCustomImage(image, backend, base, labels, err)
+	check := sandboximage.CheckCustomImage(image, backend, base, stock, labels, err)
 	if check.Warning != "" {
 		log.Printf("WARNING: %s", check.Warning)
 		return
