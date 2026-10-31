@@ -3943,8 +3943,9 @@ type UpdateTaskRequest struct {
 	// Capabilities, given, replaces the task's capability grants while
 	// preserving durable on standing console-session tasks.
 	Capabilities *[]string `json:"capabilities,omitempty"`
-	// Priority attaches or detaches PriorityDispatchCapability on the task.
-	Priority *bool `json:"priority,omitempty"`
+	// PriorityDispatch attaches or detaches PriorityDispatchCapability on
+	// the task (also accepted as a boolean "priority" in JSON).
+	PriorityDispatch *bool `json:"priorityDispatch,omitempty"`
 	// KeepRunning attaches or detaches DurableCapability on the task.
 	KeepRunning *bool `json:"keepRunning,omitempty"`
 }
@@ -3956,16 +3957,33 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 	type Alias UpdateTaskRequest
 	var aux struct {
 		Alias
-		RawCapabilities    json.RawMessage `json:"capabilities,omitempty"`
-		RawGrants          json.RawMessage `json:"grants,omitempty"`
-		NetworkAccessSnake *string         `json:"network_access,omitempty"`
-		AutoApproveSnake   *bool           `json:"auto_approve_proposals,omitempty"`
-		KeepRunningSnake   *bool           `json:"keep_running,omitempty"`
+		RawCapabilities       json.RawMessage `json:"capabilities,omitempty"`
+		RawGrants             json.RawMessage `json:"grants,omitempty"`
+		RawPriority           json.RawMessage `json:"priority,omitempty"`
+		PriorityDispatchSnake *bool           `json:"priority_dispatch,omitempty"`
+		NetworkAccessSnake    *string         `json:"network_access,omitempty"`
+		AutoApproveSnake      *bool           `json:"auto_approve_proposals,omitempty"`
+		KeepRunningSnake      *bool           `json:"keep_running,omitempty"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 	*r = UpdateTaskRequest(aux.Alias)
+	if trimmed := strings.TrimSpace(string(aux.RawPriority)); trimmed != "" && trimmed != "null" {
+		var b bool
+		if err := json.Unmarshal(aux.RawPriority, &b); err == nil {
+			r.PriorityDispatch = &b
+		} else {
+			var p int
+			if err := json.Unmarshal(aux.RawPriority, &p); err != nil {
+				return err
+			}
+			r.Priority = &p
+		}
+	}
+	if r.PriorityDispatch == nil && aux.PriorityDispatchSnake != nil {
+		r.PriorityDispatch = aux.PriorityDispatchSnake
+	}
 	parseCapRaw := func(raw json.RawMessage) (*[]string, error) {
 		trimmed := strings.TrimSpace(string(raw))
 		if trimmed == "" || trimmed == "null" {
@@ -4134,7 +4152,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// sent as agentBackendId as the model choice it was.
 	var editModel *string
 	var isConsoleSessionTask bool
-	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.Priority != nil || req.KeepRunning != nil {
+	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
 		if existing, err := c.Store.GetTask(ctx, id); err == nil && existing != nil {
 			isConsoleSessionTask = existing.IsConsoleSession()
 		}
@@ -4507,7 +4525,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.Reviewers != nil {
 			task.Reviewers = model.NormalizeReviewers(*req.Reviewers)
 		}
-		if req.Capabilities != nil || req.Priority != nil || req.KeepRunning != nil {
+		if req.Capabilities != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
 			existingByCap := make(map[string]model.Grant, len(task.Grants))
 			for _, g := range task.Grants {
 				existingByCap[g.Capability] = g
@@ -4549,8 +4567,8 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				}
 				task.Grants = newGrants
 			}
-			if req.Priority != nil {
-				if *req.Priority {
+			if req.PriorityDispatch != nil {
+				if *req.PriorityDispatch {
 					if _, had := existingByCap[model.PriorityDispatchCapability]; !had {
 						if err := c.catalogueEditRefusal(ctx, *task, model.PriorityDispatchCapability); err != nil {
 							return err

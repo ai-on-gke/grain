@@ -2078,7 +2078,7 @@ func TestActiveConsoleSessionOperatorEditsPreservedAcrossReconciles(t *testing.T
 		Model:                &chosenModel,
 		NetworkAccess:        &netNone,
 		AutoApproveProposals: &approved,
-		Priority:             &prio,
+		PriorityDispatch:     &prio,
 		KeepRunning:          &keepRunning,
 	}); err != nil {
 		t.Fatalf("UpdateTask on active console session with state repo configured: %v", err)
