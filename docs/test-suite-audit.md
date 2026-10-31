@@ -24,23 +24,23 @@ Every pull request and `main` push runs the per-PR suite. Invariants in `tests/d
 
 | Job ID | Display Name | `.grain/workflows/tests.yml` | `.github/workflows/tests.yml` | Packages / Scope | Timeout (Grain / GHA) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `go` | `go` | Yes | Yes | `make fmt`, `make frontend`, `go build ./...`, `go vet ./...`, and `go test -race ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...` | 20m / 30m |
-| `go-e2e` | `go e2e` | Yes | Yes | `make frontend` + `go test -race ./tests/e2e/... ./tests/deploy/...` | 35m / 30m |
-| `go-orchestrator` | `go orchestrator` | Yes | Yes | `go test -race ./pkg/orchestrator/...` | 35m / 30m |
+| `go` | `go` | Yes | Yes | `make fmt`, `make frontend`, `go build ./...`, `go vet ./...`, and `go test -race ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...` | 25m / 30m |
+| `go-e2e` | `go e2e` | Yes | Yes | `make frontend` + `go test -race ./tests/e2e/... ./tests/deploy/...` | 25m / 30m |
+| `go-orchestrator` | `go orchestrator` | Yes | Yes | `go test -race ./pkg/orchestrator/...` | 20m / 30m |
 | `go-model` | `go model` | Yes | Yes | `go test -race ./pkg/model/... ./pkg/staterepo/... ./tests/security/...` | 20m / 30m |
 | `go-unit` | `go unit` | Yes | Yes | `go test -race` across all remaining packages (`./cmd/checkpost/...`, `./cmd/ghcr-prune/...`, `./cmd/github-webhook/...`, `./cmd/grain-connect/...`, `./cmd/grain-sandbox/...`, `./cmd/grit/...`, `./docs/releases/...`, `./tests/hygiene/...`, `./tests/container/...`, `./tests/installer/...`, `./tests/bench/...`, and 58 `./pkg/...` packages including `daemon`, `forge`, `ghwebhook`, `gitproxy`, `mcp`, `namespace`, `runhost`, `sandboxcli`, `trustboundary`, `upgrade`) | 20m / 30m |
-| `granule` | `granule` | Yes | Yes | `go test -race ./...` inside `third_party/granule` (`-mod=vendor`) | 10m / 15m |
+| `granule` | `granule` | Yes | Yes | `go test -race ./...` inside `third_party/granule` (`-mod=vendor`) | 15m / 15m |
 | `postgres` | `postgres` | Yes | Yes | `GRAIN_REQUIRE_POSTGRES=1` `go test -count=1 ./pkg/model/postgres/... ./pkg/model/` against real PostgreSQL | 15m / 20m |
-| `run-host` | `run host` | Yes | Yes | `GRAIN_RUNHOST_DOCKER=1` `go test -race -count=1 ./pkg/runhost/` + `TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest` in `./pkg/cli/` | 10m / 15m |
+| `run-host` | `run host` | Yes | Yes | `GRAIN_RUNHOST_DOCKER=1` `go test -race -count=1 ./pkg/runhost/` + `TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest` in `./pkg/cli/` | 15m / 15m |
 | `host-script-container` | `host-script container` | Yes | Yes | Builds `Dockerfile.k8s-sandbox` and runs `TestHostScriptGrantInARealContainerSandbox` in `./pkg/orchestrator/` | 15m / 15m |
-| `frontend` | `frontend` | Yes | Yes | `make frontend`, `make fmt-frontend`, and `cd ui && npm test -- --maxWorkers=4` (Jest unit tests) | 10m / 15m |
-| `ui-e2e` | `ui e2e` | Yes | Yes | `make frontend`, `make playwright-browsers`, and `make test-e2e-suite` (Playwright E2E suite in `ui/e2e/`) | 35m / 30m |
-| `lint` | `lint` | Yes | Yes | `shellcheck` over tracked shell scripts (`scripts/*.sh`, `deploy/terraform/*.sh`) + `actionlint` over `.github/workflows/` (GHA) | 5m / 10m |
-| `terraform` | `terraform` | Yes | Yes | `terraform fmt -check`, `init -backend=false`, and `validate` across `deploy/terraform/gcp` and `deploy/gke/terraform` | 5m / 10m |
-| `installer-e2e` | `installer` | Yes | Yes | Builds `grain-installer:test` (`scripts/installer-test-image.sh`) and runs `GRAIN_INSTALLER_E2E=1 go test ./tests/installer -count=1 -v` | 15m / 25m |
+| `frontend` | `frontend` | Yes | Yes | `make frontend`, `make fmt-frontend`, and `cd ui && npm test -- --maxWorkers=4` (Jest unit tests) | 15m / 15m |
+| `ui-e2e` | `ui e2e` | Yes | Yes | `make frontend`, `make playwright-browsers`, and `make test-e2e-suite` (Playwright E2E suite in `ui/e2e/`) | 25m / 35m |
+| `lint` | `lint` | Yes | Yes | `shellcheck` over tracked shell scripts (`scripts/*.sh`, `deploy/terraform/*.sh`) | 15m / 15m |
+| `terraform` | `terraform` | Yes | Yes | `terraform fmt -check`, `init -backend=false`, and `validate` across `deploy/terraform/gcp` | 15m / 15m |
+| `installer-e2e` | `installer` | Yes | Yes | Builds `grain-installer:test` (`scripts/installer-test-image.sh`) and runs `GRAIN_INSTALLER_E2E=1 go test ./tests/installer -count=1 -v` | 15m / 20m |
 | `package-cache` | `package cache` | Yes | Yes | Real-dockerd package cache tests (`GRAIN_REAL_DOCKER_CACHE_TESTS=1` in `./pkg/orchestrator/`) + transparent interception test (`GRAIN_REAL_INTERCEPT_TESTS=1` in `./pkg/daemon/`) | 15m / 20m |
 | `real-vm` | `real vm` | Moved to `nightly.yml` (`kvm-sandboxes`) | Gated (`vars.ENABLE_SELF_HOSTED_TESTS == 'true'`) | Real Firecracker / Cloud-Hypervisor VM tests in `./pkg/orchestrator/` | — / 30m |
-| `real-kubernetes` | `real kubernetes` | Yes (`paths:` scoped) | Gated (`vars.ENABLE_SELF_HOSTED_TESTS == 'true'`) | `kind` + Calico cluster pod sandbox E2E tests (`GRAIN_REAL_K8S_TESTS=1`) in `./pkg/orchestrator/` | 20m / 30m |
+| `real-kubernetes` | `real kubernetes` | — | Gated (`vars.ENABLE_SELF_HOSTED_TESTS == 'true'`) | `kind` + Calico cluster pod sandbox E2E tests (`GRAIN_REAL_K8S_TESTS=1`) in `./pkg/orchestrator/` | — / 30m |
 
 ### 2.2 Nightly Suite (`.grain/workflows/nightly.yml` & `.github/workflows/nightly.yml`)
 
@@ -48,22 +48,22 @@ The nightly suite runs on schedule (`cron: "11 2 * * *"` UTC) and via `workflow_
 
 | Job ID | Display Name | `.grain/workflows/nightly.yml` | `.github/workflows/nightly.yml` | Target / Scope | Timeout (Grain / GHA) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `go-long` | `go test -race -shuffle=on -count=2` | Yes | Yes (4 matrix shards) | `make test-long` (`go test -race -shuffle=on -count=2 ./...`) catching order-dependent and repeat-invocation bugs | 45m / 90m per shard |
-| `staterepo-soak` | `staterepo 100-commit soak` | Yes | Yes | `make soak` (`TestStateRepoSoak100Commits` in `./pkg/staterepo/...`) | 20m / 30m |
-| `loadtest` | `20-agent concurrent load test` | Yes | Yes | `make loadtest` (`TestHighConcurrencyLoad` in `./tests/e2e/...`) | 20m / 30m |
-| `scalability` | `50-agent scalability and 500-task scale` | Yes | Yes | `make scalability` (`TestScalability50Agents` & `TestLargeScaleHistory` in `./tests/e2e/...`) | 30m / 45m |
-| `merge-stress` | `25-branch merge queue stress` | Yes | Yes | `make merge-stress` (`TestMergeQueueStress` in `./tests/e2e/...`) | 30m / 45m |
-| `long-term-test` | `end-to-end long term tests` | Yes | Yes | `make long-term-test` (`TestLongTermEndToEndSustained` in `./tests/e2e/...`) | 35m / 50m |
-| `long-sim` | `long randomized cluster simulation` | Yes | Yes | `make long-sim` (`TestRandomizedClusterLong` in `./tests/e2e/...`) | 35m / 50m |
-| `postgres-stress` | `postgres concurrency and stress` | Yes | Yes | `GRAIN_REQUIRE_POSTGRES=1 make postgres-stress` (`./pkg/model/postgres/... -run TestPostgres`) | 20m / 30m |
-| `tunnel-stress` | `reverse tunnel multiplexer stress` | Yes | Yes | `make tunnel-stress` (`./pkg/tunnel/...` 30-minute stress suite) | 40m / 50m |
-| `ui-e2e-long` | `ui e2e, repeated` | Yes | Yes (3 matrix passes) | `make test-e2e-long` (3 full passes of Playwright E2E suite) | 90m / 60m per pass |
-| `installer-variants` | `installer trixie and hostmode` | Yes | Yes | Assembles `grain-installer:test` (`debian:trixie`) and runs `./tests/installer/trixie` + `./tests/installer/hostmode` | 20m / 30m |
-| `vulns` | `govulncheck` | Yes | Yes | `make vuln` (`govulncheck ./...` under `go.mod` toolchain) | 15m / 20m |
-| `cmd-grain-stress` | `pkg/cli stress under load` | Yes (`paths:` scoped) | Yes | 4-way parallel `go test -race -count=1 ./pkg/cli` rounds within a 1,800s budget | 45m / 45m |
-| `kvm-sandboxes` | `real KVM sandboxes` | Yes (`paths:` scoped) | Gated (`vars.ENABLE_SELF_HOSTED_TESTS == 'true'`) | Resolves guest image (`scripts/granule-guest-resolve.sh`) and runs real KVM VM tests in `./pkg/orchestrator/` | 35m / 45m |
-| `kvm-route-stress` | `twenty two-VM boots` | Yes (`paths:` scoped) | Gated (`vars.ENABLE_SELF_HOSTED_TESTS == 'true'`) | 20 consecutive boots of `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently` | 25m / 35m |
-| `upgrade-test` | `upgrade from previous version` | Yes (`paths:` scoped) | Yes | Builds `grain-e2e:test` (`scripts/ci-docker-build.sh`) and runs `make test-upgrade` (`./tests/container/ -run 'TestUpgradeFromPreviousVersion\|TestAnUpgrade'`) | 25m / 35m |
+| `go-long` | `go, shuffled and repeated` | Yes | Yes (4 matrix shards) | `make test-long` (`go test -race -shuffle=on -count=2 ./...`) catching order-dependent and repeat-invocation bugs | 60m / 90m per shard |
+| `staterepo-soak` | `state repository soak` | Yes | Yes | `make soak` (`TestStateRepoSoak100Commits` in `./pkg/staterepo/...`) | 35m / 35m |
+| `loadtest` | `sustained load` | Yes | Yes | `make loadtest` (`TestHighConcurrencyLoad` in `./tests/e2e/...`) | 35m / 35m |
+| `scalability` | `metadata and model scalability` | Yes | Yes | `make scalability` (`TestScalability50Agents` & `TestLargeScaleHistory` in `./tests/e2e/...`) | 35m / 35m |
+| `merge-stress` | `merge liveness stress` | Yes | Yes | `make merge-stress` (`TestMergeQueueStress` in `./tests/e2e/...`) | 60m / 60m |
+| `long-term-test` | `end-to-end long term tests` | Yes | Yes | `make long-term-test` (`TestLongTermEndToEndSustained` in `./tests/e2e/...`) | 60m / 60m |
+| `long-sim` | `long randomized cluster simulation` | Yes | Yes | `make long-sim` (`TestRandomizedClusterLong` in `./tests/e2e/...`) | 45m / 45m |
+| `postgres-stress` | `postgres concurrency and stress` | Yes | Yes | `GRAIN_REQUIRE_POSTGRES=1 make postgres-stress` (`./pkg/model/postgres/... -run TestPostgres`) | 20m / 25m |
+| `tunnel-stress` | `reverse tunnel multiplexer stress` | Yes | Yes | `make tunnel-stress` (`./pkg/tunnel/...` 30-minute stress suite) | 45m / 45m |
+| `ui-e2e-long` | `ui e2e, repeated` | Yes | Yes (3 matrix passes) | `make test-e2e-long` (3 full passes of Playwright E2E suite) | 70m / 60m per pass |
+| `installer-variants` | `installer trixie and hostmode` | Yes | Yes | Assembles `grain-installer:test` (`debian:trixie`) and runs `./tests/installer/trixie` + `./tests/installer/hostmode` | 40m / 45m |
+| `vulns` | `govulncheck` | Yes | Yes | `make vuln` (`govulncheck ./...` under `go.mod` toolchain) | 10m / 15m |
+| `cmd-grain-stress` | `pkg/cli stress under load` | Yes (`paths:` scoped) | Yes | 4-way parallel `go test -race -count=1 ./pkg/cli` rounds within a 1,800s budget | 35m / 40m |
+| `kvm-sandboxes` | `real KVM sandboxes` | Yes (`paths:` scoped) | Gated (`vars.ENABLE_SELF_HOSTED_TESTS == 'true'`) | Resolves guest image (`scripts/granule-guest-resolve.sh`) and runs real KVM VM tests in `./pkg/orchestrator/` | 50m / 50m |
+| `kvm-route-stress` | `twenty two-VM boots` | Yes (`paths:` scoped) | Gated (`vars.ENABLE_SELF_HOSTED_TESTS == 'true'`) | 20 consecutive boots of `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently` | 70m / 70m |
+| `upgrade-test` | `upgrade from previous version` | Yes (`paths:` scoped) | Yes | Builds `grain-e2e:test` (`scripts/ci-docker-build.sh`) and runs `make test-upgrade` (`./tests/container/ -run 'TestUpgradeFromPreviousVersion\|TestAnUpgrade'`) | 30m / 40m |
 
 ### 2.3 Package Inventory Across `tests/...`
 
@@ -87,10 +87,10 @@ The nightly suite runs on schedule (`cron: "11 2 * * *"` UTC) and via `workflow_
 
 1. **`pkg/staterepo/growth_test.go` (Deleted):**
    - `TestStateRepoGrowth` was written prior to `grain/task-395` to measure git object growth when `task_run` and `task_observation` rows were exported to the state repository. Following `grain/task-395`, `staterepo.ExportConfig` exports only configuration and memory tables, making the 6-pass `task_run`/`task_observation` loop a no-op against `grain/config` while still paying git commit/gc overhead on every PR.
-   - `pkg/staterepo/staterepo_test.go` (`TestExportDoesNotWriteTaskOrCITables`) and `pkg/staterepo/soak_test.go` already directly verify `ExportConfig` invariants.
+   - `pkg/staterepo/config_only_test.go` (`TestExportConfigLeavesOperationalRowsOnlyInSQLite`) and `pkg/staterepo/soak_test.go` already directly verify `ExportConfig` invariants.
 2. **`pkg/staterepo/cigrowth_test.go` (Deleted):**
    - `TestCIRunStorageCost` simulated 3 CI runs × 4 jobs × 6 steps (72 step logs) and ran 6 full `staterepo.Export` + `git count-objects` passes on every PR while explicitly stating `// and it asserts nothing`.
-   - `TestCIStateRepoGrowth` asserted the absence of `tables/ci_step.json` after 3 multi-job CI runs, duplicating `TestExportDoesNotWriteTaskOrCITables` in `pkg/staterepo/staterepo_test.go`.
+   - `TestCIStateRepoGrowth` asserted the absence of `tables/ci_step.json` after 3 multi-job CI runs, duplicating `TestExportConfigLeavesOperationalRowsOnlyInSQLite` in `pkg/staterepo/config_only_test.go`.
 3. **`pkg/ci/runstore_live_cost_test.go` (Deleted):**
    - `TestLiveOutputWriteCost` executed 288 SQLite read/write operations across simulated 64 KiB step logs on every PR while explicitly stating `// It asserts nothing`.
    - The incremental step-log write invariant (`SaveLiveOutput` writing only the changed step's blob without rewriting the whole run) is already asserted by `TestALiveStepsOutputIsWrittenWithoutRewritingTheWholeRun` and `TestAPublicationThatMovesWhatOtherStepsKeepIsWrittenWhole` in `pkg/ci/runstore_stored_test.go`.
