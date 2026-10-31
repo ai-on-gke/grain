@@ -72,7 +72,10 @@
 // to one run already, and the single shared slot there used to be left
 // every other team's and user's session waiting out whichever one was
 // live (grain/task-2323). They still charge the sandbox budget, under the
-// exception policy (model.Limits.AdmitDirectorSandboxShape). A pipeline
+// priority policy (model.Limits.AdmitDirectorSandboxShape,
+// model.Budget.AdmitsPriority): only the disk floor or a cluster with no
+// room refuses them, never the budget's ceilings, its repair reserve or
+// whatever CI holds (docs/sandbox-budget.md). A pipeline
 // pause does not hold them either (PriorityPassesPause), with one
 // exception: an upgrade's own hold, whose restart would end any run it
 // let start.

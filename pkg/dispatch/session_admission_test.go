@@ -61,7 +61,7 @@ func budgetFullOfCI() map[string][]model.Commitment {
 	return map[string][]model.Commitment{
 		"cpu":    {{CPUs: 8, MemoryMB: 1024}, {CPUs: 8, MemoryMB: 1024}},
 		"memory": {{CPUs: 1, MemoryMB: 16 * 1024}, {CPUs: 1, MemoryMB: 16 * 1024}},
-		"disk": {{CPUs: 1, MemoryMB: 1024, DiskGB: 50}, {CPUs: 1, MemoryMB: 1024, DiskGB: 50}},
+		"disk":   {{CPUs: 1, MemoryMB: 1024, DiskGB: 50}, {CPUs: 1, MemoryMB: 1024, DiskGB: 50}},
 		// Everything but the repair reserve: only a base-branch repair may
 		// spend what is left.
 		"repair-reserve": {{CPUs: 12, MemoryMB: 24 * 1024}},
