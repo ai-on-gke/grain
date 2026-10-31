@@ -34,10 +34,6 @@ permissions:
 
 env:
   GOFLAGS: -mod=readonly
-  GIT_AUTHOR_NAME: grain-ci
-  GIT_AUTHOR_EMAIL: grain-ci@example.com
-  GIT_COMMITTER_NAME: grain-ci
-  GIT_COMMITTER_EMAIL: grain-ci@example.com
   PLAYWRIGHT_BROWSERS_PATH: /var/cache/playwright
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
   npm_config_prefer_offline: "true"
@@ -61,6 +57,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -71,16 +77,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
 
       - name: Cache npm and node_modules
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -94,10 +90,15 @@ jobs:
 
       - name: Install sandbox guest dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             bubblewrap expect zstd socat psmisc
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
 
       - name: Format
         run: make fmt
@@ -128,7 +129,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -140,16 +152,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
 
       - name: Cache npm and node_modules
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -163,6 +165,7 @@ jobs:
 
       - name: Install sandbox guest dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             bubblewrap expect zstd socat psmisc shellcheck
@@ -184,7 +187,7 @@ jobs:
           GRAIN_GOTEST_LOG=/tmp/go-e2e.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./tests/e2e/... ./tests/deploy/...
           status=$?
           if [ "$status" -ne 0 ]; then
-            grep -E '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-e2e.log | tail -n 15 | while IFS= read -r line; do
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-e2e.log | tail -n 10 | while IFS= read -r line; do
               echo "::error title=go-e2e::$line"
             done
             exit "$status"
@@ -203,31 +206,45 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: false
 
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
-
       - name: Install sandbox guest dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             bubblewrap expect zstd socat psmisc iproute2 iptables
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
 
       - name: Test
-        run: ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/orchestrator/...
+        run: |
+          set +e
+          GRAIN_GOTEST_LOG=/tmp/go-orchestrator.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/orchestrator/...
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-orchestrator.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=go-orchestrator::$line"
+            done
+            exit "$status"
+          fi
 
   go-model:
     name: go model
@@ -242,24 +259,40 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: false
 
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
+      - name: Configure git identity
+        run: |
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
 
       - name: Test
-        run: ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/model/... ./pkg/staterepo/... ./tests/security/...
+        run: |
+          set +e
+          GRAIN_GOTEST_LOG=/tmp/go-model.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/model/... ./pkg/staterepo/... ./tests/security/...
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-model.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=go-model::$line"
+            done
+            exit "$status"
+          fi
 
   go-unit:
     name: go unit
@@ -274,24 +307,25 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: false
 
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
-
       - name: Install sandbox guest dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             bubblewrap expect zstd socat psmisc iproute2 iptables
@@ -324,7 +358,7 @@ jobs:
             ./pkg/version/... ./tests/bench/...
           status=$?
           if [ "$status" -ne 0 ]; then
-            grep -E '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-unit.log | tail -n 15 | while IFS= read -r line; do
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-unit.log | tail -n 10 | while IFS= read -r line; do
               echo "::error title=go-unit::$line"
             done
             exit "$status"
@@ -345,21 +379,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: false
-
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
 
       - name: Configure /dev/kvm udev permissions
         run: |
@@ -379,6 +413,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             iproute2 iptables dnsmasq-base e2fsprogs socat
@@ -391,7 +426,7 @@ jobs:
           GRAIN_GOTEST_LOG=/tmp/granule.log ../../scripts/run-go-tests.sh go test -race -count=1 -timeout 10m ./...
           status=$?
           if [ "$status" -ne 0 ]; then
-            grep -E '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/granule.log | tail -n 15 | while IFS= read -r line; do
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:|panic:' /tmp/granule.log | tail -n 10 | while IFS= read -r line; do
               echo "::error title=granule::$line"
             done
             exit "$status"
@@ -425,21 +460,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: false
-
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
 
       - name: Install PostgreSQL
         run: |
@@ -450,6 +485,7 @@ jobs:
               printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
               sudo chmod +x /usr/sbin/policy-rc.d
             fi
+            sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
             sudo apt-get update -qq
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql >/dev/null
           fi
@@ -473,21 +509,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: false
-
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
 
       - name: Pull the run-host test image
         run: docker pull -q debian:bookworm-slim
@@ -515,21 +551,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: false
-
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
 
       - name: Build the sandbox image
         run: |
@@ -607,6 +643,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -617,16 +663,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
 
       - name: Cache npm and node_modules
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -786,7 +822,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -798,16 +845,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
 
       - name: Cache npm and node_modules
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -836,7 +873,7 @@ jobs:
           ./scripts/installer-test-image.sh grain-installer:test 2>&1 | tee /tmp/installer-image.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            tail -n 15 /tmp/installer-image.log | while IFS= read -r line; do
+            tail -n 10 /tmp/installer-image.log | while IFS= read -r line; do
               echo "::error title=installer-image::$line"
             done
             exit "$status"
@@ -861,7 +898,7 @@ jobs:
             status=1
           fi
           if [ "$status" -ne 0 ]; then
-            grep -E '--- FAIL:|--- SKIP:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/installer.log | tail -n 15 | while IFS= read -r line; do
+            grep -aE -- '--- FAIL:|--- SKIP:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/installer.log | tail -n 8 | while IFS= read -r line; do
               echo "::error title=installer-e2e::$line"
             done
             exit "$status"
@@ -880,21 +917,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: false
-
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
 
       - name: Seed Granulefile /etc/docker/daemon.json
         run: |
@@ -930,7 +967,7 @@ jobs:
             fi
           done
           if [ "$status" -ne 0 ]; then
-            grep -E '--- FAIL:|--- SKIP:|_test\.go:[0-9]+:' /tmp/pkgcache.log | tail -n 15 | while IFS= read -r line; do
+            grep -aE -- '--- FAIL:|--- SKIP:|_test\.go:[0-9]+:|^FAIL' /tmp/pkgcache.log | tail -n 7 | while IFS= read -r line; do
               echo "::error title=package-cache::$line"
             done
             exit "$status"
@@ -952,7 +989,7 @@ jobs:
             status=1
           fi
           if [ "$status" -ne 0 ]; then
-            grep -E '--- FAIL:|--- SKIP:|_test\.go:[0-9]+:' /tmp/intercept.log | tail -n 15 | while IFS= read -r line; do
+            grep -aE -- '--- FAIL:|--- SKIP:|_test\.go:[0-9]+:|^FAIL' /tmp/intercept.log | tail -n 10 | while IFS= read -r line; do
               echo "::error title=package-cache-intercept::$line"
             done
             exit "$status"
