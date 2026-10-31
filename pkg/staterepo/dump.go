@@ -681,7 +681,7 @@ func importTable(ctx context.Context, tx *sql.Tx, dir, table string, withhold bo
 	}
 
 	for i, row := range rows {
-		if table == "grain_config" && found > 0 && found < 70 {
+		if table == "grain_config" && found > 0 && found < 71 {
 			if tpl, _ := row["task_branch_template"].(string); tpl == model.UnsluggedTaskBranchTemplate {
 				row["task_branch_template"] = model.DefaultTaskBranchTemplate
 			}

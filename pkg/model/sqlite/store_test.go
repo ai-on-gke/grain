@@ -2133,7 +2133,7 @@ func TestNewTaskBranchesCarryTheDeploymentID(t *testing.T) {
 }
 
 // A deployment seeded before grain/task-56 has UnsluggedTaskBranchTemplate
-// ("grain/{deployment}/task-{id}") stored in grain_config. Migration 70
+// ("grain/{deployment}/task-{id}") stored in grain_config. Migration 71
 // upgrades that stored default to DefaultTaskBranchTemplate
 // ("grain/{deployment}/task-{id}-{slug}") so newly created tasks include
 // a portion of the task's title in their branch name in addition to the
@@ -2153,11 +2153,11 @@ func TestMigrationUpgradesUnsluggedDefaultTaskBranchTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 69 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 70 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-69 store: %v", err)
+		t.Fatalf("migrating a version-70 store: %v", err)
 	}
 
 	after, err := store.GetConfig(ctx)
@@ -2185,11 +2185,11 @@ func TestMigrationUpgradesUnsluggedDefaultTaskBranchTemplate(t *testing.T) {
 		if err := store.PutConfig(ctx, *after); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 69 WHERE `id` = 1"); err != nil {
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 70 WHERE `id` = 1"); err != nil {
 			t.Fatal(err)
 		}
 		if err := model.New(db).Init(ctx); err != nil {
-			t.Fatalf("migrating a version-69 store with template %q: %v", custom, err)
+			t.Fatalf("migrating a version-70 store with template %q: %v", custom, err)
 		}
 		got, err := store.GetConfig(ctx)
 		if err != nil {

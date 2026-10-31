@@ -942,6 +942,11 @@ type Config struct {
 	// SessionSandboxIdleTTLOr; a negative duration turns warm retention off
 	// so the sandbox is released as soon as the turn ends.
 	SessionSandboxIdleTTL time.Duration
+	// SettingsLocked opts into locking non-bootstrap settings in the UI
+	// and REST API when an internal config repository (grain/config) is
+	// configured, requiring changes to go through config pull requests.
+	// False by default so settings remain editable from the UI and API.
+	SettingsLocked bool `json:"settings_locked"`
 }
 
 // Default Kubernetes sandbox configuration values.

@@ -1054,14 +1054,14 @@ func TestCheckMigrationSummarizesDroppedRollbackRowsInsteadOfWarningPerFile(t *t
 	}
 }
 
-func TestADumpBefore70UpgradesUnsluggedTaskBranchTemplate(t *testing.T) {
+func TestADumpBefore71UpgradesUnsluggedTaskBranchTemplate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "dump")
 	if err := os.CopyFS(dir, os.DirFS(goldenDump(t))); err != nil {
 		t.Fatal(err)
 	}
-	if err := staterepo.WriteSchemaVersion(dir, 69); err != nil {
+	if err := staterepo.WriteSchemaVersion(dir, 70); err != nil {
 		t.Fatal(err)
 	}
 	configs := readTable(t, dir, "grain_config")

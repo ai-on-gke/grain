@@ -393,6 +393,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     70,
+		Description: "add settings_locked to grain_config for opt-in UI/API settings lock",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `settings_locked` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     71,
 		Description: "upgrade the pre-slug default task_branch_template (grain/{deployment}/task-{id}) to grain/{deployment}/task-{id}-{slug}",
 		Statements: []string{
 			"UPDATE `grain_config` SET `task_branch_template` = '" + DefaultTaskBranchTemplate + "' WHERE `task_branch_template` = '" + UnsluggedTaskBranchTemplate + "'",
@@ -463,6 +470,10 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
+					strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") {
+					continue
+				}
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
 		}

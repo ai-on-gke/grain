@@ -167,7 +167,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// managed by an external config repository (checkSettingsWritable).
 	rehearsal := &configWriteRehearsal{}
 	r = r.WithContext(model.WithWriteRehearsal(r.Context(), rehearsal))
-	rw := &configRefusalWriter{ResponseWriter: w, rehearsal: rehearsal}
+	rw := &configRefusalWriter{
+		ResponseWriter: w,
+		rehearsal:      rehearsal,
+		onSuccess: func() {
+			s.tasks.syncStateRepoAfterWrite(r.Context())
+		},
+	}
 	s.mux.ServeHTTP(rw, r)
 	rw.finish()
 }
@@ -187,13 +193,14 @@ func requiresAccess(r *http.Request) bool {
 		return true
 	}
 	return strings.HasPrefix(r.URL.Path, "/api/") &&
-		r.URL.Path != "/api/config" &&
+		!(r.URL.Path == "/api/config" && (r.Method == http.MethodGet || r.Method == http.MethodHead)) &&
 		!strings.HasPrefix(r.URL.Path, "/api/auth/") &&
 		!executorBootstrapRoute(r)
 }
 
 func (s *Server) routes() {
 	s.route("GET /api/config", s.handleConfig)
+	s.mux.HandleFunc("PUT /api/config", s.agentAPIGate("PUT /api/settings", s.handleUpdateSettings))
 	s.route("GET /api/restart-watch", s.handleRestartWatch)
 	s.route("GET /api/auth/access-code", s.handleAccessCodeStatus)
 	s.route("POST /api/auth/access-code", s.handleAccessCodeLogin)
