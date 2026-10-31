@@ -85,8 +85,8 @@
 name: promote
 
 on:
-  release:
-    branches: [main, candidate]
+  # Retired from automatic release triggering: ai-on-gke/grain runs release
+  # promotion on GitHub Actions (.github/workflows/promote.yml).
   workflow_dispatch:
 
 jobs:

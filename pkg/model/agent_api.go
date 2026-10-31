@@ -78,8 +78,10 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "repos:write", Description: "Add and remove repositories, change their settings, create branches"},
 	{Scope: "boards:read", Description: "Read boards"},
 	{Scope: "boards:write", Description: "Create, edit and delete boards"},
-	{Scope: "memory:read", Description: "Read memory documents and release notes"},
-	{Scope: "memory:write", Description: "Write memory documents and release notes"},
+	{Scope: "memory:read", Description: "Read memory and memory documents"},
+	{Scope: "memory:write", Description: "Write memory and memory documents"},
+	{Scope: "release-notes:read", Description: "Read weekly release notes, cluster stats and release versions"},
+	{Scope: "release-notes:write", Description: "Write weekly release notes"},
 	{Scope: "sessions:read", Description: "Read standing sessions and live consoles"},
 	{Scope: "sessions:write", Description: "Create, edit and restart standing sessions, and type into consoles"},
 	{Scope: "caches:read", Description: "Read the CI, package and actions caches"},
@@ -144,6 +146,10 @@ var apiPresets = []APIPreset{
 		Scopes: []APIScope{"dispatch:read", "dispatch:write"}},
 	{Name: "team-broadcast", Description: "What the team-broadcast capability granted: post a comment to every active task",
 		Scopes: []APIScope{"teams:broadcast"}},
+	{Name: "memory", Description: "What the memory capability granted: read and write memory and memory documents",
+		Scopes: []APIScope{"memory:read", "memory:write"}},
+	{Name: "release-notes", Description: "What the release-notes capability granted: read cluster stats and weekly release notes, and publish weekly release notes",
+		Scopes: []APIScope{"release-notes:read", "release-notes:write"}},
 	{Name: ReleaseGateReadCapability, Description: "What a release workflow reads and files: its repository's CI runs " +
 		"and tasks, the persistent sandboxes' status, and its release-notes task",
 		Scopes:    []APIScope{"ci:read", "tasks:read", "sandboxes:read", "tasks:from-template"},
@@ -160,6 +166,8 @@ var apiAliasCapabilities = map[string]string{
 	"pipeline-control": "pipeline-control",
 	"team-broadcast":   "team-broadcast",
 	"dispatch-control": "dispatch-control",
+	"memory":           "memory",
+	"release-notes":    "release-notes",
 }
 
 // legacyGrantReplacements are the bare capabilities converted to api
@@ -174,6 +182,8 @@ var legacyGrantReplacements = map[string]string{
 	"team-broadcast":   APIGrantPrefix + "team-broadcast",
 	"dispatch-control": APIGrantPrefix + "dispatch-control",
 	"pipeline-control": APIGrantPrefix + "pipeline-control",
+	"memory":           APIGrantPrefix + "memory",
+	"release-notes":    APIGrantPrefix + "release-notes",
 }
 
 // CanonicalLegacyGrant is name, or the api grant a retired in-process

@@ -42,7 +42,6 @@ func TestPublishedToolNamesNamesEveryToolTheServerCanRegister(t *testing.T) {
 		"list_ci_runs", "get_ci_log", "get_ci_artifact", "run_ci_job",
 		// What the daemon connection turns on.
 		"open_pull_request", "recreate_sandbox", "update_status", "rename_session", "chat",
-		"update_memory", "list_memory_documents", "read_memory_document",
 		// What the capability grants turn on.
 		"list_grain_tasks", "read_grain_task", "read_grain_task_prompt", "read_grain_task_transcript",
 		"read_grain_metrics",

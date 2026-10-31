@@ -178,14 +178,22 @@ fi`
 // configureToolScript runs one of pkgcache.SandboxCommands, and does
 // nothing at all when the tool it configures is not installed here.
 // When configuring the Go toolchain (`go env -w`), it also compiles the
-// standalone GOCACHEPROG client helper into GoCacheProgPath once.
+// standalone GOCACHEPROG client helper into GoCacheProgPath once (unless a
+// prebuilt binary is installed at /usr/local/bin/grain-gocacheprog or the
+// caller skips the build via GRAIN_SKIP_GOCACHEPROG_BUILD=1).
 const configureToolScript = `set -eu
 command -v "$1" >/dev/null 2>&1 || exit 0
 if [ "$1" = go ] && [ "${2:-}" = env ] && [ "${3:-}" = -w ]; then
   src="` + pkgcache.GoCacheProgPath + `.$$.go"
   cat >"$src" <<'GRAIN_GOCACHEPROG_EOF'
 ` + pkgcache.GoCacheProgSource + `GRAIN_GOCACHEPROG_EOF
-  if [ ! -x "` + pkgcache.GoCacheProgPath + `" ] || ! cmp -s "$src" "` + pkgcache.GoCacheProgPath + `.go" 2>/dev/null; then
+  if [ ! -x "` + pkgcache.GoCacheProgPath + `" ] && [ -x /usr/local/bin/grain-gocacheprog ]; then
+    cp -f /usr/local/bin/grain-gocacheprog "` + pkgcache.GoCacheProgPath + `" && \
+      cp -f "$src" "` + pkgcache.GoCacheProgPath + `.go" || true
+  fi
+  if [ "${GRAIN_SKIP_GOCACHEPROG_BUILD:-}" = 1 ]; then
+    rm -f "$src"
+  elif [ ! -x "` + pkgcache.GoCacheProgPath + `" ] || ! cmp -s "$src" "` + pkgcache.GoCacheProgPath + `.go" 2>/dev/null; then
     GO111MODULE=off GOCACHEPROG="" GOPROXY=off CGO_ENABLED=0 "$1" build -o "` + pkgcache.GoCacheProgPath + `.tmp.$$" "$src" >/dev/null 2>&1 && \
       mv -f "` + pkgcache.GoCacheProgPath + `.tmp.$$" "` + pkgcache.GoCacheProgPath + `" && \
       mv -f "$src" "` + pkgcache.GoCacheProgPath + `.go" || \
@@ -199,6 +207,23 @@ if [ "$1" = go ] && [ "${2:-}" = env ] && [ "${3:-}" = -w ]; then
   fi
 fi
 exec "$@"`
+
+type skipGoCacheProgBuildKey struct{}
+
+// withSkipGoCacheProgBuild returns a context instructing configureTools not
+// to compile grain-gocacheprog.go on the cold path when no prebuilt binary is
+// present (e.g. for no-repo interactive tasks that do not run Go builds).
+func withSkipGoCacheProgBuild(ctx context.Context, skip bool) context.Context {
+	if !skip {
+		return ctx
+	}
+	return context.WithValue(ctx, skipGoCacheProgBuildKey{}, true)
+}
+
+func skipGoCacheProgBuild(ctx context.Context) bool {
+	v, _ := ctx.Value(skipGoCacheProgBuildKey{}).(bool)
+	return v
+}
 
 // ConfigurePackageCache writes the package-cache configuration into
 // sandbox, and reports what it did for a note a caller may want to make.
@@ -265,9 +290,13 @@ func configureTools(ctx context.Context, commander SandboxCommander, name, base 
 	if err != nil {
 		return err
 	}
+	script := configureToolScript
+	if skipGoCacheProgBuild(ctx) {
+		script = "GRAIN_SKIP_GOCACHEPROG_BUILD=1\n" + configureToolScript
+	}
 	for _, command := range commands {
 		_, stderr, exitCode := commander.RunInSandbox(ctx,
-			append([]string{"sh", "-c", configureToolScript, "sh"}, command.Argv...), "")
+			append([]string{"sh", "-c", script, "sh"}, command.Argv...), "")
 		if exitCode != 0 {
 			log.Printf("orchestrator: pointing %s in %s at this deployment's package cache: %s "+
 				"-- that ecosystem will be fetched from the internet instead",
