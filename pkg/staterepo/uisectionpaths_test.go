@@ -37,7 +37,7 @@ func TestSettingsSectionLinksNameExportedTables(t *testing.T) {
 		t.Fatal("CONFIG_REPO_SECTION_PATHS not found in ui/src/settingsSections.js")
 	}
 	block, _, _ = strings.Cut(block, "\n};")
-	paths := regexp.MustCompile(`"(` + TablesDir + `/[^"]+)"`).FindAllStringSubmatch(block, -1)
+	paths := regexp.MustCompile(`"(`+TablesDir+`/[^"]+)"`).FindAllStringSubmatch(block, -1)
 	if len(paths) == 0 {
 		t.Fatal("no tables/ paths found in CONFIG_REPO_SECTION_PATHS")
 	}
