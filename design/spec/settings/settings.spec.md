@@ -5,7 +5,7 @@
 This document lists every setting a Grain deployment has. That covers the deployment row (`model.Config` / `grain_config`), the per-repository row (`model.RepoConfig` / `repo_config`), repository-declared settings (`.grain/settings.yml` and the other `.grain/*` files), the composed configuration entities exported to the config repository, the `<data-dir>/state-repo.json` file, the daemon's startup flags and environment variables, and the preferences each browser keeps for itself.
 
 - The one-page architecture this inventory sits under is [`design/design/settings.design.md`](../../design/settings.design.md). Read it first for the six state surfaces, the four configuration modes, and why secrets and sign-in never enter Git.
-- The companion matrix, [`settings-mutability.spec.md`](settings-mutability.spec.md), says per mode who may write each surface (UI, REST, agent, config PR). This document does not repeat that matrix. It names each field's surface (bootstrap or config-managed), and the matrix decides what that means in each mode.
+- The companion matrix, [`settings-mutability.spec.md`](settings-mutability.spec.md), says per mode who may write each surface (UI, REST, agent, config PR): the summary is its §2.10, and §3 gives the per-setting detail. This document does not repeat that matrix. It names each field's surface (bootstrap or config-managed), and the matrix decides what that means in each mode.
 - If this document and the code disagree, the code wins, and this document is the bug. §13 lists the sources it was enumerated from, so a reviewer can re-run the audit.
 
 ## Contents
