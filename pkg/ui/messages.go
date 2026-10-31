@@ -502,8 +502,15 @@ func (c *Client) RecordDelivered(ctx context.Context, id string, through int64) 
 			return
 		}
 		o.DeliveredCommentID = &through
+		// Only a person's comment after the question answers it: one
+		// said before the run asked, and only now marked delivered,
+		// must not un-park the question the run is waiting on.
+		after := prev
+		if o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID > after {
+			after = *o.PendingQuestionCommentID
+		}
 		for _, comment := range comments {
-			if comment.ID > prev && comment.ID <= through && comment.Author.Actor.Kind == model.PrincipalHuman {
+			if comment.ID > after && comment.ID <= through && comment.Author.Actor.Kind == model.PrincipalHuman {
 				o.PendingQuestionCommentID = nil
 				o.PendingSecret = ""
 				break

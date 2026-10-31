@@ -507,3 +507,39 @@ func TestRecordDeliveredOnlyClearsPendingQuestionOnNewHumanReply(t *testing.T) {
 			obs.PendingQuestionCommentID, obs.PendingSecret)
 	}
 }
+
+// A person's comment said before the run asked its question, and only
+// marked delivered afterwards, does not answer that question: the
+// delivered report must leave it parked.
+func TestRecordDeliveredKeepsAQuestionAskedAfterTheHumanComment(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	task := create(t, client, ctx)
+	running(t, store, ctx, task.ID)
+
+	earlier, err := store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "an earlier note",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked, err := client.PostAgentMessage(ctx, task.ID, "Which region?", "Pick a region", nil)
+	if err != nil {
+		t.Fatalf("PostAgentMessage: %v", err)
+	}
+	if asked.ID <= earlier {
+		t.Fatalf("question %d is not after the earlier comment %d", asked.ID, earlier)
+	}
+	if err := client.RecordDelivered(ctx, task.ID, asked.ID); err != nil {
+		t.Fatalf("RecordDelivered(question): %v", err)
+	}
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.PendingQuestionCommentID == nil || *obs.PendingQuestionCommentID != asked.ID {
+		t.Fatalf("PendingQuestionCommentID = %v, want %d: a comment from before the question un-parked it",
+			obs.PendingQuestionCommentID, asked.ID)
+	}
+}
