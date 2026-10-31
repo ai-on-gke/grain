@@ -39,7 +39,7 @@ var routeScopes = map[string]APIScope{
 	"GET /api/deployment/repos/{owner}/{name}/config":                      "repos:read",
 	"PUT /api/deployment/repos/{owner}/{name}/config":                      "repos:write",
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":              "connections:write",
-	"POST /api/deployment/broadcast":                                       "tasks:write",
+	"POST /api/deployment/broadcast":                                       "teams:broadcast",
 	"GET /api/deployment/secret-audit":                                     "secrets:read",
 	"GET /api/deployment/audit-logs":                                       "secrets:read",
 	"GET /api/config":                                                      "settings:read",
