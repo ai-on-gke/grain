@@ -273,6 +273,9 @@ func ParsePayload(eventName, deliveryID string, raw []byte) (Event, error) {
 		ev.CheckCompletedAt = r.UpdatedAt
 		ev.HeadSHA = clampShort(r.HeadSHA)
 		ev.HeadRef = clampShort(r.HeadBranch)
+		if r.HeadRepository != nil {
+			ev.HeadRepo = clampShort(r.HeadRepository.FullName)
+		}
 		ev.HTMLURL = clampShort(r.HTMLURL)
 	} else if p.CheckSuite != nil {
 		ev.CheckStatus = clampShort(p.CheckSuite.Status)
@@ -490,18 +493,21 @@ type rawWebhookPayload struct {
 		} `json:"steps"`
 	} `json:"workflow_job"`
 	WorkflowRun *struct {
-		ID           int64      `json:"id"`
-		Name         string     `json:"name"`
-		Path         string     `json:"path"`
-		Event        string     `json:"event"`
-		RunAttempt   int        `json:"run_attempt"`
-		HeadBranch   string     `json:"head_branch"`
-		HeadSHA      string     `json:"head_sha"`
-		Status       string     `json:"status"`
-		Conclusion   string     `json:"conclusion"`
-		HTMLURL      string     `json:"html_url"`
-		RunStartedAt *time.Time `json:"run_started_at"`
-		UpdatedAt    *time.Time `json:"updated_at"`
+		ID             int64      `json:"id"`
+		Name           string     `json:"name"`
+		Path           string     `json:"path"`
+		Event          string     `json:"event"`
+		RunAttempt     int        `json:"run_attempt"`
+		HeadBranch     string     `json:"head_branch"`
+		HeadSHA        string     `json:"head_sha"`
+		Status         string     `json:"status"`
+		Conclusion     string     `json:"conclusion"`
+		HTMLURL        string     `json:"html_url"`
+		RunStartedAt   *time.Time `json:"run_started_at"`
+		UpdatedAt      *time.Time `json:"updated_at"`
+		HeadRepository *struct {
+			FullName string `json:"full_name"`
+		} `json:"head_repository"`
 	} `json:"workflow_run"`
 	CheckSuite *struct {
 		HeadBranch string `json:"head_branch"`
