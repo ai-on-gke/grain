@@ -47,6 +47,12 @@ const PAGES = [
     "repositories/acme/widgets/releases",
     "repos",
   ],
+  ["/repos/acme/widgets/settings/ci", "repositories/acme/widgets/ci", "repos"],
+  [
+    "/repos/acme/widgets/settings/merge-queue",
+    "repositories/acme/widgets/merge queue",
+    "repos",
+  ],
   ["/settings", "settings/models", "settings"],
   ["/system", "system/health", "system"],
   ["/system/logs", "system/logs", "system"],
