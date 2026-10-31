@@ -55,6 +55,22 @@ func ParsePullRequestRef(s string) (PullRequestRef, error) {
 	return PullRequestRef{Repo: repo, Number: number}, nil
 }
 
+// SamePullRequest reports whether a and b are one pull request: the same
+// number in the same repository (RepoRef.Same, so case-insensitively).
+func SamePullRequest(a, b PullRequestRef) bool {
+	return a.Number == b.Number && a.Repo.Same(b.Repo)
+}
+
+// PullRequestRefLess orders pull requests by repository, then by number
+// as a number. Ordering them by String() instead, as a task's links are
+// read back, puts "o/r#100" before "o/r#99".
+func PullRequestRefLess(a, b PullRequestRef) bool {
+	if !a.Repo.Same(b.Repo) {
+		return strings.ToLower(a.Repo.String()) < strings.ToLower(b.Repo.String())
+	}
+	return a.Number < b.Number
+}
+
 // PrHealth is GitHub's own view of one pull request, as far as grain has
 // last observed it — docs/data-model.md's PrHealth enum.
 //

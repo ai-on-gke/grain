@@ -934,17 +934,22 @@ func ciVerdictSentence(run ci.Run, commit string) string {
 // off its own LinkFixes link -- the same link finishWithPullRequest wrote
 // and Store.OpenPullRequestLinks selects on. A task with several (a
 // branch reopened by hand) yields the first, which is the one grain
-// itself opened.
+// itself opened -- first by number, compared as a number
+// (model.PullRequestRefLess), not by the link's text, under which
+// "o/r#100" comes before "o/r#99".
 func trackedPullRequest(task model.Task) (model.PullRequestRef, bool) {
+	var out model.PullRequestRef
+	found := false
 	for _, l := range task.Links {
 		if l.Kind != model.LinkFixes {
 			continue
 		}
-		if ref, err := model.ParsePullRequestRef(l.Target); err == nil {
-			return ref, true
+		if ref, err := model.ParsePullRequestRef(l.Target); err == nil &&
+			(!found || model.PullRequestRefLess(ref, out)) {
+			out, found = ref, true
 		}
 	}
-	return model.PullRequestRef{}, false
+	return out, found
 }
 
 // ciDetail is the verdict in one line: what goes in the task's record,
