@@ -322,6 +322,26 @@ import "strconv"
 // 69 is 67 again for `pipeline-control`, now `api:pipeline-control`.
 const SchemaVersion = 69
 
+// taskEventTable is the `task_event` table: one row per close or reopen of
+// a task by somebody (model.TaskEvent). actor_kind/actor_id are the
+// model.Principal that asked; reason is what they said, "" for nothing;
+// detail is what grain did because of it -- the live run and CI runs a
+// close cancelled. Observation.ClosedAt only ever holds the current
+// closure, so this is the only record of a close somebody later undid.
+// Needs no SchemaVersion bump and no migration rung, for the reason
+// task_run_tool gives: Store.Init's applySchema creates a missing table and
+// its indexes on every start.
+const taskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+  ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`kind`" + `       TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`actor_kind`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
+)`
+
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
 const ciStepAttachmentTable = `CREATE TABLE IF NOT EXISTS ` + "`ci_step_attachment`" + ` (
@@ -3692,6 +3712,12 @@ var Tables = []string{
 	// when the step starts and checkpointed as it runs, so a restarted
 	// daemon reattaches the step instead of interrupting its run.
 	ciStepAttachmentTable,
+
+	// Every close and reopen of a task somebody asked for, with who, when
+	// and why (model.TaskEvent).
+	taskEventTable,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_event_at`" + ` ON ` + "`task_event`" + ` (` + "`at`" + `)`,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and

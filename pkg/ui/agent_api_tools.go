@@ -284,6 +284,7 @@ var routeBodies = map[string]any{
 	"POST /api/tasks/{id}/change-mail":                               MailChangeRequest{},
 	"PUT /api/tasks/{id}/secret":                                     setPendingSecretRequest{},
 	"POST /api/tasks/{id}/close":                                     closeRequest{},
+	"POST /api/tasks/{id}/reopen":                                    reopenRequest{},
 	"POST /api/tasks/{id}/force-merge":                               forceMergeRequest{},
 	"POST /api/tasks/{id}/messages":                                  messageRequest{},
 	"POST /api/tasks/{id}/agent-messages":                            agentMessageRequest{},

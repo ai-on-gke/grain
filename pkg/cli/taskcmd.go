@@ -637,6 +637,7 @@ func cmdClose(ctx context.Context, c *ui.HTTPClient, out *printer, args []string
 	closePR := fs.Bool("close-pull-request", false,
 		"close the task's pull request on GitHub too, without merging it "+
 			"(the branch and its commits are left untouched)")
+	reason := fs.String("reason", "", "why, kept with the close in the task's history")
 	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -648,7 +649,7 @@ func cmdClose(ctx context.Context, c *ui.HTTPClient, out *printer, args []string
 	if err != nil {
 		return err
 	}
-	if err := c.Close(ctx, id, ui.CloseOptions{ClosePullRequest: *closePR}); err != nil {
+	if err := c.Close(ctx, id, ui.CloseOptions{ClosePullRequest: *closePR, Reason: *reason}); err != nil {
 		return err
 	}
 	return respond(ctx, c, out, id)
@@ -656,17 +657,19 @@ func cmdClose(ctx context.Context, c *ui.HTTPClient, out *printer, args []string
 
 func cmdReopen(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain reopen", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if err := atMostArgs(fs, fs.Args(), 1); err != nil {
-		return err
-	}
-	id, err := taskID(fs.Arg(0))
+	reason := fs.String("reason", "", "why, kept with the reopen in the task's history")
+	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
-	if err := c.Reopen(ctx, id); err != nil {
+	if err := atMostArgs(fs, rest, 1); err != nil {
+		return err
+	}
+	id, err := taskID(first(rest))
+	if err != nil {
+		return err
+	}
+	if err := c.ReopenBecause(ctx, id, *reason); err != nil {
 		return err
 	}
 	return respond(ctx, c, out, id)

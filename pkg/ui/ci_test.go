@@ -1433,8 +1433,8 @@ func TestCloseCancelsInFlightTaskCIRuns(t *testing.T) {
 		t.Fatalf("cancelled = %v, want [run-recorded run-selective]", runner.cancelled)
 	}
 	for i, reason := range runner.reasons {
-		if reason != "task 11 was closed" {
-			t.Errorf("reason[%d] = %q, want %q", i, reason, "task 11 was closed")
+		if reason != "task 11 was closed by human alice" {
+			t.Errorf("reason[%d] = %q, want %q", i, reason, "task 11 was closed by human alice")
 		}
 	}
 	for i, source := range runner.sources {
