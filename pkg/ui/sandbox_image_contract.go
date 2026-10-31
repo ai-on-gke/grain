@@ -71,7 +71,7 @@ func (c *Client) resolveSandboxImageFields(ctx context.Context, cfg model.Config
 		return out
 	}
 	labels, err := c.sandboxImageLabels(ctx, out.image)
-	check := sandboximage.CheckCustomImage(out.image, backend, out.baseImage, labels, err)
+	check := sandboximage.CheckCustomImage(out.image, backend, out.baseImage, out.imageDefault, labels, err)
 	out.check, out.warning = &check, check.Warning
 	return out
 }
@@ -88,6 +88,61 @@ func (f sandboxImageFields) apply(s *Settings) {
 	s.SandboxImageCheck = f.check
 	info := sandboximage.GetContractInfo(model.DefaultSandboxImage, model.DefaultK8sSandboxImage)
 	s.SandboxContract = &info
+}
+
+// staleSandboxImagePins is every sandbox image setting in cfg --
+// sandbox_image, k8s_sandbox_image, k8s_granule_image -- that pins
+// grain's own stock sandbox image at another build than the one this
+// daemon is stamped for (sandboximage.StaleStockPin), for the System
+// Health pane: Settings says the same beside each field, but the pane is
+// where somebody looks when a sandbox behaves oddly weeks after the pin.
+//
+// It reads no registry: tags decide, and a custom image's labels are
+// used only when Settings has already fetched them (imageLabelCache).
+func (c *Client) staleSandboxImagePins(ctx context.Context) []string {
+	if c == nil || c.Store == nil {
+		return nil
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil || cfg == nil {
+		return nil
+	}
+	if strings.TrimSpace(cfg.SandboxImage) == "" && strings.TrimSpace(cfg.K8sSandboxImage) == "" && strings.TrimSpace(cfg.K8sGranuleImage) == "" {
+		return nil
+	}
+	repoConfigs, _ := c.Store.ListRepoConfigs(ctx)
+	sandboxDefault, granuleDefault, _ := c.resolveK8sImageDefaults(ctx, cfg, repoConfigs)
+	var out []string
+	add := func(field, image, stamped string, labels map[string]string) {
+		if w := sandboximage.StaleStockPin(image, stamped, labels); w != "" {
+			out = append(out, field+": "+w)
+		}
+	}
+	if image := strings.TrimSpace(cfg.SandboxImage); image != "" {
+		stamped := sandboxDefault
+		if sandboximage.IsGranuleBackend(c.sandboxImageBackend(*cfg)) {
+			stamped = granuleDefault
+		}
+		var labels map[string]string
+		if cached, ok := imageLabelCache.Load(image); ok {
+			labels = cached.(cachedImageLabels).labels
+		}
+		add("sandbox_image", image, stamped, labels)
+	}
+	add("k8s_sandbox_image", cfg.K8sSandboxImage, sandboxDefault, nil)
+	add("k8s_granule_image", cfg.K8sGranuleImage, granuleDefault, nil)
+	return out
+}
+
+// joinWarnings is the non-empty warnings among ws, in order, as one.
+func joinWarnings(ws ...string) string {
+	var kept []string
+	for _, w := range ws {
+		if w = strings.TrimSpace(w); w != "" {
+			kept = append(kept, w)
+		}
+	}
+	return strings.Join(kept, " ")
 }
 
 // sandboxImageLabels reads a custom image's OCI labels through

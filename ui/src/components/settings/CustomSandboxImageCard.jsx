@@ -107,8 +107,8 @@ export default function CustomSandboxImageCard({ s }) {
         data-testid="sandbox-image-inherits"
       >
         {vm
-          ? "Granule VM backends boot a packed guest. guest-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, passwordless sudo, systemd, grain-connect and the contract version stamps."
-          : "Container and Kubernetes pod backends run a container image. k8s-sandbox-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding and the contract version stamps."}
+          ? "Granule VM backends boot a packed guest. guest-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, passwordless sudo, systemd, grain-connect, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps."
+          : "Container and Kubernetes pod backends run a container image. k8s-sandbox-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps."}
       </Typography>
       <Typography
         variant="body2"

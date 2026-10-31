@@ -33,8 +33,20 @@ import (
 	"github.com/ai-on-gke/grain/pkg/sandboxcli"
 )
 
+// usage is what this grain prints outside a sandbox (or with
+// GRAIN_SANDBOX_CLI=0). It names the sandbox CLI's commands as well as
+// host-script, because pkg/sandboximage.VerifyScript reads it to tell
+// this grain from an older, host-script-only one: keep every
+// sandboximage.SandboxCLICommands entry in it (TestUsageNamesTheSandboxCLI).
 const usage = `usage: grain host-script <name> [arguments...]   run a granted host script (grain host-script --list)
-       grain help                                   the sandbox CLI: namespace, CI, pull request, task commands
+       grain ls <uri>                               list a directory in ci://, src://, task://, config://, memory://
+       grain read <uri>                             read a file from the namespace
+       grain grep <pattern> <uri>                   search a file or subtree
+       grain ci (wait | log | list | ...)           this task's grain CI
+       grain pr (status | open | reply | ...)       this task's pull request
+       grain task (wait | message | propose | ...)  other tasks
+       grain api ...                                the rest of the deployment's API
+       grain help                                   the sandbox CLI in full (inside a sandbox)
 `
 
 func main() {
