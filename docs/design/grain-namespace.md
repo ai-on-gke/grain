@@ -87,6 +87,8 @@ Every sandbox already reaches the daemon's per-sandbox HTTP git proxy on loopbac
   - `Accept: application/json` (or `?format=json`): JSON object `{"path": "...", "entries": [{"name": "...", "type": "file"|"dir", "size": 123, "growing": false}]}`.
 - **`GET /fs/<scheme>/<path>?glob=<pattern>`**
   Matches paths beneath `<scheme>://<path>` against `<pattern>` (supporting `*`, `?`, and `**`), returning one matching path per line (or JSON with `Accept: application/json`).
+  A pattern with no `/` and no `**` matches only the directory's direct children, without walking or capping anything. A pattern with either walks the subtree, up to 2000 entries. A trailing `/` matches directories only.
+- **Truncation.** A listing, glob or grep that was cut short says so: text output ends with a `[truncated: <why>]` line, the response carries `X-Grain-Truncated: true`, and JSON gets `"truncated": true` plus a `truncated_reason`. Two caps do this: a walk hitting its 2000-entry bound, and a `ci://<owner>/<repo>` listing, which shows only the newest 200 runs.
 - **`GET /fs/<scheme>/<path>?grep=<re>[&i=1][&n=1][&context=N][&max=N]`**
   Server-side RE2 regular expression search across a single file or recursively across all files under a directory prefix:
   - `i` (`?i` or `?i=1`): case-insensitive matching.

@@ -52,12 +52,12 @@ package bootstrap
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"io/fs"
 	"sort"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -66,10 +66,10 @@ import (
 // "bootstrap-playbooks".
 const CapabilityName = "bootstrap-playbooks"
 
-//go:embed playbooks/*.md
-var playbookFS embed.FS
-
-const playbookDir = "playbooks"
+// FS is the embedded playbooks, read-only, each a <name>.md file at
+// its root -- what both the tools below and src://playbooks
+// (pkg/namespace) serve.
+var FS fs.FS = playbooks.FS
 
 // Provider is the bootstrap-playbooks capability. Every method but Spec
 // is model.BaseCapability's default -- see selfdebug.Provider's own doc
@@ -98,7 +98,7 @@ func (p *Provider) Spec() model.CapabilitySpec {
 // without the .md suffix), sorted -- the order both PlaybookTools'
 // list_bootstrap_playbooks tool and this package's own tests rely on.
 func playbookNames() ([]string, error) {
-	entries, err := fs.ReadDir(playbookFS, playbookDir)
+	entries, err := fs.ReadDir(FS, ".")
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: reading embedded playbooks: %w", err)
 	}
@@ -118,7 +118,7 @@ func playbookNames() ([]string, error) {
 // steer-back-toward-a-valid-argument shape selfdebug's own path errors
 // give.
 func readPlaybook(name string) (string, error) {
-	data, err := playbookFS.ReadFile(playbookDir + "/" + name + ".md")
+	data, err := fs.ReadFile(FS, name+".md")
 	if err != nil {
 		names, listErr := playbookNames()
 		if listErr != nil || len(names) == 0 {

@@ -90,4 +90,41 @@ describe("Declared", () => {
     );
     expect(screen.queryByText("Network access")).not.toBeInTheDocument();
   });
+
+  // A task an external agent filed is created as the deployment's person,
+  // and its page named only that person
+  // (docs/test-runs/2026-10-29-external-agent-mcp.md, follow-up 1).
+  it("names the external agent that filed a task ahead of its creator", () => {
+    render(
+      <Declared
+        t={{
+          id: "31",
+          team: "default",
+          creator: "debian",
+          author: "external:widgets-writer",
+          authorKind: "agent",
+        }}
+        config={{}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Filed by")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "external agent widgets-writer (external:widgets-writer)",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("debian")).toBeInTheDocument();
+  });
+
+  it("has no filed-by row for a task its creator filed", () => {
+    render(
+      <Declared
+        t={{ id: "7", team: "default", creator: "alice", author: "alice" }}
+        config={{}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Filed by")).not.toBeInTheDocument();
+  });
 });

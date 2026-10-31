@@ -50,7 +50,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/reporead"
 	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -119,7 +118,6 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 		grainci.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
 		releasenotes.New(),
-		teambroadcast.New(),
 		consolecap.New(),
 		quarantine.New(),
 		readissues.New(),

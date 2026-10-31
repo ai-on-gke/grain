@@ -76,11 +76,11 @@ daemon imported it, was then loaded into the demo with `PUT
 | 2e | Agent attach of a `requires_person` grant → 403; person attach of a refused grant → 400 | Pass |
 | 2f | Repo-move `PATCH` re-judges | Pass |
 | 2g | Dispatch hold on a task queued before the tightening | Pass |
-| 2h | CI job judged as kind `ci` | Not exercised live |
-| 2i | End-of-run proposal replay | Not exercised live |
+| 2h | CI job judged as kind `ci` | Not exercised live here. Pass in the task 1828 addendum |
+| 2i | End-of-run proposal replay | Not exercised live here. Pass in the task 1828 addendum, plus **Bug 4, fixed** |
 | 2j | External agent (`gma_`) filing | Pass: refused before the catalogue is asked |
 | 3 | `staterepo.Check` refusals (`grain state check`) | Pass. Two wording nits |
-| 4 | Config-policy hold on config PRs (live) | Partly: PRs opened. Hold not reached without an agent backend |
+| 4 | Config-policy hold on config PRs (live) | Partly: PRs opened. Hold not reached without an agent backend. Pass in the task 1828 addendum, UI at 1440 and 390 |
 | 4b | `config-policy.yml` ceiling refused by Check | Pass |
 | 5 | Settings → Capabilities rule editor save | **Bug 2, fixed**: erased the whole catalogue |
 | 6 | New-task form, picker, refusal in the UI (1440, 390) | Refusal shown readably. **Bug 3** (follow-up): "No repo" sends hidden defaults |
@@ -290,3 +290,151 @@ granted, but it is unreachable configuration.
    - The unknown-key message names `staterepo.capabilitiesDoc`.
    - Repo move refuses rather than drops a refused default.
    - The plan's `grain demo … -sandbox-port-base=0` is not a demo flag.
+
+## Addendum: task 1828 (the three gaps, with runs that finish)
+
+Task 1828 (`grain/049f1e09/task-1828`) walked the three checks above that
+need runs to finish: 2h, 2i and 4.
+
+### How
+
+- **Base**: `94f69ba9` (`main`).
+- `grain daemon` still has no scripted-agent backend, and `grain demo` never
+  runs an agent. So the walk runs on the e2e harness instead:
+  `tests/e2e/config_policy_catalogue_walkthrough_test.go`. It uses:
+  - the real orchestrator (`RunCycle`: dispatch, finish, security hold,
+    merge queue);
+  - a real git server with githubsim behind it;
+  - a scripted antigravity agent that clones, edits and pushes;
+  - and, for CI, the daemon's own `daemon.BuildCIService`, with a local
+    sandbox standing in for a machine.
+- The catalogue is not stuffed into the store. Each test exports the
+  store's settings (`staterepo.Export`), writes `settings/capabilities.yml`
+  and imports it back with `staterepo.ImportTables(SettingsTables)`, which
+  is how the daemon applies a merged config change.
+- The config repository is the world's repository, named as this
+  deployment's state repository through `model.Store.SettingsRepo`. That is
+  the hook the daemon sets from its state manager, and `stateRepoGuard`
+  reads it as it reads `grain/config`.
+  - `settings/config-policy.yml` was committed straight to `main` with
+    `auto_merge_paths: [memory/**, scripts/**]`.
+- Run with: `go test ./tests/e2e/ -run
+  'TestConfigPolicyHoldWalkthrough|TestCICatalogueWalkthrough|TestCatalogueProposalReplayWalkthrough' -v`.
+- **Mutation checks**: each test was run against a broken build, and each
+  failed:
+  - CI catalogue check off, or `defaults.ci` not joined: all three CI
+    cases fail.
+  - `notes/**` forced into the policy: the unlisted and self-opt-in cases
+    fail.
+  - Policy never read: the `memory/**` case fails.
+  - The Bug 4 assertion fails on the base.
+- **UI**: a temporary (uncommitted) test served `ui.NewServer` over the same
+  kind of world after its runs had finished. Pages were shot with
+  `ui/e2e/screenshot.mjs --url … --code …` and measured with Playwright.
+
+### Results
+
+| # | Check | Outcome |
+|---|---|---|
+| 4a | Config PR touching `memory/x.md` (opted in) | Pass: kept auto-merge, no hold, no review filed, merged and closed |
+| 4b | Config PR touching `notes/unlisted.md` (unlisted) | Pass: `awaiting_submit`, auto-merge off, not merged over 6 clean cycles |
+| 4c | Config PR touching `scripts/x.sh` (listed, but past the ceiling) | Pass: held the same way |
+| 4d | Branch that adds `notes/**` to `auto_merge_paths` and touches `notes/x.md` | Pass: held. The hold names both `settings/config-policy.yml` and `notes/x.md`, so the branch's own policy was not read |
+| 4e | Hold in the UI, task page and Inbox, 1440 and 390 | Pass (below) |
+| 2h-1 | CI job holding a grant with `kinds: [task]` | Pass: run `errored`, no sandbox built |
+| 2h-2 | CI job holding a grant with `repos: [acme/other]` | Pass: the same |
+| 2h-3 | `defaults.ci` joins the repo's CI capabilities | Pass: with no repo list, the job's sandbox request held `[ci-default-key]` and the run succeeded |
+| 2i-1 | Proposal for a `requires_person` grant (`grain-log`) from an auto-merging parent that holds it | Pass: `proposed`, holds the grant, "_Filed for a person to approve: settings/capabilities.yml marks grain-log as a person's decision (requires_person)._" |
+| 2i-2 | Proposal for a grant the catalogue refuses it (`gcp-key`, `templates: [walk-ops]`; the parent is on that template, the proposal on none) | Pass: `proposed`, keeps the grant, "_Filed for a person to approve: settings/capabilities.yml refuses what it asked for (capability gcp-key is not granted to an ad-hoc task by settings/capabilities.yml (templates: walk-ops))._" |
+| 2i-3 | Plain proposal in the same run | Pass: `queued` |
+| 2i-4 | Those held proposals marked as the run's own `hold_for_approval` | **Bug 4, fixed** |
+
+**What the hold says.** Each held change got one comment:
+
+> acme/widgets#9000 touches grain's trust boundary, so it is no longer
+> merging automatically. … **state-privilege** (built in) -- this
+> deployment's own settings … applied to the running daemon once merged:
+> `notes/unlisted.md` … Filed task 3 to review it, but changes to
+> **state-privilege** never merge automatically: press Submit once you
+> have read the review.
+
+A security review is still filed. When it finished clean, it did not
+release the hold, and no releasable `security-hold` link was set.
+
+**CI refusals, verbatim:**
+
+- The job error and the daemon log line read: `waiting for this job's
+  capability grants: the capability catalogue refuses this CI job:
+  capability task-only-key is not granted to a CI job by
+  settings/capabilities.yml (kinds: task)`.
+- The repo-restricted case reads `… other-repo-key is not granted on
+  acme/widgets by settings/capabilities.yml (repos: acme/other)`.
+- The daemon log also has `grain ci: acme/widgets: push job … refused by
+  settings/capabilities.yml: …`.
+
+**UI** (the held world: task 1 on `memory/`, task 2 on `notes/`, task 3 on
+`scripts/`; light and dark; `/tasks/1`, `/tasks/2`, `/tasks/3`, `/inbox` at
+desktop 1440×900 and phone 390×844):
+
+- **Task page** (`/tasks/2`, `/tasks/3`):
+  - The timeline shows the hold comment above.
+  - The action panel reads "This change touches grain's trust boundary and
+    will not merge automatically: read its security review, then Submit.
+    Security review: task 5", with **submit** below it.
+  - At 1440, the panel is at x=1152, 260 px wide (y 124–680). The text sits
+    at y=184, and the submit button is 260×37 at y=315, inside the panel.
+  - At 390, the panel is 357 px wide at x=17. The text sits at y=1322, above
+    the 357×37 submit button at y=1417 (below the fold, so it scrolls).
+  - `scrollWidth` is 1440 and 390: nothing overflows.
+- **Inbox**:
+  - The group is "asked: submit for merge (2)", with "submit all (2)".
+  - It has one row each for tasks 2 and 3 ("Asked you to submit
+    acme/widgets#9001" / "#9002"). Each row has a 64×31 **submit** button
+    in the right-hand slot: x=1348 of 1440, and x=310 of 390.
+  - Task 1 is not there. Its page shows it merged and closed.
+- I could not look at the PNGs myself (no image reader in this sandbox, and
+  no Gemini key for `LOOK=1`). The checks above are DOM text and bounding
+  boxes. Crops and the contact sheet are attached to the task's closing
+  note.
+
+### Bug 4: grain's own end-of-run holds were marked as the run's choice
+
+**What happened.** In `relayProposedTasks` (`orchestrator/finish.go`), every
+proposal grain filed for a person for a reason of its own was also handled
+as if the run had set `hold_for_approval`. That covered the catalogue's
+`requires_person` and refusals, an unresolvable fork head, and an unusable
+change target. Each such proposal got two things:
+
+- the `held-for-approval` tag;
+- this note:
+
+  > grain: task 1, which proposed this, could have queued it on its own
+  > permission and asked for it to wait for a person instead
+  > (propose_task's hold_for_approval).
+
+The run had asked for no such thing. The tag's own contract
+(`model.HeldForApprovalTag`) is that it marks a choice the run made. The
+live path (`ui.CreateTask`) already keeps the two apart.
+
+**Fix.** Only the run's own `hold_for_approval` now earns the tag and the
+note. grain's reasons still file the proposal for a person, under the
+"Filed for a person to approve" note that says why. Pinned by
+`TestCatalogueProposalReplayWalkthrough`, which fails on the base.
+
+### Nits seen, not changed
+
+- For a state-privilege hold, the daemon log says `auto-merge withdrawn
+  pending security review` (`securityhold.go`). No review releases that
+  hold, so the line suggests a wait that never ends on its own.
+- A CI job the catalogue refuses has its error prefixed `waiting for this
+  job's capability grants:` (`grit/engine`). The job is not waiting: it
+  errored.
+
+### Still not walked
+
+- On a real `grain daemon` binary: it has no scripted-agent backend
+  (`-agy-path` takes only a real CLI). These walks use the same
+  orchestrator, CI service and UI server the daemon wires, in-process.
+- A config PR on the literal `grain/config` name through the daemon's
+  internal state repository, as task 1797 opened them. The guard treats
+  that name and `SettingsRepo` the same way (`isSettingsRepo`).

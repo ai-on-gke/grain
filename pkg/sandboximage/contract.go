@@ -38,6 +38,8 @@ import (
 //   - on Granule microVM backends: `systemd`, passwordless `sudo`, `/usr/local/bin/grain-connect`,
 //     `/usr/lib/tmpfiles.d/grain.conf` (`d /run/grain 0755 root root -`), and Granule's own
 //     guest contract (`dev.granule.guest.contract` / `/etc/granule/guest-contract`).
+//   - `/usr/local/bin/grain` (cmd/grain-sandbox) with the sandbox CLI (`ls`, `read`, `grep`,
+//     `ci`, `pr`, `task`, `api`) and `host-script`.
 //
 // Rules for changing these numbers:
 //
@@ -75,9 +77,19 @@ import (
 //	   - Required Granule microVM boundary: `systemd`, passwordless `sudo` for
 //	     `debian`, `/usr/local/bin/grain-connect` (`/run/grain` tmpfiles.d),
 //	     and Granule guest contract `dev.granule.guest.contract` = 1.
+//	2: In-sandbox grain CLI (docs/design/sandbox-first-agent-surface.md):
+//	   - Required common boundary: executable `/usr/local/bin/grain`
+//	     (cmd/grain-sandbox) carrying the sandbox CLI -- `grain ls`, `read`,
+//	     `grep`, `ci`, `pr`, `task`, `api` -- beside `grain host-script`. The
+//	     orchestrator no longer offers those as MCP tools and tells every
+//	     agent to run them in its sandbox, so an image whose `grain` only
+//	     knows `host-script` leaves an agent with no way to read CI, its pull
+//	     request or its own deployment.
+//	   - MinimumContract rises with it: a v1 image may carry that older
+//	     `grain`, and this daemon can no longer drive a run in it.
 const (
-	Contract        = 1
-	MinimumContract = 1
+	Contract        = 2
+	MinimumContract = 2
 )
 
 const (
@@ -334,6 +346,16 @@ func IsGranuleBackend(backend string) bool {
 	}
 }
 
+// SandboxCLIPath is where every sandbox image carries its own grain
+// (cmd/grain-sandbox), and SandboxCLICommands are the sandbox CLI
+// commands the orchestrator tells agents to run through it
+// (pkg/orchestrator's grainCLISection) -- what VerifyScript asks
+// `grain help` to list, so an image carrying an older, host-script-only
+// grain fails the check instead of passing it.
+const SandboxCLIPath = "/usr/local/bin/grain"
+
+var SandboxCLICommands = []string{"ls", "read", "grep", "ci", "pr", "task", "api"}
+
 // RequiredComponents returns the human-readable list of in-sandbox boundary
 // components required for the given backend (`granule` vs `k8s`/`container`).
 func RequiredComponents(backend string) []string {
@@ -345,6 +367,7 @@ func RequiredComponents(backend string) []string {
 		"curl",
 		"ca-certificates (/etc/ssl/certs/ca-certificates.crt)",
 		"python3 with standard library modules: os, socket, sys, threading (pkg/capability/portforward.GuestForwarder)",
+		SandboxCLIPath + " (cmd/grain-sandbox: the sandbox CLI -- " + strings.Join(SandboxCLICommands, ", ") + " -- and host-script)",
 	}
 	if IsGranuleBackend(backend) {
 		items = append(items,
@@ -440,6 +463,7 @@ if [ %q = "1" ]; then
   fi
 fi
 
+%s
 echo "sandbox-contract verify ok: grain=v${grain_contract}$([ %q = "1" ] && echo " granule=v${granule_contract}" || true)"
 `,
 		ContractFile, ContractFile, expectedRange(MinimumContract, Contract),
@@ -451,8 +475,26 @@ echo "sandbox-contract verify ok: grain=v${grain_contract}$([ %q = "1" ] && echo
 		GranuleContractFile, GranuleContractFile,
 		GranuleMinimumContract, GranuleContractFile, GranuleMinimumContract,
 		GranuleContract, GranuleContractFile, GranuleContract,
+		sandboxCLIVerify(),
 		isGranule,
 	)
+}
+
+// sandboxCLIVerify is VerifyScript's check of SandboxCLIPath: that it is
+// there, and that its own usage offers every SandboxCLICommands entry and
+// host-script. GRAIN_SANDBOX_CLI=0 makes it print that usage even in a
+// sandbox whose proxy credential would otherwise have it answer help over
+// the proxy, so the verdict is the binary's and not the deployment's.
+func sandboxCLIVerify() string {
+	return fmt.Sprintf(`if [ ! -x %[1]q ]; then
+  fail "missing executable %[1]s (cmd/grain-sandbox)"
+fi
+grain_help="$(GRAIN_SANDBOX_CLI=0 %[1]q help 2>&1 || true)"
+for sub in %[2]s host-script; do
+  if ! printf '%%s\n' "$grain_help" | grep -Eq "grain $sub( |\$)"; then
+    fail "%[1]s does not offer 'grain $sub': it is an older grain without the sandbox CLI (rebuild FROM a current base image)"
+  fi
+done`, SandboxCLIPath, strings.Join(SandboxCLICommands, " "))
 }
 
 // BaseImageFor derives the corresponding minimal base image reference

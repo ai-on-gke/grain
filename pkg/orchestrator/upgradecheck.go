@@ -415,8 +415,8 @@ func upgradeCheckBody(status upgrade.Status, stateRepo model.RepoRef, gap upgrad
 		"is running on still say what it said before the upgrade?\n\n")
 	b.WriteString("You have the self-debug capability: inspect grain's own code in the read-only " +
 		"`grain-src/` checkout using standard sandbox tools, which is the code the " +
-		"upgrade installed, and list_grain_tasks, read_grain_task, read_grain_task_prompt and " +
-		"read_grain_task_transcript read this deployment's own tasks and runs through the " +
+		"upgrade installed, and `grain task list`, `grain task read`, `grain task prompt` and " +
+		"`grain task transcript` read this deployment's own tasks and runs through the " +
 		"daemon -- which is how you answer the queue questions above, and the only way to " +
 		"those rows from here. read_grain_metrics is the same record measured: ask it for a " +
 		"window that ends now and one that ended before the upgrade, and \"do the runs since " +

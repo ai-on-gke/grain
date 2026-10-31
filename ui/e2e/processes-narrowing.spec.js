@@ -113,7 +113,7 @@ test("narrows schedules by source, type, name and enabled, and keeps it in the U
     // Sorted by next run, latest first.
     await page.getByTitle("Choose the order this list is shown in").click();
     await page.getByLabel("Direction for sort 1").click();
-    await page.getByRole("option", { name: "Newest first" }).click();
+    await page.getByRole("option", { name: "Latest first" }).click();
 
     const narrowed = [
       "kind=schedule",

@@ -154,6 +154,38 @@ describe("useSettingsSection", () => {
     );
   });
 
+  it("takes a refusal's banner down once that setting saves", async () => {
+    const { result, dismissError } = await loaded({
+      pollInterval: "10s",
+      maxAgentTurns: 5,
+    });
+    api.mockRejectedValueOnce(new Error("pollInterval must be positive"));
+    await act(async () =>
+      result.current.onTextBlur("pollInterval")({ target: { value: "0s" } }),
+    );
+    expect(result.current.status).toBe("error");
+
+    // Saving another setting leaves the poll interval's banner up.
+    api.mockResolvedValueOnce({ maxAgentTurns: 6 });
+    await act(async () =>
+      result.current.onIntBlur("maxAgentTurns")({
+        target: { value: "6", validity: {} },
+      }),
+    );
+    expect(dismissError).not.toHaveBeenCalled();
+
+    api.mockRejectedValueOnce(new Error("pollInterval must be positive"));
+    await act(async () =>
+      result.current.onTextBlur("pollInterval")({ target: { value: "0s" } }),
+    );
+    api.mockResolvedValueOnce({ pollInterval: "12s" });
+    await act(async () =>
+      result.current.onTextBlur("pollInterval")({ target: { value: "12s" } }),
+    );
+    expect(result.current.status).toBe("saved");
+    expect(dismissError).toHaveBeenCalledWith("Poll interval must be positive");
+  });
+
   it("clears a failed number box's error when it is put back", async () => {
     const { result } = await loaded({ maxAgentTurns: 5, budget: 1.5 });
     api.mockRejectedValueOnce(new Error("boom"));

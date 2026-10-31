@@ -632,6 +632,31 @@ describe("parsePath", () => {
     expect(buildPath(parsePath(old))).toBe(now);
   });
 
+  // The Config Repo Browser (docs/design/config-repo-settings.md §2.3)
+  // is Settings → Config repo, with the open file as its item.
+  it("parses /config?path= to the Config Repo Browser with that file open", () => {
+    expect(parsePath("/config", "?path=settings%2Fcapabilities.yml")).toEqual({
+      view: "settings",
+      settingsSection: "config-repo",
+      settingsItem: "settings/capabilities.yml",
+    });
+    expect(parsePath("/config")).toEqual({
+      view: "settings",
+      settingsSection: "config-repo",
+    });
+    const built = buildPath({
+      view: "settings",
+      settingsSection: "config-repo",
+      settingsItem: "tables/repo_config.json",
+    });
+    expect(built).toBe("/settings/config-repo/tables/repo_config.json");
+    expect(parsePath(built)).toEqual({
+      view: "settings",
+      settingsSection: "config-repo",
+      settingsItem: "tables/repo_config.json",
+    });
+  });
+
   // The bare /settings is Settings' own entry, not a redirect: on a
   // phone it is the section list, and elsewhere SettingsPage opens
   // General from it (settings-panel-walkthrough.spec.js checks both).

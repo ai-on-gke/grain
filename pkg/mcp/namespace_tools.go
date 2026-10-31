@@ -190,8 +190,9 @@ func NewNamespaceTools(cfg NamespaceToolsConfig) []Tool {
 						"description": "Namespace URI or path to list (e.g. \"ci://bwsalmon/grain/<run>/go\" or \"src://pkg\").",
 					},
 					"glob": map[string]any{
-						"type":        "string",
-						"description": "Optional glob pattern to filter entries recursively (e.g. \"*Test*\").",
+						"type": "string",
+						"description": "Optional glob pattern. Without / or ** it matches the directory's own entries (e.g. \"*Test*\"); " +
+							"with them it walks the subtree (e.g. \"**/*_test.go\"). A trailing / matches directories only.",
 					},
 				},
 				"required": []string{"path"},

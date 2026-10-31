@@ -119,12 +119,12 @@ func TestSrcServesCoreBeneathALayer(t *testing.T) {
 		t.Errorf("src://cmd lists %s, want both trees' entries", got)
 	}
 
-	matches, err := s.Glob(ctx, scope, "src", "pkg", "*.go")
+	matches, err := s.Glob(ctx, scope, "src", "pkg", "**/*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(matches, ","); got != "cli/sandbox.go,cli/sandbox2.go" {
-		t.Errorf("glob src://pkg *.go = %s", got)
+		t.Errorf("glob src://pkg **/*.go = %s", got)
 	}
 	res, err := s.Grep(ctx, scope, "src", "pkg", GrepOptions{Pattern: "sandbox2"})
 	if err != nil {

@@ -33,6 +33,7 @@ import {
 import { isApiGrant, withoutApiRows } from "../../apiGrants.js";
 import { isCapabilityRef } from "../../capabilityArgs.js";
 import GrantsPicker from "../GrantsPicker.jsx";
+import ReadOnlyGrants from "../ReadOnlyGrants.jsx";
 import { localGrantHandlers } from "../capabilityMethods.js";
 import { LEGACY_CAPABILITIES_HINT, capabilityRows } from "../../state.js";
 import { legacyValues } from "../../taskAttributes.js";
@@ -75,7 +76,10 @@ function StrandedFieldNote({ field, tasks, onShow }) {
 function TaskFieldsCard({ config, tasks, onShowStrandedValues }) {
   const fields = (config && config.customFields) || [];
   return (
-    <SettingsCard title="Task fields" anchor="task-fields">
+    // Nothing here is editable -- the fields are declared in the config
+    // repo -- and the stranded-value counts are links into the task list,
+    // so the card is never drawn inside a read-only fieldset.
+    <SettingsCard title="Task fields" anchor="task-fields" allowInExternalMode>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         Fields this deployment adds to its own tasks -- filled in on the
         new-task form, shown on each task, and handed to every run in its
@@ -134,6 +138,10 @@ export default function TasksSection({
   onShowStrandedValues,
 }) {
   const { settings, saveChoice, onIntBlur, onEnterKey } = s;
+  // Read-only when the config repo holds these settings: the default
+  // grants are then settings/capabilities.yml's, listed rather than
+  // edited (docs/design/config-repo-settings.md §7.4).
+  const readOnly = Boolean(s.readOnly);
   const defaultCapabilities = settings.defaultCapabilities || [];
   // The defaults are one list holding all three kinds a task's own
   // capabilities do: the legacy in-process ids, edited with the
@@ -281,22 +289,31 @@ export default function TasksSection({
           <Typography variant="subtitle2" component="h3" sx={{ mb: 0.5 }}>
             Default grants
           </Typography>
-          <GrantsPicker
-            config={config}
-            grants={defaultCapabilities}
-            onApiChange={(next) =>
-              saveChoice({
-                defaultCapabilities: [
-                  ...legacyDefaults,
-                  ...next,
-                  ...refDefaults,
-                ],
-              })
-            }
-            onSubmit={methodDefaults.onSubmit}
-            onRemove={methodDefaults.onRemove}
-            idPrefix="settings-default"
-          />
+          {readOnly ? (
+            <ReadOnlyGrants
+              config={config}
+              grants={[...apiDefaults, ...refDefaults]}
+              empty="None: a new task starts with only the grants whoever files it adds."
+              testId="default-grants-list"
+            />
+          ) : (
+            <GrantsPicker
+              config={config}
+              grants={defaultCapabilities}
+              onApiChange={(next) =>
+                saveChoice({
+                  defaultCapabilities: [
+                    ...legacyDefaults,
+                    ...next,
+                    ...refDefaults,
+                  ],
+                })
+              }
+              onSubmit={methodDefaults.onSubmit}
+              onRemove={methodDefaults.onRemove}
+              idPrefix="settings-default"
+            />
+          )}
           <FormHelperText>
             Agent API grants and capability server methods, with their
             arguments, every new task is filed with -- shown on the new-task
@@ -317,16 +334,18 @@ export default function TasksSection({
               severity="info"
               sx={{ mt: 1 }}
               action={
-                <Button
-                  color="inherit"
-                  size="small"
-                  onClick={() => {
-                    const next = [...defaultCapabilities, c.id];
-                    saveChoice({ defaultCapabilities: next });
-                  }}
-                >
-                  Add to defaults
-                </Button>
+                readOnly ? null : (
+                  <Button
+                    color="inherit"
+                    size="small"
+                    onClick={() => {
+                      const next = [...defaultCapabilities, c.id];
+                      saveChoice({ defaultCapabilities: next });
+                    }}
+                  >
+                    Add to defaults
+                  </Button>
+                )
               }
             >
               {c.name || c.id} is on by default for this build, and is not in

@@ -386,6 +386,12 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		}
 	}
 	if !staleBranch && !inPlace {
+		pushedCommit := true
+		if preRunBranchSHA != "" && client != nil && task.Target != nil {
+			if head, herr := client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName()); herr == nil && head != nil {
+				pushedCommit = head.SHA != preRunBranchSHA
+			}
+		}
 		handled, err := salvagePushedBranch(ctx, store, client, task, now)
 		if empty, ok := emptyBranch(err); ok {
 			// The task has already been told, and parked (noteEmptyBranch).
@@ -404,6 +410,9 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			return err
 		}
 		if handled {
+			if pushedCommit || hasComment || hasNothingNeeded || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != "")) {
+				resolveRelayedThreadsAfterOwnerRun(ctx, store, client, task, proxyResult, pushedCommit)
+			}
 			return nil
 		}
 	}
@@ -1909,15 +1918,18 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// whatever the permission below would have said, and marked as
 		// held only if it would have said yes -- ui.CreateTask's rule for
 		// the identical call filed live. Per call: the held task's own
-		// proposals are judged on its own permission when it runs.
-		hold, _ := p["hold_for_approval"].(bool)
-		hold = hold || needsPersonWhy != ""
+		// proposals are judged on its own permission when it runs. A
+		// proposal grain itself files for a person (needsPersonWhy) waits
+		// too, but its note above already says why, and it is not marked
+		// as held: the run made no choice there.
+		heldByRun, _ := p["hold_for_approval"].(bool)
+		hold := heldByRun || needsPersonWhy != ""
 		switch {
 		case len(escalated) > 0:
-			proposal.Body += model.CapabilityEscalationNote(task.ID, escalated)
+			proposal.Body += model.ProposalEscalationNote(task.ID, proposal, escalated)
 		case len(ungranted) > 0, len(ungrantedReads) > 0:
 			// Filed for a person; the notes above say why.
-		case hold && (approved || model.AutoSubmits(proposal, task)):
+		case heldByRun && (approved || model.AutoSubmits(proposal, task)):
 			proposal.Body += model.HeldForApprovalNote(task.ID)
 			proposal.Tags = append(proposal.Tags, model.HeldForApprovalTag)
 		case hold:

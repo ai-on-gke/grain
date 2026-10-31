@@ -135,6 +135,7 @@ export default function HealthTab({
         onOpenConnection={() => onOpenSettings?.("models")}
         onOpenSetup={onOpenSetup}
         onOpenConfigRepo={() => onOpenSettings?.("config-repo")}
+        onOpenPower={onOpenPower}
         onOpenTask={onOpenTask}
         onAct={onAct}
       />

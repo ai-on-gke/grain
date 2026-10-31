@@ -93,7 +93,7 @@ func ReviewTemplateRefusedNote(proposer, asked, fallback string, why error) stri
 }
 
 // IsDangerousGrant is IsDangerousAPIGrant for any capability name,
-// including the bare aliases (self-upgrade, pipeline-control) that stand
+// including the bare aliases (self-upgrade, dispatch-control, ...) that stand
 // for an api preset.
 func IsDangerousGrant(name string) bool {
 	if preset, ok := apiAliasCapabilities[name]; ok {

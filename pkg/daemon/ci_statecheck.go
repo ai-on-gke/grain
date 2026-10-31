@@ -86,7 +86,7 @@ func (s StateCheckSandboxes) Acquire(ctx context.Context, req ci.SandboxRequest)
 		target = "HEAD"
 	}
 
-	dir, err := os.MkdirTemp(s.TempDir, "grain-ci-state-check-")
+	dir, err := ciMkdirTemp(s.TempDir, "grain-ci-state-check-")
 	if err != nil {
 		return nil, err
 	}
