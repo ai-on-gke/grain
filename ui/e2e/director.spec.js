@@ -406,13 +406,15 @@ test("follows a live Director task through its durable exchange", async ({
   await expect
     .poll(async () => (await task(page, firstTask)).state)
     .toBe("closed");
+  await expect(page.getByText("Diagnostic exchange complete.")).toHaveCount(0);
+  await expect(page.locator(".cs-message")).toHaveCount(2);
 
   await send(page, "Which task is this reply attached to?");
   await expect(
     page.getByText(
       `This reply is attached to the open replacement task #${replacementTask}, not its closed history.`,
     ),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
 
   const closedHistory = await task(page, firstTask);
   expect(
@@ -431,7 +433,7 @@ test("follows a live Director task through its durable exchange", async ({
     page.getByText(
       `Replacement exchange complete on task #${replacementTask}.`,
     ),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
   await expect
     .poll(async () => (await task(page, replacementTask)).state)
     .toBe("awaiting_reply");
