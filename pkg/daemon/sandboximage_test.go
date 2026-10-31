@@ -24,7 +24,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // captureLog collects what a call logs, so a test can assert on the line
@@ -617,5 +620,58 @@ func TestApplySandboxImageClearingTheMirrorReturnsToTheStamp(t *testing.T) {
 	}
 	if !strings.Contains(logged, "new sandboxes are created from "+stamped) {
 		t.Errorf("no line saying which image new sandboxes use:\n%s", logged)
+	}
+}
+
+// The Settings pane's Granule VM image warning probes the image the daemon
+// really creates kubernetes-granule pods from: this build's stamp,
+// mirrored, and not the UI's version-derived default mirrored instead --
+// a tag the mirror never received, which read as "did not resolve (HTTP
+// 404)" beside a deployment running happily (task 1802).
+func TestSettingsProbesTheDaemonsMirroredK8sGranuleImage(t *testing.T) {
+	stamped := "127.0.0.1:5000/src/guest:sha-aaaa111"
+	savedStamp := DefaultSandboxImage
+	DefaultSandboxImage = stamped
+	t.Cleanup(func() { DefaultSandboxImage = savedStamp })
+	if versionDefault := ui.DefaultSandboxImageFor(installtrack.TrackOSS, version.Get()); versionDefault == stamped {
+		t.Fatalf("the version default is the stamp %q; the test needs them to differ", stamped)
+	}
+	mirror := "127.0.0.1:5001/mirror/guest"
+	digest := "sha256:f97baa533a26513c453a362be331a43eb60214302f449c16571b23cea141dce4"
+	fakeMirrorDocker(t, `["`+mirror+`@`+digest+`"]`, 0)
+	want := mirror + ":sha-aaaa111@" + digest
+
+	running := Config{K8sGranuleSandboxes: true, K8sGranuleImage: stamped, SandboxImageMirror: mirror}
+	// What startup does: mirror the stamp, and create pods from the result.
+	if got := EffectiveK8sGranuleImage(running); got != want {
+		t.Fatalf("EffectiveK8sGranuleImage = %q, want %q", got, want)
+	}
+
+	store, closeStore := openTestStore(t, t.TempDir())
+	t.Cleanup(closeStore)
+	ctx := context.Background()
+	if err := store.PutConfig(ctx, model.Config{SandboxImageMirror: mirror}); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+	var probed []string
+	client := ui.NewClient(ui.Config{
+		K8sGranuleImage: func(mc model.Config) string { return k8sGranuleImageForSettings(running, mc) },
+		CheckImageManifest: func(_ context.Context, ref string) error {
+			probed = append(probed, ref)
+			if ref != want {
+				return errors.New("HTTP 404")
+			}
+			return nil
+		},
+	}, store)
+	settings, err := client.GetSettings(ctx)
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if !slices.Contains(probed, want) {
+		t.Errorf("probed %q, want the daemon's mirrored stamp %q among them", probed, want)
+	}
+	if settings.K8sGranuleImageWarning != "" {
+		t.Errorf("K8sGranuleImageWarning = %q, want none for the image the daemon runs", settings.K8sGranuleImageWarning)
 	}
 }

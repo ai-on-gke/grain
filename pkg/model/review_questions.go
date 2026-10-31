@@ -65,3 +65,61 @@ func ReviewQuestionsOf(task Task) (ReviewQuestions, bool) {
 	}
 	return ReviewQuestions{}, false
 }
+
+// RelayedReviewThread maps an inline review comment relayed onto a pull
+// request by one of grain's review tasks (by its GitHub REST comment ID)
+// to its GraphQL review thread ID, and records whether the owner has
+// decided what to do about that review's findings.
+type RelayedReviewThread struct {
+	ReviewTaskID string
+	ReviewID     int
+	CommentID    int
+	ThreadID     string
+	Decided      bool
+}
+
+// Target encodes the mapping as "<reviewTaskID>:<reviewID>:<commentID>:<state>:<threadID>".
+func (r RelayedReviewThread) Target() string {
+	state := "open"
+	if r.Decided {
+		state = "decided"
+	}
+	return fmt.Sprintf("%s:%d:%d:%s:%s", r.ReviewTaskID, r.ReviewID, r.CommentID, state, r.ThreadID)
+}
+
+// ParseRelayedReviewThread decodes a LinkRelayedReviewThread target.
+func ParseRelayedReviewThread(target string) (RelayedReviewThread, bool) {
+	parts := strings.SplitN(target, ":", 5)
+	if len(parts) != 5 || parts[4] == "" {
+		return RelayedReviewThread{}, false
+	}
+	reviewID, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return RelayedReviewThread{}, false
+	}
+	commentID, err := strconv.Atoi(parts[2])
+	if err != nil || commentID <= 0 {
+		return RelayedReviewThread{}, false
+	}
+	return RelayedReviewThread{
+		ReviewTaskID: parts[0],
+		ReviewID:     reviewID,
+		CommentID:    commentID,
+		Decided:      parts[3] == "decided",
+		ThreadID:     parts[4],
+	}, true
+}
+
+// RelayedReviewThreadsOf returns every parsed LinkRelayedReviewThread on task.
+func RelayedReviewThreadsOf(task Task) []RelayedReviewThread {
+	var out []RelayedReviewThread
+	for _, l := range task.Links {
+		if l.Kind != LinkRelayedReviewThread {
+			continue
+		}
+		if rt, ok := ParseRelayedReviewThread(l.Target); ok {
+			out = append(out, rt)
+		}
+	}
+	return out
+}

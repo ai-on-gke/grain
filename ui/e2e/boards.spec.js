@@ -205,6 +205,73 @@ test("reorders a board within its folder, and files one into it", async ({
   expect(of(loose.id).orderKey).toBeGreaterThan(of(first.id).orderKey);
 });
 
+// The same move with a mouse, from a folder below the first section.
+// Marking a drag draws a drop zone closing every section, and drawn
+// inside dragstart it pushed every board under the first section down
+// and out from under the pointer -- which Chromium answers by cancelling
+// the drag on the spot (dragstart, then dragend, and no drop). jsdom has
+// no such check, so this is the test that can see it.
+test("files a board into another folder by dragging it", async ({ page }) => {
+  const stamp = Date.now();
+  const from = `E2E drag from ${stamp}`;
+  const to = `E2E drag to ${stamp}`;
+  const moved = await seedBoard(page, {
+    name: `E2E dragged ${stamp}`,
+    folder: from,
+    kind: "list",
+    query: "",
+  });
+  await seedBoard(page, {
+    name: `E2E resident ${stamp}`,
+    folder: to,
+    kind: "list",
+    query: "",
+  });
+
+  await page.goto("/boards");
+  const handle = page.getByRole("button", {
+    name: `Move E2E dragged ${stamp}`,
+  });
+  await expect(handle).toBeVisible();
+  const heading = page.locator(".board-folder-heading", { hasText: to });
+
+  const patched = page.waitForResponse(
+    (r) =>
+      r.url().endsWith(`/api/boards/${moved.id}`) &&
+      r.request().method() === "PATCH",
+  );
+  // By hand rather than dragTo: the drop zones a drag draws push the
+  // folders below down by a row or two once it has started, so the
+  // heading is aimed at where it is then -- as a person would -- rather
+  // than where it was before the drag began.
+  const from_ = await handle.boundingBox();
+  await page.mouse.move(from_.x + from_.width / 2, from_.y + from_.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    from_.x + from_.width / 2,
+    from_.y + from_.height / 2 + 8,
+    { steps: 3 },
+  );
+  // The drag took: had Chromium cancelled it, the zones would never be
+  // drawn and the row would never dim.
+  await expect(page.locator(".board-drop-end").first()).toBeAttached();
+  await expect(page.locator(".task-row-dragging")).toHaveCount(1);
+  const to_ = await heading.boundingBox();
+  await page.mouse.move(to_.x + 40, to_.y + to_.height / 2, { steps: 8 });
+  await page.mouse.up();
+  expect((await patched).ok()).toBe(true);
+
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get("/api/boards");
+        return (await res.json()).find((b) => b.id === moved.id)?.folder;
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(to);
+});
+
 // The whole of how a board is made: the button opens the new-task form
 // with the task already written (boards.js), rather than a form that
 // writes a board.

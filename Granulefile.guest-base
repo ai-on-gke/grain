@@ -165,9 +165,9 @@ RUN echo 'tmpfs /tmp tmpfs mode=1777,strictatime,nosuid,nodev,size=50% 0 0' >> /
 
 # Stamp the Grain sandbox contract version (pkg/sandboximage.Contract).
 RUN install -d -m0755 /etc/grain \
-    && printf '1\n' > /etc/grain/sandbox-contract
-LABEL dev.grain.sandbox.contract="1"
+    && printf '2\n' > /etc/grain/sandbox-contract
+LABEL dev.grain.sandbox.contract="2"
 
 # Pack the base guest rootfs into a bootable VM image
 VM PACK --variant=debian AS guest_base
-LABEL dev.grain.sandbox.contract="1"
+LABEL dev.grain.sandbox.contract="2"

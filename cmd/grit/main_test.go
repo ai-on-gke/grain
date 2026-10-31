@@ -18,12 +18,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -243,5 +245,41 @@ func TestGritClientAndServe(t *testing.T) {
 	tCancel()
 	if code := <-tDone; code != 0 {
 		t.Fatalf("grit serve -grain-url = %d: %s", code, stderr.String())
+	}
+}
+
+// TestDialGrainLoopLogsAndBacksOff is the regression for the 2026-10-29
+// walkthrough's F5: a refused reverse session was redialed every 100ms
+// with nothing logged.
+func TestDialGrainLoopLogsAndBacksOff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	var stamps []time.Time
+	dial := func(context.Context) error {
+		mu.Lock()
+		defer mu.Unlock()
+		stamps = append(stamps, time.Now())
+		if len(stamps) == 5 {
+			cancel()
+		}
+		return errors.New("grit api (404 http_error)")
+	}
+	var log bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		dialGrainLoop(ctx, "http://grain.example", dial, &log, 5*time.Millisecond, 40*time.Millisecond)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dialGrainLoop did not return after its context was cancelled")
+	}
+	if got := strings.Count(log.String(), "reverse session to http://grain.example: grit api (404 http_error)"); got != 1 {
+		t.Fatalf("logged the same failure %d times, want once:\n%s", got, log.String())
+	}
+	// 5ms, 10ms, 20ms, 40ms between the five dials: the gaps grow.
+	if gap := stamps[4].Sub(stamps[3]); gap < 30*time.Millisecond {
+		t.Fatalf("last redial gap %s, want the backoff to have grown towards 40ms", gap)
 	}
 }

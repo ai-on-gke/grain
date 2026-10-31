@@ -34,7 +34,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
@@ -371,6 +370,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	prompt += timezoneSection(task)
 	prompt += issueSection(task)
 	prompt += setupSection(setup)
+	prompt += sessionSandboxSection(task, history)
 	// The two history sections, together and in that order: what the
 	// attempts before this one did, then what has been said about the
 	// task. Both are the same kind of fact -- something a run would
@@ -396,6 +396,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	}
 	if task.Target != nil {
 		prompt += pairedBranchesSection(history.PairedBranches)
+		prompt += relayedReviewThreadsSection(task)
 	}
 	// Said out loud because neither half is discoverable from the tools
 	// alone. Nothing stops a run pushing repeatedly -- the branch is its
@@ -609,10 +610,17 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 		)
 	}
 	if checkoutDir != "" {
-		prompt += fmt.Sprintf(
-			" That repo is freshly cloned for you at ./%s with %q checked out.",
-			checkoutDir, branch,
-		)
+		if history.SandboxReused {
+			prompt += fmt.Sprintf(
+				" That repo is already checked out for you at ./%s with %q checked out.",
+				checkoutDir, branch,
+			)
+		} else {
+			prompt += fmt.Sprintf(
+				" That repo is freshly cloned for you at ./%s with %q checked out.",
+				checkoutDir, branch,
+			)
+		}
 	}
 	if sandboxRoot != "" {
 		if checkoutDir != "" {
@@ -634,6 +642,7 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	prompt += timezoneSection(task)
 	prompt += issueSection(task)
 	prompt += setupSection(setup)
+	prompt += sessionSandboxSection(task, history)
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
 	}
@@ -645,6 +654,9 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	}
 	if history.BaseIncident != "" {
 		prompt += "\n\n" + strings.TrimRight(history.BaseIncident, "\n")
+	}
+	if task.Target != nil {
+		prompt += relayedReviewThreadsSection(task)
 	}
 	if task.Target != nil && !grainci.Granted(task.Grants) && (history.Repair || model.FixesBaseBranch(task)) {
 		prompt += repairCISection()
@@ -1451,7 +1463,9 @@ func grainCLISection(task model.Task) string {
 			"`grain ci run-job <job>`, `grain ci retrigger`, `grain ci list`, `grain ci log [<run-id>] " +
 			"[--job <j>] [--step <s>] [--tail N]`, `grain ci test-history <test>`, `grain pr status`, " +
 			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
-			"`grain pr review-comment`.\n"
+			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
+			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +
+			"`grain ci log <run-id>`.\n"
 	}
 	s += "- **Task & collaboration:** `grain status \"<note>\"`, `grain handover write --file <path>`, " +
 		"`grain task wait <id>`, `grain task message <id> \"<body>\"`, `grain notify --subject <s> " +
@@ -1466,12 +1480,12 @@ func grainCLISection(task model.Task) string {
 
 // grainCLIGrants is the `grain` commands each of grain's own capability
 // grants unlocks, in the order grainCLIGrantBullets lists them. A grant
-// whose tools stay model tools (dispatch-control, self-upgrade, db-write,
-// team-broadcast) is not here: the tool roster already names those.
+// whose tools stay model tools (self-upgrade, db-write) is not here: the
+// tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
 	{model.SelfDebugCapability, "`grain ls/read/grep src://...`, `grain task list`, `grain task read <id>`, " +
-		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d] [--repo <r>]`, `grain read deploy://pipeline-changes`"},
-	{"grain-log", "`grain log [--since <t>] [--min-priority err] [--contains <s>] [--max-lines N]`"},
+		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes`"},
+	{"grain-log", "`grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority err] [--contains <s>] [--max-lines N]`"},
 	{"deployment-health", "`grain health`, `grain read deploy://state`"},
 	{"bootstrap-playbooks", "`grain playbooks [<name>]`"},
 	{"memory", "`grain memory list`, `grain memory read <key>`, `grain memory write [--repo owner/name] --file <f>`, " +
@@ -2254,6 +2268,26 @@ type History struct {
 	// until through wait_for_task's resume_at -- zero unless that attempt
 	// ended model.ParkedOutcome that way. See parkedResumeSection.
 	ResumedUntil time.Time
+	// SandboxReused is true when a session task's previous warm sandbox was
+	// reused across turns rather than torn down and rebuilt.
+	SandboxReused bool
+	// SandboxReclaimed is true when a session task had a warm sandbox that was
+	// reclaimed (TTL expiry or capacity eviction) before this turn started.
+	SandboxReclaimed bool
+}
+
+func sessionSandboxSection(task model.Task, h History) string {
+	if h.SandboxReused {
+		return "\n\nThe sandbox is the same one as your previous turn: your filesystem, installed " +
+			"packages, clones and uncommitted changes are still in place, so do not redo setup, " +
+			"re-clone or reinstall packages that are already there."
+	}
+	if h.SandboxReclaimed || (task.Interactive && len(h.Attempts) > 0) {
+		return "\n\nThe sandbox is not the same one: your previous session sandbox was reclaimed, " +
+			"so this run has a new sandbox with a fresh clone and only what you committed and " +
+			"pushed still exists."
+	}
+	return ""
 }
 
 // parkedResumeSection tells a run that its task is back from a park: which
@@ -2910,12 +2944,12 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// there is actually a clone to make: prepareCheckout returns a
 		// zero checkout and does nothing at all for a task with no target
 		// or a deployment running no git proxy.
-		if (cfg.GitRemoteBase != "" || cloneURL != "") && task.Target != nil {
+		if (cfg.GitRemoteBase != "" || cloneURL != "") && task.Target != nil && !cfg.sandboxReused {
 			notes.say(ctx, cloningNote(*task.Target))
 		}
-		prepared, checkoutErr = prepareCheckoutFrom(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, notes, cfg.settingsRepo())
+		prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
 		if checkoutErr == nil {
-			placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared)
+			placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
 		}
 	}
 
@@ -2924,7 +2958,14 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	// (checkoutCommits). Only for a redispatch, and only where there is a
 	// checkout: a first attempt's branch has nothing on it that is not
 	// the base's, so this would be a tool call spent proving that.
-	history := History{Attempt: d.Attempt, Attempts: previous, Comments: comments, Repair: repair}
+	history := History{
+		Attempt:          d.Attempt,
+		Attempts:         previous,
+		Comments:         comments,
+		Repair:           repair,
+		SandboxReused:    cfg.sandboxReused,
+		SandboxReclaimed: cfg.sandboxReclaimed,
+	}
 	history.BaseIncident = baseIncidentNote(ctx, store, task)
 	history.Resumed = ResumedFrom(ctx, store, previous)
 	history.ResumedUntil = ResumedUntil(previous)
@@ -3360,6 +3401,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			// framework whose sessions do not outlive a run, which
 			// leaves the dispatch exactly as it has always been.
 			ResumeSession: resumeSession,
+			SandboxReused: cfg.sandboxReused,
 			// And the conversation this run is in, written down the
 			// moment the framework names it (earlySession).
 			OnResumableSession: early.record,
@@ -3370,6 +3412,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
 		result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
+		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)
 		agentRan = true
 		if result != nil {
 			resumableSession = result.ResumableSession
@@ -4067,7 +4110,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 var toolGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName, memory.CapabilityName,
 	grainci.CapabilityName, deploymenthealth.CapabilityName, selfupgrade.CapabilityName,
-	dispatchcontrol.CapabilityName, readissues.CapabilityName,
+	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 }
 

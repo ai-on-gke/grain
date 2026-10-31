@@ -83,6 +83,13 @@ type Store struct {
 	proxyCalls      map[string][]ProxyToolCall
 	proxyAPICalls   map[string][]RunAPICall
 
+	// commentAdded is, per task, the channel CommentAdded handed out and
+	// AddComment closes (and forgets) once a comment on that task has
+	// committed. Process-local: a comment another process writes reaches
+	// a waiter only through that waiter's own poll.
+	commentMu    sync.Mutex
+	commentAdded map[string]chan struct{}
+
 	// SettingsRepo is the deployment's own state repository, whose merged
 	// changes the daemon applies to itself on its next tick
 	// (staterepo.Apply) -- which is why the security hold judges a pull
@@ -817,7 +824,41 @@ func (s *Store) AddComment(ctx context.Context, c Comment) (id int64, err error)
 		id, err = addComment(ctx, tx, c)
 		return err
 	})
+	if err == nil {
+		s.signalCommentAdded(c.TaskID)
+	}
 	return id, err
+}
+
+// CommentAdded returns a channel closed the next time AddComment commits
+// a comment on taskID through this Store: what something waiting on a
+// conversation (orchestrator's in-process session wait) selects on so it
+// wakes the moment a person writes, rather than at its next poll. Take
+// the channel before reading the conversation, so a comment landing
+// between the read and the wait is not missed. Only AddComment signals,
+// and only in this process; a waiter still polls, at its own interval,
+// for everything else.
+func (s *Store) CommentAdded(taskID string) <-chan struct{} {
+	s.commentMu.Lock()
+	defer s.commentMu.Unlock()
+	if s.commentAdded == nil {
+		s.commentAdded = map[string]chan struct{}{}
+	}
+	ch, ok := s.commentAdded[taskID]
+	if !ok {
+		ch = make(chan struct{})
+		s.commentAdded[taskID] = ch
+	}
+	return ch
+}
+
+func (s *Store) signalCommentAdded(taskID string) {
+	s.commentMu.Lock()
+	defer s.commentMu.Unlock()
+	if ch, ok := s.commentAdded[taskID]; ok {
+		close(ch)
+		delete(s.commentAdded, taskID)
+	}
 }
 
 func addComment(ctx context.Context, tx *sql.Tx, c Comment) (int64, error) {
@@ -848,9 +889,17 @@ func addComment(ctx context.Context, tx *sql.Tx, c Comment) (int64, error) {
 // same instant still have an order, and it is the one they were written
 // in.
 func (s *Store) Comments(ctx context.Context, taskID string) ([]Comment, error) {
+	return s.CommentsAfter(ctx, taskID, 0)
+}
+
+// CommentsAfter is Comments for only the comments whose id is greater
+// than after: what a reader holding a cursor into the conversation asks
+// for, rather than reading the whole thread again to find the tail.
+func (s *Store) CommentsAfter(ctx context.Context, taskID string, after int64) ([]Comment, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT "+
 		"`id`, `author_kind`, `author_id`, `author_behalf_kind`, `author_behalf_id`, "+
-		"`body`, `created_at`, `handover`, `summary` FROM `task_comment` WHERE `task_id` = ? ORDER BY `id`", taskID)
+		"`body`, `created_at`, `handover`, `summary` FROM `task_comment` WHERE `task_id` = ? AND `id` > ? ORDER BY `id`",
+		taskID, after)
 	if err != nil {
 		return nil, fmt.Errorf("reading comments on task %s: %w", taskID, err)
 	}
@@ -2159,7 +2208,7 @@ func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
 
 func computeStreakForTask(ctx context.Context, q querier, taskID string, retryRequestedAt *time.Time) (int, *time.Time, *time.Time, error) {
 	rows, err := q.QueryContext(ctx,
-		"SELECT `outcome`, `started_at`, `finished_at`, `suspend_kind` FROM `task_run` "+
+		"SELECT `outcome`, `started_at`, `finished_at`, `detail`, `suspend_kind` FROM `task_run` "+
 			"WHERE `task_id` = ? AND `finished_at` IS NOT NULL ORDER BY `started_at` DESC", taskID)
 	if err != nil {
 		return 0, nil, nil, err
@@ -2173,14 +2222,16 @@ func computeStreakForTask(ctx context.Context, q querier, taskID string, retryRe
 	for rows.Next() {
 		var outcome string
 		var startedAt, finishedAt time.Time
-		var suspended sql.NullString
-		if err := rows.Scan(&outcome, &startedAt, &finishedAt, &suspended); err != nil {
+		var detail, suspended sql.NullString
+		if err := rows.Scan(&outcome, &startedAt, &finishedAt, &detail, &suspended); err != nil {
 			return 0, nil, nil, err
 		}
-		if suspended.Valid || outcome == EnvironmentOutcome {
+		if suspended.Valid || outcome == EnvironmentOutcome || StoppedByPerson(outcome, detail.String) {
 			// Neither counts towards the streak nor breaks it: a
 			// suspension (model.SuspensionKind) is not a judgement of the
-			// task, and nor is a host held for a person (OutcomeHeld).
+			// task, nor is a host held for a person (OutcomeHeld), nor a
+			// run a person ended by closing the task or stopping its turn
+			// (StoppedByPerson).
 			continue
 		}
 		if SucceededOutcome(outcome) {
@@ -2270,6 +2321,10 @@ func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, ou
 	// through grain hostd (HostdCursorKey).
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_spool_cursor` WHERE `run_id` IN (?, ?)",
 		runID, HostdCursorKey(runID)); err != nil {
+		return err
+	}
+	// Nor anything left for an adopting daemon to skip (RelayedCalls).
+	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_relayed_call` WHERE `run_id` = ?", runID); err != nil {
 		return err
 	}
 	if err := recordSuspensionTx(ctx, tx, runID, taskID, outcome, detail, at, susp); err != nil {
@@ -3012,6 +3067,19 @@ func (s *Store) FailureStreak(ctx context.Context, taskID string) (*FailureStrea
 			// no retry here to space out.
 			continue
 		}
+		if StoppedByPerson(outcome, detail.String) {
+			// Skipped from Count and from BackoffCount, and not a
+			// boundary either: a person closing the task under a live run
+			// (TaskClosedDetail) or stopping its turn (TurnStoppedDetail)
+			// made a decision about the task, which says nothing about
+			// whether it fails. Reopening it, or replying, should
+			// dispatch it at once rather than wait out a backoff.
+			continue
+		}
+		if streak.Count == 0 {
+			streak.LastFailureAt = finishedAt
+			streak.LastFailureDetail = detail.String
+		}
 		streak.Count++
 		streak.BackoffCount++
 	}
@@ -3130,6 +3198,12 @@ type FailureStreak struct {
 	LastFinishedAt time.Time
 	LastOutcome    string
 	LastDetail     string
+	// LastFailureAt and LastFailureDetail are the most recent run Count
+	// counts -- not necessarily the most recent run, which may be one
+	// the streak passes over (a suspension, or a run a person stopped).
+	// Zero while Count is.
+	LastFailureAt     time.Time
+	LastFailureDetail string
 }
 
 // LiveLease is one outstanding lease, joined to the run holding it.
@@ -4215,19 +4289,23 @@ func (s *Store) GitPushAnyRef(ctx context.Context, sandbox string) (bool, error)
 // NamespaceScope describes the namespace roots and repositories a sandbox's
 // currently live run may read over /fs/<scheme>/<path> and /cli/ on the sandbox proxy.
 type NamespaceScope struct {
-	TaskID            string
-	RunID             string
-	Attempt           int
-	TaskRepo          string
-	TaskBranch        string
-	TaskBase          string
-	ConfigRepo        string
-	Grants            []string
-	MayReadCI         bool
-	MayReadAllCI      bool
-	AllowedRepos      map[string]bool
-	MayReadSrc        bool
-	MayReadAllTasks   bool
+	TaskID          string
+	RunID           string
+	Attempt         int
+	TaskRepo        string
+	TaskBranch      string
+	TaskBase        string
+	ConfigRepo      string
+	Grants          []string
+	MayReadCI       bool
+	MayReadAllCI    bool
+	AllowedRepos    map[string]bool
+	MayReadSrc      bool
+	MayReadAllTasks bool
+	// TaskReadRepos are the repositories whose tasks the run may read
+	// under task:// without MayReadAllTasks: its task's target, reads
+	// and writes, and any api:tasks:read@owner/repo names.
+	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
 	MayReadMetrics    bool
@@ -4237,6 +4315,30 @@ type NamespaceScope struct {
 	MayReadPlaybooks  bool
 	MayReadIssues     bool
 	MayReadDB         bool
+}
+
+// TaskCIRef is the repository task id works in and the branch its runs
+// push to, which is what grain CI's runs for it are recorded under:
+// what `grain ci list --task` and `grain pr status --task` look up.
+// found is false, with a nil error, for a task that does not exist.
+func (s *Store) TaskCIRef(ctx context.Context, id string) (repo, branch string, found bool, err error) {
+	id = strings.TrimSpace(strings.TrimPrefix(id, "#"))
+	if id == "" {
+		return "", "", false, nil
+	}
+	var owner, name, stored sql.NullString
+	err = s.db.QueryRowContext(ctx,
+		"SELECT `target_owner`, `target_name`, `branch` FROM `task` WHERE `id` = ?", id).Scan(&owner, &name, &stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("reading task %s: %w", id, err)
+	}
+	if owner.Valid && owner.String != "" {
+		repo = RepoFromStored(owner.String, name.String).String()
+	}
+	return repo, Task{ID: id, Branch: stored.String}.BranchName(), true, nil
 }
 
 // SandboxNamespaceScope returns the namespace access scope of the currently
@@ -4264,6 +4366,7 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	taskBase := strings.TrimSpace(storedBase.String)
 
 	allowed := make(map[string]bool)
+	taskRepos := make(map[string]bool)
 	addRepo := func(r string) {
 		r = strings.TrimSpace(r)
 		if r == "" {
@@ -4272,16 +4375,27 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		allowed[r] = true
 		allowed[strings.ToLower(r)] = true
 	}
+	addTaskRepo := func(r string) {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			return
+		}
+		taskRepos[r] = true
+		taskRepos[strings.ToLower(r)] = true
+	}
 	var taskRepo string
 	if target != nil {
 		taskRepo = target.String()
 		addRepo(taskRepo)
+		addTaskRepo(taskRepo)
 	}
 	for _, r := range reads {
 		addRepo(r.String())
+		addTaskRepo(r.String())
 	}
 	for _, w := range writes {
 		addRepo(w.String())
+		addTaskRepo(w.String())
 	}
 
 	cfgRepo := ConfigRepo()
@@ -4368,6 +4482,9 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	if apiSet.Allows("tasks:read", "") {
 		mayReadAllTasks = true
 	}
+	for _, r := range apiSet.Repos("tasks:read") {
+		addTaskRepo(r)
+	}
 	if apiSet.Allows("settings:read", "") || apiSet.Allows("repos:read", "") {
 		mayReadFullConfig = true
 	}
@@ -4397,6 +4514,7 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		AllowedRepos:      allowed,
 		MayReadSrc:        mayReadSrc,
 		MayReadAllTasks:   mayReadAllTasks,
+		TaskReadRepos:     taskRepos,
 		MayReadFullConfig: mayReadFullConfig,
 		MayReadAllMemory:  mayReadAllMemory,
 		MayReadMetrics:    mayReadMetrics,
@@ -4886,7 +5004,7 @@ const configColumns = "`poll_interval_ms`,`max_workers`,`max_mergers`,`max_merge
 	"`k8s_privileged`,`k8s_network_policy`,`k8s_deployment`,`k8s_container`," +
 	"`mcp_servers`,`capability_policy`,`cli_run`,`sandbox_overcommit`,`base_ci_red_streak`," +
 	"`k8s_priority_class_interactive`,`k8s_priority_class_agent`,`k8s_priority_class_ci`,`sandbox_disk_overcommit`," +
-	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`"
+	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`"
 
 func scanConfig(scan func(...any) error) (Config, error) {
 	var c Config
@@ -4899,6 +5017,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	// The merge queue's gather window, in milliseconds for the same
 	// reason (grain/task-360).
 	var gatherWindowMS int64
+	var sessionIdleTTLMS int64
 	var defaultCapabilities string
 	var networkAccess string
 	var consoleSessions string
@@ -4944,7 +5063,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 		&c.K8sPrivileged, &c.K8sNetworkPolicy, &c.K8sDeployment, &c.K8sContainer,
 		&mcpServers, &capabilityPolicy, &cliRun, &sandboxOvercommit, &c.BaseCIRedStreak,
 		&c.K8sPriorityClassInteractive, &c.K8sPriorityClassAgent, &c.K8sPriorityClassCI, &c.SandboxDiskOvercommit,
-		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror); err != nil {
+		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS); err != nil {
 		return Config{}, err
 	}
 	backends, err := DecodeAgentBackends(agentBackends)
@@ -4981,6 +5100,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	c.MergeGatherWindow = time.Duration(gatherWindowMS) * time.Millisecond
 	c.CIAgeBoost = time.Duration(ageBoostMS) * time.Millisecond
 	c.CIReserveAfter = time.Duration(reserveAfterMS) * time.Millisecond
+	c.SessionSandboxIdleTTL = time.Duration(sessionIdleTTLMS) * time.Millisecond
 	c.DefaultCapabilities = splitCapabilities(defaultCapabilities)
 	c.TargetRepos = splitCSV(targetRepos)
 	c.K8sNodeSelector = splitCSV(k8sNodeSelector)
@@ -5053,7 +5173,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
-		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		c.PollInterval.Milliseconds(), c.MaxWorkers, c.MaxMergers, c.MaxMergesPerRepo, c.MergeBatchSize,
 		c.MergeGatherWindow.Milliseconds(), c.MaxCIJobs, c.MaxAgentTurns,
 		c.GitHubHost, c.GitHubInsecureHTTP, c.GCPProject, c.GCPServiceAccountEmail,
@@ -5088,7 +5208,8 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		strings.TrimSpace(c.K8sPriorityClassInteractive), strings.TrimSpace(c.K8sPriorityClassAgent),
 		strings.TrimSpace(c.K8sPriorityClassCI), c.SandboxDiskOvercommit,
 		strings.TrimSpace(c.AutoUpgradeChannel), strings.TrimSpace(c.AutoUpgradeTime),
-		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI, strings.TrimSpace(c.SandboxImageMirror))
+		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI, strings.TrimSpace(c.SandboxImageMirror),
+		c.SessionSandboxIdleTTL.Milliseconds())
 	return err
 }
 
@@ -5194,14 +5315,16 @@ func scanSchedule(scan func(...any) error) (Schedule, error) {
 		t.SuiteID = &suiteID.String
 	}
 	t.TimeZone = timeZone
+	recKind, ghTrigger := ParseStoredRecurrenceKind(kind)
 	t.Recurrence = Recurrence{
-		Kind:          RecurrenceKind(kind),
-		EveryNHours:   int(everyNHours.Int64),
-		EveryNMinutes: int(everyNMinutes.Int64),
-		TimeOfDay:     int(timeOfDay.Int64),
-		Weekday:       time.Weekday(weekday.Int64),
-		DayOfMonth:    int(dayOfMonth.Int64),
-		TimeZone:      timeZone,
+		Kind:              recKind,
+		EveryNHours:       int(everyNHours.Int64),
+		EveryNMinutes:     int(everyNMinutes.Int64),
+		TimeOfDay:         int(timeOfDay.Int64),
+		Weekday:           time.Weekday(weekday.Int64),
+		DayOfMonth:        int(dayOfMonth.Int64),
+		TimeZone:          timeZone,
+		GitHubWorkflowRun: ghTrigger,
 	}
 	t.LastRunAt = timePtr(lastRun)
 	return t, nil
@@ -5248,7 +5371,7 @@ func putSchedule(ctx context.Context, tx *sql.Tx, t Schedule) error {
 		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`"+`
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Body, t.Target.StoredOwner(), t.Target.Name, nullable(t.Base),
-		t.AutoMerge, t.AutoApproveProposals, stringOf(t.TemplateID), stringOf(t.SuiteID), string(r.Kind), everyNHours, timeOfDay, weekday, dayOfMonth,
+		t.AutoMerge, t.AutoApproveProposals, stringOf(t.TemplateID), stringOf(t.SuiteID), r.StoredKind(), everyNHours, timeOfDay, weekday, dayOfMonth,
 		string(overlap), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Enabled, t.NextRunAt.UTC(), timeOf(t.LastRunAt), t.CreatedAt.UTC(), timeZone,
 		string(t.WorkflowReview), everyNMinutes)
 	if err != nil {
@@ -5482,7 +5605,7 @@ func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
 func (s *Store) DueSchedules(ctx context.Context, now time.Time) ([]Schedule, error) {
 	rows, err := s.db.QueryContext(ctx,
 		"SELECT "+scheduleColumns+" FROM `schedule` "+
-			"WHERE `enabled` = 1 AND `next_run_at` <= ? ORDER BY `id`", now.UTC())
+			"WHERE `enabled` = 1 AND `next_run_at` <= ? AND `recurrence_kind` NOT LIKE 'github_workflow_run%' ORDER BY `id`", now.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("listing due schedules: %w", err)
 	}

@@ -757,6 +757,7 @@ func scheduleSchema() Schema {
 					{Name: "daily", In: Everywhere},
 					{Name: "weekly", In: Everywhere},
 					{Name: "monthly", In: Everywhere},
+					{Name: "trigger", In: Everywhere},
 				},
 				Columns: []string{
 					"recurrence_kind", "every_n_hours", "every_n_minutes", "time_of_day_minutes", "weekday", "day_of_month",

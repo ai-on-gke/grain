@@ -59,6 +59,7 @@ var RecognizedGrainConfigParameters = map[string]struct{}{
 	"sandbox_disk_overcommit":        {},
 	"sandbox_memory_reserve_mb":      {},
 	"sandbox_overcommit":             {},
+	"session_sandbox_idle_ttl_ms":    {},
 	"sandbox_disk_floor_share":       {},
 	"sandbox_disk_floor_min_mb":      {},
 	"show_closed_by_default":         {},

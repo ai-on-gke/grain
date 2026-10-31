@@ -44,15 +44,27 @@ var ErrRemoteNotConnected = errors.New("no grain hostd is connected to this daem
 type Remote struct {
 	// Token is the shared token a hostd must present (Authorize).
 	Token string
-	// Logf logs connects and drops; nothing when nil.
+	// Logf logs connects, drops and refused tokens; nothing when nil.
 	Logf func(format string, args ...any)
+	// now is time.Now, or a test's clock for refusal's rate limit.
+	now func() time.Time
 
 	mu       sync.Mutex
 	cur      *remoteSession
 	arrived  chan struct{}
 	last     RemoteStatus
 	sessions int
+
+	// refusedAt is when a refused hostd was last logged, and refused how
+	// many have been refused since without a line of their own.
+	refusedAt time.Time
+	refused   int
 }
+
+// refusalLogEvery is how often at most a refused hostd is logged: a
+// hostd with the wrong token retries every few seconds, and one line a
+// minute says so without filling the daemon's log.
+const refusalLogEvery = time.Minute
 
 // RemotePeer is what a hostd said about itself when it connected.
 type RemotePeer struct {
@@ -189,11 +201,46 @@ func RequestToken(r *http.Request) string {
 	return ""
 }
 
+// logRefused logs a hostd refused for its token, at most once every
+// refusalLogEvery, so an operator watching the daemon can tell a hostd
+// with the wrong token from no hostd at all -- otherwise only the hostd's
+// own log says so.
+func (r *Remote) logRefused(req *http.Request, missing bool) {
+	now := time.Now
+	if r.now != nil {
+		now = r.now
+	}
+	t := now()
+	r.mu.Lock()
+	if !r.refusedAt.IsZero() && t.Sub(r.refusedAt) < refusalLogEvery {
+		r.refused++
+		r.mu.Unlock()
+		return
+	}
+	more := r.refused
+	r.refusedAt, r.refused = t, 0
+	r.mu.Unlock()
+	why := "a token that is not this daemon's hostd token (-hostd-token-file or $GRAIN_HOSTD_TOKEN)"
+	if missing {
+		why = "no hostd token"
+	}
+	host := req.Header.Get(HostHeader)
+	if host == "" {
+		host = "an unnamed host"
+	}
+	since := ""
+	if more > 0 {
+		since = fmt.Sprintf(" (%d more refused since the last line like this)", more)
+	}
+	r.logf("grain daemon: refused a grain hostd on %s connecting from %s: it presented %s%s", host, req.RemoteAddr, why, since)
+}
+
 // ServeHTTP takes a hostd's upgrade of RemotePath (Dialer.Dial): it is
 // refused unless it presents Token, and is otherwise answered 101 and
 // served as the session to that hostd until it drops.
 func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if !r.Authorize(RequestToken(req)) {
+	if tok := RequestToken(req); !r.Authorize(tok) {
+		r.logRefused(req, tok == "")
 		http.Error(w, "grain hostd: this controller does not take that hostd token", http.StatusUnauthorized)
 		return
 	}

@@ -19,7 +19,9 @@
 //
 // It is the same grant registry-push is -- an operator turns it on per
 // repository, and a job may only receive it for a trusted post-merge
-// release or an operator's own workflow_dispatch -- and differs in where
+// release or an operator's own workflow_dispatch (and, unlike
+// registry-push, the cron grain itself fires from the default branch;
+// see SupportsTrustedSchedule) -- and differs in where
 // the material comes from. registry-push reads one JSON secret somebody
 // pasted: a second long-lived credential, rotated by hand, held against
 // nothing, and belonging to whichever account happened to create it.
@@ -123,6 +125,16 @@ func (p *Provider) Spec() model.CapabilitySpec {
 func (*Provider) SupportsCIEvent(event string) bool {
 	return event == "release" || event == "workflow_dispatch"
 }
+
+// SupportsTrustedSchedule admits the cron grain itself fired from a
+// workflow on the default branch, as repo-write and release-gate-read
+// do: that cron and the job declaring this capability were both merged
+// there, which is the assurance a dispatch carries, and it is what lets
+// the daily release train publish its rc and pending images without an
+// operator dispatching it. A caller's own `-event schedule` run is still
+// refused (ci.Request.TrustedSchedule), and so is any repository whose
+// operator has not put package-publish in its ci_capabilities.
+func (*Provider) SupportsTrustedSchedule() bool { return true }
 
 func (p *Provider) Resolve(ctx context.Context, cc model.CapabilityContext) (model.Resolution, error) {
 	if _, err := p.credential(cc); err != nil {

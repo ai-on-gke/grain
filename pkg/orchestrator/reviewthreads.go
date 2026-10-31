@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -112,6 +113,14 @@ type reviewThreadLister interface {
 	ListReviewThreads(owner, repo string, number int) ([]github.ReviewThread, error)
 }
 
+type reviewCommentReplier interface {
+	ReplyToReviewComment(owner, repo string, number, commentID int, body string) (int, error)
+}
+
+type reviewThreadResolver interface {
+	ResolveReviewThread(owner, repo, threadID string) error
+}
+
 func sendRunForReviewThreads(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, ref model.PullRequestRef, now time.Time) error {
 
@@ -132,17 +141,22 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 	github.Polls().Observe(poll, reviewCommentsFingerprint(comments), now)
 	seen := map[string]bool{}
 	drafts := map[string]bool{}
+	relayed := map[int]bool{}
 	for _, l := range task.Links {
 		switch l.Kind {
 		case model.LinkReviewThread:
 			seen[l.Target] = true
 		case model.LinkDraftReview:
 			drafts[l.Target] = true
+		case model.LinkRelayedReviewThread:
+			if rt, ok := model.ParseRelayedReviewThread(l.Target); ok {
+				relayed[rt.CommentID] = true
+			}
 		}
 	}
 	var fresh []github.ReviewComment
 	for _, c := range comments {
-		if c.InReplyTo != 0 || seen[strconv.Itoa(c.ID)] {
+		if c.InReplyTo != 0 || seen[strconv.Itoa(c.ID)] || relayed[c.ID] {
 			continue
 		}
 		if c.ReviewID != 0 && drafts[strconv.Itoa(c.ReviewID)] {
@@ -371,4 +385,461 @@ func userOrUnknownAuthor(author string) string {
 		return "someone"
 	}
 	return author
+}
+
+// discoverRelayedThreads maps the inline review comments just posted by reviewID
+// on ref to their GraphQL review thread IDs.
+func discoverRelayedThreads(client github.Client, ref model.PullRequestRef, reviewTaskID string,
+	reviewID int, decided bool) []model.RelayedReviewThread {
+
+	if client == nil || ref.Number <= 0 || reviewID == 0 {
+		return nil
+	}
+	lister, ok := client.(reviewThreadLister)
+	if !ok {
+		return nil
+	}
+	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	if err != nil {
+		return nil
+	}
+	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	if err != nil {
+		return nil
+	}
+	threadByRoot := map[int]string{}
+	for _, th := range threads {
+		if len(th.CommentIDs) > 0 && th.ID != "" {
+			threadByRoot[th.CommentIDs[0]] = th.ID
+		}
+	}
+	var out []model.RelayedReviewThread
+	for _, c := range comments {
+		if c.InReplyTo != 0 || c.ReviewID != reviewID {
+			continue
+		}
+		threadID := threadByRoot[c.ID]
+		if threadID == "" {
+			continue
+		}
+		out = append(out, model.RelayedReviewThread{
+			ReviewTaskID: reviewTaskID,
+			ReviewID:     reviewID,
+			CommentID:    c.ID,
+			ThreadID:     threadID,
+			Decided:      decided,
+		})
+	}
+	return out
+}
+
+// markRelayedReviewThreadsDecided marks relayed review threads on links (for
+// reviewTaskID, or all when reviewTaskID is empty) as having a recorded owner
+// decision.
+func markRelayedReviewThreadsDecided(links []model.Link, reviewTaskID string) []model.Link {
+	out := make([]model.Link, len(links))
+	for i, l := range links {
+		if l.Kind == model.LinkRelayedReviewThread {
+			if rt, ok := model.ParseRelayedReviewThread(l.Target); ok {
+				if reviewTaskID == "" || rt.ReviewTaskID == "" || rt.ReviewTaskID == reviewTaskID {
+					rt.Decided = true
+					l.Target = rt.Target()
+				}
+			}
+		}
+		out[i] = l
+	}
+	return out
+}
+
+// syncRelayedReviewThreads reads ref's review comments and threads, backfilling
+// LinkRelayedReviewThread entries for any root comments belonging to one of
+// task's LinkDraftReview reviews that were not yet mapped (for instance, a
+// draft review submitted after relayReviewFeedback ran).
+func syncRelayedReviewThreads(ctx context.Context, store *model.Store, client github.Client,
+	task model.Task, ref model.PullRequestRef) (model.Task, []github.ReviewComment, []github.ReviewThread) {
+
+	if client == nil || ref.Number <= 0 {
+		return task, nil, nil
+	}
+	lister, ok := client.(reviewThreadLister)
+	if !ok {
+		return task, nil, nil
+	}
+	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	if err != nil {
+		return task, nil, nil
+	}
+	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	if err != nil {
+		return task, comments, nil
+	}
+
+	drafts := map[int]bool{}
+	knownComments := map[int]bool{}
+	for _, l := range task.Links {
+		switch l.Kind {
+		case model.LinkDraftReview:
+			if id, err := strconv.Atoi(l.Target); err == nil && id != 0 {
+				drafts[id] = true
+			}
+		case model.LinkRelayedReviewThread:
+			if rt, ok := model.ParseRelayedReviewThread(l.Target); ok {
+				knownComments[rt.CommentID] = true
+			}
+		}
+	}
+	if len(drafts) == 0 {
+		return task, comments, threads
+	}
+
+	threadByRoot := map[int]string{}
+	for _, th := range threads {
+		if len(th.CommentIDs) > 0 && th.ID != "" {
+			threadByRoot[th.CommentIDs[0]] = th.ID
+		}
+	}
+	questions, held := model.ReviewQuestionsOf(task)
+	reviewTaskID := ""
+	if held {
+		reviewTaskID = questions.ReviewTaskID
+	}
+	var added []model.RelayedReviewThread
+	for _, c := range comments {
+		if c.InReplyTo != 0 || !drafts[c.ReviewID] || knownComments[c.ID] {
+			continue
+		}
+		threadID := threadByRoot[c.ID]
+		if threadID == "" {
+			continue
+		}
+		knownComments[c.ID] = true
+		added = append(added, model.RelayedReviewThread{
+			ReviewTaskID: reviewTaskID,
+			ReviewID:     c.ReviewID,
+			CommentID:    c.ID,
+			ThreadID:     threadID,
+			Decided:      !held,
+		})
+	}
+	if len(added) == 0 {
+		return task, comments, threads
+	}
+	for _, rt := range added {
+		task.Links = append(task.Links, model.Link{Kind: model.LinkRelayedReviewThread, Target: rt.Target()})
+	}
+	if store != nil {
+		_ = store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+			existing := map[int]bool{}
+			for _, l := range t.Links {
+				if l.Kind == model.LinkRelayedReviewThread {
+					if rt, ok := model.ParseRelayedReviewThread(l.Target); ok {
+						existing[rt.CommentID] = true
+					}
+				}
+			}
+			for _, rt := range added {
+				if !existing[rt.CommentID] {
+					t.Links = append(t.Links, model.Link{Kind: model.LinkRelayedReviewThread, Target: rt.Target()})
+				}
+			}
+			return nil
+		})
+	}
+	return task, comments, threads
+}
+
+// decidedRelayedThreadMap returns the grain-relayed review threads on task
+// whose findings have a recorded decision, keyed by root comment ID.
+func decidedRelayedThreadMap(task model.Task) map[int]model.RelayedReviewThread {
+	questions, held := model.ReviewQuestionsOf(task)
+	out := map[int]model.RelayedReviewThread{}
+	for _, rt := range model.RelayedReviewThreadsOf(task) {
+		if rt.Decided || !held || (rt.ReviewTaskID != "" && questions.ReviewTaskID != rt.ReviewTaskID) {
+			out[rt.CommentID] = rt
+		}
+	}
+	return out
+}
+
+// resolveHandledRelayedThreads replies to (if not yet replied to) and resolves
+// every unresolved review thread on ref that grain's review relay opened and
+// whose finding has a recorded decision.
+func resolveHandledRelayedThreads(ctx context.Context, store *model.Store, client github.Client,
+	task model.Task, ref model.PullRequestRef, replyLine string) (int, error) {
+
+	task, comments, threads := syncRelayedReviewThreads(ctx, store, client, task, ref)
+	decided := decidedRelayedThreadMap(task)
+	if len(decided) == 0 || len(threads) == 0 {
+		return 0, nil
+	}
+	repliedTo := map[int]bool{}
+	commentByID := map[int]github.ReviewComment{}
+	for _, c := range comments {
+		commentByID[c.ID] = c
+		if c.InReplyTo != 0 {
+			repliedTo[c.InReplyTo] = true
+		}
+	}
+	threadByRoot := map[int]github.ReviewThread{}
+	threadByID := map[string]github.ReviewThread{}
+	for _, th := range threads {
+		threadByID[th.ID] = th
+		if len(th.CommentIDs) > 0 {
+			threadByRoot[th.CommentIDs[0]] = th
+		}
+	}
+	replier, canReply := client.(reviewCommentReplier)
+	resolver, canResolve := client.(reviewThreadResolver)
+	if !canResolve {
+		return 0, nil
+	}
+
+	resolved := 0
+	for _, rt := range model.RelayedReviewThreadsOf(task) {
+		if _, ok := decided[rt.CommentID]; !ok {
+			continue
+		}
+		th, ok := threadByID[rt.ThreadID]
+		if !ok {
+			th, ok = threadByRoot[rt.CommentID]
+		}
+		if !ok || th.ID == "" || th.Resolved {
+			continue
+		}
+		rootAuthor := commentByID[rt.CommentID].User
+		if threadHasHumanComment(th, commentByID, rootAuthor) {
+			continue
+		}
+		if canReply && !repliedTo[rt.CommentID] && len(th.CommentIDs) <= 1 && strings.TrimSpace(replyLine) != "" {
+			if _, err := replier.ReplyToReviewComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, rt.CommentID, replyLine); err != nil {
+				log.Printf("orchestrator: replying to relayed review comment %d on %s before resolving thread %s: %v",
+					rt.CommentID, ref, th.ID, err)
+			}
+		}
+		if err := resolver.ResolveReviewThread(ref.Repo.Owner, ref.Repo.Name, th.ID); err != nil {
+			return resolved, fmt.Errorf("orchestrator: resolving relayed review thread %s on %s: %w", th.ID, ref, err)
+		}
+		resolved++
+	}
+	return resolved, nil
+}
+
+// threadHasHumanComment reports whether any comment in th was written by a
+// person other than the grain identity that opened the relayed review thread.
+// It fails closed: a comment whose author cannot be read (missing from the
+// listing, or with no login) counts as a person's, and so does a login that
+// merely looks like grain's, or belongs to some other GitHub App ("[bot]"): a
+// third-party reviewer bot replying in the thread is not grain, and only the
+// root comment's own author is.
+// reviewThreadCommentsPage is how many comments of each thread
+// github.ListReviewThreads reads (its query's comments(first: 100)).
+const reviewThreadCommentsPage = 100
+
+func threadHasHumanComment(th github.ReviewThread, commentByID map[int]github.ReviewComment, rootAuthor string) bool {
+	// ListReviewThreads reads at most a page of comments per thread, so a
+	// thread that fills one may hold replies it never saw.
+	if rootAuthor == "" || len(th.CommentIDs) >= reviewThreadCommentsPage {
+		return true
+	}
+	for _, id := range th.CommentIDs {
+		c, ok := commentByID[id]
+		if !ok || c.User == "" {
+			return true
+		}
+		if c.User != rootAuthor {
+			return true
+		}
+	}
+	return false
+}
+
+// ownerRunResolutionReply formats the one-line reply posted on a grain-relayed
+// review thread before resolving it when the owner's decision run finishes.
+func ownerRunResolutionReply(task model.Task, result *agent.Result, pushed bool) string {
+	var summary string
+	if comment, ok := effectiveCommentOnIssue(result); ok {
+		summary = oneLine(comment, 120)
+	} else if reason, ok := firstToolCallArg(result, "nothing_needed", "reason"); ok {
+		summary = oneLine(reason, 120)
+	}
+	if pushed {
+		if summary != "" {
+			return fmt.Sprintf("Handled in the latest push to `%s` (task %s): %s", task.BranchName(), task.ID, summary)
+		}
+		return fmt.Sprintf("Handled in the latest push to `%s` (task %s).", task.BranchName(), task.ID)
+	}
+	if summary != "" {
+		return fmt.Sprintf("Resolved per owner decision on task %s: %s", task.ID, summary)
+	}
+	return fmt.Sprintf("Resolved per owner decision on task %s (kept as is).", task.ID)
+}
+
+// resolveRelayedThreadsAfterOwnerRun resolves any unresolved review threads
+// that grain's own review tasks opened on task's pull request once the owner's
+// decision run has finished handling them.
+func resolveRelayedThreadsAfterOwnerRun(ctx context.Context, store *model.Store, client github.Client,
+	task model.Task, result *agent.Result, pushed bool) {
+
+	if store == nil || client == nil || isReviewTask(task) {
+		return
+	}
+	current, err := store.GetTask(ctx, task.ID)
+	if err != nil || current == nil {
+		return
+	}
+	if _, held := model.ReviewQuestionsOf(*current); held {
+		return
+	}
+	hasRelayed := false
+	for _, l := range current.Links {
+		if l.Kind == model.LinkRelayedReviewThread || l.Kind == model.LinkDraftReview {
+			hasRelayed = true
+			break
+		}
+	}
+	if !hasRelayed {
+		return
+	}
+	pr := lastPullRequest(*current)
+	if pr == nil {
+		return
+	}
+	_ = store.UpdateTask(ctx, current.ID, func(t *model.Task) error {
+		t.Links = markRelayedReviewThreadsDecided(t.Links, "")
+		return nil
+	})
+	current.Links = markRelayedReviewThreadsDecided(current.Links, "")
+	replyLine := ownerRunResolutionReply(*current, result, pushed)
+	if _, err := resolveHandledRelayedThreads(ctx, store, client, *current, *pr, replyLine); err != nil {
+		log.Printf("orchestrator: %v", err)
+	}
+}
+
+// resolveOrClassifyUnresolvedThreadsOnMerge is the merge queue's belt-and-braces
+// pass when a merge is refused: any unresolved review threads that were opened
+// by grain's review relay and have a recorded decision are replied to and
+// resolved, and resolvedAll reports whether every unresolved thread on ref was
+// thus resolved so the caller can immediately retry the merge. Threads written
+// by people are never auto-resolved.
+func resolveOrClassifyUnresolvedThreadsOnMerge(ctx context.Context, store *model.Store, client github.Client,
+	task model.Task, ref model.PullRequestRef) bool {
+
+	task, comments, threads := syncRelayedReviewThreads(ctx, store, client, task, ref)
+	if len(threads) == 0 {
+		return false
+	}
+	unresolvedTotal := 0
+	for _, th := range threads {
+		if !th.Resolved {
+			unresolvedTotal++
+		}
+	}
+	if unresolvedTotal == 0 {
+		return false
+	}
+
+	replyLine := fmt.Sprintf("Resolved per recorded decision on task %s.", task.ID)
+	resolvedGrain, err := resolveHandledRelayedThreads(ctx, store, client, task, ref, replyLine)
+	if err != nil {
+		log.Printf("orchestrator: %v", err)
+		return false
+	}
+	_ = comments
+	return resolvedGrain > 0 && resolvedGrain == unresolvedTotal
+}
+
+// unresolvedReviewThreads returns the number of remaining unresolved review
+// threads on ref and their authors (in order of appearance, deduplicated).
+func unresolvedReviewThreads(client github.Client, task model.Task, ref model.PullRequestRef) (int, []string) {
+	if client == nil || ref.Number <= 0 {
+		return 0, nil
+	}
+	lister, ok := client.(reviewThreadLister)
+	if !ok {
+		return 0, nil
+	}
+	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	if err != nil {
+		return 0, nil
+	}
+	comments, _ := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	commentByID := map[int]github.ReviewComment{}
+	for _, c := range comments {
+		commentByID[c.ID] = c
+	}
+	drafts := map[int]bool{}
+	relayed := map[int]bool{}
+	for _, l := range task.Links {
+		switch l.Kind {
+		case model.LinkDraftReview:
+			if id, err := strconv.Atoi(l.Target); err == nil && id != 0 {
+				drafts[id] = true
+			}
+		case model.LinkRelayedReviewThread:
+			if rt, ok := model.ParseRelayedReviewThread(l.Target); ok {
+				relayed[rt.CommentID] = true
+			}
+		}
+	}
+
+	count := 0
+	seenAuthors := map[string]bool{}
+	var authors []string
+	for _, th := range threads {
+		if th.Resolved {
+			continue
+		}
+		count++
+		author := "someone"
+		if len(th.CommentIDs) > 0 {
+			root := commentByID[th.CommentIDs[0]]
+			if root.User != "" {
+				author = root.User
+			}
+			// If anyone else commented inside a thread grain opened, attribute
+			// that participant: it is their reply that keeps the thread open.
+			if relayed[root.ID] || (root.ReviewID != 0 && drafts[root.ReviewID]) {
+				for _, cid := range th.CommentIDs {
+					if c, ok := commentByID[cid]; ok && c.User != "" && c.User != root.User {
+						author = c.User
+						break
+					}
+				}
+			}
+		}
+		if !seenAuthors[author] {
+			seenAuthors[author] = true
+			authors = append(authors, author)
+		}
+	}
+	return count, authors
+}
+
+// relayedReviewThreadsSection is the prompt paragraph instructing an owner's
+// decision run to resolve each grain-relayed review thread once handled.
+func relayedReviewThreadsSection(task model.Task) string {
+	if _, held := model.ReviewQuestionsOf(task); held {
+		return ""
+	}
+	relayed := model.RelayedReviewThreadsOf(task)
+	var decided []model.RelayedReviewThread
+	for _, rt := range relayed {
+		if rt.Decided {
+			decided = append(decided, rt)
+		}
+	}
+	if len(decided) == 0 {
+		return ""
+	}
+	var items []string
+	for _, rt := range decided {
+		items = append(items, fmt.Sprintf("comment %d (thread `%s`)", rt.CommentID, rt.ThreadID))
+	}
+	return fmt.Sprintf(
+		"\n\nOnce you have handled each finding from the review (%s) -- whether by pushing a "+
+			"fix or by carrying out the owner's decision to keep the code as is -- reply to its "+
+			"review comment with one line saying what was done (`reply_to_pull_request_comment` or "+
+			"`grain pr reply`) and resolve the review thread (`resolve_review_thread` or `grain pr resolve`).",
+		strings.Join(items, ", "))
 }

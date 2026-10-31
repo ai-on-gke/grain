@@ -286,7 +286,7 @@ test.describe("Responsive Navigation Matrix & Shell Behavior", () => {
 
     // 11. Settings: a view behind the gear (docs/design/settings-panel.md)
     await page.getByTestId("top-bar-settings").click();
-    await expect(page).toHaveURL(/\/settings\/general$/);
+    await expect(page).toHaveURL(/\/settings\/models$/);
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
     await assertNoHorizontalOverflow(page);
 

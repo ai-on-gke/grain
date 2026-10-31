@@ -229,6 +229,14 @@ type Settings struct {
 	// adjustments and OOM kills are SandboxCommitment.Budget.Overcommit.
 	SandboxOvercommit model.OvercommitSettings `json:"sandboxOvercommit"`
 	ExternalAgentAPI  bool                     `json:"externalAgentApi"`
+	// SessionSandboxIdleTTL is model.Config.SessionSandboxIdleTTL: how long
+	// an interactive chat/session task's sandbox (and in-process agent run)
+	// stays warm awaiting a reply after a turn ends before being released,
+	// as a Go duration string ("30m"). Empty means grain's own default
+	// (SessionSandboxIdleTTLDefault); a negative duration ("-1s") turns warm
+	// retention off.
+	SessionSandboxIdleTTL        string `json:"sessionSandboxIdleTtl"`
+	SessionSandboxIdleTTLDefault string `json:"sessionSandboxIdleTtlDefault"`
 	// SandboxMemoryReserveMBDefault is what a negative reserve comes to
 	// on the host this process can speak for (model.DefaultReserveMemoryMB),
 	// so the pane's blank field can say what blank means. Zero, and so
@@ -1014,17 +1022,13 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 	cfg, unrunnable := c.runnableSettings(cfg)
 	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
-	effectiveGranuleForWarn := firstNonEmptyString(cfg.K8sGranuleImage, granuleImgDefault)
-	if mirror := strings.TrimSpace(cfg.SandboxImageMirror); mirror != "" {
-		if mirrored := upgrade.MirrorSandboxRef(effectiveGranuleForWarn, mirror); mirrored != "" {
-			effectiveGranuleForWarn = mirrored
-		}
-	}
 	sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
 		ctx,
 		firstNonEmptyString(cfg.K8sSandboxImage, sandboxImgDefault),
-		effectiveGranuleForWarn,
+		c.k8sGranuleImageForWarn(cfg, granuleImgDefault),
 	)
+	sandboxWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sSandboxImage, sandboxImgDefault, nil), sandboxWarn)
+	granuleWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sGranuleImage, granuleImgDefault, nil), granuleWarn)
 	out := Settings{
 		Configured:               true,
 		PollInterval:             cfg.PollInterval.String(),
@@ -1131,6 +1135,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxMemoryReserveMBDefault:      c.sandboxMemoryReserveDefault(),
 		SandboxOvercommit:                  cfg.SandboxOvercommit.Resolved(),
 		ExternalAgentAPI:                   cfg.ExternalAgentAPI,
+		SessionSandboxIdleTTL:              durationSetting(cfg.SessionSandboxIdleTTL),
+		SessionSandboxIdleTTLDefault:       model.DefaultSessionSandboxIdleTTL.String(),
 		SandboxDiskFloorShare:              cfg.SandboxDiskFloorShare,
 		SandboxDiskFloorMinMB:              cfg.SandboxDiskFloorMinMB,
 		SandboxDiskFloorShareDefault:       model.DefaultDiskFloorShare,
@@ -1346,6 +1352,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			SandboxDiskOvercommitDefault:   model.DefaultDiskOvercommit,
 			SandboxOvercommit:              def.SandboxOvercommit.Resolved(),
 			ExternalAgentAPI:               def.ExternalAgentAPI,
+			SessionSandboxIdleTTL:          durationSetting(def.SessionSandboxIdleTTL),
+			SessionSandboxIdleTTLDefault:   model.DefaultSessionSandboxIdleTTL.String(),
 			SandboxDiskFloorShare:          def.SandboxDiskFloorShare,
 			SandboxDiskFloorMinMB:          def.SandboxDiskFloorMinMB,
 			SandboxDiskFloorShareDefault:   model.DefaultDiskFloorShare,
@@ -1474,6 +1482,7 @@ type UpdateSettingsRequest struct {
 	// (model.OvercommitSettings); zero bounds are grain's defaults.
 	SandboxOvercommit      *model.OvercommitSettings `json:"sandboxOvercommit"`
 	ExternalAgentAPI       *bool                     `json:"externalAgentApi"`
+	SessionSandboxIdleTTL  *string                   `json:"sessionSandboxIdleTtl"`
 	SandboxMemoryReserveMB *int                      `json:"sandboxMemoryReserveMb"`
 	SandboxDiskFloorShare  *float64                  `json:"sandboxDiskFloorShare"`
 	SandboxDiskFloorMinMB  *int                      `json:"sandboxDiskFloorMinMb"`
@@ -1825,6 +1834,19 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.ExternalAgentAPI != nil {
 		cfg.ExternalAgentAPI = *req.ExternalAgentAPI
 	}
+	if req.SessionSandboxIdleTTL != nil {
+		d, err := parseDurationSetting("sessionSandboxIdleTtl", *req.SessionSandboxIdleTTL)
+		if err != nil {
+			return model.Config{}, err
+		}
+		if d != 0 && d > -time.Millisecond && d < time.Millisecond {
+			return model.Config{}, validationErrorf("sessionSandboxIdleTtl is stored in whole "+
+				"milliseconds, so %s would be kept as 0 -- which means grain's own default rather "+
+				"than what you asked for. Use a negative duration (-1s) to turn warm retention off, "+
+				"or blank for the default", d)
+		}
+		cfg.SessionSandboxIdleTTL = d
+	}
 	// A negative reserve is grain's own (an eighth of the machine), so
 	// what there is to refuse here is the other end: a reserve at or
 	// above what the host has leaves a memory budget of nothing, which
@@ -1908,13 +1930,25 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.K8sWorkspace = strings.TrimSpace(*req.K8sWorkspace)
 	}
 	if req.K8sGitProxyHost != nil {
-		cfg.K8sGitProxyHost = strings.TrimSpace(*req.K8sGitProxyHost)
+		host := strings.TrimSpace(*req.K8sGitProxyHost)
+		if host != "" && !k8sAddress.MatchString(host) {
+			return model.Config{}, validationErrorf("k8sGitProxyHost %q is not a host name or IP address", host)
+		}
+		cfg.K8sGitProxyHost = host
 	}
 	if req.K8sSandboxService != nil {
-		cfg.K8sSandboxService = strings.TrimSpace(*req.K8sSandboxService)
+		name, err := k8sObjectName("k8sSandboxService", *req.K8sSandboxService, k8sLabelName, "Service")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sSandboxService = name
 	}
 	if req.K8sServiceAccount != nil {
-		cfg.K8sServiceAccount = strings.TrimSpace(*req.K8sServiceAccount)
+		name, err := k8sObjectName("k8sServiceAccount", *req.K8sServiceAccount, k8sSubdomainName, "ServiceAccount")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sServiceAccount = name
 	}
 	if req.K8sNodeSelector != nil {
 		selectors := make([]string, 0, len(*req.K8sNodeSelector))
@@ -1940,10 +1974,18 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.K8sNetworkPolicy = *req.K8sNetworkPolicy
 	}
 	if req.K8sDeployment != nil {
-		cfg.K8sDeployment = strings.TrimSpace(*req.K8sDeployment)
+		name, err := k8sObjectName("k8sDeployment", *req.K8sDeployment, k8sSubdomainName, "Deployment")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sDeployment = name
 	}
 	if req.K8sContainer != nil {
-		cfg.K8sContainer = strings.TrimSpace(*req.K8sContainer)
+		name, err := k8sObjectName("k8sContainer", *req.K8sContainer, k8sLabelName, "container")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sContainer = name
 	}
 	if req.K8sPriorityClassInteractive != nil {
 		name, err := k8sPriorityClassName("k8sPriorityClassInteractive", *req.K8sPriorityClassInteractive)
@@ -2429,6 +2471,26 @@ var (
 	k8sLabelName     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 	k8sSubdomainName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
+
+// k8sAddress is what the git proxy host a sandbox pod is handed may be:
+// a host name or an IP address, with no scheme, path or space in it.
+var k8sAddress = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.:-]*[A-Za-z0-9])?$`)
+
+// k8sObjectName trims a setting naming a Kubernetes object of kind and
+// refuses a name re says the API server never accepts (the 2026-10-30
+// walkthrough saved the ServiceAccount "Bad SA"). Empty is valid: the
+// setting's default or none applies.
+func k8sObjectName(key, raw string, re *regexp.Regexp, kind string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name != "" && (len(name) > 253 || !re.MatchString(name)) {
+		chars := "lowercase letters, digits and '-'"
+		if re == k8sSubdomainName {
+			chars = "lowercase letters, digits, '-' and '.'"
+		}
+		return "", validationErrorf("%s %q is not a Kubernetes %s name: %s, starting and ending with a letter or digit", key, name, kind, chars)
+	}
+	return name, nil
+}
 
 // k8sPriorityClassName trims a priority class setting and refuses a
 // name Kubernetes could never accept. Empty is valid: it sets none.

@@ -46,8 +46,9 @@ this rule existed, or written straight into the store -- is refused at
 `model.ResolveGrants` before its provider resolves anything, so no credential
 is minted and nothing is placed. The reason is the event gate below: the
 material is a token that can write to the repository's own packages, and it
-is released only to a trusted post-merge release or an operator's own
-`workflow_dispatch`. A task is not an event, and "this task is working on the
+is released only to a trusted post-merge release, an operator's own
+`workflow_dispatch` or, for `package-publish`, the `on: schedule` cron grain
+itself fires from the default branch. A task is not an event, and "this task is working on the
 default branch" is not the assurance "this commit is already merged" is, so
 there is no task-path equivalent of that gate to apply. Settings shows both
 capabilities as **CI only** rather than as something a task could be given.
@@ -500,11 +501,12 @@ workflow's `on: schedule` cron (`ci.Request.TrustedSchedule`, set only by
 `push` or `pull_request` run, and a caller's own
 `grain ci run -event schedule`, still never hold write, whatever the job
 declares. A provider opts in to trusted schedules with
-`model.TrustedScheduleCapability`. `package-publish` and `registry-push`
-have not opted in, so a cron still can't publish. A cron publishes
-through `.grain/workflows/promote.yml` instead: once a `release-train`
-schedule's run on the default branch finishes, the orchestrator starts
-`promote.yml` as a trusted `release` of that commit
+`model.TrustedScheduleCapability`. `repo-write`, `release-gate-read` and
+`package-publish` have opted in, so the daily `release-train` cron
+publishes its rc and pending images itself; `registry-push` has not, so a
+cron still can't publish with it. Once a `release-train` schedule's run on
+the default branch finishes, the orchestrator also starts
+`.grain/workflows/promote.yml` as a trusted `release` of that commit
 (`orchestrator.startPromotion`), and `package-publish` and `image-signing`
 are released to that event.
 

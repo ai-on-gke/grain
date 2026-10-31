@@ -1503,17 +1503,30 @@ func TestUpdateSettingsRoundTripsKubernetesSettingsAndValidatesNodeSelector(t *t
 		{"k8sPriorityClassInteractive", func(v *string) ui.UpdateSettingsRequest {
 			return ui.UpdateSettingsRequest{K8sPriorityClassInteractive: v}
 		}},
+		{"k8sServiceAccount", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sServiceAccount: v} }},
+		{"k8sSandboxService", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sSandboxService: v} }},
+		{"k8sDeployment", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sDeployment: v} }},
+		{"k8sContainer", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sContainer: v} }},
 	} {
 		bad := "Bad_Name"
 		if _, err := c.UpdateSettings(ctx, tc.req(&bad)); err == nil || !strings.HasPrefix(err.Error(), tc.key+" ") {
 			t.Errorf("UpdateSettings(%s=%q) = %v, want a refusal naming %s", tc.key, bad, err, tc.key)
 		}
 		good := " walk-low.v1 "
-		if tc.key == "k8sNamespace" {
+		if tc.key == "k8sNamespace" || tc.key == "k8sSandboxService" || tc.key == "k8sContainer" {
 			good = " walk-ns "
 		}
 		if _, err := c.UpdateSettings(ctx, tc.req(&good)); err != nil {
 			t.Errorf("UpdateSettings(%s=%q): %v", tc.key, good, err)
+		}
+	}
+	// The git proxy host is an address: the 2026-10-30 walkthrough saved
+	// "not a host!".
+	for host, ok := range map[string]bool{"not a host!": false, "http://10.0.0.1": false, "10.96.0.10": true, "grain.grain.svc.cluster.local": true, "fd00::1": true} {
+		h := host
+		_, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{K8sGitProxyHost: &h})
+		if ok != (err == nil) {
+			t.Errorf("UpdateSettings(k8sGitProxyHost=%q) = %v, want accepted %v", host, err, ok)
 		}
 	}
 	none := ""

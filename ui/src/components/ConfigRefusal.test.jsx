@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import api from "../api.js";
 import ConfigRefusalDialog, {
   configRepoRefusal,
   settingsSectionPath,
 } from "./ConfigRefusal.jsx";
+
+vi.mock("../api.js", () => ({ default: vi.fn() }));
 
 const refusal = {
   code: "config_managed_externally",
@@ -77,6 +81,76 @@ describe("ConfigRefusalDialog", () => {
   it("renders nothing without a refusal", () => {
     const { container } = render(<ConfigRefusalDialog refusal={null} />);
     expect(container.textContent).toBe("");
+  });
+});
+
+// docs/design/config-repo-settings.md §2.3: a refusal of this
+// deployment's own grain/config opens its file in the Config Repo
+// Browser, and can open the config pull request itself.
+describe("ConfigRefusalDialog for the internal grain/config", () => {
+  const internal = {
+    ...refusal,
+    repo: "grain/config",
+    branch: "main",
+    url: "/repos/grain/config",
+    internal: true,
+    description: "set the deployment title",
+  };
+  afterEach(() => api.mockReset());
+
+  it("links each file into the Config Repo Browser", () => {
+    render(<ConfigRefusalDialog refusal={internal} onClose={() => {}} />);
+    const link = screen.getByRole("link", {
+      name: "Open in Config Browser → settings/schedules.yml",
+    });
+    expect(link).toHaveAttribute(
+      "href",
+      "/config?path=settings%2Fschedules.yml",
+    );
+  });
+
+  it("opens a held config pull request carrying the refusal's change", async () => {
+    api.mockResolvedValue({ taskId: "42", number: 42 });
+    const user = userEvent.setup();
+    render(<ConfigRefusalDialog refusal={internal} onClose={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Create Config PR" }));
+    expect(api).toHaveBeenCalledWith("/api/state-repo/pull-requests", {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Set the deployment title",
+        changes: internal.change,
+      }),
+    });
+    const opened = await screen.findByTestId("config-refusal-opened");
+    expect(opened).toHaveTextContent("Opened config pull request #42");
+    expect(screen.getByRole("link", { name: "task 42" })).toHaveAttribute(
+      "href",
+      "/tasks/42",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Create Config PR" }),
+    ).toBeNull();
+  });
+
+  it("says why a config pull request could not be opened", async () => {
+    api.mockRejectedValue(
+      new Error("the config change does not pass validation"),
+    );
+    const user = userEvent.setup();
+    render(<ConfigRefusalDialog refusal={internal} onClose={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Create Config PR" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("config-refusal-error")).toHaveTextContent(
+        "the config change does not pass validation",
+      ),
+    );
+  });
+
+  it("offers no pull request for an external repository", () => {
+    render(<ConfigRefusalDialog refusal={refusal} onClose={() => {}} />);
+    expect(
+      screen.queryByRole("button", { name: "Create Config PR" }),
+    ).toBeNull();
   });
 });
 

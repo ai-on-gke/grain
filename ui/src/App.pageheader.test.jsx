@@ -47,7 +47,7 @@ const PAGES = [
     "repositories/acme/widgets/releases",
     "repos",
   ],
-  ["/settings", "settings/general", "settings"],
+  ["/settings", "settings/models", "settings"],
   ["/system", "system/health", "system"],
   ["/system/logs", "system/logs", "system"],
 ];

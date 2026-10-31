@@ -42,7 +42,7 @@ func teamScopedFixture(t *testing.T) (*ui.Client, *model.Store) {
 }
 
 // grain/task-2555: a non-admin team's admin may grant self-debug and
-// pipeline-control to the team's own tasks, with no deployment admin.
+// memory to the team's own tasks, with no deployment admin.
 // Since the single-tenant reset (stage 4) what every such grant reaches
 // is the whole deployment, which the task's record says
 // (TaskDetail.DeploymentWide) for `grain mcpserver` to read.
@@ -53,26 +53,26 @@ func TestANonAdminTeamAdminGrantsTheTeamScopedCapabilities(t *testing.T) {
 
 	task, err := c.CreateTask(carol, ui.CreateTaskRequest{
 		Title: "debug our queue", Approved: true, Repo: "acme/widgets", Creator: "carol",
-		Capabilities: &[]string{"self-debug", "pipeline-control", "memory"},
+		Capabilities: &[]string{"self-debug", "memory"},
 	})
 	if err != nil {
-		t.Fatalf("a payments admin granting self-debug, pipeline-control, and memory: %v", err)
+		t.Fatalf("a payments admin granting self-debug and memory: %v", err)
 	}
-	if !slices.Contains(task.Capabilities, "self-debug") || !slices.Contains(task.Capabilities, "pipeline-control") || !slices.Contains(task.Capabilities, "memory") {
+	if !slices.Contains(task.Capabilities, "self-debug") || !slices.Contains(task.Capabilities, "memory") {
 		t.Fatalf("task capabilities = %v, want all team-scoped grants", task.Capabilities)
 	}
 	detail, err := c.GetTask(t.Context(), task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"memory", "pipeline-control", "self-debug"}; !slices.Equal(detail.DeploymentWide, want) {
+	if want := []string{"memory", "self-debug"}; !slices.Equal(detail.DeploymentWide, want) {
 		t.Errorf("payments' task DeploymentWide = %v, want %v: every grant is deployment-wide", detail.DeploymentWide, want)
 	}
 
 	// The default team's task has the same deployment-wide reach.
 	admin, err := c.CreateTask(t.Context(), ui.CreateTaskRequest{
 		Title: "debug everything", Approved: true, Repo: "acme/widgets",
-		Capabilities: &[]string{"self-debug", "pipeline-control"},
+		Capabilities: &[]string{"self-debug", "memory"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestANonAdminTeamAdminGrantsTheTeamScopedCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(detail.DeploymentWide, "self-debug") || !slices.Contains(detail.DeploymentWide, "pipeline-control") {
+	if !slices.Contains(detail.DeploymentWide, "self-debug") || !slices.Contains(detail.DeploymentWide, "memory") {
 		t.Errorf("default team's task DeploymentWide = %v, want both grants deployment-wide", detail.DeploymentWide)
 	}
 }

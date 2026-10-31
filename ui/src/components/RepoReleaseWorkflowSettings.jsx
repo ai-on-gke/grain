@@ -44,10 +44,17 @@ function jobList(value) {
 // already drawn only for a repo admin (canEditSecrets). describedBy is
 // the id of the page's sentence saying why, each disabled write's
 // accessible description.
+//
+// configReadOnly draws the release settings -- the automatic-release
+// switch and the job lists -- disabled for everybody: they are
+// config-repo only (docs/design/config-repo-settings.md §2.1). The
+// operational actions, a manual release and a base branch's check, stay
+// a repo admin's.
 export default function RepoReleaseWorkflowSettings({
   repo,
   config = null,
   readOnly = false,
+  configReadOnly = false,
   describedBy,
   // refreshKey moves when the page this sits on changed a setting that
   // can judge or unjudge the base branch, so the gate alert below is
@@ -315,7 +322,7 @@ export default function RepoReleaseWorkflowSettings({
             />
             <Button
               size="small"
-              disabled={readOnly}
+              disabled={readOnly || configReadOnly}
               aria-describedby={describedBy}
               onClick={toggle}
             >
@@ -489,9 +496,10 @@ export default function RepoReleaseWorkflowSettings({
                   size="small"
                   fullWidth
                   autoComplete="off"
-                  disabled={readOnly}
+                  disabled={readOnly || configReadOnly}
                   inputProps={{
-                    "aria-describedby": readOnly ? describedBy : undefined,
+                    "aria-describedby":
+                      readOnly || configReadOnly ? describedBy : undefined,
                   }}
                   helperText="Grain CI job ids, comma-separated, run on push against the base branch after every merge. Empty means every job a push would run."
                 />
@@ -499,7 +507,7 @@ export default function RepoReleaseWorkflowSettings({
                   type="submit"
                   variant="contained"
                   size="small"
-                  disabled={readOnly}
+                  disabled={readOnly || configReadOnly}
                   aria-describedby={describedBy}
                 >
                   Save jobs
@@ -531,9 +539,10 @@ export default function RepoReleaseWorkflowSettings({
               size="small"
               fullWidth
               autoComplete="off"
-              disabled={readOnly}
+              disabled={readOnly || configReadOnly}
               inputProps={{
-                "aria-describedby": readOnly ? describedBy : undefined,
+                "aria-describedby":
+                  readOnly || configReadOnly ? describedBy : undefined,
               }}
               helperText="Grain CI job ids, comma-separated, dispatched on the base branch once it moves — whatever releases are doing. For the part of a release workflow that is a build input, such as a cache later branches read. A failure here never holds the merge queue."
             />
@@ -541,7 +550,7 @@ export default function RepoReleaseWorkflowSettings({
               type="submit"
               variant="contained"
               size="small"
-              disabled={readOnly}
+              disabled={readOnly || configReadOnly}
               aria-describedby={describedBy}
             >
               Save dispatched jobs

@@ -288,21 +288,26 @@ func (s Schedule) Location() *time.Location {
 // workflow parser that produces them from a cron line, so that it does
 // not import this package (docs/design/grit-split.md, GS-2).
 type (
-	RecurrenceKind       = workflows.RecurrenceKind
-	Recurrence           = workflows.Recurrence
-	WorkflowReviewPolicy = workflows.ReviewPolicy
+	RecurrenceKind           = workflows.RecurrenceKind
+	Recurrence               = workflows.Recurrence
+	GitHubWorkflowRunTrigger = workflows.GitHubWorkflowRunTrigger
+	WorkflowReviewPolicy     = workflows.ReviewPolicy
 )
 
 const (
-	RecurrenceEveryNHours   = workflows.RecurrenceEveryNHours
-	RecurrenceEveryNMinutes = workflows.RecurrenceEveryNMinutes
-	RecurrenceDaily         = workflows.RecurrenceDaily
-	RecurrenceWeekly        = workflows.RecurrenceWeekly
-	RecurrenceMonthly       = workflows.RecurrenceMonthly
-	MaxEveryNHours          = workflows.MaxEveryNHours
-	MinEveryNMinutes        = workflows.MinEveryNMinutes
-	MaxEveryNMinutes        = workflows.MaxEveryNMinutes
+	RecurrenceEveryNHours       = workflows.RecurrenceEveryNHours
+	RecurrenceEveryNMinutes     = workflows.RecurrenceEveryNMinutes
+	RecurrenceDaily             = workflows.RecurrenceDaily
+	RecurrenceWeekly            = workflows.RecurrenceWeekly
+	RecurrenceMonthly           = workflows.RecurrenceMonthly
+	RecurrenceGitHubWorkflowRun = workflows.RecurrenceGitHubWorkflowRun
+	MaxEveryNHours              = workflows.MaxEveryNHours
+	MinEveryNMinutes            = workflows.MinEveryNMinutes
+	MaxEveryNMinutes            = workflows.MaxEveryNMinutes
 
 	WorkflowReviewOnFailure = workflows.ReviewOnFailure
 	WorkflowReviewAlways    = workflows.ReviewAlways
 )
+
+// ParseStoredRecurrenceKind re-exports workflows.ParseStoredRecurrenceKind.
+var ParseStoredRecurrenceKind = workflows.ParseStoredRecurrenceKind
