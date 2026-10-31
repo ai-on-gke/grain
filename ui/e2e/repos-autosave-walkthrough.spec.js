@@ -148,7 +148,9 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
         `/api/repos/${targetRepo}/capabilities`,
       );
       expect(capsRes.ok()).toBe(true);
-      expect((await capsRes.json()).defaultCapabilities).toContain("self-debug");
+      expect((await capsRes.json()).defaultCapabilities).toContain(
+        "self-debug",
+      );
     });
   });
 });
