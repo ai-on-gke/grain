@@ -184,3 +184,69 @@ func TestHoldForApprovalComposesWithDependsOnSupersedesAndNotBefore(t *testing.T
 		t.Errorf("superseded task state = %s, want closed", old.State)
 	}
 }
+
+// A proposal held for approval and filed against a repo off the target
+// repo list is parked awaiting a reply as well as unapproved
+// (grain/task-2050). The park's comment asks for a reply once the list
+// is widened, and that reply lifts the park only: it is not an approval,
+// so the task goes back to proposed rather than onto the queue.
+func TestReplyToAHeldProposalParkedOffTheTargetRepoListDoesNotApproveIt(t *testing.T) {
+	client, store, ctx := testClient(t)
+	setDefaultTeamTargetRepos(t, store, ctx, []string{"acme/widgets"})
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.ConsoleSessions = []model.ConsoleSession{
+			{ID: model.DirectorSessionID, Title: "Director", TasksApproved: true},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "Director", Interactive: true, NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := mustGetTask(t, ctx, store, session.ID)
+	stored.Tags = append(stored.Tags, model.ConsoleSessionTag(model.DirectorSessionID))
+	if err := store.PutTask(ctx, stored); err != nil {
+		t.Fatal(err)
+	}
+
+	held, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "publish the skill", Description: "d", Repo: "sklodowska-dev/skill-publisher",
+		ProposedBy: session.ID, HoldForApproval: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.State != model.StateAwaitingReply || held.Approved {
+		t.Fatalf("filed %s, approved %v; want awaiting_reply, unapproved", held.State, held.Approved)
+	}
+	if !strings.Contains(held.ParkNote, "not on this deployment's target repo list") {
+		t.Errorf("parkNote = %q, want the park's own comment", held.ParkNote)
+	}
+	if held.ApprovalNote == "" {
+		t.Error("approvalNote is empty, want why it waits for a person")
+	}
+
+	setDefaultTeamTargetRepos(t, store, ctx, []string{"acme/widgets", "sklodowska-dev/skill-publisher"})
+	if err := client.AddComment(ctx, held.ID, "added it to the list", nil); err != nil {
+		t.Fatal(err)
+	}
+	replied, err := client.Task(ctx, held.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replied.State != model.StateProposed || replied.Approved {
+		t.Fatalf("after a reply: %s, approved %v; want proposed, unapproved -- a reply is not an approval",
+			replied.State, replied.Approved)
+	}
+	ready, err := store.Ready(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ready {
+		if id == held.ID {
+			t.Fatal("the held proposal is ready for dispatch after a reply, want it waiting for an approval")
+		}
+	}
+}

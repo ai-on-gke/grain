@@ -46,7 +46,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
 	"github.com/ai-on-gke/grain/pkg/capability/reporead"
 	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
@@ -117,7 +116,6 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 		bootstrap.New(),
 		grainci.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
-		releasenotes.New(),
 		consolecap.New(),
 		quarantine.New(),
 		readissues.New(),

@@ -113,13 +113,17 @@ func baseBranchCIOff(ctx context.Context, store *model.Store, repo model.RepoRef
 // Writes nothing for a row already in that shape, so a branch that stays
 // off costs one comparison a cycle.
 func standDownBaseBranchCI(ctx context.Context, deps Deps, row model.BaseBranchCI, now time.Time) error {
+	return standDownBaseBranchCIWithReason(ctx, deps, row, model.StandingWorkOffReason(row.Repo), now)
+}
+
+func standDownBaseBranchCIWithReason(ctx context.Context, deps Deps, row model.BaseBranchCI, why string, now time.Time) error {
 	idle := model.BaseBranchCI{Repo: row.Repo, Branch: row.Branch, Commit: row.Commit, StartedAt: row.StartedAt}
 	if row.RunID == "" && row.Conclusion == "" && row.Confirmation == "" && row.ConfirmRunID == "" &&
 		row.PendingTaskID == "" && row.PendingMerges == 0 && row.RunRequestedAt == nil &&
 		row.RepairTaskID == "" && row.Detail == "" {
 		return nil
 	}
-	reason := "cancelled: " + model.StandingWorkOffReason(row.Repo)
+	reason := "cancelled: " + why
 	if deps.CI != nil {
 		if baseCIInFlight(row) {
 			deps.CI.Cancel(row.RunID, reason, ci.CancelBySystem)
@@ -129,6 +133,6 @@ func standDownBaseBranchCI(ctx context.Context, deps Deps, row model.BaseBranchC
 		}
 	}
 	log.Printf("orchestrator: not judging %s %s: %s; it holds nothing and owes no run until that is turned back on",
-		row.Repo, row.Branch, model.StandingWorkOffReason(row.Repo))
+		row.Repo, row.Branch, why)
 	return deps.Store.PutBaseBranchCI(ctx, idle)
 }

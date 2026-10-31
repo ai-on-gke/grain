@@ -11,7 +11,7 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 ## Triggers, Concurrency, and Permissions
 
 - **Triggers (`on:`)**:
-  - `tests.yml`: `push` on `main`, `pull_request`, `merge_group`, and `workflow_dispatch`
+  - `tests.yml`: `push` on `main`, `pull_request`, `merge_group`, and `workflow_dispatch` (with optional comma-separated `jobs` input for selective job execution)
   - `nightly.yml`: `schedule` (`cron: "11 2 * * *"`) and `workflow_dispatch`
   - `post-reset-e2e.yml`: `schedule` (`cron: "23 5 * * *"`) and `workflow_dispatch`
   - `kvm-route-stress.yml`: `workflow_dispatch`
@@ -31,6 +31,7 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 
 | Job ID | Display Name | Grain CI (`.grain/workflows/tests.yml`) | GitHub Actions (`.github/workflows/tests.yml`) | Hosted Runner Status |
 | :--- | :--- | :--- | :--- | :--- |
+| `changes` | `changes` | Native per-job `paths:` / `paths-ignore:` cache keys evaluated by `pkg/ci` | Lightweight pre-job running `./scripts/github-ci-changes.sh` to emit per-group and per-job booleans to `$GITHUB_OUTPUT` for `pull_request` path filtering and `workflow_dispatch` `inputs.jobs` selection | Active (`ubuntu-latest`) |
 | `go` | `go` | Runs `make fmt`, `make frontend`, `go build ./...`, `go vet ./...`, and `-race` tests for `./pkg/ui/... ./cmd/grain/... ./ui/e2e/...` | Same commands on `ubuntu-latest` with `actions/setup-go`, `actions/setup-node`, `actions/cache`, and `bubblewrap` setup | Active (`ubuntu-latest`) |
 | `go-e2e` | `go e2e` | Builds frontend (`make frontend`) and runs `-race` tests for `./tests/e2e/... ./tests/deploy/...` | Same commands on `ubuntu-latest` with Go/Node setup, caches, `bubblewrap`, and `shellcheck` | Active (`ubuntu-latest`) |
 | `go-orchestrator` | `go orchestrator` | Runs `-race` tests for `./pkg/orchestrator/...` | Same commands on `ubuntu-latest` with Go setup, cache, and `bubblewrap` + network tools | Active (`ubuntu-latest`) |
@@ -48,6 +49,21 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 | `package-cache` | `package cache` | Runs `pkg/orchestrator` real-dockerd cache tests (`GRAIN_REAL_DOCKER_CACHE_TESTS=1`) and `pkg/daemon` transparent interception test (`GRAIN_REAL_INTERCEPT_TESTS=1`) | Seeds `/etc/docker/daemon.json` with `Granulefile`'s `bip`/`default-address-pools`/`mtu`, restarts Docker, and runs the same tests | Active (`ubuntu-latest`) |
 | `real-vm` | `real vm` | Formerly in `tests.yml` (now in `nightly.yml` as `kvm-sandboxes`): boots real Firecracker/Cloud-Hypervisor VMs | Present in `.github/workflows/tests.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
 | `real-kubernetes` | `real kubernetes` | Boots a `kind` + Calico cluster and exercises Kubernetes pod sandboxes | Present in `.github/workflows/tests.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
+
+#### Per-Job Path Filtering (`pull_request`) and `workflow_dispatch` Job Selection
+
+Because GitHub Actions only supports native `paths:` / `paths-ignore:` filters at the workflow trigger level (`on.pull_request`), `.github/workflows/tests.yml` runs a fast `changes` pre-job (`./scripts/github-ci-changes.sh`) and gates every downstream job with `needs: [changes]` and an `if:` condition:
+
+- **Path filtering on `pull_request`** (mirroring `.grain/workflows/tests.yml`, plus `.github/workflows/tests.yml` itself so workflow edits run all jobs):
+  - **`go_program`** (gates `go`, `go-e2e`, `ui-e2e`, `installer-e2e`): `true` when any changed file is outside `*not-read-by-the-go-program` (`docs/**` except `docs/*-surface.md`, top-level `*.md`, `LICENSE`, `NOTICE`).
+  - **`go_backend`** (gates `go-orchestrator`, `go-model`, `postgres`, `run-host`, `host-script-container`, `package-cache`, `real-vm`, `real-kubernetes`): `true` when any changed file is outside `*not-read-by-the-go-backend` (`*not-read-by-the-go-program` plus `ui/**`).
+  - **`go_unit`** (gates `go-unit`): `true` when any changed file is outside `*not-read-by-the-go-backend`, or touches `ui/src/state.js` or `ui/src/taskAttributes.js`.
+  - **`granule`** (gates `granule`): `true` when any changed file matches `third_party/granule/**`, `scripts/run-go-tests.sh`, or `.github/workflows/tests.yml`.
+  - **`frontend`** (gates `frontend`): `true` when any changed file matches `ui/**`, `Makefile`, `scripts/warm-npm-cache.sh`, or `.github/workflows/tests.yml`.
+  - **`lint`** (gates `lint`): `true` when any changed file matches `scripts/**/*.sh`, `deploy/terraform/**/*.sh`, or `.github/workflows/tests.yml`.
+  - **`terraform`** (gates `terraform`): `true` when any changed file matches `deploy/terraform/**`, `deploy/gke/terraform/**`, or `.github/workflows/tests.yml`.
+- **Full suite on `push` and `merge_group`**: When `github.event_name` is `push` or `merge_group` (or when `git diff` against the PR base cannot be resolved cleanly), `scripts/github-ci-changes.sh` fails open (`true` for every group and job).
+- **Subset selection on `workflow_dispatch` (`inputs.jobs`)**: Operators or agents can pass a comma-separated list of job IDs (e.g. `go-model,postgres`) via the `jobs` workflow input to run only those jobs on a branch; leaving `jobs` empty runs all active jobs. Grain's GitHub check reader (`pkg/forge/health.go`, `HealthFrom`) treats `"skipped"` check runs as passing (`PrClean`).
 
 ### 2. Nightly Suite (`.grain/workflows/nightly.yml` -> `.github/workflows/nightly.yml`)
 

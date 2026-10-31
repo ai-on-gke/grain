@@ -495,7 +495,9 @@ export default function RepoPage({
   // notice linking to those files. The operational actions -- adding a
   // branch, importing issues now, a manual release, a base branch's
   // check -- are not settings, and stay a repo admin's (adminReadOnly).
-  const configRepoOnly = Boolean(config?.configRepoOnly);
+  const configRepoOnly = Boolean(
+    config?.configRepoOnly || config?.settingsLocked,
+  );
   const readOnly = adminReadOnly || configRepoOnly;
   // The same sentence is each disabled control's own accessible
   // description, so a screen reader on one hears why it is dimmed

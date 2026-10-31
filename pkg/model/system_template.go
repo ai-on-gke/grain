@@ -307,11 +307,7 @@ func memoryAgentTemplate(stateRepo RepoRef) *Template {
 		Body:          memoryAgentBody(stateRepo),
 		NetworkAccess: NetworkOpen,
 		Grants: []Grant{
-			// Named as strings rather than through
-			// pkg/capability/memory and pkg/capability/selfdebug's own
-			// CapabilityName constants: those packages import this one,
-			// so this one cannot import them.
-			{Capability: "memory", Via: GrantByGrain},
+			{Capability: "api:memory", Via: GrantByGrain},
 			{Capability: "self-debug", Via: GrantByGrain},
 		},
 	}
@@ -539,11 +535,7 @@ func releaseNotesTemplate(stateRepo RepoRef) *Template {
 		Body:          releaseNotesBody(stateRepo),
 		NetworkAccess: NetworkOpen,
 		Grants: []Grant{
-			// Named as strings rather than through
-			// pkg/capability/releasenotes and pkg/capability/selfdebug's
-			// own CapabilityName constants: those packages import this
-			// one, so this one cannot import them.
-			{Capability: "release-notes", Via: GrantByGrain},
+			{Capability: "api:release-notes", Via: GrantByGrain},
 			{Capability: "self-debug", Via: GrantByGrain},
 		},
 	}

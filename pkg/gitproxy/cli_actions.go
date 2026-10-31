@@ -287,6 +287,16 @@ type CLITaskActions interface {
 	ListAPIRoutes(ctx context.Context, callerTaskID string, grants []string, scopeFilter string) ([]CLIAPIRoute, error)
 }
 
+// CLIGitHubCheckActions is an optional extension of CLIActions for tasks whose
+// repository gates on GitHub check runs (ci_mode: "github") rather than
+// Grain CI. When UsesGitHubChecks reports true for a task, /cli/ci/wait polls
+// GitHub check runs via WaitForGitHubChecks instead of starting a Grain CI run
+// via StartTaskCI.
+type CLIGitHubCheckActions interface {
+	UsesGitHubChecks(ctx context.Context, taskID string) (bool, error)
+	WaitForGitHubChecks(ctx context.Context, taskID string, timeout, poll time.Duration, onPoll func(waited time.Duration)) (mcp.GitHubCheckWaitResult, error)
+}
+
 // proxyHandoverWriter writes a standing handover comment for a task run.
 // Implemented by *model.Store.
 type proxyHandoverWriter interface {
@@ -524,6 +534,7 @@ type CLIWaitResponse struct {
 	Commit      string          `json:"commit,omitempty"`
 	Conclusion  string          `json:"conclusion,omitempty"`
 	Error       string          `json:"error,omitempty"`
+	Report      string          `json:"report,omitempty"`
 	Selective   bool            `json:"selective,omitempty"`
 	Jobs        []CLIJobVerdict `json:"jobs"`
 	WaitedMS    int64           `json:"waited_ms"`
@@ -533,9 +544,11 @@ type CLIWaitResponse struct {
 }
 
 func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope namespace.Scope, single bool) {
-	if err := requireOwnCI(scope); err != nil {
-		cliError(w, err)
-		return
+	if single {
+		if err := requireOwnCI(scope); err != nil {
+			cliError(w, err)
+			return
+		}
 	}
 	var req cliWaitRequest
 	if !readCLIJSON(w, r, &req) {
@@ -562,6 +575,28 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		if d := deadline.Add(-cliWaitDeadlineMargin); d.Before(end) {
 			end = d
 		}
+	}
+
+	if !single && len(jobs) == 0 && strings.TrimSpace(req.ResumeRunID) == "" {
+		if ghActions, ok := p.CLIActions.(CLIGitHubCheckActions); ok {
+			usesGitHub, err := ghActions.UsesGitHubChecks(ctx, scope.TaskIDStr)
+			if err != nil {
+				cliError(w, err)
+				return
+			}
+			if usesGitHub {
+				if scope.TaskRepo == "" || scope.TaskBranch == "" {
+					cliError(w, fmt.Errorf("%w: this task has no repository and branch of its own for CI to run on", namespace.ErrBadRequest))
+					return
+				}
+				p.serveGitHubCIWait(w, ctx, scope, start, end, ghActions)
+				return
+			}
+		}
+	}
+	if err := requireOwnCI(scope); err != nil {
+		cliError(w, err)
+		return
 	}
 
 	// A daemon that has just restarted serves this route before its CI
@@ -658,6 +693,60 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		verdict = mcp.WaitVerdictFailed
 	}
 	p.recordCheckWait(ctx, scope.RunID, verdict, waited)
+	writeCLIJSON(w, http.StatusOK, resp)
+}
+
+func (p *GitProxy) serveGitHubCIWait(w http.ResponseWriter, ctx context.Context, scope namespace.Scope,
+	start, end time.Time, ghActions CLIGitHubCheckActions) {
+
+	phrase := mcp.ToolActivityNote("wait_for_checks")
+	p.noteDeclaredWait(ctx, scope.TaskIDStr, phrase)
+
+	lastReport := start
+	var credit CLIWaitCredit
+	report := func(now time.Time) {
+		credit = p.creditCLIWait(ctx, scope, now.Sub(lastReport))
+		lastReport = now
+	}
+
+	timeout := max(time.Until(end), 0)
+	res, err := ghActions.WaitForGitHubChecks(ctx, scope.TaskIDStr, timeout, cliWaitPoll, func(_ time.Duration) {
+		now := time.Now()
+		p.noteDeclaredWait(ctx, scope.TaskIDStr, phrase)
+		report(now)
+	})
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	now := time.Now()
+	report(now)
+	waited := now.Sub(start)
+
+	resp := CLIWaitResponse{
+		Status:      res.Status,
+		RunID:       "github",
+		Commit:      res.Commit,
+		Conclusion:  res.Conclusion,
+		Report:      res.Report,
+		WaitedMS:    waited.Milliseconds(),
+		CreditMS:    credit.Credited.Milliseconds(),
+		CreditCapMS: credit.Cap.Milliseconds(),
+		CreditLive:  credit.Live,
+	}
+	for _, c := range res.Checks {
+		verdict := ""
+		if c.Conclusion != nil {
+			verdict = strings.ToLower(strings.TrimSpace(*c.Conclusion))
+		}
+		if !strings.EqualFold(c.Status, "completed") || verdict == "" {
+			verdict = "running"
+		}
+		resp.Jobs = append(resp.Jobs, CLIJobVerdict{Name: c.Name, Conclusion: verdict})
+	}
+	if res.Verdict != "" {
+		p.recordCheckWait(ctx, scope.RunID, res.Verdict, waited)
+	}
 	writeCLIJSON(w, http.StatusOK, resp)
 }
 

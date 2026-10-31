@@ -391,6 +391,23 @@ var Migrations = []Migration{
 		Description: "rewrite stored pipeline-control grants to api:pipeline-control (the in-process capability is retired)",
 		Up:          rewriteLegacyGrants(map[string]string{"pipeline-control": "api:pipeline-control"}),
 	},
+	{
+		Version:     70,
+		Description: "add settings_locked to grain_config for opt-in UI/API settings lock",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `settings_locked` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     71,
+		Description: "rewrite stored memory grants to api:memory (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"memory": "api:memory"}),
+	},
+	{
+		Version:     72,
+		Description: "rewrite stored release-notes grants to api:release-notes (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"release-notes": "api:release-notes"}),
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
@@ -456,6 +473,10 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
+					strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") {
+					continue
+				}
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
 		}

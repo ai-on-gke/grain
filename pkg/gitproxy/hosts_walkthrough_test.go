@@ -91,6 +91,7 @@ func localGitHTTPBackend(projectRoot string) http.HandlerFunc {
 //     the WrongHost sentence naming both hosts, and second server received no request carrying either credential.
 //  4. Restart once more on github.com defaults with a fresh store. Assert no .host.json files are written.
 func TestGitHostsPhase1ProxyMigrationAndGuard(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	// Set up temporary directories
 	dataDir := t.TempDir()
 	secretsDir := filepath.Join(dataDir, "secrets", "github")

@@ -189,8 +189,8 @@ per-capability list, with what each one becomes:
 | `dispatch-control` | `…/api#dispatch-control` preset | **done** (task 2004): provider and its four tools removed, stored grants rewritten to `api:dispatch-control` by schema migration 68 |
 | `test-quarantine` | `…/api#tests:write` (new scope) | api scope |
 | `read-issues` | `…/github#read-issues` | new method on `github` server |
-| `release-notes` | `…/api#releases:read` + `…/api#releases:write` | api scopes |
-| `memory` | `…/api#memory:write` (new scope) | api scope |
+| `release-notes` | `…/api#release-notes` preset (`release-notes:read` + `release-notes:write`) | **done** (task 2035): provider and its tools removed, `/api/release-notes*` routes moved to `release-notes:read`/`release-notes:write`, stored grants rewritten to `api:release-notes` by schema migration 72 |
+| `memory` | `…/api#memory` preset (`memory:read` + `memory:write`) | **done** (task 2035): provider and its tools removed, stored grants rewritten to `api:memory` by schema migration 71 |
 | `team-broadcast` | `…/api#teams:broadcast` (new scope), preset `team-broadcast` | **done** (task 2004): provider and `broadcast_team_message` removed, stored grants rewritten to `api:team-broadcast` by schema migration 67 |
 | `bootstrap-playbooks` | `…/skill#skill` `{dir: bootstrap}` | existing server method |
 | `console` | stays a task setting, not a grant (it changes how the run is hosted, not what it may reach) | moved out of grants (Q8) |

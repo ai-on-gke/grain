@@ -95,8 +95,8 @@ type Scope struct {
 	MayReadSrc      bool
 	MayReadAllTasks bool
 	// TaskReadRepos are the repositories whose tasks this scope may read
-	// under task:// without MayReadAllTasks: the task's own, its reads
-	// and writes, and any an api:tasks:read@owner/repo grant names.
+	// under task:// without MayReadAllTasks: the ones an
+	// api:tasks:read@owner/repo grant names. TaskRepo is not implied.
 	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool

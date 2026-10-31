@@ -409,6 +409,42 @@ func (s *Store) suppressStandingWorkOff(ctx context.Context, sched Schedule, tar
 		StandingWorkOffReason(target))}, nil
 }
 
+// workflowGrainCIOff reports whether target has explicitly disabled Grain CI
+// (CIModeGitHub or CIModeNone), in which case scheduled `.grain/workflows/*.yml`
+// crons do not run on Grain CI.
+func (s *Store) workflowGrainCIOff(ctx context.Context, target RepoRef) (bool, CIMode, error) {
+	if target == (RepoRef{}) || IsConfigRepo(target) {
+		return false, "", nil
+	}
+	cfg, err := s.GetRepoConfig(ctx, target)
+	if err != nil {
+		return false, "", fmt.Errorf("reading %s's CI mode: %w", target, err)
+	}
+	if cfg != nil && (cfg.CIMode == CIModeGitHub || cfg.CIMode == CIModeNone) {
+		return true, cfg.CIMode, nil
+	}
+	return false, "", nil
+}
+
+func (s *Store) suppressWorkflowGrainCIOff(ctx context.Context, sched Schedule, target RepoRef,
+	mode CIMode, now time.Time, loc *time.Location, advance bool) (ScheduleFiring, error) {
+
+	if advance {
+		next := nextOccurrence(sched, now, loc)
+		if err := s.UpdateSchedule(ctx, sched.ID, func(sc *Schedule) error {
+			sc.NextRunAt = next
+			return nil
+		}); err != nil {
+			return ScheduleFiring{}, fmt.Errorf("advancing past a workflow firing into a repo with CI mode %s: %w", mode, err)
+		}
+	}
+	reason := fmt.Sprintf("this repository uses %s CI mode", mode)
+	if mode == CIModeNone {
+		reason = "this repository has CI disabled (ci_mode: none)"
+	}
+	return ScheduleFiring{StandingWorkOff: &target, Skip: droppedSkip(sched, now, SuppressedByStandingWork, reason)}, nil
+}
+
 // fireTaskSchedule files sched's next task, unless its previous firing
 // has not finished yet -- in which case this is a no-op (reported as
 // ScheduleFiring.Skipped), tried again next cycle with NextRunAt left
@@ -707,6 +743,12 @@ func (s *Store) fireWorkflowSchedule(ctx context.Context, sched Schedule, stem s
 			return ScheduleFiring{}, err
 		}
 		return s.suppressStandingWorkOff(ctx, sched, sched.Target, now, loc, advance)
+	}
+	if off, mode, err := s.workflowGrainCIOff(ctx, sched.Target); err != nil || off {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return s.suppressWorkflowGrainCIOff(ctx, sched, sched.Target, mode, now, loc, advance)
 	}
 
 	// The review this firing is going ahead over, if it found one: empty

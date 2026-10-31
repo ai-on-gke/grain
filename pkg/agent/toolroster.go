@@ -115,8 +115,6 @@ func PublishedToolNames() []string {
 	add(mcp.NewNotifyTools(nil))
 	add(mcp.NewMergeQueueTools(nil))
 	add(mcp.NewRevertTools(nil))
-	add(mcp.NewMemoryTools(nil))
-	add(mcp.NewReleaseNotesTools(nil))
 	add(mcp.NewQuarantineTools(mcp.QuarantineToolConfig{}))
 
 	// chat needs that daemon and a task somebody is sitting with; the

@@ -351,7 +351,7 @@ func runLoadHarness(t *testing.T, cfg loadConfig) {
 	creating.Store(false)
 	drainDeadline := time.Now().Add(cfg.drainTimeout)
 	for time.Now().Before(drainDeadline) {
-		if storeIsQuiet(t, ctx, store) {
+		if storeIsQuiet(t, ctx, store) && consoleSessionDispatched(ctx, store) {
 			break
 		}
 		runOneTick(t, ctx, store, deps, metrics)
@@ -419,6 +419,23 @@ func assertConsoleSessionsDispatched(t *testing.T, ctx context.Context, store *m
 		t.Errorf("console sessions: %d session task(s) filed, none of them ever dispatched -- "+
 			"every one was skipped, so the capabilities those sessions hold were never resolved", sessionTasks)
 	}
+}
+
+func consoleSessionDispatched(ctx context.Context, store *model.Store) bool {
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		return false
+	}
+	for _, task := range tasks {
+		if _, ok := model.ConsoleSessionIDOf(task); !ok {
+			continue
+		}
+		runs, err := store.Runs(ctx, task.ID)
+		if err == nil && len(runs) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // storeIsQuiet reports whether nothing is ready and no slot is occupied
@@ -634,8 +651,17 @@ func doLoadWriterAction(ctx context.Context, store *model.Store, rng *rand.Rand,
 		// separately tested code path, not one of the three things this
 		// file exists to catch, and racing it in here would only turn
 		// RunCycle's own reported error into noise this test would
-		// otherwise have to specifically parse out again.
-		if id, ok := loadPickWhere(states, rng, func(s model.State) bool {
+		// otherwise have to specifically parse out again. Also leave
+		// console session tasks alone until at least one has been
+		// dispatched: reconcileConsoleSessions files a session parked in
+		// awaiting_reply at the start of a tick, so closing it before the
+		// next tick's dispatch runs would just file another parked
+		// replacement every cycle without ever dispatching one.
+		sessionDispatched := consoleSessionDispatched(ctx, store)
+		if id, ok := loadPickWhere(states, rng, func(id string, s model.State) bool {
+			if !sessionDispatched && !strings.HasPrefix(id, "load-") {
+				return false
+			}
 			return s != model.StateClosed && s != model.StateRunning
 		}); ok {
 			start := time.Now()
@@ -670,19 +696,20 @@ func benignOrErr(err error) error {
 }
 
 func loadPickState(states map[string]model.State, want model.State, rng *rand.Rand) (string, bool) {
-	return loadPickWhere(states, rng, func(s model.State) bool { return s == want })
+	return loadPickWhere(states, rng, func(_ string, s model.State) bool { return s == want })
 }
 
-func loadPickWhere(states map[string]model.State, rng *rand.Rand, ok func(model.State) bool) (string, bool) {
+func loadPickWhere(states map[string]model.State, rng *rand.Rand, ok func(string, model.State) bool) (string, bool) {
 	var candidates []string
 	for id, s := range states {
-		if ok(s) {
+		if ok(id, s) {
 			candidates = append(candidates, id)
 		}
 	}
 	if len(candidates) == 0 {
 		return "", false
 	}
+	slices.Sort(candidates)
 	return candidates[rng.IntN(len(candidates))], true
 }
 
