@@ -602,6 +602,11 @@ func Run(opts Options) error {
 	if baseBranch != nil {
 		srv = baseBranchDemoHandler(srv, baseBranch)
 	}
+	if opts.GitHubSim {
+		if simClient, ok := cfg.GitHubBranches.(github.Client); ok {
+			srv = githubSimDemoHandler(srv, simClient)
+		}
+	}
 	ln, err := net.Listen("tcp", opts.Addr)
 	if err != nil {
 		return fmt.Errorf("grain demo: listening on %s: %v", opts.Addr, err)

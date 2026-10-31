@@ -35,11 +35,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -52,6 +55,10 @@ import (
 type demoSimState struct {
 	calls  *demoGitHubCalls
 	events orchestrator.GitHubEventSource
+	// sims is every simulated repository by "owner/name": -github-sim's
+	// own and demoGitHubSimUpstream, which the e2e hook
+	// (githubSimDemoHandler) edits issues on.
+	sims map[string]*githubsim.Sim
 }
 
 var demoSimClients sync.Map // map[github.Client]*demoSimState
@@ -59,10 +66,42 @@ var demoSimClients sync.Map // map[github.Client]*demoSimState
 type demoGitHubSimTransport struct {
 	sim   *githubsim.Sim
 	calls *demoGitHubCalls
+	// others are the further simulated repositories, by "owner/name"
+	// (demoGitHubSimUpstream). A /repos/ path naming a repository in
+	// neither answers 404, as GitHub does for one the token cannot see,
+	// rather than reaching a Sim configured for another repository,
+	// which panics.
+	others map[string]*githubsim.Sim
+}
+
+// simFor is the Sim that answers path.
+func (t demoGitHubSimTransport) simFor(path string) *githubsim.Sim {
+	rest, ok := strings.CutPrefix(path, "/repos/")
+	if !ok {
+		return t.sim
+	}
+	parts := strings.SplitN(rest, "/", 3)
+	if len(parts) < 2 {
+		return t.sim
+	}
+	name, _, _ := strings.Cut(parts[1], "?")
+	if strings.EqualFold(parts[0], t.sim.Owner) && strings.EqualFold(name, t.sim.Repo) {
+		return t.sim
+	}
+	for key, other := range t.others {
+		if strings.EqualFold(key, parts[0]+"/"+name) {
+			return other
+		}
+	}
+	return nil
 }
 
 func (t demoGitHubSimTransport) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
-	resp, err := t.sim.Request(method, path, headers, body)
+	sim := t.simFor(path)
+	if sim == nil {
+		return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+	}
+	resp, err := sim.Request(method, path, headers, body)
 	if err == nil && t.calls != nil {
 		caller, kind := "sync", "head read"
 		switch {
@@ -86,6 +125,12 @@ func (t demoGitHubSimTransport) Request(method, path string, headers map[string]
 var demoGitHubSimBranches = []string{demoGitHubSimDefaultBranch, "release/1.0"}
 
 const demoGitHubSimDefaultBranch = "main"
+
+// demoGitHubSimUpstream is a second simulated repository, standing for the
+// upstream a fork imports its issues from (model.IssueImportSettings.Repo):
+// it has issues and nothing else -- no task targets it, and its branches
+// are -github-sim's own bare repository's, which nothing reads.
+var demoGitHubSimUpstream = model.RepoRef{Owner: "acme-upstream", Name: "widgets"}
 
 // configureGitHubSimDemo creates the bare repo under dir, seeds it with
 // demoGitHubSimBranches and wires a githubsim.Sim for repo into cfg. It
@@ -143,8 +188,18 @@ func configureGitHubSimDemo(dir string, cfg ui.Config, repo model.RepoRef) (ui.C
 			{ID: 501, Path: "README.md", Line: &lineOne, Body: "Please document this flag.", User: "reviewer"},
 		}
 	}
-	client := github.NewClient(demoGitHubSimTransport{sim: sim, calls: ghCalls}, nil)
-	demoSimClients.Store(client, &demoSimState{calls: ghCalls})
+	upstream := githubsim.New(demoGitHubSimUpstream.Owner, demoGitHubSimUpstream.Name, bare, demoGitHubSimDefaultBranch)
+	upstream.Issues[7] = &githubsim.Issue{
+		Title:  "Widgets render blank on narrow screens",
+		Body:   "Reported upstream: below 400px the widget grid collapses to nothing.",
+		Author: "upstream-user",
+		Labels: map[string]struct{}{"bug": {}},
+		State:  "open",
+	}
+	others := map[string]*githubsim.Sim{demoGitHubSimUpstream.String(): upstream}
+	client := github.NewClient(demoGitHubSimTransport{sim: sim, calls: ghCalls, others: others}, nil)
+	sims := map[string]*githubsim.Sim{repo.String(): sim, demoGitHubSimUpstream.String(): upstream}
+	demoSimClients.Store(client, &demoSimState{calls: ghCalls, sims: sims})
 	cfg.GitHubBranches = client
 	cfg.GitHubForkPullRequests = client
 	prReader := demoPullRequests{repo: repo, client: client}
@@ -164,6 +219,14 @@ func configureGitHubSimDemo(dir string, cfg ui.Config, repo model.RepoRef) (ui.C
 	// -github-sim at all, rather than a listing error.
 	cfg.GitHubCredentialAvailable = func(owner, name string) bool {
 		return repo.Same(model.RepoRef{Owner: owner, Name: name})
+	}
+	// The manual "Import issues now", over the sim, as the daemon wires
+	// it over its own GitHub client (pkg/daemon's ui_server.go). Without
+	// it the button answers that the deployment has no GitHub client.
+	if store := prReader.store; store != nil {
+		cfg.IssueImporter = func(ctx context.Context, target model.RepoRef) (model.IssueImportResult, error) {
+			return orchestrator.ImportIssues(ctx, store, client, target, time.Now().UTC())
+		}
 	}
 	return cfg, bare, nil
 }
@@ -311,4 +374,59 @@ func demoGitStdin(gitDir, stdin string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// githubSimDemoHandler serves /api/e2e/github-sim/repos/{owner}/{name}/...
+// to loopback callers only, handing the rest of the path, the method and
+// the body to that repository's simulated GitHub as a GitHub REST call:
+// how a walkthrough opens an issue (POST .../issues), labels one after the
+// fact (POST .../issues/N/labels) or closes one (PATCH .../issues/N with
+// {"state":"closed"}) for the issue importer to find on its next pass.
+// Everything else goes to app.
+func githubSimDemoHandler(app http.Handler, client github.Client) http.Handler {
+	const prefix = "/api/e2e/github-sim/repos/"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			app.ServeHTTP(w, r)
+			return
+		}
+		if !loopbackRequest(r) {
+			http.Error(w, "the GitHub sim hook only answers loopback callers", http.StatusForbidden)
+			return
+		}
+		var sims map[string]*githubsim.Sim
+		if v, ok := demoSimClients.Load(client); ok {
+			sims = v.(*demoSimState).sims
+		}
+		path := strings.TrimPrefix(r.URL.Path, "/api/e2e/github-sim")
+		parts := strings.SplitN(strings.TrimPrefix(path, "/repos/"), "/", 3)
+		var sim *githubsim.Sim
+		if len(parts) >= 2 {
+			for key, s := range sims {
+				if strings.EqualFold(key, parts[0]+"/"+parts[1]) {
+					sim = s
+				}
+			}
+		}
+		if sim == nil {
+			http.Error(w, "no simulated repository there", http.StatusNotFound)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if r.URL.RawQuery != "" {
+			path += "?" + r.URL.RawQuery
+		}
+		resp, err := sim.Request(r.Method, path, map[string]string{}, body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.Status)
+		_, _ = w.Write(resp.Body)
+	})
 }
