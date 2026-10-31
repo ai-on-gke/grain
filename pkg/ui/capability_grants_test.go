@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -132,7 +133,7 @@ func TestCapabilityMethodsListArgumentSchemas(t *testing.T) {
 	if code := postJSON(t, ts, "GET", "/api/capability-methods", nil, &methods); code != 200 {
 		t.Fatalf("status %d", code)
 	}
-	if len(methods) != 2 {
+	if len(methods) < 2 {
 		t.Fatalf("methods = %+v", methods)
 	}
 	key := methods[0]
@@ -142,8 +143,11 @@ func TestCapabilityMethodsListArgumentSchemas(t *testing.T) {
 	if props, _ := key.Args["properties"].(map[string]any); props["account"] == nil {
 		t.Errorf("key's schema lost its properties: %v", key.Args)
 	}
-	if v := methods[1]; v.RequiresArgs || v.Releasable || v.Args != nil || v.Policy != nil {
+	if v := methods[1]; v.Ref != grantTestCap+"#viewer" || v.RequiresArgs || v.Releasable || v.Args != nil || v.Policy != nil {
 		t.Errorf("viewer = %+v", v)
+	}
+	if !slices.ContainsFunc(methods, func(m ui.CapabilityMethod) bool { return m.Ref == model.GrainJournalRef && !m.RequiresArgs }) {
+		t.Errorf("methods missing in-process %s: %+v", model.GrainJournalRef, methods)
 	}
 
 	if err := client.SetCapabilityPolicy(context.Background(), model.CapabilityPolicy{

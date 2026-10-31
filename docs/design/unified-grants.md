@@ -181,7 +181,7 @@ per-capability list, with what each one becomes:
 | `local-scripts:<name>` | `…/host-script#host-script` `{script}` | existing server method |
 | `repo-read:<repo>`, `repo-write:<repo>` (CI) | `…/repo#read` / `…/repo#write` `{repo}` | repo grant |
 | `self-debug` | `…/api#self-debug` preset (already an alias) plus a new `…/grain#source` method for the source checkout and metrics tools | api scope + new in-process server `…/grain` |
-| `grain-log` | `…/grain#journal` | new in-process server method; deliberately not part of any api preset (journal may hold secrets; its redaction stays) |
+| `grain-log` | `…/grain#journal` | **done** (task 2037): provider removed, `https://grain.dev/capabilities/grain#journal` added on the in-process `…/grain` server (redaction kept, deliberately in no api preset), stored grants rewritten to `https://grain.dev/capabilities/grain#journal={}` by schema migration 74 |
 | `deployment-health` | `…/api#deployment:read` plus `…/grain#health` for the host/sandbox probes | api scope + new method |
 | `self-repair` | `…/grain#host-exec` (each command still needs a live chat reply) | new method, dangerous (Q7) |
 | `self-upgrade` | `…/api#self-upgrade` preset | api preset (alias today) |

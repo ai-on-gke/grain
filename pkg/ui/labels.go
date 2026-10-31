@@ -191,11 +191,9 @@ func OfferedCapabilities() []Capability {
 			Description: "Mint a short-lived Gemini API key for this task"},
 		{ID: "self-debug", Name: "Self debug",
 			Description: "Let this task read grain's own source checkout, this deployment's own tasks and runs, and the measurements it keeps about itself -- throughput, latency, the tool-use census -- to help it debug or explain grain's own behavior. All read-only, and all of it is what anyone with this UI open can already see."},
-		{ID: "grain-log", Name: "Grain log",
-			Description: "Let this task read a bounded slice of grain's own systemd journal on this host -- the daemon's log and the kernel's -- with known credentials redacted before it leaves. Separate from self-debug on purpose: the journal carries whatever anything here has ever logged, which is far more than grain's source code."},
 	}
 	// Capabilities contributed from outside core
-	// (capability.RegisterProvider) follow grain-log, where the
+	// (capability.RegisterProvider) follow self-debug, where the
 	// deployment-level ones begin.
 	for _, r := range capability.Registered() {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})

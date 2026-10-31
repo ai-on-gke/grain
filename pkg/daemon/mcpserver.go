@@ -36,6 +36,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
@@ -1383,7 +1384,7 @@ var ConfirmPollInterval = chatPollInterval
 
 func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID string, client *ui.HTTPClient) []mcp.Tool {
 	var tools []mcp.Tool
-	if grants.Has(grainlog.CapabilityName) {
+	if grainserver.HasJournal(grants) {
 		tools = append(tools, grainlog.Tools(grainlog.Config{
 			TaskID:   taskID,
 			Redactor: grainLogRedactor(secretsDir),
@@ -2315,7 +2316,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 				MayReadMetrics:   grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", ""),
 				MayReadPipeline:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", "") || apiGrants.Allows("dispatch:read", ""),
 				MayReadHealth:    grants.Has(deploymenthealth.CapabilityName) || apiGrants.Allows("deployment:read", ""),
-				MayReadGrainLog:  grants.Has(grainlog.CapabilityName),
+				MayReadGrainLog:  grainserver.HasJournal(grants),
 			},
 			CIReader:    DaemonGrainCI{Client: client, TaskID: *taskID},
 			ArtifactDir: ciArtifactDir(*dataDir),

@@ -4576,7 +4576,7 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 			mayReadFullConfig = true
 			mayReadMetrics = true
 			mayReadPipeline = true
-		case "grain-log":
+		case "grain-log", GrainJournalRef, GrainJournalGrant:
 			mayReadGrainLog = true
 		case "deployment-health":
 			mayReadHealth = true

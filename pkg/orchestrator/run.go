@@ -37,6 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
@@ -1515,6 +1516,9 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	}
 	if apiSet.Has("release-notes:read") || apiSet.Has("release-notes:write") {
 		held["release-notes"] = true
+	}
+	if grainserver.HasJournal(names) {
+		held["grain-log"] = true
 	}
 	var b strings.Builder
 	for _, c := range grainCLIGrants {
@@ -3231,7 +3235,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// answered with (pkg/capability/grainlog, agent.RunConfig's
 		// GrainSecretsDir).
 		grainSecretsDir := ""
-		if slices.Contains(grants, grainlog.CapabilityName) || slices.Contains(grants, deploymenthealth.CapabilityName) {
+		if grainserver.HasJournal(grants) || slices.Contains(grants, deploymenthealth.CapabilityName) {
 			grainSecretsDir = cfg.GrainSecretsDir
 		}
 		grainStateDir := ""
@@ -4168,7 +4172,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // serves no MCP tool at all may be read by the run's agent framework
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
+	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
 	grainci.CapabilityName, deploymenthealth.CapabilityName, selfupgrade.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,

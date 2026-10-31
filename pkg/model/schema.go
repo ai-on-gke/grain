@@ -331,7 +331,11 @@ import "strconv"
 //
 // 73 adds `priority` to `task` (default 5) and `template`: numeric task
 // priority where higher numbers mean higher dispatch priority.
-const SchemaVersion = 73
+//
+// 74 rewrites stored `grain-log` grants to
+// `https://grain.dev/capabilities/grain#journal={}`: the in-process
+// `grain-log` provider is retired for the `grain#journal` method.
+const SchemaVersion = 74
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

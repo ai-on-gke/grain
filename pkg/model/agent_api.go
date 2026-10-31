@@ -170,20 +170,45 @@ var apiAliasCapabilities = map[string]string{
 	"release-notes":    "release-notes",
 }
 
-// legacyGrantReplacements are the bare capabilities converted to api
-// grants (docs/design/unified-grants.md §4) whose in-process provider is
-// gone: each is written as its api preset wherever a grant is recorded
-// (CanonicalLegacyGrant), and the store migration that retired it
-// rewrote the rows already stored. The bare name stays in
-// apiAliasCapabilities as well, so a grant nothing rewrote -- a
-// repository's own .grain declaration, an older grain/config -- keeps
-// granting what it did.
+// GrainCapabilityServerID is the canonical capability_id of the in-process
+// grain server (docs/design/unified-grants.md §1, §4).
+const GrainCapabilityServerID = "https://grain.dev/capabilities/grain"
+
+// Recorded canonical grants on the in-process grain server.
+const (
+	GrainJournalRef   = GrainCapabilityServerID + "#journal"
+	GrainJournalGrant = GrainJournalRef + "={}"
+)
+
+// IsGrainJournalGrant reports whether grant names grain#journal (recorded or
+// bare) or the retired bare grain-log alias.
+func IsGrainJournalGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == "grain-log" {
+		return true
+	}
+	return CapabilityGrantRef(s) == GrainJournalRef
+}
+
+// HasGrainJournal reports whether any grant in grants opens grain#journal.
+func HasGrainJournal(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainJournalGrant)
+}
+
+// legacyGrantReplacements are the bare capabilities converted to api or
+// capability-server grants (docs/design/unified-grants.md §4) whose
+// in-process provider is gone: each is written as its replacement wherever a
+// grant is recorded (CanonicalLegacyGrant), and the store migration that
+// retired it rewrote the rows already stored. The bare name keeps granting
+// what it did so a grant nothing rewrote -- a repository's own .grain
+// declaration, an older grain/config -- keeps working.
 var legacyGrantReplacements = map[string]string{
 	"team-broadcast":   APIGrantPrefix + "team-broadcast",
 	"dispatch-control": APIGrantPrefix + "dispatch-control",
 	"pipeline-control": APIGrantPrefix + "pipeline-control",
 	"memory":           APIGrantPrefix + "memory",
 	"release-notes":    APIGrantPrefix + "release-notes",
+	"grain-log":        GrainJournalGrant,
 }
 
 // CanonicalLegacyGrant is name, or the api grant a retired in-process

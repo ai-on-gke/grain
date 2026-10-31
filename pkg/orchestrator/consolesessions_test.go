@@ -106,7 +106,7 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{"bootstrap-playbooks", "deployment-health", "durable", "grain-log", "self-debug"}) {
+	if !slices.Equal(grants, []string{"bootstrap-playbooks", "deployment-health", "durable", model.GrainJournalGrant, "self-debug"}) {
 		t.Errorf("Grants = %v, want the shipped default set plus durable", grants)
 	}
 	goal, err := store.TaskGoal(ctx, director.ID)
@@ -2078,7 +2078,7 @@ func TestActiveConsoleSessionOperatorEditsPreservedAcrossReconciles(t *testing.T
 		Model:                &chosenModel,
 		NetworkAccess:        &netNone,
 		AutoApproveProposals: &approved,
-		Priority:             &prio,
+		PriorityDispatch:     &prio,
 		KeepRunning:          &keepRunning,
 	}); err != nil {
 		t.Fatalf("UpdateTask on active console session with state repo configured: %v", err)

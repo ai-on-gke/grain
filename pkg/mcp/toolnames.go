@@ -114,7 +114,7 @@ var capabilityForTool = map[string]string{
 	"read_grain_task_transcript": "self-debug",
 	"read_pipeline_changes":      "self-debug",
 	"read_grain_metrics":         "self-debug",
-	"read_grain_log":             "grain-log",
+	"read_grain_log":             "https://grain.dev/capabilities/grain#journal",
 	"list_bootstrap_playbooks":   "bootstrap-playbooks",
 	"read_bootstrap_playbook":    "bootstrap-playbooks",
 	"read_deployment_health":     "deployment-health",

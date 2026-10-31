@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -691,7 +690,7 @@ func GrantArgs(cfg RunConfig) []string {
 		if grant == selfdebug.CapabilityName && cfg.GrainSourceDir != "" {
 			args = append(args, "-grain-src-dir", cfg.GrainSourceDir)
 		}
-		if (grant == grainlog.CapabilityName || grant == deploymenthealth.CapabilityName) && cfg.GrainSecretsDir != "" {
+		if (model.IsGrainJournalGrant(grant) || grant == deploymenthealth.CapabilityName) && cfg.GrainSecretsDir != "" {
 			args = append(args, "-grain-secrets-dir", cfg.GrainSecretsDir)
 		}
 		if grant == deploymenthealth.CapabilityName && cfg.GrainStateDir != "" {

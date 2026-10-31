@@ -286,7 +286,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"github-sandbox":      "GitHub sandbox",
 	"self-debug":          "Self debug",
 	"deployment-health":   "Deployment health",
-	"grain-log":           "Grain log",
 	"self-repair":         "Self repair",
 	"self-upgrade":        "Self upgrade",
 	"bootstrap-playbooks": "Bootstrap playbooks",

@@ -416,6 +416,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `template` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 0",
 		},
 	},
+	{
+		Version:     74,
+		Description: "rewrite stored grain-log grants to https://grain.dev/capabilities/grain#journal={} (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"grain-log": GrainJournalGrant}),
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
