@@ -70,7 +70,7 @@ func seedDemoForkPullRequests(sim *githubsim.Sim, bare string, repo model.RepoRe
 		if err != nil {
 			return err
 		}
-		commit, err := demoGit(bare, "commit-tree", "-p", parent, "-m", f.title, "--end-of-options", tree)
+		commit, err := demoGit(bare, "commit-tree", "-p"+parent, "-m", f.title, "--end-of-options", tree)
 		if err != nil {
 			return err
 		}
