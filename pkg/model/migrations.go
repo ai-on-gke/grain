@@ -435,6 +435,13 @@ var Migrations = []Migration{
 		Description: "rewrite stored test-quarantine grants to api:test-quarantine (the in-process capability is retired)",
 		Up:          rewriteLegacyGrants(map[string]string{"test-quarantine": "api:test-quarantine"}),
 	},
+	{
+		Version:     77,
+		Description: "add the New Task form's configuration to grain_config",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `new_task_form` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
