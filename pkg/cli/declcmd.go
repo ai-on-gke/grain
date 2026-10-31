@@ -282,6 +282,8 @@ type declaredTemplateView struct {
 	Network   string `json:"network,omitempty"`
 	// Interactive is the template's interactive: a live chat.
 	Interactive bool `json:"interactive,omitempty"`
+	// KeepRunning is the template's keep-running: restart on exit.
+	KeepRunning bool `json:"keepRunning,omitempty"`
 	// NothingNeeded is the template's nothing-needed: "" for close.
 	NothingNeeded string              `json:"nothingNeeded,omitempty"`
 	CustomFields  map[string][]string `json:"customFields,omitempty"`
@@ -357,6 +359,7 @@ func (v *declarationsView) fill(declared model.RepoDeclarations, now time.Time, 
 			AutoMerge:    t.Template.AutoMerge,
 			Network:      string(t.Template.NetworkAccess),
 			Interactive:  t.Template.Interactive,
+			KeepRunning:  t.Template.KeepRunning,
 			CustomFields: t.Template.CustomFields,
 			Push:         t.Push,
 
@@ -577,6 +580,9 @@ func (p *printer) declarations(v declarationsView) {
 		}
 		if t.Interactive {
 			fmt.Printf("  interactive: true\n")
+		}
+		if t.KeepRunning {
+			fmt.Printf("  keep-running: true\n")
 		}
 		if len(t.CustomFields) > 0 {
 			values := make([]string, 0, len(t.CustomFields))

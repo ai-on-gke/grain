@@ -1723,6 +1723,11 @@ type Task struct {
 	// presentation of this flag -- what a run does, and how, is
 	// unchanged by it.
 	Interactive bool
+	// KeepRunning restarts this task immediately when its run exits
+	// without asking a question or requesting a secret, re-queueing it
+	// instead of completing, closing on nothing_needed, or resting on a
+	// goal.
+	KeepRunning bool
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) override
 	// Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB for this task's

@@ -693,7 +693,7 @@ type sandboxArgs struct {
 // sandboxBoolFlags take no value.
 var sandboxBoolFlags = map[string]bool{
 	"i": true, "full": true, "json": true, "all": true, "comments": true,
-	"no-repo": true, "fixes-base-branch": true, "no-port": true,
+	"no-repo": true, "fixes-base-branch": true, "no-port": true, "keep-running": true,
 	"no-follow-up": true, "park": true, "auto-merge": true,
 	"hold-for-approval": true, "at-front": true, "stalled": true,
 }
