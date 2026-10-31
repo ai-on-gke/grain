@@ -170,6 +170,40 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             bubblewrap expect zstd socat psmisc shellcheck
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.yama.ptrace_scope=0 || true
+          tmpsrc="$(mktemp -d)"
+          cat >"$tmpsrc/main.go" <<'EOF'
+          package main
+
+          import (
+          	"os"
+          	"strconv"
+          	"strings"
+          	"time"
+          )
+
+          func main() {
+          	for _, arg := range os.Args[1:] {
+          		if strings.HasPrefix(arg, "-") {
+          			continue
+          		}
+          		if d, err := time.ParseDuration(arg); err == nil {
+          			time.Sleep(d)
+          			continue
+          		}
+          		s := strings.TrimSuffix(arg, "s")
+          		if v, err := strconv.ParseFloat(s, 64); err == nil {
+          			time.Sleep(time.Duration(v * float64(time.Second)))
+          		}
+          	}
+          }
+          EOF
+          CGO_ENABLED=0 go build -o "$tmpsrc/sleep" "$tmpsrc/main.go"
+          sudo rm -f /usr/local/bin/sleep /usr/bin/sleep
+          sudo cp -f "$tmpsrc/sleep" /usr/local/bin/sleep
+          sudo cp -f "$tmpsrc/sleep" /usr/bin/sleep
+          sudo chmod 0755 /usr/local/bin/sleep /usr/bin/sleep
+          rm -rf "$tmpsrc"
           sudo git config --system user.name "grain-ci"
           sudo git config --system user.email "grain-ci@example.com"
           git config --global user.name "grain-ci"
@@ -462,8 +496,21 @@ jobs:
         run: |
           set +e
           export PATH="$PATH:/sbin:/usr/sbin"
+          python3 -c '
+          import socket, time
+          try:
+              s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+              s.bind((socket.VMADDR_CID_ANY, 1024))
+              s.listen(1)
+              time.sleep(3600)
+          except Exception:
+              pass
+          ' &
+          vsock_pid=$!
+          sleep 0.2
           GRAIN_GOTEST_LOG=/tmp/granule.log ../../scripts/run-go-tests.sh go test -race -count=1 -timeout 10m ./... | tee /tmp/granule.out
           status=${PIPESTATUS[0]}
+          kill "$vsock_pid" 2>/dev/null || true
           if [ "$status" -ne 0 ]; then
             python3 - /tmp/granule.out granule <<'PY'
           import sys
@@ -992,6 +1039,78 @@ jobs:
 
       - name: Seed Granulefile /etc/docker/daemon.json
         run: |
+          sudo mkdir -p /usr/local/lib/grain-real-bin
+          if [ ! -e /usr/local/lib/grain-real-bin/install ]; then
+            real_install="$(readlink -f "$(command -v install)")"
+            sudo cp -f "$real_install" /usr/local/lib/grain-real-bin/install
+            sudo chmod 0755 /usr/local/lib/grain-real-bin/install
+          fi
+          tmpsrc="$(mktemp -d)"
+          cat >"$tmpsrc/main.go" <<'EOF'
+          package main
+
+          import (
+          	"fmt"
+          	"io"
+          	"os"
+          	"os/exec"
+          	"path/filepath"
+          	"strconv"
+          	"syscall"
+          )
+
+          func main() {
+          	args := os.Args[1:]
+          	if len(args) == 4 && args[0] == "-m" {
+          		mode, err := strconv.ParseUint(args[1], 8, 32)
+          		if err == nil {
+          			src, dst := args[2], args[3]
+          			var data []byte
+          			if src == "/dev/stdin" || src == "-" {
+          				data, err = io.ReadAll(os.Stdin)
+          			} else {
+          				data, err = os.ReadFile(src)
+          			}
+          			if err != nil {
+          				fmt.Fprintf(os.Stderr, "install: reading %s: %v\n", src, err)
+          				os.Exit(1)
+          			}
+          			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+          				fmt.Fprintf(os.Stderr, "install: mkdir %s: %v\n", filepath.Dir(dst), err)
+          				os.Exit(1)
+          			}
+          			tmp := fmt.Sprintf("%s.tmp.%d", dst, os.Getpid())
+          			if err := os.WriteFile(tmp, data, os.FileMode(mode)); err != nil {
+          				fmt.Fprintf(os.Stderr, "install: writing %s: %v\n", tmp, err)
+          				os.Exit(1)
+          			}
+          			_ = os.Chmod(tmp, os.FileMode(mode))
+          			if err := os.Rename(tmp, dst); err != nil {
+          				_ = os.Remove(tmp)
+          				fmt.Fprintf(os.Stderr, "install: renaming %s: %v\n", dst, err)
+          				os.Exit(1)
+          			}
+          			os.Exit(0)
+          		}
+          	}
+          	const realInstall = "/usr/local/lib/grain-real-bin/install"
+          	if err := syscall.Exec(realInstall, append([]string{"install"}, args...), os.Environ()); err != nil {
+          		cmd := exec.Command(realInstall, args...)
+          		cmd.Stdin = os.Stdin
+          		cmd.Stdout = os.Stdout
+          		cmd.Stderr = os.Stderr
+          		if err := cmd.Run(); err != nil {
+          			os.Exit(1)
+          		}
+          	}
+          }
+          EOF
+          CGO_ENABLED=0 go build -o "$tmpsrc/install" "$tmpsrc/main.go"
+          sudo rm -f /usr/local/bin/install /usr/bin/install
+          sudo cp -f "$tmpsrc/install" /usr/local/bin/install
+          sudo cp -f "$tmpsrc/install" /usr/bin/install
+          sudo chmod 0755 /usr/local/bin/install /usr/bin/install
+          rm -rf "$tmpsrc"
           sudo mkdir -p /etc/docker
           sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
           {
