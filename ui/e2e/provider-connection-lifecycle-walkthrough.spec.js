@@ -66,9 +66,14 @@ test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and 
     const initialSettings = initialSettingsRes.ok()
       ? await initialSettingsRes.json()
       : null;
+    const initialDeploymentRes = await page.request.get("/api/deployment");
+    const initialDeployment = initialDeploymentRes.ok()
+      ? await initialDeploymentRes.json()
+      : null;
 
-    // -----------------------------------------------------------------------
-    // STEP 1: AI Provider Connection Management Lifecycle
+    try {
+      // -----------------------------------------------------------------------
+      // STEP 1: AI Provider Connection Management Lifecycle
     // -----------------------------------------------------------------------
     // Navigate to Settings -> Models & connections, the deployment's own
     // connections.
@@ -581,24 +586,36 @@ test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and 
     await expect(tokenCard.getByText("Revoked", { exact: true })).toBeVisible();
     await expect(tokenCard.getByText(/Revoked:/)).toBeVisible();
 
-    // Clean up created test teams
+      // Reset back to main root page
+      await page.goto("/");
 
-    // Restore initial settings to avoid polluting shared test state
-    if (initialSettings) {
-      await page.request
-        .put("/api/settings", {
-          data: initialSettings,
-        })
-        .catch(() => {});
+      // Final sanity assertion: no server 5xx errors occurred
+      expect(
+        failedRequests,
+        `Unexpected 5xx responses: ${failedRequests.join(", ")}`,
+      ).toHaveLength(0);
+    } finally {
+      // Restore initial settings to avoid polluting shared test state
+      if (initialSettings) {
+        await page.request
+          .put("/api/settings", {
+            data: {
+              agentBackends: initialSettings.agentBackends,
+              defaultModel: initialSettings.defaultModel,
+            },
+          })
+          .catch(() => {});
+      }
+      if (initialDeployment) {
+        await page.request
+          .put("/api/deployment", {
+            data: {
+              defaultModel: initialDeployment.defaultModel || "",
+              modelSettings: initialDeployment.modelSettings || [],
+            },
+          })
+          .catch(() => {});
+      }
     }
-
-    // Reset back to main root page
-    await page.goto("/");
-
-    // Final sanity assertion: no server 5xx errors occurred
-    expect(
-      failedRequests,
-      `Unexpected 5xx responses: ${failedRequests.join(", ")}`,
-    ).toHaveLength(0);
   });
 });

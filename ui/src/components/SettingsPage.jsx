@@ -150,9 +150,10 @@ export default function SettingsPage({
   // writes in favour of a config pull request when settings are locked.
   // By default (settingsLocked: false) they stay editable in the UI.
   const lockedInUI =
-    settings && typeof settings.settingsLocked === "boolean"
+    Boolean(config?.configRepoOnly && !config?.settingsLocked) ||
+    (settings && typeof settings.settingsLocked === "boolean"
       ? settings.settingsLocked
-      : Boolean(config?.configRepoOnly) || Boolean(config?.settingsLocked);
+      : Boolean(config?.configRepoOnly) || Boolean(config?.settingsLocked));
   const configRepoOnly = lockedInUI || Boolean(externalConfigRepo);
   const configManaged = configRepoOnly && isConfigRepoSection(current);
   const readOnly = external || configManaged;
