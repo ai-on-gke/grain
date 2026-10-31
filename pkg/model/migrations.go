@@ -398,6 +398,16 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `settings_locked` INTEGER NOT NULL DEFAULT 0",
 		},
 	},
+	{
+		Version:     71,
+		Description: "rewrite stored memory grants to api:memory (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"memory": "api:memory"}),
+	},
+	{
+		Version:     72,
+		Description: "rewrite stored release-notes grants to api:release-notes (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"release-notes": "api:release-notes"}),
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
