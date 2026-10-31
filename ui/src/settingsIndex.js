@@ -40,6 +40,13 @@ export const SETTINGS_INDEX = [
     keywords: [],
   },
   {
+    id: "settingsLocked",
+    section: "general",
+    anchor: "settings-lock",
+    label: "Lock settings in UI (require config repo PRs)",
+    keywords: ["lock", "read-only", "config repo"],
+  },
+  {
     id: "upgradeCheckMode",
     section: "general",
     anchor: "updates",

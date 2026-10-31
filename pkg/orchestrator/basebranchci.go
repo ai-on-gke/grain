@@ -378,6 +378,15 @@ func reconcileBaseBranchCI(ctx context.Context, deps Deps, now time.Time) error 
 			}
 			continue
 		}
+		if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, row.Repo); err != nil {
+			errs = append(errs, err)
+			continue
+		} else if disabled {
+			if err := standDownBaseBranchCIWithReason(ctx, deps, row, cancelReasonForCIMode(mode), now); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
 		if err := reconcileOneBaseBranchCI(ctx, deps, row, now); err != nil {
 			errs = append(errs, err)
 		}

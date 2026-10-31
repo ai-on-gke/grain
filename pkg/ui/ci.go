@@ -185,6 +185,22 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 	}
 	resetPullRequestPolls(*task)
 	full := len(opt.Jobs) == 0 && opt.Workflow == "" && !opt.Recheck
+	if full && !grainci.RequiredFor(*task.Target) && c.Store != nil {
+		repoCfg, err := c.Store.GetRepoConfig(ctx, *task.Target)
+		if err != nil {
+			return ci.Run{}, err
+		}
+		if !grainci.RepoUsesGrainCI(repoCfg, *task.Target) {
+			rulesRequire := false
+			if rules, rerr := c.Store.MergeRulesOf(ctx, *task.Target); rerr == nil && !rules.Empty() {
+				rulesRequire = rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()
+			}
+			explicitDisabled := repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone)
+			if !rulesRequire && (explicitDisabled || !grainci.GrantedExplicitly(task.Grants)) {
+				return ci.Run{}, forbiddenErrorf("%s", ciNotEnabledMessage(*task.Target))
+			}
+		}
+	}
 	previous, err := c.Store.GetObservation(ctx, id)
 	if err != nil {
 		return ci.Run{}, err

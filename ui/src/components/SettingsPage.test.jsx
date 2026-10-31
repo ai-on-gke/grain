@@ -777,4 +777,42 @@ describe("SettingsPage", () => {
       }),
     );
   });
+
+  it("allows locking and unlocking settings in the UI from General", async () => {
+    const user = userEvent.setup();
+    setup({ section: "general", config: { settingsLocked: false } });
+
+    const envBox = await screen.findByLabelText("Environment name");
+    const lockToggle = screen.getByRole("checkbox", {
+      name: /Lock settings in UI \(require config repo PRs\)/i,
+    });
+    expect(envBox).toBeEnabled();
+    expect(lockToggle).not.toBeChecked();
+    expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+
+    // Lock settings in UI
+    await user.click(lockToggle);
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ settingsLocked: true }),
+      }),
+    );
+    expect(lockToggle).toBeChecked();
+    expect(screen.getByLabelText("Environment name")).toBeDisabled();
+    expect(screen.getByTestId("config-managed-notice")).toBeInTheDocument();
+    expect(lockToggle).toBeEnabled();
+
+    // Unlock settings in UI again
+    await user.click(lockToggle);
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ settingsLocked: false }),
+      }),
+    );
+    expect(lockToggle).not.toBeChecked();
+    expect(screen.getByLabelText("Environment name")).toBeEnabled();
+    expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+  });
 });
