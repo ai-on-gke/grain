@@ -1267,6 +1267,19 @@ var Tables = []string{
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
 )`,
 
+	// task_run_startup records the per-phase startup timestamps of a run
+	// (queued_at -> started_at -> sandbox_acquired_at -> sandbox_prepared_at -> first_turn_at)
+	// so interactive and batch startup latency breakdowns can be reported on
+	// Attempt and in grain metrics without altering the frozen task_run DDL.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_startup`" + ` (
+  ` + "`run_id`" + `              TEXT     NOT NULL,
+  ` + "`queued_at`" + `           DATETIME NULL,
+  ` + "`sandbox_acquired_at`" + ` DATETIME NULL,
+  ` + "`sandbox_prepared_at`" + ` DATETIME NULL,
+  ` + "`first_turn_at`" + `       DATETIME NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
+)`,
+
 	`CREATE TABLE IF NOT EXISTS ` + "`lease`" + ` (
   ` + "`run_id`" + `     TEXT     NOT NULL,
   ` + "`capability`" + ` TEXT     NOT NULL,
