@@ -743,8 +743,14 @@ func patchTouchesTaskGrants(body []byte) bool {
 		}
 		lower := strings.ToLower(key)
 		if strings.Contains(lower, "capabilit") || lower == "grants" ||
-			lower == "priority" || lower == "keeprunning" || lower == "keep_running" {
+			lower == "keeprunning" || lower == "keep_running" {
 			return true
+		}
+		if lower == "priority" {
+			var b bool
+			if json.Unmarshal(raw, &b) == nil {
+				return true
+			}
 		}
 	}
 	return false

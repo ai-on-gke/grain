@@ -595,6 +595,35 @@ export default function ConsoleSessionPage({
           }
           sx={{ display: "flex", alignItems: "flex-start" }}
         />
+        <FormControlLabel
+          control={
+            <Checkbox
+              size="small"
+              name="keepRunning"
+              checked={Boolean(session.keepRunning)}
+              disabled={saving === "keepRunning"}
+              onChange={() =>
+                save({ keepRunning: !session.keepRunning }, "keepRunning")
+              }
+            />
+          }
+          label={
+            <span>
+              Keep running
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                component="span"
+                sx={{ display: "block" }}
+              >
+                Off, the session rests when a turn ends and waits for your next
+                message. On, it immediately starts a new turn whenever a run
+                exits.
+              </Typography>
+            </span>
+          }
+          sx={{ display: "flex", alignItems: "flex-start", mt: 0.5 }}
+        />
       </Box>
     </Box>
   );
