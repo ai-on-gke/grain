@@ -2291,7 +2291,7 @@ func sessionSandboxSection(task model.Task, h History) string {
 			"packages, clones and uncommitted changes are still in place, so do not redo setup, " +
 			"re-clone or reinstall packages that are already there."
 	}
-	if h.SandboxReclaimed || (task.Interactive && len(h.Attempts) > 0) {
+	if h.SandboxReclaimed || ((task.Interactive || task.KeepRunning) && len(h.Attempts) > 0) {
 		return "\n\nThe sandbox is not the same one: your previous session sandbox was reclaimed, " +
 			"so this run has a new sandbox with a fresh clone and only what you committed and " +
 			"pushed still exists."
@@ -3471,7 +3471,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// inside the run: a turn that ended promising more work, or a
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
-		result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
+		if !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
+			result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
+		}
 		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)
 		agentRan = true
 		if result != nil {
@@ -3863,9 +3865,12 @@ const textOnlyAnswerDetail = "the agent answered in text without calling a tool"
 // session (grain/task-1774). A run that produced neither a tool call nor
 // any text is still a failure, interactive or not.
 func outcomeFor(task model.Task, result *agent.Result) (outcome, detail string) {
-	if task.Interactive && result != nil && len(result.ToolCalls) == 0 &&
+	if (task.Interactive || task.KeepRunning) && result != nil && len(result.ToolCalls) == 0 &&
 		strings.TrimSpace(result.FinalText) != "" {
 		return "succeeded", textOnlyAnswerDetail
+	}
+	if task.KeepRunning && result != nil && len(result.ToolCalls) == 0 {
+		return "succeeded", "the run exited cleanly"
 	}
 	return outcomeOf(result)
 }
@@ -4834,6 +4839,7 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		detail = runErr.Error() + partialWorkSuffix(result) + suspectedRefusalSuffix(unmatched)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	default:
+		task.KeepRunning = taskKeepRunning(ctx, store, task)
 		outcome, detail = outcomeFor(task, result)
 	}
 	// A run that stopped by itself during a graceful pause's grace period

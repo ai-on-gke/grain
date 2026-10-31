@@ -620,6 +620,7 @@ var (
 		"blocks",
 		"auto_approve_proposals",
 		"interactive",
+		"keep_running",
 		"immediate",
 		"no_port",
 		"resume_on_deadline",
