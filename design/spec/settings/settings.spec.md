@@ -108,7 +108,7 @@ Component: `ModelsSection.jsx`, `ModelDefaults.jsx`, `CLIRunLocations.jsx`. Surf
 | … `concurrency` | | | Runs at once on this connection; default `model.DefaultAgentBackendConcurrency` = 4 | |
 | … `modelTurnTimeout`, `modelRetryCutoff` | | | `antigravity` only. Durations, with `modelRetryCutoff` ≤ `modelTurnTimeout`. | |
 | Connection credential | `PUT`/`DELETE /api/agent-backends/{id}/credential`, `PUT`/`DELETE /api/agent-backends/{id}/codex-auth`, `PUT`/`DELETE /api/agent-keys/{framework}`, `PUT`/`DELETE /api/codex-auth` | secret store only | Write-only. `POST /api/agent-keys/{framework}/check` tests a credential without storing it. | live |
-| Default model (`#model-defaults`) | `defaultModel` (`PUT /api/settings` or `PUT /api/deployment`); `defaultModels` (ordered fallback list, `PUT /api/deployment`) | `DefaultModel` / `default_model` | String. Empty means the first supported model of the configured connections, or else the framework default. | live (per dispatch) |
+| Default model (`#model-defaults`) | `defaultModel` (`PUT /api/settings` or `PUT /api/deployment`); `defaultModels` (ordered fallback list, `PUT /api/deployment`; the UI's *Add fallback model* control, `addDefaultModel`) | `DefaultModel` / `default_model` | String. Empty means the first supported model of the configured connections, or else the framework default. | live (per dispatch) |
 | Reasoning effort, per model (`#model-defaults`) | `modelSettings` on `PUT /api/deployment` | `ModelSettings` / `model_settings` (JSON `[{model, effort}]`) | Effort per model. The values offered come from `codexEfforts` and `geminiEfforts` in `GET /api/settings`. | live (next dispatch) |
 | Pinned connection | `agentBackendId` (team/deployment update) | `AgentBackendID` / `agent_backend_id` | The connection a task that names no model, connection or framework is pinned to. Empty means the rotation. | live |
 | Where each agent CLI runs (`#cli-run`) | `GET`/`PUT /api/settings/cli-run` | `CLIRun` / `cli_run` (JSON map, framework → `{location}`) | `location` is `host`, `container` or `detached` (`model.CLIRun*`), limited to what this host allows. A framework with no entry runs where the daemon flags (`-claude-run`, `-codex-run`, `-agy-run`), and then the built-in default, put it. | next run |
@@ -152,7 +152,7 @@ Component: `SandboxesSection.jsx`, `CustomSandboxImageCard.jsx`. Surface: **boot
 | Disk floor (share of each volume) | `sandboxDiskFloorShare` | `SandboxDiskFloorShare` / `sandbox_disk_floor_share` | 0–1. Default 0.10. Effectively capped at 0.25 (`MaxDiskFloorShare`). `0` together with min `0` means no floor. | live (per disk reading) |
 | Disk floor minimum (MiB) | `sandboxDiskFloorMinMb` | `SandboxDiskFloorMinMB` / `sandbox_disk_floor_min_mb` | ≥ 0. Default 5120 (`MinDiskFloorMB`). | live |
 
-The card also shows the read-only `sandboxCommitment` (what the budget currently admits).
+The auto-mode inputs are named `sandboxOvercommitCpuMin`, `sandboxOvercommitCpuMax`, `sandboxOvercommitMemoryMin`, `sandboxOvercommitMemoryMax`, `sandboxOvercommitCpuPressureTarget` and `sandboxOvercommitMemoryPressureTarget` in the form, and are sent as the nested `sandboxOvercommit` object. The card also shows the read-only `sandboxCommitment` (what the budget currently admits).
 
 #### Kubernetes (`#kubernetes`)
 
@@ -173,7 +173,7 @@ These apply to the `kubernetes` and `kubernetes-granule` backends. Every field e
 | (checkbox) NetworkPolicy enforced | `k8sNetworkPolicy` | `k8s_network_policy` | `false`; asserts the CNI enforces `deploy/kubernetes/networkpolicy.yaml` | restart |
 | Kubernetes Deployment | `k8sDeployment` | `k8s_deployment` | `grain`; the Deployment the Upgrade button repoints | restart |
 | Kubernetes container | `k8sContainer` | `k8s_container` | `grain` | restart |
-| PriorityClass (interactive / agent / CI) | `k8sPriorityClassInteractive`, `k8sPriorityClassAgent`, `k8sPriorityClassCi` | `k8s_priority_class_{interactive,agent,ci}` | `grain-interactive` / `grain-agent` / `grain-ci`. An empty string means **no** priority class, not the default. Must be a valid PriorityClass name. | restart (they are in `restartOnlySettings`) |
+| PriorityClass (interactive / agent / CI) | `k8sPriorityClassInteractive`, `k8sPriorityClassAgent`, `k8sPriorityClassCi` | `k8s_priority_class_interactive`, `k8s_priority_class_agent`, `k8s_priority_class_ci` | `grain-interactive` / `grain-agent` / `grain-ci`. An empty string means **no** priority class, not the default. Must be a valid PriorityClass name. | restart (they are in `restartOnlySettings`) |
 
 ### 3.3 Models & sandboxes → Executors (`/settings/executors#executors`)
 
@@ -348,3 +348,202 @@ Component: `MemorySection.jsx` → `MemoryPanel`. Config path: `memory/deploymen
 | --- | --- | --- | --- | --- |
 | Deployment memory | `GET`/`PUT /api/memory` (with `repo` for one repository) | `memory` table → `memory/**` | Free text given to runs | next run |
 | Memory documents | `GET /api/memory/documents[/{name}]`, `PUT /api/memory/documents` | `memory_document` table | Named documents, per deployment or per repository | next run |
+
+## 4. Deployment settings with no Settings-page control
+
+These `model.Config` fields are real and exported to `tables/grain_config.json`, but no Settings page card edits them. Some are written by another route, and the rest only by a config PR (or `grain settings` / `PUT /api/settings` where a key exists).
+
+| Field / column | Write path | Type, default, semantics | Applies |
+| --- | --- | --- | --- |
+| `MaxMergers` / `max_mergers` | config repo | Capacity on top of `max_workers` that only merge-queue fix tasks may use. `0` is meaningful: mergers then contend with workers. Default 1. (The `-max-mergers` flag is deprecated and ignored.) | live |
+| `MaxCIJobs` / `max_ci_jobs` | config repo (the `sandbox_commitment` planner may zero it) | CI job sandboxes at once, independent of workers. Default 1. (The `-max-ci-jobs` flag is deprecated and ignored.) | live |
+| `BaseCIRedStreak` / `base_ci_red_streak` | config repo | Consecutive judged base-branch tips that fail the same job before the branch is treated as confirmed red without a re-run. `0` means 2. | live |
+| `TimeZone` / `time_zone` | `timeZone` on `PUT /api/settings` | An IANA zone. Empty or `UTC` means UTC. The default zone every timestamp is printed in, carried in `GET /api/config`. A browser may override it locally (§11). | live (per request) |
+| `DefaultFilters` / `default_filters` | config repo | §3.13 | live |
+| `JudgementModel` / `judgement_model` | config repo | §3.1 | live |
+| `AgentFramework` / `agent_framework` | config repo | §3.14 | live |
+| `RepairTemplateID` / `repair_template_id` | `repairTemplateID` | §3.14 | live |
+| `ExternalAgentAPI` / `external_agent_api` | `externalAgentApi` | §3.5 | live |
+| `SandboxImageMirror` / `sandbox_image_mirror` | `sandboxImageMirror` | §3.2 | live |
+| `IAPBackendService` / `iap_backend_service` | `iapBackendService` | The GCP backend service whose IAP IAM policy is reconciled. Empty disables reconciliation. | live (tick, plus `TriggerIAPSync`) |
+| `IAPResource` / `iap_resource` | `iapResource` | The IAP web resource to reconcile as well, for example `projects/<N>/iap_web/cloud_run-<region>/services/<svc>`. Empty derives it from a Cloud Run relay's audience. `none` turns that off. Validated. | live |
+| `AgentBackendID`, `GitCredential`, `ModelSettings`, `AgentGitName`, `AgentGitEmail`, `TargetRepos` | `PUT /api/deployment`, legacy team update | §3.1, §3.11, §3.12, §3.14 | live |
+
+## 5. Retired and ignored `grain_config` columns
+
+These columns are still read and written for dump fidelity, and nothing acts on them:
+
+- `merge_batch_size`, `merge_gather_window_ms`: retired by grain/task-1023 (§3.8).
+- `password_auth_enabled`, `open_registration`, `google_oauth_enabled`, `google_oauth_client_id`, `google_oauth_client_secret`, `google_oauth_allowed_domains`: in-app sign-in from before IAP and access-code sign-in ([authentication design](../../design/authentication.design.md)). There is no API key for any of them.
+
+A new field that holds a credential belongs in `pkg/secrets`, never here (the `model.Config` doc comment).
+
+## 6. Per-repository settings (`repo_config`, `/repos/<owner>/<name>/settings/<tab>`)
+
+Store: `model.RepoConfig`, one row per repository → `tables/repo_config.json`. The setup command is externalised to `scripts/repos/<owner>/<name>/setup.sh`. Surface: **config-managed**. Write routes:
+- `PUT /api/repos/{owner}/{name}/settings` (`ui.SetRepoSettingsRequest`, only the fields given are changed).
+- One single-field route per setting, listed below.
+- `PUT /api/deployment/repos/{owner}/{name}/config` (operator-level fields, `json` keys as given).
+
+`GET /api/repos/{owner}/{name}/settings` reads them. Every repository field applies **live** (it is read at dispatch, at merge, or per cycle) unless the row says otherwise.
+
+| Tab | UI control | API key (route) | Field / column | Type, default, semantics |
+| --- | --- | --- | --- | --- |
+| overview | Merge batches panel, runs (read-only) | — | — | — |
+| ci | CI mode | `ciMode` (`PUT …/ci-mode`) | `CIMode` / `ci_mode` | `grain` (`.grain/workflows` gates, GitHub checks ignored), `github` (GitHub checks gate) or `none` (no CI gate). Empty derives from the legacy `ignore_github_ci`. |
+| ci | Ignore GitHub CI (legacy) | `ignoreGitHubCI` (`PUT …/ignore-github-ci`) | `IgnoreGitHubCI` / `ignore_github_ci` | Bool. A repository layer can only add to a deployment's own refusal, never subtract. |
+| ci | Watch default branch | `watchDefaultBranch` (`PUT …/watch-default-branch`) | `WatchDefaultBranch` / `watch_default_branch` | Bool. Seed base-branch CI and repair it when red. Only has effect when grain CI is enabled for the repository. |
+| ci | CI capabilities | `ciCapabilities` (`PUT …/ci-capabilities`) | `CICapabilities` / `ci_capabilities` | The explicit capability set for CI jobs (also `capabilities.yml` `repos.<repo>.ci`) |
+| ci | Workflows editor | `PUT …/workflows` (`{workflows:[{path,text}]}`) | `repo_workflow` table (`Repo`, `Path`, `Text`) → `workflows/<owner>/<name>/…` | The deployment's own grain CI workflows for the repository, alongside `.grain/workflows` |
+| merge-queue | Require branch up to date | `requireBranchUpToDate` (`PUT …/require-branch-up-to-date`) | `RequireBranchUpToDate` / `require_branch_up_to_date` | Bool |
+| merge-queue | Merge on green | `mergeOnGreen` (`PUT …/merge-on-green`) | `MergeOnGreen` / `merge_on_green` | Bool. Merge a green, clean PR without waiting behind earlier entries. |
+| merge-queue | Base repairs bypass human gates | `baseRepairBypassesHumanGates` (`PUT …/base-repair-bypasses-human-gates`) | `BaseRepairBypassesHumanGates` / `base_repair_bypasses_human_gates` | Bool |
+| merge-queue | Checks that cannot pass | `unfixableChecks` (`PUT …/unfixable-checks`) | `UnfixableChecks` / `unfixable_checks` | Exact check names, case-insensitive, never substrings |
+| merge-queue | Read declarations (also on advanced) | `declarations` (`PUT …/declarations`) | `Declarations` / `declarations` | Bool, default off. Whether grain reads this repository's `.grain/*` (§7). Never declarable by the repository itself. |
+| (no control) | — | `mergeRecheck` (`PUT …/settings`) | `MergeRecheck` / `merge_recheck` | `off`, `observe` or `enforce`. Under `enforce`, each entry is checked against the live tip before merging, and `max_merges_per_repo` is not spent. |
+| agents | Default capabilities | `defaultCapabilities` (`PUT …/capabilities`) | `DefaultCapabilities` / `default_capabilities` | Ids added (never subtracted) to the deployment seed for new tasks on this repository. Applies to the next task. |
+| agents | Standing instructions | `promptExtension` (`PUT …/prompt-extension`) | `PromptExtension` / `prompt_extension` | Text appended after the deployment's. Read at dispatch. |
+| agents | Setup command | `setupCommand` (`PUT …/setup-command`) | `SetupCommand` / `setup_command` → `scripts/repos/<owner>/<name>/setup.sh` | Shell run in each new checkout, before the repository's declared one. Applies to the next sandbox. |
+| agents | Issue import | `issueImportEnabled`, `issueImportRepo`, `issueImportLabel`, `issueImportApproved`, `issueImportIntervalSeconds` (`PUT …/settings`); `POST …/import-issues` runs it now | `IssueImport` / `issue_import` (JSON) | `Repo` empty means this repository. `Label` filters by label. `Approved` files the tasks queued. Interval `0` means 10 min, floored at 1 min. |
+| (no control) | — | `repairTemplateID` (`PUT …/settings`) / `repairTemplateId` (deployment route) | `RepairTemplateID` / `repair_template_id` | Asked before the deployment's repair template |
+| branches | Create branch (action) | `POST …/branches` | — | — |
+| releases | Work ownership | `PUT …/work-ownership` | `Work` / `work` (JSON `{Default, Overrides}`) | `on`, `off` or unset, per item: `release`, `base-ci`, `post-merge`, `ports`, `triage`. Never declarable by the repository. |
+| releases | Release workflow settings | `PUT …/release` | `BaseBranchCIJobs` / `base_branch_ci_jobs`; `PostMergeDispatchJobs` / `post_merge_dispatch_jobs` | The jobs that judge base branches, and the jobs dispatched after a merge |
+| releases | Release secrets | `PUT`/`DELETE …/release-secrets/{secret}`; `releaseSecrets` (deployment route) | `ReleaseSecrets` / `release_secrets` (names only; values in the secret store) | Write-only values for release jobs |
+| releases | Qualification plan | `PUT …/qualification-plan` | `qualification_config`, `qualification_item`, `qualification_item_depends_on` | The items a release candidate is qualified by, and whether a run needs approval |
+| advanced | Port directions | config repo | `PortBranches` / `port_branches`, `PortTypes` / `port_types` | Operator layer, unioned with the declared `port-branches` / `port-types` (§7) |
+| (operator) | — | `cloneUrl`, `gitCredential` (`PUT /api/deployment/repos/{owner}/{name}/config`, `…/git-connection`) | `CloneURL` / `clone_url`, `GitCredential` / `git_credential` | Overrides the GitHub proxy clone URL and the git connection |
+| (read-only) | — | — | `DeclaredPromptExtension`, `DeclaredSetupCommand`, `DeclaredPortBranches`, `DeclaredPortTypes` | Copied from `.grain/settings.yml` when declarations are on. These are not operator-writable. |
+
+## 7. Repository-declared settings (`.grain/*`)
+
+A repository's own tree is read only when `repo_config.declarations` is on. The rule is **authority, not behaviour** ([`docs/declarations.md`](../../../docs/declarations.md), `pkg/declschema.RepoSettingsSchema`): a repository may declare what its own work does, never what that work may do or who judges it.
+
+| File | Keys | Composition |
+| --- | --- | --- |
+| `.grain/settings.yml` (or `.grain/config.yml`) | `prompt-extension`, `setup-command`, `port-branches`, `port-types` (`<from>-><to>: [types]`) | Appended or unioned after the operator's layer, never replacing it. `port-types` only narrows pairs the repository declared itself. Everything else is refused by name: authority (`default-capabilities`, `capabilities`, `ci-capabilities`, `release-secrets`, `clone-url`, `repo`), verdict (`ignore-github-ci`, `unfixable-checks`, `base-branch-ci-jobs`, `require-branch-up-to-date`, `watch-default-branch`), bootstrap (`declarations`) and ownership (`work-ownership`, `release-workflows-disabled`). |
+| `.grain/review.yml` (or `.yaml`, or `.grain/templates/review.yml`) | `name`, `title`, `prompt` / `body`, `network`, `custom-fields` | The default review template for tasks on the repository |
+| `.grain/templates/<stem>.yml` | Template fields (§8.2) | Row id is `model.RepoDeclaredID` |
+| `.grain/suites/<stem>.yml` | Suite fields (§8.3) | — |
+| `.grain/schedules/<stem>.yml` | Schedule fields (§8.4) | Runs only where `work-ownership` says this deployment owns the repository's standing work |
+| `.grain/triggers/<stem>.yml` | Event triggers (`pkg/repodecl/triggers.go`) | — |
+| `.grain/merge-rules.yml` | `ci: {mode, grain, github}`, `auto_merge`, `stall_timeout`, path rules `{id, description, paths, review}`; `batching`, `repairs`, `flake_recheck` and `port` are reserved | `pkg/repodecl/merge_rules.go` |
+| `.grain/workflows/<name>.yml` | grain CI workflow, including its own cron | Read when the repository's CI mode is `grain` |
+| `.grain/lifecycle.yml` | `name`, `image`, `serve: {run, working-directory, listen, env, ready-timeout-seconds, request-timeout-ms, sandbox: {cpus, memory-mb}}`; `build`, `capabilities`, `secrets`, `repo`, `target`, `reads`, `writes` and `grants` are reserved | `pkg/repodecl/lifecycle.go`. Defaults: ready timeout 30 s, request timeout 5000 ms. |
+
+A declaration is checked before a push with `grain declarations check`, and its status is shown by `GET /api/repos/{owner}/{name}/declarations`.
+
+## 8. Composed and auxiliary configuration entities
+
+These are all config-managed and exported through `staterepo.SettingsTables`, except where noted. Each applies live from the next read.
+
+| § | Entity | Routes | Config repo path | Fields |
+| --- | --- | --- | --- | --- |
+| 8.1 | Boards | `GET`/`POST /api/boards`, `PATCH`/`DELETE /api/boards/{id}` | `tables/board*.json` | `ID`, `Name`, `Folder`, `Kind` (kanban, panels, report), `Description`, `Query`, `Columns`, `Panels`, `Sections`, `OrderKey` |
+| 8.2 | Templates | `POST /api/templates`, `PATCH`/`DELETE /api/templates/{id}` (`revision` guards concurrent edits); `POST /api/tasks/from-template` | `settings/templates.yml` + `tables/template*.json` | `ID`, `Name`, `Title`, `Body`, `Fields`, `Target`, `ChangeTarget`, `Reviewers`, `Base`, `CustomFields`, `NetworkAccess`, `NothingNeededAction`, `Goal`, `Model`, `Reads`, `Writes`, `Grants`, `AutoMerge`, `Interactive`, `KeepRunning`, `Priority` (default 5) |
+| 8.3 | Suites | `POST /api/suites`, `PATCH`/`DELETE /api/suites/{id}`, `POST /api/suites/composition` | `settings/suites.yml` + `tables/suite*.json` | `ID`, `Name`, `Items`, `Mode`, `Count`, `MaxPasses`, `RequireApproval`, `AutoMerge`, `AutoApproveProposals` |
+| 8.4 | Schedules | `GET`/`POST /api/schedules`, `PATCH`/`DELETE /api/schedules/{id}`, `POST /api/schedules/{id}/run`, `POST /api/schedules/composition` | `settings/schedules.yml` + `tables/schedule*.json` | `ID`, `Title`, `Body`, `Target`, `Base`, `AutoMerge`, `AutoApproveProposals`, `Reads`, `Writes`, `Grants`, `NetworkAccess`, `NothingNeededAction`, `KeepRunning`, `Model`, `WorkflowReview`, `CustomFields`, `TemplateID` / `SuiteID`, `Recurrence`, `TimeZone`, `Overlap`, `Enabled`. `NextRunAt` and `LastRunAt` are runtime. |
+| 8.5 | Custom fields | the task-fields card (§3.13) | `tables/custom_field.json` | §3.13 |
+| 8.6 | API scope sets | §3.15 | `settings/capabilities.yml` `api_scopes` / `tables/api_scope_set.json` | §3.15 |
+| 8.7 | GCP keys | `GET`/`POST /api/gcp-keys`, `GET`/`PUT`/`DELETE /api/gcp-keys/{name}` | `tables/gcp_key.json` | `Name`, `ProjectID`, `ServiceAccountEmail`, `ServiceAccountCount`, `MinterCredential` (a credential reference, not material), `MaxKeyAge`, `Description` |
+| 8.8 | Standing and persistent sandboxes | System → Sandboxes | `tables/standing_sandbox*.json`, `tables/persistent_sandbox.json` | Standing: `Name`, `Image`, `Command`, `Dir`, `Env`, `Secrets` (references), `CPUs`, `MemoryMB`, `DiskGB`, `NetworkAccess`, `Enabled`. Persistent: also `Repo`, `Ref`, `AutoUpdate`, `Capabilities`, `SandboxPort`, `HostPort`, `UISubpath`, `StripPrefix`, `Refresh`, `RollbackOnCrash`. |
+| 8.9 | External agent tokens | `GET`/`POST /api/external-agents/tokens`, `POST …/{id}/rotate`, `POST …/{id}/revoke`, `DELETE …/{id}` | **not exported** (runtime, hash only) | `id`, `name`, `prefix`, `scopeSet`, `scopes`, `repos`, `rateLimit` (default 60), `maxConcurrent` (default 8), `expiresAt`, `revokedAt`. The secret is shown once. Needs `externalAgentApi`. |
+| 8.10 | Executor tokens | §3.3 | **not exported** | — |
+| 8.11 | Console sessions | §3.14 | `grain_config.console_sessions` | §3.14 |
+| 8.12 | Git connections | §3.11 | `grain_config.git_connections` | §3.11 |
+| 8.13 | Config policy and the new-task form | — | `settings/config-policy.yml` (checked by `statecheck`), `settings/new-task-form.yml` | Review policy for config PRs, and the new-task form layout |
+
+## 9. `<data-dir>/state-repo.json`
+
+This file is re-read per request and never exported (`pkg/staterepo/settings.go`).
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `remote` | string | Empty means internal `grain/config` on the controller. A URL means an external config repository (mode 4). |
+| `branch` | string | The branch read on the remote |
+| `tokenFile` | string | Credential file for the remote |
+| `checkImage` | string | The image `grain state check` runs in |
+| `directConfigWrites` | bool | Internal mode only. Forces `configRepoOnly: false`, for migration and e2e harnesses. External mode ignores it. |
+| `noWorkflow`, `postCheck`, `localOnlyAcknowledged` | bool | Turn off the config repo's own CI workflow, run post-merge checks, and acknowledge a local-only repository with no backup remote |
+
+## 10. Daemon startup flags and environment variables
+
+`grain daemon -flag-names` prints every flag this build accepts. Flags fall into three classes.
+
+`grain settings` (`pkg/cli/settingscmd.go`) edits the stored settings from the command line through the same validation.
+
+**10.1 Seed-only flags.** The help text ends "seeds the stored configuration on first use; ignored once one exists" (`seedOnly` in `pkg/cli/daemon.go`, `loadConfig`). Once a `grain_config` row exists, the stored value wins, and the daemon warns at startup when a flag and the row disagree (`pkg/daemon/config.go`). The flags, by the column each seeds:
+- `-poll-interval` → `poll_interval_ms`
+- `-max-workers` (former name `-max-concurrent`) → `max_workers`
+- `-max-agent-turns`
+- `-github-host`, `-github-insecure-http`
+- `-gcp-project`, `-gcp-agent-service-account`, `-gcp-agent-account-count`
+- `-iap-backend-service`, `-iap-resource`
+- `-sandbox-cpus`, `-sandbox-memory-mb`, `-sandbox-disk-gb`
+- `-sandbox-cpu-overcommit`, `-sandbox-memory-overcommit`, `-sandbox-disk-overcommit`, `-sandbox-memory-reserve-mb`
+- `-sandbox-disk-floor-share`, `-sandbox-disk-floor-min-mb`
+- `-sandbox-image-mirror`
+- `-package-cache-size-gb`, `-actions-cache-size-gb`
+- `-ci-run-history`, `-ci-step-output-mb`, `-ci-step-output-days`, `-ci-run-output-kb`
+- `-ci-cache-max-bytes`, `-ci-cache-max-entries`, `-ci-cache-max-age`, `-ci-artifact-max-bytes`, `-ci-artifact-max-run-bytes`, `-ci-artifact-max-entry-bytes`, `-ci-artifact-max-age` (converted to the MiB and day columns)
+- `-k8s-namespace`, `-k8s-kubectl`, `-k8s-sandbox-image`, `-k8s-granule-image`, `-k8s-workspace`, `-k8s-git-proxy-host`, `-k8s-sandbox-service-account`, `-k8s-node-selector`, `-k8s-sandbox-privileged`, `-k8s-network-policy`, `-k8s-deployment`, `-k8s-container`, `-k8s-priority-class-{interactive,agent,ci}`
+- the backend-selecting booleans `-container-sandboxes`, `-granule-sandboxes`, `-k8s-sandboxes`, `-k8s-granule-sandboxes` and `-host-sandboxes`, which resolve an empty `sandbox_backend`. `-sandbox-backend` itself is a flag of `grain local`, `grain init` and `grain settings`, not of `grain daemon`.
+
+**10.2 Override flags.** These win over a stored setting while given:
+- `-sandbox-image`, `-container-sandbox-image` and a granule `-kontur-image` / `-granule-create-arg` pin override `sandbox_image`.
+- `-claude-run`, `-codex-run` and `-agy-run` supply the CLI location for a framework with no `cli_run` entry.
+- `-default-target-repo` is the repository for a UI-created task that names none.
+
+**10.3 Startup-only flags.** These have no stored equivalent, because the process needs them before the store, secret store or listener opens, or because they name secret material or host plumbing:
+- Store and paths: `-data-dir` (required; `$GRAIN_DATA_DIR`), `-db-driver` (`sqlite` or `postgres`; `$GRAIN_DB_DRIVER`), `-db-dsn` (`$GRAIN_DB_DSN`), `-postgres-url` (`$GRAIN_POSTGRES_URL`), `-sandbox-dir`, `-docker-root-dir`, `-grain-state-dir`, `-grain-secrets-dir`, `-grain-src-dir`
+- Listeners and sign-in: `-ui-addr` (default `0.0.0.0:4242`), `-ui-allowed-hosts`, `-ui-iap-audience` / `-ui-iap-issuer` / `-ui-iap-keys-url` (with the `$GRAIN_IAP_*` fallbacks), `-ui-access-session-lifetime`, `-ui-open`, `-as`, `-sandbox-port-base` (the git proxy, model proxies and caches bind from here; use `0` inside a sandbox), `-executor-addr` / `-executor-token-file` / `-executor-cert-file` / `-executor-key-file` / `-executor-wait` (each also under a legacy `-model-exec-*` name), `-hostd-socket`, `-hostd-token-file`
+- Credentials by file: `-gemini-api-key-file`, `-claude-oauth-token-file`, `-openai-api-key-file`, `-codex-auth-file`. Each is optional, because the same credential can be set from Settings → Models into the secret store.
+- Agent CLIs: `-agy-path`, `-claude-path`, `-codex-path`, `-model-backend`, `-mcp-surface`, `-model-proxy-unrestricted`, `-model-proxy-max-concurrent`, `-model-proxy-slot-wait`, `-recorded-tools`, `-tool-budget`
+- Sandbox plumbing: the `-granule-*` flags (each also under a legacy `-kontur-*` name), `-container-git-proxy-host`, `-container-sandbox-network`, `-container-sandbox-cap-add`, `-k8s-kubeconfig`, `-k8s-granule-access`, `-k8s-granule-reattach-timeout`, `-sandbox-access-addr` / `-dial` / `-ca-secret`, `-run-host-image`, `-run-host-credential-dir`, `-run-host-dir`, `-run-host-daemon-url`, `-k8s-run-host-rwx`, `-k8s-run-host-service-account`, `-k8s-run-host-volume`, `-sandbox-env`, `-sandbox-env-file`, `-host-sandbox-env`, `-allow-unisolated-host-sandboxes`, `-native-sandboxes` / `-disable-native-sandboxes`, `-repair-reserve-sandboxes`
+- CI: `-ci` (default `true`), `-grit-url`, `-grit-client-token`, `-checkpost-url`, `-checkpost-expect`
+- Caches: `-package-cache-dir` and its upstream mirror flags, `-actions-cache-dir`
+- Upgrade and power: §3.6
+- Backups: `-backup-interval`, `-backup-gcs-bucket`, `-backup-google-drive-folder`, `-backup-google-credentials-file`
+- Policy: `-policy` (`grain_policy.yml`; see [`docs/local-policy.md`](../../../docs/local-policy.md)), `-local-scripts`, `-local-scripts-env-file`
+- Deprecated or removed: `-max-mergers` and `-max-ci-jobs` are ignored. `-cli-image`, `-cli-image-file` and `-cli-container-engine` are ignored. `-tunnel-*` and `-relay-*` refuse to start.
+
+`docs/grain-options.md` records the design options considered for the executor control channel. It is not a flag reference: `-flag-names` and each flag's help text are authoritative.
+
+## 11. Browser-local preferences (This browser → Preferences, `/settings/preferences`)
+
+Component: `PreferencesSection.jsx`. These are stored in `localStorage` and never sent to the daemon. `SettingsPage.jsx` marks the section `NOT_CONFIG`. All of them apply immediately, in this browser only.
+
+| UI label (card) | `localStorage` key | Values |
+| --- | --- | --- |
+| Appearance (`#appearance`) | `grain.themeMode` | `light`, `dark` or `auto` (follow the OS) |
+| Time zone (`#time-zone`) | `grain.timeZone` (migrated from `grain.userTimeZone`) | An IANA zone, or unset to use the deployment's `timeZone` (§4) |
+| Task timeline (`#timeline`) | `grain.timelineOrder` | Newest first or oldest first |
+| Sidebar (`#pinned`) | `grain.pinned`, `grain.sidebar.hidden` | Pinned items, and hidden sidebar sections |
+
+Other per-browser UI state, not shown in Preferences: `grain.sidebar.collapsed`, `grain.inbox.collapsed`, `grain.inboxNotifications`, `grain.board.columns`, `grain.gantt.view`, `grain.ci.narrowing`, `grain.ci.activeSandboxes.expanded`, `grain.ci.sharedFaults.collapsed`, `grain.system.ciSandboxes.expanded`, `grain.task.draft` (the unsent new-task form), and the per-list filter keys (`storageKey(list)`). `grain.storageVersion` drives `storageMigration.js`.
+
+## 12. Runtime application summary
+
+- **Restart needed** (`ui.restartOnlySettings`, reported in `restartRequired` and in `pendingRestart` while they differ): `sandboxBackend`, `k8sNamespace`, `k8sKubectl`, `k8sSandboxImage`, `k8sGranuleImage`, `k8sWorkspace`, `k8sGitProxyHost`, `k8sSandboxService`, `k8sServiceAccount`, `k8sNodeSelector`, `k8sPrivileged`, `k8sNetworkPolicy`, `k8sDeployment`, `k8sContainer`, `k8sPriorityClassInteractive`, `k8sPriorityClassAgent`, `k8sPriorityClassCi`, `githubHost`, `githubInsecureHttp`.
+- **Unrunnable:** `GET /api/settings` also reports `unrunnable`, for stored values this daemon cannot honour (`runnableSettings`), with what it runs instead.
+- **Next sandbox or job only:** sandbox shape, `networkAccess`, `sandboxImage`, `packageCacheEnabled`, `actionsCacheEnabled`, `ciArtifactFileMb`, `cliRun`, and the repository setup command.
+- **Next task only** (seeded or frozen at creation): `defaultCapabilities` (deployment and repository), `taskBranchTemplate`, `deploymentId`, and the new-task form defaults (`approvedByDefault`, `autoMergeByDefault`, `newestFirst`).
+- **Live:** every other `PUT /api/settings` key, as listed in `settingsAppliedLive`. That includes the whole sandbox budget, the CI retention, storage and queue knobs, cache sizes, the GCP and IAP fields, models and connections, prompt extensions, the upgrade policy, `externalAgentApi` and `settingsLocked`.
+- **Config repo imports:** a merged `grain/config` PR is applied by `staterepo.Apply` when `HEAD` passes the loaded-commit marker. Each field then takes effect under the same rule as a UI write.
+
+## 13. Sources and coverage checklist
+
+This inventory was enumerated from:
+- `pkg/model/config.go`: `Config`, `DefaultConfig`, `NewDeploymentConfig` and the `Default*` constants.
+- `pkg/model/store.go` `configColumns`.
+- `pkg/model/repo_config.go`.
+- `pkg/ui/settings.go`: `UpdateSettingsRequest`, `plannedConfig` and `restartOnlySettings`.
+- `pkg/ui/settings_restart_drift_test.go` (`settingsAppliedLive`).
+- `pkg/ui/config_bootstrap.go` (`clearBootstrap`).
+- `pkg/ui/deployment_routes.go`, `pkg/ui/repos.go` (`SetRepoSettingsRequest`), `pkg/ui/agent_api_tools.go` (the route catalogue).
+- `pkg/staterepo/bind.go` (`SettingsTables`), `pkg/staterepo/capabilities_file.go`, `pkg/staterepo/settings.go`.
+- `pkg/repodecl/*.go`.
+- `pkg/cli/daemon.go` (the flag set).
+- `ui/src/settingsSections.js`, `ui/src/components/settings/*.jsx`, `ui/src/components/RepoPage.jsx`, and the `localStorage` keys under `ui/src`.
+
+Every `UpdateSettingsRequest` key, every `configColumns` column, every `RepoConfig` field and every `SettingsTables` table appears above. A field added to any of them must be added here in the same change. The drift test already forces it to be classified as live or restart-only.
