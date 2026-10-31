@@ -346,7 +346,8 @@ func (m *StateManager) noteOutcome(err error) {
 		}
 		return
 	}
-	next := &ui.StateRepoSyncFailure{Since: time.Now(), LastSuccess: m.lastSuccess, Error: err.Error(), Repo: m.settingsRepoLocked().String()}
+	remote, _ := m.externalConfigRepo(false)
+	next := &ui.StateRepoSyncFailure{Since: time.Now(), LastSuccess: m.lastSuccess, Error: err.Error(), Repo: m.settingsRepoLocked().String(), External: remote != ""}
 	if prev := m.failure.Load(); prev != nil {
 		next.Since = prev.Since
 	}
