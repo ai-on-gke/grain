@@ -1926,7 +1926,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		hold := heldByRun || needsPersonWhy != ""
 		switch {
 		case len(escalated) > 0:
-			proposal.Body += model.CapabilityEscalationNote(task.ID, escalated)
+			proposal.Body += model.ProposalEscalationNote(task.ID, proposal, escalated)
 		case len(ungranted) > 0, len(ungrantedReads) > 0:
 			// Filed for a person; the notes above say why.
 		case heldByRun && (approved || model.AutoSubmits(proposal, task)):

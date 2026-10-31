@@ -666,7 +666,11 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	}
 	title := model.ConsoleSessionTitle(session)
 	body := model.DirectorSessionBody(deps.Config.settingsRepo(), session)
-	grants := consoleSessionGrants(session)
+	defaults, err := model.DeploymentDefaultCapabilities(ctx, deps.Store)
+	if err != nil {
+		return err
+	}
+	grants := consoleSessionGrants(session, defaults)
 	network := consoleSessionNetworkAccess(deps, session)
 	stateRepo := deps.Config.settingsRepo()
 	var reads []model.RepoRef
@@ -761,9 +765,11 @@ func consoleSessionNetworkAccess(deps Deps, session model.ConsoleSession) model.
 
 // consoleSessionGrants is the session's configured capabilities as
 // grants: GrantByGrain, because it is grain applying them to its own
-// task from a settings row rather than a human labelling one.
-func consoleSessionGrants(session model.ConsoleSession) []model.Grant {
-	return model.ConsoleSessionGrants(session)
+// task from a settings row rather than a human labelling one -- plus
+// this deployment's default capabilities, GrantByDefault, which every
+// task the session files is seeded with (model.ConsoleSessionGrants).
+func consoleSessionGrants(session model.ConsoleSession, defaults []string) []model.Grant {
+	return model.ConsoleSessionGrants(session, defaults...)
 }
 
 func parkConsoleSession(ctx context.Context, deps Deps, taskID, note string, now time.Time) error {
