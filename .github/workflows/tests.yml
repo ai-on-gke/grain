@@ -289,12 +289,30 @@ jobs:
       - name: Test
         run: |
           set +e
-          GRAIN_GOTEST_LOG=/tmp/go-orchestrator.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/orchestrator/...
-          status=$?
+          GRAIN_GOTEST_LOG=/tmp/go-orchestrator.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/orchestrator/... | tee /tmp/go-orchestrator.out
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-orchestrator.log | tail -n 10 | while IFS= read -r line; do
-              echo "::error title=go-orchestrator::$line"
-            done
+            python3 - /tmp/go-orchestrator.out go-orchestrator <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
             exit "$status"
           fi
 
@@ -428,12 +446,30 @@ jobs:
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
             ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... \
-            ./pkg/version/... ./tests/bench/...
-          status=$?
+            ./pkg/version/... ./tests/bench/... | tee /tmp/go-unit.out
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-unit.log | tail -n 10 | while IFS= read -r line; do
-              echo "::error title=go-unit::$line"
-            done
+            python3 - /tmp/go-unit.out go-unit <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
             exit "$status"
           fi
 

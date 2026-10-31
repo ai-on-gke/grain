@@ -1,10 +1,10 @@
-# Test Suite Audit & Modernization (`tests.yml` & `nightly.yml`)
+# Per-PR (`tests.yml`) and Nightly (`nightly.yml`) Test Suite Audit
 
 ## 1. Executive Summary & Architectural Alignment
 
 Over the past week, Grain's core architecture evolved significantly across seven subsystems:
 
-1. **Repository Split & Retirement of `bwsalmon/grain`:** Core open-source development moved to `ai-on-gke/grain` alongside the 3-segment Google internal overlay `depot.code.corp.goog/experimental/grain` (`model.GrainSourceRepo()`).
+1. **Repository Split & Retirement of `bwsalmon/grain`:** Core open-source development moved to `ai-on-gke/grain` (`model.GrainSourceRepo()`) alongside 3-segment host-qualified repositories (such as `depot.code.forge.test/experimental/grain`).
 2. **State Repository Narrowing (`staterepo.ExportConfig`):** `grain/config` was narrowed (`grain/task-395`) to export configuration and memory tables only (`config`, `repo_config`, `credential_profile`, `task_template`, `review_template`, `secret_metadata`, `memory`), while tasks, runs, comments, observations, and CI steps live exclusively in the database.
 3. **Immediate Merge & Path-Overlap Recheck:** Merge batching and bisection were removed (`grain/task-1023`) in favor of immediate merge on clean head, path-overlap recheck (`pkg/orchestrator/mergerecheck.go`), and path-scoped `.grain/merge-rules.yml` policies (`pkg/forge/merge_rules.go`).
 4. **Unified In-Sandbox `grain` CLI:** `cmd/grain-sandbox` (`pkg/sandboxcli`) communicating over the loopback sandbox HTTP proxy (`127.0.0.1:9728`, `pkg/daemon/sandbox_cli_proxy.go`) replaced legacy host-side MCP inspection/action tools.
@@ -20,49 +20,64 @@ This document records the complete inventory of jobs and test packages across `.
 
 ### 2.1 Per-PR Suite (`.grain/workflows/tests.yml` & `.github/workflows/tests.yml`)
 
-Every pull request and `main` push runs the per-PR suite. Invariants in `tests/deploy/grain_workflows_test.go` (`TestTheGoJobsCoverEveryPackageInTheModuleOnce`, `TestTheGrainGoTestStepsStreamProgressThroughRunGoTests`) enforce that the five Go jobs partition `go list ./...` without gaps or overlaps and run with `-race`.
+Every pull request and `main` push runs the per-PR suite. Invariants in `tests/deploy/grain_workflows_test.go` (`TestTheGoJobsCoverEveryPackageInTheModuleOnce`, `TestTheGrainGoTestStepsStreamProgressThroughRunGoTests`, `TestSelfWorkflowsAskOnlyForWhatTheyUse`) enforce that the five Go jobs partition `go list ./...` without gaps or overlaps, run with `-race`, and declare minimal capabilities.
 
-| Job | `.grain/workflows/tests.yml` | `.github/workflows/tests.yml` | Packages / Scope | Timeout |
-| --- | --- | --- | --- | --- |
-| `go` | Yes | Yes | `go vet ./...` + `go test -race ./cmd/... ./pkg/cli/...` (`cmd/grain`, `cmd/grain-agent`, `cmd/grain-guest-init`, `cmd/grain-hostd`, `cmd/grain-sandbox`, `pkg/cli`) | 20m |
-| `go-e2e` | Yes | Yes | `go test -race ./tests/e2e/... ./tests/installer/bundle` | 20m |
-| `go-orchestrator` | Yes | Yes | `go test -race -timeout 18m ./pkg/orchestrator/...` | 20m |
-| `go-model` | Yes | Yes | `go test -race ./pkg/model/... ./pkg/staterepo/... ./pkg/ui/... ./tests/deploy/... ./tests/security/...` | 20m |
-| `go-unit` | Yes | Yes | `go test -race` across all remaining `./pkg/...` packages (`agent`, `Alert`, `auth`, `backup`, `ci`, `claude`, `config`, `container`, `cost`, `crypto`, `daemon`, `db`, `forge`, `Fulltext`, `ghapp`, `ghwebhook`, `git`, `github`, `host`, `hostscript`, `k8s`, `logging`, `mcp`, `metrics`, `migrate`, `notify`, `omerge`, `proxy`, `ratelimit`, `redact`, `sandbox`, `sandboxcli`, `secrets`, `skills`, `ssh`, `store`, `supervisor`, `telemetry`, `tunnel`, `vcs`, `webhook`, `worktree`) | 20m |
-| `ui` | Yes | Yes | `cd web && npm test && npm run build` (Vitest unit tests + Vite bundle) + `go test -race ./tests/installer/dryrun/...` | 15m |
-| `ui-e2e` | Yes | Yes | `cd web && npx playwright test` (Playwright Chromium E2E against live Go backend) | 25m |
-| `ui-webkit` | Yes | Yes | `cd web && npx playwright test --project=webkit` (Playwright WebKit / Mobile Safari layout & interaction E2E) | 25m |
-| `helm-lint` | Yes | Yes | `helm lint charts/grain` + `helm template` rendering checks | 10m |
-| `container` | — | Yes (GHA only) | Docker multi-stage image build (`Dockerfile`) + `grain --help` smoke check | 20m |
-| `sandbox-smoke` | — | Yes (GHA only) | Container sandbox rootfs smoke test (`./scripts/test-sandbox.sh`) | 15m |
+| Job ID | Display Name | `.grain/workflows/tests.yml` | `.github/workflows/tests.yml` | Packages / Scope | Timeout (Grain / GHA) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `go` | `go` | Yes | Yes | `make fmt`, `make frontend`, `go build ./...`, `go vet ./...`, and `go test -race ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...` | 20m / 30m |
+| `go-e2e` | `go e2e` | Yes | Yes | `make frontend` + `go test -race ./tests/e2e/... ./tests/deploy/...` | 35m / 30m |
+| `go-orchestrator` | `go orchestrator` | Yes | Yes | `go test -race ./pkg/orchestrator/...` | 35m / 30m |
+| `go-model` | `go model` | Yes | Yes | `go test -race ./pkg/model/... ./pkg/staterepo/... ./tests/security/...` | 20m / 30m |
+| `go-unit` | `go unit` | Yes | Yes | `go test -race` across all remaining packages (`./cmd/checkpost/...`, `./cmd/ghcr-prune/...`, `./cmd/github-webhook/...`, `./cmd/grain-connect/...`, `./cmd/grain-sandbox/...`, `./cmd/grit/...`, `./docs/releases/...`, `./tests/hygiene/...`, `./tests/container/...`, `./tests/installer/...`, `./tests/bench/...`, and 58 `./pkg/...` packages including `daemon`, `forge`, `ghwebhook`, `gitproxy`, `mcp`, `namespace`, `runhost`, `sandboxcli`, `trustboundary`, `upgrade`) | 20m / 30m |
+| `granule` | `granule` | Yes | Yes | `go test -race ./...` inside `third_party/granule` (`-mod=vendor`) | 10m / 15m |
+| `postgres` | `postgres` | Yes | Yes | `GRAIN_REQUIRE_POSTGRES=1` `go test -count=1 ./pkg/model/postgres/... ./pkg/model/` against real PostgreSQL | 15m / 20m |
+| `run-host` | `run host` | Yes | Yes | `GRAIN_RUNHOST_DOCKER=1` `go test -race -count=1 ./pkg/runhost/` + `TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest` in `./pkg/cli/` | 10m / 15m |
+| `host-script-container` | `host-script container` | Yes | Yes | Builds `Dockerfile.k8s-sandbox` and runs `TestHostScriptGrantInARealContainerSandbox` in `./pkg/orchestrator/` | 15m / 15m |
+| `frontend` | `frontend` | Yes | Yes | `make frontend`, `make fmt-frontend`, and `cd ui && npm test -- --maxWorkers=4` (Jest unit tests) | 10m / 15m |
+| `ui-e2e` | `ui e2e` | Yes | Yes | `make frontend`, `make playwright-browsers`, and `make test-e2e-suite` (Playwright E2E suite in `ui/e2e/`) | 35m / 30m |
+| `lint` | `lint` | Yes | Yes | `shellcheck` over tracked shell scripts (`scripts/*.sh`, `deploy/terraform/*.sh`) + `actionlint` over `.github/workflows/` (GHA) | 5m / 10m |
+| `terraform` | `terraform` | Yes | Yes | `terraform fmt -check`, `init -backend=false`, and `validate` across `deploy/terraform/gcp` and `deploy/gke/terraform` | 5m / 10m |
+| `installer-e2e` | `installer` | Yes | Yes | Builds `grain-installer:test` (`scripts/installer-test-image.sh`) and runs `GRAIN_INSTALLER_E2E=1 go test ./tests/installer -count=1 -v` | 15m / 25m |
+| `package-cache` | `package cache` | Yes | Yes | Real-dockerd package cache tests (`GRAIN_REAL_DOCKER_CACHE_TESTS=1` in `./pkg/orchestrator/`) + transparent interception test (`GRAIN_REAL_INTERCEPT_TESTS=1` in `./pkg/daemon/`) | 15m / 20m |
+| `real-vm` | `real vm` | Moved to `nightly.yml` (`kvm-sandboxes`) | Gated (`vars.ENABLE_SELF_HOSTED_TESTS == 'true'`) | Real Firecracker / Cloud-Hypervisor VM tests in `./pkg/orchestrator/` | — / 30m |
+| `real-kubernetes` | `real kubernetes` | Yes (`paths:` scoped) | Gated (`vars.ENABLE_SELF_HOSTED_TESTS == 'true'`) | `kind` + Calico cluster pod sandbox E2E tests (`GRAIN_REAL_K8S_TESTS=1`) in `./pkg/orchestrator/` | 20m / 30m |
 
 ### 2.2 Nightly Suite (`.grain/workflows/nightly.yml` & `.github/workflows/nightly.yml`)
 
-The nightly suite runs at `15 3 * * *` UTC (and via `workflow_dispatch`). `tests/deploy/grain_workflows_test.go` (`TestEverythingTheGateDoesNotRunTheNightlyDoes`, `TestTheNightlySuiteRunsTheLongTargets`, `TestThisRepositoryScheduledWorkflowsFitInsideTheirOwnCadence`) enforces that every build-tagged or slow target excluded from `tests.yml` is exercised in `nightly.yml` within the schedule cadence.
+The nightly suite runs on schedule (`cron: "11 2 * * *"` UTC) and via `workflow_dispatch`. `tests/deploy/grain_workflows_test.go` (`TestEverythingTheGateDoesNotRunTheNightlyDoes`, `TestTheNightlySuiteRunsTheLongTargets`, `TestThisRepositoryScheduledWorkflowsFitInsideTheirOwnCadence`) enforces that every long/stress target excluded from `tests.yml` is exercised in `nightly.yml` within the schedule cadence.
 
-| Job | `.grain/workflows/nightly.yml` | `.github/workflows/nightly.yml` | Target / Scope | Timeout |
-| --- | --- | --- | --- | --- |
-| `go-long` | Yes | Yes (4 matrix shards) | `make test-long` (`go test -race -shuffle=on -count=2 ./...`) catching order-dependent and flaky race conditions | 45m (60m GHA) |
-| `staterepo-soak` | Yes | Yes | `make test-staterepo-soak` (`go test -tags=soak -timeout 35m ./pkg/staterepo/...`) | 40m |
-| `loadtest` | Yes | Yes | `make loadtest` (`go test -tags=loadtest -timeout 20m ./tests/e2e/... -run TestLoad`) | 25m |
-| `scalability` | Yes | Yes | `make test-scalability` (`go test -tags=scalability -timeout 25m ./tests/e2e/... -run TestScalability`) | 30m |
-| `merge-stress` | Yes | Yes | `make test-merge-stress` (`go test -tags=mergestress -timeout 25m ./tests/e2e/... -run TestMergeStress`) | 30m |
-| `long-term-test` | Yes | Yes | `make long-term-test` (`go test -tags=longterm -timeout 55m ./tests/e2e/... -run TestLongTerm`) | 60m |
-| `long-sim` | Yes | Yes | `make test-long-sim` (`go test -tags=longsim -timeout 40m ./tests/e2e/... ./pkg/model/... -run TestLongSim`) | 45m |
-| `postgres-stress` | Yes | Yes | `make test-postgres` (real PostgreSQL service container + `./pkg/store/... ./pkg/migrate/... ./tests/e2e/...`) | 30m |
-| `tunnel-stress` | Yes | Yes | `make test-tunnel-stress` (`go test -tags=tunnelstress -timeout 20m ./pkg/tunnel/...`) | 25m |
-| `ui-e2e-long` | Yes | Yes | 3 consecutive Playwright passes (`for pass in 1 2 3; do npx playwright test; done`) | 45m |
-| `installer-variants` | Yes | Yes | `go test -tags=installer_variants ./tests/installer/trixie/... ./tests/installer/hostmode/...` | 30m |
-| `vulns` | Yes | Yes | `make vulns` (`govulncheck ./...` + `npm audit --omit=dev`) | 15m |
-| `cmd-grain-stress` | Yes | — (Grain CI) | `go test -race -count=5 ./cmd/grain/... ./pkg/cli/...` | 20m |
-| `kvm-sandboxes` | Yes | — (bare-metal KVM) | `go test -tags=kvm -timeout 25m ./pkg/sandbox/...` | 30m |
-| `kvm-route-stress` | Yes | — (bare-metal KVM) | `go test -tags=kvm,routestress -timeout 25m ./pkg/sandbox/...` | 30m |
-| `upgrade-test` | Yes | — (Grain CI) | `go test -tags=upgrade -timeout 25m ./tests/deploy/... -run TestUpgrade` | 30m |
+| Job ID | Display Name | `.grain/workflows/nightly.yml` | `.github/workflows/nightly.yml` | Target / Scope | Timeout (Grain / GHA) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `go-long` | `go test -race -shuffle=on -count=2` | Yes | Yes (4 matrix shards) | `make test-long` (`go test -race -shuffle=on -count=2 ./...`) catching order-dependent and repeat-invocation bugs | 45m / 90m per shard |
+| `staterepo-soak` | `staterepo 100-commit soak` | Yes | Yes | `make soak` (`TestStateRepoSoak100Commits` in `./pkg/staterepo/...`) | 20m / 30m |
+| `loadtest` | `20-agent concurrent load test` | Yes | Yes | `make loadtest` (`TestHighConcurrencyLoad` in `./tests/e2e/...`) | 20m / 30m |
+| `scalability` | `50-agent scalability and 500-task scale` | Yes | Yes | `make scalability` (`TestScalability50Agents` & `TestLargeScaleHistory` in `./tests/e2e/...`) | 30m / 45m |
+| `merge-stress` | `25-branch merge queue stress` | Yes | Yes | `make merge-stress` (`TestMergeQueueStress` in `./tests/e2e/...`) | 30m / 45m |
+| `long-term-test` | `end-to-end long term tests` | Yes | Yes | `make long-term-test` (`TestLongTermEndToEndSustained` in `./tests/e2e/...`) | 35m / 50m |
+| `long-sim` | `long randomized cluster simulation` | Yes | Yes | `make long-sim` (`TestRandomizedClusterLong` in `./tests/e2e/...`) | 35m / 50m |
+| `postgres-stress` | `postgres concurrency and stress` | Yes | Yes | `GRAIN_REQUIRE_POSTGRES=1 make postgres-stress` (`./pkg/model/postgres/... -run TestPostgres`) | 20m / 30m |
+| `tunnel-stress` | `reverse tunnel multiplexer stress` | Yes | Yes | `make tunnel-stress` (`./pkg/tunnel/...` 30-minute stress suite) | 40m / 50m |
+| `ui-e2e-long` | `ui e2e, repeated` | Yes | Yes (3 matrix passes) | `make test-e2e-long` (3 full passes of Playwright E2E suite) | 90m / 60m per pass |
+| `installer-variants` | `installer trixie and hostmode` | Yes | Yes | Assembles `grain-installer:test` (`debian:trixie`) and runs `./tests/installer/trixie` + `./tests/installer/hostmode` | 20m / 30m |
+| `vulns` | `govulncheck` | Yes | Yes | `make vuln` (`govulncheck ./...` under `go.mod` toolchain) | 15m / 20m |
+| `cmd-grain-stress` | `pkg/cli stress under load` | Yes (`paths:` scoped) | Yes | 4-way parallel `go test -race -count=1 ./pkg/cli` rounds within a 1,800s budget | 45m / 45m |
+| `kvm-sandboxes` | `real KVM sandboxes` | Yes (`paths:` scoped) | Gated (`vars.ENABLE_SELF_HOSTED_TESTS == 'true'`) | Resolves guest image (`scripts/granule-guest-resolve.sh`) and runs real KVM VM tests in `./pkg/orchestrator/` | 35m / 45m |
+| `kvm-route-stress` | `twenty two-VM boots` | Yes (`paths:` scoped) | Gated (`vars.ENABLE_SELF_HOSTED_TESTS == 'true'`) | 20 consecutive boots of `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently` | 25m / 35m |
+| `upgrade-test` | `upgrade from previous version` | Yes (`paths:` scoped) | Yes | Builds `grain-e2e:test` (`scripts/ci-docker-build.sh`) and runs `make test-upgrade` (`./tests/container/ -run 'TestUpgradeFromPreviousVersion\|TestAnUpgrade'`) | 25m / 35m |
 
-### 2.3 Division of Responsibilities (`tests.yml` vs `nightly.yml`)
+### 2.3 Package Inventory Across `tests/...`
 
-- **`tests.yml` (Per-PR Gate):** Fast (<20–25m wall clock), deterministic, single-pass (`-race`) functional and security verification across every Go package, Vitest unit suite, Playwright Chromium/WebKit E2E suites, installer bundle/dryrun checks, and Helm chart linting. No external network calls, multi-pass loops, or unasserted benchmark/measurement loops belong in `tests.yml`.
-- **`nightly.yml` (Scheduled Deep Verification):** Multi-pass order/race fuzzing (`go-long` with `-race -shuffle=on -count=2` and `ui-e2e-long` 3x), build-tagged stress/soak/simulation suites (`soak`, `loadtest`, `scalability`, `mergestress`, `longterm`, `longsim`, `tunnelstress`), external database/distro matrices (`postgres-stress`, `installer-variants`), network-dependent vulnerability scanning (`vulns`), and bare-metal KVM/upgrade suites (`kvm-sandboxes`, `kvm-route-stress`, `upgrade-test`).
+- **`tests/e2e/`:** Full-stack in-process daemon + `githubsim` E2E tests (`e2e_test.go`, `lifecycle_test.go`, `merge_queue_test.go`, `schedules_test.go`, `self_host_test.go`, `webhook_test.go`), plus `-short`-skipped nightly stress suites (`load_test.go`, `scalability_test.go`, `merge_stress_test.go`, `long_term_test.go`, `long_sim_test.go`). Note: `tests/sim/` was previously consolidated into `tests/e2e/long_sim_test.go` and `pkg/github/githubsim/`.
+- **`tests/deploy/`:** Static and structural invariants over `.grain/workflows/*.yml`, `.github/workflows/*.yml`, `Makefile`, `Dockerfile*`, `Granulefile*`, Terraform modules, and systemd units (`grain_workflows_test.go`, `deploy_test.go`).
+- **`tests/installer/`:** Unit tests (`installer_unit_test.go` in `go-unit`), default bookworm E2E installer qualification (`installer_e2e_test.go` in `installer-e2e`), and nightly variant suites (`tests/installer/trixie`, `tests/installer/hostmode` in `installer-variants`).
+- **`tests/security/`:** Route authorization, CSRF, capability boundary, gitproxy scope isolation, and secret redaction tests (`go-model` on every PR and `go-long` in nightly).
+- **`tests/hygiene/`:** Repository boundary checks (`boundary_test.go` enforcing zero internal tokens in open-source core, license headers, and module tidiness in `go-unit`).
+- **`tests/container/`:** Container image and cross-version upgrade verification (`upgrade-test` in nightly and unit checks in `go-unit`).
+
+### 2.4 Division of Responsibilities (`tests.yml` vs `nightly.yml`)
+
+- **`tests.yml` (Per-PR Gate):** Fast, deterministic, single-pass (`-race`) functional and security verification across every Go package, Jest unit suite, Playwright E2E suite, installer qualification, and Terraform/shell/workflow linting. No multi-pass soak loops or unasserted cost-measurement loops belong in `tests.yml`.
+- **`nightly.yml` (Scheduled Deep Verification):** Multi-pass order/race fuzzing (`go-long` with `-race -shuffle=on -count=2` and `ui-e2e-long` 3x), long-running stress/soak/simulation suites (`staterepo-soak`, `loadtest`, `scalability`, `merge-stress`, `long-term-test`, `long-sim`, `tunnel-stress`, `cmd-grain-stress`), database/distro/upgrade matrices (`postgres-stress`, `installer-variants`, `upgrade-test`), vulnerability scanning (`vulns`), and bare-metal KVM suites (`kvm-sandboxes`, `kvm-route-stress`).
 
 ---
 
@@ -85,10 +100,11 @@ The nightly suite runs at `15 3 * * *` UTC (and via `workflow_dispatch`). `tests
 - Removed the standalone `security-audit` job (`make security`, which runs `go vet ./...` + `go test -race -count=1 ./tests/security/...`) from `.grain/workflows/nightly.yml`, `.github/workflows/nightly.yml`, and the nightly table in `docs/github-actions-ci.md`.
 - **Why:** As documented in `tests/security/doc.go`, `tests/security` is an ordinary package in the main module without build tags. Every PR already runs `go vet ./...` (in `go`) and `go test -race ./tests/security/...` (in `go-model`), and `nightly.yml`'s own `go-long` job (`make test-long`) already runs `./tests/security/...` twice with `-race -shuffle=on -count=2`.
 
-### 3.3 Modernized Hardcoded `bwsalmon/grain` References
+### 3.3 Modernized Hardcoded `bwsalmon/grain` References & Fixed GHA Failure Annotations
 
 - Updated `tests/deploy/grain_workflows_test.go` (`TestTheGuestCacheJobIsWhatAPostMergeDispatchPlans` and `TestTheBaseBranchGateForThisRepositoryRunsItsTests`) to use `model.GrainSourceRepo().String()` (`"ai-on-gke/grain"`) instead of hardcoded `"bwsalmon/grain"`.
-- Updated `pkg/sandboxcli/help.go` and `pkg/sandboxcli/sandboxcli_test.go` CLI examples from `bwsalmon/grain` to `ai-on-gke/grain`.
+- Updated `pkg/sandboxcli/help.go` and `pkg/sandboxcli/sandboxcli_test.go` CLI examples and test fixtures from `bwsalmon/grain` to `ai-on-gke/grain`.
+- Updated `go-unit` and `go-orchestrator` in `.github/workflows/tests.yml` to parse the structured `=== failing tests ===` section emitted by `scripts/run-go-tests.sh` (matching `go-e2e` and `go-model`) instead of grepping `_test\.go:[0-9]+:` from the tail of `/tmp/go-unit.log`, where verbose `t.Log` output in passing tests (`pkg/upgrade/log_test.go:103`) previously masked actual test failures in GitHub Actions `::error` annotations and cross-branch failure attribution.
 
 ---
 
@@ -132,10 +148,10 @@ The nightly suite runs at `15 3 * * *` UTC (and via `workflow_dispatch`). `tests
   2. **Synthesized 0-job `workflow_run` fallback:** Covered in `TestGitHubCIThreeSegmentRepoEventsTailsAndSynthesizedWorkflowRun` in `pkg/orchestrator/githubci_test.go`, verifying that a failed `workflow_run` with zero `workflow_job` records (e.g. a workflow file syntax/startup failure) synthesizes a `GitHubCIJob` with `HTMLURL` fallback so the failure is surfaced in `ci://` and PR status.
   3. **`ci_mode: github` interaction with `.grain/merge-rules.yml` (`grain`, `github`, `none`):** Added `TestCIModeGitHubGatingAndMergeRulesOverridesToGrainOrNone` in `pkg/forge/merge_rules_test.go`, verifying that a repository configured with `CIMode: "github"` gates merges on GitHub check runs by default, switches to Grain CI verdict gating when `.grain/merge-rules.yml` resolves `mode: grain` for the touched paths, and bypasses both GitHub check runs and Grain CI when `.grain/merge-rules.yml` resolves `mode: none` (e.g. docs-only changes).
 
-### 4.5 Multi-Segment Forge Repositories (3-Segment `depot.code.corp.goog/experimental/grain`)
+### 4.5 Multi-Segment Forge Repositories (3-Segment `depot.code.forge.test/experimental/grain`)
 
 - **Existing coverage verified:**
   - `pkg/model/repo_test.go`: `ParseRepoName` and `RepoName` methods for 2-segment and 3-segment repository names.
-  - `pkg/sandbox/gitproxy_test.go` & `pkg/daemon/gitproxy_url_test.go`: Git proxy routing for multi-segment upstream repositories.
+  - `pkg/gitproxy/commandforge_depot_test.go` & `pkg/gitproxy/host_routing_test.go`: Git proxy routing for multi-segment upstream repositories.
 - **Gaps closed in this audit:**
-  - Added `TestGitHubCIThreeSegmentRepoEventsTailsAndSynthesizedWorkflowRun` in `pkg/orchestrator/githubci_test.go`, exercising `NoteGitHubCIJob`, `NoteGitHubCIRun`, `splitStoredRepo` (which splits `"depot.code.corp.goog/experimental/grain"` at the first `/` into owner `"depot.code.corp.goog"` and repo `"experimental/grain"`), and failed-job log-tail fetching (`FetchJobLogTail`) for a 3-segment repository.
+  - Added `TestGitHubCIThreeSegmentRepoEventsTailsAndSynthesizedWorkflowRun` in `pkg/orchestrator/githubci_test.go`, exercising `NoteGitHubCIJob`, `NoteGitHubCIRun`, `splitStoredRepo` (which splits `"depot.code.forge.test/experimental/grain"` at the first `/` into owner `"depot.code.forge.test"` and repo `"experimental/grain"`), and failed-job log-tail fetching (`FetchJobLogTail`) for a 3-segment repository.

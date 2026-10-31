@@ -723,13 +723,13 @@ func TestGitHubCIThreeSegmentRepoEventsTailsAndSynthesizedWorkflowRun(t *testing
 	defer orchestrator.SetGitHubCIBudgetLow(false)()
 
 	// Configure a 3-segment host-qualified repository in TargetRepos.
-	repo := model.RepoRef{Host: "depot.code.corp.goog", Owner: "experimental", Name: "grain"}
+	repo := model.RepoRef{Host: "depot.code.forge.test", Owner: "experimental", Name: "grain"}
 	if err := store.SetTargetRepos(ctx, []string{repo.String()}); err != nil {
 		t.Fatal(err)
 	}
 
 	// 1. Inbound workflow_job webhook with 2-segment GitHub full_name ("experimental/grain")
-	// resolves to the 3-segment RepoRef ("depot.code.corp.goog/experimental/grain") and fetches its log tail via splitStoredRepo.
+	// resolves to the 3-segment RepoRef ("depot.code.forge.test/experimental/grain") and fetches its log tail via splitStoredRepo.
 	branch := "grain/task-501"
 	sim.WorkflowJobs = map[string][]githubsim.WorkflowJob{
 		branch: {{
@@ -788,7 +788,7 @@ func TestGitHubCIThreeSegmentRepoEventsTailsAndSynthesizedWorkflowRun(t *testing
 	}}
 
 	// First process events without a WorkflowRunsReader client so run 702 exercises the 0-job synthesized record path,
-	// then run tails with client so jobID's log tail is fetched via splitStoredRepo("depot.code.corp.goog/experimental/grain").
+	// then run tails with client so jobID's log tail is fetched via splitStoredRepo("depot.code.forge.test/experimental/grain").
 	runGitHubEventsReconciler(t, ctx, orchestrator.Deps{Store: store, GitHubEvents: source}, baseTime)
 	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime)
 
