@@ -190,11 +190,11 @@ export default function SettingsPage({
   }, [anchor]);
   useEffect(() => {
     if (!focusTarget) return;
-    const timer = setTimeout(() => {
+    const reveal = () => {
       const el =
         document.querySelector(`[data-setting-id="${focusTarget}"]`) ||
         document.getElementById(focusTarget);
-      if (!el) return;
+      if (!el) return false;
       el.scrollIntoView?.({ block: "center" });
       const input = el.matches?.("input,textarea,select,button")
         ? el
@@ -203,8 +203,14 @@ export default function SettingsPage({
       el.classList.add("setting-highlight");
       setTimeout(() => el.classList.remove("setting-highlight"), 2000);
       setFocusTarget("");
-    }, 50);
-    return () => clearTimeout(timer);
+      return true;
+    };
+    if (reveal()) return;
+    const observer = new MutationObserver(() => {
+      if (reveal()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
   }, [focusTarget, current, settings]);
 
   const go = (next) => {

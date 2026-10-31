@@ -1798,6 +1798,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
           at.settingsSection || (isPhone ? "" : DEFAULT_SETTINGS_SECTION),
         );
         setSettingsItem("");
+        setSettingsAnchor("");
       }
       // The rail's Processes entry is the whole list, whatever it was
       // last narrowed to; the pages it replaced, if anything still asks

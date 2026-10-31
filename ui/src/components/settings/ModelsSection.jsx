@@ -47,6 +47,7 @@ import SettingsCard from "./SettingsCard.jsx";
 export default function ModelsSection({ config, onSaved, showError }) {
   const [editingBackend, setEditingBackend] = useState(null);
   const [settings, setSettings] = useState(null);
+  const [cliRun, setCliRun] = useState(null);
   const [agentBackends, setAgentBackends] = useState([]);
   const [testConnResults, setTestConnResults] = useState({});
   const [testingConnId, setTestingConnId] = useState(null);
@@ -54,12 +55,20 @@ export default function ModelsSection({ config, onSaved, showError }) {
   const {
     deployment,
     error: deploymentError,
+    loading: deploymentLoading,
     saveDeployment,
   } = useDeployment({ onSaved, showError });
 
   const reloadSettings = useCallback(async () => {
     try {
-      const loaded = await api("/api/settings");
+      const [loaded, loadedCliRun] = await Promise.all([
+        api("/api/settings"),
+        api("/api/settings/cli-run").catch((err) => {
+          if (showError) showError(err);
+          return null;
+        }),
+      ]);
+      setCliRun(loadedCliRun);
       setSettings(loaded);
       setAgentBackends(loaded.agentBackends || []);
     } catch (err) {
@@ -135,7 +144,7 @@ export default function ModelsSection({ config, onSaved, showError }) {
     await deleteBackend(id);
   };
 
-  if (!settings) {
+  if (!settings || deploymentLoading) {
     return (
       <Typography variant="body2" color="text.secondary">
         Loading settings...
@@ -577,7 +586,11 @@ export default function ModelsSection({ config, onSaved, showError }) {
           <code>grain</code>; see Settings &rarr; Executors for join tokens and
           System &rarr; Sandboxes for connected model servers.
         </Typography>
-        <CLIRunLocations showError={showError} onSaved={onSaved} />
+        <CLIRunLocations
+          showError={showError}
+          onSaved={onSaved}
+          initialLoaded={cliRun}
+        />
       </SettingsCard>
     </>
   );
