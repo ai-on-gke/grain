@@ -80,11 +80,7 @@ The live/restart split is enforced by `pkg/ui/settings_restart_drift_test.go`: e
 
 Every table is classified as settings or runtime (`TestEveryTableIsEitherSettingsOrDeliberatelyNot`). `staterepo.SettingsTables` is exactly: `grain_config`, `repo_config`, `repo_workflow`, `qualification_config`, `qualification_item`, `qualification_item_depends_on`, `custom_field`, `api_scope_set`, `template`, `template_read`, `template_write`, `template_grant`, `template_field`, `template_custom_field`, `template_sequence`, `suite`, `suite_item`, `suite_sequence`, `board`, `board_column`, `board_panel`, `board_section`, `board_sequence`, `schedule`, `schedule_read`, `schedule_write`, `schedule_grant`, `schedule_custom_field`, `schedule_sequence`, `standing_sandbox`, `standing_sandbox_secret`, `standing_sandbox_env`, `persistent_sandbox`, `gcp_key`. `memoryTables` is `memory` and `memory_document`.
 
-> **Note on `CONFIG_REPO_SECTION_PATHS`.** `ui/src/settingsSections.js` links some sections to config files that are no longer separate tables:
-> - The Git section's `tables/git_credential.json` and `tables/repo_git_credential.json`. Git connections are now `grain_config.git_connections` and `grain_config.git_credential` (schema 22 moved them off the team row, `staterepo.movedTeamSettingColumns`), and a repository's choice is `repo_config.git_credential`.
-> - The Agents section's `tables/console_session.json`. Console sessions are the `grain_config.console_sessions` JSON column.
->
-> The links still open the config browser, but these fields are found in the files named above.
+`CONFIG_REPO_SECTION_PATHS` (`ui/src/settingsSections.js`) links each config-repo-only section to the files above that hold its settings. Git connections are `grain_config.git_connections` and `grain_config.git_credential` (schema 22 moved them off the team row, `staterepo.movedTeamSettingColumns`) and a repository's choice is `repo_config.git_credential`, so the Git section links `tables/grain_config.json` and `tables/repo_config.json`. Console sessions are the `grain_config.console_sessions` JSON column, so the Agents section links `tables/grain_config.json` only.
 
 ## 3. Deployment settings by Settings section
 

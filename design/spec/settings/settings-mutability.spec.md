@@ -372,7 +372,7 @@ With `directConfigWrites: true` and `settings_locked: true`, `GET /api/config` r
 
 ### D-11: Config-managed notices link files that do not exist
 
-`CONFIG_REPO_SECTION_PATHS` names `tables/git_credential.json`, `tables/repo_git_credential.json` (Git) and `tables/console_session.json` (Agents). Those tables do not exist: git connections live in `grain_config.git_connections` / `git_credential` and `repo_config.git_credential`, and console sessions in `grain_config.console_sessions`, all exported to `tables/grain_config.json` / `tables/repo_config.json`. The same names appear in `trustboundary.NeverAutoMergePaths` (harmless there), and `settings/new-task-form.yml` is listed there but is not written by `pkg/staterepo`.
+`CONFIG_REPO_SECTION_PATHS` named `tables/git_credential.json`, `tables/repo_git_credential.json` (Git) and `tables/console_session.json` (Agents); it now links Git to `tables/grain_config.json` / `tables/repo_config.json` and Agents to `tables/grain_config.json`. Those tables do not exist: git connections live in `grain_config.git_connections` / `git_credential` and `repo_config.git_credential`, and console sessions in `grain_config.console_sessions`, all exported to `tables/grain_config.json` / `tables/repo_config.json`. The same names appear in `trustboundary.NeverAutoMergePaths` (harmless there), and `settings/new-task-form.yml` is listed there but is not written by `pkg/staterepo`.
 
 ### D-12: `settings_locked` refuses writes on a deployment with no config repository
 
