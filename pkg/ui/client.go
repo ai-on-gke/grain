@@ -3949,26 +3949,25 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 		if trimmed == "" || trimmed == "null" {
 			return nil, nil
 		}
-		var list model.CapabilityList
-		if err := json.Unmarshal(raw, &list); err == nil {
-			caps := []string(list)
-			return &caps, nil
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return nil, fmt.Errorf("capabilities must be a list")
 		}
-		var grants []model.Grant
-		if err := json.Unmarshal(raw, &grants); err == nil {
-			caps := make([]string, 0, len(grants))
-			for _, g := range grants {
-				if strings.TrimSpace(g.Capability) != "" {
-					caps = append(caps, strings.TrimSpace(g.Capability))
+		caps := make([]string, 0, len(items))
+		for _, item := range items {
+			if entries, err := model.CapabilityEntryNames(item); err == nil {
+				caps = append(caps, entries...)
+				continue
+			} else if spec, gerr := protocol.ParseGrant(item); gerr == nil && len(spec.With) == 0 {
+				if c := strings.TrimSpace(spec.Capability); c != "" {
+					caps = append(caps, c)
 				}
+				continue
+			} else {
+				return nil, err
 			}
-			return &caps, nil
 		}
-		var errList model.CapabilityList
-		if err := json.Unmarshal(raw, &errList); err != nil {
-			return nil, err
-		}
-		return nil, nil
+		return &caps, nil
 	}
 	if len(aux.RawCapabilities) > 0 {
 		caps, err := parseCapRaw(aux.RawCapabilities)
@@ -3976,7 +3975,8 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		r.Capabilities = caps
-	} else if len(aux.RawGrants) > 0 {
+	}
+	if r.Capabilities == nil && len(aux.RawGrants) > 0 {
 		caps, err := parseCapRaw(aux.RawGrants)
 		if err != nil {
 			return err
@@ -4476,11 +4476,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			task.Reviewers = model.NormalizeReviewers(*req.Reviewers)
 		}
 		if req.Capabilities != nil || req.Priority != nil || req.KeepRunning != nil {
+			existingByCap := make(map[string]model.Grant, len(task.Grants))
+			for _, g := range task.Grants {
+				existingByCap[g.Capability] = g
+			}
 			if req.Capabilities != nil {
-				existingByCap := make(map[string]model.Grant, len(task.Grants))
-				for _, g := range task.Grants {
-					existingByCap[g.Capability] = g
-				}
 				policy, configured, err := c.capabilityPolicyFor(ctx)
 				if err != nil {
 					return err
@@ -4519,6 +4519,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			}
 			if req.Priority != nil {
 				if *req.Priority {
+					if _, had := existingByCap[model.PriorityDispatchCapability]; !had {
+						if err := c.catalogueEditRefusal(ctx, *task, model.PriorityDispatchCapability); err != nil {
+							return err
+						}
+					}
 					if !slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.PriorityDispatchCapability }) {
 						task.Grants = append(task.Grants, model.Grant{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel})
 					}
@@ -4528,6 +4533,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			}
 			if req.KeepRunning != nil {
 				if *req.KeepRunning {
+					if _, had := existingByCap[model.DurableCapability]; !had {
+						if err := c.catalogueEditRefusal(ctx, *task, model.DurableCapability); err != nil {
+							return err
+						}
+					}
 					if !slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.DurableCapability }) {
 						via := model.GrantByLabel
 						if task.IsConsoleSession() {

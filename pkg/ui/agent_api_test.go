@@ -206,6 +206,7 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 	seedAPITask(t, client, "4", "acme/widgets", "api:capabilities:admin", "api:tasks:write", "api:tasks:read", "gcp-key")
 	for _, body := range []string{
 		`{"capabilities":["self-debug"]}`,
+		`{"grants":[{"capability":"self-debug"}]}`,
 		`{"priority":true}`,
 		`{"priority":false}`,
 		`{"keepRunning":true}`,
@@ -213,6 +214,15 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 		`{"keep_running":true}`,
 	} {
 		if code, resp := asAgent(t, srv, "4", http.MethodPatch, "/api/tasks/2", body, "testing"); code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 with %s answered an agent %d: %s", body, code, resp)
+		}
+	}
+	for _, body := range []string{
+		`{"grants":[{"capability":"self-debug","via":"label"}]}`,
+		`{"grants":[{"Capability":"self-debug"}]}`,
+		`{"capabilities":[{"capability":"api:secrets:write","via":"label"}]}`,
+	} {
+		if code, resp := asAgent(t, srv, "4", http.MethodPatch, "/api/tasks/2", body, "testing"); code != http.StatusBadRequest && code != http.StatusForbidden {
 			t.Errorf("PATCH /api/tasks/2 with %s answered an agent %d: %s", body, code, resp)
 		}
 	}
