@@ -165,7 +165,7 @@ jobs:
             go test -race -shuffle=on -count=2 -timeout 80m "${PKGS[@]}" | tee /tmp/go-long.out
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            if ! python3 - /tmp/go-long.out go-long <<'PY'
+            if ! python3 - /tmp/go-long.out go-long <<'PY'; then
           import sys
           text = open(sys.argv[1], errors="replace").read()
           title = sys.argv[2]
@@ -196,7 +196,6 @@ jobs:
                       emitted += 1
           sys.exit(0 if emitted > 0 else 1)
           PY
-            then
               grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-long.log | tail -n 10 | while IFS= read -r line; do
                 echo "::error title=go-long::$line"
               done
