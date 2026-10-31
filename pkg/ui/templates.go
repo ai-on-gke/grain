@@ -80,6 +80,7 @@ type Template struct {
 	Fields    []TemplateField `json:"fields,omitempty"`
 	Repo      string          `json:"repo,omitempty"`
 	Base      string          `json:"base,omitempty"`
+	Priority  *int            `json:"priority,omitempty"`
 	AutoMerge bool            `json:"autoMerge"`
 	// NetworkAccess is how much of the internet the sandbox of every
 	// task filed from this template may reach
@@ -199,6 +200,10 @@ func templateFrom(t model.Template) Template {
 	if t.Target != nil {
 		out.Repo, out.Base = t.Target.String(), t.Base
 	}
+	if t.Priority != nil && *t.Priority != 0 {
+		p := *t.Priority
+		out.Priority = &p
+	}
 	out.ChangeTarget = t.ChangeTarget.Clone()
 	out.Reviewers = slices.Clone(t.Reviewers)
 	for _, r := range t.Reads {
@@ -309,6 +314,7 @@ type CreateTemplateRequest struct {
 	Reviewers []string `json:"reviewers,omitempty"`
 	Repo      string   `json:"repo"`
 	Base      string   `json:"base"`
+	Priority  *int     `json:"priority,omitempty"`
 	AutoMerge bool     `json:"autoMerge"`
 	// NetworkAccess fixes the network of every task this template files
 	// (model.Template.NetworkAccess): one of model.NetworkAccesses(), or
@@ -363,6 +369,16 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 	}
 	if strings.TrimSpace(req.Title) == "" {
 		return Template{}, validationErrorf("title is required")
+	}
+	var priority *int
+	if req.Priority != nil {
+		if *req.Priority < 0 {
+			return Template{}, validationErrorf("priority must be a positive integer")
+		}
+		if *req.Priority > 0 {
+			p := *req.Priority
+			priority = &p
+		}
 	}
 	if err := validateNetworkAccess(req.NetworkAccess); err != nil {
 		return Template{}, err
@@ -425,6 +441,7 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 		Fields:        fields,
 		Target:        target,
 		Base:          base,
+		Priority:      priority,
 		AutoMerge:     req.AutoMerge,
 		Interactive:   req.Interactive,
 		NetworkAccess: model.NetworkAccess(req.NetworkAccess),
@@ -541,6 +558,10 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 	}
 	if !req.Interactive {
 		req.Interactive = comp.Interactive
+	}
+	if req.Priority == nil && comp.Priority != 0 {
+		p := comp.Priority
+		req.Priority = &p
 	}
 	if strings.TrimSpace(req.NetworkAccess) == "" {
 		req.NetworkAccess = string(comp.NetworkAccess)
@@ -683,6 +704,7 @@ type UpdateTemplateRequest struct {
 	Reviewers *[]string `json:"reviewers,omitempty"`
 	Repo      *string   `json:"repo,omitempty"`
 	Base      *string   `json:"base,omitempty"`
+	Priority  *int      `json:"priority,omitempty"`
 	AutoMerge *bool     `json:"autoMerge,omitempty"`
 	// NetworkAccess edits what CreateTemplateRequest.NetworkAccess sets,
 	// with an empty string meaningful rather than ignored: it clears the
@@ -726,6 +748,9 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 	}
 	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 		return Template{}, validationErrorf("title cannot be empty")
+	}
+	if req.Priority != nil && *req.Priority < 0 {
+		return Template{}, validationErrorf("priority must be a positive integer")
 	}
 	if req.NetworkAccess != nil {
 		if err := validateNetworkAccess(*req.NetworkAccess); err != nil {
@@ -866,6 +891,14 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 		}
 		if req.Repo != nil || req.Base != nil {
 			t.Target, t.Base = target, base
+		}
+		if req.Priority != nil {
+			if *req.Priority == 0 {
+				t.Priority = nil
+			} else {
+				p := *req.Priority
+				t.Priority = &p
+			}
 		}
 		if req.AutoMerge != nil {
 			t.AutoMerge = *req.AutoMerge

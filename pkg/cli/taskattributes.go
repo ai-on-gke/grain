@@ -467,6 +467,17 @@ var builtinAttributes = attributeSet{
 		values: one(func(t ui.Task) string { return t.ID }),
 		key:    func(t ui.Task) sortKey { return idKey(t.ID) },
 	},
+	{
+		id:  "priority",
+		typ: typeNumber,
+		values: func(t ui.Task) []string {
+			p := t.Priority
+			if p <= 0 {
+				p = model.DefaultTaskPriority
+			}
+			return []string{strconv.Itoa(p)}
+		},
+	},
 }
 
 // customPrefix namespaces every deployment-defined attribute, so
