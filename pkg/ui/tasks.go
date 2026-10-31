@@ -1702,6 +1702,11 @@ type configResponse struct {
 	// (docs/design/config-repo-settings.md §2.1).
 	ConfigRepoOnly bool `json:"configRepoOnly,omitempty"`
 	SettingsLocked bool `json:"settingsLocked,omitempty"`
+	// NewTaskForm is settings/new-task-form.yml as stored
+	// (model.NewTaskForm), which the New Task form resolves for the
+	// repository, template and board it is filled in for; nil draws the
+	// form as built (docs/design/config-repo-settings.md §6).
+	NewTaskForm *model.NewTaskForm `json:"newTaskForm,omitempty"`
 }
 
 // CustomFieldDeclaration is one declared field on the wire -- the JSON
@@ -1942,6 +1947,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		resp.ModelsConfigured = len(cfg.AgentBackends) > 0
 		resp.ShowClosedByDefault = cfg.ShowClosedByDefault
 		resp.SettingsLocked = cfg.SettingsLocked
+		resp.NewTaskForm = cfg.NewTaskForm
 		resp.DefaultFilters = cfg.DefaultFilters
 		resp.EnvironmentName = cfg.EnvironmentName
 		// The stored zone, which before this never reached the frontend:
@@ -2273,6 +2279,13 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// The browser's zone when the body names none (TimeZoneHeader).
 	if strings.TrimSpace(req.TimeZone) == "" {
 		req.TimeZone = requestTimeZone(r)
+	}
+	// The fields settings/new-task-form.yml hides file as it says.
+	if cfg, err := s.tasks.Store.GetConfig(r.Context()); err == nil && cfg != nil {
+		if err := applyHiddenFormDefaults(&req, cfg.NewTaskForm); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 	}
 	task, err := s.tasks.CreateTask(r.Context(), req)
 	if err != nil {

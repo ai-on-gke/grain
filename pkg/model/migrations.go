@@ -425,6 +425,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `schedule` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
 		},
 	},
+	{
+		Version:     75,
+		Description: "add the New Task form's configuration to grain_config",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `new_task_form` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

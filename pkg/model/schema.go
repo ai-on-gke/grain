@@ -334,7 +334,10 @@ import "strconv"
 //
 // 74 adds `keep_running` to `task`, `template` and `schedule`
 // (model.Task.KeepRunning, model.Template.KeepRunning, model.Schedule.KeepRunning).
-const SchemaVersion = 74
+//
+// 75 adds `new_task_form` to `grain_config`: the New Task form's
+// configuration (settings/new-task-form.yml, model.NewTaskForm).
+const SchemaVersion = 75
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -2062,6 +2065,7 @@ var Tables = []string{
   ` + "`sandbox_image_mirror`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
   ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
+  ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
