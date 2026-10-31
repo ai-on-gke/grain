@@ -243,14 +243,14 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 		recordedSandboxKey string
 		recordedGrantsKey  string
 		hasRecordedKeys    bool
-		pinnedTarget       *model.RepoRef
-		hasPinnedTarget    bool
-		runLeases          []model.Lease
 	)
 	if store != nil {
+		// A run with no recorded keys -- one a daemon from before
+		// task_run_sandbox_key started, or one whose SetRunSandboxKeys
+		// failed -- is never parked warm: what its sandbox was built
+		// for cannot be told from the task as it stands now, which may
+		// have been narrowed since.
 		recordedSandboxKey, recordedGrantsKey, hasRecordedKeys, _ = store.RunSandboxKeys(ctx, runID)
-		pinnedTarget, hasPinnedTarget, _ = store.RunPinnedTarget(ctx, runID)
-		runLeases, _ = store.RunLeases(ctx, runID)
 	}
 	// Recreatable as runOne's runs are (recreate_sandbox): unregistered
 	// before releaseAdoptedSandbox below, which waits out a rebuild in
@@ -377,39 +377,13 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 			if terr == nil && latestTask != nil && serr == nil && st != "" &&
 				st != model.StateClosed && st != model.StateFailed &&
 				st != model.StateCompleted && st != model.StateAwaitingSubmit {
-				sandboxShapeFor := func(tk model.Task) Shape {
-					sh := Shape{
-						CPUs:          tk.SandboxCPUs,
-						MemoryMB:      tk.SandboxMemoryMB,
-						DiskGB:        tk.SandboxDiskGB,
-						NetworkAccess: tk.NetworkAccess,
-						GrainSource:   hasGrant(tk, model.SelfDebugCapability),
-						Class:         sandboxClassFor(tk),
-					}
-					if isUnisolated(deps.Sandboxes) {
-						sh.OperatorEnv, _ = localTask(cleanupCtx, store, deps.Policy, tk)
-					}
-					return sh
-				}
-				var (
-					sandboxKey string
-					grantsKey  string
-					canPark    bool
-				)
-				if hasRecordedKeys {
-					sandboxKey = recordedSandboxKey
-					grantsKey = recordedGrantsKey
-					canPark = true
-				} else if len(runLeases) == 0 && (!hasPinnedTarget || sameTargetRepo(pinnedTarget, task.Target)) {
-					sandboxKey = sessionSandboxKey(sandboxShapeFor(*task), *task, nil)
-					grantsKey = sessionGrantsKey(*task)
-					canPark = true
-				}
+				sandboxKey, grantsKey := recordedSandboxKey, recordedGrantsKey
+				canPark := hasRecordedKeys
 				if canPark && sessionGrantsKey(*latestTask) != grantsKey {
 					canPark = false
 				}
 				if canPark && (deps.Config.Capabilities == nil || !hasScarceGrant(deps.Config.Capabilities, *latestTask)) {
-					if sessionSandboxKey(sandboxShapeFor(*latestTask), *latestTask, nil) != sandboxKey {
+					if sessionSandboxKey(adoptedSessionShape(cleanupCtx, deps, *latestTask), *latestTask, nil) != sandboxKey {
 						canPark = false
 					}
 				}
@@ -438,11 +412,22 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	return errors.Join(errs...)
 }
 
-func sameTargetRepo(a, b *model.RepoRef) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
+// adoptedSessionShape is the sandbox Shape runOne would build for task,
+// as far as an adopting daemon can tell it from the task alone: what the
+// latest task's sessionSandboxKey is computed from before a warm park.
+func adoptedSessionShape(ctx context.Context, deps Deps, tk model.Task) Shape {
+	sh := Shape{
+		CPUs:          tk.SandboxCPUs,
+		MemoryMB:      tk.SandboxMemoryMB,
+		DiskGB:        tk.SandboxDiskGB,
+		NetworkAccess: tk.NetworkAccess,
+		GrainSource:   hasGrant(tk, model.SelfDebugCapability),
+		Class:         sandboxClassFor(tk),
 	}
-	return a.Same(*b)
+	if isUnisolated(deps.Sandboxes) {
+		sh.OperatorEnv, _ = localTask(ctx, deps.Store, deps.Policy, tk)
+	}
+	return sh
 }
 
 // registerAdoptedRecreation registers an adopted run with

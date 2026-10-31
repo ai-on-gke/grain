@@ -2510,34 +2510,6 @@ func (s *Store) RunSandboxKeys(ctx context.Context, runID string) (sandboxKey, g
 	return sandboxKey, grantsKey, true, nil
 }
 
-// RunPinnedTarget returns the write target SetRunSandbox pinned onto runID's
-// task_run row. pinned is false for a run where SetRunSandbox never ran (NULL
-// target_owner). When pinned is true and target is nil, the run was pinned to
-// having no target repository.
-func (s *Store) RunPinnedTarget(ctx context.Context, runID string) (target *RepoRef, pinned bool, err error) {
-	if runID == "" {
-		return nil, false, nil
-	}
-	var owner, name sql.NullString
-	err = s.db.QueryRowContext(ctx,
-		"SELECT `target_owner`, `target_name` FROM `task_run` WHERE `id` = ?",
-		runID).Scan(&owner, &name)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	if !owner.Valid {
-		return nil, false, nil
-	}
-	if owner.String == "" && name.String == "" {
-		return nil, true, nil
-	}
-	r := RepoFromStored(owner.String, name.String)
-	return &r, true, nil
-}
-
 // SetRunAgentStarted records the moment a run's agent actually got its
 // first turn -- everything before it (a sandbox built, a repo cloned, a
 // capability minted) is this run's setup, and everything after it is the

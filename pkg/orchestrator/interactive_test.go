@@ -738,6 +738,7 @@ func TestInteractiveRunHostAdoptionMidChatWithRecreateSandboxAndSubsequentTurns(
 			Capabilities:          model.NewCapabilityRegistry(durable.New()),
 		},
 	}
+	recordAdoptedSessionKeys(t, ctx, store, deps, director.ID, d.RunID)
 	if err := orchestrator.ResumeAdoptedRun(ctx, deps, host, adopted[0]); err != nil {
 		t.Fatalf("ResumeAdoptedRun: %v", err)
 	}
@@ -935,6 +936,9 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 			Adoption: runhost.Adoption{Claim: runhost.Claim{Run: d.RunID, Task: director.ID, Sandbox: d.RunID}, Host: info},
 			Sandbox:  sb,
 		}
+		// Recorded, so it is the degraded rebuild alone that keeps the
+		// sandbox from being parked.
+		recordAdoptedSessionKeys(t, ctx, store, deps, director.ID, d.RunID)
 		if err := orchestrator.ResumeAdoptedRun(ctx, deps, host, adopted); err != nil {
 			t.Fatalf("ResumeAdoptedRun: %v", err)
 		}
@@ -943,6 +947,87 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 		}
 		if got := orchestrator.WarmSessionSandboxID(store, director.ID); got != "" {
 			t.Fatalf("WarmSessionSandboxID = %q, want empty after adopted rebuild with unrestorable capability", got)
+		}
+	})
+
+	t.Run("unrecorded_keys_release_sandbox", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		settings(t, store, func(cfg *model.Config) {
+			cfg.SessionSandboxIdleTTL = 30 * time.Minute
+			cfg.ConsoleSessions = []model.ConsoleSession{{
+				ID: model.DirectorSessionID, Title: "Director",
+				Capabilities: []string{selfdebug.CapabilityName}, NetworkAccess: model.NetworkOpen,
+			}}
+		})
+		runSessions(t, store, baseTime)
+		director := sessionTasks(t, store)[0]
+
+		started := time.Now().UTC().Add(-time.Minute)
+		replyToSession(t, store, director.ID, started.Add(-time.Second))
+
+		// A run dispatched by a daemon that recorded no session keys (one
+		// from before task_run_sandbox_key, or a failed SetRunSandboxKeys).
+		d := dispatch.Dispatch{TaskID: director.ID, RunID: director.ID + "-1", Attempt: 1}
+		startRun(t, ctx, store, d, started)
+		if err := store.SetRunSandbox(ctx, d.RunID, d.RunID, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetSpoolCursor(ctx, d.RunID, 0, started); err != nil {
+			t.Fatal(err)
+		}
+
+		// Narrowed before the adopting daemon reads the task: computing the
+		// key from the task now would name a sandbox it no longer matches.
+		settings(t, store, func(cfg *model.Config) {
+			cfg.SessionSandboxIdleTTL = 30 * time.Minute
+			cfg.ConsoleSessions = []model.ConsoleSession{{
+				ID: model.DirectorSessionID, Title: "Director",
+				Capabilities: []string{}, NetworkAccess: model.NetworkNone,
+			}}
+		})
+		runSessions(t, store, started.Add(10*time.Second))
+
+		sandboxes := orchestrator.NewHostSandboxes(t.TempDir())
+		if _, err := sandboxes.Acquire(ctx, d.RunID, orchestrator.Shape{NetworkAccess: model.NetworkOpen, GrainSource: true}); err != nil {
+			t.Fatal(err)
+		}
+		sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, d.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fw := parsingFramework{
+			parsed:  make(chan string, 1),
+			earlier: make(chan string, 1),
+			result: toolResult(agent.ToolCall{
+				Name:      "comment_on_issue",
+				Arguments: map[string]any{"comment": "finished adopted turn"},
+			}),
+		}
+		deps := orchestrator.Deps{
+			Store:     store,
+			Sandboxes: sandboxes,
+			Framework: orchestrator.StaticFramework(fw),
+			Config: orchestrator.Config{
+				SessionSandboxIdleTTL: 30 * time.Minute,
+				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+				Capabilities:          model.NewCapabilityRegistry(durable.New(), selfdebug.New()),
+			},
+		}
+		info := runhost.Info{
+			Name:    "rh-unrecorded",
+			Running: true,
+			Labels:  runhost.Labels{Deployment: "d", Task: director.ID, Run: d.RunID, Protocol: runhost.Protocol, Spool: t.TempDir()},
+		}
+		adopted := orchestrator.AdoptedRun{
+			Adoption: runhost.Adoption{Claim: runhost.Claim{Run: d.RunID, Task: director.ID, Sandbox: d.RunID}, Host: info},
+			Sandbox:  sb,
+		}
+		if err := orchestrator.ResumeAdoptedRun(ctx, deps, &simpleAdoptedHost{stdout: "ok\n"}, adopted); err != nil {
+			t.Fatalf("ResumeAdoptedRun: %v", err)
+		}
+		if got := orchestrator.WarmSessionSandboxID(store, director.ID); got != "" {
+			t.Fatalf("WarmSessionSandboxID = %q, want empty (no recorded keys: the sandbox must not be parked)", got)
 		}
 	})
 
@@ -1013,6 +1098,7 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 			Adoption: runhost.Adoption{Claim: runhost.Claim{Run: d.RunID, Task: director.ID, Sandbox: d.RunID}, Host: info},
 			Sandbox:  sb,
 		}
+		recordAdoptedSessionKeys(t, ctx, store, deps, director.ID, d.RunID)
 		if err := orchestrator.ResumeAdoptedRun(ctx, deps, &simpleAdoptedHost{stdout: "ok\n"}, adopted); err != nil {
 			t.Fatalf("ResumeAdoptedRun: %v", err)
 		}
@@ -1023,4 +1109,18 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 			t.Fatalf("ledger.IdleCount(PoolAgent) = %d, want 1 (deferred Release must not wipe out parked warm sandbox)", got)
 		}
 	})
+}
+
+// recordAdoptedSessionKeys records the session keys runOne would have
+// recorded when it dispatched runID, as task stands now.
+func recordAdoptedSessionKeys(t *testing.T, ctx context.Context, store *model.Store, deps orchestrator.Deps, taskID, runID string) {
+	t.Helper()
+	task, err := store.GetTask(ctx, taskID)
+	if err != nil || task == nil {
+		t.Fatalf("GetTask(%s): %v", taskID, err)
+	}
+	sandboxKey, grantsKey := orchestrator.SessionKeysForTest(ctx, deps, *task)
+	if err := store.SetRunSandboxKeys(ctx, runID, sandboxKey, grantsKey); err != nil {
+		t.Fatal(err)
+	}
 }
