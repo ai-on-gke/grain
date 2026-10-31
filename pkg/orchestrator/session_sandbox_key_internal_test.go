@@ -28,33 +28,61 @@ import (
 func TestSessionSandboxKeyChangesWithWhatTheSandboxWasBuiltFor(t *testing.T) {
 	t.Parallel()
 	base := model.Task{
-		Target: &model.RepoRef{Owner: "acme", Name: "app"},
-		Grants: []model.Grant{{Capability: "gcp-key"}, {Capability: "durable", Via: "grain"}},
+		Target:        &model.RepoRef{Owner: "acme", Name: "app"},
+		Reads:         []model.RepoRef{{Owner: "acme", Name: "docs"}, {Owner: "acme", Name: "lib"}},
+		Writes:        []model.WriteTarget{{Repo: model.RepoRef{Owner: "acme", Name: "app"}}, {Repo: model.RepoRef{Owner: "acme", Name: "lib"}, Base: "main"}},
+		Grants:        []model.Grant{{Capability: "gcp-key"}, {Capability: "durable", Via: "grain"}},
+		NetworkAccess: model.NetworkOpen,
 	}
 	shape := Shape{NetworkAccess: model.NetworkOpen, Class: "interactive"}
 	prepared := []model.Materialized{{Grant: model.Grant{Capability: "gcp-key"}}}
 	key := sessionSandboxKey(shape, base, prepared)
+	grantsKey := sessionGrantsKey(base)
 
 	reordered := base
 	reordered.Grants = []model.Grant{base.Grants[1], base.Grants[0]}
+	reordered.Reads = []model.RepoRef{base.Reads[1], base.Reads[0]}
+	reordered.Writes = []model.WriteTarget{base.Writes[1], base.Writes[0]}
 	if got := sessionSandboxKey(shape, reordered, prepared); got != key {
-		t.Errorf("reordering the same grants changed the key:\n%s\n%s", key, got)
+		t.Errorf("reordering the same grants/reads/writes changed the key:\n%s\n%s", key, got)
+	}
+	if got := sessionGrantsKey(reordered); got != grantsKey {
+		t.Errorf("reordering the same grants/reads/writes changed sessionGrantsKey:\n%s\n%s", grantsKey, got)
 	}
 
 	withdrawn := base
 	withdrawn.Grants = base.Grants[1:]
+	readWithdrawn := base
+	readWithdrawn.Reads = base.Reads[1:]
+	writeWithdrawn := base
+	writeWithdrawn.Writes = base.Writes[1:]
 	retarget := base
 	retarget.Target = &model.RepoRef{Owner: "acme", Name: "other"}
 	narrowed := shape
 	narrowed.NetworkAccess = model.NetworkNone
 	for name, got := range map[string]string{
 		"a task grant withdrawn":     sessionSandboxKey(shape, withdrawn, prepared),
+		"a read repo withdrawn":      sessionSandboxKey(shape, readWithdrawn, prepared),
+		"a write repo withdrawn":     sessionSandboxKey(shape, writeWithdrawn, prepared),
 		"a run grant no longer made": sessionSandboxKey(shape, base, nil),
 		"another target":             sessionSandboxKey(shape, retarget, prepared),
 		"no network":                 sessionSandboxKey(narrowed, base, prepared),
 	} {
 		if got == key {
 			t.Errorf("%s left the key unchanged: %s", name, key)
+		}
+	}
+
+	netNarrowedTask := base
+	netNarrowedTask.NetworkAccess = model.NetworkNone
+	for name, got := range map[string]string{
+		"a task grant withdrawn": sessionGrantsKey(withdrawn),
+		"a read repo withdrawn":  sessionGrantsKey(readWithdrawn),
+		"a write repo withdrawn": sessionGrantsKey(writeWithdrawn),
+		"task network narrowed":  sessionGrantsKey(netNarrowedTask),
+	} {
+		if got == grantsKey {
+			t.Errorf("%s left sessionGrantsKey unchanged: %s", name, grantsKey)
 		}
 	}
 }
