@@ -184,12 +184,30 @@ jobs:
       - name: Test
         run: |
           set +e
-          GRAIN_GOTEST_LOG=/tmp/go-e2e.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./tests/e2e/... ./tests/deploy/...
-          status=$?
+          GRAIN_GOTEST_LOG=/tmp/go-e2e.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./tests/e2e/... ./tests/deploy/... | tee /tmp/go-e2e.out
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-e2e.log | tail -n 10 | while IFS= read -r line; do
-              echo "::error title=go-e2e::$line"
-            done
+            python3 - /tmp/go-e2e.out go-e2e <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
             exit "$status"
           fi
 
@@ -277,6 +295,9 @@ jobs:
 
       - name: Configure git identity
         run: |
+          sudo systemctl stop postgresql 2>/dev/null || true
+          sudo systemctl disable postgresql 2>/dev/null || true
+          sudo rm -rf /usr/lib/postgresql
           sudo git config --system user.name "grain-ci"
           sudo git config --system user.email "grain-ci@example.com"
           git config --global user.name "grain-ci"
@@ -285,12 +306,30 @@ jobs:
       - name: Test
         run: |
           set +e
-          GRAIN_GOTEST_LOG=/tmp/go-model.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/model/... ./pkg/staterepo/... ./tests/security/...
-          status=$?
+          GRAIN_GOTEST_LOG=/tmp/go-model.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/model/... ./pkg/staterepo/... ./tests/security/... | tee /tmp/go-model.out
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-model.log | tail -n 10 | while IFS= read -r line; do
-              echo "::error title=go-model::$line"
-            done
+            python3 - /tmp/go-model.out go-model <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
             exit "$status"
           fi
 
@@ -423,12 +462,30 @@ jobs:
         run: |
           set +e
           export PATH="$PATH:/sbin:/usr/sbin"
-          GRAIN_GOTEST_LOG=/tmp/granule.log ../../scripts/run-go-tests.sh go test -race -count=1 -timeout 10m ./...
-          status=$?
+          GRAIN_GOTEST_LOG=/tmp/granule.log ../../scripts/run-go-tests.sh go test -race -count=1 -timeout 10m ./... | tee /tmp/granule.out
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:|panic:' /tmp/granule.log | tail -n 10 | while IFS= read -r line; do
-              echo "::error title=granule::$line"
-            done
+            python3 - /tmp/granule.out granule <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
             exit "$status"
           fi
 
@@ -958,18 +1015,35 @@ jobs:
           set +e
           GRAIN_GOTEST_LOG=/tmp/pkgcache.log ./scripts/run-go-tests.sh \
             go test ./pkg/orchestrator/ -run 'PackageCache|ReloadDockerScript|AsRootScript' \
-            -count=1 -v -timeout 20m
-          status=$?
+            -count=1 -v -timeout 20m | tee /tmp/pkgcache.out
+          status=${PIPESTATUS[0]}
           for want in TestPackageCachePullsThroughARealDockerd TestPackageCacheReachesAChildContainerBuild TestPackageCacheLeavesASandboxWithNoRunningDockerdAlone; do
             if ! grep -q -- "--- PASS: $want" /tmp/pkgcache.log; then
               status=1
-              echo "::error title=package-cache::$want did not pass"
             fi
           done
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|--- SKIP:|_test\.go:[0-9]+:|^FAIL' /tmp/pkgcache.log | tail -n 7 | while IFS= read -r line; do
-              echo "::error title=package-cache::$line"
-            done
+            python3 - /tmp/pkgcache.out package-cache <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
             exit "$status"
           fi
 
