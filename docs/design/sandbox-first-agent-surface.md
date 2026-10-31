@@ -84,7 +84,7 @@ Every sandbox credential is minted per attempt in `pkg/gitproxy/tokens.go` and c
 1. **Baseline Own-Task & Read Scopes (every run with a sandbox):**
    - **Namespace reads (`/fs/`):**
      - `ci://<task-repo>/...` (when the task holds `grain-ci`)
-     - `task://<own-task-id>/...` (own task metadata, comments, handover, diff)
+     - `task://<own-task-id>/...` (own task metadata, comments, handover, diff); another task's `task://<id>/` needs `self-debug` or `api:tasks:read@<its repo>`
      - `config://repos/<task-repo>`, `config://workflows/`
      - `memory://global/...`, `memory://repos/<task-repo>/...`
      - `deploy://merge-queue` (read-only merge queue state, replacing `query_merge_queue`)

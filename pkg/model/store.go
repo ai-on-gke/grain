@@ -4421,8 +4421,10 @@ type NamespaceScope struct {
 	MayReadSrc      bool
 	MayReadAllTasks bool
 	// TaskReadRepos are the repositories whose tasks the run may read
-	// under task:// without MayReadAllTasks: its task's target, reads
-	// and writes, and any api:tasks:read@owner/repo names.
+	// under task:// without MayReadAllTasks: the ones its
+	// api:tasks:read@owner/repo grants name, and nothing else. A task's
+	// own target, reads and writes are not among them -- a run with no
+	// grant reads only its own task.
 	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
@@ -4505,15 +4507,12 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	if target != nil {
 		taskRepo = target.String()
 		addRepo(taskRepo)
-		addTaskRepo(taskRepo)
 	}
 	for _, r := range reads {
 		addRepo(r.String())
-		addTaskRepo(r.String())
 	}
 	for _, w := range writes {
 		addRepo(w.String())
-		addTaskRepo(w.String())
 	}
 
 	cfgRepo := ConfigRepo()
