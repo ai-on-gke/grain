@@ -62,6 +62,12 @@ var (
 	serverInst *protocol.Server
 )
 
+// callerClock is the in-process methods' clock. An external server
+// holds a pass's deadline to its own clock; this one runs inside grain,
+// whose orchestrator set that deadline from the clock it runs on (a test
+// world's, say), so there is no second clock to hold it to.
+func callerClock() time.Time { return time.Time{} }
+
 func buildServer() *protocol.Server {
 	journal, err := protocol.NewMethod(protocol.MethodSpec{
 		Name: JournalMethod,
@@ -72,6 +78,7 @@ func buildServer() *protocol.Server {
 		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
 			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
 		},
+		Now: callerClock,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building #%s: %v", JournalMethod, err))
@@ -84,6 +91,7 @@ func buildServer() *protocol.Server {
 		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
 			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
 		},
+		Now: callerClock,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building #%s: %v", HealthMethod, err))
@@ -106,6 +114,7 @@ func buildServer() *protocol.Server {
 		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
 			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
 		},
+		Now: callerClock,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building #%s: %v", SQLMethod, err))

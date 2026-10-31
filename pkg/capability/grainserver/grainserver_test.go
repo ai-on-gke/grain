@@ -73,3 +73,30 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 		t.Fatalf("SQLWriteGrant should be dangerous and person-only")
 	}
 }
+
+// A pass's deadline comes from the orchestrator's clock, which need not
+// be the wall clock -- a test world's is months behind it -- and the
+// in-process server, running inside grain, holds it to no clock of its own.
+func TestInProcessServerMintsOnTheCallersClock(t *testing.T) {
+	t.Parallel()
+
+	lookup := grainserver.Lookup(nil)
+	grants, err := model.CapabilityGrants([]model.Grant{{Capability: grainserver.HealthGrant, Via: model.GrantByLabel}}, lookup)
+	if err != nil {
+		t.Fatalf("CapabilityGrants: %v", err)
+	}
+	then := time.Now().Add(-90 * 24 * time.Hour)
+	pass, err := protocol.MintPass(context.Background(), grants, func(id string) (protocol.Minter, error) {
+		return lookup(id)
+	}, protocol.PassOptions{
+		Deployment: "test",
+		Task:       "1",
+		Attempt:    1,
+		Deadline:   then.Add(time.Hour),
+		Now:        func() time.Time { return then },
+	})
+	if err != nil {
+		t.Fatalf("MintPass with a deadline behind the wall clock: %v", err)
+	}
+	pass.Release(context.Background())
+}
