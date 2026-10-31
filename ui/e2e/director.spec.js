@@ -232,13 +232,13 @@ test("follows a live Director task through its durable exchange", async ({
   await page
     .getByRole("button", { name: "Edit Director capabilities" })
     .click();
-  const health = page.getByRole("checkbox", { name: /Deployment health/ });
-  await expect(health).not.toBeChecked();
-  await health.click();
-  await expect(health).toBeChecked();
+  await page.getByRole("button", { name: "Add grant…" }).click();
+  await page
+    .locator('[data-method="https://grain.dev/capabilities/grain#health"]')
+    .click();
   await expect
     .poll(async () => (await task(page, firstTask)).capabilities)
-    .toContain("deployment-health");
+    .toContain("https://grain.dev/capabilities/grain#health={}");
   await page
     .getByRole("button", { name: "Hide Director capabilities" })
     .click();

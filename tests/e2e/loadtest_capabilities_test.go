@@ -58,7 +58,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
@@ -93,7 +92,7 @@ import (
 func loadHarnessRegistry(extra ...model.CapabilityProvider) *model.CapabilityRegistry {
 	providers := append([]model.CapabilityProvider{}, extra...)
 	providers = append(providers,
-		selfdebug.New(), deploymenthealth.New(), selfrepair.New(),
+		selfdebug.New(), selfrepair.New(),
 		selfupgrade.New(), bootstrap.New(), grainci.New(), registrypush.New(),
 		consolecap.New(), readissues.New(),
 		prioritydispatch.New(), durable.New(),

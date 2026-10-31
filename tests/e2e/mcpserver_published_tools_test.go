@@ -35,9 +35,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
@@ -49,8 +47,8 @@ import (
 // is no count to keep in step with it.
 var everyToolGrant = []string{
 	selfdebug.CapabilityName,
-	grainlog.CapabilityName,
-	deploymenthealth.CapabilityName,
+	"https://grain.dev/capabilities/grain#journal",
+	"https://grain.dev/capabilities/grain#health",
 	bootstrap.CapabilityName,
 	selfupgrade.CapabilityName,
 	grainci.CapabilityName,

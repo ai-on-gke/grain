@@ -1358,8 +1358,8 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // served by the run's agent framework -- agent/antigravity's pre-tool
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
-	grainci.CapabilityName, deploymenthealth.CapabilityName,
+	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
+	grainci.CapabilityName, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	selfupgrade.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
@@ -1370,6 +1370,9 @@ func warnUnknownGrants(grants GrantNames) {
 	for _, name := range grants {
 		if _, isAPI, err := ui.ParseAPIGrant(name); isAPI && err == nil {
 			continue // served as generated tools (ui.AgentAPITools)
+		}
+		if grainserver.IsInProcessGrant(name) {
+			continue
 		}
 		if !slices.Contains(served, name) {
 			fmt.Fprintf(os.Stderr,
@@ -1390,7 +1393,7 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 			Redactor: grainLogRedactor(secretsDir),
 		})...)
 	}
-	if grants.Has(deploymenthealth.CapabilityName) {
+	if grainserver.HasHealth(grants) {
 		redactor := grainLogRedactor(secretsDir)
 		var redact func(string) string
 		if redactor != nil {
@@ -2315,7 +2318,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 				MayReadAllMemory: apiGrants.Allows("memory:read", ""),
 				MayReadMetrics:   grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", ""),
 				MayReadPipeline:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", "") || apiGrants.Allows("dispatch:read", ""),
-				MayReadHealth:    grants.Has(deploymenthealth.CapabilityName) || apiGrants.Allows("deployment:read", ""),
+				MayReadHealth:    grainserver.HasHealth(grants) || apiGrants.Allows("deployment:read", ""),
 				MayReadGrainLog:  grainserver.HasJournal(grants),
 			},
 			CIReader:    DaemonGrainCI{Client: client, TaskID: *taskID},

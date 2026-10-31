@@ -1520,6 +1520,9 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	if grainserver.HasJournal(names) {
 		held["grain-log"] = true
 	}
+	if grainserver.HasHealth(names) || apiSet.Has("deployment:read") {
+		held["deployment-health"] = true
+	}
 	var b strings.Builder
 	for _, c := range grainCLIGrants {
 		if held[c.grant] {
@@ -3235,11 +3238,11 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// answered with (pkg/capability/grainlog, agent.RunConfig's
 		// GrainSecretsDir).
 		grainSecretsDir := ""
-		if grainserver.HasJournal(grants) || slices.Contains(grants, deploymenthealth.CapabilityName) {
+		if grainserver.HasJournal(grants) || grainserver.HasHealth(grants) {
 			grainSecretsDir = cfg.GrainSecretsDir
 		}
 		grainStateDir := ""
-		if slices.Contains(grants, deploymenthealth.CapabilityName) {
+		if grainserver.HasHealth(grants) {
 			grainStateDir = cfg.GrainStateDir
 		}
 		// The local-scripts declarations this task's capabilities grant,
@@ -4173,7 +4176,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
-	grainci.CapabilityName, deploymenthealth.CapabilityName, selfupgrade.CapabilityName,
+	grainci.CapabilityName, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant, selfupgrade.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 }

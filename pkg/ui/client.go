@@ -376,6 +376,22 @@ func (c *Client) normalizeCapabilityID(id string) (string, error) {
 	return names[0], nil
 }
 
+// normalizeCapabilityIDs expands 1-to-many retired legacy grants (such as
+// deployment-health -> [api:deployment:read, grain#health={}]) and normalizes
+// each resulting capability ID.
+func (c *Client) normalizeCapabilityIDs(id string) ([]string, error) {
+	expanded := model.CanonicalLegacyGrants(id)
+	out := make([]string, 0, len(expanded))
+	for _, part := range expanded {
+		normalized, err := c.normalizeCapabilityID(part)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, normalized)
+	}
+	return out, nil
+}
+
 func (c *Client) capabilityByID(id string) (Capability, bool) {
 	if model.IsCapabilityRef(id) {
 		if model.CheckCapabilityGrantSyntax(id) != nil {
@@ -3228,14 +3244,16 @@ func (c *Client) grantsFor(ids []string, via model.GrantSource) ([]model.Grant, 
 			}
 			return nil, validationErrorf("%s", grainci.Refusal())
 		}
-		id, err := c.normalizeCapabilityID(id)
+		normalizedIDs, err := c.normalizeCapabilityIDs(id)
 		if err != nil {
 			return nil, grantValidationError(err)
 		}
-		if _, ok := c.capabilityByID(id); !ok {
-			return nil, validationErrorf("%s", capabilityRefusal(id))
+		for _, nid := range normalizedIDs {
+			if _, ok := c.capabilityByID(nid); !ok {
+				return nil, validationErrorf("%s", capabilityRefusal(nid))
+			}
+			grants = append(grants, model.Grant{Capability: nid, Via: via})
 		}
-		grants = append(grants, model.Grant{Capability: id, Via: via})
 	}
 	return model.NormalizeCapabilityGrants(grants, nil)
 }
@@ -3321,25 +3339,27 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 				if id == grainci.CapabilityName {
 					continue
 				}
-				id, err := c.normalizeCapabilityID(id)
+				normalizedIDs, err := c.normalizeCapabilityIDs(id)
 				if err != nil {
 					return nil, nil, err
 				}
-				if _, ok := c.capabilityByID(id); !ok {
-					return nil, nil, validationErrorf("%s", capabilityRefusal(id))
-				}
-				found := false
-				for _, g := range grants {
-					if g.Capability == id {
-						found = true
-						break
+				for _, nid := range normalizedIDs {
+					if _, ok := c.capabilityByID(nid); !ok {
+						return nil, nil, validationErrorf("%s", capabilityRefusal(nid))
 					}
-				}
-				if !found {
-					grants = append(grants, model.Grant{
-						Capability: id,
-						Via:        model.GrantByLabel,
-					})
+					found := false
+					for _, g := range grants {
+						if g.Capability == nid {
+							found = true
+							break
+						}
+					}
+					if !found {
+						grants = append(grants, model.Grant{
+							Capability: nid,
+							Via:        model.GrantByLabel,
+						})
+					}
 				}
 			}
 		}
@@ -4339,18 +4359,20 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		seen := map[string]bool{}
 		normalizedCaps = make([]string, 0, len(*req.Capabilities))
 		for _, rawCap := range *req.Capabilities {
-			capID, err := c.normalizeCapabilityID(rawCap)
+			capIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return Task{}, err
 			}
-			if _, ok := c.capabilityByID(capID); !ok {
-				return Task{}, validationErrorf("capabilities: %s", capabilityRefusal(capID))
+			for _, capID := range capIDs {
+				if _, ok := c.capabilityByID(capID); !ok {
+					return Task{}, validationErrorf("capabilities: %s", capabilityRefusal(capID))
+				}
+				if seen[capID] {
+					continue
+				}
+				seen[capID] = true
+				normalizedCaps = append(normalizedCaps, capID)
 			}
-			if seen[capID] {
-				continue
-			}
-			seen[capID] = true
-			normalizedCaps = append(normalizedCaps, capID)
 		}
 	}
 	submitted, submittedAt, submittedHead := false, c.now(), ""
@@ -4876,33 +4898,41 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 	if capabilityID == "" {
 		return validationErrorf("capability id is required")
 	}
+	var targetIDs []string
 	if attach {
-		normalized, err := c.normalizeCapabilityID(capabilityID)
+		normalized, err := c.normalizeCapabilityIDs(capabilityID)
 		if err != nil {
 			return grantValidationError(err)
 		}
-		capabilityID = normalized
-	}
-	if _, ok := c.capabilityByID(capabilityID); attach && !ok {
-		return validationErrorf("%s", capabilityRefusal(capabilityID))
-	}
-	if attach {
-		if err := c.catalogueEditRefusalFor(ctx, id, capabilityID); err != nil {
-			return err
+		targetIDs = normalized
+		for _, nid := range targetIDs {
+			if _, ok := c.capabilityByID(nid); !ok {
+				return validationErrorf("%s", capabilityRefusal(nid))
+			}
+			if err := c.catalogueEditRefusalFor(ctx, id, nid); err != nil {
+				return err
+			}
+		}
+	} else {
+		targetIDs = model.CanonicalLegacyGrants(capabilityID)
+		if !slices.Contains(targetIDs, capabilityID) {
+			targetIDs = append(targetIDs, capabilityID)
 		}
 	}
 	// Rebuilding the grant set inside the closure is what lets two people
 	// attach two different capabilities without one losing: a retry runs
 	// again against the set the winner already wrote.
 	return c.mutate(ctx, id, func(task *model.Task) error {
-		kept := make([]model.Grant, 0, len(task.Grants)+1)
+		kept := make([]model.Grant, 0, len(task.Grants)+len(targetIDs))
 		for _, g := range task.Grants {
-			if g.Capability != capabilityID {
+			if !slices.Contains(targetIDs, g.Capability) {
 				kept = append(kept, g)
 			}
 		}
 		if attach {
-			kept = append(kept, model.Grant{Capability: capabilityID, Via: model.GrantByLabel})
+			for _, nid := range targetIDs {
+				kept = append(kept, model.Grant{Capability: nid, Via: model.GrantByLabel})
+			}
 		}
 		task.Grants = kept
 		return nil

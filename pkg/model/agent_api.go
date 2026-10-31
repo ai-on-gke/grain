@@ -161,13 +161,14 @@ var apiPresets = []APIPreset{
 // well as whatever tools it still has under their old names (none, for
 // one legacyGrantReplacements retires).
 var apiAliasCapabilities = map[string]string{
-	"self-debug":       "self-debug",
-	"self-upgrade":     "self-upgrade",
-	"pipeline-control": "pipeline-control",
-	"team-broadcast":   "team-broadcast",
-	"dispatch-control": "dispatch-control",
-	"memory":           "memory",
-	"release-notes":    "release-notes",
+	"self-debug":        "self-debug",
+	"self-upgrade":      "self-upgrade",
+	"deployment-health": "deployment:read",
+	"pipeline-control":  "pipeline-control",
+	"team-broadcast":    "team-broadcast",
+	"dispatch-control":  "dispatch-control",
+	"memory":            "memory",
+	"release-notes":     "release-notes",
 }
 
 // GrainCapabilityServerID is the canonical capability_id of the in-process
@@ -178,6 +179,9 @@ const GrainCapabilityServerID = "https://grain.dev/capabilities/grain"
 const (
 	GrainJournalRef   = GrainCapabilityServerID + "#journal"
 	GrainJournalGrant = GrainJournalRef + "={}"
+
+	GrainHealthRef   = GrainCapabilityServerID + "#health"
+	GrainHealthGrant = GrainHealthRef + "={}"
 )
 
 // IsGrainJournalGrant reports whether grant names grain#journal (recorded or
@@ -195,13 +199,28 @@ func HasGrainJournal(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainJournalGrant)
 }
 
+// IsGrainHealthGrant reports whether grant names grain#health (recorded or
+// bare) or the retired bare deployment-health alias.
+func IsGrainHealthGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == "deployment-health" {
+		return true
+	}
+	return CapabilityGrantRef(s) == GrainHealthRef
+}
+
+// HasGrainHealth reports whether any grant in grants opens grain#health.
+func HasGrainHealth(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainHealthGrant)
+}
+
 // legacyGrantReplacements are the bare capabilities converted to api or
 // capability-server grants (docs/design/unified-grants.md §4) whose
 // in-process provider is gone: each is written as its replacement wherever a
-// grant is recorded (CanonicalLegacyGrant), and the store migration that
-// retired it rewrote the rows already stored. The bare name keeps granting
-// what it did so a grant nothing rewrote -- a repository's own .grain
-// declaration, an older grain/config -- keeps working.
+// grant is recorded (CanonicalLegacyGrant / CanonicalLegacyGrants), and the
+// store migration that retired it rewrote the rows already stored. The bare
+// name keeps granting what it did so a grant nothing rewrote -- a
+// repository's own .grain declaration, an older grain/config -- keeps working.
 var legacyGrantReplacements = map[string]string{
 	"team-broadcast":   APIGrantPrefix + "team-broadcast",
 	"dispatch-control": APIGrantPrefix + "dispatch-control",
@@ -211,13 +230,33 @@ var legacyGrantReplacements = map[string]string{
 	"grain-log":        GrainJournalGrant,
 }
 
-// CanonicalLegacyGrant is name, or the api grant a retired in-process
-// capability of that name became.
+// legacyGrantMultiReplacements maps retired bare capabilities that split into
+// multiple canonical grants (for example an api scope plus an in-process
+// grain server method).
+var legacyGrantMultiReplacements = map[string][]string{
+	"deployment-health": {APIGrantPrefix + "deployment:read", GrainHealthGrant},
+}
+
+// CanonicalLegacyGrant is name, or the single grant a retired 1-to-1
+// in-process capability of that name became. Callers recording a capability
+// list should use CanonicalLegacyGrants so 1-to-many retirements (such as
+// deployment-health) expand to every grant they became.
 func CanonicalLegacyGrant(name string) string {
-	if to, ok := legacyGrantReplacements[strings.TrimSpace(name)]; ok {
+	trimmed := strings.TrimSpace(name)
+	if to, ok := legacyGrantReplacements[trimmed]; ok {
 		return to
 	}
 	return name
+}
+
+// CanonicalLegacyGrants returns the canonical grant(s) a retired in-process
+// capability became, or []string{name} when name is not retired.
+func CanonicalLegacyGrants(name string) []string {
+	trimmed := strings.TrimSpace(name)
+	if many, ok := legacyGrantMultiReplacements[trimmed]; ok {
+		return slices.Clone(many)
+	}
+	return []string{CanonicalLegacyGrant(name)}
 }
 
 // APIAliasPreset returns the preset name that a bare capability name aliases,

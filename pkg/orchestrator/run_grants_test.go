@@ -147,10 +147,10 @@ func TestRunCycleTellsADBAccessTaskItHoldsTheGrant(t *testing.T) {
 // forked MCP server still cannot serve either diagnostic tool.
 func TestRunCycleTellsADeploymentHealthTaskItHoldsTheGrant(t *testing.T) {
 	t.Parallel()
-	grants := []model.Grant{{Capability: "deployment-health", Via: model.GrantByGrain}}
+	grants := []model.Grant{{Capability: model.GrainHealthGrant, Via: model.GrantByGrain}}
 	held, _ := runWithGrants(t, grants, "/usr/local/share/grain/src")
-	if !slices.Contains(held, "deployment-health") {
-		t.Errorf("RunConfig.Grants = %v, want the deployment-health grant among them", held)
+	if !slices.Contains(held, model.GrainHealthGrant) {
+		t.Errorf("RunConfig.Grants = %v, want the %s grant among them", held, model.GrainHealthGrant)
 	}
 }
 
@@ -175,7 +175,9 @@ func TestRunCycleForwardsAllKnownToolGrants(t *testing.T) {
 	allToolGrants := []string{
 		selfdebug.CapabilityName,
 		grainlog.CapabilityName,
+		model.GrainJournalGrant,
 		deploymenthealth.CapabilityName,
+		model.GrainHealthGrant,
 		bootstrap.CapabilityName,
 		selfupgrade.CapabilityName,
 		grainci.CapabilityName,

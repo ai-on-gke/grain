@@ -55,8 +55,8 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 	t.Cleanup(func() { pass.Release(context.Background()) })
 
 	st := grainserver.Status()
-	if st.ID != grainserver.ID || !slices.Contains(st.Methods, grainserver.JournalMethod) {
-		t.Fatalf("Status() = %+v, want %s with %s", st, grainserver.ID, grainserver.JournalMethod)
+	if st.ID != grainserver.ID || !slices.Contains(st.Methods, grainserver.JournalMethod) || !slices.Contains(st.Methods, grainserver.HealthMethod) {
+		t.Fatalf("Status() = %+v, want %s with %s and %s", st, grainserver.ID, grainserver.JournalMethod, grainserver.HealthMethod)
 	}
 	if !grainserver.HasJournal([]string{grainserver.JournalGrant}) || !grainserver.HasJournal([]string{"grain-log"}) {
 		t.Fatalf("HasJournal failed to match canonical or legacy journal grant")

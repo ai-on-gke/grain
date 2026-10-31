@@ -33,17 +33,6 @@ func (f fakeReader) DeploymentHealth(context.Context) (any, error) {
 	return f.value, f.err
 }
 
-func TestProviderSpecAndNew(t *testing.T) {
-	p := New()
-	spec := p.Spec()
-	if spec.Name != CapabilityName {
-		t.Fatalf("spec.Name = %q, want %q", spec.Name, CapabilityName)
-	}
-	if spec.Label == "" || spec.Description == "" {
-		t.Fatalf("empty spec fields: %+v", spec)
-	}
-}
-
 func TestToolsList(t *testing.T) {
 	cfg := Config{}
 	tools := Tools(cfg)

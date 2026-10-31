@@ -611,6 +611,14 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 	if name == "" {
 		return nil
 	}
+	if expanded := model.CanonicalLegacyGrants(name); len(expanded) > 1 {
+		for _, part := range expanded {
+			if err := agentGrantRefusal(held, part, normalize); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	// APIGrantsOf reads an alias (self-upgrade) as the preset it now is,
 	// which ParseAPIGrant alone does not.
 	if slices.ContainsFunc(APIGrantsOf([]string{name}).Scopes(), IsDangerousAPIScope) || model.IsDangerousAPIGrant(name) {

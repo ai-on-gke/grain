@@ -41,6 +41,14 @@ const (
 
 	// LegacyGrainLog is the retired in-process capability name for JournalGrant.
 	LegacyGrainLog = "grain-log"
+
+	// HealthMethod lets a task read host/sandbox probes and local state snapshot (formerly deployment-health).
+	HealthMethod = "health"
+	HealthRef    = model.GrainHealthRef
+	HealthGrant  = model.GrainHealthGrant
+
+	// LegacyDeploymentHealth is the retired in-process capability name for api:deployment:read + HealthGrant.
+	LegacyDeploymentHealth = "deployment-health"
 )
 
 var (
@@ -62,7 +70,19 @@ func buildServer() *protocol.Server {
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building #%s: %v", JournalMethod, err))
 	}
-	cs, err := protocol.NewCapabilityServer("grain", journal)
+	health, err := protocol.NewMethod(protocol.MethodSpec{
+		Name: HealthMethod,
+		Description: "Read bounded controller-side host RAM, swap, disks and load, live sandbox/VM " +
+			"counts and per-sandbox resource readings, and the local synchronized deployment-state " +
+			"snapshot, without host shell or sandbox network access.",
+		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
+			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
+		},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building #%s: %v", HealthMethod, err))
+	}
+	cs, err := protocol.NewCapabilityServer("grain", journal, health)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building capability server: %v", err))
 	}
@@ -142,3 +162,10 @@ func IsJournalGrant(grant string) bool { return model.IsGrainJournalGrant(grant)
 
 // HasJournal reports whether any grant in grants opens grain#journal.
 func HasJournal(grants []string) bool { return model.HasGrainJournal(grants) }
+
+// IsHealthGrant reports whether grant names grain#health (recorded or bare)
+// or the retired bare deployment-health alias.
+func IsHealthGrant(grant string) bool { return model.IsGrainHealthGrant(grant) }
+
+// HasHealth reports whether any grant in grants opens grain#health.
+func HasHealth(grants []string) bool { return model.HasGrainHealth(grants) }

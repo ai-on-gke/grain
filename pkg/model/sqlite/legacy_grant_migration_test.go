@@ -64,53 +64,56 @@ func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 		t.Errorf("%s: dangerous %v before the migration and %v after", what, b, a)
 	}
 	for _, name := range before {
-		if model.CanonicalLegacyGrant(name) == name && !slices.Contains(after, name) {
+		to := model.CanonicalLegacyGrants(name)
+		retired := len(to) != 1 || to[0] != name
+		if !retired && !slices.Contains(after, name) {
 			t.Errorf("%s: %q, which is not retired, was lost (%v -> %v)", what, name, before, after)
 		}
-		if to := model.CanonicalLegacyGrant(name); to != name && slices.Contains(after, name) {
-			t.Errorf("%s: retired %q survived the migration as itself rather than as %q", what, name, to)
+		if retired && slices.Contains(after, name) {
+			t.Errorf("%s: retired %q survived the migration as itself rather than as %v", what, name, to)
 		}
 	}
 }
 
 // retiredGrants are the in-process capabilities a store migration
 // rewrote, each with the schema version the migration produces and the
-// api grant it wrote.
+// canonical grant(s) it wrote.
 var retiredGrants = []struct {
 	version int
 	legacy  string
-	api     string
+	to      []string
 }{
-	{67, "team-broadcast", "api:team-broadcast"},
-	{68, "dispatch-control", "api:dispatch-control"},
-	{69, "pipeline-control", "api:pipeline-control"},
-	{71, "memory", "api:memory"},
-	{72, "release-notes", "api:release-notes"},
-	{74, "grain-log", model.GrainJournalGrant},
+	{67, "team-broadcast", []string{"api:team-broadcast"}},
+	{68, "dispatch-control", []string{"api:dispatch-control"}},
+	{69, "pipeline-control", []string{"api:pipeline-control"}},
+	{71, "memory", []string{"api:memory"}},
+	{72, "release-notes", []string{"api:release-notes"}},
+	{74, "grain-log", []string{model.GrainJournalGrant}},
+	{75, "deployment-health", []string{"api:deployment:read", model.GrainHealthGrant}},
 }
 
 // Each retiring migration rewrites every stored grant of its capability
 // -- the three grant tables, the deployment's and a repository's default
-// capabilities, and the standing sessions' -- to the api grant it
+// capabilities, and the standing sessions' -- to the grant(s) it
 // became, and each row grants exactly what it did before.
 func TestMigrationRewritesRetiredGrants(t *testing.T) {
 	t.Parallel()
 	for _, r := range retiredGrants {
 		t.Run(r.legacy, func(t *testing.T) {
 			t.Parallel()
-			testMigrationRewrites(t, r.version, r.legacy, r.api)
+			testMigrationRewrites(t, r.version, r.legacy, r.to)
 		})
 	}
 }
 
-func testMigrationRewrites(t *testing.T, version int, legacy, api string) {
+func testMigrationRewrites(t *testing.T, version int, legacy string, replacements []string) {
 	store, db, ctx := openStore(t)
 
 	cfg := testConfig()
 	cfg.DefaultCapabilities = []string{legacy, "gcp-key"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
 		{ID: "director", Title: "Director", Capabilities: []string{"self-debug", legacy}},
-		{ID: "steward", Title: "Steward", Capabilities: []string{api, legacy}},
+		{ID: "steward", Title: "Steward", Capabilities: append(slices.Clone(replacements), legacy)},
 		{ID: "quiet", Title: "Quiet"},
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
@@ -124,7 +127,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy, api string) {
 	fixture := map[string]map[string][]string{
 		"task_grant": {
 			"1": {legacy, "self-debug"},
-			"2": {legacy, api},
+			"2": append([]string{legacy}, replacements...),
 			"3": {"api:tasks:write"},
 		},
 		"template_grant": {"t": {legacy}},
@@ -154,15 +157,17 @@ func testMigrationRewrites(t *testing.T, version int, legacy, api string) {
 			sameGrantMeaning(t, table+" "+id, before, got[id])
 		}
 	}
-	if got := grantRows(t, ctx, db, "task_grant", "task_id")["2"]; !slices.Equal(got, []string{api}) {
-		t.Errorf("task 2, holding both spellings, holds %v after the migration, want the api grant once", got)
+	wantSorted := slices.Clone(replacements)
+	sort.Strings(wantSorted)
+	if got := grantRows(t, ctx, db, "task_grant", "task_id")["2"]; !slices.Equal(got, wantSorted) {
+		t.Errorf("task 2, holding both spellings, holds %v after the migration, want %v once", got, wantSorted)
 	}
 
 	after, err := store.GetConfig(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{api, "gcp-key"}; !slices.Equal(after.DefaultCapabilities, want) {
+	if want := append(slices.Clone(replacements), "gcp-key"); !slices.Equal(after.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", after.DefaultCapabilities, want)
 	}
 	if len(after.ConsoleSessions) != len(cfg.ConsoleSessions) {
@@ -175,7 +180,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy, api string) {
 		}
 		sameGrantMeaning(t, "console session "+s.ID, was.Capabilities, s.Capabilities)
 	}
-	if got, want := after.ConsoleSessions[1].Capabilities, []string{api}; !slices.Equal(got, want) {
+	if got, want := after.ConsoleSessions[1].Capabilities, replacements; !slices.Equal(got, want) {
 		t.Errorf("steward capabilities = %v, want %v", got, want)
 	}
 
@@ -183,7 +188,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy, api string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"self-debug", api}; !slices.Equal(repo.DefaultCapabilities, want) {
+	if want := append([]string{"self-debug"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
 	// A CI job's api grant is a CIAPI token, which none of these ever

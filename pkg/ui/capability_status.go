@@ -285,7 +285,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"gemini-key":          "Gemini key",
 	"github-sandbox":      "GitHub sandbox",
 	"self-debug":          "Self debug",
-	"deployment-health":   "Deployment health",
 	"self-repair":         "Self repair",
 	"self-upgrade":        "Self upgrade",
 	"bootstrap-playbooks": "Bootstrap playbooks",

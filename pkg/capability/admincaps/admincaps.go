@@ -25,7 +25,6 @@ package admincaps
 import (
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
@@ -57,7 +56,6 @@ func IsTeamScoped(id string) bool {
 func Providers() []model.CapabilityProvider {
 	providers := []model.CapabilityProvider{
 		selfdebug.NewWithConfig(selfdebug.Config{}),
-		deploymenthealth.NewWithConfig(deploymenthealth.ProviderConfig{}),
 		selfrepair.NewWithConfig(selfrepair.Config{}),
 		selfupgrade.NewWithConfig(selfupgrade.ProviderConfig{}),
 		dbaccess.NewReadProviderWithConfig(dbaccess.Config{}),

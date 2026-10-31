@@ -335,7 +335,11 @@ import "strconv"
 // 74 rewrites stored `grain-log` grants to
 // `https://grain.dev/capabilities/grain#journal={}`: the in-process
 // `grain-log` provider is retired for the `grain#journal` method.
-const SchemaVersion = 74
+//
+// 75 rewrites stored `deployment-health` grants to `api:deployment:read` and
+// `https://grain.dev/capabilities/grain#health={}`: the in-process
+// `deployment-health` provider is retired.
+const SchemaVersion = 75
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

@@ -199,8 +199,6 @@ func OfferedCapabilities() []Capability {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
 	}
 	offered = append(offered, []Capability{
-		{ID: "deployment-health", Name: "Deployment health",
-			Description: "Read bounded controller host, sandbox, and deployment-state health without host shell or sandbox network access"},
 		{ID: "self-repair", Name: "Self repair",
 			Description: "Let this task run commands on grain's own host -- restart services, edit config, call the grain CLI -- each one needing a live reply in the task's chat before it runs"},
 		{ID: selfupgrade.CapabilityName, Name: "Self upgrade",

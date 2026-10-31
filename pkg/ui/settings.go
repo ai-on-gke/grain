@@ -1774,24 +1774,26 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.DefaultCapabilities != nil {
 		seen := map[string]bool{}
 		ids := make([]string, 0, len(*req.DefaultCapabilities))
-		for _, id := range *req.DefaultCapabilities {
-			id, err := c.normalizeCapabilityID(id)
+		for _, rawID := range *req.DefaultCapabilities {
+			normalizedIDs, err := c.normalizeCapabilityIDs(rawID)
 			if err != nil {
 				return model.Config{}, err
 			}
-			if _, ok := c.capabilityByID(id); !ok {
-				// Refused rather than dropped, and named with
-				// capabilityRefusal's own words: this set seeds every
-				// task filed on the deployment (CreateTask), so a
-				// CI-only id landing here would fail every one of them
-				// at model.ResolveGrants at once.
-				return model.Config{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+			for _, id := range normalizedIDs {
+				if _, ok := c.capabilityByID(id); !ok {
+					// Refused rather than dropped, and named with
+					// capabilityRefusal's own words: this set seeds every
+					// task filed on the deployment (CreateTask), so a
+					// CI-only id landing here would fail every one of them
+					// at model.ResolveGrants at once.
+					return model.Config{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+				}
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+				ids = append(ids, id)
 			}
-			if seen[id] {
-				continue
-			}
-			seen[id] = true
-			ids = append(ids, id)
 		}
 		cfg.DefaultCapabilities = ids
 	}
