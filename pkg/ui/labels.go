@@ -47,7 +47,6 @@ import (
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
@@ -200,8 +199,6 @@ func OfferedCapabilities() []Capability {
 	offered = append(offered, []Capability{
 		{ID: "self-repair", Name: "Self repair",
 			Description: "Let this task run commands on grain's own host -- restart services, edit config, call the grain CLI -- each one needing a live reply in the task's chat before it runs"},
-		{ID: selfupgrade.CapabilityName, Name: "Self upgrade",
-			Description: selfupgrade.Description},
 		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
 			Description: prioritydispatch.Description},
 		{ID: durable.CapabilityName, Name: "Durable",
@@ -219,8 +216,6 @@ func OfferedCapabilities() []Capability {
 		// repository's tasks itself (pkg/capability/grainci's package
 		// doc). Every place a capability is chosen refuses it with
 		// grainci.Refusal, by way of capabilityRefusal.
-		{ID: "test-quarantine", Name: "Test quarantine",
-			Description: "Quarantine flaky or failing tests and file follow-up repair tasks"},
 		{ID: readissues.CapabilityName, Name: "Read issues",
 			Description: "Let this task read issues and comments from GitHub"},
 	}...)

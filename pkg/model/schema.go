@@ -332,19 +332,26 @@ import "strconv"
 // 73 adds `priority` to `task` (default 5) and `template`: numeric task
 // priority where higher numbers mean higher dispatch priority.
 //
-// 74 rewrites stored `grain-log` grants to
+// 74 adds `keep_running` to `task`, `template` and `schedule`
+// (model.Task.KeepRunning, model.Template.KeepRunning, model.Schedule.KeepRunning).
+//
+// 75 is 67 again for `self-upgrade`, now `api:self-upgrade`.
+//
+// 76 is 67 again for `test-quarantine`, now `api:test-quarantine`.
+//
+// 77 rewrites stored `grain-log` grants to
 // `https://grain.dev/capabilities/grain#journal={}`: the in-process
 // `grain-log` provider is retired for the `grain#journal` method.
 //
-// 75 rewrites stored `deployment-health` grants to `api:deployment:read` and
+// 78 rewrites stored `deployment-health` grants to `api:deployment:read` and
 // `https://grain.dev/capabilities/grain#health={}`: the in-process
 // `deployment-health` provider is retired.
 //
-// 76 rewrites stored `db-read` and `db-write` grants to
+// 79 rewrites stored `db-read` and `db-write` grants to
 // `https://grain.dev/capabilities/grain#sql={"write":false}` and
 // `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
 // `db-read` and `db-write` providers are retired.
-const SchemaVersion = 76
+const SchemaVersion = 79
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -537,6 +544,7 @@ var Tables = []string{
   ` + "`change_target_spec`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
   ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1472,6 +1480,7 @@ var Tables = []string{
   ` + "`last_run_at`" + `           DATETIME NULL,
   ` + "`created_at`" + `            DATETIME NOT NULL,
   ` + "`every_n_minutes`" + `       INTEGER  NULL,
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1589,6 +1598,7 @@ var Tables = []string{
   ` + "`change_target_spec`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
+  ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

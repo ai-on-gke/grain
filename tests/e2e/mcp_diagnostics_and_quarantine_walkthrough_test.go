@@ -16,6 +16,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,9 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/ui"
 	"gopkg.in/yaml.v3"
 )
 
@@ -268,45 +272,81 @@ func TestMCPDiagnosticsAndQuarantineWalkthrough(t *testing.T) {
 	// Section 4: Test Quarantine Lifecycle & Non-Blocking CI Execution
 	// =========================================================================
 	t.Log("=== Section 4: Test Quarantine Lifecycle ===")
-	mockSink := &mcp.MockSink{}
-	quarantineToolConfig := mcp.QuarantineToolConfig{
-		WorkspaceDir: repoDir,
-		TaskID:       "task-933",
-		Repo:         "bwsalmon/grain",
-		Branch:       "grain/task-933",
-		Sink:         mockSink,
+	qDB, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatalf("opening sqlite: %v", err)
 	}
-	quarantineTools := mcp.NewQuarantineTools(quarantineToolConfig)
-	quarantineTool := quarantineTools[0]
+	t.Cleanup(func() { qDB.Close() })
+	qStore := model.New(qDB)
+	if err := qStore.Init(ctx); err != nil {
+		t.Fatalf("initializing store: %v", err)
+	}
+	qTarget := model.RepoRef{Owner: "bwsalmon", Name: "grain"}
+	if err := qStore.PutTask(ctx, model.Task{
+		ID:     "933",
+		Title:  "Investigate orchestrator flake",
+		Intent: model.IntentImplement,
+		Target: &qTarget,
+		Grants: []model.Grant{{Capability: "api:test-quarantine", Via: model.GrantByLabel}},
+	}); err != nil {
+		t.Fatalf("creating acting task: %v", err)
+	}
+	qClient := ui.NewClient(withAccessCode(ui.Config{
+		Actor:        ui.DefaultActor("operator"),
+		Capabilities: ui.OfferedCapabilities(),
+	}), qStore)
+	qDaemonURL := newTestServer(t, ui.NewServerWithClient(qClient))
+	httpClient := ui.NewHTTPClient(qDaemonURL)
+	apiTools := ui.AgentAPITools(httpClient, "933", []string{"api:test-quarantine"})
+	var quarantineTool mcp.Tool
+	for _, tool := range apiTools {
+		if tool.Name == "api_quarantine_test" {
+			quarantineTool = tool
+			break
+		}
+	}
+	if quarantineTool.Name == "" {
+		t.Fatalf("api:test-quarantine did not serve api_quarantine_test; got %v", apiTools)
+	}
 
-	// 4A. Call quarantine_test MCP tool to quarantine a flaky test
+	// 4A. Call api_quarantine_test (POST /api/tests/quarantine) to quarantine a flaky test
 	qRes := quarantineTool.Handler(ctx, map[string]any{
-		"test_name":      "pkg/orchestrator_test.TestFlakyWorkerReconcile",
-		"reason":         "Intermittent race condition under multi-tenant load",
-		"ttl":            "14d",
-		"file_follow_up": true,
+		"body": map[string]any{
+			"testName":     "pkg/orchestrator_test.TestFlakyWorkerReconcile",
+			"reason":       "Intermittent race condition under multi-tenant load",
+			"ttl":          "14d",
+			"fileFollowUp": true,
+		},
 	})
 	if qRes.IsError {
-		t.Fatalf("quarantine_test returned error: %s", qRes.Text)
+		t.Fatalf("api_quarantine_test returned error: %s", qRes.Text)
 	}
-	if !strings.Contains(qRes.Text, "Quarantined test \"pkg/orchestrator_test.TestFlakyWorkerReconcile\"") {
-		t.Errorf("quarantine_test output missing confirmation: %s", qRes.Text)
+	var qResp ui.QuarantineTestResponse
+	if err := json.Unmarshal([]byte(qRes.Text), &qResp); err != nil {
+		t.Fatalf("decoding api_quarantine_test response: %v (%s)", err, qRes.Text)
 	}
-	if !strings.Contains(qRes.Text, "Recorded in .grain/quarantine.yml") {
-		t.Errorf("quarantine_test output missing yml notice: %s", qRes.Text)
+	if qResp.FollowUpTaskID == "" {
+		t.Fatalf("expected follow-up repair task ID, got empty response: %+v", qResp)
+	}
+	followUp, err := qClient.GetTask(ctx, qResp.FollowUpTaskID)
+	if err != nil {
+		t.Fatalf("reading follow-up task %s: %v", qResp.FollowUpTaskID, err)
+	}
+	if followUp.State != model.StateProposed {
+		t.Errorf("follow-up state = %q, want proposed", followUp.State)
+	}
+	if !strings.Contains(followUp.Title, "unquarantine and fix flaky test pkg/orchestrator_test.TestFlakyWorkerReconcile") {
+		t.Errorf("unexpected follow-up task title: %s", followUp.Title)
 	}
 
-	// Verify follow-up task was generated in MockSink
-	proposals := mockSink.ProposedTasks()
-	if len(proposals) != 1 {
-		t.Fatalf("expected 1 follow-up repair task, got %d", len(proposals))
-	}
-	if !strings.Contains(proposals[0].Title, "unquarantine and fix flaky test pkg/orchestrator_test.TestFlakyWorkerReconcile") {
-		t.Errorf("unexpected follow-up task title: %s", proposals[0].Title)
-	}
-
-	// Verify .grain/quarantine.yml was written and contains active entry
+	// Write the rendered .grain/quarantine.yml into the workspace and verify active entry
 	qFilePath := filepath.Join(repoDir, ".grain", "quarantine.yml")
+	if err := os.MkdirAll(filepath.Dir(qFilePath), 0o755); err != nil {
+		t.Fatalf("creating .grain dir: %v", err)
+	}
+	if err := os.WriteFile(qFilePath, []byte(qResp.QuarantineYAML), 0o644); err != nil {
+		t.Fatalf("writing .grain/quarantine.yml: %v", err)
+	}
 	qData, err := os.ReadFile(qFilePath)
 	if err != nil {
 		t.Fatalf("reading .grain/quarantine.yml: %v", err)

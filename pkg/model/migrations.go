@@ -418,16 +418,35 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     74,
+		Description: "add keep_running flag to task, template and schedule",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `template` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `schedule` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     75,
+		Description: "rewrite stored self-upgrade grants to api:self-upgrade (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"self-upgrade": "api:self-upgrade"}),
+	},
+	{
+		Version:     76,
+		Description: "rewrite stored test-quarantine grants to api:test-quarantine (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"test-quarantine": "api:test-quarantine"}),
+	},
+	{
+		Version:     77,
 		Description: "rewrite stored grain-log grants to https://grain.dev/capabilities/grain#journal={} (the in-process capability is retired)",
 		Up:          rewriteLegacyGrants(map[string]string{"grain-log": GrainJournalGrant}),
 	},
 	{
-		Version:     75,
+		Version:     78,
 		Description: "rewrite stored deployment-health grants to api:deployment:read and https://grain.dev/capabilities/grain#health={} (the in-process capability is retired)",
 		Up:          rewriteLegacyGrantsMulti(map[string][]string{"deployment-health": {"api:deployment:read", GrainHealthGrant}}),
 	},
 	{
-		Version:     76,
+		Version:     79,
 		Description: "rewrite stored db-read and db-write grants to https://grain.dev/capabilities/grain#sql (the in-process capabilities are retired)",
 		Up: rewriteLegacyGrants(map[string]string{
 			"db-read":  GrainSQLReadGrant,
@@ -500,7 +519,8 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		for _, stmt := range m.Statements {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
 				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
-					strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") {
+					(strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") ||
+						strings.Contains(strings.ToLower(err.Error()), "already exists")) {
 					continue
 				}
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)

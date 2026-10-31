@@ -64,6 +64,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "merge:force", Description: "Force-merge a task's pull request past its gate", Dangerous: true},
 	{Scope: "ci:read", Description: "Read grain CI runs, their job logs and artifacts, merge batches and base-branch gates"},
 	{Scope: "ci:write", Description: "Start, re-run and cancel grain CI runs, base-branch and release runs"},
+	{Scope: "tests:write", Description: "Quarantine flaky or failing tests and file their follow-up repair tasks"},
 	{Scope: "notifications:write", Description: "Raise and clear operator notifications"},
 	{Scope: "teams:broadcast", Description: "Post a comment to every active task of the deployment"},
 	{Scope: "dispatch:read", Description: "Read whether dispatch is paused"},
@@ -125,9 +126,7 @@ type APIPreset struct {
 // apiPresets are the bundles a picker offers first. Each is what one of
 // the per-ability capabilities that used to be filed one at a time asked
 // for (tasks 399, 420, 421, 422, 425), plus the older capabilities
-// whose own tools are kept for compatibility (self-debug, self-upgrade
-// and pipeline-control, which now also grant their preset's routes -- see
-// apiAliasCapabilities).
+// that now also grant their preset's routes (see apiAliasCapabilities).
 var apiPresets = []APIPreset{
 	{Name: "task-admin", Description: "Edit, reorder, retry and close tasks, open and retry their merges, and re-run CI",
 		Scopes: []APIScope{"tasks:read", "tasks:write", "merge:write", "ci:read", "ci:write", "notifications:write"}},
@@ -142,7 +141,7 @@ var apiPresets = []APIPreset{
 			"schedules:read", "schedules:write", "releases:read", "releases:write", "repos:read"}},
 	{Name: "self-debug", Description: "What the self-debug capability grants: read tasks, runs and deployment status",
 		Scopes: []APIScope{"tasks:read", "deployment:read"}},
-	{Name: "self-upgrade", Description: "What the self-upgrade capability grants: read and start upgrades",
+	{Name: "self-upgrade", Description: "What the self-upgrade capability granted: read and start upgrades",
 		Scopes: []APIScope{"deployment:read", "deployment:upgrade"}},
 	{Name: "pipeline-control", Description: "What the pipeline-control capability granted: pause and resume dispatch",
 		Scopes: []APIScope{"dispatch:read", "dispatch:write"}},
@@ -152,6 +151,8 @@ var apiPresets = []APIPreset{
 		Scopes: []APIScope{"memory:read", "memory:write"}},
 	{Name: "release-notes", Description: "What the release-notes capability granted: read cluster stats and weekly release notes, and publish weekly release notes",
 		Scopes: []APIScope{"release-notes:read", "release-notes:write"}},
+	{Name: "test-quarantine", Description: "What the test-quarantine capability granted: quarantine flaky or failing tests and file follow-up repair tasks",
+		Scopes: []APIScope{"tests:write"}},
 	{Name: ReleaseGateReadCapability, Description: "What a release workflow reads and files: its repository's CI runs " +
 		"and tasks, the persistent sandboxes' status, and its release-notes task",
 		Scopes:    []APIScope{"ci:read", "tasks:read", "sandboxes:read", "tasks:from-template"},
@@ -171,6 +172,7 @@ var apiAliasCapabilities = map[string]string{
 	"dispatch-control":  "dispatch-control",
 	"memory":            "memory",
 	"release-notes":     "release-notes",
+	"test-quarantine":   "test-quarantine",
 }
 
 // GrainCapabilityServerID is the canonical capability_id of the in-process
@@ -291,6 +293,8 @@ var legacyGrantReplacements = map[string]string{
 	"grain-log":        GrainJournalGrant,
 	"db-read":          GrainSQLReadGrant,
 	"db-write":         GrainSQLWriteGrant,
+	"self-upgrade":     APIGrantPrefix + "self-upgrade",
+	"test-quarantine":  APIGrantPrefix + "test-quarantine",
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into

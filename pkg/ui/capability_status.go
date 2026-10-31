@@ -32,7 +32,6 @@ import (
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -286,7 +285,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"github-sandbox":      "GitHub sandbox",
 	"self-debug":          "Self debug",
 	"self-repair":         "Self repair",
-	"self-upgrade":        "Self upgrade",
 	"bootstrap-playbooks": "Bootstrap playbooks",
 	"grain-ci":            "grain CI",
 	"registry-push":       "Registry push",
@@ -294,7 +292,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"image-signing":       "Image signing",
 	"git-push-any-ref":    "Push any ref",
 	"console":             "Interactive console",
-	"test-quarantine":     "Test quarantine",
 	"priority-dispatch":   "Priority dispatch",
 	"durable":             "Durable",
 	"read-issues":         "Read issues",
@@ -369,7 +366,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 		packagepublish.New(packagepublish.Config{}),
 		imagesigning.New(imagesigning.Config{}),
 		consolecap.New(),
-		quarantine.New(),
 		readissues.New(),
 		prioritydispatch.New(),
 		durable.New(),

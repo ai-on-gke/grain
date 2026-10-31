@@ -232,7 +232,7 @@ func TestAutoSubmittedProposalInheritanceAndCapabilities(t *testing.T) {
 		t.Errorf("state = %s, want queued -- its parent's permission covers the defaults", piece.State)
 	}
 
-	// Proposal asking for capability NOT granted to parent (e.g. self-upgrade) cannot auto-submit -> Proposed.
+	// Proposal asking for capability NOT granted to parent (e.g. self-upgrade, canonicalized to api:self-upgrade) cannot auto-submit -> Proposed.
 	escalated, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "escalated proposal", ProposedBy: parent.ID, AutoMerge: true,
 		Capabilities: &[]string{"self-upgrade"},
@@ -243,8 +243,8 @@ func TestAutoSubmittedProposalInheritanceAndCapabilities(t *testing.T) {
 	if escalated.State != model.StateProposed {
 		t.Errorf("state = %s, want proposed -- requested capabilities exceed parent grants", escalated.State)
 	}
-	if !strings.Contains(escalated.Description, "`self-upgrade`") {
-		t.Errorf("body = %q, want a note naming self-upgrade -- approving the work must not "+
+	if !strings.Contains(escalated.Description, "`api:self-upgrade`") {
+		t.Errorf("body = %q, want a note naming api:self-upgrade -- approving the work must not "+
 			"silently approve the capability", escalated.Description)
 	}
 	if strings.Contains(piece.Description, "grain: this proposal asked for") {

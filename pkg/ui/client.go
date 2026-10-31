@@ -1593,6 +1593,11 @@ type CreateTaskRequest struct {
 	// nothing_needed, "ack" leaves it in awaiting_ack for somebody to
 	// acknowledge.
 	NothingNeededAction string `json:"nothingNeededAction,omitempty"`
+	// KeepRunning sets model.Task.KeepRunning: when true, the orchestrator
+	// immediately restarts the task when its run exits rather than completing
+	// or parking it.
+	KeepRunning      bool  `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool `json:"keep_running,omitempty"`
 	// Goal declares the task's goal (model.TaskGoal,
 	// docs/design/durable-tasks.md#DT-4) as it is filed; nil for none, or
 	// for the goal of the template it is filed from.
@@ -2525,6 +2530,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		SandboxDiskGB:        req.SandboxDiskGB,
 		NetworkAccess:        model.NetworkAccess(req.NetworkAccess),
 		NothingNeededAction:  nothingNeeded,
+		KeepRunning:          req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
 		NoPort:               req.NoPort,
 		WorkOrigin:           explicitOrigin,
 		AgentFramework:       agentFramework,
@@ -3880,6 +3886,9 @@ type UpdateTaskRequest struct {
 	// NothingNeededAction edits CreateTaskRequest.NothingNeededAction's
 	// field; "" sets it back to the default, close.
 	NothingNeededAction *string `json:"nothingNeededAction,omitempty"`
+	// KeepRunning edits CreateTaskRequest.KeepRunning's field.
+	KeepRunning      *bool `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool `json:"keep_running,omitempty"`
 	// NoPort edits CreateTaskRequest.NoPort's field.
 	NoPort *bool `json:"noPort,omitempty"`
 	// FixesBaseBranch marks or unmarks this task as fixing its base
@@ -3969,10 +3978,8 @@ type UpdateTaskRequest struct {
 	// preserving durable on standing console-session tasks.
 	Capabilities *[]string `json:"capabilities,omitempty"`
 	// PriorityDispatch attaches or detaches PriorityDispatchCapability on the
-	// task (UnmarshalJSON also accepts legacy boolean "priority").
+	// task (also populated when JSON "priority" is a boolean).
 	PriorityDispatch *bool `json:"priorityDispatch,omitempty"`
-	// KeepRunning attaches or detaches DurableCapability on the task.
-	KeepRunning *bool `json:"keepRunning,omitempty"`
 }
 
 // UnmarshalJSON accepts both camelCase and snake_case spellings for common
@@ -3982,28 +3989,27 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 	type Alias UpdateTaskRequest
 	var aux struct {
 		Alias
-		RawPriority           json.RawMessage `json:"priority,omitempty"`
-		RawCapabilities       json.RawMessage `json:"capabilities,omitempty"`
-		RawGrants             json.RawMessage `json:"grants,omitempty"`
-		NetworkAccessSnake    *string         `json:"network_access,omitempty"`
-		AutoApproveSnake      *bool           `json:"auto_approve_proposals,omitempty"`
-		PriorityDispatchSnake *bool           `json:"priority_dispatch,omitempty"`
-		KeepRunningSnake      *bool           `json:"keep_running,omitempty"`
+		RawCapabilities    json.RawMessage `json:"capabilities,omitempty"`
+		RawGrants          json.RawMessage `json:"grants,omitempty"`
+		RawPriority        json.RawMessage `json:"priority,omitempty"`
+		NetworkAccessSnake *string         `json:"network_access,omitempty"`
+		AutoApproveSnake   *bool           `json:"auto_approve_proposals,omitempty"`
+		KeepRunningSnake   *bool           `json:"keep_running,omitempty"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 	*r = UpdateTaskRequest(aux.Alias)
 	if trimmed := strings.TrimSpace(string(aux.RawPriority)); trimmed != "" && trimmed != "null" {
-		var on bool
-		if err := json.Unmarshal(aux.RawPriority, &on); err == nil {
-			r.PriorityDispatch = &on
+		var b bool
+		if json.Unmarshal(aux.RawPriority, &b) == nil {
+			r.PriorityDispatch = &b
 		} else {
-			var prio int
-			if err := json.Unmarshal(aux.RawPriority, &prio); err != nil {
+			var n int
+			if err := json.Unmarshal(aux.RawPriority, &n); err != nil {
 				return err
 			}
-			r.Priority = &prio
+			r.Priority = &n
 		}
 	}
 	parseCapRaw := func(raw json.RawMessage) (*[]string, error) {
@@ -4050,9 +4056,6 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 	}
 	if r.AutoApproveProposals == nil && aux.AutoApproveSnake != nil {
 		r.AutoApproveProposals = aux.AutoApproveSnake
-	}
-	if r.PriorityDispatch == nil && aux.PriorityDispatchSnake != nil {
-		r.PriorityDispatch = aux.PriorityDispatchSnake
 	}
 	if r.KeepRunning == nil && aux.KeepRunningSnake != nil {
 		r.KeepRunning = aux.KeepRunningSnake
@@ -4177,7 +4180,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// sent as agentBackendId as the model choice it was.
 	var editModel *string
 	var isConsoleSessionTask bool
-	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
+	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.Priority != nil || req.KeepRunning != nil {
 		if existing, err := c.Store.GetTask(ctx, id); err == nil && existing != nil {
 			isConsoleSessionTask = existing.IsConsoleSession()
 		}
@@ -4520,6 +4523,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.NothingNeededAction != nil {
 			task.NothingNeededAction = nothingNeeded
 		}
+		if req.KeepRunning != nil {
+			task.KeepRunning = *req.KeepRunning
+		} else if req.KeepRunningSnake != nil {
+			task.KeepRunning = *req.KeepRunningSnake
+		}
 		if req.NoPort != nil {
 			task.NoPort = *req.NoPort
 		}
@@ -4552,7 +4560,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.Reviewers != nil {
 			task.Reviewers = model.NormalizeReviewers(*req.Reviewers)
 		}
-		if req.Capabilities != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
+		if req.Capabilities != nil || req.PriorityDispatch != nil {
 			existingByCap := make(map[string]model.Grant, len(task.Grants))
 			for _, g := range task.Grants {
 				existingByCap[g.Capability] = g
@@ -4577,7 +4585,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				}
 				newGrants := make([]model.Grant, 0, len(normalizedCaps)+1)
 				seen := map[string]bool{}
-				if task.IsConsoleSession() && (req.KeepRunning == nil || *req.KeepRunning) {
+				if task.IsConsoleSession() {
 					newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
 					seen[model.DurableCapability] = true
 				}
@@ -4606,24 +4614,6 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 					}
 				} else {
 					task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.PriorityDispatchCapability })
-				}
-			}
-			if req.KeepRunning != nil {
-				if *req.KeepRunning {
-					if _, had := existingByCap[model.DurableCapability]; !had {
-						if err := c.catalogueEditRefusal(ctx, *task, model.DurableCapability); err != nil {
-							return err
-						}
-					}
-					if !slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.DurableCapability }) {
-						via := model.GrantByLabel
-						if task.IsConsoleSession() {
-							via = model.GrantByGrain
-						}
-						task.Grants = append(task.Grants, model.Grant{Capability: model.DurableCapability, Via: via})
-					}
-				} else {
-					task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.DurableCapability })
 				}
 			}
 		}

@@ -13,7 +13,14 @@
 // limitations under the License.
 
 import { useEffect, useRef, useState } from "react";
-import { Button, MenuItem, Stack, TextField } from "@mui/material";
+import {
+  Button,
+  Checkbox,
+  FormControlLabel,
+  MenuItem,
+  Stack,
+  TextField,
+} from "@mui/material";
 import api from "../../api.js";
 import {
   connectionLabel,
@@ -78,6 +85,8 @@ export default function EditTaskForm({
   const savedNothingNeeded = t.nothingNeededAction || "close";
   const [nothingNeededAction, setNothingNeededAction] =
     useState(savedNothingNeeded);
+  const savedKeepRunning = Boolean(t.keepRunning);
+  const [keepRunning, setKeepRunning] = useState(savedKeepRunning);
   const savedPriority = t.priority ?? 5;
   const [priority, setPriority] = useState(String(savedPriority));
   // The deployment's connections and default model: a task names no
@@ -117,6 +126,7 @@ export default function EditTaskForm({
     if (reviewTemplateId !== (t.reviewTemplateId || "")) return true;
     if (reviewers !== savedReviewers) return true;
     if (nothingNeededAction !== savedNothingNeeded) return true;
+    if (keepRunning !== savedKeepRunning) return true;
     if (String(priority).trim() !== String(savedPriority)) return true;
     if (model !== (t.model || "")) return true;
     if (agentBackendId !== (t.agentBackendId || "")) return true;
@@ -158,6 +168,7 @@ export default function EditTaskForm({
             ...(nothingNeededAction !== savedNothingNeeded
               ? { nothingNeededAction }
               : {}),
+            ...(keepRunning !== savedKeepRunning ? { keepRunning } : {}),
             ...(!Number.isNaN(parsedPriority) &&
             parsedPriority !== savedPriority
               ? { priority: parsedPriority }
@@ -318,6 +329,19 @@ export default function EditTaskForm({
         <MenuItem value="close">Close</MenuItem>
         <MenuItem value="ack">Leave for acknowledgement</MenuItem>
       </TextField>
+      <FormControlLabel
+        control={
+          <Checkbox
+            size="small"
+            name="keepRunning"
+            checked={keepRunning}
+            onChange={(e) => setKeepRunning(e.target.checked)}
+          />
+        }
+        label="Keep running (immediately restart when a run exits)"
+        sx={{ display: "flex", m: 0 }}
+        slotProps={{ typography: { fontSize: "0.8rem" } }}
+      />
       <TextField
         label="Task priority"
         type="number"

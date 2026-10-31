@@ -26,6 +26,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 type simFixture struct {
@@ -498,4 +499,170 @@ func TestEnforceRecheckRefusesAHeadPushedAfterItWasCleared(t *testing.T) {
 	if got := mustBatch(t, ctx, store, fix.repo).Members[0].HeadSHA; got != moved.HeadSHA {
 		t.Fatalf("re-check pinned to %s, want %s", got, moved.HeadSHA)
 	}
+}
+
+// When an overlap re-check CI run concludes errored (for instance when no
+// workflow answers pull_request on the merge-queue ref, or when a job cannot
+// acquire a sandbox), SyncPullRequests hands the task to a person with the CI
+// error surfaced, clears the queue for later changes, and does not spin
+// creating a fresh merge batch on the same or subsequent sync ticks.
+func TestMergeRecheckErroredDoesNotSpinInAnInfiniteLoop(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unmatched-workflow-error-and-ci-reconciler", func(t *testing.T) {
+		t.Parallel()
+		ctx, store, fix, runner, branch := recheckFixture(t, model.MergeRecheckEnforce, "landed.go")
+
+		// Queue a second, non-overlapping green change behind t1 to verify it
+		// is no longer held back once t1's errored re-check hands t1 to a person.
+		t2, b2 := queuedTaskWithPullRequest(t, ctx, store, fix.sim, fix.client, "t2", fix.repo)
+		pushFileToBranch(t, fix.sim.BareRepo, b2, "docs/notes.md", "notes", "unrelated docs")
+		t2 = grantCI(t, ctx, store, t2)
+		greenGrainCI(t, ctx, store, fix.client, runner, t2, fix.repo, b2)
+		setMergeable(fix.sim, true)
+
+		before := runner.started()
+		t0 := baseTime.Add(time.Minute)
+		syncWithCI(t, ctx, store, fix.client, runner, t0)
+
+		batch := mustBatch(t, ctx, store, fix.repo)
+		if got := runner.started() - before; got != 1 {
+			t.Fatalf("started %d grain CI run(s), want 1", got)
+		}
+
+		erroredRun, ok := runner.Get(batch.RunID)
+		if !ok {
+			t.Fatalf("missing merge-recheck run %s", batch.RunID)
+		}
+		finishedAt := t0.Add(5 * time.Second)
+		erroredRun.Conclusion = ci.ConclusionErrored
+		erroredRun.FinishedAt = &finishedAt
+		erroredRun.Error = "ci: no workflow of acme/widgets answers pull_request of branch " + batch.Ref
+		runner.remember(erroredRun)
+
+		// Advance across several 20s sync ticks and past ciRetryDelay with the
+		// task CI reconciler running alongside SyncPullRequests.
+		for i, dt := range []time.Duration{
+			20 * time.Second,
+			40 * time.Second,
+			60 * time.Second,
+			10 * time.Minute,
+			20 * time.Minute,
+		} {
+			tick := t0.Add(dt)
+			if err := runCIReconcilerAt(t, ctx, store, fix.client, runner, tick); err != nil {
+				t.Fatalf("tick %d: runCIReconcilerAt: %v", i, err)
+			}
+			syncWithCI(t, ctx, store, fix.client, runner, tick)
+			if got := runner.started() - before; got != 1 {
+				t.Fatalf("tick %d (%s): started %d merge-recheck/CI run(s), want 1 (infinite re-check loop)",
+					i, dt, got)
+			}
+			if row, err := store.GetMergeBatch(ctx, fix.repo, "main"); err != nil || row != nil {
+				t.Fatalf("tick %d: GetMergeBatch = %+v (%v), want nil", i, row, err)
+			}
+		}
+
+		if mergedBranch(fix.sim, branch) {
+			t.Fatal("t1 merged after its overlap re-check errored")
+		}
+		if !mergedBranch(fix.sim, b2) {
+			t.Fatal("t2 stayed blocked behind t1 after t1's overlap re-check errored")
+		}
+		if repairInFlightNow(t, ctx, store, "t1") {
+			t.Fatal("t1 was sent for an automatic repair on an errored overlap re-check")
+		}
+		obs, err := store.GetObservation(ctx, "t1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obs.RepairsSpent() != 0 {
+			t.Fatalf("RepairsSpent = %d, want 0", obs.RepairsSpent())
+		}
+		if obs.MergeQueueBlockedAt == nil || obs.MergeQueueState != "merge_failed" {
+			t.Fatalf("obs = %+v, want MergeQueueBlockedAt set and state merge_failed", obs)
+		}
+		if !strings.Contains(obs.MergeQueueNote, "no workflow of acme/widgets answers pull_request") {
+			t.Fatalf("MergeQueueNote = %q, want errored run detail surfaced", obs.MergeQueueNote)
+		}
+		bodies := commentBodies(t, ctx, store, "t1")
+		if len(bodies) == 0 || !strings.Contains(bodies[len(bodies)-1], "no workflow of acme/widgets answers pull_request") {
+			t.Fatalf("comments = %q, want comment surfacing why the overlap re-check errored", bodies)
+		}
+		for _, r := range recheckRecords(t, ctx, store) {
+			if r.TaskID == "t1" {
+				t.Fatalf("unexpected merge re-check history record for errored run on t1: %+v", r)
+			}
+		}
+
+		// Once the operator fixes the workflow and presses "Retry merge", t1
+		// re-enters the queue cleanly and merges when the fresh re-check passes.
+		uiClient := ui.NewClient(ui.Config{Actor: ui.DefaultActor("operator"), GitHubPullRequests: fix.client}, store)
+		if err := uiClient.RetryMerge(ctx, "t1"); err != nil {
+			t.Fatalf("RetryMerge(t1): %v", err)
+		}
+		retryTick := t0.Add(25 * time.Minute)
+		if err := runCIReconcilerAt(t, ctx, store, fix.client, runner, retryTick); err != nil {
+			t.Fatal(err)
+		}
+		headStatus := ciStatusOf(t, ctx, store, "t1")
+		if headStatus == nil || headStatus.RunID == "" {
+			t.Fatalf("after RetryMerge, head CI status = %+v, want fresh run", headStatus)
+		}
+		runner.finish(headStatus.RunID, ci.ConclusionSuccess)
+		if err := runCIReconcilerAt(t, ctx, store, fix.client, runner, retryTick.Add(10*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		syncWithCI(t, ctx, store, fix.client, runner, retryTick.Add(20*time.Second))
+		retryBatch := mustBatch(t, ctx, store, fix.repo)
+		runner.finish(retryBatch.RunID, ci.ConclusionSuccess)
+		syncWithCI(t, ctx, store, fix.client, runner, retryTick.Add(40*time.Second))
+		if !mergedBranch(fix.sim, branch) {
+			t.Fatal("t1 did not merge after RetryMerge and a green overlap re-check")
+		}
+	})
+
+	t.Run("explicit-enforce-without-task-grain-ci", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		fix := newBatchFixture(t)
+		if err := store.PutRepoConfig(ctx, model.RepoConfig{
+			Repo:         fix.repo,
+			CIMode:       model.CIModeGitHub,
+			MergeRecheck: model.MergeRecheckEnforce,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		runner := newFakeCI()
+		_, branch := queuedTaskWithPullRequest(t, ctx, store, fix.sim, fix.client, "t1", fix.repo)
+		pushFileToBranch(t, fix.sim.BareRepo, branch, "change.go", "package widgets", "the change")
+		greenOnGitHub(fix.sim, branch)
+		pushFileToBranch(t, fix.sim.BareRepo, "main", "landed.go", "package widgets", "landed meanwhile")
+		setMergeable(fix.sim, true)
+
+		before := runner.started()
+		syncWithCI(t, ctx, store, fix.client, runner, baseTime.Add(time.Minute))
+		batch := mustBatch(t, ctx, store, fix.repo)
+		runner.finish(batch.RunID, ci.ConclusionErrored, ci.JobRun{
+			WorkflowPath: ".grain/workflows/tests.yml",
+			JobID:        "go",
+			Name:         "go",
+			Conclusion:   ci.ConclusionErrored,
+			Error:        "no sandbox capacity",
+		})
+
+		for i := 2; i <= 5; i++ {
+			syncWithCI(t, ctx, store, fix.client, runner, baseTime.Add(time.Duration(i)*time.Minute))
+			if got := runner.started() - before; got != 1 {
+				t.Fatalf("sync %d: started %d grain CI run(s), want 1", i, got)
+			}
+		}
+		obs, err := store.GetObservation(ctx, "t1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obs.MergeQueueBlockedAt == nil || obs.MergeQueueState != "merge_failed" {
+			t.Fatalf("obs = %+v, want MergeQueueBlockedAt set and state merge_failed", obs)
+		}
+	})
 }
