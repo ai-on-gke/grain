@@ -329,6 +329,7 @@ var routeScopes = map[string]APIScope{
 	"GET /api/ci/runs/{id}/artifacts/{job}/{name}":                         "ci:read",
 	"GET /api/ci/cache":                                                    "caches:read",
 	"DELETE /api/ci/cache":                                                 "caches:write",
+	"POST /api/tests/quarantine":                                           "tests:write",
 	"GET /api/merge-batches":                                               "ci:read",
 	"GET /api/pipeline/changes":                                            "tasks:read",
 	"GET /api/base-branch-gates":                                           "ci:read",

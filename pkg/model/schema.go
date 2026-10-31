@@ -334,7 +334,11 @@ import "strconv"
 //
 // 74 adds `keep_running` to `task`, `template` and `schedule`
 // (model.Task.KeepRunning, model.Template.KeepRunning, model.Schedule.KeepRunning).
-const SchemaVersion = 74
+//
+// 75 is 67 again for `self-upgrade`, now `api:self-upgrade`.
+//
+// 76 is 67 again for `test-quarantine`, now `api:test-quarantine`.
+const SchemaVersion = 76
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
