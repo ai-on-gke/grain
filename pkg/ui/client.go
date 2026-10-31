@@ -2635,12 +2635,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	allowed := c.teamTargetRepos(ctx, teamID)
+	parkNote := ""
 	if target != nil && !targetAllowed(allowed, *target) {
 		if err := c.parkOffAllowlist(ctx, id, *target, now); err != nil {
 			return Task{}, err
 		}
+		parkNote = model.OffAllowlistParkComment(*target)
 	} else if parkUnreached {
-		if err := c.park(ctx, id, reachParkComment(reachRefused), now); err != nil {
+		parkNote = reachParkComment(reachRefused)
+		if err := c.park(ctx, id, parkNote, now); err != nil {
 			return Task{}, err
 		}
 	}
@@ -2656,6 +2659,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		return Task{}, err
 	}
 	created.SupersedeMoved = supersedeResult.Moved
+	created.ParkNote = parkNote
 	if proposedBy != nil && !created.Approved {
 		created.ApprovalNote = proposalApprovalNote(req.HoldForApproval, heldNote != "", limitNote != "", refusal)
 	}
