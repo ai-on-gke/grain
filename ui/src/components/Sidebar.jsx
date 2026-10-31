@@ -957,6 +957,7 @@ export default function Sidebar({
                 size="small"
                 onClick={onOpenCustomize}
                 aria-label="Customize sidebar"
+                aria-haspopup="dialog"
                 sx={{ p: 0.5 }}
               >
                 <TuneIcon sx={{ fontSize: "1rem" }} />
@@ -974,6 +975,11 @@ export default function Sidebar({
               }}
               title="Customize sidebar"
               aria-label="Customize sidebar"
+              // It opens a dialog rather than going anywhere, and saying
+              // so keeps the phone drawer open under it
+              // (PhoneNav.jsx's keepsDrawerOpen): closing Customize lands
+              // back in the rail it was customizing, not on the page.
+              aria-haspopup="dialog"
             >
               Customize
             </Button>

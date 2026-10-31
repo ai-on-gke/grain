@@ -1873,8 +1873,11 @@ test("Customize sidebar opens from the phone drawer and its pin persists", async
   const menu = page.getByRole("button", { name: "Open navigation" });
   await menu.click();
   const drawer = page.getByRole("dialog", { name: "Navigation", exact: true });
-  await drawer.getByRole("button", { name: "Customize sidebar" }).click();
-  await expect(drawer).toHaveCount(0);
+  const customize = drawer.getByRole("button", { name: "Customize sidebar" });
+  await customize.click();
+  // The drawer stays open under the overlay (it opens a dialog rather
+  // than going anywhere), so closing Customize lands back in the rail.
+  await expect(page.locator(".MuiDrawer-paper")).toBeAttached();
   const overlay = page.getByRole("dialog", {
     name: "Customize sidebar",
   });
@@ -1889,9 +1892,13 @@ test("Customize sidebar opens from the phone drawer and its pin persists", async
     await overlay.getByRole("button", { name: "Pin item" }).click();
     await overlay.getByRole("button", { name: "Save" }).click();
     await expect(overlay).toHaveCount(0);
-    // Escape and Save hand focus back to the bar's menu button, the
-    // control the reader started from, rather than to a rail that is gone.
-    await expect(menu).toBeFocused();
+    // Save hands focus back to Customize in the drawer it was opened
+    // from, and the pin is there at once.
+    await expect(drawer).toBeVisible();
+    await expect(customize).toBeFocused();
+    await expect(
+      drawer.getByRole("button", { name: /^Director/ }),
+    ).toBeVisible();
 
     await page.reload();
     await menu.click();

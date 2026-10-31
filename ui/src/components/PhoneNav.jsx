@@ -246,7 +246,10 @@ export default function PhoneNav({
 // And a toggle (aria-pressed) -- a staging environment's pin -- which
 // changes the rail in place rather than going anywhere: closing on it
 // hid the very entry it had just pinned (2026-10-29 responsive
-// walkthrough).
+// walkthrough). Customize sidebar is the same kind of control
+// (aria-haspopup="dialog"): it opens its overlay over the drawer, and
+// closing that overlay lands back in the rail it was customizing
+// (2026-10-30 responsive walkthrough).
 function keepsDrawerOpen(target) {
   return Boolean(
     target.closest(
