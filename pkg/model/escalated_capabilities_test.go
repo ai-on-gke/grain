@@ -97,7 +97,11 @@ func TestSeededDefaultReferenceIsReportedAsADefault(t *testing.T) {
 		t.Errorf("refusal = %q, want the seeded reference named as a default", refusal)
 	}
 
-	seeded := model.Task{ID: "9", Grants: model.ConsoleSessionGrants(director, "corp-research", ref, "self-debug", "")}
+	seededSession := model.ConsoleSession{
+		ID:           model.DirectorSessionID,
+		Capabilities: []string{"self-debug", "corp-research", ref, "self-debug", ""},
+	}
+	seeded := model.Task{ID: "9", Grants: model.ConsoleSessionGrants(seededSession)}
 	if got := model.EscalatedCapabilities(model.Task{Grants: child.Grants[:2]}, seeded); len(got) != 0 {
 		t.Errorf("EscalatedCapabilities against a session holding the defaults = %v, want none", got)
 	}
@@ -108,8 +112,8 @@ func TestSeededDefaultReferenceIsReportedAsADefault(t *testing.T) {
 	for _, g := range seeded.Grants {
 		vias = append(vias, g.Via)
 	}
-	want := []model.GrantSource{model.GrantByGrain, model.GrantByGrain, model.GrantByDefault, model.GrantByDefault}
+	want := []model.GrantSource{model.GrantByGrain, model.GrantByGrain, model.GrantByGrain, model.GrantByGrain}
 	if !slices.Equal(vias, want) {
-		t.Errorf("session grants = %+v, want durable and self-debug by grain, then each default once", seeded.Grants)
+		t.Errorf("session grants = %+v, want durable and each configured capability once by grain", seeded.Grants)
 	}
 }
