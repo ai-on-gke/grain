@@ -766,24 +766,13 @@ func continueSessionTurns(
 		waitCtx, cancelWait := context.WithTimeout(hostCtx, ttl)
 		unmark := markInProcessSessionIdle(store, cfg.sessionLedger, runID, cfg.sessionSandboxName, cfg.sessionShape, now, cancelWait)
 
-		// While waiting in-process for the person's next message (when none has
-		// already arrived after lastID), point PendingQuestionCommentID at the
-		// relayed reply so the task reads awaiting_reply (Asked) instead of
-		// running, matching the chat tool's own wait state.
-		if existing, err := store.CommentsAfter(daemonCtx, task.ID, lastID); err == nil && !slices.ContainsFunc(existing, func(c model.Comment) bool {
-			return c.Author.Actor.Kind == model.PrincipalHuman
-		}) {
-			_ = store.ObserveField(daemonCtx, task.ID, now, func(o *model.Observation) {
-				o.PendingQuestionCommentID = &relayedID
-			})
-		}
-
 		// Woken by AddComment the moment a comment lands in this process
 		// (Store.CommentAdded), and otherwise polled at the deployment's
 		// own interval for a comment another process wrote, a pause or a
 		// close -- reading only the conversation after lastID, never the
 		// whole thread again.
 		var fresh []model.Comment
+		var parkedInWait bool
 		ticker := time.NewTicker(cfg.cancelPollInterval())
 	waitLoop:
 		for {
@@ -801,6 +790,12 @@ func continueSessionTurns(
 				fresh = latest
 				break waitLoop
 			}
+			if !parkedInWait {
+				parkedInWait = true
+				_ = store.ObserveField(daemonCtx, task.ID, now, func(o *model.Observation) {
+					o.PendingQuestionCommentID = &relayedID
+				})
+			}
 			select {
 			case <-waitCtx.Done():
 				break waitLoop
@@ -811,16 +806,18 @@ func continueSessionTurns(
 		ticker.Stop()
 		cancelWait()
 		unmark()
-		_ = store.ObserveField(daemonCtx, task.ID, cfg.now(), func(o *model.Observation) {
-			if o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID == relayedID {
-				o.PendingQuestionCommentID = nil
-			}
-		})
+		if parkedInWait {
+			_ = store.ObserveField(daemonCtx, task.ID, cfg.now(), func(o *model.Observation) {
+				if o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID == relayedID {
+					o.PendingQuestionCommentID = nil
+				}
+			})
+		}
 
 		if len(fresh) == 0 {
 			break
 		}
-		inProcessRelayedRuns.Delete(runID)
+		inProcessRelayedRuns.Delete(inProcessRunKey{store: store, runID: runID})
 
 		// Only a person's message wakes the session, but the turn is told
 		// everything said since what it last saw, each with who said it
