@@ -4263,6 +4263,12 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			task.Issue = *req.Issue
 		}
 		if req.AutoMerge != nil {
+			// A change target's change is a CL, with no pull request
+			// to merge (model.ValidateTaskChangeTarget): a task turned
+			// to auto-merge is one no dispatch can set up.
+			if *req.AutoMerge && !task.AutoMerge && task.ChangeTarget != nil {
+				return validationErrorf("a %s task has no git pull request: auto_merge cannot be set", task.ChangeTarget.Kind)
+			}
 			// Turning it on is Submit by another name (see above), and
 			// says what Submit does about the holds it was waiting under.
 			if *req.AutoMerge && !task.AutoMerge {
@@ -4947,6 +4953,13 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 		// A CL is submitted by a person through its provider, never
 		// queued for a merge (change_submit.go).
 		return c.submitChange(ctx, *task)
+	}
+	if task.ChangeTarget != nil {
+		// A change target's change is only ever a CL: with none live
+		// there is nothing to submit, and the merge queue below has no
+		// pull request to take -- auto-merge on such a task is one
+		// every dispatch refuses (model.ValidateTaskChangeTarget).
+		return validationErrorf("%s has no %s change to submit yet", id, task.ChangeTarget.Kind)
 	}
 	// A CL whose provider gates Submit on its required reviews
 	// (change.ReviewGate) is submitted only once they have passed on its
