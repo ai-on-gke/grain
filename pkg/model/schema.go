@@ -320,7 +320,14 @@ import "strconv"
 // 68 is 67 again for `dispatch-control`, now `api:dispatch-control`.
 //
 // 69 is 67 again for `pipeline-control`, now `api:pipeline-control`.
-const SchemaVersion = 70
+//
+// 70 adds `settings_locked` to `grain_config`: whether non-bootstrap settings
+// are locked in the UI and REST API in favour of config repository pull
+// requests (off by default).
+//
+// 71 adds `priority` to `task` (default 5) and `template`: numeric task
+// priority where higher numbers mean higher dispatch priority.
+const SchemaVersion = 71
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -2031,6 +2038,7 @@ var Tables = []string{
   ` + "`external_agent_api`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`sandbox_image_mirror`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
+  ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

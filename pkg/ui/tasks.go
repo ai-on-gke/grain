@@ -1606,12 +1606,12 @@ type configResponse struct {
 	ExternalConfigBranch string `json:"externalConfigBranch,omitempty"`
 	// ConfigRepoOnly is whether a non-bootstrap settings write from the
 	// API is refused with a config pull request (configRepoFor): an
-	// external config repository, or the internal grain/config without
-	// the directConfigWrites opt-out. The UI draws the config-repo-only
-	// settings read-only exactly then (docs/design/config-repo-settings.md
-	// §2.1); a UI with no config repository (`grain demo`) still edits
-	// them, since there is nowhere else to.
+	// external config repository, or the internal grain/config with
+	// settings_locked enabled and without the directConfigWrites opt-out.
+	// The UI draws the config-repo-only settings read-only exactly then
+	// (docs/design/config-repo-settings.md §2.1).
 	ConfigRepoOnly bool `json:"configRepoOnly,omitempty"`
+	SettingsLocked bool `json:"settingsLocked,omitempty"`
 }
 
 // CustomFieldDeclaration is one declared field on the wire -- the JSON
@@ -1851,6 +1851,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if cfg != nil {
 		resp.ModelsConfigured = len(cfg.AgentBackends) > 0
 		resp.ShowClosedByDefault = cfg.ShowClosedByDefault
+		resp.SettingsLocked = cfg.SettingsLocked
 		resp.DefaultFilters = cfg.DefaultFilters
 		resp.EnvironmentName = cfg.EnvironmentName
 		// The stored zone, which before this never reached the frontend:

@@ -127,3 +127,41 @@ test("a View in config repo link opens Settings → Config repo with the file na
     /\/settings\/config-repo\/settings\/capabilities\.yml$/,
   );
 });
+
+test("toggling Lock settings in UI in General locks and unlocks settings", async ({
+  page,
+}) => {
+  try {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/settings/general");
+
+    const envBox = page.getByLabel("Environment name");
+    const lockToggle = page.getByRole("checkbox", {
+      name: /Lock settings in UI \(require config repo PRs\)/i,
+    });
+    await expect(envBox).toBeEnabled();
+    await expect(lockToggle).not.toBeChecked();
+    await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+
+    const sectionBox = await page.getByTestId("settings-section").boundingBox();
+    const lockCardBox = await page.locator("#settings-lock").boundingBox();
+    expect(inside(sectionBox, lockCardBox)).toBe(true);
+
+    // Enable settings lock
+    await lockToggle.click();
+    await expect(lockToggle).toBeChecked();
+    await expect(envBox).toBeDisabled();
+    await expect(page.getByTestId("config-managed-notice")).toBeVisible();
+    await expect(lockToggle).toBeEnabled();
+
+    // Disable settings lock again
+    await lockToggle.click();
+    await expect(lockToggle).not.toBeChecked();
+    await expect(envBox).toBeEnabled();
+    await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+  } finally {
+    await page.request
+      .put("/api/settings", { data: { settingsLocked: false } })
+      .catch(() => {});
+  }
+});

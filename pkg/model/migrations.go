@@ -393,6 +393,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     70,
+		Description: "add settings_locked to grain_config for opt-in UI/API settings lock",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `settings_locked` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     71,
 		Description: "add numeric priority to task (default 5) and template",
 		Statements: []string{
 			"ALTER TABLE `task` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 5",
@@ -473,6 +480,10 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 				}
 			}
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
+					strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") {
+					continue
+				}
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
 		}

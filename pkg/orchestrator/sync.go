@@ -209,7 +209,7 @@ func SetCheckStallDeadline(d time.Duration) func() { return forge.SetCheckStallD
 // for itself (forge.Input.IgnoreGitHubCI); this arm is what lets a task
 // that *has* a recorded verdict be judged on it rather than on silence.
 func grainCIVerdictOf(task model.Task, obs *model.Observation, headSHA string, gateIsGrainCI bool) grainCIVerdict {
-	if (!grainci.Granted(task.Grants) && !gateIsGrainCI) || headSHA == "" {
+	if (!grainci.GrantedExplicitly(task.Grants) && !gateIsGrainCI) || headSHA == "" {
 		return grainCIVerdict{}
 	}
 	if obs == nil || obs.CI == nil {
@@ -300,6 +300,9 @@ type queueEntry struct {
 	gateIsGrainCI bool
 	// ciMode is this repository's configured CI mode (grain, github, none).
 	ciMode model.CIMode
+	// explicitDisablesGrainCI is true when the repository's stored RepoConfig
+	// explicitly sets CIMode to CIModeGitHub or CIModeNone.
+	explicitDisablesGrainCI bool
 	// running says an agent run for this task is in flight right now, so
 	// its branch is one somebody is still pushing to.
 	//
@@ -411,6 +414,9 @@ func (e *queueEntry) observe(client github.Client, now time.Time) error {
 		},
 		GrainCIFor: func(headSHA string) forge.GrainCI {
 			gate := e.gateIsGrainCI || (e.policy != nil && e.policy.Mode.Grain())
+			if e.explicitDisablesGrainCI && !gate {
+				return forge.GrainCI{}
+			}
 			return narrowedGrainCI(grainCIVerdictOf(e.task, e.obs, headSHA, gate), e.policy, e.obs, e.runner)
 		},
 	}, now)
@@ -1172,6 +1178,7 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 	onGreen := map[model.RepoRef]bool{}
 	grainCIGate := map[model.RepoRef]bool{}
 	ciModes := map[model.RepoRef]model.CIMode{}
+	explicitDisablesGrain := map[model.RepoRef]bool{}
 	unfixableChecks := map[model.RepoRef][]string{}
 	mergeRules := map[model.RepoRef]*model.MergeRules{}
 	for _, link := range links {
@@ -1210,6 +1217,13 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 			}
 			ciModes[ref.Repo] = mode
 			grainCIGate[ref.Repo] = (mode == model.CIModeGrain)
+			if !deploymentGateIsGrainCI {
+				disabled, _, err := repoExplicitlyDisablesGrainCI(ctx, store, ref.Repo)
+				if err != nil {
+					return err
+				}
+				explicitDisablesGrain[ref.Repo] = disabled
+			}
 		}
 		if _, read := unfixableChecks[ref.Repo]; !read {
 			declared, err := repoUnfixableChecks(ctx, store, ref.Repo)
@@ -1230,13 +1244,14 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 			runner: gate.CI,
 			task:   *task, obs: obs, ref: ref, requiredCheck: gate.requiredCheckFor(ref),
 			verdicts: verdicts, running: running[link.TaskID],
-			requireUpToDate:   upToDate[ref.Repo],
-			mergeOnGreen:      onGreen[ref.Repo],
-			gateIsGrainCI:     grainCIGate[ref.Repo],
-			ciMode:            ciModes[ref.Repo],
-			declaredUnfixable: unfixableChecks[ref.Repo],
-			recheckingHead:    rechecking[link.TaskID],
-			paused:            taskPaused(ctx, store, link.TaskID),
+			requireUpToDate:         upToDate[ref.Repo],
+			mergeOnGreen:            onGreen[ref.Repo],
+			gateIsGrainCI:           grainCIGate[ref.Repo],
+			ciMode:                  ciModes[ref.Repo],
+			explicitDisablesGrainCI: explicitDisablesGrain[ref.Repo],
+			declaredUnfixable:       unfixableChecks[ref.Repo],
+			recheckingHead:          rechecking[link.TaskID],
+			paused:                  taskPaused(ctx, store, link.TaskID),
 		})
 	}
 
@@ -2069,8 +2084,12 @@ func recordPostMergeCI(ctx context.Context, store *model.Store, client github.Cl
 	if err != nil {
 		return err
 	}
-	if policy.Refusal == baseCINotEnabled && grainci.Granted(task.Grants) {
-		// Not enabled for the repository, but this task holds the grant:
+	disabled, _, err := repoExplicitlyDisablesGrainCI(ctx, store, ref.Repo)
+	if err != nil {
+		return err
+	}
+	if policy.Refusal == baseCINotEnabled && !disabled && grainci.GrantedExplicitly(task.Grants) {
+		// Not enabled for the repository, but this task holds an explicit grant:
 		// the one branch somebody is trying grain CI on gets its
 		// post-merge run, exactly as it did when the task's grant was the
 		// only thing consulted.

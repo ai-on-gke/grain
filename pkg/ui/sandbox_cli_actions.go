@@ -22,9 +22,12 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 )
@@ -40,8 +43,9 @@ type SandboxCLIActions struct {
 }
 
 var (
-	_ gitproxy.CLIActions     = SandboxCLIActions{}
-	_ gitproxy.CLITaskActions = SandboxCLIActions{}
+	_ gitproxy.CLIActions            = SandboxCLIActions{}
+	_ gitproxy.CLITaskActions        = SandboxCLIActions{}
+	_ gitproxy.CLIGitHubCheckActions = SandboxCLIActions{}
 )
 
 // PullRequestReviewActions is what grain pr reply and grain pr resolve
@@ -51,6 +55,13 @@ var (
 type PullRequestReviewActions interface {
 	ReplyForTask(ctx context.Context, taskID string, commentID int, body string) (text string, refused bool, err error)
 	ResolveForTask(ctx context.Context, taskID, threadID string, commentID int) (text string, refused bool, err error)
+}
+
+// PullRequestCheckReader is an optional interface implemented by
+// Config.PullRequests when it can supply an mcp.PullRequestReader for polling
+// GitHub check runs on a task's branch.
+type PullRequestCheckReader interface {
+	GitHubPullRequestReader() mcp.PullRequestReader
 }
 
 // errNoReviewActions is a deployment whose pull request opener cannot
@@ -416,4 +427,90 @@ func (a SandboxCLIActions) ListAPIRoutes(ctx context.Context, callerTaskID strin
 		})
 	}
 	return out, nil
+}
+
+func (a SandboxCLIActions) resolveCITask(ctx context.Context, taskID string) (*model.Task, error) {
+	if a.Client == nil || a.Client.Store == nil {
+		return nil, nil
+	}
+	task, err := a.Client.Store.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, cliActionError(err)
+	}
+	if task == nil {
+		return nil, fmt.Errorf("%w: task %s not found", namespace.ErrNotFound, taskID)
+	}
+	if ownerID, inPlace := task.CIOwner(); inPlace {
+		if owner, oerr := a.Client.Store.GetTask(ctx, ownerID); oerr == nil && owner != nil && owner.Target != nil {
+			task = owner
+		}
+	}
+	return task, nil
+}
+
+func (a SandboxCLIActions) UsesGitHubChecks(ctx context.Context, taskID string) (bool, error) {
+	task, err := a.resolveCITask(ctx, taskID)
+	if err != nil || task == nil || task.Target == nil {
+		return false, err
+	}
+	if grainci.RequiredFor(*task.Target) {
+		return false, nil
+	}
+	eff, err := a.Client.Store.EffectiveRepoConfig(ctx, *task.Target)
+	if err != nil {
+		return false, err
+	}
+	switch eff.CIMode {
+	case model.CIModeGitHub:
+		if rules, rerr := a.Client.Store.MergeRulesOf(ctx, *task.Target); rerr == nil && !rules.Empty() {
+			if !rules.Effective(nil, false, model.CIModeGitHub).Mode.GitHub() {
+				return false, nil
+			}
+		}
+		return true, nil
+	case model.CIModeGrain, model.CIModeNone:
+		return false, nil
+	}
+	return false, nil
+}
+
+func (a SandboxCLIActions) githubCheckReader() mcp.PullRequestReader {
+	if a.Client == nil {
+		return nil
+	}
+	if r, ok := a.Client.Config.PullRequests.(PullRequestCheckReader); ok {
+		if reader := r.GitHubPullRequestReader(); reader != nil {
+			return reader
+		}
+	}
+	if reader, ok := a.Client.Config.GitHubPullRequests.(mcp.PullRequestReader); ok && reader != nil {
+		return reader
+	}
+	return nil
+}
+
+func (a SandboxCLIActions) WaitForGitHubChecks(ctx context.Context, taskID string,
+	timeout, poll time.Duration, onPoll func(waited time.Duration)) (mcp.GitHubCheckWaitResult, error) {
+
+	task, err := a.resolveCITask(ctx, taskID)
+	if err != nil {
+		return mcp.GitHubCheckWaitResult{}, err
+	}
+	if task == nil || task.Target == nil {
+		return mcp.GitHubCheckWaitResult{}, fmt.Errorf("%w: task %s has no target repository", namespace.ErrBadRequest, taskID)
+	}
+	reader := a.githubCheckReader()
+	if reader == nil {
+		return mcp.GitHubCheckWaitResult{}, errors.New("this deployment has no GitHub client wired to read check runs")
+	}
+	scope := mcp.PullRequestScope{
+		Owner:  task.Target.Owner,
+		Repo:   task.Target.Name,
+		Branch: task.BranchName(),
+		Base:   task.Base,
+	}
+	if pr := model.TaskPullRequest(*task); pr != nil && pr.Repo.Same(*task.Target) {
+		scope.PullRequestNumber = pr.Number
+	}
+	return mcp.WaitForGitHubChecks(ctx, reader, scope, timeout, poll, 0, onPoll)
 }
