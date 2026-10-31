@@ -136,6 +136,14 @@ func TestChangeReviewDraftsRepliesAndPublishesThem(t *testing.T) {
 		t.Fatalf("review after publishing = %+v", got.CLReview)
 	}
 
+	// A draft is unmailed even where its provider did not say it needs
+	// mailing: it is never refused Mail as "already mailed".
+	change.Remember(change.Observation{Target: "cl/42", ReviewState: change.ReviewStateDraft})
+	got, _ = client.GetTask(ctx, "91")
+	if !got.CLReview.CanMail || got.CLReview.MailReason != "" {
+		t.Fatalf("review = %+v, want Mail offered on a draft", got.CLReview)
+	}
+
 	// An unmailed CL offers Mail, which goes as the person who pressed it.
 	change.Remember(change.Observation{Target: "cl/42", ReviewState: change.ReviewStateDraft, NeedsMailing: true})
 	got, _ = client.GetTask(ctx, "91")
