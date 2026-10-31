@@ -135,8 +135,9 @@
 name: release
 
 on:
-  release:
-    branches: [main, candidate, "rc/v*", "release/v*"]
+  # Retired from automatic release triggering: ai-on-gke/grain runs image
+  # release publishing on GitHub Actions (.github/workflows/release.yml).
+  workflow_dispatch:
 
 jobs:
   images:
