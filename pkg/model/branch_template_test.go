@@ -16,6 +16,7 @@ package model_test
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -231,9 +232,60 @@ func TestValidBranchNameFollowsGitRefRules(t *testing.T) {
 		"grain/task-42/":        false,
 		"grain//task-42":        false,
 		"grain/task..42":        false,
+		strings.Repeat("a", model.MaxBranchNameLen):   true,
+		strings.Repeat("a", model.MaxBranchNameLen+1): false,
 	} {
 		if got := model.ValidBranchName(name); got != want {
 			t.Errorf("ValidBranchName(%q) = %v, want %v", name, got, want)
 		}
+	}
+}
+
+func TestFormatTaskBranchNameCapsTotalBranchLength(t *testing.T) {
+	longTitle := "Fix the header parser when handling an extraordinarily verbose multi-kilobyte upstream response"
+
+	// DefaultTaskBranchTemplate with max deployment ID (32), max int64 task ID (19), and a long title.
+	defBranch, err := model.FormatTaskBranchName(
+		model.DefaultTaskBranchTemplate,
+		strings.Repeat("f", 32),
+		strings.Repeat("d", model.MaxDeploymentIDLen),
+		"9223372036854775807",
+		longTitle,
+	)
+	if err != nil {
+		t.Fatalf("DefaultTaskBranchTemplate with max inputs failed: %v", err)
+	}
+	if len(defBranch) > model.MaxBranchNameLen {
+		t.Fatalf("DefaultTaskBranchTemplate produced %d-char branch %q, want <= %d", len(defBranch), defBranch, model.MaxBranchNameLen)
+	}
+
+	// Custom template leaving room for only part of the slug (12 chars after "task-42-").
+	// base = prefix + "/task-42" -> want len(base) == MaxBranchNameLen - 1 - 12 = 231 -> len(prefix) = 223.
+	prefix223 := strings.Repeat("a", 100) + "/" + strings.Repeat("b", 122)
+	trimmed, err := model.FormatTaskBranchName(prefix223+"/task-{id}-{slug}", "inst", "dep", "42", longTitle)
+	if err != nil {
+		t.Fatalf("FormatTaskBranchName with tight slug budget failed: %v", err)
+	}
+	if len(trimmed) > model.MaxBranchNameLen {
+		t.Fatalf("trimmed branch length = %d, want <= %d: %q", len(trimmed), model.MaxBranchNameLen, trimmed)
+	}
+	if wantSuffix := "/task-42-fix-the"; !strings.HasSuffix(trimmed, wantSuffix) {
+		t.Fatalf("trimmed branch = %q, want suffix %q", trimmed, wantSuffix)
+	}
+
+	// Custom template whose base fills MaxBranchNameLen exactly omits -{slug} rather than overflowing.
+	exactPrefix := strings.Repeat("a", 100) + "/" + strings.Repeat("b", model.MaxBranchNameLen-100-1-len("/task-42"))
+	exact, err := model.FormatTaskBranchName(exactPrefix+"/task-{id}-{slug}", "inst", "dep", "42", longTitle)
+	if err != nil {
+		t.Fatalf("FormatTaskBranchName at exact MaxBranchNameLen failed: %v", err)
+	}
+	if len(exact) != model.MaxBranchNameLen || !strings.HasSuffix(exact, "/task-42") {
+		t.Fatalf("exact-cap branch = %q (len %d), want len %d ending in /task-42", exact, len(exact), model.MaxBranchNameLen)
+	}
+
+	// Template whose non-slug prefix already exceeds MaxBranchNameLen is refused.
+	tooLongPrefix := strings.Repeat("a", model.MaxBranchNameLen)
+	if _, err := model.FormatTaskBranchName(tooLongPrefix+"/task-{id}-{slug}", "inst", "dep", "42", longTitle); err == nil {
+		t.Fatal("FormatTaskBranchName accepted a template exceeding MaxBranchNameLen, want an error")
 	}
 }

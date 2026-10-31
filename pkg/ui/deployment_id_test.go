@@ -15,6 +15,7 @@
 package ui_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -120,7 +121,8 @@ func TestSettingsRefusesABranchTemplateWhoseSlugCouldNameAnotherTask(t *testing.
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"grain/task-{id}{slug}", "grain/{slug}/task-{id}", "{slug}-task-{id}",
-		"grain/{deployment}-task-{id}-{slug}", "grain/task-{id}-{slug}-x"} {
+		"grain/{deployment}-task-{id}-{slug}", "grain/task-{id}-{slug}-x",
+		strings.Repeat("a", 210) + "/{deployment}/task-{id}-{slug}"} {
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{TaskBranchTemplate: ptr(bad)}); err == nil {
 			t.Errorf("taskBranchTemplate %q was accepted, want a validation error", bad)
 		}
