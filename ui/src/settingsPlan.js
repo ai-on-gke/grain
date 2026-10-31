@@ -48,6 +48,7 @@
 // job is completeness.
 const SETTING_LABELS = {
   environmentName: "Environment name",
+  settingsLocked: "Lock settings in UI (require config repo PRs)",
   pollInterval: "Poll interval",
   maxWorkers: "Max worker agents",
   maxMergesPerRepo: "Max merges per repo branch",
