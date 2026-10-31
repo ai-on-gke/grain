@@ -3686,6 +3686,7 @@ type WorkflowRun struct {
 	Path       string     `json:"path"`
 	HeadBranch string     `json:"head_branch"`
 	HeadSHA    string     `json:"head_sha"`
+	HeadRepo   string     `json:"head_repo,omitempty"`
 	Event      string     `json:"event"`
 	Status     string     `json:"status"`
 	Conclusion string     `json:"conclusion"`
@@ -3755,17 +3756,28 @@ func (c *RESTClient) CompletedWorkflowRuns(owner, repo string, limit int) ([]Wor
 		completedRunsETags.Store(cacheKey, etag)
 	}
 	var data struct {
-		WorkflowRuns []WorkflowRun `json:"workflow_runs"`
+		WorkflowRuns []struct {
+			WorkflowRun
+			HeadRepository *struct {
+				FullName string `json:"full_name"`
+			} `json:"head_repository"`
+		} `json:"workflow_runs"`
 	}
 	if err := json.Unmarshal(resp.Body, &data); err != nil {
 		return nil, err
 	}
-	for i := range data.WorkflowRuns {
-		if data.WorkflowRuns[i].RunAttempt <= 0 {
-			data.WorkflowRuns[i].RunAttempt = 1
+	runs := make([]WorkflowRun, len(data.WorkflowRuns))
+	for i, item := range data.WorkflowRuns {
+		r := item.WorkflowRun
+		if r.RunAttempt <= 0 {
+			r.RunAttempt = 1
 		}
+		if item.HeadRepository != nil && r.HeadRepo == "" {
+			r.HeadRepo = strings.TrimSpace(item.HeadRepository.FullName)
+		}
+		runs[i] = r
 	}
-	return data.WorkflowRuns, nil
+	return runs, nil
 }
 
 // ListWorkflowRunJobs returns the jobs of one GitHub Actions workflow run.

@@ -13,13 +13,22 @@
 // limitations under the License.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import api from "../api.js";
 import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
 import ReviewBadge from "./ClReview.jsx";
 import { BehindBadge } from "./ClSubmit.jsx";
 import { processPath } from "../paths.js";
 import LinkedNote from "../linkedNote.jsx";
-import { Alert, Button, Chip, Link, Typography } from "@mui/material";
+import {
+  Alert,
+  Button,
+  Chip,
+  Link,
+  TextField,
+  Typography,
+} from "@mui/material";
+import ModelPicker from "./ModelPicker.jsx";
 import { branchRefs } from "../branchRefs.js";
 import {
   STATE_LABELS,
@@ -679,6 +688,14 @@ export default function DetailOverlay({
                 label={`target: ${t.base}`}
               />
             )}
+            <Chip
+              size="small"
+              variant="outlined"
+              className="chip-priority"
+              data-testid="detail-priority-badge"
+              title="Task priority (default 5; higher numbers run first)"
+              label={`priority: ${t.priority ?? 5}`}
+            />
           </div>
           {/* And the sentence itself, spelled out under the badge it is
               about, for the same reason the merge queue's note is
@@ -781,6 +798,55 @@ export default function DetailOverlay({
             showError={showError}
           />
           <Declared t={t} config={config} act={act} />
+          {(t.interactive || t.consoleSession) && (
+            <fieldset>
+              <legend>Session parameters</legend>
+              <ModelPicker
+                config={config}
+                name="sessionModel"
+                value={t.model || ""}
+                onChange={(model) =>
+                  act(
+                    () =>
+                      api(`/api/tasks/${t.id}`, {
+                        method: "PATCH",
+                        body: JSON.stringify({ model }),
+                      }),
+                    t.id,
+                  )
+                }
+                margin="none"
+              />
+              <TextField
+                select
+                name="networkAccess"
+                label="Network access"
+                value={t.networkAccess || ""}
+                onChange={(e) =>
+                  act(
+                    () =>
+                      api(`/api/tasks/${t.id}`, {
+                        method: "PATCH",
+                        body: JSON.stringify({ networkAccess: e.target.value }),
+                      }),
+                    t.id,
+                  )
+                }
+                disabled={!!config?.sandboxShapeIgnored}
+                InputLabelProps={{ shrink: true }}
+                SelectProps={{ native: true }}
+                fullWidth
+                margin="dense"
+                size="small"
+              >
+                <option value="">
+                  {`Deployment default${config && config.networkAccess ? ` (${config.networkAccess === "open" ? "egress" : config.networkAccess})` : ""}`}
+                </option>
+                <option value="open">Egress (outbound internet only)</option>
+                <option value="none">None (this deployment only)</option>
+              </TextField>
+            </fieldset>
+          )}
           <CustomFieldsSection
             t={t}
             config={config}

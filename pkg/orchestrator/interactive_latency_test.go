@@ -145,7 +145,7 @@ func TestInteractiveInitialStartupLatencyAndBreakdown(t *testing.T) {
 	startWall := time.Now()
 	t1 := startWall.UTC()
 	replyToSession(t, store, director.ID, t1)
-	if err := orchestrator.RunDispatchCycle(ctx, deps, t1.Add(10*time.Millisecond)); err != nil {
+	if err := orchestrator.RunDispatchCycle(ctx, deps, time.Now().UTC()); err != nil {
 		t.Fatalf("RunDispatchCycle: %v", err)
 	}
 	startupElapsed := firstTurnAt.Sub(startWall)

@@ -142,6 +142,7 @@ ARGUMENTS & FLAGS:
   --hold-for-approval          File unapproved for a human to review even if your task's permission
                                would have queued it.
   --at-front                   Place at the front of the backlog ahead of already queued work.
+  --priority <N>               Task priority (default 5; higher numbers mean higher priority).
   --no-repo                    Standalone task with no git repository or branch.
   --no-port                    Change belongs only on the target branch; do not port to paired branches.
   --fixes-base-branch          Marks this task as repairing a red base branch (gives it a base-green

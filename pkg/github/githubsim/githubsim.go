@@ -322,6 +322,7 @@ type WorkflowRun struct {
 	Path       string
 	HeadBranch string
 	HeadSHA    string
+	HeadRepo   string
 	Event      string
 	Status     string
 	Conclusion string
@@ -2754,17 +2755,22 @@ func (s *Sim) repoRunsJSON(owner, repo string) map[string]any {
 		if headSHA == "" && wr.HeadBranch != "" {
 			headSHA = s.branchSHA(wr.HeadBranch)
 		}
+		headRepo := wr.HeadRepo
+		if headRepo == "" {
+			headRepo = owner + "/" + repo
+		}
 		runs = append(runs, map[string]any{
-			"id":          runID,
-			"name":        name,
-			"path":        wr.Path,
-			"head_branch": wr.HeadBranch,
-			"head_sha":    headSHA,
-			"event":       wr.Event,
-			"status":      status,
-			"conclusion":  conclusion,
-			"run_attempt": attempt,
-			"html_url":    fmt.Sprintf("https://github.example/%s/%s/actions/runs/%d", owner, repo, runID),
+			"id":              runID,
+			"name":            name,
+			"path":            wr.Path,
+			"head_branch":     wr.HeadBranch,
+			"head_sha":        headSHA,
+			"head_repository": map[string]string{"full_name": headRepo},
+			"event":           wr.Event,
+			"status":          status,
+			"conclusion":      conclusion,
+			"run_attempt":     attempt,
+			"html_url":        fmt.Sprintf("https://github.example/%s/%s/actions/runs/%d", owner, repo, runID),
 		})
 	}
 	for _, key := range s.runCommits() {

@@ -383,6 +383,44 @@ func TestProposeTaskHandlerRecordsSandboxShapeAndNetworkAccess(t *testing.T) {
 	}
 }
 
+func TestProposeTaskAcceptsAndValidatesPriority(t *testing.T) {
+	sink := &MockSink{}
+	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+	props, ok := tool.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("InputSchema has no properties map")
+	}
+	priSpec, ok := props["priority"].(map[string]any)
+	if !ok {
+		t.Fatal("propose_task InputSchema is missing priority property")
+	}
+	if typ, _ := priSpec["type"].(string); typ != "integer" {
+		t.Errorf("priority type = %q, want integer", typ)
+	}
+
+	res := tool.Handler(context.Background(), map[string]any{
+		"title":    "urgent follow-up",
+		"body":     "fix first",
+		"priority": float64(8),
+	})
+	if res.IsError {
+		t.Fatalf("Handler errored: %s", res.Text)
+	}
+	tasks := sink.ProposedTasks()
+	if len(tasks) != 1 || tasks[0].Priority != 8 {
+		t.Fatalf("ProposedTasks() = %+v, want priority=8", tasks)
+	}
+
+	negRes := tool.Handler(context.Background(), map[string]any{
+		"title":    "bad priority",
+		"body":     "nope",
+		"priority": float64(-1),
+	})
+	if !negRes.IsError {
+		t.Errorf("propose_task with priority=-1 succeeded, want error")
+	}
+}
+
 func TestProposeTaskAcceptsCapabilities(t *testing.T) {
 	sink := &MockSink{}
 	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")

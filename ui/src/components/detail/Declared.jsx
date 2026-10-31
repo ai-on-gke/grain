@@ -250,6 +250,9 @@ export default function Declared({ t, config, act }) {
       "Leave for acknowledgement",
     ]);
   }
+  if (t.priority != null && t.priority !== 5) {
+    rows.push(["Task priority", `${t.priority} (default 5)`]);
+  }
   // A task an external agent filed (over /mcp or the agent API) has the
   // deployment's person who vouches for that credential as its creator
   // -- the requester policy and credentials are chosen by -- so the
