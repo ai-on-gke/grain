@@ -34,6 +34,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -2025,5 +2026,124 @@ func TestWarmSessionSandboxReleasedWhenItsGrantsChange(t *testing.T) {
 	}
 	if sbx.releases <= releases {
 		t.Fatalf("releases = %d, want the warm sandbox released (was %d)", sbx.releases, releases)
+	}
+}
+
+type testOrchestratorStateRepo struct {
+	repo   *staterepo.Repo
+	store  *model.Store
+	status ui.StateRepoStatus
+}
+
+func (s *testOrchestratorStateRepo) Status(context.Context) (ui.StateRepoStatus, error) {
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) ImportSecretsKey(context.Context, string) (ui.StateRepoStatus, error) {
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) SetRemote(context.Context, ui.StateRepoRemoteRequest) (ui.StateRepoStatus, error) {
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) SetSecretsRepo(context.Context, ui.SecretsRepoRequest) (ui.StateRepoStatus, error) {
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) DismissResetNotices(context.Context) (ui.StateRepoStatus, error) {
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) Sync(ctx context.Context) (ui.StateRepoStatus, error) {
+	if _, err := staterepo.Apply(ctx, s.repo, s.store.DB(), model.SchemaVersion); err != nil {
+		return ui.StateRepoStatus{}, err
+	}
+	if _, err := staterepo.Sync(ctx, s.repo, s.store.DB(), model.SchemaVersion); err != nil {
+		return ui.StateRepoStatus{}, err
+	}
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) SyncAfterWrite(ctx context.Context) error {
+	_, err := s.Sync(ctx)
+	return err
+}
+func (s *testOrchestratorStateRepo) Tree(context.Context) (ui.StateRepoTree, error) {
+	return ui.StateRepoTree{}, nil
+}
+func (s *testOrchestratorStateRepo) File(context.Context, string, int64) (ui.StateRepoFile, error) {
+	return ui.StateRepoFile{}, nil
+}
+
+func TestUIEditsWithStateRepoUnlockedPersistAcrossOrchestratorAndStateRepoCycles(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(*model.Config) {})
+
+	stateDir := filepath.Join(t.TempDir(), "state-repo")
+	repo, err := staterepo.Open(ctx, staterepo.Config{Dir: stateDir})
+	if err != nil {
+		t.Fatalf("staterepo.Open: %v", err)
+	}
+	if err := staterepo.Load(ctx, repo, store.DB(), model.SchemaVersion); err != nil {
+		t.Fatalf("staterepo.Load: %v", err)
+	}
+
+	sr := &testOrchestratorStateRepo{
+		repo:   repo,
+		store:  store,
+		status: ui.StateRepoStatus{Branch: "main"},
+	}
+	client := ui.NewClient(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		StateRepo:    sr,
+	}, store)
+	client.Now = func() time.Time { return baseTime }
+
+	// Edit console_sessions, default_capabilities, repo_config, schedules, and templates via UI client while settings_locked is false (default).
+	capID := ui.OfferedCapabilities()[0].ID
+	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+		DefaultCapabilities: &[]string{capID},
+	}); err != nil {
+		t.Fatalf("UpdateSettings(defaultCapabilities): %v", err)
+	}
+	if _, err := client.CreateConsoleSession(ctx, ui.CreateConsoleSessionRequest{
+		ID:    "ops-chat",
+		Title: "Ops Chat",
+	}); err != nil {
+		t.Fatalf("CreateConsoleSession: %v", err)
+	}
+	promptExt := "Always verify tests"
+	if _, err := client.SetRepoSettings(ctx, "acme/widgets", ui.SetRepoSettingsRequest{
+		PromptExtension: &promptExt,
+	}); err != nil {
+		t.Fatalf("SetRepoSettings: %v", err)
+	}
+	if _, err := client.CreateSchedule(ctx, ui.CreateScheduleRequest{
+		Title:      "Hourly sweep",
+		Repo:       "acme/widgets",
+		Recurrence: ui.Recurrence{Kind: "everyNHours", EveryNHours: 1},
+	}); err != nil {
+		t.Fatalf("CreateSchedule: %v", err)
+	}
+	if _, err := client.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name:  "triage",
+		Title: "Triage bug",
+	}); err != nil {
+		t.Fatalf("CreateTemplate: %v", err)
+	}
+
+	// Sync to state repo and run both state-repo reconcile and orchestrator RunCycle.
+	if err := sr.SyncAfterWrite(ctx); err != nil {
+		t.Fatalf("SyncAfterWrite: %v", err)
+	}
+	runSessions(t, store, baseTime.Add(time.Minute))
+	if _, err := sr.Sync(ctx); err != nil {
+		t.Fatalf("second staterepo Sync: %v", err)
+	}
+	runSessions(t, store, baseTime.Add(2*time.Minute))
+
+	// Verify the console session task for ops-chat was created and survived state-repo sync cycles.
+	sessions := sessionTasks(t, store)
+	if !slices.ContainsFunc(sessions, func(tk model.Task) bool {
+		return slices.Contains(tk.Tags, model.ConsoleSessionTag("ops-chat"))
+	}) {
+		t.Fatalf("expected ops-chat session task to be reconciled and preserved across staterepo sync, got %+v", sessions)
 	}
 }

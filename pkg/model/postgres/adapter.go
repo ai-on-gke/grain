@@ -671,6 +671,7 @@ var (
 		"k8s_privileged",
 		"k8s_network_policy",
 		"external_agent_api",
+		"settings_locked",
 		// task_run_ci_habit (model.RunCIHabit).
 		"narrow_test_before_push",
 		"narrow_test_before_fix_push",

@@ -1448,6 +1448,91 @@ func shortSHAForTest(sha string) string {
 	return sha
 }
 
+func TestSwitchingRepoToGitHubCIModeCancelsBaseBranchCIAndSkipsPostMergeCI(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:   repo,
+		CIMode: model.CIModeGrain,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := newFakeCI()
+
+	// Pre-existing task t1 (with GrantByDefault grain-ci) merges while CIMode is grain,
+	// starting an in-flight base-branch CI run.
+	t1, branch1 := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
+	if err := store.UpdateTask(ctx, t1.ID, func(tk *model.Task) error {
+		tk.Grants = []model.Grant{{Capability: "grain-ci", Via: model.GrantByDefault}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t1Ptr, _ := store.GetTask(ctx, t1.ID)
+	greenGrainCI(t, ctx, store, client, runner, *t1Ptr, repo, branch1)
+	setMergeable(sim, true)
+
+	at := baseTime
+	syncWithCI(t, ctx, store, client, runner, at)
+	at = at.Add(time.Minute)
+	row := baseBranchRunAfterMerge(t, ctx, store, client, runner, repo, "main", at)
+	inFlightRunID := row.RunID
+	if inFlightRunID == "" {
+		t.Fatal("expected an in-flight base-branch CI run while CIMode is grain")
+	}
+
+	// Switch repo to CIModeGitHub while the base-branch CI run is in flight.
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:   repo,
+		CIMode: model.CIModeGitHub,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	at = at.Add(time.Minute)
+	if err := runBaseBranchCIReconciler(t, ctx, store, client, runner, at); err != nil {
+		t.Fatalf("runBaseBranchCIReconciler after switch: %v", err)
+	}
+	if got := runner.reasons[inFlightRunID]; got != "cancelled: repository switched to GitHub CI" {
+		t.Fatalf("base-branch CI run %s cancel reason = %q, want %q", inFlightRunID, got, "cancelled: repository switched to GitHub CI")
+	}
+	rowAfter, err := store.GetBaseBranchCI(ctx, repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rowAfter != nil && (rowAfter.RunID != "" && rowAfter.Conclusion == "") {
+		t.Fatalf("base-branch CI row still in flight after switching to GitHub CI: %+v", rowAfter)
+	}
+
+	// Now merge a second pre-existing task t2 (which still carries a stale GrantByDefault grain-ci grant)
+	// after the repo switched to CIModeGitHub. Verify recordPostMergeCI does NOT start a base-branch CI run.
+	startedBefore := runner.started()
+	t2, branch2 := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t2", repo)
+	if err := store.UpdateTask(ctx, t2.ID, func(tk *model.Task) error {
+		tk.Grants = []model.Grant{{Capability: "grain-ci", Via: model.GrantByDefault}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	greenOnGitHub(sim, branch2)
+	setMergeable(sim, true)
+	at = at.Add(time.Minute)
+	if err := orchestrator.SyncPullRequests(ctx, store, client, at); err != nil {
+		t.Fatalf("SyncPullRequests for t2: %v", err)
+	}
+	if !mergedBranch(sim, branch2) {
+		t.Fatal("t2 did not merge under CIModeGitHub")
+	}
+	at = at.Add(time.Minute)
+	if err := runBaseBranchCIReconciler(t, ctx, store, client, runner, at); err != nil {
+		t.Fatalf("runBaseBranchCIReconciler after t2 merge: %v", err)
+	}
+	if got := runner.started(); got != startedBefore {
+		t.Fatalf("base-branch CI runs started after merging t2 on CIModeGitHub = %d, want 0", got-startedBefore)
+	}
+}
+
 // watchDefaultBranch is an operator ticking "watch this repository's
 // default branch" on a repository grain CI is enabled for
 // (model.RepoConfig.WatchDefaultBranch, grain/task-331) -- the whole of
