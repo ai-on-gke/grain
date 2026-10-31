@@ -5182,20 +5182,24 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	if err != nil {
 		return err
 	}
-	if reopenAck && by.Actor.Kind == model.PrincipalHuman {
-		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
-		if err != nil || reopened {
-			return err
-		}
-	}
-	// A run that stopped with resume_later(when: {message: true}) is
-	// waiting for exactly this: anybody's post but its own.
+	// A run that stopped with resume_later(when: {message: true}) -- or a
+	// console session that ParkConsoleSessionTask both parked on a question
+	// and deferred on {message: true} -- is waiting for anybody's post but
+	// its own. Wake before reopenAcknowledgeable so the first human reply
+	// clears DeferredAt as well as PendingQuestionCommentID instead of
+	// returning early from reopenAcknowledgeable with the task still deferred.
 	wokeOnMessage := false
 	ownAgent := model.Principal{Kind: model.PrincipalAgent, ID: id}
 	if by.Actor != ownAgent && (by.OnBehalfOf == nil || *by.OnBehalfOf != ownAgent) {
 		var err error
 		wokeOnMessage, err = c.Store.WakeOnMessage(ctx, id, now)
 		if err != nil {
+			return err
+		}
+	}
+	if reopenAck && by.Actor.Kind == model.PrincipalHuman {
+		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
+		if err != nil || reopened {
 			return err
 		}
 	}

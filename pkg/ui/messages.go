@@ -468,7 +468,14 @@ func (c *Client) RecordDelivered(ctx context.Context, id string, through int64) 
 	if !slices.ContainsFunc(comments, func(comment model.Comment) bool { return comment.ID == through }) {
 		return validationErrorf("through must be the id of a comment on task %s", id)
 	}
-	return c.Store.AdvanceDelivered(ctx, id, through, c.now())
+	now := c.now()
+	if err := c.Store.AdvanceDelivered(ctx, id, through, now); err != nil {
+		return err
+	}
+	return c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		o.PendingQuestionCommentID = nil
+		o.PendingSecret = ""
+	})
 }
 
 // handleRecordDelivered answers POST /api/tasks/{id}/delivered.

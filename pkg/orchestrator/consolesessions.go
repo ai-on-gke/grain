@@ -610,17 +610,28 @@ func undeliveredHumanComment(comments []model.Comment, obs *model.Observation, r
 	if obs == nil || obs.DeliveredCommentID == nil {
 		return nil, false
 	}
-	var started time.Time
-	for _, run := range runs {
-		if run.StartedAt.After(started) {
-			started = run.StartedAt
+	var latest *model.Run
+	for i := range runs {
+		if latest == nil || runs[i].StartedAt.After(latest.StartedAt) {
+			latest = &runs[i]
 		}
+	}
+	// Only treat the latest run's StartedAt as an implicit cutoff when that
+	// run ended without succeeding (for example, it failed in setup before
+	// it could advance DeliveredCommentID). If the run is still active or
+	// succeeded, it advances DeliveredCommentID for every comment it was
+	// actually shown; a human comment with ID > DeliveredCommentID that
+	// arrived just before StartedAt (or while an in-process turn was ending)
+	// was not answered and must still be dispatched.
+	var failedStart time.Time
+	if latest != nil && latest.FinishedAt != nil && latest.Outcome != "succeeded" {
+		failedStart = latest.StartedAt
 	}
 	for i, c := range comments {
 		if c.ID <= *obs.DeliveredCommentID || c.Author.Actor.Kind != model.PrincipalHuman {
 			continue
 		}
-		if !c.CreatedAt.After(started) {
+		if !failedStart.IsZero() && !c.CreatedAt.After(failedStart) {
 			continue
 		}
 		return &comments[i], true

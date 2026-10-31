@@ -612,6 +612,13 @@ type AgentChoice struct {
 	// rotation tries them after the rest of its default list. A model the
 	// task chose itself is used regardless.
 	AvoidModels []string
+	// PreferFramework and PreferModel are the framework and model an
+	// unpinned interactive (or suspended-session) task's previous run used.
+	// When set, the pool keeps the task on that model/framework so warm CLI
+	// sessions (--resume) and prompt caches survive across turns, falling
+	// back to the rest of the rotation only when unavailable or paused.
+	PreferFramework string
+	PreferModel     string
 }
 
 // ChoiceFor is the AgentChoice task's own fields make: the one runOne
@@ -1156,7 +1163,11 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 			delete(prepared, d.RunID)
 			fw := frameworks[d.RunID]
 			delete(frameworks, d.RunID)
-			deps.Runs.Go(d.RunID, d.TaskID, func() {
+			var afterDone func()
+			if deps.Ledger != nil {
+				afterDone = deps.Ledger.Wake
+			}
+			deps.Runs.GoAfter(d.RunID, d.TaskID, func() {
 				// The sandbox this run holds stops being charged under RunID
 				// when the run is over; if the run kept its session sandbox
 				// warm between turns, park that sandbox as an idle entry in
@@ -1169,7 +1180,7 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 				if err := recoverRunOneWithFramework(ctx, deps, d, reserved, fw, now); err != nil {
 					log.Printf("orchestrator: run %s (task %s): %v", d.RunID, d.TaskID, err)
 				}
-			})
+			}, afterDone)
 		}
 		for _, f := range frameworks {
 			releaseFramework(f.framework)

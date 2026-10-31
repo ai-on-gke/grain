@@ -1015,6 +1015,47 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 		interval = chatPollInterval
 	}
 	deadline := time.Now().Add(wait)
+	pollOnce := func(firstPoll bool) (mcp.ChatTurn, bool) {
+		after := posted.ID
+		if d.delivered != nil {
+			if cur := d.delivered.current(); cur < after {
+				after = cur
+			}
+		} else if firstPoll {
+			after = 0
+		}
+		pollCtx, cancelPoll := context.WithDeadline(ctx, deadline)
+		messages, err := d.client.TaskMessages(pollCtx, d.taskID, after)
+		cancelPoll()
+		if err != nil || len(messages) == 0 {
+			return mcp.ChatTurn{}, false
+		}
+		var beforePost, afterPost []ui.Message
+		for _, m := range messages {
+			if m.ID > posted.ID {
+				afterPost = append(afterPost, m)
+			} else {
+				beforePost = append(beforePost, m)
+			}
+		}
+		beforePost = d.delivered.notByChat(beforePost)
+		chosen := afterPost
+		if len(chosen) == 0 {
+			chosen = beforePost
+		}
+		if len(chosen) == 0 {
+			return mcp.ChatTurn{}, false
+		}
+		placeMessageAttachments(ctx, d.client, d.taskID, chosen, d.writeFile)
+		d.delivered.deliveredByChat(ctx, chosen)
+		return mcp.ChatTurn{Reply: joinMessages(chosen)}, true
+	}
+	if turn, ok := pollOnce(true); ok {
+		return turn, nil
+	}
+	if time.Now().After(deadline) {
+		return mcp.ChatTurn{}, nil
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -1034,13 +1075,8 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 			// deadline, so the client's restart-gap retry (ui.RetryPolicy,
 			// two minutes) cannot hold the turn past the time it said it
 			// would wait.
-			pollCtx, cancelPoll := context.WithDeadline(ctx, deadline)
-			messages, err := d.client.TaskMessages(pollCtx, d.taskID, posted.ID)
-			cancelPoll()
-			if err == nil && len(messages) > 0 {
-				placeMessageAttachments(ctx, d.client, d.taskID, messages, d.writeFile)
-				d.delivered.deliveredByChat(ctx, messages)
-				return mcp.ChatTurn{Reply: joinMessages(messages)}, nil
+			if turn, ok := pollOnce(false); ok {
+				return turn, nil
 			}
 			if now.After(deadline) {
 				return mcp.ChatTurn{}, nil
@@ -1187,6 +1223,16 @@ func newDeliveredCursor(client *ui.HTTPClient, taskID string, seed int64) *deliv
 		through: seed,
 		byChat:  map[int64]bool{},
 	}
+}
+
+// current returns the highest comment ID this cursor has recorded as delivered.
+func (c *deliveredCursor) current() int64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.through
 }
 
 // advance moves the mark to through, if that is forward, and tells the

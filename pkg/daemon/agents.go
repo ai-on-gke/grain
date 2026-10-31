@@ -250,6 +250,11 @@ type poolRequest struct {
 	// frameworks this daemon can adopt a run of across its own restart
 	// (preferAdoptable); nil otherwise.
 	adoptable map[string]bool
+	// preferFramework and preferModel are the framework and model of an
+	// unpinned interactive or resumable-session task's previous attempt
+	// (preferPrevious).
+	preferFramework string
+	preferModel     string
 }
 
 // frameworkFor is the framework a run of m on req is restricted to: m's
@@ -412,10 +417,13 @@ func (p *AgentPool) resolve(ctx context.Context, live Config, choice orchestrato
 	// a human to set.
 	if choice.Durable {
 		req.preferAdoptable(live.adoptableFrameworks(ctx))
-		if len(choice.AvoidModels) > 0 && len(req.models) > 0 {
-			req.models = avoidLast(req.models, choice.AvoidModels)
-			req.model = req.models[0]
-		}
+	}
+	if choice.PreferFramework != "" || choice.PreferModel != "" {
+		req.preferPrevious(choice.PreferFramework, choice.PreferModel)
+	}
+	if (choice.Durable || choice.PreferFramework != "" || choice.PreferModel != "") && len(choice.AvoidModels) > 0 && len(req.models) > 0 {
+		req.models = avoidLast(req.models, choice.AvoidModels)
+		req.model = req.models[0]
 	}
 	return req, nil
 }
@@ -488,7 +496,7 @@ func (p *AgentPool) candidatesLocked(live Config, req poolRequest, now time.Time
 			candidates = append(candidates, backend)
 		}
 	}
-	return req.adoptableOnly(candidates), excluded
+	return req.preferredOnly(req.adoptableOnly(candidates)), excluded
 }
 
 // selectCandidateLocked tries req's models in order -- first model first,

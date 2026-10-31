@@ -584,13 +584,18 @@ func markInProcessSessionIdle(store *model.Store, ledger *model.Ledger, runID, s
 	}
 }
 
+type inProcessRunKey struct {
+	store *model.Store
+	runID string
+}
+
 var inProcessRelayedRuns sync.Map
 
-func takeInProcessRelayed(runID string) bool {
-	if runID == "" {
+func takeInProcessRelayed(store *model.Store, runID string) bool {
+	if store == nil || runID == "" {
 		return false
 	}
-	_, ok := inProcessRelayedRuns.LoadAndDelete(runID)
+	_, ok := inProcessRelayedRuns.LoadAndDelete(inProcessRunKey{store: store, runID: runID})
 	return ok
 }
 
@@ -649,7 +654,14 @@ func continueSessionTurns(
 	// (agent.RunConfig.AddendaAfter): what the turn was dispatched with.
 	turnAfter := runCfg.AddendaAfter
 	for {
-		if runErr != nil || turnResult == nil || turnResult.ResumableSession == "" || hostCtx.Err() != nil || daemonCtx.Err() != nil {
+		session := ""
+		if turnResult != nil {
+			session = turnResult.ResumableSession
+		}
+		if session == "" {
+			session = runCfg.ResumeSession
+		}
+		if runErr != nil || turnResult == nil || session == "" || hostCtx.Err() != nil || daemonCtx.Err() != nil {
 			break
 		}
 		if _, ok := firstToolCallArg(turnResult, "nothing_needed", "reason"); ok {
@@ -699,14 +711,15 @@ func continueSessionTurns(
 		} else {
 			replyBody = finalText
 		}
-		if _, err := relayCommentWithAttachments(daemonCtx, store, task, replyBody, attachments, now); err != nil {
+		relayedID, err := relayCommentWithAttachments(daemonCtx, store, task, replyBody, attachments, now)
+		if err != nil {
 			log.Printf("orchestrator: run %s: relaying session answer in-process: %v", runID, err)
 			break
 		}
 		if hasComment {
 			recordRelayedInProcess(daemonCtx, store, runID, result, "comment_on_issue")
 		}
-		inProcessRelayedRuns.Store(runID, true)
+		inProcessRelayedRuns.Store(inProcessRunKey{store: store, runID: runID}, true)
 
 		// What the turn was actually shown: its prompt, and every
 		// comment its forked mcpserver handed it since as an addendum on
@@ -753,6 +766,18 @@ func continueSessionTurns(
 		waitCtx, cancelWait := context.WithTimeout(hostCtx, ttl)
 		unmark := markInProcessSessionIdle(store, cfg.sessionLedger, runID, cfg.sessionSandboxName, cfg.sessionShape, now, cancelWait)
 
+		// While waiting in-process for the person's next message (when none has
+		// already arrived after lastID), point PendingQuestionCommentID at the
+		// relayed reply so the task reads awaiting_reply (Asked) instead of
+		// running, matching the chat tool's own wait state.
+		if existing, err := store.CommentsAfter(daemonCtx, task.ID, lastID); err == nil && !slices.ContainsFunc(existing, func(c model.Comment) bool {
+			return c.Author.Actor.Kind == model.PrincipalHuman
+		}) {
+			_ = store.ObserveField(daemonCtx, task.ID, now, func(o *model.Observation) {
+				o.PendingQuestionCommentID = &relayedID
+			})
+		}
+
 		// Woken by AddComment the moment a comment lands in this process
 		// (Store.CommentAdded), and otherwise polled at the deployment's
 		// own interval for a comment another process wrote, a pause or a
@@ -786,6 +811,11 @@ func continueSessionTurns(
 		ticker.Stop()
 		cancelWait()
 		unmark()
+		_ = store.ObserveField(daemonCtx, task.ID, cfg.now(), func(o *model.Observation) {
+			if o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID == relayedID {
+				o.PendingQuestionCommentID = nil
+			}
+		})
 
 		if len(fresh) == 0 {
 			break
@@ -810,7 +840,7 @@ func continueSessionTurns(
 		}
 		comments = append(comments, fresh...)
 		nextCfg := runCfg
-		nextCfg.ResumeSession = turnResult.ResumableSession
+		nextCfg.ResumeSession = session
 		nextCfg.ContinuePrompt = promptBuilder.String()
 		nextCfg.Addenda = addendaPoller(store, task.ID, comments)
 		nextCfg.AddendaAfter = lastCommentID(comments)

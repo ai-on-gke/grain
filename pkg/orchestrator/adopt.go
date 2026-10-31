@@ -176,10 +176,18 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	if deps.Framework == nil {
 		return abandon("has no agent framework to read its result with")
 	}
-	framework, err := deps.Framework(ctx, deps.choiceFor(*task))
+	choice := deps.choiceFor(*task)
+	if run.AgentFramework != "" {
+		choice.Framework = run.AgentFramework
+	}
+	if run.Model != "" {
+		choice.Model = run.Model
+	}
+	framework, err := deps.Framework(ctx, choice)
 	if err != nil {
 		return abandon("could not build its agent framework: " + err.Error())
 	}
+	defer releaseFramework(framework)
 	parser, ok := framework.(agent.ResultParser)
 	// A wrapper (the daemon's connection pool hands back one) parses
 	// only if what it wraps does.
@@ -317,16 +325,70 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 		os.Remove(transcriptPath)
 	}
 	revokeLeases(finishCtx, framework)
+	if finishErr == nil && end.outcome == "succeeded" && task.Interactive && store != nil {
+		if comments, cerr := store.Comments(finishCtx, task.ID); cerr == nil {
+			var promptCutoff int64
+			for _, c := range comments {
+				if !c.CreatedAt.After(run.StartedAt) && c.ID > promptCutoff {
+					promptCutoff = c.ID
+				}
+			}
+			if promptCutoff > 0 && (obs == nil || obs.DeliveredCommentID == nil || promptCutoff > *obs.DeliveredCommentID) {
+				_ = store.AdvanceDelivered(finishCtx, task.ID, promptCutoff, cfg.now())
+			}
+		}
+	}
 
 	var errs []error
+	var afterErr error
 	switch {
 	case finishErr != nil:
 		errs = append(errs, end.runErr, fmt.Errorf("orchestrator: finishing adopted run %s: %w", runID, finishErr))
 	default:
-		errs = append(errs, afterAgentRun(ctx, deps, *task, runID, result, end.runErr, preRunBranchSHA, "", cfg.now()))
+		afterErr = afterAgentRun(ctx, deps, *task, runID, result, end.runErr, preRunBranchSHA, "", cfg.now())
+		errs = append(errs, afterErr)
 	}
 	stopRecreating()
-	releaseAdoptedSandbox(ctx, deps, a.Sandbox, runID, run)
+	keptWarm := false
+	if finishErr == nil && afterErr == nil && end.runErr == nil && task.Interactive && store != nil {
+		cleanupCtx := context.WithoutCancel(ctx)
+		finishNow := cfg.now()
+		if ttl := sessionSandboxIdleTTL(cleanupCtx, deps); ttl > 0 && !taskPaused(cleanupCtx, store, task.ID) {
+			if st, serr := store.State(cleanupCtx, task.ID); serr == nil && st != "" &&
+				st != model.StateClosed && st != model.StateFailed &&
+				st != model.StateCompleted && st != model.StateAwaitingSubmit {
+				shape := Shape{
+					CPUs:          task.SandboxCPUs,
+					MemoryMB:      task.SandboxMemoryMB,
+					DiskGB:        task.SandboxDiskGB,
+					NetworkAccess: task.NetworkAccess,
+					GrainSource:   hasGrant(*task, model.SelfDebugCapability),
+					Class:         sandboxClassFor(*task),
+				}
+				if isUnisolated(deps.Sandboxes) {
+					shape.OperatorEnv, _ = localTask(cleanupCtx, store, deps.Policy, *task)
+				}
+				commitShape := (model.Limits{AgentShape: deps.AgentShape}).TaskShape(*task)
+				counted := func(cctx context.Context) {
+					if usages, err := store.SandboxUsages(cctx); err == nil {
+						for _, u := range usages {
+							if u.Kind == model.SandboxKindAgent && u.Created > u.Finished {
+								ended := cfg.now()
+								_ = store.RecordSandboxFinish(cctx, model.SandboxKindAgent, max(ended.Sub(run.StartedAt), 0), ended)
+								break
+							}
+						}
+					}
+				}
+				parkWarmSessionSandbox(deps, task.ID, a.Sandbox.Name(), sessionSandboxKey(shape, *task, nil), sessionGrantsKey(*task), a.Sandbox, counted, commitShape, finishNow, ttl)
+				parkWarmSessionInLedger(deps, task.ID)
+				keptWarm = true
+			}
+		}
+	}
+	if !keptWarm {
+		releaseAdoptedSandbox(ctx, deps, a.Sandbox, runID, run)
+	}
 	return errors.Join(errs...)
 }
 
