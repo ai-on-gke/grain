@@ -2707,7 +2707,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
           !openTaskId &&
           /^\/(tasks|director)(\/|$)/.test(window.location.pathname));
       if (mountedRef.current && !samePage && !dropped && !oldProcessPath) {
-        window.history.pushState(entry, "", path);
+        const anchorHash =
+          view === "settings" && settingsAnchor ? `#${settingsAnchor}` : "";
+        window.history.pushState(entry, "", path + anchorHash);
       } else {
         // A correction of the address on screen -- the first write on
         // load -- keeps its #fragment, which is a
@@ -2742,6 +2744,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     openCIRunId,
     openSessionId,
     settingsSection,
+    settingsAnchor,
     settingsItem,
     systemTab,
     metricsNarrowing,
@@ -2826,6 +2829,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
       // as well as in and out of the views, since both are in the path.
       setSettingsSection(parsed.settingsSection || "");
       setSettingsItem(parsed.settingsItem || "");
+      setSettingsAnchor(
+        parsed.view === "settings" && window.location.hash
+          ? decodeURIComponent(window.location.hash.slice(1))
+          : "",
+      );
       setSystemTab(parsed.systemTab || "");
       // Back out of a scoped report is how that scope is undone, exactly
       // as it is for a narrowed list above.
