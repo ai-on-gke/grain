@@ -379,3 +379,45 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 		}
 	})
 }
+
+func TestRunDispatchCycleParksTasksOffTheTargetRepoList(t *testing.T) {
+	store, ctx := openStore(t)
+	restrictTo(t, ctx, store, "acme/allowed")
+
+	now := baseTime
+	target := model.RepoRef{Owner: "acme", Name: "removed"}
+	if err := store.PutTask(ctx, model.Task{
+		ID:          "off-allowlist-1",
+		Intent:      model.IntentImplement,
+		Title:       "Interactive session against removed repo",
+		Body:        "hello",
+		Interactive: true,
+		Target:      &target,
+		Origin:      model.Origin{Attribution: aliceSays, Reason: model.ReasonDirect},
+		Approval:    &aliceSays,
+		CreatedAt:   &now,
+	}); err != nil {
+		t.Fatalf("PutTask: %v", err)
+	}
+
+	ag := &recordingSessionAgent{}
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  orchestrator.NewHostSandboxes(t.TempDir()),
+		Framework:  orchestrator.StaticFramework(ag),
+		MaxWorkers: 1,
+	}
+	if err := orchestrator.RunDispatchCycle(ctx, deps, now.Add(time.Second)); err != nil {
+		t.Fatalf("RunDispatchCycle: %v", err)
+	}
+	if len(ag.configs) != 0 {
+		t.Fatalf("RunDispatchCycle dispatched %d runs for off-allowlist repo, want 0", len(ag.configs))
+	}
+	st, err := store.State(ctx, "off-allowlist-1")
+	if err != nil {
+		t.Fatalf("State: %v", err)
+	}
+	if st != model.StateAwaitingReply {
+		t.Fatalf("State = %s, want %s (parked by reconcileTargetRepos)", st, model.StateAwaitingReply)
+	}
+}

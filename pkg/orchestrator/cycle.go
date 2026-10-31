@@ -828,10 +828,9 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 }
 
 // RunDispatchCycle runs only the local store-backed reconcilers needed to
-// admit and dispatch ready tasks (session sandboxes, ledger, console sessions,
-// wake, pauses, target repos, and dispatch), bypassing slow GitHub-bound
-// reconcilers so interactive session creations and human replies dispatch
-// within milliseconds of a wake.
+// admit and dispatch ready tasks (task pauses, pipeline pause, target repos,
+// and dispatch), bypassing slow GitHub-bound reconcilers so interactive
+// session creations and human replies dispatch within milliseconds of a wake.
 func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
 	if deps.DiskSpace != nil {
 		deps.Budget.Disk = deps.DiskSpace()
@@ -877,13 +876,25 @@ func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
 			}
 		}
 	}
-	r := Reconciler{Name: dispatchReconciler, Reconcile: reconcileDispatch}
-	rdeps := deps
-	rdeps.Client = github.WithCaller(deps.Client, r.Name)
-	if err := recoverReconcile(ctx, r, rdeps, now); err != nil {
-		return fmt.Errorf("%s: %w", r.Name, err)
+	fast := []Reconciler{
+		{Name: "task-pauses", Reconcile: reconcileTaskPauses},
+		{Name: "pause", Reconcile: reconcilePipelinePause},
+		{Name: "target-repos", Reconcile: reconcileTargetRepos},
+		{Name: dispatchReconciler, Reconcile: reconcileDispatch},
 	}
-	return nil
+	var errs []error
+	for _, r := range fast {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		rdeps := deps
+		rdeps.Client = github.WithCaller(deps.Client, r.Name)
+		if err := recoverReconcile(ctx, r, rdeps, now); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", r.Name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // recoverReconcile calls r.Reconcile and turns a panic into an error the

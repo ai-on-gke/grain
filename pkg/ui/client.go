@@ -5176,21 +5176,13 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	commentID, err := c.Store.AddComment(ctx, model.Comment{
+	if _, _, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID:    id,
 		Author:    by,
 		Body:      body,
 		CreatedAt: now,
-	})
-	if err != nil {
+	}, attachments); err != nil {
 		return err
-	}
-	for i := range attachments {
-		attachments[i].TaskID = id
-		attachments[i].CommentID = &commentID
-		if _, err := c.Store.AddAttachment(ctx, attachments[i]); err != nil {
-			return err
-		}
 	}
 
 	obs, err := c.Store.GetObservation(ctx, id)

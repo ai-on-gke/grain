@@ -121,7 +121,7 @@ func (c *Client) PostAgentMessage(ctx context.Context, id, body, summary string,
 		return Message{}, err
 	}
 	agentPrincipal := model.Principal{Kind: model.PrincipalAgent, ID: id}
-	commentID, err := c.Store.AddComment(ctx, model.Comment{
+	commentID, attIDs, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID: id,
 		Author: model.Attribution{
 			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
@@ -130,20 +130,14 @@ func (c *Client) PostAgentMessage(ctx context.Context, id, body, summary string,
 		Body:      body,
 		Summary:   summary,
 		CreatedAt: now,
-	})
+	}, attachments)
 	if err != nil {
 		return Message{}, err
 	}
 	var msgAttachments []Attachment
 	for i := range attachments {
-		attachments[i].TaskID = id
-		attachments[i].CommentID = &commentID
-		attID, err := c.Store.AddAttachment(ctx, attachments[i])
-		if err != nil {
-			return Message{}, err
-		}
 		msgAttachments = append(msgAttachments, Attachment{
-			ID:          attID,
+			ID:          attIDs[i],
 			Filename:    attachments[i].Filename,
 			ContentType: attachments[i].ContentType,
 			Size:        int64(len(attachments[i].Content)),
@@ -337,25 +331,19 @@ func (c *Client) PostMessageToAgent(ctx context.Context, from, to, body string, 
 		return Message{}, err
 	}
 	signed := fmt.Sprintf("Message from %s to this task's agent:\n\n%s", signature, body)
-	commentID, err := c.Store.AddComment(ctx, model.Comment{
+	commentID, attIDs, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID:    to,
 		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: from}},
 		Body:      signed,
 		CreatedAt: now,
-	})
+	}, attachments)
 	if err != nil {
 		return Message{}, err
 	}
 	var msgAttachments []Attachment
 	for i := range attachments {
-		attachments[i].TaskID = to
-		attachments[i].CommentID = &commentID
-		attID, err := c.Store.AddAttachment(ctx, attachments[i])
-		if err != nil {
-			return Message{}, err
-		}
 		msgAttachments = append(msgAttachments, Attachment{
-			ID:          attID,
+			ID:          attIDs[i],
 			Filename:    attachments[i].Filename,
 			ContentType: attachments[i].ContentType,
 			Size:        int64(len(attachments[i].Content)),
@@ -418,8 +406,8 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 			writeClientError(w, validationErrorf("wait_ms must be a non-negative integer"))
 			return
 		}
-		if parsed > 30000 {
-			parsed = 30000
+		if parsed > 5000 {
+			parsed = 5000
 		}
 		wait = time.Duration(parsed) * time.Millisecond
 	}

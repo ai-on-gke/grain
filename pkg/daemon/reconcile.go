@@ -208,15 +208,17 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 			}
 			defer fastTimer.Stop()
 			fastPending := false
-			runFast := func() {
+			inFlightRetry := false
+			runFast := func(allowInFlightRetry bool) {
 				lastFastWake = time.Now()
 				d := snapshotDeps()
 				hadInFlight := d.Runs != nil && d.Runs.Len() > 0
 				if err := orchestrator.RunDispatchCycle(ctx, d, time.Now().UTC()); err != nil {
 					log.Printf("grain daemon: woken dispatch cycle: %v", err)
 				}
-				if hadInFlight && !fastPending {
+				if allowInFlightRetry && hadInFlight && !fastPending {
 					fastPending = true
+					inFlightRetry = true
 					fastTimer.Reset(minWakeInterval)
 				}
 				select {
@@ -230,18 +232,22 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 					return
 				case <-wakes:
 					if fastPending {
+						inFlightRetry = false
 						continue
 					}
 					wait := max(0, minWakeInterval-time.Since(lastFastWake))
 					if wait == 0 {
-						runFast()
+						runFast(true)
 					} else {
 						fastPending = true
+						inFlightRetry = false
 						fastTimer.Reset(wait)
 					}
 				case <-fastTimer.C:
+					allowRetry := !inFlightRetry
 					fastPending = false
-					runFast()
+					inFlightRetry = false
+					runFast(allowRetry)
 				}
 			}
 		}()

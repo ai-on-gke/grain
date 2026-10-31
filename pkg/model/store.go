@@ -820,12 +820,33 @@ func newTaskID(ctx context.Context, tx *sql.Tx) (string, error) {
 // question needs, since Observation.PendingQuestionCommentID names one of
 // these.
 func (s *Store) AddComment(ctx context.Context, c Comment) (id int64, err error) {
+	id, _, err = s.AddCommentWithAttachments(ctx, c, nil)
+	return id, err
+}
+
+// AddCommentWithAttachments commits c and its attachments in a single
+// transaction and signals CommentAdded only after both are durable, so a
+// long-polling /messages reader woken by CommentAdded never observes the
+// comment before its attachments have been written.
+func (s *Store) AddCommentWithAttachments(ctx context.Context, c Comment, attachments []Attachment) (id int64, attachmentIDs []int64, err error) {
 	err = s.write(ctx, "comment on task "+c.TaskID, func(tx *sql.Tx) error {
 		id, err = addComment(ctx, tx, c)
 		if err != nil {
 			return err
 		}
-		if c.Author.Actor.Kind == PrincipalAgent {
+		if len(attachments) > 0 {
+			attachmentIDs = make([]int64, len(attachments))
+			for i := range attachments {
+				attachments[i].TaskID = c.TaskID
+				attachments[i].CommentID = &id
+				attID, err := addAttachment(ctx, tx, attachments[i])
+				if err != nil {
+					return err
+				}
+				attachmentIDs[i] = attID
+			}
+		}
+		if c.Author.Actor.Kind == PrincipalAgent || (c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.Kind == PrincipalAgent) {
 			stamp := c.CreatedAt
 			if stamp.IsZero() {
 				stamp = time.Now()
@@ -842,7 +863,7 @@ func (s *Store) AddComment(ctx context.Context, c Comment) (id int64, err error)
 	if err == nil {
 		s.signalCommentAdded(c.TaskID)
 	}
-	return id, err
+	return id, attachmentIDs, err
 }
 
 // CommentAdded returns a channel closed the next time AddComment commits
