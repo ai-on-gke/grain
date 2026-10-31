@@ -145,7 +145,6 @@ func TestEveryToolThisPackageServesHasAPhrase(t *testing.T) {
 	rosters = append(rosters, NewOpenPullRequestTools(nil)...)
 	rosters = append(rosters, NewRecreateSandboxTools(nil)...)
 	rosters = append(rosters, NewChatTools(nil, nil)...)
-	rosters = append(rosters, NewMemoryTools(nil)...)
 	rosters = append(rosters, NewTaskTools(nil)...)
 	rosters = append(rosters, NewGrainCIWaitTools(nil, CIRepoScope{})...)
 	rosters = append(rosters, NewRunCIJobTools(nil, CIRepoScope{})...)

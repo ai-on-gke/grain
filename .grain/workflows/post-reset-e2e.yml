@@ -35,8 +35,8 @@
 name: post-reset-e2e
 
 on:
-  schedule:
-    - cron: "23 5 * * *"
+  # Retired from automatic schedule triggering: ai-on-gke/grain runs
+  # post-reset-e2e on GitHub Actions (.github/workflows/post-reset-e2e.yml).
   workflow_dispatch:
 
 env:

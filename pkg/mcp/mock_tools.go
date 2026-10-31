@@ -82,6 +82,12 @@ type FiledProposal struct {
 	// work, or what the proposer's permission does not cover -- and ""
 	// for a queued one or a filer that does not say.
 	ApprovalNote string
+	// Parked is why filing parked the proposal awaiting a reply -- its
+	// repo is off the deployment's target repo list, say -- and "" for one
+	// filing did not park. A parked proposal is not dispatched whatever
+	// Queued says: Queued is its approval, and the park is a second thing
+	// standing between it and a run that only an operator lifts.
+	Parked string
 }
 
 // SupersedeKept is one dependent a supersede left where it was, and why
@@ -1115,19 +1121,45 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 // answer partly the run's own choice: a run that asked to hold a
 // proposal and is told only "unapproved" cannot tell whether its request
 // was the reason or its permission was, and so cannot say which in chat.
+//
+// A proposal filing parked (FiledProposal.Parked) is said to be parked
+// as well, and never "queued": an approved one parked on a repo off the
+// target repo list is not dispatched in its turn, and a run told it was
+// would pass that on as fact -- or, holding one, conclude its hold had
+// not worked.
 func proposalStanding(task ProposedTask, filed FiledProposal) string {
-	switch {
-	case filed.Queued:
+	if filed.Queued {
+		if filed.Parked != "" {
+			return "It is filed approved -- your own task's permission covers it -- but it is " +
+				"not queued: filing parked it awaiting a reply, and it is not dispatched until an " +
+				"operator lifts that. " + parkedReason(filed.Parked)
+		}
 		return "It is filed approved -- your own task's permission covers it -- so it is " +
 			"queued already and dispatched in its turn without anybody approving it."
+	}
+	var standing string
+	switch {
 	case filed.ApprovalNote != "":
-		return "It is filed unapproved because " + filed.ApprovalNote +
+		standing = "It is filed unapproved because " + filed.ApprovalNote +
 			". It waits until a human approves it."
 	case task.HoldForApproval:
-		return "It is filed unapproved because you asked to hold it (hold_for_approval). " +
+		standing = "It is filed unapproved because you asked to hold it (hold_for_approval). " +
 			"It waits until a human approves it."
+	default:
+		standing = "It is filed unapproved: your permission does not cover it. It waits until a human approves it."
 	}
-	return "It is filed unapproved: your permission does not cover it. It waits until a human approves it."
+	if filed.Parked != "" {
+		standing += " It is also parked awaiting a reply, and a reply alone does not approve it. " +
+			parkedReason(filed.Parked)
+	}
+	return standing
+}
+
+// parkedReason quotes the comment filing parked a proposal on, which
+// says what lifts the park in grain's own words (model.
+// OffAllowlistParkComment).
+func parkedReason(note string) string {
+	return "Parked because: " + strings.TrimSpace(note)
 }
 
 // ParseNotBefore reads propose_task's `not_before`: a bare date, taken

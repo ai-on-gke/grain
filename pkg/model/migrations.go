@@ -400,6 +400,16 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     71,
+		Description: "rewrite stored memory grants to api:memory (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"memory": "api:memory"}),
+	},
+	{
+		Version:     72,
+		Description: "rewrite stored release-notes grants to api:release-notes (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"release-notes": "api:release-notes"}),
+	},
+	{
+		Version:     73,
 		Description: "add numeric priority to task (default 5) and template",
 		Statements: []string{
 			"ALTER TABLE `task` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 5",

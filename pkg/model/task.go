@@ -2574,7 +2574,27 @@ type Run struct {
 	// *finished* run it is the only record of how far setup got before it
 	// broke (ui.Attempt.SetupNote, which is exactly that pairing).
 	AgentStartedAt *time.Time
-	Leases         []Lease
+	// QueuedAt, SandboxAcquiredAt, SandboxPreparedAt, and FirstTurnAt record
+	// the per-phase startup breakdown of this attempt (task_run_startup):
+	//   - QueuedAt -> StartedAt: queued -> dispatched
+	//   - StartedAt -> SandboxAcquiredAt: sandbox acquire
+	//   - SandboxAcquiredAt -> SandboxPreparedAt (or AgentStartedAt): prepare sandbox
+	//   - SandboxPreparedAt (or AgentStartedAt) -> FirstTurnAt: agent launch -> first turn
+	QueuedAt          *time.Time
+	SandboxAcquiredAt *time.Time
+	SandboxPreparedAt *time.Time
+	FirstTurnAt       *time.Time
+	Leases            []Lease
+}
+
+// RunStartup holds the per-phase startup timestamps for one attempt
+// (task_run_startup).
+type RunStartup struct {
+	RunID             string
+	QueuedAt          *time.Time
+	SandboxAcquiredAt *time.Time
+	SandboxPreparedAt *time.Time
+	FirstTurnAt       *time.Time
 }
 
 // RunActivity is Run.Activity and Run.ActivityAt on their own -- what a

@@ -896,8 +896,17 @@ func (c *HTTPClient) PostTaskMessage(ctx context.Context, id, body, summary stri
 // themselves rather than a "yes/no": the answer to a question is the
 // words in it.
 func (c *HTTPClient) TaskMessages(ctx context.Context, id string, after int64) ([]Message, error) {
+	return c.TaskMessagesWait(ctx, id, after, 0)
+}
+
+// TaskMessagesWait is TaskMessages with an optional server-side long-poll wait
+// so a chat turn wakes immediately when a human posts a reply.
+func (c *HTTPClient) TaskMessagesWait(ctx context.Context, id string, after int64, wait time.Duration) ([]Message, error) {
 	var messages []Message
 	path := "/api/tasks/" + id + "/messages?after=" + strconv.FormatInt(after, 10)
+	if ms := wait.Milliseconds(); ms > 0 {
+		path += "&wait_ms=" + strconv.FormatInt(ms, 10)
+	}
 	if err := c.do(ctx, http.MethodGet, path, nil, &messages); err != nil {
 		return nil, err
 	}

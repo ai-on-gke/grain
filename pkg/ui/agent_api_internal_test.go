@@ -312,6 +312,10 @@ func TestAPIPresetsExpand(t *testing.T) {
 	has("api:self-debug", "tasks:read", "deployment:read")
 	has(selfupgrade.CapabilityName, "deployment:read", "deployment:upgrade")
 	has("pipeline-control", "dispatch:write")
+	has("memory", "memory:read", "memory:write")
+	has("api:memory", "memory:read", "memory:write")
+	has("release-notes", "release-notes:read", "release-notes:write")
+	has("api:release-notes", "release-notes:read", "release-notes:write")
 	for _, p := range model.APIPresets() {
 		for _, s := range p.Scopes {
 			if _, ok := apiScopeInfo(s); !ok {

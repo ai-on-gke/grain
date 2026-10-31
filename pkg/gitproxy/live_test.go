@@ -224,6 +224,7 @@ func TestLiveCloneAndPushThroughTheWholeStack(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
+	t.Setenv("HOME", t.TempDir())
 
 	// --- the stand-in "GitHub": a bare repo served by git http-backend
 	upstreamDir := t.TempDir()
@@ -338,6 +339,7 @@ func TestLivePushToARepoOutsideTheTasksScopeIsDenied(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
+	t.Setenv("HOME", t.TempDir())
 
 	upstreamDir := t.TempDir()
 	newBareRepoWithOneCommit(t, upstreamDir, "owner", "other-repo")
