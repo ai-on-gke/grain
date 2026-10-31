@@ -61,4 +61,15 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 	if !grainserver.HasJournal([]string{grainserver.JournalGrant}) || !grainserver.HasJournal([]string{"grain-log"}) {
 		t.Fatalf("HasJournal failed to match canonical or legacy journal grant")
 	}
+
+	sqlDefault, err := model.NormalizeCapabilityNames([]string{grainserver.SQLRef}, lookup)
+	if err != nil || !slices.Equal(sqlDefault, []string{grainserver.SQLReadGrant}) {
+		t.Fatalf("NormalizeCapabilityNames(sql) = %v, %v; want [%s]", sqlDefault, err, grainserver.SQLReadGrant)
+	}
+	if model.IsDangerousGrant(grainserver.SQLReadGrant) {
+		t.Fatalf("SQLReadGrant should not be dangerous")
+	}
+	if !model.IsDangerousGrant(grainserver.SQLWriteGrant) || !model.IsPersonOnlyGrant(grainserver.SQLWriteGrant) {
+		t.Fatalf("SQLWriteGrant should be dangerous and person-only")
+	}
 }

@@ -41,7 +41,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
@@ -224,10 +223,6 @@ func OfferedCapabilities() []Capability {
 			Description: "Quarantine flaky or failing tests and file follow-up repair tasks"},
 		{ID: readissues.CapabilityName, Name: "Read issues",
 			Description: "Let this task read issues and comments from GitHub"},
-		{ID: dbaccess.CapabilityDBRead, Name: "Grain DB read",
-			Description: "Let this task execute read-only SQL queries directly against Grain's database"},
-		{ID: dbaccess.CapabilityDBWrite, Name: "Grain DB read/write",
-			Description: "Let this task execute SQL queries and statements (read and write) directly against Grain's database"},
 	}...)
 	// One row per vendor grain proxies to -- claude-proxy, openai-proxy
 	// and gemini-proxy -- written from the vendor itself rather than

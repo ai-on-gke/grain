@@ -426,6 +426,14 @@ var Migrations = []Migration{
 		Description: "rewrite stored deployment-health grants to api:deployment:read and https://grain.dev/capabilities/grain#health={} (the in-process capability is retired)",
 		Up:          rewriteLegacyGrantsMulti(map[string][]string{"deployment-health": {"api:deployment:read", GrainHealthGrant}}),
 	},
+	{
+		Version:     76,
+		Description: "rewrite stored db-read and db-write grants to https://grain.dev/capabilities/grain#sql (the in-process capabilities are retired)",
+		Up: rewriteLegacyGrants(map[string]string{
+			"db-read":  GrainSQLReadGrant,
+			"db-write": GrainSQLWriteGrant,
+		}),
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

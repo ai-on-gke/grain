@@ -339,7 +339,12 @@ import "strconv"
 // 75 rewrites stored `deployment-health` grants to `api:deployment:read` and
 // `https://grain.dev/capabilities/grain#health={}`: the in-process
 // `deployment-health` provider is retired.
-const SchemaVersion = 75
+//
+// 76 rewrites stored `db-read` and `db-write` grants to
+// `https://grain.dev/capabilities/grain#sql={"write":false}` and
+// `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
+// `db-read` and `db-write` providers are retired.
+const SchemaVersion = 76
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

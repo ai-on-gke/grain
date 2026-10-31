@@ -619,10 +619,16 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 		}
 		return nil
 	}
+	if canonical := model.CanonicalLegacyGrant(name); canonical != name && model.IsCapabilityRef(canonical) {
+		name = canonical
+	}
 	// APIGrantsOf reads an alias (self-upgrade) as the preset it now is,
 	// which ParseAPIGrant alone does not.
 	if slices.ContainsFunc(APIGrantsOf([]string{name}).Scopes(), IsDangerousAPIScope) || model.IsDangerousAPIGrant(name) {
 		return fmt.Errorf("%s is a dangerous api grant: only a person may grant it", name)
+	}
+	if model.IsDangerousGrant(name) {
+		return fmt.Errorf("%s is a dangerous grant: only a person may grant it", name)
 	}
 	// priority-dispatch lets a task jump the queue, so it is a person's
 	// to give even to an agent whose own task holds it.

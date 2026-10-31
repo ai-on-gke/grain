@@ -49,6 +49,12 @@ const (
 
 	// LegacyDeploymentHealth is the retired in-process capability name for api:deployment:read + HealthGrant.
 	LegacyDeploymentHealth = "deployment-health"
+
+	// SQLMethod lets a task run SQL against Grain's database (formerly db-read / db-write).
+	SQLMethod     = model.GrainSQLMethod
+	SQLRef        = model.GrainSQLRef
+	SQLReadGrant  = model.GrainSQLReadGrant
+	SQLWriteGrant = model.GrainSQLWriteGrant
 )
 
 var (
@@ -82,7 +88,29 @@ func buildServer() *protocol.Server {
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building #%s: %v", HealthMethod, err))
 	}
-	cs, err := protocol.NewCapabilityServer("grain", journal, health)
+	sqlMethod, err := protocol.NewMethod(protocol.MethodSpec{
+		Name: SQLMethod,
+		Description: "Execute SQL against Grain's database: read-only queries by default " +
+			"(write: false), or read and write statements when write: true (dangerous).",
+		Args: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"write": map[string]any{
+					"type":        "boolean",
+					"default":     false,
+					"description": "Allow write statements (INSERT, UPDATE, DELETE, DDL) as well as read-only SQL queries.",
+				},
+			},
+		},
+		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
+			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
+		},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building #%s: %v", SQLMethod, err))
+	}
+	cs, err := protocol.NewCapabilityServer("grain", journal, health, sqlMethod)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building capability server: %v", err))
 	}
@@ -136,7 +164,7 @@ func Status() servers.Status {
 func Lookup(fallback protocol.Lookup) protocol.Lookup {
 	return func(capabilityID string) (*protocol.Server, error) {
 		if capabilityID == ID {
-			return Server(), nil
+			return buildServer(), nil
 		}
 		if fallback != nil {
 			return fallback(capabilityID)
@@ -169,3 +197,15 @@ func IsHealthGrant(grant string) bool { return model.IsGrainHealthGrant(grant) }
 
 // HasHealth reports whether any grant in grants opens grain#health.
 func HasHealth(grants []string) bool { return model.HasGrainHealth(grants) }
+
+// IsSQLGrant reports whether grant names grain#sql (read or write) or a retired db-read/db-write alias.
+func IsSQLGrant(grant string) bool { return model.IsGrainSQLGrant(grant) }
+
+// IsSQLWriteGrant reports whether grant names grain#sql with write: true or the retired db-write alias.
+func IsSQLWriteGrant(grant string) bool { return model.IsGrainSQLWriteGrant(grant) }
+
+// HasSQL reports whether any grant in grants opens grain#sql (read or write).
+func HasSQL(grants []string) bool { return model.HasGrainSQL(grants) }
+
+// HasSQLWrite reports whether any grant in grants opens grain#sql with write: true.
+func HasSQLWrite(grants []string) bool { return model.HasGrainSQLWrite(grants) }

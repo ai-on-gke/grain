@@ -4587,6 +4587,9 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		case "db-read", "db-write":
 			mayReadDB = true
 		}
+		if IsGrainSQLGrant(name) {
+			mayReadDB = true
+		}
 		// An api grant limited to one repository is spelt
 		// api:<scope-or-preset>@owner/repo (ParseAPIGrant); a name that
 		// does not parse as one grants nothing here, as it grants no

@@ -34,7 +34,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
@@ -53,8 +52,8 @@ var everyToolGrant = []string{
 	selfupgrade.CapabilityName,
 	grainci.CapabilityName,
 	readissues.CapabilityName,
-	dbaccess.CapabilityDBRead,
-	dbaccess.CapabilityDBWrite,
+	`https://grain.dev/capabilities/grain#sql={"write":false}`,
+	`https://grain.dev/capabilities/grain#sql={"write":true}`,
 }
 
 func TestMCPServerAdvertisesNothingUnpublished(t *testing.T) {

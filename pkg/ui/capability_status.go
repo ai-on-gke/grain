@@ -298,8 +298,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"priority-dispatch":   "Priority dispatch",
 	"durable":             "Durable",
 	"read-issues":         "Read issues",
-	"db-read":             "Grain DB read",
-	"db-write":            "Grain DB read/write",
 })
 
 // withModelProxyDisplayNames adds one row per vendor's proxy capability

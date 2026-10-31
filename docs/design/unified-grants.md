@@ -194,7 +194,7 @@ per-capability list, with what each one becomes:
 | `team-broadcast` | `…/api#teams:broadcast` (new scope), preset `team-broadcast` | **done** (task 2004): provider and `broadcast_team_message` removed, stored grants rewritten to `api:team-broadcast` by schema migration 67 |
 | `bootstrap-playbooks` | `…/skill#skill` `{dir: bootstrap}` | existing server method |
 | `console` | stays a task setting, not a grant (it changes how the run is hosted, not what it may reach) | moved out of grants (Q8) |
-| `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | new method, `write: true` dangerous |
+| `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | **done** (task 2037): providers removed, `https://grain.dev/capabilities/grain#sql` (`{write: bool}`, with `write: true` dangerous) added on the in-process `…/grain` server, stored grants rewritten to `https://grain.dev/capabilities/grain#sql={"write":false}` / `{"write":true}` by schema migration 76 |
 | `grain-ci` | `…/grain#ci` | new method |
 | `image-signing`, `registry-push`, `package-publish` (CI) | `…/release#image-signing`, `…/release#registry-push`, `…/release#package-publish` | new in-process server `…/release` |
 | `corp-research` (google build) | a `…/corp#research` method registered by the google build through the same `capability.Register` seam | contributed server method |

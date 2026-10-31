@@ -24,7 +24,6 @@ package admincaps
 
 import (
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
@@ -58,8 +57,6 @@ func Providers() []model.CapabilityProvider {
 		selfdebug.NewWithConfig(selfdebug.Config{}),
 		selfrepair.NewWithConfig(selfrepair.Config{}),
 		selfupgrade.NewWithConfig(selfupgrade.ProviderConfig{}),
-		dbaccess.NewReadProviderWithConfig(dbaccess.Config{}),
-		dbaccess.NewWriteProviderWithConfig(dbaccess.Config{}),
 	}
 	for _, r := range capability.Registered() {
 		providers = append(providers, r.New())

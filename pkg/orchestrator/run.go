@@ -1523,6 +1523,9 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	if grainserver.HasHealth(names) || apiSet.Has("deployment:read") {
 		held["deployment-health"] = true
 	}
+	if grainserver.HasSQL(names) {
+		held["db-read"] = true
+	}
 	var b strings.Builder
 	for _, c := range grainCLIGrants {
 		if held[c.grant] {
@@ -4179,6 +4182,7 @@ var toolGrants = []string{
 	grainci.CapabilityName, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant, selfupgrade.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
+	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
 
 // runGrants is the subset of toolGrants task holds, which is what a

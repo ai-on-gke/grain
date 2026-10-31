@@ -19,6 +19,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // The agent API's scope vocabulary (docs/agent-api.md). pkg/ui holds
@@ -182,7 +184,21 @@ const (
 
 	GrainHealthRef   = GrainCapabilityServerID + "#health"
 	GrainHealthGrant = GrainHealthRef + "={}"
+
+	GrainSQLMethod     = "sql"
+	GrainSQLRef        = GrainCapabilityServerID + "#" + GrainSQLMethod
+	GrainSQLReadGrant  = GrainSQLRef + `={"write":false}`
+	GrainSQLWriteGrant = GrainSQLRef + `={"write":true}`
 )
+
+func init() {
+	protocol.SetGrantPolicy(GrainCapabilityServerID, GrainSQLMethod, func(args map[string]any) protocol.GrantKind {
+		if w, _ := args["write"].(bool); w {
+			return protocol.GrantByPerson
+		}
+		return protocol.GrantCovered
+	})
+}
 
 // IsGrainJournalGrant reports whether grant names grain#journal (recorded or
 // bare) or the retired bare grain-log alias.
@@ -214,6 +230,51 @@ func HasGrainHealth(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainHealthGrant)
 }
 
+// ParseGrainSQLGrant reports whether grant names grain#sql (recorded or bare)
+// or the retired bare db-read / db-write aliases, and whether it allows writes.
+func ParseGrainSQLGrant(grant string) (ok bool, write bool) {
+	s := strings.TrimSpace(grant)
+	switch s {
+	case "db-read":
+		return true, false
+	case "db-write":
+		return true, true
+	}
+	if !IsCapabilityRef(s) {
+		return false, false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil || spec.Capability != GrainSQLRef {
+		return false, false
+	}
+	w, _ := spec.With["write"].(bool)
+	return true, w
+}
+
+// IsGrainSQLGrant reports whether grant names grain#sql (read or write) or a
+// retired db-read / db-write alias.
+func IsGrainSQLGrant(grant string) bool {
+	ok, _ := ParseGrainSQLGrant(grant)
+	return ok
+}
+
+// IsGrainSQLWriteGrant reports whether grant names grain#sql with write: true
+// or the retired db-write alias.
+func IsGrainSQLWriteGrant(grant string) bool {
+	ok, write := ParseGrainSQLGrant(grant)
+	return ok && write
+}
+
+// HasGrainSQL reports whether any grant in grants opens grain#sql (read or write).
+func HasGrainSQL(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainSQLGrant)
+}
+
+// HasGrainSQLWrite reports whether any grant in grants opens grain#sql with write: true.
+func HasGrainSQLWrite(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainSQLWriteGrant)
+}
+
 // legacyGrantReplacements are the bare capabilities converted to api or
 // capability-server grants (docs/design/unified-grants.md §4) whose
 // in-process provider is gone: each is written as its replacement wherever a
@@ -228,6 +289,8 @@ var legacyGrantReplacements = map[string]string{
 	"memory":           APIGrantPrefix + "memory",
 	"release-notes":    APIGrantPrefix + "release-notes",
 	"grain-log":        GrainJournalGrant,
+	"db-read":          GrainSQLReadGrant,
+	"db-write":         GrainSQLWriteGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into

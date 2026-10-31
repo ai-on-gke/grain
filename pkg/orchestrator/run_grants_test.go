@@ -74,9 +74,10 @@ func runWithGrants(t *testing.T, grants []model.Grant, sourceDir string) ([]stri
 	framework := &grantCapturingFramework{}
 	deps := orchestrator.Deps{
 		Store: store, Client: client, Sandboxes: orchestrator.NewHostSandboxes(t.TempDir()),
-		Framework:  orchestrator.StaticFramework(framework),
-		Config:     orchestrator.Config{GrainSourceDir: sourceDir},
-		MaxWorkers: 1,
+		Framework:        orchestrator.StaticFramework(framework),
+		Config:           orchestrator.Config{GrainSourceDir: sourceDir},
+		CapabilityPasses: orchestrator.NewCapabilityPasses(),
+		MaxWorkers:       1,
 	}
 	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
 		t.Fatalf("RunCycle: %v", err)
@@ -178,6 +179,8 @@ func TestRunCycleForwardsAllKnownToolGrants(t *testing.T) {
 		model.GrainJournalGrant,
 		deploymenthealth.CapabilityName,
 		model.GrainHealthGrant,
+		model.GrainSQLReadGrant,
+		model.GrainSQLWriteGrant,
 		bootstrap.CapabilityName,
 		selfupgrade.CapabilityName,
 		grainci.CapabilityName,

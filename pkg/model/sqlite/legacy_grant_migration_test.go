@@ -90,6 +90,8 @@ var retiredGrants = []struct {
 	{72, "release-notes", []string{"api:release-notes"}},
 	{74, "grain-log", []string{model.GrainJournalGrant}},
 	{75, "deployment-health", []string{"api:deployment:read", model.GrainHealthGrant}},
+	{76, "db-read", []string{model.GrainSQLReadGrant}},
+	{76, "db-write", []string{model.GrainSQLWriteGrant}},
 }
 
 // Each retiring migration rewrites every stored grant of its capability

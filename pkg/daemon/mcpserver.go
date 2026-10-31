@@ -1363,6 +1363,7 @@ var servedGrants = []string{
 	selfupgrade.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
+	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -1457,14 +1458,14 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 			Confirm:    confirm,
 		})...)
 	}
-	if grants.Has(dbaccess.CapabilityDBRead) || grants.Has(dbaccess.CapabilityDBWrite) {
+	if grainserver.HasSQL(grants) {
 		var executor dbaccess.DBExecutor
 		if client != nil {
 			executor = daemonDB{client: client, taskID: taskID}
 		}
 		tools = append(tools, dbaccess.Tools(dbaccess.Config{
 			TaskID:     taskID,
-			AllowWrite: grants.Has(dbaccess.CapabilityDBWrite),
+			AllowWrite: grainserver.HasSQLWrite(grants),
 			Executor:   executor,
 		})...)
 	}
