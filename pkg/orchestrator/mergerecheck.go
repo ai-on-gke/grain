@@ -368,6 +368,10 @@ func singleMergeRecheck(ctx context.Context, store *model.Store, client github.C
 	if out.mode != model.MergeRecheckEnforce || !v.trigger {
 		return out, nil
 	}
+	if e.obs != nil && e.obs.MergeQueueBlockedAt != nil {
+		out.held = "blocked"
+		return out, nil
+	}
 	if requiresGitHubQueue(repo, branch) {
 		return out, nil
 	}
@@ -463,6 +467,13 @@ func advanceMergeRecheck(ctx context.Context, deps Deps, row model.MergeBatch, n
 		errs = append(errs, dropRecheckRef(deps, row))
 		errs = append(errs, clearRecheckState(ctx, deps, m.TaskID, now))
 		errs = append(errs, sendRecheckFailureBack(ctx, deps, row, m, now))
+		errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch))
+		return errors.Join(errs...)
+	case row.Conclusion == string(ci.ConclusionErrored):
+		var errs []error
+		errs = append(errs, dropRecheckRef(deps, row))
+		errs = append(errs, clearRecheckState(ctx, deps, m.TaskID, now))
+		errs = append(errs, blockErroredMergeRecheck(ctx, deps, row, m, now))
 		errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch))
 		return errors.Join(errs...)
 	default:
@@ -601,6 +612,45 @@ func sendRecheckFailureBack(ctx context.Context, deps Deps, row model.MergeBatch
 	return observeField(ctx, deps.Store, m.TaskID, now, func(o *model.Observation) {
 		markRepairAsked(o, now, row.BaseCommit, failures, why)
 	})
+}
+
+// blockErroredMergeRecheck hands m's pull request to a person when its
+// overlap re-check run concludes errored without judging the tree -- for
+// instance when no workflow in the repository answers pull_request on the
+// merge-queue ref, or when no sandbox could be acquired. Discarding the row
+// silently would fall straight back into startMergeRecheck on the same and
+// every subsequent sync cycle, spinning in an unbounded CI loop; sending it
+// to sendRecheckFailureBack would spend an automatic agent repair on a
+// verdict that says nothing about the branch's code.
+func blockErroredMergeRecheck(ctx context.Context, deps Deps, row model.MergeBatch,
+	m model.MergeBatchMember, now time.Time) error {
+
+	detail := row.Detail
+	if detail == "" {
+		detail = "grain CI could not run"
+	}
+	body := fmt.Sprintf("The merge queue tried to re-check this change on top of `%s` at %s -- "+
+		"grain CI against `%s`, which is `%s` with this change merged into it and nothing else -- "+
+		"and the run errored without reaching a verdict about the tree: %s\n\n"+
+		"Nothing here says the branch is broken, so no automatic repair was spent. The queue has "+
+		"handed this pull request to a person and moved on to the rest of %s: once what stopped "+
+		"grain CI from running has been resolved, press \"Retry merge\" to run the check again.",
+		row.Branch, shortSHA(row.BaseCommit), row.Ref, row.Branch, detail, row.Repo)
+	if err := observeField(ctx, deps.Store, m.TaskID, now, func(o *model.Observation) {
+		if o.CI != nil && o.CI.Commit == m.HeadSHA {
+			o.CI.Conclusion = row.Conclusion
+			o.CI.Detail = detail
+			o.CI.FinishedAt = row.FinishedAt
+			if o.CI.Attempts < ciMaximumAttempts {
+				o.CI.Attempts = ciMaximumAttempts
+			}
+		}
+	}); err != nil {
+		return err
+	}
+	reason := fmt.Sprintf("grain CI could not run its overlap re-check on top of %s (%s)",
+		row.Branch, detail)
+	return blockMergeQueueAgainst(ctx, deps.Store, m.TaskID, body, reason, row.BaseCommit, now)
 }
 
 func startMergeRecheck(ctx context.Context, deps Deps, repo model.RepoRef, branch string,
