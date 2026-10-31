@@ -400,8 +400,8 @@ var routeQueries = map[string]map[string]string{
 		"limit":  "At most this many tasks: the newest by filing time, listed oldest first.",
 		"fields": "summary for id, title, state, repo, createdAt, blockedBy and stall only -- no description; use it when the full records are not needed.",
 	},
-	"GET /api/tasks/states":                     {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
-	"GET /api/states":                           {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
+	"GET /api/tasks/states": {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
+	"GET /api/states":       {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
 	"GET /api/tasks/{id}/messages": {
 		"after":   "Only messages after this comment id.",
 		"agents":  "true to include other tasks' runs' messages to this task's agent (POST /api/tasks/{id}/agent-messages).",

@@ -126,7 +126,7 @@ type MetricsReport struct {
 	InteractiveStartup []MetricsStage `json:"interactiveStartup,omitempty"`
 	BatchStartup       []MetricsStage `json:"batchStartup,omitempty"`
 	Runs               MetricsRuns    `json:"runs"`
-	Backlog MetricsBacklog `json:"backlog"`
+	Backlog            MetricsBacklog `json:"backlog"`
 	// Cycles sits beside Runs because it answers the question Runs
 	// raises. Runs.Utilization says whether the deployment was full;
 	// this says what the tick itself cost regardless -- the two together
