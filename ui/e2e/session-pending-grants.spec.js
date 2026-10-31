@@ -122,7 +122,9 @@ test("active session parameters and permissions remain editable in ConsoleSessio
 }) => {
   const taskID = await directorTaskID(request);
   expect(taskID).toBeTruthy();
-  const initialSessions = (await (await request.get("/api/console-sessions")).json()).sessions;
+  const initialSessions = (
+    await (await request.get("/api/console-sessions")).json()
+  ).sessions;
   const initialDirector = initialSessions.find((s) => s.id === "director");
   const createRes = await request.post("/api/tasks", {
     data: {
@@ -155,21 +157,27 @@ test("active session parameters and permissions remain editable in ConsoleSessio
     await netSelect.selectOption("none");
     await expect
       .poll(async () => {
-        const { sessions } = await (await request.get("/api/console-sessions")).json();
+        const { sessions } = await (
+          await request.get("/api/console-sessions")
+        ).json();
         return sessions.find((s) => s.id === "director")?.networkAccess;
       })
       .toBe("none");
 
     // Check task detail sidebar for the interactive session task
     await page.goto(`/tasks/${chatTask.id}`);
-    const fieldset = page.locator("fieldset", { hasText: "Session parameters" });
+    const fieldset = page.locator("fieldset", {
+      hasText: "Session parameters",
+    });
     await expect(fieldset).toBeVisible();
     const sidebarNet = fieldset.locator('select[name="networkAccess"]');
     await expect(sidebarNet).toBeEnabled();
     await sidebarNet.selectOption("none");
     await expect
       .poll(async () => {
-        const updated = await (await request.get(`/api/tasks/${chatTask.id}`)).json();
+        const updated = await (
+          await request.get(`/api/tasks/${chatTask.id}`)
+        ).json();
         return updated.networkAccess;
       })
       .toBe("none");
@@ -179,7 +187,9 @@ test("active session parameters and permissions remain editable in ConsoleSessio
       const fsBox = await fieldset.boundingBox();
       const netBox = await sidebarNet.boundingBox();
       expect(netBox.x).toBeGreaterThanOrEqual(fsBox.x);
-      expect(netBox.x + netBox.width).toBeLessThanOrEqual(fsBox.x + fsBox.width + 1);
+      expect(netBox.x + netBox.width).toBeLessThanOrEqual(
+        fsBox.x + fsBox.width + 1,
+      );
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= window.innerWidth,
