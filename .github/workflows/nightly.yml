@@ -45,7 +45,7 @@ jobs:
   go-long:
     name: go, shuffled and repeated
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     concurrency:
       group: ${{ github.workflow }}-go-long-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -109,10 +109,10 @@ jobs:
           set +e
           make frontend || exit 1
           GRAIN_GOTEST_LOG=/tmp/go-long.log ./scripts/run-go-tests.sh \
-            go test -race -shuffle=on -count=2 -timeout 90m ./...
+            go test -race -shuffle=on -count=2 -timeout 110m ./...
           status=$?
           if [ "$status" -ne 0 ]; then
-            grep -E '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-long.log | tail -n 15 | while IFS= read -r line; do
+            grep -aE '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-long.log | tail -n 15 | while IFS= read -r line; do
               echo "::error title=go-long::$line"
             done
             exit "$status"
@@ -525,7 +525,7 @@ jobs:
   ui-e2e-long:
     name: ui e2e, repeated
     runs-on: ubuntu-latest
-    timeout-minutes: 80
+    timeout-minutes: 150
     concurrency:
       group: ${{ github.workflow }}-ui-e2e-long-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}

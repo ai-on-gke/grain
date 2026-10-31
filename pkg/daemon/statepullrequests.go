@@ -48,6 +48,7 @@ var (
 	_ github.CheckRunWriter     = (*StateRepoPullRequestClient)(nil)
 	_ github.CallerLabeler      = (*StateRepoPullRequestClient)(nil)
 	_ github.JobLogTailer       = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
 )
 
 // WithCaller is this client with its forge requests charged to caller
@@ -1083,6 +1084,28 @@ func (c *StateRepoPullRequestClient) JobLogTail(owner, name string, jobID int64)
 		return "", nil
 	}
 	return tailer.JobLogTail(owner, name, jobID)
+}
+
+func (c *StateRepoPullRequestClient) CompletedWorkflowRuns(owner, name string, limit int) ([]github.WorkflowRun, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.WorkflowRunsReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.CompletedWorkflowRuns(owner, name, limit)
+}
+
+func (c *StateRepoPullRequestClient) ListWorkflowRunJobs(owner, name string, runID int64) ([]github.WorkflowRunJob, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.WorkflowRunsReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.ListWorkflowRunJobs(owner, name, runID)
 }
 
 func (c *StateRepoPullRequestClient) ActionsState(owner, name, headSHA string) (github.ActionsState, error) {

@@ -105,11 +105,13 @@ type Event struct {
 	// CheckOutput is the check run's output title, summary and text,
 	// bounded: what a check that is not an Actions job says instead of
 	// a log.
-	CheckOutput  string `json:"check_output,omitempty"`
-	WorkflowName string `json:"workflow_name,omitempty"`
-	WorkflowRun  int64  `json:"workflow_run_id,omitempty"`
-	RunAttempt   int    `json:"run_attempt,omitempty"`
-	FailingStep  string `json:"failing_step,omitempty"`
+	CheckOutput   string `json:"check_output,omitempty"`
+	WorkflowName  string `json:"workflow_name,omitempty"`
+	WorkflowPath  string `json:"workflow_path,omitempty"`
+	WorkflowEvent string `json:"workflow_event,omitempty"`
+	WorkflowRun   int64  `json:"workflow_run_id,omitempty"`
+	RunAttempt    int    `json:"run_attempt,omitempty"`
+	FailingStep   string `json:"failing_step,omitempty"`
 }
 
 // maxCheckOutput bounds Event.CheckOutput.
@@ -254,6 +256,24 @@ func ParsePayload(eventName, deliveryID string, raw []byte) (Event, error) {
 				break
 			}
 		}
+	} else if p.WorkflowRun != nil {
+		r := p.WorkflowRun
+		ev.WorkflowRun = r.ID
+		ev.RunAttempt = r.RunAttempt
+		if ev.RunAttempt <= 0 {
+			ev.RunAttempt = 1
+		}
+		ev.WorkflowName = clampShort(r.Name)
+		ev.WorkflowPath = clampShort(r.Path)
+		ev.WorkflowEvent = clampShort(r.Event)
+		ev.CheckStatus = clampShort(r.Status)
+		ev.CheckConclusion = clampShort(r.Conclusion)
+		ev.CheckApp = "github-actions"
+		ev.CheckStartedAt = r.RunStartedAt
+		ev.CheckCompletedAt = r.UpdatedAt
+		ev.HeadSHA = clampShort(r.HeadSHA)
+		ev.HeadRef = clampShort(r.HeadBranch)
+		ev.HTMLURL = clampShort(r.HTMLURL)
 	} else if p.CheckSuite != nil {
 		ev.CheckStatus = clampShort(p.CheckSuite.Status)
 		ev.CheckConclusion = clampShort(p.CheckSuite.Conclusion)
@@ -469,6 +489,20 @@ type rawWebhookPayload struct {
 			Conclusion string `json:"conclusion"`
 		} `json:"steps"`
 	} `json:"workflow_job"`
+	WorkflowRun *struct {
+		ID           int64      `json:"id"`
+		Name         string     `json:"name"`
+		Path         string     `json:"path"`
+		Event        string     `json:"event"`
+		RunAttempt   int        `json:"run_attempt"`
+		HeadBranch   string     `json:"head_branch"`
+		HeadSHA      string     `json:"head_sha"`
+		Status       string     `json:"status"`
+		Conclusion   string     `json:"conclusion"`
+		HTMLURL      string     `json:"html_url"`
+		RunStartedAt *time.Time `json:"run_started_at"`
+		UpdatedAt    *time.Time `json:"updated_at"`
+	} `json:"workflow_run"`
 	CheckSuite *struct {
 		HeadBranch string `json:"head_branch"`
 		HeadSHA    string `json:"head_sha"`
