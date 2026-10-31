@@ -16,6 +16,7 @@ package ui_test
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -77,7 +78,9 @@ func TestCloseAndReopenOfARunningTaskAreTransitionsWithWhoDidThem(t *testing.T) 
 		t.Fatal(err)
 	}
 	var closed, reopened *ui.Transition
+	var states []string
 	for i, tr := range detail.Transitions {
+		states = append(states, string(tr.State))
 		switch tr.State {
 		case model.StateClosed:
 			if closed != nil {
@@ -87,6 +90,9 @@ func TestCloseAndReopenOfARunningTaskAreTransitionsWithWhoDidThem(t *testing.T) 
 		case model.TransitionReopened:
 			reopened = &detail.Transitions[i]
 		}
+	}
+	if got, want := strings.Join(states, " "), "proposed queued running closed reopened"; got != want {
+		t.Fatalf("transition states = %q, want %q", got, want)
 	}
 	if closed == nil || reopened == nil {
 		t.Fatalf("transitions = %+v, want a closed and a reopened step", detail.Transitions)
@@ -169,5 +175,30 @@ func TestPipelineChangesListEveryAttempt(t *testing.T) {
 	want := "filed@0s running@1h0m0s ended@1h30m0s running@2h0m0s ended@2h30m0s"
 	if strings.Join(got, " ") != want {
 		t.Fatalf("changes = %s, want %s", strings.Join(got, " "), want)
+	}
+}
+
+func TestAgentCloseAndReopenRecordActingReasonHeader(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	srv := ui.NewServerWithClient(client)
+	seedAPITask(t, client, "901", "acme/widgets", "api:tasks:write")
+	task := create(t, client, ctx)
+
+	client.Now = func() time.Time { return baseTime.Add(10 * time.Minute) }
+	if code, body := asAgent(t, srv, "901", http.MethodPost, "/api/tasks/"+task.ID+"/close", "", "duplicate of 42"); code != http.StatusOK {
+		t.Fatalf("close: %d %s", code, body)
+	}
+	client.Now = func() time.Time { return baseTime.Add(11 * time.Minute) }
+	if code, body := asAgent(t, srv, "901", http.MethodPost, "/api/tasks/"+task.ID+"/reopen", "", "not a duplicate"); code != http.StatusOK {
+		t.Fatalf("reopen: %d %s", code, body)
+	}
+
+	events, err := store.TaskEvents(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Reason != "duplicate of 42" || events[1].Reason != "not a duplicate" {
+		t.Fatalf("events = %+v, want close and reopen carrying ActingReasonHeader", events)
 	}
 }

@@ -6196,6 +6196,12 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	}
 	now := c.now()
 	by := c.actor(ctx)
+	eventReason := strings.TrimSpace(opts.Reason)
+	if eventReason == "" {
+		if call, ok := agentCallFromContext(ctx); ok {
+			eventReason = call.reason
+		}
+	}
 	// The live run is read before the close is written: the orchestrator
 	// cancels it as soon as it sees the closure, and the event says so.
 	var liveRun *model.Run
@@ -6226,7 +6232,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	if !closed {
 		if changed {
 			c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventReopened, At: now,
-				By: by, Reason: strings.TrimSpace(opts.Reason)})
+				By: by, Reason: eventReason})
 		}
 		return nil
 	}
@@ -6254,7 +6260,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	}
 	if changed {
 		c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventClosed, At: now,
-			By: by, Reason: strings.TrimSpace(opts.Reason), Detail: closeCancelled(liveRun, cancelledCI)})
+			By: by, Reason: eventReason, Detail: closeCancelled(liveRun, cancelledCI)})
 	}
 	// After the close is written, not before: the note says the task *is*
 	// closed, and a note left in front of a close that then failed would

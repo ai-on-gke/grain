@@ -171,7 +171,12 @@ func (s *Store) RunSpansSince(ctx context.Context, since time.Time) ([]RunSpan, 
 // same close (to within the second either store keeps), so it replaces
 // that step rather than standing beside it;
 // a ClosedAt nothing recorded (one of grain's own closes, or one from
-// before task_event existed) keeps its unattributed step.
+// before task_event existed) keeps its unattributed step. An inferred
+// requeue (Transitions places one at the finish of a run when a later run
+// or the current open state proves the task returned to the queue) that
+// falls while the task was closed is the cancelled run finishing inside
+// that closure: the reopen that ended the closure is the moment the task
+// actually came back, so the inferred step is dropped in its favour.
 func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 	if len(events) == 0 {
 		return ts
@@ -184,9 +189,29 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 		}
 		return false
 	}
+	whileClosed := func(at time.Time) bool {
+		var closedAt *time.Time
+		for i := range events {
+			switch events[i].Kind {
+			case TaskEventClosed:
+				if closedAt == nil {
+					closedAt = &events[i].At
+				}
+			case TaskEventReopened:
+				if closedAt != nil && !at.Before(closedAt.Add(-time.Second)) && !at.After(events[i].At) {
+					return true
+				}
+				closedAt = nil
+			}
+		}
+		return closedAt != nil && !at.Before(closedAt.Add(-time.Second))
+	}
 	out := make([]Transition, 0, len(ts)+len(events))
 	for _, t := range ts {
 		if t.State == StateClosed && recorded(t.At) {
+			continue
+		}
+		if t.State == StateQueued && t.Inferred && whileClosed(t.At) {
 			continue
 		}
 		out = append(out, t)
