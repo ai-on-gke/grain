@@ -45,9 +45,13 @@ jobs:
   go-long:
     name: go, shuffled and repeated
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     concurrency:
-      group: ${{ github.workflow }}-go-long-${{ github.ref }}
+      group: ${{ github.workflow }}-go-long-${{ matrix.shard }}-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
     steps:
       - name: Checkout
@@ -91,11 +95,46 @@ jobs:
         run: |
           sudo systemctl stop postgresql 2>/dev/null || true
           sudo systemctl disable postgresql 2>/dev/null || true
+          sudo rm -rf /usr/lib/postgresql
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             bubblewrap expect zstd socat psmisc iproute2 iptables shellcheck
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.yama.ptrace_scope=0 || true
+          tmpsrc="$(mktemp -d)"
+          cat >"$tmpsrc/main.go" <<'EOF'
+          package main
+
+          import (
+          	"os"
+          	"strconv"
+          	"strings"
+          	"time"
+          )
+
+          func main() {
+          	for _, arg := range os.Args[1:] {
+          		if strings.HasPrefix(arg, "-") {
+          			continue
+          		}
+          		if d, err := time.ParseDuration(arg); err == nil {
+          			time.Sleep(d)
+          			continue
+          		}
+          		s := strings.TrimSuffix(arg, "s")
+          		if v, err := strconv.ParseFloat(s, 64); err == nil {
+          			time.Sleep(time.Duration(v * float64(time.Second)))
+          		}
+          	}
+          }
+          EOF
+          CGO_ENABLED=0 go build -o "$tmpsrc/sleep" "$tmpsrc/main.go"
+          sudo rm -f /usr/local/bin/sleep /usr/bin/sleep
+          sudo cp -f "$tmpsrc/sleep" /usr/local/bin/sleep
+          sudo cp -f "$tmpsrc/sleep" /usr/bin/sleep
+          sudo chmod 0755 /usr/local/bin/sleep /usr/bin/sleep
+          rm -rf "$tmpsrc"
           sudo git config --system user.name "grain-ci"
           sudo git config --system user.email "grain-ci@example.com"
           git config --global user.name "grain-ci"
@@ -108,15 +147,71 @@ jobs:
         run: |
           set +e
           make frontend || exit 1
+          case "${{ matrix.shard }}" in
+            1)
+              PKGS="./pkg/ui/... ./cmd/grain/... ./ui/e2e/..."
+              ;;
+            2)
+              PKGS="./tests/e2e/... ./tests/deploy/..."
+              ;;
+            3)
+              PKGS="./pkg/orchestrator/... ./pkg/model/... ./pkg/staterepo/... ./tests/security/..."
+              ;;
+            4)
+              PKGS="$(go list ./... | grep -vE '^github\.com/ai-on-gke/grain/(pkg/ui|cmd/grain|ui/e2e|tests/e2e|tests/deploy|pkg/orchestrator|pkg/model|pkg/staterepo|tests/security)(/|$)' | tr '\n' ' ')"
+              ;;
+          esac
           GRAIN_GOTEST_LOG=/tmp/go-long.log ./scripts/run-go-tests.sh \
-            go test -race -shuffle=on -count=2 -timeout 110m ./...
-          status=$?
+            go test -race -shuffle=on -count=2 -timeout 80m $PKGS | tee /tmp/go-long.out
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-long.log | tail -n 10 | while IFS= read -r line; do
-              echo "::error title=go-long::$line"
-            done
+            python3 - /tmp/go-long.out go-long <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          emitted = 0
+          for header in ("=== failing tests ===", "=== panics ===", "=== data races ==="):
+              if header in text:
+                  sec = text.split(header, 1)[1].split("=== per-package results ===", 1)[0]
+                  blocks, cur = [], []
+                  for line in sec.splitlines():
+                      if line.startswith("=== ") and line.endswith(" ==="):
+                          break
+                      if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                          if cur:
+                              blocks.append(" | ".join(cur)[:900])
+                          cur = [line.strip()]
+                      elif line.strip():
+                          cur.append(line.strip())
+                  if cur:
+                      blocks.append(" | ".join(cur)[:900])
+                  for b in blocks[:9]:
+                      print(f"::error title={title}::{b}")
+                      emitted += 1
+          if emitted == 0 and "=== per-package results ===" in text:
+              sec = text.split("=== per-package results ===", 1)[1]
+              for line in sec.splitlines():
+                  if line.strip().startswith("FAIL"):
+                      print(f"::error title={title}::{line.strip()}")
+                      emitted += 1
+          sys.exit(0 if emitted > 0 else 1)
+          PY
+            if [ "$?" -ne 0 ]; then
+              grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-long.log | tail -n 10 | while IFS= read -r line; do
+                echo "::error title=go-long::$line"
+              done
+            fi
             exit "$status"
           fi
+
+      - name: Upload go-long test log
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: go-long-log-${{ matrix.shard }}
+          path: /tmp/go-long.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   staterepo-soak:
     name: state repository soak
@@ -227,7 +322,16 @@ jobs:
         run: ./scripts/warm-npm-cache.sh ui
 
       - name: Load test
-        run: make loadtest
+        run: |
+          set +e
+          make loadtest 2>&1 | tee /tmp/loadtest.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/loadtest.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=loadtest::$line"
+            done
+            exit "$status"
+          fi
 
   scalability:
     name: metadata and model scalability
@@ -289,7 +393,16 @@ jobs:
         run: ./scripts/warm-npm-cache.sh ui
 
       - name: Scalability limits test
-        run: make scalability
+        run: |
+          set +e
+          make scalability 2>&1 | tee /tmp/scalability.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/scalability.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=scalability::$line"
+            done
+            exit "$status"
+          fi
 
   merge-stress:
     name: merge liveness stress
@@ -334,7 +447,16 @@ jobs:
           git --version
 
       - name: Merge liveness stress
-        run: make merge-stress
+        run: |
+          set +e
+          make merge-stress 2>&1 | tee /tmp/merge-stress.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/merge-stress.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=merge-stress::$line"
+            done
+            exit "$status"
+          fi
 
   long-term-test:
     name: end-to-end long term tests
@@ -379,7 +501,16 @@ jobs:
           git --version
 
       - name: End-to-end long term test
-        run: make long-term-test
+        run: |
+          set +e
+          make long-term-test 2>&1 | tee /tmp/long-term-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/long-term-test.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=long-term-test::$line"
+            done
+            exit "$status"
+          fi
 
   long-sim:
     name: long randomized cluster simulation
@@ -424,7 +555,16 @@ jobs:
           git --version
 
       - name: Long randomized cluster simulation
-        run: make long-sim
+        run: |
+          set +e
+          make long-sim 2>&1 | tee /tmp/long-sim.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/long-sim.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=long-sim::$line"
+            done
+            exit "$status"
+          fi
 
   postgres-stress:
     name: postgres concurrency and stress
@@ -488,7 +628,16 @@ jobs:
       - name: Postgres stress
         env:
           GRAIN_REQUIRE_POSTGRES: "1"
-        run: make postgres-stress
+        run: |
+          set +e
+          make postgres-stress 2>&1 | tee /tmp/postgres-stress.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/postgres-stress.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=postgres-stress::$line"
+            done
+            exit "$status"
+          fi
 
   tunnel-stress:
     name: reverse tunnel multiplexer stress
@@ -520,14 +669,27 @@ jobs:
           cache: false
 
       - name: Tunnel stress test
-        run: make tunnel-stress
+        run: |
+          set +e
+          make tunnel-stress 2>&1 | tee /tmp/tunnel-stress.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/tunnel-stress.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=tunnel-stress::$line"
+            done
+            exit "$status"
+          fi
 
   ui-e2e-long:
     name: ui e2e, repeated
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        pass: [1, 2, 3]
     concurrency:
-      group: ${{ github.workflow }}-ui-e2e-long-${{ github.ref }}
+      group: ${{ github.workflow }}-ui-e2e-long-${{ matrix.pass }}-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
     steps:
       - name: Checkout
@@ -582,13 +744,25 @@ jobs:
         run: ./scripts/warm-npm-cache.sh ui
 
       - name: Repeated e2e
-        run: make test-e2e-long
+        run: |
+          set +e
+          echo "=== Playwright e2e pass ${{ matrix.pass }} of 3 ==="
+          make frontend || exit 1
+          make playwright-browsers || exit 1
+          make test-e2e-suite 2>&1 | tee /tmp/ui-e2e-long.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '[0-9]+\) \[|Error:|failed' /tmp/ui-e2e-long.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=ui-e2e-long::$line"
+            done
+            exit "$status"
+          fi
 
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.pass }}
           path: ui/playwright-report
           if-no-files-found: ignore
           retention-days: 7
@@ -597,7 +771,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: playwright-test-results
+          name: playwright-test-results-${{ matrix.pass }}
           path: ui/test-results
           if-no-files-found: ignore
           retention-days: 7
@@ -665,15 +839,24 @@ jobs:
         env:
           GRAIN_INSTALLER_TRIXIE_E2E: "1"
         run: |
-          set -euo pipefail
+          set +e
           GRAIN_GOTEST_LOG=/tmp/installer-trixie.log ./scripts/run-go-tests.sh \
             go test ./tests/installer/trixie -count=1 -v -timeout 15m
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/installer-trixie.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=installer-variants::$line"
+            done
+            exit "$status"
+          fi
           if grep -q -- "--- SKIP" /tmp/installer-trixie.log; then
             grep -- "--- SKIP" /tmp/installer-trixie.log >&2
+            echo "::error title=installer-variants::tests/installer/trixie skipped a test"
             echo "tests/installer/trixie skipped a test in a runner that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this job is for." >&2
             exit 1
           fi
           if ! grep -q -- "--- PASS" /tmp/installer-trixie.log; then
+            echo "::error title=installer-variants::tests/installer/trixie passed no test at all"
             echo "tests/installer/trixie passed no test at all, so its green tick would mean nothing." >&2
             exit 1
           fi
@@ -682,15 +865,24 @@ jobs:
         env:
           GRAIN_INSTALLER_HOSTMODE_E2E: "1"
         run: |
-          set -euo pipefail
+          set +e
           GRAIN_GOTEST_LOG=/tmp/installer-hostmode.log ./scripts/run-go-tests.sh \
             go test ./tests/installer/hostmode -count=1 -v -timeout 15m
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/installer-hostmode.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=installer-variants::$line"
+            done
+            exit "$status"
+          fi
           if grep -q -- "--- SKIP" /tmp/installer-hostmode.log; then
             grep -- "--- SKIP" /tmp/installer-hostmode.log >&2
+            echo "::error title=installer-variants::tests/installer/hostmode skipped a test"
             echo "tests/installer/hostmode skipped a test in a runner that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this job is for." >&2
             exit 1
           fi
           if ! grep -q -- "--- PASS" /tmp/installer-hostmode.log; then
+            echo "::error title=installer-variants::tests/installer/hostmode passed no test at all"
             echo "tests/installer/hostmode passed no test at all, so its green tick would mean nothing." >&2
             exit 1
           fi
@@ -725,7 +917,16 @@ jobs:
           cache: false
 
       - name: Security suite
-        run: make security
+        run: |
+          set +e
+          make security 2>&1 | tee /tmp/security.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/security.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=security-audit::$line"
+            done
+            exit "$status"
+          fi
 
   vulns:
     name: govulncheck
@@ -757,7 +958,16 @@ jobs:
           cache: false
 
       - name: govulncheck
-        run: make vuln
+        run: |
+          set +e
+          make vuln 2>&1 | tee /tmp/vuln.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- 'Vulnerability|GO-[0-9]{4}-[0-9]+|FAIL' /tmp/vuln.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=vulns::$line"
+            done
+            exit "$status"
+          fi
 
   cmd-grain-stress:
     name: pkg/cli stress under load
@@ -850,7 +1060,7 @@ jobs:
                 fi
                 echo "--- failure headers in round $round sample $i ---"
                 grep -n -A40 -E -- '^[[:space:]]*--- FAIL|^=== NAME|WARNING: DATA RACE|^panic:|test timed out' /tmp/sample-$round-$i.log | head -400 || true
-                grep -E '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/sample-$round-$i.log | tail -n 10 | while IFS= read -r line; do
+                grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/sample-$round-$i.log | tail -n 10 | while IFS= read -r line; do
                   echo "::error title=cmd-grain-stress::$line"
                 done
                 echo "--- last 300 lines of round $round sample $i ---"
@@ -1148,4 +1358,13 @@ jobs:
         run: bash scripts/ci-docker-build.sh -t grain-e2e:test .
 
       - name: Run upgrade tests
-        run: make test-upgrade
+        run: |
+          set +e
+          make test-upgrade 2>&1 | tee /tmp/upgrade-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/upgrade-test.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=upgrade-test::$line"
+            done
+            exit "$status"
+          fi
