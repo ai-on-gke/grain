@@ -49,30 +49,13 @@ resource "google_dns_record_set" "gateway" {
   rrdatas      = [google_compute_global_address.gateway_ip.address]
 }
 
-resource "google_iap_brand" "grain" {
-  count             = var.create_iap_brand ? 1 : 0
-  support_email     = var.iap_support_email
-  application_title = "Grain"
-  project           = var.project_id
-
-  depends_on = [google_project_service.services]
-
-  lifecycle {
-    precondition {
-      condition     = var.iap_support_email != ""
-      error_message = "iap_support_email is required when create_iap_brand is true."
-    }
-  }
-}
-
-resource "google_iap_client" "grain" {
-  count        = var.create_iap_brand ? 1 : 0
-  brand        = google_iap_brand.grain[0].name
-  display_name = "Grain GKE Gateway"
-}
+# No google_iap_brand / google_iap_client here: Google shut the IAP OAuth
+# Admin API they wrap down on 2026-03-19. IAP uses a Google-managed OAuth
+# client by default; pass iap_client_id/iap_client_secret for a client of
+# your own, created in the console (Google Auth Platform -> Clients).
 
 locals {
-  iap_client_id = var.create_iap_brand ? google_iap_client.grain[0].client_id : var.iap_client_id
+  iap_client_id = var.iap_client_id
 
   iap_backend_member_bindings = {
     for pair in setproduct(toset(var.iap_backend_services), toset(var.iap_allowed_members)) :

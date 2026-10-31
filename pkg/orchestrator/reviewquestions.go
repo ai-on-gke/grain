@@ -155,6 +155,7 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 		}
 		reopened = true
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
+		t.Links = markRelayedReviewThreadsDecided(t.Links, questions.ReviewTaskID)
 		// Answering a review's questions is not the Submit a human-only
 		// trust-boundary hold waits for.
 		if questions.RestoreAutoMerge && !heldForHuman(*t) {
@@ -185,7 +186,8 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 		then = "It touches a path of grain's own trust boundary that only a human may release, " +
 			"so it waits for a Submit again once that run has pushed."
 	}
-	publish := "commit and push to this task's branch"
+	publish := "commit and push to this task's branch, reply to each relayed review thread with a " +
+		"one-line summary of what was done and resolve it (`resolve_review_thread` or `grain pr resolve`)"
 	if change.Primary(task) != "" && !hasPullRequest(task) {
 		publish = "upload it as a new snapshot of its CL with open_pull_request"
 		then = "Its new snapshot is reviewed again, and it waits for a Submit once that review has passed."
@@ -226,6 +228,7 @@ func dropReviewQuestions(ctx context.Context, store *model.Store, taskID string,
 	if err := store.UpdateTask(ctx, taskID, func(t *model.Task) error {
 		if current, ok := model.ReviewQuestionsOf(*t); ok && current == questions {
 			t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
+			t.Links = markRelayedReviewThreadsDecided(t.Links, questions.ReviewTaskID)
 		}
 		return nil
 	}); err != nil {

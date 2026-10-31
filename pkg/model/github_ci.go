@@ -286,7 +286,8 @@ func (s *Store) GetGitHubCIJob(ctx context.Context, repo string, checkRunID int6
 
 // GitHubCIFilter narrows ListGitHubCIJobs. Every field is optional.
 type GitHubCIFilter struct {
-	Repo string
+	Repo  string
+	RunID int64
 	// Since keeps jobs that completed at or after it (by recorded time
 	// for a row with no completion time).
 	Since time.Time
@@ -306,6 +307,10 @@ func (s *Store) ListGitHubCIJobs(ctx context.Context, f GitHubCIFilter) ([]GitHu
 	if f.Repo != "" {
 		where = append(where, "`repo` = ?")
 		args = append(args, f.Repo)
+	}
+	if f.RunID != 0 {
+		where = append(where, "`run_id` = ?")
+		args = append(args, f.RunID)
 	}
 	if !f.Since.IsZero() {
 		where = append(where, "COALESCE(`completed_at`, `recorded_at`) >= ?")

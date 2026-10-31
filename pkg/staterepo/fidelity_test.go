@@ -427,6 +427,11 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err := store.SetSpoolCursor(ctx, "a1b2-1", 987654, sub); err != nil {
 		t.Fatalf("advancing a spool cursor: %v", err)
 	}
+	// A tool call a live run's in-process session turns already relayed
+	// (task_run_relayed_call): a fingerprint and how many times.
+	if err := store.RecordRelayedCalls(ctx, "a1b2-1", []string{"9f86d081884c7d65", "9f86d081884c7d65"}); err != nil {
+		t.Fatalf("recording relayed calls: %v", err)
+	}
 	// A live k8s-granule sandbox's reverse-channel token hash and expiry
 	// (sandbox_access).
 	if err := store.SetSandboxAccess(ctx, "c3d4-1",

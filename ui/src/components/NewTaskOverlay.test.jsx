@@ -129,6 +129,50 @@ describe("NewTaskOverlay", () => {
     expect(onCreated).toHaveBeenCalledTimes(1);
   });
 
+  // A /new link whose values the form drops says so beside the fields
+  // rather than filing a different task without a word (2026-10-30
+  // intake walkthrough). The values it keeps raise nothing.
+  it("says which of a link's field values it left out", () => {
+    const config = {
+      customFields: [
+        {
+          name: "priority",
+          label: "Priority",
+          type: "enum",
+          options: ["low", "high"],
+        },
+      ],
+    };
+    const { unmount } = render(
+      <NewTaskOverlay
+        config={config}
+        fields={{ priority: "bogus", nosuch: "1" }}
+        onClose={() => {}}
+        onCreated={() => {}}
+        showError={() => {}}
+      />,
+    );
+    const notice = screen.getByTestId("unfiled-link-values");
+    expect(notice).toHaveTextContent(
+      "Priority: “bogus” is not one of its values",
+    );
+    expect(notice).toHaveTextContent(
+      "“nosuch” is not a field on this deployment",
+    );
+    unmount();
+
+    render(
+      <NewTaskOverlay
+        config={config}
+        fields={{ priority: "high" }}
+        onClose={() => {}}
+        onCreated={() => {}}
+        showError={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("unfiled-link-values")).toBeNull();
+  });
+
   // grain/task-3451: a task filed to fix a red base branch says so, so
   // grain never makes it wait on that branch's own repair task. A task
   // with no repo has no base to fix, and is not offered the box.

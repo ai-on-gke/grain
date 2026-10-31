@@ -49,6 +49,8 @@ Every option can be supplied either as a CLI flag or in a `--config <path>` envi
 | `--use-terraform` | `GRAIN_GKE_USE_TERRAFORM` | `false` | Provision GCP infrastructure through `deploy/gke/terraform` before applying manifests. |
 | `--dry-run` | — | `false` | Print every command and action without modifying any GCP, Kubernetes, or host state. |
 
+**IAP OAuth client.** By default IAP uses a Google-managed OAuth client and nothing has to be created. For a client of your own, create it in the console (Google Auth Platform -> Clients) and pass it with `--iap-client-id`/`--iap-client-secret-file`, or the Terraform module's `iap_client_id`/`iap_client_secret`. The module no longer has `create_iap_brand`/`iap_support_email`: the `google_iap_brand` and `google_iap_client` resources wrap the IAP OAuth Admin API, which Google shut down on 2026-03-19. A state that still holds them from an earlier apply should drop them with `terraform state rm 'google_iap_client.grain[0]' 'google_iap_brand.grain[0]'` rather than let Terraform try to delete them through that API.
+
 ---
 
 ## Step-by-Step Workflow
@@ -132,10 +134,12 @@ Confirm the GKE deployment end-to-end:
 ```
 
 `--check` verifies:
-1. The UI answers through IAP at `https://<dns-name>/api/auth/access-code`.
-2. The workstation's `hostd` is connected (`/api/executors`).
-3. A test sandbox executes a command over the granule dial-out channel (`Service/grain-access:4244`).
-4. The GKE API server Cloud Audit Log records **zero** `pods/exec`, `pods/attach`, or `pods/portforward` calls for that test sandbox run.
+1. The UI answers through IAP at `https://<dns-name>/api/auth/access-code`: an unauthenticated request gets 302, 401 or 403, never 200.
+2. The workstation's `hostd` is connected: inside `deploy/grain`, `GET http://127.0.0.1:8080/api/sandboxes` reports `hostExecutor.hostd.remote.connected: true`.
+3. A throwaway sandbox runs a command over the granule dial-out channel (`Service/grain-access:4244`). Inside `deploy/grain` the check runs `grain sandbox probe --id=gke-check-<ts> --access=dialout -- echo dialout-ok:gke-check-<ts>`. The daemon builds sandbox `probe-gke-check-<ts>` (pod `grain-granule-probe-gke-check-<ts>`) with the deployment's default shape, runs the command over the dial-out channel, prints its output and deletes the pod. The probe is refused if the daemon is configured for `-k8s-granule-access=kubectl`.
+4. The GKE API server Cloud Audit Log records **zero** `pods/exec`, `pods/attach`, or `pods/portforward` calls against that pod. An empty answer only counts after the log shows at least one entry for the pod, such as its create or delete. The check waits up to `GRAIN_GKE_AUDIT_WAIT_SECONDS` (default 300) for that entry, so ingestion lag cannot make it pass by default.
+
+Checks 2 and 3 run over the pod's loopback. The daemon does not trust loopback on its own, so both present its local API token (`/data/local-api-token`), and the token never leaves the pod. `grain sandbox probe` needs the `deployment:restart` API scope when an agent calls it. With `--dry-run`, `--check` prints each command it would run and ends with "none was run".
 
 ### 6. Roll Back (`--rollback`)
 

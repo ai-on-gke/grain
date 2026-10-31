@@ -67,6 +67,7 @@ export default function AlertsButton({
   onOpenConnection,
   onOpenSetup,
   onOpenConfigRepo,
+  onOpenPower,
   onOpenTask,
   onAct,
   onOpenHealth,
@@ -149,6 +150,7 @@ export default function AlertsButton({
           onOpenConnection={onOpenConnection}
           onOpenSetup={onOpenSetup}
           onOpenConfigRepo={onOpenConfigRepo}
+          onOpenPower={onOpenPower}
           onOpenTask={onOpenTask}
           onAct={onAct}
         />
@@ -226,6 +228,7 @@ export function AlertsPanel({
   onOpenConnection,
   onOpenSetup,
   onOpenConfigRepo,
+  onOpenPower,
   onOpenTask,
   onAct,
 }) {
@@ -252,6 +255,7 @@ export function AlertsPanel({
       onOpenConnection={onOpenConnection}
       onOpenSetup={onOpenSetup}
       onOpenConfigRepo={onOpenConfigRepo}
+      onOpenPower={onOpenPower}
       onOpenTask={onOpenTask}
       onAct={onAct}
     />
@@ -306,6 +310,7 @@ function AlertRow({
   onOpenConnection,
   onOpenSetup,
   onOpenConfigRepo,
+  onOpenPower,
   onOpenTask,
   onAct,
 }) {
@@ -322,6 +327,9 @@ function AlertRow({
         return;
       case "open-config-repo":
         onNavigate(() => onOpenConfigRepo?.());
+        return;
+      case "open-power":
+        onNavigate(() => onOpenPower?.());
         return;
       case "open-task":
         onNavigate(() => onOpenTask?.(action.taskId));

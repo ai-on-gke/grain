@@ -69,8 +69,18 @@ func HeldForApprovalNote(proposer string) string {
 // it needs the store and has its own note (AutoSubmitLimitNote).
 func AutoApprovalRefusal(child, parent Task, sessionQueues bool) string {
 	if escalated := EscalatedCapabilities(child, parent); len(escalated) > 0 {
-		return fmt.Sprintf("it asks for %s, which your task does not hold",
-			"`"+strings.Join(escalated, "`, `")+"`")
+		asked, seeded := SeededEscalations(child, escalated)
+		var why []string
+		if len(asked) > 0 {
+			why = append(why, fmt.Sprintf("it asks for %s, which your task does not hold",
+				"`"+strings.Join(asked, "`, `")+"`"))
+		}
+		if len(seeded) > 0 {
+			why = append(why, fmt.Sprintf("it is seeded with this deployment's default capability %s, "+
+				"which your task does not hold -- you did not ask for it, and a person can approve "+
+				"or remove it", "`"+strings.Join(seeded, "`, `")+"`"))
+		}
+		return strings.Join(why, "; and ")
 	}
 	if writes := UngrantedWrites(child, parent); len(writes) > 0 {
 		names := make([]string, 0, len(writes))

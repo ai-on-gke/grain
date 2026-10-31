@@ -151,7 +151,7 @@ func (c *Client) changeReviewTask(ctx context.Context, id string) (*model.Task, 
 	p, target := change.ReviewOf(*task)
 	if target == "" {
 		return nil, nil, validationErrorf("this task has no CL yet, so it has nothing to review: " +
-			"call open_pull_request with a summary and body to create and upload it")
+			"call open_pull_request with a summary and body to create and upload it. " + noCLYetNote)
 	}
 	if p == nil {
 		return nil, nil, errNoChangeReview
