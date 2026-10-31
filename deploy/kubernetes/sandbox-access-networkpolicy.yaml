@@ -1,0 +1,236 @@
+# The NetworkPolicies around the sandbox-access channel
+# (docs/design/grain-on-gke.md, Security 3) for -k8s-granule-sandboxes
+# with -sandbox-access-addr (deploy/kubernetes/grain-granule.yaml):
+# nothing dials a sandbox pod, a sandbox pod's wrapper reaches grain's
+# acceptor only on 4244, and the grain pod admits 4244 only from sandbox
+# pods.
+#
+# What these policies cannot do, and what does it instead: with
+# CHV_NET_MODE=inline a guest *is* its pod's IP and MAC, so to a policy
+# the wrapper's packets and the guest's are the same pod's. Keeping the
+# guest off the acceptor is done inside the pod: granule's netshim drops
+# every guest-originated packet to the acceptor's addresses on the
+# guest's tap (third_party/granule/pkg/netshim/splice.go,
+# controllerDropRules), which grain names to it as
+# GRANULE_ACCESS_CONTROLLER_IPS (the grain-access ClusterIP and the grain
+# pod's IP). Even past that, a guest has no client key and the acceptor
+# requires a client certificate before any application byte. These
+# policies bound what the pod as a whole can reach.
+#
+# The wrapper's need (4244) and the guest's (the internet) are separate
+# rules -- and the internet rule is its own policy -- so a change to one
+# cannot widen the other without its own review, and additive policy
+# evaluation never hands internet egress to grain.dev/network=none pods.
+#
+# Adjust any CHANGEME CIDRs below if this cluster's pod/service/node
+# ranges lie outside RFC1918 or its ingress proxy subnet differs from
+# 10.129.0.0/23, confirm the cluster's dataplane enforces NetworkPolicy,
+# then:
+#
+#   kubectl apply -f deploy/kubernetes/sandbox-access-networkpolicy.yaml
+#
+# networkpolicy.yaml's grain-sandbox-network-none policy needs no change
+# for the acceptor: its one egress peer is the grain pod on every port,
+# which already includes 4244. On this backend a network: none guest has
+# no NIC at all (CHV_NET_MODE=none), so that rule is the wrapper's.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grain-sandbox-egress
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  # Every sandbox pod grain creates (pkg/k8s.ManagedByLabel and
+  # SandboxLabel).
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: grain
+      app.kubernetes.io/component: sandbox
+  policyTypes:
+    - Ingress
+    - Egress
+  # Nothing dials a sandbox. grain reaches one over the channel its
+  # wrapper dialled, or `kubectl exec`, which is the kubelet's
+  # connection and not a network route into the pod.
+  ingress: []
+  egress:
+    # Rule 1 (wrapper only): dial-out mTLS channel to Service/grain-access
+    # (port 4244). Separated from the guest proxy rule below so a change
+    # to guest ports never widens access to the acceptor; the wrapper's
+    # in-pod netshim filter drops guest-originated packets to 4244.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grain
+              app.kubernetes.io/component: daemon
+      ports:
+        - protocol: TCP
+          port: 4244
+    # Rule 2 (guest proxies and package cache): the -sandbox-port-base
+    # block (default 9728..9983) plus the package cache's DNS/HTTP/HTTPS
+    # interception listeners on the daemon pod.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grain
+              app.kubernetes.io/component: daemon
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 9728
+          endPort: 9983
+    # Rule 3: DNS, to resolve grain-access.grain.svc (and, for
+    # open-network guests, internet names).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grain-sandbox-egress-internet
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  # Open-network sandboxes only: a pod labelled grain.dev/network=none
+  # (orchestrator.NetworkLabel) is excluded, so additive NetworkPolicy
+  # evaluation never grants it internet access.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: grain
+      app.kubernetes.io/component: sandbox
+    matchExpressions:
+      - key: grain.dev/network
+        operator: NotIn
+        values: ["none"]
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Cloud metadata server and link-local range: no Workload
+              # Identity or node metadata for a sandbox.
+              - 169.254.169.254/32
+              - 169.254.0.0/16
+              # CHANGEME if this cluster's pod, service, node or
+              # control-plane CIDRs lie outside RFC1918: block cluster
+              # and internal networks so a guest reaches the internet
+              # and not the cluster. (grain's own pod is reached via the
+              # explicit podSelector rules in grain-sandbox-egress.)
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grain-access-ingress
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grain
+      app.kubernetes.io/component: daemon
+  policyTypes:
+    - Ingress
+  ingress:
+    # The acceptor, only from sandbox pods.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: grain
+              app.kubernetes.io/component: sandbox
+      ports:
+        - protocol: TCP
+          port: 4244
+    # Guest-facing package cache, git proxy and model proxies, only from
+    # sandbox pods.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: grain
+              app.kubernetes.io/component: sandbox
+      ports:
+        - protocol: UDP
+            # DNS resolver
+          port: 53
+        - protocol: TCP
+          port: 53
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 9728
+          endPort: 9983
+    # The UI and API: only from the ingress/load-balancer health-check
+    # and proxy-only ranges and the webhook receiver.
+    - from:
+        - ipBlock:
+            cidr: 130.211.0.0/22
+        - ipBlock:
+            cidr: 35.191.0.0/16
+        - ipBlock:
+            # CHANGEME: this cluster's regional proxy-only subnet.
+            cidr: 10.129.0.0/23
+        - podSelector:
+            matchLabels:
+              app: grain-webhook
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grain-webhook-isolation
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  podSelector:
+    matchLabels:
+      app: grain-webhook
+  policyTypes:
+    - Ingress
+    - Egress
+  egress: []
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grain
+              app.kubernetes.io/component: daemon
+        - ipBlock:
+            cidr: 130.211.0.0/22
+        - ipBlock:
+            cidr: 35.191.0.0/16
+        - ipBlock:
+            # CHANGEME: this cluster's regional proxy-only subnet.
+            cidr: 10.129.0.0/23
+      ports:
+        - protocol: TCP
+          port: 8080

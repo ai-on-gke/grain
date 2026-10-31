@@ -27,8 +27,16 @@ package deploy
 // posture from grain.yaml's own.
 
 import (
+	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/k8s"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ports"
+	"github.com/ai-on-gke/grain/pkg/runhost"
 )
 
 // grainGranuleDeployment is grainDeployment's own counterpart, reading
@@ -250,5 +258,286 @@ func TestTheKubernetesGranuleRolePinsDeploymentWritesToTheDeploymentAnUpgradeRep
 	}
 	if !pinned {
 		t.Errorf("no Role rule grants patch/update on deployment %q", deployment)
+	}
+}
+
+// TestTheKubernetesGranuleRoleGrantsOnlyCreateAndDeleteOnSecrets checks
+// that Role/grain in grain-granule.yaml grants only create and delete on
+// Secrets (for per-pod grain-access-<pod> credential Secrets) and never
+// get, list, watch, update or patch -- pkg/k8s/secret.go never reads or
+// lists Secrets in the namespace.
+func TestTheKubernetesGranuleRoleGrantsOnlyCreateAndDeleteOnSecrets(t *testing.T) {
+	objects, nodes := manifestDocsForFile(t, "grain-granule.yaml")
+	var role struct {
+		Rules []struct {
+			Resources []string `yaml:"resources"`
+			Verbs     []string `yaml:"verbs"`
+		} `yaml:"rules"`
+	}
+	for i, obj := range objects {
+		if obj.Kind == "Role" && obj.Metadata.Name == "grain" {
+			if err := nodes[i].Decode(&role); err != nil {
+				t.Fatalf("decoding Role/grain: %v", err)
+			}
+		}
+	}
+	var sawSecretsRule bool
+	wantVerbs := []string{"create", "delete"}
+	for _, rule := range role.Rules {
+		if slices.Contains(rule.Resources, "secrets") {
+			sawSecretsRule = true
+			if !slices.Equal(rule.Verbs, wantVerbs) {
+				t.Errorf("Role/grain secrets verbs = %v, want %v (pkg/k8s/secret.go never reads or lists Secrets)",
+					rule.Verbs, wantVerbs)
+			}
+		}
+	}
+	if !sawSecretsRule {
+		t.Error("Role/grain in grain-granule.yaml has no secrets rule for sandbox-access credentials")
+	}
+}
+
+// TestTheKubernetesGranuleSandboxAccessServiceAndFlagsAgree checks that
+// Service/grain-access is defined ahead of Deployment/grain (so the pod
+// receives GRAIN_ACCESS_SERVICE_HOST at start), stays ClusterIP-only on
+// ports.SandboxAccess (4244), selects only the daemon pod, and agrees
+// with Deployment/grain's -sandbox-access-addr and containerPort.
+func TestTheKubernetesGranuleSandboxAccessServiceAndFlagsAgree(t *testing.T) {
+	raw := stripComments(read(t, "deploy", "kubernetes", "grain-granule.yaml"))
+	for _, forbidden := range []string{
+		"7443",
+		"GRAIN_GRANULE_ACCESS_MODE",
+		"GRAIN_SANDBOX_ACCESS_ADDR",
+		"GRAIN_SANDBOX_CA_KEY_FILE",
+	} {
+		absent(t, raw, forbidden)
+	}
+
+	objects, nodes := manifestDocsForFile(t, "grain-granule.yaml")
+	accessIdx, depIdx := -1, -1
+	var svc *k8sService
+	var depDoc struct {
+		Spec struct {
+			Template struct {
+				Metadata struct {
+					Labels map[string]string `yaml:"labels"`
+				} `yaml:"metadata"`
+				Spec struct {
+					Containers []struct {
+						Name  string `yaml:"name"`
+						Ports []struct {
+							Name          string `yaml:"name"`
+							ContainerPort int    `yaml:"containerPort"`
+						} `yaml:"ports"`
+					} `yaml:"containers"`
+				} `yaml:"spec"`
+			} `yaml:"template"`
+		} `yaml:"spec"`
+	}
+	for i, obj := range objects {
+		switch {
+		case obj.Kind == "Service" && obj.Metadata.Name == "grain-access":
+			accessIdx = i
+			svc = &k8sService{}
+			if err := nodes[i].Decode(svc); err != nil {
+				t.Fatalf("decoding Service/grain-access: %v", err)
+			}
+		case obj.Kind == "Deployment" && obj.Metadata.Name == "grain":
+			depIdx = i
+			if err := nodes[i].Decode(&depDoc); err != nil {
+				t.Fatalf("decoding Deployment/grain: %v", err)
+			}
+		}
+	}
+	if svc == nil {
+		t.Fatal("grain-granule.yaml defines no Service/grain-access")
+	}
+	if accessIdx > depIdx {
+		t.Errorf("Service/grain-access (doc %d) is defined after Deployment/grain (doc %d); "+
+			"must precede it so GRAIN_ACCESS_SERVICE_HOST is populated when the pod starts", accessIdx, depIdx)
+	}
+	if svc.Spec.Type != "" && svc.Spec.Type != "ClusterIP" {
+		t.Errorf("Service/grain-access type = %q, want ClusterIP", svc.Spec.Type)
+	}
+	if svc.Spec.ClusterIP == "None" {
+		t.Error("Service/grain-access must not be headless")
+	}
+
+	podLabels := depDoc.Spec.Template.Metadata.Labels
+	for k, v := range svc.Spec.Selector {
+		if podLabels[k] != v {
+			t.Errorf("Service/grain-access selects %s=%s, which Deployment/grain's pod template lacks (%v)",
+				k, v, podLabels)
+		}
+	}
+	if svc.Spec.Selector[k8s.SandboxLabel] != runhost.KubeDaemonComponent {
+		t.Errorf("Service/grain-access does not select %s=%s, so nothing stops it matching a non-daemon pod",
+			k8s.SandboxLabel, runhost.KubeDaemonComponent)
+	}
+
+	wantAddr := ":" + strconv.Itoa(ports.SandboxAccess)
+	flags := daemonArgs(t, grainContainer(t, grainGranuleDeployment(t)))
+	if got := flagValue(t, flags, "sandbox-access-addr"); got != wantAddr {
+		t.Errorf("Deployment/grain -sandbox-access-addr = %q, want %q", got, wantAddr)
+	}
+	if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != ports.SandboxAccess || fmt.Sprint(svc.Spec.Ports[0].TargetPort) != "sandbox-access" {
+		t.Errorf("Service/grain-access ports = %+v, want sole port %d -> sandbox-access", svc.Spec.Ports, ports.SandboxAccess)
+	}
+	var sawContainerPort bool
+	for _, c := range depDoc.Spec.Template.Spec.Containers {
+		if c.Name != "grain" {
+			continue
+		}
+		for _, p := range c.Ports {
+			if p.Name == "sandbox-access" && p.ContainerPort == ports.SandboxAccess {
+				sawContainerPort = true
+			}
+		}
+	}
+	if !sawContainerPort {
+		t.Errorf("Deployment/grain container exposes no sandbox-access containerPort %d", ports.SandboxAccess)
+	}
+}
+
+// TestTheSandboxAccessNetworkPoliciesIsolateTheAcceptorAndExcludeNetworkNone
+// checks deploy/kubernetes/sandbox-access-networkpolicy.yaml against the
+// labels in pkg/k8s, orchestrator.NetworkLabel, and Deployment/grain:
+// sandbox pods get no ingress, open-network internet egress excludes
+// grain.dev/network=none pods and blocks cloud metadata + RFC1918 CIDRs,
+// and port 4244 on the daemon pod is admitted only from sandbox pods.
+func TestTheSandboxAccessNetworkPoliciesIsolateTheAcceptorAndExcludeNetworkNone(t *testing.T) {
+	objects, nodes := manifestDocsForFile(t, "sandbox-access-networkpolicy.yaml")
+	type netPolPeer struct {
+		PodSelector *struct {
+			MatchLabels map[string]string `yaml:"matchLabels"`
+		} `yaml:"podSelector"`
+		IPBlock *struct {
+			CIDR   string   `yaml:"cidr"`
+			Except []string `yaml:"except"`
+		} `yaml:"ipBlock"`
+	}
+	type netPolPort struct {
+		Protocol string `yaml:"protocol"`
+		Port     int    `yaml:"port"`
+		EndPort  int    `yaml:"endPort"`
+	}
+	type netPol struct {
+		k8sObject `yaml:",inline"`
+		Spec      struct {
+			PodSelector struct {
+				MatchLabels      map[string]string `yaml:"matchLabels"`
+				MatchExpressions []struct {
+					Key      string   `yaml:"key"`
+					Operator string   `yaml:"operator"`
+					Values   []string `yaml:"values"`
+				} `yaml:"matchExpressions"`
+			} `yaml:"podSelector"`
+			PolicyTypes []string `yaml:"policyTypes"`
+			Ingress     []struct {
+				From  []netPolPeer `yaml:"from"`
+				Ports []netPolPort `yaml:"ports"`
+			} `yaml:"ingress"`
+			Egress []struct {
+				To    []netPolPeer `yaml:"to"`
+				Ports []netPolPort `yaml:"ports"`
+			} `yaml:"egress"`
+		} `yaml:"spec"`
+	}
+
+	byName := map[string]netPol{}
+	for i, obj := range objects {
+		if obj.Kind != "NetworkPolicy" {
+			t.Fatalf("sandbox-access-networkpolicy.yaml doc %d has kind %q, want NetworkPolicy", i, obj.Kind)
+		}
+		if obj.Metadata.Namespace != "grain" {
+			t.Errorf("NetworkPolicy/%s namespace = %q, want \"grain\"", obj.Metadata.Name, obj.Metadata.Namespace)
+		}
+		var np netPol
+		if err := nodes[i].Decode(&np); err != nil {
+			t.Fatalf("decoding NetworkPolicy/%s: %v", obj.Metadata.Name, err)
+		}
+		byName[obj.Metadata.Name] = np
+	}
+
+	egressPol, ok := byName["grain-sandbox-egress"]
+	if !ok {
+		t.Fatal("missing NetworkPolicy/grain-sandbox-egress")
+	}
+	if egressPol.Spec.PodSelector.MatchLabels[k8s.ManagedByLabel] != "grain" ||
+		egressPol.Spec.PodSelector.MatchLabels[k8s.SandboxLabel] != "sandbox" {
+		t.Errorf("grain-sandbox-egress podSelector = %v, want sandbox labels", egressPol.Spec.PodSelector.MatchLabels)
+	}
+	if len(egressPol.Spec.Ingress) != 0 || !slices.Contains(egressPol.Spec.PolicyTypes, "Ingress") {
+		t.Errorf("grain-sandbox-egress must enforce empty Ingress, got policyTypes=%v ingress=%+v",
+			egressPol.Spec.PolicyTypes, egressPol.Spec.Ingress)
+	}
+
+	internetPol, ok := byName["grain-sandbox-egress-internet"]
+	if !ok {
+		t.Fatal("missing NetworkPolicy/grain-sandbox-egress-internet")
+	}
+	var excludesNone bool
+	for _, expr := range internetPol.Spec.PodSelector.MatchExpressions {
+		if expr.Key == orchestrator.NetworkLabel && expr.Operator == "NotIn" && slices.Equal(expr.Values, []string{"none"}) {
+			excludesNone = true
+		}
+	}
+	if !excludesNone {
+		t.Errorf("grain-sandbox-egress-internet must exclude %s=none via NotIn so network:none pods stay isolated, got %+v",
+			orchestrator.NetworkLabel, internetPol.Spec.PodSelector.MatchExpressions)
+	}
+	var excepts []string
+	for _, rule := range internetPol.Spec.Egress {
+		for _, peer := range rule.To {
+			if peer.IPBlock != nil {
+				excepts = append(excepts, peer.IPBlock.Except...)
+			}
+		}
+	}
+	for _, cidr := range []string{"169.254.169.254/32", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
+		if !slices.Contains(excepts, cidr) {
+			t.Errorf("grain-sandbox-egress-internet ipBlock.except = %v, missing %s", excepts, cidr)
+		}
+	}
+
+	ingressPol, ok := byName["grain-access-ingress"]
+	if !ok {
+		t.Fatal("missing NetworkPolicy/grain-access-ingress")
+	}
+	if ingressPol.Spec.PodSelector.MatchLabels["app.kubernetes.io/name"] != "grain" ||
+		ingressPol.Spec.PodSelector.MatchLabels[k8s.SandboxLabel] != runhost.KubeDaemonComponent {
+		t.Errorf("grain-access-ingress podSelector = %v, want daemon pod labels", ingressPol.Spec.PodSelector.MatchLabels)
+	}
+	var sawAcceptorRule bool
+	for _, rule := range ingressPol.Spec.Ingress {
+		touchesAcceptor := false
+		for _, p := range rule.Ports {
+			if p.Port == ports.SandboxAccess || (p.EndPort >= ports.SandboxAccess && p.Port <= ports.SandboxAccess) {
+				touchesAcceptor = true
+			}
+		}
+		if !touchesAcceptor {
+			continue
+		}
+		sawAcceptorRule = true
+		for _, from := range rule.From {
+			if from.IPBlock != nil || from.PodSelector == nil ||
+				from.PodSelector.MatchLabels[k8s.ManagedByLabel] != "grain" ||
+				from.PodSelector.MatchLabels[k8s.SandboxLabel] != "sandbox" {
+				t.Errorf("grain-access-ingress admits port %d from non-sandbox peer %+v", ports.SandboxAccess, from)
+			}
+		}
+	}
+	if !sawAcceptorRule {
+		t.Errorf("grain-access-ingress has no ingress rule for port %d", ports.SandboxAccess)
+	}
+
+	webhookPol, ok := byName["grain-webhook-isolation"]
+	if !ok {
+		t.Fatal("missing NetworkPolicy/grain-webhook-isolation")
+	}
+	if !slices.Contains(webhookPol.Spec.PolicyTypes, "Egress") || len(webhookPol.Spec.Egress) != 0 {
+		t.Errorf("grain-webhook-isolation must deny all egress, got policyTypes=%v egress=%+v",
+			webhookPol.Spec.PolicyTypes, webhookPol.Spec.Egress)
 	}
 }
