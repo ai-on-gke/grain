@@ -2477,9 +2477,7 @@ export default function RepoPage({
                           // the label the person had just typed unsaved.
                           saveIssueImport({
                             issueImportEnabled: e.target.checked,
-                            ...(e.target.checked && dirty
-                              ? draftFields()
-                              : {}),
+                            ...(e.target.checked && dirty ? draftFields() : {}),
                           })
                         }
                         disabled={readOnly}
