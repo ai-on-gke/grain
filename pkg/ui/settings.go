@@ -2206,9 +2206,12 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		// branch name (model.checkSlugPlacement): a valid name is not
 		// enough when it may be another task's.
 		for _, title := range []string{"", "Fix the header parser"} {
-			if _, err := model.FormatTaskBranchName(template, strings.Repeat("a", 32), strings.Repeat("a", model.MaxDeploymentIDLen), "9223372036854775807", title); err != nil {
+			if _, err := model.FormatTaskBranchName(template, strings.Repeat("a", 32), "a", "123", title); err != nil {
 				return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
 			}
+		}
+		if _, err := model.FormatTaskBranchName(template, strings.Repeat("a", 32), strings.Repeat("a", model.MaxDeploymentIDLen), "9223372036854775807", ""); err != nil {
+			return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
 		}
 		cfg.TaskBranchTemplate = template
 	}

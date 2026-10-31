@@ -134,6 +134,9 @@ func TestSettingsRefusesABranchTemplateWhoseSlugCouldNameAnotherTask(t *testing.
 	if cfg.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
 		t.Fatalf("stored template = %q after refused saves, want %q", cfg.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
 	}
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{TaskBranchTemplate: ptr("grain/task-{id}.lock")}); err == nil || !strings.Contains(err.Error(), "grain/task-123.lock") {
+		t.Errorf("taskBranchTemplate grain/task-{id}.lock error = %v, want it naming grain/task-123.lock", err)
+	}
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{TaskBranchTemplate: ptr("alice/{deployment}/task-{id}-{slug}")}); err != nil {
 		t.Fatalf("taskBranchTemplate alice/{deployment}/task-{id}-{slug} = %v, want it accepted", err)
 	}
