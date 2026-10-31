@@ -28,6 +28,7 @@ package sandboxcli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -385,7 +386,7 @@ func (c *sandboxCLI) run(args []string) error {
 		return c.fs("deploy://health", nil)
 	case "log":
 		uri := "deploy://grain.log"
-		if source := p.optArg(0); source != "" {
+		if source := grainLogSource(p); source != "" {
 			uri += "/" + source
 		}
 		return c.fs(uri, grainLogQuery(p))
@@ -393,7 +394,21 @@ func (c *sandboxCLI) run(args []string) error {
 		if name := p.optArg(0); name != "" {
 			return c.fs("src://playbooks/"+name, nil)
 		}
-		return c.fs("src://playbooks", url.Values{"list": {""}})
+		// One playbook name per line, as `grain playbooks <name>` takes it.
+		var listing bytes.Buffer
+		p, err := fsPath("src://playbooks")
+		if err != nil {
+			return err
+		}
+		if err := c.get(p, url.Values{"list": {""}}, &listing); err != nil {
+			return err
+		}
+		for _, line := range strings.Split(strings.TrimSpace(listing.String()), "\n") {
+			if name := strings.TrimSuffix(line, ".md"); name != "" && !strings.HasSuffix(name, "/") {
+				fmt.Fprintln(c.out, name)
+			}
+		}
+		return nil
 	case "issue list":
 		return c.get("/cli/issues", p.query("repo", "label", "limit"), c.out)
 	case "issue read":
@@ -707,8 +722,10 @@ func (p sandboxArgs) has(name string) bool { _, ok := p.flags[name]; return ok }
 // --tail, which the namespace applies to whatever that answers.
 func grainLogQuery(p sandboxArgs) url.Values {
 	q := p.query("tail", "since", "until", "contains")
-	if v := p.get("min-priority"); v != "" {
-		q.Set("min_priority", v)
+	for _, name := range []string{"priority", "min-priority"} {
+		if v := p.get(name); v != "" {
+			q.Set("min_priority", v)
+		}
 	}
 	for _, name := range []string{"max-lines", "lines"} {
 		if v := p.get(name); v != "" {
@@ -716,6 +733,15 @@ func grainLogQuery(p sandboxArgs) url.Values {
 		}
 	}
 	return q
+}
+
+// grainLogSource is the journal `grain log` reads: --source when given,
+// else its first argument, else "" for the daemon's own.
+func grainLogSource(p sandboxArgs) string {
+	if v := p.get("source"); v != "" {
+		return v
+	}
+	return p.optArg(0)
 }
 
 // metricsQuery is `grain metrics`' flags as deploy://metrics' query;

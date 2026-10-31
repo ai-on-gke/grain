@@ -669,6 +669,13 @@ func refusedMerge(ctx context.Context, store *model.Store, client github.Client,
 		checks = githubCheckRuns(client, ref, headSHA, checks)
 	}
 	kind := refineRefusal(github.ClassifyMergeRefusal(cause), cause, req, read, checks)
+	if kind == github.RefusalUnresolvedThreads || (kind == github.RefusalTransient && github.IsMergeRuleStatus(cause)) {
+		if count, authors := unresolvedReviewThreads(client, task, ref); count > 0 {
+			kind = github.RefusalUnresolvedThreads
+			req.UnresolvedThreadCount = count
+			req.UnresolvedThreadAuthors = authors
+		}
+	}
 	refusal, _ := forge.ClassifyLastMergeRefusal(forgeRef(ref), headSHA, kind, req)
 	// What GitHub's rules say has just been read: the wait's first poll.
 	forge.NoteMergeRefusalPolled(forgeRef(ref), now)

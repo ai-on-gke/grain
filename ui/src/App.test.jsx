@@ -868,6 +868,13 @@ describe("App", () => {
     // times a test -- App.test.jsx's other queries are text queries for
     // the same reason.
     const railRow = (name) => screen.getByText(name).closest("li");
+    // BoardList marks a drag a tick after dragstart (Chromium cancels a
+    // drag whose row moves inside the handler), so a drop has to wait
+    // for that tick the way a real one always does.
+    const dragStart = async (row) => {
+      fireEvent.dragStart(row);
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    };
     const patchOf = (id) =>
       api.mock.calls.find(
         ([path, opts]) =>
@@ -886,12 +893,12 @@ describe("App", () => {
 
       // Dropped above the board that already follows it: that is where
       // it is, so nothing is written.
-      fireEvent.dragStart(railRow("Waiting on me"));
+      await dragStart(railRow("Waiting on me"));
       fireEvent.dragOver(railRow("Weekly report"));
       fireEvent.drop(railRow("Weekly report"));
       expect(patchOf("board-1")).toBeUndefined();
 
-      fireEvent.dragStart(railRow("Weekly report"));
+      await dragStart(railRow("Weekly report"));
       fireEvent.dragOver(railRow("Waiting on me"));
       fireEvent.drop(railRow("Waiting on me"));
 
@@ -926,7 +933,7 @@ describe("App", () => {
       await screen.findByText("Waiting on me");
       const heading = screen.getByText("Reports").closest("li");
 
-      fireEvent.dragStart(railRow("Waiting on me"));
+      await dragStart(railRow("Waiting on me"));
       fireEvent.dragOver(heading);
       fireEvent.drop(heading);
 

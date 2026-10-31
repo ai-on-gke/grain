@@ -1,0 +1,205 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# GitHub Actions port of .grain/workflows/promote.yml.
+#
+# Keeps the `:latest` and `:vX.Y.Z` image tags on `ghcr.io/bwsalmon/grain/*`
+# aligned with the git `latest` tag by running `scripts/release-images.sh promote`.
+
+name: promote
+
+on:
+  push:
+    branches: [main, candidate]
+  release:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional vX.Y.Z release tag to promote (defaults to the release named by git tag 'latest')"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Verify promotion plan without pushing tags to the registry (always true on non-main refs)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  GOFLAGS: -mod=readonly
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+
+jobs:
+  latest:
+    name: promote release images
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: ${{ github.workflow }}-latest-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
+
+      - name: Cache npm and node_modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Resolve release context and dry-run mode
+        env:
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF:-}" in
+            refs/heads/main|refs/heads/candidate|refs/tags/v*)
+              is_release_ref=true
+              ;;
+            *)
+              is_release_ref=false
+              ;;
+          esac
+
+          dry_run="${INPUT_DRY_RUN:-}"
+          if [ "$is_release_ref" != "true" ] && [ "${GITHUB_EVENT_NAME:-}" != "release" ]; then
+            dry_run="true"
+          elif [ -z "$dry_run" ]; then
+            dry_run="false"
+          fi
+          {
+            echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
+            echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"
+            echo "GRAIN_CI_REF=${GH_REF_NAME}"
+            echo "DRY_RUN=${dry_run}"
+          } >> "$GITHUB_ENV"
+          echo "Resolved GRAIN_CI_REF=${GH_REF_NAME} DRY_RUN=${dry_run}"
+
+      - name: Authenticate to Google Cloud (WIF)
+        if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+
+      - name: Configure Artifact Registry Docker authentication
+        if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
+
+      - name: Configure package-publish credentials
+        if: env.DRY_RUN != 'true'
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
+          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
+          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
+        run: |
+          set -euo pipefail
+          token="${GHCR_PAT:-}"
+          username="${PUBLISH_USERNAME}"
+          if [ -z "$token" ]; then
+            case "${RELEASE_IMAGE_REPO}" in
+              bwsalmon/*)
+                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
+                exit 1
+                ;;
+              *)
+                token="${FALLBACK_TOKEN}"
+                username="${GITHUB_ACTOR}"
+                ;;
+            esac
+          fi
+          echo "::add-mask::${token}"
+          {
+            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
+            echo "PACKAGE_PUBLISH_USERNAME=${username}"
+            echo "PACKAGE_PUBLISH_TOKEN=${token}"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure optional image-signing key
+        if: env.DRY_RUN != 'true'
+        env:
+          SIGNING_KEY_PEM: ${{ secrets.IMAGE_SIGNING_KEY }}
+          SIGNING_KEY_PASS: ${{ secrets.IMAGE_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGNING_KEY_PEM:-}" ]; then
+            echo "WARNING: IMAGE_SIGNING_KEY secret is not set; promoted release images will be published unsigned." >&2
+            exit 0
+          fi
+          if ! command -v cosign >/dev/null 2>&1; then
+            cosign_version="v2.4.1"
+            curl -fsSL "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
+              -o /usr/local/bin/cosign
+            chmod +x /usr/local/bin/cosign
+          fi
+          key_file="${RUNNER_TEMP}/image-signing.key"
+          printf '%s\n' "${SIGNING_KEY_PEM}" > "$key_file"
+          chmod 600 "$key_file"
+          pass_file="${RUNNER_TEMP}/image-signing.pass"
+          printf '%s' "${SIGNING_KEY_PASS:-}" > "$pass_file"
+          chmod 600 "$pass_file"
+          {
+            echo "IMAGE_SIGNING_KEY=${key_file}"
+            echo "IMAGE_SIGNING_PASSWORD_FILE=${pass_file}"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish the last promoted release as latest
+        env:
+          PROMOTE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          args=(promote)
+          if [ -n "${PROMOTE_VERSION:-}" ]; then
+            args+=("${PROMOTE_VERSION}")
+          fi
+          if [ "${DRY_RUN}" = "true" ]; then
+            bash ./scripts/release-images.sh --dry-run "${args[@]}"
+          else
+            bash ./scripts/release-images.sh "${args[@]}"
+          fi

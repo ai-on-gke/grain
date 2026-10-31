@@ -1007,6 +1007,11 @@ type Config struct {
 	// nil-means-unavailable contract PullRequests and Sandboxes above
 	// already give.
 	SandboxRecreate SandboxRecreator
+	// SandboxProbe, when set, is what POST /api/sandbox-probe builds a
+	// throwaway sandbox through (sandbox_probe.go): pkg/daemon's adapter
+	// over orchestrator.ProbeSandbox and the daemon's own backend. nil
+	// answers 404, the contract SandboxRecreate above gives.
+	SandboxProbe SandboxProber
 	// StandingSandboxes, when set, reports the standing sandboxes the
 	// daemon's reconcile loop is supervising, for GET /api/sandboxes'
 	// standingSandboxes -- pkg/cli/daemon.go's adapter over the same
@@ -1241,6 +1246,13 @@ type Config struct {
 	// boundaries and returns an actionable warning suggesting
 	// -sandbox-image-mirror when the cluster cannot pull the image.
 	CheckClusterImageConnectivity func(ctx context.Context, imageRef string) error
+	// K8sGranuleImage, when set, returns the guest image the daemon
+	// creates kubernetes-granule pods from under cfg -- its own stamp,
+	// mirrored into cfg's SandboxImageMirror when one is set -- which is
+	// the image the Settings pane probes for its Granule VM image
+	// warning. nil probes cfg's own k8s-granule image, or this UI's
+	// version-derived default, mirrored the same way.
+	K8sGranuleImage func(cfg model.Config) string
 	// InspectImageLabels, when set, reads an image's OCI labels -- how
 	// the Settings pane checks a custom sandbox image's contract
 	// (sandboximage.CheckCustomImage). nil reports every custom image's

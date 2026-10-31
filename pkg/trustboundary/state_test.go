@@ -152,6 +152,14 @@ func TestNeverAutoMergePathsCoverGrantAndSecretTables(t *testing.T) {
 		"tables/template_write.json",
 		"tables/schedule_grant.json",
 		"tables/schedule_write.json",
+		// 2026-10-30: approval and auto-merge switches suite runs and
+		// qualification runs copy onto the tasks they file.
+		"tables/suite.json",
+		"tables/suite_item.json",
+		"tables/suite_sequence.json",
+		"tables/qualification_config.json",
+		"tables/qualification_item.json",
+		"tables/qualification_item_depends_on.json",
 	} {
 		if !IsNeverAutoMergePath(p) {
 			t.Errorf("IsNeverAutoMergePath(%q) = false, want true", p)

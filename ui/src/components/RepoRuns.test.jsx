@@ -99,11 +99,15 @@ describe("RepoRuns", () => {
     expect(onOpenRun).toHaveBeenCalledWith(null, "acme/widgets");
   });
 
-  it("says the deployment runs no CI, beside the workflows it would run", async () => {
+  it("says the deployment runs no CI, and where the workflows it would run are", async () => {
     api.mockResolvedValue({ enabled: false });
     renderRuns();
 
-    expect(await screen.findByText(/-ci=false/)).toBeInTheDocument();
+    const note = await screen.findByText(/-ci=false/);
+    // This list is on the repo page's Overview and the workflows are on
+    // its CI tab: "the workflows above" pointed at nothing.
+    expect(note).toHaveTextContent("workflows on this repository's CI tab");
+    expect(note).not.toHaveTextContent(/workflows above/);
     // Nothing to start, and no empty table to read as "nothing has run".
     expect(screen.queryByRole("button", { name: "Start a run" })).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();

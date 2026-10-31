@@ -53,7 +53,7 @@ const PAGES = [
     "repositories/acme/widgets/merge queue",
     "repos",
   ],
-  ["/settings", "settings/general", "settings"],
+  ["/settings", "settings/models", "settings"],
   ["/system", "system/health", "system"],
   ["/system/logs", "system/logs", "system"],
 ];

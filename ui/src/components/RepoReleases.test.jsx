@@ -1195,6 +1195,53 @@ describe("RepoReleases", () => {
     expect(onBack).toHaveBeenCalled();
   });
 
+  // docs/test-runs/2026-10-30-repository-release-memory-ui.md: with the
+  // page able to open a tab, a grain-CI-off gate goes straight to CI Mode
+  // rather than to the Overview, where a second link had to be found.
+  it("sends a grain-CI-off gate's warning straight to the CI tab", async () => {
+    const user = userEvent.setup();
+    setupApi({ releases: [activeRelease], candidates: [activeCandidate] });
+    const onBack = vi.fn();
+    const onOpenTab = vi.fn();
+    const gate = {
+      repo: "acme/widgets",
+      judged: false,
+      detail: "Nothing is testing acme/widgets's default branch.",
+    };
+    const { rerender } = render(
+      <RepoReleases
+        repo="acme/widgets"
+        baseBranchGates={[{ ...gate, reason: "grain-ci-off" }]}
+        onBack={onBack}
+        onOpenTab={onOpenTab}
+        showError={() => {}}
+      />,
+    );
+    await screen.findByText(/Nothing is testing acme\/widgets's default/);
+    expect(
+      screen.queryByRole("button", { name: "Open repository settings" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Go to CI Mode" }));
+    expect(onOpenTab).toHaveBeenCalledWith("ci");
+    expect(onBack).not.toHaveBeenCalled();
+
+    // A gate held for any other reason has no single switch to name, so
+    // it still goes to the page.
+    rerender(
+      <RepoReleases
+        repo="acme/widgets"
+        baseBranchGates={[{ ...gate, reason: "never-run" }]}
+        onBack={onBack}
+        onOpenTab={onOpenTab}
+        showError={() => {}}
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open repository settings" }),
+    );
+    expect(onBack).toHaveBeenCalled();
+  });
+
   it("ignores a stale in-flight poll that resolves after a release is removed", async () => {
     const secondRelease = {
       repo: "acme/widgets",

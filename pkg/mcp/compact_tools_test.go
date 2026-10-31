@@ -479,3 +479,63 @@ func TestAStewardWakeFitsItsToolBudget(t *testing.T) {
 		t.Errorf("the sweep came to %s, which would fit the budget: the fixture is too light to measure anything", humanBytes(sweep))
 	}
 }
+
+// An interactive session holds its conversation in one run, so a person's
+// chat reply is a new wake: the count restarts with it, the reply itself
+// carries no budget notice, and a session that keeps being answered is
+// never told to write its handover and stop part-way through a
+// conversation (task 1981).
+func TestAChatReplyRestartsTheToolBudget(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(Tool{Name: "big", Handler: func(context.Context, map[string]any) Result {
+		return Result{Text: strings.Repeat("x", 4<<10)}
+	}})
+	registry.Register(NewChatTools(&fakeChatter{turn: ChatTurn{Reply: "and now the Terraform"}}, nil)...)
+	registry.AnnounceToolBudget()
+	client := NewInProcess(context.Background(), registry)
+	t.Cleanup(func() { client.Close() })
+	call := func(name string, args map[string]any) string {
+		res, err := client.CallTool(context.Background(), name, args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Text()
+	}
+	chatArgs := map[string]any{"message": "done; anything else?", "summary": "Anything else?"}
+
+	for turn := range 4 {
+		var last string
+		for range ToolBudgetHardCalls - 5 {
+			last = call("big", nil)
+			if strings.Contains(last, "Write your handover now") {
+				t.Fatalf("turn %d: hard-line notice after a reply restarted the count: %q", turn, last[len(last)-200:])
+			}
+		}
+		if !strings.Contains(last, "Tool budget: this wake has made") {
+			t.Fatalf("turn %d: no soft-line notice after %d calls in one wake", turn, ToolBudgetHardCalls-5)
+		}
+		reply := call("chat", chatArgs)
+		if !strings.Contains(reply, "and now the Terraform") {
+			t.Fatalf("turn %d: chat lost the reply: %q", turn, reply)
+		}
+		if strings.Contains(reply, "Tool budget") {
+			t.Fatalf("turn %d: the person's reply carries grain's budget notice: %q", turn, reply)
+		}
+		registry.budget.mu.Lock()
+		calls, bytes := registry.budget.calls, registry.budget.bytes
+		registry.budget.mu.Unlock()
+		if calls != 1 || bytes >= 4<<10 {
+			t.Fatalf("turn %d: after a reply the budget reads %d calls, %d bytes; want the reply alone", turn, calls, bytes)
+		}
+	}
+	// A turn that ends with nobody replying is no new wake: it is grain's
+	// text, not a person's, and the count carries on.
+	registry.Register(NewChatTools(&fakeChatter{}, nil)...)
+	call("chat", chatArgs)
+	registry.budget.mu.Lock()
+	calls := registry.budget.calls
+	registry.budget.mu.Unlock()
+	if calls != 2 {
+		t.Errorf("an unanswered chat restarted the budget: %d calls, want 2", calls)
+	}
+}

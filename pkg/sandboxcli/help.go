@@ -84,9 +84,11 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
                                          Call one (--help lists its flags, generated from its input schema)
   grain quarantine <pkg> <test> --reason <why> [--no-follow-up]
                                          Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (quarantine-test)
-  grain metrics [<section>]              grain's own measurements (self-debug)
+  grain metrics [<section>] [--window 7d | --since <d> --until <d>]
+                                         grain's own measurements (self-debug)
   grain health                           This deployment's health (deployment-health)
-  grain log [<source>] [--tail N]        grain's own log, redacted (grain-log)
+  grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority <p>] [--contains <s>] [--lines N]
+                                         grain's own log, redacted (grain-log)
   grain playbooks [<name>]               Bootstrap playbooks (bootstrap-playbooks)
   grain issue list | grain issue read <n>
                                          GitHub issues (read-issues)
@@ -171,7 +173,7 @@ var sandboxCommandHelp = map[string]string{
 		"whose capability marks them sandbox-callable are here; a model-only tool is the agent's own MCP\n" +
 		"tool and the proxy refuses it. Each tool's flags are generated from its input schema.\n\n" +
 		"  grain cap list\n  grain cap widgets ping --help\n  grain cap widgets ping --host example.com --count 3\n  grain cap widgets ping --json '{\"host\":\"example.com\"}'\n",
-	"ls":              "grain ls <uri> [--glob <pat>]\n\nList a namespace directory.\n\n  grain ls ci://bwsalmon/grain\n  grain ls task://\n  grain ls src://pkg --glob '*_test.go'\n",
+	"ls":              "grain ls <uri> [--glob <pat>]\n\nList a namespace directory. --glob matches the directory's own entries; a\npattern with / or ** walks the subtree instead, and ends with a [truncated: ...]\nline if the walk was cut short. A trailing / matches directories only.\n\n  grain ls ci://bwsalmon/grain\n  grain ls task:// --glob '19*'\n  grain ls src://pkg --glob '**/*_test.go'\n",
 	"read":            "grain read <uri> [--tail N] [--offset N --limit N]\n\nPrint a namespace file to stdout, whole: there is no size cap.\n\n  grain read task://1436/record.md\n  grain read ci://bwsalmon/grain/<run>/go/gotest.log --tail 4000\n",
 	"grep":            "grain grep <pattern> <uri> [-i] [-C N] [--glob <pat>]\n\nSearch a namespace file or subtree with an RE2 regular expression.\n\n  grain grep -- '--- FAIL' ci://bwsalmon/grain/<run>/go/gotest.log\n  grain grep -i -C 2 TODO src://pkg/ci --glob '*.go'\n",
 	"ci list":         "grain ci list [--task <id> | --ref <branch>] [--conclusion failure,errored] [--job <j>] [--since 24h] [--limit N] [--repo owner/name]\n\nList recent grain CI runs, newest first. --ref @branch is this task's own branch;\n--task <id> is that task's branch, in any repository this task may read CI for.\n",
@@ -228,7 +230,7 @@ var sandboxCommandHelp = map[string]string{
 	"task message":          "grain task message <id> (<body|--file f>)\n\nLeave a note on a parent or child task's conversation (or any task with api:tasks:admin).\n",
 	"task propose":          sandboxProposeHelp,
 	"propose":               sandboxProposeHelp,
-	"api":                   "grain api routes [--scope <s>]\ngrain api <METHOD> <path> [--body '<json>' | --file <f> | --field k=v] [--reason <why>]\n\nList or call non-dangerous agent API routes granted to this run.\n",
+	"api":                   "grain api routes [--scope <s>]\ngrain api <METHOD> <path> [--body '<json>' | --file <f> | --field k=v] [--reason <why>]\n\nList or call non-dangerous agent API routes granted to this run.\n\nA repository off the default git host goes in a /api/repos/{owner}/{name}/... path\nwith its host and owner escaped into one segment:\n  grain api GET '/api/repos/git.forge.example%2Fexperimental/grain/releases'\n",
 	"api routes":            "grain api routes [--scope <s>]\n\nList the non-dangerous agent API routes this run's capabilities unlock.\n",
 	"memory":                "grain memory (list | read <key> | write <key> <body|--file f> | doc-write <path> <body|--file f>)\n",
 	"memory list":           "grain memory list\n\nList entries in deployment memory (memory://).\n",
@@ -246,14 +248,15 @@ var sandboxCommandHelp = map[string]string{
 		"  --since, --until  an absolute span instead: a date or an RFC 3339 timestamp\n" +
 		"  --repo, --author  only tasks on these repositories / by these authors (repeat or comma-separate)\n",
 	"health": "grain health\n\nThis deployment's health (deploy://health). Needs deployment-health.\n",
-	"log": "grain log [<source>] [--since <rfc3339>] [--until <rfc3339>] [--min-priority err|warning|...] [--contains <text>] [--max-lines N] [--tail N]\n\n" +
+	"log": "grain log [<source> | --source daemon|dmesg] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--max-lines N] [--tail N]\n\n" +
 		"grain's own log, redacted (deploy://grain.log). Needs grain-log.\n\n" +
 		"  --since, --until  the window, as RFC 3339 timestamps (default: the latest entries)\n" +
-		"  --min-priority    least severe journald priority to return (err, warning, info, ...)\n" +
+		"  --source          which journal: daemon (the default) or dmesg (the kernel's)\n" +
+		"  --priority        least severe journald priority to return (err, warning, info, ...; alias --min-priority)\n" +
 		"  --contains        only entries containing this text (plain, case-insensitive)\n" +
 		"  --max-lines N     most entries to return (alias --lines; default 200, at most 1000)\n" +
 		"  --tail N          the last N lines of what that returns\n",
-	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks, or print one (src://playbooks). Needs bootstrap-playbooks.\n",
+	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs bootstrap-playbooks.\n",
 	"issue list": "grain issue list [--repo owner/name]\n\nGitHub issues. Needs read-issues.\n",
 	"issue read": "grain issue read <number> [--repo owner/name]\n\nOne GitHub issue. Needs read-issues.\n",
 	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",

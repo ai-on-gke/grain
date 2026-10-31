@@ -94,7 +94,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "deployment:read", Description: "Read host, sandbox, log, metric and upgrade status"},
 	{Scope: "sandboxes:read", Description: "Read the status of persistent sandboxes (implied by deployment:read)"},
 	{Scope: "deployment:upgrade", Description: "Upgrade grain and its database, or cancel a scheduled upgrade", Dangerous: true},
-	{Scope: "deployment:restart", Description: "Restart grain, and act on persistent sandboxes", Dangerous: true},
+	{Scope: "deployment:restart", Description: "Restart grain, act on persistent sandboxes, and run sandbox probes", Dangerous: true},
 	{Scope: "deployment:reboot", Description: "Reboot or shut down grain's host", Dangerous: true},
 }
 
@@ -430,7 +430,7 @@ func (s APIGrantSet) Allows(scope APIScope, repo string) bool {
 	if repo == "" {
 		return false
 	}
-	return slices.ContainsFunc(s.scopes[scope], func(r string) bool { return strings.EqualFold(r, repo) })
+	return slices.ContainsFunc(s.scopes[scope], func(r string) bool { return SameRepoText(r, repo) })
 }
 
 // Repos is the repositories the set grants scope on, sorted, when it

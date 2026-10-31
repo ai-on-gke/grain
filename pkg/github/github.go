@@ -3678,6 +3678,161 @@ type JobLogTailer interface {
 	JobLogTail(owner, repo string, jobID int64) (string, error)
 }
 
+// WorkflowRun is one GitHub Actions workflow run returned by
+// GET /repos/{owner}/{repo}/actions/runs.
+type WorkflowRun struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Path       string     `json:"path"`
+	HeadBranch string     `json:"head_branch"`
+	HeadSHA    string     `json:"head_sha"`
+	Event      string     `json:"event"`
+	Status     string     `json:"status"`
+	Conclusion string     `json:"conclusion"`
+	HTMLURL    string     `json:"html_url"`
+	RunAttempt int        `json:"run_attempt"`
+	StartedAt  *time.Time `json:"run_started_at"`
+	UpdatedAt  *time.Time `json:"updated_at"`
+}
+
+// WorkflowRunJob is one job of a GitHub Actions workflow run returned by
+// GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs.
+type WorkflowRunJob struct {
+	ID          int64      `json:"id"`
+	RunID       int64      `json:"run_id"`
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Conclusion  string     `json:"conclusion"`
+	StartedAt   *time.Time `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
+	HTMLURL     string     `json:"html_url"`
+	FailingStep string     `json:"failing_step,omitempty"`
+}
+
+// WorkflowRunsReader is the optional Client capability for polling completed
+// GitHub Actions workflow runs and listing a run's jobs.
+type WorkflowRunsReader interface {
+	CompletedWorkflowRuns(owner, repo string, limit int) ([]WorkflowRun, error)
+	ListWorkflowRunJobs(owner, repo string, runID int64) ([]WorkflowRunJob, error)
+}
+
+var _ WorkflowRunsReader = (*RESTClient)(nil)
+
+// completedRunsETags caches the last ETag seen per (Transport, owner, repo) for
+// CompletedWorkflowRuns so unchanged polls cost 304 Not Modified. Keyed in a
+// package-level sync.Map because RESTClient.As makes a shallow copy of RESTClient.
+var completedRunsETags sync.Map
+
+// CompletedWorkflowRuns returns the most recent completed workflow runs in
+// owner/repo (up to limit), sending If-None-Match when an ETag was previously
+// observed and returning (nil, nil) on 304 Not Modified or 404.
+func (c *RESTClient) CompletedWorkflowRuns(owner, repo string, limit int) ([]WorkflowRun, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	endpoint := fmt.Sprintf("/repos/%s/%s/actions/runs?status=completed&per_page=%d", owner, repo, limit)
+	headers := c.headers(owner, repo, false)
+	cacheKey := fmt.Sprintf("%p/%s/%s/%d", c.Transport, strings.ToLower(owner), strings.ToLower(repo), limit)
+	if etag, ok := completedRunsETags.Load(cacheKey); ok {
+		if s, ok := etag.(string); ok && s != "" {
+			headers["If-None-Match"] = s
+		}
+	}
+	resp, err := c.request("GET", endpoint, headers, nil)
+	if err != nil {
+		return nil, err
+	}
+	switch resp.Status {
+	case http.StatusNotModified, http.StatusNotFound:
+		return nil, nil
+	case http.StatusOK:
+	default:
+		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	if etag := strings.TrimSpace(resp.Headers["ETag"]); etag != "" {
+		completedRunsETags.Store(cacheKey, etag)
+	} else if etag := strings.TrimSpace(resp.Headers["Etag"]); etag != "" {
+		completedRunsETags.Store(cacheKey, etag)
+	}
+	var data struct {
+		WorkflowRuns []WorkflowRun `json:"workflow_runs"`
+	}
+	if err := json.Unmarshal(resp.Body, &data); err != nil {
+		return nil, err
+	}
+	for i := range data.WorkflowRuns {
+		if data.WorkflowRuns[i].RunAttempt <= 0 {
+			data.WorkflowRuns[i].RunAttempt = 1
+		}
+	}
+	return data.WorkflowRuns, nil
+}
+
+// ListWorkflowRunJobs returns the jobs of one GitHub Actions workflow run.
+func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]WorkflowRunJob, error) {
+	if runID <= 0 {
+		return nil, nil
+	}
+	var out []WorkflowRunJob
+	path := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/jobs?per_page=100", owner, repo, runID)
+	for path != "" {
+		resp, err := c.get(owner, repo, path)
+		if err != nil {
+			return nil, err
+		}
+		if resp.Status == http.StatusNotFound {
+			return nil, nil
+		}
+		if resp.Status != http.StatusOK {
+			return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		}
+		var data struct {
+			Jobs []struct {
+				ID          int64      `json:"id"`
+				RunID       int64      `json:"run_id"`
+				Name        string     `json:"name"`
+				Status      string     `json:"status"`
+				Conclusion  string     `json:"conclusion"`
+				StartedAt   *time.Time `json:"started_at"`
+				CompletedAt *time.Time `json:"completed_at"`
+				HTMLURL     string     `json:"html_url"`
+				Steps       []struct {
+					Name       string `json:"name"`
+					Status     string `json:"status"`
+					Conclusion string `json:"conclusion"`
+				} `json:"steps"`
+			} `json:"jobs"`
+		}
+		if err := json.Unmarshal(resp.Body, &data); err != nil {
+			return nil, err
+		}
+		for _, job := range data.Jobs {
+			j := WorkflowRunJob{
+				ID:          job.ID,
+				RunID:       job.RunID,
+				Name:        job.Name,
+				Status:      job.Status,
+				Conclusion:  job.Conclusion,
+				StartedAt:   job.StartedAt,
+				CompletedAt: job.CompletedAt,
+				HTMLURL:     job.HTMLURL,
+			}
+			if j.RunID == 0 {
+				j.RunID = runID
+			}
+			for _, step := range job.Steps {
+				if step.Status == "completed" && failedConclusion(step.Conclusion) {
+					j.FailingStep = step.Name
+					break
+				}
+			}
+			out = append(out, j)
+		}
+		path = nextPagePath(resp.Headers["Link"])
+	}
+	return out, nil
+}
+
 // checkRunIDFrom is the numeric id at the end of a job's check_run_url
 // ("https://api.github.com/repos/o/r/check-runs/123"), or 0 if it is not
 // shaped like that. The whole URL cannot simply be fetched: Transport

@@ -18,11 +18,15 @@ import SettingsCard from "./SettingsCard.jsx";
 // ConfigRepoSection is Settings → Config repo
 // (docs/design/settings-panel.md §3.2): the repository this deployment's
 // state is exported to and read back from (StateRepoPanel). It was the
-// System overlay's state tab.
+// System overlay's state tab. It is also the Config Repo Browser
+// (docs/design/config-repo-settings.md §2.3): item is the file open in
+// it, which /config?path=<file> and /settings/config-repo/<file> name.
 export default function ConfigRepoSection({
   config,
   showError,
   onStatusChange,
+  item = "",
+  onItem,
 }) {
   return (
     <SettingsCard label="Config repo" anchor="config-repo">
@@ -30,6 +34,8 @@ export default function ConfigRepoSection({
         config={config}
         showError={showError}
         onStatusChange={onStatusChange}
+        openPath={item}
+        onOpenPath={onItem}
       />
     </SettingsCard>
   );

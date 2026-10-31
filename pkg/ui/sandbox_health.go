@@ -450,6 +450,12 @@ type SandboxHealthResponse struct {
 	// backend, or a UI not colocated with one -- where the pane shows one
 	// line fewer.
 	SandboxImage *SandboxImage `json:"sandboxImage,omitempty"`
+	// SandboxImageWarnings is every sandbox image setting that pins
+	// grain's stock sandbox image at another build than this daemon's
+	// (Client.staleSandboxImagePins) -- a pin SandboxImage above cannot
+	// show, since it is in grain's own settings rather than in the host's
+	// unit, and one that leaves sandboxes behind on every upgrade.
+	SandboxImageWarnings []string `json:"sandboxImageWarnings,omitempty"`
 	// StateRepoSync is Config.StateRepoSyncFailure: set when this
 	// deployment's settings have stopped reaching its state repository.
 	// Here so read_deployment_health reports it.
@@ -998,8 +1004,11 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 	// failure: it is about the host, not about the sandbox pool, and a
 	// deployment with no pool to report still has to say it.
 	hostCredentials := s.tasks.hostCredentialsWarning(r.Context())
+	// The same goes for a stale sandbox image pin: it is in the settings,
+	// and says so whether or not a pool is wired to report on.
 	if s.tasks.Config.Sandboxes == nil && s.tasks.Config.HostStats == nil && s.tasks.Config.Daemon == nil && s.tasks.Config.StandingSandboxes == nil && s.tasks.Config.PersistentSandboxes == nil && s.tasks.Config.Overcommit == nil {
-		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, StateRepoSync: syncFailure, HostCredentials: hostCredentials})
+		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, StateRepoSync: syncFailure, HostCredentials: hostCredentials,
+			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context())})
 		return
 	}
 	resp := SandboxHealthResponse{
@@ -1007,6 +1016,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		StateRepoSync:        syncFailure,
 		HostCredentials:      hostCredentials,
 		SandboxImage:         s.tasks.Config.SandboxImage,
+		SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()),
 		SandboxGuest:         s.tasks.sandboxGuestPublishing(r.Context()),
 		BaseBranchGates:      s.tasks.baseBranchGates(r.Context()),
 		BaseBranchPublishing: s.tasks.baseBranchPublishing(r.Context()),

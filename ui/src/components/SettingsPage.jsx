@@ -56,9 +56,13 @@ import {
   configRepoRefusal,
   settingsSectionPath,
 } from "./ConfigRefusal.jsx";
+import { ConfigManagedNotice } from "./ConfigRepoLink.jsx";
 import {
+  CONFIG_REPO_SECTION_PATHS,
+  DEFAULT_SETTINGS_SECTION,
   SETTINGS_GROUPS,
   SETTINGS_SECTIONS,
+  isConfigRepoSection,
   settingsSectionLabel,
 } from "../settingsSections.js";
 import { matchSettings } from "../settingsIndex.js";
@@ -131,13 +135,24 @@ export default function SettingsPage({
   const [filter, setFilter] = useState("");
   const filterRef = useRef(null);
   const matches = useMemo(() => matchSettings(filter), [filter]);
-  const current = section || (isPhone ? "" : "general");
+  const current = section || (isPhone ? "" : DEFAULT_SETTINGS_SECTION);
   const externalConfigRepo =
     (settings ? settings.externalConfigRepo : config?.externalConfigRepo) || "";
   const externalConfigBranch =
     (settings ? settings.externalConfigBranch : config?.externalConfigBranch) ||
     "main";
-  const readOnly = Boolean(externalConfigRepo) && !NOT_CONFIG.has(current);
+  // A config-repo-only section is read-only whichever repository holds
+  // the configuration (docs/design/config-repo-settings.md §2.1): what it
+  // draws is what the config repo says, and changing it is a pull
+  // request.
+  const external = Boolean(externalConfigRepo) && !NOT_CONFIG.has(current);
+  // GET /api/config's configRepoOnly: the API refuses these sections'
+  // writes in favour of a config pull request. Without a config repo
+  // (`grain demo`) they stay editable -- there is nowhere else to.
+  const configRepoOnly =
+    Boolean(config?.configRepoOnly) || Boolean(externalConfigRepo);
+  const configManaged = configRepoOnly && isConfigRepoSection(current);
+  const readOnly = external || configManaged;
   s.readOnly = readOnly;
 
   useEffect(() => {
@@ -272,7 +287,14 @@ export default function SettingsPage({
                       onClick={() => pick(m)}
                       data-testid="settings-result"
                     >
-                      <ListItemText primary={`${m.label}, ${sec.label}`} />
+                      <ListItemText
+                        primary={`${m.label}, ${sec.label}`}
+                        secondary={
+                          m.configRepo && configRepoOnly
+                            ? "Read-only: in the config repo"
+                            : null
+                        }
+                      />
                     </ListItemButton>
                   </ListItem>
                 ))}
@@ -497,6 +519,8 @@ export default function SettingsPage({
         body = (
           <ConfigRepoSection
             {...common}
+            item={item}
+            onItem={onItem}
             onStatusChange={() => {
               reloadSettings();
               onSaved?.();
@@ -508,7 +532,9 @@ export default function SettingsPage({
         body = <ModelsSection {...common} onSaved={onSaved} />;
         break;
       case "git":
-        body = <GitSection showError={showError} onSaved={onSaved} />;
+        body = (
+          <GitSection showError={showError} onSaved={onSaved} onSection={go} />
+        );
         break;
       case "tasks":
         body = (
@@ -618,7 +644,10 @@ export default function SettingsPage({
             Not configured yet -- nothing has been saved for this deployment.
           </Alert>
         )}
-        {readOnly && (
+        {configManaged && !external && (
+          <ConfigManagedNotice paths={CONFIG_REPO_SECTION_PATHS[current]} />
+        )}
+        {external && (
           <Alert
             severity="info"
             sx={{ mb: 2 }}
