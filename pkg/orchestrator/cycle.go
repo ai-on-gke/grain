@@ -1063,6 +1063,7 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	if held := catalogueHold(ctx, deps); held != nil {
 		holds = append(holds, held)
 	}
+	holds = append(holds, changeTargetHold(ctx, deps))
 	if len(holds) > 0 {
 		opts = append(opts, dispatch.Hold(func(taskID string) string {
 			for _, held := range holds {
@@ -1728,6 +1729,59 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 			}
 		}
 		return ""
+	}
+}
+
+// changeTargetHold holds a queued task whose change target refuses it as it
+// stands (dispatchChangeTargetRefusal) before a sandbox is started for it.
+// runDispatch asks the same question, but only once the run exists, and a
+// refusal there is a setup failure: one nothing on the task will ever
+// change, which a kept run-now request then put back at the head of the
+// queue every cycle (task 1860). Held here, the task waits, saying why
+// on its row (model.ChangeTargetWaitCapability), and is told once in its
+// conversation what a person has to change; the first cycle after they
+// change it dispatches it and clears the wait.
+func changeTargetHold(ctx context.Context, deps Deps) func(string) string {
+	return func(taskID string) string {
+		task, err := deps.Store.GetTask(ctx, taskID)
+		if err != nil || task == nil {
+			// Not this hold's question to fail closed on: a task with no
+			// change target is the usual case, and the run's own check
+			// still refuses one that slips past.
+			return ""
+		}
+		if task.ChangeTarget == nil {
+			return ""
+		}
+		wait, werr := deps.Store.GrantWaitOf(ctx, taskID)
+		refusal := dispatchChangeTargetRefusal(*task)
+		if refusal == nil {
+			if werr == nil && wait != nil && wait.Capability == model.ChangeTargetWaitCapability {
+				if err := deps.Store.ClearGrantWait(ctx, taskID); err != nil {
+					log.Printf("orchestrator: clearing %s's change target wait: %v", taskID, err)
+				}
+			}
+			return ""
+		}
+		reason := refusal.Error()
+		if werr != nil || wait == nil || wait.Capability != model.ChangeTargetWaitCapability || wait.Resource != reason {
+			if err := deps.Store.SetGrantWait(ctx, model.GrantWait{
+				TaskID: taskID, Capability: model.ChangeTargetWaitCapability, Resource: reason, WaitingAt: deps.Config.now(),
+			}); err != nil {
+				log.Printf("orchestrator: recording why %s's change target holds it: %v", taskID, err)
+			}
+			if _, err := deps.Store.AddComment(ctx, model.Comment{
+				TaskID: taskID,
+				Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+				Body: fmt.Sprintf("grain is not dispatching this task: %s. Nothing a run does can change "+
+					"that, so it waits until somebody edits the task; it is dispatched again on the "+
+					"first cycle after that.", reason),
+				CreatedAt: deps.Config.now(),
+			}); err != nil {
+				log.Printf("orchestrator: telling %s why its change target holds it: %v", taskID, err)
+			}
+		}
+		return "held by its change target: " + reason
 	}
 }
 
