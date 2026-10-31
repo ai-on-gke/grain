@@ -71,7 +71,7 @@ func (m *StateManager) OpenConfigPullRequest(ctx context.Context, req ui.ConfigP
 		return ui.ConfigPullRequest{}, err
 	}
 	if err := staterepo.ApplyChanges(candidate, req.Changes); err != nil {
-		return ui.ConfigPullRequest{}, &ui.ConfigPullRequestInvalid{Err: fmt.Errorf("the change does not apply to %s: %w", base, err)}
+		return ui.ConfigPullRequest{}, &ui.ConfigPullRequestInvalid{Err: fmt.Errorf("the change does not apply to %s: %w", base, err), Stale: true}
 	}
 	report, err := staterepo.ValidateCandidateConfig(ctx, m.db, candidate)
 	if err != nil {

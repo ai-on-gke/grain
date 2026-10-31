@@ -42,7 +42,10 @@ func checkFileOwnedBy(what, path string, owners []uint32) error {
 		return fmt.Errorf("%s %s is not a regular file", what, path)
 	}
 	if info.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("%s %s is writable by group or others (mode %s); make it 0644 or tighter", what, path, info.Mode().Perm())
+		// chmod go-w rather than a mode: what is checked is the allowlist
+		// and hostd's own binary, and 0644 would leave the binary
+		// unexecutable.
+		return fmt.Errorf("%s %s is writable by group or others (mode %s); remove that with chmod go-w %s", what, path, info.Mode().Perm(), path)
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {

@@ -275,15 +275,24 @@ func TestInteractiveInitialStartupAndAcrossRunLatencyEndToEnd(t *testing.T) {
 			mu.Lock()
 			gotTurns := len(turns)
 			mu.Unlock()
-			st, _ := store.State(ctx, created.ID)
-			if gotTurns == wantTurns && !inFlight.Busy(created.ID) && orchestrator.WarmSessionSandboxID(store, created.ID) != "" && st == model.StateAwaitingReply {
-				return
+			// The store is only read once the in-memory conditions
+			// hold, and the loop polls every 20ms rather than every
+			// 2ms: each read is a SQLite query that, under -race on a
+			// loaded CI runner, contends with the very dispatch whose
+			// latency this test measures (the latencies come from the
+			// agent's own timestamps, not from when this loop notices).
+			if gotTurns == wantTurns && !inFlight.Busy(created.ID) {
+				st, _ := store.State(ctx, created.ID)
+				if st == model.StateAwaitingReply && orchestrator.WarmSessionSandboxID(store, created.ID) != "" {
+					return
+				}
 			}
 			if time.Now().After(deadline) {
+				st, _ := store.State(ctx, created.ID)
 				t.Fatalf("timed out waiting for turn %d and awaiting_reply (gotTurns=%d, busy=%v, warm=%q, state=%s)",
 					wantTurns, gotTurns, inFlight.Busy(created.ID), orchestrator.WarmSessionSandboxID(store, created.ID), st)
 			}
-			time.Sleep(2 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond)
 		}
 	}
 	_ = turnDoneCh
