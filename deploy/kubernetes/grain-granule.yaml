@@ -285,8 +285,11 @@ spec:
 ---
 # The sandbox-access acceptor's own Service, serving nothing else
 # (docs/design/grain-on-gke.md, "Sandbox access"). ClusterIP only, never
-# behind an external Gateway or Ingress: reachable only from sandbox pods
-# inside the cluster. It is defined before the
+# behind an external Gateway or Ingress. Nothing in deploy/kubernetes
+# narrows which in-cluster pods may reach it -- that is a NetworkPolicy
+# for the operator to add -- so what keeps it from being a way in is the
+# acceptor itself: it requires a per-sandbox client certificate and token
+# (pkg/sandboxaccess) on every connection. It is defined before the
 # Deployment so the grain pod is started with GRAIN_ACCESS_SERVICE_HOST,
 # the ClusterIP grain hands granule to drop guest traffic to.
 apiVersion: v1
