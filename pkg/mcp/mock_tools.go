@@ -908,8 +908,8 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				"no_port":           map[string]any{"type": "boolean"},
 				"fixes_base_branch": map[string]any{"type": "boolean"},
 				"origin":            map[string]any{"type": "string"},
-				"no_repo":  map[string]any{"type": "boolean"},
-				"at_front": map[string]any{"type": "boolean"},
+				"no_repo":           map[string]any{"type": "boolean"},
+				"at_front":          map[string]any{"type": "boolean"},
 				"priority": map[string]any{
 					"type":        "integer",
 					"description": "Task priority (default 5; higher numbers mean higher priority)",

@@ -168,8 +168,8 @@ func (p TaskListPage) Entries() []TaskListEntry {
 		}
 		e := TaskListEntry{
 			ID: t.ID, State: t.State, Repo: t.Repo, Title: t.Title,
-			Priority:  priority,
-			Kinds:     t.Kinds, BlockedBy: t.BlockedBy, Stalled: taskStalled(t),
+			Priority: priority,
+			Kinds:    t.Kinds, BlockedBy: t.BlockedBy, Stalled: taskStalled(t),
 			CreatedAt: t.CreatedAt, ChangedAt: t.ChangedAt,
 		}
 		if !strings.EqualFold(t.State, "closed") {

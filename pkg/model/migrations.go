@@ -470,15 +470,6 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 	for v := from + 1; v <= SchemaVersion; v++ {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
-			if table, col, ok := alterAddColumnTarget(stmt); ok {
-				exists, err := tableHasColumn(ctx, tx, table, col)
-				if err != nil {
-					return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
-				}
-				if exists {
-					continue
-				}
-			}
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
 				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
 					strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") {
@@ -526,40 +517,4 @@ func storeViews(ctx context.Context, tx *sql.Tx) ([]string, error) {
 		views = append(views, name)
 	}
 	return views, rows.Err()
-}
-
-func alterAddColumnTarget(stmt string) (table, col string, ok bool) {
-	const prefix = "ALTER TABLE `"
-	const mid = "` ADD COLUMN `"
-	if !strings.HasPrefix(stmt, prefix) {
-		return "", "", false
-	}
-	rest := stmt[len(prefix):]
-	table, rest, ok = strings.Cut(rest, mid)
-	if !ok {
-		return "", "", false
-	}
-	col, _, ok = strings.Cut(rest, "`")
-	if !ok {
-		return "", "", false
-	}
-	return table, col, true
-}
-
-func tableHasColumn(ctx context.Context, tx *sql.Tx, table, col string) (bool, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT * FROM `"+table+"` WHERE 1 = 0")
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	cols, err := rows.Columns()
-	if err != nil {
-		return false, err
-	}
-	for _, c := range cols {
-		if strings.EqualFold(c, col) {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
 }
