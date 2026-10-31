@@ -357,15 +357,28 @@ var listTasksInputSchema = map[string]any{
 // taskListFilter is list_grain_tasks' narrowing beyond state: the filters
 // that let a judgement agent ask for what moved instead of sweeping the
 // whole list (docs/design/durable-tasks.md#DT-13).
+//
+// State may name several states, comma-separated ("proposed,queued"),
+// and a task in any of them matches. Repo and Search are grain task
+// list's own (/cli/tasks): the repository a task works in, compared as
+// grant names are, case-insensitively; and a substring of its title.
 type taskListFilter struct {
 	State        string
 	ChangedSince time.Time
 	Stalled      bool
 	Kind         string
+	Repo         string
+	Search       string
 }
 
 func (f taskListFilter) matches(t TaskSummary) bool {
-	if f.State != "" && !strings.EqualFold(t.State, f.State) {
+	if f.State != "" && !stateListHas(f.State, t.State) {
+		return false
+	}
+	if f.Repo != "" && !strings.EqualFold(t.Repo, f.Repo) {
+		return false
+	}
+	if f.Search != "" && !strings.Contains(strings.ToLower(t.Title), strings.ToLower(f.Search)) {
 		return false
 	}
 	if !f.ChangedSince.IsZero() && (t.ChangedAt == nil || t.ChangedAt.Before(f.ChangedSince)) {
@@ -380,8 +393,19 @@ func (f taskListFilter) matches(t TaskSummary) bool {
 	return true
 }
 
+// stateListHas reports whether state is one of the comma-separated states
+// in list.
+func stateListHas(list, state string) bool {
+	for _, s := range strings.Split(list, ",") {
+		if s = strings.TrimSpace(s); s != "" && strings.EqualFold(s, state) {
+			return true
+		}
+	}
+	return false
+}
+
 func (f taskListFilter) narrowed() bool {
-	return f.State != "" || !f.ChangedSince.IsZero() || f.Stalled || f.Kind != ""
+	return f.State != "" || !f.ChangedSince.IsZero() || f.Stalled || f.Kind != "" || f.Repo != "" || f.Search != ""
 }
 
 // describe is the filter in words, for an empty answer.
@@ -398,6 +422,12 @@ func (f taskListFilter) describe() string {
 	}
 	if f.Kind != "" {
 		parts = append(parts, "of kind "+f.Kind)
+	}
+	if f.Repo != "" {
+		parts = append(parts, "in "+f.Repo)
+	}
+	if f.Search != "" {
+		parts = append(parts, "with "+strconv.Quote(f.Search)+" in the title")
 	}
 	return strings.Join(parts, ", ")
 }
@@ -494,13 +524,8 @@ func renderTaskList(tasks []TaskSummary, state string, limit int) string {
 }
 
 func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit int) string {
-	matched := make([]TaskSummary, 0, len(tasks))
-	for _, t := range tasks {
-		if filter.matches(t) {
-			matched = append(matched, t)
-		}
-	}
-	if len(matched) == 0 {
+	shown, matched := selectTasks(tasks, filter, limit)
+	if matched == 0 {
 		if filter == (taskListFilter{State: filter.State}) && filter.State != "" {
 			return fmt.Sprintf("No tasks in state %q.", filter.State)
 		}
@@ -510,14 +535,7 @@ func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit in
 		return "This deployment has no tasks at all."
 	}
 
-	sortTasksByFiling(matched)
-
-	shown := matched
-	dropped := 0
-	if len(shown) > limit {
-		dropped = len(shown) - limit
-		shown = shown[dropped:]
-	}
+	dropped := matched - len(shown)
 
 	var b strings.Builder
 	for _, t := range shown {
@@ -579,8 +597,24 @@ func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit in
 	if dropped > 0 {
 		fmt.Fprintf(&b, "\n%d older matching tasks are not shown -- raise \"limit\" to see them.\n", dropped)
 	}
-	fmt.Fprintf(&b, "\n%d task(s) shown of %d matching.", len(shown), len(matched))
+	fmt.Fprintf(&b, "\n%d task(s) shown of %d matching.", len(shown), matched)
 	return b.String()
+}
+
+// selectTasks is the tasks filter matches, oldest first by filing, cut to
+// the newest limit of them, and how many matched before the cut.
+func selectTasks(tasks []TaskSummary, filter taskListFilter, limit int) (shown []TaskSummary, matched int) {
+	all := make([]TaskSummary, 0, len(tasks))
+	for _, t := range tasks {
+		if filter.matches(t) {
+			all = append(all, t)
+		}
+	}
+	sortTasksByFiling(all)
+	if limit > 0 && len(all) > limit {
+		return all[len(all)-limit:], len(all)
+	}
+	return all, len(all)
 }
 
 // sortTasksByFiling puts tasks oldest first by CreatedAt, then by task
