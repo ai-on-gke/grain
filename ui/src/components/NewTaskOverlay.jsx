@@ -475,6 +475,7 @@ export default function NewTaskOverlay({
   // noPort is model.Task.NoPort: a change that belongs only on the
   // branch it lands on, and is not ported to the repo's paired branches.
   const [noPort, setNoPort] = useState(() => !!draft?.noPort);
+  const [keepRunning, setKeepRunning] = useState(() => !!draft?.keepRunning);
   // fixesBaseBranch is ui.CreateTaskRequest.FixesBaseBranch: this task
   // fixes its base branch while that branch is red, so grain never makes
   // it wait on the branch's own repair task (grain/task-3451).
@@ -549,6 +550,7 @@ export default function NewTaskOverlay({
     if (autoMerge !== !!config?.autoMergeByDefault) return true;
     if (approved !== !!config?.approvedByDefault) return true;
     if (noPort) return true;
+    if (keepRunning) return true;
     if (fixesBaseBranch) return true;
     if (newBranch || newBranchName.trim() !== "") return true;
     if (reviewers.trim() !== "") return true;
@@ -610,6 +612,7 @@ export default function NewTaskOverlay({
         sandboxDiskGb,
         approved,
         noPort,
+        keepRunning,
         fixesBaseBranch,
         atFront,
         priority,
@@ -644,6 +647,7 @@ export default function NewTaskOverlay({
     sandboxDiskGb,
     approved,
     noPort,
+    keepRunning,
     fixesBaseBranch,
     atFront,
     priority,
@@ -684,6 +688,7 @@ export default function NewTaskOverlay({
     setAutoMerge(!!config?.autoMergeByDefault);
     setApproved(!!config?.approvedByDefault);
     setNoPort(false);
+    setKeepRunning(false);
     setFixesBaseBranch(false);
     setAtFront(!!config?.newestFirst);
     setPriority("5");
@@ -781,6 +786,7 @@ export default function NewTaskOverlay({
       // Only said when ticked: unticked is the server's own default
       // (model.Task.NoPort).
       ...(noPort && !ct ? { noPort: true } : {}),
+      ...(keepRunning ? { keepRunning: true } : {}),
       // Likewise only when ticked, and never for a task with no repo,
       // which has no base branch to fix.
       ...(fixesBaseBranch && !none ? { fixesBaseBranch: true } : {}),
@@ -888,6 +894,7 @@ export default function NewTaskOverlay({
       setAutoMerge(!!config?.autoMergeByDefault);
       setApproved(!!config?.approvedByDefault);
       setNoPort(false);
+      setKeepRunning(false);
       setFixesBaseBranch(false);
       setAtFront(!!config?.newestFirst);
       setPriority("5");
@@ -1251,6 +1258,18 @@ export default function NewTaskOverlay({
             sx={{ display: "flex" }}
           />
         )}
+        <FormControlLabel
+          control={
+            <Checkbox
+              name="keepRunning"
+              checked={keepRunning}
+              onChange={(e) => setKeepRunning(e.target.checked)}
+            />
+          }
+          label="Keep running"
+          title="Immediately restart the task when its run exits instead of completing or parking it."
+          sx={{ display: "flex" }}
+        />
         <FormControl fullWidth margin="normal" size="small">
           <InputLabel id="new-task-capabilities-label">
             Legacy capabilities

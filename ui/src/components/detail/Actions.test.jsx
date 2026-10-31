@@ -1213,6 +1213,30 @@ describe("DetailOverlay actions", () => {
     });
   });
 
+  it("toggles keepRunning on a task from the actions column", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, keepRunning: false }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+        showError={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: /^Keep running$/ }));
+
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12", {
+      method: "PATCH",
+      body: JSON.stringify({ keepRunning: true }),
+    });
+  });
+
   // Auto-merge is read after the run, not at checkout, so unlike the
   // repo and base above it is the one edit here that does count for the
   // run already in flight.

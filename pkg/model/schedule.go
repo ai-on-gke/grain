@@ -152,6 +152,7 @@ type Schedule struct {
 	// where "ack" (or an explicit "close") is most often wanted. Empty,
 	// the default, means close.
 	NothingNeededAction NothingNeededAction
+	KeepRunning         bool
 
 	// Model is the model every task this schedule files asks for
 	// (Task.Model, docs/connections-and-models.md). Empty means this
