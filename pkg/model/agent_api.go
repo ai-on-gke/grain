@@ -430,7 +430,7 @@ func (s APIGrantSet) Allows(scope APIScope, repo string) bool {
 	if repo == "" {
 		return false
 	}
-	return slices.ContainsFunc(s.scopes[scope], func(r string) bool { return strings.EqualFold(r, repo) })
+	return slices.ContainsFunc(s.scopes[scope], func(r string) bool { return SameRepoText(r, repo) })
 }
 
 // Repos is the repositories the set grants scope on, sorted, when it

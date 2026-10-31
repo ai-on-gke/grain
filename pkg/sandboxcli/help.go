@@ -230,7 +230,7 @@ var sandboxCommandHelp = map[string]string{
 	"task message":          "grain task message <id> (<body|--file f>)\n\nLeave a note on a parent or child task's conversation (or any task with api:tasks:admin).\n",
 	"task propose":          sandboxProposeHelp,
 	"propose":               sandboxProposeHelp,
-	"api":                   "grain api routes [--scope <s>]\ngrain api <METHOD> <path> [--body '<json>' | --file <f> | --field k=v] [--reason <why>]\n\nList or call non-dangerous agent API routes granted to this run.\n",
+	"api":                   "grain api routes [--scope <s>]\ngrain api <METHOD> <path> [--body '<json>' | --file <f> | --field k=v] [--reason <why>]\n\nList or call non-dangerous agent API routes granted to this run.\n\nA repository off the default git host goes in a /api/repos/{owner}/{name}/... path\nwith its host and owner escaped into one segment:\n  grain api GET '/api/repos/git.forge.example%2Fexperimental/grain/releases'\n",
 	"api routes":            "grain api routes [--scope <s>]\n\nList the non-dangerous agent API routes this run's capabilities unlock.\n",
 	"memory":                "grain memory (list | read <key> | write <key> <body|--file f> | doc-write <path> <body|--file f>)\n",
 	"memory list":           "grain memory list\n\nList entries in deployment memory (memory://).\n",
