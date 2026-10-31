@@ -2689,8 +2689,11 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			if st, serr := deps.Store.State(cleanupCtx, task.ID); serr == nil && st != "" &&
 				st != model.StateClosed && st != model.StateFailed &&
 				st != model.StateCompleted && st != model.StateAwaitingSubmit {
-				parkWarmSessionSandbox(deps, task.ID, sandboxName, sandboxKey, sessionGrantsKey(*task), sandbox, sandboxCounted, cfg.sessionShape, finishNow, ttl)
-				keptWarm = true
+				if latest, lerr := deps.Store.GetTask(cleanupCtx, task.ID); lerr == nil && latest != nil &&
+					sessionGrantsKey(*latest) == sessionGrantsKey(*task) {
+					parkWarmSessionSandbox(deps, task.ID, sandboxName, sandboxKey, sessionGrantsKey(*task), sandbox, sandboxCounted, cfg.sessionShape, finishNow, ttl)
+					keptWarm = true
+				}
 			}
 		}
 	}

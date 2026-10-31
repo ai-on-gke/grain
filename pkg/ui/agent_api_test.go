@@ -166,6 +166,21 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 			}
 		}
 	}
+	// Even for capabilities task 1 holds, or empty lists / false flags that
+	// strip grants, PATCH /api/tasks/2 touching grants requires
+	// capabilities:admin.
+	for _, body := range []string{
+		`{"capabilities":[]}`,
+		`{"capabilities":["api:tasks:read"]}`,
+		`{"grants":[{"capability":"api:tasks:read"}]}`,
+		`{"priority":false}`,
+		`{"keepRunning":false}`,
+		`{"keep_running":false}`,
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", body, "testing"); code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 without capabilities:admin with %s answered %d: %s", body, code, resp)
+		}
+	}
 
 	// Holding capabilities:admin itself -- a dangerous scope a person
 	// granted, with a reason -- is the power to attach grants, not to
@@ -186,6 +201,19 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 	} {
 		if code, resp := asAgent(t, srv, "3", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusForbidden {
 			t.Errorf("POST /api/tasks/2/capabilities with %s answered an agent %d: %s", body, code, resp)
+		}
+	}
+	seedAPITask(t, client, "4", "acme/widgets", "api:capabilities:admin", "api:tasks:write", "api:tasks:read", "gcp-key")
+	for _, body := range []string{
+		`{"capabilities":["self-debug"]}`,
+		`{"priority":true}`,
+		`{"priority":false}`,
+		`{"keepRunning":true}`,
+		`{"keepRunning":false}`,
+		`{"keep_running":true}`,
+	} {
+		if code, resp := asAgent(t, srv, "4", http.MethodPatch, "/api/tasks/2", body, "testing"); code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 with %s answered an agent %d: %s", body, code, resp)
 		}
 	}
 	for _, body := range []string{
@@ -275,6 +303,8 @@ func TestAgentAPICannotFileAroundTheProposalGate(t *testing.T) {
 		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","author":"admin@example.com"}`},
 		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-key"}`},
 		{http.MethodPatch, "/api/tasks/2", `{"autoMerge":true}`},
+		{http.MethodPatch, "/api/tasks/2", `{"autoApproveProposals":true}`},
+		{http.MethodPatch, "/api/tasks/2", `{"auto_approve_proposals":true}`},
 		{http.MethodPost, "/api/tasks/2/submit", `{}`},
 		// Mailing a CL and publishing its replies are a person's.
 		{http.MethodPost, "/api/tasks/2/change-mail", `{"reviewers":["alice"]}`},
