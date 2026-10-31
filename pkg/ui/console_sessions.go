@@ -591,10 +591,6 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 	}
 	writable := !c.configRepoOnly(ctx)
 	if openTask != nil {
-		defaults, err := model.DeploymentDefaultCapabilities(ctx, c.Store)
-		if err != nil {
-			return nil, err
-		}
 		stateRepo := c.stateRepoRef()
 		if err := c.Store.UpdateTask(ctx, openTask.ID, func(t *model.Task) error {
 			if req.Title != nil {
@@ -623,7 +619,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 						return err
 					}
 				}
-				newGrants := make([]model.Grant, 0, len(session.Capabilities)+len(defaults)+1)
+				newGrants := make([]model.Grant, 0, len(session.Capabilities)+1)
 				newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
 				seen := map[string]bool{model.DurableCapability: true}
 				for _, capID := range session.Capabilities {
@@ -636,14 +632,6 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 						via = model.GrantByGrain
 					}
 					newGrants = append(newGrants, model.Grant{Capability: capID, Via: via})
-				}
-				for _, d := range defaults {
-					d = strings.TrimSpace(d)
-					if d == "" || seen[d] {
-						continue
-					}
-					seen[d] = true
-					newGrants = append(newGrants, model.Grant{Capability: d, Via: model.GrantByDefault})
 				}
 				t.Grants = newGrants
 			}
@@ -703,7 +691,6 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		if writable {
 			model.RecordSyncedConsoleSession(c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
 				Capabilities:    session.Capabilities,
-				Defaults:        defaults,
 				Reads:           session.Reads,
 				Writes:          session.Writes,
 				NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
@@ -716,7 +703,6 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		} else if _, hasPrev := model.LastSyncedConsoleSession(c.Store, openTask.ID); !hasPrev {
 			model.RecordSyncedConsoleSession(c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
 				Capabilities:    origSession.Capabilities,
-				Defaults:        defaults,
 				Reads:           origSession.Reads,
 				Writes:          origSession.Writes,
 				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, !c.Config.SandboxShapeIgnored),
@@ -753,13 +739,8 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 	if !ok {
 		return
 	}
-	defaults, err := model.DeploymentDefaultCapabilities(ctx, c.Store)
-	if err != nil {
-		return
-	}
 	model.RecordSyncedConsoleSession(c.Store, task.ID, model.ConsoleSessionConfigSnapshot{
 		Capabilities:    session.Capabilities,
-		Defaults:        defaults,
 		Reads:           session.Reads,
 		Writes:          session.Writes,
 		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
@@ -887,10 +868,31 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 			caps = append(caps, capability)
 		}
 	} else {
-		// The director's set.
+		// The director's set, plus any deployment defaults offered here so a
+		// newly created session starts holding what its own proposals are
+		// seeded with (grain/task-1983) while keeping session.Capabilities as
+		// the single source of truth an operator can untick (grain/task-2126).
+		seen := map[string]bool{}
 		defs := model.DefaultConsoleSessions()
 		if len(defs) > 0 {
-			caps = append([]string(nil), defs[0].Capabilities...)
+			for _, capability := range defs[0].Capabilities {
+				if capability == "" || seen[capability] {
+					continue
+				}
+				seen[capability] = true
+				caps = append(caps, capability)
+			}
+		}
+		for _, capability := range cfg.DefaultCapabilities {
+			capability, err := c.normalizeCapabilityID(capability)
+			if err != nil || capability == "" || seen[capability] {
+				continue
+			}
+			if _, ok := c.capabilityByID(capability); !ok {
+				continue
+			}
+			seen[capability] = true
+			caps = append(caps, capability)
 		}
 	}
 

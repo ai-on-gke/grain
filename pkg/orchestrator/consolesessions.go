@@ -680,10 +680,6 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		}
 		session.TitleSource = session.ResolvedTitleSource(model.ConsoleSessionFirstMessage(comments))
 	}
-	defaults, err := model.DeploymentDefaultCapabilities(ctx, deps.Store)
-	if err != nil {
-		return err
-	}
 	prev, hasPrev := model.LastSyncedConsoleSession(deps.Store, task.ID)
 	configTitle := model.ConsoleSessionTitle(session)
 	configNetwork := consoleSessionNetworkAccess(deps, session)
@@ -693,7 +689,6 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	if !hasPrev {
 		prev = model.ConsoleSessionConfigSnapshot{
 			Capabilities:    session.Capabilities,
-			Defaults:        defaults,
 			Reads:           session.Reads,
 			Writes:          session.Writes,
 			NetworkAccess:   configNetwork,
@@ -726,7 +721,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	}
 	body := model.DirectorSessionBody(stateRepo, effectiveSession)
 
-	grants := mergeConsoleSessionGrants(task.Grants, session, defaults, prev, hasPrev)
+	grants := mergeConsoleSessionGrants(task.Grants, session, prev, hasPrev)
 	reads := mergeConsoleSessionReads(task.Reads, stateRepo, session.Reads, prev.Reads, hasPrev)
 	writes := mergeConsoleSessionWrites(task.Writes, session.Writes, prev.Writes, hasPrev)
 
@@ -765,7 +760,6 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 
 	model.RecordSyncedConsoleSession(deps.Store, task.ID, model.ConsoleSessionConfigSnapshot{
 		Capabilities:    session.Capabilities,
-		Defaults:        defaults,
 		Reads:           session.Reads,
 		Writes:          session.Writes,
 		NetworkAccess:   configNetwork,
@@ -813,29 +807,19 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	})
 }
 
-func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSession, defaults []string,
+func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSession,
 	prev model.ConsoleSessionConfigSnapshot, hasPrev bool) []model.Grant {
 
 	removedSession := map[string]bool{}
-	removedDefault := map[string]bool{}
 	if hasPrev {
 		for _, c := range prev.Capabilities {
 			if c != "" && !slices.Contains(session.Capabilities, c) {
 				removedSession[c] = true
 			}
 		}
-		for _, c := range prev.Defaults {
-			c = strings.TrimSpace(c)
-			if c == "" || slices.Contains(session.Capabilities, c) {
-				continue
-			}
-			if !slices.ContainsFunc(defaults, func(d string) bool { return strings.TrimSpace(d) == c }) {
-				removedDefault[c] = true
-			}
-		}
 	}
 
-	out := make([]model.Grant, 0, len(current)+len(session.Capabilities)+len(defaults)+1)
+	out := make([]model.Grant, 0, len(current)+len(session.Capabilities)+1)
 	out = append(out, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
 	seen := map[string]bool{model.DurableCapability: true}
 
@@ -843,14 +827,15 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 		if g.Capability == "" || seen[g.Capability] {
 			continue
 		}
-		if g.Via == model.GrantByGrain && removedSession[g.Capability] {
-			if slices.ContainsFunc(defaults, func(d string) bool { return strings.TrimSpace(d) == g.Capability }) {
-				seen[g.Capability] = true
-				out = append(out, model.Grant{Capability: g.Capability, Via: model.GrantByDefault})
+		if g.Via == model.GrantByGrain {
+			if hasPrev && removedSession[g.Capability] {
+				continue
 			}
-			continue
+			if !hasPrev && !slices.Contains(session.Capabilities, g.Capability) {
+				continue
+			}
 		}
-		if g.Via == model.GrantByDefault && removedDefault[g.Capability] {
+		if g.Via == model.GrantByDefault && !slices.Contains(session.Capabilities, g.Capability) {
 			continue
 		}
 		seen[g.Capability] = true
@@ -858,22 +843,13 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 	}
 
 	for _, name := range session.Capabilities {
+		name = strings.TrimSpace(name)
 		if name == "" || seen[name] {
 			continue
 		}
 		if !hasPrev || !slices.Contains(prev.Capabilities, name) {
 			seen[name] = true
 			out = append(out, model.Grant{Capability: name, Via: model.GrantByGrain})
-		}
-	}
-	for _, name := range defaults {
-		name = strings.TrimSpace(name)
-		if name == "" || seen[name] {
-			continue
-		}
-		if !hasPrev || !slices.ContainsFunc(prev.Defaults, func(d string) bool { return strings.TrimSpace(d) == name }) {
-			seen[name] = true
-			out = append(out, model.Grant{Capability: name, Via: model.GrantByDefault})
 		}
 	}
 	return out
@@ -973,11 +949,10 @@ func consoleSessionNetworkAccess(deps Deps, session model.ConsoleSession) model.
 
 // consoleSessionGrants is the session's configured capabilities as
 // grants: GrantByGrain, because it is grain applying them to its own
-// task from a settings row rather than a human labelling one -- plus
-// this deployment's default capabilities, GrantByDefault, which every
-// task the session files is seeded with (model.ConsoleSessionGrants).
-func consoleSessionGrants(session model.ConsoleSession, defaults []string) []model.Grant {
-	return model.ConsoleSessionGrants(session, defaults...)
+// task from a settings row rather than a human labelling one
+// (model.ConsoleSessionGrants).
+func consoleSessionGrants(session model.ConsoleSession) []model.Grant {
+	return model.ConsoleSessionGrants(session)
 }
 
 func parkConsoleSession(ctx context.Context, deps Deps, taskID, note string, now time.Time) error {
