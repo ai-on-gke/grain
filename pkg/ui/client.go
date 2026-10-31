@@ -2235,10 +2235,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	// So does the capability policy (§4.2.2), which admission would
 	// otherwise only apply once the task is dispatched.
-	grants, err = c.policyFilingGrants(ctx, grants, target)
+	grants, policyDropped, err := c.policyFilingGrants(ctx, grants, target)
 	if err != nil {
 		return Task{}, err
 	}
+	droppedRefusals = append(droppedRefusals, policyDropped...)
 	customFields, err := c.normalizeCustomFields(ctx, req.CustomFields)
 	if err != nil {
 		return Task{}, err

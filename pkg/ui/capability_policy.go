@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"net/http"
 	"sort"
@@ -405,25 +406,29 @@ func (c *Client) capabilityPolicyFor(ctx context.Context) (model.CapabilityPolic
 // grant admission would only refuse later is refused with the task
 // (400) instead. A default the policy denies -- a repository's default
 // the policy keeps from this run kind, say -- is dropped, since nobody
-// asked for it. Admission asks the policy again when it mints, so a
-// policy saved after a task was filed still has the last word.
-func (c *Client) policyFilingGrants(ctx context.Context, grants []model.Grant, target *model.RepoRef) ([]model.Grant, error) {
+// asked for it, and dropped names it with the policy's reason, for the
+// task's thread: a filer who expected the default is told it is not
+// there rather than left to find it missing. Admission asks the policy
+// again when it mints, so a policy saved after a task was filed still
+// has the last word.
+func (c *Client) policyFilingGrants(ctx context.Context, grants []model.Grant, target *model.RepoRef) (kept []model.Grant, dropped []string, err error) {
 	policy, configured, err := c.capabilityPolicyFor(ctx)
 	if err != nil || len(policy.Rules) == 0 {
-		return grants, err
+		return grants, nil, err
 	}
 	subject := model.CapabilitySubject{Repo: target, Kind: model.CapabilityRunTask}
-	kept := make([]model.Grant, 0, len(grants))
+	kept = make([]model.Grant, 0, len(grants))
 	for _, g := range grants {
 		if err := policy.Permits(g.Capability, subject, configured); err != nil {
 			if g.Via == model.GrantByDefault {
+				dropped = append(dropped, fmt.Sprintf("Default grant %s was not attached to this task: %v.", model.CapabilityGrantRef(g.Capability), err))
 				continue
 			}
-			return nil, validationErrorf("%v", err)
+			return nil, nil, validationErrorf("%v", err)
 		}
 		kept = append(kept, g)
 	}
-	return kept, nil
+	return kept, dropped, nil
 }
 
 // policyEditRefusalFor is the capability policy's answer to grant being
