@@ -329,7 +329,10 @@ import "strconv"
 //
 // 72 is 67 again for `release-notes`, now `api:release-notes`.
 //
-// 73 changes no table: it upgrades `grain_config`.`task_branch_template`
+// 73 adds `priority` to `task` (default 5) and `template`: numeric task
+// priority where higher numbers mean higher dispatch priority.
+//
+// 74 changes no table: it upgrades `grain_config`.`task_branch_template`
 // from the pre-slug default `grain/{deployment}/task-{id}`
 // (model.UnsluggedTaskBranchTemplate, seeded by NewDeploymentConfig
 // before grain/task-56) to `grain/{deployment}/task-{id}-{slug}`
@@ -338,7 +341,7 @@ import "strconv"
 // branch names in addition to the deployment and task-id uniquifiers.
 // Existing tasks keep the branch recorded on their row, and any other
 // template is left alone.
-const SchemaVersion = 73
+const SchemaVersion = 74
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -530,6 +533,7 @@ var Tables = []string{
   ` + "`change_target_kind`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1581,6 +1585,7 @@ var Tables = []string{
   ` + "`change_target_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

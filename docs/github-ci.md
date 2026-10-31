@@ -69,8 +69,11 @@ The cheapest source available is used first:
 
 ## Concluded-run triggers, workflow reviews, and release triage
 
-When a GitHub Actions workflow run concludes (via `workflow_run` webhook or the
-`GET /repos/{o}/{r}/actions/runs?status=completed` polling fallback, deduplicated
+When a GitHub Actions workflow run concludes on a branch of the repository
+itself (`push`, `schedule`, `workflow_dispatch`, `release`, or `merge_group` —
+runs from fork head repositories and `pull_request` / `pull_request_target`
+runs are ignored) via `workflow_run` webhook or the
+`GET /repos/{o}/{r}/actions/runs?status=completed` polling fallback (deduplicated
 by `run_id` and `attempt`), grain ensures the run's jobs and any failed job log
 tails are recorded in `github_ci_job` and then acts on the concluded run:
 
@@ -84,6 +87,8 @@ tails are recorded in `github_ci_job` and then acts on the concluded run:
        conclusions: [failure, success]
        branches: [main]
    ```
+   When `branches:` is omitted, grain matches the schedule's `base` branch or
+   the repository's default branch.
    When `template:` and `suite:` are omitted on a `.grain/schedules/` declaration,
    grain defaults to the built-in `system:workflow-review:<stem>` ("Review last
    night's `<stem>` run") template and records the firing in

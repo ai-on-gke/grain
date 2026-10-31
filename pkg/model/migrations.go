@@ -410,6 +410,14 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     73,
+		Description: "add numeric priority to task (default 5) and template",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 5",
+			"ALTER TABLE `template` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     74,
 		Description: "upgrade the pre-slug default task_branch_template (grain/{deployment}/task-{id}) to grain/{deployment}/task-{id}-{slug}",
 		Statements: []string{
 			"UPDATE `grain_config` SET `task_branch_template` = '" + DefaultTaskBranchTemplate + "' WHERE `task_branch_template` = '" + UnsluggedTaskBranchTemplate + "'",

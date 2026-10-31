@@ -688,6 +688,14 @@ export default function DetailOverlay({
                 label={`target: ${t.base}`}
               />
             )}
+            <Chip
+              size="small"
+              variant="outlined"
+              className="chip-priority"
+              data-testid="detail-priority-badge"
+              title="Task priority (default 5; higher numbers run first)"
+              label={`priority: ${t.priority ?? 5}`}
+            />
           </div>
           {/* And the sentence itself, spelled out under the badge it is
               about, for the same reason the merge queue's note is

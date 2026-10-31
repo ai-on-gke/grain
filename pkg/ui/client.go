@@ -1537,6 +1537,10 @@ type CreateTaskRequest struct {
 	// A task filed from an interactive template (TemplateID,
 	// model.Template.Interactive) is interactive whatever this says.
 	Interactive bool `json:"interactive"`
+	// Priority is the task's numeric dispatch priority (model.Task.Priority,
+	// default model.DefaultTaskPriority = 5; higher numbers mean higher priority).
+	// When omitted or 0, defaults to model.DefaultTaskPriority.
+	Priority *int `json:"priority,omitempty"`
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) set model.Task's own fields of
 	// the same name -- a per-task override of the deployment's default
@@ -1942,6 +1946,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	if strings.TrimSpace(req.Title) == "" {
 		return Task{}, validationErrorf("title is required")
+	}
+	priority := model.DefaultTaskPriority
+	if req.Priority != nil {
+		if *req.Priority < 0 {
+			return Task{}, validationErrorf("priority must be a positive integer")
+		}
+		if *req.Priority != 0 {
+			priority = *req.Priority
+		}
 	}
 	if req.NewBranch {
 		req.Base = strings.TrimSpace(req.Base)
@@ -2481,6 +2494,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Reviewers:            model.NormalizeReviewers(req.Reviewers),
 		Binding:              model.BindingDirective,
 		Base:                 req.Base,
+		Priority:             priority,
 		Issue:                req.Issue,
 		AutoMerge:            autoMerge,
 		AutoApproveProposals: req.AutoApproveProposals,
@@ -3796,6 +3810,7 @@ type UpdateTaskRequest struct {
 	// every attempt until somebody corrects it.
 	Repo                 *string `json:"repo,omitempty"`
 	Base                 *string `json:"base,omitempty"`
+	Priority             *int    `json:"priority,omitempty"`
 	Issue                *int    `json:"issue,omitempty"`
 	AutoMerge            *bool   `json:"autoMerge,omitempty"`
 	AutoApproveProposals *bool   `json:"autoApproveProposals,omitempty"`
@@ -3928,8 +3943,8 @@ type UpdateTaskRequest struct {
 	// Capabilities, given, replaces the task's capability grants while
 	// preserving durable on standing console-session tasks.
 	Capabilities *[]string `json:"capabilities,omitempty"`
-	// Priority attaches or detaches PriorityDispatchCapability on the task.
-	Priority *bool `json:"priority,omitempty"`
+	// PriorityDispatch attaches or detaches PriorityDispatchCapability on the task.
+	PriorityDispatch *bool `json:"priorityDispatch,omitempty"`
 	// KeepRunning attaches or detaches DurableCapability on the task.
 	KeepRunning *bool `json:"keepRunning,omitempty"`
 }
@@ -3941,16 +3956,33 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 	type Alias UpdateTaskRequest
 	var aux struct {
 		Alias
-		RawCapabilities    json.RawMessage `json:"capabilities,omitempty"`
-		RawGrants          json.RawMessage `json:"grants,omitempty"`
-		NetworkAccessSnake *string         `json:"network_access,omitempty"`
-		AutoApproveSnake   *bool           `json:"auto_approve_proposals,omitempty"`
-		KeepRunningSnake   *bool           `json:"keep_running,omitempty"`
+		RawPriority           json.RawMessage `json:"priority,omitempty"`
+		RawCapabilities       json.RawMessage `json:"capabilities,omitempty"`
+		RawGrants             json.RawMessage `json:"grants,omitempty"`
+		NetworkAccessSnake    *string         `json:"network_access,omitempty"`
+		AutoApproveSnake      *bool           `json:"auto_approve_proposals,omitempty"`
+		PriorityDispatchSnake *bool           `json:"priority_dispatch,omitempty"`
+		KeepRunningSnake      *bool           `json:"keep_running,omitempty"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 	*r = UpdateTaskRequest(aux.Alias)
+	if trimmed := strings.TrimSpace(string(aux.RawPriority)); trimmed != "" && trimmed != "null" {
+		var on bool
+		if err := json.Unmarshal(aux.RawPriority, &on); err == nil {
+			r.PriorityDispatch = &on
+		} else {
+			var n int
+			if err := json.Unmarshal(aux.RawPriority, &n); err != nil {
+				return err
+			}
+			r.Priority = &n
+		}
+	}
+	if r.PriorityDispatch == nil && aux.PriorityDispatchSnake != nil {
+		r.PriorityDispatch = aux.PriorityDispatchSnake
+	}
 	parseCapRaw := func(raw json.RawMessage) (*[]string, error) {
 		trimmed := strings.TrimSpace(string(raw))
 		if trimmed == "" || trimmed == "null" {
@@ -4024,6 +4056,9 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	}
 	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 		return Task{}, validationErrorf("title cannot be empty")
+	}
+	if req.Priority != nil && *req.Priority < 0 {
+		return Task{}, validationErrorf("priority must be a positive integer")
 	}
 	// A fork head label is resolved to the pull request it heads the way
 	// CreateTask resolves one (forkhead.go): the edit stores that pull
@@ -4370,6 +4405,13 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.Base != nil {
 			task.Base = *req.Base
 		}
+		if req.Priority != nil {
+			if *req.Priority == 0 {
+				task.Priority = model.DefaultTaskPriority
+			} else {
+				task.Priority = *req.Priority
+			}
+		}
 		if forkPR != nil && !hasLinkTo(task.Links, forkPR.Link()) {
 			task.Links = append(task.Links, forkPR.Link())
 			task.Body += forkPR.Note()
@@ -4524,8 +4566,8 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				}
 				task.Grants = newGrants
 			}
-			if req.Priority != nil {
-				if *req.Priority {
+			if req.PriorityDispatch != nil {
+				if *req.PriorityDispatch {
 					if _, had := existingByCap[model.PriorityDispatchCapability]; !had {
 						if err := c.catalogueEditRefusal(ctx, *task, model.PriorityDispatchCapability); err != nil {
 							return err
