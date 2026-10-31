@@ -360,17 +360,26 @@ func TestExternalConfigRepoRefusesSettingsMutationsAndExposesMode(t *testing.T) 
 		t.Fatalf("POST /api/state-repo/remote status %d: %s", rec.Code, rec.Body)
 	}
 
-	// Once back in internal mode, POST /api/settings writes a bootstrap
-	// field directly, and refuses any other with the edit to make in
-	// grain/config instead.
+	// Once back in internal mode (settingsLocked == false by default),
+	// POST /api/settings writes both bootstrap and non-bootstrap fields
+	// directly; when settingsLocked is enabled, it refuses non-bootstrap
+	// fields with the edit to make in grain/config instead.
 	rec = do(t, srv, http.MethodPost, "/api/settings", `{"maxWorkers":3}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST /api/settings (bootstrap) in internal mode status %d: %s", rec.Code, rec.Body)
 	}
+	rec = do(t, srv, http.MethodPost, "/api/settings", `{"environmentName":"staging"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/settings (non-bootstrap, unlocked) in internal mode status %d: %s", rec.Code, rec.Body)
+	}
+	rec = do(t, srv, http.MethodPost, "/api/settings", `{"settingsLocked":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/settings (lock) in internal mode status %d: %s", rec.Code, rec.Body)
+	}
 	rec = do(t, srv, http.MethodPost, "/api/settings", `{"environmentName":"prod"}`)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"repo":"grain/config"`) ||
 		!strings.Contains(rec.Body.String(), `+    \"environment_name\": \"prod\"`) {
-		t.Fatalf("POST /api/settings (non-bootstrap) in internal mode status %d: %s", rec.Code, rec.Body)
+		t.Fatalf("POST /api/settings (non-bootstrap, locked) in internal mode status %d: %s", rec.Code, rec.Body)
 	}
 }
 
