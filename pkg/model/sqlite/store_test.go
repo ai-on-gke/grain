@@ -2178,6 +2178,38 @@ func TestMigrationUpgradesUnsluggedDefaultTaskBranchTemplate(t *testing.T) {
 	if got, err := store.GetTask(ctx, "8"); err != nil || got.BranchName() != "grain/prod/task-8-rename-the-endpoint" {
 		t.Fatalf("new task branch = %v, %v; want grain/prod/task-8-rename-the-endpoint", got, err)
 	}
+	// Very long task titles (multi-kilobyte sentence and unbroken token) round-trip
+	// intact on the task row while producing bounded, valid branch names.
+	for _, tc := range []struct {
+		id, title, wantBranch string
+	}{
+		{
+			id:         "9",
+			title:      strings.Repeat("Fix intermittent streaming timeout across multi-region clusters ", 80),
+			wantBranch: "grain/prod/task-9-fix-intermittent-streaming",
+		},
+		{
+			id:         "10",
+			title:      strings.Repeat("supercalifragilisticexpialidocious", 60),
+			wantBranch: "grain/prod/task-10-" + strings.Repeat("supercalifragilisticexpialidocious", 60)[:model.MaxBranchSlugLen],
+		},
+	} {
+		longTask := task(tc.id, true)
+		longTask.Title = tc.title
+		if err := store.PutTask(ctx, longTask); err != nil {
+			t.Fatalf("PutTask(%s) with %d-char title: %v", tc.id, len(tc.title), err)
+		}
+		got, err := store.GetTask(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("GetTask(%s): %v", tc.id, err)
+		}
+		if got.Title != tc.title {
+			t.Fatalf("GetTask(%s).Title length = %d, want %d", tc.id, len(got.Title), len(tc.title))
+		}
+		if got.BranchName() != tc.wantBranch || !model.ValidBranchName(got.BranchName()) {
+			t.Fatalf("GetTask(%s).BranchName() = %q, want valid %q", tc.id, got.BranchName(), tc.wantBranch)
+		}
+	}
 
 	// Custom and empty templates are left untouched by the migration.
 	for _, custom := range []string{"", "alice/{deployment}/task-{id}"} {

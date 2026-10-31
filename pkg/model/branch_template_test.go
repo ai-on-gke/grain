@@ -15,6 +15,8 @@
 package model_test
 
 import (
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -287,5 +289,87 @@ func TestFormatTaskBranchNameCapsTotalBranchLength(t *testing.T) {
 	tooLongPrefix := strings.Repeat("a", model.MaxBranchNameLen)
 	if _, err := model.FormatTaskBranchName(tooLongPrefix+"/task-{id}-{slug}", "inst", "dep", "42", longTitle); err == nil {
 		t.Fatal("FormatTaskBranchName accepted a template exceeding MaxBranchNameLen, want an error")
+	}
+}
+
+func TestVeryLongTaskNamesProduceValidBranchesAndGitRefs(t *testing.T) {
+	tightPrefix := strings.Repeat("a", 100) + "/" + strings.Repeat("b", 120)
+	exactPrefix := strings.Repeat("a", 100) + "/" + strings.Repeat("b", model.MaxBranchNameLen-100-1-len("/task-1000"))
+
+	titles := []struct {
+		name  string
+		title string
+	}{
+		{
+			name:  "multi-kilobyte sentence",
+			title: strings.Repeat("Investigate and repair intermittent streaming timeout across multi-region clusters ", 80),
+		},
+		{
+			name:  "single unbroken 2000-character token",
+			title: strings.Repeat("supercalifragilisticexpialidocious", 60),
+		},
+		{
+			name:  "multibyte unicode and .lock tokens",
+			title: strings.Repeat("日本語テスト 🚀 fix index.lock & refs.lock handling — ", 100),
+		},
+		{
+			name:  "multiline huge pasted stack trace title",
+			title: "Panic in workergoroutine:\n" + strings.Repeat("goroutine 1 [running]: main.run() /src/main.go:123 +0x45\n", 100),
+		},
+	}
+
+	templates := []string{
+		model.DefaultTaskBranchTemplate,
+		tightPrefix + "/task-{id}-{slug}",
+		exactPrefix + "/task-{id}-{slug}",
+	}
+
+	bareDir := filepath.Join(t.TempDir(), "remote.git")
+	workDir := filepath.Join(t.TempDir(), "work")
+	runGit := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(cmd.Environ(),
+			"GIT_AUTHOR_NAME=test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit(t.TempDir(), "init", "--bare", bareDir)
+	runGit(t.TempDir(), "clone", bareDir, workDir)
+	runGit(workDir, "commit", "--allow-empty", "-m", "initial")
+	runGit(workDir, "push", "origin", "HEAD:refs/heads/main")
+
+	id := 1000
+	for _, tc := range titles {
+		slug := model.BranchSlug(tc.title)
+		if len(slug) > model.MaxBranchSlugLen {
+			t.Fatalf("%s: BranchSlug length = %d (%q), want <= %d", tc.name, len(slug), slug, model.MaxBranchSlugLen)
+		}
+		if slug == "" {
+			t.Fatalf("%s: expected non-empty BranchSlug", tc.name)
+		}
+		for _, tpl := range templates {
+			id++
+			branch, err := model.FormatTaskBranchName(tpl, "abcdef01", "049f1e09", strconv.Itoa(id), tc.title)
+			if err != nil {
+				t.Fatalf("%s with template len %d: FormatTaskBranchName error: %v", tc.name, len(tpl), err)
+			}
+			if len(branch) > model.MaxBranchNameLen {
+				t.Fatalf("%s: branch length = %d (%q), want <= %d", tc.name, len(branch), branch, model.MaxBranchNameLen)
+			}
+			if !model.ValidBranchName(branch) {
+				t.Fatalf("%s: ValidBranchName(%q) = false", tc.name, branch)
+			}
+			runGit(workDir, "check-ref-format", "--branch", branch)
+			runGit(workDir, "checkout", "-b", branch, "origin/main")
+			runGit(workDir, "commit", "--allow-empty", "-m", "work for "+strconv.Itoa(id))
+			runGit(workDir, "push", "origin", branch)
+		}
 	}
 }
