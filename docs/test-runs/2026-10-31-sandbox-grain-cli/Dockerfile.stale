@@ -1,0 +1,2 @@
+FROM ghcr.io/bwsalmon/grain/k8s-sandbox:latest
+COPY grain-old /usr/local/bin/grain

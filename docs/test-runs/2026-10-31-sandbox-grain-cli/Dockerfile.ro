@@ -1,0 +1,4 @@
+FROM grain-sandbox-stale:test
+USER root
+RUN mkdir -p /home/debian/.grain/bin && chown root:root /home/debian/.grain/bin && chmod 0555 /home/debian/.grain/bin
+USER debian
