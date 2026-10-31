@@ -427,7 +427,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if err != nil {
 		return err
 	}
-	relayedInProcess := takeInProcessRelayed(runID)
+	relayedInProcess := takeInProcessRelayed(store, runID)
 
 	// A goal task (model.TaskGoal, docs/design/durable-tasks.md#DT-4) is
 	// never completed or closed on its agent's word: a closing comment,

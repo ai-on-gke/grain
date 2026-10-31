@@ -4453,7 +4453,21 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			task.ReviewTemplateID = reviewTemplateID
 		}
 		if req.Reads != nil {
-			task.Reads = reads
+			if task.IsConsoleSession() {
+				stateRepo := c.stateRepoRef()
+				var taskReads []model.RepoRef
+				if stateRepo.Owner != "" {
+					taskReads = append(taskReads, stateRepo)
+				}
+				for _, r := range reads {
+					if r.Owner != "" && r.Name != "" && !r.Same(stateRepo) {
+						taskReads = append(taskReads, r)
+					}
+				}
+				task.Reads = taskReads
+			} else {
+				task.Reads = reads
+			}
 		}
 		if req.Writes != nil {
 			task.Writes = writes
@@ -4467,8 +4481,18 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				for _, g := range task.Grants {
 					existingByCap[g.Capability] = g
 				}
+				policy, configured, err := c.capabilityPolicyFor(ctx)
+				if err != nil {
+					return err
+				}
 				for _, capID := range normalizedCaps {
 					if _, had := existingByCap[capID]; !had {
+						if model.IsCapabilityRef(capID) {
+							subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
+							if err := policy.Permits(capID, subject, configured); err != nil {
+								return validationErrorf("%v", err)
+							}
+						}
 						if err := c.catalogueEditRefusal(ctx, *task, capID); err != nil {
 							return err
 						}

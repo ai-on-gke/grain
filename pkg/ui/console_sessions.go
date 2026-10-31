@@ -586,6 +586,28 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				t.Title = model.ConsoleSessionTitle(session)
 			}
 			if req.Capabilities != nil {
+				existingByCap := make(map[string]bool, len(t.Grants))
+				for _, g := range t.Grants {
+					existingByCap[g.Capability] = true
+				}
+				policy, configured, err := c.capabilityPolicyFor(ctx)
+				if err != nil {
+					return err
+				}
+				for _, capID := range session.Capabilities {
+					if capID == "" || existingByCap[capID] {
+						continue
+					}
+					if model.IsCapabilityRef(capID) {
+						subject := model.CapabilitySubject{Repo: t.Target, Kind: model.CapabilityRunTask}
+						if err := policy.Permits(capID, subject, configured); err != nil {
+							return validationErrorf("%v", err)
+						}
+					}
+					if err := c.catalogueEditRefusal(ctx, *t, capID); err != nil {
+						return err
+					}
+				}
 				newGrants := make([]model.Grant, 0, len(session.Capabilities)+len(defaults)+1)
 				newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
 				seen := map[string]bool{model.DurableCapability: true}
@@ -611,7 +633,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				t.Grants = newGrants
 			}
 			if req.NetworkAccess != nil {
-				t.NetworkAccess = session.NetworkAccess
+				t.NetworkAccess = model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored)
 			}
 			if req.TasksApproved != nil {
 				t.AutoApproveProposals = *req.TasksApproved
