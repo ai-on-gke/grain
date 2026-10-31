@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import api from "../api.js";
@@ -144,6 +144,56 @@ describe("ConfigRefusalDialog for the internal grain/config", () => {
         "the config change does not pass validation",
       ),
     );
+  });
+
+  it("lists what validation found rather than the server's one line", async () => {
+    const err = new Error(
+      "the config change does not pass validation: staterepo: the change would lock dispatch: max_parallel is 0, which lets no run start",
+    );
+    err.status = 422;
+    err.validation = {
+      liveness: [
+        "max_parallel is 0, which lets no run start",
+        "every model connection is disabled, so no run has anything to run on",
+      ],
+    };
+    api.mockRejectedValue(err);
+    const user = userEvent.setup();
+    render(<ConfigRefusalDialog refusal={internal} onClose={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Create Config PR" }));
+    const shown = await screen.findByTestId("config-refusal-error");
+    expect(shown).toHaveTextContent("This change does not pass validation");
+    expect(shown).not.toHaveTextContent("staterepo:");
+    expect(
+      within(shown)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(err.validation.liveness);
+    // Opening it again could pass once what it sets is fixed elsewhere.
+    expect(
+      screen.getByRole("button", { name: "Create Config PR" }),
+    ).toBeTruthy();
+  });
+
+  it("asks for the change again when grain/config moved since the refusal", async () => {
+    const err = new Error(
+      "the config change does not pass validation: the change does not apply to main: staterepo: applying the change to settings/schedules.yml: the patch does not match the file at line 5",
+    );
+    err.status = 422;
+    err.code = "config_change_stale";
+    api.mockRejectedValue(err);
+    const user = userEvent.setup();
+    render(<ConfigRefusalDialog refusal={internal} onClose={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Create Config PR" }));
+    const shown = await screen.findByTestId("config-refusal-error");
+    expect(shown).toHaveTextContent(
+      "grain/config has changed since this was refused",
+    );
+    expect(shown).toHaveTextContent("make the change again");
+    // The same patch can only fail the same way.
+    expect(
+      screen.queryByRole("button", { name: "Create Config PR" }),
+    ).toBeNull();
   });
 
   it("offers no pull request for an external repository", () => {
