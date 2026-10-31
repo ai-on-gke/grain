@@ -55,6 +55,7 @@ import {
   mergeQueueStalled,
   orphanedPullRequest,
   pullRequestUrl,
+  issueUrl,
   relativeAge,
   repoActivity,
   repoRows,
@@ -418,6 +419,25 @@ describe("pullRequestUrl", () => {
     );
     expect(pullRequestUrl("grain/configuration#6")).toBe(
       "https://github.com/grain/configuration/pull/6",
+    );
+  });
+});
+
+describe("pullRequestUrl on another git host", () => {
+  it("links a host-qualified repo's pull request on that host", () => {
+    expect(pullRequestUrl("git.example.com/experimental/grain#26")).toBe(
+      "https://git.example.com/experimental/grain/pull/26",
+    );
+  });
+});
+
+describe("issueUrl", () => {
+  it("links an issue on GitHub, or on the repo's own host", () => {
+    expect(issueUrl("acme/widgets#7")).toBe(
+      "https://github.com/acme/widgets/issues/7",
+    );
+    expect(issueUrl("git.example.com/experimental/grain#26")).toBe(
+      "https://git.example.com/experimental/grain/issues/26",
     );
   });
 });
@@ -1631,6 +1651,19 @@ describe("stateLabel", () => {
     expect(stateLabel({ state: "queued", interactive: true })).toBe("Waiting");
     expect(stateLabel({ state: "queued" })).toBe("Waiting");
     expect(stateLabel({ state: "completed" })).toBe("Merging");
+  });
+
+  it("calls an unapproved GitHub issue import Imported", () => {
+    expect(
+      stateLabel({
+        state: "proposed",
+        imported: true,
+        awaitingImportApproval: true,
+      }),
+    ).toBe("Imported");
+    // Approved, it reads as its state like any other task.
+    expect(stateLabel({ state: "queued", imported: true })).toBe("Waiting");
+    expect(stateLabel({ state: "proposed" })).toBe("Proposed");
   });
 
   it("says what a merge-queue repair is doing instead", () => {

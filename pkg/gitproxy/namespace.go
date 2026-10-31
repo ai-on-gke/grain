@@ -213,10 +213,17 @@ func (p *GitProxy) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this deployment's sandbox proxy is not wired to the agent API", http.StatusNotImplemented)
 		return
 	}
-	p.forwardToAPI(w, r, modelScope, r.URL.Path)
+	// The request's own path is forwarded escaped as it came: a
+	// repository off the default host is /api/repos/<host>%2F<owner>/
+	// <name>/..., and dropping RawPath would turn that %2F into a slash
+	// and give the mux three segments where its route has two.
+	p.forwardToAPI(w, r, modelScope, r.URL.Path, r.URL.RawPath)
 }
 
-func (p *GitProxy) forwardToAPI(w http.ResponseWriter, r *http.Request, modelScope model.NamespaceScope, targetPath string) {
+// forwardToAPI hands r to the agent API at targetPath. rawPath is
+// targetPath's escaped form when it holds an escaping its plain form
+// cannot (url.URL.RawPath), and "" otherwise.
+func (p *GitProxy) forwardToAPI(w http.ResponseWriter, r *http.Request, modelScope model.NamespaceScope, targetPath, rawPath string) {
 	// p.API answers as the deployment's own actor, and X-Grain-Acting-Task
 	// is the only thing that holds a forwarded request to a task's grants:
 	// agentAPIGate passes a request without one straight through. A live
@@ -227,7 +234,7 @@ func (p *GitProxy) forwardToAPI(w http.ResponseWriter, r *http.Request, modelSco
 	}
 	in := r.Clone(r.Context())
 	in.URL.Path = targetPath
-	in.URL.RawPath = ""
+	in.URL.RawPath = rawPath
 	in.RequestURI = in.URL.RequestURI()
 	in.RemoteAddr = ""
 	in.Host = "localhost"
@@ -297,7 +304,7 @@ func (p *GitProxy) ServeCapHTTP(w http.ResponseWriter, r *http.Request) {
 		if tail != "" {
 			apiPath += "/" + tail
 		}
-		p.forwardToAPI(w, r, modelScope, apiPath)
+		p.forwardToAPI(w, r, modelScope, apiPath, "")
 		return
 	case "release-notes":
 		if p.API == nil {
@@ -308,7 +315,7 @@ func (p *GitProxy) ServeCapHTTP(w http.ResponseWriter, r *http.Request) {
 		if tail != "" {
 			apiPath += "/" + tail
 		}
-		p.forwardToAPI(w, r, modelScope, apiPath)
+		p.forwardToAPI(w, r, modelScope, apiPath, "")
 		return
 	case "quarantine", "test-quarantine", "quarantine-test":
 		scope := toNamespaceScope(modelScope)
@@ -340,6 +347,7 @@ func toNamespaceScope(modelScope model.NamespaceScope) namespace.Scope {
 		AllowedRepos:      modelScope.AllowedRepos,
 		MayReadSrc:        modelScope.MayReadSrc,
 		MayReadAllTasks:   modelScope.MayReadAllTasks,
+		TaskReadRepos:     modelScope.TaskReadRepos,
 		MayReadFullConfig: modelScope.MayReadFullConfig,
 		MayReadAllMemory:  modelScope.MayReadAllMemory,
 		MayReadMetrics:    modelScope.MayReadMetrics,

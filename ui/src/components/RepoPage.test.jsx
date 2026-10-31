@@ -130,6 +130,7 @@ function routeApi({
   workOwnership = ownsItsWork,
   ciRuns = { enabled: true, runs: [] },
 } = {}) {
+  let savedImport = null;
   api.mockImplementation((path, opts) => {
     if (!opts && /\/branches$/.test(path)) return Promise.resolve(branches);
     if (!opts && /\/capabilities$/.test(path)) return Promise.resolve(caps);
@@ -144,6 +145,28 @@ function routeApi({
       return Promise.resolve(upToDate);
     if (opts && /\/require-branch-up-to-date$/.test(path))
       return Promise.resolve({ ...upToDate, requireBranchUpToDate: true });
+    if (opts && /\/settings$/.test(path)) {
+      // Each save answers with every earlier one applied, as the
+      // server's row would.
+      const body = JSON.parse(opts.body);
+      const imp = savedImport || upToDate.issueImport || {};
+      savedImport = {
+        ...imp,
+        enabled: body.issueImportEnabled ?? imp.enabled,
+        approved: body.issueImportApproved ?? imp.approved,
+        repo: body.issueImportRepo ?? imp.repo,
+        label: body.issueImportLabel ?? imp.label,
+      };
+      return Promise.resolve({ ...upToDate, issueImport: savedImport });
+    }
+    if (opts && /\/import-issues$/.test(path))
+      return Promise.resolve({
+        repo: "acme/widgets",
+        source: "acme/widgets",
+        open: 3,
+        imported: ["7", "8"],
+        skipped: 1,
+      });
     if (opts && /\/merge-on-green$/.test(path))
       return Promise.resolve({ ...upToDate, mergeOnGreen: true });
     if (opts && /\/base-repair-bypasses-human-gates$/.test(path))
@@ -1962,6 +1985,65 @@ describe("RepoPage", () => {
     expect(box).toBeChecked();
   });
 
+  it("switches on GitHub issue import, held for approval unless asked otherwise", async () => {
+    const off = {
+      enabled: false,
+      approved: false,
+      repo: "",
+      label: "",
+      intervalSeconds: 0,
+      effectiveIntervalSeconds: 600,
+    };
+    routeApi({ upToDate: { repo: "acme/widgets", issueImport: off } });
+    const user = userEvent.setup();
+    const props = renderPage({ tab: "agents" });
+
+    const enable = await screen.findByLabelText(
+      "Import open GitHub issues as tasks in acme/widgets",
+    );
+    const approve = screen.getByLabelText(
+      "Queue imported issues in acme/widgets without approval",
+    );
+    const now = screen.getByRole("button", { name: "Import issues now" });
+    expect(enable).not.toBeChecked();
+    expect(approve).not.toBeChecked();
+    expect(now).toBeDisabled();
+
+    await user.click(enable);
+    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
+      method: "PUT",
+      body: JSON.stringify({ issueImportEnabled: true }),
+    });
+    expect(props.onRefreshConfig).toHaveBeenCalled();
+    expect(enable).toBeChecked();
+    expect(approve).not.toBeChecked();
+
+    await user.type(
+      screen.getByLabelText("Source repository"),
+      "kubernetes/autoscaler",
+    );
+    await user.type(screen.getByLabelText("Label"), "bug");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        issueImportRepo: "kubernetes/autoscaler",
+        issueImportLabel: "bug",
+        issueImportIntervalSeconds: 0,
+      }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Import issues now" }));
+    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/import-issues", {
+      method: "POST",
+    });
+    expect(
+      await screen.findByText(
+        "Read 3 open issues on acme/widgets: imported 2, 1 already imported.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("shows merge when green as on for a repo that has it on", async () => {
     routeApi({
       upToDate: { repo: "acme/widgets", mergeOnGreen: true },
@@ -2653,5 +2735,78 @@ describe("RepoPage", () => {
         screen.getByRole("button", { name: "release: on" }),
       ).toHaveAttribute("aria-pressed", "true"),
     );
+  });
+
+  // docs/design/config-repo-settings.md §2.1, §7.4: when the API sends
+  // a repo's settings to the config repo (configRepoOnly), even an admin
+  // sees them read-only, with the files to change them in, and the
+  // default and CI grants as chips; the operational actions stay theirs.
+  describe("when its settings are config-repo only", () => {
+    const managed = {
+      configRepoOnly: true,
+      adminScoped: true,
+      adminRepos: ["acme/*"],
+      capabilities: [{ id: "gcp-key", name: "GCP key" }],
+    };
+    const notice =
+      /acme\/widgets's settings live in the config repo and are read-only here/;
+
+    it("draws settings read-only for an admin, linked to the config repo", async () => {
+      routeApi({
+        workflows: {
+          ...noWorkflows,
+          workflows: [{ path: ".grain/workflows/tests.yml", text: "jobs: {}" }],
+        },
+      });
+      renderPage({ tab: "ci", config: managed });
+      const radio = await screen.findByRole("radio", {
+        name: "Use GitHub CI for acme/widgets",
+      });
+      expect(radio).toBeDisabled();
+      expect(radio).toHaveAccessibleDescription(notice);
+      expect(
+        await screen.findByRole("button", { name: "Add workflow" }),
+      ).toBeDisabled();
+      expect(screen.queryByText(/but not change them/)).not.toBeInTheDocument();
+      expect(
+        within(screen.getByTestId("config-managed-notice"))
+          .getAllByTestId("config-repo-link")
+          .map((a) => a.getAttribute("href")),
+      ).toEqual([
+        "/config?path=tables%2Frepo_config.json",
+        "/config?path=settings%2Fcapabilities.yml",
+      ]);
+      await openTab("Branches");
+      expect(screen.getByLabelText("Branch name")).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Add branch" })).toBeEnabled();
+      expect(
+        api.mock.calls.filter(([, opts]) => opts?.method === "PUT"),
+      ).toEqual([]);
+    });
+
+    it("lists the default and CI grants as chips linked to settings/capabilities.yml", async () => {
+      routeApi({
+        caps: {
+          repo: "acme/widgets",
+          defaultCapabilities: ["gcp-key", "api:tasks:read"],
+          ciCapabilities: [],
+          deploymentDefaultCapabilities: [],
+          effectiveDefaultCapabilities: ["gcp-key", "api:tasks:read"],
+        },
+      });
+      renderPage({ tab: "agents", config: managed });
+      const grants = await screen.findByTestId("repo-default-grants");
+      await waitFor(() =>
+        expect(
+          grants.querySelectorAll("[data-grant-chip]").length,
+        ).toBeGreaterThan(0),
+      );
+      expect(grants.querySelector("input")).toBeNull();
+      expect(within(grants).getByTestId("config-repo-link")).toHaveAttribute(
+        "href",
+        "/config?path=settings%2Fcapabilities.yml",
+      );
+      expect(screen.getByTestId("repo-ci-grants")).toHaveTextContent("None");
+    });
   });
 });

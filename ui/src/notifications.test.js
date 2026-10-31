@@ -130,4 +130,18 @@ describe("pending releases", () => {
       { method: "POST" },
     );
   });
+
+  it("post a host-qualified repository's decision under its escaped owner", async () => {
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    expect(
+      await decideRelease(
+        { repo: "git.forge.example/experimental/grain", version: "v2.4.0" },
+        false,
+      ),
+    ).toBe(true);
+    expect(api).toHaveBeenCalledWith(
+      "/api/repos/git.forge.example%2Fexperimental/grain/pending-releases/v2.4.0/reject",
+      { method: "POST" },
+    );
+  });
 });

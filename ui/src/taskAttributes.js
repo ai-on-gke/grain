@@ -134,9 +134,20 @@ const ORIGIN_LABELS = {
   proposed: "Proposed by an agent",
   schedule: "Scheduled",
   suite: "Suite run",
+  imported: "Imported issue",
+  external: "Filed by an external agent",
   fix: "Merge fix",
   review: "Review",
 };
+
+// EXTERNAL_AGENT_PREFIX is model.ExternalAgentPrincipalPrefix: the
+// principal an external agent's credential acts as is
+// "external:<token name>".
+export const EXTERNAL_AGENT_PREFIX = "external:";
+
+export function isExternalAgent(author) {
+  return typeof author === "string" && author.startsWith(EXTERNAL_AGENT_PREFIX);
+}
 
 // originOf is the one thing that put this task in the list -- what the
 // row's own scheduled/suite/merge-fix chips say, collapsed to a single
@@ -151,7 +162,13 @@ export function originOf(t) {
   if (t.stacked) return "fix";
   if (t.scheduled) return "schedule";
   if (t.suiteRun) return "suite";
+  if (t.imported) return "imported";
   if (t.generatedFrom) return "proposed";
+  // Filed over /mcp or the agent API by an external agent's credential
+  // (model.ExternalAgentPrincipalPrefix): its creator is the
+  // deployment's person who vouches for that credential, so without
+  // this it would read as filed by hand.
+  if (isExternalAgent(t.author)) return "external";
   return "hand";
 }
 
@@ -325,7 +342,15 @@ export const ATTRIBUTES = [
     label: "Origin",
     type: TYPE_ENUM,
     values: (t) => [originOf(t)],
-    order: ["hand", "proposed", "schedule", "suite", "fix", "review"],
+    order: [
+      "hand",
+      "external",
+      "proposed",
+      "schedule",
+      "suite",
+      "fix",
+      "review",
+    ],
     labelOf: (v) => ORIGIN_LABELS[v] || v,
     // The same two figures the rows carry: a task filed by a schedule
     // wears the hourglass on its own chip (TaskList/TaskBoard), so the

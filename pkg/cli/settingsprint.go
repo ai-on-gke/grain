@@ -168,6 +168,7 @@ func (p *printer) settings(s ui.Settings) {
 	// since what a negative number comes to depends on the host and this
 	// line is about the setting.
 	fmt.Printf("sandbox overcommit: %s\n", sandboxOvercommitLine(s.SandboxOvercommit, s.SandboxCommitment))
+	fmt.Printf("session sandbox idle ttl: %s\n", orDefaultValue(s.SessionSandboxIdleTTL, s.SessionSandboxIdleTTLDefault))
 	fmt.Printf("sandbox cpu overcommit: %s\n", overcommitValue(s.SandboxCPUOvercommit))
 	fmt.Printf("sandbox memory overcommit: %s\n", overcommitValue(s.SandboxMemoryOvercommit))
 	fmt.Printf("sandbox disk overcommit: %s\n", overcommitValue(s.SandboxDiskOvercommit))

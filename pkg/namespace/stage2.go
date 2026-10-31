@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -60,6 +61,10 @@ type TaskView struct {
 	Prompt       string
 	Transcript   string
 	Attempts     []TaskAttemptView
+	// Repo is the repository the task works in ("" for none), which is
+	// what decides whether a scope without MayReadAllTasks may read it
+	// (Scope.PermitsTaskRepo).
+	Repo string
 }
 
 // TaskProvider backs the task:// namespace root.
@@ -163,6 +168,30 @@ func (s Scope) PermitsTask(taskID string) bool {
 	return own != "" && taskID != "" && strings.EqualFold(own, taskID)
 }
 
+// PermitsTaskRepo reports whether this scope may read the task:// record
+// of a task working in repo: one in the scope's own repository, or one
+// it reads or writes, or one an api:tasks:read@repo grant names. A task
+// with no repository is only MayReadAllTasks'.
+func (s Scope) PermitsTaskRepo(repo string) bool {
+	if s.MayReadAllTasks {
+		return true
+	}
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return false
+	}
+	if s.TaskRepo != "" && strings.EqualFold(s.TaskRepo, repo) {
+		return true
+	}
+	return s.TaskReadRepos[repo] || s.TaskReadRepos[strings.ToLower(repo)]
+}
+
+// mayReadRepoTasks reports whether this scope may read some other tasks'
+// records, by their repository.
+func (s Scope) mayReadRepoTasks() bool {
+	return s.TaskRepo != "" || len(s.TaskReadRepos) > 0
+}
+
 // PermitsConfig reports whether this scope may read config://<relPath>.
 func (s Scope) PermitsConfig(relPath string) bool {
 	if s.MayReadFullConfig {
@@ -176,13 +205,10 @@ func (s Scope) PermitsConfig(relPath string) bool {
 		return true
 	}
 	if s.TaskRepo != "" {
-		parts := strings.SplitN(s.TaskRepo, "/", 2)
-		if len(parts) == 2 && relPath == "repos/"+parts[0] {
-			return true
-		}
 		repoPrefix := "repos/" + strings.ToLower(s.TaskRepo)
 		lower := strings.ToLower(relPath)
-		if lower == repoPrefix ||
+		if strings.HasPrefix(repoPrefix, lower+"/") ||
+			lower == repoPrefix ||
 			strings.HasPrefix(lower, repoPrefix+"/") ||
 			lower == repoPrefix+".json" ||
 			lower == repoPrefix+".yml" ||
@@ -203,13 +229,12 @@ func (s Scope) PermitsMemory(relPath string) bool {
 		return true
 	}
 	if s.TaskRepo != "" {
-		parts := strings.SplitN(s.TaskRepo, "/", 2)
-		if len(parts) == 2 && strings.EqualFold(relPath, "repos/"+parts[0]) {
-			return true
-		}
 		repoPrefix := "repos/" + strings.ToLower(s.TaskRepo)
 		lower := strings.ToLower(relPath)
-		if lower == repoPrefix || lower == repoPrefix+".md" || strings.HasPrefix(lower, repoPrefix+"/") {
+		if strings.HasPrefix(repoPrefix, lower+"/") ||
+			lower == repoPrefix ||
+			lower == repoPrefix+".md" ||
+			strings.HasPrefix(lower, repoPrefix+"/") {
 			return true
 		}
 	}
@@ -242,7 +267,7 @@ func (s *Server) resolveTask(ctx context.Context, scope Scope, relPath string) (
 		for _, id := range ids {
 			entries = append(entries, Entry{Name: id, Type: "dir"})
 		}
-		sortEntries(entries)
+		sortTaskEntries(entries)
 		return &ResolvedNode{
 			Scheme:  "task",
 			Path:    "",
@@ -253,13 +278,20 @@ func (s *Server) resolveTask(ctx context.Context, scope Scope, relPath string) (
 
 	parts := strings.Split(relPath, "/")
 	taskID := strings.TrimPrefix(parts[0], "#")
-	if !scope.PermitsTask(taskID) {
+	own := scope.PermitsTask(taskID)
+	if !own && !scope.mayReadRepoTasks() {
 		return nil, RefuseCapability("task://"+relPath, "self-debug")
 	}
 	if s == nil || s.Tasks == nil {
 		return nil, fmt.Errorf("%w: task:// is not configured on this daemon", ErrNotFound)
 	}
 	tv, err := s.Tasks.ReadTaskView(ctx, taskID)
+	if !own && (err != nil || tv == nil || !scope.PermitsTaskRepo(tv.Repo)) {
+		// Another task is readable where it works in a repository this
+		// scope reaches; anything else -- including a task that does not
+		// exist -- is refused alike, so the refusal says nothing about it.
+		return nil, RefuseCapability("task://"+relPath, "self-debug")
+	}
 	if err != nil || tv == nil {
 		if err != nil && !errors.Is(err, ErrNotFound) {
 			return nil, fmt.Errorf("%w: task://%s: %v", ErrNotFound, relPath, err)
@@ -524,6 +556,27 @@ func (s *Server) configResolvesInside(target string) error {
 	return nil
 }
 
+func equalFoldParts(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !strings.EqualFold(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func trimRepoConfigExt(s string) string {
+	for _, ext := range []string{".json", ".yml", ".yaml"} {
+		if strings.HasSuffix(s, ext) {
+			return strings.TrimSuffix(s, ext)
+		}
+	}
+	return s
+}
+
 func (s *Server) resolveVirtualConfig(ctx context.Context, scope Scope, relPath string) (*ResolvedNode, bool, error) {
 	if relPath == "" && strings.TrimSpace(s.ConfigDir) == "" {
 		entries := []Entry{
@@ -565,20 +618,30 @@ func (s *Server) resolveVirtualConfig(ctx context.Context, scope Scope, relPath 
 		}
 		rest := strings.TrimPrefix(relPath, "repos/")
 		parts := strings.Split(rest, "/")
-		if len(parts) == 1 {
-			owner := parts[0]
+		repoSegs := repoSegmentCount(parts[0])
+		if len(parts) < repoSegs {
 			repos, err := s.Config.ListConfigRepos(ctx)
 			if err != nil {
 				return nil, true, err
 			}
+			childType := "file"
+			if len(parts)+1 < repoSegs {
+				childType = "dir"
+			}
+			seen := make(map[string]bool)
 			var entries []Entry
 			for _, r := range repos {
 				if !scope.PermitsConfig("repos/" + r) {
 					continue
 				}
-				o, name, ok := strings.Cut(r, "/")
-				if ok && strings.EqualFold(o, owner) {
-					entries = append(entries, Entry{Name: name, Type: "file"})
+				rParts := strings.Split(r, "/")
+				if len(rParts) != repoSegs || !equalFoldParts(rParts[:len(parts)], parts) {
+					continue
+				}
+				name := rParts[len(parts)]
+				if !seen[name] {
+					seen[name] = true
+					entries = append(entries, Entry{Name: name, Type: childType})
 				}
 			}
 			if len(entries) == 0 {
@@ -587,8 +650,9 @@ func (s *Server) resolveVirtualConfig(ctx context.Context, scope Scope, relPath 
 			sortEntries(entries)
 			return &ResolvedNode{Scheme: "config", Path: relPath, IsDir: true, Entries: entries}, true, nil
 		}
-		if len(parts) == 2 {
-			repo := parts[0] + "/" + strings.TrimSuffix(strings.TrimSuffix(parts[1], ".json"), ".yml")
+		if len(parts) == repoSegs {
+			last := trimRepoConfigExt(parts[repoSegs-1])
+			repo := strings.Join(append(parts[:repoSegs-1:repoSegs-1], last), "/")
 			text, err := s.Config.ReadRepoConfig(ctx, repo)
 			if err != nil {
 				return nil, true, fmt.Errorf("%w: config://%s: %v", ErrNotFound, relPath, err)
@@ -712,8 +776,8 @@ func (s *Server) resolveMemory(ctx context.Context, scope Scope, relPath string)
 	if strings.HasPrefix(relPath, "repos/") {
 		rest := strings.TrimPrefix(relPath, "repos/")
 		parts := strings.Split(rest, "/")
-		if len(parts) == 1 {
-			owner := parts[0]
+		repoSegs := repoSegmentCount(parts[0])
+		if len(parts) < repoSegs {
 			repos, err := s.Memory.ListMemoryRepos(ctx)
 			if err != nil {
 				return nil, err
@@ -727,8 +791,12 @@ func (s *Server) resolveMemory(ctx context.Context, scope Scope, relPath string)
 				if !scope.PermitsMemory("repos/" + r) {
 					continue
 				}
-				o, name, ok := strings.Cut(r, "/")
-				if ok && strings.EqualFold(o, owner) && !seen[name] {
+				rParts := strings.Split(r, "/")
+				if len(rParts) != repoSegs || !equalFoldParts(rParts[:len(parts)], parts) {
+					continue
+				}
+				name := rParts[len(parts)]
+				if !seen[name] {
 					seen[name] = true
 					entries = append(entries, Entry{Name: name, Type: "dir"})
 				}
@@ -739,16 +807,16 @@ func (s *Server) resolveMemory(ctx context.Context, scope Scope, relPath string)
 			sortEntries(entries)
 			return &ResolvedNode{Scheme: "memory", Path: relPath, IsDir: true, Entries: entries}, nil
 		}
-		repoName := strings.TrimSuffix(parts[1], ".md")
-		repo := parts[0] + "/" + repoName
+		repoName := strings.TrimSuffix(parts[repoSegs-1], ".md")
+		repo := strings.Join(append(parts[:repoSegs-1:repoSegs-1], repoName), "/")
 		layer, err := s.Memory.ReadMemoryLayer(ctx, repo)
 		if err != nil || layer == nil {
 			return nil, fmt.Errorf("%w: memory://%s", ErrNotFound, relPath)
 		}
-		if len(parts) == 2 && strings.HasSuffix(parts[1], ".md") {
+		if len(parts) == repoSegs && strings.HasSuffix(parts[repoSegs-1], ".md") {
 			return stringNode("memory", relPath, layer.Text, false), nil
 		}
-		subPath := strings.Join(parts[2:], "/")
+		subPath := strings.Join(parts[repoSegs:], "/")
 		return resolveMemoryLayerNode("repos/"+repo, relPath, subPath, layer)
 	}
 
@@ -985,4 +1053,23 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 	}
 
 	return nil, fmt.Errorf("%w: deploy://%s", ErrNotFound, relPath)
+}
+
+// sortTaskEntries orders task ids numerically, oldest first and newest
+// last, rather than as strings (1, 10, 100, 1000, ..., 999). Ids that are
+// not numbers follow, in string order.
+func sortTaskEntries(entries []Entry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		a, aErr := strconv.ParseUint(entries[i].Name, 10, 64)
+		b, bErr := strconv.ParseUint(entries[j].Name, 10, 64)
+		switch {
+		case aErr == nil && bErr == nil:
+			return a < b
+		case aErr == nil:
+			return true
+		case bErr == nil:
+			return false
+		}
+		return entries[i].Name < entries[j].Name
+	})
 }

@@ -1409,6 +1409,15 @@ main,
   max-height: var(--chips-line);
   overflow: hidden;
 }
+/* ...and once they have wrapped, ChipStrip.jsx takes them out of the
+   layout altogether. A wrapping flex container does not narrow to the
+   chips left on its first line, so the width a wrapped chip vacated
+   stayed in the strip as a blank gap before the row's phase chip, while
+   the title and status beside it ellipsised for want of it. Hidden, the
+   strip is as wide as what it shows and the rest goes back to them. */
+.chips > .chip-overflow {
+  display: none;
+}
 /* RepoPage's header is that heading's width: its counts wrap onto as
    many lines as they need and none is hidden. `.chips` alone is
    `nowrap` and `flex: none`, which a phone lifts (data-phone below) but
@@ -2944,6 +2953,7 @@ html[data-phone="true"] .gantt-body {
    by hand -- so they share the treatment. */
 .chip-scheduled,
 .chip-suite,
+.chip-imported,
 .chip-stacked {
   background: var(--accent-subtle);
   color: var(--accent);

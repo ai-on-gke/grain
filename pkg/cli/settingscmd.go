@@ -159,6 +159,8 @@ func cmdSettings(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 		"k8s-sandbox-base image (empty uses the image this build is stamped for; see docs/sandbox-image-contract.md)")
 	sandboxImageMirror := fs.String("sandbox-image-mirror", "", "OCI repository (without tag, e.g. us-docker.pkg.dev/<cluster-project>/grain/guest) "+
 		"into which the build-stamped guest sandbox image is mirrored on upgrade and startup so a cluster in another GCP organization can pull it")
+	sessionSandboxIdleTTL := fs.String("session-sandbox-idle-ttl", "",
+		"how long an interactive session task's sandbox (and in-process agent session) stays warm between turns awaiting a reply (e.g. 30m; empty uses grain's default, -1s disables warm retention)")
 	k8sNamespace := fs.String("k8s-namespace", "", "Kubernetes namespace sandbox pods are created in")
 	k8sKubectl := fs.String("k8s-kubectl", "", "kubectl binary path for Kubernetes sandboxes (empty uses kubectl on PATH)")
 	k8sSandboxImage := fs.String("k8s-sandbox-image", "", "container image for Kubernetes sandbox pods")
@@ -413,6 +415,9 @@ func cmdSettings(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 		case "sandbox-image-mirror":
 			v := *sandboxImageMirror
 			req.SandboxImageMirror = &v
+		case "session-sandbox-idle-ttl":
+			v := *sessionSandboxIdleTTL
+			req.SessionSandboxIdleTTL = &v
 		case "k8s-namespace":
 			v := *k8sNamespace
 			req.K8sNamespace = &v

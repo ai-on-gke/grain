@@ -248,6 +248,7 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/run-now", s.handleRunNow)
 	s.route("POST /api/tasks/{id}/pull-request", s.handleOpenPullRequest)
 	s.route("POST /api/tasks/{id}/sandbox/recreate", s.handleRecreateSandbox)
+	s.route("POST /api/sandbox-probe", s.handleSandboxProbe)
 	s.route("POST /api/tasks/{id}/activity", s.handleSetTaskActivity)
 	// A standing session's own run retitling its chat (mcp's
 	// rename_session): the title write PUT /api/console-sessions/{id}
@@ -370,6 +371,7 @@ func (s *Server) routes() {
 	s.route("PUT /api/repos/{owner}/{name}/workflows", s.handleSetRepoWorkflows)
 	s.route("GET /api/repos/{owner}/{name}/lifecycle", s.handleGetRepoLifecycle)
 	s.route("POST /api/repos/{owner}/{name}/lifecycle/refresh", s.handleRefreshRepoLifecycle)
+	s.route("POST /api/repos/{owner}/{name}/import-issues", s.handleImportIssues)
 
 	s.route("GET /api/repos/{owner}/{name}/releases", s.handleListReleases)
 	s.route("POST /api/repos/{owner}/{name}/releases", s.handleCreateRelease)
@@ -724,9 +726,44 @@ func (s *Server) apiFallback(next http.Handler) http.Handler {
 				return
 			}
 		}
-		writeError(w, http.StatusNotFound,
-			fmt.Errorf("no such API endpoint: %s %s", r.Method, r.URL.Path))
+		if hq := hostQualifiedRepoRequest(r); hq != nil {
+			if _, pattern := s.mux.Handler(hq); pattern != "" && pattern != "/" {
+				s.mux.ServeHTTP(w, hq)
+				return
+			}
+		}
+		msg := fmt.Sprintf("no such API endpoint: %s %s", r.Method, r.URL.Path)
+		if strings.HasPrefix(r.URL.Path, "/api/repos/") {
+			msg += " (a repository off the default host is /api/repos/<host>%2F<owner>/<name>/...)"
+		}
+		writeError(w, http.StatusNotFound, errors.New(msg))
 	})
+}
+
+// hostQualifiedRepoRequest is r with /api/repos/<host>/<owner>/<name>/...
+// read as the repo route it means, /api/repos/<host>%2F<owner>/<name>/...
+// -- the path an agent writes for a repository off the default host,
+// which has one segment too many for {owner}/{name} -- or nil when r's
+// path is not that. <host> is a host by model.ParseRepo's rule: it
+// contains a dot or a colon, which no owner can.
+func hostQualifiedRepoRequest(r *http.Request) *http.Request {
+	rest, ok := strings.CutPrefix(r.URL.EscapedPath(), "/api/repos/")
+	if !ok {
+		return nil
+	}
+	parts := strings.SplitN(rest, "/", 4)
+	if len(parts) < 3 || !strings.ContainsAny(parts[0], ".:") || parts[1] == "" || parts[2] == "" {
+		return nil
+	}
+	raw := "/api/repos/" + parts[0] + "%2F" + strings.Join(parts[1:], "/")
+	path, err := url.PathUnescape(raw)
+	if err != nil {
+		return nil
+	}
+	out := r.Clone(r.Context())
+	out.URL.Path, out.URL.RawPath = path, raw
+	out.RequestURI = out.URL.RequestURI()
+	return out
 }
 
 // spaHandler serves static assets straight out of fsys, the same as

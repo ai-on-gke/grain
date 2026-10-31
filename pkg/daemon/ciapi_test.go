@@ -135,8 +135,8 @@ func testTrustedOnly(t *testing.T, id string) {
 
 // Event-gated capabilities (repo-write:* and package-publish) are
 // withheld when a workflow_dispatch or release request is marked as not
-// a person's, while human dispatches, trusted releases, and (for
-// repo-write) trusted schedules still receive them.
+// a person's, while human dispatches, trusted releases, and trusted
+// schedules still receive them.
 func TestEventGatedCapabilitiesAreWithheldFromNonHumanDispatches(t *testing.T) {
 	gate := ciapi.NewEndpoint()
 	gate.SetURL("http://192.0.2.1:9000")
@@ -148,7 +148,7 @@ func TestEventGatedCapabilitiesAreWithheldFromNonHumanDispatches(t *testing.T) {
 		trustedSchedule bool
 	}{
 		{"repo-write:bwsalmon/grain", true},
-		{packagepublish.CapabilityName, false},
+		{packagepublish.CapabilityName, true},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			for _, c := range []struct {

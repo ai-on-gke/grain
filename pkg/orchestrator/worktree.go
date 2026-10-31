@@ -87,7 +87,7 @@ func statusWithLink(status string, pr *model.PullRequestRef) string {
 	}
 	link := ""
 	if pr != nil {
-		link = fmt.Sprintf("[%s#%d](https://github.com/%s/pull/%d)", pr.Repo, pr.Number, pr.Repo, pr.Number)
+		link = fmt.Sprintf("[%s](%s)", pr, pr.WebURL())
 	}
 	return status + " " + link
 }
@@ -98,11 +98,11 @@ func lastPullRequest(task model.Task) *model.PullRequestRef {
 	return model.TaskPullRequest(task)
 }
 
-// originLink is origin as a markdown link: GitHub's own URL for a pull
+// originLink is origin as a markdown link: its host's own URL for a pull
 // request or an issue (its /issues/ path serves both), or the task.
 func originLink(origin model.WorkOrigin) string {
 	if repo, n, ok := origin.GitHub(); ok {
-		return fmt.Sprintf("[%s#%d](https://github.com/%s/issues/%d)", repo, n, repo, n)
+		return fmt.Sprintf("[%s#%d](%s/issues/%d)", repo, n, repo.WebURL(), n)
 	}
 	if id := origin.Task(); id != "" {
 		return "task " + id
@@ -114,7 +114,7 @@ func originLink(origin model.WorkOrigin) string {
 // when it has one, which is the link a reader can follow.
 func taskRef(task model.Task) string {
 	if pr := lastPullRequest(task); pr != nil {
-		return fmt.Sprintf("task %s ([%s#%d](https://github.com/%s/pull/%d))", task.ID, pr.Repo, pr.Number, pr.Repo, pr.Number)
+		return fmt.Sprintf("task %s ([%s](%s))", task.ID, pr, pr.WebURL())
 	}
 	return "task " + task.ID
 }
@@ -345,6 +345,13 @@ func syncWorkTree(ctx context.Context, store *model.Store, client github.Client,
 		}
 		if now.Sub(*prev.CheckedAt) < interval {
 			return nil
+		}
+	}
+	if prev == nil {
+		// An issue the importer filed a task for says nothing on GitHub
+		// until somebody approves that task (OriginOnlyUnapprovedImports).
+		if held, err := store.OriginOnlyUnapprovedImports(ctx, origin); err != nil || held {
+			return err
 		}
 	}
 	body, done, total, err := renderWorkTree(ctx, store, origin)

@@ -35,7 +35,14 @@ export default function CapabilitiesSection({
   );
   return (
     <>
-      <SettingsCard title="Capability servers" anchor="capability-servers">
+      {/* The servers panel draws its own read-only form (readOnly), and
+          keeps its list clickable so one server's page can still be
+          opened; the card's disabled fieldset would stop that too. */}
+      <SettingsCard
+        title="Capability servers"
+        anchor="capability-servers"
+        allowInExternalMode
+      >
         <CapabilityServersPanel
           showError={effectiveShowError}
           readOnly={effectiveReadOnly}

@@ -300,7 +300,27 @@ import "strconv"
 // exec id and output cursor, so a restarted grain reattaches the step
 // rather than marking its run interrupted (model.CIStepAttachment,
 // docs/design/grain-on-gke.md#GKE-4).
-const SchemaVersion = 64
+//
+// 65 adds `repo_config`.`issue_import_enabled`, `issue_import_repo`,
+// `issue_import_label`, `issue_import_approved` and
+// `issue_import_interval_seconds`: the periodic GitHub issue importer's
+// per-repository settings (model.RepoConfig.IssueImport).
+//
+// 66 adds `session_sandbox_idle_ttl_ms` to `grain_config`: how long an
+// interactive chat/session task's sandbox (and in-process agent session)
+// stays warm awaiting a reply after a turn ends before being released
+// (model.Config.SessionSandboxIdleTTL).
+//
+// 67 changes no table: it rewrites every stored `team-broadcast` grant
+// (the grant tables, the default capability lists and the console
+// sessions) to `api:team-broadcast`, the in-process capability having
+// been retired for the agent API's teams:broadcast scope
+// (rewriteLegacyGrants, docs/design/unified-grants.md §4).
+//
+// 68 is 67 again for `dispatch-control`, now `api:dispatch-control`.
+//
+// 69 is 67 again for `pipeline-control`, now `api:pipeline-control`.
+const SchemaVersion = 69
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -1128,6 +1148,24 @@ var Tables = []string{
   ` + "`content`" + `      BLOB     NOT NULL,
   ` + "`created_at`" + `   DATETIME NOT NULL,
   PRIMARY KEY (` + "`run_id`" + `, ` + "`path`" + `)
+)`,
+
+	// task_run_relayed_call is a tool call a live run made that grain
+	// has already acted on while the run was still going -- an
+	// interactive session's in-process turns relaying an answer or
+	// filing a proposal before waiting for the next message
+	// (orchestrator.continueSessionTurns) -- keyed by a fingerprint of
+	// the call's name and arguments, with how many such calls there
+	// were. A daemon that adopts the run (orchestrator.ResumeAdoptedRun)
+	// re-reads every turn's calls out of the transcript, and this is what
+	// keeps it from posting the answers and filing the proposals a second
+	// time. Deleted when the run finishes. Needs no SchemaVersion bump and
+	// no migration rung, for the reason the tables above give.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_relayed_call`" + ` (
+  ` + "`run_id`" + `      TEXT    NOT NULL,
+  ` + "`fingerprint`" + ` TEXT    NOT NULL,
+  ` + "`count`" + `       INTEGER NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`fingerprint`" + `)
 )`,
 
 	// task_run_unmatched_failure is one row per failed run whose own
@@ -1990,6 +2028,7 @@ var Tables = []string{
   ` + "`judgement_model`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`external_agent_api`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`sandbox_image_mirror`" + `         TEXT    NOT NULL DEFAULT '',
+  ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2702,6 +2741,11 @@ var Tables = []string{
 	// merge_recheck is RepoConfig.MergeRecheck: off, observe or enforce
 	// for the merge queue's overlap re-check (grain/task-985, schema 41).
 	// DEFAULT '' reads as observe.
+	//
+	// issue_import_* is RepoConfig.IssueImport: the periodic GitHub
+	// issue importer (schema 65). DEFAULT 0 / '' imports nothing, and
+	// issue_import_approved DEFAULT 0 files what it does import
+	// unapproved.
 	`CREATE TABLE IF NOT EXISTS ` + "`repo_config`" + ` (
   ` + "`owner`" + `                TEXT NOT NULL,
   ` + "`name`" + `                 TEXT NOT NULL,
@@ -2733,6 +2777,11 @@ var Tables = []string{
   ` + "`merge_on_green`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`base_repair_bypasses_human_gates`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`merge_recheck`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`issue_import_enabled`" + `     INTEGER NOT NULL DEFAULT 0,
+  ` + "`issue_import_repo`" + `        TEXT NOT NULL DEFAULT '',
+  ` + "`issue_import_label`" + `       TEXT NOT NULL DEFAULT '',
+  ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
+  ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 

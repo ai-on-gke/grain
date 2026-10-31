@@ -345,8 +345,18 @@ type Task struct {
 	// (model.ReasonSuite, bwsalmon/agents#642) -- Scheduled's own badge
 	// treatment, so a pass of tasks that appeared with nobody filing
 	// them by hand reads as expected rather than as a mystery.
-	SuiteRun  bool       `json:"suiteRun,omitempty"`
-	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	SuiteRun bool `json:"suiteRun,omitempty"`
+	// Imported is true for a task the GitHub issue importer filed
+	// (model.ReasonImported): the row's "imported" chip, kept after the
+	// task is approved so an imported issue stays identifiable. Origin
+	// names the issue it came from.
+	Imported bool `json:"imported,omitempty"`
+	// AwaitingImportApproval is Imported while nobody has approved the
+	// task -- its explicit "imported" status, standing in for
+	// "proposed": the same Approve action takes it to the queue, and
+	// until then nothing dispatches it.
+	AwaitingImportApproval bool       `json:"awaitingImportApproval,omitempty"`
+	CreatedAt              *time.Time `json:"createdAt,omitempty"`
 	// StartedAt and EndedAt are model.TaskSpan on the wire: when this
 	// task's first attempt began, and when it stopped being work in
 	// progress (that type's own doc comment says which ending counts and
@@ -714,8 +724,7 @@ type TaskDetail struct {
 	SuspendedSession *TaskSuspendedSession `json:"suspendedSession,omitempty"`
 	// DeploymentWide is every team-scoped capability this task holds in
 	// its deployment-wide form (admincaps.TeamScoped, grain/task-2555):
-	// self-debug reading every team's tasks and metrics, pipeline-control
-	// pausing the whole deployment. A capability held but not named here
+	// self-debug reading every team's tasks and metrics. A capability held but not named here
 	// reaches only the task's own team's work -- which is what `grain
 	// mcpserver` reads it as, so an older daemon that never sends it
 	// leaves a run team-scoped rather than wider than it should be.
@@ -948,21 +957,24 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		Review:               t.Origin.Reason == model.ReasonReview,
 		Scheduled:            t.Origin.Reason == model.ReasonSchedule,
 		SuiteRun:             t.Origin.Reason == model.ReasonSuite,
-		CreatedAt:            t.CreatedAt,
-		StartedAt:            span.StartedAt,
-		EndedAt:              span.EndedAt,
-		ClosedAt:             span.ClosedAt,
-		PrMergedAt:           span.PrMergedAt,
-		PrClosedAt:           span.PrClosedAt,
-		DeferredUntil:        t.DeferredUntil,
-		Approved:             t.ApprovedAt != nil,
-		MergeQueueBlockedAt:  mergeQueueBlockedAt,
-		Repairing:            repairing,
-		MergeQueueState:      mergeQueue.State,
-		MergeQueueNote:       mergeQueue.Note,
-		MergeQueueStateAt:    mergeQueue.At,
-		MergeQueueStalledAt:  mergeQueue.StalledAt,
-		Stall:                stall,
+		Imported:             t.Origin.Reason == model.ReasonImported,
+		AwaitingImportApproval: t.Origin.Reason == model.ReasonImported && t.ApprovedAt == nil &&
+			state == model.StateProposed,
+		CreatedAt:           t.CreatedAt,
+		StartedAt:           span.StartedAt,
+		EndedAt:             span.EndedAt,
+		ClosedAt:            span.ClosedAt,
+		PrMergedAt:          span.PrMergedAt,
+		PrClosedAt:          span.PrClosedAt,
+		DeferredUntil:       t.DeferredUntil,
+		Approved:            t.ApprovedAt != nil,
+		MergeQueueBlockedAt: mergeQueueBlockedAt,
+		Repairing:           repairing,
+		MergeQueueState:     mergeQueue.State,
+		MergeQueueNote:      mergeQueue.Note,
+		MergeQueueStateAt:   mergeQueue.At,
+		MergeQueueStalledAt: mergeQueue.StalledAt,
+		Stall:               stall,
 	}
 	if activity != nil {
 		out.Activity, out.ActivityAt = activity.Note, activity.At
@@ -1586,6 +1598,14 @@ type configResponse struct {
 	Deployment           *Team  `json:"deployment,omitempty"`
 	ExternalConfigRepo   string `json:"externalConfigRepo,omitempty"`
 	ExternalConfigBranch string `json:"externalConfigBranch,omitempty"`
+	// ConfigRepoOnly is whether a non-bootstrap settings write from the
+	// API is refused with a config pull request (configRepoFor): an
+	// external config repository, or the internal grain/config without
+	// the directConfigWrites opt-out. The UI draws the config-repo-only
+	// settings read-only exactly then (docs/design/config-repo-settings.md
+	// §2.1); a UI with no config repository (`grain demo`) still edits
+	// them, since there is nowhere else to.
+	ConfigRepoOnly bool `json:"configRepoOnly,omitempty"`
 }
 
 // CustomFieldDeclaration is one declared field on the wire -- the JSON
@@ -1812,6 +1832,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		resp.ConfigRepo = s.tasks.Config.StateRepoRef().String()
 	}
 	resp.ExternalConfigRepo, resp.ExternalConfigBranch = s.tasks.externalConfigRepo(r.Context())
+	resp.ConfigRepoOnly = s.tasks.configRepoOnly(r.Context())
 	resp.AgentFramework = model.AgentFrameworkAntigravity
 	resp.NetworkAccess = string(model.NetworkOpen)
 	// Same reading of "no row yet" the AgentFramework line above takes:
@@ -1975,6 +1996,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 // tasks of the teams they belong to (bwsalmon/grain#2415). ?repo=owner/name
 // answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
+	if q, ok := parseTaskListQuery(r.URL.Query()); ok {
+		s.handleFilteredTaskList(w, r, q)
+		return
+	}
 	body, etag, err := s.taskList.response(r.Context(), s.tasks, strings.TrimSpace(r.URL.Query().Get("repo")))
 	if err != nil {
 		writeClientError(w, err)

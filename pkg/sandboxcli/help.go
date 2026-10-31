@@ -24,13 +24,13 @@ NAMESPACE & FILES (no size cap; pipe to grep, jq, head, or redirect to files):
                                          Search a file or subtree with an RE2 regex
 
 CI & PULL REQUEST (scoped to this task's repository and branch):
-  grain ci list [--ref <b>] [--conclusion <c>] [--job <j>] [--since <d>] [--limit N]
+  grain ci list [--task <id> | --ref <b>] [--conclusion <c>] [--job <j>] [--since <d>] [--limit N]
                                          List recent grain CI runs
-  grain ci log [<run-id>] [--job <j>] [--step <s>] [--attempt K] [--tail N]
+  grain ci log [<run-id> | --task <id>] [--repo <r>] [--job <j>] [--step <s>] [--attempt K] [--tail N]
                                          List a run's jobs and steps, or print one step's log
   grain ci test-history <test-name> [--limit N]
                                          Pass/fail/flake history across recent CI runs
-  grain ci artifact <job> <name> [-o <dest>] [--run <run-id>]
+  grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>] [--repo <r>]
                                          Download a CI artifact
   grain ci wait [--jobs j1,j2] [--timeout 9m] [--resume <run-id>]
                                          Start or attach to grain CI for this branch and wait for its verdict
@@ -39,7 +39,8 @@ CI & PULL REQUEST (scoped to this task's repository and branch):
                                          Run a single named CI job against the current branch commit and wait
   grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]
                                          Rerun failed (or named) jobs fresh and uncached
-  grain pr status                        Latest grain CI verdict on this task's branch
+  grain pr status [--task <id> | --ref <branch> [--repo <r>]]
+                                         Latest grain CI verdict on this task's branch, or another task's or branch's
   grain pr base-status                   Latest grain CI verdict on the base branch
   grain pr open                          Open or update the pull request for this branch from its commit messages
   grain pr reply <body|--file f> [--comment-id <id>]
@@ -66,7 +67,8 @@ GIT, TASK & COLLABORATION:
                                          Commit a git revert of a task's merge or of one commit
 
 TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this run's grants do not cover):
-  grain task list                        Tasks this run may read
+  grain task list [--state s] [--search t] [--limit N]
+                                         Tasks this run may read, one line each
   grain task read <id>                   A task's record
   grain task prompt <id> [--attempt N]   A task's prompt
   grain task transcript <id> [--attempt N]
@@ -83,9 +85,11 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
                                          Call one (--help lists its flags, generated from its input schema)
   grain quarantine <pkg> <test> --reason <why> [--no-follow-up]
                                          Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (quarantine-test)
-  grain metrics [<section>]              grain's own measurements (self-debug)
+  grain metrics [<section>] [--window 7d | --since <d> --until <d>]
+                                         grain's own measurements (self-debug)
   grain health                           This deployment's health (deployment-health)
-  grain log [<source>] [--tail N]        grain's own log, redacted (grain-log)
+  grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority <p>] [--contains <s>] [--lines N]
+                                         grain's own log, redacted (grain-log)
   grain playbooks [<name>]               Bootstrap playbooks (bootstrap-playbooks)
   grain issue list | grain issue read <n>
                                          GitHub issues (read-issues)
@@ -170,14 +174,14 @@ var sandboxCommandHelp = map[string]string{
 		"whose capability marks them sandbox-callable are here; a model-only tool is the agent's own MCP\n" +
 		"tool and the proxy refuses it. Each tool's flags are generated from its input schema.\n\n" +
 		"  grain cap list\n  grain cap widgets ping --help\n  grain cap widgets ping --host example.com --count 3\n  grain cap widgets ping --json '{\"host\":\"example.com\"}'\n",
-	"ls":              "grain ls <uri> [--glob <pat>]\n\nList a namespace directory.\n\n  grain ls ci://bwsalmon/grain\n  grain ls task://\n  grain ls src://pkg --glob '*_test.go'\n",
+	"ls":              "grain ls <uri> [--glob <pat>]\n\nList a namespace directory. --glob matches the directory's own entries; a\npattern with / or ** walks the subtree instead, and ends with a [truncated: ...]\nline if the walk was cut short. A trailing / matches directories only.\n\n  grain ls ci://bwsalmon/grain\n  grain ls task:// --glob '19*'\n  grain ls src://pkg --glob '**/*_test.go'\n",
 	"read":            "grain read <uri> [--tail N] [--offset N --limit N]\n\nPrint a namespace file to stdout, whole: there is no size cap.\n\n  grain read task://1436/record.md\n  grain read ci://bwsalmon/grain/<run>/go/gotest.log --tail 4000\n",
 	"grep":            "grain grep <pattern> <uri> [-i] [-C N] [--glob <pat>]\n\nSearch a namespace file or subtree with an RE2 regular expression.\n\n  grain grep -- '--- FAIL' ci://bwsalmon/grain/<run>/go/gotest.log\n  grain grep -i -C 2 TODO src://pkg/ci --glob '*.go'\n",
-	"ci list":         "grain ci list [--ref <branch>] [--conclusion failure,errored] [--job <j>] [--since 24h] [--limit N] [--repo owner/name]\n\nList recent grain CI runs, newest first. --ref @branch is this task's own branch.\n",
-	"ci log":          "grain ci log [<run-id>] [--job <j>] [--step <s>] [--attempt K] [--tail N]\n\nWith no run, the latest run on this task's branch. With no job, list the run's jobs;\nwith a job and no step, list its step logs; with both, print that step's log.\n\n  grain ci log --job go\n  grain ci log --job go --step Test --tail 8000\n",
+	"ci list":         "grain ci list [--task <id> | --ref <branch>] [--conclusion failure,errored] [--job <j>] [--since 24h] [--limit N] [--repo owner/name]\n\nList recent grain CI runs, newest first. --ref @branch is this task's own branch;\n--task <id> is that task's branch, in any repository this task may read CI for.\n",
+	"ci log":          "grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [--step <s>] [--attempt K] [--tail N]\n\nWith no run, the latest run on this task's branch (or --task's). A run is found in whichever\nrepository it belongs to that this task may read CI for; --repo names it outright. With no job, list the run's jobs;\nwith a job and no step, list its step logs; with both, print that step's log.\n\n  grain ci log --job go\n  grain ci log --job go --step Test --tail 8000\n",
 	"ci test-history": "grain ci test-history <test-name> [--limit N]\n\nPass, fail and flake history of one test across recent CI runs.\n",
-	"ci artifact":     "grain ci artifact <job> <name> [-o <dest>] [--run <run-id>]\n\nDownload a stored CI artifact, to <dest> or stdout. With no run, the latest run on this task's branch.\n",
-	"pr status":       "grain pr status\n\nThe latest grain CI run on this task's branch and each job's verdict.\n",
+	"ci artifact":     "grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>] [--repo owner/name]\n\nDownload a stored CI artifact, to <dest> or stdout. With no run, the latest run on this task's branch (or --task's).\n",
+	"pr status":       "grain pr status [--task <id> | --ref <branch> [--repo owner/name]]\n\nThe latest grain CI run on this task's branch and each job's verdict -- or on another task's\nbranch (--task), or any branch (--ref, in --repo or this task's repository), where this task may read CI.\n",
 	"pr base-status":  "grain pr base-status\n\nThe latest grain CI run on this task's base branch and each job's verdict.\n",
 	"ci wait": "grain ci wait [--jobs j1,j2] [--timeout 9m] [--resume <run-id>]\n\n" +
 		"Start grain CI on this task's branch (or attach to the identical run in flight) and wait for\n" +
@@ -216,7 +220,7 @@ var sandboxCommandHelp = map[string]string{
 	"handover":        "grain handover write (<text> | --file <f>)\n\nWrite or replace this task's standing handover summary for future runs on this task.\n",
 	"handover write":  "grain handover write (<text> | --file <f>)\n\nWrite or replace this task's standing handover summary for future runs on this task.\nUse '--file -' to read from stdin.\n",
 	"notify":          "grain notify --subject <key> --title <one-line> [--body <md> | --file <f>] [--severity info|warning|critical] [--task <id>] [--clears-when <json>]\n\nRaise an operator notification without parking this task.\n",
-	"task list":       "grain task list\n\nThe tasks this run may read: its own, or every task with self-debug.\n",
+	"task list":       sandboxTaskListHelp,
 	"task read":       "grain task read <id>\n\nA task's record (task://<id>/record.md). grain ls task://<id> shows its other files.\n",
 	"task prompt":     "grain task prompt <id> [--attempt N]\n\nA task's latest prompt, or attempt N's.\n",
 	"task transcript": "grain task transcript <id> [--attempt N]\n\nA task's latest transcript, or attempt N's.\n",
@@ -227,7 +231,7 @@ var sandboxCommandHelp = map[string]string{
 	"task message":          "grain task message <id> (<body|--file f>)\n\nLeave a note on a parent or child task's conversation (or any task with api:tasks:admin).\n",
 	"task propose":          sandboxProposeHelp,
 	"propose":               sandboxProposeHelp,
-	"api":                   "grain api routes [--scope <s>]\ngrain api <METHOD> <path> [--body '<json>' | --file <f> | --field k=v] [--reason <why>]\n\nList or call non-dangerous agent API routes granted to this run.\n",
+	"api":                   "grain api routes [--scope <s>]\ngrain api <METHOD> <path> [--body '<json>' | --file <f> | --field k=v] [--reason <why>]\n\nList or call non-dangerous agent API routes granted to this run.\n\nA repository off the default git host goes in a /api/repos/{owner}/{name}/... path\nwith its host and owner escaped into one segment:\n  grain api GET '/api/repos/git.forge.example%2Fexperimental/grain/releases'\n",
 	"api routes":            "grain api routes [--scope <s>]\n\nList the non-dangerous agent API routes this run's capabilities unlock.\n",
 	"memory":                "grain memory (list | read <key> | write <key> <body|--file f> | doc-write <path> <body|--file f>)\n",
 	"memory list":           "grain memory list\n\nList entries in deployment memory (memory://).\n",
@@ -245,14 +249,15 @@ var sandboxCommandHelp = map[string]string{
 		"  --since, --until  an absolute span instead: a date or an RFC 3339 timestamp\n" +
 		"  --repo, --author  only tasks on these repositories / by these authors (repeat or comma-separate)\n",
 	"health": "grain health\n\nThis deployment's health (deploy://health). Needs deployment-health.\n",
-	"log": "grain log [<source>] [--since <rfc3339>] [--until <rfc3339>] [--min-priority err|warning|...] [--contains <text>] [--max-lines N] [--tail N]\n\n" +
+	"log": "grain log [<source> | --source daemon|dmesg] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--max-lines N] [--tail N]\n\n" +
 		"grain's own log, redacted (deploy://grain.log). Needs grain-log.\n\n" +
 		"  --since, --until  the window, as RFC 3339 timestamps (default: the latest entries)\n" +
-		"  --min-priority    least severe journald priority to return (err, warning, info, ...)\n" +
+		"  --source          which journal: daemon (the default) or dmesg (the kernel's)\n" +
+		"  --priority        least severe journald priority to return (err, warning, info, ...; alias --min-priority)\n" +
 		"  --contains        only entries containing this text (plain, case-insensitive)\n" +
 		"  --max-lines N     most entries to return (alias --lines; default 200, at most 1000)\n" +
 		"  --tail N          the last N lines of what that returns\n",
-	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks, or print one (src://playbooks). Needs bootstrap-playbooks.\n",
+	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs bootstrap-playbooks.\n",
 	"issue list": "grain issue list [--repo owner/name]\n\nGitHub issues. Needs read-issues.\n",
 	"issue read": "grain issue read <number> [--repo owner/name]\n\nOne GitHub issue. Needs read-issues.\n",
 	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",
@@ -262,3 +267,14 @@ var sandboxCommandHelp = map[string]string{
 	"issue":      "grain issue (list | read) ...\n",
 	"db":         "grain db query <sql>\n",
 }
+
+// sandboxTaskListHelp is grain task list --help.
+const sandboxTaskListHelp = "grain task list [--state <s>[,<s>...]] [--repo <owner/name>] [--search <title text>]\n" +
+	"                [--kind <k>] [--changed-since <30m|24h|7d|time>] [--stalled] [--limit N] [--json]\n\n" +
+	"The tasks this run may read (its own, or every task with self-debug), one line each:\n" +
+	"id, state, repo, title, then \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
+	"Oldest first by filing; --limit (default 50) keeps the newest. The count, and how many\n" +
+	"were left out, go to stderr. --state may be repeated or comma-separated (proposed, queued,\n" +
+	"running, awaiting_reply, failed, awaiting_submit, completed, closed); --kind is one of\n" +
+	"port, repair, session, proposal, durable, imported. Example, before filing a fix:\n" +
+	"  grain task list --state proposed --search 'go-long'\n"

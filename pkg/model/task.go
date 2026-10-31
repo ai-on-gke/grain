@@ -125,6 +125,17 @@ const (
 	// waiting for somebody -- are exactly the ones
 	// orchestrator.reconcileConsoleSessions exempts it from.
 	ReasonConsoleSession OriginReason = "console-session"
+	// ReasonImported is an open GitHub issue the periodic issue importer
+	// turned into a task (orchestrator.reconcileIssueImports, configured
+	// per repository by RepoConfig.IssueImport). The task names the issue
+	// it came from in Issue and WorkOrigin, which is also what keeps the
+	// importer from filing the same issue twice.
+	//
+	// Its own reason for ReasonUpgradeCheck's reason: "somebody opened an
+	// issue on GitHub and grain picked it up" is not "somebody filed this
+	// here", and the person deciding whether to approve it is entitled to
+	// be told that the words in it came from outside.
+	ReasonImported OriginReason = "imported"
 )
 
 // Origin is two orthogonal facts kept together: who created a task, and
@@ -192,6 +203,12 @@ func (r RepoRef) GitHost() string {
 	return DefaultRepoHost()
 }
 
+// WebURL is r's page on its git host: https://<host>/<owner>/<name>, on
+// the deployment's default host when r names none.
+func (r RepoRef) WebURL() string {
+	return "https://" + r.GitHost() + "/" + r.Owner + "/" + r.Name
+}
+
 // StoredOwner is what r's owner column holds: Owner, or host/Owner for a
 // repository off the default host. An owner can never contain a slash
 // (validRepoSegment), so RepoFromStored splits it back unambiguously,
@@ -231,6 +248,20 @@ func RepoFromStored(owner, name string) RepoRef {
 func (r RepoRef) Same(other RepoRef) bool {
 	return strings.EqualFold(r.Owner, other.Owner) && strings.EqualFold(r.Name, other.Name) &&
 		r.OffDefaultHost() == other.OffDefaultHost()
+}
+
+// SameRepoText reports whether two written repositories name the same
+// one: parsed and compared with Same where both parse (so
+// git@host:owner/name, https://host/owner/name.git and host/owner/name
+// are one repository however they are cased), and compared as text,
+// case-insensitively, where either does not.
+func SameRepoText(a, b string) bool {
+	ra, errA := ParseRepo(a)
+	rb, errB := ParseRepo(b)
+	if errA != nil || errB != nil {
+		return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+	}
+	return ra.Same(rb)
 }
 
 // ParseRepo reads the written form of a repository: owner/name, or
@@ -1114,6 +1145,10 @@ const (
 	// so the inline comments it carries are never mistaken for review
 	// threads somebody else opened (orchestrator's reviewthreads.go).
 	LinkDraftReview LinkKind = "draft-review"
+	// LinkRelayedReviewThread maps a grain-relayed inline review comment on
+	// this task's pull request to its GitHub review thread ID and records
+	// whether the finding's decision has been made (-> RelayedReviewThread.Target()).
+	LinkRelayedReviewThread LinkKind = "relayed-review-thread"
 	// LinkReviewThread records one GitHub review thread on this task's
 	// pull request that grain has already sent a run to deal with (-> the
 	// REST ID of the comment that opened it). One run per new batch of
@@ -1285,6 +1320,15 @@ const (
 // its comments as addenda (pkg/ui's AddendaSince): a reviewer's thread
 // opened mid-run is the run's to deal with before it ends.
 var CLThreadsPrincipal = Principal{Kind: PrincipalAutomation, ID: "cl-review-threads"}
+
+// CapabilityChangePrincipal is who tells a task with a live run that its
+// grants changed (orchestrator's reconcileCapabilityChanges). Like
+// CLThreadsPrincipal, its comments reach a live run as addenda: a notice
+// saying the run is about to be restarted, or that a new `api:*` route
+// arrives only with the next run, is written for the run. An interactive
+// task's chat draws it as a system line rather than as a message
+// (ui/src/chat.js).
+var CapabilityChangePrincipal = Principal{Kind: PrincipalAutomation, ID: "capability-change"}
 
 // IsChange reports whether a link of kind k is the task's own change --
 // a pull request (LinkFixes) or a changelist (LinkChangelist) -- which

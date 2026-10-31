@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import api from "./api.js";
+import { repoApiRoot } from "./repoApi.js";
 
 // notifications.js is operator notifications in the UI
 // (docs/design/durable-tasks.md, DT-5): the open ones, read from
@@ -120,9 +121,8 @@ export async function decideRelease(release, approve) {
     ? `Approve ${release.version}? This tags ${release.version}, moves latest onto it and publishes its images.`
     : `Reject ${release.version}? Its release candidate is dropped, and the next release train run cuts the next one.`;
   if (!window.confirm(question)) return false;
-  const [owner, name] = release.repo.split("/");
   await api(
-    `/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pending-releases/${encodeURIComponent(release.version)}/${approve ? "approve" : "reject"}`,
+    `${repoApiRoot(release.repo)}/pending-releases/${encodeURIComponent(release.version)}/${approve ? "approve" : "reject"}`,
     { method: "POST" },
   );
   return true;

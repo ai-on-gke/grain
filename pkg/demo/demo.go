@@ -1217,6 +1217,32 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 
+	// An open GitHub issue the issue importer filed and nobody has
+	// approved yet (model.ReasonImported): the "Imported" status and
+	// chip the task list shows for one.
+	imported, err := create(ago(25*time.Minute), ui.CreateTaskRequest{
+		Title: "[#42] Search results drop the last page",
+		Description: "Imported from GitHub issue acme/widgets#42: https://github.com/acme/widgets/issues/42\n\n" +
+			"Author: @reporter\nLabels: bug\n\n## Description\n\nThe last page of search results is never shown.",
+	})
+	if err != nil {
+		return fmt.Errorf("seeding imported task: %w", err)
+	}
+	if err := store.UpdateTask(ctx, imported.ID, func(t *model.Task) error {
+		t.Origin = model.Origin{
+			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"}},
+			Reason:      model.ReasonImported,
+		}
+		if t.Target != nil {
+			t.Issue = 42
+			t.WorkOrigin = model.GitHubOrigin(*t.Target, 42)
+		}
+		t.Approval, t.ApprovedAt = nil, nil
+		return nil
+	}); err != nil {
+		return err
+	}
+
 	// Director session task tagged with console-session:director.
 	directorTask, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:       "Director Session",
@@ -1623,10 +1649,26 @@ func (demoChangelists) Observe(_ context.Context, _ model.Task, target string) (
 func (demoChangelists) Threads(context.Context, model.Task, string) ([]change.Thread, error) {
 	return nil, nil
 }
+
+// Submit and Sync remember what the forge would report afterwards, since
+// the demo has no poll to read it back: a submitted CL observes as
+// submitted (what a cl-submitted goal naming its number reads), and a
+// synced one as a new snapshot, up to date with head, whose presubmit has
+// not run yet.
 func (demoChangelists) Submit(_ context.Context, _ model.Task, target string, by change.Person) (change.Result, error) {
+	obs, _ := change.LastObserved(target)
+	obs.Target, obs.Status = target, change.StatusSubmitted
+	change.Remember(obs)
 	return change.Result{Target: target, Message: fmt.Sprintf("%s submitted %s (demo: nothing left this process).", by.Name, target)}, nil
 }
-func (demoChangelists) Sync(_ context.Context, _ model.Task, _ string) (change.SyncResult, error) {
+func (demoChangelists) Sync(_ context.Context, task model.Task, _ string) (change.SyncResult, error) {
+	if live := change.LiveChanges(task); len(live) > 0 {
+		obs, _ := change.LastObserved(live[0])
+		obs.Target, obs.Health, obs.Presubmit, obs.Checks = live[0], change.HealthOK, change.PresubmitNotRun, nil
+		obs.Snapshot++
+		obs.SnapshotAt = time.Now().UTC()
+		change.Remember(obs)
+	}
 	return change.SyncResult{Message: "synced to head (demo)"}, nil
 }
 

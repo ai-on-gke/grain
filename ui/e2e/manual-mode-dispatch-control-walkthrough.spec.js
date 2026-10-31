@@ -24,10 +24,11 @@ import { alertRow, openAlerts } from "./alerts.js";
 // and dispatch-control, walked against the real `grain demo` server. What
 // shipped is docs/manual-mode.md: pause the deployment, then Run now (the
 // pane's button, the list's "Run selected now") starts exactly the tasks
-// picked. dispatch-control is the agent's half: pause_pipeline,
-// resume_pipeline, run_task_now and defer_task, served by
-// `grain mcpserver`, which is driven over stdio here the way a run's
-// agent drives it.
+// picked. dispatch-control is the agent's half: the api:dispatch-control
+// preset, whose model-only routes `grain mcpserver` serves as
+// api_pause_pipeline, api_resume_pipeline and api_run_now (defer is
+// tasks:write, which a run reaches through `grain api` in its sandbox),
+// driven over stdio here the way a run's agent drives it.
 //
 // demo has no orchestrator, so nothing is dispatched: what these assert
 // is the request (runNowAt) and every page that reports it.
@@ -174,7 +175,7 @@ test("Run now and Run selected now under a pause, and the rows that say so", asy
 });
 
 // mcpCalls runs one `grain mcpserver` for task taskID holding
-// dispatch-control and makes each of calls over JSON-RPC stdio, returning
+// api:dispatch-control and makes each of calls over JSON-RPC stdio, returning
 // each call's result.
 function mcpCalls({ url, code, taskID, sandboxRoot, calls }) {
   const lines = [
@@ -208,7 +209,7 @@ function mcpCalls({ url, code, taskID, sandboxRoot, calls }) {
       "-task",
       String(taskID),
       "-grant",
-      "dispatch-control",
+      "api:dispatch-control",
     ],
     {
       input: lines.map((l) => JSON.stringify(l)).join("\n") + "\n",
@@ -246,7 +247,7 @@ test("dispatch-control over a live grain mcpserver, and the pages that show it",
     path.join(os.tmpdir(), "grain-e2e-dispatch-control-"),
   );
   const steward = await queued(request, `Steward ${stamp}`, {
-    capabilities: ["dispatch-control"],
+    capabilities: ["api:dispatch-control"],
   });
   const target = await queued(request, `Picked by the steward ${stamp}`);
   const escalating = await ok(
@@ -268,23 +269,21 @@ test("dispatch-control over a live grain mcpserver, and the pages that show it",
       taskID: steward.id,
       sandboxRoot,
       calls: [
-        ["pause_pipeline", { reason }],
-        ["run_task_now", { task_id: target.id }],
-        ["run_task_now", { task_id: running.id }],
-        ["run_task_now", { task_id: escalating.id }],
+        ["api_pause_pipeline", { body: { reason } }],
+        ["api_run_now", { id: String(target.id) }],
+        ["api_run_now", { id: String(running.id) }],
+        ["api_run_now", { id: String(escalating.id) }],
       ],
     });
     for (const name of [
-      "pause_pipeline",
-      "resume_pipeline",
-      "run_task_now",
-      "defer_task",
+      "api_pause_pipeline",
+      "api_resume_pipeline",
+      "api_run_now",
     ])
       expect(tools).toContain(name);
     const [pause, picked, onRunning, onEscalating] = results;
     expect(pause.isError, pause.text).toBe(false);
     expect(picked.isError, picked.text).toBe(false);
-    expect(picked.text).toMatch(/passes that pause/);
     expect(onRunning.isError).toBe(true);
     expect(onRunning.text).toMatch(/already running/);
     expect(onEscalating.isError).toBe(true);
@@ -315,15 +314,17 @@ test("dispatch-control over a live grain mcpserver, and the pages that show it",
       "target detail",
     );
     expect(detail.runNowAt).toBeTruthy();
-    expect(detail.comments.at(-1).author).toBe(steward.id);
+    // The agent API records the call on the task's conversation too, so
+    // the steward's note need not be the last comment.
+    expect(detail.comments.map((c) => c.author)).toContain(steward.id);
 
-    // resume_pipeline lifts it, and the alert goes.
+    // api_resume_pipeline lifts it (the agent's own pause), and the alert goes.
     const resumed = mcpCalls({
       url: demoServer,
       code: accessCode,
       taskID: steward.id,
       sandboxRoot,
-      calls: [["resume_pipeline", {}]],
+      calls: [["api_resume_pipeline", { reason: "done hand-picking" }]],
     }).results[0];
     expect(resumed.isError, resumed.text).toBe(false);
     await page.goto("/system/pipeline");

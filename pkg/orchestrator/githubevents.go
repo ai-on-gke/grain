@@ -149,6 +149,8 @@ func processGitHubEvent(ctx context.Context, deps Deps, allowedRepos []string,
 		// GitHub's own CI concluding a job: recorded beside grain CI's
 		// runs (githubci.go). The ETag invalidation below applies too.
 		return recordGitHubCIEvent(ctx, deps, repo, ev, now)
+	case "workflow_run":
+		return recordGitHubWorkflowRunEvent(ctx, deps, repo, ev, now)
 	}
 	// check_run, check_suite, status, push, pull_request.synchronize:
 	// ETag cache invalidation + cycle wakeup already ran when the event

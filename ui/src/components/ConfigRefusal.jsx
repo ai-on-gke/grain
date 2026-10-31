@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { useEffect, useState } from "react";
 import {
+  Alert,
   Box,
   Button,
   Dialog,
@@ -22,7 +24,9 @@ import {
   Link,
   Typography,
 } from "@mui/material";
+import api from "../api.js";
 import CopyButton from "./CopyButton.jsx";
+import ConfigRepoLink, { openInApp } from "./ConfigRepoLink.jsx";
 
 // The refusal a configuration write gets when the deployment's
 // configuration lives in an external config repository (pkg/ui's
@@ -59,6 +63,21 @@ export function configRepoRefusal(remote, branch) {
   return { repo, remote, branch: branch || "main", url };
 }
 
+// isInternalRefusal is whether a refusal names this deployment's own
+// grain/config (pkg/ui's config_refusal.go sets internal), which the
+// Config Repo Browser shows and POST /api/state-repo/pull-requests opens
+// pull requests in. An external repository's files and pull requests are
+// on its own host.
+export function isInternalRefusal(refusal) {
+  return Boolean(refusal?.internal);
+}
+
+// configPullRequestTitle names a pull request after what it changes.
+export function configPullRequestTitle(refusal, paths) {
+  const what = refusal?.description || `Change ${paths.join(", ")}`;
+  return what.charAt(0).toUpperCase() + what.slice(1);
+}
+
 // settingsSectionPath is the file of the config repository a settings
 // section's cards are exported to: the same files a refused write from
 // that section names (staterepo.DumpPath).
@@ -74,6 +93,22 @@ export function settingsSectionPath(section) {
 // "Edit <path> in <repo>", the path linked where it can be.
 export function EditInConfigRepo({ refusal, paths }) {
   const repo = refusal.repo || refusal.remote;
+  if (isInternalRefusal(refusal)) {
+    return (
+      <Box data-testid="config-refusal-where">
+        <Typography variant="body2">
+          {`This setting lives in ${repo} (${refusal.branch || "main"}) and is changed with a config pull request there; grain applies it once a person merges it.`}
+        </Typography>
+        <Box component="ul" sx={{ m: 0, mt: 0.5, pl: 2.5 }}>
+          {paths.map((p) => (
+            <Typography component="li" variant="body2" key={p}>
+              <ConfigRepoLink path={p} label="Open in Config Browser" />
+            </Typography>
+          ))}
+        </Box>
+      </Box>
+    );
+  }
   return (
     <Typography variant="body2" data-testid="config-refusal-where">
       {"Edit "}
@@ -99,13 +134,47 @@ export function EditInConfigRepo({ refusal, paths }) {
 
 // ConfigRefusalDialog shows a refused write's instruction: where, and
 // the patch to commit, copyable.
+// For a refusal of this deployment's own grain/config it also offers to
+// open that pull request (POST /api/state-repo/pull-requests, held for a
+// person's Submit) carrying the refusal's change as it is.
 export default function ConfigRefusalDialog({ refusal, onClose }) {
+  const [opening, setOpening] = useState(false);
+  const [opened, setOpened] = useState(null);
+  const [openError, setOpenError] = useState("");
+  // A new refusal is a new question: what the last one opened, or why
+  // it could not, is not this one's answer.
+  useEffect(() => {
+    setOpened(null);
+    setOpenError("");
+    setOpening(false);
+  }, [refusal]);
   if (!refusal) return null;
   const changes = refusal.change || [];
   const patch = changes.map((c) => c.patch).join("");
   const paths = refusal.path?.length
     ? refusal.path
     : changes.map((c) => c.path);
+  const canOpenPR = isInternalRefusal(refusal) && changes.length > 0;
+  const openPullRequest = async () => {
+    setOpening(true);
+    setOpenError("");
+    try {
+      setOpened(
+        await api("/api/state-repo/pull-requests", {
+          method: "POST",
+          body: JSON.stringify({
+            title: configPullRequestTitle(refusal, paths),
+            changes,
+          }),
+        }),
+      );
+    } catch (err) {
+      setOpenError(err?.message || String(err));
+    } finally {
+      setOpening(false);
+    }
+  };
+  const taskHref = opened?.taskId ? `/tasks/${opened.taskId}` : "";
   return (
     <Dialog
       open
@@ -146,11 +215,54 @@ export default function ConfigRefusalDialog({ refusal, onClose }) {
             </Typography>
           )
         )}
+        {opened && (
+          <Alert
+            severity="success"
+            sx={{ mt: 2 }}
+            data-testid="config-refusal-opened"
+          >
+            {"Opened config pull request"}
+            {opened.number ? ` #${opened.number}` : ""}
+            {taskHref ? (
+              <>
+                {" as "}
+                <Link
+                  href={taskHref}
+                  onClick={(evt) => {
+                    openInApp(evt, taskHref);
+                    if (evt.defaultPrevented) onClose?.();
+                  }}
+                >
+                  task {opened.taskId}
+                </Link>
+              </>
+            ) : null}
+            . It waits for a person to submit it.
+          </Alert>
+        )}
+        {openError && (
+          <Alert
+            severity="error"
+            sx={{ mt: 2 }}
+            data-testid="config-refusal-error"
+          >
+            {openError}
+          </Alert>
+        )}
       </DialogContent>
       <DialogActions>
         {refusal.docs && (
           <Button href={refusal.docs} target="_blank" rel="noreferrer">
             How this works
+          </Button>
+        )}
+        {canOpenPR && !opened && (
+          <Button
+            onClick={openPullRequest}
+            disabled={opening}
+            data-testid="config-refusal-open-pr"
+          >
+            {opening ? "Opening…" : "Create Config PR"}
           </Button>
         )}
         <Button onClick={onClose} variant="contained">

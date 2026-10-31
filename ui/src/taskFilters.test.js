@@ -1561,6 +1561,10 @@ describe("originOf", () => {
     expect(originOf(task({ generatedFrom: "7" }))).toBe("proposed");
     expect(originOf(task({ scheduled: true }))).toBe("schedule");
     expect(originOf(task({ suiteRun: true }))).toBe("suite");
+    expect(originOf(task({ imported: true }))).toBe("imported");
+    expect(originOf(task({ author: "external:w", authorKind: "agent" }))).toBe(
+      "external",
+    );
     expect(originOf(task({ stacked: true, generatedFrom: "7" }))).toBe("fix");
     expect(originOf(task({ stacked: true, review: true }))).toBe("review");
   });

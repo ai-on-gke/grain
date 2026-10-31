@@ -28,6 +28,7 @@ package sandboxcli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -287,7 +289,7 @@ func (c *sandboxCLI) run(args []string) error {
 		q.Set("n", "1")
 		return c.fs(uri, q)
 	case "ci list":
-		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "since", "limit", "repo"), c.out)
+		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "since", "limit", "repo", "task"), c.out)
 	case "ci test-history":
 		test, err := p.arg(0, "test-name")
 		if err != nil {
@@ -301,7 +303,7 @@ func (c *sandboxCLI) run(args []string) error {
 	case "ci artifact":
 		return c.ciArtifact(p)
 	case "pr status":
-		return c.get("/cli/pr/status", nil, c.out)
+		return c.get("/cli/pr/status", p.query("task", "ref", "repo"), c.out)
 	case "pr base-status":
 		return c.get("/cli/pr/base-status", nil, c.out)
 	case "ci wait":
@@ -333,7 +335,7 @@ func (c *sandboxCLI) run(args []string) error {
 	case "notify":
 		return c.notify(p)
 	case "task list":
-		return c.fs("task://", url.Values{"list": {""}})
+		return c.taskList(p)
 	case "task read":
 		id, err := p.arg(0, "id")
 		if err != nil {
@@ -385,7 +387,7 @@ func (c *sandboxCLI) run(args []string) error {
 		return c.fs("deploy://health", nil)
 	case "log":
 		uri := "deploy://grain.log"
-		if source := p.optArg(0); source != "" {
+		if source := grainLogSource(p); source != "" {
 			uri += "/" + source
 		}
 		return c.fs(uri, grainLogQuery(p))
@@ -393,7 +395,21 @@ func (c *sandboxCLI) run(args []string) error {
 		if name := p.optArg(0); name != "" {
 			return c.fs("src://playbooks/"+name, nil)
 		}
-		return c.fs("src://playbooks", url.Values{"list": {""}})
+		// One playbook name per line, as `grain playbooks <name>` takes it.
+		var listing bytes.Buffer
+		p, err := fsPath("src://playbooks")
+		if err != nil {
+			return err
+		}
+		if err := c.get(p, url.Values{"list": {""}}, &listing); err != nil {
+			return err
+		}
+		for _, line := range strings.Split(strings.TrimSpace(listing.String()), "\n") {
+			if name := strings.TrimSuffix(line, ".md"); name != "" && !strings.HasSuffix(name, "/") {
+				fmt.Fprintln(c.out, name)
+			}
+		}
+		return nil
 	case "issue list":
 		return c.get("/cli/issues", p.query("repo", "label", "limit"), c.out)
 	case "issue read":
@@ -518,32 +534,70 @@ func (c *sandboxCLI) context() (runContext, error) {
 	return rc, nil
 }
 
-// latestRun is the newest grain CI run on this task's branch.
-func (c *sandboxCLI) latestRun() (string, error) {
+// latestRun is the newest grain CI run on this task's branch, or on task's
+// when one is named.
+func (c *sandboxCLI) latestRun(task string) (string, error) {
+	q := url.Values{"ref": {"@branch"}, "limit": {"1"}}
+	what := "this task's branch"
+	if task != "" {
+		q = url.Values{"task": {task}, "limit": {"1"}}
+		what = "task " + strings.TrimPrefix(task, "#") + "'s branch"
+	}
 	var buf strings.Builder
-	if err := c.get("/cli/ci/runs", url.Values{"ref": {"@branch"}, "limit": {"1"}}, &buf); err != nil {
+	if err := c.get("/cli/ci/runs", q, &buf); err != nil {
 		return "", err
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) < 2 {
-		return "", fmt.Errorf("this task's branch has no grain CI run yet")
+		return "", fmt.Errorf("%s has no grain CI run yet", what)
 	}
 	id, _, _ := strings.Cut(lines[1], " ")
 	return id, nil
 }
 
-func (c *sandboxCLI) ciLog(p sandboxArgs) error {
+// ciRun is the run a ci log or ci artifact command reads and the
+// repository it is in: the run named (or the latest on --task's branch,
+// or on this task's), in --repo or wherever the proxy finds it.
+func (c *sandboxCLI) ciRun(p sandboxArgs, run string) (repo, id string, err error) {
 	rc, err := c.context()
+	if err != nil {
+		return "", "", err
+	}
+	if run == "" {
+		if run, err = c.latestRun(p.get("task")); err != nil {
+			return "", "", err
+		}
+	}
+	if repo = p.get("repo"); repo != "" {
+		return repo, run, nil
+	}
+	var buf strings.Builder
+	if err := c.get("/cli/ci/run", url.Values{"id": {run}}, &buf); err != nil {
+		if rc.Repo == "" {
+			return "", "", err
+		}
+		// A proxy that cannot say is asked about this task's own
+		// repository, as before it could.
+		return rc.Repo, run, nil
+	}
+	var named struct {
+		Repo string `json:"repo"`
+	}
+	if err := json.Unmarshal([]byte(buf.String()), &named); err != nil || named.Repo == "" {
+		if rc.Repo == "" {
+			return "", "", fmt.Errorf("finding the repository of CI run %s: %q", run, buf.String())
+		}
+		return rc.Repo, run, nil
+	}
+	return named.Repo, run, nil
+}
+
+func (c *sandboxCLI) ciLog(p sandboxArgs) error {
+	repo, run, err := c.ciRun(p, p.optArg(0))
 	if err != nil {
 		return err
 	}
-	run := p.optArg(0)
-	if run == "" {
-		if run, err = c.latestRun(); err != nil {
-			return err
-		}
-	}
-	uri := "ci://" + rc.Repo + "/" + run
+	uri := "ci://" + repo + "/" + run
 	job := p.get("job")
 	if job == "" {
 		return c.fs(uri, url.Values{"list": {""}})
@@ -571,17 +625,11 @@ func (c *sandboxCLI) ciArtifact(p sandboxArgs) error {
 	if err != nil {
 		return err
 	}
-	rc, err := c.context()
+	repo, run, err := c.ciRun(p, p.get("run"))
 	if err != nil {
 		return err
 	}
-	run := p.get("run")
-	if run == "" {
-		if run, err = c.latestRun(); err != nil {
-			return err
-		}
-	}
-	path, err := fsPath("ci://" + rc.Repo + "/" + run + "/artifacts/" + job + "/" + name)
+	path, err := fsPath("ci://" + repo + "/" + run + "/artifacts/" + job + "/" + name)
 	if err != nil {
 		return err
 	}
@@ -614,7 +662,7 @@ var sandboxBoolFlags = map[string]bool{
 	"i": true, "full": true, "json": true, "all": true, "comments": true,
 	"no-repo": true, "fixes-base-branch": true, "no-port": true,
 	"no-follow-up": true, "park": true, "auto-merge": true,
-	"hold-for-approval": true, "at-front": true,
+	"hold-for-approval": true, "at-front": true, "stalled": true,
 }
 
 func parseSandboxArgs(args []string) (sandboxArgs, error) {
@@ -670,13 +718,26 @@ func (p sandboxArgs) getAll(name string) []string { return p.multiFlags[name] }
 
 func (p sandboxArgs) has(name string) bool { _, ok := p.flags[name]; return ok }
 
+// only refuses any flag not among names, for a command whose every flag
+// narrows its answer: one it ignored would answer a question nobody asked.
+func (p sandboxArgs) only(cmd string, names ...string) error {
+	for name := range p.flags {
+		if !slices.Contains(names, name) {
+			return fmt.Errorf("%s: unknown flag --%s: run 'grain %s --help' for usage", cmd, name, cmd)
+		}
+	}
+	return nil
+}
+
 // grainLogQuery is `grain log`'s flags as deploy://grain.log's query:
 // the window, priority, substring and line cap read_grain_log takes, and
 // --tail, which the namespace applies to whatever that answers.
 func grainLogQuery(p sandboxArgs) url.Values {
 	q := p.query("tail", "since", "until", "contains")
-	if v := p.get("min-priority"); v != "" {
-		q.Set("min_priority", v)
+	for _, name := range []string{"priority", "min-priority"} {
+		if v := p.get(name); v != "" {
+			q.Set("min_priority", v)
+		}
 	}
 	for _, name := range []string{"max-lines", "lines"} {
 		if v := p.get(name); v != "" {
@@ -684,6 +745,15 @@ func grainLogQuery(p sandboxArgs) url.Values {
 		}
 	}
 	return q
+}
+
+// grainLogSource is the journal `grain log` reads: --source when given,
+// else its first argument, else "" for the daemon's own.
+func grainLogSource(p sandboxArgs) string {
+	if v := p.get("source"); v != "" {
+		return v
+	}
+	return p.optArg(0)
 }
 
 // metricsQuery is `grain metrics`' flags as deploy://metrics' query;
