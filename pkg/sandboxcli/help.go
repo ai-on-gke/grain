@@ -77,9 +77,9 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
   grain api <METHOD> <path> [--body '<json>' | --field k=v] [--reason <why>]
                                          Call a granted non-dangerous agent API route
   grain memory (list | read <key> | write <key> <body|--file f> | doc-write <path> <body|--file f>)
-                                         Deployment memory and standing docs (memory / api:memory:write)
+                                         Deployment memory and standing docs (api:memory / api:memory:write)
   grain release-notes (stats | publish --version <v> <body|--file f>)
-                                         Release notes stats and publishing (release-notes)
+                                         Release notes stats and publishing (api:release-notes)
   grain cap list                         Capability tools this run's grants let the sandbox call
   grain cap <server> <tool> [flags | --json '<args>']
                                          Call one (--help lists its flags, generated from its input schema)
@@ -237,12 +237,12 @@ var sandboxCommandHelp = map[string]string{
 	"memory":                "grain memory (list | read <key> | write <key> <body|--file f> | doc-write <path> <body|--file f>)\n",
 	"memory list":           "grain memory list\n\nList entries in deployment memory (memory://).\n",
 	"memory read":           "grain memory read <key>\n\nRead a file from deployment memory (memory://<key>).\n",
-	"memory write":          "grain memory write <key> (<content> | --file <f>)\n\nWrite an entry under memory/entries/<key>. Needs memory or api:memory:write.\n",
-	"memory doc-write":      "grain memory doc-write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs memory or api:memory:write.\n",
-	"memory doc":            "grain memory doc write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs memory or api:memory:write.\n",
+	"memory write":          "grain memory write <key> (<content> | --file <f>)\n\nWrite an entry under memory/entries/<key>. Needs api:memory or api:memory:write.\n",
+	"memory doc-write":      "grain memory doc-write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs api:memory or api:memory:write.\n",
+	"memory doc":            "grain memory doc write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs api:memory or api:memory:write.\n",
 	"release-notes":         "grain release-notes (stats | publish --version <v> <body|--file f>)\n",
-	"release-notes stats":   "grain release-notes stats [--since <rfc3339>] [--until <rfc3339>]\n\nCompute task and PR statistics for a release window. Needs release-notes.\n",
-	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--since <rfc3339>] [--until <rfc3339>]\n\nPublish release notes for a version. Needs release-notes.\n",
+	"release-notes stats":   "grain release-notes stats [--since <rfc3339>] [--until <rfc3339>]\n\nCompute task and PR statistics for a release window. Needs api:release-notes or api:release-notes:read.\n",
+	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--since <rfc3339>] [--until <rfc3339>]\n\nPublish release notes for a version. Needs api:release-notes or api:release-notes:write.\n",
 	"quarantine":            "grain quarantine <package> <test-name> --reason <why> [--expires <YYYY-MM-DD>] [--Follow-up-title <t>] [--no-follow-up] [-C <dir>]\n\nAdd a flaky test entry to .grain/quarantine.yml in the workspace and file a follow-up task.\nNeeds quarantine-test.\n",
 	"metrics": "grain metrics [<section>] [--window 7d | --since <date> [--until <date>]] [--repo owner/name]... [--author <a>]...\n\n" +
 		"grain's own measurements (deploy://metrics). Needs self-debug.\n\n" +

@@ -2641,12 +2641,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	allowed := c.teamTargetRepos(ctx, teamID)
+	parkNote := ""
 	if target != nil && !targetAllowed(allowed, *target) {
 		if err := c.parkOffAllowlist(ctx, id, *target, now); err != nil {
 			return Task{}, err
 		}
+		parkNote = model.OffAllowlistParkComment(*target)
 	} else if parkUnreached {
-		if err := c.park(ctx, id, reachParkComment(reachRefused), now); err != nil {
+		parkNote = reachParkComment(reachRefused)
+		if err := c.park(ctx, id, parkNote, now); err != nil {
 			return Task{}, err
 		}
 	}
@@ -2662,11 +2665,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		return Task{}, err
 	}
 	created.SupersedeMoved = supersedeResult.Moved
+	created.ParkNote = parkNote
 	if proposedBy != nil && !created.Approved {
 		created.ApprovalNote = proposalApprovalNote(req.HoldForApproval, heldNote != "", limitNote != "", refusal)
 	}
 	for _, k := range supersedeResult.Kept {
 		created.SupersedeKept = append(created.SupersedeKept, SupersedeKeptEntry{ID: k.ID, Reason: k.Reason})
+	}
+	if created.Interactive && created.State == model.StateQueued && c.Config.Wake != nil {
+		c.Config.Wake()
 	}
 	return created, nil
 }
@@ -4773,7 +4780,13 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
 	}
-	return c.Store.Approve(ctx, id, model.Attribution{Actor: c.actor(ctx)}, c.now())
+	if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.actor(ctx)}, c.now()); err != nil {
+		return err
+	}
+	if task.Interactive && task.DeferredAt == nil && c.Config.Wake != nil {
+		c.Config.Wake()
+	}
+	return nil
 }
 
 // WithdrawApproval takes an approved task back out of the queue: it
@@ -4922,7 +4935,13 @@ func (c *Client) Undefer(ctx context.Context, id string) error {
 	if task.DeferredAt == nil {
 		return nil
 	}
-	return c.Store.SetDeferred(ctx, id, nil, nil, c.now())
+	if err := c.Store.SetDeferred(ctx, id, nil, nil, c.now()); err != nil {
+		return err
+	}
+	if task.Interactive && task.Approval != nil && c.Config.Wake != nil {
+		c.Config.Wake()
+	}
+	return nil
 }
 
 // taskState is "what state is this task in", with a missing task reported
@@ -5175,21 +5194,13 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	commentID, err := c.Store.AddComment(ctx, model.Comment{
+	if _, _, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID:    id,
 		Author:    by,
 		Body:      body,
 		CreatedAt: now,
-	})
-	if err != nil {
+	}, attachments); err != nil {
 		return err
-	}
-	for i := range attachments {
-		attachments[i].TaskID = id
-		attachments[i].CommentID = &commentID
-		if _, err := c.Store.AddAttachment(ctx, attachments[i]); err != nil {
-			return err
-		}
 	}
 
 	obs, err := c.Store.GetObservation(ctx, id)
@@ -5214,7 +5225,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 		}
 	}
 	if obs == nil || obs.PendingQuestionCommentID == nil {
-		if wokeOnMessage && c.Config.Wake != nil {
+		if (wokeOnMessage || (task.Interactive && by.Actor.Kind == model.PrincipalHuman)) && c.Config.Wake != nil {
 			c.Config.Wake()
 		}
 		return nil
@@ -5453,6 +5464,9 @@ func (c *Client) Reopen(ctx context.Context, id string) error {
 			log.Printf("ui: reopening %s: could not re-attach its pull request: %v", id, err)
 		}
 	}
+	if task, err := c.Store.GetTask(ctx, id); err == nil && task != nil && task.Interactive && c.Config.Wake != nil {
+		c.Config.Wake()
+	}
 	return nil
 }
 
@@ -5473,9 +5487,15 @@ func (c *Client) Retry(ctx context.Context, id string) error {
 		return &NotFoundError{ID: id}
 	}
 	now := c.now()
-	return c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		o.RetryRequestedAt = &now
-	})
+	}); err != nil {
+		return err
+	}
+	if task.Interactive && c.Config.Wake != nil {
+		c.Config.Wake()
+	}
+	return nil
 }
 
 // RetryMerge puts a task the merge queue has given up on back on that

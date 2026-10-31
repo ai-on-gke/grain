@@ -405,6 +405,13 @@ type Task struct {
 	// to the run that filed it. Set by CreateTask only; empty on every
 	// other read, like SupersedeMoved.
 	ApprovalNote string `json:"approvalNote,omitempty"`
+	// ParkNote is, on the response to a task just filed, the comment
+	// filing parked it awaiting a reply on -- a repo off the target repo
+	// list, or one nothing here can reach -- and "" for one filing did
+	// not park. propose_task relays it, since a parked proposal is not
+	// dispatched in its turn whatever its approval says. Set by
+	// CreateTask only, like ApprovalNote.
+	ParkNote string `json:"parkNote,omitempty"`
 	// DependsOn is every task this one has declared a depends-on link to,
 	// resolved or not -- the definition. Blocked and BlockedBy are the
 	// signal: whether any of it (or a child-of link) is still open right
@@ -902,6 +909,28 @@ type Attempt struct {
 	// (model.CapabilityAuditRecord). The records are their own fetch
 	// (AttemptCapabilityAudit), for the transcript's reason.
 	CapabilityAuditCount int `json:"capabilityAuditCount,omitempty"`
+	// QueuedAt, SandboxAcquiredAt, SandboxPreparedAt, AgentStartedAt and
+	// FirstTurnAt are the startup phase timestamps of this attempt
+	// (model.RunStartup, model.Run.AgentStartedAt), and Startup is the
+	// per-phase latency breakdown derived from them.
+	QueuedAt          *time.Time      `json:"queuedAt,omitempty"`
+	SandboxAcquiredAt *time.Time      `json:"sandboxAcquiredAt,omitempty"`
+	SandboxPreparedAt *time.Time      `json:"sandboxPreparedAt,omitempty"`
+	AgentStartedAt    *time.Time      `json:"agentStartedAt,omitempty"`
+	FirstTurnAt       *time.Time      `json:"firstTurnAt,omitempty"`
+	Startup           *AttemptStartup `json:"startup,omitempty"`
+}
+
+// AttemptStartup is the per-phase startup breakdown of one attempt
+// (model.RunStartup), in seconds: queued -> dispatched, sandbox acquire,
+// prepare sandbox, agent launch -> first turn, and total attempt started ->
+// agent's first turn. Nil when no startup phase durations are available.
+type AttemptStartup struct {
+	QueuedToDispatchedSeconds     *float64 `json:"queuedToDispatchedSeconds,omitempty"`
+	SandboxAcquireSeconds         *float64 `json:"sandboxAcquireSeconds,omitempty"`
+	PrepareSandboxSeconds         *float64 `json:"prepareSandboxSeconds,omitempty"`
+	AgentLaunchToFirstTurnSeconds *float64 `json:"agentLaunchToFirstTurnSeconds,omitempty"`
+	StartedToFirstTurnSeconds     *float64 `json:"startedToFirstTurnSeconds,omitempty"`
 }
 
 // taskFrom projects a model.Task to its JSON shape. closed reports, for
@@ -1127,6 +1156,12 @@ func attemptFrom(r model.Run, promptBytes, auditCounts map[int]int) Attempt {
 		Model:                r.Model,
 		AgentFramework:       r.AgentFramework,
 		CapabilityAuditCount: auditCounts[r.Attempt],
+		QueuedAt:             r.QueuedAt,
+		SandboxAcquiredAt:    r.SandboxAcquiredAt,
+		SandboxPreparedAt:    r.SandboxPreparedAt,
+		AgentStartedAt:       r.AgentStartedAt,
+		FirstTurnAt:          r.FirstTurnAt,
+		Startup:              attemptStartupFrom(r),
 	}
 	if size := model.MeasurePromptBytes(promptBytes[r.Attempt]); !size.Zero() {
 		out.PromptBytes, out.PromptTokens = size.Bytes, size.EstimatedTokens
@@ -1138,6 +1173,56 @@ func attemptFrom(r model.Run, promptBytes, auditCounts map[int]int) Attempt {
 		out.SetupNote, out.SetupNoteAt = r.Activity, r.ActivityAt
 	}
 	return out
+}
+
+func attemptStartupFrom(r model.Run) *AttemptStartup {
+	var s AttemptStartup
+	hasAny := false
+	if r.QueuedAt != nil && !r.StartedAt.Before(*r.QueuedAt) {
+		v := r.StartedAt.Sub(*r.QueuedAt).Seconds()
+		s.QueuedToDispatchedSeconds = &v
+		hasAny = true
+	}
+	if r.SandboxAcquiredAt != nil && !r.SandboxAcquiredAt.Before(r.StartedAt) {
+		v := r.SandboxAcquiredAt.Sub(r.StartedAt).Seconds()
+		s.SandboxAcquireSeconds = &v
+		hasAny = true
+	}
+	prepEnd := r.SandboxPreparedAt
+	if prepEnd == nil {
+		prepEnd = r.AgentStartedAt
+	}
+	if prepEnd != nil {
+		prepStart := r.StartedAt
+		if r.SandboxAcquiredAt != nil {
+			prepStart = *r.SandboxAcquiredAt
+		}
+		if !prepEnd.Before(prepStart) {
+			v := prepEnd.Sub(prepStart).Seconds()
+			s.PrepareSandboxSeconds = &v
+			hasAny = true
+		}
+	}
+	if r.FirstTurnAt != nil {
+		launchStart := r.AgentStartedAt
+		if launchStart == nil {
+			launchStart = r.SandboxPreparedAt
+		}
+		if launchStart != nil && !r.FirstTurnAt.Before(*launchStart) {
+			v := r.FirstTurnAt.Sub(*launchStart).Seconds()
+			s.AgentLaunchToFirstTurnSeconds = &v
+			hasAny = true
+		}
+		if !r.FirstTurnAt.Before(r.StartedAt) {
+			v := r.FirstTurnAt.Sub(r.StartedAt).Seconds()
+			s.StartedToFirstTurnSeconds = &v
+			hasAny = true
+		}
+	}
+	if !hasAny {
+		return nil
+	}
+	return &s
 }
 
 // --- handlers ------------------------------------------------------------
