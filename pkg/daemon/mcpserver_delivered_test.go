@@ -114,3 +114,44 @@ func TestAChatReplyIsDeliveredOnceAndReported(t *testing.T) {
 		t.Errorf("reported %v, want no report that would move the mark backwards", got)
 	}
 }
+
+func TestMultiMessageChatTurnAdvancesCursorToMaxIDAndFiltersAllFromAddenda(t *testing.T) {
+	t.Parallel()
+	daemon := &deliveryDaemon{said: []ui.Message{
+		{ID: 4, AuthorKind: "human", Body: "comment posted before chat question"},
+		{ID: 9, AuthorKind: "human", Body: "first part of reply"},
+		{ID: 12, AuthorKind: "human", Body: "second part of reply"},
+	}}
+	srv := httptest.NewServer(daemon)
+	t.Cleanup(srv.Close)
+	client := ui.NewHTTPClient(srv.URL)
+	cursor := newDeliveredCursor(client, "t-multi", 3)
+	chat := daemonChat{client: client, taskID: "t-multi", poll: time.Millisecond, delivered: cursor}
+	addenda := daemonAddenda{client: client, taskID: "t-multi", delivered: cursor}
+
+	turn, err := chat.Chat(context.Background(), "status?", "", nil, time.Minute)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if turn.Reply != "first part of reply\n\nsecond part of reply" {
+		t.Fatalf("reply = %q, want both human replies joined", turn.Reply)
+	}
+	if got := daemon.reports(); len(got) != 1 || got[0] != 12 {
+		t.Fatalf("reported %v, want single delivery report through max ID 12", got)
+	}
+
+	// Both chat reply messages (9 and 12) must be filtered out of Addenda, leaving only ID 4.
+	found, err := addenda.Addenda(context.Background(), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].ID != 4 {
+		t.Fatalf("addenda = %+v, want only message 4 (with 9 and 12 filtered as chat replies)", found)
+	}
+
+	// Out-of-order slice passed to deliveredByChat still advances cursor to the maximum ID.
+	cursor.deliveredByChat(context.Background(), []ui.Message{{ID: 20}, {ID: 15}})
+	if got := daemon.reports(); len(got) != 2 || got[1] != 20 {
+		t.Fatalf("reported %v after out-of-order deliveredByChat, want [12 20]", got)
+	}
+}

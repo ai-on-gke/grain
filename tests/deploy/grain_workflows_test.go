@@ -695,7 +695,7 @@ func TestTheGuestCacheJobIsWhatAPostMergeDispatchPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, err := ci.PlanRun(ci.Request{
-		Repo: "bwsalmon/grain", Ref: "main",
+		Repo: model.GrainSourceRepo().String(), Ref: "main",
 		Commit: "0123456789abcdef0123456789abcdef01234567",
 		Event:  ci.EventManual,
 		Jobs:   []string{".grain/workflows/image.yml:guest-cache"},
@@ -764,7 +764,7 @@ func TestTheBaseBranchGateForThisRepositoryRunsItsTests(t *testing.T) {
 	// moved: an untrusted push of the whole push plan, narrowed by nothing
 	// (baseBranchCIPolicy.request with no RepoConfig.BaseBranchCIJobs).
 	gate, err := ci.PlanRun(ci.Request{
-		Repo: "bwsalmon/grain", Ref: "main", Commit: commit,
+		Repo: model.GrainSourceRepo().String(), Ref: "main", Commit: commit,
 		Event: ci.EventPush,
 	}, workflows)
 	if err != nil {
@@ -812,7 +812,7 @@ func TestTheBaseBranchGateForThisRepositoryRunsItsTests(t *testing.T) {
 	// run at the same tip and no part of the verdict
 	// (orchestrator.reconcileBaseBranchRelease).
 	release, err := ci.PlanRun(ci.Request{
-		Repo: "bwsalmon/grain", Ref: "main", Commit: commit,
+		Repo: model.GrainSourceRepo().String(), Ref: "main", Commit: commit,
 		Event: ci.EventRelease, TrustedRelease: true,
 	}, workflows)
 	if err != nil {

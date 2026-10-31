@@ -716,3 +716,95 @@ func TestGitHubReleaseWorkflowFailureFilesTriageAndRaisesNotPublishing(t *testin
 		t.Errorf("expected release-triage task to be closed as superseded after green release, still open: %v", triageIDs)
 	}
 }
+
+func TestGitHubCIThreeSegmentRepoEventsTailsAndSynthesizedWorkflowRun(t *testing.T) {
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "experimental", "grain", "main")
+	defer orchestrator.SetGitHubCIBudgetLow(false)()
+
+	// Configure a 3-segment host-qualified repository in TargetRepos.
+	repo := model.RepoRef{Host: "depot.code.corp.goog", Owner: "experimental", Name: "grain"}
+	if err := store.SetTargetRepos(ctx, []string{repo.String()}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Inbound workflow_job webhook with 2-segment GitHub full_name ("experimental/grain")
+	// resolves to the 3-segment RepoRef ("depot.code.corp.goog/experimental/grain") and fetches its log tail via splitStoredRepo.
+	branch := "grain/task-501"
+	sim.WorkflowJobs = map[string][]githubsim.WorkflowJob{
+		branch: {{
+			Name:       "unit",
+			Conclusion: "failure",
+			Log:        "2026-10-31T05:00:00.0000000Z --- FAIL: TestThreeSegment (0.01s)\n2026-10-31T05:00:01.0000000Z     three_test.go:12: boom\n",
+		}},
+	}
+	jobID := sim.WorkflowJobID(branch, 0)
+	started := baseTime.Add(-5 * time.Minute)
+	done := baseTime.Add(-time.Minute)
+
+	source := &fakeEventSource{events: []ghwebhook.Event{
+		{
+			Seq:              1,
+			DeliveryID:       "deliv-3seg-job",
+			Event:            "workflow_job",
+			Action:           "completed",
+			Repo:             "experimental/grain",
+			CheckRunID:       jobID,
+			CheckName:        "unit",
+			CheckStatus:      "completed",
+			CheckConclusion:  "failure",
+			CheckApp:         "github-actions",
+			WorkflowName:     "tests",
+			WorkflowRun:      701,
+			RunAttempt:       1,
+			HeadRef:          branch,
+			HeadSHA:          "aaaa1111",
+			CheckStartedAt:   &started,
+			CheckCompletedAt: &done,
+			FailingStep:      "go test",
+		},
+		// 2. Inbound workflow_run webhook for a startup_failure run with no per-job records
+		// synthesizes a run-level GitHubCIJob record under the 3-segment repo.
+		{
+			Seq:              2,
+			DeliveryID:       "deliv-3seg-wfrun",
+			Event:            "workflow_run",
+			Action:           "completed",
+			Repo:             "experimental/grain",
+			WorkflowRun:      702,
+			RunAttempt:       1,
+			WorkflowName:     "Nightly",
+			WorkflowPath:     ".github/workflows/nightly.yml",
+			WorkflowEvent:    "schedule",
+			CheckStatus:      "completed",
+			CheckConclusion:  "startup_failure",
+			CheckApp:         "github-actions",
+			HeadRef:          "main",
+			HeadSHA:          "bbbb2222",
+			HTMLURL:          "https://github.com/experimental/grain/actions/runs/702",
+			CheckStartedAt:   &started,
+			CheckCompletedAt: &done,
+		},
+	}}
+
+	// First process events without a WorkflowRunsReader client so run 702 exercises the 0-job synthesized record path,
+	// then run tails with client so jobID's log tail is fetched via splitStoredRepo("depot.code.corp.goog/experimental/grain").
+	runGitHubEventsReconciler(t, ctx, orchestrator.Deps{Store: store, GitHubEvents: source}, baseTime)
+	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime)
+
+	gotJob, err := store.GetGitHubCIJob(ctx, repo.String(), jobID)
+	if err != nil || gotJob == nil {
+		t.Fatalf("GetGitHubCIJob(%s, %d) = %+v, %v", repo, jobID, gotJob, err)
+	}
+	if !gotJob.TailFetched || !strings.Contains(gotJob.FailureTail, "TestThreeSegment") {
+		t.Errorf("3-segment repo job tail = %+v, want TailFetched with TestThreeSegment", gotJob)
+	}
+
+	synthJob, err := store.GetGitHubCIJob(ctx, repo.String(), 702)
+	if err != nil || synthJob == nil {
+		t.Fatalf("expected synthesized run-level GitHubCIJob for 0-job workflow_run 702 on %s, got %+v, %v", repo, synthJob, err)
+	}
+	if synthJob.Conclusion != "startup_failure" || synthJob.JobName != "Nightly" {
+		t.Errorf("synthesized GitHubCIJob = %+v, want conclusion=startup_failure and JobName=Nightly", synthJob)
+	}
+}
