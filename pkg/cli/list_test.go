@@ -579,3 +579,29 @@ func TestStateFilterAskedSelectsBothAskedStates(t *testing.T) {
 		t.Error("state:any:awaiting_reply matched an awaiting_submit task")
 	}
 }
+
+func TestPriorityFilterAndSort(t *testing.T) {
+	t.Parallel()
+	attrs := attributesFor(nil)
+	cond, err := attrs.parseCondition("priority:gt:5")
+	if err != nil {
+		t.Fatalf("priority:gt:5: %v", err)
+	}
+	now := time.Now()
+	if !cond.match(ui.Task{ID: "1", Priority: 8}, now, time.UTC) {
+		t.Error("priority:gt:5 did not match task with Priority=8")
+	}
+	if cond.match(ui.Task{ID: "2", Priority: 5}, now, time.UTC) {
+		t.Error("priority:gt:5 matched task with Priority=5")
+	}
+	if cond.match(ui.Task{ID: "3", Priority: 0}, now, time.UTC) {
+		t.Error("priority:gt:5 matched task with unset Priority (default 5)")
+	}
+	specs, err := attrs.parseSort("priority:desc")
+	if err != nil || len(specs) != 1 {
+		t.Fatalf("parseSort(priority:desc): %v", err)
+	}
+	if got := specs[0].compare(ui.Task{ID: "1", Priority: 8}, ui.Task{ID: "2", Priority: 5}, time.UTC); got >= 0 {
+		t.Errorf("priority:desc compare(8, 5) = %d, want < 0", got)
+	}
+}

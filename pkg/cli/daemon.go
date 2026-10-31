@@ -840,10 +840,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"install-time value an older scripts/setup.sh wrote unconditionally, and the stamp is used instead "+
 			"(chooseSandboxImage). Only used with -granule-sandboxes.")
 	sandboxImageMirror := fs.String("sandbox-image-mirror", "",
-		"OCI repository (without tag, e.g. us-docker.pkg.dev/<cluster-project>/grain/guest) into which "+
-			"off-cluster deployments mirror the build-stamped sandbox guest image on upgrade and startup "+
-			"so a Kubernetes cluster in another GCP organization can pull the commit-matched guest image "+
-			"from its own registry.")
+		"OCI repository (without tag, e.g. us-docker.pkg.dev/<cluster-project>/grain/guest) into which off-cluster "+
+			"deployments mirror the build-stamped sandbox guest image on upgrade and startup, so a cluster in another GCP "+
+			"organization can pull the commit-matched guest from its own registry. This host keeps only the current and "+
+			"previous mirrored tags; the registry is not pruned -- give it a cleanup policy (docs/sandbox-image-mirror.md).")
 	granuleNet := fs.String("granule-net", granule.NetModeFlat,
 		"ignored, and removed in a later release. The granule this build vendors has only the former "+
 			"\"flat\" behaviour -- its own -net says \"deprecated: only the former flat behaviour exists "+

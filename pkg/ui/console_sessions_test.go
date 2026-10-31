@@ -1080,3 +1080,114 @@ func TestASessionsModelMayNotNameAConnection(t *testing.T) {
 		t.Fatal("creating a session whose model names a connection was accepted")
 	}
 }
+
+func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
+	t.Parallel()
+	_, store, ctx := testClient(t)
+	if err := store.PutConfig(ctx, model.Config{
+		TargetRepos: []string{"acme/widgets", "acme/docs"},
+		AgentBackends: []model.AgentBackend{{
+			ID:        "work-claude",
+			Framework: model.AgentFrameworkClaude,
+			Models:    []string{"claude-opus-4", "claude-sonnet-4"},
+			Team:      model.DefaultTeamID,
+		}},
+		ConsoleSessions: []model.ConsoleSession{{
+			ID:            model.DirectorSessionID,
+			Title:         "Director",
+			Capabilities:  []string{"self-debug"},
+			NetworkAccess: model.NetworkOpen,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 10, 31, 6, 0, 0, 0, time.UTC)
+	taskID, err := model.FileConsoleSessionTask(ctx, store, model.ConsoleSession{
+		ID:            model.DirectorSessionID,
+		Title:         "Director",
+		Capabilities:  []string{"self-debug"},
+		NetworkAccess: model.NetworkOpen,
+	}, model.FileConsoleSessionOptions{
+		StateRepo:       model.RepoRef{Owner: "acme", Name: "grain-config"},
+		NetworkIsolates: true,
+		Now:             now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeStateRepo{status: ui.StateRepoStatus{Remote: "https://github.com/acme/grain-config.git", Branch: "main"}}
+	srv := ui.NewServer(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		Secrets:      secrets.New(t.TempDir()),
+		StateRepo:    fake,
+		StateRepoRef: func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-config"} },
+	}, store)
+
+	// 1. Edit active session via PATCH /api/tasks/{id} (including dangerous scopes, reads, writes, model, network_access).
+	patchBody := `{
+		"capabilities": ["self-debug", "api:tasks:admin", "api:release-manager", "https://grain.dev/capabilities/host-script#host-script={\"script\":\"cluster-autoscaler\"}"],
+		"reads": ["acme/docs"],
+		"writes": [{"repo": "acme/widgets", "base": "main"}],
+		"model": "claude-opus-4",
+		"network_access": "none",
+		"priority": true,
+		"keep_running": true
+	}`
+	rec := do(t, srv, http.MethodPatch, "/api/tasks/"+taskID, patchBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH /api/tasks/%s status = %d, want 200: %s", taskID, rec.Code, rec.Body)
+	}
+
+	// 2. GET /api/console-sessions reflects the active task's updated parameters and capabilities.
+	rec = do(t, srv, http.MethodGet, "/api/console-sessions", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/console-sessions status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	listed := decode[ui.ConsoleSessionSettingsResponse](t, rec)
+	if len(listed.Sessions) != 1 {
+		t.Fatalf("len(listed.Sessions) = %d, want 1", len(listed.Sessions))
+	}
+	dir := listed.Sessions[0]
+	for _, wantCap := range []string{"self-debug", "api:tasks:admin", "api:release-manager"} {
+		if !slices.Contains(dir.Capabilities, wantCap) {
+			t.Errorf("GET /api/console-sessions Capabilities = %v, missing %q", dir.Capabilities, wantCap)
+		}
+	}
+	if dir.Model != "claude-opus-4" {
+		t.Errorf("GET /api/console-sessions Model = %q, want claude-opus-4", dir.Model)
+	}
+	if dir.NetworkAccess != "none" {
+		t.Errorf("GET /api/console-sessions NetworkAccess = %q, want none", dir.NetworkAccess)
+	}
+	if !slices.Contains(dir.Reads, "acme/docs") {
+		t.Errorf("GET /api/console-sessions Reads = %v, want acme/docs", dir.Reads)
+	}
+	if len(dir.Writes) != 1 || dir.Writes[0].Repo != "acme/widgets" || dir.Writes[0].Base != "main" {
+		t.Errorf("GET /api/console-sessions Writes = %+v, want [{acme/widgets main}]", dir.Writes)
+	}
+
+	// 3. Edit active session via PUT /api/console-sessions/director directly when StateRepo is configured.
+	putBody := `{
+		"capabilities": ["self-debug", "self-repair", "api:tasks:admin"],
+		"model": "claude-sonnet-4",
+		"networkAccess": "open",
+		"tasksApproved": true
+	}`
+	rec = do(t, srv, http.MethodPut, "/api/console-sessions/director", putBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT /api/console-sessions/director status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	putResp := decode[ui.ConsoleSessionSettingsResponse](t, rec)
+	if len(putResp.Sessions) != 1 {
+		t.Fatalf("len(putResp.Sessions) = %d, want 1", len(putResp.Sessions))
+	}
+	if putResp.Sessions[0].Model != "claude-sonnet-4" || putResp.Sessions[0].NetworkAccess != "open" || !putResp.Sessions[0].TasksApproved {
+		t.Errorf("PUT /api/console-sessions/director response = %+v", putResp.Sessions[0])
+	}
+	if !slices.Contains(putResp.Sessions[0].Capabilities, "self-repair") || !slices.Contains(putResp.Sessions[0].Capabilities, "api:tasks:admin") {
+		t.Errorf("PUT /api/console-sessions/director Capabilities = %v", putResp.Sessions[0].Capabilities)
+	}
+}

@@ -675,28 +675,96 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		}
 		session.TitleSource = session.ResolvedTitleSource(model.ConsoleSessionFirstMessage(comments))
 	}
-	title := model.ConsoleSessionTitle(session)
-	body := model.DirectorSessionBody(deps.Config.settingsRepo(), session)
 	defaults, err := model.DeploymentDefaultCapabilities(ctx, deps.Store)
 	if err != nil {
 		return err
 	}
-	grants := consoleSessionGrants(session, defaults)
-	network := consoleSessionNetworkAccess(deps, session)
+	prev, hasPrev := model.LastSyncedConsoleSession(deps.Store, task.ID)
+	configTitle := model.ConsoleSessionTitle(session)
+	configNetwork := consoleSessionNetworkAccess(deps, session)
+	configModel := strings.TrimSpace(session.Model)
 	stateRepo := deps.Config.settingsRepo()
-	var reads []model.RepoRef
-	if stateRepo.Owner != "" {
-		reads = append(reads, stateRepo)
-	}
-	for _, r := range session.Reads {
-		if r.Owner != "" && r.Name != "" && !r.Same(stateRepo) {
-			reads = append(reads, r)
+
+	if !hasPrev {
+		prev = model.ConsoleSessionConfigSnapshot{
+			Capabilities:    session.Capabilities,
+			Defaults:        defaults,
+			Reads:           session.Reads,
+			Writes:          session.Writes,
+			NetworkAccess:   configNetwork,
+			Model:           configModel,
+			Title:           configTitle,
+			TasksApproved:   session.TasksApproved,
+			GoogleChatSpace: session.GoogleChatSpace,
 		}
 	}
-	writes := session.Writes
-	if writes == nil {
-		writes = []model.WriteTarget{}
+
+	title := task.Title
+	if title == "" || configTitle != prev.Title {
+		title = configTitle
 	}
+	effectiveSession := session
+	effectiveSession.Title = title
+	if slices.Contains(task.Tags, model.ConsoleSessionTasksApprovedTag) {
+		effectiveSession.TasksApproved = true
+	} else if slices.Contains(task.Tags, model.ConsoleSessionTasksUnapprovedTag) {
+		effectiveSession.TasksApproved = false
+	} else if session.TasksApproved != prev.TasksApproved {
+		effectiveSession.TasksApproved = session.TasksApproved
+	} else if task.AutoApproveProposals {
+		effectiveSession.TasksApproved = true
+	}
+	body := model.DirectorSessionBody(stateRepo, effectiveSession)
+
+	grants := mergeConsoleSessionGrants(task.Grants, session, defaults, prev, hasPrev)
+	reads := mergeConsoleSessionReads(task.Reads, stateRepo, session.Reads, prev.Reads, hasPrev)
+	writes := mergeConsoleSessionWrites(task.Writes, session.Writes, prev.Writes, hasPrev)
+
+	network := task.NetworkAccess
+	if network == "" || configNetwork != prev.NetworkAccess {
+		network = configNetwork
+	}
+	if network == model.NetworkNone && !sandboxesIsolateNetwork(deps.Sandboxes) {
+		network = model.NetworkOpen
+	}
+
+	chosenModel := task.Model
+	if configModel != prev.Model {
+		chosenModel = configModel
+	}
+
+	links := task.Links
+	if links == nil {
+		links = []model.Link{}
+	}
+	if session.GoogleChatSpace != prev.GoogleChatSpace || (!hasPrev && session.GoogleChatSpace != "") {
+		var updatedLinks []model.Link
+		for _, l := range task.Links {
+			if l.Kind != model.LinkGoogleChat {
+				updatedLinks = append(updatedLinks, l)
+			}
+		}
+		if session.GoogleChatSpace != "" {
+			updatedLinks = append(updatedLinks, model.Link{Kind: model.LinkGoogleChat, Target: session.GoogleChatSpace})
+		}
+		if updatedLinks == nil {
+			updatedLinks = []model.Link{}
+		}
+		links = updatedLinks
+	}
+
+	model.RecordSyncedConsoleSession(deps.Store, task.ID, model.ConsoleSessionConfigSnapshot{
+		Capabilities:    session.Capabilities,
+		Defaults:        defaults,
+		Reads:           session.Reads,
+		Writes:          session.Writes,
+		NetworkAccess:   configNetwork,
+		Model:           configModel,
+		Title:           configTitle,
+		TasksApproved:   session.TasksApproved,
+		GoogleChatSpace: session.GoogleChatSpace,
+	})
+
 	taskWrites := task.Writes
 	if taskWrites == nil {
 		taskWrites = []model.WriteTarget{}
@@ -705,26 +773,10 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	if taskReads == nil {
 		taskReads = []model.RepoRef{}
 	}
-	if reads == nil {
-		reads = []model.RepoRef{}
-	}
-	var links []model.Link
-	for _, l := range task.Links {
-		if l.Kind != model.LinkGoogleChat {
-			links = append(links, l)
-		}
-	}
-	if session.GoogleChatSpace != "" {
-		links = append(links, model.Link{Kind: model.LinkGoogleChat, Target: session.GoogleChatSpace})
-	}
 	taskLinks := task.Links
 	if taskLinks == nil {
 		taskLinks = []model.Link{}
 	}
-	if links == nil {
-		links = []model.Link{}
-	}
-	chosenModel := strings.TrimSpace(session.Model)
 	if task.Title == title && task.Body == body && task.NetworkAccess == network &&
 		task.Model == chosenModel &&
 		slices.Equal(task.Grants, grants) &&
@@ -741,15 +793,148 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		t.Reads = reads
 		t.Writes = writes
 		t.Links = links
-		// The session row is where a session's model is chosen, so it
-		// is the session's choice rather than a template's or a
-		// schedule's: ModelSource is cleared with it.
 		if t.Model != chosenModel {
 			t.Model = chosenModel
 			t.ModelSource = ""
 		}
 		return nil
 	})
+}
+
+func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSession, defaults []string,
+	prev model.ConsoleSessionConfigSnapshot, hasPrev bool) []model.Grant {
+
+	removedSession := map[string]bool{}
+	removedDefault := map[string]bool{}
+	if hasPrev {
+		for _, c := range prev.Capabilities {
+			if c != "" && !slices.Contains(session.Capabilities, c) {
+				removedSession[c] = true
+			}
+		}
+		for _, c := range prev.Defaults {
+			c = strings.TrimSpace(c)
+			if c == "" || slices.Contains(session.Capabilities, c) {
+				continue
+			}
+			if !slices.ContainsFunc(defaults, func(d string) bool { return strings.TrimSpace(d) == c }) {
+				removedDefault[c] = true
+			}
+		}
+	}
+
+	out := make([]model.Grant, 0, len(current)+len(session.Capabilities)+len(defaults)+1)
+	out = append(out, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
+	seen := map[string]bool{model.DurableCapability: true}
+
+	for _, g := range current {
+		if g.Capability == "" || seen[g.Capability] {
+			continue
+		}
+		if g.Via == model.GrantByGrain && removedSession[g.Capability] {
+			if slices.ContainsFunc(defaults, func(d string) bool { return strings.TrimSpace(d) == g.Capability }) {
+				seen[g.Capability] = true
+				out = append(out, model.Grant{Capability: g.Capability, Via: model.GrantByDefault})
+			}
+			continue
+		}
+		if g.Via == model.GrantByDefault && removedDefault[g.Capability] {
+			continue
+		}
+		seen[g.Capability] = true
+		out = append(out, g)
+	}
+
+	for _, name := range session.Capabilities {
+		if name == "" || seen[name] {
+			continue
+		}
+		if !hasPrev || !slices.Contains(prev.Capabilities, name) {
+			seen[name] = true
+			out = append(out, model.Grant{Capability: name, Via: model.GrantByGrain})
+		}
+	}
+	for _, name := range defaults {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		if !hasPrev || !slices.ContainsFunc(prev.Defaults, func(d string) bool { return strings.TrimSpace(d) == name }) {
+			seen[name] = true
+			out = append(out, model.Grant{Capability: name, Via: model.GrantByDefault})
+		}
+	}
+	return out
+}
+
+func mergeConsoleSessionReads(current []model.RepoRef, stateRepo model.RepoRef,
+	sessionReads, prevReads []model.RepoRef, hasPrev bool) []model.RepoRef {
+
+	var out []model.RepoRef
+	has := func(r model.RepoRef) bool {
+		return slices.ContainsFunc(out, func(e model.RepoRef) bool { return e.Same(r) })
+	}
+	if stateRepo.Owner != "" {
+		out = append(out, stateRepo)
+	}
+	for _, r := range current {
+		if r.Owner == "" || r.Name == "" || has(r) {
+			continue
+		}
+		wasInPrev := hasPrev && slices.ContainsFunc(prevReads, func(p model.RepoRef) bool { return p.Same(r) })
+		inSession := slices.ContainsFunc(sessionReads, func(s model.RepoRef) bool { return s.Same(r) })
+		if wasInPrev && !inSession {
+			continue
+		}
+		out = append(out, r)
+	}
+	for _, r := range sessionReads {
+		if r.Owner == "" || r.Name == "" || has(r) {
+			continue
+		}
+		wasInPrev := hasPrev && slices.ContainsFunc(prevReads, func(p model.RepoRef) bool { return p.Same(r) })
+		if !wasInPrev {
+			out = append(out, r)
+		}
+	}
+	if out == nil {
+		out = []model.RepoRef{}
+	}
+	return out
+}
+
+func mergeConsoleSessionWrites(current, sessionWrites, prevWrites []model.WriteTarget, hasPrev bool) []model.WriteTarget {
+	sameWrite := func(a, b model.WriteTarget) bool {
+		return a.Repo.Same(b.Repo) && a.Base == b.Base
+	}
+	var out []model.WriteTarget
+	has := func(w model.WriteTarget) bool {
+		return slices.ContainsFunc(out, func(e model.WriteTarget) bool { return sameWrite(e, w) })
+	}
+	for _, w := range current {
+		if w.Repo.Owner == "" || w.Repo.Name == "" || has(w) {
+			continue
+		}
+		wasInPrev := hasPrev && slices.ContainsFunc(prevWrites, func(p model.WriteTarget) bool { return sameWrite(p, w) })
+		inSession := slices.ContainsFunc(sessionWrites, func(s model.WriteTarget) bool { return sameWrite(s, w) })
+		if wasInPrev && !inSession {
+			continue
+		}
+		out = append(out, w)
+	}
+	for _, w := range sessionWrites {
+		if w.Repo.Owner == "" || w.Repo.Name == "" || has(w) {
+			continue
+		}
+		wasInPrev := hasPrev && slices.ContainsFunc(prevWrites, func(p model.WriteTarget) bool { return sameWrite(p, w) })
+		if !wasInPrev {
+			out = append(out, w)
+		}
+	}
+	if out == nil {
+		out = []model.WriteTarget{}
+	}
+	return out
 }
 
 // consoleSessionNetworkAccess is how much of the internet a session's

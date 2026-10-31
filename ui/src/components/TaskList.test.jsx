@@ -2412,6 +2412,37 @@ describe("TaskList", () => {
     );
     expect(screen.getByText("#2 Ship the other thing")).toBeInTheDocument();
   });
+
+  it("shows a priority badge on tasks with non-default priority", () => {
+    renderList({
+      tasks: [
+        {
+          id: 10,
+          title: "High priority task",
+          state: "queued",
+          priority: 8,
+          capabilities: [],
+          blocked: false,
+        },
+        {
+          id: 11,
+          title: "Default priority task",
+          state: "queued",
+          priority: 5,
+          capabilities: [],
+          blocked: false,
+        },
+      ],
+    });
+    const highRow = rowFor("High priority task");
+    const defaultRow = rowFor("Default priority task");
+    expect(
+      highRow.querySelector('[data-testid="task-priority-badge"]'),
+    ).toHaveTextContent("P8");
+    expect(
+      defaultRow.querySelector('[data-testid="task-priority-badge"]'),
+    ).toBeNull();
+  });
 });
 
 // The operator's ask on grain task 1402: a row parked on a question says

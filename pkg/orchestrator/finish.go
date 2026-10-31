@@ -1434,6 +1434,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	if len(proposals) == 0 {
 		return nil
 	}
+	if latest, err := store.GetTask(ctx, task.ID); err == nil && latest != nil {
+		task = *latest
+	}
 	atFront, err := newestFirst(ctx, store)
 	if err != nil {
 		return err
@@ -1565,6 +1568,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		}
 		noPort, _ := p["no_port"].(bool)
 		fixesBase, _ := p["fixes_base_branch"].(bool)
+		priority := model.DefaultTaskPriority
+		var hasExplicitPriority bool
+		if v, ok := p["priority"]; ok {
+			if parsed, ok := argInt(v); ok && parsed > 0 {
+				priority = parsed
+				hasExplicitPriority = true
+			}
+		}
 		goal, goalErr := model.ParseGoalArg(p["goal"])
 		if goalErr != nil {
 			body += fmt.Sprintf("\n\n_grain could not use this proposal's goal: %v. It was filed without one._", goalErr)
@@ -1601,6 +1612,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				}
 				if netAccess == "" && comp.NetworkAccess != "" {
 					netAccess = comp.NetworkAccess
+				}
+				if !hasExplicitPriority && comp.Priority != 0 {
+					priority = comp.Priority
 				}
 				interactive = comp.Interactive
 			}
@@ -1783,6 +1797,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Target:              target,
 			Binding:             model.BindingDirective,
 			Base:                base,
+			Priority:            priority,
 			Interactive:         interactive,
 			Grants:              grants,
 			SandboxCPUs:         cpus,

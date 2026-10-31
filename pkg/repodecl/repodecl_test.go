@@ -621,3 +621,30 @@ func TestRefusalsAreGroupedByReason(t *testing.T) {
 		t.Errorf("error = %q, want the other mistake reported too", msg)
 	}
 }
+
+func TestDeclaredTemplatePriorityValidation(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/urgent.yml":  "title: Urgent fix\npriority: 8\n",
+		".grain/templates/default.yml": "title: Default fix\npriority: 0\n",
+	})
+	if len(declared.Templates) != 2 {
+		t.Fatalf("Templates = %d, want 2", len(declared.Templates))
+	}
+	byName := map[string]model.Template{}
+	for _, f := range declared.Templates {
+		byName[f.Template.Name] = f.Template
+	}
+	if byName["urgent"].Priority == nil || *byName["urgent"].Priority != 8 {
+		t.Errorf("urgent Priority = %v, want 8", byName["urgent"].Priority)
+	}
+	if byName["default"].Priority != nil {
+		t.Errorf("default Priority = %v, want nil for 0", *byName["default"].Priority)
+	}
+
+	msg := loadErr(t, map[string]string{
+		".grain/templates/bad.yml": "title: Bad priority\npriority: -1\n",
+	})
+	if !strings.Contains(msg, "priority must be a positive integer") {
+		t.Errorf("negative priority error = %q, want 'priority must be a positive integer'", msg)
+	}
+}

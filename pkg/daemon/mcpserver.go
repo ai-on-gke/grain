@@ -264,7 +264,7 @@ func (d DaemonMetrics) Metrics(ctx context.Context, q mcp.MetricsQuery) (string,
 // judgement agent reads and the expect its writes are checked against
 // agree by construction.
 func taskSummary(t ui.Task) mcp.TaskSummary {
-	return mcp.TaskSummary{ID: t.ID, Title: t.Title, State: string(t.State), Repo: t.Repo, Interactive: t.Interactive, CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall, MergeQueue: mcp.TaskMergeQueue{State: t.MergeQueueState, Note: t.MergeQueueNote, At: t.MergeQueueStateAt, StalledAt: t.MergeQueueStalledAt, BlockedAt: t.MergeQueueBlockedAt},
+	return mcp.TaskSummary{ID: t.ID, Title: t.Title, State: string(t.State), Repo: t.Repo, Priority: t.Priority, Interactive: t.Interactive, CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall, MergeQueue: mcp.TaskMergeQueue{State: t.MergeQueueState, Note: t.MergeQueueNote, At: t.MergeQueueStateAt, StalledAt: t.MergeQueueStalledAt, BlockedAt: t.MergeQueueBlockedAt},
 		Kinds: ui.TaskKindTags(t), DependsOn: t.DependsOn, ChangedAt: taskChangedAt(t)}
 }
 
@@ -1746,6 +1746,11 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		c := append([]string(nil), p.Capabilities...)
 		caps = &c
 	}
+	var priority *int
+	if p.Priority != 0 {
+		prio := p.Priority
+		priority = &prio
+	}
 	// A local `id` from an earlier call in this run resolves here too: a
 	// run that re-files the same proposal twice in one turn is replacing
 	// the task it filed a moment ago, and it knows that one by the name
@@ -1755,7 +1760,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		supersedes = real
 	}
 	created, err := f.client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, AutoMerge: auto,
+		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, Priority: priority, AutoMerge: auto,
 		TemplateID: p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
 		DependsOn: deps, CustomFields: fields, Supersedes: supersedes,
 		Reads: p.Reads, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,

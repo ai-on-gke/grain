@@ -58,9 +58,11 @@ test("files a task with its fields set through the New task form", async ({
   // (model.CustomField.Default -- a default is a form's, never a value
   // the store writes for a task nobody filled in).
   await expect(page.getByText("Fields", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Priority")).toHaveText("medium");
+  await expect(page.getByLabel("Priority", { exact: true })).toHaveText(
+    "medium",
+  );
 
-  await page.getByLabel("Priority").click();
+  await page.getByLabel("Priority", { exact: true }).click();
   await page.getByRole("option", { name: "high" }).click();
   // The field that holds a set, filled from its declared options: two
   // chips in one box, which is the input no single-valued field has.
@@ -143,10 +145,10 @@ test("edits a task's fields and carries them into another task", async ({
     page.locator(".detail-header h2", { hasText: title }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Edit fields" }).click();
-  await expect(page.getByLabel("Priority")).toHaveText("low");
+  await expect(page.getByLabel("Priority", { exact: true })).toHaveText("low");
   await expect(page.getByLabel("Requested by")).toHaveValue("Northwind");
 
-  await page.getByLabel("Priority").click();
+  await page.getByLabel("Priority", { exact: true }).click();
   await page.getByRole("option", { name: "high" }).click();
   await page.getByLabel("Requested by").fill("Contoso");
   await page.getByLabel("Due date").fill("2026-12-15");
@@ -173,7 +175,7 @@ test("edits a task's fields and carries them into another task", async ({
   await next.click();
   await expect(page).toHaveURL(href);
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
-  await expect(page.getByLabel("Priority")).toHaveText("high");
+  await expect(page.getByLabel("Priority", { exact: true })).toHaveText("high");
   await expect(page.getByLabel("Requested by")).toHaveValue("Contoso");
   await expect(page.getByLabel("Due date")).toHaveValue("2026-12-15");
   const area = page
@@ -185,7 +187,7 @@ test("edits a task's fields and carries them into another task", async ({
   // The href is the contract, not merely an in-memory shortcut: loading
   // the same address from scratch produces the same form values.
   await page.goto(href);
-  await expect(page.getByLabel("Priority")).toHaveText("high");
+  await expect(page.getByLabel("Priority", { exact: true })).toHaveText("high");
   await expect(page.getByLabel("Requested by")).toHaveValue("Contoso");
   await expect(page.getByLabel("Due date")).toHaveValue("2026-12-15");
   await expect(area.getByText("backend", { exact: true })).toBeVisible();
@@ -260,7 +262,7 @@ test("narrows the task list by a declared field", async ({ page }) => {
   await page.getByRole("button", { name: /^(Filter by…|Add filter)$/ }).click();
   // The declared field in the same menu as the built-in attributes,
   // under its label rather than its namespaced id.
-  await page.getByRole("menuitem", { name: "Priority" }).click();
+  await page.getByRole("menuitem", { name: "Priority", exact: true }).click();
   await expect(page.getByRole("menu")).not.toBeVisible();
 
   // The condition the editor just added is the last row of it.
@@ -309,5 +311,5 @@ test("shows a value whose declaration has been retired", async ({ page }) => {
   // not one any more.
   await page.getByRole("button", { name: "Edit fields" }).click();
   await expect(page.getByLabel("sprint")).toHaveCount(0);
-  await expect(page.getByLabel("Priority")).toBeVisible();
+  await expect(page.getByLabel("Priority", { exact: true })).toBeVisible();
 });

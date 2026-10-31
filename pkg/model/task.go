@@ -1510,10 +1510,16 @@ func NeverEndingDependencyNote(refs []string) string {
 		"`"+strings.Join(refs, "`, `")+"`")
 }
 
+// DefaultTaskPriority is the priority assigned to a task when none is specified
+// (or when Priority is 0). Higher numbers mean higher priority.
+const DefaultTaskPriority = 5
+
 // Task is the declared half: what a human, or grain proposing, asked for.
 // No State field and no StateSince — see StateOf.
 type Task struct {
 	ID string
+	// Priority is the numeric task priority (DefaultTaskPriority = 5; higher = higher priority).
+	Priority int `json:"priority"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a

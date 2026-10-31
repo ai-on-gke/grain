@@ -2029,6 +2029,227 @@ func TestWarmSessionSandboxReleasedWhenItsGrantsChange(t *testing.T) {
 	}
 }
 
+func TestActiveConsoleSessionOperatorEditsPreservedAcrossReconciles(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "acme/infra"}
+		cfg.AgentBackends = []model.AgentBackend{{
+			ID:        "claude-main",
+			Framework: model.AgentFrameworkClaude,
+			Models:    []string{"claude-opus-4", "claude-sonnet-4"},
+			Team:      model.DefaultTeamID,
+		}}
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID:            model.DirectorSessionID,
+			Title:         "Director",
+			Capabilities:  []string{"self-debug"},
+			NetworkAccess: model.NetworkOpen,
+			TasksApproved: false,
+			Reads:         []model.RepoRef{{Owner: "acme", Name: "docs"}},
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	// Configure a UI client where grain_config is managed by a state repo (grain/config).
+	client := ui.NewClient(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		StateRepoRef: func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+	}, store)
+	client.Now = func() time.Time { return baseTime.Add(time.Minute) }
+
+	// 1. Operator edits the active console session task via PATCH /api/tasks/{id}
+	// even though a state repo (grain/config) is configured.
+	hostScriptCap := `https://grain.dev/capabilities/host-script#host-script={"script":"cluster-autoscaler"}`
+	caps := []string{"self-debug", "api:tasks:admin", "api:release-manager", hostScriptCap}
+	reads := []string{"acme/docs", "acme/widgets"}
+	writes := []ui.WriteTarget{{Repo: "acme/widgets", Base: "main"}}
+	chosenModel := "claude-opus-4"
+	netNone := "none"
+	approved := true
+	prio := true
+	keepRunning := true
+	if _, err := client.UpdateTask(ctx, director.ID, ui.UpdateTaskRequest{
+		Capabilities:         &caps,
+		Reads:                &reads,
+		Writes:               &writes,
+		Model:                &chosenModel,
+		NetworkAccess:        &netNone,
+		AutoApproveProposals: &approved,
+		PriorityDispatch:     &prio,
+		KeepRunning:          &keepRunning,
+	}); err != nil {
+		t.Fatalf("UpdateTask on active console session with state repo configured: %v", err)
+	}
+
+	// 2. Subsequent reconcileConsoleSessions cycles must preserve the operator's changes
+	// on the active session task instead of overwriting them back to the config defaults.
+	runSessions(t, store, baseTime.Add(2*time.Minute))
+	runSessions(t, store, baseTime.Add(3*time.Minute))
+
+	updated, err := store.GetTask(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wantCap := range append(caps, "priority-dispatch", model.DurableCapability) {
+		if !slices.ContainsFunc(updated.Grants, func(g model.Grant) bool { return g.Capability == wantCap }) {
+			t.Errorf("active session task Grants = %v after reconcile, missing operator grant %q", updated.Grants, wantCap)
+		}
+	}
+	if !slices.Contains(updated.Reads, model.RepoRef{Owner: "acme", Name: "widgets"}) {
+		t.Errorf("active session task Reads = %v after reconcile, want acme/widgets preserved", updated.Reads)
+	}
+	if len(updated.Writes) != 1 || updated.Writes[0].Repo != (model.RepoRef{Owner: "acme", Name: "widgets"}) || updated.Writes[0].Base != "main" {
+		t.Errorf("active session task Writes = %v after reconcile, want [{acme/widgets main}] preserved", updated.Writes)
+	}
+	if updated.Model != "claude-opus-4" {
+		t.Errorf("active session task Model = %q after reconcile, want claude-opus-4 preserved", updated.Model)
+	}
+	if updated.NetworkAccess != model.NetworkNone {
+		t.Errorf("active session task NetworkAccess = %q after reconcile, want none preserved", updated.NetworkAccess)
+	}
+	if !model.ConsoleSessionQueuesProposals([]model.ConsoleSession{{ID: model.DirectorSessionID, TasksApproved: false}}, *updated) {
+		t.Errorf("ConsoleSessionQueuesProposals = false after reconcile, want true from operator override")
+	}
+
+	// 3. When a new additive capability or read repo is added to console_sessions in grain_config,
+	// reconcileConsoleSessions merges the additive config default while preserving operator changes.
+	settings(t, store, func(cfg *model.Config) {
+		cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "acme/infra"}
+		cfg.AgentBackends = []model.AgentBackend{{
+			ID:        "claude-main",
+			Framework: model.AgentFrameworkClaude,
+			Models:    []string{"claude-opus-4", "claude-sonnet-4"},
+			Team:      model.DefaultTeamID,
+		}}
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID:            model.DirectorSessionID,
+			Title:         "Director",
+			Capabilities:  []string{"self-debug", "self-repair"},
+			NetworkAccess: model.NetworkOpen,
+			TasksApproved: false,
+			Reads: []model.RepoRef{
+				{Owner: "acme", Name: "docs"},
+				{Owner: "acme", Name: "infra"},
+			},
+		}}
+	})
+	runSessions(t, store, baseTime.Add(4*time.Minute))
+
+	merged, err := store.GetTask(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wantCap := range append(caps, "self-repair") {
+		if !slices.ContainsFunc(merged.Grants, func(g model.Grant) bool { return g.Capability == wantCap }) {
+			t.Errorf("merged Grants = %v, missing %q", merged.Grants, wantCap)
+		}
+	}
+	if !slices.Contains(merged.Reads, model.RepoRef{Owner: "acme", Name: "infra"}) {
+		t.Errorf("merged Reads = %v, missing additive config default acme/infra", merged.Reads)
+	}
+	if !slices.Contains(merged.Reads, model.RepoRef{Owner: "acme", Name: "widgets"}) {
+		t.Errorf("merged Reads = %v, lost operator read acme/widgets", merged.Reads)
+	}
+	if merged.Model != "claude-opus-4" || merged.NetworkAccess != model.NetworkNone {
+		t.Errorf("merged Model=%q NetworkAccess=%q, want claude-opus-4 and none preserved", merged.Model, merged.NetworkAccess)
+	}
+}
+
+func TestActiveConsoleSessionPermissionChangesApplyImmediatelyToProposals(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.TargetRepos = []string{"acme/widgets"}
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID:            model.DirectorSessionID,
+			Title:         "Director",
+			Capabilities:  []string{},
+			NetworkAccess: model.NetworkOpen,
+			TasksApproved: false,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	client := ui.NewClient(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		StateRepoRef: func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+	}, store)
+
+	hostScriptCap := `https://grain.dev/capabilities/host-script#host-script={"script":"cluster-autoscaler"}`
+	ag := &recordingSessionAgent{
+		onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
+			// Mid-run, the operator grants the capability, writes scope, and tasksApproved
+			// directly on the active session via PUT /api/console-sessions/director.
+			caps := []string{"api:tasks:admin", hostScriptCap}
+			writes := []ui.WriteTarget{{Repo: "acme/widgets", Base: "main"}}
+			approved := true
+			if _, err := client.UpdateConsoleSession(ctx, model.DirectorSessionID, ui.UpdateConsoleSessionRequest{
+				Capabilities:  &caps,
+				Writes:        &writes,
+				TasksApproved: &approved,
+			}); err != nil {
+				t.Errorf("mid-run UpdateConsoleSession: %v", err)
+			}
+			return &agent.Result{
+				FinalText:  "filed proposal",
+				Transcript: "filed proposal",
+				ToolCalls: []agent.ToolCall{{
+					Name: "propose_task",
+					Arguments: map[string]any{
+						"title":        "Scale cluster",
+						"body":         "Run cluster-autoscaler.",
+						"repo":         "acme/widgets",
+						"capabilities": []any{hostScriptCap},
+					},
+				}},
+			}, nil
+		},
+	}
+
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  orchestrator.NewHostSandboxes(t.TempDir()),
+		Framework:  orchestrator.StaticFramework(ag),
+		MaxWorkers: 1,
+		Config: orchestrator.Config{
+			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities: model.NewCapabilityRegistry(durable.New()),
+		},
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("cycle: %v", err)
+	}
+
+	allTasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proposed *model.Task
+	for i := range allTasks {
+		if allTasks[i].Title == "Scale cluster" {
+			proposed = &allTasks[i]
+			break
+		}
+	}
+	if proposed == nil {
+		t.Fatalf("expected proposed task 'Scale cluster' to be filed, got tasks: %+v", allTasks)
+	}
+	state, err := store.State(ctx, proposed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != model.StateQueued {
+		t.Fatalf("proposed task state = %q, want %q (mid-run session permission change should apply immediately to propose_task)", state, model.StateQueued)
+	}
+}
+
 // TestFirstReplyWakesConsoleSessionRestingWithRequestedSuspension verifies
 // that after a session rests via ParkConsoleSessionTask (which sets both
 // PendingQuestionCommentID and a requested suspension deferral on {message: true}),
