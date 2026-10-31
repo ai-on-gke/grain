@@ -411,11 +411,47 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 		}
 		after = parsed
 	}
+	var wait time.Duration
+	if raw := r.URL.Query().Get("wait_ms"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			writeClientError(w, validationErrorf("wait_ms must be a non-negative integer"))
+			return
+		}
+		if parsed > 30000 {
+			parsed = 30000
+		}
+		wait = time.Duration(parsed) * time.Millisecond
+	}
 	read := s.tasks.MessagesSince
 	if agents, _ := strconv.ParseBool(r.URL.Query().Get("agents")); agents {
 		read = s.tasks.AddendaSince
 	}
-	messages, err := read(r.Context(), r.PathValue("id"), after)
+	id := r.PathValue("id")
+	if wait > 0 && s.tasks != nil && s.tasks.Store != nil {
+		waitCtx, cancel := context.WithTimeout(r.Context(), wait)
+		defer cancel()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			ch := s.tasks.Store.CommentAdded(id)
+			messages, err := read(r.Context(), id, after)
+			if err != nil {
+				writeClientError(w, err)
+				return
+			}
+			if len(messages) > 0 || waitCtx.Err() != nil {
+				writeJSON(w, http.StatusOK, messages)
+				return
+			}
+			select {
+			case <-ch:
+			case <-ticker.C:
+			case <-waitCtx.Done():
+			}
+		}
+	}
+	messages, err := read(r.Context(), id, after)
 	if err != nil {
 		writeClientError(w, err)
 		return
