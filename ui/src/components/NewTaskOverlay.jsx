@@ -17,7 +17,7 @@ import GrantsPicker from "./GrantsPicker.jsx";
 import GrantChip from "./GrantChip.jsx";
 import { checkGrants, localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   Accordion,
   AccordionDetails,
@@ -82,6 +82,14 @@ import SidePanel from "./SidePanel.jsx";
 import TaskPicker from "./TaskPicker.jsx";
 import { clearTaskDraft, loadTaskDraft, saveTaskDraft } from "../taskDraft.js";
 import { templateLabeler } from "../templateLabels.js";
+import {
+  ADVANCED_ORDER,
+  NEW_TASK_FORM_FIELDS,
+  pickerAllows,
+  pickerDisplay,
+  resolveNewTaskForm,
+  sortByDisplay,
+} from "../newTaskForm.js";
 
 export default function NewTaskOverlay({
   tasks,
@@ -98,6 +106,11 @@ export default function NewTaskOverlay({
   // pre-filled repo does.
   prefill = null,
   fields,
+  // templateId and boardId pick settings/new-task-form.yml's template
+  // and board layers (newTaskForm.js): the template this task is filed
+  // from, and the board whose "+ New task" opened the form.
+  templateId = "",
+  boardId = "",
   onClose,
   onCreated,
   // onOpenSettings opens the deployment's Settings on a tab: the "add a
@@ -120,6 +133,31 @@ export default function NewTaskOverlay({
     initialDraft.current = !prefill ? loadTaskDraft() : null;
   }
   const draft = initialDraft.current;
+  // The form as settings/new-task-form.yml has it for the page this was
+  // opened from: what every field starts on (resolveNewTaskForm). With
+  // no configuration it is the form's own built-in defaults.
+  const openingForm = resolveNewTaskForm(config, {
+    repo: defaultRepo || "",
+    templateId,
+    boardId,
+  });
+  const formRepoDefault =
+    typeof openingForm.fields.repo.default === "string"
+      ? openingForm.fields.repo.default.trim()
+      : "";
+  const formNoRepo =
+    !draft && !defaultRepo && formRepoDefault.toLowerCase() === "none";
+  const openingRepo = defaultRepo || (formNoRepo ? "" : formRepoDefault) || "";
+  const openingDefault = (id) => openingForm.fields[id].default;
+  // formEdited is every field somebody has changed in this form -- or
+  // that a restored draft holds -- which a change of repo or template
+  // leaves alone when it re-applies the configured defaults (below), the
+  // way baseEdited and capabilitiesEdited do for their own fields.
+  const formEdited = useRef(new Set(draft ? Object.keys(draft) : []));
+  const edit = (id, set) => (value) => {
+    formEdited.current.add(id);
+    set(value);
+  };
   // draftDiscarded hides the restored draft's own leftovers -- the repo
   // the picker remounts on, and the notice above Repos -- once Discard
   // draft has been pressed. initialDraft itself is left alone: emptying
@@ -166,7 +204,7 @@ export default function NewTaskOverlay({
   const [repo, setRepo] = useState(() => {
     if (draft && draft.repo !== undefined && !draftRepoYields)
       return draft.repo;
-    return defaultRepo || "";
+    return openingRepo;
   });
   // State disables the button visibly; the ref closes the smaller gap before
   // React renders that state, so two submit events can never start two POSTs.
@@ -190,8 +228,30 @@ export default function NewTaskOverlay({
     typeof draft?.changeTarget === "string" ? draft.changeTarget : "",
   );
   const [noRepo, setNoRepo] = useState(
-    () => Boolean(draft?.noRepo) || Boolean(draft?.changeTarget),
+    () => Boolean(draft?.noRepo) || Boolean(draft?.changeTarget) || formNoRepo,
   );
+  // The form for the repo picked now: the fields' placements, labels and
+  // defaults, and the capability picker's configuration.
+  const taskForm = resolveNewTaskForm(config, {
+    repo: noRepo ? "" : repo,
+    templateId,
+    boardId,
+  });
+  const F = taskForm.fields;
+  // The repo's own block holds its branch, its base and the other repos
+  // it writes, as long as they sit where it does and right after it.
+  const inRepoGroup = (id) =>
+    ["newBranch", "base", "writes"].includes(id) &&
+    F.repo.visibility !== "hidden" &&
+    F[id].visibility === F.repo.visibility &&
+    F[id].order > F.repo.order &&
+    F[id].order < F.repo.order + 20;
+  // capabilityDefaultsFor is what the picker starts on for a repo:
+  // settings/new-task-form.yml's capabilities.defaults where a layer
+  // names them, and otherwise the catalogue's own (defaultCapabilitiesFor).
+  const capabilityDefaultsFor = (r) =>
+    resolveNewTaskForm(config, { repo: r, templateId, boardId }).capabilities
+      .defaults ?? defaultCapabilitiesFor(config, r);
   // base tracks Base branch as state, unlike most text fields on this
   // form, so picking a repo (below) can prefill it from
   // lastBaseForRepo without fighting an uncontrolled <input>'s own
@@ -206,6 +266,8 @@ export default function NewTaskOverlay({
       !(draftRepoYields && !draft.baseEdited)
     )
       return draft.base;
+    if (openingForm.fields.base.defaultSet)
+      return String(openingDefault("base"));
     return lastBaseForRepo(tasks, defaultRepo || "");
   });
   // baseEdited tracks whether the human has typed into Base branch
@@ -218,7 +280,9 @@ export default function NewTaskOverlay({
   // repo's default branch when that is blank) before the task runs
   // (ui.CreateTaskRequest.NewBranch). Base branch keeps its own value
   // either way, so ticking this only changes what that field means.
-  const [newBranch, setNewBranch] = useState(() => !!draft?.newBranch);
+  const [newBranch, setNewBranch] = useState(
+    () => draft?.newBranch ?? !!openingDefault("newBranch"),
+  );
   const [newBranchName, setNewBranchName] = useState(
     () => draft?.newBranchName ?? "",
   );
@@ -261,22 +325,39 @@ export default function NewTaskOverlay({
   const targetOptions = targetableRepos(config, tasks, reachable);
   const repoOptions = pickerRepos(config, tasks, reachable);
   const writeOptions = pickerRepos(config, tasks, reachable, { push: true });
+  // settings/new-task-form.yml's repo.offered is the target list where a
+  // layer names one (the repo already picked kept in it), and
+  // allow_google3: false leaves the google3 change target out.
+  const formTargetOptions = Array.isArray(F.repo.offered)
+    ? [...new Set([...F.repo.offered, ...(repo && !noRepo ? [repo] : [])])]
+    : targetOptions;
+  const formChangeTargets =
+    F.repo.allowGoogle3 === false
+      ? changeTargets.filter((ct) => ct !== "google3")
+      : changeTargets;
 
   // dependsOn is picked tasks ({id, title}), not just ids -- keeping the
   // title lets the chips below the picker read as "task 12 Fix the
   // thing" instead of a bare number nobody can place.
-  const [dependsOn, setDependsOn] = useState(() => draft?.dependsOn ?? []);
+  const [dependsOn, setDependsOn] = useState(
+    () =>
+      draft?.dependsOn ?? asDependencies(openingDefault("dependsOn"), tasks),
+  );
   // reads is the read-only repos picked below, held here rather than
   // left as a form field for the reason capabilities and dependsOn are:
   // its picker (ReadOnlyReposField) is a search box over knownRepos, not
   // an <input> FormData could read the answer off.
-  const [reads, setReads] = useState(() => draft?.reads ?? []);
+  const [reads, setReads] = useState(
+    () => draft?.reads ?? asList(openingDefault("reads")),
+  );
   // writes is the extra writeable repos picked below ({repo, base}
   // objects, ui.CreateTaskRequest.Writes), held in state for reads' own
   // reason -- and because each row carries a branch box whose value
   // belongs with the repo it sits beside rather than in a form field
   // named after neither of them.
-  const [writes, setWrites] = useState(() => draft?.writes ?? []);
+  const [writes, setWrites] = useState(
+    () => draft?.writes ?? asWrites(openingDefault("writes")),
+  );
   // capabilities starts as whatever a task against this repo would be
   // filed holding: this deployment's own default set plus whatever the
   // picked repo adds to it (defaultCapabilitiesFor, over GET
@@ -294,7 +375,7 @@ export default function NewTaskOverlay({
       !(draftRepoYields && !draft.capabilitiesEdited)
     )
       return draft.capabilities;
-    return defaultCapabilitiesFor(config, defaultRepo || "");
+    return capabilityDefaultsFor(openingRepo);
   });
   // The rows the picker below is drawn from: what this deployment has
   // configured, plus anything already ticked -- a default it cannot
@@ -311,8 +392,28 @@ export default function NewTaskOverlay({
   const apiIds = capabilities.filter(isApiGrant);
   const capabilityRefs = capabilities.filter(isCapabilityRef);
   const heldCapabilityIds = useHeldIds(capabilityIds);
-  const capabilityOptions = withoutApiRows(
-    capabilityRows(config?.capabilities, heldCapabilityIds),
+  // settings/new-task-form.yml's capabilities.offered and .hidden narrow
+  // what is offered (one already ticked is kept, to be unticked), and
+  // .display relabels and orders it.
+  const formCapabilities = taskForm.capabilities;
+  const capabilityOptions = sortByDisplay(
+    formCapabilities,
+    withoutApiRows(capabilityRows(config?.capabilities, heldCapabilityIds))
+      .filter(
+        (c) =>
+          pickerAllows(formCapabilities, c.id) || capabilityIds.includes(c.id),
+      )
+      .map((c) => {
+        const d = pickerDisplay(formCapabilities, c.id);
+        return d
+          ? {
+              ...c,
+              name: d.label || c.name,
+              description: d.description || c.description,
+            }
+          : c;
+      }),
+    (c) => c.id,
   );
   const methodGrants = localGrantHandlers(capabilityRefs, (refs) => {
     capabilitiesEdited.current = true;
@@ -386,9 +487,11 @@ export default function NewTaskOverlay({
   // choices depend on the live model: a pinned connection must advertise
   // it, or CreateTask refuses the pair (docs/connections-and-models.md).
   // A model implies its framework, so there is no framework choice.
-  const [model, setModel] = useState(() => draft?.model ?? "");
+  const [model, setModel] = useState(
+    () => draft?.model ?? String(openingDefault("model") ?? ""),
+  );
   const [agentBackendId, setAgentBackendId] = useState(
-    () => draft?.agentBackendId ?? "",
+    () => draft?.agentBackendId ?? String(openingDefault("agentBackendId")),
   );
   const connections = config?.agentBackends || [];
   const models = connectionModels(connections);
@@ -398,22 +501,34 @@ export default function NewTaskOverlay({
   // team's default when it has one.
   const effectiveModels = model ? [model] : teamDefaultModels;
   const effectiveModel = effectiveModels.join(" → ");
+  // settings/new-task-form.yml's model.offered and networkAccess.offered
+  // narrow those pickers where a layer names them, the current choice
+  // kept so it can still be shown.
+  const formModels = Array.isArray(F.model.offered)
+    ? models.filter((m) => F.model.offered.includes(m.id) || m.id === model)
+    : models;
+  const networkOffered = (v) =>
+    !Array.isArray(F.networkAccess.offered) ||
+    F.networkAccess.offered.includes(v) ||
+    networkAccess === v;
   const pinChoices = connectionsServingModels(
     models,
     connections,
     effectiveModels,
   );
   const [networkAccess, setNetworkAccess] = useState(
-    () => draft?.networkAccess ?? "",
+    () => draft?.networkAccess ?? String(openingDefault("networkAccess")),
   );
   // What a run ending on nothing_needed does to this task
   // (model.Task.NothingNeededAction): "close" -- the default, and what
   // the server reads "" as -- or "ack" to leave it for acknowledgement.
   const [nothingNeededAction, setNothingNeededAction] = useState(
-    () => draft?.nothingNeededAction ?? "close",
+    () =>
+      draft?.nothingNeededAction ??
+      String(openingDefault("nothingNeededAction")),
   );
   const [reviewTemplateId, setReviewTemplateId] = useState(
-    () => draft?.reviewTemplateId ?? "",
+    () => draft?.reviewTemplateId ?? String(openingDefault("reviewTemplateId")),
   );
   const [reviewers, setReviewers] = useState(() =>
     Array.isArray(draft?.reviewers)
@@ -421,16 +536,17 @@ export default function NewTaskOverlay({
       : (draft?.reviewers ?? ""),
   );
   const [promptExtension, setPromptExtension] = useState(
-    () => draft?.promptExtension ?? "",
+    () => draft?.promptExtension ?? String(openingDefault("promptExtension")),
   );
+  const openingShape = sandboxShapeDefault(openingForm.fields.sandboxShape);
   const [sandboxCpus, setSandboxCpus] = useState(
-    () => draft?.sandboxCpus ?? "",
+    () => draft?.sandboxCpus ?? openingShape.cpus,
   );
   const [sandboxMemoryMb, setSandboxMemoryMb] = useState(
-    () => draft?.sandboxMemoryMb ?? "",
+    () => draft?.sandboxMemoryMb ?? openingShape.memoryMb,
   );
   const [sandboxDiskGb, setSandboxDiskGb] = useState(
-    () => draft?.sandboxDiskGb ?? "",
+    () => draft?.sandboxDiskGb ?? openingShape.diskGb,
   );
   // advancedOpen is Advanced options' own expanded state, held here so
   // that a field inside it the browser refuses on submit (a vCPUs of -1,
@@ -467,20 +583,22 @@ export default function NewTaskOverlay({
     field?.reportValidity?.();
   };
   const [autoMerge, setAutoMerge] = useState(
-    () => draft?.autoMerge ?? !!config?.autoMergeByDefault,
+    () => draft?.autoMerge ?? !!openingDefault("autoMerge"),
   );
   const [approved, setApproved] = useState(
-    () => draft?.approved ?? !!config?.approvedByDefault,
+    () => draft?.approved ?? !!openingDefault("approved"),
   );
   // noPort is model.Task.NoPort: a change that belongs only on the
   // branch it lands on, and is not ported to the repo's paired branches.
-  const [noPort, setNoPort] = useState(() => !!draft?.noPort);
+  const [noPort, setNoPort] = useState(
+    () => draft?.noPort ?? !!openingDefault("noPort"),
+  );
   const [keepRunning, setKeepRunning] = useState(() => !!draft?.keepRunning);
   // fixesBaseBranch is ui.CreateTaskRequest.FixesBaseBranch: this task
   // fixes its base branch while that branch is red, so grain never makes
   // it wait on the branch's own repair task (grain/task-3451).
   const [fixesBaseBranch, setFixesBaseBranch] = useState(
-    () => !!draft?.fixesBaseBranch,
+    () => draft?.fixesBaseBranch ?? !!openingDefault("fixesBaseBranch"),
   );
   // atFront is which end of the backlog this task joins
   // (ui.CreateTaskRequest.AtFront, grain/task-202): the front, ahead of
@@ -491,7 +609,7 @@ export default function NewTaskOverlay({
   // chose. App.jsx re-fetches the config after a task is created, so the
   // next open of this form sees the choice this one just made.
   const [atFront, setAtFront] = useState(
-    () => draft?.atFront ?? !!config?.newestFirst,
+    () => draft?.atFront ?? !!openingDefault("atFront"),
   );
   const [priority, setPriority] = useState(() =>
     draft?.priority !== undefined ? String(draft.priority) : "5",
@@ -528,33 +646,50 @@ export default function NewTaskOverlay({
     if (title.trim() !== "") return true;
     if (description.trim() !== "") return true;
     if (noRepo) return true;
-    if (repo !== (defaultRepo || "")) return true;
+    if (repo !== openingRepo) return true;
     if (
       baseEdited.current &&
       base !== lastBaseForRepo(tasks, defaultRepo || "")
     )
       return true;
-    if (reads.length > 0) return true;
-    if (writes.length > 0) return true;
-    if (dependsOn.length > 0) return true;
+    if (
+      JSON.stringify(reads) !== JSON.stringify(asList(openingDefault("reads")))
+    )
+      return true;
+    if (
+      JSON.stringify(writes) !==
+      JSON.stringify(asWrites(openingDefault("writes")))
+    )
+      return true;
+    if (dependsOn.length > asList(openingDefault("dependsOn")).length)
+      return true;
     if (capabilitiesEdited.current) return true;
-    if (model !== "") return true;
-    if (agentBackendId !== "") return true;
-    if (networkAccess !== "") return true;
-    if (nothingNeededAction !== "close") return true;
-    if (reviewTemplateId !== "") return true;
-    if (promptExtension.trim() !== "") return true;
-    if (sandboxCpus !== "" && sandboxCpus !== 0) return true;
-    if (sandboxMemoryMb !== "" && sandboxMemoryMb !== 0) return true;
-    if (sandboxDiskGb !== "" && sandboxDiskGb !== 0) return true;
-    if (autoMerge !== !!config?.autoMergeByDefault) return true;
-    if (approved !== !!config?.approvedByDefault) return true;
-    if (noPort) return true;
+    if (model !== String(openingDefault("model") ?? "")) return true;
+    if (agentBackendId !== String(openingDefault("agentBackendId")))
+      return true;
+    if (networkAccess !== String(openingDefault("networkAccess"))) return true;
+    if (nothingNeededAction !== String(openingDefault("nothingNeededAction")))
+      return true;
+    if (reviewTemplateId !== String(openingDefault("reviewTemplateId")))
+      return true;
+    if (
+      promptExtension.trim() !==
+      String(openingDefault("promptExtension")).trim()
+    )
+      return true;
+    const shapeDiffers = (v, d) => String(v || 0) !== String(d || 0);
+    if (shapeDiffers(sandboxCpus, openingShape.cpus)) return true;
+    if (shapeDiffers(sandboxMemoryMb, openingShape.memoryMb)) return true;
+    if (shapeDiffers(sandboxDiskGb, openingShape.diskGb)) return true;
+    if (autoMerge !== !!openingDefault("autoMerge")) return true;
+    if (approved !== !!openingDefault("approved")) return true;
+    if (noPort !== !!openingDefault("noPort")) return true;
     if (keepRunning) return true;
-    if (fixesBaseBranch) return true;
-    if (newBranch || newBranchName.trim() !== "") return true;
+    if (fixesBaseBranch !== !!openingDefault("fixesBaseBranch")) return true;
+    if (newBranch !== !!openingDefault("newBranch")) return true;
+    if (newBranchName.trim() !== "") return true;
     if (reviewers.trim() !== "") return true;
-    if (atFront !== !!config?.newestFirst) return true;
+    if (atFront !== !!openingDefault("atFront")) return true;
     if (String(priority).trim() !== "5") return true;
     const defaultFields = fileableFieldValues(config, fields);
     for (const [k, v] of Object.entries(customFields)) {
@@ -654,6 +789,95 @@ export default function NewTaskOverlay({
     customFields,
   ]);
 
+  // Switching repo or template re-applies the defaults
+  // settings/new-task-form.yml gives the fields nobody has touched in
+  // this form (formEdited), as Base branch and the capability picker
+  // already follow the repo. Only on a configured form, and only for
+  // defaults a layer chose: the built-in ones are where the form opened.
+  const formDefaultsKey = taskForm.configured
+    ? JSON.stringify([
+        NEW_TASK_FORM_FIELDS.map((id) =>
+          F[id].defaultSet ? [id, F[id].default, F[id].defaultPreset] : null,
+        ),
+        taskForm.capabilities.defaults,
+      ])
+    : "";
+  useEffect(() => {
+    if (!formDefaultsKey) return;
+    const setters = {
+      description: (v) => setDescription(String(v ?? "")),
+      newBranch: (v) => setNewBranch(!!v),
+      reads: (v) => setReads(asList(v)),
+      writes: (v) => setWrites(asWrites(v)),
+      autoMerge: (v) => setAutoMerge(!!v),
+      noPort: (v) => setNoPort(!!v),
+      fixesBaseBranch: (v) => setFixesBaseBranch(!!v),
+      model: (v) => setModel(String(v ?? "")),
+      dependsOn: (v) => setDependsOn(asDependencies(v, tasks)),
+      agentBackendId: (v) => setAgentBackendId(String(v ?? "")),
+      networkAccess: (v) => setNetworkAccess(String(v ?? "")),
+      nothingNeededAction: (v) => setNothingNeededAction(String(v ?? "")),
+      reviewTemplateId: (v) => setReviewTemplateId(String(v ?? "")),
+      promptExtension: (v) => setPromptExtension(String(v ?? "")),
+      approved: (v) => setApproved(!!v),
+      atFront: (v) => setAtFront(!!v),
+    };
+    for (const [id, set] of Object.entries(setters)) {
+      if (F[id].defaultSet && !formEdited.current.has(id)) set(F[id].default);
+    }
+    if (F.base.defaultSet && !baseEdited.current)
+      setBase(String(F.base.default ?? ""));
+    if (F.sandboxShape.defaultSet && !formEdited.current.has("sandboxShape")) {
+      const shape = sandboxShapeDefault(F.sandboxShape);
+      setSandboxCpus(shape.cpus);
+      setSandboxMemoryMb(shape.memoryMb);
+      setSandboxDiskGb(shape.diskGb);
+    }
+    if (taskForm.capabilities.defaults && !capabilitiesEdited.current)
+      setCapabilities(capabilityDefaultsFor(noRepo ? "" : repo));
+    // Keyed on the resolved defaults alone: they are what changes when
+    // the repo or the template does.
+  }, [formDefaultsKey]);
+
+  // hiddenPayload is what the fields the resolved form hides file as:
+  // their defaults, whatever the form's state holds (the server applies
+  // the same, ui.applyHiddenFormDefaults).
+  const hiddenPayload = () => {
+    const out = {};
+    const hidden = (id) => F[id].visibility === "hidden" && F[id].defaultSet;
+    const d = (id) => F[id].default;
+    if (hidden("description")) out.description = String(d("description") ?? "");
+    if (hidden("base")) out.base = String(d("base") ?? "");
+    for (const id of [
+      "autoMerge",
+      "noPort",
+      "fixesBaseBranch",
+      "approved",
+      "atFront",
+    ])
+      if (hidden(id)) out[id] = !!d(id);
+    for (const id of [
+      "model",
+      "agentBackendId",
+      "networkAccess",
+      "nothingNeededAction",
+      "reviewTemplateId",
+      "promptExtension",
+    ])
+      if (hidden(id)) out[id] = String(d(id) ?? "");
+    if (hidden("reads")) out.reads = asList(d("reads"));
+    if (hidden("writes")) out.writes = asWrites(d("writes"));
+    if (hidden("dependsOn")) out.dependsOn = asList(d("dependsOn"));
+    if (hidden("grants")) out.capabilities = asList(d("grants"));
+    if (F.sandboxShape.visibility === "hidden" && F.sandboxShape.defaultSet) {
+      const shape = sandboxShapeDefault(F.sandboxShape);
+      out.sandboxCpus = parseInt(shape.cpus, 10) || 0;
+      out.sandboxMemoryMb = parseInt(shape.memoryMb, 10) || 0;
+      out.sandboxDiskGb = parseInt(shape.diskGb, 10) || 0;
+    }
+    return out;
+  };
+
   const handleDiscard = () => {
     discardedRef.current = true;
     clearTaskDraft();
@@ -661,36 +885,37 @@ export default function NewTaskOverlay({
     repoEdited.current = false;
     setTitle("");
     setDescription("");
-    setRepo(defaultRepo || "");
+    setRepo(openingRepo);
     setNoRepo(false);
     setChangeTarget("");
     setBase(lastBaseForRepo(tasks, defaultRepo || ""));
     baseEdited.current = false;
-    setNewBranch(false);
+    setNewBranch(!!openingDefault("newBranch"));
     setNewBranchName("");
-    setDependsOn([]);
-    setReads([]);
-    setWrites([]);
-    setCapabilities(defaultCapabilitiesFor(config, defaultRepo || ""));
+    setDependsOn(asDependencies(openingDefault("dependsOn"), tasks));
+    setReads(asList(openingDefault("reads")));
+    setWrites(asWrites(openingDefault("writes")));
+    setCapabilities(capabilityDefaultsFor(openingRepo));
     capabilitiesEdited.current = false;
+    formEdited.current.clear();
     setCustomFields(fileableFieldValues(config, fields));
     setAttachments([]);
-    setModel("");
-    setAgentBackendId("");
-    setNetworkAccess("");
-    setNothingNeededAction("close");
-    setReviewTemplateId("");
+    setModel(String(openingDefault("model") ?? ""));
+    setAgentBackendId(String(openingDefault("agentBackendId")));
+    setNetworkAccess(String(openingDefault("networkAccess")));
+    setNothingNeededAction(String(openingDefault("nothingNeededAction")));
+    setReviewTemplateId(String(openingDefault("reviewTemplateId")));
     setReviewers("");
-    setPromptExtension("");
-    setSandboxCpus("");
-    setSandboxMemoryMb("");
-    setSandboxDiskGb("");
-    setAutoMerge(!!config?.autoMergeByDefault);
-    setApproved(!!config?.approvedByDefault);
-    setNoPort(false);
+    setPromptExtension(String(openingDefault("promptExtension")));
+    setSandboxCpus(openingShape.cpus);
+    setSandboxMemoryMb(openingShape.memoryMb);
+    setSandboxDiskGb(openingShape.diskGb);
+    setAutoMerge(!!openingDefault("autoMerge"));
+    setApproved(!!openingDefault("approved"));
+    setNoPort(!!openingDefault("noPort"));
     setKeepRunning(false);
-    setFixesBaseBranch(false);
-    setAtFront(!!config?.newestFirst);
+    setFixesBaseBranch(!!openingDefault("fixesBaseBranch"));
+    setAtFront(!!openingDefault("atFront"));
     setPriority("5");
     setRepoSeed(null);
     setResetKey((k) => k + 1);
@@ -724,8 +949,7 @@ export default function NewTaskOverlay({
     // alone, which is a real answer rather than the absence of one, and
     // leaving the previous repo's extra capabilities ticked would file
     // the task with capabilities this repo never asked for.
-    if (!capabilitiesEdited.current)
-      setCapabilities(defaultCapabilitiesFor(config, r));
+    if (!capabilitiesEdited.current) setCapabilities(capabilityDefaultsFor(r));
     if (none || baseEdited.current) return;
     const hasHistory = (tasks || []).some(
       (t) => t.repo === r && suggestsBase(t),
@@ -734,11 +958,13 @@ export default function NewTaskOverlay({
   };
 
   const addDependency = (t) => {
+    formEdited.current.add("dependsOn");
     setDependsOn((prev) =>
       prev.some((p) => p.id === t.id) ? prev : [...prev, t],
     );
   };
   const removeDependency = (id) => {
+    formEdited.current.add("dependsOn");
     setDependsOn((prev) => prev.filter((p) => p.id !== id));
   };
 
@@ -826,7 +1052,14 @@ export default function NewTaskOverlay({
       // and refused. A No repo task under a gcp-key restricted to one
       // repo was refused that way, with nothing on the form to untick
       // the reason from (2026-10-29 test run, Bug 3).
-      ...(capabilitiesEdited.current ? { capabilities } : {}),
+      // A form whose configuration names its own capability defaults
+      // files them too -- the server knows only the catalogue's -- less
+      // any the catalogue refuses this task, as the server would drop.
+      ...(capabilitiesEdited.current
+        ? { capabilities }
+        : taskForm.capabilities.defaults
+          ? { capabilities: capabilities.filter((g) => !catalogueRefusals[g]) }
+          : {}),
       // Every field the form rendered, blanks included: the server
       // drops the empty ones (model.NormalizeCustomFieldValues), so
       // what is filed is exactly what was filled in. Left out of the
@@ -845,6 +1078,9 @@ export default function NewTaskOverlay({
           ? { priority: parsedPriority }
           : {};
       })(),
+      ...(templateId ? { templateId } : {}),
+      ...(boardId ? { boardId } : {}),
+      ...(taskForm.configured ? hiddenPayload() : {}),
     };
     try {
       // Read inside the try: a file that has gone away since it was
@@ -861,42 +1097,43 @@ export default function NewTaskOverlay({
       form.reset();
       setTitle("");
       setDescription("");
-      setRepo(defaultRepo || "");
+      setRepo(openingRepo);
       repoEdited.current = false;
       setNoRepo(false);
       setChangeTarget("");
       setBase(lastBaseForRepo(tasks, defaultRepo || ""));
       baseEdited.current = false;
-      setNewBranch(false);
+      setNewBranch(!!openingDefault("newBranch"));
       setNewBranchName("");
-      setDependsOn([]);
-      setReads([]);
+      setDependsOn(asDependencies(openingDefault("dependsOn"), tasks));
+      setReads(asList(openingDefault("reads")));
       // Emptied with the rest of the repos block: the extra repos were
       // this task's, and the form is being cleared for the next one.
-      setWrites([]);
-      setCapabilities(defaultCapabilitiesFor(config, defaultRepo || ""));
+      setWrites(asWrites(openingDefault("writes")));
+      setCapabilities(capabilityDefaultsFor(openingRepo));
       capabilitiesEdited.current = false;
+      formEdited.current.clear();
       // Back to the declared defaults rather than to what this filing
       // carried: the link's values were for the task just filed, and
       // the form is being emptied for the next one.
       setCustomFields(fileableFieldValues(config, null));
       setAttachments([]);
-      setModel("");
-      setAgentBackendId("");
-      setNetworkAccess("");
-      setNothingNeededAction("close");
-      setReviewTemplateId("");
+      setModel(String(openingDefault("model") ?? ""));
+      setAgentBackendId(String(openingDefault("agentBackendId")));
+      setNetworkAccess(String(openingDefault("networkAccess")));
+      setNothingNeededAction(String(openingDefault("nothingNeededAction")));
+      setReviewTemplateId(String(openingDefault("reviewTemplateId")));
       setReviewers("");
-      setPromptExtension("");
-      setSandboxCpus("");
-      setSandboxMemoryMb("");
-      setSandboxDiskGb("");
-      setAutoMerge(!!config?.autoMergeByDefault);
-      setApproved(!!config?.approvedByDefault);
-      setNoPort(false);
+      setPromptExtension(String(openingDefault("promptExtension")));
+      setSandboxCpus(openingShape.cpus);
+      setSandboxMemoryMb(openingShape.memoryMb);
+      setSandboxDiskGb(openingShape.diskGb);
+      setAutoMerge(!!openingDefault("autoMerge"));
+      setApproved(!!openingDefault("approved"));
+      setNoPort(!!openingDefault("noPort"));
       setKeepRunning(false);
-      setFixesBaseBranch(false);
-      setAtFront(!!config?.newestFirst);
+      setFixesBaseBranch(!!openingDefault("fixesBaseBranch"));
+      setAtFront(!!openingDefault("atFront"));
       setPriority("5");
       onClose();
       await onCreated();
@@ -906,6 +1143,1100 @@ export default function NewTaskOverlay({
       showError(err);
     }
   };
+
+  const titleNode = (
+    <>
+      {/* Focused as the form opens, as New session's and New team's
+            first fields are: without it the dialog's own paper held
+            focus, so a title typed straight after "+ New task" went
+            nowhere and the box was a Tab past "Close dialog" (found in
+            the 2026-10-15 intake walkthrough). */}
+      <TextField
+        name="title"
+        label={F.title.label || "Title"}
+        helperText={F.title.helpText || undefined}
+        required
+        InputLabelProps={{ required: false }}
+        autoFocus
+        autoComplete="off"
+        fullWidth
+        margin="normal"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+      />
+    </>
+  );
+  const descriptionField = (
+    <TextField
+      name="description"
+      label={F.description.label || "Description"}
+      helperText={F.description.helpText || undefined}
+      multiline
+      minRows={6}
+      fullWidth
+      value={description}
+      onChange={(e) => edit("description", setDescription)(e.target.value)}
+      InputProps={{ sx: { pb: 4 } }}
+    />
+  );
+  const descriptionNode = (
+    <>
+      {/* minRows, not rows: the box grows with whatever is typed into
+            it rather than keeping a fixed five lines and scrolling
+            inside itself, so a long description is read in the panel's
+            own scroll rather than in a second scrollbar within it
+            (grain/task-85). The clip that attaches files sits in its
+            bottom-right corner, which is what the padding leaves room
+            for. */}
+      {F.attachments.visibility === "hidden" ? (
+        descriptionField
+      ) : (
+        <AttachmentPicker
+          files={attachments}
+          onChange={setAttachments}
+          variant="icon"
+        >
+          {descriptionField}
+        </AttachmentPicker>
+      )}
+    </>
+  );
+  const customFieldsNode = (
+    <>
+      {/* This deployment's own fields, above the repo and the rest of
+            the mechanics: they are part of what the task *is*, like the
+            title and the description over them, rather than part of how
+            it runs. Nothing renders here on a deployment that declares
+            none, which is most of them. */}
+      {/* What a /new link asked for that this form left out
+            (unfiledLinkValues): a value its field does not offer, or a
+            field this deployment does not declare. Said here, beside the
+            fields, so the task filed is not quietly a different one from
+            the task the link's sender meant. */}
+      {unfiledFromLink.length > 0 && (
+        <Alert
+          severity="warning"
+          sx={{ mt: 1 }}
+          data-testid="unfiled-link-values"
+        >
+          This link asked for values this form has left out:{" "}
+          {unfiledFromLink.join("; ")}.
+        </Alert>
+      )}
+      <CustomFieldInputs
+        config={config}
+        values={customFields}
+        onChange={setCustomField}
+      />
+    </>
+  );
+  const newBranchNode = (
+    <>
+      {/* The first repo's own branch, which is the task's: it sits
+              between that repo and the ones under it because that is
+              where it belongs -- each of those carries its branch on
+              the same row, and this one would read as the last of them
+              if it came after. */}
+      {!noRepo && (
+        <FormControlLabel
+          control={
+            <Checkbox
+              name="newBranch"
+              checked={newBranch}
+              onChange={(e) =>
+                edit("newBranch", setNewBranch)(e.target.checked)
+              }
+            />
+          }
+          label={F.newBranch.label || "Create a new branch"}
+          sx={{ display: "flex" }}
+        />
+      )}
+      {!noRepo && newBranch && (
+        <TextField
+          name="newBranchName"
+          label="New branch name"
+          required
+          fullWidth
+          margin="dense"
+          value={newBranchName}
+          onChange={(e) => setNewBranchName(e.target.value)}
+          helperText={
+            "grain creates it from the branch below before the task " +
+            "runs; one that already exists is used as it stands"
+          }
+          inputProps={{ "data-testid": "new-branch-name" }}
+        />
+      )}
+    </>
+  );
+  const baseNode = (
+    <>
+      {!changeTarget && (
+        <>
+          {/* A non-git change target task has no branch and lands nowhere
+              else: its change is one changelist. */}
+          <BranchField
+            name="base"
+            label={
+              F.base.label ||
+              (!noRepo && newBranch ? "Create from" : "Base branch")
+            }
+            helperText={
+              F.base.helpText ||
+              (!noRepo && newBranch
+                ? "optional -- the repo's default branch if blank"
+                : "optional")
+            }
+            margin="dense"
+            size="medium"
+            repo={noRepo ? "" : repo}
+            options={branchesInUse(tasks, repo)}
+            warnMissing="push it first, or have the task depend on the one that cuts it"
+            // A pull request's head as GitHub shows it ("owner:branch")
+            // is filed against that pull request (pkg/forkhead); a new
+            // branch cannot be cut from one, which the server says.
+            forkHeads={noRepo || !newBranch}
+            value={base}
+            onChange={(next) => {
+              baseEdited.current = true;
+              setBase(next);
+            }}
+          />
+        </>
+      )}
+    </>
+  );
+  const writesNode = (
+    <>
+      {!changeTarget && (
+        <>
+          <WriteReposField
+            options={writeOptions}
+            value={writes}
+            onChange={edit("writes", setWrites)}
+          />
+        </>
+      )}
+    </>
+  );
+  const repoNode = (
+    <>
+      {/* One block for every repo this task may change, not two
+            (grain/task-202): the repo the run itself pushes to, then
+            any others named right under it, added in the same place
+            rather than in a second field somebody has to notice and
+            work out they belong in. Which is which is still a real
+            distinction -- it is the first one that gets a branch and a
+            pull request -- and it is settled by the order they are in
+            rather than by asking. */}
+      <Box sx={{ mt: 2, mb: 1 }}>
+        {!noRepo && (
+          <NoGitConnectionNotice
+            deployment={deployment}
+            onOpenSettings={onOpenSettings}
+            sx={{ mb: 1 }}
+          />
+        )}
+        {draftRepoNotice !== null && (
+          <Alert severity="info" sx={{ mb: 1 }} data-testid="draft-repo-notice">
+            {draftRepoNotice}. Discard it to file in {pageRepo}.
+          </Alert>
+        )}
+        <Box component="label" sx={{ display: "block", mb: 0.5 }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", mb: 0.5 }}
+          >
+            {F.repo.label || "Repos"}{" "}
+            <span className="hint">
+              {F.repo.helpText ||
+                "the first is the one this task's own work lands in"}
+            </span>
+          </Typography>
+          {/* Pre-filled from the repo the "+ New task" button was
+                opened from -- the repo-centric task list's whole point
+                is filing work against the repo you're already looking
+                at without retyping it. allowNoRepo puts "no repo at
+                all" in this same list (grain/task-85): picking it is
+                what sets noRepo, and submit above blanks the repo the
+                field then reports. */}
+          <RepoField
+            key={resetKey}
+            name="repo"
+            options={formTargetOptions}
+            defaultValue={
+              repoSeed !== null
+                ? repoSeed
+                : liveDraft && !draftRepoYields
+                  ? liveDraft.changeTarget &&
+                    changeTargets.includes(liveDraft.changeTarget)
+                    ? liveDraft.changeTarget
+                    : liveDraft.noRepo
+                      ? NO_REPO
+                      : liveDraft.repo || ""
+                  : formNoRepo
+                    ? NO_REPO
+                    : openingRepo
+            }
+            allowNoRepo={F.repo.allowNoRepo ?? true}
+            changeTargets={formChangeTargets}
+            onChange={(picked) => {
+              // Only a pick made here marks the repo as chosen: a team
+              // change routes through handleRepoChange too, and that is
+              // the form following the team rather than anybody's choice.
+              repoEdited.current = true;
+              handleRepoChange(picked);
+            }}
+          />
+          {/* Typing is still allowed; this is the warning for a repo
+                the team's credential cannot push to, which the server
+                will refuse to file (ui.Client.reachRefusal). */}
+          {!noRepo &&
+            repoReachable(reachable, repo, { push: true }) === false && (
+              <Typography
+                variant="caption"
+                color="warning.main"
+                data-testid="repo-unreachable"
+              >
+                The deployment&apos;s GitHub credential cannot push to {repo} --
+                give it access on GitHub, or choose another in Settings → Git
+                connections.
+              </Typography>
+            )}
+          {/* The server files a task on a repo off the team's list
+                rather than refusing it, but parks it awaiting a reply
+                (ui.Client.parkOffAllowlist), and the form used to close
+                without a word -- the only explanation a comment on a task
+                nobody had opened yet. Said here before submit, by the
+                rule the pane's own warning uses (repoTargetable). */}
+          {!noRepo && repo && !repoTargetable(config, repo) && (
+            <Typography
+              variant="caption"
+              color="warning.main"
+              sx={{ display: "block" }}
+              data-testid="repo-off-allowlist"
+            >
+              {repo} is not on this deployment&apos;s target repo list. The task
+              will be filed but parked, and runs only once an operator adds the
+              repo under Settings and replies on it.
+            </Typography>
+          )}
+        </Box>
+        {inRepoGroup("newBranch") && newBranchNode}
+        {inRepoGroup("base") && baseNode}
+        {inRepoGroup("writes") && writesNode}
+      </Box>
+    </>
+  );
+  const readsNode = (
+    <>
+      <ReadOnlyReposField
+        options={repoOptions}
+        value={reads}
+        onChange={edit("reads", setReads)}
+        // The repo picked right above, not a saved one: this form is
+        // where both halves are chosen, so the read-only picker should
+        // stop offering the target the moment it is named -- the same
+        // value WriteReposField gets, and "" for a task filed with no
+        // repo at all, which has no target for a read to collide with.
+        target={noRepo ? "" : repo}
+      />
+    </>
+  );
+  const reviewersNode = (
+    <>
+      <TextField
+        name="reviewers"
+        label="Reviewers"
+        placeholder="alice, bob"
+        helperText="optional -- comma-separated usernames passed to workspace grants and used when mailing a CL"
+        fullWidth
+        margin="normal"
+        size="small"
+        value={reviewers}
+        onChange={(e) => setReviewers(e.target.value)}
+      />
+    </>
+  );
+  const changeTargetNoteNode = (
+    <>
+      {changeTarget && (
+        <>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", mt: 1 }}
+            data-testid="change-target-note"
+          >
+            Its change is a {changeTarget} changelist in this task&apos;s own
+            workspace, created for it: nothing is cloned, and there is no pull
+            request to merge or branch to port.
+          </Typography>
+        </>
+      )}
+    </>
+  );
+  const autoMergeNode = (
+    <>
+      {!changeTarget && (
+        <>
+          <FormControlLabel
+            control={
+              <Checkbox
+                name="autoMerge"
+                checked={autoMerge}
+                onChange={(e) =>
+                  edit("autoMerge", setAutoMerge)(e.target.checked)
+                }
+              />
+            }
+            label={F.autoMerge.label || "Auto-merge once checks pass"}
+            sx={{ display: "flex", mt: 1 }}
+          />
+        </>
+      )}
+    </>
+  );
+  const noPortNode = (
+    <>
+      {!changeTarget && (
+        <>
+          <FormControlLabel
+            control={
+              <Checkbox
+                name="noPort"
+                checked={noPort}
+                onChange={(e) => edit("noPort", setNoPort)(e.target.checked)}
+              />
+            }
+            label={F.noPort.label || "Don't port to the repo's paired branches"}
+            sx={{ display: "flex" }}
+          />
+        </>
+      )}
+    </>
+  );
+  const fixesBaseBranchNode = (
+    <>
+      {!noRepo && (
+        <FormControlLabel
+          control={
+            <Checkbox
+              name="fixesBaseBranch"
+              checked={fixesBaseBranch}
+              onChange={(e) =>
+                edit("fixesBaseBranch", setFixesBaseBranch)(e.target.checked)
+              }
+            />
+          }
+          label={
+            F.fixesBaseBranch.label ||
+            `This fixes a red ${(newBranch ? newBranchName.trim() : base) || "main"}`
+          }
+          title="While the branch a task lands on is red, grain makes the work aimed at it wait on that branch's repair task. Tick this for a task that is itself fixing the branch -- a de-flake, a broken build -- so it never waits: it counts as the branch's repair, and is left open with a comment, not closed, when the branch goes green."
+          sx={{ display: "flex" }}
+        />
+      )}
+    </>
+  );
+  const keepRunningNode = (
+    <>
+      <FormControlLabel
+        control={
+          <Checkbox
+            name="keepRunning"
+            checked={keepRunning}
+            onChange={(e) => setKeepRunning(e.target.checked)}
+          />
+        }
+        label="Keep running"
+        title="Immediately restart the task when its run exits instead of completing or parking it."
+        sx={{ display: "flex" }}
+      />
+    </>
+  );
+  const grantsNode = (
+    <>
+      <FormControl fullWidth margin="normal" size="small">
+        <InputLabel id="new-task-capabilities-label">
+          Legacy capabilities
+        </InputLabel>
+        <Select
+          labelId="new-task-capabilities-label"
+          label="Legacy capabilities"
+          multiple
+          value={capabilityIds}
+          onChange={(e) => {
+            capabilitiesEdited.current = true;
+            setCapabilities([...e.target.value, ...apiIds, ...capabilityRefs]);
+          }}
+          renderValue={(selected) => (
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+              {selected.map((id) => (
+                <GrantChip
+                  key={id}
+                  grant={id}
+                  config={config}
+                  tabIndex={-1}
+                  // Marked by its border and icon, its label left at
+                  // full contrast: warning-coloured text on a light
+                  // chip is too faint to read at this size.
+                  {...(catalogueRefusals[id]
+                    ? {
+                        note: catalogueRefusals[id],
+                        variant: "outlined",
+                        icon: (
+                          <WarningAmberIcon fontSize="small" color="warning" />
+                        ),
+                        sx: { borderColor: "warning.main" },
+                        ariaSuffix: " (refused here)",
+                        "data-catalogue-refused": "true",
+                      }
+                    : {})}
+                />
+              ))}
+            </Box>
+          )}
+        >
+          {capabilityOptions.length === 0 && (
+            <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
+          )}
+          {capabilityOptions.map((c) => {
+            const refused = catalogueRefusals[c.id] || "";
+            const unavailable = refused || capabilityUnavailableHint(c);
+            return (
+              <MenuItem
+                key={c.id}
+                value={c.id}
+                // One the catalogue refuses here is not offered, but
+                // one already ticked stays enabled: its own row is
+                // the only way to untick it.
+                disabled={Boolean(refused) && !capabilityIds.includes(c.id)}
+                data-catalogue-refused={refused ? "true" : undefined}
+                title={
+                  unavailable
+                    ? `${c.description}\n\n${unavailable}`
+                    : c.description
+                }
+              >
+                <Checkbox checked={capabilityIds.includes(c.id)} size="small" />
+                <ListItemText
+                  primary={c.name}
+                  secondary={unavailable || null}
+                  secondaryTypographyProps={{ color: "warning.main" }}
+                />
+              </MenuItem>
+            );
+          })}
+        </Select>
+        {defaultCapabilitiesFor(config, noRepo ? "" : repo).length > 0 && (
+          <FormHelperText>
+            Pre-ticked ones are the defaults for this repo -- this
+            deployment&apos;s (Settings &gt; Tasks), plus anything the repo
+            itself adds (Repos &gt; Capabilities). Untick any this task should
+            not have.
+          </FormHelperText>
+        )}
+        {refusedGrants.length > 0 && (
+          <FormHelperText
+            data-testid="new-task-catalogue-refused"
+            sx={{ color: "warning.main" }}
+          >
+            {capabilitiesEdited.current
+              ? `settings/capabilities.yml refuses ${refusedGrants.join(", ")} on ${noRepo ? "a task with no repo" : policyTarget}: untick ${refusedGrants.length === 1 ? "it" : "them"}, or the task will not be filed.`
+              : `settings/capabilities.yml refuses ${refusedGrants.join(", ")} on ${noRepo ? "a task with no repo" : policyTarget}, so ${refusedGrants.length === 1 ? "that default is" : "those defaults are"} left off this task.`}
+          </FormHelperText>
+        )}
+        <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
+      </FormControl>
+      <GrantsPicker
+        config={config}
+        grants={capabilities}
+        onApiChange={(next) => {
+          capabilitiesEdited.current = true;
+          setCapabilities([...capabilityIds, ...next, ...capabilityRefs]);
+        }}
+        onSubmit={methodGrants.onSubmit}
+        onRemove={methodGrants.onRemove}
+        idPrefix="new-task"
+        policyRepo={noRepo ? "" : repo || config?.defaultTarget || ""}
+        formCapabilities={taskForm.configured ? formCapabilities : null}
+        label={F.grants.label || undefined}
+        helpText={F.grants.helpText || undefined}
+      />
+    </>
+  );
+  const modelNode = (
+    <>
+      {/* The model this one task runs on. Its choices are what the
+            target team's connections advertise; a model only disabled
+            connections serve is still offered, and says so, because
+            pinning one of those (Advanced options) is how it runs. Left
+            out where the team has no connection at all. */}
+      {models.length > 0 && (
+        <ModelSelect
+          name="model"
+          label={F.model.label || "Model"}
+          value={model}
+          onChange={(next) => {
+            edit("model", setModel)(next);
+            const nextModels = next ? [next] : teamDefaultModels;
+            const allowed = connectionsServingModels(
+              models,
+              connections,
+              nextModels,
+            );
+            if (
+              agentBackendId &&
+              nextModels.length > 0 &&
+              !allowed.some((c) => c.id === agentBackendId)
+            )
+              setAgentBackendId(String(openingDefault("agentBackendId")));
+          }}
+          options={modelOptions(
+            formModels,
+            teamDefaultLabel(deployment || teamDefaultModel, models),
+            model,
+          )}
+          helperText={
+            F.model.helpText ||
+            "which model this one task runs on -- leave it on the deployment's default unless it needs a particular one; type to search"
+          }
+          margin="normal"
+        />
+      )}
+    </>
+  );
+  const dependsOnNode = (
+    <>
+      <fieldset>
+        <legend>
+          {F.dependsOn.label || "Depends on"}{" "}
+          <span className="hint">{F.dependsOn.helpText || "optional"}</span>
+        </legend>
+        {dependsOn.length > 0 && (
+          // One full-width chip per line, the shape DetailOverlay's
+          // dependency list uses: a picked task then reads as a row,
+          // rather than a bubble sized by however long its title
+          // happens to be, wrapped in beside the others.
+          <Stack spacing={0.6} sx={{ mb: 1 }}>
+            {dependsOn.map((t) => (
+              <Tooltip key={t.id} title={`${t.id} ${t.title}`} placement="left">
+                <Chip
+                  label={`${t.id} ${t.title}`}
+                  onDelete={() => removeDependency(t.id)}
+                  deleteIcon={
+                    <span title={`Remove dependency on ${t.id}`}>×</span>
+                  }
+                  sx={{
+                    width: "100%",
+                    justifyContent: "space-between",
+                    "& .MuiChip-label": {
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    },
+                  }}
+                />
+              </Tooltip>
+            ))}
+          </Stack>
+        )}
+        <TaskPicker
+          tasks={tasks || []}
+          exclude={dependsOn.map((t) => t.id)}
+          onPick={addDependency}
+          placeholder="Search tasks to depend on…"
+        />
+      </fieldset>
+    </>
+  );
+  const agentBackendIdNode = (
+    <>
+      {/* A specific connection for this one task. Unset, the task
+                round-robins across every enabled connection of its team
+                that serves its model. A pin skips that rotation and must
+                advertise the model, so only those are offered; a disabled
+                connection is among them, labelled pin-only, because a
+                pin is the only way work reaches it. */}
+      {connections.length > 0 && (
+        <TextField
+          select
+          name="agentBackendId"
+          label={F.agentBackendId.label || "Specific connection"}
+          value={
+            pinChoices.some((c) => c.id === agentBackendId)
+              ? agentBackendId
+              : ""
+          }
+          onChange={(e) =>
+            edit("agentBackendId", setAgentBackendId)(e.target.value)
+          }
+          InputLabelProps={{ shrink: true }}
+          SelectProps={{ displayEmpty: true }}
+          helperText={
+            effectiveModel
+              ? `connections that serve ${effectiveModel} -- pin one only if this task needs that account`
+              : "pin this task to one connection -- leave it on any connection unless it needs that account"
+          }
+          fullWidth
+          margin="normal"
+          size="small"
+        >
+          <MenuItem value="">Any enabled connection serving the model</MenuItem>
+          {pinChoices.map((backend) => (
+            <MenuItem key={backend.id} value={backend.id}>
+              {connectionLabel(backend)}
+            </MenuItem>
+          ))}
+        </TextField>
+      )}
+    </>
+  );
+  const networkAccessNode = (
+    <>
+      {/* How much of the internet this one task's sandbox may
+                reach (grain/task-269). "No network" is only offered
+                where a sandbox is a VM: on a host-directory deployment
+                (config.sandboxShapeIgnored -- the same backend question
+                the shape fields below ask) the server refuses it, so the
+                whole field is disabled rather than offering the one
+                choice that guarantees the run fails at sandbox setup,
+                exactly as those fields are. */}
+      <TextField
+        select
+        name="networkAccess"
+        label={F.networkAccess.label || "Network access"}
+        value={networkAccess}
+        onChange={(e) =>
+          edit("networkAccess", setNetworkAccess)(e.target.value)
+        }
+        disabled={!!config?.sandboxShapeIgnored}
+        // displayEmpty and the shrink with it, for the reason
+        // Agent framework above needs both: "" is a real choice
+        // (the deployment's own), not a blank field.
+        InputLabelProps={{ shrink: true }}
+        SelectProps={{ displayEmpty: true }}
+        helperText={
+          config?.sandboxShapeIgnored
+            ? "unavailable here: this deployment's sandboxes are directories on the daemon's own machine, which have the host's own network"
+            : "a task with no network still reaches this deployment's git proxy, and nothing else"
+        }
+        fullWidth
+        margin="normal"
+        size="small"
+      >
+        {networkOffered("") && (
+          <MenuItem value="">
+            {`Deployment default${config && config.networkAccess ? ` (${config.networkAccess === "open" ? "egress" : config.networkAccess})` : ""}`}
+          </MenuItem>
+        )}
+        {networkOffered("open") && (
+          <MenuItem value="open">Egress (outbound internet only)</MenuItem>
+        )}
+        {networkOffered("none") && (
+          <MenuItem value="none">None (this deployment only)</MenuItem>
+        )}
+      </TextField>
+    </>
+  );
+  const nothingNeededActionNode = (
+    <>
+      {/* What happens when this task's agent ends its run with
+                nothing_needed -- looked, and found no change and no
+                report anyone has to act on. Closing is the default, so
+                deliberate no-ops stay out of the awaiting-ack inbox. */}
+      <TextField
+        select
+        name="nothingNeededAction"
+        label={
+          F.nothingNeededAction.label || "When the agent finds nothing to do"
+        }
+        value={nothingNeededAction}
+        onChange={(e) =>
+          edit("nothingNeededAction", setNothingNeededAction)(e.target.value)
+        }
+        fullWidth
+        margin="normal"
+        size="small"
+      >
+        <MenuItem value="close">Close</MenuItem>
+        <MenuItem value="ack">Leave for acknowledgement</MenuItem>
+      </TextField>
+    </>
+  );
+  const reviewTemplateIdNode = (
+    <>
+      {/* The review attached to this task (grain/task-284): once
+                its own work is done, a second agent is filed from this
+                template onto the same branch to read what it proposed
+                and fix what is wrong with it, and the task waits for
+                that before it merges. A template, not a box to type
+                instructions into, because those instructions are the
+                same on every task they are attached to -- write them
+                once in Templates and pick them here. */}
+      <TextField
+        select
+        name="reviewTemplateId"
+        label={F.reviewTemplateId.label || "Review"}
+        value={reviewTemplateId}
+        onChange={(e) =>
+          edit("reviewTemplateId", setReviewTemplateId)(e.target.value)
+        }
+        // displayEmpty and the shrink with it, for the reason
+        // Agent framework above needs both: "" is a real choice
+        // (no review), not a blank field, and the label has to be
+        // out of the way of the "No review" it displays.
+        InputLabelProps={{ shrink: true }}
+        SelectProps={{ displayEmpty: true }}
+        helperText={
+          (templates || []).length > 0
+            ? "run a second agent over this task's own code before it merges, with instructions from a template"
+            : "no templates yet -- write one in Templates to be able to attach a review here"
+        }
+        disabled={(templates || []).length === 0}
+        fullWidth
+        margin="normal"
+        size="small"
+      >
+        {/* The templates figure in front of each name
+                  (ItemGlyph.jsx), as on the schedule editor's own
+                  template picker and on the Review row this choice
+                  becomes in the task pane -- so the thing picked here is
+                  recognisably the thing the Templates page lists. "No
+                  review" names no template and holds the slot open
+                  instead, GlyphLabel's own rule for a row in a glyphed
+                  menu that names nothing a figure stands for. */}
+        <MenuItem value="">
+          <GlyphLabel kind={null}>No review</GlyphLabel>
+        </MenuItem>
+        {(templates || []).map((t) => (
+          <MenuItem key={t.id} value={t.id}>
+            <GlyphLabel kind="templates">{templateLabel(t)}</GlyphLabel>
+          </MenuItem>
+        ))}
+      </TextField>
+    </>
+  );
+  const promptExtensionNode = (
+    <>
+      {/* The task layer of model/prompt_extension.go's three, and
+                the only one that replaces rather than adds: what the
+                deployment and the repo would otherwise say is dropped
+                for this task. config.promptExtension is shown under it
+                so that choice is made while looking at what it would
+                replace -- the deployment's half of it, at least; a
+                repo's own is on that repository's own page (Repos ->
+                <repo> -> Agents), one repo at a time, rather than in the
+                config every poll fetches. */}
+      <TextField
+        name="promptExtension"
+        label={F.promptExtension.label || "Prompt extension override"}
+        helperText={
+          F.promptExtension.helpText ||
+          "Replaces this deployment's and the repo's standing instructions for this task alone. Leave empty to use them."
+        }
+        multiline
+        minRows={3}
+        autoComplete="off"
+        fullWidth
+        margin="normal"
+        size="small"
+        value={promptExtension}
+        onChange={(e) =>
+          edit("promptExtension", setPromptExtension)(e.target.value)
+        }
+      />
+      {config?.promptExtension && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: "block", mb: 2, whiteSpace: "pre-wrap" }}
+        >
+          Deployment-wide, used when the box above is empty:{" "}
+          {config.promptExtension}
+        </Typography>
+      )}
+    </>
+  );
+  const sandboxShapeNode = (
+    <>
+      {/* grain/task-26: on a deployment whose sandboxes have no
+              shape of their own (config.sandboxShapeIgnored, from the
+              backend that would be handed one -- ui.Config's own doc
+              comment), a shape here is not ignored the way the
+              deployment-wide numbers on the Settings pane are. It is
+              refused: HostSandboxes.Acquire fails the whole run at
+              sandbox setup with "a host-directory sandbox has no shape of
+              its own", after the task has been filed and dispatched. So
+              the fields are disabled rather than merely annotated -- the
+              Settings pane leaves its own editable because a stored value
+              is worth setting before switching a deployment over, and
+              this one is applied to this task's next dispatch or not at
+              all. Disabled fields are left out of FormData entirely,
+              which is the 0 submit() already reads as "no override". */}
+      <fieldset disabled={!!config?.sandboxShapeIgnored}>
+        <legend>
+          {F.sandboxShape.label || "Sandbox shape override"}{" "}
+          <span className="hint">
+            {config?.sandboxShapeIgnored
+              ? "unavailable on this deployment"
+              : "optional, granule-managed deployments only"}
+          </span>
+        </legend>
+        {/* The sentence itself sits here rather than in the legend
+                above, which is 0.72rem uppercase: a short label reads as
+                one there and a two-line explanation does not. */}
+        {config?.sandboxShapeIgnored && (
+          <Alert severity="warning" sx={{ mb: 1, fontSize: "0.8rem" }}>
+            This deployment&apos;s sandboxes are directories on the
+            daemon&apos;s own machine, which have no CPU, memory or disk shape
+            of their own. An override here is refused rather than ignored: the
+            task would be filed, dispatched, and then fail at sandbox setup.
+          </Alert>
+        )}
+        {(F.sandboxShape.presets || []).length > 0 && (
+          <TextField
+            select
+            label="Preset"
+            value={
+              (F.sandboxShape.presets || []).find(
+                (p) =>
+                  String(p.cpus || "") === String(sandboxCpus || "") &&
+                  String(p.memory_mb || "") === String(sandboxMemoryMb || "") &&
+                  String(p.disk_gb || "") === String(sandboxDiskGb || ""),
+              )?.id ?? ""
+            }
+            onChange={(e) => {
+              const shape = sandboxShapeDefault({
+                presets: F.sandboxShape.presets,
+                defaultPreset: e.target.value,
+              });
+              edit("sandboxShape", setSandboxCpus)(shape.cpus);
+              setSandboxMemoryMb(shape.memoryMb);
+              setSandboxDiskGb(shape.diskGb);
+            }}
+            InputLabelProps={{ shrink: true }}
+            SelectProps={{ displayEmpty: true }}
+            inputProps={{ "data-testid": "sandbox-preset" }}
+            fullWidth
+            margin="normal"
+            size="small"
+          >
+            <MenuItem value="">Deployment default</MenuItem>
+            {F.sandboxShape.presets.map((p) => (
+              <MenuItem key={p.id} value={p.id}>
+                {p.label || p.id}
+              </MenuItem>
+            ))}
+          </TextField>
+        )}
+        {F.sandboxShape.allowCustomNumbers !== false && (
+          <>
+            <TextField
+              name="sandboxCpus"
+              label="vCPUs"
+              helperText="blank/0 uses the deployment default"
+              type="number"
+              inputProps={{ min: 0, step: 1 }}
+              autoComplete="off"
+              fullWidth
+              margin="normal"
+              size="small"
+              value={sandboxCpus}
+              onChange={(e) =>
+                edit("sandboxShape", setSandboxCpus)(e.target.value)
+              }
+            />
+            <TextField
+              name="sandboxMemoryMb"
+              label="Memory (MiB)"
+              helperText="blank/0 uses the deployment default"
+              type="number"
+              inputProps={{ min: 0, step: 1 }}
+              autoComplete="off"
+              fullWidth
+              margin="normal"
+              size="small"
+              value={sandboxMemoryMb}
+              onChange={(e) =>
+                edit("sandboxShape", setSandboxMemoryMb)(e.target.value)
+              }
+            />
+            <TextField
+              name="sandboxDiskGb"
+              label="Disk (GiB)"
+              helperText="blank/0 uses the deployment default"
+              type="number"
+              inputProps={{ min: 0, step: 1 }}
+              autoComplete="off"
+              fullWidth
+              margin="normal"
+              size="small"
+              value={sandboxDiskGb}
+              onChange={(e) =>
+                edit("sandboxShape", setSandboxDiskGb)(e.target.value)
+              }
+            />
+          </>
+        )}
+      </fieldset>
+    </>
+  );
+  const approvedNode = (
+    <>
+      <FormControlLabel
+        control={
+          <Checkbox
+            name="approved"
+            checked={approved}
+            onChange={(e) => edit("approved", setApproved)(e.target.checked)}
+          />
+        }
+        label={
+          F.approved.label ||
+          "Queue immediately (unchecked files it as a proposal, needing approval)"
+        }
+        sx={{ display: "flex", mt: 1 }}
+      />
+    </>
+  );
+  const atFrontNode = (
+    <>
+      {/* Which end of the backlog the task joins, and the choice
+            the next one will start from: the server stores it as it
+            files this task (ui.CreateTaskRequest.AtFront), so
+            somebody filing a run of urgent work picks "Front" once
+            rather than on every task -- or drags it there
+            afterwards, which is the same OrderKey either way. */}
+      <TextField
+        select
+        label={F.atFront.label || "Add to backlog"}
+        value={atFront ? "front" : "end"}
+        onChange={(e) =>
+          edit("atFront", setAtFront)(e.target.value === "front")
+        }
+        helperText={
+          F.atFront.helpText ||
+          "Remembered: the next task you file starts at this end too."
+        }
+        fullWidth
+        margin="normal"
+        size="small"
+      >
+        <MenuItem value="end">
+          End -- runs after everything already queued
+        </MenuItem>
+        <MenuItem value="front">
+          Front -- runs next, ahead of everything already queued
+        </MenuItem>
+      </TextField>
+    </>
+  );
+  const priorityNode = (
+    <>
+      <TextField
+        name="priority"
+        label="Task priority"
+        helperText="default 5; higher numbers run first"
+        type="number"
+        inputProps={{ min: 1, step: 1 }}
+        autoComplete="off"
+        fullWidth
+        margin="normal"
+        size="small"
+        value={priority}
+        onChange={(e) => setPriority(e.target.value)}
+      />
+    </>
+  );
+
+  // Where each field is drawn (settings/new-task-form.yml, newTaskForm.js):
+  // the shown ones in order around "Advanced options", which holds the
+  // more ones and is left out when there are none. Reviewers, Keep
+  // running and Task priority are not configurable and keep their own
+  // places. A hidden field is not drawn at all, and files its default.
+  const fieldNodes = {
+    title: titleNode,
+    description: descriptionNode,
+    customFields: customFieldsNode,
+    repo: repoNode,
+    newBranch: newBranchNode,
+    base: baseNode,
+    writes: writesNode,
+    reads: readsNode,
+    autoMerge: autoMergeNode,
+    noPort: noPortNode,
+    fixesBaseBranch: fixesBaseBranchNode,
+    grants: grantsNode,
+    model: modelNode,
+    dependsOn: dependsOnNode,
+    agentBackendId: agentBackendIdNode,
+    networkAccess: networkAccessNode,
+    nothingNeededAction: nothingNeededActionNode,
+    reviewTemplateId: reviewTemplateIdNode,
+    promptExtension: promptExtensionNode,
+    sandboxShape: sandboxShapeNode,
+    approved: approvedNode,
+    atFront: atFrontNode,
+  };
+  // Whether a field draws anything at all here, for "Advanced options"
+  // to know it would be empty.
+  const fieldDraws = {
+    newBranch: !noRepo,
+    base: !changeTarget,
+    writes: !changeTarget,
+    autoMerge: !changeTarget,
+    noPort: !changeTarget,
+    fixesBaseBranch: !noRepo,
+    model: models.length > 0,
+    agentBackendId: connections.length > 0,
+  };
+  const slots = [
+    ...Object.entries(fieldNodes)
+      .filter(([id]) => id === "repo" || !inRepoGroup(id))
+      .map(([id, node]) => ({
+        key: id,
+        order: F[id].order,
+        visibility: F[id].visibility,
+        draws: fieldDraws[id] ?? true,
+        node,
+      })),
+    {
+      key: "reviewers",
+      order: 62,
+      visibility: "shown",
+      draws: true,
+      node: reviewersNode,
+    },
+    {
+      key: "changeTargetNote",
+      order: 65,
+      visibility: "shown",
+      draws: !!changeTarget,
+      node: changeTargetNoteNode,
+    },
+    {
+      key: "keepRunning",
+      order: 85,
+      visibility: "shown",
+      draws: true,
+      node: keepRunningNode,
+    },
+    {
+      key: "priority",
+      order: 320,
+      visibility: "shown",
+      draws: true,
+      node: priorityNode,
+    },
+  ].sort((a, b) => a.order - b.order);
+  const shownSlots = slots.filter((s) => s.visibility === "shown");
+  const moreSlots = slots.filter((s) => s.visibility === "more");
+  const renderSlot = (s) => <Fragment key={s.key}>{s.node}</Fragment>;
 
   return (
     <SidePanel
@@ -948,830 +2279,72 @@ export default function NewTaskOverlay({
       }
     >
       <>
-        {/* Focused as the form opens, as New session's and New team's
-            first fields are: without it the dialog's own paper held
-            focus, so a title typed straight after "+ New task" went
-            nowhere and the box was a Tab past "Close dialog" (found in
-            the 2026-10-15 intake walkthrough). */}
-        <TextField
-          name="title"
-          label="Title"
-          required
-          InputLabelProps={{ required: false }}
-          autoFocus
-          autoComplete="off"
-          fullWidth
-          margin="normal"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-        {/* minRows, not rows: the box grows with whatever is typed into
-            it rather than keeping a fixed five lines and scrolling
-            inside itself, so a long description is read in the panel's
-            own scroll rather than in a second scrollbar within it
-            (grain/task-85). The clip that attaches files sits in its
-            bottom-right corner, which is what the padding leaves room
-            for. */}
-        <AttachmentPicker
-          files={attachments}
-          onChange={setAttachments}
-          variant="icon"
-        >
-          <TextField
-            name="description"
-            label="Description"
-            multiline
-            minRows={6}
-            fullWidth
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            InputProps={{ sx: { pb: 4 } }}
-          />
-        </AttachmentPicker>
-        {/* This deployment's own fields, above the repo and the rest of
-            the mechanics: they are part of what the task *is*, like the
-            title and the description over them, rather than part of how
-            it runs. Nothing renders here on a deployment that declares
-            none, which is most of them. */}
-        {/* What a /new link asked for that this form left out
-            (unfiledLinkValues): a value its field does not offer, or a
-            field this deployment does not declare. Said here, beside the
-            fields, so the task filed is not quietly a different one from
-            the task the link's sender meant. */}
-        {unfiledFromLink.length > 0 && (
-          <Alert
-            severity="warning"
-            sx={{ mt: 1 }}
-            data-testid="unfiled-link-values"
+        {shownSlots.filter((s) => s.order < ADVANCED_ORDER).map(renderSlot)}
+        {moreSlots.some((s) => s.draws) && (
+          <Accordion
+            disableGutters
+            sx={{ mt: 2 }}
+            expanded={advancedOpen}
+            onChange={(_, open) => setAdvancedOpen(open)}
+            onInvalidCapture={revealInvalidAdvanced}
+            slotProps={{ transition: { onEntered: reportRefusedField } }}
           >
-            This link asked for values this form has left out:{" "}
-            {unfiledFromLink.join("; ")}.
-          </Alert>
+            <AccordionSummary
+              expandIcon={<ExpandMoreIcon />}
+              aria-controls="new-task-advanced-content"
+              id="new-task-advanced-header"
+            >
+              <Typography>Advanced options</Typography>
+            </AccordionSummary>
+            <AccordionDetails>{moreSlots.map(renderSlot)}</AccordionDetails>
+          </Accordion>
         )}
-        <CustomFieldInputs
-          config={config}
-          values={customFields}
-          onChange={setCustomField}
-        />
-        {/* One block for every repo this task may change, not two
-            (grain/task-202): the repo the run itself pushes to, then
-            any others named right under it, added in the same place
-            rather than in a second field somebody has to notice and
-            work out they belong in. Which is which is still a real
-            distinction -- it is the first one that gets a branch and a
-            pull request -- and it is settled by the order they are in
-            rather than by asking. */}
-        <Box sx={{ mt: 2, mb: 1 }}>
-          {!noRepo && (
-            <NoGitConnectionNotice
-              deployment={deployment}
-              onOpenSettings={onOpenSettings}
-              sx={{ mb: 1 }}
-            />
-          )}
-          {draftRepoNotice !== null && (
-            <Alert
-              severity="info"
-              sx={{ mb: 1 }}
-              data-testid="draft-repo-notice"
-            >
-              {draftRepoNotice}. Discard it to file in {pageRepo}.
-            </Alert>
-          )}
-          <Box component="label" sx={{ display: "block", mb: 0.5 }}>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: "block", mb: 0.5 }}
-            >
-              Repos{" "}
-              <span className="hint">
-                the first is the one this task&apos;s own work lands in
-              </span>
-            </Typography>
-            {/* Pre-filled from the repo the "+ New task" button was
-                opened from -- the repo-centric task list's whole point
-                is filing work against the repo you're already looking
-                at without retyping it. allowNoRepo puts "no repo at
-                all" in this same list (grain/task-85): picking it is
-                what sets noRepo, and submit above blanks the repo the
-                field then reports. */}
-            <RepoField
-              key={resetKey}
-              name="repo"
-              options={targetOptions}
-              defaultValue={
-                repoSeed !== null
-                  ? repoSeed
-                  : liveDraft && !draftRepoYields
-                    ? liveDraft.changeTarget &&
-                      changeTargets.includes(liveDraft.changeTarget)
-                      ? liveDraft.changeTarget
-                      : liveDraft.noRepo
-                        ? NO_REPO
-                        : liveDraft.repo || ""
-                    : defaultRepo || ""
-              }
-              allowNoRepo
-              changeTargets={changeTargets}
-              onChange={(picked) => {
-                // Only a pick made here marks the repo as chosen: a team
-                // change routes through handleRepoChange too, and that is
-                // the form following the team rather than anybody's choice.
-                repoEdited.current = true;
-                handleRepoChange(picked);
-              }}
-            />
-            {/* Typing is still allowed; this is the warning for a repo
-                the team's credential cannot push to, which the server
-                will refuse to file (ui.Client.reachRefusal). */}
-            {!noRepo &&
-              repoReachable(reachable, repo, { push: true }) === false && (
-                <Typography
-                  variant="caption"
-                  color="warning.main"
-                  data-testid="repo-unreachable"
-                >
-                  The deployment&apos;s GitHub credential cannot push to {repo}{" "}
-                  -- give it access on GitHub, or choose another in Settings →
-                  Git connections.
-                </Typography>
-              )}
-            {/* The server files a task on a repo off the team's list
-                rather than refusing it, but parks it awaiting a reply
-                (ui.Client.parkOffAllowlist), and the form used to close
-                without a word -- the only explanation a comment on a task
-                nobody had opened yet. Said here before submit, by the
-                rule the pane's own warning uses (repoTargetable). */}
-            {!noRepo && repo && !repoTargetable(config, repo) && (
-              <Typography
-                variant="caption"
-                color="warning.main"
-                sx={{ display: "block" }}
-                data-testid="repo-off-allowlist"
-              >
-                {repo} is not on this deployment&apos;s target repo list. The
-                task will be filed but parked, and runs only once an operator
-                adds the repo under Settings and replies on it.
-              </Typography>
-            )}
-          </Box>
-          {/* The first repo's own branch, which is the task's: it sits
-              between that repo and the ones under it because that is
-              where it belongs -- each of those carries its branch on
-              the same row, and this one would read as the last of them
-              if it came after. */}
-          {!noRepo && (
-            <FormControlLabel
-              control={
-                <Checkbox
-                  name="newBranch"
-                  checked={newBranch}
-                  onChange={(e) => setNewBranch(e.target.checked)}
-                />
-              }
-              label="Create a new branch"
-              sx={{ display: "flex" }}
-            />
-          )}
-          {!noRepo && newBranch && (
-            <TextField
-              name="newBranchName"
-              label="New branch name"
-              required
-              fullWidth
-              margin="dense"
-              value={newBranchName}
-              onChange={(e) => setNewBranchName(e.target.value)}
-              helperText={
-                "grain creates it from the branch below before the task " +
-                "runs; one that already exists is used as it stands"
-              }
-              inputProps={{ "data-testid": "new-branch-name" }}
-            />
-          )}
-          {/* A non-git change target task has no branch and lands nowhere
-              else: its change is one changelist. */}
-          {!changeTarget && (
-            <>
-              <BranchField
-                name="base"
-                label={!noRepo && newBranch ? "Create from" : "Base branch"}
-                helperText={
-                  !noRepo && newBranch
-                    ? "optional -- the repo's default branch if blank"
-                    : "optional"
-                }
-                margin="dense"
-                size="medium"
-                repo={noRepo ? "" : repo}
-                options={branchesInUse(tasks, repo)}
-                warnMissing="push it first, or have the task depend on the one that cuts it"
-                // A pull request's head as GitHub shows it ("owner:branch")
-                // is filed against that pull request (pkg/forkhead); a new
-                // branch cannot be cut from one, which the server says.
-                forkHeads={noRepo || !newBranch}
-                value={base}
-                onChange={(next) => {
-                  baseEdited.current = true;
-                  setBase(next);
-                }}
-              />
-              <WriteReposField
-                options={writeOptions}
-                value={writes}
-                onChange={setWrites}
-              />
-            </>
-          )}
-        </Box>
-        <ReadOnlyReposField
-          options={repoOptions}
-          value={reads}
-          onChange={setReads}
-          // The repo picked right above, not a saved one: this form is
-          // where both halves are chosen, so the read-only picker should
-          // stop offering the target the moment it is named -- the same
-          // value WriteReposField gets, and "" for a task filed with no
-          // repo at all, which has no target for a read to collide with.
-          target={noRepo ? "" : repo}
-        />
-        <TextField
-          name="reviewers"
-          label="Reviewers"
-          placeholder="alice, bob"
-          helperText="optional -- comma-separated usernames passed to workspace grants and used when mailing a CL"
-          fullWidth
-          margin="normal"
-          size="small"
-          value={reviewers}
-          onChange={(e) => setReviewers(e.target.value)}
-        />
-        {changeTarget ? (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ display: "block", mt: 1 }}
-            data-testid="change-target-note"
-          >
-            Its change is a {changeTarget} changelist in this task&apos;s own
-            workspace, created for it: nothing is cloned, and there is no pull
-            request to merge or branch to port.
-          </Typography>
-        ) : (
-          <>
-            <FormControlLabel
-              control={
-                <Checkbox
-                  name="autoMerge"
-                  checked={autoMerge}
-                  onChange={(e) => setAutoMerge(e.target.checked)}
-                />
-              }
-              label="Auto-merge once checks pass"
-              sx={{ display: "flex", mt: 1 }}
-            />
-            <FormControlLabel
-              control={
-                <Checkbox
-                  name="noPort"
-                  checked={noPort}
-                  onChange={(e) => setNoPort(e.target.checked)}
-                />
-              }
-              label="Don't port to the repo's paired branches"
-              sx={{ display: "flex" }}
-            />
-          </>
-        )}
-        {!noRepo && (
-          <FormControlLabel
-            control={
-              <Checkbox
-                name="fixesBaseBranch"
-                checked={fixesBaseBranch}
-                onChange={(e) => setFixesBaseBranch(e.target.checked)}
-              />
-            }
-            label={`This fixes a red ${(newBranch ? newBranchName.trim() : base) || "main"}`}
-            title="While the branch a task lands on is red, grain makes the work aimed at it wait on that branch's repair task. Tick this for a task that is itself fixing the branch -- a de-flake, a broken build -- so it never waits: it counts as the branch's repair, and is left open with a comment, not closed, when the branch goes green."
-            sx={{ display: "flex" }}
-          />
-        )}
-        <FormControlLabel
-          control={
-            <Checkbox
-              name="keepRunning"
-              checked={keepRunning}
-              onChange={(e) => setKeepRunning(e.target.checked)}
-            />
-          }
-          label="Keep running"
-          title="Immediately restart the task when its run exits instead of completing or parking it."
-          sx={{ display: "flex" }}
-        />
-        <FormControl fullWidth margin="normal" size="small">
-          <InputLabel id="new-task-capabilities-label">
-            Legacy capabilities
-          </InputLabel>
-          <Select
-            labelId="new-task-capabilities-label"
-            label="Legacy capabilities"
-            multiple
-            value={capabilityIds}
-            onChange={(e) => {
-              capabilitiesEdited.current = true;
-              setCapabilities([
-                ...e.target.value,
-                ...apiIds,
-                ...capabilityRefs,
-              ]);
-            }}
-            renderValue={(selected) => (
-              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                {selected.map((id) => (
-                  <GrantChip
-                    key={id}
-                    grant={id}
-                    config={config}
-                    tabIndex={-1}
-                    // Marked by its border and icon, its label left at
-                    // full contrast: warning-coloured text on a light
-                    // chip is too faint to read at this size.
-                    {...(catalogueRefusals[id]
-                      ? {
-                          note: catalogueRefusals[id],
-                          variant: "outlined",
-                          icon: (
-                            <WarningAmberIcon
-                              fontSize="small"
-                              color="warning"
-                            />
-                          ),
-                          sx: { borderColor: "warning.main" },
-                          ariaSuffix: " (refused here)",
-                          "data-catalogue-refused": "true",
-                        }
-                      : {})}
-                  />
-                ))}
-              </Box>
-            )}
-          >
-            {capabilityOptions.length === 0 && (
-              <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-            )}
-            {capabilityOptions.map((c) => {
-              const refused = catalogueRefusals[c.id] || "";
-              const unavailable = refused || capabilityUnavailableHint(c);
-              return (
-                <MenuItem
-                  key={c.id}
-                  value={c.id}
-                  // One the catalogue refuses here is not offered, but
-                  // one already ticked stays enabled: its own row is
-                  // the only way to untick it.
-                  disabled={Boolean(refused) && !capabilityIds.includes(c.id)}
-                  data-catalogue-refused={refused ? "true" : undefined}
-                  title={
-                    unavailable
-                      ? `${c.description}\n\n${unavailable}`
-                      : c.description
-                  }
-                >
-                  <Checkbox
-                    checked={capabilityIds.includes(c.id)}
-                    size="small"
-                  />
-                  <ListItemText
-                    primary={c.name}
-                    secondary={unavailable || null}
-                    secondaryTypographyProps={{ color: "warning.main" }}
-                  />
-                </MenuItem>
-              );
-            })}
-          </Select>
-          {defaultCapabilitiesFor(config, noRepo ? "" : repo).length > 0 && (
-            <FormHelperText>
-              Pre-ticked ones are the defaults for this repo -- this
-              deployment&apos;s (Settings &gt; Tasks), plus anything the repo
-              itself adds (Repos &gt; Capabilities). Untick any this task should
-              not have.
-            </FormHelperText>
-          )}
-          {refusedGrants.length > 0 && (
-            <FormHelperText
-              data-testid="new-task-catalogue-refused"
-              sx={{ color: "warning.main" }}
-            >
-              {capabilitiesEdited.current
-                ? `settings/capabilities.yml refuses ${refusedGrants.join(", ")} on ${noRepo ? "a task with no repo" : policyTarget}: untick ${refusedGrants.length === 1 ? "it" : "them"}, or the task will not be filed.`
-                : `settings/capabilities.yml refuses ${refusedGrants.join(", ")} on ${noRepo ? "a task with no repo" : policyTarget}, so ${refusedGrants.length === 1 ? "that default is" : "those defaults are"} left off this task.`}
-            </FormHelperText>
-          )}
-          <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
-        </FormControl>
-        <GrantsPicker
-          config={config}
-          grants={capabilities}
-          onApiChange={(next) => {
-            capabilitiesEdited.current = true;
-            setCapabilities([...capabilityIds, ...next, ...capabilityRefs]);
-          }}
-          onSubmit={methodGrants.onSubmit}
-          onRemove={methodGrants.onRemove}
-          idPrefix="new-task"
-          policyRepo={noRepo ? "" : repo || config?.defaultTarget || ""}
-        />
-        {/* The model this one task runs on. Its choices are what the
-            target team's connections advertise; a model only disabled
-            connections serve is still offered, and says so, because
-            pinning one of those (Advanced options) is how it runs. Left
-            out where the team has no connection at all. */}
-        {models.length > 0 && (
-          <ModelSelect
-            name="model"
-            label="Model"
-            value={model}
-            onChange={(next) => {
-              setModel(next);
-              const nextModels = next ? [next] : teamDefaultModels;
-              const allowed = connectionsServingModels(
-                models,
-                connections,
-                nextModels,
-              );
-              if (
-                agentBackendId &&
-                nextModels.length > 0 &&
-                !allowed.some((c) => c.id === agentBackendId)
-              )
-                setAgentBackendId("");
-            }}
-            options={modelOptions(
-              models,
-              teamDefaultLabel(deployment || teamDefaultModel, models),
-              model,
-            )}
-            helperText="which model this one task runs on -- leave it on the deployment's default unless it needs a particular one; type to search"
-            margin="normal"
-          />
-        )}
-        <fieldset>
-          <legend>
-            Depends on <span className="hint">optional</span>
-          </legend>
-          {dependsOn.length > 0 && (
-            // One full-width chip per line, the shape DetailOverlay's
-            // dependency list uses: a picked task then reads as a row,
-            // rather than a bubble sized by however long its title
-            // happens to be, wrapped in beside the others.
-            <Stack spacing={0.6} sx={{ mb: 1 }}>
-              {dependsOn.map((t) => (
-                <Tooltip
-                  key={t.id}
-                  title={`${t.id} ${t.title}`}
-                  placement="left"
-                >
-                  <Chip
-                    label={`${t.id} ${t.title}`}
-                    onDelete={() => removeDependency(t.id)}
-                    deleteIcon={
-                      <span title={`Remove dependency on ${t.id}`}>×</span>
-                    }
-                    sx={{
-                      width: "100%",
-                      justifyContent: "space-between",
-                      "& .MuiChip-label": {
-                        flex: 1,
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      },
-                    }}
-                  />
-                </Tooltip>
-              ))}
-            </Stack>
-          )}
-          <TaskPicker
-            tasks={tasks || []}
-            exclude={dependsOn.map((t) => t.id)}
-            onPick={addDependency}
-            placeholder="Search tasks to depend on…"
-          />
-        </fieldset>
-        <Accordion
-          disableGutters
-          sx={{ mt: 2 }}
-          expanded={advancedOpen}
-          onChange={(_, open) => setAdvancedOpen(open)}
-          onInvalidCapture={revealInvalidAdvanced}
-          slotProps={{ transition: { onEntered: reportRefusedField } }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon />}
-            aria-controls="new-task-advanced-content"
-            id="new-task-advanced-header"
-          >
-            <Typography>Advanced options</Typography>
-          </AccordionSummary>
-          <AccordionDetails>
-            {/* A specific connection for this one task. Unset, the task
-                round-robins across every enabled connection of its team
-                that serves its model. A pin skips that rotation and must
-                advertise the model, so only those are offered; a disabled
-                connection is among them, labelled pin-only, because a
-                pin is the only way work reaches it. */}
-            {connections.length > 0 && (
-              <TextField
-                select
-                name="agentBackendId"
-                label="Specific connection"
-                value={
-                  pinChoices.some((c) => c.id === agentBackendId)
-                    ? agentBackendId
-                    : ""
-                }
-                onChange={(e) => setAgentBackendId(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-                SelectProps={{ displayEmpty: true }}
-                helperText={
-                  effectiveModel
-                    ? `connections that serve ${effectiveModel} -- pin one only if this task needs that account`
-                    : "pin this task to one connection -- leave it on any connection unless it needs that account"
-                }
-                fullWidth
-                margin="normal"
-                size="small"
-              >
-                <MenuItem value="">
-                  Any enabled connection serving the model
-                </MenuItem>
-                {pinChoices.map((backend) => (
-                  <MenuItem key={backend.id} value={backend.id}>
-                    {connectionLabel(backend)}
-                  </MenuItem>
-                ))}
-              </TextField>
-            )}
-            {/* How much of the internet this one task's sandbox may
-                reach (grain/task-269). "No network" is only offered
-                where a sandbox is a VM: on a host-directory deployment
-                (config.sandboxShapeIgnored -- the same backend question
-                the shape fields below ask) the server refuses it, so the
-                whole field is disabled rather than offering the one
-                choice that guarantees the run fails at sandbox setup,
-                exactly as those fields are. */}
-            <TextField
-              select
-              name="networkAccess"
-              label="Network access"
-              value={networkAccess}
-              onChange={(e) => setNetworkAccess(e.target.value)}
-              disabled={!!config?.sandboxShapeIgnored}
-              // displayEmpty and the shrink with it, for the reason
-              // Agent framework above needs both: "" is a real choice
-              // (the deployment's own), not a blank field.
-              InputLabelProps={{ shrink: true }}
-              SelectProps={{ displayEmpty: true }}
-              helperText={
-                config?.sandboxShapeIgnored
-                  ? "unavailable here: this deployment's sandboxes are directories on the daemon's own machine, which have the host's own network"
-                  : "a task with no network still reaches this deployment's git proxy, and nothing else"
-              }
-              fullWidth
-              margin="normal"
-              size="small"
-            >
-              <MenuItem value="">
-                {`Deployment default${config && config.networkAccess ? ` (${config.networkAccess === "open" ? "egress" : config.networkAccess})` : ""}`}
-              </MenuItem>
-              <MenuItem value="open">Egress (outbound internet only)</MenuItem>
-              <MenuItem value="none">None (this deployment only)</MenuItem>
-            </TextField>
-            {/* What happens when this task's agent ends its run with
-                nothing_needed -- looked, and found no change and no
-                report anyone has to act on. Closing is the default, so
-                deliberate no-ops stay out of the awaiting-ack inbox. */}
-            <TextField
-              select
-              name="nothingNeededAction"
-              label="When the agent finds nothing to do"
-              value={nothingNeededAction}
-              onChange={(e) => setNothingNeededAction(e.target.value)}
-              fullWidth
-              margin="normal"
-              size="small"
-            >
-              <MenuItem value="close">Close</MenuItem>
-              <MenuItem value="ack">Leave for acknowledgement</MenuItem>
-            </TextField>
-            {/* The review attached to this task (grain/task-284): once
-                its own work is done, a second agent is filed from this
-                template onto the same branch to read what it proposed
-                and fix what is wrong with it, and the task waits for
-                that before it merges. A template, not a box to type
-                instructions into, because those instructions are the
-                same on every task they are attached to -- write them
-                once in Templates and pick them here. */}
-            <TextField
-              select
-              name="reviewTemplateId"
-              label="Review"
-              value={reviewTemplateId}
-              onChange={(e) => setReviewTemplateId(e.target.value)}
-              // displayEmpty and the shrink with it, for the reason
-              // Agent framework above needs both: "" is a real choice
-              // (no review), not a blank field, and the label has to be
-              // out of the way of the "No review" it displays.
-              InputLabelProps={{ shrink: true }}
-              SelectProps={{ displayEmpty: true }}
-              helperText={
-                (templates || []).length > 0
-                  ? "run a second agent over this task's own code before it merges, with instructions from a template"
-                  : "no templates yet -- write one in Templates to be able to attach a review here"
-              }
-              disabled={(templates || []).length === 0}
-              fullWidth
-              margin="normal"
-              size="small"
-            >
-              {/* The templates figure in front of each name
-                  (ItemGlyph.jsx), as on the schedule editor's own
-                  template picker and on the Review row this choice
-                  becomes in the task pane -- so the thing picked here is
-                  recognisably the thing the Templates page lists. "No
-                  review" names no template and holds the slot open
-                  instead, GlyphLabel's own rule for a row in a glyphed
-                  menu that names nothing a figure stands for. */}
-              <MenuItem value="">
-                <GlyphLabel kind={null}>No review</GlyphLabel>
-              </MenuItem>
-              {(templates || []).map((t) => (
-                <MenuItem key={t.id} value={t.id}>
-                  <GlyphLabel kind="templates">{templateLabel(t)}</GlyphLabel>
-                </MenuItem>
-              ))}
-            </TextField>
-            {/* The task layer of model/prompt_extension.go's three, and
-                the only one that replaces rather than adds: what the
-                deployment and the repo would otherwise say is dropped
-                for this task. config.promptExtension is shown under it
-                so that choice is made while looking at what it would
-                replace -- the deployment's half of it, at least; a
-                repo's own is on that repository's own page (Repos ->
-                <repo> -> Agents), one repo at a time, rather than in the
-                config every poll fetches. */}
-            <TextField
-              name="promptExtension"
-              label="Prompt extension override"
-              helperText="Replaces this deployment's and the repo's standing instructions for this task alone. Leave empty to use them."
-              multiline
-              minRows={3}
-              autoComplete="off"
-              fullWidth
-              margin="normal"
-              size="small"
-              value={promptExtension}
-              onChange={(e) => setPromptExtension(e.target.value)}
-            />
-            {config?.promptExtension && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: "block", mb: 2, whiteSpace: "pre-wrap" }}
-              >
-                Deployment-wide, used when the box above is empty:{" "}
-                {config.promptExtension}
-              </Typography>
-            )}
-            {/* grain/task-26: on a deployment whose sandboxes have no
-              shape of their own (config.sandboxShapeIgnored, from the
-              backend that would be handed one -- ui.Config's own doc
-              comment), a shape here is not ignored the way the
-              deployment-wide numbers on the Settings pane are. It is
-              refused: HostSandboxes.Acquire fails the whole run at
-              sandbox setup with "a host-directory sandbox has no shape of
-              its own", after the task has been filed and dispatched. So
-              the fields are disabled rather than merely annotated -- the
-              Settings pane leaves its own editable because a stored value
-              is worth setting before switching a deployment over, and
-              this one is applied to this task's next dispatch or not at
-              all. Disabled fields are left out of FormData entirely,
-              which is the 0 submit() already reads as "no override". */}
-            <fieldset disabled={!!config?.sandboxShapeIgnored}>
-              <legend>
-                Sandbox shape override{" "}
-                <span className="hint">
-                  {config?.sandboxShapeIgnored
-                    ? "unavailable on this deployment"
-                    : "optional, granule-managed deployments only"}
-                </span>
-              </legend>
-              {/* The sentence itself sits here rather than in the legend
-                above, which is 0.72rem uppercase: a short label reads as
-                one there and a two-line explanation does not. */}
-              {config?.sandboxShapeIgnored && (
-                <Alert severity="warning" sx={{ mb: 1, fontSize: "0.8rem" }}>
-                  This deployment&apos;s sandboxes are directories on the
-                  daemon&apos;s own machine, which have no CPU, memory or disk
-                  shape of their own. An override here is refused rather than
-                  ignored: the task would be filed, dispatched, and then fail at
-                  sandbox setup.
-                </Alert>
-              )}
-              <TextField
-                name="sandboxCpus"
-                label="vCPUs"
-                helperText="blank/0 uses the deployment default"
-                type="number"
-                inputProps={{ min: 0, step: 1 }}
-                autoComplete="off"
-                fullWidth
-                margin="normal"
-                size="small"
-                value={sandboxCpus}
-                onChange={(e) => setSandboxCpus(e.target.value)}
-              />
-              <TextField
-                name="sandboxMemoryMb"
-                label="Memory (MiB)"
-                helperText="blank/0 uses the deployment default"
-                type="number"
-                inputProps={{ min: 0, step: 1 }}
-                autoComplete="off"
-                fullWidth
-                margin="normal"
-                size="small"
-                value={sandboxMemoryMb}
-                onChange={(e) => setSandboxMemoryMb(e.target.value)}
-              />
-              <TextField
-                name="sandboxDiskGb"
-                label="Disk (GiB)"
-                helperText="blank/0 uses the deployment default"
-                type="number"
-                inputProps={{ min: 0, step: 1 }}
-                autoComplete="off"
-                fullWidth
-                margin="normal"
-                size="small"
-                value={sandboxDiskGb}
-                onChange={(e) => setSandboxDiskGb(e.target.value)}
-              />
-            </fieldset>
-          </AccordionDetails>
-        </Accordion>
-        <FormControlLabel
-          control={
-            <Checkbox
-              name="approved"
-              checked={approved}
-              onChange={(e) => setApproved(e.target.checked)}
-            />
-          }
-          label="Queue immediately (unchecked files it as a proposal, needing approval)"
-          sx={{ display: "flex", mt: 1 }}
-        />
-        {/* Which end of the backlog the task joins, and the choice
-            the next one will start from: the server stores it as it
-            files this task (ui.CreateTaskRequest.AtFront), so
-            somebody filing a run of urgent work picks "Front" once
-            rather than on every task -- or drags it there
-            afterwards, which is the same OrderKey either way. */}
-        <TextField
-          select
-          label="Add to backlog"
-          value={atFront ? "front" : "end"}
-          onChange={(e) => setAtFront(e.target.value === "front")}
-          helperText="Remembered: the next task you file starts at this end too."
-          fullWidth
-          margin="normal"
-          size="small"
-        >
-          <MenuItem value="end">
-            End -- runs after everything already queued
-          </MenuItem>
-          <MenuItem value="front">
-            Front -- runs next, ahead of everything already queued
-          </MenuItem>
-        </TextField>
-        <TextField
-          name="priority"
-          label="Task priority"
-          helperText="default 5; higher numbers run first"
-          type="number"
-          inputProps={{ min: 1, step: 1 }}
-          autoComplete="off"
-          fullWidth
-          margin="normal"
-          size="small"
-          value={priority}
-          onChange={(e) => setPriority(e.target.value)}
-        />
+        {shownSlots.filter((s) => s.order >= ADVANCED_ORDER).map(renderSlot)}
       </>
     </SidePanel>
   );
+}
+
+// asList is a configured default as a list of strings.
+function asList(v) {
+  if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
+  if (typeof v === "string" && v.trim()) return [v.trim()];
+  return [];
+}
+
+// asWrites is a configured writes default as {repo, base} rows.
+function asWrites(v) {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((x) =>
+      typeof x === "string"
+        ? { repo: x, base: "" }
+        : { repo: String(x?.repo || ""), base: String(x?.base || "") },
+    )
+    .filter((w) => w.repo);
+}
+
+// asDependencies is a configured dependsOn default (task ids) as the
+// {id, title} the picker's chips show.
+function asDependencies(v, tasks) {
+  return asList(v).map((id) => ({
+    id,
+    title: (tasks || []).find((t) => t.id === id)?.title || "",
+  }));
+}
+
+// sandboxShapeDefault is the shape fields' starting values: the
+// configured default preset's, or a {cpus, memory_mb, disk_gb} default,
+// or blank (the deployment's own).
+function sandboxShapeDefault(f) {
+  const preset = (f?.presets || []).find((p) => p.id === f?.defaultPreset);
+  const src =
+    preset || (f?.default && typeof f.default === "object" ? f.default : null);
+  if (!src) return { cpus: "", memoryMb: "", diskGb: "" };
+  const n = (x) => (x ? String(x) : "");
+  return {
+    cpus: n(src.cpus),
+    memoryMb: n(src.memory_mb),
+    diskGb: n(src.disk_gb),
+  };
 }
