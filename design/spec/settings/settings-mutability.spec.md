@@ -111,7 +111,7 @@ Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `s
 
 2.8.1. When `declarations` is on for a repository (`PUT /api/repos/{owner}/{name}/declarations`), the declaration sync reads `.grain/settings.yml` (and `.grain/{workflows,templates,suites,schedules,triggers}/…`, `merge-rules.yml`, `lifecycle.yml`, `review.yml`, `**/*.grain.md`) from the default branch. Its settings keys are exactly `prompt-extension`, `setup-command`, `port-branches` and `port-types` (`pkg/repodecl/settings.go`).
 
-2.8.2. Declared values are stored in their **own** columns — `repo_config.declared_prompt_extension`, `declared_setup_command`, `declared_port_branches`, `declared_port_types` — owned by the declaration sync. They MUST NOT be writable through the UI, the REST API, or a `grain/config` edit that the next sync would not overwrite; the UI shows them read-only ("Declared by {repo} itself in .grain/settings.yml").
+2.8.2. Declared values are stored in their **own** columns — `repo_config.declared_prompt_extension`, `declared_setup_command`, `declared_port_branches`, `declared_port_types` — owned by the declaration sync. They MUST NOT be writable through the UI, the REST API, or a `grain/config` edit that the next sync would not overwrite; the UI shows them read-only ("Declared by {repo} itself in .grain/settings.yml"). Because the sync rewrites them only when the repository's default branch moves, `ExportConfig` leaves them out of `tables/repo_config.json` and applying a settings change keeps the values the database holds (`staterepo.declaredColumns`, beside `withheldColumns`); `grain state check` warns, naming `.grain/settings.yml`, when a file carries one (`TestTheRepositoryDeclaredColumnsAreNeverSetFromTheConfigRepository`).
 
 2.8.3. They **compose with** (`Compose: Append`, `pkg/declschema`) rather than override the operator's columns: the declared prompt extension and setup command run after the operator's, and the declared port branches/types are unioned with `repo_config.port_branches`/`port_types`. The operator's own field stays writable (subject to the lock) and stays meaningful.
 
@@ -368,9 +368,13 @@ In external mode every Settings section except Config repo, Preferences and Upgr
 
 ### D-10: The UI ignores `directConfigWrites`
 
+*Repo page fixed 2026-10-31 (`docs/test-runs/2026-10-31-settings-git-repositories-verification.md`): `RepoPage` keys its lock on `config.configRepoOnly` alone. `SettingsPage` still prefers `settings.settingsLocked`.*
+
 With `directConfigWrites: true` and `settings_locked: true`, `GET /api/config` reports `configRepoOnly: false`, and the server accepts every write. But `SettingsPage` prefers `settings.settingsLocked` once settings are loaded, and `RepoPage` uses `config.configRepoOnly || config.settingsLocked`, so both render read-only. The UI should key the lock on `config.configRepoOnly` alone.
 
 ### D-11: Config-managed notices link files that do not exist
+
+*Fixed in `CONFIG_REPO_SECTION_PATHS` 2026-10-31: Git links `tables/grain_config.json` and `tables/repo_config.json`, Agents `tables/grain_config.json`. The `trustboundary.NeverAutoMergePaths` entries are left (harmless).*
 
 `CONFIG_REPO_SECTION_PATHS` names `tables/git_credential.json`, `tables/repo_git_credential.json` (Git) and `tables/console_session.json` (Agents). Those tables do not exist: git connections live in `grain_config.git_connections` / `git_credential` and `repo_config.git_credential`, and console sessions in `grain_config.console_sessions`, all exported to `tables/grain_config.json` / `tables/repo_config.json`. The same names appear in `trustboundary.NeverAutoMergePaths` (harmless there), and `settings/new-task-form.yml` is listed there but is not written by `pkg/staterepo`.
 
@@ -379,5 +383,7 @@ With `directConfigWrites: true` and `settings_locked: true`, `GET /api/config` r
 `configRepoFor` refuses a non-bootstrap API write whenever `settings_locked` is on and `directConfigWrites` is off, without checking that `Config.StateRepo` exists. On a standalone deployment (§2.1) that flag leaves non-bootstrap settings writable by nobody but the unlock toggle. The 409 names `grain/config` and `POST /api/state-repo/pull-requests`, and neither exists there. The guard should treat "no state repository" as unlocked, or the UI should not offer the lock there.
 
 ### D-13: `.grain/settings.yml` composes; it does not override
+
+*Design doc wording corrected 2026-10-31.*
 
 `design/design/settings.design.md` §3 says repository declarations "override both the UI and `grain/config`". In the code (§2.8) the four declarable settings are stored in separate `declared_*` columns and **appended to / unioned with** the operator's value. The design doc's wording should be corrected; no code change is implied.

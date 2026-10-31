@@ -53,7 +53,7 @@ for (const [name, viewport] of [
     const notice = page.getByTestId("config-managed-notice");
     await expect(notice).toBeVisible();
     const links = notice.getByTestId("config-repo-link");
-    await expect(links).toHaveCount(2);
+    await expect(links).toHaveCount(1);
     await expect(links.first()).toHaveAttribute(
       "href",
       "/config?path=tables%2Fgrain_config.json",
