@@ -125,6 +125,13 @@ func reconcileUpgradeCheck(ctx context.Context, deps Deps, now time.Time) error 
 	if now.Sub(status.FinishedAt.UTC()) > upgradeCheckWindow {
 		return nil
 	}
+	// This process is the one the upgrade is about to restart away, not
+	// the one it brings up: the check is the next process's to file,
+	// with that build's hash, the restart's gap and what its adoption
+	// pass did -- none of which exists yet (task 1937).
+	if status.RestartPending(deps.Config.ProcessStartedAt) {
+		return nil
+	}
 	tag := upgradeCheckTag(status)
 	checked, err := deps.Store.HasTaskWithTag(ctx, tag)
 	if err != nil {
