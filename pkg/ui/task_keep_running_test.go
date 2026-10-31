@@ -19,8 +19,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -116,5 +119,89 @@ func TestConsoleSessionUpdateCarriesKeepRunning(t *testing.T) {
 	}
 	if len(sessions) == 0 || sessions[0].KeepRunning {
 		t.Fatalf("sessions = %+v, want director KeepRunning = false", sessions)
+	}
+}
+
+func TestSchedulesRefuseKeepRunningEditsOnTemplateSuiteAndSystemSchedules(t *testing.T) {
+	t.Parallel()
+	srv, c := testServer(t)
+	ctx := t.Context()
+
+	rec := do(t, srv, http.MethodPost, "/api/templates",
+		`{"name":"Nightly audit","title":"Audit dependencies"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create template status = %d: %s", rec.Code, rec.Body)
+	}
+	tmpl := decode[ui.Template](t, rec)
+
+	for _, field := range []string{`"keepRunning":true`, `"keep_running":true`} {
+		rec = do(t, srv, http.MethodPost, "/api/schedules",
+			`{"templateId":"`+tmpl.ID+`","repo":"acme/widgets",`+field+`,`+
+				`"recurrence":{"kind":"everyNHours","everyNHours":24}}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("POST /api/schedules with %s alongside template status = %d, want 400: %s",
+				field, rec.Code, rec.Body)
+		}
+		if !strings.Contains(rec.Body.String(), "keepRunning") {
+			t.Errorf("400 body %s does not mention keepRunning", rec.Body)
+		}
+	}
+
+	rec = do(t, srv, http.MethodPost, "/api/schedules",
+		`{"templateId":"`+tmpl.ID+`","repo":"acme/widgets",`+
+			`"recurrence":{"kind":"everyNHours","everyNHours":24}}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create template schedule status = %d: %s", rec.Code, rec.Body)
+	}
+	sched := decode[ui.Schedule](t, rec)
+
+	for _, body := range []string{`{"keepRunning":true}`, `{"keep_running":true}`} {
+		rec = do(t, srv, http.MethodPatch, "/api/schedules/"+sched.ID, body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("PATCH /api/schedules/%s (%s) status = %d, want 400: %s",
+				sched.ID, body, rec.Code, rec.Body)
+		}
+		if !strings.Contains(rec.Body.String(), "keepRunning") {
+			t.Errorf("400 body %s does not mention keepRunning", rec.Body)
+		}
+	}
+
+	// Resending the unchanged keepRunning value is allowed.
+	rec = do(t, srv, http.MethodPatch, "/api/schedules/"+sched.ID, `{"keepRunning":false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH /api/schedules/%s unchanged keepRunning status = %d, want 200: %s",
+			sched.ID, rec.Code, rec.Body)
+	}
+
+	// Seed a system schedule and verify keepRunning edits are refused there too.
+	sysTmplID := model.MemoryAgentTemplateID
+	now := time.Date(2026, time.October, 31, 12, 0, 0, 0, time.UTC)
+	sysSched := model.Schedule{
+		ID:          model.MemoryAgentTemplateID,
+		Title:       "Memory agent",
+		TemplateID:  &sysTmplID,
+		Recurrence:  model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 3 * 60},
+		Overlap:     model.OverlapSkip,
+		Enabled:     true,
+		KeepRunning: false,
+		NextRunAt:   now.Add(24 * time.Hour),
+		CreatedAt:   now,
+	}
+	if err := c.Store.PutSchedule(ctx, sysSched); err != nil {
+		t.Fatalf("PutSchedule(system): %v", err)
+	}
+	for _, body := range []string{`{"keepRunning":true}`, `{"keep_running":true}`} {
+		rec = do(t, srv, http.MethodPatch, "/api/schedules/"+sysSched.ID, body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("PATCH system schedule (%s) status = %d, want 400: %s",
+				body, rec.Code, rec.Body)
+		}
+		stored, err := c.Store.GetSchedule(ctx, sysSched.ID)
+		if err != nil || stored == nil {
+			t.Fatalf("GetSchedule(system): (%+v, %v)", stored, err)
+		}
+		if stored.KeepRunning {
+			t.Fatalf("system schedule KeepRunning mutated to true via %s", body)
+		}
 	}
 }

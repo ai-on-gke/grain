@@ -3464,7 +3464,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// inside the run: a turn that ended promising more work, or a
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
-		if !task.KeepRunning {
+		if !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
 			result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
 		}
 		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)

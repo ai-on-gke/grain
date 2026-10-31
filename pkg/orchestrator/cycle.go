@@ -2424,7 +2424,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	if task.Interactive || task.KeepRunning {
 		warmSandbox, sandboxReclaimed = claimWarmSessionSandbox(deps, task.ID, now)
 		if warmSandbox != nil && warmSandbox.Key != sandboxKey {
-			log.Printf("orchestrator: run %s (task %s): not reusing warm sandbox %s: its shape, target or grants changed",
+			log.Printf("orchestrator: run %s (task %s): not reusing warm sandbox %s: its shape, target, repos or grants changed",
 				d.RunID, d.TaskID, warmSandbox.SandboxID)
 			releaseWarmSandboxEntry(context.WithoutCancel(ctx), warmSandbox)
 			warmSandbox, sandboxReclaimed = nil, true
@@ -2432,6 +2432,8 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		if !sandboxReclaimed && warmSandbox == nil && d.Attempt > 1 {
 			sandboxReclaimed = true
 		}
+	} else {
+		sandboxReclaimed = discardWarmSessionSandbox(context.WithoutCancel(ctx), deps, task.ID)
 	}
 	sandboxReused := warmSandbox != nil
 	sandboxName := d.RunID
@@ -2815,8 +2817,8 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	}
 
 	afterErr := afterAgentRun(ctx, deps, *task, d.RunID, result, runErr, preRunBranchSHA, preRunBranchSHA, now)
-	if afterErr == nil && runErr == nil && (task.Interactive || task.KeepRunning || taskKeepRunning(ctx, deps.Store, *task)) && deps.Store != nil {
-		cleanupCtx := context.WithoutCancel(ctx)
+	cleanupCtx := context.WithoutCancel(ctx)
+	if afterErr == nil && runErr == nil && deps.Store != nil && (task.Interactive || taskKeepRunning(cleanupCtx, deps.Store, *task)) {
 		finishNow := now
 		if deps.Config.Now != nil {
 			finishNow = deps.Config.Now()

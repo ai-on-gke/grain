@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -499,4 +500,195 @@ func TestKeepRunningConsoleSessionRestartsWhenTurnExits(t *testing.T) {
 	if st, _ := store.State(ctx, director.ID); st != model.StateAwaitingReply {
 		t.Fatalf("after cycle 3: state = %q, want %q", st, model.StateAwaitingReply)
 	}
+}
+
+func TestKeepRunningWarmSandboxReclaimedOnToggleOffOrWithdrawnRepoAccess(t *testing.T) {
+	t.Parallel()
+
+	t.Run("clearing keep_running mid-run does not park warm sandbox", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		task := fileKeepRunningTask(t, ctx, store, "kr-midrun-off")
+
+		sbPool := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+		var revoked atomic.Int32
+		deps := orchestrator.Deps{
+			Store:     store,
+			Sandboxes: sbPool,
+			Framework: orchestrator.StaticFramework(agentFunc(func(_ context.Context, _ agent.RunConfig) (*agent.Result, error) {
+				if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+					tk.KeepRunning = false
+					return nil
+				}); err != nil {
+					return nil, err
+				}
+				return &agent.Result{
+					FinalText:        "done",
+					ResumableSession: "sess-midrun",
+					ToolCalls: []agent.ToolCall{{
+						Name:      "comment_on_issue",
+						Arguments: map[string]any{"comment": "finished before toggle took effect"},
+					}},
+				}, nil
+			})),
+			MintSandboxToken:   func(string) (string, error) { return "tok", nil },
+			RevokeSandboxToken: func(string) error { revoked.Add(1); return nil },
+			MaxWorkers:         1,
+			Config: orchestrator.Config{
+				GitRemoteBase:         "http://proxy.example",
+				SessionSandboxIdleTTL: 30 * time.Minute,
+			},
+		}
+
+		if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(time.Second)); err != nil {
+			t.Fatalf("cycle 1: %v", err)
+		}
+		if got := orchestrator.WarmSessionSandboxID(store, task.ID); got != "" {
+			t.Fatalf("WarmSessionSandboxID = %q, want empty when KeepRunning was cleared mid-run", got)
+		}
+		if sbPool.releases != 1 {
+			t.Fatalf("sandbox releases = %d, want 1", sbPool.releases)
+		}
+		if got := int(revoked.Load()); got != 1 {
+			t.Fatalf("revoked tokens = %d, want 1", got)
+		}
+		if st, _ := store.State(ctx, task.ID); st != model.StateAwaitingReply {
+			t.Fatalf("state = %q, want %q", st, model.StateAwaitingReply)
+		}
+	})
+
+	t.Run("clearing keep_running between cycles releases warm sandbox and revokes token", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		task := fileKeepRunningTask(t, ctx, store, "kr-between-off")
+
+		sbPool := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+		var revoked atomic.Int32
+		var configs []agent.RunConfig
+		deps := orchestrator.Deps{
+			Store:     store,
+			Sandboxes: sbPool,
+			Framework: orchestrator.StaticFramework(agentFunc(func(_ context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+				configs = append(configs, cfg)
+				return &agent.Result{
+					FinalText:        "step done",
+					ResumableSession: "sess-between",
+					ToolCalls: []agent.ToolCall{{
+						Name:      "comment_on_issue",
+						Arguments: map[string]any{"comment": "reported"},
+					}},
+				}, nil
+			})),
+			MintSandboxToken:   func(string) (string, error) { return "tok", nil },
+			RevokeSandboxToken: func(string) error { revoked.Add(1); return nil },
+			MaxWorkers:         1,
+			Config: orchestrator.Config{
+				GitRemoteBase:         "http://proxy.example",
+				SessionSandboxIdleTTL: 30 * time.Minute,
+			},
+		}
+
+		if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(time.Second)); err != nil {
+			t.Fatalf("cycle 1: %v", err)
+		}
+		if got := orchestrator.WarmSessionSandboxID(store, task.ID); got == "" {
+			t.Fatal("expected warm sandbox parked after cycle 1")
+		}
+		if sbPool.releases != 0 || revoked.Load() != 0 {
+			t.Fatalf("after cycle 1: releases=%d revoked=%d, want 0/0", sbPool.releases, revoked.Load())
+		}
+
+		if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+			tk.KeepRunning = false
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(2*time.Second)); err != nil {
+			t.Fatalf("cycle 2: %v", err)
+		}
+		if got := orchestrator.WarmSessionSandboxID(store, task.ID); got != "" {
+			t.Fatalf("WarmSessionSandboxID after clearing KeepRunning = %q, want empty", got)
+		}
+		if sbPool.releases != 1 || revoked.Load() != 1 {
+			t.Fatalf("after clearing KeepRunning: releases=%d revoked=%d, want 1/1", sbPool.releases, revoked.Load())
+		}
+
+		// A human reply wakes the now non-keep-running task: it must acquire a fresh
+		// sandbox, report that the previous session sandbox was reclaimed, and release
+		// the new sandbox at the end of the turn.
+		replyToSession(t, store, task.ID, baseTime.Add(3*time.Second))
+		if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(4*time.Second)); err != nil {
+			t.Fatalf("cycle 3: %v", err)
+		}
+		if len(configs) != 2 {
+			t.Fatalf("runs = %d, want 2", len(configs))
+		}
+		if configs[1].SandboxReused {
+			t.Fatal("turn 2 SandboxReused = true, want false")
+		}
+		if !strings.Contains(configs[1].Prompt, "The sandbox is not the same one") {
+			t.Errorf("turn 2 Prompt missing reclaimed-sandbox orientation:\n%s", configs[1].Prompt)
+		}
+		if sbPool.acquires != 2 || sbPool.releases != 2 {
+			t.Fatalf("after cycle 3: acquires=%d releases=%d, want 2/2", sbPool.acquires, sbPool.releases)
+		}
+	})
+
+	t.Run("withdrawing read repo between cycles releases warm sandbox", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		task := fileKeepRunningTask(t, ctx, store, "kr-read-withdrawn")
+		if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+			tk.Reads = []model.RepoRef{{Owner: "acme", Name: "private-lib"}}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		sbPool := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+		var reused []bool
+		deps := orchestrator.Deps{
+			Store:     store,
+			Sandboxes: sbPool,
+			Framework: orchestrator.StaticFramework(agentFunc(func(_ context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+				reused = append(reused, cfg.SandboxReused)
+				return &agent.Result{
+					FinalText:        "step",
+					ResumableSession: "sess-reads",
+				}, nil
+			})),
+			MaxWorkers: 1,
+			Config: orchestrator.Config{
+				SessionSandboxIdleTTL: 30 * time.Minute,
+			},
+		}
+
+		if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(time.Second)); err != nil {
+			t.Fatalf("cycle 1: %v", err)
+		}
+		firstWarm := orchestrator.WarmSessionSandboxID(store, task.ID)
+		if firstWarm == "" {
+			t.Fatal("expected warm sandbox after cycle 1")
+		}
+
+		if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+			tk.Reads = nil
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(2*time.Second)); err != nil {
+			t.Fatalf("cycle 2: %v", err)
+		}
+		if sbPool.acquires != 2 || sbPool.releases != 1 {
+			t.Fatalf("after withdrawing Reads: acquires=%d releases=%d, want 2/1", sbPool.acquires, sbPool.releases)
+		}
+		if len(reused) != 2 || reused[0] || reused[1] {
+			t.Fatalf("SandboxReused = %v, want [false, false]", reused)
+		}
+		if secondWarm := orchestrator.WarmSessionSandboxID(store, task.ID); secondWarm == "" || secondWarm == firstWarm {
+			t.Fatalf("secondWarm = %q, want a new warm sandbox distinct from %q", secondWarm, firstWarm)
+		}
+	})
 }

@@ -210,37 +210,59 @@ func parkWarmSessionSandbox(deps Deps, taskID, sandboxID, key, grants string, sb
 }
 
 // sessionSandboxKey names what a sandbox was built for: its shape, the
-// task's target, and the capability grants the task holds and the run
-// materialized. Two runs with the same key may share a warm sandbox; a
-// run whose key differs from the warm sandbox's gets a fresh one.
+// task's target, base and repo access, and the capability grants the task
+// holds and the run materialized. Two runs with the same key may share a
+// warm sandbox; a run whose key differs from the warm sandbox's gets a fresh one.
 func sessionSandboxKey(shape Shape, task model.Task, prepared []model.Materialized) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "shape=%+v", shape)
-	if task.Target != nil {
-		fmt.Fprintf(&b, "|target=%s/%s", task.Target.StoredOwner(), task.Target.Name)
+	fmt.Fprintf(&b, "shape=%+v|", shape)
+	b.WriteString(sessionTaskAccessKey(task))
+	if len(prepared) > 0 {
+		runGrants := make([]string, 0, len(prepared))
+		for _, m := range prepared {
+			runGrants = append(runGrants, grantKey(m.Grant))
+		}
+		sort.Strings(runGrants)
+		fmt.Fprintf(&b, "|run_grants=%s", strings.Join(runGrants, ","))
 	}
-	var grants []string
-	for _, g := range task.Grants {
-		grants = append(grants, "task:"+grantKey(g))
-	}
-	for _, m := range prepared {
-		grants = append(grants, "run:"+grantKey(m.Grant))
-	}
-	sort.Strings(grants)
-	fmt.Fprintf(&b, "|grants=%s", strings.Join(grants, ","))
 	return b.String()
 }
 
-// sessionGrantsKey is the task-grant part of sessionSandboxKey: what
-// reconcileSessionSandboxes can check between turns, when no run is
-// there to say what it would materialize.
+// sessionGrantsKey is the task-access and task-grant part of sessionSandboxKey:
+// what reconcileSessionSandboxes can check between turns, when no run is there
+// to say what it would materialize.
 func sessionGrantsKey(task model.Task) string {
+	return sessionTaskAccessKey(task)
+}
+
+func sessionTaskAccessKey(task model.Task) string {
+	var b strings.Builder
+	if task.Target != nil {
+		fmt.Fprintf(&b, "target=%s/%s|base=%s|", task.Target.StoredOwner(), task.Target.Name, task.Base)
+	}
+	if len(task.Reads) > 0 {
+		reads := make([]string, 0, len(task.Reads))
+		for _, r := range task.Reads {
+			reads = append(reads, r.StoredOwner()+"/"+r.Name)
+		}
+		sort.Strings(reads)
+		fmt.Fprintf(&b, "reads=%s|", strings.Join(reads, ","))
+	}
+	if len(task.Writes) > 0 {
+		writes := make([]string, 0, len(task.Writes))
+		for _, w := range task.Writes {
+			writes = append(writes, w.Repo.StoredOwner()+"/"+w.Repo.Name+"@"+w.Base)
+		}
+		sort.Strings(writes)
+		fmt.Fprintf(&b, "writes=%s|", strings.Join(writes, ","))
+	}
 	grants := make([]string, 0, len(task.Grants))
 	for _, g := range task.Grants {
 		grants = append(grants, grantKey(g))
 	}
 	sort.Strings(grants)
-	return strings.Join(grants, ",")
+	fmt.Fprintf(&b, "grants=%s", strings.Join(grants, ","))
+	return b.String()
 }
 
 func grantKey(g model.Grant) string {
@@ -316,6 +338,27 @@ func claimWarmSessionSandbox(deps Deps, taskID string, now time.Time) (*warmSess
 		return nil, true
 	}
 	return nil, wasReclaimed
+}
+
+func discardWarmSessionSandbox(ctx context.Context, deps Deps, taskID string) bool {
+	if deps.Store == nil || taskID == "" {
+		return false
+	}
+	p := getSessionPool(deps.Store)
+	p.mu.Lock()
+	entry, ok := p.warm[taskID]
+	if ok {
+		delete(p.warm, taskID)
+		delete(p.bySandbox, entry.SandboxID)
+	}
+	wasReclaimed := p.reclaimed[taskID]
+	delete(p.reclaimed, taskID)
+	p.mu.Unlock()
+	if ok {
+		releaseWarmSandboxEntry(ctx, entry)
+		return true
+	}
+	return wasReclaimed
 }
 
 func releaseWarmSessionSandbox(ctx context.Context, deps Deps, taskID string, markReclaimed bool) bool {
@@ -406,11 +449,12 @@ func reconcileSessionSandboxes(ctx context.Context, deps Deps, now time.Time) {
 		if err != nil {
 			continue
 		}
-		// A grant withdrawn (or added) since the sandbox was built: what
-		// the old grants placed there must not outlive them while the
-		// sandbox waits for a turn that would not reuse it anyway.
+		// A grant or repository access withdrawn (or added) since the sandbox was
+		// built, or keep_running cleared on a non-interactive task: what the run
+		// placed in the warm sandbox (or its live token) must not outlive that
+		// grant or session mode until TTL expiry.
 		if task, terr := deps.Store.GetTask(ctx, entry.TaskID); terr == nil && task != nil &&
-			sessionGrantsKey(*task) != entry.Grants {
+			((!task.Interactive && !task.KeepRunning) || sessionGrantsKey(*task) != entry.Grants) {
 			releaseWarmSessionSandbox(ctx, deps, entry.TaskID, true)
 			continue
 		}

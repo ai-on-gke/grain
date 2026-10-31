@@ -1084,6 +1084,13 @@ func (c *Client) templateNameFor(ctx context.Context, id string) string {
 // distinction UpdateSchedule already makes one field along, where a
 // resent recurrence identical to the stored one is not a cadence edit
 // and must not push the next firing out.
+func updateKeepRunningChoice(req UpdateScheduleRequest) *bool {
+	if req.KeepRunning != nil {
+		return req.KeepRunning
+	}
+	return req.KeepRunningSnake
+}
+
 func refuseSystemScheduleContentEdit(sched model.Schedule, req UpdateScheduleRequest) error {
 	if sched.TemplateID == nil || !model.IsSystemTemplateID(*sched.TemplateID) {
 		return nil
@@ -1095,6 +1102,7 @@ func refuseSystemScheduleContentEdit(sched model.Schedule, req UpdateScheduleReq
 	if sched.Target != (model.RepoRef{}) {
 		repo = sched.Target.String()
 	}
+	keepRunning := updateKeepRunningChoice(req)
 	changes := func(given *string, current string) bool { return given != nil && *given != current }
 	refused := ""
 	switch {
@@ -1117,6 +1125,8 @@ func refuseSystemScheduleContentEdit(sched model.Schedule, req UpdateScheduleReq
 		refused = "which repository it targets"
 	case req.AutoMerge != nil && *req.AutoMerge != sched.AutoMerge:
 		refused = "whether its work merges on its own"
+	case keepRunning != nil && *keepRunning != sched.KeepRunning:
+		refused = "whether its tasks keep running"
 	case changes(req.TemplateID, *sched.TemplateID), req.SuiteID != nil:
 		refused = "what it fires"
 	}
@@ -1150,6 +1160,7 @@ type scheduleContentOffered struct {
 	NetworkAccess *string
 
 	NothingNeededAction *string
+	KeepRunning         *bool
 }
 
 // contentOfferedOnCreate is req's content fields, in the shape
@@ -1184,6 +1195,10 @@ func contentOfferedOnCreate(req CreateScheduleRequest) scheduleContentOffered {
 	if strings.TrimSpace(req.NothingNeededAction) != "" {
 		out.NothingNeededAction = &req.NothingNeededAction
 	}
+	if req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake) {
+		on := true
+		out.KeepRunning = &on
+	}
 	return out
 }
 
@@ -1201,6 +1216,7 @@ func contentOfferedOnUpdate(req UpdateScheduleRequest) scheduleContentOffered {
 		NetworkAccess: req.NetworkAccess,
 
 		NothingNeededAction: req.NothingNeededAction,
+		KeepRunning:         updateKeepRunningChoice(req),
 	}
 }
 
@@ -1267,6 +1283,9 @@ func refuseIgnoredScheduleContent(kind, name string, effective model.Schedule, g
 	}
 	if given.NothingNeededAction != nil && strings.TrimSpace(*given.NothingNeededAction) != current.NothingNeededAction {
 		refused = append(refused, "nothingNeededAction")
+	}
+	if given.KeepRunning != nil && *given.KeepRunning != current.KeepRunning {
+		refused = append(refused, "keepRunning")
 	}
 	if len(refused) == 0 {
 		return nil
@@ -1815,10 +1834,8 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			if req.NothingNeededAction != nil {
 				s.NothingNeededAction = nothingNeeded
 			}
-			if req.KeepRunning != nil {
-				s.KeepRunning = *req.KeepRunning
-			} else if req.KeepRunningSnake != nil {
-				s.KeepRunning = *req.KeepRunningSnake
+			if kr := updateKeepRunningChoice(req); kr != nil && s.TemplateID == nil {
+				s.KeepRunning = *kr
 			}
 		}
 		// Target and Base are applied on their own, template attached or
