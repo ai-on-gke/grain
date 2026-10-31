@@ -72,7 +72,10 @@
 // to one run already, and the single shared slot there used to be left
 // every other team's and user's session waiting out whichever one was
 // live (grain/task-2323). They still charge the sandbox budget, under the
-// exception policy (model.Limits.AdmitDirectorSandboxShape). A pipeline
+// priority policy (model.Limits.AdmitDirectorSandboxShape,
+// model.Budget.AdmitsPriority): only the disk floor or a cluster with no
+// room refuses them, never the budget's ceilings, its repair reserve or
+// whatever CI holds (docs/sandbox-budget.md). A pipeline
 // pause does not hold them either (PriorityPassesPause), with one
 // exception: an upgrade's own hold, whose restart would end any run it
 // let start.
@@ -169,10 +172,45 @@ type Candidate struct {
 // Admission is a caller-owned prerequisite acquired immediately before a run
 // is recorded. Leases are committed atomically with the run; Release undoes
 // the external reservation if that store write loses a race or fails.
+//
+// A refusal says why: Gate names which prerequisite declined the
+// candidate ("model", "policy", "capability <name>", ...) and Reason the
+// admitter's own sentence for it, the same words it recorded on the
+// task's wait. Cycle puts both on its "admission refused" line, so a
+// refusal is diagnosable from the log alone; one that leaves them empty
+// is logged as "no reason given".
 type Admission struct {
 	Admitted bool
 	Leases   []model.Lease
 	Release  func()
+	Gate     string
+	Reason   string
+}
+
+// refusalWords is the clause an "admission refused" line ends with.
+func (a Admission) refusalWords() string {
+	switch {
+	case a.Gate != "" && a.Reason != "":
+		return a.Gate + " -- " + a.Reason
+	case a.Gate != "":
+		return a.Gate
+	case a.Reason != "":
+		return a.Reason
+	}
+	return "no reason given"
+}
+
+// logRefusal logs a candidate the admitter declined, naming the gate and
+// its reason. A task with priority dispatch -- a console session a person
+// is waiting on -- is never meant to wait, so its refusal is logged as a
+// warning rather than as routine queueing.
+func logRefusal(taskID string, priority bool, admission Admission) {
+	if priority {
+		log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a priority-dispatch holder) refused admission by %s",
+			taskID, admission.refusalWords())
+		return
+	}
+	log.Printf("dispatch: candidate %s skipped: admission refused by %s", taskID, admission.refusalWords())
 }
 
 // Admitter reserves prerequisites that must not consume run capacity while
@@ -720,7 +758,10 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				if sandboxShapeShortFor(limits, true, want) {
 					noteWaiting(want)
 				}
-				setQuotaWait(ctx, store, req.TaskID, capacityReasonFor(limits, live, req.Merger, true, want), now)
+				reason := capacityReasonFor(limits, live, req.Merger, true, want)
+				setQuotaWait(ctx, store, req.TaskID, reason, now)
+				log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a priority-dispatch holder) skipped: no sandbox -- %s",
+					req.TaskID, reason)
 				continue
 			}
 		} else {
@@ -740,7 +781,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				continue
 			}
 		}
-		d, admitted, err := startTask(ctx, store, req.TaskID, now, limits, o.admit, req.Priority, repair)
+		d, admitted, refusal, err := startTask(ctx, store, req.TaskID, now, limits, o.admit, req.Priority, repair)
 		if err != nil {
 			// Unlike the ready loop below, a capacity refusal here is
 			// passed over rather than ending the cycle: this list is in
@@ -766,6 +807,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 			return out, fmt.Errorf("dispatch: starting requested run for %s: %w", req.TaskID, err)
 		}
 		if !admitted {
+			logRefusal(req.TaskID, req.Priority, refusal)
 			continue
 		}
 		started[req.TaskID] = true
@@ -900,11 +942,8 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				}
 				reason := capacityReasonFor(limits, live, merger, true, want)
 				setQuotaWait(ctx, store, candidate, reason, now)
-				if skippedWorkerMergerCapacity < maxCapacityLogsPerCycle {
-					log.Printf("dispatch: candidate %s skipped: no sandbox for priority dispatch -- %s",
-						candidate, reason)
-				}
-				skippedWorkerMergerCapacity++
+				log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a priority-dispatch holder) skipped: no sandbox -- %s",
+					candidate, reason)
 				continue
 			}
 		} else {
@@ -934,7 +973,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 			}
 		}
 
-		d, admitted, err := startTask(ctx, store, candidate, now, limits, o.admit, priority, repair)
+		d, admitted, refusal, err := startTask(ctx, store, candidate, now, limits, o.admit, priority, repair)
 		if err != nil {
 			if errors.Is(err, model.ErrDurableCeiling) {
 				setQuotaWait(ctx, store, candidate, durableCeilingReason(limits.Durable), now)
@@ -948,14 +987,20 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				if (priority || limits.Admits(live, merger)) && sandboxShapeShortFor(limits, priority, want) {
 					noteWaiting(want)
 				}
-				setQuotaWait(ctx, store, candidate, capacityReasonFor(limits, live, merger, priority, want), now)
-				log.Printf("dispatch: candidate %s skipped: at capacity during start", candidate)
+				reason := capacityReasonFor(limits, live, merger, priority, want)
+				setQuotaWait(ctx, store, candidate, reason, now)
+				if priority {
+					log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a priority-dispatch holder) skipped: at capacity during start -- %s: %v",
+						candidate, reason, err)
+				} else {
+					log.Printf("dispatch: candidate %s skipped: at capacity during start -- %v", candidate, err)
+				}
 				continue
 			}
 			return out, fmt.Errorf("dispatch: starting run for %s: %w", candidate, err)
 		}
 		if !admitted {
-			log.Printf("dispatch: candidate %s skipped: admission refused", candidate)
+			logRefusal(candidate, priority, refusal)
 			continue
 		}
 		started[candidate] = true
@@ -1063,7 +1108,7 @@ func capacityReason(limits model.Limits, live model.RunCounts, merger bool) stri
 func capacityReasonFor(limits model.Limits, live model.RunCounts, merger, priority bool, want model.Commitment) string {
 	if priority {
 		if verdict := limits.DirectorSandboxVerdictFor(want); !verdict.OK {
-			return verdict.Reason
+			return "waiting for sandbox budget: " + verdict.Reason
 		}
 	} else if verdict := limits.SandboxVerdictFor(want); !verdict.OK {
 		return verdict.Reason
@@ -1138,14 +1183,18 @@ func recordSkipQuotaWait(ctx context.Context, store *model.Store, taskID, why st
 // (model.Ledger.Release), since a run outlives the cycle that started it.
 //
 // priority is a task with priority dispatch, whose sandbox is admitted
-// under the exception policy console sessions' are. repair is a
+// under the priority policy (model.Budget.AdmitsPriority): only the disk
+// floor or the cluster can refuse it. repair is a
 // base-branch repair the budget's reserve was opened to
 // (repairAdmission): its sandbox is charged against the whole budget
 // rather than the part of it ordinary work may spend.
-func startTask(ctx context.Context, store *model.Store, taskID string, now time.Time, limits model.Limits, admit Admitter, priority, repair bool) (Dispatch, bool, error) {
+//
+// On a refusal by admit, the Admission returned is the admitter's own, for
+// the caller to log (logRefusal).
+func startTask(ctx context.Context, store *model.Store, taskID string, now time.Time, limits model.Limits, admit Admitter, priority, repair bool) (Dispatch, bool, Admission, error) {
 	attempts, err := store.Attempts(ctx, taskID)
 	if err != nil {
-		return Dispatch{}, false, fmt.Errorf("counting attempts for %s: %w", taskID, err)
+		return Dispatch{}, false, Admission{}, fmt.Errorf("counting attempts for %s: %w", taskID, err)
 	}
 	attempt := attempts + 1
 	candidate := Candidate{TaskID: taskID, RunID: RunID(taskID, attempt), Attempt: attempt}
@@ -1154,10 +1203,10 @@ func startTask(ctx context.Context, store *model.Store, taskID string, now time.
 		clearQuotaWait(ctx, store, taskID)
 		admission, err = admit(ctx, candidate)
 		if err != nil {
-			return Dispatch{}, false, err
+			return Dispatch{}, false, Admission{}, err
 		}
 		if !admission.Admitted {
-			return Dispatch{}, false, nil
+			return Dispatch{}, false, admission, nil
 		}
 	}
 	// After the admitter, so that a candidate declined for want of a
@@ -1176,7 +1225,7 @@ func startTask(ctx context.Context, store *model.Store, taskID string, now time.
 		if admission.Release != nil {
 			admission.Release()
 		}
-		return Dispatch{}, false, fmt.Errorf("%w: %s", model.ErrAtCapacity, verdict.Reason)
+		return Dispatch{}, false, Admission{}, fmt.Errorf("%w: %s", model.ErrAtCapacity, verdict.Reason)
 	}
 	// Sandbox is deliberately left empty: no sandbox exists for this run
 	// yet, and inventing a name here for one nothing has built would be a
@@ -1194,7 +1243,7 @@ func startTask(ctx context.Context, store *model.Store, taskID string, now time.
 		if admission.Release != nil {
 			admission.Release()
 		}
-		return Dispatch{}, false, err
+		return Dispatch{}, false, Admission{}, err
 	}
-	return Dispatch{TaskID: taskID, RunID: run.ID, Attempt: attempt}, true, nil
+	return Dispatch{TaskID: taskID, RunID: run.ID, Attempt: attempt}, true, Admission{}, nil
 }
