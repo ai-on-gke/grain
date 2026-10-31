@@ -233,7 +233,8 @@ func (c *Client) messagesSince(ctx context.Context, id string, after int64, from
 		case comment.Author.Actor.Kind == model.PrincipalHuman:
 		case fromAgents && isAgentMessage(comment, id):
 			author = "task " + author
-		case fromAgents && comment.Author.Actor == model.CLThreadsPrincipal:
+		case fromAgents && (comment.Author.Actor == model.CLThreadsPrincipal ||
+			comment.Author.Actor == model.CapabilityChangePrincipal):
 			author = "grain"
 		default:
 			continue

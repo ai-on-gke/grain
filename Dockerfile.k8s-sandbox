@@ -78,7 +78,7 @@ ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 # Stamp the Grain sandbox contract version (pkg/sandboximage.Contract).
 RUN install -d -m0755 /etc/grain \
-    && printf '1\n' > /etc/grain/sandbox-contract
+    && printf '2\n' > /etc/grain/sandbox-contract
 
 COPY --from=grain_sandbox_builder /out/grain /usr/local/bin/grain
 
@@ -97,7 +97,7 @@ RUN useradd --create-home --uid 1000 --shell /bin/bash debian \
 USER debian
 WORKDIR /home/debian
 
-LABEL dev.grain.sandbox.contract="1"
+LABEL dev.grain.sandbox.contract="2"
 
 # ==============================================================================
 # Stage 2: Full default Kubernetes/container sandbox image (k8s-sandbox)
@@ -295,7 +295,7 @@ RUN if [ "$INSTALL_CODEX_CLI" = "1" ]; then \
 USER debian
 WORKDIR /home/debian
 
-LABEL dev.grain.sandbox.contract="1" \
+LABEL dev.grain.sandbox.contract="2" \
       org.opencontainers.image.source="https://github.com/bwsalmon/grain" \
       org.opencontainers.image.title="grain Kubernetes sandbox" \
       org.opencontainers.image.description="Unprivileged task environment with claude, agy, codex, git, bash, curl, python3-minimal for grain's capability port forwarder, and OCR (tesseract, imagemagick, poppler-utils) for reading attached images, plus fonts (fonts-urw-base35, fonts-dejavu-core) so ImageMagick can draw text as well as read it"

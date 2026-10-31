@@ -163,3 +163,41 @@ func TestDirectConfigWritesLetsTheAPIWriteInInternalMode(t *testing.T) {
 		t.Fatalf("after opting out: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// GET /api/config says when the API refuses config-repo-only settings,
+// so the UI draws them read-only exactly then: in internal mode, not
+// after the directConfigWrites opt-out, and never without a config
+// repository at all (`grain demo`).
+func TestConfigSaysWhenSettingsAreConfigRepoOnly(t *testing.T) {
+	t.Parallel()
+	configRepoOnly := func(srv *ui.Server) bool {
+		t.Helper()
+		rec := do(t, srv, http.MethodGet, "/api/config", "")
+		var got struct {
+			ConfigRepoOnly bool `json:"configRepoOnly"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
+			t.Fatalf("GET /api/config: %d %s", rec.Code, rec.Body)
+		}
+		return got.ConfigRepoOnly
+	}
+
+	_, bare := testServer(t)
+	if configRepoOnly(ui.NewServerWithClient(bare)) {
+		t.Fatal("configRepoOnly with no config repository")
+	}
+
+	_, client := testServer(t)
+	client.Config.StateRepo = &fakeStateRepo{status: ui.StateRepoStatus{Branch: "main"}}
+	client.Config.DataDir = t.TempDir()
+	srv := ui.NewServerWithClient(client)
+	if !configRepoOnly(srv) {
+		t.Fatal("configRepoOnly false in internal mode")
+	}
+	if err := staterepo.SaveSettings(client.Config.DataDir, staterepo.Settings{DirectConfigWrites: true}); err != nil {
+		t.Fatal(err)
+	}
+	if configRepoOnly(srv) {
+		t.Fatal("configRepoOnly after the directConfigWrites opt-out")
+	}
+}

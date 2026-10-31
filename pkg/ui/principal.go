@@ -769,8 +769,8 @@ func cleanIdentity(val string) string {
 }
 
 // withAgentRequester is requestPrincipal for a write an agent makes on
-// its own behalf over this API -- dispatch-control's pause_pipeline and
-// run_task_now (daemon's daemonDispatchControl) -- returning ctx with
+// its own behalf through the daemon's hop rather than the agent API (whose
+// gate makes the acting task the actor itself) -- returning ctx with
 // that agent as the actor, so the pause row and the task's conversation
 // name {agent, <task id>} rather than this deployment's own operator.
 // Only an agent may be named: a request naming a person or an automation

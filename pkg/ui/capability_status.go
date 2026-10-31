@@ -36,7 +36,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
 	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -298,9 +297,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"image-signing":       "Image signing",
 	"memory":              "Memory",
 	"release-notes":       "Release notes",
-	"team-broadcast":      "Team broadcast",
-	"pipeline-control":    "Pipeline control",
-	"dispatch-control":    "Dispatch control",
 	"git-push-any-ref":    "Push any ref",
 	"console":             "Interactive console",
 	"test-quarantine":     "Test quarantine",
@@ -377,7 +373,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 		gitpushanyref.New(),
 		bootstrap.New(),
 		releasenotes.New(),
-		teambroadcast.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
 		packagepublish.New(packagepublish.Config{}),
 		imagesigning.New(imagesigning.Config{}),

@@ -65,6 +65,18 @@ func (f *fakeCritique) Mail(_ context.Context, _ model.Task, target string, revi
 	return change.Result{Target: target}, nil
 }
 
+func TestChangeReviewWithNoCLSaysARunsCLIsLinkedWhenItEnds(t *testing.T) {
+	client, store, ctx := testClient(t)
+	if err := store.PutTask(ctx, model.Task{ID: "93", Title: "t", Intent: model.IntentImplement}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := client.ChangeReview(ctx, "93", ui.ChangeReviewRequest{Op: ui.ChangeReviewReply, Thread: "cl/42:c1", Body: "x"})
+	if err == nil || !strings.Contains(err.Error(), "no CL yet") ||
+		!strings.Contains(err.Error(), "becomes this task's CL when the run ends, unless it holds no files or has been deleted") {
+		t.Fatalf("review with no CL = %v, want it to explain run-end CL linking", err)
+	}
+}
+
 func TestChangeReviewDraftsRepliesAndPublishesThem(t *testing.T) {
 	client, store, ctx := testClient(t)
 	fake := &fakeCritique{}

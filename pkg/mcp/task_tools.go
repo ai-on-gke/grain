@@ -284,19 +284,11 @@ type TaskPromptRecord struct {
 // -- that is the point of these tools. There is no scope to pin the way
 // PullRequestScope pins a branch: a debugging question is about whichever
 // task went wrong, which is never known when the process starts.
-// BroadcastResult reports the outcome of a broadcast to the deployment's
-// active tasks.
-type BroadcastResult struct {
-	DeliveredCount int
-	TaskIDs        []string
-}
-
 type TaskReader interface {
 	ListTasks(ctx context.Context) ([]TaskSummary, error)
 	Task(ctx context.Context, id string) (TaskRecord, error)
 	TaskPrompt(ctx context.Context, id string) (TaskPromptRecord, error)
 	AttemptTranscript(ctx context.Context, id string, attempt int) (string, error)
-	BroadcastTeamMessage(ctx context.Context, message string) (BroadcastResult, error)
 }
 
 // NewTaskTools returns the tools a self-debug or director run gets for
@@ -316,22 +308,6 @@ func NewTaskTools(reader TaskReader) []Tool {
 		readTaskTranscriptTool(reader),
 	}
 }
-
-// NewBroadcastTools returns the broadcast_team_message tool for sending
-// a message to every active task of the deployment -- the team-broadcast
-// grant's one tool (pkg/capability/teambroadcast). The daemon checks the
-// grant again on the request (ui.Client.BroadcastTeamMessage).
-func NewBroadcastTools(reader TaskReader) []Tool {
-	return []Tool{
-		broadcastTeamMessageTool(reader),
-	}
-}
-
-// noBroadcaster is broadcast_team_message's answer with no route to the
-// daemon, for noTaskReader's reason.
-const noBroadcaster = "This run cannot broadcast: it holds the team-broadcast grant but was " +
-	"dispatched with no route back to the grain daemon that owns the task store. Say so if it " +
-	"matters to what you were asked to do; nothing you can do from here will change it."
 
 // noTaskReader is the answer every one of these tools gives when it has
 // no route to the store -- a sentence about this run rather than "unknown
@@ -381,15 +357,28 @@ var listTasksInputSchema = map[string]any{
 // taskListFilter is list_grain_tasks' narrowing beyond state: the filters
 // that let a judgement agent ask for what moved instead of sweeping the
 // whole list (docs/design/durable-tasks.md#DT-13).
+//
+// State may name several states, comma-separated ("proposed,queued"),
+// and a task in any of them matches. Repo and Search are grain task
+// list's own (/cli/tasks): the repository a task works in, compared as
+// grant names are, case-insensitively; and a substring of its title.
 type taskListFilter struct {
 	State        string
 	ChangedSince time.Time
 	Stalled      bool
 	Kind         string
+	Repo         string
+	Search       string
 }
 
 func (f taskListFilter) matches(t TaskSummary) bool {
-	if f.State != "" && !strings.EqualFold(t.State, f.State) {
+	if f.State != "" && !stateListHas(f.State, t.State) {
+		return false
+	}
+	if f.Repo != "" && !strings.EqualFold(t.Repo, f.Repo) {
+		return false
+	}
+	if f.Search != "" && !strings.Contains(strings.ToLower(t.Title), strings.ToLower(f.Search)) {
 		return false
 	}
 	if !f.ChangedSince.IsZero() && (t.ChangedAt == nil || t.ChangedAt.Before(f.ChangedSince)) {
@@ -404,8 +393,19 @@ func (f taskListFilter) matches(t TaskSummary) bool {
 	return true
 }
 
+// stateListHas reports whether state is one of the comma-separated states
+// in list.
+func stateListHas(list, state string) bool {
+	for _, s := range strings.Split(list, ",") {
+		if s = strings.TrimSpace(s); s != "" && strings.EqualFold(s, state) {
+			return true
+		}
+	}
+	return false
+}
+
 func (f taskListFilter) narrowed() bool {
-	return f.State != "" || !f.ChangedSince.IsZero() || f.Stalled || f.Kind != ""
+	return f.State != "" || !f.ChangedSince.IsZero() || f.Stalled || f.Kind != "" || f.Repo != "" || f.Search != ""
 }
 
 // describe is the filter in words, for an empty answer.
@@ -422,6 +422,12 @@ func (f taskListFilter) describe() string {
 	}
 	if f.Kind != "" {
 		parts = append(parts, "of kind "+f.Kind)
+	}
+	if f.Repo != "" {
+		parts = append(parts, "in "+f.Repo)
+	}
+	if f.Search != "" {
+		parts = append(parts, "with "+strconv.Quote(f.Search)+" in the title")
 	}
 	return strings.Join(parts, ", ")
 }
@@ -518,13 +524,8 @@ func renderTaskList(tasks []TaskSummary, state string, limit int) string {
 }
 
 func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit int) string {
-	matched := make([]TaskSummary, 0, len(tasks))
-	for _, t := range tasks {
-		if filter.matches(t) {
-			matched = append(matched, t)
-		}
-	}
-	if len(matched) == 0 {
+	shown, matched := selectTasks(tasks, filter, limit)
+	if matched == 0 {
 		if filter == (taskListFilter{State: filter.State}) && filter.State != "" {
 			return fmt.Sprintf("No tasks in state %q.", filter.State)
 		}
@@ -534,14 +535,7 @@ func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit in
 		return "This deployment has no tasks at all."
 	}
 
-	sortTasksByFiling(matched)
-
-	shown := matched
-	dropped := 0
-	if len(shown) > limit {
-		dropped = len(shown) - limit
-		shown = shown[dropped:]
-	}
+	dropped := matched - len(shown)
 
 	var b strings.Builder
 	for _, t := range shown {
@@ -603,8 +597,24 @@ func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit in
 	if dropped > 0 {
 		fmt.Fprintf(&b, "\n%d older matching tasks are not shown -- raise \"limit\" to see them.\n", dropped)
 	}
-	fmt.Fprintf(&b, "\n%d task(s) shown of %d matching.", len(shown), len(matched))
+	fmt.Fprintf(&b, "\n%d task(s) shown of %d matching.", len(shown), matched)
 	return b.String()
+}
+
+// selectTasks is the tasks filter matches, oldest first by filing, cut to
+// the newest limit of them, and how many matched before the cut.
+func selectTasks(tasks []TaskSummary, filter taskListFilter, limit int) (shown []TaskSummary, matched int) {
+	all := make([]TaskSummary, 0, len(tasks))
+	for _, t := range tasks {
+		if filter.matches(t) {
+			all = append(all, t)
+		}
+	}
+	sortTasksByFiling(all)
+	if limit > 0 && len(all) > limit {
+		return all[len(all)-limit:], len(all)
+	}
+	return all, len(all)
 }
 
 // sortTasksByFiling puts tasks oldest first by CreatedAt, then by task
@@ -1237,47 +1247,4 @@ func indent(s string) string {
 		fmt.Fprintf(&b, "  %s\n", line)
 	}
 	return b.String()
-}
-
-var broadcastTeamMessageInputSchema = map[string]any{
-	"type":                 "object",
-	"additionalProperties": false,
-	"properties": map[string]any{
-		"message": map[string]any{
-			"type":        "string",
-			"description": "the message text to broadcast to every active task",
-		},
-	},
-	"required": []string{"message"},
-}
-
-func broadcastTeamMessageTool(reader TaskReader) Tool {
-	return Tool{
-		Name: "broadcast_team_message",
-		Description: "Broadcast a message or directive to every active task in this deployment " +
-			"(tasks that are queued, running, awaiting reply, awaiting submit, or awaiting ack). " +
-			"The message is added as a comment to each active task, automatically un-parking tasks " +
-			"awaiting reply and delivering the message into active sandbox sessions.",
-		InputSchema: broadcastTeamMessageInputSchema,
-		Handler: func(ctx context.Context, args map[string]any) Result {
-			if reader == nil {
-				return Result{Text: noBroadcaster, IsError: true}
-			}
-			message, ok := argString(args, "message")
-			if !ok || strings.TrimSpace(message) == "" {
-				return Result{Text: "A non-empty \"message\" is required to broadcast.", IsError: true}
-			}
-			res, err := reader.BroadcastTeamMessage(ctx, message)
-			if err != nil {
-				return Result{Text: fmt.Sprintf("Error broadcasting the message: %v", err), IsError: true}
-			}
-			if res.DeliveredCount == 0 {
-				return Result{Text: "Broadcast sent: this deployment has no active tasks."}
-			}
-			return Result{
-				Text: fmt.Sprintf("Broadcast delivered to %d active task(s): %s",
-					res.DeliveredCount, strings.Join(res.TaskIDs, ", ")),
-			}
-		},
-	}
 }

@@ -103,18 +103,24 @@ test("an admin finds an unjudged gate on the repo and its Releases, not the inbo
   await expect(page.getByText(/Nothing is testing/i)).toHaveCount(1);
   await expect(paneGate(page)).toHaveCount(0);
 
-  // Releases: the same warning, and its way back to where it is fixed.
+  // Releases: the same warning, and its way straight to where it is
+  // fixed -- CI Mode on the CI tab, not the Overview with a second link
+  // to find (docs/test-runs/2026-10-30-repository-release-memory-ui.md).
   await page.getByRole("button", { name: "Releases", exact: true }).click();
   await expect(page).toHaveURL(/\/repos\/acme\/widgets\/releases/);
   await expect(releasesGate(page)).toHaveCount(1);
   await releasesGate(page)
-    .getByRole("button", { name: "Open repository settings" })
+    .getByRole("button", { name: "Go to CI Mode" })
     .click();
-  await expect(page).toHaveURL(/\/repos\/acme\/widgets$/);
-
-  // The overview's link is to CI Mode, the switch that judges the branch.
-  await headerGate(page).getByRole("button", { name: "Go to CI Mode" }).click();
+  await expect(page).toHaveURL(/\/repos\/acme\/widgets\/settings\/ci$/);
   const radio = page.getByRole("radio", { name: gradeRadio });
+  await expect(radio).toBeInViewport();
+
+  // The overview's link is to CI Mode too, the switch that judges the
+  // branch.
+  await page.getByRole("tab", { name: "Overview" }).click();
+  await headerGate(page).getByRole("button", { name: "Go to CI Mode" }).click();
+  await expect(page).toHaveURL(/\/repos\/acme\/widgets\/settings\/ci$/);
   await expect(radio).toBeInViewport();
   await radio.click();
   await expect(radio).toBeChecked();

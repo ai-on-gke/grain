@@ -34,7 +34,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
@@ -397,6 +396,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	}
 	if task.Target != nil {
 		prompt += pairedBranchesSection(history.PairedBranches)
+		prompt += relayedReviewThreadsSection(task)
 	}
 	// Said out loud because neither half is discoverable from the tools
 	// alone. Nothing stops a run pushing repeatedly -- the branch is its
@@ -654,6 +654,9 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	}
 	if history.BaseIncident != "" {
 		prompt += "\n\n" + strings.TrimRight(history.BaseIncident, "\n")
+	}
+	if task.Target != nil {
+		prompt += relayedReviewThreadsSection(task)
 	}
 	if task.Target != nil && !grainci.Granted(task.Grants) && (history.Repair || model.FixesBaseBranch(task)) {
 		prompt += repairCISection()
@@ -1477,12 +1480,12 @@ func grainCLISection(task model.Task) string {
 
 // grainCLIGrants is the `grain` commands each of grain's own capability
 // grants unlocks, in the order grainCLIGrantBullets lists them. A grant
-// whose tools stay model tools (dispatch-control, self-upgrade, db-write,
-// team-broadcast) is not here: the tool roster already names those.
+// whose tools stay model tools (self-upgrade, db-write) is not here: the
+// tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
 	{model.SelfDebugCapability, "`grain ls/read/grep src://...`, `grain task list`, `grain task read <id>`, " +
-		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d] [--repo <r>]`, `grain read deploy://pipeline-changes`"},
-	{"grain-log", "`grain log [--since <t>] [--min-priority err] [--contains <s>] [--max-lines N]`"},
+		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes`"},
+	{"grain-log", "`grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority err] [--contains <s>] [--max-lines N]`"},
 	{"deployment-health", "`grain health`, `grain read deploy://state`"},
 	{"bootstrap-playbooks", "`grain playbooks [<name>]`"},
 	{"memory", "`grain memory list`, `grain memory read <key>`, `grain memory write [--repo owner/name] --file <f>`, " +
@@ -3409,7 +3412,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
 		result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
-		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, comments, result, runErr)
+		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)
 		agentRan = true
 		if result != nil {
 			resumableSession = result.ResumableSession
@@ -4107,7 +4110,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 var toolGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName, memory.CapabilityName,
 	grainci.CapabilityName, deploymenthealth.CapabilityName, selfupgrade.CapabilityName,
-	dispatchcontrol.CapabilityName, readissues.CapabilityName,
+	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 }
 

@@ -55,8 +55,9 @@ func TestChangeChecksAnswersThroughTheRegisteredChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := client.ChangeChecks(ctx, "81", ui.ChangeChecksRequest{Op: ui.ChangeChecksStatus}); err == nil ||
-		!strings.Contains(err.Error(), "no CL yet") {
-		t.Fatalf("status before any CL = %v, want it to say there is no CL yet", err)
+		!strings.Contains(err.Error(), "no CL yet") ||
+		!strings.Contains(err.Error(), "citc_cl_create") || !strings.Contains(err.Error(), "when the run ends") {
+		t.Fatalf("status before any CL = %v, want it to say there is no CL yet and that a run's CL is linked when it ends", err)
 	}
 	refusal, err := client.ChangeChecks(ctx, "81", ui.ChangeChecksRequest{Op: ui.ChangeChecksRefusal, Tool: "run_ci_job"})
 	if err != nil || refusal.Refusal != "run_ci_job: not on a CL" {

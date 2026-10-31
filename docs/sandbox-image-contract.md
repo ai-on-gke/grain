@@ -67,7 +67,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 VM PACK --variant=debian AS custom_guest
-LABEL dev.grain.sandbox.contract="1"
+LABEL dev.grain.sandbox.contract="2"
 ```
 
 Build and check it with:
@@ -108,8 +108,8 @@ grain sandbox-image check --backend k8s --probe my-registry.example.com/team/k8s
 ### Two Integer Contracts
 
 1. **`dev.grain.sandbox.contract`** (`/etc/grain/sandbox-contract`, defined in `pkg/sandboximage/contract.go`):
-   - `Contract` (current: `1`): the version of the Grain-to-sandbox boundary this build of Grain stamps and expects.
-   - `MinimumContract` (current: `1`): the oldest sandbox contract version this build of Grain can still drive.
+   - `Contract` (current: `2`): the version of the Grain-to-sandbox boundary this build of Grain stamps and expects.
+   - `MinimumContract` (current: `2`): the oldest sandbox contract version this build of Grain can still drive.
 2. **`dev.granule.guest.contract`** (`/etc/granule/guest-contract`, defined in `third_party/granule/pkg/guestimage/contract.go`, Granule microVM backends only):
    - `Contract` (current: `1`): the version of the Granule VMM-to-guest boundary (`granule-agent`, vsock port 1024, kernel command line, `granule-configure-*` units).
    - `MinimumContract` (current: `1`): the oldest Granule guest contract version the bundled Granule runtime can boot.
@@ -148,6 +148,17 @@ the image this build of grain is stamped for.
   appears when grain cannot read the labels at all, for example a private
   registry the daemon has no credentials for; check those images with
   `grain sandbox-image check`.
+- **A copy of the stock image is not a custom image.** When
+  `sandbox_image`, `k8s_sandbox_image` or `k8s_granule_image` names grain's
+  own stock image (the same `<owner>/grain/guest` or
+  `<owner>/grain/k8s-sandbox` repository, in any registry) at a
+  `sha-<short>` or `vX.Y.Z` tag other than the one this daemon is stamped
+  for, the pin holds every sandbox at that build while upgrades move the
+  daemon on. On a moving tag, the same applies when its
+  `org.opencontainers.image.revision` label names a different commit.
+  Settings shows a warning beside the field, and **System → Sandboxes**
+  shows one for each pinned setting. Clear the setting to follow the
+  stamp, or move the pin to the stamped tag.
 
 This setting replaces the old **Sandbox setup script**
 (`grain_config.sandbox_setup_script` / `scripts/guest-customization.sh`).
@@ -178,6 +189,7 @@ same list for the running build of grain.
 | `curl` | Reaches the in-sandbox namespace and git proxy at `127.0.0.1:9728`. |
 | `ca-certificates` (`/etc/ssl/certs/ca-certificates.crt`) | TLS to registries, package mirrors and model APIs. |
 | `python3-minimal` (`os`, `socket`, `sys`, `threading`) | `GuestForwarder`, the capability port forwarder. |
+| `/usr/local/bin/grain` (`cmd/grain-sandbox`) offering `grain ls`, `read`, `grep`, `ci`, `pr`, `task`, `api` and `host-script` | The sandbox CLI agents reach their deployment, CI and pull request through (`docs/design/sandbox-first-agent-surface.md`); the orchestrator no longer offers those as MCP tools. `grain sandbox-image check -probe` runs `GRAIN_SANDBOX_CLI=0 /usr/local/bin/grain help` and fails an image whose `grain` does not list them. |
 | `dev.grain.sandbox.contract` label and `/etc/grain/sandbox-contract` | The contract version grain checks the image against. |
 
 ### Granule microVM backends only (`guest-base`)
@@ -220,3 +232,4 @@ grain sandbox-image check -json <image>
 | Version | `MinimumContract` | `dev.granule.guest.contract` | Summary & Required Action for Custom Images |
 | :--- | :--- | :--- | :--- |
 | **1** | **1** | **1** | Initial versioned Grain sandbox contract. Base images `ghcr.io/bwsalmon/grain/guest-base` and `ghcr.io/bwsalmon/grain/k8s-sandbox-base` carry `dev.grain.sandbox.contract="1"` and `/etc/grain/sandbox-contract` (`"1\n"`), user `debian` (`uid 1000`, `/home/debian`), `/home/agent -> /home/debian`, `git`, `curl`, `ca-certificates`, `python3-minimal` (`os, socket, sys, threading` for `GuestForwarder`), and on Granule microVMs `systemd`, passwordless `sudo`, and `/usr/local/bin/grain-connect`. |
+| **2** | **2** | **1** | In-sandbox grain CLI. Every base image carries `/usr/local/bin/grain` (`cmd/grain-sandbox`) with the sandbox CLI (`grain ls`, `read`, `grep`, `ci`, `pr`, `task`, `api`) beside `grain host-script`, because the orchestrator now strips those tools from MCP and has agents run them in the sandbox. `MinimumContract` rises to 2: a v1 image may carry a `host-script`-only `grain`, which leaves an agent unable to read its own CI or pull request. **Rebuild custom images `FROM` a current `guest-base` or `k8s-sandbox-base`.** |

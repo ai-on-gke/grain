@@ -778,3 +778,27 @@ func TestHostScriptBindsDataPlaneOnlyOnceAScriptIsConfigured(t *testing.T) {
 		t.Fatalf("configured host-script did not bind data plane: listening=%v port=%d", s.hostScripts.listening, s.hostScripts.port)
 	}
 }
+
+func TestCheckBuiltinConfigAppliesConfigureRulesWithoutSecrets(t *testing.T) {
+	secretMap := map[string]any{"name": "walk-secrets", "keys": map[string]any{"token": map[string]any{}}}
+	for name, tc := range map[string]struct {
+		builtin string
+		config  map[string]any
+		want    string
+	}{
+		"secret map with no stored value": {"config-map", map[string]any{"secrets": []any{secretMap}, "secret_values": "$secret:x/secret_values"}, ""},
+		"relative path":                   {"config-map", map[string]any{"config_maps": []any{map[string]any{"name": "m", "data": map[string]any{"k": map[string]any{"path": "rel/k"}}}}}, "not a clean absolute path"},
+		"bad key":                         {"config-map", map[string]any{"config_maps": []any{map[string]any{"name": "m", "data": map[string]any{"a/b": map[string]any{}}}}}, `key "a/b" must match`},
+		"env reference":                   {"host-script", map[string]any{"scripts": []any{map[string]any{"name": "s", "description": "d", "script": "x", "timeout": 5, "env": map[string]any{"T": "$env:DEPLOY_TOKEN"}}}}, ""},
+		"timeout out of range":            {"host-script", map[string]any{"scripts": []any{map[string]any{"name": "s", "description": "d", "script": "x", "timeout": 100000}}}, "timeout must be"},
+		"not a checked built-in":          {"gcp", map[string]any{"anything": true}, ""},
+	} {
+		err := CheckBuiltinConfig(tc.builtin, tc.config)
+		if tc.want == "" && err != nil {
+			t.Errorf("%s: %v, want accepted", name, err)
+		}
+		if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%s: err = %v, want one containing %q", name, err, tc.want)
+		}
+	}
+}

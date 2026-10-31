@@ -28,6 +28,7 @@ package sandboxcli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -333,7 +335,7 @@ func (c *sandboxCLI) run(args []string) error {
 	case "notify":
 		return c.notify(p)
 	case "task list":
-		return c.fs("task://", url.Values{"list": {""}})
+		return c.taskList(p)
 	case "task read":
 		id, err := p.arg(0, "id")
 		if err != nil {
@@ -385,7 +387,7 @@ func (c *sandboxCLI) run(args []string) error {
 		return c.fs("deploy://health", nil)
 	case "log":
 		uri := "deploy://grain.log"
-		if source := p.optArg(0); source != "" {
+		if source := grainLogSource(p); source != "" {
 			uri += "/" + source
 		}
 		return c.fs(uri, grainLogQuery(p))
@@ -393,7 +395,21 @@ func (c *sandboxCLI) run(args []string) error {
 		if name := p.optArg(0); name != "" {
 			return c.fs("src://playbooks/"+name, nil)
 		}
-		return c.fs("src://playbooks", url.Values{"list": {""}})
+		// One playbook name per line, as `grain playbooks <name>` takes it.
+		var listing bytes.Buffer
+		p, err := fsPath("src://playbooks")
+		if err != nil {
+			return err
+		}
+		if err := c.get(p, url.Values{"list": {""}}, &listing); err != nil {
+			return err
+		}
+		for _, line := range strings.Split(strings.TrimSpace(listing.String()), "\n") {
+			if name := strings.TrimSuffix(line, ".md"); name != "" && !strings.HasSuffix(name, "/") {
+				fmt.Fprintln(c.out, name)
+			}
+		}
+		return nil
 	case "issue list":
 		return c.get("/cli/issues", p.query("repo", "label", "limit"), c.out)
 	case "issue read":
@@ -649,7 +665,7 @@ var sandboxBoolFlags = map[string]bool{
 	"i": true, "full": true, "json": true, "all": true, "comments": true,
 	"no-repo": true, "fixes-base-branch": true, "no-port": true,
 	"no-follow-up": true, "park": true, "auto-merge": true,
-	"hold-for-approval": true, "at-front": true,
+	"hold-for-approval": true, "at-front": true, "stalled": true,
 }
 
 func parseSandboxArgs(args []string) (sandboxArgs, error) {
@@ -705,13 +721,26 @@ func (p sandboxArgs) getAll(name string) []string { return p.multiFlags[name] }
 
 func (p sandboxArgs) has(name string) bool { _, ok := p.flags[name]; return ok }
 
+// only refuses any flag not among names, for a command whose every flag
+// narrows its answer: one it ignored would answer a question nobody asked.
+func (p sandboxArgs) only(cmd string, names ...string) error {
+	for name := range p.flags {
+		if !slices.Contains(names, name) {
+			return fmt.Errorf("%s: unknown flag --%s: run 'grain %s --help' for usage", cmd, name, cmd)
+		}
+	}
+	return nil
+}
+
 // grainLogQuery is `grain log`'s flags as deploy://grain.log's query:
 // the window, priority, substring and line cap read_grain_log takes, and
 // --tail, which the namespace applies to whatever that answers.
 func grainLogQuery(p sandboxArgs) url.Values {
 	q := p.query("tail", "since", "until", "contains")
-	if v := p.get("min-priority"); v != "" {
-		q.Set("min_priority", v)
+	for _, name := range []string{"priority", "min-priority"} {
+		if v := p.get(name); v != "" {
+			q.Set("min_priority", v)
+		}
 	}
 	for _, name := range []string{"max-lines", "lines"} {
 		if v := p.get(name); v != "" {
@@ -719,6 +748,15 @@ func grainLogQuery(p sandboxArgs) url.Values {
 		}
 	}
 	return q
+}
+
+// grainLogSource is the journal `grain log` reads: --source when given,
+// else its first argument, else "" for the daemon's own.
+func grainLogSource(p sandboxArgs) string {
+	if v := p.get("source"); v != "" {
+		return v
+	}
+	return p.optArg(0)
 }
 
 // metricsQuery is `grain metrics`' flags as deploy://metrics' query;
