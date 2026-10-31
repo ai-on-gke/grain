@@ -42,7 +42,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
@@ -50,7 +49,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
@@ -209,10 +207,6 @@ func OfferedCapabilities() []Capability {
 			Description: "Let this task run commands on grain's own host -- restart services, edit config, call the grain CLI -- each one needing a live reply in the task's chat before it runs"},
 		{ID: selfupgrade.CapabilityName, Name: "Self upgrade",
 			Description: selfupgrade.Description},
-		{ID: "pipeline-control", Name: "Pipeline control",
-			Description: "Emergency controls to pause or resume automated merges and pipeline dispatch on repositories"},
-		{ID: dispatchcontrol.CapabilityName, Name: "Dispatch control",
-			Description: dispatchcontrol.Description},
 		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
 			Description: prioritydispatch.Description},
 		{ID: durable.CapabilityName, Name: "Durable",
@@ -225,8 +219,6 @@ func OfferedCapabilities() []Capability {
 			Description: "Let this task write down what grain has learned about working here -- notes added to the prompt of every run dispatched afterwards"},
 		{ID: "release-notes", Name: "Release notes",
 			Description: "Let this task read how much work this deployment has done over a week -- pull requests merged, tasks completed, runs, and the same counts per repository -- and publish that week's release notes, shown in the UI and exported to the state repository"},
-		{ID: teambroadcast.CapabilityName, Name: "Team broadcast",
-			Description: teambroadcast.Description},
 		{ID: "github-sandbox", Name: "GitHub sandbox",
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
 		{ID: "console", Name: "Interactive console",
@@ -1420,4 +1412,9 @@ type StateRepoSyncFailure struct {
 	// Repo names the repository the settings are not reaching, for the
 	// sentence ("not exported to grain/config since ...").
 	Repo string `json:"repo,omitempty"`
+	// External is set when Repo is an external config repository, which
+	// grain only reads from: what is failing there is configuration
+	// merged in that repository not reaching this deployment, not the
+	// UI's settings failing to be exported (UI settings are read-only).
+	External bool `json:"external,omitempty"`
 }

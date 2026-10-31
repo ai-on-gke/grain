@@ -37,6 +37,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -334,7 +335,7 @@ func (c *sandboxCLI) run(args []string) error {
 	case "notify":
 		return c.notify(p)
 	case "task list":
-		return c.fs("task://", url.Values{"list": {""}})
+		return c.taskList(p)
 	case "task read":
 		id, err := p.arg(0, "id")
 		if err != nil {
@@ -661,7 +662,7 @@ var sandboxBoolFlags = map[string]bool{
 	"i": true, "full": true, "json": true, "all": true, "comments": true,
 	"no-repo": true, "fixes-base-branch": true, "no-port": true,
 	"no-follow-up": true, "park": true, "auto-merge": true,
-	"hold-for-approval": true, "at-front": true,
+	"hold-for-approval": true, "at-front": true, "stalled": true,
 }
 
 func parseSandboxArgs(args []string) (sandboxArgs, error) {
@@ -716,6 +717,17 @@ func (p sandboxArgs) get(name string) string { return p.flags[name] }
 func (p sandboxArgs) getAll(name string) []string { return p.multiFlags[name] }
 
 func (p sandboxArgs) has(name string) bool { _, ok := p.flags[name]; return ok }
+
+// only refuses any flag not among names, for a command whose every flag
+// narrows its answer: one it ignored would answer a question nobody asked.
+func (p sandboxArgs) only(cmd string, names ...string) error {
+	for name := range p.flags {
+		if !slices.Contains(names, name) {
+			return fmt.Errorf("%s: unknown flag --%s: run 'grain %s --help' for usage", cmd, name, cmd)
+		}
+	}
+	return nil
+}
 
 // grainLogQuery is `grain log`'s flags as deploy://grain.log's query:
 // the window, priority, substring and line cap read_grain_log takes, and

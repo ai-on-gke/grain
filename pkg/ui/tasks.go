@@ -724,8 +724,7 @@ type TaskDetail struct {
 	SuspendedSession *TaskSuspendedSession `json:"suspendedSession,omitempty"`
 	// DeploymentWide is every team-scoped capability this task holds in
 	// its deployment-wide form (admincaps.TeamScoped, grain/task-2555):
-	// self-debug reading every team's tasks and metrics, pipeline-control
-	// pausing the whole deployment. A capability held but not named here
+	// self-debug reading every team's tasks and metrics. A capability held but not named here
 	// reaches only the task's own team's work -- which is what `grain
 	// mcpserver` reads it as, so an older daemon that never sends it
 	// leaves a run team-scoped rather than wider than it should be.
@@ -1997,6 +1996,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 // tasks of the teams they belong to (bwsalmon/grain#2415). ?repo=owner/name
 // answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
+	if q, ok := parseTaskListQuery(r.URL.Query()); ok {
+		s.handleFilteredTaskList(w, r, q)
+		return
+	}
 	body, etag, err := s.taskList.response(r.Context(), s.tasks, strings.TrimSpace(r.URL.Query().Get("repo")))
 	if err != nil {
 		writeClientError(w, err)

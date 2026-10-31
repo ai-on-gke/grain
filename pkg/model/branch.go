@@ -81,13 +81,26 @@ var branchNameSafe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 
 // ValidBranchName reports whether name is safe to create on GitHub as a
 // ref -- non-empty, drawn from branchNameSafe's own charset, and free of
-// the "..", leading/trailing or doubled "/" that a git ref itself
-// refuses.
+// what a git ref itself refuses (git check-ref-format) within that
+// charset: "..", a leading, trailing or doubled "/", a trailing ".", and
+// a path component that starts with "." or ends in ".lock". The last
+// three were let through until 2026-10-30, when Settings → Agents saved
+// the branch name template grain/task-{id}.lock, every branch of which
+// git would have refused at the first push.
 func ValidBranchName(name string) bool {
 	if !branchNameSafe.MatchString(name) {
 		return false
 	}
-	return !strings.Contains(name, "..") && !strings.Contains(name, "//") && !strings.HasSuffix(name, "/")
+	if strings.Contains(name, "..") || strings.Contains(name, "//") ||
+		strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".") {
+		return false
+	}
+	for _, part := range strings.Split(name, "/") {
+		if strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+	return true
 }
 
 // ErrInvalidBranchName is returned by CreateBranch when name is empty or

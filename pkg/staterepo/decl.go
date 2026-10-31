@@ -1348,7 +1348,11 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 		for _, entry := range node.Content {
 			row := map[string]any{parent: id, "via": string(model.GrantByLabel), "folder": nil}
 			if entry.Kind == yaml.ScalarNode {
-				row["capability"] = entry.Value
+				// A retired in-process capability is read as the api
+				// grant it became (model.CanonicalLegacyGrant), so a
+				// grain/config exported before the store migration that
+				// rewrote it imports as what the store now holds.
+				row["capability"] = model.CanonicalLegacyGrant(entry.Value)
 				out = append(out, row)
 				continue
 			}
@@ -1360,6 +1364,9 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 			capability, ok := named["capability"]
 			if !ok {
 				return nil, fail("a grant is a capability, or {capability, via, folder}")
+			}
+			if name, isText := capability.(string); isText {
+				capability = model.CanonicalLegacyGrant(name)
 			}
 			row["capability"] = capability
 			if via, ok := named["via"]; ok {

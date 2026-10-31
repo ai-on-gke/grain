@@ -112,7 +112,7 @@ jobs:
             go test -race -shuffle=on -count=2 -timeout 110m ./...
           status=$?
           if [ "$status" -ne 0 ]; then
-            grep -aE '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-long.log | tail -n 15 | while IFS= read -r line; do
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-long.log | tail -n 10 | while IFS= read -r line; do
               echo "::error title=go-long::$line"
             done
             exit "$status"
@@ -161,7 +161,7 @@ jobs:
           make soak 2>&1 | tee /tmp/soak.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -E '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/soak.log | tail -n 10 | while IFS= read -r line; do
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/soak.log | tail -n 10 | while IFS= read -r line; do
               echo "::error title=staterepo-soak::$line"
             done
             exit "$status"

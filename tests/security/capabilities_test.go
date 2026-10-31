@@ -88,17 +88,20 @@ func TestAProposalCannotWidenItsParentsCapabilities(t *testing.T) {
 }
 
 // The publishing credentials write to a repository's packages. They are
-// CI's alone -- a task holding one is refused it -- and in CI they go to
-// a release or a run somebody asked for by hand, never to a cron:
-// neither a caller's own schedule run nor the one grain fires itself.
-// cmd/grain's resolveCICapabilities asks exactly these two questions of
-// each provider (SupportsCIEvent, then SupportsTrustedSchedule).
+// CI's alone -- a task holding one is refused it -- and in CI they never
+// go to a caller's own schedule run (SupportsCIEvent("schedule") is
+// false for both). Only package-publish opts in to the trusted schedule
+// grain itself fires from the default branch so release-train.yml can
+// publish rc and pending images; registry-push does not.
 func TestScheduledCIGetsNoPublishingCredential(t *testing.T) {
-	providers := []model.CapabilityProvider{
-		packagepublish.New(packagepublish.Config{}),
-		registrypush.New(),
-	}
-	for _, p := range providers {
+	for _, tc := range []struct {
+		p              model.CapabilityProvider
+		trustedAllowed bool
+	}{
+		{packagepublish.New(packagepublish.Config{}), true},
+		{registrypush.New(), false},
+	} {
+		p := tc.p
 		name := p.Spec().Name
 		if !p.Spec().CIOnly {
 			t.Errorf("%s is not CI-only: a task could hold a publishing credential", name)
@@ -116,8 +119,9 @@ func TestScheduledCIGetsNoPublishingCredential(t *testing.T) {
 				t.Errorf("%s is handed to a %s run", name, untrusted)
 			}
 		}
-		if trusted, ok := p.(model.TrustedScheduleCapability); ok && trusted.SupportsTrustedSchedule() {
-			t.Errorf("%s opts in to grain's own trusted schedule runs", name)
+		trusted, ok := p.(model.TrustedScheduleCapability)
+		if got := ok && trusted.SupportsTrustedSchedule(); got != tc.trustedAllowed {
+			t.Errorf("%s SupportsTrustedSchedule() = %v, want %v", name, got, tc.trustedAllowed)
 		}
 
 		reg := model.NewCapabilityRegistry(p)
