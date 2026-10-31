@@ -351,6 +351,9 @@ func (p *GitProxy) taskCIRef(ctx context.Context, scope namespace.Scope, task st
 		return "", "", namespace.RefuseCapability("grain ci", "grain-ci")
 	}
 	if own := scope.TaskIDStr; own != "" && strings.EqualFold(own, task) {
+		if scope.TaskRepo == "" {
+			return "", "", errNoTaskRepo
+		}
 		return scope.TaskRepo, scope.TaskBranch, nil
 	}
 	lookup, ok := p.NamespaceScopes.(TaskRefLookup)

@@ -351,7 +351,7 @@ func (r TestHistoryReport) Render() string {
 				refInfo = exec.Repo + " " + refInfo
 			}
 			if commitShort != "" {
-				refInfo = fmt.Sprintf("%s @ %s", exec.Ref, commitShort)
+				refInfo = fmt.Sprintf("%s @ %s", refInfo, commitShort)
 			}
 			jobName := exec.JobName
 			if jobName == "" {

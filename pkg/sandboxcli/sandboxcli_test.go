@@ -427,10 +427,10 @@ func TestSandboxCLIReadsOtherTasksCI(t *testing.T) {
 func TestSandboxCLIOnANoRepoTask(t *testing.T) {
 	store := ci.NewRunStore(10)
 	at := time.Now()
-	store.Put(ci.Run{ID: "run-w", Repo: "acme/widgets", Ref: "main", Conclusion: ci.ConclusionSuccess, StartedAt: &at,
+	store.Put(ci.Run{ID: "run-w", Repo: "acme/widgets", Ref: "main", Commit: "abc1234567890", Conclusion: ci.ConclusionSuccess, StartedAt: &at,
 		Jobs: []ci.JobRun{{Name: "go", Conclusion: ci.ConclusionSuccess, Steps: []ci.StepRun{
 			{Name: "Test", Conclusion: ci.ConclusionSuccess, Output: "--- PASS: TestThing (0.1s)\n"}}}}})
-	store.Put(ci.Run{ID: "run-l", Repo: "acme/library", Ref: "grain/dep/task-7", Conclusion: ci.ConclusionSuccess, StartedAt: &at,
+	store.Put(ci.Run{ID: "run-l", Repo: "acme/library", Ref: "grain/dep/task-7", Commit: "def4567890123", Conclusion: ci.ConclusionSuccess, StartedAt: &at,
 		Jobs: []ci.JobRun{{Name: "test", Conclusion: ci.ConclusionSuccess, Steps: []ci.StepRun{
 			{Name: "Unit", Conclusion: ci.ConclusionSuccess, Output: "--- PASS: TestThing (0.2s)\n"}}}}})
 	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
