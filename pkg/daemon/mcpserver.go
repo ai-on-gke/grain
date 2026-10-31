@@ -953,7 +953,7 @@ func (d DaemonGrainCI) GrainCI(ctx context.Context) (*mcp.GrainCIVerdict, error)
 // not a conversation. The cost is one indexed read of task_comment per
 // second per waiting run, over loopback, which is nothing beside a
 // sandbox standing idle for the same second.
-const chatPollInterval = time.Second
+const chatPollInterval = 100 * time.Millisecond
 
 // daemonChat implements mcp.Chatter by asking a running "grain daemon" to
 // post what this run has to say into its own task's conversation (pkg/ui's
@@ -1008,11 +1008,44 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 	if wait <= 0 {
 		return mcp.ChatTurn{}, nil
 	}
-	interval := d.poll
-	if interval <= 0 {
-		interval = chatPollInterval
-	}
 	deadline := time.Now().Add(wait)
+	if d.poll <= 0 {
+		for {
+			if ctx.Err() != nil {
+				return mcp.ChatTurn{}, ctx.Err()
+			}
+			rem := time.Until(deadline)
+			if rem <= 0 {
+				return mcp.ChatTurn{}, nil
+			}
+			waitSlice := min(rem, 5*time.Second)
+			pollStart := time.Now()
+			pollCtx, cancelPoll := context.WithDeadline(ctx, deadline)
+			messages, err := d.client.TaskMessagesWait(pollCtx, d.taskID, posted.ID, waitSlice)
+			cancelPoll()
+			if err == nil && len(messages) > 0 {
+				placeMessageAttachments(ctx, d.client, d.taskID, messages, d.writeFile)
+				d.delivered.deliveredByChat(ctx, messages)
+				return mcp.ChatTurn{Reply: joinMessages(messages)}, nil
+			}
+			if time.Now().After(deadline) {
+				return mcp.ChatTurn{}, nil
+			}
+			if elapsed := time.Since(pollStart); elapsed < chatPollInterval {
+				sleep := min(chatPollInterval-elapsed, time.Until(deadline))
+				if sleep > 0 {
+					timer := time.NewTimer(sleep)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return mcp.ChatTurn{}, ctx.Err()
+					case <-timer.C:
+					}
+				}
+			}
+		}
+	}
+	interval := d.poll
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -1020,18 +1053,6 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 		case <-ctx.Done():
 			return mcp.ChatTurn{}, ctx.Err()
 		case now := <-ticker.C:
-			// A read that fails is not a wait that ends: the next tick is
-			// a second away and will most likely succeed, where treating
-			// one dropped request as "nobody is there" would end a
-			// conversation over a blip. That covers a daemon restart too
-			// (docs/non-disruptive-upgrade.md): this process is the CLI's,
-			// not the daemon's, so it outlives an upgrade with the CLI,
-			// and the first poll the new daemon answers reads everything
-			// said since the run's own message, a reply posted after the
-			// restart included. Each read is bounded by the wait's own
-			// deadline, so the client's restart-gap retry (ui.RetryPolicy,
-			// two minutes) cannot hold the turn past the time it said it
-			// would wait.
 			pollCtx, cancelPoll := context.WithDeadline(ctx, deadline)
 			messages, err := d.client.TaskMessages(pollCtx, d.taskID, posted.ID)
 			cancelPoll()

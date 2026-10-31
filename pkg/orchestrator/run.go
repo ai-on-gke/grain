@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -2940,8 +2941,10 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	// Before the clone, so the CLI every prompt names is there whatever
 	// the clone does. After the grants' own placements, so nothing a
 	// grant installs in the same directory is placed over it.
-	if err := placeSandboxGrain(ctx, cfg.SandboxGrainBinary, sandboxRoot, placer); err != nil {
-		log.Printf("orchestrator: task %s: the sandbox keeps its image's grain: %v", task.ID, err)
+	if !cfg.sandboxReused {
+		if err := placeSandboxGrain(ctx, cfg.SandboxGrainBinary, sandboxRoot, placer); err != nil {
+			log.Printf("orchestrator: task %s: the sandbox keeps its image's grain: %v", task.ID, err)
+		}
 	}
 
 	var prepared checkout
@@ -2955,9 +2958,27 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		if (cfg.GitRemoteBase != "" || cloneURL != "") && task.Target != nil && !cfg.sandboxReused {
 			notes.say(ctx, cloningNote(*task.Target))
 		}
-		prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
-		if checkoutErr == nil {
-			placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
+		if task.Target == nil && hasGrant(task, model.SelfDebugCapability) {
+			var srcOut checkout
+			var srcWG sync.WaitGroup
+			srcWG.Add(1)
+			go func() {
+				defer srcWG.Done()
+				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &srcOut, cfg.sandboxReused)
+			}()
+			prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			srcWG.Wait()
+			if checkoutErr == nil {
+				prepared.GrainSource = srcOut.GrainSource
+				prepared.GrainSourceWhy = srcOut.GrainSourceWhy
+				prepared.GrainSourceRevision = srcOut.GrainSourceRevision
+				prepared.GrainSourceCommits = srcOut.GrainSourceCommits
+			}
+		} else {
+			prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			if checkoutErr == nil {
+				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
+			}
 		}
 	}
 
@@ -3324,8 +3345,29 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// legitimately end; runhost.Host adds its adoption allowance.
 		hostCtx := runhost.WithRun(agentCtx, runhost.Run{Task: task.ID, Run: d.RunID,
 			Deadline: runHostDeadline(cfg)})
+		var firstTurnOnce sync.Once
+		noteFirstTurn := func() {
+			firstTurnOnce.Do(func() {
+				if store != nil {
+					if ferr := store.SetRunFirstTurn(context.WithoutCancel(ctx), d.RunID, cfg.now()); ferr != nil {
+						log.Printf("orchestrator: run %s: recording first turn: %v", d.RunID, ferr)
+					}
+				}
+			})
+		}
+		runTools := make([]mcp.Tool, len(tools))
+		for i, t := range tools {
+			orig := t.Handler
+			if orig != nil {
+				t.Handler = func(tctx context.Context, args map[string]any) mcp.Result {
+					noteFirstTurn()
+					return orig(tctx, args)
+				}
+			}
+			runTools[i] = t
+		}
 		runCfg := agent.RunConfig{
-			Prompt: prompt, SuspendedPrompt: suspendedPrompt, Tools: tools, SandboxRoot: sandboxRoot, GranuleVM: granuleVM, Container: container, K8sPod: cfg.sandboxPod,
+			Prompt: prompt, SuspendedPrompt: suspendedPrompt, Tools: runTools, SandboxRoot: sandboxRoot, GranuleVM: granuleVM, Container: container, K8sPod: cfg.sandboxPod,
 			SandboxEnvFile: cfg.sandboxEnvFile,
 			SandboxHide:    cfg.sandboxHide,
 			// The MCP servers this run's capability grants expose, each
@@ -3415,6 +3457,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			OnResumableSession: early.record,
 		}
 		result, runErr = framework.Run(hostCtx, runCfg)
+		if runErr == nil || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != "")) {
+			noteFirstTurn()
+		}
 		// The stop rule, for a framework whose CLI cannot apply it from
 		// inside the run: a turn that ended promising more work, or a
 		// background run that ended with no closing move, is resumed

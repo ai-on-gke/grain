@@ -617,6 +617,22 @@ type Latency struct {
 	// filed a task actually waited. Every other stage above is an answer
 	// to "why is this number what it is".
 	LeadTime Distribution
+	// InteractiveStartup and BatchStartup break an attempt's startup down by
+	// phase (queued -> dispatched, sandbox acquire, prepare sandbox, agent
+	// launch -> first turn, and attempt started -> agent's first turn) for
+	// interactive sessions separately from batch tasks.
+	InteractiveStartup StartupBreakdown
+	BatchStartup       StartupBreakdown
+}
+
+// StartupBreakdown is the per-phase startup breakdown of attempts in the window
+// (model.RunStartup), computed separately for interactive and batch tasks.
+type StartupBreakdown struct {
+	QueuedToDispatched     Distribution
+	SandboxAcquire         Distribution
+	PrepareSandbox         Distribution
+	AgentLaunchToFirstTurn Distribution
+	StartedToFirstTurn     Distribution
 }
 
 // Runs is how the window's attempts turned out, and how much of the
@@ -959,7 +975,11 @@ func Compute(in Input) Report {
 
 	// --- latency ------------------------------------------------------
 	var approval, queue, setup, agent, attempt, retry, toFinish, lead []time.Duration
+	interactiveTask := make(map[string]bool, len(in.Tasks))
 	for _, t := range in.Tasks {
+		if t.Interactive {
+			interactiveTask[t.TaskID] = true
+		}
 		// Approved strictly after being filed: a task a human filed
 		// directly is approved in the same instant, and nobody waited.
 		if t.CreatedAt != nil && w.holds(t.ApprovedAt) && t.ApprovedAt.After(*t.CreatedAt) {
@@ -979,6 +999,10 @@ func Compute(in Input) Report {
 			lead = appendIfPositive(lead, t.CompletedAt.Sub(*t.CreatedAt))
 		}
 	}
+	type startupSamples struct {
+		queuedToDispatched, sandboxAcquire, prepareSandbox, agentLaunchToFirstTurn, startedToFirstTurn []time.Duration
+	}
+	var interactiveStartup, batchStartup startupSamples
 	for _, runs := range byTask {
 		for i, r := range runs {
 			if w.holds(r.AgentStartedAt) {
@@ -989,6 +1013,40 @@ func Compute(in Input) Report {
 				if r.AgentStartedAt != nil {
 					agent = appendIfPositive(agent, r.FinishedAt.Sub(*r.AgentStartedAt))
 				}
+			}
+			dst := &batchStartup
+			if interactiveTask[r.TaskID] {
+				dst = &interactiveStartup
+			}
+			startedAt := r.StartedAt
+			if r.QueuedAt != nil && w.holds(&startedAt) {
+				dst.queuedToDispatched = appendIfNonNegative(dst.queuedToDispatched, r.StartedAt.Sub(*r.QueuedAt))
+			}
+			if r.SandboxAcquiredAt != nil && w.holds(r.SandboxAcquiredAt) {
+				dst.sandboxAcquire = appendIfNonNegative(dst.sandboxAcquire, r.SandboxAcquiredAt.Sub(r.StartedAt))
+			}
+			prepEnd := r.SandboxPreparedAt
+			if prepEnd == nil {
+				prepEnd = r.AgentStartedAt
+			}
+			if w.holds(prepEnd) {
+				prepStart := r.StartedAt
+				if r.SandboxAcquiredAt != nil {
+					prepStart = *r.SandboxAcquiredAt
+				}
+				dst.prepareSandbox = appendIfNonNegative(dst.prepareSandbox, prepEnd.Sub(prepStart))
+			}
+			if w.holds(r.FirstTurnAt) {
+				launchStart := r.AgentStartedAt
+				if launchStart == nil {
+					launchStart = r.SandboxPreparedAt
+				}
+				if launchStart != nil {
+					dst.agentLaunchToFirstTurn = appendIfNonNegative(dst.agentLaunchToFirstTurn, r.FirstTurnAt.Sub(*launchStart))
+				}
+				dst.startedToFirstTurn = appendIfNonNegative(dst.startedToFirstTurn, r.FirstTurnAt.Sub(r.StartedAt))
+			} else if r.FirstTurnAt == nil && w.holds(r.AgentStartedAt) {
+				dst.startedToFirstTurn = appendIfNonNegative(dst.startedToFirstTurn, r.AgentStartedAt.Sub(r.StartedAt))
 			}
 			if i == 0 {
 				continue
@@ -1001,15 +1059,26 @@ func Compute(in Input) Report {
 			}
 		}
 	}
+	summarizeStartup := func(s startupSamples) StartupBreakdown {
+		return StartupBreakdown{
+			QueuedToDispatched:     summarize(s.queuedToDispatched),
+			SandboxAcquire:         summarize(s.sandboxAcquire),
+			PrepareSandbox:         summarize(s.prepareSandbox),
+			AgentLaunchToFirstTurn: summarize(s.agentLaunchToFirstTurn),
+			StartedToFirstTurn:     summarize(s.startedToFirstTurn),
+		}
+	}
 	rep.Latency = Latency{
-		ApprovalWait: summarize(approval),
-		QueueWait:    summarize(queue),
-		SandboxSetup: summarize(setup),
-		AgentWork:    summarize(agent),
-		Attempt:      summarize(attempt),
-		RetryWait:    summarize(retry),
-		TimeToFinish: summarize(toFinish),
-		LeadTime:     summarize(lead),
+		ApprovalWait:       summarize(approval),
+		QueueWait:          summarize(queue),
+		SandboxSetup:       summarize(setup),
+		AgentWork:          summarize(agent),
+		Attempt:            summarize(attempt),
+		RetryWait:          summarize(retry),
+		TimeToFinish:       summarize(toFinish),
+		LeadTime:           summarize(lead),
+		InteractiveStartup: summarizeStartup(interactiveStartup),
+		BatchStartup:       summarizeStartup(batchStartup),
 	}
 
 	// --- capacity -----------------------------------------------------
@@ -1271,6 +1340,13 @@ func outcomeOf(r model.RunTiming) string {
 // by two different writers -- and neither is a latency worth reporting.
 func appendIfPositive(samples []time.Duration, d time.Duration) []time.Duration {
 	if d <= 0 {
+		return samples
+	}
+	return append(samples, d)
+}
+
+func appendIfNonNegative(samples []time.Duration, d time.Duration) []time.Duration {
+	if d < 0 {
 		return samples
 	}
 	return append(samples, d)
