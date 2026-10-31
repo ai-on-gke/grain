@@ -71,7 +71,8 @@ const suites = [
   {
     id: "suite-1",
     name: "Qualify",
-    mode: "once",
+    mode: "until_clean",
+    maxPasses: 3,
     items: [{ templateId: "template-1" }],
   },
 ];
