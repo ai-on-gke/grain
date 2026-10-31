@@ -584,7 +584,13 @@ func grantWaitActivity(wait model.GrantWait) *model.RunActivity {
 		wait.Capability == model.QuotaWaitCapability || wait.Capability == model.ChangeTargetWaitCapability {
 		// The resource is already the whole sentence: "no enabled
 		// connection serves model X", "all connections serving X are busy",
-		// 'team "x" has no GitHub credential for o/r -- ...'.
+		// 'team "x" has no GitHub credential for o/r -- ...'. One that
+		// already says what it is waiting for (a session's "waiting for
+		// sandbox budget: ...", dispatch.capacityReasonFor) is not
+		// prefixed a second time.
+		if strings.HasPrefix(wait.Resource, "waiting for ") {
+			return &model.RunActivity{Note: wait.Resource, At: &wait.WaitingAt, BySetup: true}
+		}
 		return &model.RunActivity{Note: "waiting: " + wait.Resource, At: &wait.WaitingAt, BySetup: true}
 	}
 	return &model.RunActivity{
