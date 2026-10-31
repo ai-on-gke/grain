@@ -321,9 +321,13 @@ import "strconv"
 //
 // 69 is 67 again for `pipeline-control`, now `api:pipeline-control`.
 //
-// 70 adds `keep_running` to `task`, `template` and `schedule`
+// 70 adds `settings_locked` to `grain_config`: whether non-bootstrap settings
+// are locked in the UI and REST API in favour of config repository pull
+// requests (off by default).
+//
+// 71 adds `keep_running` to `task`, `template` and `schedule`
 // (model.Task.KeepRunning, model.Template.KeepRunning, model.Schedule.KeepRunning).
-const SchemaVersion = 70
+const SchemaVersion = 71
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -2035,6 +2039,7 @@ var Tables = []string{
   ` + "`external_agent_api`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`sandbox_image_mirror`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
+  ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

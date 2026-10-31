@@ -1110,6 +1110,14 @@ func (m *StateManager) Sync(ctx context.Context) (ui.StateRepoStatus, error) {
 	return m.status(ctx), nil
 }
 
+// SyncAfterWrite exports a UI/API settings write immediately to
+// grain/config so the repository reflects the database without waiting
+// for the next background sync tick.
+func (m *StateManager) SyncAfterWrite(ctx context.Context) error {
+	_, err := m.sync(ctx)
+	return err
+}
+
 func writeStateRepoToken(dataDir, token string) (string, error) {
 	return writeRepoToken(dataDir, "state-repo-token", token)
 }

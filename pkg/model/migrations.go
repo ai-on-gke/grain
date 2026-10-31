@@ -393,6 +393,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     70,
+		Description: "add settings_locked to grain_config for opt-in UI/API settings lock",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `settings_locked` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     71,
 		Description: "add keep_running flag to task, template and schedule",
 		Statements: []string{
 			"ALTER TABLE `task` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
@@ -465,8 +472,8 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
-				if strings.Contains(strings.ToUpper(stmt), "ADD COLUMN") &&
-					(strings.Contains(strings.ToLower(err.Error()), "duplicate column name") ||
+				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
+					(strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") ||
 						strings.Contains(strings.ToLower(err.Error()), "already exists")) {
 					continue
 				}
