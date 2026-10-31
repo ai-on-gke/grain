@@ -325,7 +325,11 @@ import "strconv"
 // are locked in the UI and REST API in favour of config repository pull
 // requests (off by default).
 //
-// 71 changes no table: it upgrades `grain_config`.`task_branch_template`
+// 71 is 67 again for `memory`, now `api:memory`.
+//
+// 72 is 67 again for `release-notes`, now `api:release-notes`.
+//
+// 73 changes no table: it upgrades `grain_config`.`task_branch_template`
 // from the pre-slug default `grain/{deployment}/task-{id}`
 // (model.UnsluggedTaskBranchTemplate, seeded by NewDeploymentConfig
 // before grain/task-56) to `grain/{deployment}/task-{id}-{slug}`
@@ -334,7 +338,7 @@ import "strconv"
 // branch names in addition to the deployment and task-id uniquifiers.
 // Existing tasks keep the branch recorded on their row, and any other
 // template is left alone.
-const SchemaVersion = 71
+const SchemaVersion = 73
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -1279,6 +1283,19 @@ var Tables = []string{
   ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
+)`,
+
+	// task_run_startup records the per-phase startup timestamps of a run
+	// (queued_at -> started_at -> sandbox_acquired_at -> sandbox_prepared_at -> first_turn_at)
+	// so interactive and batch startup latency breakdowns can be reported on
+	// Attempt and in grain metrics without altering the frozen task_run DDL.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_startup`" + ` (
+  ` + "`run_id`" + `              TEXT     NOT NULL,
+  ` + "`queued_at`" + `           DATETIME NULL,
+  ` + "`sandbox_acquired_at`" + ` DATETIME NULL,
+  ` + "`sandbox_prepared_at`" + ` DATETIME NULL,
+  ` + "`first_turn_at`" + `       DATETIME NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
 )`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`lease`" + ` (

@@ -170,6 +170,7 @@ var notSettings = []string{
 	// reported it at release (model.CapabilityAuditRecord): grain's
 	// record of what happened, written after the run finished.
 	"task_run_capability_audit",
+	"task_run_startup",
 	// A run's suspension (model.Suspension): grain's record of how a run
 	// stopped, written in the transaction that finished it.
 	"task_suspension",

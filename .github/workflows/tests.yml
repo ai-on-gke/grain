@@ -28,6 +28,12 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Comma-separated job IDs to run (e.g. go-model,postgres); leave empty to run all jobs"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -44,8 +50,56 @@ env:
   npm_config_fetch_retry_maxtimeout: "120000"
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: ${{ github.workflow }}-changes-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    outputs:
+      go_program: ${{ steps.filter.outputs.go_program }}
+      go_backend: ${{ steps.filter.outputs.go_backend }}
+      go_unit: ${{ steps.filter.outputs.go_unit }}
+      granule: ${{ steps.filter.outputs.granule }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      lint: ${{ steps.filter.outputs.lint }}
+      terraform: ${{ steps.filter.outputs.terraform }}
+      go: ${{ steps.filter.outputs.go }}
+      go-e2e: ${{ steps.filter.outputs.go-e2e }}
+      go-orchestrator: ${{ steps.filter.outputs.go-orchestrator }}
+      go-model: ${{ steps.filter.outputs.go-model }}
+      go-unit: ${{ steps.filter.outputs.go-unit }}
+      postgres: ${{ steps.filter.outputs.postgres }}
+      run-host: ${{ steps.filter.outputs.run-host }}
+      host-script-container: ${{ steps.filter.outputs.host-script-container }}
+      ui-e2e: ${{ steps.filter.outputs.ui-e2e }}
+      installer-e2e: ${{ steps.filter.outputs.installer-e2e }}
+      installer: ${{ steps.filter.outputs.installer }}
+      package-cache: ${{ steps.filter.outputs.package-cache }}
+      real-vm: ${{ steps.filter.outputs.real-vm }}
+      real-kubernetes: ${{ steps.filter.outputs.real-kubernetes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify changed paths and selected jobs
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          INPUT_JOBS: ${{ inputs.jobs }}
+        run: ./scripts/github-ci-changes.sh
+
   go:
     name: go
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -120,6 +174,8 @@ jobs:
 
   go-e2e:
     name: go e2e
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go-e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -247,6 +303,8 @@ jobs:
 
   go-orchestrator:
     name: go orchestrator
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.go-orchestrator == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -300,6 +358,8 @@ jobs:
 
   go-model:
     name: go model
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.go-model == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -369,6 +429,8 @@ jobs:
 
   go-unit:
     name: go unit
+    needs: [changes]
+    if: needs.changes.outputs.go_unit == 'true' && needs.changes.outputs.go-unit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -439,6 +501,8 @@ jobs:
 
   granule:
     name: granule
+    needs: [changes]
+    if: needs.changes.outputs.granule == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -538,6 +602,8 @@ jobs:
 
   postgres:
     name: postgres
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.postgres == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -602,6 +668,8 @@ jobs:
 
   run-host:
     name: run host
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.run-host == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -644,6 +712,8 @@ jobs:
 
   host-script-container:
     name: host-script container
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.host-script-container == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -692,6 +762,8 @@ jobs:
 
   frontend:
     name: frontend
+    needs: [changes]
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -733,6 +805,8 @@ jobs:
 
   ui-e2e:
     name: ui e2e
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.ui-e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     concurrency:
@@ -821,6 +895,8 @@ jobs:
 
   lint:
     name: lint
+    needs: [changes]
+    if: needs.changes.outputs.lint == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -863,6 +939,8 @@ jobs:
 
   terraform:
     name: terraform
+    needs: [changes]
+    if: needs.changes.outputs.terraform == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -917,6 +995,8 @@ jobs:
 
   installer-e2e:
     name: installer
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.installer-e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -1010,6 +1090,8 @@ jobs:
 
   package-cache:
     name: package cache
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.package-cache == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -1200,7 +1282,8 @@ jobs:
   # self-hosted runner with KVM and pre-warmed guest image cache to enable.
   real-vm:
     name: real vm
-    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'
+    needs: [changes]
+    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true' && needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.real-vm == 'true'
     runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
     concurrency:
@@ -1229,7 +1312,8 @@ jobs:
   # memory/disk budgets and belongs on a larger or self-hosted runner.
   real-kubernetes:
     name: real kubernetes
-    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'
+    needs: [changes]
+    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true' && needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.real-kubernetes == 'true'
     runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
     concurrency:

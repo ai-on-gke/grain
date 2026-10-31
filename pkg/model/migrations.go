@@ -400,6 +400,16 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     71,
+		Description: "rewrite stored memory grants to api:memory (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"memory": "api:memory"}),
+	},
+	{
+		Version:     72,
+		Description: "rewrite stored release-notes grants to api:release-notes (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"release-notes": "api:release-notes"}),
+	},
+	{
+		Version:     73,
 		Description: "upgrade the pre-slug default task_branch_template (grain/{deployment}/task-{id}) to grain/{deployment}/task-{id}-{slug}",
 		Statements: []string{
 			"UPDATE `grain_config` SET `task_branch_template` = '" + DefaultTaskBranchTemplate + "' WHERE `task_branch_template` = '" + UnsluggedTaskBranchTemplate + "'",

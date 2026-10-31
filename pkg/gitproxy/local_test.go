@@ -107,6 +107,7 @@ func localGitOutput(t *testing.T, dir string, stdin string, args ...string) (str
 
 func newPushFixture(t *testing.T) (state, client, url string) {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	state = filepath.Join(root, "state")
 	runLocalGit(t, "", "init", "-q", "-b", "main", state)

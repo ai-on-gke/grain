@@ -164,7 +164,7 @@ func TestGitHubsRefusalOfATeamsCredentialNamesTheTeam(t *testing.T) {
 }
 
 func TestCISandboxSingleTenantDefaultTeamPATNoCredentialsJSON(t *testing.T) {
-	t.Parallel()
+	t.Setenv("HOME", t.TempDir())
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("git not installed")

@@ -140,6 +140,7 @@ func TestADeclaredPushSetIsWhatARunMayPushBeyondItsBranch(t *testing.T) {
 // client -- and everything else, including what it declares for itself
 // by editing `.grain` on its own branch, is refused.
 func TestADeclaredSchedulesRunPushesItsDeclaredRefs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	store, _ := sqlitetest.Open(t)
 	ctx := context.Background()
 	now := time.Date(2026, 10, 7, 18, 0, 0, 0, time.UTC)

@@ -246,7 +246,7 @@ func TestAHandEditOfASettingsDocumentIsApplied(t *testing.T) {
 	}
 	if err := store.PutTemplate(ctx, model.Template{
 		ID: "tpl-1", Name: "nightly", Title: "Run the nightly sweep", CreatedAt: now,
-		Grants: []model.Grant{{Capability: "memory", Via: model.GrantByLabel}},
+		Grants: []model.Grant{{Capability: "api:memory", Via: model.GrantByLabel}},
 	}); err != nil {
 		t.Fatalf("putting a template: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestAHandEditOfASettingsDocumentIsApplied(t *testing.T) {
 				continue
 			}
 			entry["title"] = "Run the nightly sweep, twice"
-			entry["grants"] = []any{"memory", "self-debug"}
+			entry["grants"] = []any{"api:memory", "self-debug"}
 			entry["fields"] = []any{map[string]any{"name": "area", "label": "Which area", "default": "ui"}}
 		}
 	})
@@ -279,7 +279,7 @@ func TestAHandEditOfASettingsDocumentIsApplied(t *testing.T) {
 	if tmpl.Title != "Run the nightly sweep, twice" {
 		t.Errorf("the title did not land: %q", tmpl.Title)
 	}
-	if len(tmpl.Grants) != 2 || tmpl.Grants[0].Capability != "memory" || tmpl.Grants[1].Capability != "self-debug" {
+	if len(tmpl.Grants) != 2 || tmpl.Grants[0].Capability != "api:memory" || tmpl.Grants[1].Capability != "self-debug" {
 		t.Errorf("the grants did not land: %+v", tmpl.Grants)
 	}
 	if len(tmpl.Fields) != 1 || tmpl.Fields[0].Name != "area" || tmpl.Fields[0].Default != "ui" {

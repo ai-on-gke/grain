@@ -2133,7 +2133,7 @@ func TestNewTaskBranchesCarryTheDeploymentID(t *testing.T) {
 }
 
 // A deployment seeded before grain/task-56 has UnsluggedTaskBranchTemplate
-// ("grain/{deployment}/task-{id}") stored in grain_config. Migration 71
+// ("grain/{deployment}/task-{id}") stored in grain_config. Migration 73
 // upgrades that stored default to DefaultTaskBranchTemplate
 // ("grain/{deployment}/task-{id}-{slug}") so newly created tasks include
 // a portion of the task's title in their branch name in addition to the
@@ -2153,11 +2153,11 @@ func TestMigrationUpgradesUnsluggedDefaultTaskBranchTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 70 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 72 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-70 store: %v", err)
+		t.Fatalf("migrating a version-72 store: %v", err)
 	}
 
 	after, err := store.GetConfig(ctx)
@@ -2185,11 +2185,11 @@ func TestMigrationUpgradesUnsluggedDefaultTaskBranchTemplate(t *testing.T) {
 		if err := store.PutConfig(ctx, *after); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 70 WHERE `id` = 1"); err != nil {
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 72 WHERE `id` = 1"); err != nil {
 			t.Fatal(err)
 		}
 		if err := model.New(db).Init(ctx); err != nil {
-			t.Fatalf("migrating a version-70 store with template %q: %v", custom, err)
+			t.Fatalf("migrating a version-72 store with template %q: %v", custom, err)
 		}
 		got, err := store.GetConfig(ctx)
 		if err != nil {
@@ -5287,8 +5287,8 @@ func TestAChangelistIsTheTasksChangeLikeAPullRequest(t *testing.T) {
 // TaskCIRef names the repository a task works in and the branch fixed
 // on it, which is what `grain ci list --task` and `grain pr status --task`
 // read CI under; and a live run's scope may read the task:// records of
-// tasks in its own repository, the ones it reads, and any an
-// api:tasks:read@repo grant names.
+// other tasks only in the repositories an api:tasks:read@repo grant
+// names -- not its own target or the ones it reads.
 func TestTaskCIRefAndTaskReadRepos(t *testing.T) {
 	t.Parallel()
 	store, _, ctx := openStore(t)
@@ -5319,12 +5319,45 @@ func TestTaskCIRefAndTaskReadRepos(t *testing.T) {
 	if scope.MayReadAllTasks {
 		t.Errorf("a repository-limited tasks:read reads every task: %+v", scope)
 	}
-	for _, r := range []string{tk.Target.String(), "owner/shared-lib", "other/repo"} {
-		if !scope.TaskReadRepos[r] {
-			t.Errorf("%s not in TaskReadRepos %v", r, scope.TaskReadRepos)
+	if !scope.TaskReadRepos["other/repo"] {
+		t.Errorf("other/repo not in TaskReadRepos %v", scope.TaskReadRepos)
+	}
+	for r := range scope.TaskReadRepos {
+		if r != "other/repo" {
+			t.Errorf("TaskReadRepos %v holds %s, which no api:tasks:read grant names", scope.TaskReadRepos, r)
 		}
 	}
-	if scope.TaskReadRepos["unrelated/repo"] {
-		t.Errorf("TaskReadRepos %v holds a repository nothing granted", scope.TaskReadRepos)
+}
+
+// A live run of a task with a target, reads and writes but no api: grant
+// reads no other task's task:// record: its repositories are its git and
+// CI scope, not a grant to read the tasks working in them.
+func TestSandboxNamespaceScopeReadsNoSiblingTasksWithoutAGrant(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	tk := task("f1e3", true)
+	tk.Reads = []model.RepoRef{{Owner: "owner", Name: "shared-lib"}}
+	tk.Writes = []model.WriteTarget{{Repo: model.RepoRef{Owner: "owner", Name: "deploy-config"}, Base: "deploy"}}
+	if err := store.PutTask(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{
+		ID: "f1e3-r1", TaskID: "f1e3", Sandbox: "sandbox-nogrant", Attempt: 1, StartedAt: now,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	scope, live, err := store.SandboxNamespaceScope(ctx, "sandbox-nogrant")
+	if err != nil || !live {
+		t.Fatalf("SandboxNamespaceScope = (live %v, %v)", live, err)
+	}
+	if scope.MayReadAllTasks || len(scope.TaskReadRepos) != 0 {
+		t.Errorf("a run with no tasks:read grant reads other tasks: MayReadAllTasks %v, TaskReadRepos %v",
+			scope.MayReadAllTasks, scope.TaskReadRepos)
+	}
+	// Its repositories are still its git and CI scope.
+	for _, r := range []string{tk.Target.String(), "owner/shared-lib", "owner/deploy-config"} {
+		if !scope.AllowedRepos[r] {
+			t.Errorf("%s not in AllowedRepos %v", r, scope.AllowedRepos)
+		}
 	}
 }
