@@ -639,6 +639,12 @@ var grantBodies = map[string]func(body []byte) []string{
 		if json.Unmarshal(body, &req) != nil {
 			return nil // the handler refuses a body it cannot read
 		}
+		if req.Attach != nil && !*req.Attach {
+			if strings.TrimSpace(req.Replace) == "" {
+				return nil
+			}
+			return []string{req.Replace}
+		}
 		names := []string{req.ID, req.Grant, req.Replace}
 		if req.Capability != "" {
 			grant, err := model.EncodeCapabilityGrant(protocol.GrantSpec{Capability: strings.TrimSpace(req.Capability), With: req.With})
