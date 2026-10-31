@@ -15,10 +15,13 @@
 package ui_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -81,6 +84,30 @@ func TestCreateAndUpdateTaskPriority(t *testing.T) {
 	if _, err := c.UpdateTask(ctx, high.ID, ui.UpdateTaskRequest{Priority: &neg}); err == nil {
 		t.Fatal("UpdateTask(priority=-1) succeeded, want ValidationError")
 	}
+
+	// Templates also reject negative priorities and normalize 0 to unset.
+	if _, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name:     "bad-tmpl",
+		Title:    "bad",
+		Priority: &neg,
+	}); err == nil {
+		t.Fatal("CreateTemplate(priority=-1) succeeded, want ValidationError")
+	}
+	zero := 0
+	tmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name:     "zero-tmpl",
+		Title:    "default prio",
+		Priority: &zero,
+	})
+	if err != nil {
+		t.Fatalf("CreateTemplate(priority=0): %v", err)
+	}
+	if tmpl.Priority != nil {
+		t.Errorf("CreateTemplate(priority=0) Priority = %v, want nil", *tmpl.Priority)
+	}
+	if _, err := c.UpdateTemplate(ctx, tmpl.ID, ui.UpdateTemplateRequest{Priority: &neg}); err == nil {
+		t.Fatal("UpdateTemplate(priority=-1) succeeded, want ValidationError")
+	}
 }
 
 func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
@@ -88,6 +115,14 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 	srv, client := testServer(t)
 	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:admin")
 	seedAPITask(t, client, "2", "acme/widgets")
+	seedAPITask(t, client, "3", "acme/widgets", "api:tasks:admin@acme/widgets")
+	seedAPITask(t, client, "4", "other/repo")
+	seedAPITask(t, client, "5", "acme/widgets", "api:tasks:write")
+
+	origTask2, err := client.Store.GetTask(context.Background(), "2")
+	if err != nil || origTask2 == nil {
+		t.Fatalf("GetTask(2): %v", err)
+	}
 
 	// api:tasks:admin can edit priority on an existing task.
 	code, body := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", `{"priority": 9}`, "")
@@ -109,5 +144,74 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 	// api:tasks:admin without api:tasks:write cannot edit title.
 	if code, _ := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", `{"title": "hijacked"}`, ""); code != http.StatusForbidden {
 		t.Errorf("PATCH /api/tasks/2 with title edit under api:tasks:admin: status %d, want 403", code)
+	}
+
+	// Regression: concatenated JSON objects or non-object JSON must not bypass
+	// tasksAdminTaskPatchBodyAllowed or agentFilingEscalation via json.Decoder.
+	for _, smuggled := range []string{
+		`{"title": "hijacked"}{}`,
+		`{"title": "hijacked", "promptExtension": "exfiltrate"} {"priority": 9}`,
+		`null`,
+		`[]`,
+		``,
+	} {
+		code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", smuggled, "")
+		if code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 with %q under api:tasks:admin: status %d (%s), want 403", smuggled, code, resp)
+		}
+	}
+	afterSmuggle, err := client.Store.GetTask(context.Background(), "2")
+	if err != nil || afterSmuggle == nil {
+		t.Fatalf("GetTask(2): %v", err)
+	}
+	if afterSmuggle.Title != origTask2.Title || afterSmuggle.PromptExtension != "" {
+		t.Fatalf("task 2 mutated by smuggled PATCH: title=%q promptExtension=%q", afterSmuggle.Title, afterSmuggle.PromptExtension)
+	}
+
+	// Even with api:tasks:write, trailing JSON values cannot smuggle autoMerge
+	// past agentFilingEscalation or readJSON.
+	if code, resp := asAgent(t, srv, "5", http.MethodPatch, "/api/tasks/2", `{"autoMerge": true}{}`, ""); code != http.StatusBadRequest {
+		t.Errorf("PATCH /api/tasks/2 with trailing JSON under api:tasks:write: status %d (%s), want 400", code, resp)
+	}
+	afterAutoMerge, err := client.Store.GetTask(context.Background(), "2")
+	if err != nil || afterAutoMerge.AutoMerge {
+		t.Fatalf("task 2 AutoMerge mutated via trailing JSON: %+v (%v)", afterAutoMerge, err)
+	}
+
+	// Repo-scoped api:tasks:admin@acme/widgets cannot edit priority on other/repo,
+	// and the refusal names tasks:admin rather than tasks:write.
+	code, resp := asAgent(t, srv, "3", http.MethodPatch, "/api/tasks/4", `{"priority": 7}`, "")
+	if code != http.StatusForbidden || !strings.Contains(resp, "tasks:admin") {
+		t.Errorf("PATCH /api/tasks/4 under api:tasks:admin@acme/widgets: status %d (%s), want 403 naming tasks:admin", code, resp)
+	}
+
+	// External agent holding only tasks:admin@acme/widgets is held to the same
+	// single-JSON-object priority-only and repository boundaries.
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "prio-bot",
+		Scopes: []string{"tasks:admin"},
+		Repos:  []string{"acme/widgets"},
+	})
+	if err != nil {
+		t.Fatalf("CreateExternalAgentToken: %v", err)
+	}
+	doExtPatch := func(path, payload string) (int, string) {
+		req := httptest.NewRequest(http.MethodPatch, path, bytes.NewBufferString(payload))
+		req.Header.Set("Authorization", "Bearer "+issued.Token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	if code, resp := doExtPatch("/api/tasks/2", `{"priority": 6}`); code != http.StatusOK {
+		t.Fatalf("external PATCH /api/tasks/2 priority=6: status %d (%s), want 200", code, resp)
+	}
+	if code, resp := doExtPatch("/api/tasks/2", `{"title": "hijacked"}{}`); code != http.StatusForbidden {
+		t.Errorf("external smuggled PATCH /api/tasks/2: status %d (%s), want 403", code, resp)
+	}
+	if code, resp := doExtPatch("/api/tasks/4", `{"priority": 6}`); code != http.StatusForbidden || !strings.Contains(resp, "tasks:admin") {
+		t.Errorf("external cross-repo PATCH /api/tasks/4: status %d (%s), want 403 naming tasks:admin", code, resp)
 	}
 }

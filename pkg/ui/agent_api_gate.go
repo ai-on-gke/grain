@@ -298,11 +298,15 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		capAllowed = true
 	}
 	if !set.Allows(scope, call.repo) && !capAllowed {
+		missingScope := scope
+		if !set.Has(scope) && adminPatch {
+			missingScope = "tasks:admin"
+		}
 		if call.repo == "" {
 			return call, fmt.Errorf("task %s holds %s only for some repositories, and %s does not name one it reaches",
-				taskID, scope, pattern)
+				taskID, missingScope, pattern)
 		}
-		return call, fmt.Errorf("task %s holds %s, but not on %s", taskID, scope, call.repo)
+		return call, fmt.Errorf("task %s holds %s, but not on %s", taskID, missingScope, call.repo)
 	}
 	if call.channel == SandboxCLIChannel {
 		if err := sandboxChannelGuard(pattern, body); err != nil {
@@ -347,12 +351,13 @@ func tasksAdminAllowsTaskPatch(set APIGrantSet, pattern string) bool {
 }
 
 func tasksAdminTaskPatchBodyAllowed(body []byte) error {
-	if len(bytes.TrimSpace(body)) == 0 {
-		return nil
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return errors.New("api:tasks:admin without api:tasks:write requires a JSON object editing priority on PATCH /api/tasks/{id}")
 	}
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return nil
+	if err := json.Unmarshal(trimmed, &fields); err != nil || fields == nil {
+		return errors.New("api:tasks:admin without api:tasks:write requires a single JSON object editing priority on PATCH /api/tasks/{id}")
 	}
 	for k := range fields {
 		if !strings.EqualFold(k, "priority") {
@@ -1243,11 +1248,15 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		adminPatchAllowed = true
 	}
 	if !set.Allows(scope, call.repo) && !adminPatchAllowed {
+		missingScope := scope
+		if !set.Has(scope) && adminPatch {
+			missingScope = "tasks:admin"
+		}
 		if call.repo == "" {
 			return call, fmt.Errorf("%s holds %s only for %s, and %s does not name a repository it reaches",
-				principal, scope, strings.Join(set.Repos(scope), ", "), pattern)
+				principal, missingScope, strings.Join(set.Repos(missingScope), ", "), pattern)
 		}
-		return call, fmt.Errorf("%s holds %s, but not on %s", principal, scope, call.repo)
+		return call, fmt.Errorf("%s holds %s, but not on %s", principal, missingScope, call.repo)
 	}
 	if (IsDangerousAPIScope(scope) || method == http.MethodDelete) && call.reason == "" {
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)

@@ -370,6 +370,16 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 	if strings.TrimSpace(req.Title) == "" {
 		return Template{}, validationErrorf("title is required")
 	}
+	var priority *int
+	if req.Priority != nil {
+		if *req.Priority < 0 {
+			return Template{}, validationErrorf("priority must be a positive integer")
+		}
+		if *req.Priority > 0 {
+			p := *req.Priority
+			priority = &p
+		}
+	}
 	if err := validateNetworkAccess(req.NetworkAccess); err != nil {
 		return Template{}, err
 	}
@@ -431,7 +441,7 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 		Fields:        fields,
 		Target:        target,
 		Base:          base,
-		Priority:      req.Priority,
+		Priority:      priority,
 		AutoMerge:     req.AutoMerge,
 		Interactive:   req.Interactive,
 		NetworkAccess: model.NetworkAccess(req.NetworkAccess),
@@ -738,6 +748,9 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 	}
 	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 		return Template{}, validationErrorf("title cannot be empty")
+	}
+	if req.Priority != nil && *req.Priority < 0 {
+		return Template{}, validationErrorf("priority must be a positive integer")
 	}
 	if req.NetworkAccess != nil {
 		if err := validateNetworkAccess(*req.NetworkAccess); err != nil {

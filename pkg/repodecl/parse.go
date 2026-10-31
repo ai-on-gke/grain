@@ -273,6 +273,16 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 	if err := checkTeam(f, raw.Team); err != nil {
 		return model.Template{}, raw, err
 	}
+	var priority *int
+	if raw.Priority != nil {
+		if *raw.Priority < 0 {
+			return model.Template{}, raw, fmt.Errorf("%s: priority must be a positive integer, got %d", f.path, *raw.Priority)
+		}
+		if *raw.Priority > 0 {
+			p := *raw.Priority
+			priority = &p
+		}
+	}
 	target := repo
 	tmpl := model.Template{
 		ID:            model.RepoDeclaredID(model.DeclaredTemplate, repo, f.stem),
@@ -290,7 +300,7 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 		Grants:        grants,
 
 		Interactive:         raw.Interactive,
-		Priority:            raw.Priority,
+		Priority:            priority,
 		NothingNeededAction: nothingNeeded,
 	}
 	if raw.AutoMerge != nil {
