@@ -285,6 +285,11 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	} else {
 		result, runErr = parser.ParseResult(stdout, attachErr)
 	}
+	// An interactive session's earlier turns, continued in-process by the
+	// daemon that started it, are in the transcript just parsed, and
+	// their answers and proposals were relayed turn by turn: only the
+	// turn in flight is this pass's to act on (markRecordedRelayed).
+	markRecordedRelayed(ctx, store, runID, result)
 	var waitCredit *model.RunWaitCredit
 	blocked, credited := clock.ledger()
 	if blocked > 0 {

@@ -1140,6 +1140,24 @@ var Tables = []string{
   PRIMARY KEY (` + "`run_id`" + `, ` + "`path`" + `)
 )`,
 
+	// task_run_relayed_call is a tool call a live run made that grain
+	// has already acted on while the run was still going -- an
+	// interactive session's in-process turns relaying an answer or
+	// filing a proposal before waiting for the next message
+	// (orchestrator.continueSessionTurns) -- keyed by a fingerprint of
+	// the call's name and arguments, with how many such calls there
+	// were. A daemon that adopts the run (orchestrator.ResumeAdoptedRun)
+	// re-reads every turn's calls out of the transcript, and this is what
+	// keeps it from posting the answers and filing the proposals a second
+	// time. Deleted when the run finishes. Needs no SchemaVersion bump and
+	// no migration rung, for the reason the tables above give.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_relayed_call`" + ` (
+  ` + "`run_id`" + `      TEXT    NOT NULL,
+  ` + "`fingerprint`" + ` TEXT    NOT NULL,
+  ` + "`count`" + `       INTEGER NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`fingerprint`" + `)
+)`,
+
 	// task_run_unmatched_failure is one row per failed run whose own
 	// account of itself matched none of grain's markers for a provider
 	// refusal -- neither the usage-limit ones (agent/usagelimit.go) nor
