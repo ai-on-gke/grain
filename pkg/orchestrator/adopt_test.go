@@ -19,8 +19,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -329,5 +332,93 @@ func TestRunDispatchRecordsTheLeasesOfARunItDetachesFrom(t *testing.T) {
 	leases, err := store.RunLeases(ctx, d.RunID)
 	if err != nil || len(leases) != 1 || leases[0].Capability != "keyed" || leases[0].Resource != "res-1" {
 		t.Fatalf("recorded leases = %+v (%v), want the one the run minted", leases, err)
+	}
+}
+
+// recreatingHost is an AdoptHost whose CLI asks, while it is being
+// followed, for its sandbox to be rebuilt -- what an adopted run's agent
+// calling recreate_sandbox does.
+type recreatingHost struct {
+	recreations *orchestrator.SandboxRecreations
+	taskID      string
+	stale       string
+	got         orchestrator.SandboxRecreation
+	err         error
+	staleKept   bool
+	released    []string
+}
+
+func (h *recreatingHost) Attach(ctx context.Context, _ runhost.Info, _ int64, _ io.Writer) (string, error) {
+	h.got, h.err = h.recreations.Recreate(ctx, h.taskID)
+	_, statErr := os.Stat(h.stale)
+	h.staleKept = statErr == nil
+	return "", errors.New("the CLI exited")
+}
+
+func (h *recreatingHost) Release(_ context.Context, info runhost.Info, _ string) {
+	h.released = append(h.released, info.Name)
+}
+
+// A run carried over a daemon restart can still have its sandbox rebuilt:
+// ResumeAdoptedRun registers it as runOne registers a run it dispatched,
+// the rebuild warns that the capability setup only the previous daemon
+// held is not back, and the entry is gone once the run has ended.
+func TestResumeAdoptedRunCanRecreateItsSandbox(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	task := filedTask(t, ctx, store, "t", model.RepoRef{Owner: "acme", Name: "widgets"})
+	d := dispatch.Dispatch{TaskID: task.ID, RunID: "t-1", Attempt: 1}
+	startRun(t, ctx, store, d, time.Now().UTC())
+	sandboxDir := t.TempDir()
+	if _, err := orchestrator.NewHostSandboxes(sandboxDir).Acquire(ctx, d.RunID, orchestrator.Shape{}); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(sandboxDir, d.RunID, "left-behind")
+	if err := os.WriteFile(stale, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sandboxes := orchestrator.NewHostSandboxes(sandboxDir)
+	sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, d.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability := &fakeCapability{name: "keyed"}
+	if err := store.RecordLeases(ctx, d.RunID, []model.Lease{{Capability: "keyed", Resource: "key-1",
+		MintedBy: model.CredentialRef{Name: "test"}, IssuedAt: time.Now().UTC()}}); err != nil {
+		t.Fatal(err)
+	}
+	recreations := orchestrator.NewSandboxRecreations()
+	host := &recreatingHost{recreations: recreations, taskID: task.ID, stale: stale}
+	fw := parsingFramework{parsed: make(chan string, 1), earlier: make(chan string, 1)}
+	deps := orchestrator.Deps{Store: store, Client: client, Sandboxes: sandboxes,
+		Framework: orchestrator.StaticFramework(fw),
+		Config: orchestrator.Config{Capabilities: model.NewCapabilityRegistry(capability),
+			SandboxRecreations: recreations}}
+	info := runhost.Info{Name: "rh", Running: true,
+		Labels: runhost.Labels{Deployment: "d", Run: d.RunID, Protocol: runhost.Protocol, Spool: t.TempDir()}}
+	a := orchestrator.AdoptedRun{Adoption: runhost.Adoption{Claim: runhost.Claim{Run: d.RunID, Task: task.ID}, Host: info}, Sandbox: sb}
+	_ = orchestrator.ResumeAdoptedRun(ctx, deps, host, a)
+
+	if host.err != nil {
+		t.Fatalf("Recreate during the adopted run: %v, want a rebuild", host.err)
+	}
+	if host.staleKept {
+		t.Error("the old sandbox's contents survived the rebuild")
+	}
+	if host.got.Sandbox != d.RunID {
+		t.Errorf("rebuilt sandbox %q, want %q", host.got.Sandbox, d.RunID)
+	}
+	if !slices.ContainsFunc(host.got.Warnings, func(w string) bool {
+		return strings.Contains(w, "keyed") && strings.Contains(w, "daemon restart")
+	}) {
+		t.Errorf("warnings = %q, want one naming the capability the restart lost", host.got.Warnings)
+	}
+	_, err = recreations.Recreate(ctx, task.ID)
+	if err == nil || !strings.Contains(err.Error(), "no run of this task is registered") {
+		t.Fatalf("Recreate after the adopted run ended: %v, want no run registered", err)
+	}
+	if _, err := os.Stat(filepath.Join(sandboxDir, d.RunID)); !os.IsNotExist(err) {
+		t.Fatalf("the sandbox outlived the run: %v", err)
 	}
 }

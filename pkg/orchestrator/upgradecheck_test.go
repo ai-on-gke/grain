@@ -231,7 +231,7 @@ func TestUpgradeCheckBodySendsTheQueueQuestionToTheTaskTools(t *testing.T) {
 	}
 	body := checks[0].Body
 
-	if !strings.Contains(body, "list_grain_tasks") || !strings.Contains(body, "read_grain_task") {
+	if !strings.Contains(body, "grain task list") || !strings.Contains(body, "grain task read") {
 		t.Errorf("the body asks what the deployment has dispatched without naming the tools "+
 			"that read it:\n%s", body)
 	}

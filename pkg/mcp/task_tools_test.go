@@ -27,12 +27,11 @@ import (
 // stands in for nothing here, since what these tests are about is what a
 // self-debug run reads back, not how the daemon found it.
 type fakeTasks struct {
-	summaries     []TaskSummary
-	records       map[string]TaskRecord
-	prompts       map[string]TaskPromptRecord
-	transcripts   map[string]string // "<id>#<attempt>"
-	broadcastFunc func(message string) (BroadcastResult, error)
-	err           error
+	summaries   []TaskSummary
+	records     map[string]TaskRecord
+	prompts     map[string]TaskPromptRecord
+	transcripts map[string]string // "<id>#<attempt>"
+	err         error
 }
 
 func (f *fakeTasks) ListTasks(context.Context) ([]TaskSummary, error) {
@@ -73,19 +72,6 @@ func (f *fakeTasks) AttemptTranscript(_ context.Context, id string, attempt int)
 	return transcript, nil
 }
 
-func (f *fakeTasks) BroadcastTeamMessage(_ context.Context, message string) (BroadcastResult, error) {
-	if f.err != nil {
-		return BroadcastResult{}, f.err
-	}
-	if f.broadcastFunc != nil {
-		return f.broadcastFunc(message)
-	}
-	return BroadcastResult{
-		DeliveredCount: 2,
-		TaskIDs:        []string{"task-2", "task-3"},
-	}, nil
-}
-
 // callTask invokes one of the tools by name, the way a client
 // would, so a rename of a tool breaks these tests rather than silently
 // testing a function nothing serves.
@@ -93,7 +79,6 @@ func callTask(t *testing.T, reader TaskReader, name string, args map[string]any)
 	t.Helper()
 	var allTools []Tool
 	allTools = append(allTools, NewTaskTools(reader)...)
-	allTools = append(allTools, NewBroadcastTools(reader)...)
 	for _, tool := range allTools {
 		if tool.Name == name {
 			return tool.Handler(context.Background(), args)
@@ -404,17 +389,6 @@ func TestTaskToolsRegisterWithoutAReader(t *testing.T) {
 	}
 }
 
-func TestBroadcastToolsRegisterWithoutAReader(t *testing.T) {
-	tools := NewBroadcastTools(nil)
-	if len(tools) != 1 || tools[0].Name != "broadcast_team_message" {
-		t.Fatalf("NewBroadcastTools registered %v, want [broadcast_team_message]", tools)
-	}
-	res := tools[0].Handler(context.Background(), map[string]any{"message": "hello"})
-	if !res.IsError || !strings.Contains(res.Text, "no route back to the grain daemon") {
-		t.Errorf("broadcast_team_message answered %q (isError=%v), want no-daemon explanation", res.Text, res.IsError)
-	}
-}
-
 // queuedWorld is a deployment with one task in it whose run is over and
 // whose change the merge queue is still driving -- the shape an operator
 // asks about, and the one a task record could say nothing about before
@@ -713,94 +687,5 @@ func TestReadGrainTaskTranscriptIsCapped(t *testing.T) {
 	}
 	if !strings.Contains(res.Text, "grain's own UI") {
 		t.Errorf("text = %q, want the elision notice saying where the rest is", res.Text)
-	}
-}
-
-func TestBroadcastTeamMessageDeliversToTasks(t *testing.T) {
-	world := worldOfTasks()
-	var calledMsg string
-	world.broadcastFunc = func(message string) (BroadcastResult, error) {
-		calledMsg = message
-		return BroadcastResult{
-			DeliveredCount: 2,
-			TaskIDs:        []string{"task-2", "task-3"},
-		}, nil
-	}
-
-	res := callTask(t, world, "broadcast_team_message", map[string]any{
-		"message": "Deployment paused for maintenance.",
-	})
-	if res.IsError {
-		t.Fatalf("broadcast_team_message reported error: %s", res.Text)
-	}
-	if calledMsg != "Deployment paused for maintenance." {
-		t.Errorf("calledMsg=%q, want the message", calledMsg)
-	}
-	if !strings.Contains(res.Text, "Broadcast delivered to 2 active task(s): task-2, task-3") {
-		t.Errorf("unexpected output text: %q", res.Text)
-	}
-	if strings.Contains(res.Text, "team") {
-		t.Errorf("output text %q names a team; grain has only the deployment", res.Text)
-	}
-}
-
-// The tool no longer takes a team, and one an older prompt still passes
-// is ignored rather than refused: there is only the deployment to reach.
-func TestBroadcastTeamMessageIgnoresARetiredTeamArgument(t *testing.T) {
-	world := worldOfTasks()
-	called := false
-	world.broadcastFunc = func(message string) (BroadcastResult, error) {
-		called = true
-		return BroadcastResult{DeliveredCount: 1, TaskIDs: []string{"task-1"}}, nil
-	}
-
-	res := callTask(t, world, "broadcast_team_message", map[string]any{
-		"team":    "infra",
-		"message": "deployment-wide notice",
-	})
-	if res.IsError || !called {
-		t.Errorf("a broadcast naming a team was refused: %q (called=%v)", res.Text, called)
-	}
-	if _, ok := broadcastTeamMessageInputSchema["properties"].(map[string]any)["team"]; ok {
-		t.Error("broadcast_team_message still offers a team argument")
-	}
-}
-
-func TestBroadcastTeamMessageRequiresMessage(t *testing.T) {
-	world := worldOfTasks()
-	res := callTask(t, world, "broadcast_team_message", map[string]any{})
-	if !res.IsError || !strings.Contains(res.Text, "A non-empty \"message\" is required") {
-		t.Errorf("text = %q (isError=%v), want message required error", res.Text, res.IsError)
-	}
-}
-
-func TestBroadcastTeamMessageReportsNoActiveTasks(t *testing.T) {
-	world := worldOfTasks()
-	world.broadcastFunc = func(message string) (BroadcastResult, error) {
-		return BroadcastResult{DeliveredCount: 0, TaskIDs: []string{}}, nil
-	}
-
-	res := callTask(t, world, "broadcast_team_message", map[string]any{
-		"message": "Hello",
-	})
-	if res.IsError {
-		t.Fatalf("broadcast_team_message reported error: %s", res.Text)
-	}
-	if !strings.Contains(res.Text, "Broadcast sent: this deployment has no active tasks.") {
-		t.Errorf("unexpected output text: %q", res.Text)
-	}
-}
-
-func TestBroadcastTeamMessageReportsError(t *testing.T) {
-	world := worldOfTasks()
-	world.broadcastFunc = func(message string) (BroadcastResult, error) {
-		return BroadcastResult{}, errors.New("daemon unreachable")
-	}
-
-	res := callTask(t, world, "broadcast_team_message", map[string]any{
-		"message": "Hello",
-	})
-	if !res.IsError || !strings.Contains(res.Text, "Error broadcasting the message: daemon unreachable") {
-		t.Errorf("text = %q (isError=%v), want error text", res.Text, res.IsError)
 	}
 }

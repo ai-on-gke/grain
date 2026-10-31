@@ -250,6 +250,20 @@ func (r RepoRef) Same(other RepoRef) bool {
 		r.OffDefaultHost() == other.OffDefaultHost()
 }
 
+// SameRepoText reports whether two written repositories name the same
+// one: parsed and compared with Same where both parse (so
+// git@host:owner/name, https://host/owner/name.git and host/owner/name
+// are one repository however they are cased), and compared as text,
+// case-insensitively, where either does not.
+func SameRepoText(a, b string) bool {
+	ra, errA := ParseRepo(a)
+	rb, errB := ParseRepo(b)
+	if errA != nil || errB != nil {
+		return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+	}
+	return ra.Same(rb)
+}
+
 // ParseRepo reads the written form of a repository: owner/name, or
 // host/owner/name for one on a git host other than the default. A first
 // segment containing a dot or a colon is a host -- GitHub owners can
@@ -1306,6 +1320,15 @@ const (
 // its comments as addenda (pkg/ui's AddendaSince): a reviewer's thread
 // opened mid-run is the run's to deal with before it ends.
 var CLThreadsPrincipal = Principal{Kind: PrincipalAutomation, ID: "cl-review-threads"}
+
+// CapabilityChangePrincipal is who tells a task with a live run that its
+// grants changed (orchestrator's reconcileCapabilityChanges). Like
+// CLThreadsPrincipal, its comments reach a live run as addenda: a notice
+// saying the run is about to be restarted, or that a new `api:*` route
+// arrives only with the next run, is written for the run. An interactive
+// task's chat draws it as a system line rather than as a message
+// (ui/src/chat.js).
+var CapabilityChangePrincipal = Principal{Kind: PrincipalAutomation, ID: "capability-change"}
 
 // IsChange reports whether a link of kind k is the task's own change --
 // a pull request (LinkFixes) or a changelist (LinkChangelist) -- which

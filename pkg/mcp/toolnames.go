@@ -126,13 +126,8 @@ var capabilityForTool = map[string]string{
 	"deployment_upgrade_status":  "self-upgrade",
 	"upgrade_deployment":         "self-upgrade",
 	"cancel_deployment_upgrade":  "self-upgrade",
-	"pause_pipeline":             "pipeline-control",
-	"resume_pipeline":            "pipeline-control",
-	"run_task_now":               "dispatch-control",
-	"defer_task":                 "dispatch-control",
 	"list_issues":                "read-issues",
 	"read_issue":                 "read-issues",
-	"broadcast_team_message":     "team-broadcast",
 }
 
 // CapabilityForTool names the capability that puts tool on a run's

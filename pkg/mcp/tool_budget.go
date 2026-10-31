@@ -27,6 +27,13 @@ package mcp
 // fresh context -- and that half lands with resume_later itself (DT-S4);
 // until then the notice is the whole of it.
 //
+// A wake is counted from the last thing a person said to it, not from the
+// start of the run: an interactive session that holds a conversation in one
+// run (the chat tool) begins a new wake with every reply, which restarts
+// the count (Result.HumanTurn). A session's continued turn after it
+// answers (orchestrator's continueSessionTurns) forks a new mcpserver,
+// and so a new budget, of its own.
+//
 // Only a run whose registry has been told to (AnnounceToolBudget, the
 // mcpserver's -tool-budget) counts at all; every other run's results read
 // exactly as their handlers wrote them.
@@ -67,6 +74,18 @@ func (b *toolBudget) spend(n int) string {
 	b.calls++
 	b.bytes += n
 	return toolBudgetNotice(b.calls, b.bytes)
+}
+
+// reset starts a new wake whose first result is n bytes -- a person's
+// reply, which is in the run's context like any other result.
+func (b *toolBudget) reset(n int) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.calls = 1
+	b.bytes = n
 }
 
 // toolBudgetNotice is the sentence for a run that has made calls calls and

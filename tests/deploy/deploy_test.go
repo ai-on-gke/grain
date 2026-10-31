@@ -3953,8 +3953,9 @@ func TestABranchTagAndItsCommitTagAreOneManifest(t *testing.T) {
 // build-artifacts.yml holds to publish, and the same argument that file
 // makes about push-vs-pull_request applies with more force. What keeps
 // it out of reach is the trigger: workflow_dispatch needs write access
-// to the repository. Scheduled runs cannot receive package-publish credentials,
-// so automated pruning runs on release in release.yml instead.
+// to the repository. This job declares no cron, so the trusted schedules
+// package-publish answers do not reach it either; automated pruning runs
+// on release in release.yml instead.
 //
 // The dry-run default is the other half. Deleting a package version
 // cannot be undone, so the command deletes only when passed -apply, and

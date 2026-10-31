@@ -162,7 +162,6 @@ var toolActivityNotes = map[string]string{
 	"read_grain_task":            "reading a grain task",
 	"read_grain_task_prompt":     "reading a grain task's prompt",
 	"read_grain_task_transcript": "reading a grain task's transcript",
-	"broadcast_team_message":     "broadcasting a message to the team",
 	"read_grain_metrics":         "reading grain's own measurements",
 	"read_pipeline_changes":      "reading grain's pipeline changes",
 	"query_merge_queue":          "checking the merge queue",
