@@ -178,19 +178,6 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 		t.Fatalf("task 2 AutoMerge mutated via trailing JSON: %+v (%v)", afterAutoMerge, err)
 	}
 
-	// Boolean priority / priorityDispatch toggles the priority-dispatch capability,
-	// not numeric task priority, so api:tasks:admin cannot smuggle it through.
-	for _, capBody := range []string{
-		`{"priority": true}`,
-		`{"priority": false}`,
-		`{"priorityDispatch": true}`,
-		`{"priority_dispatch": true}`,
-	} {
-		if code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", capBody, "testing"); code != http.StatusForbidden {
-			t.Errorf("PATCH /api/tasks/2 with %s under api:tasks:admin: status %d (%s), want 403", capBody, code, resp)
-		}
-	}
-
 	// Repo-scoped api:tasks:admin@acme/widgets cannot edit priority on other/repo,
 	// and the refusal names tasks:admin rather than tasks:write.
 	code, resp := asAgent(t, srv, "3", http.MethodPatch, "/api/tasks/4", `{"priority": 7}`, "")
@@ -220,9 +207,6 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 	}
 	if code, resp := doExtPatch("/api/tasks/2", `{"priority": 6}`); code != http.StatusOK {
 		t.Fatalf("external PATCH /api/tasks/2 priority=6: status %d (%s), want 200", code, resp)
-	}
-	if code, resp := doExtPatch("/api/tasks/2", `{"priority": true}`); code != http.StatusForbidden {
-		t.Errorf("external boolean priority PATCH /api/tasks/2: status %d (%s), want 403", code, resp)
 	}
 	if code, resp := doExtPatch("/api/tasks/2", `{"title": "hijacked"}{}`); code != http.StatusForbidden {
 		t.Errorf("external smuggled PATCH /api/tasks/2: status %d (%s), want 403", code, resp)

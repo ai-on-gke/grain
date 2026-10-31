@@ -73,6 +73,9 @@ type ConsoleSessionSetting struct {
 	// approved rather than waiting for a person. False is the default --
 	// see model.ConsoleSession's own doc comment on why.
 	TasksApproved bool `json:"tasksApproved"`
+	// KeepRunning is whether the session's task immediately restarts when
+	// its run exits rather than parking until the next message.
+	KeepRunning bool `json:"keepRunning"`
 	// Reads is every repo this session may read but never push to --
 	// model.ConsoleSession.Reads, rendered as owner/name strings.
 	Reads []string `json:"reads,omitempty"`
@@ -148,14 +151,16 @@ type ConsoleSessionSettingsResponse struct {
 // model.ConsoleSession on why a settings form may not rewrite what an
 // agent holding this deployment's own host is for.
 type UpdateConsoleSessionRequest struct {
-	Title           *string        `json:"title"`
-	Team            *string        `json:"team"`
-	Capabilities    *[]string      `json:"capabilities"`
-	NetworkAccess   *string        `json:"networkAccess"`
-	TasksApproved   *bool          `json:"tasksApproved"`
-	Reads           *[]string      `json:"reads"`
-	Writes          *[]WriteTarget `json:"writes"`
-	GoogleChatSpace *string        `json:"googleChatSpace"`
+	Title            *string        `json:"title"`
+	Team             *string        `json:"team"`
+	Capabilities     *[]string      `json:"capabilities"`
+	NetworkAccess    *string        `json:"networkAccess"`
+	TasksApproved    *bool          `json:"tasksApproved"`
+	KeepRunning      *bool          `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool          `json:"keep_running,omitempty"`
+	Reads            *[]string      `json:"reads"`
+	Writes           *[]WriteTarget `json:"writes"`
+	GoogleChatSpace  *string        `json:"googleChatSpace"`
 	// Model is the model the session runs on; "" puts it back on its
 	// team's default model.
 	Model *string `json:"model"`
@@ -187,15 +192,17 @@ type UpdateConsoleSessionRequest struct {
 // a title nor a message is refused, which is what keeps an opened-and-
 // abandoned chat out of the sessions list.
 type CreateConsoleSessionRequest struct {
-	ID              string        `json:"id,omitempty"`
-	Title           string        `json:"title,omitempty"`
-	Team            string        `json:"team,omitempty"`
-	Capabilities    []string      `json:"capabilities,omitempty"`
-	NetworkAccess   string        `json:"networkAccess,omitempty"`
-	TasksApproved   bool          `json:"tasksApproved,omitempty"`
-	Reads           []string      `json:"reads,omitempty"`
-	Writes          []WriteTarget `json:"writes,omitempty"`
-	GoogleChatSpace string        `json:"googleChatSpace,omitempty"`
+	ID               string        `json:"id,omitempty"`
+	Title            string        `json:"title,omitempty"`
+	Team             string        `json:"team,omitempty"`
+	Capabilities     []string      `json:"capabilities,omitempty"`
+	NetworkAccess    string        `json:"networkAccess,omitempty"`
+	TasksApproved    bool          `json:"tasksApproved,omitempty"`
+	KeepRunning      bool          `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool         `json:"keep_running,omitempty"`
+	Reads            []string      `json:"reads,omitempty"`
+	Writes           []WriteTarget `json:"writes,omitempty"`
+	GoogleChatSpace  string        `json:"googleChatSpace,omitempty"`
 	// Model is the model the session runs on, or "" for its team's
 	// default model.
 	Model string `json:"model,omitempty"`
@@ -279,6 +286,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 		capabilities := append([]string{}, s.Capabilities...)
 		networkAccess := string(s.NetworkAccess)
 		tasksApproved := s.TasksApproved
+		keepRunning := s.KeepRunning
 		googleChatSpace := s.GoogleChatSpace
 		modelChoice := s.Model
 		reads := make([]string, 0, len(s.Reads))
@@ -319,6 +327,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 					}
 				}
 				tasksApproved = model.ConsoleSessionQueuesProposals(sessions, *openTask)
+				keepRunning = openTask.KeepRunning
 				if openTask.Reads != nil || len(s.Reads) == 0 {
 					stateRepo := c.stateRepoRef()
 					reads = make([]string, 0, len(openTask.Reads))
@@ -368,6 +377,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 			Capabilities:    capabilities,
 			NetworkAccess:   networkAccess,
 			TasksApproved:   tasksApproved,
+			KeepRunning:     keepRunning,
 			Reads:           reads,
 			Writes:          writes,
 			GoogleChatSpace: googleChatSpace,
@@ -543,6 +553,11 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 	if req.TasksApproved != nil {
 		session.TasksApproved = *req.TasksApproved
 	}
+	if req.KeepRunning != nil {
+		session.KeepRunning = *req.KeepRunning
+	} else if req.KeepRunningSnake != nil {
+		session.KeepRunning = *req.KeepRunningSnake
+	}
 	if req.Reads != nil {
 		reads, err := c.parseReads(*req.Reads)
 		if err != nil {
@@ -677,6 +692,9 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				t.Model = session.Model
 				t.ModelSource = ""
 			}
+			if req.KeepRunning != nil || req.KeepRunningSnake != nil {
+				t.KeepRunning = session.KeepRunning
+			}
 			t.Body = model.DirectorSessionBody(stateRepo, session)
 			return nil
 		}); err != nil {
@@ -692,6 +710,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				Model:           strings.TrimSpace(session.Model),
 				Title:           model.ConsoleSessionTitle(session),
 				TasksApproved:   session.TasksApproved,
+				KeepRunning:     session.KeepRunning,
 				GoogleChatSpace: session.GoogleChatSpace,
 			})
 		} else if _, hasPrev := model.LastSyncedConsoleSession(c.Store, openTask.ID); !hasPrev {
@@ -704,6 +723,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				Model:           strings.TrimSpace(origSession.Model),
 				Title:           model.ConsoleSessionTitle(origSession),
 				TasksApproved:   origSession.TasksApproved,
+				KeepRunning:     origSession.KeepRunning,
 				GoogleChatSpace: origSession.GoogleChatSpace,
 			})
 		}
@@ -919,6 +939,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		Capabilities:    caps,
 		NetworkAccess:   access,
 		TasksApproved:   req.TasksApproved,
+		KeepRunning:     req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
 		Reads:           reads,
 		Writes:          writes,
 		GoogleChatSpace: strings.TrimSpace(req.GoogleChatSpace),

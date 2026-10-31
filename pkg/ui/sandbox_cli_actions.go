@@ -330,6 +330,7 @@ func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID 
 		Capabilities:    caps,
 		FixesBaseBranch: req.FixesBaseBranch,
 		NoPort:          req.NoPort,
+		KeepRunning:     req.KeepRunning,
 		Origin:          req.Origin,
 		DeferredUntil:   req.NotBefore,
 		Priority:        req.Priority,

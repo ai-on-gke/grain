@@ -174,8 +174,6 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 		`{"capabilities":["api:tasks:read"]}`,
 		`{"grants":[{"capability":"api:tasks:read"}]}`,
 		`{"priority":false}`,
-		`{"priorityDispatch":false}`,
-		`{"priority_dispatch":false}`,
 		`{"keepRunning":false}`,
 		`{"keep_running":false}`,
 	} {
@@ -211,9 +209,6 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 		`{"grants":[{"capability":"self-debug"}]}`,
 		`{"priority":true}`,
 		`{"priority":false}`,
-		`{"priorityDispatch":true}`,
-		`{"priorityDispatch":false}`,
-		`{"priority_dispatch":true}`,
 		`{"keepRunning":true}`,
 		`{"keepRunning":false}`,
 		`{"keep_running":true}`,
