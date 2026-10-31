@@ -13,7 +13,11 @@
 // limitations under the License.
 
 import { describe, expect, it } from "vitest";
-import { fieldRows, initialFieldValues } from "./CustomFields.jsx";
+import {
+  fieldRows,
+  initialFieldValues,
+  unfiledLinkValues,
+} from "./CustomFields.jsx";
 
 const config = {
   customFields: [
@@ -49,6 +53,38 @@ describe("initialFieldValues", () => {
     expect(initialFieldValues(config, { gone: "x" })).not.toHaveProperty(
       "gone",
     );
+  });
+});
+
+// What a /new link asked for that the form leaves out
+// (2026-10-29 intake walkthrough, O3; 2026-10-30 run).
+describe("unfiledLinkValues", () => {
+  it("says nothing for no link, or one whose every value is kept", () => {
+    expect(unfiledLinkValues(config, null)).toEqual([]);
+    expect(
+      unfiledLinkValues(config, { priority: "high", customer: "globex" }),
+    ).toEqual([]);
+  });
+
+  it("names a value its field does not offer", () => {
+    expect(unfiledLinkValues(config, { priority: "bogus" })).toEqual([
+      "Priority: “bogus” is not one of its values",
+    ]);
+    expect(unfiledLinkValues(config, { due: "next week" })).toEqual([
+      "Due date: “next week” is not one of its values",
+    ]);
+  });
+
+  it("names a field nothing declares", () => {
+    expect(unfiledLinkValues(config, { nosuch: "1" })).toEqual([
+      "“nosuch” is not a field on this deployment",
+    ]);
+  });
+
+  it("names the values past the first on a field that holds one", () => {
+    expect(unfiledLinkValues(config, { priority: ["low", "high"] })).toEqual([
+      "Priority: “high” is not one of its values",
+    ]);
   });
 });
 
