@@ -310,6 +310,23 @@ type WorkflowJob struct {
 	// wrote nothing there, which is what every job that really ran looks
 	// like.
 	FailureReason string
+	// FailingStep is the name of the step that failed in this job; defaults
+	// to "Run the job" when empty.
+	FailingStep string
+}
+
+// WorkflowRun is one seeded GitHub Actions workflow run for Sim.WorkflowRuns.
+type WorkflowRun struct {
+	ID         int64
+	Name       string
+	Path       string
+	HeadBranch string
+	HeadSHA    string
+	Event      string
+	Status     string
+	Conclusion string
+	RunAttempt int
+	Jobs       []WorkflowJob
 }
 
 // Sim is a github.Transport backed by an in-memory set of issues and pull
@@ -374,6 +391,9 @@ type Sim struct {
 	// would decide for the test what CI looked like, and the point of
 	// these is a test saying what one particular job printed.
 	WorkflowJobs map[string][]WorkflowJob
+	// WorkflowRuns is explicit workflow runs seeded for GET .../actions/runs
+	// and GET .../actions/runs/{id}/jobs.
+	WorkflowRuns []WorkflowRun
 	// StartupFailures marks the commits (keyed exactly like WorkflowJobs)
 	// whose workflow run GitHub concluded before any job of it started:
 	// the run is there, it is `startup_failure`, and its jobs endpoint
@@ -444,6 +464,12 @@ type Sim struct {
 	// merges once it does -- which is what lets a test show the queue
 	// waiting for an approval and merging when it arrives.
 	RequireApprovals int
+	// RequireConversationResolution, when true, is GitHub's "Require
+	// conversation resolution before merging" branch protection / ruleset
+	// rule: PUT .../merge answers 405 "Repository rule violations found\n\nAll
+	// comments must be resolved." while any review thread on the pull
+	// request is unresolved.
+	RequireConversationResolution bool
 	// RefuseLabels, when non-zero, is the status GitHub answers POST
 	// .../issues/N/labels with instead of applying them -- a 403 for a
 	// token without the permission, a 422 for a label the repository will
@@ -1386,10 +1412,23 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			s.mustOwn(m[1], m[2])
 			key := qs.Get("head_sha")
 			// No commit to scope to is the repository-wide read
-			// (github.RESTClient.RecentRunStarts): everything this
-			// repository has run lately, rather than one commit's runs.
+			// (github.RESTClient.RecentRunStarts / CompletedWorkflowRuns):
+			// everything this repository has run lately, rather than one commit's runs.
 			if key == "" {
-				return jsonResponse(200, s.repoRunsJSON(m[1], m[2])), nil
+				payload := s.repoRunsJSON(m[1], m[2])
+				rawBytes, _ := json.Marshal(payload)
+				var h uint64 = 14695981039346656037
+				for _, b := range rawBytes {
+					h ^= uint64(b)
+					h *= 1099511628211
+				}
+				etag := fmt.Sprintf(`W/"%x-%016x"`, len(rawBytes), h)
+				if headers["If-None-Match"] != "" && headers["If-None-Match"] == etag {
+					return github.ApiResponse{Status: 304, Headers: map[string]string{"ETag": etag}}, nil
+				}
+				resp := jsonResponse(200, payload)
+				resp.Headers = map[string]string{"ETag": etag}
+				return resp, nil
 			}
 			if s.startupFailureFor(key) {
 				return jsonResponse(200, startupFailureRunJSON(m[1], m[2], s.runIDFor(key))), nil
@@ -1400,6 +1439,9 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		if m := runJobsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			runID := mustAtoi(m[3])
+			if wr, ok := s.workflowRunByID(int64(runID)); ok {
+				return jsonResponse(200, jobsJSON(m[1], m[2], runID, wr.Jobs)), nil
+			}
 			key, ok := s.runKeyFor(runID)
 			if !ok {
 				return github.ApiResponse{Status: 404, Body: []byte("{}")}, nil
@@ -1416,6 +1458,12 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			s.mustOwn(m[1], m[2])
 			id := mustAtoi(m[3])
 			runID, index := id/1000, id%1000
+			if wr, ok := s.workflowRunByID(int64(runID)); ok {
+				if index >= len(wr.Jobs) || wr.Jobs[index].Log == "" {
+					return github.ApiResponse{Status: 410, Body: []byte("{}")}, nil
+				}
+				return github.ApiResponse{Status: 200, Body: []byte(wr.Jobs[index].Log)}, nil
+			}
 			key, ok := s.runKeyFor(runID)
 			if !ok {
 				return github.ApiResponse{Status: 404, Body: []byte("{}")}, nil
@@ -1736,7 +1784,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			s.nextReviewID++
 			s.Reviews = append(s.Reviews, Review{Number: number, Event: payload.Event, Body: payload.Body, Comments: comments})
-			if payload.Event != "" && len(comments) > 0 {
+			if (payload.Event != "" || s.conversationResolutionRequiredForPR(number)) && len(comments) > 0 {
 				if s.ReviewComments == nil {
 					s.ReviewComments = map[int][]github.ReviewComment{}
 				}
@@ -1744,10 +1792,12 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 					s.nextCommentID++
 					line := c.Line
 					s.ReviewComments[number] = append(s.ReviewComments[number], github.ReviewComment{
-						ID:   s.nextCommentID,
-						Path: c.Path,
-						Line: &line,
-						Body: c.Body,
+						ID:       s.nextCommentID,
+						User:     "grain-agent",
+						ReviewID: s.nextReviewID,
+						Path:     c.Path,
+						Line:     &line,
+						Body:     c.Body,
 					})
 				}
 			}
@@ -2093,6 +2143,10 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 						return jsonResponse(405, map[string]string{"message": fmt.Sprintf(
 							"Repository rule violations found\n\nReview required: at least %d approving review is required by reviewers with write access.",
 							s.RequireApprovals)}), nil
+					}
+					if s.conversationResolutionRequired(s.PullRequests[i].Base) && s.hasUnresolvedReviewThreads(number) {
+						return jsonResponse(405, map[string]string{"message": "Repository rule violations found\n\n" +
+							"All comments must be resolved."}), nil
 					}
 					// GitHub's own message: commit_title (its default
 					// when empty), a blank line, then commit_message.
@@ -2452,6 +2506,43 @@ func (s *Sim) reviewThreadExists(id string) bool {
 	return false
 }
 
+func (s *Sim) conversationResolutionRequiredForPR(number int) bool {
+	if s.RequireConversationResolution {
+		return true
+	}
+	pr, ok := s.pullRequest(number)
+	if !ok {
+		return false
+	}
+	return s.conversationResolutionRequired(pr.Base)
+}
+
+func (s *Sim) conversationResolutionRequired(base string) bool {
+	if s.RequireConversationResolution {
+		return true
+	}
+	for _, rule := range s.BranchRules[base] {
+		if rule["type"] != "pull_request" {
+			continue
+		}
+		if params, ok := rule["parameters"].(map[string]any); ok {
+			if req, _ := params["required_review_thread_resolution"].(bool); req {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Sim) hasUnresolvedReviewThreads(number int) bool {
+	for _, c := range s.ReviewComments[number] {
+		if c.InReplyTo == 0 && !s.ResolvedThreads[fmt.Sprintf("thread-%d", c.ID)] {
+			return true
+		}
+	}
+	return false
+}
+
 // reviewThreadsJSON is pull request number's review comments grouped
 // into GraphQL reviewThreads nodes, one per comment that opened a thread.
 func (s *Sim) reviewThreadsJSON(number int) []map[string]any {
@@ -2616,8 +2707,66 @@ func workflowRunsJSON(owner, repo string, runID int, jobs []WorkflowJob) map[str
 // otherwise the run its jobs imply. Run ids come from runIDFor, the same
 // as every other answer here, so the jobs endpoint can be asked about
 // anything named in this list.
+func (s *Sim) workflowRunByID(id int64) (WorkflowRun, bool) {
+	for i, r := range s.WorkflowRuns {
+		runID := r.ID
+		if runID <= 0 {
+			runID = int64(runIDBase + 500 + i)
+		}
+		if runID == id {
+			r.ID = runID
+			return r, true
+		}
+	}
+	return WorkflowRun{}, false
+}
+
 func (s *Sim) repoRunsJSON(owner, repo string) map[string]any {
 	runs := []map[string]any{}
+	for i, wr := range s.WorkflowRuns {
+		runID := wr.ID
+		if runID <= 0 {
+			runID = int64(runIDBase + 500 + i)
+		}
+		status := wr.Status
+		if status == "" {
+			status = "completed"
+		}
+		conclusion := wr.Conclusion
+		if conclusion == "" {
+			conclusion = "success"
+			for _, job := range wr.Jobs {
+				switch jobConclusion(job) {
+				case "failure", "timed_out", "startup_failure":
+					conclusion = "failure"
+				}
+			}
+		}
+		attempt := wr.RunAttempt
+		if attempt <= 0 {
+			attempt = 1
+		}
+		name := wr.Name
+		if name == "" {
+			name = "tests"
+		}
+		headSHA := wr.HeadSHA
+		if headSHA == "" && wr.HeadBranch != "" {
+			headSHA = s.branchSHA(wr.HeadBranch)
+		}
+		runs = append(runs, map[string]any{
+			"id":          runID,
+			"name":        name,
+			"path":        wr.Path,
+			"head_branch": wr.HeadBranch,
+			"head_sha":    headSHA,
+			"event":       wr.Event,
+			"status":      status,
+			"conclusion":  conclusion,
+			"run_attempt": attempt,
+			"html_url":    fmt.Sprintf("https://github.example/%s/%s/actions/runs/%d", owner, repo, runID),
+		})
+	}
 	for _, key := range s.runCommits() {
 		id := s.runIDFor(key)
 		if s.startupFailureFor(key) {
@@ -2700,8 +2849,12 @@ func jobsJSON(owner, repo string, runID int, jobs []WorkflowJob) map[string]any 
 	items := make([]map[string]any, len(jobs))
 	for i, job := range jobs {
 		id := jobID(runID, i)
+		stepName := job.FailingStep
+		if stepName == "" {
+			stepName = "Run the job"
+		}
 		steps := []map[string]any{
-			{"name": "Run the job", "status": "completed", "conclusion": jobConclusion(job)},
+			{"name": stepName, "status": "completed", "conclusion": jobConclusion(job)},
 		}
 		if job.NeverStarted {
 			steps = []map[string]any{}

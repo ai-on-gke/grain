@@ -1,0 +1,8 @@
+name: Update agent CLI clients
+template: update-agent-clients
+base: main
+timezone: UTC
+weekly:
+  day: monday
+  at: "06:00"
+overlap: skip

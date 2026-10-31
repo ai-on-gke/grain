@@ -28,6 +28,7 @@ import {
   mergeQueueBatching,
   mergeQueueStall,
   internalPullRequestUrl,
+  issueUrl,
   orphanedPullRequest,
   pullRequestUrl,
   runActivity,
@@ -407,7 +408,7 @@ export default function DetailOverlay({
                           />
                         ) : (
                           <Link
-                            href={`https://github.com/${t.origin.replace("#", "/issues/")}`}
+                            href={issueUrl(t.origin)}
                             target="_blank"
                             rel="noopener noreferrer"
                           >

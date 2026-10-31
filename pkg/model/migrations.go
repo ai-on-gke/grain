@@ -377,10 +377,19 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		// task_event is new, so Statements() creates it and its indexes.
 		Version:     67,
-		Description: "record who closed or reopened each task, when and why",
-		Statements:  []string{taskEventTable},
+		Description: "rewrite stored team-broadcast grants to api:team-broadcast (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"team-broadcast": "api:team-broadcast"}),
+	},
+	{
+		Version:     68,
+		Description: "rewrite stored dispatch-control grants to api:dispatch-control (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"dispatch-control": "api:dispatch-control"}),
+	},
+	{
+		Version:     69,
+		Description: "rewrite stored pipeline-control grants to api:pipeline-control (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"pipeline-control": "api:pipeline-control"}),
 	},
 }
 

@@ -251,6 +251,34 @@ func EffectiveK8sSandboxImage(cfg Config) string {
 // SandboxImageMirror (or a derived cross-project guest mirror repository) when
 // configured.
 func EffectiveK8sGranuleImage(cfg Config) string {
+	return effectiveK8sGranuleImage(cfg, func(base, mirrorRepo string) string {
+		return resolveOrMirrorSandboxImage(context.Background(), base, mirrorRepo)
+	})
+}
+
+// k8sGranuleImageForSettings is ui.Config.K8sGranuleImage: the guest image
+// kubernetes-granule pods are created from under mc, laid over the
+// configuration running holds -- the stamp this build carries and the
+// mirror it is copied into, which the UI's own version-derived default
+// knows nothing of -- so that the Settings pane probes the image the
+// daemon really runs rather than one it never asks for.
+//
+// The stored k8s_granule_image is restart-only (withLiveModelConfig keeps
+// running's), but it is what the pane shows, so a stored one is what is
+// probed. Nothing is copied into the mirror from here: a settings request
+// answers from what startup (or applySandboxImage) already mirrored, and
+// from the mirror's tag where nothing has been.
+func k8sGranuleImageForSettings(running Config, mc model.Config) string {
+	cfg := running.withLiveModelConfig(mc)
+	if pinned := strings.TrimSpace(mc.K8sGranuleImage); pinned != "" {
+		cfg.K8sGranuleImage = pinned
+	}
+	return effectiveK8sGranuleImage(cfg, mirroredSandboxImageIfKnown)
+}
+
+// effectiveK8sGranuleImage is EffectiveK8sGranuleImage with how the
+// stamped guest becomes its mirrored reference left to mirror.
+func effectiveK8sGranuleImage(cfg Config, mirror func(base, mirrorRepo string) string) string {
 	base := DefaultSandboxImage
 	if base == model.DefaultSandboxImage {
 		base = ui.DefaultSandboxImageFor(installtrack.TrackOSS, version.Get())
@@ -267,7 +295,7 @@ func EffectiveK8sGranuleImage(cfg Config) string {
 		if pinned != "" && !isMirroredGuestRef(pinned, mirrorRepo) {
 			return pinned
 		}
-		return resolveOrMirrorSandboxImage(context.Background(), base, mirrorRepo)
+		return mirror(base, mirrorRepo)
 	}
 	if cfg.K8sGranuleImage != "" {
 		return cfg.K8sGranuleImage

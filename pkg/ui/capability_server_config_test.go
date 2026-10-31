@@ -21,9 +21,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -47,6 +49,8 @@ type fakeProber struct {
 	resolved    []string
 	hostEntries []string
 	noHostd     bool
+	// hostd, when set, is asked for hostEntries as the registry asks it.
+	hostd *hostd.Client
 }
 
 func (f *fakeProber) Statuses() []servers.Status {
@@ -63,9 +67,14 @@ func (f *fakeProber) Probe(_ context.Context, id string, cfg protocol.ServerConf
 	return servers.ProbeResult{ID: id, OK: true, ConfigSchema: cloudConfigSchema, Methods: []servers.MethodDetail{{Name: "key", Releasable: true}}}
 }
 
-func (f *fakeProber) HostCapabilityEntries(context.Context) ([]string, error) {
+func (f *fakeProber) HostCapabilityEntries(ctx context.Context) ([]string, error) {
 	if f.noHostd {
 		return nil, servers.ErrNoHostd
+	}
+	if f.hostd != nil {
+		if _, err := f.hostd.Offers(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return f.hostEntries, nil
 }
@@ -311,5 +320,66 @@ func TestOnlyConfigMapSecretValuesAreMergedIntoTheStoredSecret(t *testing.T) {
 	}
 	if got := strings.Join(row(list).ConfiguredSecretKeys, ","); got != "creds/a,creds/c" {
 		t.Errorf("configured secret keys = %q, want creds/a,creds/c", got)
+	}
+}
+
+// A built-in's own rules beyond its schema -- a config map's name and
+// mode, a host script's unique name -- refuse the save, rather than
+// storing what the server then refuses on its next start, which would
+// take an attached server out of use.
+func TestABuiltinsOwnConfigRulesRefuseTheSave(t *testing.T) {
+	_, hc, _, _ := configTestServer(t, &fakeProber{})
+	ctx := context.Background()
+
+	const cm = "https://grain.dev/capabilities/config-map"
+	configMap := func(name, mode string) protocol.ServerConfig {
+		return protocol.ServerConfig{Command: "grain", Args: []string{"capability", "config-map"}, Builtin: "config-map", Config: map[string]any{
+			"config_maps": []any{map[string]any{"name": name, "data": map[string]any{"walk.toml": map[string]any{"content": "a = 1\n", "mode": mode}}}},
+		}}
+	}
+	for _, tc := range []struct{ name, mode, want string }{
+		{"Walk Settings", "", `name "Walk Settings" does not match`},
+		{"walk-settings", "999", `mode "999" must be a four-digit octal mode`},
+	} {
+		_, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: cm, Config: configMap(tc.name, tc.mode)})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("saving config map %q mode %q: err = %v, want one containing %q", tc.name, tc.mode, err, tc.want)
+		}
+	}
+	list, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: cm, Config: configMap("walk-settings", "0640")})
+	if err != nil {
+		t.Fatalf("saving a valid config map: %v", err)
+	}
+	for _, row := range list {
+		if row.ID == cm && len(row.Config.Config) == 0 {
+			t.Errorf("valid config map not saved: %+v", row.Config)
+		}
+	}
+
+	const hs = "https://grain.dev/capabilities/host-script"
+	script := map[string]any{"name": "walk-echo", "description": "d", "script": "echo hi", "timeout": 10}
+	twice := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "host-script"}, Builtin: "host-script", Config: map[string]any{
+		"scripts": []any{script, script},
+	}}
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: hs, Config: twice}); err == nil || !strings.Contains(err.Error(), "configured twice") {
+		t.Errorf("saving two host scripts named walk-echo: err = %v, want configured twice", err)
+	}
+}
+
+// With no dialing-in hostd connected, a run: host server's test says so
+// at once, rather than after the 30 s a run waits for one to dial in
+// (hostd.ForDisplay).
+func TestTestingAHostServerWithNoHostdConnectedAnswersAtOnce(t *testing.T) {
+	c := hostd.Client{Dial: (&hostd.Remote{Token: "x"}).Dial}
+	_, hc, _, _ := configTestServer(t, &fakeProber{hostd: &c})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := hc.TestCapabilityServer(ctx, ui.TestCapabilityServerRequest{ID: configCap, Config: &protocol.ServerConfig{Command: "cloud", Run: protocol.RunHost}})
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("test took %s with no hostd connected, want it at once", took)
+	}
+	if err == nil || !strings.Contains(err.Error(), hostd.ErrRemoteNotConnected.Error()) {
+		t.Fatalf("err = %v, want it to say no hostd is connected", err)
 	}
 }

@@ -724,8 +724,7 @@ type TaskDetail struct {
 	SuspendedSession *TaskSuspendedSession `json:"suspendedSession,omitempty"`
 	// DeploymentWide is every team-scoped capability this task holds in
 	// its deployment-wide form (admincaps.TeamScoped, grain/task-2555):
-	// self-debug reading every team's tasks and metrics, pipeline-control
-	// pausing the whole deployment. A capability held but not named here
+	// self-debug reading every team's tasks and metrics. A capability held but not named here
 	// reaches only the task's own team's work -- which is what `grain
 	// mcpserver` reads it as, so an older daemon that never sends it
 	// leaves a run team-scoped rather than wider than it should be.
@@ -1611,6 +1610,14 @@ type configResponse struct {
 	Deployment           *Team  `json:"deployment,omitempty"`
 	ExternalConfigRepo   string `json:"externalConfigRepo,omitempty"`
 	ExternalConfigBranch string `json:"externalConfigBranch,omitempty"`
+	// ConfigRepoOnly is whether a non-bootstrap settings write from the
+	// API is refused with a config pull request (configRepoFor): an
+	// external config repository, or the internal grain/config without
+	// the directConfigWrites opt-out. The UI draws the config-repo-only
+	// settings read-only exactly then (docs/design/config-repo-settings.md
+	// §2.1); a UI with no config repository (`grain demo`) still edits
+	// them, since there is nowhere else to.
+	ConfigRepoOnly bool `json:"configRepoOnly,omitempty"`
 }
 
 // CustomFieldDeclaration is one declared field on the wire -- the JSON
@@ -1837,6 +1844,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		resp.ConfigRepo = s.tasks.Config.StateRepoRef().String()
 	}
 	resp.ExternalConfigRepo, resp.ExternalConfigBranch = s.tasks.externalConfigRepo(r.Context())
+	resp.ConfigRepoOnly = s.tasks.configRepoOnly(r.Context())
 	resp.AgentFramework = model.AgentFrameworkAntigravity
 	resp.NetworkAccess = string(model.NetworkOpen)
 	// Same reading of "no row yet" the AgentFramework line above takes:
@@ -2000,6 +2008,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 // tasks of the teams they belong to (bwsalmon/grain#2415). ?repo=owner/name
 // answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
+	if q, ok := parseTaskListQuery(r.URL.Query()); ok {
+		s.handleFilteredTaskList(w, r, q)
+		return
+	}
 	body, etag, err := s.taskList.response(r.Context(), s.tasks, strings.TrimSpace(r.URL.Query().Get("repo")))
 	if err != nil {
 		writeClientError(w, err)

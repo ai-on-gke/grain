@@ -91,6 +91,13 @@ export function useSettingsSection({ showError, dismissError, onSaved } = {}) {
           body: JSON.stringify(payload),
         });
         setSettings((prev) => ({ ...prev, ...payload, ...updated }));
+        // A refusal of the setting just saved is over, so its banner
+        // comes down with the status; one about another setting is left
+        // up, as it is when that box is merely left alone.
+        const failed = errorRef.current;
+        if (failed && (failed.key === errorKey || failed.key in payload)) {
+          dismissError?.(failed.message);
+        }
         setError(null);
         try {
           await onSaved?.();
@@ -120,7 +127,7 @@ export function useSettingsSection({ showError, dismissError, onSaved } = {}) {
         setInFlight((n) => n - 1);
       }
     },
-    [onSaved, showError],
+    [onSaved, showError, dismissError],
   );
 
   const saveChoice = useCallback(

@@ -254,10 +254,26 @@ func TestDeployGKEScriptDryRunAllModes(t *testing.T) {
 			"--dry-run",
 		)
 		contains(t, out, "https://grain.example.com/api/auth/access-code")
-		contains(t, out, "http://127.0.0.1:8080/api/executors")
-		contains(t, out, "--access=dialout")
+		// Check 2 reads hostd's status inside the pod with curl (the image
+		// has no wget), presenting the daemon's local API token: loopback
+		// is not trusted on its own.
+		contains(t, out, "exec deploy/grain -c grain -- sh -c curl")
+		contains(t, out, "/data/local-api-token")
+		contains(t, out, "http://127.0.0.1:8080/api/sandboxes")
+		absent(t, out, "wget")
+		// Check 3 is a real `grain sandbox probe` (pkg/cli/sandbox_probe_cmd.go),
+		// authenticated the same way through GRAIN_DATA_DIR.
+		contains(t, out, "exec deploy/grain -c grain -- env GRAIN_DATA_DIR=/data /usr/local/bin/grain -server=http://127.0.0.1:8080 -timeout=15m sandbox probe --id=gke-check-")
+		contains(t, out, "--access=dialout -- echo dialout-ok:gke-check-")
+		// Check 4 is keyed on the probe's pod, and waits for the audit log
+		// to reach it before an empty answer counts.
+		contains(t, out, "grain-granule-probe-gke-check-")
+		contains(t, out, "wait up to 300s for the probe pod to appear")
 		contains(t, out, "io.k8s.core.v1.pods.")
 		contains(t, out, "exec/attach/portforward")
+		// A dry run checks nothing and must not say otherwise.
+		contains(t, out, "nothing is checked")
+		absent(t, out, "checks passed")
 	})
 }
 
@@ -472,4 +488,16 @@ func TestDeployGKETerraformModule(t *testing.T) {
 	iapTF := stripComments(read(t, "deploy", "gke", "terraform", "iap.tf"))
 	contains(t, iapTF, "google_iap_web_backend_service_iam_member")
 	absent(t, iapTF, "google_iap_web_iam_member ")
+	// The IAP OAuth Admin API behind google_iap_brand/google_iap_client was
+	// shut down on 2026-03-19, so the module must not create either; a custom
+	// client comes in through iap_client_id/iap_client_secret instead.
+	absent(t, iapTF, "google_iap_brand")
+	absent(t, iapTF, "google_iap_client")
+	contains(t, vars, `variable "iap_client_id"`)
+	contains(t, vars, `variable "iap_client_secret"`)
+	absent(t, vars, `variable "create_iap_brand"`)
+	absent(t, vars, `variable "iap_support_email"`)
+	exampleTFVars := stripComments(read(t, "deploy", "gke", "terraform", "example.tfvars"))
+	absent(t, exampleTFVars, "create_iap_brand")
+	absent(t, exampleTFVars, "iap_support_email")
 }

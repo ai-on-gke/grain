@@ -311,17 +311,26 @@ import "strconv"
 // stays warm awaiting a reply after a turn ends before being released
 // (model.Config.SessionSandboxIdleTTL).
 //
-// 67 adds the `task_event` table: who closed or reopened a task, when,
-// why, and what the close cancelled (model.TaskEvent).
-const SchemaVersion = 67
+// 67 changes no table: it rewrites every stored `team-broadcast` grant
+// (the grant tables, the default capability lists and the console
+// sessions) to `api:team-broadcast`, the in-process capability having
+// been retired for the agent API's teams:broadcast scope
+// (rewriteLegacyGrants, docs/design/unified-grants.md §4).
+//
+// 68 is 67 again for `dispatch-control`, now `api:dispatch-control`.
+//
+// 69 is 67 again for `pipeline-control`, now `api:pipeline-control`.
+const SchemaVersion = 69
 
-// taskEventTable is the `task_event` table, named once for Tables and
-// for the migration that adds it: one row per close or reopen of a task
-// by somebody (model.TaskEvent). actor_kind/actor_id are the
-// model.Principal that asked; reason is what they said, ” for nothing;
+// taskEventTable is the `task_event` table: one row per close or reopen of
+// a task by somebody (model.TaskEvent). actor_kind/actor_id are the
+// model.Principal that asked; reason is what they said, "" for nothing;
 // detail is what grain did because of it -- the live run and CI runs a
 // close cancelled. Observation.ClosedAt only ever holds the current
 // closure, so this is the only record of a close somebody later undid.
+// Needs no SchemaVersion bump and no migration rung, for the reason
+// task_run_tool gives: Store.Init's applySchema creates a missing table and
+// its indexes on every start.
 const taskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
   ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
   ` + "`task_id`" + `    TEXT     NOT NULL,
@@ -1159,6 +1168,24 @@ var Tables = []string{
   ` + "`content`" + `      BLOB     NOT NULL,
   ` + "`created_at`" + `   DATETIME NOT NULL,
   PRIMARY KEY (` + "`run_id`" + `, ` + "`path`" + `)
+)`,
+
+	// task_run_relayed_call is a tool call a live run made that grain
+	// has already acted on while the run was still going -- an
+	// interactive session's in-process turns relaying an answer or
+	// filing a proposal before waiting for the next message
+	// (orchestrator.continueSessionTurns) -- keyed by a fingerprint of
+	// the call's name and arguments, with how many such calls there
+	// were. A daemon that adopts the run (orchestrator.ResumeAdoptedRun)
+	// re-reads every turn's calls out of the transcript, and this is what
+	// keeps it from posting the answers and filing the proposals a second
+	// time. Deleted when the run finishes. Needs no SchemaVersion bump and
+	// no migration rung, for the reason the tables above give.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_relayed_call`" + ` (
+  ` + "`run_id`" + `      TEXT    NOT NULL,
+  ` + "`fingerprint`" + ` TEXT    NOT NULL,
+  ` + "`count`" + `       INTEGER NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`fingerprint`" + `)
 )`,
 
 	// task_run_unmatched_failure is one row per failed run whose own

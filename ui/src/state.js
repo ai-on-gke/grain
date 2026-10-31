@@ -1249,8 +1249,8 @@ export function inboxCount(tasks) {
 // pullRequestUrl turns "owner/name#123" (t.pullRequest, straight off
 // model.PullRequestRef.String()) into the surface that owns it: the
 // config repository's native comparison page for grain/config
-// (model.IsConfigRepo, the only one there is), or GitHub for an external
-// repo. It lived
+// (model.IsConfigRepo, the only one there is), or the git host an
+// external repo is on (repoUrl). It lived
 // in DetailOverlay.jsx until the inbox needed the same link on a row
 // (InboxPage.jsx) -- two views spelling out github.com/.../pull/... for
 // themselves is one of them getting it wrong the first time the ref's
@@ -1261,7 +1261,15 @@ export function pullRequestUrl(ref, branch = "", base = "") {
     const head = branch || `grain/task-${number}`;
     return internalPullRequestUrl("grain/config", head, base || "main");
   }
-  return `https://github.com/${repo}/pull/${number}`;
+  return `${repoUrl(repo)}/pull/${number}`;
+}
+
+// issueUrl turns "owner/name#123" or "host/owner/name#123" -- a task's
+// GitHub origin -- into that issue's page on the repo's git host. The
+// /issues/ path serves a pull request too.
+export function issueUrl(ref) {
+  const [repo, number] = ref.split("#");
+  return `${repoUrl(repo)}/issues/${number}`;
 }
 
 // internalPullRequestUrl is grain's own pull request for a task branch:

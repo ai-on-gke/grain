@@ -152,6 +152,10 @@ var notSettings = []string{
 	// the run's finish (model.StagedAttachment): runtime bookkeeping the
 	// finish path deletes once it has relayed it.
 	"task_run_staged_attachment",
+	// A tool call a live run's in-process session turns already acted
+	// on (model.Store.RecordRelayedCalls): runtime bookkeeping deleted
+	// when the run finishes.
+	"task_run_relayed_call",
 	// What a run said when it failed for a reason grain could not name
 	// (model.UnmatchedFailure). grain's own record of what happened to
 	// it, written after the run finished, and nothing a pull request

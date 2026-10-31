@@ -526,6 +526,12 @@ func (s *StoredRunStore) Get(id string) (Run, bool) {
 		return Run{}, false
 	}
 	if stored == nil {
+		if runID, err := strconv.ParseInt(strings.TrimSpace(id), 10, 64); err == nil && runID > 0 {
+			ghJobs, err := s.store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{RunID: runID})
+			if err == nil && len(ghJobs) > 0 {
+				return GitHubCIRun(ghJobs)
+			}
+		}
 		return Run{}, false
 	}
 	return runOf(*stored), true

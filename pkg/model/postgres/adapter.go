@@ -41,6 +41,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_run_report_check":          {"run_id"},
 	"task_run_spool_cursor":          {"run_id"},
 	"task_run_staged_attachment":     {"run_id", "path"},
+	"task_run_relayed_call":          {"run_id", "fingerprint"},
 	"task_run_unmatched_failure":     {"run_id"},
 	"task_run_exec_failure":          {"run_id"},
 	"task_run_capability_audit":      {"run_id", "seq"},
