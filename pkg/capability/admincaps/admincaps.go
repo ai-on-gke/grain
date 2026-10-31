@@ -29,7 +29,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -61,7 +60,6 @@ func Providers() []model.CapabilityProvider {
 		grainlog.NewWithConfig(grainlog.ProviderConfig{}),
 		deploymenthealth.NewWithConfig(deploymenthealth.ProviderConfig{}),
 		selfrepair.NewWithConfig(selfrepair.Config{}),
-		selfupgrade.NewWithConfig(selfupgrade.ProviderConfig{}),
 		dbaccess.NewReadProviderWithConfig(dbaccess.Config{}),
 		dbaccess.NewWriteProviderWithConfig(dbaccess.Config{}),
 	}

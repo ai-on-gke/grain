@@ -497,7 +497,7 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 		"sb-1": {
 			TaskID: "7", RunID: "run-2", Attempt: 2,
 			TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
-			Grants: []string{"quarantine-test", "api:tasks:read"},
+			Grants: []string{"api:test-quarantine", "api:tasks:read"},
 		},
 	}}
 	var apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderReason, apiHeaderAuth, apiHeaderTunnel string
@@ -535,7 +535,7 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 	scopes.scopes["sb-1"] = model.NamespaceScope{
 		TaskID: "7", RunID: "run-2", Attempt: 2,
 		TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
-		Grants: []string{"quarantine-test", "api:tasks:read"},
+		Grants: []string{"api:test-quarantine", "api:tasks:read"},
 	}
 
 	// Stage 3 collaboration & blocking-wait endpoints:
@@ -578,6 +578,21 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 	// Quarantine follow-up proposals share the same per-attempt proposal cap.
 	if rec := send(h, http.MethodPost, tok2, "/cli/quarantine", `{"test_name":"pkg/foo.TestBar","reason":"flake"}`); rec.Code != http.StatusTooManyRequests {
 		t.Errorf("quarantine follow-up proposal over cap: %d %s, want 429", rec.Code, rec.Body)
+	}
+	// Without tests:write (or on a mismatched repo-scoped grant), /cli/quarantine is refused with 403.
+	scopes.scopes["sb-1"] = model.NamespaceScope{
+		TaskID: "7", RunID: "run-2", Attempt: 2,
+		TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
+		Grants: []string{"api:tests:write@other/repo"},
+	}
+	if rec := send(h, http.MethodPost, tok2, "/cli/quarantine", `{"test_name":"pkg/foo.TestBar","reason":"flake"}`); rec.Code != http.StatusForbidden ||
+		!strings.Contains(rec.Body.String(), "api:test-quarantine") {
+		t.Errorf("quarantine without grant on repo: got %d %s, want 403 naming api:test-quarantine", rec.Code, rec.Body)
+	}
+	scopes.scopes["sb-1"] = model.NamespaceScope{
+		TaskID: "7", RunID: "run-2", Attempt: 2,
+		TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
+		Grants: []string{"api:test-quarantine", "api:tasks:read"},
 	}
 
 	// /api/ forwarding attaches X-Grain-Channel: sandbox-cli, X-Grain-Acting-Task, and X-Grain-Acting-Run,

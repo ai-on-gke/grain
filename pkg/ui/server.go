@@ -587,6 +587,7 @@ func (s *Server) routes() {
 	// an operator does to it.
 	s.route("GET /api/ci/cache", s.handleGetCICache)
 	s.route("DELETE /api/ci/cache", s.handleClearCICache)
+	s.route("POST /api/tests/quarantine", s.handleQuarantineTest)
 
 	// The merge queue's speculative batches: which changes one suite is
 	// deciding together (pkg/ui/mergebatches.go). Read-only, and beside

@@ -683,7 +683,7 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	case req.AfterTasksFinish:
 		if err := s.scheduleUpgrade(r, req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+			writeClientError(w, err)
 			return
 		}
 	case req.Image != "":
@@ -728,20 +728,17 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 func (s *Server) scheduleUpgrade(r *http.Request, req startUpgradeRequest) error {
 	branch, err := s.tasks.Config.Upgrader.ValidateBranch(req.Branch)
 	if err != nil {
-		return err
+		return validationErrorf("%v", err)
 	}
-	by, err := requestPrincipal(
-		"a scheduled upgrade's requester", req.RequestedBy, req.RequestedByKind)
+	ctx, err := withAgentRequester(
+		r.Context(), "a scheduled upgrade's requester", req.RequestedBy, req.RequestedByKind)
 	if err != nil {
 		return err
 	}
-	if by == (model.Principal{}) {
-		by = s.tasks.actor(r.Context())
-	}
-	return s.tasks.Store.SetScheduledUpgrade(r.Context(), model.ScheduledUpgrade{
+	return s.tasks.Store.SetScheduledUpgrade(ctx, model.ScheduledUpgrade{
 		Branch:      branch,
 		RequestedAt: time.Now().UTC(),
-		By:          by,
+		By:          s.tasks.actor(ctx),
 	})
 }
 
