@@ -27,12 +27,11 @@
 # last run stopped, and a stage whose work is already done says so and
 # moves on.
 #
-# Unlike scripts/deploy-gke.sh (Cloud SQL, Gateway + IAP, a GCS-staged
-# partial copy), this keeps the store as it is -- SQLite on the
-# grain-data PVC, or the Postgres the local daemon already uses -- and
-# copies the whole data directory, so the controller that comes up in the
-# cluster is the same deployment with the same history, secrets and
-# state repository, and only the place it runs has changed.
+# This keeps the store as it is -- SQLite on the grain-data PVC, or the
+# Postgres the local daemon already uses -- and copies the whole data
+# directory, so the controller that comes up in the cluster is the same
+# deployment with the same history, secrets and state repository, and
+# only the place it runs has changed.
 #
 # Tested by scripts/migrate-local-to-gke_test.sh (stubbed kubectl,
 # systemctl, gcloud, docker, curl and grain), run in CI by
