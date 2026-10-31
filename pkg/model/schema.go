@@ -335,9 +335,13 @@ import "strconv"
 // 74 adds `keep_running` to `task`, `template` and `schedule`
 // (model.Task.KeepRunning, model.Template.KeepRunning, model.Schedule.KeepRunning).
 //
-// 75 adds `new_task_form` to `grain_config`: the New Task form's
+// 75 is 67 again for `self-upgrade`, now `api:self-upgrade`.
+//
+// 76 is 67 again for `test-quarantine`, now `api:test-quarantine`.
+//
+// 77 adds `new_task_form` to `grain_config`: the New Task form's
 // configuration (settings/new-task-form.yml, model.NewTaskForm).
-const SchemaVersion = 75
+const SchemaVersion = 77
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

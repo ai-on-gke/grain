@@ -1122,6 +1122,11 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 	if pathParam.MatchString(pathOf(pattern)) {
 		return "", nil
 	}
+	if pattern == "POST /api/tests/quarantine" && acting != nil {
+		if own := taskRepo(acting); own != "" {
+			return own, nil
+		}
+	}
 	// A read-only collection asked for without ?repo= by a task that
 	// reaches it on some repositories only lists the one it reaches --
 	// the single repository its grant names, or its own -- rather than
