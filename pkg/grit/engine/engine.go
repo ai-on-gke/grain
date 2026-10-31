@@ -952,8 +952,13 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		}
 	}
 
+	jobName := pj.Job.ID
+	if jobName == "" {
+		jobName = pj.ID
+	}
+	jobLabel := gateJobLabel(plan.Request.Repo, runID, jobName)
 	if perRun != nil {
-		release, err := perRun.Acquire(queueCtx, GateRequest{Wait: waiting})
+		release, err := perRun.Acquire(queueCtx, GateRequest{Job: jobLabel, Wait: waiting})
 		if err != nil {
 			if e.stopping(ctx) {
 				return NewJobRun(pj)
@@ -972,6 +977,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		// the count (grain/task-173).
 		var jobID string
 		release, err := e.Jobs.Acquire(queueCtx, GateRequest{
+			Job:  jobLabel,
 			Want: workflows.SandboxCommitment(pj.Job.Sandbox), Priority: rank, Wait: waiting,
 			Adopted: adopted != nil,
 			Assigned: func(id string) {
