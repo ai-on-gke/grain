@@ -256,7 +256,7 @@ var sandboxCommandHelp = map[string]string{
 		"  --contains        only entries containing this text (plain, case-insensitive)\n" +
 		"  --max-lines N     most entries to return (alias --lines; default 200, at most 1000)\n" +
 		"  --tail N          the last N lines of what that returns\n",
-	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks, or print one (src://playbooks). Needs bootstrap-playbooks.\n",
+	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs bootstrap-playbooks.\n",
 	"issue list": "grain issue list [--repo owner/name]\n\nGitHub issues. Needs read-issues.\n",
 	"issue read": "grain issue read <number> [--repo owner/name]\n\nOne GitHub issue. Needs read-issues.\n",
 	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",

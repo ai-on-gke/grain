@@ -28,6 +28,7 @@ package sandboxcli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -393,7 +394,21 @@ func (c *sandboxCLI) run(args []string) error {
 		if name := p.optArg(0); name != "" {
 			return c.fs("src://playbooks/"+name, nil)
 		}
-		return c.fs("src://playbooks", url.Values{"list": {""}})
+		// One playbook name per line, as `grain playbooks <name>` takes it.
+		var listing bytes.Buffer
+		p, err := fsPath("src://playbooks")
+		if err != nil {
+			return err
+		}
+		if err := c.get(p, url.Values{"list": {""}}, &listing); err != nil {
+			return err
+		}
+		for _, line := range strings.Split(strings.TrimSpace(listing.String()), "\n") {
+			if name := strings.TrimSuffix(line, ".md"); name != "" && !strings.HasSuffix(name, "/") {
+				fmt.Fprintln(c.out, name)
+			}
+		}
+		return nil
 	case "issue list":
 		return c.get("/cli/issues", p.query("repo", "label", "limit"), c.out)
 	case "issue read":
