@@ -27,7 +27,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -844,48 +843,28 @@ func TestExternalAgentConcurrencyCapRefusesASecondRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var (
-		pw      *io.PipeWriter
-		heldRec *httptest.ResponseRecorder
-		done    chan struct{}
-	)
-	hold := func() {
-		var pr *io.PipeReader
-		pr, pw = io.Pipe()
-		held := httptest.NewRequest(http.MethodPost, "/mcp", pr)
-		held.Header.Set("Authorization", "Bearer "+issued.Token)
-		rec, finished := httptest.NewRecorder(), make(chan struct{})
-		heldRec, done = rec, finished
-		go func() {
-			defer close(finished)
-			srv.ServeHTTP(rec, held)
-		}()
-	}
-	hold()
+	pr, pw := io.Pipe()
+	held := httptest.NewRequest(http.MethodPost, "/mcp", pr)
+	held.Header.Set("Authorization", "Bearer "+issued.Token)
+	heldRec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer pr.Close()
+		srv.ServeHTTP(heldRec, held)
+	}()
 
-	// The held request takes its slot before it reads its body; until it
-	// has, a second request may still be let through. One that arrived
-	// while a probe held the slot was itself refused and has finished, so
-	// it is sent again: under load that collision is what left every
-	// later probe let through.
-	var refused *httptest.ResponseRecorder
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		select {
-		case <-done:
-			if heldRec.Code != http.StatusTooManyRequests {
-				t.Fatalf("held request finished before its body was sent: status %d (%s)", heldRec.Code, heldRec.Body.String())
-			}
-			hold()
-			continue
-		default:
-		}
-		if rec, _ := doMCP(t, srv, issued.Token, "ping", map[string]any{}); rec.Code == http.StatusTooManyRequests {
-			refused = rec
-			break
-		}
+	// Writing to the unbuffered pipe blocks until handleMCP calls
+	// io.ReadAll(r.Body), which is after serveHTTP's
+	// authenticateExternalAgent has acquired the concurrency slot. Keeping
+	// pw open holds the request in io.ReadAll with the slot taken.
+	if _, err := pw.Write([]byte(" ")); err != nil {
+		t.Fatalf("held request exited before reading its body (%d: %s): %v", heldRec.Code, heldRec.Body.String(), err)
 	}
-	if refused == nil {
-		t.Fatal("a second request was never refused while the first held the only slot")
+
+	refused, _ := doMCP(t, srv, issued.Token, "ping", map[string]any{})
+	if refused.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request while slot held: status %d (%s), want 429", refused.Code, refused.Body.String())
 	}
 	if !strings.Contains(refused.Body.String(), "exceeded max concurrent requests (1)") {
 		t.Errorf("refusal = %s, want the concurrency cap named", refused.Body.String())
