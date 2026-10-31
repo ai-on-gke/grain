@@ -1,0 +1,241 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# GitHub Actions port of .grain/workflows/release-train.yml.
+#
+# Runs daily at 04:15 UTC (and on demand via workflow_dispatch) to drive
+# `scripts/release-from-trunk.sh`:
+#   1. Judges any release candidate currently soaking on staging (`:4280`).
+#      A passing 24h soak tags `vX.Y.0-pending`, publishes `:vX.Y.0-pending`
+#      images, files the release-notes task, and sends the operator approval
+#      notification. A failing soak tags `vX.Y.0-rc.N-discarded`.
+#   2. With nothing soaking, selects the newest known-good `main` commit, tags
+#      `vX.Y.0-rc.N`, force-moves `refs/heads/candidate`, and publishes
+#      `:vX.Y.0-rc.N`, `:candidate`, and `:rc` images.
+#
+# On non-main refs, `dry_run` defaults to and is enforced as `true`.
+
+name: release-train
+
+on:
+  schedule:
+    - cron: "15 4 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run release-from-trunk in dry-run mode without pushing git refs or images (always true on non-main refs)"
+        required: false
+        default: false
+        type: boolean
+      force:
+        description: "Bypass the 24h soak elapsed-time gate (--force)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+env:
+  GOFLAGS: -mod=readonly
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+
+jobs:
+  train:
+    name: cut, soak and stage a release from trunk
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      group: ${{ github.workflow }}-train
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.REPO_WRITE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache npm and node_modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Resolve release context and dry-run mode
+        env:
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+
+          case "${GITHUB_REF:-}" in
+            refs/heads/main)
+              is_main_ref=true
+              ;;
+            *)
+              is_main_ref=false
+              ;;
+          esac
+
+          dry_run="${INPUT_DRY_RUN:-}"
+          if [ "$is_main_ref" != "true" ]; then
+            dry_run="true"
+          elif [ -z "$dry_run" ]; then
+            dry_run="false"
+          fi
+          {
+            echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
+            echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"
+            echo "GRAIN_CI_REF=${GH_REF_NAME}"
+            echo "GRAIN_CI_EVENT=${GITHUB_EVENT_NAME}"
+            echo "DRY_RUN=${dry_run}"
+          } >> "$GITHUB_ENV"
+          echo "Resolved GRAIN_CI_REF=${GH_REF_NAME} DRY_RUN=${dry_run}"
+
+      - name: Authenticate to Google Cloud (WIF)
+        if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+
+      - name: Configure Artifact Registry Docker authentication
+        if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
+
+      - name: Configure package-publish credentials
+        if: env.DRY_RUN != 'true'
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
+          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
+          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
+        run: |
+          set -euo pipefail
+          token="${GHCR_PAT:-}"
+          username="${PUBLISH_USERNAME}"
+          if [ -z "$token" ]; then
+            case "${RELEASE_IMAGE_REPO}" in
+              bwsalmon/*)
+                token=""
+                ;;
+              *)
+                token="${FALLBACK_TOKEN}"
+                username="${GITHUB_ACTOR}"
+                ;;
+            esac
+          fi
+          if [ -n "$token" ]; then
+            echo "::add-mask::${token}"
+            {
+              echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
+              echo "PACKAGE_PUBLISH_USERNAME=${username}"
+              echo "PACKAGE_PUBLISH_TOKEN=${token}"
+            } >> "$GITHUB_ENV"
+            sudo mkdir -p /home/debian
+            printf '%s\n' "${PUBLISH_REGISTRY}" | sudo tee /home/debian/.package-publish-registry >/dev/null
+            printf '%s\n' "${username}" | sudo tee /home/debian/.package-publish-username >/dev/null
+            printf '%s\n' "${token}" | sudo tee /home/debian/.package-publish-token >/dev/null
+            sudo chmod 600 /home/debian/.package-publish-token
+          fi
+
+      - name: Configure optional image-signing key
+        if: env.DRY_RUN != 'true'
+        env:
+          SIGNING_KEY_PEM: ${{ secrets.IMAGE_SIGNING_KEY }}
+          SIGNING_KEY_PASS: ${{ secrets.IMAGE_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGNING_KEY_PEM:-}" ]; then
+            echo "WARNING: IMAGE_SIGNING_KEY secret is not set; release-train images will be published unsigned." >&2
+            exit 0
+          fi
+          if ! command -v cosign >/dev/null 2>&1; then
+            cosign_version="v2.4.1"
+            curl -fsSL "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
+              -o /usr/local/bin/cosign
+            chmod +x /usr/local/bin/cosign
+          fi
+          key_file="${RUNNER_TEMP}/image-signing.key"
+          printf '%s\n' "${SIGNING_KEY_PEM}" > "$key_file"
+          chmod 600 "$key_file"
+          pass_file="${RUNNER_TEMP}/image-signing.pass"
+          printf '%s' "${SIGNING_KEY_PASS:-}" > "$pass_file"
+          chmod 600 "$pass_file"
+          {
+            echo "IMAGE_SIGNING_KEY=${key_file}"
+            echo "IMAGE_SIGNING_PASSWORD_FILE=${pass_file}"
+          } >> "$GITHUB_ENV"
+
+      - name: Require the publishing credential
+        env:
+          RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
+        run: |
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Dry-run mode enabled: skipping package-publish credential requirement"
+            exit 0
+          fi
+          if [ -z "${PACKAGE_PUBLISH_TOKEN:-}" ] && [ ! -s /home/debian/.package-publish-token ] && [ "${RELEASE_IMAGES:-}" != off ]; then
+            echo "release-train: no package-publish credential reached this ${GRAIN_CI_EVENT:-} run, so the rc and pending images could not be published; nothing was tagged." >&2
+            echo "release-train: configure the GHCR_TOKEN secret (see docs/github-actions-ci.md)." >&2
+            exit 1
+          fi
+
+      - name: Run the release train
+        env:
+          GRAIN_API_URL: ${{ vars.GRAIN_API_URL || 'http://127.0.0.1:4200' }}
+          GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
+          RELEASE_STAGING_URL: ${{ vars.RELEASE_STAGING_URL || 'http://127.0.0.1:4280' }}
+          RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
+          RELEASE_NOTES_TASK: ${{ vars.RELEASE_NOTES_TASK }}
+          RELEASE_NOTIFY: ${{ vars.RELEASE_NOTIFY }}
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" = "true" ] && [ -z "${GRAIN_API_TOKEN:-}" ]; then
+            echo '[]' > "${RUNNER_TEMP}/dry-run-empty.json"
+            export RELEASE_RUNS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
+            export RELEASE_TASKS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
+          fi
+          bash ./scripts/release-from-trunk.sh

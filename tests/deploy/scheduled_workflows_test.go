@@ -42,8 +42,10 @@ func TestTheNightlysVerdictIsBackedByAGrainWorkflowThatIsActuallyScheduled(t *te
 	t.Fatal("no .grain/workflows/nightly.yml: nothing runs the long suite on this deployment")
 }
 
-// The publishing credential is refused to a scheduled run, because
-// `schedule` is accepted by ci.Request.Validate from any caller.
+// The publishing credential is refused to a scheduled run a caller asked
+// for, because `schedule` is accepted by ci.Request.Validate from any
+// caller. Only the cron grain itself fires (ci.Request.TrustedSchedule)
+// reaches it, through model.TrustedScheduleCapability.
 func TestThePublishingCredentialStillRefusesAScheduledRun(t *testing.T) {
 	p := &packagepublish.Provider{}
 	if p.SupportsCIEvent(string(ci.EventSchedule)) {

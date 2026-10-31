@@ -533,7 +533,13 @@ const DIRECTIONS = {
   text: { asc: "A–Z", desc: "Z–A" },
 };
 
+// A date that is still to come -- a schedule's next run -- is read as
+// soon or late rather than old or new: "Next run, oldest first" named
+// the run furthest off as the old one.
+const FUTURE_DATE = { asc: "Soonest first", desc: "Latest first" };
+
 export function directionLabels(attr) {
+  if (attr.type === TYPE_DATE && attr.future) return FUTURE_DATE;
   if (DIRECTIONS[attr.type]) return DIRECTIONS[attr.type];
   return attr.order ? DIRECTIONS.ordered : DIRECTIONS.text;
 }

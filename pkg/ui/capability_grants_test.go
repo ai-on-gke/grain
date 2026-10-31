@@ -311,6 +311,51 @@ func TestCheckCapabilityGrants(t *testing.T) {
 	}
 }
 
+// With a subject, the check also says which grants the capability
+// catalogue refuses a task on that repo -- or on none -- so the new-task
+// form can mark a pre-ticked default before filing rather than after.
+func TestCheckCapabilityGrantsJudgesTheCatalogueForASubject(t *testing.T) {
+	ts, client := grantTestServer(t)
+	setCatalogue(t, context.Background(), client.Store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"gcp-key": {Restrictions: &model.CapabilityRestrictions{Repos: []string{"acme/widgets"}}},
+	}})
+	grants := []any{map[string]any{"grant": "gcp-key"}, map[string]any{"grant": "gemini-key"}}
+	for _, tc := range []struct {
+		name    string
+		subject any
+		refused bool
+	}{
+		{"no subject", nil, false},
+		{"its repo", map[string]any{"repo": "acme/widgets"}, false},
+		{"another repo", map[string]any{"repo": "acme/gadgets"}, true},
+		{"no repository", map[string]any{"repo": ""}, true},
+	} {
+		body := map[string]any{"grants": grants}
+		if tc.subject != nil {
+			body["subject"] = tc.subject
+		}
+		var out []ui.GrantCheck
+		if code := postJSON(t, ts, "POST", "/api/capability-grants/check", body, &out); code != 200 || len(out) != 2 {
+			t.Fatalf("%s: %d %+v", tc.name, code, out)
+		}
+		if got := out[0].CatalogueRefusal != ""; got != tc.refused {
+			t.Errorf("%s: gcp-key refusal = %q, want refused %v", tc.name, out[0].CatalogueRefusal, tc.refused)
+		}
+		if tc.refused && !strings.Contains(out[0].CatalogueRefusal, "repos: acme/widgets") {
+			t.Errorf("%s: refusal %q does not name the restriction", tc.name, out[0].CatalogueRefusal)
+		}
+		if out[1].CatalogueRefusal != "" {
+			t.Errorf("%s: gemini-key, which nothing restricts, is refused: %q", tc.name, out[1].CatalogueRefusal)
+		}
+	}
+	var bad map[string]any
+	if code := postJSON(t, ts, "POST", "/api/capability-grants/check", map[string]any{
+		"grants": grants, "subject": map[string]any{"repo": "not a repo"},
+	}, &bad); code != 400 {
+		t.Errorf("a malformed subject repo: %d %v", code, bad)
+	}
+}
+
 func TestCreateTaskGrantRefusalNamesItsField(t *testing.T) {
 	ts, _ := grantTestServer(t)
 	var out map[string]any

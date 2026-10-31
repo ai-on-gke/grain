@@ -34,17 +34,14 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/memory"
-	"github.com/ai-on-gke/grain/pkg/capability/pipelinecontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -216,21 +213,6 @@ func (d DaemonTasks) TaskPrompt(ctx context.Context, id string) (mcp.TaskPromptR
 
 func (d DaemonTasks) AttemptTranscript(ctx context.Context, id string, attempt int) (string, error) {
 	return d.Client.AttemptTranscript(ctx, id, attempt)
-}
-
-// BroadcastTeamMessage broadcasts to the deployment's active tasks.
-func (d DaemonTasks) BroadcastTeamMessage(ctx context.Context, message string) (mcp.BroadcastResult, error) {
-	resp, err := d.Client.BroadcastDeploymentMessage(ctx, ui.BroadcastTeamRequest{
-		Message: message,
-		Task:    d.taskID,
-	})
-	if err != nil {
-		return mcp.BroadcastResult{}, err
-	}
-	return mcp.BroadcastResult{
-		DeliveredCount: resp.DeliveredCount,
-		TaskIDs:        resp.TaskIDs,
-	}, nil
 }
 
 // daemonMetrics implements mcp.MetricsReader by asking a running "grain
@@ -420,139 +402,6 @@ func selfUpgradeStatus(status ui.UpgradeStatus) selfupgrade.Status {
 		}
 	}
 	return out
-}
-
-// daemonPipelineControl is pipeline-control's Controller over the
-// daemon's REST API. There is one pause, the deployment's own: team
-// pipeline pauses were removed with the rest of multi-tenant mode
-// (grain/task-4682, single-tenant reset stage 3). Only a task holding
-// pipeline-control deployment-wide (ui.TaskDetail.DeploymentWide) may
-// take it, asked at the moment of the call; any other task is refused
-// rather than reaching a pause wider than its grant.
-type daemonPipelineControl struct {
-	client *ui.HTTPClient
-	taskID string
-}
-
-// authorize refuses a run whose pipeline-control is not deployment-wide.
-func (d daemonPipelineControl) authorize(ctx context.Context) error {
-	detail, err := d.client.GetTask(ctx, d.taskID)
-	if err != nil {
-		return fmt.Errorf("reading task %s to see what its pipeline-control reaches: %w", d.taskID, err)
-	}
-	if !slices.Contains(detail.DeploymentWide, pipelinecontrol.CapabilityName) {
-		return fmt.Errorf("task %s holds %s only for its team, and team pipeline pauses no longer exist: "+
-			"only a task granted it deployment-wide pauses the deployment", d.taskID, pipelinecontrol.CapabilityName)
-	}
-	return nil
-}
-
-func (d daemonPipelineControl) PausePipeline(ctx context.Context, repo, reason string) (string, error) {
-	fullReason := reason
-	if repo != "" {
-		fullReason = fmt.Sprintf("[%s] %s", repo, reason)
-	}
-	if err := d.authorize(ctx); err != nil {
-		return "", err
-	}
-	_, _, err := d.client.PausePipeline(ctx, fullReason)
-	return "", err
-}
-
-func (d daemonPipelineControl) ResumePipeline(ctx context.Context, repo, reason string) (string, error) {
-	if err := d.authorize(ctx); err != nil {
-		return "", err
-	}
-	_, _, err := d.client.ResumePipeline(ctx)
-	return "", err
-}
-
-// daemonDispatchControl is dispatch-control's Controller over the
-// daemon's REST API: the pipeline pause and Run now, made as this run's
-// own agent ({agent, <task id>}, the way daemonUpgrade schedules an
-// upgrade) so the pause row and each task's conversation say which task
-// decided. The grant is re-read on every call, so taking it off the
-// task stops the next call rather than the next run.
-type daemonDispatchControl struct {
-	client *ui.HTTPClient
-	taskID string
-}
-
-func (d daemonDispatchControl) agent() model.Principal {
-	if d.taskID == "" {
-		return model.Principal{}
-	}
-	return model.Principal{Kind: model.PrincipalAgent, ID: d.taskID}
-}
-
-// authorize refuses a run whose task no longer holds dispatch-control.
-func (d daemonDispatchControl) authorize(ctx context.Context) error {
-	if d.taskID == "" {
-		return errors.New("this run serves no task, so there is no grant of dispatch-control to act under")
-	}
-	detail, err := d.client.GetTask(ctx, d.taskID)
-	if err != nil {
-		return fmt.Errorf("reading task %s to see whether it still holds %s: %w", d.taskID, dispatchcontrol.CapabilityName, err)
-	}
-	if !slices.Contains(detail.Capabilities, dispatchcontrol.CapabilityName) {
-		return fmt.Errorf("task %s no longer holds %s", d.taskID, dispatchcontrol.CapabilityName)
-	}
-	return nil
-}
-
-func (d daemonDispatchControl) PausePipeline(ctx context.Context, reason string) (bool, error) {
-	if err := d.authorize(ctx); err != nil {
-		return false, err
-	}
-	_, paused, err := d.client.PausePipelineAs(ctx, reason, d.agent())
-	return paused, err
-}
-
-// ResumePipeline refuses while an upgrade holds the queue -- the pause
-// RunNowPasses is false for, an upgrade's own hold or one running or
-// scheduled under somebody else's pause. Lifting that hold is passing it
-// with every task at once, and lifting a scheduled upgrade's calls the
-// upgrade off (ui.Client.ResumePipeline), which is self-upgrade's
-// cancel_deployment_upgrade rather than anything this grant gives. Not
-// knowing the pause refuses too, as it holds a Run now back.
-func (d daemonDispatchControl) ResumePipeline(ctx context.Context) (bool, error) {
-	if err := d.authorize(ctx); err != nil {
-		return false, err
-	}
-	pause, err := d.client.PipelinePause(ctx)
-	if err != nil {
-		return false, fmt.Errorf("reading the pause to see whether an upgrade holds it: %w", err)
-	}
-	if pause.Paused && !pause.RunNowPasses {
-		return false, fmt.Errorf("an upgrade holds the queue (%s), and %s does not lift that: "+
-			"the hold goes when the upgrade is over, or a person resumes from the banner", pause.Reason,
-			dispatchcontrol.CapabilityName)
-	}
-	_, resumed, err := d.client.ResumePipeline(ctx)
-	return resumed, err
-}
-
-func (d daemonDispatchControl) RunTaskNow(ctx context.Context, taskID string) (string, bool, error) {
-	if err := d.authorize(ctx); err != nil {
-		return "", false, err
-	}
-	if err := d.client.RunNowAs(ctx, taskID, d.agent()); err != nil {
-		return "", false, err
-	}
-	pause, err := d.client.PipelinePause(ctx)
-	if err != nil || !pause.Paused {
-		// The request is made either way; not knowing the pause only
-		// costs the sentence that says whether it is passed.
-		return "", false, nil
-	}
-	return pause.Reason, pause.RunNowPasses, nil
-}
-
-func (d daemonDispatchControl) DeferTask(ctx context.Context, taskID string, until *time.Time) error {
-	if err := d.authorize(ctx); err != nil {
-		return err
-	}
-	return d.client.Defer(ctx, taskID, ui.DeferOptions{Until: until})
 }
 
 type daemonDB struct {
@@ -1689,9 +1538,9 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 var servedGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
 	memory.CapabilityName, grainci.CapabilityName, deploymenthealth.CapabilityName,
-	selfupgrade.CapabilityName, pipelinecontrol.CapabilityName, dispatchcontrol.CapabilityName,
+	selfupgrade.CapabilityName,
 	readissues.CapabilityName,
-	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite, teambroadcast.CapabilityName,
+	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -1781,29 +1630,6 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 			TaskID:     taskID,
 			Deployment: deployment,
 			Confirm:    confirm,
-		})...)
-	}
-	if grants.Has(dispatchcontrol.CapabilityName) {
-		var controller dispatchcontrol.Controller
-		if client != nil {
-			controller = daemonDispatchControl{client: client, taskID: taskID}
-		}
-		tools = append(tools, dispatchcontrol.Tools(dispatchcontrol.Config{
-			TaskID:     taskID,
-			Controller: controller,
-		})...)
-	}
-	// pipeline-control's two tools share their names with
-	// dispatch-control's first two, which do what they do and more, so a
-	// run holding both is served dispatch-control's.
-	if grants.Has(pipelinecontrol.CapabilityName) && !grants.Has(dispatchcontrol.CapabilityName) {
-		var controller pipelinecontrol.Controller
-		if client != nil {
-			controller = daemonPipelineControl{client: client, taskID: taskID}
-		}
-		tools = append(tools, pipelinecontrol.Tools(pipelinecontrol.Config{
-			TaskID:     taskID,
-			Controller: controller,
 		})...)
 	}
 	if grants.Has(dbaccess.CapabilityDBRead) || grants.Has(dbaccess.CapabilityDBWrite) {
@@ -2529,13 +2355,6 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		// notify_operator and message_task are every run's, with no
 		// grant: the daemon applies their rules for -task.
 		registry.Register(mcp.NewNotifyTools(daemonNotifier{client: client, taskID: *taskID})...)
-		// broadcast_team_message writes into other tasks' conversations,
-		// so it is the team-broadcast grant's (pkg/capability/
-		// teambroadcast). The daemon is told which task is asking and
-		// checks the grant itself.
-		if grants.Has(teambroadcast.CapabilityName) {
-			registry.Register(mcp.NewBroadcastTools(DaemonTasks{Client: client, taskID: *taskID})...)
-		}
 		if grants.Has(grainci.CapabilityName) {
 			taskBranch := strings.TrimSpace(*prBranch)
 			if taskBranch == "" {

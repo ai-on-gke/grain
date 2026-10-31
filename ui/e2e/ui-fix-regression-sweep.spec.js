@@ -81,7 +81,7 @@ test.describe("2026-10-22 UI fixes, together on one tip", () => {
   }) => {
     await page.goto("/");
     await page.getByTestId("top-bar-settings").click();
-    await expect(page).toHaveURL(/\/settings\/general$/);
+    await expect(page).toHaveURL(/\/settings\/models$/);
     await page.getByTestId("settings-nav-agents").click();
     await expect(page).toHaveURL(/\/settings\/agents$/);
 

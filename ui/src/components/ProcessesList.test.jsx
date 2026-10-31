@@ -249,6 +249,37 @@ describe("ProcessesList", () => {
     expect(await screen.findByTestId("new-process-kind")).toBeTruthy();
   });
 
+  it("tells a declared workflow schedule's reader where its cadence is changed, not that it can be changed here", async () => {
+    const user = userEvent.setup();
+    const declared = {
+      ...schedules[2],
+      system: true,
+      templateId: "system:workflow-review:nightly",
+      templateName: 'Review the "nightly" workflow\'s scheduled run',
+    };
+    render(
+      <Harness
+        schedules={[declared, schedules[3]]}
+        templates={[]}
+        suites={[]}
+      />,
+    );
+    await user.click(screen.getByText("nightly workflow"));
+    const pane = await screen.findByRole("dialog");
+    expect(pane).toHaveTextContent(
+      "whether it runs at all are set in .grain/workflows/nightly.yml.",
+    );
+    expect(pane).not.toHaveTextContent("You can change how often it runs");
+    expect(within(pane).getByRole("button", { name: "Pause" })).toBeDisabled();
+    await user.click(within(pane).getByRole("button", { name: "Close" }));
+
+    // grain's own (undeclared) schedule still can be.
+    await user.click(screen.getByText("Upgrade check"));
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "You can change how often it runs",
+    );
+  });
+
   it("opens each kind's own overlay from its row", async () => {
     const onOpenTrigger = vi.fn();
     const user = userEvent.setup();

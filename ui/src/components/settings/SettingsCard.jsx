@@ -56,10 +56,25 @@ export default function SettingsCard({
         </Typography>
       )}
       {readOnly ? (
+        // A disabled fieldset disables every native control inside it,
+        // but MUI draws a Select, a Checkbox's box and a chip's delete as
+        // elements of its own: those are dimmed and stopped by hand, so a
+        // read-only card neither looks nor acts editable. Links still
+        // work -- "View in config repo" is one.
         <Box
           component="fieldset"
           disabled
-          sx={{ border: 0, p: 0, m: 0, minInlineSize: 0 }}
+          data-settings-readonly
+          sx={{
+            border: 0,
+            p: 0,
+            m: 0,
+            minInlineSize: 0,
+            "& button:disabled, & .MuiCheckbox-root:has(input:disabled), & .MuiSwitch-root:has(input:disabled), & .MuiRadio-root:has(input:disabled)":
+              { opacity: 0.5, cursor: "default" },
+            "& .MuiSelect-select, & .MuiChip-deleteIcon, & .MuiAutocomplete-root":
+              { pointerEvents: "none" },
+          }}
         >
           {children}
         </Box>

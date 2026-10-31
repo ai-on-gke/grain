@@ -25,6 +25,13 @@ import { UpgradeCheckSettings } from "../UpgradePanel.jsx";
 // §3.2). `s` is the page's useSettingsSection().
 export default function GeneralSection({ s, config }) {
   const { settings, saveChoice, onTextBlur, onEnterKey } = s;
+  const external = Boolean(
+    settings ? settings.externalConfigRepo : config?.externalConfigRepo,
+  );
+  const settingsLocked =
+    typeof settings?.settingsLocked === "boolean"
+      ? settings.settingsLocked
+      : Boolean(config?.settingsLocked || config?.configRepoOnly);
   return (
     <>
       <SettingsCard title="Deployment" anchor="deployment">
@@ -62,6 +69,36 @@ export default function GeneralSection({ s, config }) {
                 of Deferred, Closed&quot;, so closed tasks are out of it until
                 that filter is edited. on: the filter leaves closed out, showing
                 them from the start.
+              </span>
+            </>
+          }
+          sx={{ display: "flex", mt: 1 }}
+        />
+      </SettingsCard>
+      <SettingsCard
+        title="Settings lock"
+        anchor="settings-lock"
+        allowInExternalMode={!external}
+      >
+        <FormControlLabel
+          control={
+            <Checkbox
+              name="settingsLocked"
+              data-setting-id="settingsLocked"
+              checked={settingsLocked}
+              onChange={(evt) =>
+                saveChoice({ settingsLocked: evt.target.checked })
+              }
+            />
+          }
+          label={
+            <>
+              Lock settings in UI (require config repo PRs)
+              <span className="hint">
+                off (default): settings are editable in the UI and API and
+                synced to the config repository automatically. on: settings
+                managed in the config repository are read-only here and must be
+                changed via config pull requests.
               </span>
             </>
           }

@@ -417,6 +417,17 @@ var NeverAutoMergePaths = []string{
 	"tables/standing_sandbox_env.json",
 	"tables/persistent_sandbox.json",
 	"tables/gcp_key.json",
+	// Suites, for a dump that still carries them as tables rather than
+	// settings/suites.yml: whether the tasks a suite run files need a
+	// person's approval, auto-merge, or auto-approve their proposals.
+	"tables/suite.json",
+	"tables/suite_item.json",
+	"tables/suite_sequence.json",
+	// Qualification plans: whether a run's tasks may dispatch without a
+	// person's approval, and whether its candidate is promoted on its own.
+	"tables/qualification_config.json",
+	"tables/qualification_item.json",
+	"tables/qualification_item_depends_on.json",
 	// Extracted scripts, CI workflows, and schema version.
 	"scripts/**",
 	"workflows/**",

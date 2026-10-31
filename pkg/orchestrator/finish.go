@@ -386,6 +386,12 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		}
 	}
 	if !staleBranch && !inPlace {
+		pushedCommit := true
+		if preRunBranchSHA != "" && client != nil && task.Target != nil {
+			if head, herr := client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName()); herr == nil && head != nil {
+				pushedCommit = head.SHA != preRunBranchSHA
+			}
+		}
 		handled, err := salvagePushedBranch(ctx, store, client, task, now)
 		if empty, ok := emptyBranch(err); ok {
 			// The task has already been told, and parked (noteEmptyBranch).
@@ -404,6 +410,9 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			return err
 		}
 		if handled {
+			if pushedCommit || hasComment || hasNothingNeeded || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != "")) {
+				resolveRelayedThreadsAfterOwnerRun(ctx, store, client, task, proxyResult, pushedCommit)
+			}
 			return nil
 		}
 	}
@@ -1917,7 +1926,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		hold := heldByRun || needsPersonWhy != ""
 		switch {
 		case len(escalated) > 0:
-			proposal.Body += model.CapabilityEscalationNote(task.ID, escalated)
+			proposal.Body += model.ProposalEscalationNote(task.ID, proposal, escalated)
 		case len(ungranted) > 0, len(ungrantedReads) > 0:
 			// Filed for a person; the notes above say why.
 		case heldByRun && (approved || model.AutoSubmits(proposal, task)):
@@ -1947,7 +1956,18 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		asked := proposedAutoMerge(p, task) &&
 			model.GrantsSubsetOf(proposal.Grants, task.Grants)
 		proposal.AutoMerge = asked && model.LandsWhereGranted(proposal, task)
-		if asked && !proposal.AutoMerge && len(ungranted) == 0 {
+		if proposal.ChangeTarget != nil {
+			// A change target's change is a CL, not a pull request, so
+			// there is nothing for auto-merge to merge and
+			// model.ValidateTaskChangeTarget refuses it -- checked above
+			// before this was decided, so inheriting it here filed a task
+			// every dispatch refused (task 1860). Its CL is submitted by
+			// a person through its provider instead.
+			if proposal.AutoMerge {
+				proposal.Body += changeTargetAutoMergeNote(task, proposal)
+			}
+			proposal.AutoMerge = false
+		} else if asked && !proposal.AutoMerge && len(ungranted) == 0 {
 			proposal.Body += otherBranchAutoMergeNote(task, proposal)
 		}
 		if err := store.PutTask(ctx, proposal); err != nil {
@@ -2558,6 +2578,16 @@ func otherBranchAutoMergeNote(task, proposal model.Task) string {
 		"permission for one branch, not for the run holding it. Turn it on when you approve "+
 		"this if it belongs here too.",
 		task.ID, landingBranch(task), landingBranch(proposal))
+}
+
+// changeTargetAutoMergeNote is otherBranchAutoMergeNote for a proposal
+// with a change target: it would have inherited auto-merge, and has no
+// pull request for it to apply to.
+func changeTargetAutoMergeNote(task, proposal model.Task) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: task %s, which proposed this, is an auto-merge job, but this "+
+		"task's change is a %s change with no git pull request, so it did not inherit that. "+
+		"Its change is submitted by a person through its provider.",
+		task.ID, proposal.ChangeTarget.Kind)
 }
 
 // landingBranch names the branch a task's work lands on, for the sentence

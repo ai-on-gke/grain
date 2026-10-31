@@ -27,6 +27,11 @@ import (
 type Result struct {
 	Text    string
 	IsError bool
+	// HumanTurn marks a result that is a person's own reply (chat): the
+	// start of a new turn of the conversation, which restarts the tool
+	// budget and is handed back without a budget notice appended to the
+	// person's words (tool_budget.go).
+	HumanTurn bool
 }
 
 // Tool is one entry in tools/list plus the function that answers tools/call
@@ -251,7 +256,16 @@ func (r *Registry) handleCall(ctx context.Context, id json.RawMessage, params js
 	// start a long repair it has no time to push.
 	// The budget counts what the tool answered, after the bound above and
 	// before grain's own notices, so a run is charged for what it read.
-	budgetNotice := r.budget.spend(len(text))
+	// A person's reply is a new wake for budgeting: an interactive session
+	// stays in one run across many turns, and what it spent answering the
+	// last message is no reason to tell it to stop before answering this
+	// one. The reply itself carries no notice -- it is their words.
+	var budgetNotice string
+	if result.HumanTurn {
+		r.budget.reset(len(text))
+	} else {
+		budgetNotice = r.budget.spend(len(text))
+	}
 	text = withDeadlineNotice(text, r.deadlineNotice())
 	text = withDeadlineNotice(text, budgetNotice)
 	// And after it, a person's own words, if anybody has said anything

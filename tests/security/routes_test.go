@@ -393,6 +393,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/persistent-sandboxes":                  trusted,
 	"GET /api/persistent-sandboxes/{name}/logs":      trusted,
 	"POST /api/persistent-sandboxes/{name}/{action}": trusted,
+	"POST /api/sandbox-probe":                        trusted,
 	"/staging/{name}/{path...}":                      trusted,
 	"GET /api/metrics":                               trusted,
 	"GET /api/unmatched-failures":                    trusted,

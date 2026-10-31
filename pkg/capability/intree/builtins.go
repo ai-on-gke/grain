@@ -15,6 +15,7 @@
 package intree
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -340,6 +341,58 @@ func ResolveAlias(servers map[string]protocol.ServerConfig, id string) (string, 
 		}
 	}
 	return "", false
+}
+
+// CheckBuiltinConfig applies the rules a built-in server's configure
+// enforces beyond its config schema -- a config map's name, directory,
+// keys, modes and paths, a host script's name, timeout and limits, and
+// either kind's names being unique -- so Settings refuses a save that
+// would otherwise be stored and then leave the server needing
+// configuration the next time it starts. Nothing secret is read: each
+// declared secret map key stands in with a placeholder value, and every
+// host script $env: reference is taken as set, so those are still left
+// to the server's own status. A name that is not one of these built-ins
+// passes.
+func CheckBuiltinConfig(name string, config map[string]any) error {
+	switch name {
+	case "config-map":
+		probe := make(map[string]any, len(config))
+		for k, v := range config {
+			probe[k] = v
+		}
+		values := map[string]string{}
+		secrets, _ := config["secrets"].([]any)
+		for _, item := range secrets {
+			m, _ := item.(map[string]any)
+			mapName, _ := m["name"].(string)
+			keys, _ := m["keys"].(map[string]any)
+			for key := range keys {
+				values[SecretValueKey(strings.TrimSpace(mapName), key)] = "placeholder"
+			}
+		}
+		raw, err := json.Marshal(values)
+		if err != nil {
+			return err
+		}
+		probe["secret_values"] = string(raw)
+		_, err = parseConfigMapEntries(probe)
+		return err
+	case "host-script":
+		var environ []string
+		scripts, _ := config["scripts"].([]any)
+		for _, item := range scripts {
+			m, _ := item.(map[string]any)
+			env, _ := m["env"].(map[string]any)
+			for _, v := range env {
+				if s, _ := v.(string); strings.HasPrefix(s, hostScriptEnvRef) {
+					environ = append(environ, strings.TrimPrefix(s, hostScriptEnvRef)+"=placeholder")
+				}
+			}
+		}
+		_, err := parseHostScripts(config, environ)
+		return err
+	}
+	return nil
 }
 
 // BuiltinConfigSchema returns the operator-facing configure schema for a

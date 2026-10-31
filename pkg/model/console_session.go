@@ -718,7 +718,13 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 		"this conversation.\n\n")
 
 	b.WriteString("Whatever else you hold is on this task's capabilities, and the person you " +
-		"are talking to can change them in the same pane this chat is in. Check what you " +
+		"are talking to can change them in the same pane this chat is in. Not every change " +
+		"reaches you at the same moment: repositories added to or removed from this " +
+		"session's reads and writes, and `api:*` scopes called through `grain api`, take " +
+		"effect at once; everything else -- a new or removed capability, and an `api:*` " +
+		"route served only as an `api_*` tool -- takes effect when grain restarts this " +
+		"session to pick it up, which it says in this chat and which loses nothing said " +
+		"here. Check what you " +
 		"actually have before promising anything: if you are asked to do something you have no " +
 		"capability for, say which one it would need rather than working around it.\n\n")
 
@@ -792,17 +798,49 @@ type FileConsoleSessionOptions struct {
 }
 
 // ConsoleSessionGrants returns the session's configured capabilities as
-// GrantByGrain grants, always including DurableCapability.
-func ConsoleSessionGrants(session ConsoleSession) []Grant {
-	grants := make([]Grant, 0, len(session.Capabilities)+1)
+// GrantByGrain grants, always including DurableCapability, followed by
+// defaults -- this deployment's Config.DefaultCapabilities -- as
+// GrantByDefault for any the session does not already name.
+//
+// The defaults are there because every task a session files is seeded
+// with them (ui.Client.defaultCapabilities), and a capability reference
+// its proposer does not hold is an escalation however it came to be on
+// the proposal (EscalatedCapabilities, docs/capabilities-spec.md
+// §2.3.4). A session left without them could never queue anything on a
+// deployment whose defaults name a reference, whatever TasksApproved
+// says (grain/task-1983): holding what its own proposals are seeded with
+// is what lets a session's approval mean what it says.
+func ConsoleSessionGrants(session ConsoleSession, defaults ...string) []Grant {
+	grants := make([]Grant, 0, len(session.Capabilities)+len(defaults)+1)
 	grants = append(grants, Grant{Capability: DurableCapability, Via: GrantByGrain})
+	seen := map[string]bool{DurableCapability: true}
 	for _, name := range session.Capabilities {
-		if name == "" || name == DurableCapability {
+		if name == "" || seen[name] {
 			continue
 		}
+		seen[name] = true
 		grants = append(grants, Grant{Capability: name, Via: GrantByGrain})
 	}
+	for _, name := range defaults {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		grants = append(grants, Grant{Capability: name, Via: GrantByDefault})
+	}
 	return grants
+}
+
+// DeploymentDefaultCapabilities is this deployment's
+// Config.DefaultCapabilities as stored, or none when there is no config
+// row yet: what ConsoleSessionGrants seeds a standing session with.
+func DeploymentDefaultCapabilities(ctx context.Context, store *Store) ([]string, error) {
+	cfg, err := store.GetConfig(ctx)
+	if err != nil || cfg == nil {
+		return nil, err
+	}
+	return cfg.DefaultCapabilities, nil
 }
 
 // ConsoleSessionNetworkAccess resolves the network access for a console
@@ -832,6 +870,10 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 		return "", err
 	}
 	stateRepo := opts.StateRepo
+	defaults, err := DeploymentDefaultCapabilities(ctx, store)
+	if err != nil {
+		return "", err
+	}
 	task := Task{
 		ID:     id,
 		Intent: IntentAnalyze,
@@ -842,7 +884,7 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 			Reason:      ReasonConsoleSession,
 		},
 		Binding:       BindingDirective,
-		Grants:        ConsoleSessionGrants(session),
+		Grants:        ConsoleSessionGrants(session, defaults...),
 		Tags:          []string{ConsoleSessionTag(session.ID)},
 		Interactive:   true,
 		NetworkAccess: ConsoleSessionNetworkAccess(session, opts.NetworkIsolates),

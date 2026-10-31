@@ -125,17 +125,42 @@ type WorkTree struct {
 // TaskPullRequest is the pull request task's work was opened as, nil if
 // none. A pull request left in a repository the task was since moved
 // off (PullRequestOffTarget) is not it.
+//
+// A task can carry more than one on-target LinkFixes link -- a branch
+// reopened by hand, or one linked in a write repository as well as the
+// target -- and every reader that keeps one piece of state per task (its
+// observation row, its security hold, its merge-queue place) has to agree
+// on which of them it is. It is the one in the task's own Target over one
+// in a write repository, and within a repository the newest: the highest
+// number, compared as a number (PullRequestRefLess). Links are read back
+// ordered by their target's text, where "o/r#100" sorts before "o/r#99",
+// so "the last link" was not the newest one past a digit boundary.
 func TaskPullRequest(task Task) *PullRequestRef {
 	var out *PullRequestRef
 	for _, l := range task.Links {
 		if l.Kind != LinkFixes {
 			continue
 		}
-		if ref, err := ParsePullRequestRef(l.Target); err == nil && !PullRequestOffTarget(task, ref) {
+		ref, err := ParsePullRequestRef(l.Target)
+		if err != nil || PullRequestOffTarget(task, ref) {
+			continue
+		}
+		if out == nil || taskPullRequestBefore(task, *out, ref) {
 			out = &ref
 		}
 	}
 	return out
+}
+
+// taskPullRequestBefore reports whether TaskPullRequest prefers b to a.
+func taskPullRequestBefore(task Task, a, b PullRequestRef) bool {
+	if task.Target != nil {
+		aOwn, bOwn := a.Repo.Same(*task.Target), b.Repo.Same(*task.Target)
+		if aOwn != bOwn {
+			return bOwn
+		}
+	}
+	return PullRequestRefLess(a, b)
 }
 
 // WorkTreeStatus is how a tree names where task stands -- planned,

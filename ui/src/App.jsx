@@ -89,6 +89,7 @@ import CustomizeSidebarOverlay from "./components/CustomizeSidebarOverlay.jsx";
 import SettingsPage from "./components/SettingsPage.jsx";
 import SystemPage from "./components/SystemPage.jsx";
 import {
+  DEFAULT_SETTINGS_SECTION,
   oldAdminDestination,
   settingsSectionFor,
   systemDestination,
@@ -747,7 +748,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // settingsItem is one item of the open section, in the path after it:
   // the capability server /settings/capabilities/<id> opens.
   const [settingsItem, setSettingsItem] = useState(
-    () => parsePath(window.location.pathname).settingsItem || "",
+    () =>
+      parsePath(window.location.pathname, window.location.search)
+        .settingsItem || "",
   );
   const [systemTab, setSystemTab] = useState(
     () => parsePath(window.location.pathname).systemTab || "",
@@ -1791,7 +1794,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
           !isPhone && at.systemTab === "health" ? "" : at.systemTab || "",
         );
       if (v === "settings") {
-        setSettingsSection(at.settingsSection || (isPhone ? "" : "general"));
+        setSettingsSection(
+          at.settingsSection || (isPhone ? "" : DEFAULT_SETTINGS_SECTION),
+        );
         setSettingsItem("");
       }
       // The rail's Processes entry is the whole list, whatever it was
@@ -2696,7 +2701,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
           window.location.pathname,
         ) ||
         (view === "settings" &&
-          settingsSection === "general" &&
+          settingsSection === DEFAULT_SETTINGS_SECTION &&
           window.location.pathname === "/settings") ||
         (view === "session" &&
           !openTaskId &&
@@ -3119,7 +3124,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     [setViewAndCloseOpen, isPhone],
   );
   const openSettings = useCallback(
-    (section = "general", anchor = "") => {
+    (section = DEFAULT_SETTINGS_SECTION, anchor = "") => {
       if (!section) {
         if (leavingLosesEdits() && !window.confirm(DISCARD_PROMPT)) return;
         setSettingsSection("");
@@ -3146,11 +3151,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   );
   const openDeploymentSettings = openSettings;
 
-  // A bare /settings is the section list on a phone and General
-  // everywhere else, so the address says General there (§3.2).
+  // A bare /settings is the section list on a phone and Models
+  // everywhere else, so the address says Models there (§3.2).
   useEffect(() => {
     if (view === "settings" && !settingsSection && !isPhone)
-      setSettingsSection("general");
+      setSettingsSection(DEFAULT_SETTINGS_SECTION);
   }, [view, settingsSection, isPhone]);
   // And a /system/health is the bare /system everywhere but a phone,
   // where the bare path is the list of tabs (settingsSections.js's
@@ -3259,7 +3264,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
               : ""
         }`
       : view === "settings"
-        ? `settings / ${settingsSectionLabel(settingsSection || "general").toLowerCase()}`
+        ? `settings / ${settingsSectionLabel(settingsSection || DEFAULT_SETTINGS_SECTION).toLowerCase()}`
         : view === "system"
           ? `system / ${systemTabLabel(systemTab || "health").toLowerCase()}`
           : view === "boards" && openBoardRow
@@ -3303,6 +3308,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       onChanged={() => Promise.all([refreshConfig(), reloadNotifications()])}
       showError={showError}
       onOpenConfigRepo={() => openSettings("config-repo")}
+      onOpenPower={() => openSystem("power")}
       onOpenConnection={() => openDeploymentSettings("models")}
       onOpenSetup={({ tab, view: target }) =>
         target ? setViewAndCloseOpen(target) : openDeploymentSettings(tab)
@@ -3323,7 +3329,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       view={view}
       config={config}
       onOpenSystem={() => openSystem("")}
-      onOpenSettings={() => openSettings("general")}
+      onOpenSettings={() => openSettings()}
     />
   );
 
@@ -3441,6 +3447,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                               setReleasesOpen(false);
                               setOpenRelease(null);
                             }}
+                            onOpenTab={(tab) => openRepoPage(openRepo, tab)}
                             onOpenTask={openTask}
                             showError={showError}
                           />

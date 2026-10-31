@@ -14,6 +14,14 @@ Each repo has a design folder with 5 classes of things in it:
 
 Alternatively, all of the design material could live in a separate repo rather than in a folder in each repo; either layout could be supported.
 
+## Reviews
+
+**Design** Any change to a design is approved by an owner and a least one other human. 
+**Specs** Any change to a spec is reviewed by at least one human and a second entity (human or agent).
+**Playbook designs** Any change to a playbook design is reviewed by an owner and at least one other human.
+**Playbooks** Any change to a playbook is reviewed by at least one human and some other enitity.
+**Code** Any change to other code is reviewed by at least 2 entities (2 agents, 1 human and agent, 2 humans).
+
 ## Process
 
 Wherever an agent opens a PR against the design folder (specifications, tasks, clarifications, playbooks), it should listen to that PR and respond to review comments by making updates to the doc PR. Every change is reviewed by a second agent before it is committed. That covers spec PRs, tasks PRs, clarification PRs, playbook PRs, and implementation (code) PRs alike: a separate agent, not the one that wrote the change, reviews it before it merges. Implementation PRs opened outside grain are adopted and reviewed the same way (see [External pull request adoption](#external-pull-request-adoption)).

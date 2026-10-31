@@ -698,7 +698,13 @@ test("switches between internal grain/config and external read-only IaC config r
       page.locator("section[data-settings-card] fieldset[disabled]"),
     ).toHaveCount(0);
 
-    // Confirm PUT /api/settings succeeds again in Internal mode.
+    // Confirm PUT /api/settings succeeds again in Internal mode and
+    // commits changes to the internal `grain/config` repository.
+    const headBeforeExport = execFileSync(
+      "git",
+      ["-C", internalRepoDir, "rev-parse", "HEAD"],
+      { encoding: "utf8" },
+    ).trim();
     const putSettingsInternalResp = await page.request.put(
       `${daemon.url}/api/settings`,
       { data: { environmentName: "internal-restored" } },
@@ -707,12 +713,6 @@ test("switches between internal grain/config and external read-only IaC config r
     const updatedSettingsInternal = await putSettingsInternalResp.json();
     expect(updatedSettingsInternal.environmentName).toBe("internal-restored");
 
-    // Confirm "Export now" commits changes to the internal `grain/config` repository.
-    const headBeforeExport = execFileSync(
-      "git",
-      ["-C", internalRepoDir, "rev-parse", "HEAD"],
-      { encoding: "utf8" },
-    ).trim();
     await page.goto(`${daemon.url}/settings/config-repo`);
     await page.getByRole("button", { name: "Export now" }).click();
 

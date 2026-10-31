@@ -314,7 +314,7 @@ As the merge queue drives a pull request, it updates `Observation.MergeQueueStat
 | `repair_needed` | Agent Repair | Merge conflict or red CI detected; about to re-queue the task for an agent repair run. |
 | `repair_queued` | Agent Repair | Task is re-queued (`CompletedAt` cleared, back in `queued`) waiting for a sandbox to fix the conflict or CI failure. |
 | `repairing` / `agent_working` | Agent Repair | An agent run is actively running in a sandbox to fix the PR (`agent_working` when triggered manually via **Run now**). |
-| `merge_failed` | Awaiting Person | GitHub refused the merge with a non-transient error (e.g., branch protection rule mismatch). Stopped until a human clicks **Retry merge**. |
+| `merge_failed` | Awaiting Person | GitHub refused the merge with a non-transient error (e.g., branch protection rule mismatch, or unresolved human review conversations reported as `blocked: N unresolved review conversations by <people>`; threads opened by grain's own review tasks are replied to and resolved automatically once the owner's decision is handled). Stopped until the condition is resolved or a human clicks **Retry merge**. |
 
 ### Step 8: The liveness rule (`pkg/orchestrator/liveness.go`)
 
@@ -485,7 +485,7 @@ Grain supports two capability mechanisms side by side:
    - `grain-ci`: Granted automatically to every task run so `mcp_grain-sandbox_wait_for_checks`, `get_ci_log`, `retrigger_ci`, and `run_ci_job` work.
    - `self-debug`, `grain-log`, `deployment-health`: Read-only access to Grain's own source (`/home/debian/grain-src`), scrubbed SQLite replica, daemon logs, and health metrics.
    - `memory`, `release-notes`: Permission to commit updates to `memory/` or `release-notes/` in `grain/config`.
-   - `self-repair`, `self-upgrade`, `pipeline-control`, `dispatch-control`, `quarantine`: Operator-level control plane actions (used by the Director or system jobs when explicitly enabled). `dispatch-control` is manual mode for an agent: pause, Run now chosen tasks, resume ([manual-mode.md](manual-mode.md)).
+   - `self-repair`, `self-upgrade`, `quarantine`: Operator-level control plane actions (used by the Director or system jobs when explicitly enabled). `dispatch-control`, manual mode for an agent (pause, Run now chosen tasks, resume; [manual-mode.md](manual-mode.md)), and `pipeline-control` are now the `api:dispatch-control` and `api:pipeline-control` presets rather than in-process capabilities.
    - `gcp-key`, `gemini-key`, `github-token`, `git-push-any-ref`, `local-scripts`: Scoped cloud/forge credentials and host script access.
 2. **Capability MCP servers (`pkg/capability/protocol`, `pkg/capability/intree`, `grain_config.mcp_servers`):** External or in-tree MCP servers (`grain capability <name>` over stdio for `gcp`, `self-debug`, `git`, `model-proxy`, `skill`, `host-script`, or remote HTTP servers) configured in **Settings → Capabilities → Capability servers** (`/settings/capabilities`, one tab per server). A capability server advertises `mint_<method>` and `release_<method>` tools.
 
