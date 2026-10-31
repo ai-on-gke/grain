@@ -185,13 +185,13 @@ per-capability list, with what each one becomes:
 | `deployment-health` | `…/api#deployment:read` plus `…/grain#health` for the host/sandbox probes | api scope + new method |
 | `self-repair` | `…/grain#host-exec` (each command still needs a live chat reply) | new method, dangerous (Q7) |
 | `self-upgrade` | `…/api#self-upgrade` preset | api preset (alias today) |
-| `pipeline-control` | `…/api#pipeline-control` preset | api preset (alias today) |
-| `dispatch-control` | `…/api#dispatch-control` preset | api preset |
+| `pipeline-control` | `…/api#pipeline-control` preset | **done** (task 2004): provider and its two tools removed, stored grants rewritten to `api:pipeline-control` by schema migration 69 |
+| `dispatch-control` | `…/api#dispatch-control` preset | **done** (task 2004): provider and its four tools removed, stored grants rewritten to `api:dispatch-control` by schema migration 68 |
 | `test-quarantine` | `…/api#tests:write` (new scope) | api scope |
 | `read-issues` | `…/github#read-issues` | new method on `github` server |
 | `release-notes` | `…/api#releases:read` + `…/api#releases:write` | api scopes |
 | `memory` | `…/api#memory:write` (new scope) | api scope |
-| `team-broadcast` | `…/api#teams:broadcast` (new scope) | api scope |
+| `team-broadcast` | `…/api#teams:broadcast` (new scope), preset `team-broadcast` | **done** (task 2004): provider and `broadcast_team_message` removed, stored grants rewritten to `api:team-broadcast` by schema migration 67 |
 | `bootstrap-playbooks` | `…/skill#skill` `{dir: bootstrap}` | existing server method |
 | `console` | stays a task setting, not a grant (it changes how the run is hosted, not what it may reach) | moved out of grants (Q8) |
 | `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | new method, `write: true` dangerous |

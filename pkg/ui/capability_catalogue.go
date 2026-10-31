@@ -78,6 +78,27 @@ func (c *Client) catalogueFilingGrants(ctx context.Context, grants []model.Grant
 	return kept, needsPerson, nil
 }
 
+// markCatalogueRefusals sets CatalogueRefusal on each checked grant the
+// catalogue refuses a task filed against target (nil: no repository)
+// with no template -- what the new-task form files.
+func (c *Client) markCatalogueRefusals(ctx context.Context, checks []GrantCheck, target *model.RepoRef) ([]GrantCheck, error) {
+	cat, err := c.capabilityCatalogue(ctx)
+	if err != nil || cat == nil {
+		return checks, err
+	}
+	for i, check := range checks {
+		grant := check.Recorded
+		if grant == "" {
+			grant = check.Grant
+		}
+		gc := c.catalogueGrantContext(ctx, target, "", []model.Grant{{Capability: grant}})
+		if _, err := cat.ValidateGrants(gc); err != nil {
+			checks[i].CatalogueRefusal = err.Error()
+		}
+	}
+	return checks, nil
+}
+
 // catalogueEditRefusal judges one grant being attached to an existing
 // task: 400 for one the catalogue refuses the task, 403 for an agent
 // attaching one the catalogue says is a person's decision.

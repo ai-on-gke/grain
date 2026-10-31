@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -275,7 +276,7 @@ func (s *Server) resolveTask(ctx context.Context, scope Scope, relPath string) (
 		for _, id := range ids {
 			entries = append(entries, Entry{Name: id, Type: "dir"})
 		}
-		sortEntries(entries)
+		sortTaskEntries(entries)
 		return &ResolvedNode{
 			Scheme:  "task",
 			Path:    "",
@@ -1061,4 +1062,23 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 	}
 
 	return nil, fmt.Errorf("%w: deploy://%s", ErrNotFound, relPath)
+}
+
+// sortTaskEntries orders task ids numerically, oldest first and newest
+// last, rather than as strings (1, 10, 100, 1000, ..., 999). Ids that are
+// not numbers follow, in string order.
+func sortTaskEntries(entries []Entry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		a, aErr := strconv.ParseUint(entries[i].Name, 10, 64)
+		b, bErr := strconv.ParseUint(entries[j].Name, 10, 64)
+		switch {
+		case aErr == nil && bErr == nil:
+			return a < b
+		case aErr == nil:
+			return true
+		case bErr == nil:
+			return false
+		}
+		return entries[i].Name < entries[j].Name
+	})
 }

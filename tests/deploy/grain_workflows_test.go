@@ -1971,15 +1971,16 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 	)
 	creds := releaseTrainCredential(`{"registry":"ghcr.io","username":"bot","token":"secret"}`)
 
-	// An operator's dispatch holds every one of them; grain's own cron
-	// holds all but package-publish, which stays release and dispatch only.
+	// An operator's dispatch and grain's own cron both hold every one of
+	// them: package-publish opted in to trusted schedules so the daily
+	// train can publish its rc and pending images (task 1913).
 	for _, tc := range []struct {
 		event   ci.Event
 		trusted bool
 		want    []string
 	}{
 		{ci.EventManual, false, job.Capabilities},
-		{ci.EventSchedule, true, []string{model.RepoWriteCapability(repo), model.ReleaseGateReadCapability}},
+		{ci.EventSchedule, true, job.Capabilities},
 	} {
 		cc, resolved, err := daemon.ResolveCICapabilities(context.Background(), reg, creds, repo, "ci-job", tc.event, tc.trusted, job.Capabilities)
 		if err != nil {

@@ -1148,3 +1148,45 @@ daily:
 		t.Fatalf("the declared schedule = %+v, %v, want review: on-failure", file, err)
 	}
 }
+
+func TestScheduledWorkflowRunsAreSkippedAndCancelledWhenRepoUsesGitHubCIMode(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sched := workflowSchedule(t, store, baseTime.Add(-time.Minute))
+	runner := newFakeCI()
+	deps := workflowDeps(store, runner)
+
+	// Start a scheduled workflow run while the repo uses Grain CI.
+	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if len(runner.requests) != 1 {
+		t.Fatalf("started %d runs, want 1", len(runner.requests))
+	}
+
+	// Switch the repo to CIModeGitHub while run1 is in flight.
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:   declaringRepo,
+		CIMode: model.CIModeGitHub,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("RunCycle after switching to GitHub CI: %v", err)
+	}
+	if got := runner.reasons["run1"]; got != "repository switched to GitHub CI" {
+		t.Fatalf("run1 cancel reason = %q, want %q", got, "repository switched to GitHub CI")
+	}
+	if filed := scheduledTasksTagged(t, store, "schedule:"+sched.ID); len(filed) != 0 {
+		t.Fatalf("filed %d review tasks for a cancelled scheduled workflow run on CIModeGitHub, want 0", len(filed))
+	}
+
+	// Advance to the next day: the workflow schedule must not start a new Grain CI run while CIMode is GitHub.
+	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(25*time.Hour)); err != nil {
+		t.Fatalf("RunCycle next day: %v", err)
+	}
+	if got := runner.started(); got != 1 {
+		t.Fatalf("started %d runs after switching to CIModeGitHub, want 1 (no new runs)", got)
+	}
+}

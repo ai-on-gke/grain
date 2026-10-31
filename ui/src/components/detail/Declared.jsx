@@ -26,6 +26,10 @@ import {
   providerDefaultModel,
 } from "../../state.js";
 import { GlyphLabel } from "../ItemGlyph.jsx";
+import {
+  EXTERNAL_AGENT_PREFIX,
+  isExternalAgent,
+} from "../../taskAttributes.js";
 import { DeclaredPushRefs } from "../Declared.jsx";
 
 // How the Model row names the declaration that chose a task's model,
@@ -244,6 +248,17 @@ export default function Declared({ t, config, act }) {
     rows.push([
       "When the agent finds nothing to do",
       "Leave for acknowledgement",
+    ]);
+  }
+  // A task an external agent filed (over /mcp or the agent API) has the
+  // deployment's person who vouches for that credential as its creator
+  // -- the requester policy and credentials are chosen by -- so the
+  // Creator row alone would say that person filed it. Name the agent
+  // ahead of it, the way messages.go signs what one says on a task.
+  if (isExternalAgent(t.author)) {
+    rows.push([
+      "Filed by",
+      `external agent ${t.author.slice(EXTERNAL_AGENT_PREFIX.length)} (${t.author})`,
     ]);
   }
   if (t.creator) rows.push(["Creator", t.creator]);

@@ -20,6 +20,8 @@ package ui_test
 // cache in front of that route (pkg/ui/task_list_cache.go).
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -244,5 +246,77 @@ func TestTaskListNarrowsToTheAskedRepo(t *testing.T) {
 	}
 	if body := whole.Body.String(); !strings.Contains(body, "acme/gadgets") || !strings.Contains(body, "acme/widgets") {
 		t.Errorf("the unfiltered list lost a repo: %s", body)
+	}
+}
+
+// TestTaskListNarrowsToStateSearchAndLimit pins GET /api/tasks for a
+// caller that is not the UI: ?state=, ?q= and ?limit= narrow it, the
+// newest limit tasks are kept in filing order (never as strings, which
+// puts 9 after 12), and fields=summary leaves every description out.
+func TestTaskListNarrowsToStateSearchAndLimit(t *testing.T) {
+	t.Parallel()
+	srv, _ := testServer(t)
+	for i := 1; i <= 12; i++ {
+		approved := i%2 == 1
+		title := fmt.Sprintf("fix thing %d", i)
+		if i == 9 {
+			title = "Flaky go-long test"
+		}
+		do(t, srv, http.MethodPost, "/api/tasks",
+			fmt.Sprintf(`{"title":%q,"description":"a very long description","approved":%v}`, title, approved))
+	}
+	get := func(path string) []map[string]any {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status %d: %s", path, rec.Code, rec.Body.String())
+		}
+		var out []map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("GET %s: %v: %s", path, err, rec.Body.String())
+		}
+		return out
+	}
+	ids := func(tasks []map[string]any) string {
+		var out []string
+		for _, task := range tasks {
+			out = append(out, fmt.Sprint(task["id"]))
+		}
+		return strings.Join(out, ",")
+	}
+
+	if got := get("/api/tasks?limit=3"); ids(got) != "10,11,12" {
+		t.Errorf("?limit=3 = %s, want the newest three in filing order", ids(got))
+	}
+	proposed := get("/api/tasks?state=proposed&limit=100")
+	if len(proposed) != 6 {
+		t.Errorf("?state=proposed = %s, want the six unapproved tasks", ids(proposed))
+	}
+	for _, task := range proposed {
+		if task["state"] != "proposed" {
+			t.Errorf("?state=proposed listed %v in state %v", task["id"], task["state"])
+		}
+	}
+	if got := get("/api/tasks?state=proposed,queued&q=GO-LONG"); ids(got) != "9" {
+		t.Errorf("?q=GO-LONG = %s, want 9", ids(got))
+	}
+	if got := get("/api/tasks?search=nothing+like+it"); len(got) != 0 {
+		t.Errorf("?search with no match = %s, want []", ids(got))
+	}
+	summary := get("/api/tasks?fields=summary&limit=2")
+	if ids(summary) != "11,12" {
+		t.Errorf("?fields=summary&limit=2 = %s", ids(summary))
+	}
+	for _, task := range summary {
+		if _, ok := task["description"]; ok {
+			t.Errorf("fields=summary carried a description: %v", task)
+		}
+		if task["title"] == nil || task["state"] == nil {
+			t.Errorf("fields=summary lost the title or state: %v", task)
+		}
+	}
+	if full := get("/api/tasks?limit=1"); full[0]["description"] != "a very long description" {
+		t.Errorf("?limit=1 without fields lost the description: %v", full[0])
 	}
 }

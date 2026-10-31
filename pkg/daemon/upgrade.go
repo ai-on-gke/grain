@@ -20,12 +20,17 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
+
+// processStartedAt is when this process started, near enough: package
+// initialisation runs before main.
+var processStartedAt = time.Now().UTC()
 
 // upgradeStatus is orchestrator.Config.UpgradeStatus for this
 // deployment: the last (or current) upgrade as pkg/upgrade recorded it,

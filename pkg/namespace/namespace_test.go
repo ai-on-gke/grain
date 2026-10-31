@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
@@ -940,5 +942,49 @@ func TestTaskReadsSiblingsOnlyWithATasksReadGrant(t *testing.T) {
 				t.Errorf("%s: task://101/%s: %d %q", name, f, rec.Code, rec.Body.String())
 			}
 		}
+	}
+}
+
+// TestPlaybooksServedFromTheEmbeddedCopy checks src://playbooks lists
+// and reads the playbooks embedded in the binary, whatever SrcDir is --
+// no deployment's source tree has a playbooks/ of its own -- and still
+// only for a scope the bootstrap-playbooks grant (or self-debug) opens.
+func TestPlaybooksServedFromTheEmbeddedCopy(t *testing.T) {
+	t.Parallel()
+
+	want, err := fs.ReadFile(playbooks.FS, "gke-sandbox-cluster.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated := t.TempDir()
+	if err := os.WriteFile(filepath.Join(unrelated, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, srcDir := range map[string]string{"no SrcDir": "", "unrelated SrcDir": unrelated} {
+		t.Run(name, func(t *testing.T) {
+			srv := &Server{SrcDir: srcDir, Redactor: redact.New(nil)}
+			scope := Scope{MayReadPlaybooks: true}
+
+			rec := serveRequest(srv, scope, http.MethodGet, "/fs/src/playbooks?list", nil)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "gke-sandbox-cluster.md\n") {
+				t.Fatalf("list: %d %q", rec.Code, rec.Body.String())
+			}
+			for _, p := range []string{"/fs/src/playbooks/gke-sandbox-cluster.md", "/fs/src/playbooks/gke-sandbox-cluster"} {
+				rec := serveRequest(srv, scope, http.MethodGet, p, nil)
+				if rec.Code != http.StatusOK || rec.Body.String() != string(want) {
+					t.Errorf("read %s: %d, %d bytes, want %d", p, rec.Code, rec.Body.Len(), len(want))
+				}
+			}
+			if rec := serveRequest(srv, scope, http.MethodGet, "/fs/src/playbooks/nope", nil); rec.Code != http.StatusNotFound {
+				t.Errorf("missing playbook: %d, want 404", rec.Code)
+			}
+			if rec := serveRequest(srv, scope, http.MethodGet, "/fs/src/main.go", nil); rec.Code != http.StatusForbidden {
+				t.Errorf("bootstrap-playbooks reading outside playbooks/: %d, want 403", rec.Code)
+			}
+			rec = serveRequest(srv, Scope{}, http.MethodGet, "/fs/src/playbooks?list", nil)
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "bootstrap-playbooks") {
+				t.Errorf("no grant: %d %q, want 403 naming bootstrap-playbooks", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

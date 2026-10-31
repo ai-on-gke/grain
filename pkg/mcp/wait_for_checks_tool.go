@@ -472,6 +472,51 @@ func sleepUntilCancelled(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// GitHubCheckWaitResult is the structured result of waiting on GitHub check
+// runs for a branch's tip commit.
+type GitHubCheckWaitResult struct {
+	// Status is "passed", "failed", or "running".
+	Status string
+	// Verdict is one of WaitVerdictPassed, WaitVerdictFailed,
+	// WaitVerdictTimedOut, or WaitVerdictNoChecks (or "" if the branch has not
+	// been pushed yet).
+	Verdict string
+	// Commit is the branch tip SHA that was checked, if the branch exists.
+	Commit string
+	// Conclusion is "success", "failure", or "" (when still running).
+	Conclusion string
+	// Checks is the latest snapshot of GitHub check runs seen against Commit.
+	Checks []github.CheckRun
+	// Report is the rendered human-readable report (identical to wait_for_checks).
+	Report string
+}
+
+// WaitForGitHubChecks polls GitHub check runs on scope's branch until a check
+// fails, all checks complete, or timeout elapses, using the same polling and
+// reporting logic as the wait_for_checks MCP tool.
+func WaitForGitHubChecks(ctx context.Context, client PullRequestReader, scope PullRequestScope,
+	timeout, poll, grace time.Duration, onPoll func(waited time.Duration)) (GitHubCheckWaitResult, error) {
+
+	client = readableErrors(client)
+	if client == nil || !scope.complete() {
+		return GitHubCheckWaitResult{}, fmt.Errorf("this task has no GitHub repository and branch configured for it")
+	}
+	w := newCheckWaiter(client, nil, scope)
+	if poll > 0 {
+		w.poll = poll
+	}
+	if grace > 0 {
+		w.grace = grace
+	}
+	if onPoll != nil {
+		w.credit = func(_ context.Context, blocked time.Duration) (time.Duration, bool) {
+			onPoll(blocked)
+			return 0, false
+		}
+	}
+	return w.waitStructured(ctx, timeout)
+}
+
 // wait blocks until CI on the branch's tip commit has a verdict, timeout
 // elapses, or ctx is cancelled, and renders whichever of those happened.
 //
@@ -480,6 +525,11 @@ func sleepUntilCancelled(ctx context.Context, d time.Duration) error {
 // A build that failed, or one that never finished, is a perfectly good
 // answer to the question asked and comes back as text.
 func (w checkWaiter) wait(ctx context.Context, timeout time.Duration) (string, error) {
+	res, err := w.waitStructured(ctx, timeout)
+	return res.Report, err
+}
+
+func (w checkWaiter) waitStructured(ctx context.Context, timeout time.Duration) (GitHubCheckWaitResult, error) {
 	// Read once, up front, and for the same reason pullRequestStatus
 	// does: "you have not pushed anything yet" is a different answer
 	// from anything CI could say, and blocking for fifteen minutes on a
@@ -487,13 +537,17 @@ func (w checkWaiter) wait(ctx context.Context, timeout time.Duration) (string, e
 	// not say it.
 	head, err := w.client.GetBranchHead(w.scope.Owner, w.scope.Repo, w.scope.Branch)
 	if err != nil {
-		return "", fmt.Errorf("reading %s/%s's %s branch: %w", w.scope.Owner, w.scope.Repo, w.scope.Branch, err)
+		return GitHubCheckWaitResult{}, fmt.Errorf("reading %s/%s's %s branch: %w", w.scope.Owner, w.scope.Repo, w.scope.Branch, err)
 	}
 	if head == nil {
-		return fmt.Sprintf(
-			"Branch %s does not exist on %s/%s yet, so there is no CI to wait for. "+
-				"Commit and `git push origin %s`, then call this again.",
-			w.scope.Branch, w.scope.Owner, w.scope.Repo, w.scope.Branch), nil
+		return GitHubCheckWaitResult{
+			Status:     "failed",
+			Conclusion: "failure",
+			Report: fmt.Sprintf(
+				"Branch %s does not exist on %s/%s yet, so there is no CI to wait for. "+
+					"Commit and `git push origin %s`, then call this again.",
+				w.scope.Branch, w.scope.Owner, w.scope.Repo, w.scope.Branch),
+		}, nil
 	}
 	sha := shortSHA(head.SHA)
 
@@ -519,7 +573,7 @@ func (w checkWaiter) wait(ctx context.Context, timeout time.Duration) (string, e
 			failures++
 			lastError = err
 			if failures >= checkReadAttempts {
-				return "", fmt.Errorf("gave up after %d consecutive failed reads of CI for %s: %w",
+				return GitHubCheckWaitResult{}, fmt.Errorf("gave up after %d consecutive failed reads of CI for %s: %w",
 					failures, sha, err)
 			}
 		} else {
@@ -534,12 +588,32 @@ func (w checkWaiter) wait(ctx context.Context, timeout time.Duration) (string, e
 				// a wait that went looking every fifteen seconds would
 				// spend a full-length wait reading a lot of nothing
 				// (failing_job_logs.go).
-				return w.report(ctx, head.SHA, w.now().Sub(started), tally, waitVerdictFailed) +
-					failingJobLogs(ctx, w.client, w.scope, head.SHA, checks), nil
+				return GitHubCheckWaitResult{
+					Status:     "failed",
+					Verdict:    WaitVerdictFailed,
+					Commit:     head.SHA,
+					Conclusion: "failure",
+					Checks:     seen,
+					Report: w.report(ctx, head.SHA, w.now().Sub(started), tally, waitVerdictFailed) +
+						failingJobLogs(ctx, w.client, w.scope, head.SHA, checks),
+				}, nil
 			case len(checks) > 0 && tally.pending == 0:
-				return w.report(ctx, head.SHA, w.now().Sub(started), tally, waitVerdictPassed), nil
+				return GitHubCheckWaitResult{
+					Status:     "passed",
+					Verdict:    WaitVerdictPassed,
+					Commit:     head.SHA,
+					Conclusion: "success",
+					Checks:     seen,
+					Report:     w.report(ctx, head.SHA, w.now().Sub(started), tally, waitVerdictPassed),
+				}, nil
 			case !everSeen && w.now().Sub(started) >= w.grace:
-				return w.report(ctx, head.SHA, w.now().Sub(started), tally, waitVerdictNoChecks), nil
+				return GitHubCheckWaitResult{
+					Status:  "running",
+					Verdict: WaitVerdictNoChecks,
+					Commit:  head.SHA,
+					Checks:  seen,
+					Report:  w.report(ctx, head.SHA, w.now().Sub(started), tally, waitVerdictNoChecks),
+				}, nil
 			}
 		}
 
@@ -559,24 +633,40 @@ func (w checkWaiter) wait(ctx context.Context, timeout time.Duration) (string, e
 		if left, ok := w.creditBlocked(ctx, w.now().Sub(started)); ok && left <= waitForChecksDeadlineSlack {
 			w.deadlineClamped = true
 			verdict := waitVerdictTimedOut
+			verdictStr := WaitVerdictTimedOut
 			if !everSeen {
 				verdict = waitVerdictNoChecks
+				verdictStr = WaitVerdictNoChecks
 			}
-			return w.report(ctx, head.SHA, w.now().Sub(started), tallyChecks(seen), verdict), nil
+			return GitHubCheckWaitResult{
+				Status:  "running",
+				Verdict: verdictStr,
+				Commit:  head.SHA,
+				Checks:  seen,
+				Report:  w.report(ctx, head.SHA, w.now().Sub(started), tallyChecks(seen), verdict),
+			}, nil
 		}
 
 		remaining := deadline.Sub(w.now())
 		if remaining <= 0 {
 			verdict := waitVerdictTimedOut
+			verdictStr := WaitVerdictTimedOut
 			if !everSeen {
 				verdict = waitVerdictNoChecks
+				verdictStr = WaitVerdictNoChecks
 			}
 			text := w.report(ctx, head.SHA, w.now().Sub(started), tallyChecks(seen), verdict)
 			if lastError != nil {
 				text += fmt.Sprintf("\n\nThe last read of CI also failed, which may be why "+
 					"nothing here is newer: %v", lastError)
 			}
-			return text, nil
+			return GitHubCheckWaitResult{
+				Status:  "running",
+				Verdict: verdictStr,
+				Commit:  head.SHA,
+				Checks:  seen,
+				Report:  text,
+			}, nil
 		}
 		// The last nap is only as long as there is left: sleeping a whole
 		// interval past the deadline would report a verdict up to a poll
@@ -586,7 +676,7 @@ func (w checkWaiter) wait(ctx context.Context, timeout time.Duration) (string, e
 			nap = remaining
 		}
 		if err := w.sleep(ctx, nap); err != nil {
-			return "", fmt.Errorf("the wait for CI on %s was cancelled after %s: %w",
+			return GitHubCheckWaitResult{}, fmt.Errorf("the wait for CI on %s was cancelled after %s: %w",
 				sha, roundDuration(w.now().Sub(started)), err)
 		}
 	}

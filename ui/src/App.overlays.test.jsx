@@ -55,10 +55,10 @@ describe("App", () => {
 
     await user.click(screen.getByTestId("top-bar-settings"));
     expect(
-      await screen.findByRole("heading", { name: "General", level: 1 }),
+      await screen.findByRole("heading", { name: "Models", level: 1 }),
     ).toBeInTheDocument();
     await waitFor(() =>
-      expect(window.location.pathname).toBe("/settings/general"),
+      expect(window.location.pathname).toBe("/settings/models"),
     );
     expect(screen.getByTestId("top-bar-settings")).toHaveAttribute(
       "aria-pressed",

@@ -1276,11 +1276,26 @@ stage_rollback() {
 # Step 7: Verification (--check).
 # Confirms:
 # 1. The UI answers through IAP (and refuses unauthenticated requests).
-# 2. hostd is connected and healthy.
-# 3. A test sandbox runs a command over the granule dial-out channel (grain-access:4244).
-# 4. The Kubernetes API server audit log shows zero exec/attach/portforward calls for that run.
+# 2. hostd is connected to the GKE daemon (GET /api/sandboxes' hostExecutor.hostd.remote).
+# 3. A throwaway sandbox runs a command over the granule dial-out channel
+#    (`grain sandbox probe`, POST /api/sandbox-probe).
+# 4. The Kubernetes API server audit log has caught up past that sandbox's
+#    pod and shows zero exec/attach/portforward calls against it.
+#
+# Checks 2 and 3 run inside the daemon's own pod, over loopback. Loopback
+# is not trusted on its own (pkg/ui/localtoken.go): both present the
+# daemon's local API token from ${GRAIN_POD_DATA_DIR}/local-api-token, which
+# never leaves the pod.
+GRAIN_POD_DATA_DIR="/data"
+GRAIN_POD_API="http://127.0.0.1:8080"
+CHECK_AUDIT_WAIT_SECONDS="${GRAIN_GKE_AUDIT_WAIT_SECONDS:-300}"
+
 stage_check() {
-  log "Stage 7 (--check): Verifying GKE deployment at ${GATEWAY_URL}..."
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    log "Stage 7 (--check, dry run): showing the 4 verification checks for ${GATEWAY_URL}; nothing is checked."
+  else
+    log "Stage 7 (--check): Verifying GKE deployment at ${GATEWAY_URL}..."
+  fi
 
   # 1. Verify UI is protected by IAP (unauthenticated requests must be rejected with 302/401/403, never 200)
   #    and answers when an IAP identity token is presented.
@@ -1305,34 +1320,85 @@ stage_check() {
     fi
   fi
 
-  # 2. Verify hostd is connected.
-  log "  Check 2/4: Confirming hostd '${HOSTD_NAME}' is connected to GKE daemon..."
-  run_cmd kubectl -n "${NAMESPACE}" exec deploy/grain -c grain -- \
-    wget -qO- "http://127.0.0.1:8080/api/executors"
+  # 2. Verify hostd is connected: the daemon's own view of the hostd that
+  #    dials in to /api/hostd/connect. The pod image has curl, not wget.
+  log "  Check 2/4: Confirming hostd '${HOSTD_NAME}' is connected to GKE daemon (${GRAIN_POD_API}/api/sandboxes)..."
+  # shellcheck disable=SC2016 # expanded by the pod's shell, so the token stays in the pod
+  local sandboxes_cmd='curl -fsS -H "Authorization: Bearer $(cat '"${GRAIN_POD_DATA_DIR}"'/local-api-token)" '"${GRAIN_POD_API}"'/api/sandboxes'
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    run_cmd kubectl -n "${NAMESPACE}" exec deploy/grain -c grain -- sh -c "${sandboxes_cmd}"
+    printf 'DRY-RUN: (must report "remote":{"connected":true...} under hostExecutor.hostd)\n'
+  else
+    local health
+    health="$(kubectl -n "${NAMESPACE}" exec deploy/grain -c grain -- sh -c "${sandboxes_cmd}")" ||
+      die "hostd check failed: could not read ${GRAIN_POD_API}/api/sandboxes inside deploy/grain"
+    if [[ "${health}" != *'"remote":{"connected":true'* ]]; then
+      die "hostd check failed: the GKE daemon reports no connected hostd (is grain-hostd.service on this workstation running with -server=${GATEWAY_URL}?)"
+    fi
+    local hostd_host
+    hostd_host="$(sed -n 's/.*"remote":{"connected":true[^}]*"host":"\([^"]*\)".*/\1/p' <<<"${health}")"
+    if [[ -n "${hostd_host}" && "${hostd_host}" != "${HOSTD_NAME}" && "${hostd_host}" != "${HOSTD_NAME}."* ]]; then
+      log "  WARNING: the connected hostd reports host '${hostd_host}', not '${HOSTD_NAME}'."
+    fi
+  fi
 
-  # 3. Verify a test sandbox runs a command over the granule dial-out channel.
+  # 3. Verify a throwaway sandbox runs a command over the granule dial-out
+  #    channel. The probe refuses a deployment configured for kubectl access.
   local probe_id
   probe_id="gke-check-$(date +%s)"
+  local probe_pod="grain-granule-probe-${probe_id}"
   local start_ts
   start_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   log "  Check 3/4: Running test sandbox command (${probe_id}) over granule dial-out channel (Service/grain-access:4244)..."
-  run_cmd kubectl -n "${NAMESPACE}" exec deploy/grain -c grain -- \
-    /usr/local/bin/grain sandbox probe --id="${probe_id}" --access=dialout -- echo "dialout-ok:${probe_id}"
-
-  # 4. Verify the Kubernetes API server audit log shows no exec/attach/portforward for that run.
-  log "  Check 4/4: Querying GKE API server Cloud Audit Logs for exec/attach/portforward on '${probe_id}' since ${start_ts}..."
-  local audit_filter="resource.type=\"k8s_cluster\" AND resource.labels.cluster_name=\"${CLUSTER}\" AND timestamp>=\"${start_ts}\" AND protoPayload.resourceName:\"${probe_id}\" AND protoPayload.methodName=~\"io.k8s.core.v1.pods.(exec|attach|portforward).create\""
+  local probe_cmd=(kubectl -n "${NAMESPACE}" exec deploy/grain -c grain --
+    env "GRAIN_DATA_DIR=${GRAIN_POD_DATA_DIR}" /usr/local/bin/grain "-server=${GRAIN_POD_API}" -timeout=15m
+    sandbox probe --id="${probe_id}" --access=dialout -- echo "dialout-ok:${probe_id}")
   if [[ "${DRY_RUN}" == "true" ]]; then
-    printf 'DRY-RUN: gcloud logging read %q --project=%q --format=json\n' \
+    run_cmd "${probe_cmd[@]}"
+    printf 'DRY-RUN: (must print dialout-ok:%s from pod %s)\n' "${probe_id}" "${probe_pod}"
+  else
+    local probe_out
+    probe_out="$("${probe_cmd[@]}")" || die "dial-out check failed: grain sandbox probe ${probe_id} did not complete"
+    if [[ "${probe_out}" != *"dialout-ok:${probe_id}"* ]]; then
+      die "dial-out check failed: probe ${probe_id} printed '${probe_out}', not dialout-ok:${probe_id}"
+    fi
+  fi
+
+  # 4. Verify the Kubernetes API server audit log shows no exec/attach/portforward
+  #    against the probe's pod. An empty answer only counts once the log has
+  #    caught up past that pod -- its create/delete are always logged -- so
+  #    log ingestion lag cannot pass the check vacuously.
+  log "  Check 4/4: Querying GKE API server Cloud Audit Logs for exec/attach/portforward on pod '${probe_pod}' since ${start_ts}..."
+  local pod_filter="resource.type=\"k8s_cluster\" AND resource.labels.cluster_name=\"${CLUSTER}\" AND timestamp>=\"${start_ts}\" AND protoPayload.resourceName:\"${probe_pod}\""
+  local audit_filter="${pod_filter} AND protoPayload.methodName=~\"io.k8s.core.v1.pods.(exec|attach|portforward).create\""
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    printf 'DRY-RUN: gcloud logging read %q --project=%q --limit=1 (wait up to %ss for the probe pod to appear)\n' \
+      "${pod_filter}" "${PROJECT}" "${CHECK_AUDIT_WAIT_SECONDS}"
+    printf 'DRY-RUN: gcloud logging read %q --project=%q --format=json (must be empty)\n' \
       "${audit_filter}" "${PROJECT}"
   else
+    local waited=0 seen=""
+    while :; do
+      seen="$(gcloud logging read "${pod_filter}" --project="${PROJECT}" --limit=1 --format='value(insertId)' 2>/dev/null || true)"
+      [[ -n "${seen}" ]] && break
+      if (( waited >= CHECK_AUDIT_WAIT_SECONDS )); then
+        die "audit-log check failed: after ${waited}s the API server audit log still has no entry for pod ${probe_pod}, so an empty exec/attach/portforward query would prove nothing (raise GRAIN_GKE_AUDIT_WAIT_SECONDS if ingestion is slow)"
+      fi
+      sleep 15
+      waited=$((waited + 15))
+    done
     local matches
-    matches="$(gcloud logging read "${audit_filter}" --project="${PROJECT}" --format='value(insertId)' 2>/dev/null || true)"
+    matches="$(gcloud logging read "${audit_filter}" --project="${PROJECT}" --format='value(insertId)' 2>/dev/null)" ||
+      die "audit-log check failed: gcloud logging read did not complete"
     if [[ -n "${matches}" ]]; then
       die "API server audit log recorded forbidden exec/attach/portforward call(s) during sandbox probe ${probe_id}: ${matches}"
     fi
   fi
-  log "  All 4 verification checks passed (IAP UI, hostd connected, dial-out sandbox exec, zero API server exec/attach/portforward)."
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    log "  Dry run: would run 4 verification checks (IAP UI, hostd connected, dial-out sandbox exec, zero API server exec/attach/portforward); none was run."
+  else
+    log "  All 4 verification checks passed (IAP UI, hostd connected, dial-out sandbox exec, zero API server exec/attach/portforward)."
+  fi
 }
 
 main() {

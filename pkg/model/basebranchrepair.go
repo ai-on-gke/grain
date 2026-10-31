@@ -162,13 +162,15 @@ func ParseBaseRepairBranchTag(tag string) (RepoRef, string, bool) {
 	if !ok {
 		return RepoRef{}, "", false
 	}
-	repo, branch, ok := strings.Cut(rest, ":")
-	if !ok || branch == "" {
+	// The branch is after the last colon: a git ref cannot contain one,
+	// while a host-qualified repo's host can (host:port/owner/name).
+	at := strings.LastIndex(rest, ":")
+	if at < 0 || at == len(rest)-1 {
 		return RepoRef{}, "", false
 	}
-	owner, name, ok := strings.Cut(repo, "/")
-	if !ok || owner == "" || name == "" {
+	repo, err := ParseRepo(rest[:at])
+	if err != nil {
 		return RepoRef{}, "", false
 	}
-	return RepoRef{Owner: owner, Name: name}, branch, true
+	return repo, rest[at+1:], true
 }

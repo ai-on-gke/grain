@@ -201,6 +201,18 @@ test("1. the repository's workflow schedules are read, the candidate one with it
   await expect(
     scheduleRow(page, candidateTitle).getByText("Reviews every run"),
   ).toHaveCount(0);
+
+  // Its pane says it cannot be changed here and has Pause and Save off,
+  // so the built-in-job note under it names the file the cadence lives
+  // in rather than offering to change it.
+  await page.getByRole("link", { name: candidateTitle, exact: true }).click();
+  const pane = page.getByRole("dialog");
+  await expect(pane).toContainText("cannot be edited or deleted here");
+  await expect(pane).toContainText(
+    "whether it runs at all are set in .grain/schedules/x-candidate.yml.",
+  );
+  await expect(pane).not.toContainText("You can change how often it runs");
+  await expect(pane.getByRole("button", { name: "Pause" })).toBeDisabled();
 });
 
 test("2. a passing firing files no review and its row says so", async ({

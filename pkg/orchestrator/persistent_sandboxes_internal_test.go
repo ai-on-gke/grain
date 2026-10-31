@@ -509,3 +509,19 @@ exec "$@"
 		})
 	}
 }
+
+// A persistent sandbox on a repo off the default git host clones it with
+// its host, through the git proxy (which routes on it) or directly.
+func TestPersistentCloneURLKeepsTheHost(t *testing.T) {
+	for _, c := range []struct{ base, repo, want string }{
+		{"http://127.0.0.1:9728", "acme/app", "http://127.0.0.1:9728/acme/app.git"},
+		{"http://127.0.0.1:9728/", "git.example.com/acme/app", "http://127.0.0.1:9728/git.example.com/acme/app.git"},
+		{"", "acme/app", "https://" + model.DefaultRepoHost() + "/acme/app.git"},
+		{"", "git.example.com/acme/app", "https://git.example.com/acme/app.git"},
+	} {
+		got, err := persistentCloneURL(c.base, c.repo)
+		if err != nil || got != c.want {
+			t.Errorf("persistentCloneURL(%q, %q) = %q, %v; want %q", c.base, c.repo, got, err, c.want)
+		}
+	}
+}

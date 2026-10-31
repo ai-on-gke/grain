@@ -1719,7 +1719,7 @@ func (s CiWorkflowSource) workflowsAndTree(ctx context.Context, repo, ref string
 	ctx, cancel := context.WithTimeout(ctx, ciCloneTimeout)
 	defer cancel()
 
-	dir, err := os.MkdirTemp(s.TempDir, "grain-ci-workflows-")
+	dir, err := ciMkdirTemp(s.TempDir, "grain-ci-workflows-")
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -1760,6 +1760,25 @@ func (s CiWorkflowSource) workflowsAndTree(ctx context.Context, repo, ref string
 	return workflows, strings.TrimSpace(commit), tree, nil
 }
 
+// ciMkdirTemp is os.MkdirTemp made absolute. Every clone here runs git
+// with the temporary directory as its working directory and a target
+// inside it, so a directory relative to this process's own -- a
+// relative -data-dir, `grain daemon -data-dir d2` -- names a path git
+// cannot find from where it runs ("chdir d2/state/grain-ci-workflows-
+// .../repo: no such file or directory").
+func ciMkdirTemp(base, pattern string) (string, error) {
+	dir, err := os.MkdirTemp(base, pattern)
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	return abs, nil
+}
+
 // ciCommitName is a commit as a caller may pin one: hex, abbreviated or
 // whole.
 var ciCommitName = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
@@ -1789,7 +1808,7 @@ func (s CiWorkflowSource) OnBranch(ctx context.Context, repo, ref, commit string
 
 	ctx, cancel := context.WithTimeout(ctx, ciCloneTimeout)
 	defer cancel()
-	dir, err := os.MkdirTemp(s.TempDir, "grain-ci-history-")
+	dir, err := ciMkdirTemp(s.TempDir, "grain-ci-history-")
 	if err != nil {
 		return false, err
 	}

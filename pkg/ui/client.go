@@ -355,9 +355,12 @@ func (c *Client) capabilityLookup() protocol.Lookup {
 }
 
 // normalizeCapabilityID is id as a task records it: an in-process name
-// as it is, a capability reference resolved and validated against its
-// server and in recorded form (model.NormalizeCapabilityNames).
+// as it is -- or, for a retired one, as the api grant it became
+// (model.CanonicalLegacyGrant) -- and a capability reference resolved and
+// validated against its server and in recorded form
+// (model.NormalizeCapabilityNames).
 func (c *Client) normalizeCapabilityID(id string) (string, error) {
+	id = model.CanonicalLegacyGrant(id)
 	if !model.IsCapabilityRef(id) {
 		return id, nil
 	}
@@ -1127,9 +1130,9 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	detail.Parked = detail.Blocked && streak != nil && streak.LastOutcome == model.ParkedOutcome
 	if streak != nil && streak.Count > 0 && !completedOrClosed {
 		detail.FailedAttempts = streak.Count
-		lastFailureAt := streak.LastFinishedAt
+		lastFailureAt := streak.LastFailureAt
 		detail.LastFailureAt = &lastFailureAt
-		detail.LastFailureReason = streak.LastDetail
+		detail.LastFailureReason = streak.LastFailureDetail
 	}
 	// One query for every attempt's prompt size rather than one per
 	// attempt, and sizes rather than the prompts themselves: a task with
@@ -2159,6 +2162,13 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err := refuseTargetAmongWrites(writes, target, req.Base); err != nil {
 		return Task{}, err
 	}
+	// A proposal naming its own repo among its reads is an agent
+	// repeating what its run already has, not a choice between two
+	// meanings anybody needs to be asked about: it is dropped rather than
+	// failing the propose_task call over it (grain/task-1983).
+	if req.ProposedBy != "" {
+		reads = readsBesidesTarget(reads, target)
+	}
 	if err := refuseTargetAmongReads(reads, target); err != nil {
 		return Task{}, err
 	}
@@ -2536,7 +2546,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		task.ApprovedAt = &now
 	}
 	if task.Approval == nil && proposedBy != nil {
-		task.Body += model.CapabilityEscalationNote(proposedBy.ID, escalated)
+		task.Body += model.ProposalEscalationNote(proposedBy.ID, model.Task{Grants: grants}, escalated)
 	}
 	if req.DeferredUntil != nil && req.DeferredUntil.After(now) {
 		until := req.DeferredUntil.UTC()
@@ -3723,6 +3733,13 @@ func (c *Client) parseReads(repos []string) ([]model.RepoRef, error) {
 // (model.WritesBesides' own reasoning: content saved long before anybody
 // chose which repo it would be fired at should not fail a firing nobody
 // is watching). readOnlyNames is what keeps those harmless.
+//
+// A proposal (CreateTaskRequest.ProposedBy) is the exception, and has its
+// target dropped from its reads instead (readsBesidesTarget): the caller
+// there is an agent's propose_task call, which names the repo it is
+// filing against and the repos it wants to read in two arguments, and
+// listing the first among the second as well is a slip with one obvious
+// meaning, not a question -- refusing it lost the proposal outright.
 func refuseTargetAmongReads(reads []model.RepoRef, target *model.RepoRef) error {
 	if target == nil {
 		return nil
@@ -3735,6 +3752,21 @@ func refuseTargetAmongReads(reads []model.RepoRef, target *model.RepoRef) error 
 		}
 	}
 	return nil
+}
+
+// readsBesidesTarget is reads without target, which a run clones and
+// pushes to already.
+func readsBesidesTarget(reads []model.RepoRef, target *model.RepoRef) []model.RepoRef {
+	if target == nil {
+		return reads
+	}
+	out := reads[:0:0]
+	for _, r := range reads {
+		if !r.Same(*target) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // UpdateTaskRequest is a task's editable fields -- nil means "leave this
@@ -4231,6 +4263,12 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			task.Issue = *req.Issue
 		}
 		if req.AutoMerge != nil {
+			// A change target's change is a CL, with no pull request
+			// to merge (model.ValidateTaskChangeTarget): a task turned
+			// to auto-merge is one no dispatch can set up.
+			if *req.AutoMerge && !task.AutoMerge && task.ChangeTarget != nil {
+				return validationErrorf("a %s task has no git pull request: auto_merge cannot be set", task.ChangeTarget.Kind)
+			}
 			// Turning it on is Submit by another name (see above), and
 			// says what Submit does about the holds it was waiting under.
 			if *req.AutoMerge && !task.AutoMerge {
@@ -4915,6 +4953,13 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 		// A CL is submitted by a person through its provider, never
 		// queued for a merge (change_submit.go).
 		return c.submitChange(ctx, *task)
+	}
+	if task.ChangeTarget != nil {
+		// A change target's change is only ever a CL: with none live
+		// there is nothing to submit, and the merge queue below has no
+		// pull request to take -- auto-merge on such a task is one
+		// every dispatch refuses (model.ValidateTaskChangeTarget).
+		return validationErrorf("%s has no %s change to submit yet", id, task.ChangeTarget.Kind)
 	}
 	// A CL whose provider gates Submit on its required reviews
 	// (change.ReviewGate) is submitted only once they have passed on its

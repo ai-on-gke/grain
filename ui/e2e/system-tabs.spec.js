@@ -180,9 +180,9 @@ test("system sandboxes and caches tabs walkthrough", async ({ page }) => {
   });
 
   // Flush all remaining package caches via "Flush the whole cache" button
-  const flushWholeBtn = page
-    .getByRole("button", { name: "Flush the whole cache" })
-    .first();
+  const flushWholeBtn = page.getByRole("button", {
+    name: "Flush the whole proxy cache",
+  });
   await expect(flushWholeBtn).toBeVisible();
   await flushWholeBtn.click();
   await expect(page.getByText(/Total space consumed: 0 B/)).toBeVisible({

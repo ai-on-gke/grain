@@ -376,6 +376,28 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `session_sandbox_idle_ttl_ms` INTEGER NOT NULL DEFAULT 0",
 		},
 	},
+	{
+		Version:     67,
+		Description: "rewrite stored team-broadcast grants to api:team-broadcast (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"team-broadcast": "api:team-broadcast"}),
+	},
+	{
+		Version:     68,
+		Description: "rewrite stored dispatch-control grants to api:dispatch-control (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"dispatch-control": "api:dispatch-control"}),
+	},
+	{
+		Version:     69,
+		Description: "rewrite stored pipeline-control grants to api:pipeline-control (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"pipeline-control": "api:pipeline-control"}),
+	},
+	{
+		Version:     70,
+		Description: "add settings_locked to grain_config for opt-in UI/API settings lock",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `settings_locked` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
@@ -441,6 +463,10 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
+					strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") {
+					continue
+				}
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
 		}

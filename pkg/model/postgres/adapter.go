@@ -41,6 +41,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_run_report_check":          {"run_id"},
 	"task_run_spool_cursor":          {"run_id"},
 	"task_run_staged_attachment":     {"run_id", "path"},
+	"task_run_relayed_call":          {"run_id", "fingerprint"},
 	"task_run_unmatched_failure":     {"run_id"},
 	"task_run_exec_failure":          {"run_id"},
 	"task_run_capability_audit":      {"run_id", "seq"},
@@ -669,6 +670,7 @@ var (
 		"k8s_privileged",
 		"k8s_network_policy",
 		"external_agent_api",
+		"settings_locked",
 		// task_run_ci_habit (model.RunCIHabit).
 		"narrow_test_before_push",
 		"narrow_test_before_fix_push",
