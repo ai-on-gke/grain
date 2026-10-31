@@ -326,17 +326,17 @@ func capabilityAdmitter(deps Deps, admit dispatch.Admitter) dispatch.Admitter {
 		if err != nil || !adm.Admitted {
 			return adm, err
 		}
-		decline := func() (dispatch.Admission, error) {
+		decline := func(gate, reason string) (dispatch.Admission, error) {
 			if adm.Release != nil {
 				adm.Release()
 			}
-			return dispatch.Admission{}, nil
+			return dispatch.Admission{Gate: gate, Reason: reason}, nil
 		}
 		at := deps.Config.now()
 		if b, wait := passes.waiting(task.ID, at); wait {
 			_ = deps.Store.SetGrantWait(ctx, model.GrantWait{TaskID: task.ID, Capability: b.grant,
 				Resource: b.reason, WaitingAt: at})
-			return decline()
+			return decline("capability pass "+b.grant, "backing off: "+b.reason)
 		}
 		deadline := capabilityDeadline(at, deps.Config.maxRunRuntime())
 		p, err := mintCapabilityPass(ctx, deps, *task, candidate, at, deadline)
@@ -344,7 +344,7 @@ func capabilityAdmitter(deps Deps, admit dispatch.Admitter) dispatch.Admitter {
 			if serr := admissionMintFailed(ctx, deps, passes, *task, err, at); serr != nil {
 				log.Printf("orchestrator: task %s: recording its failed capability admission: %v", task.ID, serr)
 			}
-			return decline()
+			return decline("capability pass", err.Error())
 		}
 		passes.clearBackoff(task.ID)
 		passes.hold(candidate.RunID, p, deadline)

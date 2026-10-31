@@ -383,9 +383,11 @@ pipeline, such as the pipeline steward (`docs/pipeline-steward.md`),
 which would otherwise be starved by that congestion. Such a task:
 
 - starts whenever it is ready, even with every worker busy: it isn't
-  counted against or held by `max_workers` or the merger count. It
-  still needs room in the sandbox budget, which it is charged under the
-  same exception policy a session's sandbox is;
+  counted against or held by `max_workers` or the merger count. Its
+  sandbox is charged to the sandbox budget, but, like a session's, it
+  is refused only by the host disk floor or a cluster with no room. The
+  budget's ceilings, the repair reserve and what CI holds never refuse it
+  ([Sandbox budget](sandbox-budget.md#sessions-are-never-held-by-the-budget));
 - is ordered ahead of merge-queue repairs and ordinary work, alongside
   console sessions;
 - passes a pipeline pause, a manual one included. The exception is an
