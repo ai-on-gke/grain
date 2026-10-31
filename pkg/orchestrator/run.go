@@ -3271,6 +3271,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// taking it can cost one: a task must not fail because a
 		// bookkeeping write did (Store.SetRunAgentStarted).
 		agentStartedAt := cfg.now()
+		if cfg.Now == nil && agentStartedAt.Before(at) {
+			agentStartedAt = at
+		}
 		if err := store.SetRunAgentStarted(ctx, d.RunID, agentStartedAt); err != nil {
 			log.Printf("orchestrator: run %s: recording when its agent started: %v", d.RunID, err)
 		}
@@ -3349,7 +3352,11 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		noteFirstTurn := func() {
 			firstTurnOnce.Do(func() {
 				if store != nil {
-					if ferr := store.SetRunFirstTurn(context.WithoutCancel(ctx), d.RunID, cfg.now()); ferr != nil {
+					firstTurnAt := cfg.now()
+					if cfg.Now == nil && firstTurnAt.Before(agentStartedAt) {
+						firstTurnAt = agentStartedAt
+					}
+					if ferr := store.SetRunFirstTurn(context.WithoutCancel(ctx), d.RunID, firstTurnAt); ferr != nil {
 						log.Printf("orchestrator: run %s: recording first turn: %v", d.RunID, ferr)
 					}
 				}

@@ -3925,6 +3925,81 @@ type UpdateTaskRequest struct {
 	// slice clears it. Refused to agents by agentFilingEscalation /
 	// externalAgentFilingEscalation.
 	Reviewers *[]string `json:"reviewers,omitempty"`
+	// Capabilities, given, replaces the task's capability grants while
+	// preserving durable on standing console-session tasks.
+	Capabilities *[]string `json:"capabilities,omitempty"`
+	// Priority attaches or detaches PriorityDispatchCapability on the task.
+	Priority *bool `json:"priority,omitempty"`
+	// KeepRunning attaches or detaches DurableCapability on the task.
+	KeepRunning *bool `json:"keepRunning,omitempty"`
+}
+
+// UnmarshalJSON accepts both camelCase and snake_case spellings for common
+// task parameter overrides as well as capabilities/grants lists containing
+// strings, {capability, with} objects, or model.Grant objects.
+func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
+	type Alias UpdateTaskRequest
+	var aux struct {
+		Alias
+		RawCapabilities    json.RawMessage `json:"capabilities,omitempty"`
+		RawGrants          json.RawMessage `json:"grants,omitempty"`
+		NetworkAccessSnake *string         `json:"network_access,omitempty"`
+		AutoApproveSnake   *bool           `json:"auto_approve_proposals,omitempty"`
+		KeepRunningSnake   *bool           `json:"keep_running,omitempty"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*r = UpdateTaskRequest(aux.Alias)
+	parseCapRaw := func(raw json.RawMessage) (*[]string, error) {
+		trimmed := strings.TrimSpace(string(raw))
+		if trimmed == "" || trimmed == "null" {
+			return nil, nil
+		}
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return nil, fmt.Errorf("capabilities must be a list")
+		}
+		caps := make([]string, 0, len(items))
+		for _, item := range items {
+			if entries, err := model.CapabilityEntryNames(item); err == nil {
+				caps = append(caps, entries...)
+				continue
+			} else if spec, gerr := protocol.ParseGrant(item); gerr == nil && len(spec.With) == 0 {
+				if c := strings.TrimSpace(spec.Capability); c != "" {
+					caps = append(caps, c)
+				}
+				continue
+			} else {
+				return nil, err
+			}
+		}
+		return &caps, nil
+	}
+	if len(aux.RawCapabilities) > 0 {
+		caps, err := parseCapRaw(aux.RawCapabilities)
+		if err != nil {
+			return err
+		}
+		r.Capabilities = caps
+	}
+	if r.Capabilities == nil && len(aux.RawGrants) > 0 {
+		caps, err := parseCapRaw(aux.RawGrants)
+		if err != nil {
+			return err
+		}
+		r.Capabilities = caps
+	}
+	if r.NetworkAccess == nil && aux.NetworkAccessSnake != nil {
+		r.NetworkAccess = aux.NetworkAccessSnake
+	}
+	if r.AutoApproveProposals == nil && aux.AutoApproveSnake != nil {
+		r.AutoApproveProposals = aux.AutoApproveSnake
+	}
+	if r.KeepRunning == nil && aux.KeepRunningSnake != nil {
+		r.KeepRunning = aux.KeepRunningSnake
+	}
+	return nil
 }
 
 // UpdateTask edits a task's fields. Unlike the issue-backed version, this
@@ -4040,23 +4115,37 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// model.Task.AgentBackendID); splitModelChoice reads a legacy model
 	// sent as agentBackendId as the model choice it was.
 	var editModel *string
+	var isConsoleSessionTask bool
+	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.Priority != nil || req.KeepRunning != nil {
+		if existing, err := c.Store.GetTask(ctx, id); err == nil && existing != nil {
+			isConsoleSessionTask = existing.IsConsoleSession()
+		}
+	}
 	if req.Model != nil || req.AgentBackendID != nil {
-		var m, pin string
-		if req.Model != nil {
-			m = *req.Model
-		}
-		if req.AgentBackendID != nil {
-			pin = *req.AgentBackendID
-		}
-		chosen, pinned, err := c.splitModelChoice(ctx, m, pin)
-		if err != nil {
-			return Task{}, err
-		}
-		if req.Model != nil || chosen != "" {
+		if isConsoleSessionTask && req.AgentBackendID == nil && req.Model != nil {
+			chosen, err := c.declaredModelChoice(ctx, *req.Model)
+			if err != nil {
+				return Task{}, err
+			}
 			editModel = &chosen
-		}
-		if req.AgentBackendID != nil {
-			req.AgentBackendID = &pinned
+		} else {
+			var m, pin string
+			if req.Model != nil {
+				m = *req.Model
+			}
+			if req.AgentBackendID != nil {
+				pin = *req.AgentBackendID
+			}
+			chosen, pinned, err := c.splitModelChoice(ctx, m, pin)
+			if err != nil {
+				return Task{}, err
+			}
+			if req.Model != nil || chosen != "" {
+				editModel = &chosen
+			}
+			if req.AgentBackendID != nil {
+				req.AgentBackendID = &pinned
+			}
 		}
 	}
 	var backendFrameworks map[string]string
@@ -4081,7 +4170,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	if req.AgentBackendID != nil {
 		statedPin = strings.TrimSpace(*req.AgentBackendID)
 	}
-	if editModel != nil {
+	if editModel != nil && !isConsoleSessionTask {
 		statedModel = *editModel
 	}
 	if statedPin != "" || statedModel != "" {
@@ -4204,6 +4293,25 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	if err != nil {
 		return Task{}, err
 	}
+	var normalizedCaps []string
+	if req.Capabilities != nil {
+		seen := map[string]bool{}
+		normalizedCaps = make([]string, 0, len(*req.Capabilities))
+		for _, rawCap := range *req.Capabilities {
+			capID, err := c.normalizeCapabilityID(rawCap)
+			if err != nil {
+				return Task{}, err
+			}
+			if _, ok := c.capabilityByID(capID); !ok {
+				return Task{}, validationErrorf("capabilities: %s", capabilityRefusal(capID))
+			}
+			if seen[capID] {
+				continue
+			}
+			seen[capID] = true
+			normalizedCaps = append(normalizedCaps, capID)
+		}
+	}
 	submitted, submittedAt, submittedHead := false, c.now(), ""
 	if req.AutoMerge != nil && *req.AutoMerge {
 		// Read outside the closure: it may ask GitHub, and the
@@ -4286,6 +4394,16 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		}
 		if req.AutoApproveProposals != nil {
 			task.AutoApproveProposals = *req.AutoApproveProposals
+			if _, ok := model.ConsoleSessionIDOf(*task); ok {
+				task.Tags = slices.DeleteFunc(task.Tags, func(tag string) bool {
+					return tag == model.ConsoleSessionTasksApprovedTag || tag == model.ConsoleSessionTasksUnapprovedTag
+				})
+				if *req.AutoApproveProposals {
+					task.Tags = append(task.Tags, model.ConsoleSessionTasksApprovedTag)
+				} else {
+					task.Tags = append(task.Tags, model.ConsoleSessionTasksUnapprovedTag)
+				}
+			}
 		}
 		if req.SandboxCPUs != nil {
 			task.SandboxCPUs = *req.SandboxCPUs
@@ -4342,13 +4460,102 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			task.ReviewTemplateID = reviewTemplateID
 		}
 		if req.Reads != nil {
-			task.Reads = reads
+			if task.IsConsoleSession() {
+				stateRepo := c.stateRepoRef()
+				var taskReads []model.RepoRef
+				if stateRepo.Owner != "" {
+					taskReads = append(taskReads, stateRepo)
+				}
+				for _, r := range reads {
+					if r.Owner != "" && r.Name != "" && !r.Same(stateRepo) {
+						taskReads = append(taskReads, r)
+					}
+				}
+				task.Reads = taskReads
+			} else {
+				task.Reads = reads
+			}
 		}
 		if req.Writes != nil {
 			task.Writes = writes
 		}
 		if req.Reviewers != nil {
 			task.Reviewers = model.NormalizeReviewers(*req.Reviewers)
+		}
+		if req.Capabilities != nil || req.Priority != nil || req.KeepRunning != nil {
+			existingByCap := make(map[string]model.Grant, len(task.Grants))
+			for _, g := range task.Grants {
+				existingByCap[g.Capability] = g
+			}
+			if req.Capabilities != nil {
+				policy, configured, err := c.capabilityPolicyFor(ctx)
+				if err != nil {
+					return err
+				}
+				for _, capID := range normalizedCaps {
+					if _, had := existingByCap[capID]; !had {
+						if model.IsCapabilityRef(capID) {
+							subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
+							if err := policy.Permits(capID, subject, configured); err != nil {
+								return validationErrorf("%v", err)
+							}
+						}
+						if err := c.catalogueEditRefusal(ctx, *task, capID); err != nil {
+							return err
+						}
+					}
+				}
+				newGrants := make([]model.Grant, 0, len(normalizedCaps)+1)
+				seen := map[string]bool{}
+				if task.IsConsoleSession() && (req.KeepRunning == nil || *req.KeepRunning) {
+					newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
+					seen[model.DurableCapability] = true
+				}
+				for _, capID := range normalizedCaps {
+					if capID == "" || seen[capID] {
+						continue
+					}
+					seen[capID] = true
+					if prevGrant, had := existingByCap[capID]; had {
+						newGrants = append(newGrants, prevGrant)
+					} else {
+						newGrants = append(newGrants, model.Grant{Capability: capID, Via: model.GrantByLabel})
+					}
+				}
+				task.Grants = newGrants
+			}
+			if req.Priority != nil {
+				if *req.Priority {
+					if _, had := existingByCap[model.PriorityDispatchCapability]; !had {
+						if err := c.catalogueEditRefusal(ctx, *task, model.PriorityDispatchCapability); err != nil {
+							return err
+						}
+					}
+					if !slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.PriorityDispatchCapability }) {
+						task.Grants = append(task.Grants, model.Grant{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel})
+					}
+				} else {
+					task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.PriorityDispatchCapability })
+				}
+			}
+			if req.KeepRunning != nil {
+				if *req.KeepRunning {
+					if _, had := existingByCap[model.DurableCapability]; !had {
+						if err := c.catalogueEditRefusal(ctx, *task, model.DurableCapability); err != nil {
+							return err
+						}
+					}
+					if !slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.DurableCapability }) {
+						via := model.GrantByLabel
+						if task.IsConsoleSession() {
+							via = model.GrantByGrain
+						}
+						task.Grants = append(task.Grants, model.Grant{Capability: model.DurableCapability, Via: via})
+					}
+				} else {
+					task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.DurableCapability })
+				}
+			}
 		}
 		if retargeted {
 			// A pull request a run opened in the repository the task is
@@ -4592,6 +4799,7 @@ func (c *Client) mutate(ctx context.Context, id string, apply func(*model.Task) 
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
+	c.ensureConsoleSessionSnapshot(ctx, *task)
 	return c.Store.UpdateTask(ctx, id, apply)
 }
 

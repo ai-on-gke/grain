@@ -228,6 +228,22 @@ func sessionSandboxKey(shape Shape, task model.Task, prepared []model.Materializ
 	}
 	sort.Strings(grants)
 	fmt.Fprintf(&b, "|grants=%s", strings.Join(grants, ","))
+	if len(task.Reads) > 0 {
+		reads := make([]string, 0, len(task.Reads))
+		for _, r := range task.Reads {
+			reads = append(reads, r.StoredOwner()+"/"+r.Name)
+		}
+		sort.Strings(reads)
+		fmt.Fprintf(&b, "|reads=%s", strings.Join(reads, ","))
+	}
+	if len(task.Writes) > 0 {
+		writes := make([]string, 0, len(task.Writes))
+		for _, w := range task.Writes {
+			writes = append(writes, w.Repo.StoredOwner()+"/"+w.Repo.Name+":"+w.Base)
+		}
+		sort.Strings(writes)
+		fmt.Fprintf(&b, "|writes=%s", strings.Join(writes, ","))
+	}
 	return b.String()
 }
 
@@ -240,7 +256,27 @@ func sessionGrantsKey(task model.Task) string {
 		grants = append(grants, grantKey(g))
 	}
 	sort.Strings(grants)
-	return strings.Join(grants, ",")
+	out := strings.Join(grants, ",")
+	if len(task.Reads) > 0 {
+		reads := make([]string, 0, len(task.Reads))
+		for _, r := range task.Reads {
+			reads = append(reads, r.StoredOwner()+"/"+r.Name)
+		}
+		sort.Strings(reads)
+		out += "|reads=" + strings.Join(reads, ",")
+	}
+	if len(task.Writes) > 0 {
+		writes := make([]string, 0, len(task.Writes))
+		for _, w := range task.Writes {
+			writes = append(writes, w.Repo.StoredOwner()+"/"+w.Repo.Name+":"+w.Base)
+		}
+		sort.Strings(writes)
+		out += "|writes=" + strings.Join(writes, ",")
+	}
+	if task.NetworkAccess != "" {
+		out += "|net=" + string(task.NetworkAccess)
+	}
+	return out
 }
 
 func grantKey(g model.Grant) string {
@@ -584,13 +620,18 @@ func markInProcessSessionIdle(store *model.Store, ledger *model.Ledger, runID, s
 	}
 }
 
+type relayedRunKey struct {
+	store *model.Store
+	runID string
+}
+
 var inProcessRelayedRuns sync.Map
 
-func takeInProcessRelayed(runID string) bool {
-	if runID == "" {
+func takeInProcessRelayed(store *model.Store, runID string) bool {
+	if store == nil || runID == "" {
 		return false
 	}
-	_, ok := inProcessRelayedRuns.LoadAndDelete(runID)
+	_, ok := inProcessRelayedRuns.LoadAndDelete(relayedRunKey{store: store, runID: runID})
 	return ok
 }
 
@@ -706,7 +747,7 @@ func continueSessionTurns(
 		if hasComment {
 			recordRelayedInProcess(daemonCtx, store, runID, result, "comment_on_issue")
 		}
-		inProcessRelayedRuns.Store(runID, true)
+		inProcessRelayedRuns.Store(relayedRunKey{store: store, runID: runID}, true)
 
 		// What the turn was actually shown: its prompt, and every
 		// comment its forked mcpserver handed it since as an addendum on
@@ -790,7 +831,17 @@ func continueSessionTurns(
 		if len(fresh) == 0 {
 			break
 		}
-		inProcessRelayedRuns.Delete(runID)
+		if latestTask, err := store.GetTask(daemonCtx, task.ID); err == nil && latestTask != nil {
+			if !slices.Equal(latestTask.Grants, task.Grants) ||
+				!slices.Equal(latestTask.Reads, task.Reads) ||
+				!slices.Equal(latestTask.Writes, task.Writes) ||
+				latestTask.Model != task.Model ||
+				latestTask.NetworkAccess != task.NetworkAccess {
+				break
+			}
+			task = *latestTask
+		}
+		inProcessRelayedRuns.Delete(relayedRunKey{store: store, runID: runID})
 
 		// Only a person's message wakes the session, but the turn is told
 		// everything said since what it last saw, each with who said it

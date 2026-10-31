@@ -2173,18 +2173,22 @@ func runQueuedAt(ctx context.Context, store *model.Store, task model.Task, attem
 	if task.ApprovedAt != nil && task.ApprovedAt.After(q) {
 		q = *task.ApprovedAt
 	}
-	if attempt > 1 && store != nil {
-		if runs, err := store.Runs(ctx, task.ID); err == nil {
-			for _, r := range runs {
-				if r.Attempt < attempt && r.FinishedAt != nil && !r.FinishedAt.After(startedAt) && r.FinishedAt.After(q) {
-					q = *r.FinishedAt
+	if store != nil {
+		if attempt > 1 {
+			if runs, err := store.Runs(ctx, task.ID); err == nil {
+				for _, r := range runs {
+					if r.Attempt < attempt && r.FinishedAt != nil && !r.FinishedAt.After(startedAt) && r.FinishedAt.After(q) {
+						q = *r.FinishedAt
+					}
 				}
 			}
 		}
-		if comments, err := store.Comments(ctx, task.ID); err == nil {
-			for _, c := range comments {
-				if c.Author.Actor.Kind != model.PrincipalAgent && !c.CreatedAt.After(startedAt) && c.CreatedAt.After(q) {
-					q = c.CreatedAt
+		if attempt > 1 || task.Interactive {
+			if comments, err := store.Comments(ctx, task.ID); err == nil {
+				for _, c := range comments {
+					if c.Author.Actor.Kind != model.PrincipalAgent && !c.CreatedAt.After(startedAt) && c.CreatedAt.After(q) {
+						q = c.CreatedAt
+					}
 				}
 			}
 		}
@@ -2465,8 +2469,12 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			return fmt.Errorf("orchestrator: acquiring a sandbox for run %s: %w", d.RunID, err)
 		}
 	}
+	acquiredAt := deps.Config.now()
+	if acquiredAt.Before(now) {
+		acquiredAt = now
+	}
 	if deps.Store != nil {
-		if rerr := deps.Store.SetRunSandboxAcquired(ctx, d.RunID, deps.Config.now()); rerr != nil {
+		if rerr := deps.Store.SetRunSandboxAcquired(ctx, d.RunID, acquiredAt); rerr != nil {
 			log.Printf("orchestrator: recording run %s sandbox_acquired_at: %v", d.RunID, rerr)
 		}
 	}
@@ -2823,8 +2831,11 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			if st, serr := deps.Store.State(cleanupCtx, task.ID); serr == nil && st != "" &&
 				st != model.StateClosed && st != model.StateFailed &&
 				st != model.StateCompleted && st != model.StateAwaitingSubmit {
-				parkWarmSessionSandbox(deps, task.ID, sandboxName, sandboxKey, sessionGrantsKey(*task), sandbox, sandboxCounted, cfg.sessionShape, finishNow, ttl)
-				keptWarm = true
+				if latest, lerr := deps.Store.GetTask(cleanupCtx, task.ID); lerr == nil && latest != nil &&
+					sessionGrantsKey(*latest) == sessionGrantsKey(*task) {
+					parkWarmSessionSandbox(deps, task.ID, sandboxName, sandboxKey, sessionGrantsKey(*task), sandbox, sandboxCounted, cfg.sessionShape, finishNow, ttl)
+					keptWarm = true
+				}
 			}
 		}
 	}

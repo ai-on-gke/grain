@@ -302,6 +302,15 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 			return call, err
 		}
 	}
+	if pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body) {
+		if !set.Allows("capabilities:admin", call.repo) {
+			return call, fmt.Errorf("task %s holds no api grant for scope capabilities:admin, which %s needs when editing task capabilities",
+				taskID, pattern)
+		}
+		if call.reason == "" {
+			return call, fmt.Errorf("%s with capabilities is destructive (scope capabilities:admin): give a reason", pattern)
+		}
+	}
 	if (IsDangerousAPIScope(scope) || method == http.MethodDelete) && call.reason == "" {
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
 	}
@@ -382,7 +391,7 @@ func sandboxChannelGuard(pattern string, body []byte) error {
 			return errors.New("parking a run (park: true) is a model-only control action; grain task wait supports blocking waits only")
 		}
 	case "PATCH /api/tasks/{id}", "POST /api/tasks/{id}/capabilities":
-		if len(grantsInBody(pattern, body)) > 0 {
+		if len(grantsInBody(pattern, body)) > 0 || (pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body)) {
 			return errors.New("attaching capabilities to an existing task is not permitted from the sandbox CLI")
 		}
 	case "POST /api/tasks":
@@ -687,6 +696,28 @@ func grantsInBody(pattern string, body []byte) []string {
 	return addedGrantsInBody(pattern, body, nil, nil)
 }
 
+func patchTouchesTaskGrants(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return false
+	}
+	for key, raw := range fields {
+		trimmed := strings.TrimSpace(string(raw))
+		if trimmed == "" || trimmed == "null" {
+			continue
+		}
+		lower := strings.ToLower(key)
+		if strings.Contains(lower, "capabilit") || lower == "grants" ||
+			lower == "priority" || lower == "keeprunning" || lower == "keep_running" {
+			return true
+		}
+	}
+	return false
+}
+
 func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, normalize func(string) (string, error)) []string {
 	if len(body) == 0 {
 		return nil
@@ -701,6 +732,20 @@ func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, 
 	var names []string
 	for key, raw := range fields {
 		lower := strings.ToLower(key)
+		if lower == "priority" {
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
+				names = append(names, model.PriorityDispatchCapability)
+			}
+			continue
+		}
+		if lower == "keeprunning" || lower == "keep_running" {
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
+				names = append(names, model.DurableCapability)
+			}
+			continue
+		}
 		if !strings.Contains(lower, "capabilit") && !strings.EqualFold(key, "grants") {
 			continue
 		}
@@ -819,10 +864,16 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if json.Unmarshal(raw, &on) == nil && on {
 				return errAgentAutoMerge
 			}
-		case "autoapproveproposals":
+		case "autoapproveproposals", "auto_approve_proposals", "tasksapproved":
 			var on bool
-			if json.Unmarshal(raw, &on) == nil && on && !acting.AutoApproveProposals {
+			if json.Unmarshal(raw, &on) == nil && on && !s.agentMayAutoApproveProposals(ctx, acting) {
 				return errors.New("an agent cannot turn on autoApproveProposals, which its own task does not have")
+			}
+		case "networkaccess", "network_access":
+			var access string
+			if json.Unmarshal(raw, &access) == nil && acting.NetworkAccess == model.NetworkNone &&
+				model.NetworkAccess(strings.TrimSpace(access)) != model.NetworkNone {
+				return errors.New("an agent with networkAccess \"none\" cannot widen networkAccess")
 			}
 		case "approved", "interactive":
 			var on bool
@@ -897,6 +948,21 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 		}
 	}
 	return nil
+}
+
+func (s *Server) agentMayAutoApproveProposals(ctx context.Context, acting *model.Task) bool {
+	if acting == nil {
+		return false
+	}
+	if acting.AutoApproveProposals {
+		return true
+	}
+	if s.tasks != nil {
+		if ok, err := s.tasks.consoleSessionQueuesProposals(ctx, *acting); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 // errAgentAutoMerge is the refusal of anything that would let work merge
@@ -1214,6 +1280,15 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		}
 		return call, fmt.Errorf("%s holds %s, but not on %s", principal, scope, call.repo)
 	}
+	if pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body) {
+		if !set.Allows("capabilities:admin", call.repo) {
+			return call, fmt.Errorf("%s holds no api grant for scope capabilities:admin, which %s needs when editing task capabilities",
+				principal, pattern)
+		}
+		if call.reason == "" {
+			return call, fmt.Errorf("%s with capabilities is destructive (scope capabilities:admin): give a reason", pattern)
+		}
+	}
 	if (IsDangerousAPIScope(scope) || method == http.MethodDelete) && call.reason == "" {
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
 	}
@@ -1447,7 +1522,7 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if json.Unmarshal(raw, &on) == nil && on {
 				return errAgentAutoMerge
 			}
-		case "autoapproveproposals":
+		case "autoapproveproposals", "auto_approve_proposals", "tasksapproved":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on {
 				return errors.New("an external agent cannot turn on autoApproveProposals")
