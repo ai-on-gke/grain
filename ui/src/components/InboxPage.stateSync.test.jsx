@@ -15,7 +15,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import InboxPage from "./InboxPage.jsx";
-import { STATE_SYNC_TITLE, collectAlerts } from "../alerts.js";
+import {
+  STATE_PULL_TITLE,
+  STATE_SYNC_TITLE,
+  collectAlerts,
+} from "../alerts.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -69,5 +73,48 @@ describe("a failing settings sync", () => {
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Config repo" }));
     expect(onOpenConfigRepo).toHaveBeenCalledTimes(1);
+  });
+});
+
+// An external config repository is only read from: its failing sync is
+// configuration not arriving, and the UI's settings are read-only there,
+// so "Settings are not being exported" and "changes made in the UI exist
+// only in this deployment's database" were both untrue (2026-10-30
+// settings walkthrough).
+describe("a failing pull from an external config repository", () => {
+  const external = {
+    since: "2026-10-30T12:28:08Z",
+    error:
+      "the state repository's remote could not be reached: fatal: Could not read from remote repository.",
+    repo: "acme/grain-config",
+    external: true,
+  };
+
+  it("says configuration is not being pulled, and what that costs", () => {
+    const [alert] = collectAlerts({ stateRepoSyncFailure: external });
+    expect(alert.title).toBe(STATE_PULL_TITLE);
+    expect(alert.sentence).toMatch(
+      /^Configuration has not been pulled from acme\/grain-config since .*remote repository\.$/,
+    );
+    expect(alert.sentence).not.toMatch(/\.\.$/);
+    expect(alert.impact).toMatch(/merged in acme\/grain-config/);
+    expect(alert.impact).not.toMatch(/made in the UI/);
+  });
+
+  it("is an inbox item in the same words", () => {
+    render(
+      <InboxPage
+        tasks={[]}
+        config={{ stateRepoSyncFailure: external }}
+        onOpenTask={() => {}}
+        onAct={() => {}}
+        onActBatch={() => {}}
+        showError={() => {}}
+        onOpenConfigRepo={() => {}}
+      />,
+    );
+    expect(screen.getByText(STATE_PULL_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(STATE_SYNC_TITLE)).toBeNull();
+    expect(screen.queryByText(/not backed up/)).toBeNull();
   });
 });

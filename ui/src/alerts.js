@@ -282,6 +282,25 @@ export function heldForRunNow(pause, t) {
 // (InboxPage.jsx's StateSyncGroup) both call it.
 export const STATE_SYNC_TITLE = "Settings are not being exported";
 
+// STATE_PULL_TITLE is the same for an external config repository
+// (failure.external), which grain only reads from: there the UI's settings
+// are read-only and nothing is exported, so what is failing is the
+// repository's configuration reaching this deployment.
+export const STATE_PULL_TITLE = "Configuration is not being pulled";
+
+// stateSyncTitle is the alert's and the Inbox group's title for failure.
+export function stateSyncTitle(failure) {
+  return failure?.external ? STATE_PULL_TITLE : STATE_SYNC_TITLE;
+}
+
+// stateSyncImpact is what the failure costs, for the alert's impact line
+// and the Inbox group's hint.
+export function stateSyncImpact(failure) {
+  return failure?.external
+    ? `Changes merged in ${failure.repo || "the config repository"} since then are not applied here until the sync is fixed.`
+    : "Changes made in the UI since then exist only in this deployment's database until the sync is fixed.";
+}
+
 // stateSyncSentence is the one sentence both the alert and the Inbox row
 // say about config.stateRepoSyncFailure: which repository the settings
 // are not reaching, since when, and why.
@@ -292,6 +311,9 @@ export function stateSyncSentence(failure, zone = "") {
   const since = failure.since
     ? formatDateTime(failure.since, zone) || "an unknown time"
     : "an unknown time";
+  if (failure.external) {
+    return `Configuration has not been pulled from ${repo} since ${since}: ${failure.error}`;
+  }
   return `Settings have not been exported to ${repo} since ${since}: ${failure.error}`;
 }
 
@@ -383,12 +405,12 @@ export function collectAlerts(config, zone = "", tasks = []) {
     out.push({
       id: "state-sync-failing",
       severity: "critical",
-      title: STATE_SYNC_TITLE,
-      sentence: `${stateSyncSentence(sync, zone)}.`,
+      title: stateSyncTitle(sync),
+      // git's own errors end in a full stop of their own.
+      sentence: stateSyncSentence(sync, zone).replace(/[^.!?]$/, "$&."),
       scope: { kind: "deployment" },
       since: sync.since || undefined,
-      impact:
-        "Changes made in the UI since then exist only in this deployment's database until the sync is fixed.",
+      impact: stateSyncImpact(sync),
       // The Inbox row's own button. The access code is owner access, so
       // whoever reads this can open Settings → Config repo (settings-panel.md §6.1).
       actions: [{ kind: "open-config-repo", label: "Config repo" }],
