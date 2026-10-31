@@ -492,6 +492,9 @@ export default function NewTaskOverlay({
   const [atFront, setAtFront] = useState(
     () => draft?.atFront ?? !!config?.newestFirst,
   );
+  const [priority, setPriority] = useState(() =>
+    draft?.priority !== undefined ? String(draft.priority) : "5",
+  );
   // customFields is this deployment's own fields (grain/task-53), held
   // as state rather than read off the form at submit for the reason
   // capabilities above is: an enum is a <Select> and a boolean a
@@ -550,6 +553,7 @@ export default function NewTaskOverlay({
     if (newBranch || newBranchName.trim() !== "") return true;
     if (reviewers.trim() !== "") return true;
     if (atFront !== !!config?.newestFirst) return true;
+    if (String(priority).trim() !== "5") return true;
     const defaultFields = fileableFieldValues(config, fields);
     for (const [k, v] of Object.entries(customFields)) {
       if (JSON.stringify(v) !== JSON.stringify(defaultFields[k])) return true;
@@ -608,6 +612,7 @@ export default function NewTaskOverlay({
         noPort,
         fixesBaseBranch,
         atFront,
+        priority,
         customFields,
       });
     } else {
@@ -641,6 +646,7 @@ export default function NewTaskOverlay({
     noPort,
     fixesBaseBranch,
     atFront,
+    priority,
     customFields,
   ]);
 
@@ -680,6 +686,7 @@ export default function NewTaskOverlay({
     setNoPort(false);
     setFixesBaseBranch(false);
     setAtFront(!!config?.newestFirst);
+    setPriority("5");
     setRepoSeed(null);
     setResetKey((k) => k + 1);
   };
@@ -826,6 +833,12 @@ export default function NewTaskOverlay({
       writes: ct ? [] : writes,
       approved,
       atFront,
+      ...(() => {
+        const parsedPriority = parseInt(String(priority).trim(), 10);
+        return !Number.isNaN(parsedPriority) && parsedPriority !== 5
+          ? { priority: parsedPriority }
+          : {};
+      })(),
     };
     try {
       // Read inside the try: a file that has gone away since it was
@@ -877,6 +890,7 @@ export default function NewTaskOverlay({
       setNoPort(false);
       setFixesBaseBranch(false);
       setAtFront(!!config?.newestFirst);
+      setPriority("5");
       onClose();
       await onCreated();
     } catch (err) {
@@ -1725,6 +1739,19 @@ export default function NewTaskOverlay({
             Front -- runs next, ahead of everything already queued
           </MenuItem>
         </TextField>
+        <TextField
+          name="priority"
+          label="Task priority"
+          helperText="default 5; higher numbers run first"
+          type="number"
+          inputProps={{ min: 1, step: 1 }}
+          autoComplete="off"
+          fullWidth
+          margin="normal"
+          size="small"
+          value={priority}
+          onChange={(e) => setPriority(e.target.value)}
+        />
       </>
     </SidePanel>
   );

@@ -112,6 +112,9 @@ func (p TaskListPage) Lines() string {
 	var b strings.Builder
 	for _, t := range p.Tasks {
 		fmt.Fprintf(&b, "%s  %s  %s  %s", t.ID, t.State, blankAsNone(t.Repo, "-"), singleLine(t.Title))
+		if t.Priority > 0 && t.Priority != 5 {
+			fmt.Fprintf(&b, "  (priority %d)", t.Priority)
+		}
 		if taskStalled(t) {
 			b.WriteString("  (stalled)")
 		}
@@ -146,6 +149,7 @@ type TaskListEntry struct {
 	State      string     `json:"state"`
 	Repo       string     `json:"repo,omitempty"`
 	Title      string     `json:"title"`
+	Priority   int        `json:"priority,omitempty"`
 	Kinds      []string   `json:"kinds,omitempty"`
 	BlockedBy  []string   `json:"blockedBy,omitempty"`
 	Stalled    bool       `json:"stalled,omitempty"`
@@ -158,9 +162,14 @@ type TaskListEntry struct {
 func (p TaskListPage) Entries() []TaskListEntry {
 	out := make([]TaskListEntry, 0, len(p.Tasks))
 	for _, t := range p.Tasks {
+		priority := t.Priority
+		if priority <= 0 {
+			priority = 5
+		}
 		e := TaskListEntry{
 			ID: t.ID, State: t.State, Repo: t.Repo, Title: t.Title,
-			Kinds: t.Kinds, BlockedBy: t.BlockedBy, Stalled: taskStalled(t),
+			Priority:  priority,
+			Kinds:     t.Kinds, BlockedBy: t.BlockedBy, Stalled: taskStalled(t),
 			CreatedAt: t.CreatedAt, ChangedAt: t.ChangedAt,
 		}
 		if !strings.EqualFold(t.State, "closed") {

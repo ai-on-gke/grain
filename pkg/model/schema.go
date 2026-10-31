@@ -320,7 +320,7 @@ import "strconv"
 // 68 is 67 again for `dispatch-control`, now `api:dispatch-control`.
 //
 // 69 is 67 again for `pipeline-control`, now `api:pipeline-control`.
-const SchemaVersion = 69
+const SchemaVersion = 70
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -512,6 +512,7 @@ var Tables = []string{
   ` + "`change_target_kind`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1550,6 +1551,7 @@ var Tables = []string{
   ` + "`change_target_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

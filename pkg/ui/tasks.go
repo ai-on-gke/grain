@@ -92,6 +92,7 @@ type Task struct {
 	// piece missing.
 	Writes               []WriteTarget `json:"writes,omitempty"`
 	Base                 string        `json:"base,omitempty"`
+	Priority             int           `json:"priority"`
 	AutoMerge            bool          `json:"autoMerge"`
 	AutoApproveProposals bool          `json:"autoApproveProposals"`
 	// Interactive mirrors model.Task's own field of the same name
@@ -922,6 +923,10 @@ type Attempt struct {
 func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueueBlockedAt *time.Time,
 	repairing bool, mergeQueue model.MergeQueueActivity, activity *model.RunActivity,
 	reviewTemplateName string, span model.TaskSpan, stall string) Task {
+	priority := t.Priority
+	if priority == 0 {
+		priority = model.DefaultTaskPriority
+	}
 	out := Task{
 		ID:                   t.ID,
 		Title:                t.Title,
@@ -930,6 +935,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		AuthorKind:           string(t.Origin.Attribution.Actor.Kind),
 		State:                state,
 		Base:                 t.Base,
+		Priority:             priority,
 		Issue:                t.Issue,
 		AutoMerge:            t.AutoMerge,
 		AutoApproveProposals: t.AutoApproveProposals,

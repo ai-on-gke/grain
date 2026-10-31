@@ -269,7 +269,8 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	call.grants = set
 	capAllowed := agentCapabilityAllowsRoute(held, set, pattern, scope)
 	ciCap := grainCIReadsRoute(held, pattern)
-	if !set.Has(scope) && !capAllowed && !ciCap {
+	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
+	if !set.Has(scope) && !capAllowed && !ciCap && !adminPatch {
 		return call, fmt.Errorf("task %s holds no api grant for scope %s, which %s needs: "+
 			"ask a person to grant api:%s or a preset that includes it (docs/agent-api.md)", taskID, scope, pattern, scope)
 	}
@@ -288,6 +289,12 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if ciCap && !capAllowed && !set.Allows(scope, call.repo) && call.repo != "" && agentMayRead(acting, call.repo) {
 		// grain-ci reads CI of the repositories the task's runs may
 		// read, as it does over /fs/ci/ and /cli/ci/.
+		capAllowed = true
+	}
+	if adminPatch && !set.Allows(scope, call.repo) && set.Allows("tasks:admin", call.repo) {
+		if err := tasksAdminTaskPatchBodyAllowed(body); err != nil {
+			return call, err
+		}
 		capAllowed = true
 	}
 	if !set.Allows(scope, call.repo) && !capAllowed {
@@ -342,6 +349,26 @@ func agentCapabilityAllowsRoute(held []string, set APIGrantSet, pattern string, 
 		}
 	}
 	return false
+}
+
+func tasksAdminAllowsTaskPatch(set APIGrantSet, pattern string) bool {
+	return pattern == "PATCH /api/tasks/{id}" && set.Has("tasks:admin")
+}
+
+func tasksAdminTaskPatchBodyAllowed(body []byte) error {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil
+	}
+	for k := range fields {
+		if !strings.EqualFold(k, "priority") {
+			return fmt.Errorf("api:tasks:admin without api:tasks:write may only edit priority on PATCH /api/tasks/{id} (got %q)", k)
+		}
+	}
+	return nil
 }
 
 // grainCIReadRoutes are the agent API's CI reads the grain-ci capability
@@ -1195,7 +1222,8 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		return call, fmt.Errorf("external agent %q has invalid grants: %w", tok.Name, err)
 	}
 	call.grants = set
-	if !set.Has(scope) {
+	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
+	if !set.Has(scope) && !adminPatch {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
 	}
 	body, err := peekBody(r)
@@ -1216,7 +1244,14 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		call.targetTasks = extraTargets
 		call.targetTask = extraTargets[0]
 	}
-	if !set.Allows(scope, call.repo) {
+	adminPatchAllowed := false
+	if adminPatch && !set.Allows(scope, call.repo) && set.Allows("tasks:admin", call.repo) {
+		if err := tasksAdminTaskPatchBodyAllowed(body); err != nil {
+			return call, err
+		}
+		adminPatchAllowed = true
+	}
+	if !set.Allows(scope, call.repo) && !adminPatchAllowed {
 		if call.repo == "" {
 			return call, fmt.Errorf("%s holds %s only for %s, and %s does not name a repository it reaches",
 				principal, scope, strings.Join(set.Repos(scope), ", "), pattern)

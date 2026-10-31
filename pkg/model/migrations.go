@@ -391,6 +391,14 @@ var Migrations = []Migration{
 		Description: "rewrite stored pipeline-control grants to api:pipeline-control (the in-process capability is retired)",
 		Up:          rewriteLegacyGrants(map[string]string{"pipeline-control": "api:pipeline-control"}),
 	},
+	{
+		Version:     70,
+		Description: "add numeric priority to task (default 5) and template",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 5",
+			"ALTER TABLE `template` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
@@ -455,6 +463,15 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 	for v := from + 1; v <= SchemaVersion; v++ {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
+			if table, col, ok := alterAddColumnTarget(stmt); ok {
+				exists, err := tableHasColumn(ctx, tx, table, col)
+				if err != nil {
+					return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
+				}
+				if exists {
+					continue
+				}
+			}
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
@@ -498,4 +515,40 @@ func storeViews(ctx context.Context, tx *sql.Tx) ([]string, error) {
 		views = append(views, name)
 	}
 	return views, rows.Err()
+}
+
+func alterAddColumnTarget(stmt string) (table, col string, ok bool) {
+	const prefix = "ALTER TABLE `"
+	const mid = "` ADD COLUMN `"
+	if !strings.HasPrefix(stmt, prefix) {
+		return "", "", false
+	}
+	rest := stmt[len(prefix):]
+	table, rest, ok = strings.Cut(rest, mid)
+	if !ok {
+		return "", "", false
+	}
+	col, _, ok = strings.Cut(rest, "`")
+	if !ok {
+		return "", "", false
+	}
+	return table, col, true
+}
+
+func tableHasColumn(ctx context.Context, tx *sql.Tx, table, col string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT * FROM `"+table+"` WHERE 1 = 0")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		return false, err
+	}
+	for _, c := range cols {
+		if strings.EqualFold(c, col) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }

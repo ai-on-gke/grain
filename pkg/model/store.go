@@ -577,13 +577,17 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	if t.Target != nil {
 		targetOwner, targetName = t.Target.StoredOwner(), t.Target.Name
 	}
+	priority := t.Priority
+	if priority == 0 {
+		priority = DefaultTaskPriority
+	}
 	if _, err := tx.ExecContext(ctx, `REPLACE INTO `+"`task`"+` (
   `+"`id`, `branch`, `intent`, `title`, `body`"+`,
   `+"`origin_actor_kind`, `origin_actor_id`, `origin_behalf_kind`, `origin_behalf_id`, `origin_reason`"+`,
   `+"`approval_actor_kind`, `approval_actor_id`, `approval_behalf_kind`, `approval_behalf_id`, `approved_at`, `deferred_at`, `deferred_until`, `undeferred_at`"+`,
   `+"`target_owner`, `target_name`, `binding`, `base`, `folder`"+`,
-  `+"`auto_merge`, `auto_approve_proposals`, `created_at`, `order_key`, `sandbox_cpus`, `sandbox_memory_mb`, `sandbox_disk_gb`, `interactive`, `agent_framework`, `agent_backend_id`, `agent_model`, `prompt_extension`, `review_template_id`, `network_access`, `nothing_needed_action`, `creator`, `time_zone`, `issue`, `no_port`, `agent_model_source`, `origin_ref`, `resume_on_deadline`, `change_target_kind`, `change_target_spec`, `reviewers`"+`
-) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  `+"`auto_merge`, `auto_approve_proposals`, `created_at`, `order_key`, `sandbox_cpus`, `sandbox_memory_mb`, `sandbox_disk_gb`, `interactive`, `agent_framework`, `agent_backend_id`, `agent_model`, `prompt_extension`, `review_template_id`, `network_access`, `nothing_needed_action`, `creator`, `time_zone`, `issue`, `no_port`, `agent_model_source`, `origin_ref`, `resume_on_deadline`, `change_target_kind`, `change_target_spec`, `reviewers`, `priority`"+`
+) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Branch, string(t.Intent), t.Title, t.Body,
 		string(oActor.Kind), oActor.ID, kindOf(oBehalf), idOf(oBehalf), string(t.Origin.Reason),
 		aActorKind, aActorID, aBehalfKind, aBehalfID, timeOf(t.ApprovedAt), timeOf(t.DeferredAt), timeOf(t.DeferredUntil),
@@ -591,7 +595,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		targetOwner, targetName, string(t.Binding), nullable(t.Base), folderOf(t.Folder),
 		t.AutoMerge, t.AutoApproveProposals, timeOf(t.CreatedAt), t.OrderKey, t.SandboxCPUs, t.SandboxMemoryMB, t.SandboxDiskGB, t.Interactive,
 		t.AgentFramework, t.AgentBackendID, t.Model, t.PromptExtension, t.ReviewTemplateID, string(t.NetworkAccess), string(t.NothingNeededAction), t.Creator, t.TimeZone, t.Issue, t.NoPort, string(t.ModelSource), string(t.WorkOrigin), t.ResumeOnDeadline,
-		changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)),
+		changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority,
 	); err != nil {
 		return fmt.Errorf("writing task %s: %w", t.ID, err)
 	}
@@ -1064,7 +1068,7 @@ const taskColumns = "`id`,`branch`,`intent`,`title`,`body`," +
 	"`approval_actor_kind`,`approval_actor_id`,`approval_behalf_kind`,`approval_behalf_id`,`approved_at`,`deferred_at`,`deferred_until`,`undeferred_at`," +
 	"`target_owner`,`target_name`,`binding`,`base`,`folder`," +
 	"`auto_merge`,`auto_approve_proposals`,`created_at`,`order_key`,`sandbox_cpus`,`sandbox_memory_mb`,`sandbox_disk_gb`,`interactive`," +
-	"`agent_framework`,`agent_backend_id`,`agent_model`,`prompt_extension`,`review_template_id`,`network_access`,`nothing_needed_action`,`creator`,`time_zone`,`issue`,`no_port`,`agent_model_source`,`origin_ref`,`resume_on_deadline`,`change_target_kind`,`change_target_spec`,`reviewers`"
+	"`agent_framework`,`agent_backend_id`,`agent_model`,`prompt_extension`,`review_template_id`,`network_access`,`nothing_needed_action`,`creator`,`time_zone`,`issue`,`no_port`,`agent_model_source`,`origin_ref`,`resume_on_deadline`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`"
 
 // scanTask reads one task row. It takes the Scan method rather than a
 // *sql.Row or *sql.Rows so one function serves both the single-row and
@@ -1082,8 +1086,11 @@ func scanTask(scan func(...any) error) (Task, error) {
 		&aaKind, &aaID, &abKind, &abID, &approvedAt, &deferredAt, &deferredUntil, &undeferredAt,
 		&tOwner, &tName, &binding, &base, &folder,
 		&t.AutoMerge, &t.AutoApproveProposals, &createdAt, &t.OrderKey, &t.SandboxCPUs, &t.SandboxMemoryMB, &t.SandboxDiskGB, &t.Interactive,
-		&t.AgentFramework, &t.AgentBackendID, &t.Model, &t.PromptExtension, &t.ReviewTemplateID, &networkAccess, &nothingNeeded, &t.Creator, &t.TimeZone, &t.Issue, &t.NoPort, &modelSource, &workOrigin, &t.ResumeOnDeadline, &ctKind, &ctSpec, &reviewers); err != nil {
+		&t.AgentFramework, &t.AgentBackendID, &t.Model, &t.PromptExtension, &t.ReviewTemplateID, &networkAccess, &nothingNeeded, &t.Creator, &t.TimeZone, &t.Issue, &t.NoPort, &modelSource, &workOrigin, &t.ResumeOnDeadline, &ctKind, &ctSpec, &reviewers, &t.Priority); err != nil {
 		return Task{}, err
+	}
+	if t.Priority == 0 {
+		t.Priority = DefaultTaskPriority
 	}
 	t.ChangeTarget = ChangeTargetFromStored(ctKind, ctSpec)
 	t.Reviewers = splitCSV(reviewers)
@@ -1156,9 +1163,20 @@ func scanTask(scan func(...any) error) (Task, error) {
 // practice (Store.OrderKeyForNewTask and Store.Reorder both space new
 // values away from their neighbours) but nothing enforces it, so a tie
 // still needs a stable, deterministic break.
+// fixesBaseBranchOrderSQL sorts tasks marked as fixing a base branch
+// (BaseRepairBranchTag, "base-ci-repair:%") ahead of ordinary tasks within
+// the same priority band.
+const fixesBaseBranchOrderSQL = "CASE WHEN EXISTS (SELECT 1 FROM `task_tag` AS `rt` WHERE `rt`.`task_id` = `t`.`id` AND `rt`.`tag` LIKE '" + baseRepairBranchTagPrefix + "%') THEN 0 ELSE 1 END"
+
+// taskQueueOrderSQL is the canonical dispatch and queue order: higher numeric
+// priority first, then base-branch repairs, then backlog order_key (which
+// encodes at_front, MoveToFrontOfBacklog, manual Reorder, and FIFO creation
+// order), then FIFO approval/creation timestamps and task ID as tie-breakers.
+const taskQueueOrderSQL = "`t`.`priority` DESC, " + fixesBaseBranchOrderSQL + ", `t`.`order_key`, COALESCE(`t`.`approved_at`, `t`.`created_at`), `t`.`created_at`, `t`.`id`"
+
 func (s *Store) ListTasks(ctx context.Context) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT "+taskColumns+" FROM `task` ORDER BY `order_key`, `id`")
+		"SELECT "+taskColumns+" FROM `task` AS `t` ORDER BY "+taskQueueOrderSQL)
 	if err != nil {
 		return nil, fmt.Errorf("listing tasks: %w", err)
 	}
@@ -1198,7 +1216,7 @@ type TaskRepo struct {
 // more on a store of a few thousand tasks (grain/task-3903).
 func (s *Store) TaskRepos(ctx context.Context) ([]TaskRepo, error) {
 	var out []TaskRepo
-	err := each(ctx, s.db, "SELECT `id`,`target_owner`,`target_name` FROM `task` ORDER BY `order_key`, `id`", nil,
+	err := each(ctx, s.db, "SELECT `t`.`id`,`t`.`target_owner`,`t`.`target_name` FROM `task` AS `t` ORDER BY "+taskQueueOrderSQL, nil,
 		func(rows *sql.Rows) error {
 			var t TaskRepo
 			var owner, name sql.NullString
@@ -3316,7 +3334,7 @@ func (s *Store) Ready(ctx context.Context) ([]string, error) {
 	err := each(ctx, s.db,
 		"SELECT `r`.`task_id` FROM `task_ready` AS `r` "+
 			"JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
-			"ORDER BY `t`.`order_key`, `r`.`task_id`",
+			"ORDER BY "+taskQueueOrderSQL,
 		nil,
 		func(rows *sql.Rows) error {
 			var id string
@@ -3417,7 +3435,7 @@ func (s *Store) ReadyTargets(ctx context.Context) ([]ReadyTarget, error) {
 	err := each(ctx, s.db,
 		"SELECT `r`.`task_id`, `t`.`target_owner`, `t`.`target_name` FROM `task_ready` AS `r` "+
 			"JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
-			"ORDER BY `t`.`order_key`, `r`.`task_id`",
+			"ORDER BY "+taskQueueOrderSQL,
 		nil,
 		func(rows *sql.Rows) error {
 			var row ReadyTarget
@@ -3511,7 +3529,7 @@ func (s *Store) ReadyMergers(ctx context.Context) ([]string, error) {
 			"JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
 			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `r`.`task_id` "+
 			"WHERE "+mergerTaskSQL+" "+
-			"ORDER BY `t`.`order_key`, `r`.`task_id`",
+			"ORDER BY "+taskQueueOrderSQL,
 		[]any{string(ReasonFix)},
 		func(rows *sql.Rows) error {
 			var id string
@@ -3538,7 +3556,7 @@ func (s *Store) ReadyPriorityDispatch(ctx context.Context) ([]string, error) {
 		"SELECT `r`.`task_id` FROM `task_ready` AS `r` "+
 			"JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
 			"WHERE "+priorityDispatchTaskSQL+" "+
-			"ORDER BY `t`.`order_key`, `r`.`task_id`",
+			"ORDER BY "+taskQueueOrderSQL,
 		priorityDispatchArgs(),
 		func(rows *sql.Rows) error {
 			var id string
@@ -5955,17 +5973,21 @@ func newTemplateID(ctx context.Context, tx *sql.Tx) (string, error) {
 }
 
 const templateColumns = "`id`,`name`,`title`,`body`," +
-	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`,`reviewers`"
+	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`"
 
 func scanTemplate(scan func(...any) error) (Template, error) {
 	var t Template
 	var target RepoRef
 	var base sql.NullString
 	var networkAccess, nothingNeeded, goal, ctKind, ctSpec, reviewers string
+	var priority int
 	if err := scan(&t.ID, &t.Name, &t.Title, &t.Body,
 		&target.Owner, &target.Name, &base, &t.AutoMerge, &t.CreatedAt, &networkAccess, &nothingNeeded, &t.Model, &t.Interactive,
-		&goal, &ctKind, &ctSpec, &reviewers); err != nil {
+		&goal, &ctKind, &ctSpec, &reviewers, &priority); err != nil {
 		return Template{}, err
+	}
+	if priority != 0 {
+		t.Priority = &priority
 	}
 	t.ChangeTarget = ChangeTargetFromStored(ctKind, ctSpec)
 	t.Reviewers = splitCSV(reviewers)
@@ -5997,12 +6019,16 @@ func putTemplate(ctx context.Context, tx *sql.Tx, t Template) error {
 	if t.Target != nil {
 		targetOwner, targetName = t.Target.StoredOwner(), t.Target.Name
 	}
+	var priority int
+	if t.Priority != nil {
+		priority = *t.Priority
+	}
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`template`"+` (
   `+templateColumns+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Name, t.Title, t.Body,
 		targetOwner, targetName, t.Base, t.AutoMerge, t.CreatedAt.UTC(), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Interactive,
-		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)))
+		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority)
 	if err != nil {
 		return fmt.Errorf("writing template %s: %w", t.ID, err)
 	}

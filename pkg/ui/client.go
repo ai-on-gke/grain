@@ -1537,6 +1537,10 @@ type CreateTaskRequest struct {
 	// A task filed from an interactive template (TemplateID,
 	// model.Template.Interactive) is interactive whatever this says.
 	Interactive bool `json:"interactive"`
+	// Priority is the task's numeric dispatch priority (model.Task.Priority,
+	// default model.DefaultTaskPriority = 5; higher numbers mean higher priority).
+	// When omitted or 0, defaults to model.DefaultTaskPriority.
+	Priority *int `json:"priority,omitempty"`
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) set model.Task's own fields of
 	// the same name -- a per-task override of the deployment's default
@@ -1942,6 +1946,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	if strings.TrimSpace(req.Title) == "" {
 		return Task{}, validationErrorf("title is required")
+	}
+	priority := model.DefaultTaskPriority
+	if req.Priority != nil {
+		if *req.Priority < 0 {
+			return Task{}, validationErrorf("priority must be a positive integer")
+		}
+		if *req.Priority != 0 {
+			priority = *req.Priority
+		}
 	}
 	if req.NewBranch {
 		req.Base = strings.TrimSpace(req.Base)
@@ -2481,6 +2494,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Reviewers:            model.NormalizeReviewers(req.Reviewers),
 		Binding:              model.BindingDirective,
 		Base:                 req.Base,
+		Priority:             priority,
 		Issue:                req.Issue,
 		AutoMerge:            autoMerge,
 		AutoApproveProposals: req.AutoApproveProposals,
@@ -3789,6 +3803,7 @@ type UpdateTaskRequest struct {
 	// every attempt until somebody corrects it.
 	Repo                 *string `json:"repo,omitempty"`
 	Base                 *string `json:"base,omitempty"`
+	Priority             *int    `json:"priority,omitempty"`
 	Issue                *int    `json:"issue,omitempty"`
 	AutoMerge            *bool   `json:"autoMerge,omitempty"`
 	AutoApproveProposals *bool   `json:"autoApproveProposals,omitempty"`
@@ -3942,6 +3957,9 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	}
 	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 		return Task{}, validationErrorf("title cannot be empty")
+	}
+	if req.Priority != nil && *req.Priority < 0 {
+		return Task{}, validationErrorf("priority must be a positive integer")
 	}
 	// A fork head label is resolved to the pull request it heads the way
 	// CreateTask resolves one (forkhead.go): the edit stores that pull
@@ -4254,6 +4272,13 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		}
 		if req.Base != nil {
 			task.Base = *req.Base
+		}
+		if req.Priority != nil {
+			if *req.Priority == 0 {
+				task.Priority = model.DefaultTaskPriority
+			} else {
+				task.Priority = *req.Priority
+			}
 		}
 		if forkPR != nil && !hasLinkTo(task.Links, forkPR.Link()) {
 			task.Links = append(task.Links, forkPR.Link())

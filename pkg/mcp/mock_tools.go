@@ -136,6 +136,10 @@ type ProposedTask struct {
 	// Empty means the target repository's default branch.
 	Branch string
 
+	// Priority is the numeric task priority (default 5; higher numbers mean higher priority).
+	// 0 means unset (defaults to model.DefaultTaskPriority, or template priority).
+	Priority int
+
 	// NoRepo files this task with no repository at all -- a standalone
 	// task with no repository target,
 	// task that will not clone or push a branch.
@@ -241,6 +245,9 @@ type ProposedTask struct {
 	// Per call, and not inherited by what the held task files in turn.
 	HoldForApproval bool
 }
+
+// TaskProposal aliases ProposedTask for callers referring to a proposed task record.
+type TaskProposal = ProposedTask
 
 // ReviewComment is one add_review_comment call as this process recorded
 // it. Turning it into a real draft review on the pull request under
@@ -901,9 +908,13 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				"no_port":           map[string]any{"type": "boolean"},
 				"fixes_base_branch": map[string]any{"type": "boolean"},
 				"origin":            map[string]any{"type": "string"},
-				"no_repo":           map[string]any{"type": "boolean"},
-				"at_front":          map[string]any{"type": "boolean"},
-				"template_id":       map[string]any{"type": "string"},
+				"no_repo":  map[string]any{"type": "boolean"},
+				"at_front": map[string]any{"type": "boolean"},
+				"priority": map[string]any{
+					"type":        "integer",
+					"description": "Task priority (default 5; higher numbers mean higher priority)",
+				},
+				"template_id": map[string]any{"type": "string"},
 				"template_fields": map[string]any{
 					"type": "object",
 					"additionalProperties": map[string]any{
@@ -967,6 +978,10 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			}
 			supersedes, _ := argString(args, "supersedes")
 			reviewTemplateID, _ := argString(args, "review_template_id")
+			priority, hasPriority := argInt(args, "priority")
+			if hasPriority && priority < 0 {
+				return Result{Text: "priority must be a positive integer", IsError: true}
+			}
 			cpus, _ := argInt(args, "sandbox_cpus")
 			memoryMB, _ := argInt(args, "sandbox_memory_mb")
 			diskGB, _ := argInt(args, "sandbox_disk_gb")
@@ -1014,6 +1029,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				Body:                body,
 				Repo:                repo,
 				Branch:              strings.TrimSpace(branch),
+				Priority:            priority,
 				NoRepo:              noRepo,
 				ChangeTarget:        changeTarget,
 				AtFront:             atFront,

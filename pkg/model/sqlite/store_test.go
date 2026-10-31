@@ -5259,3 +5259,90 @@ func TestTaskCIRefAndTaskReadRepos(t *testing.T) {
 		t.Errorf("TaskReadRepos %v holds a repository nothing granted", scope.TaskReadRepos)
 	}
 }
+
+func TestTaskPriorityDefaultUpdateAndQueueOrdering(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+
+	defaultTask := task("prio-default", true)
+	defaultTask.CreatedAt = &now
+	if err := store.PutTask(ctx, defaultTask); err != nil {
+		t.Fatal(err)
+	}
+	gotDefault, err := store.GetTask(ctx, "prio-default")
+	if err != nil || gotDefault == nil {
+		t.Fatalf("GetTask prio-default: %v", err)
+	}
+	if gotDefault.Priority != model.DefaultTaskPriority {
+		t.Errorf("Priority = %d, want default %d", gotDefault.Priority, model.DefaultTaskPriority)
+	}
+
+	lowTask := task("prio-low", true)
+	lowTask.Priority = 2
+	t1 := now.Add(time.Minute)
+	lowTask.CreatedAt = &t1
+	if err := store.PutTask(ctx, lowTask); err != nil {
+		t.Fatal(err)
+	}
+
+	highTask := task("prio-high", true)
+	highTask.Priority = 8
+	t2 := now.Add(2 * time.Minute)
+	highTask.CreatedAt = &t2
+	if err := store.PutTask(ctx, highTask); err != nil {
+		t.Fatal(err)
+	}
+
+	midFrontTask := task("prio-mid-front", true)
+	midFrontTask.Priority = 5
+	t3 := now.Add(3 * time.Minute)
+	midFrontTask.CreatedAt = &t3
+	if err := store.PutTask(ctx, midFrontTask); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MoveToFrontOfBacklog(ctx, []string{"prio-mid-front"}); err != nil {
+		t.Fatal(err)
+	}
+
+	midFixesBase := task("prio-mid-fixes-base", true)
+	midFixesBase.Priority = 5
+	model.SetFixesBaseBranch(&midFixesBase, true)
+	t4 := now.Add(4 * time.Minute)
+	midFixesBase.CreatedAt = &t4
+	if err := store.PutTask(ctx, midFixesBase); err != nil {
+		t.Fatal(err)
+	}
+
+	ready, err := store.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	wantIDs := []string{"prio-high", "prio-mid-fixes-base", "prio-mid-front", "prio-default", "prio-low"}
+	if !slices.Equal(ready, wantIDs) {
+		t.Errorf("Ready order = %v, want %v", ready, wantIDs)
+	}
+
+	// Updating priority moves lowTask ahead of highTask.
+	lowStored, err := store.GetTask(ctx, "prio-low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowStored.Priority = 10
+	if err := store.PutTask(ctx, *lowStored); err != nil {
+		t.Fatal(err)
+	}
+	updatedLow, err := store.GetTask(ctx, "prio-low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedLow.Priority != 10 {
+		t.Errorf("updated Priority = %d, want 10", updatedLow.Priority)
+	}
+	readyAfter, err := store.Ready(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readyAfter) == 0 || readyAfter[0] != "prio-low" {
+		t.Errorf("Ready after priority update first = %v, want prio-low", readyAfter)
+	}
+}

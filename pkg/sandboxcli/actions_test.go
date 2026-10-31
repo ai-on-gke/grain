@@ -276,10 +276,17 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 		t.Errorf("task wait --park: %d %s", code, errOut)
 	}
 
-	// 4. task propose (draft allowed; --supersedes and --auto-merge refused)
-	if out, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "Follow-up", "--body", "Do x", "--depends-on", "7,8"); code != 0 ||
+	// 4. task propose (draft allowed; --priority forwarded; --supersedes and --auto-merge refused)
+	if out, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "Follow-up", "--body", "Do x", "--depends-on", "7,8", "--priority", "8"); code != 0 ||
 		!strings.Contains(out, "Proposed task #101") || !strings.Contains(out, "held for human approval") {
 		t.Errorf("task propose: %d %s %s", code, out, errOut)
+	}
+	if gotPri, ok := proxy.bodies["POST /cli/proposals"]["priority"].(float64); !ok || gotPri != 8 {
+		t.Errorf("task propose priority in body = %v, want 8", proxy.bodies["POST /cli/proposals"]["priority"])
+	}
+	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--priority", "-1"); code != 1 ||
+		!strings.Contains(errOut, "--priority") {
+		t.Errorf("task propose --priority -1: %d %s", code, errOut)
 	}
 	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--supersedes", "5"); code != 1 ||
 		!strings.Contains(errOut, "propose_task") {
