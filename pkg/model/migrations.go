@@ -408,6 +408,14 @@ var Migrations = []Migration{
 		Description: "rewrite stored release-notes grants to api:release-notes (the in-process capability is retired)",
 		Up:          rewriteLegacyGrants(map[string]string{"release-notes": "api:release-notes"}),
 	},
+	{
+		Version:     73,
+		Description: "add numeric priority to task (default 5) and template",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 5",
+			"ALTER TABLE `template` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

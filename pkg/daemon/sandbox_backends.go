@@ -252,7 +252,7 @@ func EffectiveK8sSandboxImage(cfg Config) string {
 // configured.
 func EffectiveK8sGranuleImage(cfg Config) string {
 	return effectiveK8sGranuleImage(cfg, func(base, mirrorRepo string) string {
-		return resolveOrMirrorSandboxImage(context.Background(), base, mirrorRepo)
+		return resolveOrMirrorSandboxImage(context.Background(), cfg, base, mirrorRepo)
 	})
 }
 

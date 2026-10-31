@@ -872,23 +872,12 @@ func isGitHubReleaseWorkflow(name, wfPath, event string) bool {
 	return false
 }
 
-func isGitHubBaseBranch(ctx context.Context, deps Deps, repo model.RepoRef, branch string) bool {
+func isGitHubBaseBranch(deps Deps, repo model.RepoRef, branch string) bool {
 	branch = strings.TrimSpace(strings.TrimPrefix(branch, "refs/heads/"))
-	if branch == "" {
+	if branch == "" || deps.Client == nil {
 		return false
 	}
-	if deps.Client != nil {
-		return isTrunk(deps, repo, branch)
-	}
-	if deps.Store != nil {
-		if existing, err := deps.Store.GetBaseBranchRelease(ctx, repo, branch); err == nil && existing != nil {
-			return true
-		}
-		if existing, err := deps.Store.GetBaseBranchCI(ctx, repo, branch); err == nil && existing != nil {
-			return true
-		}
-	}
-	return branch == "main" || branch == "master"
+	return isTrunk(deps, repo, branch)
 }
 
 // recordGitHubBaseBranchRelease updates BaseBranchRelease state when a
@@ -899,11 +888,14 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 	if deps.Store == nil || run.RunID == 0 {
 		return nil
 	}
+	if isGitHubWorkflowRunForeignHead(run.Repo, run.HeadRepo) || !isGitHubBranchWorkflowEvent(run.Event) {
+		return nil
+	}
 	if !isGitHubReleaseWorkflow(run.WorkflowName, run.WorkflowPath, run.Event) {
 		return nil
 	}
 	branch := strings.TrimPrefix(run.Ref, "refs/heads/")
-	if !isGitHubBaseBranch(ctx, deps, run.Repo, branch) {
+	if !isGitHubBaseBranch(deps, run.Repo, branch) {
 		return nil
 	}
 

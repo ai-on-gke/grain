@@ -901,6 +901,9 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 	if trig == nil {
 		return nil
 	}
+	if isGitHubWorkflowRunForeignHead(run.Repo, run.HeadRepo) || !isGitHubBranchWorkflowEvent(run.Event) {
+		return nil
+	}
 	if !trig.MatchesWorkflow(run.WorkflowName, run.WorkflowPath) {
 		return nil
 	}
@@ -908,7 +911,17 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 		return nil
 	}
 	branch := strings.TrimPrefix(run.Ref, "refs/heads/")
-	if !trig.MatchesBranch(branch, sched.Base) {
+	fallbackBase := strings.TrimSpace(sched.Base)
+	if len(trig.Branches) == 0 && fallbackBase == "" {
+		def, err := scheduledWorkflowRef(deps, model.ScheduledWorkflowRun{Repo: run.Repo})
+		if err != nil {
+			sayOnce("github-workflow-run-default-branch:"+sched.ID,
+				"orchestrator: schedule %s: %v", sched.ID, err)
+			return nil
+		}
+		fallbackBase = def
+	}
+	if !trig.MatchesBranch(branch, fallbackBase) {
 		return nil
 	}
 
