@@ -328,3 +328,35 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 		t.Errorf("quarantine.yml = %q, %v", qRaw, err)
 	}
 }
+
+func TestSandboxActionsUseGitCredentialsWithoutProxyEnv(t *testing.T) {
+	proxy := &fakeActionProxy{
+		bodies:  map[string]map[string]any{},
+		headers: map[string]http.Header{},
+		answers: map[string]string{
+			"/cli/ci/wait": `{"status":"passed","run_id":"ci-gw","commit":"abcdef0123456789","conclusion":"success",
+				"jobs":[{"name":"go","conclusion":"success"}]}`,
+			"/cli/pr/open": "Opened pull request #42: https://github.com/ai-on-gke/grain/pull/42\n",
+		},
+	}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	// Point .git-credentials at the listener without setting GRAIN_SANDBOX_PROXY
+	// or GRAIN_SANDBOX_TOKEN, matching a Granule VM or host sandbox session.
+	creds := "http://sandbox:tok-from-creds@" + strings.TrimPrefix(srv.URL, "http://") + "\n"
+	env := fakeSandboxEnv(map[string]string{}, creds)
+
+	var out, errOut bytes.Buffer
+	code, handled := maybeRunSandboxCLI([]string{"ci", "wait"}, env, &out, &errOut)
+	if !handled || code != 0 || !strings.Contains(out.String(), "ci-gw") {
+		t.Fatalf("ci wait via .git-credentials: handled=%v code=%d out=%q err=%q", handled, code, out.String(), errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code, handled = maybeRunSandboxCLI([]string{"pr", "open"}, env, &out, &errOut)
+	if !handled || code != 0 || !strings.Contains(out.String(), "#42") {
+		t.Fatalf("pr open via .git-credentials: handled=%v code=%d out=%q err=%q", handled, code, out.String(), errOut.String())
+	}
+}
