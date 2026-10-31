@@ -300,9 +300,10 @@ func (d sandboxDeploy) ListStateTables(ctx context.Context) ([]string, error) {
 // ReadGrainLog is read_grain_log's answer for one source, with every
 // window and filter `grain log` was given passed on as that tool's own
 // arguments -- so a read can reach past the tool's default tail instead of
-// only ever seeing it.
+// only ever seeing it -- and the reading task named on the tool's audit
+// line, which said "(no task)" for every `grain log` before.
 func (d sandboxDeploy) ReadGrainLog(ctx context.Context, source string, q namespace.GrainLogQuery) (string, error) {
-	tool := grainlog.Tools(grainlog.Config{Redactor: grainLogRedactor(d.secretsDir), Sources: d.logSources})[0]
+	tool := grainlog.Tools(grainlog.Config{TaskID: q.TaskID, Redactor: grainLogRedactor(d.secretsDir), Sources: d.logSources})[0]
 	return toolText(tool.Handler(ctx, grainLogArgs(source, q)))
 }
 

@@ -311,7 +311,7 @@ func TestDeployReadsForwardTheirQuery(t *testing.T) {
 		t.Fatalf("deploy://grain.log: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	if want := (GrainLogQuery{Since: "2026-10-29T00:00:00Z", Until: "2026-10-29T06:00:00Z",
-		MinPriority: "err", Contains: "dispatch failed", MaxLines: 900}); gotLog != want {
+		MinPriority: "err", Contains: "dispatch failed", MaxLines: 900, TaskID: "1"}); gotLog != want {
 		t.Errorf("grain.log query = %+v, want %+v", gotLog, want)
 	}
 	if rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/grain.log?lines=50", nil); rec.Code != http.StatusOK || gotLog.MaxLines != 50 {

@@ -949,6 +949,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 		if err != nil {
 			return nil, err
 		}
+		q.TaskID = scope.TaskIDStr
 		text, err := s.Deploy.ReadGrainLog(ctx, source, q)
 		if err != nil {
 			return nil, fmt.Errorf("%w: deploy://%s: %v", ErrNotFound, relPath, err)

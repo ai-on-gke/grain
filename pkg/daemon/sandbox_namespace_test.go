@@ -15,9 +15,11 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,12 +29,14 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -322,5 +326,30 @@ func TestGrainLogArgsCarryTheQuery(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("grainLogArgs[%q] = %v, want %v", k, got[k], v)
 		}
+	}
+}
+
+// A `grain log` read through deploy://grain.log is audited as the task
+// whose sandbox made it. A walkthrough found every such read logged as
+// "task (no task)" (docs/test-runs/2026-10-31-sandbox-grain-cli.md, F2):
+// the namespace path built read_grain_log without its TaskID.
+func TestSandboxGrainLogReadIsAuditedAsItsTask(t *testing.T) {
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(prevOut); log.SetFlags(prevFlags) })
+
+	dataDir := t.TempDir()
+	if err := secrets.Open(SecretsConfig(dataDir)).Set("widget-api", "token", []byte("s3cret-value")); err != nil {
+		t.Fatal(err)
+	}
+	d := sandboxDeploy{secretsDir: SecretsDir(dataDir), logSources: []grainlog.Source{{Name: "daemon", What: "test journal",
+		Read: func(context.Context, systemlog.Query) ([]string, error) { return []string{"a line"}, nil }}}}
+	if _, err := d.ReadGrainLog(context.Background(), "", namespace.GrainLogQuery{MaxLines: 5, TaskID: "42"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); !strings.Contains(got, "read_grain_log: task 42 read daemon") {
+		t.Errorf("audit line = %q, want it to name task 42", got)
 	}
 }
