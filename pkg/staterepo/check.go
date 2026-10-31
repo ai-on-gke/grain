@@ -189,6 +189,9 @@ func check(ctx context.Context, db *sql.DB, dir, scratch string, version int, mi
 	if err := checkCapabilities(dir); err != nil {
 		return report, err
 	}
+	if err := checkNewTaskForm(dir); err != nil {
+		return report, err
+	}
 	warnings, err := describeDump(ctx, db, dir, tables, migrating)
 	if err != nil {
 		return report, err

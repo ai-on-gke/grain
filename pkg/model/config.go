@@ -917,6 +917,11 @@ type Config struct {
 	// admission before anything is minted. Stored as JSON in one column
 	// and exported to grain/config with the rest of this row.
 	CapabilityPolicy CapabilityPolicy
+	// NewTaskForm is the New Task form's configuration
+	// (settings/new-task-form.yml, new_task_form.go); nil when the
+	// deployment has none, and the form is drawn as it always was.
+	// Stored as JSON in one column.
+	NewTaskForm *NewTaskForm
 	// CLIRun is where each agent CLI runs, keyed by framework name
 	// (claude, codex, antigravity, custom): on the host, in a per-run
 	// container of an image, or whichever of those the host allows

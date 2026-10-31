@@ -363,7 +363,6 @@ func TestGitHubCIChangesMirrorsGrainTestsWorkflowPaths(t *testing.T) {
 		"scripts/granule/guest-inputs.sh",
 		"deploy/terraform/gcp/main.tf",
 		"deploy/terraform/gcp/files/deploy.sh",
-		"deploy/gke/terraform/variables.tf",
 	}
 
 	grainJobDefs := make(map[string]ci.Job, len(grainJobs))

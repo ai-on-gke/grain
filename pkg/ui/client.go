@@ -1495,6 +1495,10 @@ type CreateTaskRequest struct {
 	// template, which wins here as it does at every other firing point
 	// (model.Template.Target).
 	TemplateID string `json:"templateId"`
+	// BoardID is the board the New Task form was opened from, which
+	// picks settings/new-task-form.yml's boards layer (§6.3) when the
+	// server applies the defaults of the fields that form hides.
+	BoardID string `json:"boardId,omitempty"`
 	// Fields is what the template's own input fields are filled in with,
 	// keyed by field name (model.TemplateField.Name) -- "the environment
 	// to deploy to", not one of this deployment's declared columns,

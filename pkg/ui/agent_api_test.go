@@ -1187,3 +1187,42 @@ func TestAgentAPIGrainCIReadsCIOfTheTasksRepositories(t *testing.T) {
 		t.Errorf("grain-ci cancelled a run: %d", code)
 	}
 }
+
+// settings/new-task-form.yml's hidden defaults are a person's form, not a
+// way around the proposal gate: an agent's POST /api/tasks is judged on
+// the body it sent, so the defaults are not put in after that gate.
+func TestAgentAPIFilingTakesNoHiddenFormDefaults(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write")
+	var form model.NewTaskForm
+	if err := json.Unmarshal([]byte(`{"default": {"fields": {
+		"autoMerge": {"visibility": "hidden", "default": true},
+		"approved": {"visibility": "hidden", "default": true},
+		"writes": {"visibility": "hidden", "default": ["acme/gadgets"]},
+		"reads": {"visibility": "hidden", "default": ["acme/secret"]}
+	}}}`), &form); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.UpdateConfig(context.Background(), func(c *model.Config) error {
+		c.NewTaskForm = &form
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := asAgent(t, srv, "1", http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets"}`, "testing")
+	if code != http.StatusCreated {
+		t.Fatalf("agent filing answered %d: %s", code, body)
+	}
+	var created struct{ ID string }
+	if err := json.Unmarshal([]byte(body), &created); err != nil || created.ID == "" {
+		t.Fatalf("created = %s (%v)", body, err)
+	}
+	task, err := client.Store.GetTask(context.Background(), created.ID)
+	if err != nil || task == nil {
+		t.Fatalf("GetTask(%s) = %v, %v", created.ID, task, err)
+	}
+	if task.AutoMerge || task.Approval != nil || len(task.Writes) != 0 || len(task.Reads) != 0 {
+		t.Errorf("agent-filed task took the form's hidden defaults: autoMerge=%v approval=%v writes=%v reads=%v",
+			task.AutoMerge, task.Approval, task.Writes, task.Reads)
+	}
+}
