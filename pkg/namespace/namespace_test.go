@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
@@ -756,5 +758,181 @@ func TestNewRedactorAppliesToReadRedactedGrepAndGrainLog(t *testing.T) {
 	logOut := srv.RedactGrainLogText("daemon started with token=" + secretVal + "\n")
 	if strings.Contains(logOut, secretVal) || !strings.Contains(logOut, "[redacted: secret custom]") {
 		t.Errorf("RedactGrainLogText did not apply NewRedactor: %q", logOut)
+	}
+}
+
+func TestThreeSegmentHostQualifiedRepoCI(t *testing.T) {
+	t.Parallel()
+
+	const repo = "git.forge.example/experimental/grain"
+	store := ci.NewRunStore(10)
+	now := time.Now().UTC()
+	artDir := t.TempDir()
+	artPath := filepath.Join(artDir, "run-forge-1", "go", "cover.out")
+	if err := os.MkdirAll(filepath.Dir(artPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artPath, []byte("mode: set\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store.Put(ci.Run{
+		ID:         "run-forge-1",
+		Repo:       repo,
+		Ref:        "main",
+		Commit:     "abc123456789",
+		Conclusion: ci.ConclusionFailure,
+		StartedAt:  &now,
+		FinishedAt: &now,
+		Jobs: []ci.JobRun{
+			{
+				JobID:      "go",
+				Name:       "go",
+				Conclusion: ci.ConclusionFailure,
+				Steps: []ci.StepRun{
+					{
+						Name:       "Test",
+						Conclusion: ci.ConclusionFailure,
+						Output:     "--- FAIL: TestForgeNamespace (0.02s)\n",
+					},
+				},
+				Artifacts: []ci.Artifact{
+					{Name: "cover.out", Job: "go", Stored: true, Bytes: 10},
+				},
+				Attempts: []ci.JobAttempt{
+					{
+						Attempt:    1,
+						Conclusion: ci.ConclusionFailure,
+						Steps: []ci.StepRun{
+							{
+								Name:       "Test",
+								Conclusion: ci.ConclusionFailure,
+								Output:     "--- FAIL: TestForgeNamespace (0.02s)\n",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	srv := newTestServer(t, store, "", nil)
+	srv.ArtifactDir = artDir
+	scope := Scope{TaskRepo: repo, MayReadCI: true}
+
+	for _, tc := range []struct {
+		url  string
+		want string
+	}{
+		{"/fs/ci/?list", "git.forge.example/experimental/grain/\n"},
+		{"/fs/ci/git.forge.example?list", "experimental/grain/\n"},
+		{"/fs/ci/git.forge.example/experimental?list", "grain/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain?list", "run-forge-1/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1?list", "go/\nartifacts/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go?list", "attempts/\nTest.log\ngotest.log\ntests/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/attempts?list", "1/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/Test.log", "--- FAIL: TestForgeNamespace (0.02s)\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/attempts/1/Test.log", "--- FAIL: TestForgeNamespace (0.02s)\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/artifacts/go/cover.out", "mode: set\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/Test.log?grep=FAIL", "--- FAIL: TestForgeNamespace (0.02s)\n"},
+	} {
+		rec := serveRequest(srv, scope, http.MethodGet, tc.url, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d: %s", tc.url, rec.Code, rec.Body.String())
+		}
+		if got := rec.Body.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.url, got, tc.want)
+		}
+	}
+
+	// Out-of-scope 3-segment repo reports the full 3-segment name in the refusal.
+	forbiddenRec := serveRequest(srv, scope, http.MethodGet, "/fs/ci/git.forge.example/experimental/other/run-forge-1", nil)
+	if forbiddenRec.Code != http.StatusForbidden {
+		t.Fatalf("out-of-scope 3-segment repo status = %d, want 403", forbiddenRec.Code)
+	}
+	if got := forbiddenRec.Body.String(); !strings.Contains(got, "ci://git.forge.example/experimental/other is outside this sandbox's CI read scope") {
+		t.Errorf("out-of-scope refusal = %q, want full 3-segment repo name", got)
+	}
+}
+
+// task://<id> reads another task's record where that task works in a
+// repository the scope reaches -- its own, one it reads, or one an
+// api:tasks:read@repo grant names -- and refuses every other task, and
+// one that does not exist, alike.
+func TestTaskReadsTasksInTheScopesRepositories(t *testing.T) {
+	srv := &Server{Tasks: stubTaskProvider{tasks: map[string]*TaskView{
+		"100": {ID: "100", Repo: "acme/widgets", Record: "Task 100\n"},
+		"101": {ID: "101", Repo: "acme/widgets", Record: "Task 101: sibling\n"},
+		"102": {ID: "102", Repo: "acme/library", Record: "Task 102: library\n"},
+		"103": {ID: "103", Repo: "acme/gadgets", Record: "Task 103: gadgets\n"},
+		"104": {ID: "104", Record: "Task 104: no repository\n"},
+	}}}
+	scope := Scope{
+		TaskID: 100, TaskIDStr: "100", TaskRepo: "acme/widgets",
+		TaskReadRepos: map[string]bool{"acme/widgets": true, "acme/library": true},
+	}
+	for _, id := range []string{"101", "102"} {
+		if rec := serveRequest(srv, scope, http.MethodGet, "/fs/task/"+id+"/record.md", nil); rec.Code != http.StatusOK ||
+			!strings.Contains(rec.Body.String(), "Task "+id) {
+			t.Errorf("task://%s in a repository the scope reaches: %d %q", id, rec.Code, rec.Body.String())
+		}
+	}
+	for _, id := range []string{"103", "104", "999"} {
+		if rec := serveRequest(srv, scope, http.MethodGet, "/fs/task/"+id+"/record.md", nil); rec.Code != http.StatusForbidden ||
+			!strings.Contains(rec.Body.String(), `"self-debug"`) {
+			t.Errorf("task://%s outside the scope's repositories: %d %q", id, rec.Code, rec.Body.String())
+		}
+	}
+	// A scope with only its own repository still reads its siblings.
+	bare := Scope{TaskID: 100, TaskIDStr: "100", TaskRepo: "acme/widgets"}
+	if rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/101/record.md", nil); rec.Code != http.StatusOK {
+		t.Errorf("task://101 in the task's own repository: %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/102/record.md", nil); rec.Code != http.StatusForbidden {
+		t.Errorf("task://102 in a repository the bare scope does not reach: %d", rec.Code)
+	}
+}
+
+// TestPlaybooksServedFromTheEmbeddedCopy checks src://playbooks lists
+// and reads the playbooks embedded in the binary, whatever SrcDir is --
+// no deployment's source tree has a playbooks/ of its own -- and still
+// only for a scope the bootstrap-playbooks grant (or self-debug) opens.
+func TestPlaybooksServedFromTheEmbeddedCopy(t *testing.T) {
+	t.Parallel()
+
+	want, err := fs.ReadFile(playbooks.FS, "gke-sandbox-cluster.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated := t.TempDir()
+	if err := os.WriteFile(filepath.Join(unrelated, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, srcDir := range map[string]string{"no SrcDir": "", "unrelated SrcDir": unrelated} {
+		t.Run(name, func(t *testing.T) {
+			srv := &Server{SrcDir: srcDir, Redactor: redact.New(nil)}
+			scope := Scope{MayReadPlaybooks: true}
+
+			rec := serveRequest(srv, scope, http.MethodGet, "/fs/src/playbooks?list", nil)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "gke-sandbox-cluster.md\n") {
+				t.Fatalf("list: %d %q", rec.Code, rec.Body.String())
+			}
+			for _, p := range []string{"/fs/src/playbooks/gke-sandbox-cluster.md", "/fs/src/playbooks/gke-sandbox-cluster"} {
+				rec := serveRequest(srv, scope, http.MethodGet, p, nil)
+				if rec.Code != http.StatusOK || rec.Body.String() != string(want) {
+					t.Errorf("read %s: %d, %d bytes, want %d", p, rec.Code, rec.Body.Len(), len(want))
+				}
+			}
+			if rec := serveRequest(srv, scope, http.MethodGet, "/fs/src/playbooks/nope", nil); rec.Code != http.StatusNotFound {
+				t.Errorf("missing playbook: %d, want 404", rec.Code)
+			}
+			if rec := serveRequest(srv, scope, http.MethodGet, "/fs/src/main.go", nil); rec.Code != http.StatusForbidden {
+				t.Errorf("bootstrap-playbooks reading outside playbooks/: %d, want 403", rec.Code)
+			}
+			rec = serveRequest(srv, Scope{}, http.MethodGet, "/fs/src/playbooks?list", nil)
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "bootstrap-playbooks") {
+				t.Errorf("no grant: %d %q, want 403 naming bootstrap-playbooks", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

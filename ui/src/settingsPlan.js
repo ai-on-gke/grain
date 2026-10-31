@@ -81,6 +81,7 @@ const SETTING_LABELS = {
   sandboxMemoryMb: "Sandbox memory (MiB)",
   sandboxDiskGb: "Sandbox disk (GiB)",
   networkAccess: "Sandbox network",
+  sessionSandboxIdleTtl: "Session sandbox idle TTL",
   sandboxOvercommit: "Overcommit mode",
   sandboxOvercommitCpuMin: "Auto CPU minimum",
   sandboxOvercommitCpuMax: "Auto CPU maximum",

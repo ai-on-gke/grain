@@ -1026,3 +1026,75 @@ func TestAgentReleaseNoteWriteIsAttributedToTheAgent(t *testing.T) {
 		t.Errorf("release note written by task 1 is attributed to %s %q, want agent \"1\"", note.UpdatedByKind, note.UpdatedBy)
 	}
 }
+
+// A CI run is its repository's: a task holding ci:read for some
+// repositories reads a run in one of them by id, and a run elsewhere is
+// refused; a listing that names no repository is narrowed to the one
+// the grant reaches rather than refused.
+func TestAgentAPIRepoScopedCIReadReachesRunsByID(t *testing.T) {
+	runner := &fakeCIRunner{runs: []ci.Run{
+		{ID: "run-w", Repo: "acme/widgets", Ref: "grain/task-2"},
+		{ID: "run-g", Repo: "acme/gadgets", Ref: "grain/task-3"},
+	}}
+	client, _, _ := testClient(t)
+	client.Config.CI = runner
+	srv := ui.NewServerWithClient(client)
+	seedAPITask(t, client, "1", "acme/widgets", "api:ci:read@acme/widgets")
+
+	if code, body := asAgent(t, srv, "1", http.MethodGet, "/api/ci/runs/run-w", "", ""); code != http.StatusOK {
+		t.Errorf("ci:read@acme/widgets was refused a run in acme/widgets: %d %s", code, body)
+	}
+	if code, body := asAgent(t, srv, "1", http.MethodGet, "/api/ci/runs/run-g", "", ""); code != http.StatusForbidden ||
+		!strings.Contains(body, "acme/gadgets") {
+		t.Errorf("ci:read@acme/widgets read a run in acme/gadgets: %d %s", code, body)
+	}
+	code, body := asAgent(t, srv, "1", http.MethodGet, "/api/ci/runs", "", "")
+	if code != http.StatusOK || !strings.Contains(body, "run-w") || strings.Contains(body, "run-g") {
+		t.Errorf("GET /api/ci/runs without ?repo= was not narrowed to acme/widgets: %d %s", code, body)
+	}
+}
+
+// grain-ci reads CI over the agent API for the repositories its task's
+// runs may read -- its own and its reads -- as it does over /fs/ci/, and
+// for no other.
+func TestAgentAPIGrainCIReadsCIOfTheTasksRepositories(t *testing.T) {
+	runner := &fakeCIRunner{runs: []ci.Run{
+		{ID: "run-w", Repo: "acme/widgets", Ref: "grain/task-2"},
+		{ID: "run-l", Repo: "acme/library", Ref: "main"},
+		{ID: "run-g", Repo: "acme/gadgets", Ref: "grain/task-3"},
+	}}
+	client, _, _ := testClient(t)
+	client.Config.CI = runner
+	srv := ui.NewServerWithClient(client)
+	target := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := client.Store.PutTask(context.Background(), model.Task{
+		ID: "1", Intent: model.IntentImplement, Title: "task 1", Target: &target,
+		Reads:  []model.RepoRef{{Owner: "acme", Name: "library"}},
+		Grants: []model.Grant{{Capability: "grain-ci", Via: model.GrantByLabel}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{"run-w", "run-l"} {
+		if code, body := asSandboxAgent(t, srv, "1", "", http.MethodGet, "/api/ci/runs/"+id, "", ""); code != http.StatusOK {
+			t.Errorf("grain-ci was refused %s: %d %s", id, code, body)
+		}
+	}
+	if code, body := asSandboxAgent(t, srv, "1", "", http.MethodGet, "/api/ci/runs/run-g", "", ""); code != http.StatusForbidden {
+		t.Errorf("grain-ci read a run in a repository its task does not read: %d %s", code, body)
+	}
+	code, body := asSandboxAgent(t, srv, "1", "", http.MethodGet, "/api/ci/runs", "", "")
+	if code != http.StatusOK || !strings.Contains(body, "run-w") || strings.Contains(body, "run-g") {
+		t.Errorf("grain-ci's GET /api/ci/runs was not narrowed to its own repository: %d %s", code, body)
+	}
+	if code, body := asSandboxAgent(t, srv, "1", "", http.MethodGet, "/api/ci/runs?repo=acme/library", "", ""); code != http.StatusOK ||
+		!strings.Contains(body, "run-l") {
+		t.Errorf("grain-ci was refused its reads repository's runs: %d %s", code, body)
+	}
+	if code, _ := asSandboxAgent(t, srv, "1", "", http.MethodGet, "/api/ci/runs?repo=acme/gadgets", "", ""); code != http.StatusForbidden {
+		t.Errorf("grain-ci listed a repository its task does not read: %d", code)
+	}
+	if code, _ := asSandboxAgent(t, srv, "1", "", http.MethodDelete, "/api/ci/runs/run-w", "", "stop"); code != http.StatusForbidden {
+		t.Errorf("grain-ci cancelled a run: %d", code)
+	}
+}

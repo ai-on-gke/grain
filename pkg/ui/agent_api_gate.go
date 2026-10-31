@@ -192,7 +192,7 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 				call, err := s.authorizeExternalAgentCall(r, pattern, scope, tok)
 				if err != nil {
 					log.Printf("grain api: refused {agent, %s} %s: %v", call.principalID(), pattern, err)
-					writeError(w, http.StatusForbidden, err)
+					writeError(w, agentRefusalStatus(err), err)
 					return
 				}
 				agent := model.Principal{Kind: model.PrincipalAgent, ID: call.principalID()}
@@ -211,7 +211,7 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		call, err := s.authorizeAgentCall(r, pattern, scope, taskID)
 		if err != nil {
 			log.Printf("grain api: refused {agent, %s} %s: %v", taskID, pattern, err)
-			writeError(w, http.StatusForbidden, err)
+			writeError(w, agentRefusalStatus(err), err)
 			return
 		}
 		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID}
@@ -220,6 +220,17 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		next(rec, r)
 		s.recordAgentCall(r.Context(), call, rec.status, rec.bytes)
 	}
+}
+
+// agentRefusalStatus is the status a refused agent call answers with: 400
+// for a request that is malformed (a repo that is not one), 403 for
+// every refusal of what the agent may do.
+func agentRefusalStatus(err error) int {
+	var ve *ValidationError
+	if errors.As(err, &ve) {
+		return http.StatusBadRequest
+	}
+	return http.StatusForbidden
 }
 
 var errNoAgentAPI = errors.New("this server has no task store, so it cannot check an agent's api grants")
@@ -257,7 +268,8 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	}
 	call.grants = set
 	capAllowed := agentCapabilityAllowsRoute(held, set, pattern, scope)
-	if !set.Has(scope) && !capAllowed {
+	ciCap := grainCIReadsRoute(held, pattern)
+	if !set.Has(scope) && !capAllowed && !ciCap {
 		return call, fmt.Errorf("task %s holds no api grant for scope %s, which %s needs: "+
 			"ask a person to grant api:%s or a preset that includes it (docs/agent-api.md)", taskID, scope, pattern, scope)
 	}
@@ -269,9 +281,14 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if target := r.PathValue("id"); target != "" && strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") {
 		call.targetTask = target
 	}
-	call.repo, err = s.agentCallRepo(ctx, r, pattern, call.targetTask, body)
+	call.repo, err = s.agentCallRepo(ctx, r, pattern, call.targetTask, body, acting, set, scope, ciCap)
 	if err != nil {
 		return call, err
+	}
+	if ciCap && !capAllowed && !set.Allows(scope, call.repo) && call.repo != "" && agentMayRead(acting, call.repo) {
+		// grain-ci reads CI of the repositories the task's runs may
+		// read, as it does over /fs/ci/ and /cli/ci/.
+		capAllowed = true
 	}
 	if !set.Allows(scope, call.repo) && !capAllowed {
 		if call.repo == "" {
@@ -325,6 +342,37 @@ func agentCapabilityAllowsRoute(held []string, set APIGrantSet, pattern string, 
 		}
 	}
 	return false
+}
+
+// grainCIReadRoutes are the agent API's CI reads the grain-ci capability
+// reaches on its own, for the repositories its task's runs may read
+// (Task.Repo, Reads and Writes): the same records /fs/ci/ and /cli/ci/
+// serve a run holding it.
+var grainCIReadRoutes = map[string]bool{
+	"GET /api/ci/runs":                             true,
+	"GET /api/ci/runs/{id}":                        true,
+	"GET /api/ci/runs/{id}/artifacts":              true,
+	"GET /api/ci/runs/{id}/artifacts/{job}/{name}": true,
+	"GET /api/ci/workflows":                        true,
+}
+
+// grainCIReadsRoute reports whether held includes grain-ci and pattern is
+// one of the CI reads it opens. Which repository is the caller's to
+// check once it is known (authorizeAgentCall).
+func grainCIReadsRoute(held []string, pattern string) bool {
+	return grainCIReadRoutes[pattern] && slices.Contains(held, "grain-ci")
+}
+
+// agentRepoDefaultRoutes are the read-only collection routes that filter
+// by ?repo=, and that a caller reaching only one repository may call
+// without naming it.
+var agentRepoDefaultRoutes = map[string]bool{
+	"GET /api/tasks":                   true,
+	"GET /api/ci/runs":                 true,
+	"GET /api/ci/workflows":            true,
+	"GET /api/merge-batches":           true,
+	"GET /api/pipeline/changes":        true,
+	"GET /api/memory/documents/{name}": true,
 }
 
 // sandboxChannelGuard enforces the additional restrictions required when an
@@ -843,7 +891,7 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			// Moving work to another repository (PATCH /api/tasks/{id}
 			// with a new repo) is a call on that repository too.
 			var to string
-			if json.Unmarshal(raw, &to) != nil || strings.TrimSpace(to) == "" || strings.EqualFold(strings.TrimSpace(to), repo) {
+			if json.Unmarshal(raw, &to) != nil || strings.TrimSpace(to) == "" || model.SameRepoText(to, repo) {
 				continue
 			}
 			if !set.Allows(scope, strings.TrimSpace(to)) {
@@ -904,10 +952,10 @@ func agentMayWrite(acting *model.Task, repo string) bool {
 	if repo == "" {
 		return true
 	}
-	if t := taskRepo(acting); t != "" && strings.EqualFold(t, repo) {
+	if t := taskRepo(acting); t != "" && model.SameRepoText(t, repo) {
 		return true
 	}
-	return slices.ContainsFunc(acting.Writes, func(w model.WriteTarget) bool { return strings.EqualFold(w.Repo.String(), repo) })
+	return slices.ContainsFunc(acting.Writes, func(w model.WriteTarget) bool { return model.SameRepoText(w.Repo.String(), repo) })
 }
 
 // agentMayRead reports whether the acting task's own runs may read repo.
@@ -915,7 +963,7 @@ func agentMayRead(acting *model.Task, repo string) bool {
 	if agentMayWrite(acting, repo) {
 		return true
 	}
-	return slices.ContainsFunc(acting.Reads, func(r model.RepoRef) bool { return strings.EqualFold(r.String(), strings.TrimSpace(repo)) })
+	return slices.ContainsFunc(acting.Reads, func(r model.RepoRef) bool { return model.SameRepoText(r.String(), repo) })
 }
 
 // agentCallRepo is the repository a call acts on, where one can be told:
@@ -926,9 +974,14 @@ func agentMayRead(acting *model.Task, repo string) bool {
 // template, ...) acts on that thing's repository whatever the body or
 // query claim, so for those "" is returned: none is known, and only a
 // grant for every repository reaches it.
-func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, target string, body []byte) (string, error) {
+func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, target string, body []byte,
+	acting *model.Task, set APIGrantSet, scope APIScope, ciCap bool) (string, error) {
 	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
-		return owner + "/" + name, nil
+		// {owner} is host/owner, escaped into one segment, for a
+		// repository off the default host (RepoFromStored), and an
+		// agent may have written a remote there instead; either way
+		// owner/name is the written repository.
+		return s.agentCanonicalRepo(owner + "/" + name)
 	}
 	if target != "" {
 		t, err := s.tasks.Store.GetTask(ctx, target)
@@ -937,7 +990,15 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 		}
 		return taskRepo(t), nil
 	}
-	if pathParam.MatchString(pathOf(pattern)) {
+	if pattern == "GET /api/ci/runs/{id}" || pattern == "DELETE /api/ci/runs/{id}" || strings.HasPrefix(pathOf(pattern), "/api/ci/runs/{id}/") {
+		// A CI run is its repository's, as externalAgentCallRepo reads it.
+		if s.tasks != nil && s.tasks.Config.CI != nil {
+			if run, ok := s.tasks.Config.CI.Get(r.PathValue("id")); ok && run.Repo != "" {
+				return run.Repo, nil
+			}
+		}
+	}
+	if pathParam.MatchString(pathOf(pattern)) && !agentRepoDefaultRoutes[pattern] {
 		return "", nil
 	}
 	var fields struct {
@@ -946,7 +1007,7 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 	}
 	if len(body) > 0 && json.Unmarshal(body, &fields) == nil {
 		if fields.Repo != "" {
-			return fields.Repo, nil
+			return s.agentCanonicalRepo(fields.Repo)
 		}
 		if fields.TaskID != "" {
 			if t, err := s.tasks.Store.GetTask(ctx, fields.TaskID); err == nil && t != nil {
@@ -955,9 +1016,52 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 		}
 	}
 	if repo := r.URL.Query().Get("repo"); repo != "" && r.Method == http.MethodGet {
-		return repo, nil
+		return s.agentCanonicalRepo(repo)
+	}
+	if pathParam.MatchString(pathOf(pattern)) {
+		return "", nil
+	}
+	// A read-only collection asked for without ?repo= by a task that
+	// reaches it on some repositories only lists the one it reaches --
+	// the single repository its grant names, or its own -- rather than
+	// being refused for naming none.
+	if r.Method == http.MethodGet && agentRepoDefaultRoutes[pattern] && !set.Allows(scope, "") {
+		repo := agentDefaultRepo(acting, set.Repos(scope), ciCap)
+		if repo != "" {
+			q := r.URL.Query()
+			q.Set("repo", repo)
+			r.URL.RawQuery = q.Encode()
+			return repo, nil
+		}
 	}
 	return "", nil
+}
+
+// agentCanonicalRepo is the repository text a call names, spelled this
+// deployment's way (Client.parseRepo): the form the acting task's grants,
+// target and reads are written in, whichever of host/owner/name, an SSH
+// remote or a URL the call used. Text that is not a repository is a 400,
+// rather than a string no grant could match.
+func (s *Server) agentCanonicalRepo(text string) (string, error) {
+	ref, err := s.tasks.parseRepo(text)
+	if err != nil {
+		return "", err
+	}
+	return ref.String(), nil
+}
+
+// agentDefaultRepo is the repository a collection read by acting is
+// narrowed to when it names none: the one repository granted, or the
+// task's own where that is among those granted (or grain-ci reaches it).
+func agentDefaultRepo(acting *model.Task, granted []string, ciCap bool) string {
+	own := taskRepo(acting)
+	if own != "" && (ciCap || slices.ContainsFunc(granted, func(g string) bool { return model.SameRepoText(g, own) })) {
+		return own
+	}
+	if len(granted) == 1 {
+		return granted[0]
+	}
+	return ""
 }
 
 // recordAgentCall writes the attribution: a line in the daemon's journal
@@ -1156,7 +1260,8 @@ func (s *Server) checkExternalTokenRotationEscalation(ctx context.Context, held 
 
 func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pattern string, scope APIScope, set APIGrantSet, target string, body []byte, tok *model.ExternalAgentToken) (string, []string, error) {
 	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
-		return owner + "/" + name, nil, nil
+		repo, err := s.agentCanonicalRepo(owner + "/" + name)
+		return repo, nil, err
 	}
 	if target != "" {
 		t, err := s.tasks.Store.GetTask(ctx, target)
@@ -1206,11 +1311,13 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 			}
 		}
 		if repo := strings.TrimSpace(fields.Repo); repo != "" {
-			return repo, nil, nil
+			repo, err := s.agentCanonicalRepo(repo)
+			return repo, nil, err
 		}
 	}
 	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" && r.Method == http.MethodGet {
-		return repo, nil, nil
+		repo, err := s.agentCanonicalRepo(repo)
+		return repo, nil, err
 	}
 	// If the credential is restricted to a single repository and calls a
 	// read-only collection endpoint that accepts ?repo=, default the filter
@@ -1400,7 +1507,7 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			}
 		case "repo":
 			var to string
-			if json.Unmarshal(raw, &to) != nil || strings.TrimSpace(to) == "" || strings.EqualFold(strings.TrimSpace(to), repo) {
+			if json.Unmarshal(raw, &to) != nil || strings.TrimSpace(to) == "" || model.SameRepoText(to, repo) {
 				continue
 			}
 			if !set.Allows(scope, strings.TrimSpace(to)) {

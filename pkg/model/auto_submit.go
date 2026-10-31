@@ -255,6 +255,69 @@ func CapabilityEscalationNote(proposer string, caps []string) string {
 		"ahead without them.", "`"+strings.Join(caps, "`, `")+"`", proposer)
 }
 
+// SeededEscalations splits caps -- EscalatedCapabilities(child, ...) --
+// into those child's proposer named in its own call (asked) and those
+// child carries only because this deployment or its repo seeds every new
+// task with them (seeded, GrantByDefault). Only a capability reference
+// can be in seeded: a named default is never an escalation at all.
+//
+// The two are told apart because they are different things to approve.
+// "This proposal asked for X" is false of a seeded default, and the
+// person deciding should hear that X is a default the proposer was never
+// given, not a request somebody typed.
+func SeededEscalations(child Task, caps []string) (asked, seeded []string) {
+	for _, c := range caps {
+		if isSeededGrant(child.Grants, c) {
+			seeded = append(seeded, c)
+		} else {
+			asked = append(asked, c)
+		}
+	}
+	return asked, seeded
+}
+
+// isSeededGrant reports whether capability -- as EscalatedCapabilities
+// names it, which for a reference is its recorded form -- is on grants
+// only as a GrantByDefault.
+func isSeededGrant(grants []Grant, capability string) bool {
+	want, wantRef := recordedCapabilityGrant(capability)
+	found := false
+	for _, g := range grants {
+		match := g.Capability == capability
+		if !match && wantRef {
+			if got, ok := recordedCapabilityGrant(g.Capability); ok {
+				match = RecordedCapabilityGrant(got) == RecordedCapabilityGrant(want)
+			}
+		}
+		if !match {
+			continue
+		}
+		if g.Via != GrantByDefault {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
+// ProposalEscalationNote is CapabilityEscalationNote for a proposal
+// whose escalated capabilities may include seeded defaults
+// (SeededEscalations): each half is explained as what it is. "" for
+// none.
+func ProposalEscalationNote(proposer string, child Task, caps []string) string {
+	asked, seeded := SeededEscalations(child, caps)
+	note := CapabilityEscalationNote(proposer, asked)
+	if len(seeded) > 0 {
+		note += fmt.Sprintf("\n\n---\n\ngrain: this proposal holds %s because this deployment "+
+			"gives every new task it as a default capability -- task %s, which proposed it, did "+
+			"not ask for it, but does not hold it itself. A capability reference its proposer does "+
+			"not hold keeps a proposal from being queued automatically, so it waits for a person: "+
+			"approving it grants that default as well as the work. Remove it from the task first if "+
+			"it should go ahead without it.", "`"+strings.Join(seeded, "`, `")+"`", proposer)
+	}
+	return note
+}
+
 // UngrantedWritesNote is the line appended to a proposal that declared
 // write targets the task proposing it does not hold itself. Those are
 // permission the proposal would pass on to whatever it proposes in turn,

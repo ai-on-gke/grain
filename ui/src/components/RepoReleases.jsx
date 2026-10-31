@@ -133,6 +133,7 @@ export default function RepoReleases({
   templates = [],
   baseBranchGates = [],
   onBack,
+  onOpenTab = null,
   onOpenTask,
   onSelectRelease = () => {},
   showError,
@@ -495,9 +496,21 @@ export default function RepoReleases({
             severity="error"
             sx={{ mt: 1 }}
             // Nothing on this pane judges a branch: the settings that do
-            // are on the repository's own page, one step back.
+            // are on the repository's own page. A gate held only by grain
+            // CI being off is repaired by that page's CI Mode, so it goes
+            // straight to the CI tab, as the page's own warning does;
+            // landing on the Overview left the reader to find a second
+            // "Go to CI Mode" there. Anything else is the page itself.
             action={
-              onBack ? (
+              gate.reason === "grain-ci-off" && onOpenTab ? (
+                <Button
+                  color="inherit"
+                  size="small"
+                  onClick={() => onOpenTab("ci")}
+                >
+                  Go to CI Mode
+                </Button>
+              ) : onBack ? (
                 <Button color="inherit" size="small" onClick={onBack}>
                   Open repository settings
                 </Button>

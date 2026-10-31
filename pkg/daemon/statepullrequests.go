@@ -48,6 +48,7 @@ var (
 	_ github.CheckRunWriter     = (*StateRepoPullRequestClient)(nil)
 	_ github.CallerLabeler      = (*StateRepoPullRequestClient)(nil)
 	_ github.JobLogTailer       = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
 )
 
 // WithCaller is this client with its forge requests charged to caller
@@ -1004,6 +1005,54 @@ func (c *StateRepoPullRequestClient) ListReviewComments(owner, name string, numb
 	return nil, nil
 }
 
+func (c *StateRepoPullRequestClient) ReplyToReviewComment(owner, name string, number, commentID int, body string) (int, error) {
+	if c.isDisabledConfigRepo(owner, name) {
+		return 0, errExternalConfigRepoNoNativePR
+	}
+	if c.isLocal(owner, name) {
+		return 0, nil
+	}
+	replier, ok := c.Client.(interface {
+		ReplyToReviewComment(owner, repo string, number, commentID int, body string) (int, error)
+	})
+	if !ok {
+		return 0, fmt.Errorf("%s/%s has no GitHub review comment replier", owner, name)
+	}
+	return replier.ReplyToReviewComment(owner, name, number, commentID, body)
+}
+
+func (c *StateRepoPullRequestClient) ListReviewThreads(owner, name string, number int) ([]github.ReviewThread, error) {
+	if c.isDisabledConfigRepo(owner, name) {
+		return nil, errExternalConfigRepoNoNativePR
+	}
+	if c.isLocal(owner, name) {
+		return nil, nil
+	}
+	lister, ok := c.Client.(interface {
+		ListReviewThreads(owner, repo string, number int) ([]github.ReviewThread, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("%s/%s has no GitHub review thread lister", owner, name)
+	}
+	return lister.ListReviewThreads(owner, name, number)
+}
+
+func (c *StateRepoPullRequestClient) ResolveReviewThread(owner, name, threadID string) error {
+	if c.isDisabledConfigRepo(owner, name) {
+		return errExternalConfigRepoNoNativePR
+	}
+	if c.isLocal(owner, name) {
+		return nil
+	}
+	resolver, ok := c.Client.(interface {
+		ResolveReviewThread(owner, repo, threadID string) error
+	})
+	if !ok {
+		return fmt.Errorf("%s/%s has no GitHub review thread resolver", owner, name)
+	}
+	return resolver.ResolveReviewThread(owner, name, threadID)
+}
+
 func (c *StateRepoPullRequestClient) ListComments(owner, name string, number int) ([]github.Comment, error) {
 	if c.isDisabledConfigRepo(owner, name) {
 		return nil, errExternalConfigRepoNoNativePR
@@ -1035,6 +1084,28 @@ func (c *StateRepoPullRequestClient) JobLogTail(owner, name string, jobID int64)
 		return "", nil
 	}
 	return tailer.JobLogTail(owner, name, jobID)
+}
+
+func (c *StateRepoPullRequestClient) CompletedWorkflowRuns(owner, name string, limit int) ([]github.WorkflowRun, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.WorkflowRunsReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.CompletedWorkflowRuns(owner, name, limit)
+}
+
+func (c *StateRepoPullRequestClient) ListWorkflowRunJobs(owner, name string, runID int64) ([]github.WorkflowRunJob, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.WorkflowRunsReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.ListWorkflowRunJobs(owner, name, runID)
 }
 
 func (c *StateRepoPullRequestClient) ActionsState(owner, name, headSHA string) (github.ActionsState, error) {

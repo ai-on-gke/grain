@@ -314,7 +314,7 @@ As the merge queue drives a pull request, it updates `Observation.MergeQueueStat
 | `repair_needed` | Agent Repair | Merge conflict or red CI detected; about to re-queue the task for an agent repair run. |
 | `repair_queued` | Agent Repair | Task is re-queued (`CompletedAt` cleared, back in `queued`) waiting for a sandbox to fix the conflict or CI failure. |
 | `repairing` / `agent_working` | Agent Repair | An agent run is actively running in a sandbox to fix the PR (`agent_working` when triggered manually via **Run now**). |
-| `merge_failed` | Awaiting Person | GitHub refused the merge with a non-transient error (e.g., branch protection rule mismatch). Stopped until a human clicks **Retry merge**. |
+| `merge_failed` | Awaiting Person | GitHub refused the merge with a non-transient error (e.g., branch protection rule mismatch, or unresolved human review conversations reported as `blocked: N unresolved review conversations by <people>`; threads opened by grain's own review tasks are replied to and resolved automatically once the owner's decision is handled). Stopped until the condition is resolved or a human clicks **Retry merge**. |
 
 ### Step 8: The liveness rule (`pkg/orchestrator/liveness.go`)
 

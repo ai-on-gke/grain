@@ -935,6 +935,13 @@ type Config struct {
 	// agents"). Off by default so a deployment must opt in before any
 	// external credential is accepted.
 	ExternalAgentAPI bool
+	// SessionSandboxIdleTTL is how long an interactive chat/session task's
+	// sandbox (and in-process agent session) stays warm awaiting a reply
+	// after a turn ends before being released. Zero means "nobody has
+	// chosen" and reads as DefaultSessionSandboxIdleTTL (30 minutes) via
+	// SessionSandboxIdleTTLOr; a negative duration turns warm retention off
+	// so the sandbox is released as soon as the turn ends.
+	SessionSandboxIdleTTL time.Duration
 }
 
 // Default Kubernetes sandbox configuration values.
@@ -1083,6 +1090,7 @@ func DefaultConfig() Config {
 		K8sPriorityClassInteractive: DefaultK8sPriorityClassInteractive,
 		K8sPriorityClassAgent:       DefaultK8sPriorityClassAgent,
 		K8sPriorityClassCI:          DefaultK8sPriorityClassCI,
+		SessionSandboxIdleTTL:       DefaultSessionSandboxIdleTTL,
 	}
 }
 
@@ -1119,6 +1127,26 @@ const DefaultTaskBranchTemplate = "grain/{deployment}/task-{id}-{slug}"
 // daemon's own -poll-interval flag default, scripts/setup.sh, and
 // terraform.
 const DefaultPollInterval = 10 * time.Second
+
+// DefaultSessionSandboxIdleTTL is Config.SessionSandboxIdleTTL for a
+// deployment that has never chosen one: 30 minutes of idle retention for
+// a session task's sandbox and in-process agent turn wait.
+const DefaultSessionSandboxIdleTTL = 30 * time.Minute
+
+// SessionSandboxIdleTTLOr returns Config.SessionSandboxIdleTTL as the
+// orchestrator reads it: the stored duration where one has been chosen,
+// DefaultSessionSandboxIdleTTL where nothing has (zero), and zero (no
+// warm retention) where an operator has turned it off with a negative
+// duration. A nil Config reads as the default.
+func (c *Config) SessionSandboxIdleTTLOr() time.Duration {
+	if c == nil || c.SessionSandboxIdleTTL == 0 {
+		return DefaultSessionSandboxIdleTTL
+	}
+	if c.SessionSandboxIdleTTL < 0 {
+		return 0
+	}
+	return c.SessionSandboxIdleTTL
+}
 
 // DefaultMaxWorkers is Config.MaxWorkers for a deployment that has never
 // chosen one -- named here rather than repeated at each of the places

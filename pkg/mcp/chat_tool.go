@@ -221,7 +221,7 @@ func chatTool(chatter Chatter, read SandboxFileReader) Tool {
 			case turn.Reply != "":
 				return Result{Text: fmt.Sprintf(
 					"They replied:\n\n%s\n\n[grain] Carry on from there. Another chat call "+
-						"reaches them again, in this same run.", turn.Reply)}
+						"reaches them again, in this same run.", turn.Reply), HumanTurn: true}
 			case tooLate:
 				return Result{Text: "Posted, but this run is too close to its deadline to wait " +
 					"for an answer. The task is parked on what you said, so it is not lost: " +

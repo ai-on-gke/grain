@@ -43,13 +43,14 @@ func (e *scheduleNotFoundError) Error() string { return "no schedule " + e.ID }
 // depends on Kind,
 // the same sum-type-as-struct shape model.Recurrence itself uses.
 type Recurrence struct {
-	Kind          string `json:"kind"`
-	EveryNHours   int    `json:"everyNHours,omitempty"`
-	EveryNMinutes int    `json:"everyNMinutes,omitempty"`
-	TimeOfDay     string `json:"timeOfDay,omitempty"`
-	Weekday       string `json:"weekday,omitempty"`
-	DayOfMonth    int    `json:"dayOfMonth,omitempty"`
-	TimeZone      string `json:"timeZone,omitempty"`
+	Kind              string                          `json:"kind"`
+	EveryNHours       int                             `json:"everyNHours,omitempty"`
+	EveryNMinutes     int                             `json:"everyNMinutes,omitempty"`
+	TimeOfDay         string                          `json:"timeOfDay,omitempty"`
+	Weekday           string                          `json:"weekday,omitempty"`
+	DayOfMonth        int                             `json:"dayOfMonth,omitempty"`
+	TimeZone          string                          `json:"timeZone,omitempty"`
+	GitHubWorkflowRun *model.GitHubWorkflowRunTrigger `json:"githubWorkflowRun,omitempty"`
 }
 
 var weekdayNames = [...]string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
@@ -95,6 +96,8 @@ func recurrenceFrom(r model.Recurrence) Recurrence {
 	case model.RecurrenceMonthly:
 		out.TimeOfDay = formatTimeOfDay(r.TimeOfDay)
 		out.DayOfMonth = r.DayOfMonth
+	case model.RecurrenceGitHubWorkflowRun:
+		out.GitHubWorkflowRun = r.GitHubWorkflowRun
 	}
 	return out
 }
@@ -107,11 +110,12 @@ func recurrenceFrom(r model.Recurrence) Recurrence {
 // minute through the API any more than through the editor.
 func parseRecurrence(req Recurrence) (model.Recurrence, error) {
 	r := model.Recurrence{
-		Kind:          model.RecurrenceKind(req.Kind),
-		EveryNHours:   req.EveryNHours,
-		EveryNMinutes: req.EveryNMinutes,
-		DayOfMonth:    req.DayOfMonth,
-		TimeZone:      strings.TrimSpace(req.TimeZone),
+		Kind:              model.RecurrenceKind(req.Kind),
+		EveryNHours:       req.EveryNHours,
+		EveryNMinutes:     req.EveryNMinutes,
+		DayOfMonth:        req.DayOfMonth,
+		TimeZone:          strings.TrimSpace(req.TimeZone),
+		GitHubWorkflowRun: req.GitHubWorkflowRun,
 	}
 	if req.TimeOfDay != "" {
 		minutes, err := parseTimeOfDay(req.TimeOfDay)

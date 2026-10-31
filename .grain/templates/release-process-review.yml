@@ -1,0 +1,61 @@
+name: Release process review
+title: Weekly review of releases and release pipeline improvements
+base: main
+body: |
+  Review the past week of release pipeline execution on `main` and suggest
+  concrete improvements to the release process. Releases are cut from
+  `main` (`docs/design/release-from-trunk.md`). This run changes no code:
+  it reports what happened and files follow-up tasks for the fixes.
+
+  ## 1. Inspect the past 7 days of release activity
+
+  Look across git tags, CI runs and tasks.
+
+  - Tags: `git fetch origin --tags`, then list every `v*` tag (`vX.Y.Z`,
+    `vX.Y.0-rc.N`, `vX.Y.0-rc.N-discarded`, `vX.Y.0-pending`) created or
+    moved in the past 7 days
+    (`git for-each-ref --sort=-creatordate --format='%(refname:short) %(creatordate:iso) %(objectname:short)' 'refs/tags/v*'`),
+    along with what `latest` and `refs/heads/candidate` point to.
+  - CI runs: inspect the past 7 days of runs on `main` for
+    `.grain/workflows/release.yml`, `.grain/workflows/release-train.yml`,
+    `.grain/workflows/promote-release.yml`, `.grain/workflows/promote.yml`
+    and `.grain/workflows/nightly.yml`. Use `grain ci list` / `grain ls ci://`
+    or `list_ci_runs` when available; otherwise reconstruct what you can from
+    git and task history, and say which source you used.
+  - Tasks: inspect recent `release-watchdog`, `release-notes` and soak
+    triage tasks (`grain task list` / `grain task read`, when `self-debug`
+    is granted) to see where human intervention was required, which RCs
+    were discarded or stalled, and why. If you cannot read tasks, say so
+    in the closing note.
+
+  ## 2. Evaluate bottlenecks and failure modes
+
+  - Measure the lead time through each stage of the train, per release
+    and per RC: commit on `main` -> LKG selection -> `-rc.N` cut -> 24h
+    staging soak on `grain-candidate` (`:4280`) -> `-pending` staging ->
+    human promotion (`vX.Y.Z` / `latest`) -> downstream sync (the
+    repository that imports this module picking up the release). Name the
+    stage where most of the time went.
+  - Identify recurring friction, for example:
+    - capability or credential refusals;
+    - LKG starvation (`nightly.yml` or `release.yml` failing or timing
+      out, so no commit qualifies);
+    - false-positive soak failures in `scripts/candidate-gate.sh`;
+    - slow image builds in `scripts/release-images.sh`;
+    - manual steps that had to be pushed by hand.
+
+  ## 3. Suggest and file actionable improvements
+
+  - Post a concise weekly release retrospective as the closing note
+    (`comment_on_issue`) covering:
+    1. Releases promoted and RCs cut or discarded this week, with lead
+       times.
+    2. Every point where the release train stalled, failed or needed
+       manual intervention.
+    3. Ranked recommendations to improve release reliability, speed or
+       automation.
+  - Propose focused follow-up tasks (`propose_task` with
+    `hold_for_approval: true`, `repo: "ai-on-gke/grain"` unless the fix
+    belongs elsewhere) for high-value code, script, workflow or
+    configuration fixes identified during the review. Before filing,
+    check that an open or proposed task does not already cover it.

@@ -47,6 +47,26 @@ func TestParsePullRequestRefRejectsBadNumber(t *testing.T) {
 	}
 }
 
+func TestPullRequestRefWebURLUsesTheRepoHost(t *testing.T) {
+	for _, tc := range []struct {
+		ref  model.PullRequestRef
+		repo string
+		pr   string
+	}{
+		{model.PullRequestRef{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, Number: 42},
+			"https://github.com/acme/widgets", "https://github.com/acme/widgets/pull/42"},
+		{model.PullRequestRef{Repo: model.RepoRef{Host: "git.example.com", Owner: "experimental", Name: "grain"}, Number: 26},
+			"https://git.example.com/experimental/grain", "https://git.example.com/experimental/grain/pull/26"},
+	} {
+		if got := tc.ref.Repo.WebURL(); got != tc.repo {
+			t.Errorf("%s: Repo.WebURL() = %q, want %q", tc.ref, got, tc.repo)
+		}
+		if got := tc.ref.WebURL(); got != tc.pr {
+			t.Errorf("%s: WebURL() = %q, want %q", tc.ref, got, tc.pr)
+		}
+	}
+}
+
 // A task's links come back ordered by their target's text, where
 // "o/r#100" sorts before "o/r#99". The task's pull request is the newest
 // by number, in its own target ahead of a write repository's.

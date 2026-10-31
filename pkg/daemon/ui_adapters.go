@@ -44,6 +44,9 @@ type SandboxHealthAdapter struct {
 }
 
 func sandboxTerminationReason(s orchestrator.SandboxHealth) string {
+	if orchestrator.IsIdleSessionSandbox(s.Name) || orchestrator.IsIdleSessionSandbox(s.Sandbox) {
+		return "idle session"
+	}
 	if s.Ready {
 		return "running"
 	}
@@ -73,9 +76,13 @@ func (a SandboxHealthAdapter) Health(ctx context.Context) []ui.SandboxSnapshot {
 	sandboxes := reporter.Health(ctx)
 	out := make([]ui.SandboxSnapshot, len(sandboxes))
 	for i, s := range sandboxes {
+		kind := s.Kind
+		if orchestrator.IsIdleSessionSandbox(s.Name) || orchestrator.IsIdleSessionSandbox(s.Sandbox) {
+			kind = "idle session"
+		}
 		out[i] = ui.SandboxSnapshot{
 			Sandbox:           s.Sandbox,
-			Kind:              s.Kind,
+			Kind:              kind,
 			Backend:           s.Backend,
 			Name:              s.Name,
 			CPUs:              s.CPUs,

@@ -35,6 +35,9 @@ type PullRequestRef struct {
 // with no escaping.
 func (r PullRequestRef) String() string { return fmt.Sprintf("%s#%d", r.Repo, r.Number) }
 
+// WebURL is r's page on its repository's git host.
+func (r PullRequestRef) WebURL() string { return fmt.Sprintf("%s/pull/%d", r.Repo.WebURL(), r.Number) }
+
 // ParsePullRequestRef reverses PullRequestRef.String.
 func ParsePullRequestRef(s string) (PullRequestRef, error) {
 	repoPart, numPart, ok := strings.Cut(s, "#")

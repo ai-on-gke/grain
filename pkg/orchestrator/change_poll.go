@@ -123,9 +123,10 @@ type ChangeOutcomeStore interface {
 
 // applyChangeObservation acts on one polled observation of task's CL: a
 // CL found submitted closes the task the way Submit does, saying it was
-// submitted outside grain; one found abandoned is marked so; and a live
-// one whose health or age calls for a sync is synced, once per snapshot
-// and never during a run (change.SyncPlanner).
+// submitted outside grain; one found abandoned (or deleted), or found
+// holding no files while no run is under way or queued, is marked
+// abandoned; and a live one whose health or age calls for a sync is
+// synced, once per snapshot and never during a run (change.SyncPlanner).
 func applyChangeObservation(ctx context.Context, st ChangeOutcomeStore, p change.Provider, task model.Task,
 	obs change.Observation, now time.Time) error {
 
@@ -141,6 +142,15 @@ func applyChangeObservation(ctx context.Context, st ChangeOutcomeStore, p change
 	state, err := st.State(ctx, task.ID)
 	if err != nil {
 		return err
+	}
+	if obs.Empty {
+		// A run may still be uploading to the CL it just made, and a
+		// queued task's next run may upload to it; once neither can, an
+		// empty CL is nothing to submit.
+		if state == model.StateRunning || state == model.StateQueued {
+			return nil
+		}
+		return change.RecordEmpty(ctx, st, task, obs.Target, now)
 	}
 	return AutoSync(ctx, st, p, change.Planner, task, obs, state, now)
 }

@@ -171,14 +171,40 @@ because that is what survives a run ending, reads on a phone, and needs
 no session manager to still exist tomorrow. `TaskChat.jsx`'s own doc
 comment has the full trade.
 
-**It does not hold a sandbox open between exchanges.** The task asked for
-"always a sandbox and a running task"; what it has is a conversation that
-always exists and a sandbox built per exchange, because grain's sandboxes
-are per-run everywhere else and an idle one is a VM and a worker slot
-spent on a director nobody is talking to. The cost is the sandbox build
-at the start of each exchange; the thing that would buy it back is
-keeping the run itself alive between messages, which is what the
-pseudo-terminal path does and what a future session could opt into.
+**It keeps its sandbox and agent warm between exchanges for an idle TTL.**
+Acquiring a fresh VM/pod, re-cloning, reinstalling packages, and rebuilding
+the full prompt on every message is too slow for an interactive conversation.
+Instead, when a session turn ends (`person-closes` goal or awaiting reply),
+grain keeps the session warm in two layers controlled by **Settings →
+Sandboxes → Session sandbox idle TTL** (`grain_config.session_sandbox_idle_ttl_ms`,
+CLI flag `-session-sandbox-idle-ttl`, default `30m`; set to `-1s` to disable):
+
+1. **In-process session continuation (`continueSessionTurns`):** Where the
+   agent framework returns a resumable session token (`ResumableSession`) and
+   the run is executing asynchronously, ending a turn relays the agent's
+   reply into the conversation immediately, marks the sandbox as an `"idle
+   session"`, and keeps the run waiting in-process up to the idle TTL for the
+   person's next message. When a reply arrives within the TTL, the same run
+   resumes the CLI session in-process with the new message — no new dispatch,
+   no sandbox acquisition, no clone, and no prompt rebuild.
+2. **Warm sandbox pool fallback (`session_sandboxes.go`):** When a run does
+   end (usage limit, crash, daemon restart, or synchronous single-turn cycle)
+   while the session rests awaiting a reply, the orchestrator holds the
+   sandbox in a warm pool for up to the idle TTL instead of releasing it. A
+   new message within the TTL dispatches onto the *same* sandbox (preserving
+   its filesystem, installed packages, clones, and uncommitted changes), and
+   the prompt (`BuildPrompt`, `BuildSuspendedPrompt`, and
+   `agent.SuspendedReusedSandboxPreamble`) explicitly tells the agent that
+   **the sandbox is the same one** so it does not redo setup.
+
+Held session sandboxes are counted honestly against the deployment's sandbox
+budget and `MaxWorkers`, shown on **System → Sandboxes** with kind and status
+`"idle session"`, and released when the idle TTL expires, when the session
+task is closed or paused, or under capacity pressure (where the oldest idle
+session sandbox is evicted first so new work can be admitted). When a warm
+sandbox has been reclaimed before the next message arrives, the next dispatch
+acquires a fresh sandbox and its prompt tells the agent that **the sandbox is
+not the same one**.
 
 ## Acting through grain's API
 

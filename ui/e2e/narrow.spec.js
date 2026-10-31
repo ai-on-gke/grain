@@ -83,6 +83,12 @@ async function chipFit(row) {
     for (const chip of strip.children) {
       const c = chip.getBoundingClientRect();
       const label = chip.textContent;
+      // A chip ChipStrip.jsx has taken out of the layout because it
+      // wrapped: hidden, and leaving no width behind it.
+      if (chip.getClientRects().length === 0) {
+        out.hidden.push(label);
+        continue;
+      }
       // Half a pixel of slack at each edge: a chip laid out on a
       // fractional boundary is not a chip cut in half.
       if (c.bottom <= box.bottom + 0.5 && c.right <= box.right + 0.5) {
@@ -142,6 +148,74 @@ test("keeps a repo's name when its count chips no longer fit", async ({
     overflow,
     `the repos list is ${overflow}px too wide`,
   ).toBeLessThanOrEqual(0);
+});
+
+// The width a chip that does not fit leaves behind. A wrapping flex
+// container keeps the whole width the row gave it, so the chip that
+// wrapped away used to leave a blank gap at the end of the strip --
+// between the last chip still showing and the row's phase chip ("live
+// run") or its end -- while the title and status beside it were already
+// ellipsised for want of that width. ChipStrip.jsx hides what wrapped,
+// so the strip ends at its last chip and the next thing on the row
+// starts one row gap after it.
+test("leaves no gap after the last chip a task row has room for", async ({
+  page,
+}) => {
+  await page.setViewportSize(NARROW);
+  await page.goto("/");
+  await expect(page.locator(".task-row .chips").first()).toBeAttached();
+
+  const rows = await page.locator(".task-row").evaluateAll((els) =>
+    els.map((row) => {
+      const strip = row.querySelector(":scope > .chips");
+      if (!strip) return null;
+      const chips = [...strip.children];
+      const top = chips[0]?.getBoundingClientRect().top;
+      // Hidden is what the strip has no room for: taken out of the
+      // layout, or -- without ChipStrip -- wrapped onto the clipped line.
+      const shown = chips.filter(
+        (c) =>
+          c.getClientRects().length > 0 &&
+          c.getBoundingClientRect().top <= top + 1,
+      );
+      const hidden = chips.length - shown.length;
+      if (!hidden || !shown.length) return null;
+      const box = strip.getBoundingClientRect();
+      const last = shown[shown.length - 1].getBoundingClientRect();
+      const next = strip.nextElementSibling?.getBoundingClientRect();
+      const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+      return {
+        id: row.querySelector(".task-number")?.textContent,
+        hidden,
+        tail: box.right - last.right,
+        toNext: next ? next.left - box.right : null,
+        gap,
+        wrapped: chips.some(
+          (c) =>
+            c.getClientRects().length > 0 &&
+            c.getBoundingClientRect().top > top + 1,
+        ),
+      };
+    }),
+  );
+  const crowded = rows.filter(Boolean);
+  expect(
+    crowded.length,
+    "no task row hid a chip, so this width is not the crowded one this test needs",
+  ).toBeGreaterThan(0);
+  for (const r of crowded) {
+    expect(r.wrapped, `task ${r.id} still shows a wrapped chip`).toBe(false);
+    expect(
+      r.tail,
+      `task ${r.id}'s chip strip runs ${r.tail}px past its last chip`,
+    ).toBeLessThanOrEqual(1);
+    if (r.toNext !== null) {
+      expect(
+        Math.abs(r.toNext - r.gap),
+        `task ${r.id}'s next chip is ${r.toNext}px after the strip, not the row's ${r.gap}px gap`,
+      ).toBeLessThanOrEqual(1);
+    }
+  }
 });
 
 // The other half of a crowded row, for the rows that carry their chips

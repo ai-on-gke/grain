@@ -18,8 +18,11 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/sandboximage"
 )
 
 // The sandbox image's grain answers the sandbox CLI, not only host-script:
@@ -68,5 +71,20 @@ func TestSandboxGrainOutsideASandbox(t *testing.T) {
 	errOut.Reset()
 	if code := run([]string{"daemon"}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "not a command") {
 		t.Errorf("grain daemon = %d, %q", code, errOut.String())
+	}
+}
+
+// pkg/sandboximage.VerifyScript decides whether an image's grain carries
+// the sandbox CLI by reading this usage, outside any sandbox.
+func TestUsageNamesTheSandboxCLI(t *testing.T) {
+	t.Setenv("GRAIN_SANDBOX_CLI", "0")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"help"}, &out, &errOut); code != 0 {
+		t.Fatalf("grain help = %d, %q", code, errOut.String())
+	}
+	for _, sub := range append(append([]string(nil), sandboximage.SandboxCLICommands...), "host-script") {
+		if !regexp.MustCompile(`(?m)grain ` + sub + `( |$)`).MatchString(out.String()) {
+			t.Errorf("grain help does not name %q:\n%s", "grain "+sub, out.String())
+		}
 	}
 }

@@ -1819,6 +1819,11 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		var mergeErr error
 		if !onGitHubQueue {
 			mergeErr = mergeTaskPullRequest(ctx, store, client, ref.Repo, ref.Number, detail.HeadSHA, task.ID, detail.Title)
+			if mergeErr != nil && (github.ClassifyMergeRefusal(mergeErr) == github.RefusalUnresolvedThreads || github.IsMergeRuleStatus(mergeErr)) {
+				if resolveOrClassifyUnresolvedThreadsOnMerge(ctx, store, client, task, ref) {
+					mergeErr = mergeTaskPullRequest(ctx, store, client, ref.Repo, ref.Number, detail.HeadSHA, task.ID, detail.Title)
+				}
+			}
 		}
 		// A base branch that only takes changes through GitHub's merge
 		// queue: the pull request is put in that queue instead, and lands

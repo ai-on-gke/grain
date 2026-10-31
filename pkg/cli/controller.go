@@ -72,8 +72,9 @@ var botManifestPermissions = map[string]string{
 	"pull_requests": "write",
 	"checks":        "write",
 	"statuses":      "read",
-	// actions: read is what a workflow_job delivery needs, and what
-	// reading a failed job's log for GitHub CI's failure tails needs.
+	// actions: read is what workflow_job and workflow_run deliveries need,
+	// and what reading a failed job's log for GitHub CI's failure tails and
+	// polling completed workflow runs need.
 	"actions":  "read",
 	"metadata": "read",
 }
@@ -91,6 +92,7 @@ var botWebhookEvents = []string{
 	"push",
 	"status",
 	"workflow_job",
+	"workflow_run",
 }
 
 // callbackTimeout bounds how long bootstrapGitHubApp waits for the

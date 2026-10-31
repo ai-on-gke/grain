@@ -39,6 +39,18 @@ one). The daemon's gate then:
    task, a note in that task's conversation, signed by grain on behalf of
    the run.
 
+A repository off the default git host is `host/owner/name`. In a
+`/api/repos/{owner}/{name}/...` path its `{owner}` is `host/owner`
+escaped into one segment, as the UI writes it:
+`/api/repos/git.forge.example%2Fexperimental/grain/releases`. The
+unescaped `/api/repos/<host>/<owner>/<name>/...` is read as that same
+route when no other matches (a first segment holding a `.` or a `:` is
+a host, as `model.ParseRepo` reads one). The gate reads every
+repository a call names -- in its path, a `repo` in its body, or a
+`?repo=` -- the way the deployment spells it, so an SSH remote, a URL
+or another capitalisation matches the grant naming that repository.
+Text that is not a repository is refused with 400.
+
 The header can only narrow a request. A request without it is whatever
 the access gate already let in, so anyone able to send the header could
 also have left it off.
@@ -148,7 +160,7 @@ every `DELETE`.
 | `deployment:read` | read host, sandbox, log, metric and upgrade status | |
 | `sandboxes:read` | read the persistent sandboxes' status (`GET /api/persistent-sandboxes`); `deployment:read` implies it | |
 | `deployment:upgrade` | upgrade grain and its database, or cancel a scheduled upgrade | yes |
-| `deployment:restart` | restart grain, act on persistent sandboxes | yes |
+| `deployment:restart` | restart grain, act on persistent sandboxes, run sandbox probes | yes |
 | `deployment:reboot` | reboot or shut down the host | yes |
 
 `internal` marks grain's own plumbing, which no agent can ever reach.
@@ -563,6 +575,13 @@ Credentials are managed through:
 | `POST /api/external-agents/tokens/{id}/revoke` | `capabilities:admin` | Revoke a credential immediately (`204 No Content`). |
 | `DELETE /api/external-agents/tokens/{id}` | `capabilities:admin` | Delete a credential record (`204 No Content`). |
 | `POST /api/external-agents/tokens/revoke-all` | `capabilities:admin` | Emergency kill switch: revoke every active external agent credential immediately. |
+
+A credential's view (listed, created or rotated) carries
+`resolvedScopes`: every scope it holds after expanding scope sets and
+implied scopes. A scope held on named repositories only is listed once
+per repository as `scope@owner/name` (a credential issued with
+`"scopes": ["tasks:write@acme/widgets"]` lists `tasks:write@acme/widgets`);
+a bare scope is held on every repository.
 
 ### Attribution
 

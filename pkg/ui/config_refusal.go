@@ -416,6 +416,19 @@ func (c *Client) configRepoFor(ctx context.Context, bootstrap bool) (remote, bra
 	return "", "main", true
 }
 
+// configRepoOnly is whether the API refuses a non-bootstrap settings
+// write in favour of a config pull request -- configRepoFor's answer for
+// a request that came through the API, asked without one.
+func (c *Client) configRepoOnly(ctx context.Context) bool {
+	if c == nil {
+		return false
+	}
+	if remote, _ := c.externalConfigRepo(ctx); remote != "" {
+		return true
+	}
+	return c.Config.StateRepo != nil && !c.directConfigWrites()
+}
+
 // directConfigWrites is the host-local opt-out from the config
 // repository write path in internal mode (staterepo.Settings), read on
 // every guarded write so an operator's edit to state-repo.json takes

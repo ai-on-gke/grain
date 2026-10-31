@@ -15,7 +15,10 @@
 package workflows
 
 import (
+	"encoding/json"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 
 	// The IANA zone database, so that a schedule's zone resolves the same
@@ -54,7 +57,88 @@ const (
 	// clamped to a shorter month's last day, so DayOfMonth 31 reads as
 	// much as "the last day of every month" as it does "the 31st".
 	RecurrenceMonthly RecurrenceKind = "monthly"
+	// RecurrenceGitHubWorkflowRun fires when a GitHub Actions workflow run
+	// concludes matching GitHubWorkflowRunTrigger.
+	RecurrenceGitHubWorkflowRun RecurrenceKind = "github_workflow_run"
 )
+
+// GitHubWorkflowRunTrigger configures a schedule that fires when a GitHub
+// Actions workflow run concludes.
+type GitHubWorkflowRunTrigger struct {
+	Workflow    string   `json:"workflow" yaml:"workflow"`
+	Conclusions []string `json:"conclusions,omitempty" yaml:"conclusions,omitempty"`
+	Branches    []string `json:"branches,omitempty" yaml:"branches,omitempty"`
+}
+
+// WorkflowStem returns the stem of t.Workflow (e.g. "nightly" from
+// ".github/workflows/nightly.yml" or "nightly.yml").
+func (t GitHubWorkflowRunTrigger) WorkflowStem() string {
+	clean := path.Base(strings.TrimSpace(t.Workflow))
+	ext := path.Ext(clean)
+	return strings.TrimSuffix(clean, ext)
+}
+
+// MatchesWorkflow reports whether workflowName or workflowPath matches t.Workflow.
+func (t GitHubWorkflowRunTrigger) MatchesWorkflow(workflowName, workflowPath string) bool {
+	want := strings.TrimSpace(t.Workflow)
+	if want == "" {
+		return false
+	}
+	wantClean := strings.TrimPrefix(path.Clean(want), ".github/workflows/")
+	if strings.EqualFold(workflowName, want) || strings.EqualFold(workflowPath, want) {
+		return true
+	}
+	if workflowPath != "" {
+		pathClean := strings.TrimPrefix(path.Clean(workflowPath), ".github/workflows/")
+		if strings.EqualFold(pathClean, wantClean) || strings.EqualFold(path.Base(pathClean), wantClean) {
+			return true
+		}
+		stem := strings.TrimSuffix(path.Base(pathClean), path.Ext(pathClean))
+		if strings.EqualFold(stem, wantClean) {
+			return true
+		}
+	}
+	wantStem := strings.TrimSuffix(path.Base(wantClean), path.Ext(wantClean))
+	return strings.EqualFold(workflowName, wantStem)
+}
+
+// MatchesConclusion reports whether conclusion matches t.Conclusions.
+// When Conclusions is empty, any non-empty conclusion matches.
+func (t GitHubWorkflowRunTrigger) MatchesConclusion(conclusion string) bool {
+	c := strings.ToLower(strings.TrimSpace(conclusion))
+	if c == "" {
+		return false
+	}
+	if len(t.Conclusions) == 0 {
+		return true
+	}
+	for _, want := range t.Conclusions {
+		if strings.ToLower(strings.TrimSpace(want)) == c {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchesBranch reports whether branch matches t.Branches (or fallbackBase when
+// Branches is empty). When both Branches and fallbackBase are empty, any branch matches.
+func (t GitHubWorkflowRunTrigger) MatchesBranch(branch, fallbackBase string) bool {
+	b := strings.TrimPrefix(strings.TrimSpace(branch), "refs/heads/")
+	if len(t.Branches) == 0 {
+		fb := strings.TrimPrefix(strings.TrimSpace(fallbackBase), "refs/heads/")
+		if fb == "" {
+			return true
+		}
+		return b == fb
+	}
+	for _, want := range t.Branches {
+		w := strings.TrimPrefix(strings.TrimSpace(want), "refs/heads/")
+		if w == b {
+			return true
+		}
+	}
+	return false
+}
 
 // Recurrence is a schedule's cadence. TimeOfDay, Weekday and DayOfMonth
 // are read against the deployment's own wall clock -- the zone
@@ -93,6 +177,35 @@ type Recurrence struct {
 	// TimeZone is an optional IANA time zone name (e.g. "America/New_York").
 	// When empty, cadences are read against UTC.
 	TimeZone string
+
+	// GitHubWorkflowRun is set when Kind is RecurrenceGitHubWorkflowRun.
+	GitHubWorkflowRun *GitHubWorkflowRunTrigger
+}
+
+// StoredKind encodes r.Kind (and GitHubWorkflowRun trigger details when
+// Kind is RecurrenceGitHubWorkflowRun) into the schedule.recurrence_kind
+// column so no schema migration is required.
+func (r Recurrence) StoredKind() string {
+	if r.Kind == RecurrenceGitHubWorkflowRun && r.GitHubWorkflowRun != nil {
+		b, err := json.Marshal(r.GitHubWorkflowRun)
+		if err == nil {
+			return string(RecurrenceGitHubWorkflowRun) + ":" + string(b)
+		}
+	}
+	return string(r.Kind)
+}
+
+// ParseStoredRecurrenceKind decodes a schedule.recurrence_kind column value
+// written by Recurrence.StoredKind.
+func ParseStoredRecurrenceKind(raw string) (RecurrenceKind, *GitHubWorkflowRunTrigger) {
+	prefix := string(RecurrenceGitHubWorkflowRun) + ":"
+	if strings.HasPrefix(raw, prefix) {
+		var trig GitHubWorkflowRunTrigger
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(raw, prefix)), &trig); err == nil {
+			return RecurrenceGitHubWorkflowRun, &trig
+		}
+	}
+	return RecurrenceKind(raw), nil
 }
 
 // MaxEveryNHours is the longest interval an everyNHours recurrence may
@@ -157,6 +270,20 @@ func (r Recurrence) Validate() error {
 		}
 		if r.DayOfMonth < 1 || r.DayOfMonth > 31 {
 			return fmt.Errorf("dayOfMonth must be between 1 and 31")
+		}
+	case RecurrenceGitHubWorkflowRun:
+		if r.GitHubWorkflowRun == nil || strings.TrimSpace(r.GitHubWorkflowRun.Workflow) == "" {
+			return fmt.Errorf("github_workflow_run trigger needs a workflow")
+		}
+		for _, c := range r.GitHubWorkflowRun.Conclusions {
+			if strings.TrimSpace(c) == "" {
+				return fmt.Errorf("github_workflow_run conclusions cannot contain empty strings")
+			}
+		}
+		for _, b := range r.GitHubWorkflowRun.Branches {
+			if strings.TrimSpace(b) == "" {
+				return fmt.Errorf("github_workflow_run branches cannot contain empty strings")
+			}
 		}
 	default:
 		return fmt.Errorf("unknown recurrence kind %q", r.Kind)
@@ -226,6 +353,9 @@ func (r Recurrence) Next(after time.Time, loc *time.Location) time.Time {
 			minutes = MaxEveryNMinutes
 		}
 		return after.Add(time.Duration(minutes) * time.Minute)
+	case RecurrenceGitHubWorkflowRun:
+		// Event-triggered schedules do not fire on a wall-clock cadence.
+		return after.Add(time.Duration(MaxEveryNHours) * time.Hour)
 	default:
 		// Validate is expected to have already rejected this -- an hour
 		// out is a safe, visible fallback rather than looping forever.
