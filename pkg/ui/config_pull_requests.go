@@ -73,7 +73,14 @@ type ConfigPullRequestOpener interface {
 type ConfigPullRequestInvalid struct {
 	Err        error
 	Validation staterepo.CandidateReport
+	// Stale is a change that no longer applies to the base branch:
+	// grain/config moved since the refusal that produced it, so the
+	// person has to make the change again for a patch that does.
+	Stale bool
 }
+
+// ConfigChangeStale is the code a 422 carries for a stale change.
+const ConfigChangeStale = "config_change_stale"
 
 func (e *ConfigPullRequestInvalid) Error() string {
 	return "the config change does not pass validation: " + e.Err.Error()
@@ -149,10 +156,14 @@ func (s *Server) handleOpenConfigPullRequest(w http.ResponseWriter, r *http.Requ
 	case errors.Is(err, errConfigPullRequestsUnavailable):
 		writeError(w, http.StatusNotImplemented, apierror.Public(err.Error()))
 	case errors.As(err, &invalid):
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+		body := map[string]any{
 			"error":      invalid.Error(),
 			"validation": invalid.Validation,
-		})
+		}
+		if invalid.Stale {
+			body["code"] = ConfigChangeStale
+		}
+		writeJSON(w, http.StatusUnprocessableEntity, body)
 	case err != nil:
 		writeClientError(w, err)
 	default:

@@ -17,6 +17,7 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -116,10 +117,15 @@ func TestInternalModeLetsGrainsOwnWritesThrough(t *testing.T) {
 type openerStateRepo struct {
 	*fakeStateRepo
 	got []ui.ConfigPullRequestRequest
+	// err, when set, is what opening answers.
+	err error
 }
 
 func (o *openerStateRepo) OpenConfigPullRequest(_ context.Context, req ui.ConfigPullRequestRequest) (ui.ConfigPullRequest, error) {
 	o.got = append(o.got, req)
+	if o.err != nil {
+		return ui.ConfigPullRequest{}, o.err
+	}
 	return ui.ConfigPullRequest{TaskID: "7", Number: 7, Branch: "grain/task-7", Base: "main"}, nil
 }
 
@@ -168,6 +174,40 @@ func TestOpenConfigPullRequestTakesTheRefusalsChange(t *testing.T) {
 	client.Config.StateRepo = nil
 	if rec := do(t, srv, http.MethodPost, "/api/state-repo/pull-requests", string(body)); rec.Code != http.StatusNotImplemented {
 		t.Fatalf("no config repository: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A change the pre-review suite refuses answers 422 with its report, and
+// one that no longer applies to the base says so in its code, so the UI
+// can tell the person to make the change again rather than to fix it.
+func TestOpenConfigPullRequestAnswersAnInvalidChangeWithItsReport(t *testing.T) {
+	t.Parallel()
+	change := `{"changes":[{"path":"tables/grain_config.json","op":"modify","patch":"x"}]}`
+	for _, tc := range []struct {
+		name     string
+		invalid  *ui.ConfigPullRequestInvalid
+		wantCode string
+	}{
+		{"liveness", &ui.ConfigPullRequestInvalid{Err: staterepo.ErrDispatchLocked, Validation: staterepo.CandidateReport{Liveness: []string{"max_parallel is 0, which lets no run start"}}}, ""},
+		{"stale", &ui.ConfigPullRequestInvalid{Err: errors.New("the change does not apply to main"), Stale: true}, ui.ConfigChangeStale},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, client := testServer(t)
+			storeSettingsRow(t, client)
+			client.Config.StateRepo = &openerStateRepo{fakeStateRepo: &fakeStateRepo{status: ui.StateRepoStatus{Branch: "main"}}, err: tc.invalid}
+			rec := do(t, ui.NewServerWithClient(client), http.MethodPost, "/api/state-repo/pull-requests", change)
+			var got struct {
+				Error      string                    `json:"error"`
+				Code       string                    `json:"code"`
+				Validation staterepo.CandidateReport `json:"validation"`
+			}
+			if rec.Code != http.StatusUnprocessableEntity || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
+				t.Fatalf("open: %d %s", rec.Code, rec.Body)
+			}
+			if got.Code != tc.wantCode || got.Error == "" || !slices.Equal(got.Validation.Liveness, tc.invalid.Validation.Liveness) {
+				t.Fatalf("422 body = %+v, want code %q and the report", got, tc.wantCode)
+			}
+		})
 	}
 }
 
