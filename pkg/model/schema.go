@@ -339,19 +339,22 @@ import "strconv"
 //
 // 76 is 67 again for `test-quarantine`, now `api:test-quarantine`.
 //
-// 77 rewrites stored `grain-log` grants to
+// 77 adds `new_task_form` to `grain_config`: the New Task form's
+// configuration (settings/new-task-form.yml, model.NewTaskForm).
+//
+// 78 rewrites stored `grain-log` grants to
 // `https://grain.dev/capabilities/grain#journal={}`: the in-process
 // `grain-log` provider is retired for the `grain#journal` method.
 //
-// 78 rewrites stored `deployment-health` grants to `api:deployment:read` and
+// 79 rewrites stored `deployment-health` grants to `api:deployment:read` and
 // `https://grain.dev/capabilities/grain#health={}`: the in-process
 // `deployment-health` provider is retired.
 //
-// 79 rewrites stored `db-read` and `db-write` grants to
+// 80 rewrites stored `db-read` and `db-write` grants to
 // `https://grain.dev/capabilities/grain#sql={"write":false}` and
 // `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
 // `db-read` and `db-write` providers are retired.
-const SchemaVersion = 79
+const SchemaVersion = 80
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -2079,6 +2082,7 @@ var Tables = []string{
   ` + "`sandbox_image_mirror`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
   ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
+  ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

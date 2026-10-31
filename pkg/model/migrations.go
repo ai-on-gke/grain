@@ -437,16 +437,23 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     77,
+		Description: "add the New Task form's configuration to grain_config",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `new_task_form` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     78,
 		Description: "rewrite stored grain-log grants to https://grain.dev/capabilities/grain#journal={} (the in-process capability is retired)",
 		Up:          rewriteLegacyGrants(map[string]string{"grain-log": GrainJournalGrant}),
 	},
 	{
-		Version:     78,
+		Version:     79,
 		Description: "rewrite stored deployment-health grants to api:deployment:read and https://grain.dev/capabilities/grain#health={} (the in-process capability is retired)",
 		Up:          rewriteLegacyGrantsMulti(map[string][]string{"deployment-health": {"api:deployment:read", GrainHealthGrant}}),
 	},
 	{
-		Version:     79,
+		Version:     80,
 		Description: "rewrite stored db-read and db-write grants to https://grain.dev/capabilities/grain#sql (the in-process capabilities are retired)",
 		Up: rewriteLegacyGrants(map[string]string{
 			"db-read":  GrainSQLReadGrant,
