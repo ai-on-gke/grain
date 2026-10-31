@@ -636,7 +636,10 @@ func continueSessionTurns(
 	runErr error,
 ) (*agent.Result, error, []model.Comment) {
 	ttl := cfg.sessionSandboxIdleTTL()
-	if !task.Interactive || !cfg.inProcessSessionWait || ttl <= 0 || store == nil {
+	if !task.Interactive || task.KeepRunning || !cfg.inProcessSessionWait || ttl <= 0 || store == nil {
+		return result, runErr, comments
+	}
+	if taskKeepRunning(daemonCtx, store, task) {
 		return result, runErr, comments
 	}
 	goal, err := store.TaskGoal(daemonCtx, task.ID)

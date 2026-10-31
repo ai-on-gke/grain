@@ -206,6 +206,7 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 		Capabilities:    splitMultiFlag(p, "capability"),
 		FixesBaseBranch: p.has("fixes-base-branch"),
 		NoPort:          p.has("no-port"),
+		KeepRunning:     p.has("keep-running"),
 		Origin:          strings.TrimSpace(p.get("origin")),
 		Reads:           splitMultiFlag(p, "read"),
 		HoldForApproval: &hold,

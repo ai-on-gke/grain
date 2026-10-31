@@ -102,6 +102,7 @@ type Template struct {
 	// Omitted when false, like Repo, so a template saved before the
 	// switch existed keeps the revision it had.
 	Interactive  bool                        `json:"interactive,omitempty"`
+	KeepRunning  bool                        `json:"keepRunning,omitempty"`
 	Reads        []string                    `json:"reads,omitempty"`
 	Writes       []WriteTarget               `json:"writes,omitempty"`
 	CustomFields map[string]CustomFieldValue `json:"customFields,omitempty"`
@@ -188,6 +189,7 @@ func templateFrom(t model.Template) Template {
 		Fields:        templateFieldsFrom(t.Fields),
 		AutoMerge:     t.AutoMerge,
 		Interactive:   t.Interactive,
+		KeepRunning:   t.KeepRunning,
 		NetworkAccess: string(t.NetworkAccess),
 		Model:         t.Model,
 		CustomFields:  customFieldValues(t.CustomFields),
@@ -328,11 +330,13 @@ type CreateTemplateRequest struct {
 	// (model.Template.Model), or "" to leave it to the team's default.
 	Model string `json:"model"`
 	// Interactive sets model.Template.Interactive.
-	Interactive  bool                        `json:"interactive"`
-	Capabilities []string                    `json:"capabilities"`
-	Reads        []string                    `json:"reads"`
-	Writes       []WriteTarget               `json:"writes"`
-	CustomFields map[string]CustomFieldValue `json:"customFields"`
+	Interactive      bool                        `json:"interactive"`
+	KeepRunning      bool                        `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool                       `json:"keep_running,omitempty"`
+	Capabilities     []string                    `json:"capabilities"`
+	Reads            []string                    `json:"reads"`
+	Writes           []WriteTarget               `json:"writes"`
+	CustomFields     map[string]CustomFieldValue `json:"customFields"`
 }
 
 // parseBinding turns a request's repo/base pair into the binding
@@ -427,6 +431,7 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 		Base:          base,
 		AutoMerge:     req.AutoMerge,
 		Interactive:   req.Interactive,
+		KeepRunning:   req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
 		NetworkAccess: model.NetworkAccess(req.NetworkAccess),
 		Model:         chosenModel,
 		Reads:         reads,
@@ -541,6 +546,9 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 	}
 	if !req.Interactive {
 		req.Interactive = comp.Interactive
+	}
+	if !req.KeepRunning && req.KeepRunningSnake == nil {
+		req.KeepRunning = comp.KeepRunning
 	}
 	if strings.TrimSpace(req.NetworkAccess) == "" {
 		req.NetworkAccess = string(comp.NetworkAccess)
@@ -696,11 +704,13 @@ type UpdateTemplateRequest struct {
 	// clears it, so the template's tasks go back to the team's default.
 	Model *string `json:"model,omitempty"`
 	// Interactive edits CreateTemplateRequest.Interactive's own field.
-	Interactive  *bool                        `json:"interactive,omitempty"`
-	Capabilities *[]string                    `json:"capabilities,omitempty"`
-	Reads        *[]string                    `json:"reads,omitempty"`
-	Writes       *[]WriteTarget               `json:"writes,omitempty"`
-	CustomFields *map[string]CustomFieldValue `json:"customFields,omitempty"`
+	Interactive      *bool                        `json:"interactive,omitempty"`
+	KeepRunning      *bool                        `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool                        `json:"keep_running,omitempty"`
+	Capabilities     *[]string                    `json:"capabilities,omitempty"`
+	Reads            *[]string                    `json:"reads,omitempty"`
+	Writes           *[]WriteTarget               `json:"writes,omitempty"`
+	CustomFields     *map[string]CustomFieldValue `json:"customFields,omitempty"`
 	// Revision, given, is the template's Revision as the caller last read
 	// it, and the edit is refused (staleEditError) if the template has been
 	// saved since. Absent applies the edit regardless.
@@ -872,6 +882,11 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 		}
 		if req.Interactive != nil {
 			t.Interactive = *req.Interactive
+		}
+		if req.KeepRunning != nil {
+			t.KeepRunning = *req.KeepRunning
+		} else if req.KeepRunningSnake != nil {
+			t.KeepRunning = *req.KeepRunningSnake
 		}
 		if req.NetworkAccess != nil {
 			t.NetworkAccess = model.NetworkAccess(*req.NetworkAccess)

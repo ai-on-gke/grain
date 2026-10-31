@@ -73,6 +73,9 @@ type ConsoleSessionSetting struct {
 	// approved rather than waiting for a person. False is the default --
 	// see model.ConsoleSession's own doc comment on why.
 	TasksApproved bool `json:"tasksApproved"`
+	// KeepRunning is whether the session's task immediately restarts when
+	// its run exits rather than parking until the next message.
+	KeepRunning bool `json:"keepRunning"`
 	// Reads is every repo this session may read but never push to --
 	// model.ConsoleSession.Reads, rendered as owner/name strings.
 	Reads []string `json:"reads,omitempty"`
@@ -148,14 +151,16 @@ type ConsoleSessionSettingsResponse struct {
 // model.ConsoleSession on why a settings form may not rewrite what an
 // agent holding this deployment's own host is for.
 type UpdateConsoleSessionRequest struct {
-	Title           *string        `json:"title"`
-	Team            *string        `json:"team"`
-	Capabilities    *[]string      `json:"capabilities"`
-	NetworkAccess   *string        `json:"networkAccess"`
-	TasksApproved   *bool          `json:"tasksApproved"`
-	Reads           *[]string      `json:"reads"`
-	Writes          *[]WriteTarget `json:"writes"`
-	GoogleChatSpace *string        `json:"googleChatSpace"`
+	Title            *string        `json:"title"`
+	Team             *string        `json:"team"`
+	Capabilities     *[]string      `json:"capabilities"`
+	NetworkAccess    *string        `json:"networkAccess"`
+	TasksApproved    *bool          `json:"tasksApproved"`
+	KeepRunning      *bool          `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool          `json:"keep_running,omitempty"`
+	Reads            *[]string      `json:"reads"`
+	Writes           *[]WriteTarget `json:"writes"`
+	GoogleChatSpace  *string        `json:"googleChatSpace"`
 	// Model is the model the session runs on; "" puts it back on its
 	// team's default model.
 	Model *string `json:"model"`
@@ -187,15 +192,17 @@ type UpdateConsoleSessionRequest struct {
 // a title nor a message is refused, which is what keeps an opened-and-
 // abandoned chat out of the sessions list.
 type CreateConsoleSessionRequest struct {
-	ID              string        `json:"id,omitempty"`
-	Title           string        `json:"title,omitempty"`
-	Team            string        `json:"team,omitempty"`
-	Capabilities    []string      `json:"capabilities,omitempty"`
-	NetworkAccess   string        `json:"networkAccess,omitempty"`
-	TasksApproved   bool          `json:"tasksApproved,omitempty"`
-	Reads           []string      `json:"reads,omitempty"`
-	Writes          []WriteTarget `json:"writes,omitempty"`
-	GoogleChatSpace string        `json:"googleChatSpace,omitempty"`
+	ID               string        `json:"id,omitempty"`
+	Title            string        `json:"title,omitempty"`
+	Team             string        `json:"team,omitempty"`
+	Capabilities     []string      `json:"capabilities,omitempty"`
+	NetworkAccess    string        `json:"networkAccess,omitempty"`
+	TasksApproved    bool          `json:"tasksApproved,omitempty"`
+	KeepRunning      bool          `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool         `json:"keep_running,omitempty"`
+	Reads            []string      `json:"reads,omitempty"`
+	Writes           []WriteTarget `json:"writes,omitempty"`
+	GoogleChatSpace  string        `json:"googleChatSpace,omitempty"`
 	// Model is the model the session runs on, or "" for its team's
 	// default model.
 	Model string `json:"model,omitempty"`
@@ -296,6 +303,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 			Capabilities:    append([]string{}, s.Capabilities...),
 			NetworkAccess:   string(s.NetworkAccess),
 			TasksApproved:   s.TasksApproved,
+			KeepRunning:     s.KeepRunning,
 			Reads:           reads,
 			Writes:          writes,
 			GoogleChatSpace: s.GoogleChatSpace,
@@ -438,6 +446,11 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 	}
 	if req.TasksApproved != nil {
 		session.TasksApproved = *req.TasksApproved
+	}
+	if req.KeepRunning != nil {
+		session.KeepRunning = *req.KeepRunning
+	} else if req.KeepRunningSnake != nil {
+		session.KeepRunning = *req.KeepRunningSnake
 	}
 	if req.Reads != nil {
 		reads, err := c.parseReads(*req.Reads)
@@ -649,6 +662,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		Capabilities:    caps,
 		NetworkAccess:   access,
 		TasksApproved:   req.TasksApproved,
+		KeepRunning:     req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
 		Reads:           reads,
 		Writes:          writes,
 		GoogleChatSpace: strings.TrimSpace(req.GoogleChatSpace),

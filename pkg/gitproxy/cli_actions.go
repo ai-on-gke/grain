@@ -234,6 +234,7 @@ type CLIProposeRequest struct {
 	NotBefore       *time.Time          `json:"not_before,omitempty"`
 	FixesBaseBranch bool                `json:"fixes_base_branch,omitempty"`
 	NoPort          bool                `json:"no_port,omitempty"`
+	KeepRunning     bool                `json:"keep_running,omitempty"`
 	Origin          string              `json:"origin,omitempty"`
 	Reads           []string            `json:"reads,omitempty"`
 	HoldForApproval *bool               `json:"hold_for_approval,omitempty"`

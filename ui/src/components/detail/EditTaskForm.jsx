@@ -13,7 +13,14 @@
 // limitations under the License.
 
 import { useEffect, useRef, useState } from "react";
-import { Button, MenuItem, Stack, TextField } from "@mui/material";
+import {
+  Button,
+  Checkbox,
+  FormControlLabel,
+  MenuItem,
+  Stack,
+  TextField,
+} from "@mui/material";
 import api from "../../api.js";
 import {
   connectionLabel,
@@ -78,6 +85,8 @@ export default function EditTaskForm({
   const savedNothingNeeded = t.nothingNeededAction || "close";
   const [nothingNeededAction, setNothingNeededAction] =
     useState(savedNothingNeeded);
+  const savedKeepRunning = Boolean(t.keepRunning);
+  const [keepRunning, setKeepRunning] = useState(savedKeepRunning);
   // The deployment's connections and default model: a task names no
   // team of its own.
   const connections = config?.agentBackends || [];
@@ -115,6 +124,7 @@ export default function EditTaskForm({
     if (reviewTemplateId !== (t.reviewTemplateId || "")) return true;
     if (reviewers !== savedReviewers) return true;
     if (nothingNeededAction !== savedNothingNeeded) return true;
+    if (keepRunning !== savedKeepRunning) return true;
     if (model !== (t.model || "")) return true;
     if (agentBackendId !== (t.agentBackendId || "")) return true;
     return false;
@@ -154,6 +164,7 @@ export default function EditTaskForm({
             ...(nothingNeededAction !== savedNothingNeeded
               ? { nothingNeededAction }
               : {}),
+            ...(keepRunning !== savedKeepRunning ? { keepRunning } : {}),
             // Sent on every save, like the review beside it: what the
             // pickers hold is this task's whole answer, and "" is the
             // real edit that hands it back to the deployment's default model
@@ -310,6 +321,19 @@ export default function EditTaskForm({
         <MenuItem value="close">Close</MenuItem>
         <MenuItem value="ack">Leave for acknowledgement</MenuItem>
       </TextField>
+      <FormControlLabel
+        control={
+          <Checkbox
+            size="small"
+            name="keepRunning"
+            checked={keepRunning}
+            onChange={(e) => setKeepRunning(e.target.checked)}
+          />
+        }
+        label="Keep running (immediately restart when a run exits)"
+        sx={{ display: "flex", m: 0 }}
+        slotProps={{ typography: { fontSize: "0.8rem" } }}
+      />
       <Stack direction="row" spacing={1} justifyContent="flex-end">
         <Button onClick={onDone}>Cancel</Button>
         <Button variant="contained" disabled={!title.trim()} onClick={save}>

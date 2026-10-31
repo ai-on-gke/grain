@@ -1568,6 +1568,11 @@ type CreateTaskRequest struct {
 	// nothing_needed, "ack" leaves it in awaiting_ack for somebody to
 	// acknowledge.
 	NothingNeededAction string `json:"nothingNeededAction,omitempty"`
+	// KeepRunning sets model.Task.KeepRunning: when true, the orchestrator
+	// immediately restarts the task when its run exits rather than completing
+	// or parking it.
+	KeepRunning      bool  `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool `json:"keep_running,omitempty"`
 	// Goal declares the task's goal (model.TaskGoal,
 	// docs/design/durable-tasks.md#DT-4) as it is filed; nil for none, or
 	// for the goal of the template it is filed from.
@@ -2490,6 +2495,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		SandboxDiskGB:        req.SandboxDiskGB,
 		NetworkAccess:        model.NetworkAccess(req.NetworkAccess),
 		NothingNeededAction:  nothingNeeded,
+		KeepRunning:          req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
 		NoPort:               req.NoPort,
 		WorkOrigin:           explicitOrigin,
 		AgentFramework:       agentFramework,
@@ -3833,6 +3839,9 @@ type UpdateTaskRequest struct {
 	// NothingNeededAction edits CreateTaskRequest.NothingNeededAction's
 	// field; "" sets it back to the default, close.
 	NothingNeededAction *string `json:"nothingNeededAction,omitempty"`
+	// KeepRunning edits CreateTaskRequest.KeepRunning's field.
+	KeepRunning      *bool `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool `json:"keep_running,omitempty"`
 	// NoPort edits CreateTaskRequest.NoPort's field.
 	NoPort *bool `json:"noPort,omitempty"`
 	// FixesBaseBranch marks or unmarks this task as fixing its base
@@ -4324,6 +4333,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		}
 		if req.NothingNeededAction != nil {
 			task.NothingNeededAction = nothingNeeded
+		}
+		if req.KeepRunning != nil {
+			task.KeepRunning = *req.KeepRunning
+		} else if req.KeepRunningSnake != nil {
+			task.KeepRunning = *req.KeepRunningSnake
 		}
 		if req.NoPort != nil {
 			task.NoPort = *req.NoPort

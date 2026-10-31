@@ -141,6 +141,9 @@ type rawTemplate struct {
 	// Interactive is model.Template.Interactive: every task filed from
 	// this template is a live chat.
 	Interactive bool `yaml:"interactive"`
+	// KeepRunning is model.Template.KeepRunning: every task filed from
+	// this template immediately restarts when its run exits.
+	KeepRunning bool `yaml:"keep-running"`
 	// NothingNeeded is model.Template.NothingNeededAction: "close" (what
 	// empty means) or "ack".
 	NothingNeeded string              `yaml:"nothing-needed"`
@@ -287,6 +290,7 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 		Grants:        grants,
 
 		Interactive:         raw.Interactive,
+		KeepRunning:         raw.KeepRunning,
 		NothingNeededAction: nothingNeeded,
 	}
 	if raw.AutoMerge != nil {

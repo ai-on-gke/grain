@@ -1871,6 +1871,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		SandboxCPUs: p.SandboxCPUs, SandboxMemoryMB: p.SandboxMemoryMB,
 		SandboxDiskGB: p.SandboxDiskGB, NetworkAccess: p.NetworkAccess,
 		NothingNeededAction: p.NothingNeededAction,
+		KeepRunning:         p.KeepRunning,
 		Goal:                p.Goal,
 		NoPort:              p.NoPort,
 		FixesBaseBranch:     p.FixesBaseBranch,

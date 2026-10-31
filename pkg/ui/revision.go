@@ -101,7 +101,7 @@ func scheduleRevision(w Schedule) string {
 		// template is bound, and a bound template's resync rewrites them
 		// only when its binding itself moves, which does change what this
 		// schedule fires at.
-		w.Title, w.Description, w.AutoMerge = "", "", false
+		w.Title, w.Description, w.AutoMerge, w.KeepRunning = "", "", false, false
 		w.Reads, w.Writes, w.Capabilities, w.CustomFields = nil, nil, nil, nil
 		w.NetworkAccess, w.NothingNeededAction = "", ""
 	}

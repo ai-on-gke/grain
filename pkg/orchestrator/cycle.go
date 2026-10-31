@@ -970,6 +970,7 @@ func reconcileSuites(ctx context.Context, deps Deps, now time.Time) error {
 // is no separate ctx.Err() check to make before launching them the way
 // the old sequential loop needed one before each iteration.
 func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
+	settleStoppedKeepRunningTasks(ctx, deps.Store, now)
 	// Nothing is dispatched onto a credential that has no budget left: a
 	// task started now would spend a sandbox and an attempt reaching the
 	// same refusal the run that closed that gate already reached
@@ -2291,8 +2292,9 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// name recorded is the sandbox this run actually uses.
 	var warmSandbox *warmSessionSandbox
 	var sandboxReclaimed bool
+	clearKeepRunningRequeued(deps.Store, task.ID)
 	sandboxKey := sessionSandboxKey(shape, *task, prepared)
-	if task.Interactive {
+	if task.Interactive || task.KeepRunning {
 		warmSandbox, sandboxReclaimed = claimWarmSessionSandbox(deps, task.ID, now)
 		if warmSandbox != nil && warmSandbox.Key != sandboxKey {
 			log.Printf("orchestrator: run %s (task %s): not reusing warm sandbox %s: its shape, target or grants changed",
@@ -2679,7 +2681,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	}
 
 	afterErr := afterAgentRun(ctx, deps, *task, d.RunID, result, runErr, preRunBranchSHA, preRunBranchSHA, now)
-	if afterErr == nil && runErr == nil && task.Interactive && deps.Store != nil {
+	if afterErr == nil && runErr == nil && (task.Interactive || task.KeepRunning || taskKeepRunning(ctx, deps.Store, *task)) && deps.Store != nil {
 		cleanupCtx := context.WithoutCancel(ctx)
 		finishNow := now
 		if deps.Config.Now != nil {

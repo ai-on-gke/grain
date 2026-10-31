@@ -166,6 +166,7 @@ type Template struct {
 	// it is -- including a schedule's, whose task parks on its first chat
 	// until somebody replies, the same as any other interactive task.
 	Interactive bool
+	KeepRunning bool
 
 	CreatedAt time.Time
 }

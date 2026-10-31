@@ -216,6 +216,9 @@ type ProposedTask struct {
 	// NoPort files the proposal as one whose change is not ported to its
 	// repository's other paired branches (model.Task.NoPort).
 	NoPort bool
+	// KeepRunning files the proposal so that its task immediately restarts
+	// when its run exits rather than completing or parking (model.Task.KeepRunning).
+	KeepRunning bool
 	// FixesBaseBranch files the proposal marked as fixing its base branch
 	// while that branch is red (model.FixesBaseBranch): it is not made to
 	// wait on the branch's repair, because it is one.
@@ -898,6 +901,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					"type": "string",
 					"enum": []any{"close", "ack"},
 				},
+				"keep_running":      map[string]any{"type": "boolean"},
 				"no_port":           map[string]any{"type": "boolean"},
 				"fixes_base_branch": map[string]any{"type": "boolean"},
 				"origin":            map[string]any{"type": "string"},
@@ -1041,6 +1045,9 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			}
 			if noPort, ok := argBool(args, "no_port"); ok {
 				task.NoPort = noPort
+			}
+			if keepRunning, ok := argBool(args, "keep_running"); ok {
+				task.KeepRunning = keepRunning
 			}
 			if fixes, ok := argBool(args, "fixes_base_branch"); ok {
 				task.FixesBaseBranch = fixes

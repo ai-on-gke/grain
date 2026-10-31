@@ -102,6 +102,10 @@ type ConsoleSession struct {
 	// capacity on a misunderstanding. An operator who trusts theirs can
 	// turn it on.
 	TasksApproved bool
+	// KeepRunning restarts the session's underlying task immediately when
+	// its run exits without asking a question, rather than parking it to
+	// wait for the next message.
+	KeepRunning bool `json:"keepRunning,omitempty"`
 	// Reads is the repos this session is granted read-only access to
 	// (Task.Reads). The session's sandbox may clone or fetch from them,
 	// but never push commits directly.
@@ -121,6 +125,22 @@ type ConsoleSession struct {
 	// next cycle (orchestrator.syncConsoleSessionTask), so a change here
 	// is what the session's next exchange runs on.
 	Model string `json:"model,omitempty"`
+}
+
+func (s *ConsoleSession) UnmarshalJSON(data []byte) error {
+	type alias ConsoleSession
+	var raw struct {
+		alias
+		KeepRunningSnake *bool `json:"keep_running,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*s = ConsoleSession(raw.alias)
+	if !s.KeepRunning && raw.KeepRunningSnake != nil {
+		s.KeepRunning = *raw.KeepRunningSnake
+	}
+	return nil
 }
 
 // ConsoleSessionPrincipal is who grain approves a session's own
@@ -887,6 +907,7 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 		Grants:        ConsoleSessionGrants(session, defaults...),
 		Tags:          []string{ConsoleSessionTag(session.ID)},
 		Interactive:   true,
+		KeepRunning:   session.KeepRunning,
 		NetworkAccess: ConsoleSessionNetworkAccess(session, opts.NetworkIsolates),
 		Model:         strings.TrimSpace(session.Model),
 		CreatedAt:     &now,

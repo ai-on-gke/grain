@@ -316,6 +316,22 @@ func updateConsoleSession(ctx context.Context, deps Deps, session model.ConsoleS
 	if running {
 		return nil
 	}
+	if session.KeepRunning {
+		if obs != nil && obs.PendingQuestionCommentID != nil {
+			if comments, err := deps.Store.Comments(ctx, task.ID); err == nil {
+				for _, c := range comments {
+					if c.ID == *obs.PendingQuestionCommentID && isConsoleSessionResting(c) {
+						return deps.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
+							o.PendingQuestionCommentID = nil
+						})
+					}
+				}
+			}
+		}
+		if waiting, unanswered, err := consoleSessionRest(ctx, deps, task.ID); err == nil && !waiting && unanswered == nil {
+			return nil
+		}
+	}
 	if obs == nil || obs.PendingQuestionCommentID == nil {
 		return restConsoleSession(ctx, deps, task.ID, now)
 	}
@@ -715,7 +731,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	}
 	chosenModel := strings.TrimSpace(session.Model)
 	if task.Title == title && task.Body == body && task.NetworkAccess == network &&
-		task.Model == chosenModel &&
+		task.Model == chosenModel && task.KeepRunning == session.KeepRunning &&
 		slices.Equal(task.Grants, grants) &&
 		slices.Equal(taskReads, reads) &&
 		slices.Equal(taskWrites, writes) &&
@@ -727,6 +743,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		t.Body = body
 		t.Grants = grants
 		t.NetworkAccess = network
+		t.KeepRunning = session.KeepRunning
 		t.Reads = reads
 		t.Writes = writes
 		t.Links = links

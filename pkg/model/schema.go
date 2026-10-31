@@ -320,7 +320,10 @@ import "strconv"
 // 68 is 67 again for `dispatch-control`, now `api:dispatch-control`.
 //
 // 69 is 67 again for `pipeline-control`, now `api:pipeline-control`.
-const SchemaVersion = 69
+//
+// 70 adds `keep_running` to `task`, `template` and `schedule`
+// (model.Task.KeepRunning, model.Template.KeepRunning, model.Schedule.KeepRunning).
+const SchemaVersion = 70
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -512,6 +515,7 @@ var Tables = []string{
   ` + "`change_target_kind`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1434,6 +1438,7 @@ var Tables = []string{
   ` + "`last_run_at`" + `           DATETIME NULL,
   ` + "`created_at`" + `            DATETIME NOT NULL,
   ` + "`every_n_minutes`" + `       INTEGER  NULL,
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1550,6 +1555,7 @@ var Tables = []string{
   ` + "`change_target_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

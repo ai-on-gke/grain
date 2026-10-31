@@ -391,6 +391,15 @@ var Migrations = []Migration{
 		Description: "rewrite stored pipeline-control grants to api:pipeline-control (the in-process capability is retired)",
 		Up:          rewriteLegacyGrants(map[string]string{"pipeline-control": "api:pipeline-control"}),
 	},
+	{
+		Version:     70,
+		Description: "add keep_running flag to task, template and schedule",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `template` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `schedule` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
@@ -456,6 +465,11 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				if strings.Contains(strings.ToUpper(stmt), "ADD COLUMN") &&
+					(strings.Contains(strings.ToLower(err.Error()), "duplicate column name") ||
+						strings.Contains(strings.ToLower(err.Error()), "already exists")) {
+					continue
+				}
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
 		}
