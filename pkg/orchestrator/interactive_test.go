@@ -25,6 +25,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
+	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -749,4 +750,277 @@ func TestInteractiveRunHostAdoptionMidChatWithRecreateSandboxAndSubsequentTurns(
 	if got := orchestrator.WarmSessionSandboxID(store, director.ID); got != warmSandboxName {
 		t.Fatalf("WarmSessionSandboxID after adopted interactive run = %q, want %q", got, warmSandboxName)
 	}
+}
+
+type simpleAdoptedHost struct {
+	stdout string
+}
+
+func (h *simpleAdoptedHost) Attach(_ context.Context, _ runhost.Info, _ int64, tee io.Writer) (string, error) {
+	if tee != nil {
+		_, _ = io.WriteString(tee, h.stdout)
+	}
+	return h.stdout, nil
+}
+
+func (h *simpleAdoptedHost) Release(_ context.Context, _ runhost.Info, _ string) {}
+
+// TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark verifies three
+// warm-sandbox invariants across daemon restarts:
+//  1. If a task's isolation shape or grants were narrowed while the run was in
+//     flight before the daemon restarted, ResumeAdoptedRun does not stamp the
+//     old privileged sandbox with the narrowed task's key and releases it instead.
+//  2. If an adopted run holding a sandbox-materialized capability calls
+//     recreate_sandbox (whose capability placements could not be restored across
+//     the restart), the degraded rebuilt sandbox is released rather than parked
+//     warm for subsequent turns.
+//  3. When an unchanged first-attempt interactive run (sandbox name == runID) is
+//     adopted and parked warm, defer deps.Ledger.Release runs before
+//     parkWarmSessionInLedger so the idle commitment remains tracked in Ledger.
+func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T) {
+	t.Parallel()
+
+	t.Run("narrowed_task_before_adoption_releases_privileged_sandbox", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		settings(t, store, func(cfg *model.Config) {
+			cfg.SessionSandboxIdleTTL = 30 * time.Minute
+			cfg.ConsoleSessions = []model.ConsoleSession{{
+				ID: model.DirectorSessionID, Title: "Director",
+				Capabilities: []string{selfdebug.CapabilityName}, NetworkAccess: model.NetworkOpen,
+			}}
+		})
+		runSessions(t, store, baseTime)
+		director := sessionTasks(t, store)[0]
+
+		started := time.Now().UTC().Add(-time.Minute)
+		replyToSession(t, store, director.ID, started.Add(-time.Second))
+
+		d := dispatch.Dispatch{TaskID: director.ID, RunID: director.ID + "-1", Attempt: 1}
+		startRun(t, ctx, store, d, started)
+		if err := store.SetRunSandbox(ctx, d.RunID, d.RunID, nil); err != nil {
+			t.Fatal(err)
+		}
+		// Record the dispatch-time privileged keys before the task is narrowed.
+		if err := store.SetRunSandboxKeys(ctx, d.RunID,
+			"shape={CPUs:0 MemoryMB:0 DiskGB:0 NetworkAccess:open GrainSource:true OperatorEnv:false Class:}|grants=task:durable:grain,task:self-debug:grain",
+			"durable:grain,self-debug:grain"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetSpoolCursor(ctx, d.RunID, 0, started); err != nil {
+			t.Fatal(err)
+		}
+
+		// Operator withdraws self-debug and narrows network access BEFORE the adopting daemon reads the task.
+		settings(t, store, func(cfg *model.Config) {
+			cfg.SessionSandboxIdleTTL = 30 * time.Minute
+			cfg.ConsoleSessions = []model.ConsoleSession{{
+				ID: model.DirectorSessionID, Title: "Director",
+				Capabilities: []string{}, NetworkAccess: model.NetworkNone,
+			}}
+		})
+		runSessions(t, store, started.Add(10*time.Second))
+
+		sandboxDir := t.TempDir()
+		sandboxes := orchestrator.NewHostSandboxes(sandboxDir)
+		if _, err := sandboxes.Acquire(ctx, d.RunID, orchestrator.Shape{NetworkAccess: model.NetworkOpen, GrainSource: true}); err != nil {
+			t.Fatal(err)
+		}
+		sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, d.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fw := parsingFramework{
+			parsed:  make(chan string, 1),
+			earlier: make(chan string, 1),
+			result: toolResult(agent.ToolCall{
+				Name:      "comment_on_issue",
+				Arguments: map[string]any{"comment": "finished adopted turn"},
+			}),
+		}
+		deps := orchestrator.Deps{
+			Store:     store,
+			Sandboxes: sandboxes,
+			Framework: orchestrator.StaticFramework(fw),
+			Config: orchestrator.Config{
+				SessionSandboxIdleTTL: 30 * time.Minute,
+				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+				Capabilities:          model.NewCapabilityRegistry(durable.New(), selfdebug.New()),
+			},
+		}
+		info := runhost.Info{
+			Name:    "rh-narrowed",
+			Running: true,
+			Labels:  runhost.Labels{Deployment: "d", Task: director.ID, Run: d.RunID, Protocol: runhost.Protocol, Spool: t.TempDir()},
+		}
+		adopted := orchestrator.AdoptedRun{
+			Adoption: runhost.Adoption{Claim: runhost.Claim{Run: d.RunID, Task: director.ID, Sandbox: d.RunID}, Host: info},
+			Sandbox:  sb,
+		}
+		if err := orchestrator.ResumeAdoptedRun(ctx, deps, &simpleAdoptedHost{stdout: "ok\n"}, adopted); err != nil {
+			t.Fatalf("ResumeAdoptedRun: %v", err)
+		}
+		if got := orchestrator.WarmSessionSandboxID(store, director.ID); got != "" {
+			t.Fatalf("WarmSessionSandboxID = %q, want empty (privileged sandbox must not be parked under narrowed task key)", got)
+		}
+	})
+
+	t.Run("degraded_recreate_with_capability_grant_does_not_park_warm", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		settings(t, store, func(cfg *model.Config) {
+			cfg.SessionSandboxIdleTTL = 30 * time.Minute
+			cfg.ConsoleSessions = []model.ConsoleSession{{
+				ID: model.DirectorSessionID, Title: "Director",
+				Capabilities: []string{selfdebug.CapabilityName}, NetworkAccess: model.NetworkOpen,
+			}}
+		})
+		runSessions(t, store, baseTime)
+		director := sessionTasks(t, store)[0]
+
+		started := time.Now().UTC().Add(-time.Minute)
+		replyToSession(t, store, director.ID, started.Add(-time.Second))
+
+		d := dispatch.Dispatch{TaskID: director.ID, RunID: director.ID + "-1", Attempt: 1}
+		startRun(t, ctx, store, d, started)
+		if err := store.SetRunSandbox(ctx, d.RunID, d.RunID, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetSpoolCursor(ctx, d.RunID, 0, started); err != nil {
+			t.Fatal(err)
+		}
+
+		sandboxDir := t.TempDir()
+		sandboxes := orchestrator.NewHostSandboxes(sandboxDir)
+		if _, err := sandboxes.Acquire(ctx, d.RunID, orchestrator.Shape{NetworkAccess: model.NetworkOpen, GrainSource: true}); err != nil {
+			t.Fatal(err)
+		}
+		sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, d.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		recreations := orchestrator.NewSandboxRecreations()
+		host := &liveAdoptedInteractiveHost{
+			recreations: recreations,
+			store:       store,
+			taskID:      director.ID,
+		}
+		fw := parsingFramework{
+			parsed:  make(chan string, 1),
+			earlier: make(chan string, 1),
+			result: toolResult(agent.ToolCall{
+				Name:      "comment_on_issue",
+				Arguments: map[string]any{"comment": "finished adopted turn after degraded recreate"},
+			}),
+		}
+		deps := orchestrator.Deps{
+			Store:     store,
+			Sandboxes: sandboxes,
+			Framework: orchestrator.StaticFramework(fw),
+			Config: orchestrator.Config{
+				SandboxRecreations:    recreations,
+				SessionSandboxIdleTTL: 30 * time.Minute,
+				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+				Capabilities:          model.NewCapabilityRegistry(durable.New(), selfdebug.New()),
+			},
+		}
+		info := runhost.Info{
+			Name:    "rh-degraded",
+			Running: true,
+			Labels:  runhost.Labels{Deployment: "d", Task: director.ID, Run: d.RunID, Protocol: runhost.Protocol, Spool: t.TempDir()},
+		}
+		adopted := orchestrator.AdoptedRun{
+			Adoption: runhost.Adoption{Claim: runhost.Claim{Run: d.RunID, Task: director.ID, Sandbox: d.RunID}, Host: info},
+			Sandbox:  sb,
+		}
+		if err := orchestrator.ResumeAdoptedRun(ctx, deps, host, adopted); err != nil {
+			t.Fatalf("ResumeAdoptedRun: %v", err)
+		}
+		if host.recreateErr != nil {
+			t.Fatalf("recreate_sandbox failed: %v", host.recreateErr)
+		}
+		if got := orchestrator.WarmSessionSandboxID(store, director.ID); got != "" {
+			t.Fatalf("WarmSessionSandboxID = %q, want empty after adopted rebuild with unrestorable capability", got)
+		}
+	})
+
+	t.Run("first_attempt_adopted_run_retains_idle_park_in_ledger", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		settings(t, store, func(cfg *model.Config) {
+			cfg.SessionSandboxIdleTTL = 30 * time.Minute
+			cfg.ConsoleSessions = []model.ConsoleSession{{
+				ID: model.DirectorSessionID, Title: "Director",
+				Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+			}}
+		})
+		runSessions(t, store, baseTime)
+		director := sessionTasks(t, store)[0]
+
+		started := time.Now().UTC().Add(-time.Minute)
+		replyToSession(t, store, director.ID, started.Add(-time.Second))
+
+		// First attempt: sandbox name == runID ("1-1").
+		d := dispatch.Dispatch{TaskID: director.ID, RunID: director.ID + "-1", Attempt: 1}
+		startRun(t, ctx, store, d, started)
+		if err := store.SetRunSandbox(ctx, d.RunID, d.RunID, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetSpoolCursor(ctx, d.RunID, 0, started); err != nil {
+			t.Fatal(err)
+		}
+
+		sandboxDir := t.TempDir()
+		sandboxes := orchestrator.NewHostSandboxes(sandboxDir)
+		if _, err := sandboxes.Acquire(ctx, d.RunID, orchestrator.Shape{NetworkAccess: model.NetworkOpen}); err != nil {
+			t.Fatal(err)
+		}
+		sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, d.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ledger := &model.Ledger{}
+		t.Cleanup(func() { ledger.EvictOldestIdle(1) })
+		fw := parsingFramework{
+			parsed:  make(chan string, 1),
+			earlier: make(chan string, 1),
+			result: toolResult(agent.ToolCall{
+				Name:      "comment_on_issue",
+				Arguments: map[string]any{"comment": "finished first-attempt adopted turn"},
+			}),
+		}
+		deps := orchestrator.Deps{
+			Store:      store,
+			Sandboxes:  sandboxes,
+			Ledger:     ledger,
+			AgentShape: model.Commitment{CPUs: 2, MemoryMB: 4096},
+			Framework:  orchestrator.StaticFramework(fw),
+			Config: orchestrator.Config{
+				SessionSandboxIdleTTL: 30 * time.Minute,
+				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+				Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			},
+		}
+		info := runhost.Info{
+			Name:    "rh-ledger",
+			Running: true,
+			Labels:  runhost.Labels{Deployment: "d", Task: director.ID, Run: d.RunID, Protocol: runhost.Protocol, Spool: t.TempDir()},
+		}
+		adopted := orchestrator.AdoptedRun{
+			Adoption: runhost.Adoption{Claim: runhost.Claim{Run: d.RunID, Task: director.ID, Sandbox: d.RunID}, Host: info},
+			Sandbox:  sb,
+		}
+		if err := orchestrator.ResumeAdoptedRun(ctx, deps, &simpleAdoptedHost{stdout: "ok\n"}, adopted); err != nil {
+			t.Fatalf("ResumeAdoptedRun: %v", err)
+		}
+		if got := orchestrator.WarmSessionSandboxID(store, director.ID); got != d.RunID {
+			t.Fatalf("WarmSessionSandboxID = %q, want %q", got, d.RunID)
+		}
+		if got := ledger.IdleCount(model.PoolAgent); got != 1 {
+			t.Fatalf("ledger.IdleCount(PoolAgent) = %d, want 1 (deferred Release must not wipe out parked warm sandbox)", got)
+		}
+	})
 }

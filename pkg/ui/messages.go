@@ -493,12 +493,22 @@ func (c *Client) RecordDelivered(ctx context.Context, id string, through int64) 
 		return validationErrorf("through must be the id of a comment on task %s", id)
 	}
 	now := c.now()
-	if err := c.Store.AdvanceDelivered(ctx, id, through, now); err != nil {
-		return err
-	}
 	return c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
-		o.PendingQuestionCommentID = nil
-		o.PendingSecret = ""
+		prev := int64(0)
+		if o.DeliveredCommentID != nil {
+			prev = *o.DeliveredCommentID
+		}
+		if through <= prev {
+			return
+		}
+		o.DeliveredCommentID = &through
+		for _, comment := range comments {
+			if comment.ID > prev && comment.ID <= through && comment.Author.Actor.Kind == model.PrincipalHuman {
+				o.PendingQuestionCommentID = nil
+				o.PendingSecret = ""
+				break
+			}
+		}
 	})
 }
 

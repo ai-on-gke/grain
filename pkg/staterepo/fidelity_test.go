@@ -486,6 +486,9 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("recording run startup: %v", err)
 	}
+	if err := store.SetRunSandboxKeys(ctx, "a1b2-1", "shape=default|target=owner/payments-api", "gcp-key:label"); err != nil {
+		t.Fatalf("recording run sandbox keys: %v", err)
+	}
 	// A run of grain's own CI (ci_run, ci_job, ci_step): the three tables
 	// whose interesting column is a step's output, which is raw bytes
 	// out of somebody else's build and exactly the thing a round trip

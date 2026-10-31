@@ -416,3 +416,94 @@ func TestPostAgentMessageDerivesAMissingSummaryAndRefusesABadOne(t *testing.T) {
 		t.Errorf("an over-long summary was accepted")
 	}
 }
+
+// RecordDelivered clears PendingQuestionCommentID and PendingSecret only when
+// the delivered mark actually advances across at least one PrincipalHuman
+// reply: a duplicate/stale delivery report or an agent-to-agent message must
+// never lift the task's parked question or pending secret prompt.
+func TestRecordDeliveredOnlyClearsPendingQuestionOnNewHumanReply(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	task := create(t, client, ctx)
+	running(t, store, ctx, task.ID)
+
+	seedHuman, err := store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "initial instruction",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RecordDelivered(ctx, task.ID, seedHuman); err != nil {
+		t.Fatalf("RecordDelivered(seedHuman): %v", err)
+	}
+
+	asked, err := client.PostAgentMessage(ctx, task.ID, "Need confirmation and secret", "Confirm and set secret", nil)
+	if err != nil {
+		t.Fatalf("PostAgentMessage: %v", err)
+	}
+	if err := store.ObserveField(ctx, task.ID, client.Now(), func(o *model.Observation) {
+		o.PendingSecret = "stripe-api-key"
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Stale/duplicate RecordDelivered at or below DeliveredCommentID must NOT clear pending fields.
+	if err := client.RecordDelivered(ctx, task.ID, seedHuman); err != nil {
+		t.Fatalf("RecordDelivered(stale): %v", err)
+	}
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.PendingQuestionCommentID == nil || *obs.PendingQuestionCommentID != asked.ID || obs.PendingSecret != "stripe-api-key" {
+		t.Fatalf("after stale RecordDelivered: PendingQuestionCommentID=%v PendingSecret=%q, want %d and stripe-api-key",
+			obs.PendingQuestionCommentID, obs.PendingSecret, asked.ID)
+	}
+
+	// 2. Advancing DeliveredCommentID over a non-human (agent) comment must NOT clear pending fields.
+	peerComment, err := store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "peer agent note",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "peer-task"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RecordDelivered(ctx, task.ID, peerComment); err != nil {
+		t.Fatalf("RecordDelivered(peerComment): %v", err)
+	}
+	obs, err = store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.DeliveredCommentID == nil || *obs.DeliveredCommentID != peerComment {
+		t.Fatalf("DeliveredCommentID = %v, want %d", obs.DeliveredCommentID, peerComment)
+	}
+	if obs.PendingQuestionCommentID == nil || *obs.PendingQuestionCommentID != asked.ID || obs.PendingSecret != "stripe-api-key" {
+		t.Fatalf("after non-human RecordDelivered: PendingQuestionCommentID=%v PendingSecret=%q, want %d and stripe-api-key",
+			obs.PendingQuestionCommentID, obs.PendingSecret, asked.ID)
+	}
+
+	// 3. Advancing DeliveredCommentID across a PrincipalHuman reply DOES clear both pending fields.
+	humanReply, err := store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "yes, proceed",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RecordDelivered(ctx, task.ID, humanReply); err != nil {
+		t.Fatalf("RecordDelivered(humanReply): %v", err)
+	}
+	obs, err = store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.DeliveredCommentID == nil || *obs.DeliveredCommentID != humanReply {
+		t.Fatalf("DeliveredCommentID = %v, want %d", obs.DeliveredCommentID, humanReply)
+	}
+	if obs.PendingQuestionCommentID != nil || obs.PendingSecret != "" {
+		t.Fatalf("after human RecordDelivered: PendingQuestionCommentID=%v PendingSecret=%q, want nil and empty",
+			obs.PendingQuestionCommentID, obs.PendingSecret)
+	}
+}

@@ -2457,6 +2457,11 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		}
 		return fmt.Errorf("orchestrator: recording run %s's sandbox: %w", d.RunID, err)
 	}
+	if task.Interactive {
+		if kerr := deps.Store.SetRunSandboxKeys(ctx, d.RunID, sandboxKey, sessionGrantsKey(*task)); kerr != nil {
+			log.Printf("orchestrator: recording run %s's sandbox keys: %v", d.RunID, kerr)
+		}
+	}
 	var sandbox Sandbox
 	var sandboxCounted func(context.Context)
 	if sandboxReused {

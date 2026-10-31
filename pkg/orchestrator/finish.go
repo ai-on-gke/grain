@@ -467,6 +467,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 					if _, err := relayCommentWithAttachments(ctx, store, task, strings.TrimSpace(result.FinalText), nil, now); err != nil {
 						return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 					}
+					hasComment = true
 				}
 				if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
 					waitingMessage = true

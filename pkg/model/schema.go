@@ -1292,6 +1292,17 @@ var Tables = []string{
   PRIMARY KEY (` + "`run_id`" + `)
 )`,
 
+	// task_run_sandbox_key records the sessionSandboxKey and sessionGrantsKey
+	// a run's sandbox was built or reused under, so an adopting daemon after a
+	// restart enforces the exact same warm-sandbox isolation key even if the
+	// task's grants, network access, target, or size were edited mid-run.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_sandbox_key`" + ` (
+  ` + "`run_id`" + `      TEXT NOT NULL,
+  ` + "`sandbox_key`" + ` TEXT NOT NULL,
+  ` + "`grants_key`" + `  TEXT NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
+)`,
+
 	`CREATE TABLE IF NOT EXISTS ` + "`lease`" + ` (
   ` + "`run_id`" + `     TEXT     NOT NULL,
   ` + "`capability`" + ` TEXT     NOT NULL,
