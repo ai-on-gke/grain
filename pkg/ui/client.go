@@ -4758,6 +4758,7 @@ func (c *Client) mutate(ctx context.Context, id string, apply func(*model.Task) 
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
+	c.ensureConsoleSessionSnapshot(ctx, *task)
 	return c.Store.UpdateTask(ctx, id, apply)
 }
 

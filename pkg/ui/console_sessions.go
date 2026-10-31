@@ -294,60 +294,61 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 		}
 		if openTask != nil {
 			prev, hasPrev := model.LastSyncedConsoleSession(c.Store, openTask.ID)
-			if strings.TrimSpace(openTask.Title) != "" && (!hasPrev || openTask.Title != prev.Title || s.Title == prev.Title) {
+			if c.configRepoOnly(ctx) && hasPrev && strings.TrimSpace(openTask.Title) != "" &&
+				(openTask.Title != prev.Title || model.ConsoleSessionTitle(s) == prev.Title) {
 				title = openTask.Title
 			}
-			if len(openTask.Grants) > 0 {
-				capabilities = make([]string, 0, len(openTask.Grants))
-				for _, g := range openTask.Grants {
-					if g.Capability == "" || g.Capability == model.DurableCapability {
-						continue
+			if hasPrev {
+				if len(openTask.Grants) > 0 {
+					capabilities = make([]string, 0, len(openTask.Grants))
+					for _, g := range openTask.Grants {
+						if g.Capability == "" || g.Capability == model.DurableCapability {
+							continue
+						}
+						if g.Via == model.GrantByDefault && !slices.Contains(s.Capabilities, g.Capability) {
+							continue
+						}
+						if !slices.Contains(capabilities, g.Capability) {
+							capabilities = append(capabilities, g.Capability)
+						}
 					}
-					if g.Via == model.GrantByDefault && !slices.Contains(s.Capabilities, g.Capability) {
-						continue
+				}
+				if openTask.NetworkAccess != "" || prev.NetworkAccess != openTask.NetworkAccess {
+					if !(s.NetworkAccess == model.NetworkNone && c.Config.SandboxShapeIgnored && openTask.NetworkAccess == model.NetworkOpen) {
+						networkAccess = string(openTask.NetworkAccess)
 					}
-					if !slices.Contains(capabilities, g.Capability) {
-						capabilities = append(capabilities, g.Capability)
+				}
+				tasksApproved = model.ConsoleSessionQueuesProposals(sessions, *openTask)
+				if openTask.Reads != nil || len(s.Reads) == 0 {
+					stateRepo := c.stateRepoRef()
+					reads = make([]string, 0, len(openTask.Reads))
+					for _, r := range openTask.Reads {
+						if stateRepo.Owner != "" && r.Same(stateRepo) &&
+							!slices.ContainsFunc(s.Reads, func(sr model.RepoRef) bool { return sr.Same(stateRepo) }) {
+							continue
+						}
+						reads = append(reads, r.String())
 					}
 				}
-			}
-			if openTask.NetworkAccess != "" || (hasPrev && prev.NetworkAccess != openTask.NetworkAccess) {
-				if !(s.NetworkAccess == model.NetworkNone && c.Config.SandboxShapeIgnored && openTask.NetworkAccess == model.NetworkOpen) {
-					networkAccess = string(openTask.NetworkAccess)
-				}
-			}
-			tasksApproved = model.ConsoleSessionQueuesProposals(sessions, *openTask)
-			if openTask.Reads != nil || len(s.Reads) == 0 {
-				stateRepo := c.stateRepoRef()
-				reads = make([]string, 0, len(openTask.Reads))
-				for _, r := range openTask.Reads {
-					if stateRepo.Owner != "" && r.Same(stateRepo) &&
-						!slices.ContainsFunc(s.Reads, func(sr model.RepoRef) bool { return sr.Same(stateRepo) }) {
-						continue
+				if openTask.Writes != nil || len(s.Writes) == 0 {
+					writes = make([]WriteTarget, 0, len(openTask.Writes))
+					for _, w := range openTask.Writes {
+						writes = append(writes, WriteTarget{
+							Repo: w.Repo.String(),
+							Base: w.Base,
+						})
 					}
-					reads = append(reads, r.String())
 				}
-			}
-			if openTask.Writes != nil || len(s.Writes) == 0 {
-				writes = make([]WriteTarget, 0, len(openTask.Writes))
-				for _, w := range openTask.Writes {
-					writes = append(writes, WriteTarget{
-						Repo: w.Repo.String(),
-						Base: w.Base,
-					})
+				if openTask.Model != "" || prev.Model != openTask.Model {
+					modelChoice = openTask.Model
 				}
-			}
-			if openTask.Model != "" || (hasPrev && prev.Model != openTask.Model) {
-				modelChoice = openTask.Model
-			}
-			var linkedSpace string
-			for _, l := range openTask.Links {
-				if l.Kind == model.LinkGoogleChat {
-					linkedSpace = l.Target
-					break
+				var linkedSpace string
+				for _, l := range openTask.Links {
+					if l.Kind == model.LinkGoogleChat {
+						linkedSpace = l.Target
+						break
+					}
 				}
-			}
-			if linkedSpace != "" || hasPrev {
 				googleChatSpace = linkedSpace
 			}
 		}
@@ -476,7 +477,8 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			return nil, err
 		}
 	}
-	session := sessions[index]
+	origSession := sessions[index]
+	session := origSession
 	staticCaps := append([]string{}, session.Capabilities...)
 	if req.Title != nil {
 		switch {
@@ -670,6 +672,18 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				TasksApproved:   session.TasksApproved,
 				GoogleChatSpace: session.GoogleChatSpace,
 			})
+		} else if _, hasPrev := model.LastSyncedConsoleSession(c.Store, openTask.ID); !hasPrev {
+			model.RecordSyncedConsoleSession(c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
+				Capabilities:    origSession.Capabilities,
+				Defaults:        defaults,
+				Reads:           origSession.Reads,
+				Writes:          origSession.Writes,
+				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, !c.Config.SandboxShapeIgnored),
+				Model:           strings.TrimSpace(origSession.Model),
+				Title:           model.ConsoleSessionTitle(origSession),
+				TasksApproved:   origSession.TasksApproved,
+				GoogleChatSpace: origSession.GoogleChatSpace,
+			})
 		}
 	}
 	if writable {
@@ -679,6 +693,39 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		}
 	}
 	return c.ListConsoleSessions(ctx)
+}
+
+func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Task) {
+	sessionID, ok := model.ConsoleSessionIDOf(task)
+	if !ok {
+		return
+	}
+	if _, hasPrev := model.LastSyncedConsoleSession(c.Store, task.ID); hasPrev {
+		return
+	}
+	cfg, err := c.consoleSessionConfig(ctx)
+	if err != nil {
+		return
+	}
+	session, ok := model.ConsoleSessionByID(model.ConsoleSessionsOr(cfg.ConsoleSessions), sessionID)
+	if !ok {
+		return
+	}
+	defaults, err := model.DeploymentDefaultCapabilities(ctx, c.Store)
+	if err != nil {
+		return
+	}
+	model.RecordSyncedConsoleSession(c.Store, task.ID, model.ConsoleSessionConfigSnapshot{
+		Capabilities:    session.Capabilities,
+		Defaults:        defaults,
+		Reads:           session.Reads,
+		Writes:          session.Writes,
+		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
+		Model:           strings.TrimSpace(session.Model),
+		Title:           model.ConsoleSessionTitle(session),
+		TasksApproved:   session.TasksApproved,
+		GoogleChatSpace: session.GoogleChatSpace,
+	})
 }
 
 func slugifySessionID(title string) string {

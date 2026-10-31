@@ -66,6 +66,10 @@ test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and 
     const initialSettings = initialSettingsRes.ok()
       ? await initialSettingsRes.json()
       : null;
+    const initialDeploymentRes = await page.request.get("/api/deployment");
+    const initialDeployment = initialDeploymentRes.ok()
+      ? await initialDeploymentRes.json()
+      : null;
 
     // -----------------------------------------------------------------------
     // STEP 1: AI Provider Connection Management Lifecycle
@@ -584,10 +588,23 @@ test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and 
     // Clean up created test teams
 
     // Restore initial settings to avoid polluting shared test state
+    if (initialDeployment) {
+      await page.request
+        .put("/api/deployment", {
+          data: {
+            defaultModel: initialDeployment.defaultModel || "",
+            modelSettings: initialDeployment.modelSettings || [],
+          },
+        })
+        .catch(() => {});
+    }
     if (initialSettings) {
       await page.request
         .put("/api/settings", {
-          data: initialSettings,
+          data: {
+            agentBackends: initialSettings.agentBackends,
+            defaultModel: initialSettings.defaultModel,
+          },
         })
         .catch(() => {});
     }
