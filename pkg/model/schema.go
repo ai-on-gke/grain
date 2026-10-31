@@ -324,7 +324,11 @@ import "strconv"
 // 70 adds `settings_locked` to `grain_config`: whether non-bootstrap settings
 // are locked in the UI and REST API in favour of config repository pull
 // requests (off by default).
-const SchemaVersion = 70
+//
+// 71 is 67 again for `memory`, now `api:memory`.
+//
+// 72 is 67 again for `release-notes`, now `api:release-notes`.
+const SchemaVersion = 72
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

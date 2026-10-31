@@ -36,10 +36,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
 	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/change"
@@ -1239,204 +1237,6 @@ func (c *deliveredCursor) notByChat(messages []ui.Message) []ui.Message {
 	return kept
 }
 
-// daemonMemory implements mcp.MemoryStore by asking a running "grain
-// daemon" for what it has learned about working here (pkg/ui's
-// /api/memory routes) -- the fourth REST hop this file makes, over the
-// same client as the three above.
-//
-// What it names a task for is not which memory it writes -- a memory is
-// about the deployment or about a repository, never about the run
-// writing it, and the run's authority to touch one at all is the
-// "memory" capability its task holds (pkg/capability/memory) rather than
-// anything in the call. It is who the write is *recorded as*
-// (model.Memory.UpdatedBy): a run and a person editing the Settings pane
-// send the same body to the same handler, so unless this hop says which
-// it is, nothing about a landed write does -- and memory is replaced
-// wholesale, so an operator's correction could be overwritten by
-// tonight's memory agent with no trace that a person had said otherwise.
-// This process knows the answer for its own side of that, from -task, so
-// it says so; the browser says nothing and is recorded as the
-// deployment's own actor (ui.Client.PutMemory).
-//
-// It is also the one hop here that formats an answer rather than passing
-// one along, and only for one field: how old a note is, in the words
-// model.MemoryAge already gives every prompt. pkg/mcp does not import
-// pkg/model (its own limits are restated there for the same reason), and
-// this is the one place that has both.
-type daemonMemory struct {
-	client *ui.HTTPClient
-	taskID string
-	now    func() time.Time
-}
-
-// newDaemonMemory is the memory store for the run of task taskID. Its
-// memory grant reaches every scope: memory is the deployment's, with no
-// team layer to narrow a run to (single-tenant reset, stage 4d).
-func newDaemonMemory(client *ui.HTTPClient, taskID string) daemonMemory {
-	return daemonMemory{client: client, taskID: taskID}
-}
-
-func (d daemonMemory) WriteMemory(ctx context.Context, repo, text string) error {
-	_, err := d.client.PutMemory(ctx, repo, text, d.author())
-	return err
-}
-
-func (d daemonMemory) WriteMemoryDocument(ctx context.Context, repo, name, summary, text string) error {
-	_, err := d.client.PutMemoryDocument(ctx, repo, name, summary, text, d.author())
-	return err
-}
-
-// author is the run this process serves, as a principal: an agent, named
-// by its task, which is the spelling everything else that attributes
-// work to a run uses (orchestrator.finish's own agentPrincipal, and
-// pkg/capability/selfrepair's). The zero Principal when there is no task
-// to name -- which cannot happen through `grain daemon`, since -task and
-// -server are required together, but can when somebody points a real MCP
-// client at this binary by hand: a write with nobody to name is better
-// recorded as the deployment's own actor than as an agent that does not
-// exist.
-func (d daemonMemory) author() model.Principal {
-	if d.taskID == "" {
-		return model.Principal{}
-	}
-	return model.Principal{Kind: model.PrincipalAgent, ID: d.taskID}
-}
-
-func (d daemonMemory) ListMemoryDocuments(ctx context.Context) ([]mcp.MemoryDocumentEntry, error) {
-	docs, err := d.client.ListMemoryDocuments(ctx)
-	if err != nil {
-		return nil, err
-	}
-	entries := make([]mcp.MemoryDocumentEntry, 0, len(docs))
-	for _, doc := range docs {
-		entries = append(entries, mcp.MemoryDocumentEntry{
-			Repo: doc.Repo, Name: doc.Name, Summary: doc.Summary,
-			Age: d.age(doc.UpdatedAt), Length: doc.Length, ByHand: byHand(doc.UpdatedByKind),
-		})
-	}
-	return entries, nil
-}
-
-func (d daemonMemory) ReadMemoryDocument(ctx context.Context, repo, name string) (mcp.MemoryDocumentText, error) {
-	doc, err := d.client.GetMemoryDocument(ctx, repo, name)
-	if err != nil {
-		return mcp.MemoryDocumentText{}, err
-	}
-	return mcp.MemoryDocumentText{
-		Repo: doc.Repo, Name: doc.Name, Summary: doc.Summary,
-		Age: d.age(doc.UpdatedAt), Text: doc.Text, ByHand: byHand(doc.UpdatedByKind),
-	}, nil
-}
-
-// daemonReleaseNotes implements mcp.ReleaseNotesStore by asking a
-// running "grain daemon" for what this deployment has been doing and for
-// somewhere to publish the week (pkg/ui's /api/release-notes routes) --
-// the fifth REST hop this file makes, over the same client as the four
-// above.
-//
-// What it names a task for is daemonMemory's own reason and not a
-// different one: the run's authority to publish at all is the
-// "release-notes" capability its task holds
-// (pkg/capability/releasenotes), and the task id is who the write is
-// *recorded as* (model.ReleaseNote.UpdatedBy). A week's notes are this
-// deployment's public account of itself, so whether a week was written
-// by an agent or corrected afterwards by a person is exactly the kind of
-// thing a reader is entitled to see, and this hop is the only place that
-// knows which of the two it is.
-//
-// Neither call resolves a week for itself. An empty period travels as an
-// empty period and the daemon fills it in with the week that just ended
-// on the deployment's own clock (ui.Client.releaseNotePeriod), so the
-// numbers a run reads and the week it publishes cannot end up being
-// different weeks because this process and the daemon disagree about
-// what day it is.
-type daemonReleaseNotes struct {
-	client *ui.HTTPClient
-	taskID string
-}
-
-func (d daemonReleaseNotes) ClusterStats(ctx context.Context, period string) (mcp.ClusterStats, error) {
-	stats, err := d.client.ClusterStats(ctx, period)
-	if err != nil {
-		return mcp.ClusterStats{}, err
-	}
-	out := mcp.ClusterStats{
-		Period: stats.Period,
-		// Dates rather than timestamps: the window is whole days on the
-		// deployment's own calendar, and a reader of the sentence this
-		// ends up in wants "2026-09-14 to 2026-09-21".
-		Since:                stats.Since.Format(time.DateOnly),
-		Until:                stats.Until.Format(time.DateOnly),
-		PullRequestsMerged:   stats.PullRequestsMerged,
-		PullRequestsMeasured: stats.PullRequestsMeasured,
-		LinesAdded:           stats.LinesAdded,
-		LinesDeleted:         stats.LinesDeleted,
-		TasksCompleted:       stats.TasksCompleted,
-		TasksFiled:           stats.TasksFiled,
-		Runs:                 stats.Runs,
-		RunsSucceeded:        stats.RunsSucceeded,
-		AgentHours:           stats.AgentHours,
-	}
-	for _, r := range stats.Repos {
-		out.Repos = append(out.Repos, mcp.RepoStats{
-			Repo: r.Repo, PullRequestsMerged: r.PullRequestsMerged,
-			PullRequestsMeasured: r.PullRequestsMeasured,
-			LinesAdded:           r.LinesAdded,
-			LinesDeleted:         r.LinesDeleted,
-			TasksCompleted:       r.TasksCompleted, TasksFiled: r.TasksFiled, Runs: r.Runs,
-		})
-	}
-	return out, nil
-}
-
-// WriteReleaseNotes publishes the week and answers with the week that
-// was actually written -- which is the point of the return value: a run
-// that named no period has just published something, and the sentence it
-// reports back to the person reading its closing note should name the
-// week rather than "this one".
-func (d daemonReleaseNotes) WriteReleaseNotes(ctx context.Context, period, title, text string) (string, error) {
-	note, err := d.client.PutReleaseNote(ctx, period, title, text, d.author())
-	if err != nil {
-		return "", err
-	}
-	return note.Period, nil
-}
-
-// author is daemonMemory.author's principal, for daemonMemory.author's
-// reasons: the run this process serves, as an agent named by its task,
-// and the zero Principal when there is no task to name.
-func (d daemonReleaseNotes) author() model.Principal {
-	if d.taskID == "" {
-		return model.Principal{}
-	}
-	return model.Principal{Kind: model.PrincipalAgent, ID: d.taskID}
-}
-
-// byHand is whether a note was written by a person rather than by an
-// agent (model.Memory.UpdatedBy), read off the kind the API reports.
-//
-// The second field this file translates rather than passes along, for
-// the reason age above is the first: pkg/mcp deliberately does not
-// import pkg/model, and this process is the one place holding both. A
-// kind that is neither -- automation, or the empty string every row
-// written before the author was recorded carries -- is false, since the
-// mark is a claim that somebody typed it and unknown is not that claim.
-func byHand(kind string) bool { return kind == string(model.PrincipalHuman) }
-
-// age is model.MemoryAge against this process's own clock, and "" for a
-// row that carries no timestamp -- the same silence MemoryAge keeps
-// rather than inventing an age for a note whose write left none.
-func (d daemonMemory) age(updated *time.Time) string {
-	if updated == nil {
-		return ""
-	}
-	now := time.Now().UTC()
-	if d.now != nil {
-		now = d.now()
-	}
-	return model.MemoryAge(*updated, now)
-}
-
 // SandboxEnv collects the repeated -sandbox-env flag: NAME=VALUE entries
 // a -sandbox-root server's run_command sets on top of its allowlist
 // (mcp.NewSandboxTools), checked by mcp.ValidateSandboxEnv once
@@ -1537,7 +1337,7 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
-	memory.CapabilityName, grainci.CapabilityName, deploymenthealth.CapabilityName,
+	grainci.CapabilityName, deploymenthealth.CapabilityName,
 	selfupgrade.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
@@ -2464,7 +2264,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 				TaskReadRepos:    taskReadRepos,
 				MayReadFullConfig: grants.Has(selfdebug.CapabilityName) ||
 					apiGrants.Allows("settings:read", "") || apiGrants.Allows("repos:read", ""),
-				MayReadAllMemory: grants.Has(memory.CapabilityName) || apiGrants.Allows("memory:read", ""),
+				MayReadAllMemory: apiGrants.Allows("memory:read", ""),
 				MayReadMetrics:   grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", ""),
 				MayReadPipeline:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", "") || apiGrants.Allows("dispatch:read", ""),
 				MayReadHealth:    grants.Has(deploymenthealth.CapabilityName) || apiGrants.Allows("deployment:read", ""),
@@ -2495,24 +2295,6 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		}
 		registry.Register(mcp.NewLiveProposalTools(escapeSink, proposeRepoList.Nameable(), *taskID,
 			liveFiler)...)
-		// update_memory is the one grant-gated tool that also needs the
-		// daemon: what it writes is a row in the daemon's store, so a
-		// run granted memory with no daemon to ask gets no tool at all
-		// rather than one that could only refuse. The grant is still
-		// what decides whether it appears -- see grantedTools for the
-		// tools that depend on the grant alone.
-		if grants.Has(memory.CapabilityName) {
-			registry.Register(mcp.NewMemoryTools(
-				newDaemonMemory(client, *taskID))...)
-		}
-		// The same arrangement for the weekly release-notes job: what it
-		// counts and what it publishes are both the daemon's, so a run
-		// granted release-notes with no daemon to ask gets no tools at
-		// all rather than two that could only refuse.
-		if grants.Has(releasenotes.CapabilityName) {
-			registry.Register(mcp.NewReleaseNotesTools(
-				daemonReleaseNotes{client: client, taskID: *taskID})...)
-		}
 		if grants.Has(quarantine.CapabilityName) {
 			ws := *root
 			if ws == "" {

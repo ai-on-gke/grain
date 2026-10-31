@@ -50,7 +50,7 @@ func systemSchedule() model.Schedule {
 		Title:      "Write down what grain has learned about working here",
 		Body:       "You are grain's memory.",
 		Reads:      []model.RepoRef{{Owner: "bwsalmon", Name: "grain-home"}},
-		Grants:     []model.Grant{{Capability: "memory", Via: model.GrantByGrain}},
+		Grants:     []model.Grant{{Capability: "api:memory", Via: model.GrantByGrain}},
 		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 3 * 60},
 		Overlap:    model.OverlapSkip,
 		Enabled:    true,

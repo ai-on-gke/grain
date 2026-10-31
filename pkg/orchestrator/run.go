@@ -37,7 +37,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
@@ -1170,11 +1169,11 @@ func resolvePromptExtension(ctx context.Context, store *model.Store, deployment 
 // made to read any of it. now is what turns a row's timestamp into that
 // age.
 //
-// Only for a task holding the memory capability, because reading a
-// document is one of that capability's tools (pkg/mcp's
-// read_memory_document): telling every other run that a note it has no
-// way to open exists would be a line of prompt whose only possible
-// effect is to send a run looking for a tool it does not have.
+// Only for a task holding the memory:read scope (via api:memory,
+// api:memory:read, or the bare memory alias): telling every other run
+// that a note it has no way to open exists would be a line of prompt
+// whose only possible effect is to send a run looking for a tool it does
+// not have.
 func resolveMemory(ctx context.Context, store *model.Store, task model.Task, now time.Time) (string, error) {
 	deployment, err := store.GetMemory(ctx, nil)
 	if err != nil {
@@ -1188,7 +1187,7 @@ func resolveMemory(ctx context.Context, store *model.Store, task model.Task, now
 		}
 	}
 	text := model.MemoryFor(memoryText(deployment), memoryText(repoMemory))
-	if !hasGrant(task, memory.CapabilityName) {
+	if !hasAPIScope(task, "memory:read") {
 		return text, nil
 	}
 	scopes := []model.MemoryScope{{Repo: nil}}
@@ -1500,12 +1499,21 @@ var grainCLIGrants = []struct{ grant, commands string }{
 // `grain` commands it unlocks, plus one for any api grant.
 func grainCLIGrantBullets(grants []model.Grant) string {
 	held := map[string]bool{}
+	names := make([]string, 0, len(grants))
 	api := false
 	for _, g := range grants {
 		held[g.Capability] = true
+		names = append(names, g.Capability)
 		if strings.HasPrefix(g.Capability, model.APIGrantPrefix) {
 			api = true
 		}
+	}
+	apiSet := model.APIGrantsOf(names)
+	if apiSet.Has("memory:write") {
+		held["memory"] = true
+	}
+	if apiSet.Has("release-notes:read") || apiSet.Has("release-notes:write") {
+		held["release-notes"] = true
 	}
 	var b strings.Builder
 	for _, c := range grainCLIGrants {
@@ -4108,7 +4116,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // serves no MCP tool at all may be read by the run's agent framework
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName, memory.CapabilityName,
+	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
 	grainci.CapabilityName, deploymenthealth.CapabilityName, selfupgrade.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
@@ -4255,6 +4263,14 @@ func hasGrant(task model.Task, capability string) bool {
 		}
 	}
 	return false
+}
+
+func hasAPIScope(task model.Task, scope model.APIScope) bool {
+	names := make([]string, 0, len(task.Grants))
+	for _, g := range task.Grants {
+		names = append(names, g.Capability)
+	}
+	return model.APIGrantsOf(names).Has(scope)
 }
 
 // appendSection joins one more section onto a prompt, blank-line

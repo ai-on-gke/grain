@@ -4447,8 +4447,6 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 			mayReadHealth = true
 		case "bootstrap-playbooks":
 			mayReadPlaybooks = true
-		case "memory":
-			mayReadAllMemory = true
 		case "read-issues":
 			mayReadIssues = true
 		case "db-read", "db-write":
