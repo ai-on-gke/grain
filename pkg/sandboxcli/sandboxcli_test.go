@@ -434,3 +434,20 @@ func TestSandboxCLIReadsOtherTasksCI(t *testing.T) {
 		t.Errorf("ci log --task: %d %q %s", code, out, errOut)
 	}
 }
+
+// --tail is a byte count wherever the namespace serves it
+// (namespace.Server's tail parameter), so `grain log --tail 2` prints
+// the last two bytes of the answer, not its last two entries -- which is
+// what the help said when a walkthrough read ".\n" back from it
+// (docs/test-runs/2026-10-31-sandbox-grain-cli.md, F1).
+func TestTailHelpSaysBytes(t *testing.T) {
+	for _, command := range []string{"read", "ci log", "log"} {
+		help := sandboxCommandHelp[command]
+		if !strings.Contains(help, "bytes") {
+			t.Errorf("grain %s's help does not say --tail counts bytes:\n%s", command, help)
+		}
+		if strings.Contains(help, "last N lines") {
+			t.Errorf("grain %s's help still says --tail counts lines:\n%s", command, help)
+		}
+	}
+}
