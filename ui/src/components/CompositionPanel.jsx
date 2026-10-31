@@ -69,6 +69,7 @@ const LABELS = {
   nothingNeeded: "Nothing needed",
   model: "Model",
   autoMerge: "Auto-merge",
+  keepRunning: "Keep running",
   approval: "Approval",
 };
 

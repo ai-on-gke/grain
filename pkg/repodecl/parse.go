@@ -141,6 +141,9 @@ type rawTemplate struct {
 	// Interactive is model.Template.Interactive: every task filed from
 	// this template is a live chat.
 	Interactive bool `yaml:"interactive"`
+	// KeepRunning is model.Template.KeepRunning: every task filed from
+	// this template immediately restarts when its run exits.
+	KeepRunning bool `yaml:"keep-running"`
 	// Priority is model.Template.Priority: optional default priority for
 	// tasks filed from this template.
 	Priority *int `yaml:"priority"`
@@ -300,6 +303,7 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 		Grants:        grants,
 
 		Interactive:         raw.Interactive,
+		KeepRunning:         raw.KeepRunning,
 		Priority:            priority,
 		NothingNeededAction: nothingNeeded,
 	}
