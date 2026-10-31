@@ -108,7 +108,7 @@ export function newTaskFormLayers(form, { repo, templateId, boardId } = {}) {
 
 // resolveNewTaskForm is the form for one repo, template and board:
 // {configured, fields: {<id>: {visibility, order, label, helpText,
-// default, defaultSet, offered, allowNoRepo, allowGoogle3, presets,
+// default, defaultSet, offered, allowNoRepo, allowChangeTargets, presets,
 // defaultPreset, allowCustomNumbers}}, capabilities: {defaults, offered,
 // hidden, display}}. defaultSet says a layer chose the default, which
 // is what NewTaskOverlay.jsx re-applies when the repo or template
@@ -148,8 +148,8 @@ export function resolveNewTaskForm(config, ctx = {}) {
       if (Array.isArray(fc.offered)) f.offered = fc.offered;
       if (typeof fc.allow_no_repo === "boolean")
         f.allowNoRepo = fc.allow_no_repo;
-      if (typeof fc.allow_google3 === "boolean")
-        f.allowGoogle3 = fc.allow_google3;
+      if (typeof fc.allow_change_targets === "boolean")
+        f.allowChangeTargets = fc.allow_change_targets;
       if (Array.isArray(fc.presets)) f.presets = fc.presets;
       if (typeof fc.default_preset === "string") {
         f.defaultPreset = fc.default_preset;

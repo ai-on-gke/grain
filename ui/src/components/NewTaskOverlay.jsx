@@ -327,14 +327,12 @@ export default function NewTaskOverlay({
   const writeOptions = pickerRepos(config, tasks, reachable, { push: true });
   // settings/new-task-form.yml's repo.offered is the target list where a
   // layer names one (the repo already picked kept in it), and
-  // allow_google3: false leaves the google3 change target out.
+  // allow_change_targets: false leaves the non-git change targets out.
   const formTargetOptions = Array.isArray(F.repo.offered)
     ? [...new Set([...F.repo.offered, ...(repo && !noRepo ? [repo] : [])])]
     : targetOptions;
   const formChangeTargets =
-    F.repo.allowGoogle3 === false
-      ? changeTargets.filter((ct) => ct !== "google3")
-      : changeTargets;
+    F.repo.allowChangeTargets === false ? [] : changeTargets;
 
   // dependsOn is picked tasks ({id, title}), not just ids -- keeping the
   // title lets the chips below the picker read as "task 12 Fix the

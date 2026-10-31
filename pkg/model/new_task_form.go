@@ -84,9 +84,11 @@ type NewTaskFormField struct {
 	// or a list, as the field takes.
 	Default any `json:"default,omitempty" yaml:"default,omitempty"`
 	// Offered narrows the choices of repo, model and networkAccess.
-	Offered      []string `json:"offered,omitempty" yaml:"offered,omitempty"`
-	AllowNoRepo  *bool    `json:"allow_no_repo,omitempty" yaml:"allow_no_repo,omitempty"`
-	AllowGoogle3 *bool    `json:"allow_google3,omitempty" yaml:"allow_google3,omitempty"`
+	Offered     []string `json:"offered,omitempty" yaml:"offered,omitempty"`
+	AllowNoRepo *bool    `json:"allow_no_repo,omitempty" yaml:"allow_no_repo,omitempty"`
+	// AllowChangeTargets false leaves out the repo picker's non-git
+	// change targets (the kinds the binary registers, pkg/change).
+	AllowChangeTargets *bool `json:"allow_change_targets,omitempty" yaml:"allow_change_targets,omitempty"`
 	// The sandboxShape field's presets.
 	Presets            []NewTaskFormSandboxPreset `json:"presets,omitempty" yaml:"presets,omitempty"`
 	DefaultPreset      *string                    `json:"default_preset,omitempty" yaml:"default_preset,omitempty"`
@@ -236,8 +238,8 @@ func mergeFormField(base, over NewTaskFormField) NewTaskFormField {
 	if over.AllowNoRepo != nil {
 		base.AllowNoRepo = over.AllowNoRepo
 	}
-	if over.AllowGoogle3 != nil {
-		base.AllowGoogle3 = over.AllowGoogle3
+	if over.AllowChangeTargets != nil {
+		base.AllowChangeTargets = over.AllowChangeTargets
 	}
 	if over.Presets != nil {
 		base.Presets = over.Presets
