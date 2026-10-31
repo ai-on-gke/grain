@@ -1208,12 +1208,20 @@ func TestWorkflowCLIDownloadsForceIPv4AndRetry(t *testing.T) {
 // VMs and clusters are deleted.
 func TestOnlyTheScheduledSmokeJobHoldsAGCPCredential(t *testing.T) {
 	smoke := stripComments(gcpSmokeWorkflow(t))
+	ghSmoke := stripComments(read(t, ".github", "workflows", "gcp-smoke.yml"))
 
-	contains(t, smoke, "schedule:")
-	contains(t, smoke, "workflow_dispatch:")
+	contains(t, upTo(t, ghSmoke, "jobs:"), "schedule:")
+	contains(t, upTo(t, ghSmoke, "jobs:"), "workflow_dispatch:")
 	for _, forbidden := range []string{"push:", "pull_request:"} {
+		if strings.Contains(upTo(t, ghSmoke, "jobs:"), forbidden) {
+			t.Errorf(".github/workflows/gcp-smoke.yml triggers on %s: the credential it holds would then be readable by any branch", forbidden)
+		}
+	}
+
+	contains(t, upTo(t, smoke, "jobs:"), "workflow_dispatch:")
+	for _, forbidden := range []string{"push:", "pull_request:", "release:", "schedule:"} {
 		if strings.Contains(upTo(t, smoke, "jobs:"), forbidden) {
-			t.Errorf("gcp-smoke.yml triggers on %s: the credential it holds would then be readable by any branch", forbidden)
+			t.Errorf(".grain/workflows/gcp-smoke.yml triggers on %s: expected workflow_dispatch only", forbidden)
 		}
 	}
 
@@ -2596,12 +2604,17 @@ func TestTheNightlySuiteRunsTheLongTargets(t *testing.T) {
 		contains(t, makefile, "\n"+target+":")
 	}
 
-	// A schedule, because the whole point is that it runs when nobody
-	// remembered to ask; and workflow_dispatch, because a change to the
+	// A schedule on GitHub Actions (.github/workflows/nightly.yml), because
+	// the whole point is that it runs when nobody remembered to ask; and
+	// workflow_dispatch in both workflows, because a change to the
 	// reconcile loop or to pkg/staterepo deserves this before it merges
-	// rather than the night after.
-	contains(t, nightly, "schedule:")
-	contains(t, nightly, "workflow_dispatch:")
+	// rather than the night after, while .grain/workflows/nightly.yml has
+	// its automatic cron trigger retired.
+	ghNightly := stripComments(read(t, ".github", "workflows", "nightly.yml"))
+	contains(t, upTo(t, ghNightly, "jobs:"), "schedule:")
+	contains(t, upTo(t, ghNightly, "jobs:"), "workflow_dispatch:")
+	contains(t, upTo(t, nightly, "jobs:"), "workflow_dispatch:")
+	absent(t, upTo(t, nightly, "jobs:"), "schedule:")
 
 	// Credential-free, like tests.yml and for a weaker version of the
 	// same reason: this one is dispatchable against any branch, and

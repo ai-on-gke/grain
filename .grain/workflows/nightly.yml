@@ -33,8 +33,8 @@
 name: nightly
 
 on:
-  schedule:
-    - cron: "11 2 * * *"
+  # Retired from automatic schedule triggering: ai-on-gke/grain runs the
+  # nightly long suite on GitHub Actions (.github/workflows/nightly.yml).
   workflow_dispatch:
 
 env:
