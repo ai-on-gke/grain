@@ -38,7 +38,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
@@ -54,7 +53,6 @@ var everyToolGrant = []string{
 	deploymenthealth.CapabilityName,
 	bootstrap.CapabilityName,
 	selfupgrade.CapabilityName,
-	memory.CapabilityName,
 	grainci.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead,

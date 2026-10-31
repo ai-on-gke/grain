@@ -147,6 +147,9 @@ type TaskTiming struct {
 	// and "" for a task filed without a template. It is what the agents
 	// report groups wake telemetry by (metrics.Agents).
 	TemplateID string
+	// Interactive is whether the task is an interactive session (task.interactive),
+	// so startup latency SLOs can be reported separately for interactive vs batch tasks.
+	Interactive bool
 }
 
 // The two values TaskTiming.Port takes for a port.
@@ -182,6 +185,11 @@ type RunTiming struct {
 	// the cluster's exec tunnel failed after it had reached its agent
 	// (ExecTransportFailure) -- zero for a run with none recorded.
 	ExecTransportFailures int
+	// Per-phase startup timestamps from task_run_startup.
+	QueuedAt          *time.Time
+	SandboxAcquiredAt *time.Time
+	SandboxPreparedAt *time.Time
+	FirstTurnAt       *time.Time
 }
 
 // TaskTimings is every task's timeline, oldest id first.
@@ -227,7 +235,8 @@ func (s *Store) TaskTimings(ctx context.Context) ([]TaskTiming, error) {
 			"COALESCE((SELECT `ft`.`template_id` FROM `task_filed_template` AS `ft` WHERE `ft`.`task_id` = `t`.`id`), "+
 			"(SELECT SUBSTR(`st`.`tag`, 10) FROM `task_tag` AS `st` WHERE `st`.`task_id` = `t`.`id` AND `st`.`tag` LIKE 'schedule:%' LIMIT 1), ''), "+
 			// Whether the work is a CL rather than a pull request.
-			"EXISTS (SELECT 1 FROM `task_link` AS `cl` WHERE `cl`.`task_id` = `t`.`id` AND `cl`.`kind` IN (?, ?)) "+
+			"EXISTS (SELECT 1 FROM `task_link` AS `cl` WHERE `cl`.`task_id` = `t`.`id` AND `cl`.`kind` IN (?, ?)), "+
+			"`t`.`interactive` "+
 			"FROM `task` AS `t` "+
 			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` "+
 			"ORDER BY `t`.`id`", []any{string(LinkFixTask), string(LinkPortOf), TagMechanicalPort,
@@ -242,7 +251,7 @@ func (s *Store) TaskTimings(ctx context.Context) ([]TaskTiming, error) {
 			var isPort, mechanical, isCL bool
 			if err := rows.Scan(&t.TaskID, &created, &approved, &undeferred, &completed, &closed,
 				&prOpened, &prMerged, &queueEntered, &owner, &name, &t.Author, &t.FixTaskFiled,
-				&repairAt, &repairNote, &isPort, &mechanical, &t.TemplateID, &isCL); err != nil {
+				&repairAt, &repairNote, &isPort, &mechanical, &t.TemplateID, &isCL, &t.Interactive); err != nil {
 				return err
 			}
 			t.Targeted = owner.Valid
@@ -441,18 +450,27 @@ func (s *Store) RunTimings(ctx context.Context) ([]RunTiming, error) {
 	var out []RunTiming
 	err := each(ctx, s.db,
 		"SELECT `r`.`id`,`r`.`task_id`,`r`.`attempt`,`r`.`started_at`,`r`.`agent_started_at`,`r`.`finished_at`,"+
-			"`r`.`outcome`,`r`.`detail`,COALESCE(`x`.`calls`, 0) FROM `task_run` `r` "+
+			"`r`.`outcome`,`r`.`detail`,COALESCE(`x`.`calls`, 0),"+
+			"`st`.`queued_at`,`st`.`sandbox_acquired_at`,`st`.`sandbox_prepared_at`,`st`.`first_turn_at` "+
+			"FROM `task_run` `r` "+
 			"LEFT JOIN `task_run_exec_failure` `x` ON `x`.`run_id` = `r`.`id` "+
+			"LEFT JOIN `task_run_startup` `st` ON `st`.`run_id` = `r`.`id` "+
 			"ORDER BY `r`.`task_id`, `r`.`attempt`", nil,
 		func(rows *sql.Rows) error {
 			var r RunTiming
 			var agentStarted, finished sql.NullTime
+			var queuedAt, sandboxAcquiredAt, sandboxPreparedAt, firstTurnAt sql.NullTime
 			var outcome, detail sql.NullString
 			if err := rows.Scan(&r.RunID, &r.TaskID, &r.Attempt, &r.StartedAt,
-				&agentStarted, &finished, &outcome, &detail, &r.ExecTransportFailures); err != nil {
+				&agentStarted, &finished, &outcome, &detail, &r.ExecTransportFailures,
+				&queuedAt, &sandboxAcquiredAt, &sandboxPreparedAt, &firstTurnAt); err != nil {
 				return err
 			}
 			r.AgentStartedAt, r.FinishedAt = timePtr(agentStarted), timePtr(finished)
+			r.QueuedAt = timePtr(queuedAt)
+			r.SandboxAcquiredAt = timePtr(sandboxAcquiredAt)
+			r.SandboxPreparedAt = timePtr(sandboxPreparedAt)
+			r.FirstTurnAt = timePtr(firstTurnAt)
 			r.Outcome, r.Detail = outcome.String, detail.String
 			out = append(out, r)
 			return nil

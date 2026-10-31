@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -126,27 +125,29 @@ func TestResolveMemoryIndexesDocumentsForARunThatCanReadThem(t *testing.T) {
 		}
 	}
 
-	granted := model.Task{ID: "t1", Target: &repo,
-		Grants: []model.Grant{{Capability: memory.CapabilityName}}}
-	got, err := resolveMemory(ctx, store, granted, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("resolveMemory: %v", err)
-	}
-	// This run's own two scopes, with what each note is about and how old
-	// it is -- and not a word of any note's text.
-	for _, want := range []string{"state-repo-shape", "flaky-e2e", "how the dump is laid out",
-		"written 3 days ago", "read_memory_document"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("the index never mentions %q:\n%s", want, got)
+	for _, capName := range []string{"api:memory", "api:memory:read", "memory"} {
+		granted := model.Task{ID: "t1", Target: &repo,
+			Grants: []model.Grant{{Capability: capName}}}
+		got, err := resolveMemory(ctx, store, granted, time.Now().UTC())
+		if err != nil {
+			t.Fatalf("resolveMemory (%s): %v", capName, err)
 		}
-	}
-	if strings.Contains(got, "the suite reuses the VM") {
-		t.Errorf("the index carries a document's text, which is the one thing it exists not to do:\n%s", got)
-	}
-	// A third repo's note is somebody else's business: the index is the
-	// two layers this dispatch reads, exactly as the memory above it is.
-	if strings.Contains(got, "vm-boot") {
-		t.Errorf("the index names a scope this task has nothing to do with:\n%s", got)
+		// This run's own two scopes, with what each note is about and how old
+		// it is -- and not a word of any note's text.
+		for _, want := range []string{"state-repo-shape", "flaky-e2e", "how the dump is laid out",
+			"written 3 days ago", "read_memory_document"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: the index never mentions %q:\n%s", capName, want, got)
+			}
+		}
+		if strings.Contains(got, "the suite reuses the VM") {
+			t.Errorf("%s: the index carries a document's text, which is the one thing it exists not to do:\n%s", capName, got)
+		}
+		// A third repo's note is somebody else's business: the index is the
+		// two layers this dispatch reads, exactly as the memory above it is.
+		if strings.Contains(got, "vm-boot") {
+			t.Errorf("%s: the index names a scope this task has nothing to do with:\n%s", capName, got)
+		}
 	}
 
 	ungranted, err := resolveMemory(ctx, store, model.Task{ID: "t2", Target: &repo}, time.Now().UTC())

@@ -324,7 +324,11 @@ import "strconv"
 // 70 adds `settings_locked` to `grain_config`: whether non-bootstrap settings
 // are locked in the UI and REST API in favour of config repository pull
 // requests (off by default).
-const SchemaVersion = 70
+//
+// 71 is 67 again for `memory`, now `api:memory`.
+//
+// 72 is 67 again for `release-notes`, now `api:release-notes`.
+const SchemaVersion = 72
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -1269,6 +1273,19 @@ var Tables = []string{
   ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
+)`,
+
+	// task_run_startup records the per-phase startup timestamps of a run
+	// (queued_at -> started_at -> sandbox_acquired_at -> sandbox_prepared_at -> first_turn_at)
+	// so interactive and batch startup latency breakdowns can be reported on
+	// Attempt and in grain metrics without altering the frozen task_run DDL.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_startup`" + ` (
+  ` + "`run_id`" + `              TEXT     NOT NULL,
+  ` + "`queued_at`" + `           DATETIME NULL,
+  ` + "`sandbox_acquired_at`" + ` DATETIME NULL,
+  ` + "`sandbox_prepared_at`" + ` DATETIME NULL,
+  ` + "`first_turn_at`" + `       DATETIME NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
 )`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`lease`" + ` (

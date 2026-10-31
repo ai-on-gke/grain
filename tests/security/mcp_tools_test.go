@@ -36,10 +36,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
 	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -134,7 +132,6 @@ var interactiveRunTool = map[string]string{
 // daemonToolGrants is toolGrants plus the grants whose tools exist only
 // with a daemon to ask.
 var daemonToolGrants = append(slices.Clone(toolGrants),
-	releasenotes.CapabilityName,
 	quarantine.CapabilityName,
 )
 
@@ -153,7 +150,6 @@ var toolGrants = []string{
 	deploymenthealth.CapabilityName,
 	bootstrap.CapabilityName,
 	selfupgrade.CapabilityName,
-	memory.CapabilityName,
 	grainci.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead,

@@ -834,6 +834,76 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 	return errors.Join(errs...)
 }
 
+// RunDispatchCycle runs only the local store-backed reconcilers needed to
+// admit and dispatch ready tasks (task pauses, pipeline pause, target repos,
+// and dispatch), bypassing slow GitHub-bound reconcilers so interactive
+// session creations and human replies dispatch within milliseconds of a wake.
+func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
+	if deps.DiskSpace != nil {
+		deps.Budget.Disk = deps.DiskSpace()
+	}
+	if deps.Store != nil {
+		if mc, err := deps.Store.GetConfig(ctx); err != nil {
+			log.Printf("orchestrator: reading stored configuration: %v", err)
+		} else if mc != nil {
+			deps.Config.MaxMergesPerRepo = mc.MaxMergesPerRepo
+			if !deps.AgentShape.IsZero() {
+				if mc.SandboxCPUs > 0 {
+					deps.AgentShape.CPUs = mc.SandboxCPUs
+				}
+				if mc.SandboxMemoryMB > 0 {
+					deps.AgentShape.MemoryMB = mc.SandboxMemoryMB
+				}
+				if mc.SandboxDiskGB > 0 {
+					deps.AgentShape.DiskGB = mc.SandboxDiskGB
+				}
+			}
+			if deps.Budget.Known() {
+				if mc.SandboxMemoryReserveMB > 0 {
+					deps.Budget.ReserveMemoryMB = mc.SandboxMemoryReserveMB
+				}
+				if mc.SandboxCPUOvercommit > 0 {
+					deps.Budget.CPUOvercommit = mc.SandboxCPUOvercommit
+				}
+				if mc.SandboxMemoryOvercommit > 0 {
+					deps.Budget.MemoryOvercommit = mc.SandboxMemoryOvercommit
+				}
+				if mc.SandboxDiskOvercommit > 0 {
+					deps.Budget.DiskOvercommit = mc.SandboxDiskOvercommit
+				}
+				if !deps.Budget.RepairReserve.IsZero() && !deps.AgentShape.IsZero() {
+					deps.Budget.RepairReserve = deps.AgentShape
+				}
+			}
+			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
+			deps.Config.PromptExtension = mc.PromptExtension
+			deps.Config.TimeZone = mc.TimeZone
+			if deps.Config.SessionSandboxIdleTTL == 0 {
+				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
+			}
+		}
+	}
+	fast := []Reconciler{
+		{Name: "task-pauses", Reconcile: reconcileTaskPauses},
+		{Name: "pause", Reconcile: reconcilePipelinePause},
+		{Name: "target-repos", Reconcile: reconcileTargetRepos},
+		{Name: dispatchReconciler, Reconcile: reconcileDispatch},
+	}
+	var errs []error
+	for _, r := range fast {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		rdeps := deps
+		rdeps.Client = github.WithCaller(deps.Client, r.Name)
+		if err := recoverReconcile(ctx, r, rdeps, now); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", r.Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // recoverReconcile calls r.Reconcile and turns a panic into an error the
 // same way this func's own caller already treats any other error one
 // reconciler returns -- see RunCycle's own "one reconciler having a
@@ -976,7 +1046,27 @@ func reconcileSuites(ctx context.Context, deps Deps, now time.Time) error {
 // Run and the store calls underneath it all already respect it, so there
 // is no separate ctx.Err() check to make before launching them the way
 // the old sequential loop needed one before each iteration.
+var dispatchLocks sync.Map
+
+func storeDispatchMutex(store *model.Store) *sync.Mutex {
+	if store == nil {
+		return &sync.Mutex{}
+	}
+	v, _ := dispatchLocks.LoadOrStore(store, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
 func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
+	dispatchMu := storeDispatchMutex(deps.Store)
+	dispatchMu.Lock()
+	unlocked := false
+	unlockDispatch := func() {
+		if !unlocked {
+			unlocked = true
+			dispatchMu.Unlock()
+		}
+	}
+	defer unlockDispatch()
 	// Nothing is dispatched onto a credential that has no budget left: a
 	// task started now would spend a sandbox and an attempt reaching the
 	// same refusal the run that closed that gate already reached
@@ -1220,6 +1310,7 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	for _, f := range frameworks {
 		releaseFramework(f.framework)
 	}
+	unlockDispatch()
 	wg.Wait()
 	return errors.Join(errs...)
 }
@@ -2085,6 +2176,36 @@ func finishPanickedRun(ctx context.Context, store *model.Store, runID string, no
 	return nil
 }
 
+func runQueuedAt(ctx context.Context, store *model.Store, task model.Task, attempt int, startedAt time.Time) time.Time {
+	var q time.Time
+	if task.CreatedAt != nil {
+		q = *task.CreatedAt
+	}
+	if task.ApprovedAt != nil && task.ApprovedAt.After(q) {
+		q = *task.ApprovedAt
+	}
+	if attempt > 1 && store != nil {
+		if runs, err := store.Runs(ctx, task.ID); err == nil {
+			for _, r := range runs {
+				if r.Attempt < attempt && r.FinishedAt != nil && !r.FinishedAt.After(startedAt) && r.FinishedAt.After(q) {
+					q = *r.FinishedAt
+				}
+			}
+		}
+		if comments, err := store.Comments(ctx, task.ID); err == nil {
+			for _, c := range comments {
+				if c.Author.Actor.Kind != model.PrincipalAgent && !c.CreatedAt.After(startedAt) && c.CreatedAt.After(q) {
+					q = c.CreatedAt
+				}
+			}
+		}
+	}
+	if q.IsZero() || q.After(startedAt) {
+		q = startedAt
+	}
+	return q
+}
+
 func runOne(ctx context.Context, deps Deps, d dispatch.Dispatch, prepared []model.Materialized, now time.Time) error {
 	return runOneWithFramework(ctx, deps, d, prepared, reservedFramework{}, now)
 }
@@ -2220,6 +2341,12 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	if task == nil {
 		return fmt.Errorf("orchestrator: dispatch.Cycle dispatched unknown task %s", d.TaskID)
 	}
+	if deps.Store != nil {
+		queuedAt := runQueuedAt(ctx, deps.Store, *task, d.Attempt, now)
+		if rerr := deps.Store.RecordRunStartup(ctx, model.RunStartup{RunID: d.RunID, QueuedAt: &queuedAt}); rerr != nil {
+			log.Printf("orchestrator: recording run %s startup queued_at: %v", d.RunID, rerr)
+		}
+	}
 
 	// The local policy is checked once more here, against the task as
 	// this run read it, before anything is built or cloned: the dispatch
@@ -2349,6 +2476,11 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			return fmt.Errorf("orchestrator: acquiring a sandbox for run %s: %w", d.RunID, err)
 		}
 	}
+	if deps.Store != nil {
+		if rerr := deps.Store.SetRunSandboxAcquired(ctx, d.RunID, deps.Config.now()); rerr != nil {
+			log.Printf("orchestrator: recording run %s sandbox_acquired_at: %v", d.RunID, rerr)
+		}
+	}
 
 	// stopTokenRefresh ends the refresher started once this sandbox's
 	// token is minted below; the release stops it before revoking, so a
@@ -2448,7 +2580,9 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// and unlike them it never fails a dispatch: a sandbox that could not
 	// be pointed at the cache downloads from the internet, as every
 	// sandbox did before the cache existed (applyPackageCache).
-	applyPackageCache(ctx, deps.Config, sandbox, d.TaskID)
+	if !sandboxReused {
+		applyPackageCache(withSkipGoCacheProgBuild(ctx, task.Target == nil), deps.Config, sandbox, d.TaskID)
+	}
 
 	tools, err := sandbox.Tools(ctx)
 	if err != nil {
