@@ -48,7 +48,7 @@
 #
 # By hand (a repository admin, from the CLI):
 #
-#     grain ci run -repo bwsalmon/grain -branch main -event workflow_dispatch \
+#     grain ci run -repo ai-on-gke/grain -branch main -event workflow_dispatch \
 #       -job .grain/workflows/release-train.yml:train -watch
 name: release-train
 
