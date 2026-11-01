@@ -295,3 +295,31 @@ func TestAgentGatesFoldBodyKeysAsEncodingJSONDoes(t *testing.T) {
 		}
 	}
 }
+
+// The priority-dispatch toggle is priorityDispatch or priority_dispatch, and
+// the agent gate refuses both; the snake_case spelling used to decode to
+// nothing, so PATCH {"priority_dispatch": true} answered 200 and changed
+// nothing (docs/test-runs/2026-11-01-task-priorities.md).
+func TestUpdateTaskRequestReadsEveryPriorityDispatchSpelling(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"priorityDispatch": true}`, true},
+		{`{"priority_dispatch": true}`, true},
+		{`{"priority_dispatch": false}`, false},
+		{`{"priority": true}`, true},
+	} {
+		var req ui.UpdateTaskRequest
+		if err := json.Unmarshal([]byte(tc.body), &req); err != nil {
+			t.Fatalf("Unmarshal(%s): %v", tc.body, err)
+		}
+		if req.PriorityDispatch == nil || *req.PriorityDispatch != tc.want {
+			t.Errorf("Unmarshal(%s).PriorityDispatch = %v, want %v", tc.body, req.PriorityDispatch, tc.want)
+		}
+		if req.Priority != nil {
+			t.Errorf("Unmarshal(%s).Priority = %d, want unset", tc.body, *req.Priority)
+		}
+	}
+}
