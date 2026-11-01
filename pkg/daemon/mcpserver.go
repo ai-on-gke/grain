@@ -756,11 +756,49 @@ func grainCIReader(client *ui.HTTPClient, taskID string, grants GrantNames) mcp.
 // own task's repository here like any other run, since another team's
 // CI is another team's work.
 func CiRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.CIRepoScope {
-	return mcp.CIRepoScope{
-		Repo: strings.TrimSpace(prRepo),
-		AllRepos: grants.Has(selfdebug.CapabilityName) &&
-			slices.Contains(deploymentWide, selfdebug.CapabilityName),
+	own := strings.TrimSpace(prRepo)
+	wide := grants.Has(selfdebug.CapabilityName) &&
+		slices.Contains(deploymentWide, selfdebug.CapabilityName)
+	apiGrants := model.APIGrantsOf(grants)
+	if wide || apiGrants.Allows("ci:read", "") {
+		return mcp.CIRepoScope{Repo: own, AllRepos: true}
 	}
+	var extra []string
+	for _, r := range apiGrants.Repos("ci:read") {
+		if own == "" || !strings.EqualFold(r, own) {
+			extra = append(extra, r)
+		}
+	}
+	return mcp.CIRepoScope{
+		Repo:  own,
+		Reads: extra,
+	}
+}
+
+// ciReadRepoScope is which repositories list_ci_runs, get_ci_log and
+// get_ci_artifact may read when a run holds an api ci:read grant rather
+// than grain-ci: only the repositories its ci:read grants name (plus all
+// repositories for deployment-wide self-debug or an unscoped api:ci-read),
+// never -pr-repo on its own when the grant was scoped elsewhere.
+func ciReadRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.CIRepoScope {
+	own := strings.TrimSpace(prRepo)
+	wide := grants.Has(selfdebug.CapabilityName) &&
+		slices.Contains(deploymentWide, selfdebug.CapabilityName)
+	apiGrants := model.APIGrantsOf(grants)
+	if wide || apiGrants.Allows("ci:read", "") {
+		return mcp.CIRepoScope{Repo: own, AllRepos: true}
+	}
+	repos := apiGrants.Repos("ci:read")
+	if own != "" && apiGrants.Allows("ci:read", own) {
+		var extra []string
+		for _, r := range repos {
+			if !strings.EqualFold(r, own) {
+				extra = append(extra, r)
+			}
+		}
+		return mcp.CIRepoScope{Repo: own, Reads: extra}
+	}
+	return mcp.CIRepoScope{Reads: repos}
 }
 
 // daemonGrainCI implements mcp.GrainCIReader by reading this run's own
@@ -2184,6 +2222,23 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 				registry.Register(mcp.NewGrainCIArtifactTools(
 					DaemonGrainCI{Client: client, TaskID: *taskID}, CiRepoScope(*prRepo, grants, taskDetail.DeploymentWide), *root, taskBranch)...)
 			}
+		} else if model.APIGrantsOf(grants).Has("ci:read") {
+			// A run holding an api ci:read grant (for instance, a GitHub
+			// workflow-run review task on a ci_mode: github repository)
+			// reads synthesized and stored CI runs through list_ci_runs and
+			// get_ci_log without replacing GitHub's wait_for_checks or
+			// advertising grain CI's run_ci_job / retrigger_ci.
+			taskBranch := strings.TrimSpace(*prBranch)
+			if taskBranch == "" {
+				taskBranch = strings.TrimSpace(taskDetail.Task.Branch)
+			}
+			readScope := ciReadRepoScope(*prRepo, grants, taskDetail.DeploymentWide)
+			registry.Register(mcp.NewGrainCIReadTools(
+				DaemonGrainCI{Client: client, TaskID: *taskID}, readScope, taskBranch)...)
+			if *root != "" {
+				registry.Register(mcp.NewGrainCIArtifactTools(
+					DaemonGrainCI{Client: client, TaskID: *taskID}, readScope, *root, taskBranch)...)
+			}
 		}
 		// A task whose change is a CL has no pull request and no grain CI:
 		// pull_request_status and wait_for_checks answer from the CL's own
@@ -2276,12 +2331,8 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		for _, r := range apiGrants.Repos("tasks:read") {
 			addTaskRepo(r)
 		}
-		for _, name := range grants {
-			parsed, isAPI, err := model.ParseAPIGrant(name)
-			if !isAPI || err != nil || parsed.Repo == "" || !slices.Contains(parsed.Scopes, "ci:read") {
-				continue
-			}
-			addAllowedRepo(parsed.Repo)
+		for _, r := range apiGrants.Repos("ci:read") {
+			addAllowedRepo(r)
 		}
 		registry.Register(mcp.NewNamespaceTools(mcp.NamespaceToolsConfig{
 			Scope: namespace.Scope{
