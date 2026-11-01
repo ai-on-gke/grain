@@ -289,6 +289,12 @@ const (
 	MaxAttachmentsPerRequest = 10
 )
 
+// errPriorityNotPositive is the refusal for a task priority below 1, on
+// create and on edit alike. 0 is refused rather than read as "the
+// default": leaving the field out is how a caller asks for that, and
+// the Edit form, the host CLI and the sandbox CLI all say the same.
+const errPriorityNotPositive = "priority must be a positive integer (1 or more; leave it out for the default, 5)"
+
 // decodeAttachments validates and base64-decodes uploads into the
 // model.Attachment shape Store.AddAttachment writes -- TaskID and
 // CommentID are left for the caller to fill in once it knows them
@@ -1567,7 +1573,9 @@ type CreateTaskRequest struct {
 	Interactive bool `json:"interactive"`
 	// Priority is the task's numeric dispatch priority (model.Task.Priority,
 	// default model.DefaultTaskPriority = 5; higher numbers mean higher priority).
-	// When omitted or 0, defaults to model.DefaultTaskPriority.
+	// When omitted, defaults to model.DefaultTaskPriority. 0 and below are
+	// refused (errPriorityNotPositive), as on every other surface that
+	// takes a task priority: there is no number that means "the default".
 	Priority *int `json:"priority,omitempty"`
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) set model.Task's own fields of
@@ -1982,12 +1990,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	priority := model.DefaultTaskPriority
 	if req.Priority != nil {
-		if *req.Priority < 0 {
-			return Task{}, validationErrorf("priority must be a positive integer")
+		if *req.Priority < 1 {
+			return Task{}, validationErrorf(errPriorityNotPositive)
 		}
-		if *req.Priority != 0 {
-			priority = *req.Priority
-		}
+		priority = *req.Priority
 	}
 	if req.NewBranch {
 		req.Base = strings.TrimSpace(req.Base)
@@ -3864,7 +3870,7 @@ type UpdateTaskRequest struct {
 	// every attempt until somebody corrects it.
 	Repo                 *string `json:"repo,omitempty"`
 	Base                 *string `json:"base,omitempty"`
-	Priority             *int    `json:"priority,omitempty"`
+	Priority             *int    `json:"priority,omitempty"` // 1 or more; see errPriorityNotPositive
 	Issue                *int    `json:"issue,omitempty"`
 	AutoMerge            *bool   `json:"autoMerge,omitempty"`
 	AutoApproveProposals *bool   `json:"autoApproveProposals,omitempty"`
@@ -4113,8 +4119,8 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 		return Task{}, validationErrorf("title cannot be empty")
 	}
-	if req.Priority != nil && *req.Priority < 0 {
-		return Task{}, validationErrorf("priority must be a positive integer")
+	if req.Priority != nil && *req.Priority < 1 {
+		return Task{}, validationErrorf(errPriorityNotPositive)
 	}
 	// A fork head label is resolved to the pull request it heads the way
 	// CreateTask resolves one (forkhead.go): the edit stores that pull
