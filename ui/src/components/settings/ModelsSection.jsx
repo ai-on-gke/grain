@@ -564,6 +564,18 @@ export default function ModelsSection({ config, onSaved, showError }) {
               Create one to authenticate agent models.
             </Alert>
           )}
+          {/* The config pull request suite refuses this state
+              (staterepo.CheckDispatchLiveness); a direct write here is
+              the escape hatch and is not refused, so it is said here
+              (docs/design/config-repo-settings.md, section 2.2). */}
+          {agentBackends.length > 0 &&
+            agentBackends.every((backend) => backend.disabled) && (
+              <Alert severity="warning" data-testid="all-connections-disabled">
+                Every provider connection is disabled, so no run has anything to
+                run on and this deployment&apos;s tasks wait. Enable one to let
+                them start.
+              </Alert>
+            )}
         </Stack>
       </SettingsCard>
       <SettingsCard label="Models" anchor="model-defaults">
