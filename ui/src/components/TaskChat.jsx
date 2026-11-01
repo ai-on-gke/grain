@@ -137,6 +137,7 @@ export default function TaskChat({
     const serverComments = t.comments || [];
     const consumed = new Set();
     const remaining = pendingComments.filter((p) => {
+      if (p.failed) return true;
       const idx = serverComments.findIndex(
         (c, i) =>
           !consumed.has(i) &&
@@ -161,6 +162,7 @@ export default function TaskChat({
     const serverComments = t.comments || [];
     const consumed = new Set();
     const unpersisted = pendingComments.filter((p) => {
+      if (p.failed) return true;
       const idx = serverComments.findIndex(
         (c, i) =>
           !consumed.has(i) &&
@@ -178,7 +180,13 @@ export default function TaskChat({
     });
     return unpersisted.length === 0
       ? serverEntries
-      : [...serverEntries, ...unpersisted];
+      : [
+          ...serverEntries,
+          ...unpersisted.map((p) => ({
+            ...p,
+            pending: p.failed ? "failed" : p.sent ? undefined : "sending",
+          })),
+        ];
   }, [serverEntries, pendingComments, t.comments]);
   const busy = working(t);
   const note = typingNote(t);
@@ -251,6 +259,16 @@ export default function TaskChat({
     return () => root.removeEventListener("scroll", onScroll, true);
   }, []);
   const stopping = useRef(false);
+  // What the sending state last came to, for a screen reader: the
+  // bubbles say "Sending…" and "Not sent" in their headers, but nothing
+  // announces a header changing, so the status region below says it.
+  const [sendNotice, setSendNotice] = useState("");
+  const sending = pendingComments.filter((p) => !p.failed && !p.sent).length;
+  // A failed bubble's Retry and Discard, reached through a ref so the
+  // memoised transcript below need not be rebuilt for a new closure on
+  // every keystroke, and still calls this render's (current t, current
+  // pending list) rather than the one that drew it.
+  const bubbleActions = useRef({});
 
   // A shortcut elsewhere in the shell can bring somebody here with words
   // ready to edit. Apply each request once by identity; task polling must not
@@ -325,6 +343,12 @@ export default function TaskChat({
           ) : (
             <Message
               key={e.key}
+              className={
+                e.pending
+                  ? `task-chat-pending task-chat-${e.pending}`
+                  : undefined
+              }
+              aria-busy={e.pending === "sending" ? "true" : undefined}
               model={{
                 direction: e.direction,
                 // "single" rather than the library's own grouping:
@@ -338,7 +362,15 @@ export default function TaskChat({
             >
               <Message.Header
                 sender={e.sender}
-                sentTime={e.at ? formatDateTime(e.at, zone) : ""}
+                sentTime={
+                  e.pending === "sending"
+                    ? "Sending…"
+                    : e.pending === "failed"
+                      ? "Not sent"
+                      : e.at
+                        ? formatDateTime(e.at, zone)
+                        : ""
+                }
               />
               <Message.CustomContent>
                 <div className="task-chat-message-content">
@@ -350,6 +382,22 @@ export default function TaskChat({
                   )}
                 </div>
                 <AttachmentLinks taskId={t.id} attachments={e.attachments} />
+                {e.pending === "failed" && (
+                  <div className="task-chat-retry">
+                    <Button
+                      size="small"
+                      onClick={() => bubbleActions.current.retry(e.key)}
+                    >
+                      Retry
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={() => bubbleActions.current.discard(e.key)}
+                    >
+                      Discard
+                    </Button>
+                  </div>
+                )}
               </Message.CustomContent>
             </Message>
           ),
@@ -361,14 +409,20 @@ export default function TaskChat({
 
   const send = async () => {
     const sent = draftRef.current;
-    const body = sent.text;
     const files = attachmentsRef.current;
-    if (!body.trim() && files.length === 0) return;
+    if (!sent.text.trim() && files.length === 0) return;
     // Cleared synchronously before the first await so double-clicks on the
     // same draft are ignored while a second message typed while this one is
     // still in flight can be sent immediately without being dropped.
     setDraft({ html: "", text: "" });
     setAttachments([]);
+    await post(sent, files);
+  };
+
+  // post sends one message, queued behind any still in flight so they
+  // land in the order they were typed.
+  const post = async (sent, files) => {
+    const body = sent.text;
     const serverComments = t.comments || [];
     const afterCommentLen = serverComments.length;
     const afterMaxId = serverComments.reduce(
@@ -389,9 +443,54 @@ export default function TaskChat({
           attachments: [],
           afterCommentLen,
           afterMaxId,
+          sent: false,
+          failed: false,
         },
       ]);
+      setSendNotice("");
     }
+    // A message that did not land goes back in the box rather than being
+    // lost with the banner (grain/task-1360). If the box holds something
+    // already -- typed since, or an earlier queued message that failed
+    // and went back first -- it stays in the transcript marked "Not
+    // sent", with Retry, rather than being dropped (2026-11-01 §3).
+    const unsent = () => {
+      if (
+        !draftRef.current.text.trim() &&
+        attachmentsRef.current.length === 0
+      ) {
+        setPendingComments((cur) => cur.filter((p) => p.key !== optimisticKey));
+        setDraft(sent);
+        setAttachments(files);
+        setSendNotice("Message not sent. It is back in the message box.");
+        return;
+      }
+      setPendingComments((cur) => {
+        if (cur.some((p) => p.key === optimisticKey)) {
+          return cur.map((p) =>
+            p.key === optimisticKey ? { ...p, failed: true, sent, files } : p,
+          );
+        }
+        return [
+          ...cur,
+          {
+            key: optimisticKey,
+            kind: "message",
+            at: new Date(),
+            direction: "outgoing",
+            sender: t.creator || t.author || "human",
+            body: body.trim() ? body : files.map((f) => f.name).join(", "),
+            attachments: [],
+            afterCommentLen,
+            afterMaxId,
+            failed: true,
+            sent,
+            files,
+          },
+        ];
+      });
+      setSendNotice("Message not sent. Retry it from the conversation.");
+    };
     const task = sendChain.current.then(async () => {
       try {
         const uploaded = await Promise.all(
@@ -413,28 +512,48 @@ export default function TaskChat({
           }, t.id);
         }
         // act() reports a failure and swallows it, so whether the message
-        // landed is only known from here. One that did not -- the network
-        // dropped, the daemon answered 5xx -- goes back in the box rather
-        // than being lost with the banner, unless something new has been
-        // typed there meanwhile (grain/task-1360).
+        // landed is only known from here.
         if (!posted) {
+          if (onSend) {
+            setDraft((cur) => (cur.text.trim() ? cur : sent));
+            setAttachments((cur) => (cur.length ? cur : files));
+          } else {
+            unsent();
+          }
+        } else {
           setPendingComments((cur) =>
-            cur.filter((p) => p.key !== optimisticKey),
+            cur.map((p) =>
+              p.key === optimisticKey ? { ...p, sent: true } : p,
+            ),
           );
-          setDraft((cur) => (cur.text.trim() ? cur : sent));
-          setAttachments((cur) => (cur.length ? cur : files));
         }
         onDraftConsumed?.(draftRequest);
       } catch (err) {
-        setPendingComments((cur) => cur.filter((p) => p.key !== optimisticKey));
-        setDraft((cur) => (cur.text.trim() ? cur : sent));
-        setAttachments((cur) => (cur.length ? cur : files));
+        if (onSend) {
+          setDraft((cur) => (cur.text.trim() ? cur : sent));
+          setAttachments((cur) => (cur.length ? cur : files));
+        } else {
+          unsent();
+        }
         throw err;
       }
     });
     sendChain.current = task.catch(() => {});
     await task;
   };
+
+  const retry = (key) => {
+    const failed = pendingComments.find((p) => p.key === key);
+    if (!failed) return;
+    setPendingComments((cur) => cur.filter((p) => p.key !== key));
+    post(failed.sent, failed.files || []).catch(() => {});
+  };
+
+  const discard = (key) => {
+    setPendingComments((cur) => cur.filter((p) => p.key !== key));
+    setSendNotice("");
+  };
+  bubbleActions.current = { retry, discard };
 
   const stop = async () => {
     if (stopping.current) return;
@@ -502,6 +621,11 @@ export default function TaskChat({
           </Typography>
         )}
       </Box>
+      <span className="visually-hidden" role="status" aria-live="polite">
+        {sending > 0
+          ? `Sending ${sending} message${sending === 1 ? "" : "s"}…`
+          : sendNotice}
+      </span>
       <LocalScriptApprovals t={t} act={act} />
       <PendingConfigChange t={t} act={act} />
       <div className="task-chat-window" ref={windowRef} id={windowId}>
