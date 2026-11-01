@@ -853,6 +853,16 @@ func (c *HTTPClient) StageAttachment(ctx context.Context, id, path string, uploa
 	return staged, nil
 }
 
+// ProposeConfigChange is Client.ProposeConfigChange over the wire: the
+// mcpserver's propose_config_change, for its own task.
+func (c *HTTPClient) ProposeConfigChange(ctx context.Context, id string, proposal ConfigChangeProposal) (*model.PendingConfigChange, error) {
+	var pending model.PendingConfigChange
+	if err := c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/config-change", proposal, &pending); err != nil {
+		return nil, err
+	}
+	return &pending, nil
+}
+
 // CreditWait is Client.CreditWait over the wire: credit id's live run for
 // the time it has now spent blocked on CI, and read back where its
 // deadline stands as a result.
