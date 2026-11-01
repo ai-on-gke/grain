@@ -691,7 +691,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		}
 		session.TitleSource = session.ResolvedTitleSource(model.ConsoleSessionFirstMessage(comments))
 	}
-	prev, hasPrev := model.LastSyncedConsoleSession(deps.Store, task.ID)
+	prev, hasPrev := model.LastSyncedConsoleSession(ctx, deps.Store, task.ID)
 	configTitle := model.ConsoleSessionTitle(session)
 	configNetwork := consoleSessionNetworkAccess(deps, session)
 	configModel := strings.TrimSpace(session.Model)
@@ -769,7 +769,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		links = updatedLinks
 	}
 
-	model.RecordSyncedConsoleSession(deps.Store, task.ID, model.ConsoleSessionConfigSnapshot{
+	if err := model.RecordSyncedConsoleSession(ctx, deps.Store, task.ID, model.ConsoleSessionConfigSnapshot{
 		Capabilities:    session.Capabilities,
 		Reads:           session.Reads,
 		Writes:          session.Writes,
@@ -779,7 +779,9 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		TasksApproved:   session.TasksApproved,
 		KeepRunning:     session.KeepRunning,
 		GoogleChatSpace: session.GoogleChatSpace,
-	})
+	}); err != nil {
+		return err
+	}
 
 	taskWrites := task.Writes
 	if taskWrites == nil {
@@ -866,6 +868,15 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 	return out
 }
 
+// mergeConsoleSessionReads and mergeConsoleSessionWrites carry the
+// declaration's reads: and writes: onto the task while keeping what an
+// operator added on the task itself. Against a snapshot, an entry the task
+// holds is dropped only when the declaration stopped naming it since the
+// last sync. With no snapshot to tell the two apart -- a task synced for the
+// first time, or one whose snapshot predates console_session_sync -- the
+// declaration is authoritative, the way it is for GrantByGrain grants: an
+// entry it does not name is dropped, rather than a repository the
+// deployment no longer lets the session write being kept for good.
 func mergeConsoleSessionReads(current []model.RepoRef, stateRepo model.RepoRef,
 	sessionReads, prevReads []model.RepoRef, hasPrev bool) []model.RepoRef {
 
@@ -882,7 +893,7 @@ func mergeConsoleSessionReads(current []model.RepoRef, stateRepo model.RepoRef,
 		}
 		wasInPrev := hasPrev && slices.ContainsFunc(prevReads, func(p model.RepoRef) bool { return p.Same(r) })
 		inSession := slices.ContainsFunc(sessionReads, func(s model.RepoRef) bool { return s.Same(r) })
-		if wasInPrev && !inSession {
+		if (wasInPrev || !hasPrev) && !inSession {
 			continue
 		}
 		out = append(out, r)
@@ -916,7 +927,7 @@ func mergeConsoleSessionWrites(current, sessionWrites, prevWrites []model.WriteT
 		}
 		wasInPrev := hasPrev && slices.ContainsFunc(prevWrites, func(p model.WriteTarget) bool { return sameWrite(p, w) })
 		inSession := slices.ContainsFunc(sessionWrites, func(s model.WriteTarget) bool { return sameWrite(s, w) })
-		if wasInPrev && !inSession {
+		if (wasInPrev || !hasPrev) && !inSession {
 			continue
 		}
 		out = append(out, w)

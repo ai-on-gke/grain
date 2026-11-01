@@ -62,6 +62,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_grant":                     {"task_id", "capability"},
 	"task_grant_wait":                {"task_id"},
 	"task_pause":                     {"task_id"},
+	"console_session_sync":           {"task_id"},
 	"custom_field":                   {"name"},
 	"api_scope_set":                  {"name"},
 	"lease":                          {"run_id", "capability", "resource"},
