@@ -151,6 +151,7 @@ export default function SystemPage({
   metricsWindow,
   onPickMetricsWindow,
   onOpenTask,
+  onOpenView,
   onAct,
   onOpenSession,
 }) {
@@ -267,6 +268,7 @@ export default function SystemPage({
             pickedWindow={metricsWindow}
             onPickWindow={onPickMetricsWindow}
             onOpenTask={onOpenTask}
+            onOpen={onOpenView}
             showError={showError}
           />
         </>
