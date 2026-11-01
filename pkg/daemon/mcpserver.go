@@ -196,6 +196,9 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
+	for _, tr := range detail.Transitions {
+		record.Transitions = append(record.Transitions, mcp.TaskTransition{State: string(tr.State), At: tr.At, Inferred: tr.Inferred, By: tr.By, Reason: tr.Reason, Detail: tr.Detail})
+	}
 	for _, c := range detail.Comments {
 		record.Comments = append(record.Comments, mcp.TaskComment{ID: c.ID, Author: c.Author, AuthorKind: c.AuthorKind, Body: c.Body, CreatedAt: c.CreatedAt, Handover: c.Handover})
 	}
@@ -954,10 +957,10 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 		if err != nil {
 			return mcp.ChatTurn{}, false
 		}
-		if needPrePost {
-			checkedPrePost = true
-		}
 		if len(messages) == 0 {
+			if needPrePost {
+				checkedPrePost = true
+			}
 			return mcp.ChatTurn{}, false
 		}
 		var beforePost, afterPost []ui.Message
@@ -974,9 +977,20 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 			chosen = beforePost
 		}
 		if len(chosen) == 0 {
+			if needPrePost {
+				checkedPrePost = true
+			}
 			return mcp.ChatTurn{}, false
 		}
-		placeMessageAttachments(ctx, d.client, d.taskID, chosen, d.writeFile)
+		attCtx, cancelAtt := context.WithDeadline(ctx, deadline)
+		err = placeMessageAttachments(attCtx, d.client, d.taskID, chosen, d.writeFile)
+		cancelAtt()
+		if err != nil {
+			return mcp.ChatTurn{}, false
+		}
+		if needPrePost {
+			checkedPrePost = true
+		}
 		d.delivered.deliveredByChat(ctx, chosen)
 		return mcp.ChatTurn{Reply: joinMessages(chosen)}, true
 	}
@@ -1062,26 +1076,42 @@ func joinMessages(messages []ui.Message) string {
 	return strings.Join(bodies, "\n\n")
 }
 
-func placeMessageAttachments(ctx context.Context, client *ui.HTTPClient, taskID string, messages []ui.Message, writeFile func(context.Context, map[string]any) mcp.Result) {
-	if writeFile == nil || client == nil {
-		return
+func placeMessageAttachments(ctx context.Context, client *ui.HTTPClient, taskID string, messages []ui.Message, writeFile func(context.Context, map[string]any) mcp.Result) error {
+	hasAttachments := false
+	for _, m := range messages {
+		if len(m.Attachments) > 0 {
+			hasAttachments = true
+			break
+		}
+	}
+	if !hasAttachments {
+		return nil
+	}
+	if client == nil {
+		return errors.New("no daemon client configured to fetch attachments")
+	}
+	if writeFile == nil {
+		return errors.New("sandbox exposes no write_file tool to place attachments with")
 	}
 	for _, m := range messages {
 		for _, a := range m.Attachments {
 			att, err := client.Attachment(ctx, taskID, a.ID)
 			if err != nil {
-				continue
+				return fmt.Errorf("fetching attachment %d (%q): %w", a.ID, a.Filename, err)
 			}
-			path := fmt.Sprintf("attachments/%d-%s", a.ID, a.Filename)
-			_ = writeFile(ctx, map[string]any{"file_path": path, "content": string(att.Content)})
+			path := orchestrator.AttachmentPath(a.ID, a.Filename)
+			if res := writeFile(ctx, map[string]any{"file_path": path, "content": string(att.Content)}); res.IsError {
+				return fmt.Errorf("writing attachment %d (%q): %s", a.ID, a.Filename, strings.TrimSpace(res.Text))
+			}
 		}
 	}
+	return nil
 }
 
 func formatMessageBody(m ui.Message) string {
 	var attLines []string
 	for _, a := range m.Attachments {
-		attLines = append(attLines, fmt.Sprintf("- ./attachments/%d-%s", a.ID, a.Filename))
+		attLines = append(attLines, fmt.Sprintf("- ./%s", orchestrator.AttachmentPath(a.ID, a.Filename)))
 	}
 	body := m.Body
 	if m.Author != "" && strings.TrimSpace(body) != "" {
@@ -1138,7 +1168,9 @@ func (d daemonAddenda) Addenda(ctx context.Context, after int64) ([]mcp.Addendum
 	// A message this run was already handed as a chat reply is not news
 	// on the answer after it: the run has just read it.
 	messages = d.delivered.notByChat(messages)
-	placeMessageAttachments(ctx, d.client, d.taskID, messages, d.writeFile)
+	if err := placeMessageAttachments(ctx, d.client, d.taskID, messages, d.writeFile); err != nil {
+		return nil, err
+	}
 	addenda := make([]mcp.Addendum, 0, len(messages))
 	for _, message := range messages {
 		addenda = append(addenda, mcp.Addendum{ID: message.ID, Body: formatMessageBody(message)})

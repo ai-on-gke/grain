@@ -226,7 +226,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// because a process that died in between would otherwise leave a
 	// repository nothing was allowed to rewrite and a deployment that
 	// could not start for it.
-	if schemaMigrated {
+	if schemaMigrated.any() {
 		discardSchemaUpgrade(cfg.DataDir)
 	}
 	if loadErr != nil {

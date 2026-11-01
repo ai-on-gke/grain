@@ -288,7 +288,7 @@ in_process:
 		t.Errorf("Check warned about active self-debug: %q", joined)
 	}
 
-	// Importing a pre-83 dump runs migration 83 and rewrites the export so
+	// Importing a pre-84 dump runs migration 84 and rewrites the export so
 	// the retired entries live under api_scopes.presets.<name> with zero
 	// warnings on the exported tree.
 	if err := WriteSchemaVersion(dir, 65); err != nil {

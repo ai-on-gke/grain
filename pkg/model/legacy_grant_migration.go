@@ -30,9 +30,11 @@ import (
 // holds is dropped rather than duplicated, keeping the one already
 // there), the deployment's and each repository's default_capabilities,
 // and the capabilities of grain_config.console_sessions -- the standing
-// director and steward among them. ci_capabilities is left alone: an api
-// grant in a CI job's list is a token for CIAPI (pkg/capability/ciapi),
-// which none of these ever were.
+// director and steward among them. Migrations 67-82 left
+// repo_config.ci_capabilities alone, and migration 83 rewrites past
+// retirements there via rewriteCapabilityListColumnMulti; earlier
+// migrations do not change, since stores already past them will not
+// re-run them.
 //
 // renames is the migration's own copy rather than legacyGrantReplacements,
 // so a later conversion adding to that table never changes what an

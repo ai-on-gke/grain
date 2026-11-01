@@ -109,7 +109,8 @@ type taskEvent struct {
 }
 
 // lastTaskEvents is the n latest things the record says happened to the
-// task: attempts starting and ending, and comments.
+// task: attempts starting and ending, recorded closes and reopens, and
+// comments.
 func lastTaskEvents(t TaskRecord, n int) []taskEvent {
 	var events []taskEvent
 	for _, a := range t.Attempts {
@@ -122,6 +123,22 @@ func lastTaskEvents(t TaskRecord, n int) []taskEvent {
 		} else {
 			events = append(events, taskEvent{at: a.StartedAt, text: fmt.Sprintf("attempt #%d started, still running", a.Number)})
 		}
+	}
+	for _, tr := range t.Transitions {
+		if (tr.State != "closed" && tr.State != "reopened") || (tr.By == "" && tr.Reason == "" && tr.Detail == "") {
+			continue
+		}
+		text := tr.State
+		if tr.By != "" {
+			text += " by " + tr.By
+		}
+		if tr.Reason != "" {
+			text += " (" + singleLine(tr.Reason) + ")"
+		}
+		if tr.Detail != "" {
+			text += "; " + singleLine(tr.Detail)
+		}
+		events = append(events, taskEvent{at: tr.At, text: text})
 	}
 	for _, c := range t.Comments {
 		text := fmt.Sprintf("comment #%d by %s (%s): %s", c.ID, c.Author, c.AuthorKind, singleLine(c.Body))

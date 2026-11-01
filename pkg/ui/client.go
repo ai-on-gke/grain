@@ -289,6 +289,12 @@ const (
 	MaxAttachmentsPerRequest = 10
 )
 
+// errPriorityNotPositive is the refusal for a task priority below 1, on
+// create and on edit alike. 0 is refused rather than read as "the
+// default": leaving the field out is how a caller asks for that, and
+// the Edit form, the host CLI and the sandbox CLI all say the same.
+const errPriorityNotPositive = "priority must be a positive integer (1 or more; leave it out for the default, 5)"
+
 // decodeAttachments validates and base64-decodes uploads into the
 // model.Attachment shape Store.AddAttachment writes -- TaskID and
 // CommentID are left for the caller to fill in once it knows them
@@ -1180,6 +1186,13 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	}
 
 	transitions := model.Transitions(*t, obs, runs, streak, askedAt(obs, comments))
+	// Who closed or reopened it, which the record above cannot say. A
+	// failure to read them leaves the timeline as the record alone has it.
+	if events, err := c.Store.TaskEvents(ctx, id); err != nil {
+		log.Printf("ui: task %s: reading its closes and reopens: %v", id, err)
+	} else {
+		transitions = model.MergeTaskEvents(transitions, events)
+	}
 	detail.Transitions = make([]Transition, 0, len(transitions))
 	for _, tr := range transitions {
 		detail.Transitions = append(detail.Transitions, transitionFrom(tr))
@@ -1567,7 +1580,9 @@ type CreateTaskRequest struct {
 	Interactive bool `json:"interactive"`
 	// Priority is the task's numeric dispatch priority (model.Task.Priority,
 	// default model.DefaultTaskPriority = 5; higher numbers mean higher priority).
-	// When omitted or 0, defaults to model.DefaultTaskPriority.
+	// When omitted, defaults to model.DefaultTaskPriority. 0 and below are
+	// refused (errPriorityNotPositive), as on every other surface that
+	// takes a task priority: there is no number that means "the default".
 	Priority *int `json:"priority,omitempty"`
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) set model.Task's own fields of
@@ -1982,12 +1997,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	priority := model.DefaultTaskPriority
 	if req.Priority != nil {
-		if *req.Priority < 0 {
-			return Task{}, validationErrorf("priority must be a positive integer")
+		if *req.Priority < 1 {
+			return Task{}, validationErrorf(errPriorityNotPositive)
 		}
-		if *req.Priority != 0 {
-			priority = *req.Priority
-		}
+		priority = *req.Priority
 	}
 	if req.NewBranch {
 		req.Base = strings.TrimSpace(req.Base)
@@ -3864,7 +3877,7 @@ type UpdateTaskRequest struct {
 	// every attempt until somebody corrects it.
 	Repo                 *string `json:"repo,omitempty"`
 	Base                 *string `json:"base,omitempty"`
-	Priority             *int    `json:"priority,omitempty"`
+	Priority             *int    `json:"priority,omitempty"` // 1 or more; see errPriorityNotPositive
 	Issue                *int    `json:"issue,omitempty"`
 	AutoMerge            *bool   `json:"autoMerge,omitempty"`
 	AutoApproveProposals *bool   `json:"autoApproveProposals,omitempty"`
@@ -4113,8 +4126,8 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 		return Task{}, validationErrorf("title cannot be empty")
 	}
-	if req.Priority != nil && *req.Priority < 0 {
-		return Task{}, validationErrorf("priority must be a positive integer")
+	if req.Priority != nil && *req.Priority < 1 {
+		return Task{}, validationErrorf(errPriorityNotPositive)
 	}
 	// A fork head label is resolved to the pull request it heads the way
 	// CreateTask resolves one (forkhead.go): the edit stores that pull
@@ -5735,6 +5748,9 @@ type CloseOptions struct {
 	// task closed and the pull request open, and says so in the note. See
 	// noteOrphanedPullRequests.
 	ClosePullRequest bool
+	// Reason is what whoever is closing the task says about why, kept on
+	// the close's model.TaskEvent beside who they are. Optional.
+	Reason string
 }
 
 // Close marks a task closed. Closed is the terminal state
@@ -5773,7 +5789,13 @@ func (c *Client) Close(ctx context.Context, id string, opts CloseOptions) error 
 // re-attach that fails is logged rather than failing the reopen -- the
 // task is open either way, and its next run looks again as it starts.
 func (c *Client) Reopen(ctx context.Context, id string) error {
-	if err := c.setClosed(ctx, id, false, CloseOptions{}); err != nil {
+	return c.ReopenBecause(ctx, id, "")
+}
+
+// ReopenBecause is Reopen with the reason whoever is reopening it gave,
+// kept on the reopen's model.TaskEvent.
+func (c *Client) ReopenBecause(ctx context.Context, id, reason string) error {
+	if err := c.setClosed(ctx, id, false, CloseOptions{Reason: reason}); err != nil {
 		return err
 	}
 	if r, ok := c.Config.PullRequests.(PullRequestReattacher); ok {
@@ -6529,6 +6551,11 @@ func pullRequestRefOf(task model.Task) string {
 	return ref
 }
 
+// setClosed closes or reopens a task and records who did it
+// (model.TaskEvent): the closure itself is one stamp the next reopen
+// clears, so the event is the only lasting trace of either. Closing a
+// task already closed, or reopening one already open, changes nothing and
+// records nothing.
 func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts CloseOptions) error {
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil {
@@ -6538,8 +6565,31 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		return &NotFoundError{ID: id}
 	}
 	now := c.now()
+	by := c.actor(ctx)
+	eventReason := strings.TrimSpace(opts.Reason)
+	if eventReason == "" {
+		if call, ok := agentCallFromContext(ctx); ok {
+			eventReason = call.reason
+		}
+	}
+	// The live run is read before the close is written: the orchestrator
+	// cancels it as soon as it sees the closure, and the event says so.
+	var liveRun *model.Run
+	if closed {
+		runs, err := c.Store.Runs(ctx, id)
+		if err != nil {
+			log.Printf("ui: closing %s: reading its runs: %v", id, err)
+		}
+		for i := range runs {
+			if runs[i].FinishedAt == nil {
+				liveRun = &runs[i]
+			}
+		}
+	}
 	var obs *model.Observation
+	changed := false
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		changed = (o.ClosedAt == nil) == closed
 		if closed {
 			o.ClosedAt = &now
 			obs = o
@@ -6550,14 +6600,23 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		return err
 	}
 	if !closed {
+		if changed {
+			c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventReopened, At: now,
+				By: by, Reason: eventReason})
+		}
 		return nil
 	}
+	var cancelledCI []string
 	if c.Config.CI != nil && (obs == nil || obs.PrMergedAt == nil) {
 		reason := fmt.Sprintf("task %s was closed", id)
+		if by.ID != "" {
+			reason += " by " + principalLabel(by)
+		}
 		var cancelledRunID string
 		if obs != nil && obs.CI != nil && !obs.CI.Done() && obs.CI.RunID != "" {
 			c.Config.CI.Cancel(obs.CI.RunID, reason, ci.CancelByOperator)
 			cancelledRunID = obs.CI.RunID
+			cancelledCI = append(cancelledCI, cancelledRunID)
 		}
 		for _, run := range c.Config.CI.List() {
 			if run.ID == "" || run.ID == cancelledRunID || run.Conclusion.Done() || run.Interrupted {
@@ -6565,8 +6624,13 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 			}
 			if run.RequestedBy == id || (task.Target != nil && run.Repo == task.Target.String() && run.Ref == task.BranchName()) {
 				c.Config.CI.Cancel(run.ID, reason, ci.CancelByOperator)
+				cancelledCI = append(cancelledCI, run.ID)
 			}
 		}
+	}
+	if changed {
+		c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventClosed, At: now,
+			By: by, Reason: eventReason, Detail: closeCancelled(liveRun, cancelledCI)})
 	}
 	// After the close is written, not before: the note says the task *is*
 	// closed, and a note left in front of a close that then failed would
@@ -6576,4 +6640,48 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	// and leaves the same note itself (orchestrator's own
 	// salvagePushedBranch).
 	return c.noteOrphanedPullRequests(ctx, *task, opts, now)
+}
+
+// recordTaskEvent writes a close or reopen's event, and only logs a
+// failure: the closure it records has already been written, and failing
+// the call now would tell the caller it had not.
+func (c *Client) recordTaskEvent(ctx context.Context, e model.TaskEvent) {
+	if _, err := c.Store.RecordTaskEvent(ctx, e); err != nil {
+		log.Printf("ui: recording the %s of task %s by %s: %v", e.Kind, e.TaskID, principalLabel(e.By), err)
+	}
+}
+
+// closeCancelled says what a close cancelled, "" for nothing: the live
+// run the orchestrator stops once it sees the closure, and the CI runs
+// the close cancelled itself.
+func closeCancelled(live *model.Run, ciRuns []string) string {
+	var parts []string
+	if live != nil {
+		parts = append(parts, fmt.Sprintf("run %s (attempt %d)", live.ID, live.Attempt))
+	}
+	switch len(ciRuns) {
+	case 0:
+	case 1:
+		parts = append(parts, "CI run "+ciRuns[0])
+	default:
+		parts = append(parts, "CI runs "+strings.Join(ciRuns, ", "))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "cancelled " + strings.Join(parts, " and ")
+}
+
+// principalLabel is a principal as a reader is shown it: "human
+// alice@example.com", "agent 1920", or the kind alone for one with no id.
+func principalLabel(p model.Principal) string {
+	switch {
+	case p.Kind == "" && p.ID == "":
+		return "unknown"
+	case p.ID == "":
+		return string(p.Kind)
+	case p.Kind == "":
+		return p.ID
+	}
+	return string(p.Kind) + " " + p.ID
 }

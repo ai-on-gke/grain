@@ -230,6 +230,19 @@ type TaskComment struct {
 	Handover bool
 }
 
+// TaskTransition is one step in a task's timeline (ui.Transition): when
+// it entered a state, or when somebody closed or reopened it
+// (model.TaskEvent), with who asked, the reason they gave and what a
+// close cancelled.
+type TaskTransition struct {
+	State    string
+	At       time.Time
+	Inferred bool
+	By       string
+	Reason   string
+	Detail   string
+}
+
 // TaskRecord is one task in full: the summary above, plus what it asked
 // for, what happened on every attempt, and everything said about it.
 type TaskRecord struct {
@@ -244,6 +257,7 @@ type TaskRecord struct {
 	LastFailureAt     *time.Time
 	LastFailureReason string
 	Attempts          []TaskAttempt
+	Transitions       []TaskTransition
 	Comments          []TaskComment
 	// Activity is what this task's live run is saying it is doing, for
 	// the reason the merge queue's own state is on the summary above: it
@@ -852,6 +866,26 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 		b.WriteByte('\n')
 		if a.Detail != "" {
 			fmt.Fprintf(&b, "      %s\n", singleLine(a.Detail))
+		}
+	}
+
+	if len(t.Transitions) > 0 {
+		b.WriteString("\nTransitions:\n")
+		for _, tr := range t.Transitions {
+			line := fmt.Sprintf("  %s  %s", tr.At.UTC().Format(time.RFC3339), tr.State)
+			if tr.Inferred {
+				line += " (inferred)"
+			}
+			if tr.By != "" {
+				line += " by " + tr.By
+			}
+			if tr.Reason != "" {
+				line += fmt.Sprintf(" (%s)", singleLine(tr.Reason))
+			}
+			if tr.Detail != "" {
+				line += "; " + singleLine(tr.Detail)
+			}
+			b.WriteString(line + "\n")
 		}
 	}
 

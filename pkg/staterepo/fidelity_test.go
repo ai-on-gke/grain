@@ -329,6 +329,13 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("commenting: %v", err)
 	}
+	if _, err := store.RecordTaskEvent(ctx, model.TaskEvent{
+		TaskID: "a1b2", Kind: model.TaskEventClosed, At: sub, Reason: awkward,
+		By:     model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"},
+		Detail: "cancelled run a1b2-1 (attempt 1)",
+	}); err != nil {
+		t.Fatalf("recording a close: %v", err)
+	}
 	// One attachment on the task itself (a NULL comment_id) and one on
 	// the comment (an integer one).
 	blob := make([]byte, 512)

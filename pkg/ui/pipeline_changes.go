@@ -25,7 +25,8 @@ package ui
 // history -- and the stall onsets are the same TaskStallNote the row in
 // the UI is drawn with. So the feed can only say what those records can:
 // a task's state transitions are the moments its record stamps (filed,
-// run started, run ended, closed, merged), and a base branch's verdict is
+// each attempt's start and end, every close and reopen somebody asked for
+// (model.TaskEvent), merged), and a base branch's verdict is
 // its latest one. Notifications (DT-5) are not a source yet; they join the
 // feed when their store lands.
 //
@@ -150,7 +151,7 @@ func (c *Client) PipelineChangesIn(ctx context.Context, repo string, after *Pipe
 		cursor = *after
 	}
 
-	all, err := c.pipelineChanges(ctx, now, strings.TrimSpace(repo))
+	all, err := c.pipelineChanges(ctx, now, cursor.At, strings.TrimSpace(repo))
 	if err != nil {
 		return PipelineChanges{}, err
 	}
@@ -173,8 +174,10 @@ func (c *Client) PipelineChangesIn(ctx context.Context, repo string, after *Pipe
 }
 
 // pipelineChanges is every entry the records can say about repo (every
-// repository for ""), in feed order with Seq assigned.
-func (c *Client) pipelineChanges(ctx context.Context, now time.Time, repo string) ([]PipelineChange, error) {
+// repository for ""), in feed order with Seq assigned. since bounds the
+// two sources that are a row per moment rather than a row per task --
+// attempts and closes -- to the ones a read from since could show.
+func (c *Client) pipelineChanges(ctx context.Context, now, since time.Time, repo string) ([]PipelineChange, error) {
 	inRepo := func(r string) bool { return repo == "" || strings.EqualFold(r, repo) }
 	tasks, err := c.ListTasks(ctx)
 	if err != nil {
@@ -186,12 +189,28 @@ func (c *Client) pipelineChanges(ctx context.Context, now time.Time, repo string
 			return nil, err
 		}
 	}
+	spans, err := c.Store.RunSpansSince(ctx, since)
+	if err != nil {
+		return nil, err
+	}
+	runsOf := map[string][]model.RunSpan{}
+	for _, r := range spans {
+		runsOf[r.TaskID] = append(runsOf[r.TaskID], r)
+	}
+	events, err := c.Store.TaskEventsSince(ctx, since)
+	if err != nil {
+		return nil, err
+	}
+	eventsOf := map[string][]model.TaskEvent{}
+	for _, e := range events {
+		eventsOf[e.TaskID] = append(eventsOf[e.TaskID], e)
+	}
 	var all []PipelineChange
 	for _, t := range tasks {
 		if !inRepo(t.Repo) {
 			continue
 		}
-		all = append(all, taskChanges(t)...)
+		all = append(all, taskChanges(t, runsOf[t.ID], eventsOf[t.ID])...)
 		if t.Stall != "" && c.Config.Stall != nil {
 			if since := times[t.ID].Since(t.State); since != nil {
 				at := stallOnset(c.Config.Stall, t.State, *since, now)
@@ -243,7 +262,16 @@ func (c *Client) pipelineChanges(ctx context.Context, now time.Time, repo string
 // taskChanges is what one task's record can say about its own history:
 // the moments it stamps, each one a transition from whatever the previous
 // one left it in.
-func taskChanges(t Task) []PipelineChange {
+//
+// Every attempt is its own start and end (runs, from task_run), so a task
+// run three times is three runs in the feed rather than its first start
+// and its last ending. Every close and reopen somebody asked for is its
+// own entry too (events), with who in its detail, so a close that was
+// undone seconds later is still in the feed; the task's current ClosedAt
+// is only used for a close nothing recorded -- one of grain's own.
+// A task with no attempts in runs falls back on its first start, which
+// is all a task listing carries.
+func taskChanges(t Task, runs []model.RunSpan, events []model.TaskEvent) []PipelineChange {
 	var out []PipelineChange
 	add := func(at *time.Time, kind, to, detail string) {
 		if at != nil && !at.IsZero() {
@@ -251,15 +279,45 @@ func taskChanges(t Task) []PipelineChange {
 		}
 	}
 	add(t.CreatedAt, PipelineChangeTask, "filed", "")
-	add(t.StartedAt, PipelineChangeTask, "running", "")
-	if t.EndedAt != nil && (t.StartedAt == nil || !t.EndedAt.Before(*t.StartedAt)) {
+	if len(runs) == 0 {
+		add(t.StartedAt, PipelineChangeTask, "running", "")
+	}
+	for _, r := range runs {
+		attempt := fmt.Sprintf("attempt %d, run %s", r.Attempt, r.ID)
+		started := r.StartedAt
+		add(&started, PipelineChangeTask, "running", attempt)
+		add(r.FinishedAt, PipelineChangeTask, "ended", blankAsWord(r.Outcome, "finished")+", "+attempt)
+	}
+	// The task's own ending, when it is a completion: a closure is said
+	// below, by whoever asked for it.
+	if t.EndedAt != nil && (t.StartedAt == nil || !t.EndedAt.Before(*t.StartedAt)) &&
+		(t.ClosedAt == nil || !t.EndedAt.Equal(*t.ClosedAt)) {
 		to := string(t.State)
 		if t.State == model.StateRunning || t.State == model.StateClosed {
 			to = "ended"
 		}
 		add(t.EndedAt, PipelineChangeTask, to, "")
 	}
-	add(t.ClosedAt, PipelineChangeTask, "closed", "")
+	closeRecorded := false
+	for _, e := range events {
+		at := e.At
+		detail := "by " + principalLabel(e.By)
+		if e.Reason != "" {
+			detail += ": " + e.Reason
+		}
+		if e.Detail != "" {
+			detail += "; " + e.Detail
+		}
+		add(&at, PipelineChangeTask, string(e.Kind), detail)
+		if e.Kind == model.TaskEventClosed && t.ClosedAt != nil {
+			if d := e.At.Sub(*t.ClosedAt); d < time.Second && d > -time.Second {
+				closeRecorded = true
+			}
+		}
+	}
+	if !closeRecorded {
+		add(t.ClosedAt, PipelineChangeTask, "closed", "")
+	}
 	add(t.PrMergedAt, PipelineChangeTask, "merged", "")
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	for i := 1; i < len(out); i++ {
