@@ -57,7 +57,9 @@ describe("AccessSection", () => {
     expect(onLogout).toHaveBeenCalled();
   });
 
-  it("names the server-reported IAP actor, without its prefix, and offers no log out", () => {
+  it("names the server-reported IAP actor, without its prefix, and logs out", async () => {
+    const user = userEvent.setup();
+    const onLogout = vi.fn();
     localStorage.setItem("grain.username", "alice");
     render(
       section({
@@ -66,6 +68,7 @@ describe("AccessSection", () => {
           actor: "user:iap@example.com",
           authMethod: "iap",
         },
+        onLogout,
       }),
     );
 
@@ -73,9 +76,8 @@ describe("AccessSection", () => {
       screen.getByText(/Signed in through IAP as iap@example\.com\./),
     ).toBeInTheDocument();
     expect(screen.queryByText(/alice/)).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Log out" }),
-    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Log out" }));
+    expect(onLogout).toHaveBeenCalledTimes(1);
   });
 
   it("has no Username box, whatever this browser once stored", () => {

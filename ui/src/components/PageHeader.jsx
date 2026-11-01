@@ -22,10 +22,19 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { Box, IconButton, Tooltip, Typography } from "@mui/material";
+import {
+  Box,
+  ButtonBase,
+  IconButton,
+  Menu,
+  MenuItem,
+  Tooltip,
+  Typography,
+} from "@mui/material";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import ItemGlyph from "./ItemGlyph.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
+import { verifiedUserEmail } from "./settings/AccessSection.jsx";
 
 // crumbSx is the one type style of the page title: every crumb and the
 // slash between them share a family, size, line height, letter-spacing
@@ -140,7 +149,11 @@ export function GlobalButtons({
   config = null,
   onOpenSystem,
   onOpenSettings,
+  onOpenAccess,
+  onLogout,
 }) {
+  const [userAnchor, setUserAnchor] = useState(null);
+  const email = verifiedUserEmail(config);
   const selectedSx = (on) => ({
     color: on ? "primary.main" : "text.secondary",
     bgcolor: on ? "action.selected" : "transparent",
@@ -182,6 +195,79 @@ export function GlobalButtons({
             <ItemGlyph kind="settings" size={18} />
           </IconButton>
         </Tooltip>
+      )}
+      {email && (
+        <>
+          <Tooltip title={`Signed in as ${email}`}>
+            <ButtonBase
+              data-testid="top-bar-user"
+              aria-label={`Signed in as ${email}`}
+              aria-haspopup={onLogout || onOpenAccess ? "menu" : undefined}
+              aria-expanded={Boolean(userAnchor) || undefined}
+              onClick={(e) => {
+                if (onLogout || onOpenAccess) {
+                  setUserAnchor(e.currentTarget);
+                } else {
+                  onOpenSettings?.();
+                }
+              }}
+              sx={{
+                px: 1,
+                height: 28,
+                borderRadius: 1,
+                maxWidth: 200,
+                fontSize: "0.75rem",
+                fontWeight: 500,
+                color: "text.secondary",
+                border: 1,
+                borderColor: "divider",
+                "&:hover": {
+                  bgcolor: "action.hover",
+                  color: "text.primary",
+                },
+              }}
+            >
+              <Typography
+                component="span"
+                variant="caption"
+                noWrap
+                sx={{ fontSize: "0.75rem", fontWeight: 500, lineHeight: 1 }}
+              >
+                {email}
+              </Typography>
+            </ButtonBase>
+          </Tooltip>
+          <Menu
+            anchorEl={userAnchor}
+            open={Boolean(userAnchor)}
+            onClose={() => setUserAnchor(null)}
+            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+            transformOrigin={{ vertical: "top", horizontal: "right" }}
+          >
+            {(onOpenAccess || onOpenSettings) && (
+              <MenuItem
+                dense
+                onClick={() => {
+                  setUserAnchor(null);
+                  (onOpenAccess || onOpenSettings)();
+                }}
+              >
+                Access settings
+              </MenuItem>
+            )}
+            {onLogout && (
+              <MenuItem
+                dense
+                onClick={() => {
+                  setUserAnchor(null);
+                  onLogout();
+                }}
+              >
+                Log out
+              </MenuItem>
+            )}
+          </Menu>
+        </>
       )}
     </Box>
   );

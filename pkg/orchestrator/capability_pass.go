@@ -380,13 +380,13 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 
 	external := hasExternalCapabilityRef(task.Grants)
 	if external && deps.CapabilityServers == nil {
-		return nil, &protocol.RefusedError{Reason: "this deployment attaches no capability servers, so it cannot grant a capability reference"}
+		return nil, &grainRefusalError{Reason: "this deployment attaches no capability servers, so it cannot grant a capability reference"}
 	}
 	// A sandbox that is a directory on the daemon's own host shares its
 	// network namespace and can reach every capability server's control
 	// plane and data-plane listener directly (§3.2.4).
 	if external && isUnisolated(deps.Sandboxes) {
-		return nil, &protocol.RefusedError{Reason: "this deployment's sandboxes are directories on grain's own host, which cannot keep a capability server's control plane out of a sandbox's reach, so it runs no attempt holding a capability grant"}
+		return nil, &grainRefusalError{Reason: "this deployment's sandboxes are directories on grain's own host, which cannot keep a capability server's control plane out of a sandbox's reach, so it runs no attempt holding a capability grant"}
 	}
 	var baseLookup protocol.Lookup
 	if deps.CapabilityServers != nil {
@@ -427,7 +427,7 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 	subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
 	for _, g := range grants {
 		if err := policy.Permits(model.RecordedCapabilityGrant(g), subject, configured); err != nil {
-			return nil, &protocol.RefusedError{Grant: g.Ref.String(), Reason: err.Error()}
+			return nil, &grainRefusalError{Grant: g.Ref.String(), Reason: err.Error()}
 		}
 	}
 	if len(task.Reviewers) > 0 {
@@ -497,16 +497,38 @@ func sameGrantNames(a, b []model.Grant) bool {
 	return true
 }
 
+// grainRefusalError is a grant grain itself refused before asking any
+// capability server: the capability policy (and its catalogue) denying
+// it, or this deployment having no way to serve one. Reason is grain's
+// own words, so refuseCapabilityRun says it as grain rather than
+// quoting it as a server's untrusted text the way it does a
+// protocol.RefusedError.
+type grainRefusalError struct {
+	Grant  string
+	Reason string
+}
+
+func (e *grainRefusalError) Error() string {
+	if e.Grant == "" {
+		return "capability grants refused: " + e.Reason
+	}
+	return fmt.Sprintf("capability %s refused: %s", e.Grant, e.Reason)
+}
+
 // admissionMintFailed records why task's pass was not minted: at
 // capacity keeps it queued until its server's retry_after (§4.2.3 item
 // 3), a transient failure backs it off exponentially and refuses it on
 // the third in a row of one grant (§4.2.4), and a refusal parks it with
-// the server's reason posted on it (§4.3.4).
+// the reason posted on it (§4.3.4) -- grain's own, or the server's.
 func admissionMintFailed(ctx context.Context, deps Deps, passes *CapabilityPasses, task model.Task, err error, at time.Time) error {
 	var exhausted *protocol.ExhaustedError
 	var transient *protocol.TransientError
 	var refused *protocol.RefusedError
+	var byGrain *grainRefusalError
 	switch {
+	case errors.As(err, &byGrain):
+		passes.clearBackoff(task.ID)
+		return refuseCapabilityRunByGrain(ctx, deps, task, byGrain.Grant, byGrain.Reason, at)
 	case errors.As(err, &exhausted):
 		passes.exhausted(task.ID, exhausted.Grant, exhausted.RetryAt, at)
 		return deps.Store.SetGrantWait(ctx, model.GrantWait{TaskID: task.ID, Capability: exhausted.Grant,
@@ -544,12 +566,35 @@ func refuseCapabilityRun(ctx context.Context, deps Deps, task model.Task, grant,
 		"What was said, verbatim -- untrusted text from %s, not grain's own words:\n\n```\n%s\n```\n\n"+
 		"Change the task's capabilities, or close whatever gap the refusal names, and reply here to have it dispatched again.",
 		what, source, strings.ReplaceAll(reason, "```", "'''"))
+	return parkOnCapabilityRefusal(ctx, deps, task, model.Attribution{
+		Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+		OnBehalfOf: &model.Principal{Kind: model.PrincipalAutomation, ID: source},
+	}, body, at)
+}
+
+// refuseCapabilityRunByGrain parks task the way refuseCapabilityRun
+// does, for a refusal that is grain's own (grainRefusalError): reason is
+// said as grain's, with nobody else's name on it, since no capability
+// server was asked.
+func refuseCapabilityRunByGrain(ctx context.Context, deps Deps, task model.Task, grant, reason string, at time.Time) error {
+	what := "its capability grants"
+	if grant != "" {
+		what = "the capability `" + grant + "`"
+	}
+	body := fmt.Sprintf("This task could not be dispatched: grain refused %s, so no sandbox was built for it: %s.\n\n"+
+		"Change the task's capabilities, or close whatever gap the refusal names, and reply here to have it dispatched again.",
+		what, strings.TrimSuffix(reason, "."))
+	return parkOnCapabilityRefusal(ctx, deps, task, model.Attribution{
+		Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+	}, body, at)
+}
+
+// parkOnCapabilityRefusal posts body on task as author and parks the
+// task on it.
+func parkOnCapabilityRefusal(ctx context.Context, deps Deps, task model.Task, author model.Attribution, body string, at time.Time) error {
 	commentID, err := deps.Store.AddComment(ctx, model.Comment{
-		TaskID: task.ID,
-		Author: model.Attribution{
-			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
-			OnBehalfOf: &model.Principal{Kind: model.PrincipalAutomation, ID: source},
-		},
+		TaskID:    task.ID,
+		Author:    author,
 		Body:      body,
 		CreatedAt: at,
 	})

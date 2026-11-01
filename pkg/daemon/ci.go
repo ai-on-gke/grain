@@ -3216,6 +3216,31 @@ func (g GritFlags) Apply(cfg *Config) {
 // /v1/session for the reverse tunnel. Refused unless asked for by name,
 // so nobody points a deployment's CI at it as a second way of running
 // the same thing (design/design/grit-split.design.md).
+// CheckCICacheBounds rejects negative CI cache and artifact size/age flags.
+// Zero means "use grain's own default" (ci.OpenDirCache), whereas a negative
+// bound would otherwise be silently promoted to the default.
+func CheckCICacheBounds(cfg Config) error {
+	switch {
+	case cfg.CiCacheMaxAge < 0:
+		return errors.New("-ci-cache-max-age cannot be negative")
+	case cfg.CiCacheMaxBytes < 0:
+		return errors.New("-ci-cache-max-bytes cannot be negative")
+	case cfg.CiCacheMaxEntries < 0:
+		return errors.New("-ci-cache-max-entries cannot be negative")
+	case cfg.CiCacheMaxEntryBytes < 0:
+		return errors.New("-ci-cache-max-entry-bytes cannot be negative")
+	case cfg.CiArtifactMaxAge < 0:
+		return errors.New("-ci-artifact-max-age cannot be negative")
+	case cfg.CiArtifactMaxBytes < 0:
+		return errors.New("-ci-artifact-max-bytes cannot be negative")
+	case cfg.CiArtifactMaxRunBytes < 0:
+		return errors.New("-ci-artifact-max-run-bytes cannot be negative")
+	case cfg.CiArtifactMaxEntryBytes < 0:
+		return errors.New("-ci-artifact-max-entry-bytes cannot be negative")
+	}
+	return nil
+}
+
 func CheckGritURL(cfg Config) error {
 	if strings.TrimSpace(cfg.GritURL) == "" || cfg.GritExperimental {
 		return nil

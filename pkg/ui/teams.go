@@ -460,7 +460,7 @@ func (c *Client) applyDeploymentSettings(cfg *model.Config, req UpdateTeamReques
 // otherwise be any team admin or system admin by typing their name.
 func teamActingUser(ctx context.Context, claimed string) string {
 	_ = claimed
-	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalHuman && strings.TrimSpace(p.ID) != "" {
+	if p, ok := PrincipalFromContext(ctx); ok && (p.Kind == model.PrincipalHuman || p.Kind == model.PrincipalService) && strings.TrimSpace(p.ID) != "" {
 		return strings.TrimSpace(p.ID)
 	}
 	return ""
@@ -473,10 +473,10 @@ func (c *Client) triggerIAPSync() {
 }
 
 func requestUser(r *http.Request) string {
-	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalHuman && strings.TrimSpace(p.ID) != "" {
+	if p, ok := PrincipalFromContext(r.Context()); ok && (p.Kind == model.PrincipalHuman || p.Kind == model.PrincipalService) && strings.TrimSpace(p.ID) != "" {
 		return strings.TrimSpace(p.ID)
 	}
-	if p, ok := ExtractPrincipal(r); ok && p.Kind == model.PrincipalHuman && strings.TrimSpace(p.ID) != "" {
+	if p, ok := ExtractPrincipal(r); ok && (p.Kind == model.PrincipalHuman || p.Kind == model.PrincipalService) && strings.TrimSpace(p.ID) != "" {
 		return strings.TrimSpace(p.ID)
 	}
 	return ""

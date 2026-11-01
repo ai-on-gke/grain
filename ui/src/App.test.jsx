@@ -1621,6 +1621,47 @@ describe("App", () => {
     expect(screen.queryByText("auth-user@example.com")).toBeNull();
   });
 
+  it("shows the signed-in IAP email in the header and redirects logout to /_gcp_iap/clear_login_cookie", async () => {
+    const assignSpy = vi.fn();
+    const origLocation = window.location;
+    delete window.location;
+    window.location = { ...origLocation, assign: assignSpy };
+    try {
+      setupApi();
+      const realImpl = api.getMockImplementation();
+      api.mockImplementation((path, opts) => {
+        if (path === "/api/config") {
+          return Promise.resolve({
+            ...config,
+            authenticated: true,
+            authMethod: "iap",
+            actor: "iap-user@example.com",
+            actorKind: "human",
+          });
+        }
+        if (path === "/api/auth/logout") {
+          return Promise.resolve({
+            loggedOut: true,
+            redirect: "/_gcp_iap/clear_login_cookie",
+          });
+        }
+        return realImpl(path, opts);
+      });
+
+      const user = userEvent.setup();
+      render(<App />);
+
+      const badge = await screen.findByTestId("top-bar-user");
+      expect(badge).toHaveTextContent("iap-user@example.com");
+
+      await user.click(badge);
+      await user.click(screen.getByRole("menuitem", { name: "Log out" }));
+      expect(assignSpy).toHaveBeenCalledWith("/_gcp_iap/clear_login_cookie");
+    } finally {
+      window.location = origLocation;
+    }
+  });
+
   // A browser the server names nobody for (actor "") and refuses every
   // list is signed out, and is sent to the access-code sign-in rather
   // than shown an empty app or asked for a name
