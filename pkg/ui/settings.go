@@ -1751,7 +1751,15 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.GCPProject = *req.GCPProject
 	}
 	if req.GCPServiceAccountEmail != nil {
-		cfg.GCPServiceAccountEmail = *req.GCPServiceAccountEmail
+		// A service account is an email address; the 2026-11-01
+		// walkthrough saved "not an email", which only failed when a key
+		// was minted.
+		email := strings.TrimSpace(*req.GCPServiceAccountEmail)
+		if local, domain, ok := strings.Cut(email, "@"); email != "" &&
+			(!ok || local == "" || domain == "" || strings.ContainsAny(email, " \t") || strings.Contains(domain, "@")) {
+			return model.Config{}, validationErrorf("gcpServiceAccountEmail %q is not a service account email, such as grain-minter@my-project-123.iam.gserviceaccount.com", email)
+		}
+		cfg.GCPServiceAccountEmail = email
 	}
 	if req.GCPServiceAccountCount != nil {
 		count := *req.GCPServiceAccountCount

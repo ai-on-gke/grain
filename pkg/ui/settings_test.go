@@ -1858,3 +1858,43 @@ func TestCheckImageManifestHTTPServer(t *testing.T) {
 		t.Fatalf("CheckImageManifest(missing) = %v, want ErrImageNotFound", err)
 	}
 }
+
+// The 2026-11-01 walkthrough saved "not an email" as the GCP service
+// account email, which only failed when gcp-key next minted a key.
+func TestUpdateSettingsRefusesAGCPServiceAccountEmailThatIsNotOne(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		email string
+		ok    bool
+	}{
+		{"not an email", false},
+		{"no-at-sign", false},
+		{"@project.iam.gserviceaccount.com", false},
+		{"minter@", false},
+		{"a@b@c", false},
+		{" grain-minter@walk-1.iam.gserviceaccount.com ", true},
+		{"", true},
+	} {
+		e := tc.email
+		_, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{GCPServiceAccountEmail: &e})
+		if tc.ok != (err == nil) {
+			t.Errorf("UpdateSettings(gcpServiceAccountEmail=%q) = %v, want accepted %v", tc.email, err, tc.ok)
+		}
+		if err != nil && !strings.HasPrefix(err.Error(), "gcpServiceAccountEmail ") {
+			t.Errorf("refusal %q does not name gcpServiceAccountEmail", err)
+		}
+		if tc.ok && err == nil && tc.email != "" {
+			saved, err := c.GetSettings(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved.GCPServiceAccountEmail != strings.TrimSpace(tc.email) {
+				t.Errorf("GCPServiceAccountEmail = %q, want %q trimmed", saved.GCPServiceAccountEmail, tc.email)
+			}
+		}
+	}
+}
