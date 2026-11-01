@@ -38,6 +38,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/gitpushanyref"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
@@ -284,6 +285,12 @@ func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, t
 		// since this process started is redacted by the next run that
 		// reads the journal rather than by the next restart.
 		grainlog.CapabilityName: func(_ *model.Store, taskID string) []mcp.Tool {
+			return grainlog.Tools(grainlog.Config{
+				TaskID:   taskID,
+				Redactor: grainLogRedactor(secretsDir),
+			})
+		},
+		grainserver.JournalGrant: func(_ *model.Store, taskID string) []mcp.Tool {
 			return grainlog.Tools(grainlog.Config{
 				TaskID:   taskID,
 				Redactor: grainLogRedactor(secretsDir),

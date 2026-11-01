@@ -322,7 +322,21 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		return err
 	}
 	if waiting {
-		return nil
+		// If a human message arrived concurrently (for example just before
+		// PostAgentMessage set PendingQuestionCommentID as the run was tearing
+		// down, or while ProcessResult was starting), clear the stale question
+		// marker and fall through so the task stays queued for the unanswered
+		// human message instead of parking on it.
+		if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
+			if err := observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+				o.PendingQuestionCommentID = nil
+				o.PendingSecret = ""
+			}); err != nil {
+				return err
+			}
+		} else {
+			return nil
+		}
 	}
 
 	// A run that stopped through resume_later -- or wait_for_task's park
@@ -437,6 +451,11 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// its goal or a message instead (restOnGoal). Its words are relayed as
 	// an ordinary comment; reconcileTaskGoals closes it once the goal is
 	// met, and a person may close it any time.
+	if !waitingMessage {
+		if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
+			waitingMessage = true
+		}
+	}
 	if !waitingMessage && !keepRunning {
 		finalText := !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && strings.TrimSpace(result.FinalText) != "" &&
 			!taskPaused(ctx, store, task.ID)
@@ -450,9 +469,22 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 					if _, err := relayCommentWithAttachments(ctx, store, task, strings.TrimSpace(result.FinalText), nil, now); err != nil {
 						return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 					}
+					hasComment = true
 				}
-				_, err := restOnGoal(ctx, store, task, runID, now)
-				return err
+				if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
+					waitingMessage = true
+				} else {
+					_, err := restOnGoal(ctx, store, task, runID, now)
+					if err != nil {
+						return err
+					}
+					if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
+						if _, werr := store.WakeOnMessage(ctx, task.ID, now); werr != nil {
+							return werr
+						}
+					}
+					return nil
+				}
 			}
 		}
 	}
@@ -496,6 +528,14 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 		}
 		hasComment = true
+	} else if relayedInProcess {
+		hasComment = true
+	}
+
+	if !waitingMessage {
+		if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
+			waitingMessage = true
+		}
 	}
 
 	// Its words are in the conversation; its task stays open for the
@@ -1039,11 +1079,34 @@ func relayParkingCalls(ctx context.Context, store *model.Store, task model.Task,
 
 	secret, _ := firstToolCallArg(result, "request_secret", "secret")
 	question, _ := firstToolCallArg(result, "ask_question", "question")
-	if secret == "" && question == "" {
+	_, proposed := firstToolCallArg(result, "propose_config_change", "summary")
+	if secret == "" && question == "" && !proposed {
 		return false, nil
 	}
 
 	var pending int64
+	parked := false
+	// A config change the run proposed is already recorded on the task
+	// (ui.Client.ProposeConfigChange, called while the run was live);
+	// what is left is the parking, on a comment saying what the person
+	// is being asked to decide. One cleared since -- decided while the
+	// turn was still ending -- parks nothing.
+	if proposed {
+		obs, err := store.GetObservation(ctx, task.ID)
+		if err != nil {
+			return false, fmt.Errorf("orchestrator: reading the config change %s proposed: %w", task.ID, err)
+		}
+		if obs != nil && obs.PendingConfigChange != nil {
+			change := obs.PendingConfigChange
+			body := configChangeRequestBody(*change)
+			summary := model.QuestionSummary("Approve config change: "+change.Summary, body, "propose_config_change on "+task.ID)
+			commentID, err := relayQuestion(ctx, store, task, body, summary, nil, now)
+			if err != nil {
+				return false, fmt.Errorf("orchestrator: posting the config change for %s: %w", task.ID, err)
+			}
+			pending, parked = commentID, true
+		}
+	}
 	if secret != "" {
 		reason, _ := firstToolCallArg(result, "request_secret", "reason")
 		summary, _ := firstToolCallArg(result, "request_secret", "summary")
@@ -1058,7 +1121,7 @@ func relayParkingCalls(ctx context.Context, store *model.Store, task model.Task,
 		if err != nil {
 			return false, fmt.Errorf("orchestrator: posting the secret request for %s: %w", task.ID, err)
 		}
-		pending = commentID
+		pending, parked = commentID, true
 	}
 	if question != "" {
 		attachments, dropped := mcp.ResponseAttachmentsTolerant(firstToolCallArgs(result, "ask_question"), staged)
@@ -1068,7 +1131,10 @@ func relayParkingCalls(ctx context.Context, store *model.Store, task model.Task,
 		if err != nil {
 			return false, fmt.Errorf("orchestrator: posting question for %s: %w", task.ID, err)
 		}
-		pending = commentID
+		pending, parked = commentID, true
+	}
+	if !parked {
+		return false, nil
 	}
 
 	if err := observeField(ctx, store, task.ID, now, func(o *model.Observation) {
@@ -1101,6 +1167,24 @@ func secretRequestBody(secret, reason string) string {
 		return body
 	}
 	return reason + "\n\n" + body
+}
+
+// configChangeRequestBody is what a propose_config_change call reads as
+// in the task's conversation: grain's account of what is waiting, since
+// the diff and the buttons are in the card beside it.
+func configChangeRequestBody(change model.PendingConfigChange) string {
+	body := fmt.Sprintf("**This session proposed a change to %s:** %s\n\nBranch `%s` at `%s` touches %s. ",
+		model.ConfigRepo(), change.Summary, change.Branch, shortCommit(change.HeadSHA), strings.Join(change.Files, ", "))
+	if change.Validation.OK {
+		body += "It passed config validation. "
+	} else {
+		body += "It failed config validation (" + change.Validation.Error + "), so it cannot be approved as it stands. "
+	}
+	body += "Approve or reject it in the card on this task; nothing takes effect until it is approved."
+	if change.Description != "" {
+		body = change.Description + "\n\n" + body
+	}
+	return body
 }
 
 // relayComment records something a dispatched run said, attributed as
@@ -3092,7 +3176,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	// what every pull request grain opened was called before this.
 	title := titleFromCommits(commits)
 	if title == "" {
-		title = task.Title
+		title = capTitle(commitSummary(task.Title))
 	}
 	if title == "" {
 		title = "grain: " + task.ID

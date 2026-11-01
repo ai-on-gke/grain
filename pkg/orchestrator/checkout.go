@@ -173,7 +173,10 @@ type checkout struct {
 	// state is absent when it cannot be supplied.
 	DirectorState     directorStateStatus
 	DirectorStateRepo model.RepoRef
-	ProxyBase         string
+	// DirectorStateWritable is a ready checkout the session may push
+	// proposal branches from: the state repository is in its Writes.
+	DirectorStateWritable bool
+	ProxyBase             string
 	// GrainSource records what placeGrainSource did with the
 	// deployment's baked-in copy of grain's source for a self-debug run.
 	GrainSource grainSourceStatus
@@ -416,10 +419,22 @@ func prepareDirectorStateWithReuse(ctx context.Context, tools []mcp.Tool, remote
 		out.Root = sandboxWorkingDir(ctx, tools)
 		return out
 	}
-	granted := false
+	// A session that may write the state repository (grain_config's
+	// console_sessions gives the director grain/config in its writes) gets
+	// a checkout it can push from: never to main, which the git proxy
+	// refuses, but to the proposal branches propose_config_change pushes
+	// (model.ConfigProposalBranchPrefix). Read access alone keeps the push
+	// URL disabled, as every checkout did before.
+	granted, writable := false, false
 	for _, read := range task.Reads {
-		if read == repo {
+		if read.Same(repo) {
 			granted = true
+			break
+		}
+	}
+	for _, write := range task.Writes {
+		if write.Repo.Same(repo) {
+			granted, writable = true, true
 			break
 		}
 	}
@@ -434,19 +449,23 @@ func prepareDirectorStateWithReuse(ctx context.Context, tools []mcp.Tool, remote
 		out.Root = sandboxWorkingDir(ctx, tools)
 		return out
 	}
+	after := fmt.Sprintf("git -C '%s' remote set-url --push origin grain-read-only", DirectorStateDir)
+	if writable {
+		after = fmt.Sprintf("git -C '%[1]s' config user.name 'grain director' && git -C '%[1]s' config user.email 'grain@localhost'", DirectorStateDir)
+	}
 	script := fmt.Sprintf(`%s
 rm -rf '%s'
-git clone --quiet '%s' '%s' && git -C '%s' remote set-url --push origin grain-read-only`,
-		sandboxRootEcho(), DirectorStateDir, CloneURL(out.ProxyBase, repo), DirectorStateDir, DirectorStateDir)
+git clone --quiet '%s' '%s' && %s`,
+		sandboxRootEcho(), DirectorStateDir, CloneURL(out.ProxyBase, repo), DirectorStateDir, after)
 	if reused {
 		script = fmt.Sprintf(`%s
 if [ -d '%s/.git' ]; then
   git -C '%s' pull --ff-only --quiet 2>/dev/null || true
 else
   rm -rf '%s'
-  git clone --quiet '%s' '%s' && git -C '%s' remote set-url --push origin grain-read-only
+  git clone --quiet '%s' '%s' && %s
 fi`,
-			sandboxRootEcho(), DirectorStateDir, DirectorStateDir, DirectorStateDir, CloneURL(out.ProxyBase, repo), DirectorStateDir, DirectorStateDir)
+			sandboxRootEcho(), DirectorStateDir, DirectorStateDir, DirectorStateDir, CloneURL(out.ProxyBase, repo), DirectorStateDir, after)
 	}
 	result := run(ctx, map[string]any{"command": script})
 	out.Root = sandboxRootFrom(result.Text)
@@ -456,6 +475,7 @@ fi`,
 		return out
 	}
 	out.DirectorState = directorStateReady
+	out.DirectorStateWritable = writable
 	return out
 }
 

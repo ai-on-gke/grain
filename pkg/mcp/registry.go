@@ -231,6 +231,9 @@ func (r *Registry) handleCall(ctx context.Context, id json.RawMessage, params js
 	if args == nil {
 		args = map[string]any{}
 	}
+	// Acknowledge any addenda handed to the previous tool call now that the
+	// agent is making another tool call rather than exiting the run.
+	r.ackPendingAddenda(ctx)
 	// Before the handler, because the point of the line is to say what
 	// the run is doing *while* it does it: a tool that blocks for a
 	// quarter of an hour is exactly the one a person watching the row
@@ -273,8 +276,12 @@ func (r *Registry) handleCall(ctx context.Context, id json.RawMessage, params js
 	// result a run is most likely to have to act on, and because the
 	// poll behind it is only worth making once the handler has returned:
 	// a wait_for_checks that blocked for a quarter of an hour picks up
-	// everything said during it (addenda.go).
-	text = withDeadlineNotice(text, r.addendaNotice(ctx))
+	// everything said during it (addenda.go). Skip turn-ending tools and
+	// unanswered chat turns so comments arriving as the run stops are left
+	// for the next turn/dispatch.
+	if !isTurnEndingTool(t.Name, result) {
+		text = withDeadlineNotice(text, r.addendaNotice(ctx))
+	}
 	return mustMarshalLine(rpcResponse{
 		JSONRPC: "2.0", ID: id,
 		Result: map[string]any{
@@ -282,4 +289,15 @@ func (r *Registry) handleCall(ctx context.Context, id json.RawMessage, params js
 			"isError": result.IsError,
 		},
 	})
+}
+
+func isTurnEndingTool(name string, result Result) bool {
+	switch name {
+	case "comment_on_issue", "ask_question", "nothing_needed", "request_secret", "resume_later":
+		return true
+	case "chat":
+		return !result.HumanTurn
+	default:
+		return false
+	}
 }

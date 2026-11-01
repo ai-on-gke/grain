@@ -76,6 +76,23 @@ test.describe("under prefers-reduced-motion: reduce", () => {
     for (const d of await durations(container)) expect(d).toBe(0);
   });
 
+  // A button focused from the keyboard draws MUI's focus ripple, which
+  // pulsed on an endless keyframe loop whatever the preference
+  // (2026-11-01 responsive walkthrough).
+  test("a keyboard-focused button's ripple holds still", async ({ page }) => {
+    await page.goto("/");
+    const menu = page.getByRole("button", { name: "Open navigation" });
+    await expect(menu).toBeVisible();
+    await menu.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    const pulse = menu.locator(".MuiTouchRipple-childPulsate");
+    await expect(pulse).toHaveCount(1);
+    expect(
+      await pulse.evaluate((el) => getComputedStyle(el).animationName),
+    ).toBe("none");
+  });
+
   // The preference is read live: turning it off mid-session brings the
   // transitions back without a reload, as the OS setting would.
   test("follows the preference when it changes", async ({ page }) => {

@@ -472,7 +472,12 @@ not taken from the repository's CI capabilities list.
   ([question-summaries.md](question-summaries.md)).
 - **Standing sessions.** A run can't act on a standing session it doesn't
   own. It can never create, restart, cancel or delete a session, and
-  can't type into a live console.
+  can't type into a live console. The one exception is a note
+  (`POST /api/tasks/{id}/notes`, message_task) from the session's own
+  parent or child: a director's child may report back to it. A note never
+  parks the session or acts on its run. It reaches the session the same
+  way whether it is sent through the agent API, `grain task message` or
+  `grain mcpserver`'s `message_task`.
 - **Upgrade holds.** A run honours them. It can't lift a dispatch pause
   someone else took. It can't upgrade, restart or reboot while an upgrade
   check holds dispatch for another task.

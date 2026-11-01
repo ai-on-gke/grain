@@ -102,7 +102,7 @@ const READS_SETTINGS = new Set([
 // list then a section on a phone.
 //
 // `section` is the open section's id ("" for the bare /settings: the
-// list on a phone, General elsewhere -- App fills that in), and
+// list on a phone, Models elsewhere -- App fills that in), and
 // onSection picks another. One useSettingsSection() holds the save and
 // dirty state for every section, so the nav can mark a dirty one and
 // leaving one asks first.
@@ -148,12 +148,14 @@ export default function SettingsPage({
   const external = Boolean(externalConfigRepo) && !NOT_CONFIG.has(current);
   // GET /api/config's configRepoOnly: the API refuses these sections'
   // writes in favour of a config pull request when settings are locked.
-  // By default (settingsLocked: false) they stay editable in the UI.
+  // By default (settingsLocked: false) they stay editable in the UI, and
+  // so they do under the directConfigWrites opt-out, which the server
+  // folds into configRepoOnly: the loaded settings carry the same answer
+  // for the row they last wrote, so toggling the lock redraws at once.
   const lockedInUI =
-    Boolean(config?.configRepoOnly && !config?.settingsLocked) ||
-    (settings && typeof settings.settingsLocked === "boolean"
-      ? settings.settingsLocked
-      : Boolean(config?.configRepoOnly) || Boolean(config?.settingsLocked));
+    settings && typeof settings.configRepoOnly === "boolean"
+      ? settings.configRepoOnly
+      : Boolean(config?.configRepoOnly);
   const configRepoOnly = lockedInUI || Boolean(externalConfigRepo);
   const configManaged = configRepoOnly && isConfigRepoSection(current);
   const readOnly = external || configManaged;

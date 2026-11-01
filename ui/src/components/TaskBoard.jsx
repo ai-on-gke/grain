@@ -22,10 +22,10 @@ import {
   isAgentRunning,
   isTaskRepairing,
   mergeQueueStall,
+  partStateLabels,
   runActivity,
   stackedChip,
   stateLabel,
-  stateLabels,
   stateTitle,
   taskBadgeModifier,
   taskBadgeState,
@@ -369,7 +369,7 @@ export default function TaskBoard({
           className="board-hidden-note"
         >
           {hidden} task{hidden === 1 ? "" : "s"} in no column (
-          {stateLabels(offBoard).join(", ")}).{" "}
+          {partStateLabels(offBoard).join(", ")}).{" "}
           {!fixedColumns && (
             <Button size="small" onClick={() => setEditing(true)}>
               Edit columns

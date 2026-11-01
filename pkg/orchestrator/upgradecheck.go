@@ -21,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
@@ -241,7 +240,7 @@ func fileUpgradeCheck(ctx context.Context, deps Deps, status upgrade.Status, tag
 		Binding: model.BindingDirective,
 		Grants: []model.Grant{
 			{Capability: selfdebug.CapabilityName, Via: model.GrantByGrain},
-			{Capability: grainlog.CapabilityName, Via: model.GrantByGrain},
+			{Capability: model.GrainJournalGrant, Via: model.GrantByGrain},
 		},
 		Tags:      []string{tag},
 		CreatedAt: &now,
