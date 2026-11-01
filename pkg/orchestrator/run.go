@@ -3520,6 +3520,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// that adopts the run (RecoverRunHosts, ResumeAdoptedRun).
 		if errors.Is(runErr, agent.ErrDetached) {
 			log.Printf("orchestrator: run %s: left running in its run host for the next daemon to adopt", d.RunID)
+			// Its wait credit too: the sandbox proxy's CLI ledger lives in
+			// this process, and without this the adopter starts it at zero.
+			leaveWaitLedger(ctx, store, d.RunID, clock)
 			return nil, fmt.Errorf("orchestrator: run %s: %w", d.RunID, runErr)
 		}
 
