@@ -184,10 +184,12 @@ describe("TasksSection", () => {
     });
   });
 
-  // docs/design/config-repo-settings.md §7.4: under the config repo the
-  // defaults are settings/capabilities.yml's, listed as chips beside a
-  // link to it rather than edited with a GrantsPicker.
-  it("lists default method and api grants as read-only chips linked to settings/capabilities.yml", async () => {
+  // docs/design/config-repo-settings.md §7.4, settings-mutability D-11:
+  // under the config repo the defaults are listed as read-only chips
+  // rather than edited with a GrantsPicker, and the section's own
+  // ConfigManagedNotice links the config-repo files without repeating
+  // settings/capabilities.yml inside the card.
+  it("lists default method and api grants as read-only chips without duplicating the section notice link", async () => {
     resetCapabilityMethodsForTest();
     serveMethods();
     const held = cloudGrant({ account: "staging", ttl: 60 });
@@ -211,10 +213,7 @@ describe("TasksSection", () => {
     expect(
       within(grants).queryByRole("button", { name: /^Remove/ }),
     ).toBeNull();
-    expect(within(grants).getByTestId("config-repo-link")).toHaveAttribute(
-      "href",
-      "/config?path=settings%2Fcapabilities.yml",
-    );
+    expect(within(grants).queryByTestId("config-repo-link")).toBeNull();
     expect(s.saveChoice).not.toHaveBeenCalled();
   });
 });
