@@ -506,6 +506,11 @@ type SandboxHealthResponse struct {
 	// Absent on the ordinary day, and again from the first run that gets
 	// past starting its tools.
 	HostCredentials *HostCredentialsWarning `json:"hostCredentials,omitempty"`
+	// Credentials is everything stopped by the operator's credentials
+	// having lapsed (CredentialsHealth): blocked change providers, the
+	// host warning above, and host tools or proactive checks failing on
+	// auth. Absent on the ordinary day.
+	Credentials *CredentialsHealth `json:"credentials,omitempty"`
 	// Daemon is the health of the process answering this request
 	// (Config.Daemon). Absent where nothing can speak for it.
 	Daemon *DaemonHealth `json:"daemon,omitempty"`
@@ -1004,10 +1009,11 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 	// failure: it is about the host, not about the sandbox pool, and a
 	// deployment with no pool to report still has to say it.
 	hostCredentials := s.tasks.hostCredentialsWarning(r.Context())
+	credentials := credentialsHealth(hostCredentials)
 	// The same goes for a stale sandbox image pin: it is in the settings,
 	// and says so whether or not a pool is wired to report on.
 	if s.tasks.Config.Sandboxes == nil && s.tasks.Config.HostStats == nil && s.tasks.Config.Daemon == nil && s.tasks.Config.StandingSandboxes == nil && s.tasks.Config.PersistentSandboxes == nil && s.tasks.Config.Overcommit == nil {
-		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, StateRepoSync: syncFailure, HostCredentials: hostCredentials,
+		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, StateRepoSync: syncFailure, HostCredentials: hostCredentials, Credentials: credentials,
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context())})
 		return
 	}
@@ -1015,6 +1021,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		Enabled:              true,
 		StateRepoSync:        syncFailure,
 		HostCredentials:      hostCredentials,
+		Credentials:          credentials,
 		SandboxImage:         s.tasks.Config.SandboxImage,
 		SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()),
 		SandboxGuest:         s.tasks.sandboxGuestPublishing(r.Context()),

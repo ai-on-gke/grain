@@ -362,6 +362,25 @@ func HealthOf(kind string) HealthState {
 	return health[kind]
 }
 
+// BlockedKind is one kind's recorded block, as deployment health
+// reports it.
+type BlockedKind struct {
+	Kind string `json:"kind"`
+	HealthState
+}
+
+// Blocked is every kind whose health is blocked, ordered by kind.
+func Blocked() []BlockedKind {
+	healthMu.Lock()
+	defer healthMu.Unlock()
+	out := make([]BlockedKind, 0, len(health))
+	for k, h := range health {
+		out = append(out, BlockedKind{Kind: k, HealthState: h})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+	return out
+}
+
 // Forger is a Provider that names the forge its changes land on, as
 // merge metrics count them.
 type Forger interface {
