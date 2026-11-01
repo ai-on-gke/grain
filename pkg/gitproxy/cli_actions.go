@@ -703,6 +703,16 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 			break
 		}
 	}
+	// A wait cut short -- a shutdown, its timeout -- can land up to a
+	// poll after grain superseded run, so look once more before
+	// answering: the run to resume is the one that will give the verdict.
+	if !waitSettled(run, jobs) {
+		if got, ok := p.CLIActions.CIRun(ctx, run.ID); ok {
+			if next := p.followSuperseded(ctx, scope, got, jobs); next.ID != run.ID {
+				run = next
+			}
+		}
+	}
 	now := time.Now()
 	report(now)
 	waited := now.Sub(start)
