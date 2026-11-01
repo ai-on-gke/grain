@@ -99,12 +99,10 @@ test("a rested console session wakes on the first reply, and the Inbox agrees", 
     timeout: 10_000,
   });
   const latency = Date.now() - sentAt;
-  test
-    .info()
-    .annotations.push({
-      type: "wake-latency-ms",
-      description: String(latency),
-    });
+  test.info().annotations.push({
+    type: "wake-latency-ms",
+    description: String(latency),
+  });
   const given = await prompts(page);
   expect(given).toHaveLength(before + 1);
   expect(given[given.length - 1]).toContain("first reply after resting");
