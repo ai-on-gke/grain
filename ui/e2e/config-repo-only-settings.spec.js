@@ -128,10 +128,10 @@ for (const [name, viewport] of [
       .getByRole("link", { name: "Kubernetes namespace" });
     await expect(link).toHaveAttribute(
       "href",
-      "/settings/sandboxes#kubernetes",
+      "/settings/sandboxes#k8sNamespace",
     );
     await link.click();
-    await expect(page).toHaveURL(/\/settings\/sandboxes#kubernetes$/);
+    await expect(page).toHaveURL(/\/settings\/sandboxes#k8sNamespace$/);
     await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
 
     const card = page.locator("#kubernetes");
