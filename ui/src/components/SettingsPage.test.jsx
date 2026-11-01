@@ -413,6 +413,102 @@ describe("SettingsPage", () => {
     expect(screen.getByLabelText("Max worker agents")).toBeDisabled();
   });
 
+  // settings-mutability.spec.md D-9: external mode leaves secret entry
+  // in the UI. A model connection's credential and an executor join
+  // token are secrets the config repo never holds and their routes take
+  // in external mode; the connection's own fields are the config repo's
+  // and stay read-only.
+  describe("under an external config repo", () => {
+    const external = {
+      ...settings,
+      externalConfigRepo: "https://github.com/acme/grain-config.git",
+      externalConfigBranch: "main",
+      agentBackends: [
+        {
+          id: "conn-1",
+          name: "Primary Claude",
+          framework: "claude",
+          authMode: "api_key",
+          models: ["claude-opus-5-5"],
+        },
+      ],
+    };
+    const renderSection = (section) => {
+      api.mockImplementation((path) => {
+        if (path === "/api/settings") return Promise.resolve(external);
+        if (path === "/api/deployment")
+          return Promise.resolve({ id: "default", modelSettings: [] });
+        if (path === "/api/executors" || path === "/api/executors/tokens")
+          return Promise.resolve([]);
+        return Promise.resolve({});
+      });
+      render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={{
+              externalConfigRepo: external.externalConfigRepo,
+              externalConfigBranch: external.externalConfigBranch,
+            }}
+            section={section}
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+    };
+
+    it("keeps a model connection's credential usable and the connection read-only", async () => {
+      const user = userEvent.setup();
+      renderSection("models");
+      await screen.findByTestId("external-config-repo-banner");
+      await screen.findByText("Primary Claude");
+      expect(
+        screen.getByRole("button", { name: "New connection" }),
+      ).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Disable" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
+      // The deployment's model defaults are config and stay in the
+      // read-only fieldset.
+      expect(
+        screen
+          .getByRole("region", { name: "Models" })
+          .querySelector("[data-settings-readonly]"),
+      ).not.toBeNull();
+
+      await user.click(screen.getByRole("button", { name: "Edit" }));
+      expect(screen.getByLabelText("Name")).toBeDisabled();
+      expect(screen.getByLabelText("Concurrency")).toBeDisabled();
+      const credential = screen.getByLabelText("Claude Code OAuth token", {
+        selector: "input[type=password]",
+      });
+      expect(credential).toBeEnabled();
+      await user.type(credential, "sk-test");
+      await user.click(screen.getByRole("button", { name: "Set credential" }));
+      await waitFor(() =>
+        expect(api).toHaveBeenCalledWith(
+          "/api/agent-backends/conn-1/credential",
+          { method: "PUT", body: JSON.stringify({ value: "sk-test" }) },
+        ),
+      );
+      expect(
+        screen.getByRole("button", { name: "Clear credential" }),
+      ).toBeEnabled();
+    });
+
+    it("keeps executor join tokens usable", async () => {
+      renderSection("executors");
+      await screen.findByTestId("external-config-repo-banner");
+      expect(
+        await screen.findByRole("button", { name: "Issue Token" }),
+      ).toBeEnabled();
+      expect(
+        screen
+          .getByRole("region", { name: "Executor join tokens" })
+          .querySelector("[data-settings-readonly]"),
+      ).toBeNull();
+    });
+  });
+
   // Upgrade moved here from System (/system/upgrade): it is an action,
   // not a setting, so it carries no save state and is not read-only
   // under an external config repo, and its pointer to the upgrade-check

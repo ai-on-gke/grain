@@ -146,7 +146,7 @@ Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `s
 | **Composed entities**: templates, schedules, suites, qualifications, boards, custom fields, API scope sets, standing / persistent sandboxes, `repo_workflow` (guard **S**) | P, R, A | P, R, A (synced); C | C only. P / R / A get 409. The UI is not lock-aware for boards and processes (D-4). An open console session's live task row stays writable (D-5). | C only. P / R / A get 409. |
 | ↳ **Memory** (`memory/**`; no guard) | P, R, A (`memory:write`) | P, R, A; C | P, R, A (the UI renders it read-only, D-3); C | P, R, A, until the next import replaces them (D-3); C |
 | ↳ **Repository declarations** (`.grain/settings.yml`, …) | A PR on the target repository, in every mode, by whoever may write that repository. These are composed with the operator's value, never written through Grain's settings API (§2.8, D-13). | ← | ← | ← |
-| **Secrets** (`<data-dir>/secrets`: agent keys, connection credentials, tokens, `PUT /api/secrets/…`; no guard) | P, R, A (`secrets:write` / `connections:write`, person-granted). Never C: not exported. | same | same (except D-6, D-7) | P (the UI greys out some of it, D-9), R, A. Capability-server bindings get 409 before the value is stored (§2.7.2). Never C. |
+| **Secrets** (`<data-dir>/secrets`: agent keys, connection credentials, tokens, `PUT /api/secrets/…`; no guard) | P, R, A (`secrets:write` / `connections:write`, person-granted). Never C: not exported. | same | same (except D-6, D-7) | P (D-9, fixed: Legacy capabilities, Capability servers, model-connection credentials and executor join tokens stay usable; Git's token controls point to Legacy capabilities), R, A. Capability-server bindings get 409 before the value is stored (§2.7.2). Never C. |
 | **`<data-dir>/state-repo.json`** (host-local, not in the database) | — (`POST /api/state-repo/remote` answers 501). Operator: edit the file, or `grain state repo <url>`. | `remote` / `branch` / `tokenFile`: P (Config repo page), R, A (`settings:write`) via `POST /api/state-repo/remote`, which calls no config guard; operator CLI or file. `directConfigWrites`, `noWorkflow`, `postCheck`, `checkImage`, `localOnlyAcknowledged`: operator file edit only. Never C. | same | same: `POST /api/state-repo/remote` with `"none": true` is how a deployment leaves external mode. |
 | **Browser preferences** (`localStorage`: theme, time zone, timeline order, sidebar) | P, in that browser only | same | same | same. Never read-only (`NOT_CONFIG`). |
 
@@ -175,7 +175,7 @@ Columns:
 | Default model `defaultModel`, pinned connection `agentBackendId`, per-model `modelSettings` | Yes — Models → defaults; `PUT /api/deployment`, `PUT /api/settings` | Yes — `tables/grain_config.json` | Unlocked (Bootstrap; G) / editable | Yes | |
 | `judgementModel` | No | Yes — `tables/grain_config.json` | Unlocked (Bootstrap) / — | — | No route sets it; config repo is the only writer. |
 | CLI run locations `cliRun` | Yes — Models → CLI run locations; `PUT /api/settings/cli-run` | Yes — `tables/grain_config.json` | Unlocked (Bootstrap; B) / editable | Yes | |
-| Model connection credential / agent key / Codex auth | Write-only — Models; `PUT`/`DELETE /api/agent-backends/{id}/credential`, `/api/agent-keys/{framework}`, `/api/codex-auth`, `/api/agent-backends/{id}/codex-auth` | No — secret material (`<data-dir>/secrets`) | Unlocked (Secret; —) / editable | No | `secrets:write`. UI renders it read-only in external mode although the server takes it (§4, D-9). |
+| Model connection credential / agent key / Codex auth | Write-only — Models; `PUT`/`DELETE /api/agent-backends/{id}/credential`, `/api/agent-keys/{framework}`, `/api/codex-auth`, `/api/agent-backends/{id}/codex-auth` | No — secret material (`<data-dir>/secrets`) | Unlocked (Secret; —) / editable | No | `secrets:write`. Stays editable in external mode, where the connection's own fields are drawn read-only (§4, D-9, fixed). |
 | Key / connection checks | Action — `POST /api/agent-keys/{framework}/check`, `GET /api/agent-models` | No — action | Unlocked (Action) | No | |
 
 ### 3.2 Sandboxes (`/settings/sandboxes`)
@@ -193,7 +193,7 @@ Columns:
 
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Remote executor tokens | Write-only — Executors; `POST /api/executors/tokens`, `POST …/{id}/revoke`, `DELETE …/{id}` | No — runtime credential (`executor_token`, runtime table) | Unlocked (Secret; —) / editable | No | `secrets:write`; token shown once. UI read-only in external mode (D-9). |
+| Remote executor tokens | Write-only — Executors; `POST /api/executors/tokens`, `POST …/{id}/revoke`, `DELETE …/{id}` | No — runtime credential (`executor_token`, runtime table) | Unlocked (Secret; —) / editable | No | `secrets:write`; token shown once. Stays editable in external mode (D-9, fixed). |
 | External agent tokens | Write-only — `POST /api/external-agents/tokens`, `…/{id}/rotate`, `…/{id}/revoke`, `…/revoke-all`, `DELETE …/{id}` | No — runtime credential | Unlocked (Secret; —) | No | `capabilities:admin`. |
 | External agent API on/off `externalAgentApi` | No — API only (`PUT /api/settings`) | Yes — `tables/grain_config.json` | Locked (G) / — | Yes | |
 
@@ -403,6 +403,8 @@ The rule of §2.3.4 keeps secret material writable under the lock, but `SetRepoR
 `release_note` is exported as `release-notes/<period>.md` (`dump.go`, `ExportConfig`), but it is in neither `SettingsTables` nor `memoryTables`, so `staterepo.Apply` ignores a merged edit to `release-notes/**`; the next export writes the database's text back over it. Either import it or document the directory as export-only in the config repo's README.
 
 ### D-9: External mode blocks secret and executor entry in the UI that the API accepts
+
+*Fixed 2026-11-01 (task 2232; confirmed open in `docs/test-runs/2026-11-01-settings-bootstrap-operations-verification.md`). The Models → Provider connections cards and the Executors → Executor join tokens card opt out of the read-only fieldset with `allowInExternalMode`. In external mode a connection's credential (and Codex login) can be set, cleared and tested from its editor, while New connection, Enable/Disable, Remove, a pause's Resume and the connection's agent type, authentication method and Connection form stay read-only (`ModelBackendPage`'s `configReadOnly`, which draws them in the same `ReadOnlyFieldset` as a read-only card). Model defaults and CLI run locations stay read-only. Git is unchanged: its read-only note points to Legacy capabilities, where tokens can be entered (`SettingsPage.test.jsx` "under an external config repo", `ExecutorsSection.test.jsx`).*
 
 In external mode every Settings section except Config repo, Preferences and Upgrade is read-only, including Models (model-connection credentials), Executors (tokens) and Git (whose note points to Credentials). The corresponding routes are unguarded and still accept writes. Only the Legacy capabilities and Capability servers cards opt out with `allowInExternalMode`. Secrets entry is the one thing external mode is meant to leave in the UI.
 

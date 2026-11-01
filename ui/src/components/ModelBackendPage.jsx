@@ -28,6 +28,7 @@ import api from "../api.js";
 import ConnectionModelsField from "./ConnectionModelsField.jsx";
 import CodexAuthFields from "./CodexAuthFields.jsx";
 import Overlay from "./Overlay.jsx";
+import { ReadOnlyFieldset } from "./settings/SettingsCard.jsx";
 
 export const frameworkLabels = {
   antigravity: "Antigravity",
@@ -88,6 +89,11 @@ export default function ModelBackendPage({
   showError,
   backLabel = "Models",
   cliDefaults = {},
+  // configReadOnly draws the connection itself read-only and leaves its
+  // credential usable: an external config repo holds the connection but
+  // never the secret, which the API still takes (settings-mutability
+  // spec D-9).
+  configReadOnly = false,
 }) {
   const [draft, setDraft] = useState(() => foldLegacyModel(backend));
   const [persisted, setPersisted] = useState(() =>
@@ -363,20 +369,22 @@ export default function ModelBackendPage({
             <Typography variant="h6" sx={{ mb: 0.5 }}>
               Agent type
             </Typography>
-            <Stack spacing={2}>
-              {typeField}
-              {typeDirty && (
-                <Button
-                  type="button"
-                  variant="contained"
-                  disabled={saving}
-                  onClick={() => saveDraft()}
-                  sx={{ alignSelf: "flex-start" }}
-                >
-                  Save agent type
-                </Button>
-              )}
-            </Stack>
+            <ReadOnlyFieldset disabled={configReadOnly}>
+              <Stack spacing={2}>
+                {typeField}
+                {typeDirty && (
+                  <Button
+                    type="button"
+                    variant="contained"
+                    disabled={saving}
+                    onClick={() => saveDraft()}
+                    sx={{ alignSelf: "flex-start" }}
+                  >
+                    Save agent type
+                  </Button>
+                )}
+              </Stack>
+            </ReadOnlyFieldset>
 
             <Divider sx={{ my: 4 }} />
             <Typography variant="h6" sx={{ mb: 0.5 }}>
@@ -392,61 +400,65 @@ export default function ModelBackendPage({
               </Alert>
             ) : (
               <Stack spacing={2}>
-                <TextField
-                  select
-                  label="Authentication method"
-                  value={authValue}
-                  disabled={saving}
-                  onChange={(event) => chooseAuthentication(event.target.value)}
-                  fullWidth
-                  SelectProps={{ displayEmpty: true }}
-                  InputLabelProps={{ shrink: true }}
-                >
-                  {requiresChoice && (
-                    <MenuItem value="" disabled>
-                      Choose an authentication method
-                    </MenuItem>
-                  )}
-                  {draft.framework === "antigravity" && [
-                    <MenuItem key="ambient" value="ambient">
-                      Ambient Antigravity login
-                    </MenuItem>,
-                    <MenuItem key="api_key" value="api_key">
-                      Gemini API key
-                    </MenuItem>,
-                  ]}
-                  {draft.framework === "codex" && [
-                    <MenuItem key="api_key" value="api_key">
-                      OpenAI API key
-                    </MenuItem>,
-                    <MenuItem key="subscription" value="subscription">
-                      ChatGPT subscription (auth.json)
-                    </MenuItem>,
-                  ]}
-                  {draft.framework === "claude" && [
-                    <MenuItem key="api_key" value="api_key">
-                      Claude Code OAuth token
-                    </MenuItem>,
-                    <MenuItem key="vertex" value="vertex">
-                      Google Cloud Vertex AI
-                    </MenuItem>,
-                  ]}
-                  {draft.framework === "custom" && (
-                    <MenuItem value="own">
-                      Use a credential for this connection
-                    </MenuItem>
-                  )}
-                  {/* Named as the connection list names it, by id when it
+                <ReadOnlyFieldset disabled={configReadOnly}>
+                  <TextField
+                    select
+                    label="Authentication method"
+                    value={authValue}
+                    disabled={saving}
+                    onChange={(event) =>
+                      chooseAuthentication(event.target.value)
+                    }
+                    fullWidth
+                    SelectProps={{ displayEmpty: true }}
+                    InputLabelProps={{ shrink: true }}
+                  >
+                    {requiresChoice && (
+                      <MenuItem value="" disabled>
+                        Choose an authentication method
+                      </MenuItem>
+                    )}
+                    {draft.framework === "antigravity" && [
+                      <MenuItem key="ambient" value="ambient">
+                        Ambient Antigravity login
+                      </MenuItem>,
+                      <MenuItem key="api_key" value="api_key">
+                        Gemini API key
+                      </MenuItem>,
+                    ]}
+                    {draft.framework === "codex" && [
+                      <MenuItem key="api_key" value="api_key">
+                        OpenAI API key
+                      </MenuItem>,
+                      <MenuItem key="subscription" value="subscription">
+                        ChatGPT subscription (auth.json)
+                      </MenuItem>,
+                    ]}
+                    {draft.framework === "claude" && [
+                      <MenuItem key="api_key" value="api_key">
+                        Claude Code OAuth token
+                      </MenuItem>,
+                      <MenuItem key="vertex" value="vertex">
+                        Google Cloud Vertex AI
+                      </MenuItem>,
+                    ]}
+                    {draft.framework === "custom" && (
+                      <MenuItem value="own">
+                        Use a credential for this connection
+                      </MenuItem>
+                    )}
+                    {/* Named as the connection list names it, by id when it
                       has no name: every source shares this one's framework,
                       so modelBackendLabel's framework fallback gave several
                       nameless ones the same "Reuse authentication from
                       Claude" and no way to tell them apart. */}
-                  {sources.map((source) => (
-                    <MenuItem key={source.id} value={`reuse:${source.id}`}>
-                      Reuse authentication from {source.name || source.id}
-                    </MenuItem>
-                  ))}
-                </TextField>
+                    {sources.map((source) => (
+                      <MenuItem key={source.id} value={`reuse:${source.id}`}>
+                        Reuse authentication from {source.name || source.id}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </ReadOnlyFieldset>
                 {!authenticationChosen && (
                   <Alert severity="info">
                     Choose one authentication method. Only the selected method
@@ -594,154 +606,160 @@ export default function ModelBackendPage({
             {editsModel && (
               <>
                 <Divider sx={{ my: 4 }} />
-                <Box
-                  component="form"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    submitDraft();
-                  }}
-                >
-                  <Typography variant="h6" sx={{ mb: 0.5 }}>
-                    Connection
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mb: 2 }}
+                <ReadOnlyFieldset disabled={configReadOnly}>
+                  <Box
+                    component="form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      submitDraft();
+                    }}
                   >
-                    Name this account and list the models it serves. Which model
-                    a run uses is chosen in Settings (Models) or by the task,
-                    not by the connection.
-                  </Typography>
-                  <Stack spacing={2}>
-                    <TextField
-                      label="Name"
-                      value={draft.name || ""}
-                      onChange={(event) => change({ name: event.target.value })}
-                      helperText="A readable name for this account or installation"
-                      fullWidth
-                    />
-                    <TextField
-                      type="number"
-                      label="Concurrency"
-                      placeholder="4"
-                      value={draft.concurrency ?? ""}
-                      onChange={(event) => {
-                        const val =
-                          event.target.value === ""
-                            ? undefined
-                            : parseInt(event.target.value, 10);
-                        change({ concurrency: isNaN(val) ? undefined : val });
-                      }}
-                      inputProps={{ min: 1 }}
-                      helperText="Maximum number of concurrent agents on this connection (4 by default)"
-                      fullWidth
-                    />
-                    {cliBinary && (
+                    <Typography variant="h6" sx={{ mb: 0.5 }}>
+                      Connection
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      sx={{ mb: 2 }}
+                    >
+                      Name this account and list the models it serves. Which
+                      model a run uses is chosen in Settings (Models) or by the
+                      task, not by the connection.
+                    </Typography>
+                    <Stack spacing={2}>
                       <TextField
-                        label="CLI path (optional)"
-                        value={draft.cliPath || ""}
+                        label="Name"
+                        value={draft.name || ""}
                         onChange={(event) =>
-                          change({ cliPath: event.target.value || undefined })
+                          change({ name: event.target.value })
                         }
-                        helperText={cliPathHint}
+                        helperText="A readable name for this account or installation"
                         fullWidth
                       />
-                    )}
-                    {/* The model-turn deadline is antigravity's alone
+                      <TextField
+                        type="number"
+                        label="Concurrency"
+                        placeholder="4"
+                        value={draft.concurrency ?? ""}
+                        onChange={(event) => {
+                          const val =
+                            event.target.value === ""
+                              ? undefined
+                              : parseInt(event.target.value, 10);
+                          change({ concurrency: isNaN(val) ? undefined : val });
+                        }}
+                        inputProps={{ min: 1 }}
+                        helperText="Maximum number of concurrent agents on this connection (4 by default)"
+                        fullWidth
+                      />
+                      {cliBinary && (
+                        <TextField
+                          label="CLI path (optional)"
+                          value={draft.cliPath || ""}
+                          onChange={(event) =>
+                            change({ cliPath: event.target.value || undefined })
+                          }
+                          helperText={cliPathHint}
+                          fullWidth
+                        />
+                      )}
+                      {/* The model-turn deadline is antigravity's alone
                         (pkg/agent/antigravity/turndeadline.go): agy retries
                         provider errors silently, and grain reads its log to
                         tell a retried turn from a slow one. Empty is the
                         default; the server holds the 30s-60m bounds. */}
-                    {draft.framework === "antigravity" && (
-                      <>
-                        <Typography variant="subtitle2" sx={{ pt: 1 }}>
-                          Advanced
-                        </Typography>
-                        <TextField
-                          label="Model turn timeout (optional)"
-                          value={draft.modelTurnTimeout || ""}
-                          onChange={(event) =>
-                            change({
-                              modelTurnTimeout: event.target.value || undefined,
-                            })
-                          }
-                          placeholder="15m"
-                          helperText={
-                            "How long one model turn may run while agy logs no " +
-                            "provider errors -- a slow model rather than a " +
-                            "refused one. A duration such as 20m, from 30s to " +
-                            "60m. Empty uses the default, 15m."
-                          }
-                          fullWidth
-                        />
-                        <TextField
-                          label="Model retry cutoff (optional)"
-                          value={draft.modelRetryCutoff || ""}
-                          onChange={(event) =>
-                            change({
-                              modelRetryCutoff: event.target.value || undefined,
-                            })
-                          }
-                          placeholder="100s"
-                          helperText={
-                            "How long a turn may run once agy's log shows it " +
-                            "retrying provider errors (429, 503, " +
-                            "RESOURCE_EXHAUSTED), and the whole limit when that " +
-                            "log cannot be read. From 30s to 60m, no longer " +
-                            "than the turn timeout. Empty uses the default, 100s."
-                          }
-                          fullWidth
-                        />
-                      </>
-                    )}
-                    <ConnectionModelsField
-                      backend={draft}
-                      onChange={change}
-                      refreshKey={catalogRevision}
-                    />
-                    {/* A save that landed is otherwise invisible: the pane
+                      {draft.framework === "antigravity" && (
+                        <>
+                          <Typography variant="subtitle2" sx={{ pt: 1 }}>
+                            Advanced
+                          </Typography>
+                          <TextField
+                            label="Model turn timeout (optional)"
+                            value={draft.modelTurnTimeout || ""}
+                            onChange={(event) =>
+                              change({
+                                modelTurnTimeout:
+                                  event.target.value || undefined,
+                              })
+                            }
+                            placeholder="15m"
+                            helperText={
+                              "How long one model turn may run while agy logs no " +
+                              "provider errors -- a slow model rather than a " +
+                              "refused one. A duration such as 20m, from 30s to " +
+                              "60m. Empty uses the default, 15m."
+                            }
+                            fullWidth
+                          />
+                          <TextField
+                            label="Model retry cutoff (optional)"
+                            value={draft.modelRetryCutoff || ""}
+                            onChange={(event) =>
+                              change({
+                                modelRetryCutoff:
+                                  event.target.value || undefined,
+                              })
+                            }
+                            placeholder="100s"
+                            helperText={
+                              "How long a turn may run once agy's log shows it " +
+                              "retrying provider errors (429, 503, " +
+                              "RESOURCE_EXHAUSTED), and the whole limit when that " +
+                              "log cannot be read. From 30s to 60m, no longer " +
+                              "than the turn timeout. Empty uses the default, 100s."
+                            }
+                            fullWidth
+                          />
+                        </>
+                      )}
+                      <ConnectionModelsField
+                        backend={draft}
+                        onChange={change}
+                        refreshKey={catalogRevision}
+                      />
+                      {/* A save that landed is otherwise invisible: the pane
                         stays open and nothing on it moves. Gating the
                         button on the draft still differing from what is
                         stored -- as the agent type above gates on
                         typeDirty -- lets it go quiet on a save, which is
                         the page's answer to "is what I typed stored?". */}
-                    <Stack
-                      direction="row"
-                      spacing={2}
-                      alignItems="center"
-                      sx={{ alignSelf: "flex-start" }}
-                    >
-                      <Button
-                        type="submit"
-                        variant="contained"
-                        disabled={saving || !dirty}
-                        aria-busy={saving}
-                        startIcon={
-                          saving ? (
-                            <CircularProgress size={16} color="inherit" />
-                          ) : undefined
-                        }
+                      <Stack
+                        direction="row"
+                        spacing={2}
+                        alignItems="center"
+                        sx={{ alignSelf: "flex-start" }}
                       >
-                        Save connection
-                      </Button>
-                      {saving && (
-                        <Typography
-                          variant="body2"
-                          color="text.secondary"
-                          role="status"
+                        <Button
+                          type="submit"
+                          variant="contained"
+                          disabled={saving || !dirty}
+                          aria-busy={saving}
+                          startIcon={
+                            saving ? (
+                              <CircularProgress size={16} color="inherit" />
+                            ) : undefined
+                          }
                         >
-                          Saving…
-                        </Typography>
-                      )}
-                      {!dirty && !saving && (
-                        <Typography variant="body2" color="text.secondary">
-                          No unsaved changes
-                        </Typography>
-                      )}
+                          Save connection
+                        </Button>
+                        {saving && (
+                          <Typography
+                            variant="body2"
+                            color="text.secondary"
+                            role="status"
+                          >
+                            Saving…
+                          </Typography>
+                        )}
+                        {!dirty && !saving && (
+                          <Typography variant="body2" color="text.secondary">
+                            No unsaved changes
+                          </Typography>
+                        )}
+                      </Stack>
                     </Stack>
-                  </Stack>
-                </Box>
+                  </Box>
+                </ReadOnlyFieldset>
               </>
             )}
           </>
