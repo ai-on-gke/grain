@@ -1072,7 +1072,7 @@ func placeMessageAttachments(ctx context.Context, client *ui.HTTPClient, taskID 
 			if err != nil {
 				continue
 			}
-			path := fmt.Sprintf("attachments/%d-%s", a.ID, a.Filename)
+			path := orchestrator.AttachmentPath(a.ID, a.Filename)
 			_ = writeFile(ctx, map[string]any{"file_path": path, "content": string(att.Content)})
 		}
 	}
@@ -1081,7 +1081,7 @@ func placeMessageAttachments(ctx context.Context, client *ui.HTTPClient, taskID 
 func formatMessageBody(m ui.Message) string {
 	var attLines []string
 	for _, a := range m.Attachments {
-		attLines = append(attLines, fmt.Sprintf("- ./attachments/%d-%s", a.ID, a.Filename))
+		attLines = append(attLines, fmt.Sprintf("- ./%s", orchestrator.AttachmentPath(a.ID, a.Filename)))
 	}
 	body := m.Body
 	if m.Author != "" && strings.TrimSpace(body) != "" {
