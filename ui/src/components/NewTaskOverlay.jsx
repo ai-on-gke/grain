@@ -42,6 +42,7 @@ import {
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import api from "../api.js";
+import { wholeNumber } from "../wholeNumber.js";
 import { useHeldIds } from "../useHeldIds.js";
 import fileToAttachment from "../attachments.js";
 import {
@@ -869,9 +870,9 @@ export default function NewTaskOverlay({
     if (hidden("grants")) out.capabilities = asList(d("grants"));
     if (F.sandboxShape.visibility === "hidden" && F.sandboxShape.defaultSet) {
       const shape = sandboxShapeDefault(F.sandboxShape);
-      out.sandboxCpus = parseInt(shape.cpus, 10) || 0;
-      out.sandboxMemoryMb = parseInt(shape.memoryMb, 10) || 0;
-      out.sandboxDiskGb = parseInt(shape.diskGb, 10) || 0;
+      out.sandboxCpus = wholeNumber(shape.cpus) || 0;
+      out.sandboxMemoryMb = wholeNumber(shape.memoryMb) || 0;
+      out.sandboxDiskGb = wholeNumber(shape.diskGb) || 0;
     }
     return out;
   };
@@ -1014,9 +1015,9 @@ export default function NewTaskOverlay({
       // Likewise only when ticked, and never for a task with no repo,
       // which has no base branch to fix.
       ...(fixesBaseBranch && !none ? { fixesBaseBranch: true } : {}),
-      sandboxCpus: parseInt(sandboxCpus, 10) || 0,
-      sandboxMemoryMb: parseInt(sandboxMemoryMb, 10) || 0,
-      sandboxDiskGb: parseInt(sandboxDiskGb, 10) || 0,
+      sandboxCpus: wholeNumber(sandboxCpus) || 0,
+      sandboxMemoryMb: wholeNumber(sandboxMemoryMb) || 0,
+      sandboxDiskGb: wholeNumber(sandboxDiskGb) || 0,
       // "" is the deployment's default model (model.Task.Model). No framework
       // is sent: the model implies one.
       model,
@@ -1071,7 +1072,7 @@ export default function NewTaskOverlay({
       approved,
       atFront,
       ...(() => {
-        const parsedPriority = parseInt(String(priority).trim(), 10);
+        const parsedPriority = wholeNumber(priority);
         return !Number.isNaN(parsedPriority) && parsedPriority !== 5
           ? { priority: parsedPriority }
           : {};
