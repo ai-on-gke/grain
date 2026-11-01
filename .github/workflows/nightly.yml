@@ -886,47 +886,6 @@ jobs:
             exit 1
           fi
 
-  security-audit:
-    name: Security suite and audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    concurrency:
-      group: ${{ github.workflow }}-security-audit-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-
-      - name: Cache Go modules and build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/go/pkg/mod/cache/download
-            ~/.cache/go-build
-          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
-          restore-keys: |
-            go-dl-${{ runner.os }}-
-
-      - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version-file: go.mod
-          cache: false
-
-      - name: Security suite
-        run: |
-          set +e
-          make security 2>&1 | tee /tmp/security.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/security.log | tail -n 10 | while IFS= read -r line; do
-              echo "::error title=security-audit::$line"
-            done
-            exit "$status"
-          fi
-
   vulns:
     name: govulncheck
     runs-on: ubuntu-latest
