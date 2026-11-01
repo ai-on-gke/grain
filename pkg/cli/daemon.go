@@ -305,6 +305,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then "+ui.GoogleIAPIssuer)
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "where the signing keys for those assertions are published (IAP's PEM map or a JWK set); "+
 		"defaults to $GRAIN_IAP_KEYS_URL, then "+ui.GoogleIAPCertURL)
+	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	uiOpen := fs.Bool("ui-open", false, "open the UI in the system's default browser once it's listening")
 	actor := fs.String("as", "", "principal the UI/API attributes tasks and comments it creates to (defaults to the OS user)")
 	defaultTargetRepo := fs.String("default-target-repo", "", "owner/name a task created through the UI/API with no repo of its own targets")
@@ -1174,6 +1175,16 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	if err := removedRelaySettings(passed, unknownFlags); err != nil {
 		return daemon.Config{}, fs, unknownFlags, err
 	}
+	allowedPrincipals := ui.SplitAllowedPrincipals(*uiAllowedPrincipals)
+	if len(allowedPrincipals) > 0 {
+		if _, err := ui.ParseAllowedPrincipals(allowedPrincipals); err != nil {
+			return daemon.Config{}, fs, unknownFlags, err
+		}
+	} else if envAllowed := os.Getenv("GRAIN_ALLOWED_PRINCIPALS"); envAllowed != "" {
+		if _, err := ui.ParseAllowedPrincipals(ui.SplitAllowedPrincipals(envAllowed)); err != nil {
+			return daemon.Config{}, fs, unknownFlags, err
+		}
+	}
 
 	if *executorAddr == "" && *modelExecAddr != "" {
 		*executorAddr = *modelExecAddr
@@ -1209,6 +1220,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
+		UiAllowedPrincipals:     allowedPrincipals,
 		ExecutorAddr:            *executorAddr,
 		ExecutorTokenFile:       *executorTokenFile,
 		ExecutorWait:            *executorWait,

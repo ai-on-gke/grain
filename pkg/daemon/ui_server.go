@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -103,18 +104,24 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	if reader, ok := stateRepo.(ui.SettingsHistoryReader); ok {
 		settingsHistory = reader
 	}
+	provisionedSAs := gcpkey.PoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
+	if proj := strings.TrimSpace(cfg.GcpProject); proj != "" {
+		provisionedSAs = append(provisionedSAs, "grain-daemon@"+proj+".iam.gserviceaccount.com")
+	}
 	uiCfg := ui.Config{
-		Actor:                 ui.DefaultActor(ActorID(cfg.Actor)),
-		LocalAPIToken:         localAPIToken,
-		LocalAPITokenFile:     localAPITokenFile,
-		AccessSessionLifetime: cfg.UiAccessSessionLifetime,
-		IAPAudience:           cfg.UiIAPAudience,
-		IAPIssuer:             cfg.UiIAPIssuer,
-		IAPKeysURL:            cfg.UiIAPKeysURL,
-		DBDriver:              cfg.DbDriver,
-		DBDSN:                 cfg.DbDSN,
-		DataDir:               cfg.DataDir,
-		SourceDB:              db,
+		Actor:                      ui.DefaultActor(ActorID(cfg.Actor)),
+		LocalAPIToken:              localAPIToken,
+		LocalAPITokenFile:          localAPITokenFile,
+		AccessSessionLifetime:      cfg.UiAccessSessionLifetime,
+		IAPAudience:                cfg.UiIAPAudience,
+		IAPIssuer:                  cfg.UiIAPIssuer,
+		IAPKeysURL:                 cfg.UiIAPKeysURL,
+		AllowedPrincipals:          cfg.UiAllowedPrincipals,
+		ProvisionedServiceAccounts: provisionedSAs,
+		DBDriver:                   cfg.DbDriver,
+		DBDSN:                      cfg.DbDSN,
+		DataDir:                    cfg.DataDir,
+		SourceDB:                   db,
 		// The fixed set grain ships providers for, plus one row per named
 		// GitHub token this deployment has beyond its default one
 		// (grain/task-117) -- the same names capabilityProviders builds
