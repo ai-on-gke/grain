@@ -117,6 +117,11 @@ export const CONFIG_REPO_SECTION_PATHS = {
   ],
   ci: ["tables/grain_config.json", "tables/repo_config.json"],
   memory: ["memory/deployment.md"],
+  // Caches sit under System / Operations, but none of their four
+  // settings is a bootstrap one: with settings locked the API refuses
+  // them like any other config-managed field (settings-mutability.spec.md
+  // D-1), so the section is drawn read-only then too.
+  caches: ["tables/grain_config.json"],
 };
 
 // isConfigRepoSection is whether a section's settings are config-repo

@@ -728,8 +728,8 @@ func (c *Client) EachState(ctx context.Context, pageSize int, fn func(id string,
 // than a failure. This deployment's UI may not have been handed the
 // deadlines at all (Config.Stall, nil under `grain demo`); the state may
 // be one whose beginning the record cannot place, which
-// model.StateTimes.Since answers nil for -- every state a person owns,
-// and a queued task approved before Task.ApprovedAt existed; and the
+// model.StateTimes.Since answers nil for -- every state a person owns
+// (a deferral counts only once it has a wake time), and a queued task approved before Task.ApprovedAt existed; and the
 // state may simply be inside its patience, which is what the note itself
 // answers "" for.
 func (c *Client) stallNote(state model.State, times model.StateTimes, now time.Time) string {
@@ -2432,8 +2432,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			catalogueHold, req.Approved = true, false
 		}
 	}
+	keepRunning := req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake)
 	autoMerge, autoSubmit, sessionQueued := req.AutoMerge, false, false
-	var limitNote, ungrantedNote, heldNote, refusal string
+	var limitNote, ungrantedNote, heldNote, personOnlyNote, refusal string
 	var escalated []string
 	if proposedBy != nil {
 		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes}
@@ -2472,6 +2473,20 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		if needsPersonWhy != "" {
 			if autoSubmit || sessionQueued || req.Approved {
 				heldNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", needsPersonWhy)
+			}
+			autoSubmit, sessionQueued, req.Approved = false, false, false
+		}
+		// keep_running, or a priority above the proposer's own: settings
+		// only a person may give a task (model.PersonOnlyProposalSettings),
+		// so neither permission queues a proposal that asks for one. Filed
+		// as asked, with a note saying which, and told to the run as what
+		// its permission does not cover.
+		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: keepRunning, Priority: priority}, *proposedBy); why != "" {
+			if autoSubmit || sessionQueued || req.Approved {
+				personOnlyNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
+			}
+			if refusal == "" {
+				refusal = why
 			}
 			autoSubmit, sessionQueued, req.Approved = false, false, false
 		}
@@ -2521,7 +2536,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + reviewTemplateNote + limitNote + heldNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
+		Body:                 req.Description + forkNote + ungrantedNote + reviewTemplateNote + limitNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
 		Origin:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
@@ -2538,7 +2553,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		SandboxDiskGB:        req.SandboxDiskGB,
 		NetworkAccess:        model.NetworkAccess(req.NetworkAccess),
 		NothingNeededAction:  nothingNeeded,
-		KeepRunning:          req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
+		KeepRunning:          keepRunning,
 		NoPort:               req.NoPort,
 		WorkOrigin:           explicitOrigin,
 		AgentFramework:       agentFramework,

@@ -432,6 +432,13 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err := store.RecordRelayedCalls(ctx, "a1b2-1", []string{"9f86d081884c7d65", "9f86d081884c7d65"}); err != nil {
 		t.Fatalf("recording relayed calls: %v", err)
 	}
+	// A live run's wait time per source, left for an adopting daemon
+	// (task_run_wait_ledger): the mcpserver's source is the empty string.
+	if err := store.SetRunWaitLedger(ctx, "a1b2-1", map[string]time.Duration{
+		"": 90 * time.Second, "cli": 12*time.Minute + 345*time.Millisecond,
+	}); err != nil {
+		t.Fatalf("recording a wait ledger: %v", err)
+	}
 	// A live k8s-granule sandbox's reverse-channel token hash and expiry
 	// (sandbox_access).
 	if err := store.SetSandboxAccess(ctx, "c3d4-1",
