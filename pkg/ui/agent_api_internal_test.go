@@ -944,3 +944,24 @@ func TestAnAgentCannotGrantDurableEvenHoldingIt(t *testing.T) {
 		t.Error("an agent attached durable through the capability pane's route")
 	}
 }
+
+// TestPatchTouchesTaskGrantsCoversPriorityDispatch pins that every
+// spelling of the priority-dispatch toggle on PATCH /api/tasks/{id} is a
+// grant edit (capabilities:admin and a reason), while the numeric
+// priority stays an ordinary task edit.
+func TestPatchTouchesTaskGrantsCoversPriorityDispatch(t *testing.T) {
+	for _, body := range []string{
+		`{"priority": true}`, `{"priority": false}`,
+		`{"priorityDispatch": true}`, `{"priorityDispatch": false}`,
+		`{"PriorityDispatch": true}`, `{"priority_dispatch": true}`,
+	} {
+		if !patchTouchesTaskGrants([]byte(body)) {
+			t.Errorf("patchTouchesTaskGrants(%s) = false, want true", body)
+		}
+	}
+	for _, body := range []string{`{"priority": 7}`, `{"priority": null}`, `{"title": "x"}`} {
+		if patchTouchesTaskGrants([]byte(body)) {
+			t.Errorf("patchTouchesTaskGrants(%s) = true, want false", body)
+		}
+	}
+}

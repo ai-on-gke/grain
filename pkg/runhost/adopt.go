@@ -29,12 +29,22 @@ import (
 
 // Claim is one live task_run row, as the adoption pass sees it.
 type Claim struct {
-	Run  string
-	Task string
+	Run     string
+	Task    string
+	Sandbox string
 	// LastSeen is when a daemon last advanced this run's spool cursor:
 	// the start of the gap the adoption credits as wait time. Zero when
 	// no cursor was ever written.
 	LastSeen time.Time
+}
+
+// SandboxName returns the sandbox ID this run is executing in: c.Sandbox
+// when set (e.g. a reused warm session sandbox), or c.Run otherwise.
+func (c Claim) SandboxName() string {
+	if c.Sandbox != "" {
+		return c.Sandbox
+	}
+	return c.Run
 }
 
 // Adoption is a live row matched to a run host that is resumed.

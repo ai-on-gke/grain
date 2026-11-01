@@ -171,6 +171,7 @@ var notSettings = []string{
 	// record of what happened, written after the run finished.
 	"task_run_capability_audit",
 	"task_run_startup",
+	"task_run_sandbox_key",
 	// A run's suspension (model.Suspension): grain's record of how a run
 	// stopped, written in the transaction that finished it.
 	"task_suspension",
