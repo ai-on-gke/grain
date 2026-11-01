@@ -45,7 +45,7 @@ type controller struct {
 
 func startController(t *testing.T, token string) *controller {
 	t.Helper()
-	c := &controller{remote: &Remote{Token: token, Logf: t.Logf}}
+	c := &controller{remote: &Remote{Token: token, Logf: testLogf(t)}}
 	mux := http.NewServeMux()
 	mux.Handle("GET "+RemotePath, c.remote)
 	c.http = httptest.NewUnstartedServer(mux)
@@ -59,6 +59,28 @@ func startController(t *testing.T, token string) *controller {
 	c.http.Start()
 	t.Cleanup(c.http.Close)
 	return c
+}
+
+// testLogf is t.Logf until t is done, and nothing after. Remote logs a
+// session's disconnect from the goroutine serving its hijacked
+// connection, which httptest.Server.Close does not wait for, so that line
+// can arrive after the test has returned -- a data race on t, and a panic
+// once it has finished. Registered first, its cleanup runs last.
+func testLogf(t *testing.T) func(string, ...any) {
+	var mu sync.Mutex
+	done := false
+	t.Cleanup(func() {
+		mu.Lock()
+		done = true
+		mu.Unlock()
+	})
+	return func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !done {
+			t.Logf(format, args...)
+		}
+	}
 }
 
 // drop cuts every hostd session the controller holds, as a network
@@ -310,7 +332,7 @@ func TestAHostdServesWithNoSocket(t *testing.T) {
 		Allowlist:       allow,
 		AllowlistOwners: []uint32{uint32(os.Getuid())},
 		Remote:          Dialer{Server: ctl.http.URL, Token: "s3cret"}.Dial,
-		Logf:            t.Logf,
+		Logf:            testLogf(t),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
