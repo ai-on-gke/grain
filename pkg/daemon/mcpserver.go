@@ -36,6 +36,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/change"
@@ -1345,10 +1346,11 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // served by the run's agent framework -- agent/antigravity's pre-tool
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
-	grainci.CapabilityName, deploymenthealth.CapabilityName,
+	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
+	grainci.CapabilityName, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
+	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -1356,6 +1358,9 @@ func warnUnknownGrants(grants GrantNames) {
 	for _, name := range grants {
 		if _, isAPI, err := ui.ParseAPIGrant(name); isAPI && err == nil {
 			continue // served as generated tools (ui.AgentAPITools)
+		}
+		if grainserver.IsInProcessGrant(name) {
+			continue
 		}
 		if model.APIAliasPreset(name) != "" {
 			continue // bare alias for an api preset (ui.AgentAPITools)
@@ -1371,13 +1376,13 @@ func warnUnknownGrants(grants GrantNames) {
 
 func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID string, client *ui.HTTPClient) []mcp.Tool {
 	var tools []mcp.Tool
-	if grants.Has(grainlog.CapabilityName) {
+	if grainserver.HasJournal(grants) {
 		tools = append(tools, grainlog.Tools(grainlog.Config{
 			TaskID:   taskID,
 			Redactor: grainLogRedactor(secretsDir),
 		})...)
 	}
-	if grants.Has(deploymenthealth.CapabilityName) {
+	if grainserver.HasHealth(grants) {
 		redactor := grainLogRedactor(secretsDir)
 		var redact func(string) string
 		if redactor != nil {
@@ -1392,14 +1397,14 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 	if grants.Has(bootstrap.CapabilityName) {
 		tools = append(tools, bootstrap.PlaybookTools()...)
 	}
-	if grants.Has(dbaccess.CapabilityDBRead) || grants.Has(dbaccess.CapabilityDBWrite) {
+	if grainserver.HasSQL(grants) {
 		var executor dbaccess.DBExecutor
 		if client != nil {
 			executor = daemonDB{client: client, taskID: taskID}
 		}
 		tools = append(tools, dbaccess.Tools(dbaccess.Config{
 			TaskID:     taskID,
-			AllowWrite: grants.Has(dbaccess.CapabilityDBWrite),
+			AllowWrite: grainserver.HasSQLWrite(grants),
 			Executor:   executor,
 		})...)
 	}
@@ -2259,8 +2264,8 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 				MayReadAllMemory: apiGrants.Allows("memory:read", ""),
 				MayReadMetrics:   grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", ""),
 				MayReadPipeline:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", "") || apiGrants.Allows("dispatch:read", ""),
-				MayReadHealth:    grants.Has(deploymenthealth.CapabilityName) || apiGrants.Allows("deployment:read", ""),
-				MayReadGrainLog:  grants.Has(grainlog.CapabilityName),
+				MayReadHealth:    grainserver.HasHealth(grants) || apiGrants.Allows("deployment:read", ""),
+				MayReadGrainLog:  grainserver.HasJournal(grants),
 			},
 			CIReader:    DaemonGrainCI{Client: client, TaskID: *taskID},
 			ArtifactDir: ciArtifactDir(*dataDir),

@@ -147,8 +147,10 @@ Usage of grain daemon:
     	working directory run_command/read_file/edit_file/write_file operate in on each granule VM (required with -granule-sandboxes)
   -grit-client-token token
     	client token (<id>.<secret>) sent in Grit-Client when -grit-url is set
+  -grit-experimental
+    	allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, and has no reverse-tunnel mode: for developing the grit split, not for a deployment's CI
   -grit-url url
-    	remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process
+    	EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (docs/design/grit-split.md, GS-3 to GS-5 deferred)
   -host-sandbox-env value
     	NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone
   -host-sandboxes
