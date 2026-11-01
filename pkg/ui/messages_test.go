@@ -567,6 +567,30 @@ func TestPostAgentMessageDoesNotParkOnAQuestionAlreadyAnswered(t *testing.T) {
 	task := create(t, client, ctx)
 	running(t, store, ctx, task.ID)
 
+	// With no delivered mark nothing says what a run has been shown, so
+	// an answered question followed by a new one parks as it always has.
+	answer, err := store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "use main",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unmarked, err := client.PostAgentMessage(ctx, task.ID, "And which reviewer?", "Pick a reviewer", nil)
+	if err != nil {
+		t.Fatalf("PostAgentMessage: %v", err)
+	}
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs == nil || obs.PendingQuestionCommentID == nil || *obs.PendingQuestionCommentID != unmarked.ID {
+		t.Fatalf("PendingQuestionCommentID = %v, want %d with no delivered mark", obs, unmarked.ID)
+	}
+	if err := client.RecordDelivered(ctx, task.ID, answer); err != nil {
+		t.Fatalf("RecordDelivered: %v", err)
+	}
+
 	waiting, err := store.AddComment(ctx, model.Comment{
 		TaskID: task.ID, Body: "ok, did that do it?",
 		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
@@ -577,8 +601,7 @@ func TestPostAgentMessageDoesNotParkOnAQuestionAlreadyAnswered(t *testing.T) {
 	if _, err := client.PostAgentMessage(ctx, task.ID, "Done; anything else?", "Anything else?", nil); err != nil {
 		t.Fatalf("PostAgentMessage: %v", err)
 	}
-	obs, err := store.GetObservation(ctx, task.ID)
-	if err != nil {
+	if obs, err = store.GetObservation(ctx, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	if obs != nil && obs.PendingQuestionCommentID != nil {

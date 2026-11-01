@@ -148,14 +148,12 @@ func (c *Client) PostAgentMessage(ctx context.Context, id, body, summary string,
 	// that comment at once (daemonChat's pre-post poll), so parking the
 	// task on this message would leave it reading awaiting_reply on a
 	// question nobody is left to answer. RecordDelivered will not un-park
-	// it either, since the comment predates the question.
+	// it either, since the comment predates the question. Only a task
+	// whose run keeps a delivered mark can say what it has not been shown;
+	// without one every earlier comment would look unread.
 	var waitingHuman []int64
-	if obs, err := c.Store.GetObservation(ctx, id); err == nil {
-		delivered := int64(0)
-		if obs != nil && obs.DeliveredCommentID != nil {
-			delivered = *obs.DeliveredCommentID
-		}
-		if later, err := c.Store.CommentsAfter(ctx, id, delivered); err == nil {
+	if obs, err := c.Store.GetObservation(ctx, id); err == nil && obs != nil && obs.DeliveredCommentID != nil {
+		if later, err := c.Store.CommentsAfter(ctx, id, *obs.DeliveredCommentID); err == nil {
 			for _, comment := range later {
 				if comment.ID < commentID && comment.Author.Actor.Kind == model.PrincipalHuman {
 					waitingHuman = append(waitingHuman, comment.ID)
@@ -164,11 +162,9 @@ func (c *Client) PostAgentMessage(ctx context.Context, id, body, summary string,
 		}
 	}
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
-		delivered := int64(0)
-		if o.DeliveredCommentID != nil {
-			delivered = *o.DeliveredCommentID
-		}
-		if slices.ContainsFunc(waitingHuman, func(cid int64) bool { return cid > delivered }) {
+		if o.DeliveredCommentID != nil &&
+			slices.ContainsFunc(waitingHuman, func(cid int64) bool { return cid > *o.DeliveredCommentID }) {
+			o.PendingQuestionCommentID = nil
 			return
 		}
 		o.PendingQuestionCommentID = &commentID
