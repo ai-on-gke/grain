@@ -1900,6 +1900,7 @@ export default function RepoPage({
                       disabled={readOnly}
                       idPrefix="repo-ci"
                       runKind="ci"
+                      policyRepo={repo}
                     />
                   )}
                 </Box>

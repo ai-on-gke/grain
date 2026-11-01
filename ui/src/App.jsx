@@ -1103,8 +1103,27 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // rail is waiting on can arrive without anybody doing anything here: a
   // session configured a moment ago has no task until the next cycle's
   // reconciler files one, and the chat cannot open until it does.
+  //
+  // Reads are sequenced: the background poll's read can still be out
+  // when a restart answers with the session's replacement task, and
+  // written after it, its older list would point the pane back at the
+  // closed task and draw that conversation again. So a list is only
+  // written if no read started later (or answer applied by
+  // applySessions) has been written already; a stale one is dropped
+  // and refreshSessions answers null.
+  const sessionsSeq = useRef(0);
+  const sessionsWritten = useRef(0);
+  const applySessions = useCallback((next) => {
+    sessionsSeq.current += 1;
+    sessionsWritten.current = sessionsSeq.current;
+    setSessions((prev) => keepIfSame(prev, next));
+  }, []);
   const refreshSessions = useCallback(async () => {
+    sessionsSeq.current += 1;
+    const seq = sessionsSeq.current;
     const res = await api("/api/console-sessions");
+    if (seq < sessionsWritten.current) return null;
+    sessionsWritten.current = seq;
     const next = (res && res.sessions) || [];
     setSessions((prev) => keepIfSame(prev, next));
     setSessionsLoaded(true);
@@ -1227,18 +1246,34 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // capability toggle) completes so the chat's Stop button, state badge,
   // and separator reflect the mutation immediately rather than waiting
   // for the next poll tick.
-  const refreshSessionSaved = useCallback(async () => {
-    const [nextSessions] = await Promise.all([
-      refreshSessions(),
-      refreshList(),
-    ]);
-    const currentSession = openSessionIdRef.current
-      ? nextSessions.find((s) => s.id === openSessionIdRef.current) || null
-      : nextSessions[0] || null;
-    const nextTaskId = currentSession?.taskId || null;
-    openSessionTaskIdRef.current = nextTaskId;
-    await loadSessionTask(nextTaskId);
-  }, [refreshSessions, loadSessionTask, refreshList]);
+  //
+  // A control whose answer already lists the sessions (Start a fresh
+  // chat answers with the replacement task in it) passes that list,
+  // which is written at once: until it is, the pane is still pointed at
+  // the task the restart closed.
+  const refreshSessionSaved = useCallback(
+    async (answered) => {
+      const pointAt = (listed) => {
+        const currentSession = openSessionIdRef.current
+          ? listed.find((s) => s.id === openSessionIdRef.current) || null
+          : listed[0] || null;
+        openSessionTaskIdRef.current = currentSession?.taskId || null;
+      };
+      if (Array.isArray(answered)) {
+        applySessions(answered);
+        pointAt(answered);
+      }
+      const [nextSessions] = await Promise.all([
+        refreshSessions(),
+        refreshList(),
+      ]);
+      // null: a later read or answer has already been written, and the
+      // pane already points where that one said.
+      if (nextSessions) pointAt(nextSessions);
+      await loadSessionTask(openSessionTaskIdRef.current);
+    },
+    [applySessions, refreshSessions, loadSessionTask, refreshList],
+  );
 
   // refreshConfig re-fetches /api/config -- needed after adding a target
   // repo (RepoList's own "Add") or removing one (RepoPage's own
@@ -1983,7 +2018,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       }
       const listed = res?.sessions || [];
       if (listed.length) {
-        setSessions((prev) => keepIfSame(prev, listed));
+        applySessions(listed);
       }
       // The answer names what it created; the diff against what the
       // rail knew is for a daemon older than that field.
@@ -1999,6 +2034,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       await Promise.all([refreshSessions(), refreshList()]);
     },
     [
+      applySessions,
       refreshSessions,
       refreshList,
       openStandingSession,
