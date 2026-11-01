@@ -667,8 +667,16 @@ func capabilitiesDocumentFor(ctx context.Context, db querier) ([]byte, error) {
 	}
 	for name, cp := range cat.APIScopes.Presets {
 		p := presets[name]
+		rowRequiresPerson := p.Restrictions != nil && p.Restrictions.RequiresPerson
 		p.Enabled = cp.Enabled
-		p.Restrictions = cp.Restrictions
+		switch {
+		case cp.Restrictions != nil && rowRequiresPerson && !cp.Restrictions.RequiresPerson:
+			merged := *cp.Restrictions
+			merged.RequiresPerson = true
+			p.Restrictions = &merged
+		case cp.Restrictions != nil || !rowRequiresPerson:
+			p.Restrictions = cp.Restrictions
+		}
 		presets[name] = p
 	}
 	doc.APIScopes = &capabilityAPIScopes{Presets: &presets, RawScopes: cat.APIScopes.RawScopes}

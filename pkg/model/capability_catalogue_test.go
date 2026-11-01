@@ -352,7 +352,7 @@ func TestFoldRetiredInProcessMergesConservatively(t *testing.T) {
 	if mem.Enabled == nil || *mem.Enabled {
 		t.Fatalf("Presets[memory] = %+v, want disabled", mem)
 	}
-	for _, g := range []string{"api:memory", "api:grain/memory"} {
+	for _, g := range []string{"api:memory", "api:grain/memory", "memory"} {
 		if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{g}}); err == nil || !strings.Contains(err.Error(), "disabled") {
 			t.Errorf("ValidateGrants(%s) = %v, want disabled refusal", g, err)
 		}
@@ -379,5 +379,46 @@ func TestFoldRetiredInProcessMergesConservatively(t *testing.T) {
 	}
 	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"api:pipeline-control"}}); err == nil {
 		t.Error("merged pipeline-control admitted task, want refused because in_process was ci_only")
+	}
+}
+
+func TestRetiredGrainServerCapabilitiesAndPresetAliases(t *testing.T) {
+	cat := &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"grain-log":         {Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"ai-on-gke/grain"}}},
+			"deployment-health": {Restrictions: &model.CapabilityRestrictions{Kinds: model.Patterns{"director"}}},
+			"db-read":           {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+			"db-write":          {Enabled: boolp(false)},
+		},
+		APIScopes: model.CatalogueAPIScopes{
+			Presets: map[string]model.CataloguePreset{
+				model.ReleaseGateReadCapability: {Enabled: boolp(false)},
+			},
+		},
+	}
+
+	if _, err := cat.ValidateGrants(model.GrantContext{Repo: repo("other/repo"), Kind: "task", Grants: []string{model.GrainJournalGrant}}); err == nil || !strings.Contains(err.Error(), "in_process.grain-log") {
+		t.Errorf("GrainJournalGrant on other/repo = %v, want in_process.grain-log refusal", err)
+	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{model.GrainHealthGrant}}); err == nil || !strings.Contains(err.Error(), "in_process.deployment-health") {
+		t.Errorf("GrainHealthGrant for task = %v, want in_process.deployment-health refusal", err)
+	}
+	v, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{model.GrainSQLReadGrant}})
+	if err != nil || len(v.RequiresPerson) != 1 {
+		t.Errorf("GrainSQLReadGrant = (%+v, %v), want admitted with RequiresPerson from in_process.db-read", v, err)
+	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{model.GrainSQLWriteGrant}}); err == nil || !strings.Contains(err.Error(), "in_process.db-write") {
+		t.Errorf("GrainSQLWriteGrant = %v, want disabled refusal from in_process.db-write", err)
+	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "ci", Grants: []string{model.ReleaseGateReadCapability}}); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("bare release-gate-read = %v, want disabled refusal from api_scopes.presets.release-gate-read", err)
+	}
+
+	merged := model.MergeCapabilityRestrictions(
+		&model.CapabilityRestrictions{Templates: model.Patterns{"ops*"}},
+		&model.CapabilityRestrictions{Templates: model.Patterns{"ops/nightly*"}},
+	)
+	if len(merged.Templates) != 0 {
+		t.Errorf("MergeCapabilityRestrictions(ops*, ops/nightly*).Templates = %v, want [] because path.Match '*' does not cross '/'", merged.Templates)
 	}
 }

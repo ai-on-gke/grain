@@ -17,17 +17,19 @@
 // #api-scope-sets), including retired in_process keys that bind api: presets.
 
 const BUILTIN_PRESETS = new Set([
-  "ci-read",
-  "task-triage",
   "task-admin",
-  "team-broadcast",
+  "ci-read",
   "dispatch-control",
-  "pipeline-control",
   "deployment-ops",
+  "release-manager",
+  "self-debug",
+  "self-upgrade",
+  "pipeline-control",
+  "team-broadcast",
   "memory",
   "release-notes",
-  "self-upgrade",
   "test-quarantine",
+  "release-gate-read",
 ]);
 
 export const RETIRED_IN_PROCESS = {
@@ -67,20 +69,21 @@ export const RETIRED_IN_PROCESS = {
     scopeSet: "grain/test-quarantine",
   },
   "deployment-health": {
-    grant: "api:deployment:read",
-    rawScope: "deployment:read",
+    grant: "api:deployment:read + https://grain.dev/capabilities/grain#health",
+    moveTo:
+      'api_scopes.raw_scopes["deployment:read"] and servers (https://grain.dev/capabilities/grain#health)',
   },
   "grain-log": {
-    grant: "api:log:read",
-    rawScope: "log:read",
+    grant: "https://grain.dev/capabilities/grain#journal",
+    moveTo: "servers (https://grain.dev/capabilities/grain#journal)",
   },
   "db-read": {
-    grant: "api:db:read",
-    rawScope: "db:read",
+    grant: 'https://grain.dev/capabilities/grain#sql={"write":false}',
+    moveTo: "servers (https://grain.dev/capabilities/grain#sql)",
   },
   "db-write": {
-    grant: "api:db:write",
-    rawScope: "db:write",
+    grant: 'https://grain.dev/capabilities/grain#sql={"write":true}',
+    moveTo: "servers (https://grain.dev/capabilities/grain#sql)",
   },
 };
 
@@ -173,9 +176,11 @@ export function summariseCatalogueEntries(catalogue) {
     ];
     const rep = RETIRED_IN_PROCESS[name];
     if (rep) {
-      const moveTarget = rep.preset
-        ? `api_scopes.presets.${rep.preset}`
-        : `api_scopes.raw_scopes["${rep.rawScope}"]`;
+      const moveTarget = rep.moveTo
+        ? rep.moveTo
+        : rep.preset
+          ? `api_scopes.presets.${rep.preset}`
+          : `api_scopes.raw_scopes["${rep.rawScope}"]`;
       items.push({
         key: `in_process:${name}`,
         target: rep.grant,

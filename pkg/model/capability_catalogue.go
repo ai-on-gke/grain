@@ -279,6 +279,10 @@ func (c *CapabilityCatalogue) judge(g string, gc GrantContext) (bool, error) {
 }
 
 func (c *CapabilityCatalogue) judgeRef(g string, gc GrantContext) (bool, error) {
+	retiredPerson, err := c.judgeRetiredInProcess(g, gc)
+	if err != nil {
+		return false, err
+	}
 	var with map[string]any
 	ref := CapabilityGrantRef(g)
 	if spec, err := CapabilityGrantSpec(g); err == nil {
@@ -287,7 +291,7 @@ func (c *CapabilityCatalogue) judgeRef(g string, gc GrantContext) (bool, error) 
 	id, method, _ := strings.Cut(ref, "#")
 	srv, ok := c.server(id)
 	if !ok {
-		return false, nil
+		return retiredPerson, nil
 	}
 	if srv.Enabled != nil && !*srv.Enabled {
 		return false, fmt.Errorf("capability %s: server %s is disabled in settings/capabilities.yml", ref, srv.ID)
@@ -319,7 +323,8 @@ func (c *CapabilityCatalogue) judgeRef(g string, gc GrantContext) (bool, error) 
 			}
 		}
 	}
-	return r.judge(ref, gc, with)
+	p, err := r.judge(ref, gc, with)
+	return retiredPerson || p, err
 }
 
 func (c *CapabilityCatalogue) judgeAPI(g string, gc GrantContext) (bool, error) {
@@ -404,8 +409,26 @@ func RetiredInProcessPreset(name string) (string, bool) {
 }
 
 // retiredInProcessNames are the retired bare capabilities whose
-// replacement is the api: grant g (any @repo limit aside), sorted.
+// replacement is the canonical grant g (any @repo limit aside), sorted.
 func retiredInProcessNames(g string) []string {
+	if IsCapabilityRef(g) {
+		switch {
+		case IsGrainJournalGrant(g):
+			return []string{"grain-log"}
+		case IsGrainHealthGrant(g):
+			return []string{"deployment-health"}
+		}
+		if ok, write := ParseGrainSQLGrant(g); ok {
+			if write {
+				return []string{"db-write"}
+			}
+			return []string{"db-read"}
+		}
+		return nil
+	}
+	if !strings.HasPrefix(g, APIGrantPrefix) {
+		return nil
+	}
 	what, _, _ := strings.Cut(strings.TrimPrefix(g, APIGrantPrefix), "@")
 	what = canonicalPresetKey(what)
 	grant := APIGrantPrefix + what
@@ -465,20 +488,40 @@ func (c *CapabilityCatalogue) judgeAPIScopes(g string, gc GrantContext) (bool, e
 }
 
 func (c *CapabilityCatalogue) judgeInProcess(g string, gc GrantContext) (bool, error) {
+	person := false
 	entry, ok := c.InProcess[g]
 	if !ok {
-		family, _, cut := strings.Cut(g, ":")
-		if !cut {
-			return false, nil
-		}
-		if entry, ok = c.InProcess[family]; !ok {
-			return false, nil
+		if family, _, cut := strings.Cut(g, ":"); cut {
+			entry, ok = c.InProcess[family]
 		}
 	}
-	if entry.Enabled != nil && !*entry.Enabled {
-		return false, fmt.Errorf("capability %s is disabled in settings/capabilities.yml", g)
+	if ok {
+		if entry.Enabled != nil && !*entry.Enabled {
+			return false, fmt.Errorf("capability %s is disabled in settings/capabilities.yml", g)
+		}
+		p, err := entry.Restrictions.judge(g, gc, nil)
+		if err != nil {
+			return false, err
+		}
+		person = person || p
 	}
-	return entry.Restrictions.judge(g, gc, nil)
+	trimmed := strings.TrimSpace(g)
+	if repl := CanonicalLegacyGrants(trimmed); !(len(repl) == 1 && repl[0] == trimmed) {
+		for _, rg := range repl {
+			p, err := c.judge(rg, gc)
+			if err != nil {
+				return false, err
+			}
+			person = person || p
+		}
+	} else if trimmed == ReleaseGateReadCapability {
+		p, err := c.judgeAPIScopes(APIGrantPrefix+ReleaseGateReadCapability, gc)
+		if err != nil {
+			return false, err
+		}
+		person = person || p
+	}
+	return person, nil
 }
 
 func (c *CapabilityCatalogue) server(id string) (CatalogueServer, bool) {
@@ -1116,7 +1159,7 @@ func templatePatternSubsumedByList(pattern string, list Patterns) bool {
 		if q == "*" || q == pattern {
 			return true
 		}
-		if globSubsumes(q, pattern, false) {
+		if globSubsumes(q, pattern, true) {
 			return true
 		}
 	}

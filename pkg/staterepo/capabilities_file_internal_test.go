@@ -334,4 +334,63 @@ in_process:
 	if len(recheck.Warnings) != 0 {
 		t.Errorf("exported dump produced warnings: %v", recheck.Warnings)
 	}
+
+	// A template still carrying a retired bare grant ("memory") must still be
+	// refused once the restriction lives under api_scopes.presets.memory.
+	if err := os.WriteFile(filepath.Join(out, SettingsDir, "templates.yml"), []byte(`templates:
+  - id: template-1
+    name: legacy-mem
+    grants: [memory]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCapabilities(out); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("checkCapabilities with bare retired memory grant = %v, want disabled refusal", err)
+	}
+}
+
+func TestDisabledDeclaredScopeSetPreservesRequiresPersonOnExport(t *testing.T) {
+	ctx := context.Background()
+	db := openSchema(t)
+	store := model.New(db)
+	off := false
+	if err := store.PutConfig(ctx, model.Config{
+		CapabilityPolicy: model.CapabilityPolicy{
+			Catalogue: &model.CapabilityCatalogue{
+				APIScopes: model.CatalogueAPIScopes{
+					Presets: map[string]model.CataloguePreset{
+						"ops/triage": {Enabled: &off},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutAPIScopeSet(ctx, model.APIScopeSet{
+		Name:           "ops/triage",
+		Description:    "Declared set requiring human approval",
+		Scopes:         []string{"tasks:read"},
+		RequiresPerson: true,
+		Version:        1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	if err := ExportConfig(ctx, db, out); err != nil {
+		t.Fatalf("ExportConfig: %v", err)
+	}
+	exported, err := os.ReadFile(filepath.Join(out, SettingsDir, CapabilitiesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat, err := ValidateCapabilitiesFile(exported)
+	if err != nil {
+		t.Fatalf("ValidateCapabilitiesFile: %v\n%s", err, string(exported))
+	}
+	p, ok := cat.APIScopes.Presets["ops/triage"]
+	if !ok || p.Enabled == nil || *p.Enabled || p.Restrictions == nil || !p.Restrictions.RequiresPerson {
+		t.Fatalf("exported ops/triage = %+v (restrictions %+v), want disabled and requires_person: true\n%s",
+			p, p.Restrictions, string(exported))
+	}
 }

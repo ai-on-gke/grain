@@ -74,6 +74,7 @@ test("surfaces retired in_process and api_scopes.presets catalogue entries in Se
           catalogue: {
             inProcess: {
               memory: { enabled: false },
+              "db-write": { enabled: false },
             },
             apiScopes: {
               presets: {
@@ -101,6 +102,18 @@ test("surfaces retired in_process and api_scopes.presets catalogue entries in Se
     expect(refused.status()).toBe(400);
     expect(await refused.text()).toContain("in_process.memory");
 
+    const refusedSQL = await request.post("/api/tasks", {
+      data: {
+        title: "Check retired db-write refusal on grain#sql",
+        noRepo: true,
+        capabilities: [
+          'https://grain.dev/capabilities/grain#sql={"write":true}',
+        ],
+      },
+    });
+    expect(refusedSQL.status()).toBe(400);
+    expect(await refusedSQL.text()).toContain("in_process.db-write");
+
     for (const viewport of [
       { width: 1440, height: 900 },
       { width: 390, height: 844 },
@@ -112,6 +125,9 @@ test("surfaces retired in_process and api_scopes.presets catalogue entries in Se
       await expect(policyAlert).toBeVisible();
       await expect(policyAlert).toContainText(
         "api:grain/memory — disabled (retired in_process.memory → move to api_scopes.presets.memory)",
+      );
+      await expect(policyAlert).toContainText(
+        'https://grain.dev/capabilities/grain#sql={"write":true} — disabled (retired in_process.db-write → move to servers (https://grain.dev/capabilities/grain#sql))',
       );
       await expect(policyAlert).toContainText(
         "api:grain/release-notes — repos acme/* · requires a person (api_scopes.presets.release-notes)",
