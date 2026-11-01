@@ -79,6 +79,9 @@ import CIPage from "./components/CIPage.jsx";
 import CIRunOverlay from "./components/CIRunOverlay.jsx";
 import BatchActionsBar from "./components/BatchActionsBar.jsx";
 import ErrorBanner from "./components/ErrorBanner.jsx";
+import DroppedDefaultsNotice, {
+  droppedDefaults,
+} from "./components/DroppedDefaultsNotice.jsx";
 import ConfigRefusalDialog from "./components/ConfigRefusal.jsx";
 import DetailOverlay from "./components/DetailOverlay.jsx";
 import TaskLoadingOverlay from "./components/TaskLoadingOverlay.jsx";
@@ -1350,10 +1353,18 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // (ui.CreateTaskRequest.AtFront, config.newestFirst), and the form
   // seeds its picker from that -- so without re-reading the config here,
   // the choice would only show up on the next full page load.
-  const refreshAfterCreate = useCallback(async () => {
-    await refreshList();
-    await refreshConfig();
-  }, [refreshList, refreshConfig]);
+  //
+  // It is also handed the filed task, and a filing that left a default
+  // grant off (ui.Task.DroppedDefaults) says so in a toast.
+  const [filedWithoutDefaults, setFiledWithoutDefaults] = useState(null);
+  const refreshAfterCreate = useCallback(
+    async (created) => {
+      if (droppedDefaults(created).length > 0) setFiledWithoutDefaults(created);
+      await refreshList();
+      await refreshConfig();
+    },
+    [refreshList, refreshConfig],
+  );
 
   const toggleSelect = useCallback((id) => {
     setSelected((prev) => {
@@ -3888,6 +3899,12 @@ function AppContent({ onReload = () => window.location.reload() }) {
           )}
         </div>
         {error !== null && <ErrorBanner message={error} />}
+        {filedWithoutDefaults !== null && (
+          <DroppedDefaultsNotice
+            created={filedWithoutDefaults}
+            onClose={() => setFiledWithoutDefaults(null)}
+          />
+        )}
         <ConfigRefusalDialog
           refusal={configRefusal}
           onClose={() => setConfigRefusal(null)}

@@ -2280,7 +2280,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
-	droppedRefusals = append(droppedRefusals, policyDropped...)
+	for _, d := range policyDropped {
+		droppedRefusals = append(droppedRefusals, d.Note())
+	}
 	customFields, err := c.normalizeCustomFields(ctx, req.CustomFields)
 	if err != nil {
 		return Task{}, err
@@ -2662,10 +2664,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, err
 		}
 	}
+	// grain's notes, not the filer's: it was grain that left these off.
 	for _, refusal := range droppedRefusals {
 		if _, err := c.Store.AddComment(ctx, model.Comment{
 			TaskID:    id,
-			Author:    model.Attribution{Actor: c.actor(ctx)},
+			Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
 			Body:      refusal,
 			CreatedAt: now,
 		}); err != nil {
@@ -2737,6 +2740,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	created.SupersedeMoved = supersedeResult.Moved
 	created.ParkNote = parkNote
+	created.DroppedDefaults = policyDropped
 	if proposedBy != nil && !created.Approved {
 		created.ApprovalNote = proposalApprovalNote(req.HoldForApproval, heldNote != "", limitNote != "", refusal)
 	}
