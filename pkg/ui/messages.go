@@ -143,7 +143,34 @@ func (c *Client) PostAgentMessage(ctx context.Context, id, body, summary string,
 			Size:        int64(len(attachments[i].Content)),
 		})
 	}
+	// A person who has already said something the run has not been shown
+	// has answered before the question was asked: the chat call returns
+	// that comment at once (daemonChat's pre-post poll), so parking the
+	// task on this message would leave it reading awaiting_reply on a
+	// question nobody is left to answer. RecordDelivered will not un-park
+	// it either, since the comment predates the question.
+	var waitingHuman []int64
+	if obs, err := c.Store.GetObservation(ctx, id); err == nil {
+		delivered := int64(0)
+		if obs != nil && obs.DeliveredCommentID != nil {
+			delivered = *obs.DeliveredCommentID
+		}
+		if later, err := c.Store.CommentsAfter(ctx, id, delivered); err == nil {
+			for _, comment := range later {
+				if comment.ID < commentID && comment.Author.Actor.Kind == model.PrincipalHuman {
+					waitingHuman = append(waitingHuman, comment.ID)
+				}
+			}
+		}
+	}
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		delivered := int64(0)
+		if o.DeliveredCommentID != nil {
+			delivered = *o.DeliveredCommentID
+		}
+		if slices.ContainsFunc(waitingHuman, func(cid int64) bool { return cid > delivered }) {
+			return
+		}
 		o.PendingQuestionCommentID = &commentID
 	}); err != nil {
 		return Message{}, err
