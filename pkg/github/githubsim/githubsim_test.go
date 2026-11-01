@@ -15,7 +15,9 @@
 package githubsim
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -176,6 +178,47 @@ func TestSimListIssuesFiltersByLabel(t *testing.T) {
 	}
 	if len(issues) != 1 || issues[0].Number != 1 || issues[0].Title != "needs a fix" {
 		t.Fatalf("got %+v", issues)
+	}
+}
+
+// TestSimListIssuesIsGitHubsListing: the listing GitHub answers -- closed
+// issues left out unless state asks for them, an issue closed through
+// PATCH leaving it, and pull requests in it marked by a pull_request key,
+// which RESTClient.ListIssues has to skip. Before, Sim listed every issue
+// whatever its state and no pull request at all, so neither half of what
+// the issue importer relies on was exercised against it.
+func TestSimListIssuesIsGitHubsListing(t *testing.T) {
+	sim, client := newSim(t, "main")
+	sim.Issues[1] = &Issue{Title: "open", Labels: map[string]struct{}{"grain-agent": {}}}
+	sim.Issues[2] = &Issue{Title: "closed", State: "closed", Labels: map[string]struct{}{"grain-agent": {}}}
+	sim.Issues[3] = &Issue{Title: "closed later", Labels: map[string]struct{}{"grain-agent": {}}}
+	sim.PullRequests = append(sim.PullRequests, PullRequest{Number: 9, Title: "a pr", State: "open", Labels: map[string]struct{}{"grain-agent": {}}})
+
+	if resp, err := sim.Request("PATCH", "/repos/acme/widgets/issues/3", nil, []byte(`{"state":"closed"}`)); err != nil || resp.Status != 200 {
+		t.Fatalf("closing #3: %d %v", resp.Status, err)
+	}
+	issues, err := client.ListIssues("acme", "widgets", "grain-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || issues[0].Number != 1 {
+		t.Fatalf("ListIssues = %+v, want #1 alone", issues)
+	}
+	resp, err := sim.Request("GET", "/repos/acme/widgets/issues?state=all&labels=grain-agent", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(resp.Body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, item := range raw {
+		_, isPR := item["pull_request"]
+		got = append(got, fmt.Sprintf("%v:%v:%v", item["number"], item["state"], isPR))
+	}
+	if want := "1:open:false 2:closed:false 3:closed:false 9:open:true"; strings.Join(got, " ") != want {
+		t.Fatalf("state=all listing = %v, want %s", got, want)
 	}
 }
 
