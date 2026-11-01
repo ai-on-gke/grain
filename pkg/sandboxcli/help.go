@@ -183,9 +183,15 @@ var sandboxCommandHelp = map[string]string{
 		"tool and the proxy refuses it. Each tool's flags are generated from its input schema.\n\n" +
 		"  grain cap list\n  grain cap widgets ping --help\n  grain cap widgets ping --host example.com --count 3\n  grain cap widgets ping --json '{\"host\":\"example.com\"}'\n",
 	"ls": "grain ls <uri> [--glob <pat>]\n\nList a namespace directory. --glob matches the directory's own entries; a\npattern with / or ** walks the subtree instead, and ends with a [truncated: ...]\nline if the walk was cut short. A trailing / matches directories only.\n\n  grain ls ci://<owner>/<repo>\n  grain ls task:// --glob '19*'\n  grain ls src://cmd --glob '**/*.go'\n",
-	"read": "grain read <uri> [--tail N] [--offset N --limit N] [--lines N]\n\nPrint a namespace file to stdout, whole: there is no size cap.\n\n" +
-		byteRangeHelp + "\n" +
-		"  grain read task://1436/record.md\n  grain read ci://<owner>/<repo>/<run>/go/gotest.log --tail 4000\n  grain read deploy://pipeline-changes -n 20\n",
+	"read": "grain read <uri> [--tail N] [--offset N --limit N] [--lines N]\n" +
+		"grain read deploy://pipeline-changes [--cursor <c>] [--page N]\n\nPrint a namespace file to stdout, whole: there is no size cap.\n\n" +
+		byteRangeHelp +
+		"  --cursor <c>        deploy://pipeline-changes only: the changes after the cursor a page ended\n" +
+		"                      with (its last line is the command that reads the next page), or after\n" +
+		"                      an RFC 3339 time; --since is the same flag. Without it, the last 24 hours\n" +
+		"  --page N            deploy://pipeline-changes only: at most N changes (default 100, at most 500)\n\n" +
+		"  grain read task://1436/record.md\n  grain read ci://<owner>/<repo>/<run>/go/gotest.log --tail 4000\n" +
+		"  grain read deploy://pipeline-changes --page 20\n  grain read deploy://pipeline-changes --cursor 2026-10-29T11:50:43.079363246Z~1\n",
 	"grep": "grain grep <pattern> <uri> [-i] [-C N] [--glob <pat>] [--max N]\n\nSearch a namespace file or subtree with an RE2 regular expression.\n\n" +
 		"  -i           match case-insensitively\n" +
 		"  -C N         N lines of context around each match\n" +

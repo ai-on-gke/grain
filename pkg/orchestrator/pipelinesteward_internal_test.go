@@ -134,7 +134,7 @@ func TestThePipelineStewardHoldsTheDocumentedPresetsAndNothingDangerous(t *testi
 		t.Errorf("subscriptions = %v, want [pipeline.*]", subs)
 	}
 	// The prompt holds the four rules (DT-12) and files no repairs.
-	for _, want := range []string{"/api/pipeline/changes", "grain task read <id>", "record-disagrees",
+	for _, want := range []string{"grain read deploy://pipeline-changes --cursor <cursor>", "grain task read <id>", "record-disagrees",
 		"at most 15", "grain task message", "grain notify", "Never file a repair"} {
 		if !strings.Contains(tmpl.Body, want) {
 			t.Errorf("the prompt does not say %q", want)
