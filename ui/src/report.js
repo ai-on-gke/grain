@@ -66,6 +66,7 @@
 // ReportBoard.jsx prints the window it used, so the reading is on screen
 // rather than in this comment alone.
 import { NONE } from "./taskAttributes.js";
+import { statesOf } from "./state.js";
 import { NO_NARROWING, needsValue } from "./taskFilters.js";
 
 // REPORT_SECTIONS is every section of the report, in the order the
@@ -319,6 +320,21 @@ export function reportScope(narrowing, attributes) {
     ignored.push(label);
   }
   return { ...scope, ignored };
+}
+
+// stateNarrowing is the task list a count in the report's backlog stands
+// for: the report's own repo and author scope, plus the one display state
+// the count is of -- both asked states for "asked", the grouping the
+// dashboard's state counts link with too. Not the report's window: the
+// backlog is what is unfinished right now, whenever it was created.
+export function stateNarrowing(scope, state) {
+  const filters = [];
+  if (scope?.repos?.length)
+    filters.push({ attr: "repo", op: "any", values: [...scope.repos] });
+  if (scope?.authors?.length)
+    filters.push({ attr: "author", op: "any", values: [...scope.authors] });
+  filters.push({ attr: "state", op: "any", values: statesOf(state) });
+  return { ...NO_NARROWING, filters };
 }
 
 // conditionLabel is one condition as a phrase for the "not used" note --

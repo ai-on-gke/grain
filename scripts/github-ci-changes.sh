@@ -16,6 +16,13 @@
 # Evaluates per-group and per-job enablement booleans for .github/workflows/tests.yml
 # and writes them to $GITHUB_OUTPUT (or stdout when GITHUB_OUTPUT is unset).
 #
+# This script does not judge a change to itself: a pull request that edits it
+# (or .github/workflows/tests.yml) would otherwise be filtered by the edited
+# copy, which could skip every job. The workflow's `guard` step, which runs
+# first, sets every output to true for such a pull request (and for push and
+# merge_group) and this script is not run at all. pkg/trustboundary also
+# classifies this file as ci-suppressions, so a change to it waits for a person.
+#
 # Environment variables:
 #   EVENT_NAME     - GitHub event name (pull_request, push, merge_group, workflow_dispatch)
 #   BASE_SHA       - PR base commit SHA (pull_request)

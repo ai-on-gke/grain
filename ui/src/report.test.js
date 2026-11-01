@@ -20,6 +20,7 @@ import {
   normalizeSections,
   reportPath,
   reportScope,
+  stateNarrowing,
   reportWindow,
   scopeSummary,
   sectionTitle,
@@ -126,6 +127,31 @@ describe("reportScope", () => {
       expect(scope.within).toBe("");
       expect(scope.ignored).toEqual([`Created (${bad})`]);
     }
+  });
+});
+
+describe("stateNarrowing", () => {
+  it("is the report's repo and author scope plus the one state", () => {
+    expect(
+      stateNarrowing(
+        scopeOf("f=repo:any:acme/widgets&f=author:any:ada&f=created:within:7"),
+        "queued",
+      ).filters,
+    ).toEqual([
+      { attr: "repo", op: "any", values: ["acme/widgets"] },
+      { attr: "author", op: "any", values: ["ada"] },
+      { attr: "state", op: "any", values: ["queued"] },
+    ]);
+  });
+
+  it("opens both asked states for Asked", () => {
+    expect(stateNarrowing(scopeOf(""), "asked").filters).toEqual([
+      {
+        attr: "state",
+        op: "any",
+        values: ["awaiting_reply", "awaiting_submit"],
+      },
+    ]);
   });
 });
 

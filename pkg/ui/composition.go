@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -179,6 +180,15 @@ func composedTaskFrom(c model.Composition, modelFallbackSource string, modelFall
 		{Name: "model", Values: modelValues, Source: modelSource},
 		{Name: "autoMerge", Values: []string{onOff(c.AutoMerge)}, Source: string(c.Sources.AutoMerge)},
 		{Name: "approval", Values: []string{approvalWord(c.Approved)}, Source: string(c.Sources.Approved)},
+	}
+	// Only a template sets a priority other than the default
+	// (model.Template.Priority; an inline schedule's firing always takes
+	// model.DefaultTaskPriority), and only one that does is worth a row:
+	// the task detail pane says nothing of a priority of 5 either.
+	if c.Priority != 0 && c.Priority != model.DefaultTaskPriority {
+		fields = append(fields, ComposedField{
+			Name: "priority", Values: []string{strconv.Itoa(c.Priority)}, Source: string(model.LayerTemplate),
+		})
 	}
 	return ComposedTask{
 		TemplateID:   c.TemplateID,
