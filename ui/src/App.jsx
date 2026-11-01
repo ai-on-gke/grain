@@ -740,6 +740,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // "no override", so the overlay falls back to whichever repo page is
   // open, the same as the sidebar's own "+ New task" button does.
   const [newTaskRepo, setNewTaskRepo] = useState(null);
+  // newTaskBoard is the board whose page "New task" was opened on, which
+  // picks settings/new-task-form.yml's boards layer (newTaskForm.js) and
+  // rides on the filing as boardId for the server's hidden defaults.
+  // Null for the form opened anywhere else.
+  const [newTaskBoard, setNewTaskBoard] = useState(null);
   // newTaskPrefill is a task somebody is being offered rather than one
   // they are writing from scratch: the "New board"/"Edit board" buttons
   // open the form with the title and the description already in it
@@ -1571,6 +1576,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // from the page it was opened on.
   const openNewTaskForRepo = useCallback((repo) => {
     setNewTaskRepo(repo);
+    setNewTaskBoard(null);
     setNewTaskFields(null);
     setShowNewTask(true);
   }, []);
@@ -1635,6 +1641,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     setNewTaskPrefill(prefill);
     setNewTaskFields(null);
     setNewTaskRepo(targetRepo || BOARDS_REPO);
+    setNewTaskBoard(null);
     setShowNewTask(true);
   }, []);
 
@@ -3163,6 +3170,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // itself into another.
   const openNewTask = () => {
     setNewTaskRepo(null);
+    setNewTaskBoard(view === "boards" ? openBoardId : null);
     setNewTaskPrefill(null);
     setNewTaskFields(null);
     setShowNewTask(true);
@@ -3197,6 +3205,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     (fields) => {
       closeDetail();
       setNewTaskRepo(null);
+      setNewTaskBoard(null);
       setNewTaskPrefill(null);
       setNewTaskFields(
         fields && Object.keys(fields).length > 0 ? fields : null,
@@ -3947,8 +3956,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
               defaultRepo={newTaskRepo !== null ? newTaskRepo : openRepo}
               prefill={newTaskPrefill}
               fields={newTaskFields}
+              boardId={newTaskBoard || ""}
               onClose={() => {
                 setShowNewTask(false);
+                setNewTaskBoard(null);
                 setNewTaskFields(null);
                 setNewTaskPrefill(null);
               }}

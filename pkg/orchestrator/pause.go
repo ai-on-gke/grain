@@ -48,10 +48,12 @@ var errUsageLimit = errors.New("orchestrator: the agent's usage limit was reache
 //     short delay. The point of pausing is to stop the queue walking
 //     into the same wall run after run, and a few seconds does not.
 //   - maxUsageLimitPause is the ceiling over one that named a very long
-//     one -- or over a reset instant this code misread. A deployment
-//     idling for a wrong six hours is recoverable; one idling until 2286
-//     because an epoch was parsed in the wrong unit is not something
-//     anybody would think to look for.
+//     one -- or over a reset instant this code misread. A day covers the
+//     longest window a provider has been seen to name (agy's "Resets in
+//     17h32m", task 1908, which a 6h cap met two or three times over).
+//     A deployment idling for a wrong day is recoverable; one idling
+//     until 2286 because an epoch was parsed in the wrong unit is not
+//     something anybody would think to look for.
 //
 // Retrying once the pause lifts is not a promise the limit is over: a
 // window that has not actually reset produces one more refusal, one more
@@ -60,7 +62,7 @@ var errUsageLimit = errors.New("orchestrator: the agent's usage limit was reache
 const (
 	defaultUsageLimitPause = 15 * time.Minute
 	minUsageLimitPause     = time.Minute
-	maxUsageLimitPause     = 6 * time.Hour
+	maxUsageLimitPause     = 24 * time.Hour
 )
 
 // PauseScope is what one usage limit belongs to, and so what the pause it

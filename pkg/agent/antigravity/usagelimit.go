@@ -71,6 +71,10 @@ var usageLimitMarkers = []string{
 	// your capacity on this model. Your quota will reset after 2h28m27s."
 	"exhausted your capacity",
 	"quota will reset",
+	// agy's newer wording (2026-10-31, task 1908): "Individual quota
+	// reached. Please upgrade your subscription to increase your limits.
+	// Resets in 10h46m37s."
+	"individual quota reached",
 }
 
 // retryDelayPattern is the Gemini API's own "come back in": a
@@ -87,6 +91,15 @@ var retryDelayPattern = regexp.MustCompile(`(?i)"?retry_?delay"?\s*[:=]\s*"?(\d+
 // as seconds. "in" is admitted alongside "after" for the same sentence
 // worded the other way.
 var quotaResetPattern = regexp.MustCompile(`(?i)quota\s+will\s+reset\s+(?:after|in)\s+((?:\d+(?:\.\d+)?(?:h|ms|m|s))+)`)
+
+// resetsInPattern is the same delay in agy's newer wording, which
+// replaced the sentence above on 2026-10-31: "Individual quota reached.
+// Please upgrade your subscription to increase your limits. Resets in
+// 10h46m37s." Missing it left RetryAfter zero, so each model pause
+// lasted the orchestrator's 15-minute default instead of the 10-17h
+// window agy reported, and dispatch met the same refusal every ~16
+// minutes (task 1908).
+var resetsInPattern = regexp.MustCompile(`(?i)\bresets\s+in\s+((?:\d+(?:\.\d+)?(?:h|ms|m|s))+)`)
 
 // usageLimitFailure reads a failed run's own account of itself -- the
 // terminal result event's text and whatever the subprocess reported --
@@ -129,8 +142,8 @@ func mentionsUsageLimit(text string) bool {
 }
 
 // retryDelay reads when to come back out of text: the API's own
-// "retryDelay", or agy's "Your quota will reset after <duration>", and
-// the longer of the two where both appear -- the later reopening is the
+// "retryDelay", agy's "Your quota will reset after <duration>", or its
+// newer "Resets in <duration>", and the longest where several appear -- the later reopening is the
 // one a retry can trust. A delay of zero reads as "none given" rather than "come back
 // immediately": the caller's own floor is the safer reading of a
 // provider that has just refused a request (agent.UsageLimitError.
@@ -142,9 +155,11 @@ func retryDelay(text string) (time.Duration, bool) {
 			longest = d
 		}
 	}
-	if m := quotaResetPattern.FindStringSubmatch(text); m != nil {
-		if d, err := time.ParseDuration(strings.ToLower(m[1])); err == nil && d > longest {
-			longest = d
+	for _, pattern := range []*regexp.Regexp{quotaResetPattern, resetsInPattern} {
+		if m := pattern.FindStringSubmatch(text); m != nil {
+			if d, err := time.ParseDuration(strings.ToLower(m[1])); err == nil && d > longest {
+				longest = d
+			}
 		}
 	}
 	return longest, longest > 0

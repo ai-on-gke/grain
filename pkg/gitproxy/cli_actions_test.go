@@ -17,6 +17,7 @@ package gitproxy_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,6 +43,8 @@ type fakeCLIActions struct {
 	started  []gitproxy.CIStartRequest
 	replies  []string
 	refuse   bool
+	// proposeErr, when set, is what ProposeTask answers with.
+	proposeErr error
 	// downStarts and downReads are how many StartTaskCI and CIRun calls
 	// are answered as a daemon whose CI is not up yet; lastDown is
 	// whether the latest CIRun was, which is what Ready reports.
@@ -455,6 +458,9 @@ func (f *fakeCLIActions) CheckWaitTargets(_ context.Context, taskID string, targ
 }
 
 func (f *fakeCLIActions) ProposeTask(_ context.Context, taskID, runID string, req gitproxy.CLIProposeRequest) (gitproxy.CLIProposeResult, error) {
+	if f.proposeErr != nil {
+		return gitproxy.CLIProposeResult{}, f.proposeErr
+	}
 	return gitproxy.CLIProposeResult{
 		ID:              "100",
 		URL:             "/tasks/100",
@@ -589,6 +595,27 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 		!strings.Contains(rec.Body.String(), "api:test-quarantine") {
 		t.Errorf("quarantine without grant on repo: got %d %s, want 403 naming api:test-quarantine", rec.Code, rec.Body)
 	}
+	scopes.scopes["sb-1"] = model.NamespaceScope{
+		TaskID: "7", RunID: "run-2", Attempt: 2,
+		TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
+		Grants: []string{"api:test-quarantine", "api:tasks:read"},
+	}
+
+	// A quarantine whose repair proposal cannot be filed says why rather
+	// than answering as though it had been (seen on a repoless run:
+	// "no repo given, and this deployment has no default target repo").
+	// Its own run, so the per-attempt proposal cap spent above is not.
+	scopes.scopes["sb-1"] = model.NamespaceScope{
+		TaskID: "7", RunID: "run-2q", Attempt: 2,
+		TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
+		Grants: []string{"api:test-quarantine", "api:tasks:read"},
+	}
+	actions.proposeErr = errors.New("no repo given")
+	if rec := send(h, http.MethodPost, tok2, "/cli/quarantine", `{"test_name":"pkg/foo.TestBar","reason":"flake"}`); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"follow_up_error":"no repo given"`) || strings.Contains(rec.Body.String(), "follow_up_task_id") {
+		t.Errorf("quarantine with a failing follow-up: %d %s, want follow_up_error and no follow_up_task_id", rec.Code, rec.Body)
+	}
+	actions.proposeErr = nil
 	scopes.scopes["sb-1"] = model.NamespaceScope{
 		TaskID: "7", RunID: "run-2", Attempt: 2,
 		TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
