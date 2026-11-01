@@ -1,149 +1,120 @@
-# Numeric task priorities and flow continuity
+# Numeric task priorities
 
-Note: this design covers which ready task is dispatched first. It does not change who may run (grants), how many may run (`Limits`), or how the merge queue orders landings.
+Note: this design covers how tasks are ordered within each dispatch admission group, in the task list, and in the merge queue. It does not change capability grants, concurrency limits (`Limits`), or Grain CI gate ranks (`ci.Priority`). The normative specification is [`task-priorities.spec.md`](../spec/task-priorities/task-priorities.spec.md).
 
-## Today
+## Motivation
 
-Grain keeps one order for queued work, and that order is a column: `task.order_key`, a float.
+Ordering a backlog with `task.order_key` and `at_front` alone gives callers only one queue and two extremes:
 
-- `Store.OrderKeyForNewTask(atFront)` gives a new task a key one `orderKeySpacing` step past one end of the table. `Config.NewestFirst` picks which end by default. `atFront` (`propose_task`'s `at_front`/`position`, `grain create -position`, `CreateTaskRequest.AtFront`) overrides it. Base-branch repairs, review follow-ups, ports, upgrade checks and console sessions are filed at the front. Schedules, suites, path triggers and takeovers are filed at the end.
-- `Store.Reorder` (`POST /api/tasks/reorder`, drag and drop) splits the gap between two neighbours. It rebalances when the gap gets too small.
-- `Store.Ready`, `ReadyMergers`, `ReadyPriorityDispatch` and `ReadyTargets` all sort by `order_key, task_id`. `ListTasks` uses the same order, so the list a person sees is the dispatch order. `Store.Ready`'s doc comment calls this a deliberate invariant: an ordering that lives only in a dispatcher's `ORDER BY` is one nobody can see or drag.
-- `dispatch.Cycle` splits the ready list into three admission groups and keeps Ready's order inside each group. Priority-dispatch tasks come first (`priority-dispatch`/`durable` grants and console sessions; they are admitted outside every count). Mergers come next (`mergerTaskSQL`: fix tasks and in-flight repairs, which use merger capacity). Ordinary work comes last.
-- `showQueueAtFrontOfBacklog` rewrites the keys of merge-queue members so that they lead the backlog in landing order.
+- **`at_front` does not compose.** "Front" means ahead of everything already queued. Two urgent filings leapfrog each other, and there is no way to express "more important than ordinary backlog work, less important than an emergency fix".
+- **`priority-dispatch` is an admission grant, not an ordering rank.** Granting `priority-dispatch` (or `durable`) to make a task run sooner also lets it bypass `max_workers`, merger counts, pipeline pauses, red base-branch holds, and model-connection concurrency limits. That is why it is person-only.
 
-The only ways to say "this matters more" are a position and two booleans: `at_front`, and the `priority-dispatch` grant (person-only).
-
-## Problem
-
-Multi-step flows get lost.
-
-- **FIFO buries continuations.** A run that splits its work with `propose_task` files its children at the end of the queue by default. A design → spec → tasks → implementation → follow-up chain does the same at every step. Each step queues behind every nightly sweep, schedule fire and hygiene task filed since the flow began. One five-step flow can wait out the whole backlog five times.
-- **NewestFirst buries the older steps instead.** With `NewestFirst` on, children jump ahead. But a task that resumes (`resume_later`, `wait_for_task`, a review comment) keeps its old key, and every task filed since then is now ahead of it.
-- **`at_front` does not compose.** "Front" means ahead of everything. If two flows both file at the front, they leapfrog each other on every step. A nightly sweep that files at the front beats an urgent fix filed a minute earlier.
-- **`priority-dispatch` is the wrong tool.** It bypasses admission ceilings and pauses. Granting it to make a feature flow "go first" also lets that flow escape `max_workers` and connection limits. That is why it is person-only, and it cannot express "more important than A, less important than B".
-
-What is missing is a relative importance that work inherits, that people can see, and that agents cannot inflate.
+Numeric task priority gives every task a visible integer rank that orders dispatch and the merge queue without bypassing capacity limits, while holding agent-escalated proposals for human approval.
 
 ## Design
 
-### Numeric priority
+### Scale and default
 
-Every task gets an integer `priority`, where **a higher number means more important**. The default is `0`. Values are clamped to `-100..100`.
+Every task carries an integer `Priority` (`model.Task.Priority`, SQL `task.priority INTEGER NOT NULL DEFAULT 5`), where **a higher number means higher priority**.
 
-Four reference bands are documented and used by grain's own defaults, templates and the UI:
+- **Default:** `model.DefaultTaskPriority = 5` (`pkg/model/task.go`).
+- **Allowed range:** Positive integers (`1` or more). There is no upper clamp and there are no named priority bands in code.
+- **Validation on task surfaces:** Every task-facing write surface (`POST /api/tasks`, `PATCH /api/tasks/{id}`, `grain create -priority`, `grain update -priority`, `grain task propose --priority`, `propose_task`, and the UI forms) refuses `0` and negative integers (`priority must be a positive integer (1 or more; leave it out for the default, 5)`). Leaving `priority` out selects the default (`5`, or the template's priority). Setting `5` explicitly restores an edited task to the default priority.
+- **Internal zero normalization:** An unset `model.Task.Priority == 0` in Go normalizes to `DefaultTaskPriority` (`5`) when written to the store (`putTask` in `pkg/model/store.go`), projected to API responses (`taskFrom` in `pkg/ui/tasks.go`), or compared in the merge queue (`queueOrder` in `pkg/orchestrator/sync.go`).
+- **Templates:** `model.Template.Priority` is `*int` (SQL `template.priority INTEGER NOT NULL DEFAULT 0`). `nil` or `0` means the template sets no priority, leaving tasks composed from it on `DefaultTaskPriority` (`5`). Template APIs and `.grain/templates/*.yml` refuse negative integers (`< 0`) and treat `0` as clearing any saved priority.
 
-| Band | Value | Meant for |
-|---|---|---|
-| urgent | `20` | Base-branch repair, critical unblocks, release fixes |
-| flow | `10` | Active, operator-initiated multi-step work and its continuations |
-| normal | `0` | Ordinary bugs and features; the default |
-| background | `-10` | Schedules, nightly walkthroughs, hygiene sweeps, auto-filed cleanups |
+### Queue, dispatch and merge-queue ordering
 
-Any integer is valid; the bands are conventions, not an enum. Gaps of 10 leave room for "slightly above normal" (`5`) without a new band. A signed scale centred on `0` means that every existing task, and every task filed without a priority, is "normal" with no migration of meaning.
+One shared SQL `ORDER BY` fragment, `taskQueueOrderSQL` (`pkg/model/store.go`), orders `Store.ListTasks`, `Store.TaskRepos`, `Store.Ready`, `Store.ReadyTargets`, `Store.ReadyMergers`, and `Store.ReadyPriorityDispatch`:
 
-The scheduling rule is one ordering, used by every ready query and by `ListTasks`:
-
+```sql
+`t`.`priority` DESC,
+CASE WHEN EXISTS (
+  SELECT 1 FROM `task_tag` AS `rt`
+  WHERE `rt`.`task_id` = `t`.`id` AND `rt`.`tag` LIKE 'base-ci-repair:%'
+) THEN 0 ELSE 1 END,
+`t`.`order_key`,
+COALESCE(`t`.`approved_at`, `t`.`created_at`),
+`t`.`created_at`,
+`t`.`id`
 ```
-ORDER BY priority DESC, order_key ASC, id ASC
-```
 
-Higher priority always wins. `order_key` orders tasks that share a priority value, and it keeps every behaviour it has today within that value: FIFO or NewestFirst, `at_front`, drag and drop, and the merge queue's `MoveToFrontOfBacklog`. Because `ListTasks` uses the same order, the list stays the dispatch order and the invariant in `Store.Ready`'s doc comment holds.
+1. **Higher `priority` always wins.**
+2. **Base-branch repairs lead their priority level.** Within the same numeric `priority`, tasks carrying `BaseRepairBranchTag` (`model.FixesBaseBranch`, `fixesBaseBranchOrderSQL`) sort ahead of ordinary tasks.
+3. **`order_key` orders peers.** Tasks sharing both `priority` and base-repair status sort by ascending `order_key`, preserving FIFO (`atFront = false`), `Config.NewestFirst`, explicit `at_front` / `-position`, manual `Reorder`, and `MoveToFrontOfBacklog` within that slice.
+4. **Deterministic tie-breakers.** `COALESCE(approved_at, created_at)`, `created_at`, and `id` ascending break any equal `order_key`.
 
-`dispatch.Cycle` keeps its three admission groups, and each group is now sorted by the new order. Numeric priority decides order; it never decides admission. A priority-100 ordinary task still uses worker capacity and still waits behind a full `max_workers`.
+Because `ListTasks` and all `Ready*` queries use `taskQueueOrderSQL`, the task list displays the dispatch order within each admission group.
 
-### Flow continuity
+**Dispatch groups.** `dispatch.Cycle` (`pkg/dispatch/dispatch.go`) splits ready work into three admission groups and preserves `taskQueueOrderSQL` inside each:
+1. Priority-dispatch tasks (`ReadyPriorityDispatch`: console sessions and holders of `priority-dispatch` or `durable`), admitted outside worker and merger counts.
+2. Mergers (`ReadyMergers`: `ReasonFix` tasks and in-flight merge-queue repairs), admitted under merger capacity.
+3. Ordinary tasks (`Ready`), admitted under `max_workers`.
 
-Most of "keep longer flows from getting lost" comes from three rules.
+Numeric `priority` orders candidates inside each group; it never grants admission capacity. A priority-`100` ordinary task still waits behind a full `max_workers`.
 
-**1. Children inherit.** A task filed by a run inherits the filing task's `priority` unless the call passes one explicitly. This covers `propose_task` (`LinkProposedBy`), decompositions, follow-ups and the next step of a design → spec → tasks chain. Suite steps and grainfile-imported `depends_on` chains take the priority of the suite run, or of the importing process, as a whole. So a flow started at `10` stays at `10` through every hand-off. It stays ahead of the background band no matter how much of it was filed since, and it does not need `at_front` to get there.
+**Merge queue.** `queueOrder` (`pkg/orchestrator/sync.go`) orders merge-queue members by `Priority` descending (treating `0` as `5`), then `FixesBaseBranch` (`true` first), then established queue members ahead of first-cycle newcomers (`Observation.MergeQueueEnteredAt == nil`), then `OrderKey` ascending and `ID` ascending. `showQueueAtFrontOfBacklog` writes `order_key` values in that order ahead of non-queue tasks.
 
-**2. Continuations are placed next to their flow, not at the end of the queue.** Inheritance puts a child in the right band. Within that band, a child is placed right after its parent: its `order_key` is split from the gap between the parent's key and the next key in the parent's band. Several children from one run are spaced in call order, the way `relayProposedTasks` already spaces a batch. The flow's next step therefore runs ahead of unrelated work of the same priority that was filed later, and behind work of that priority that was already waiting before the flow started. Neither FIFO nor NewestFirst can express that. It applies only when the child is not given an explicit `at_front` or `position`, which still mean the head or tail of the child's band.
+**`order_key` allocation, resumption, and reorder.**
+- `Store.OrderKeyForNewTask(ctx, atFront)` steps `orderKeySpacing` (`1 << 20`) past the global minimum (`atFront = true`) or maximum (`atFront = false`) `order_key` across `task`.
+- State transitions (`resume_later`, `wait_for_task`, `wait_for_checks`, comment wakeups, pause/resume) leave both `priority` and `order_key` untouched.
+- `Store.Reorder` (`POST /api/tasks/reorder`, `ui.ReorderRequest{IDs, AfterID, BeforeID}`) splits `order_key` between `afterId` and `beforeId`, rebalancing all tasks by `ORDER BY order_key, id` when a bounded gap falls below `minOrderKeyGap` (`1e-6`). `Reorder` never alters `priority`, so drag-and-drop reorders tasks only relative to peers of the same `priority` (and base-repair status).
 
-A task that comes back to the queue keeps its own key, whatever `NewestFirst` says. This covers resuming after `resume_later`, `wait_for_task` or `wait_for_checks`, being woken by a review comment, and a merge-queue repair. It is already true, because no state transition rewrites `order_key`. The design makes it a stated rule rather than an accident, so that a later change does not "re-file" resumed work at the end of the queue.
+### Filing defaults and templates
 
-**3. Blockers are raised to the priority of what waits on them.** A `priority: 20` task that `depends_on` a `priority: -10` task would otherwise wait for the background band to drain: a priority inversion. When a dependency edge is written, or a dependent's priority is raised, grain raises each open blocker's stored priority to at least the dependent's, and records a task event that says why. The raise is a write, not a hidden "effective priority" computed in the query, so the list shows the reason the blocker moved up. Blockers are never lowered again automatically.
+Every task starts at `DefaultTaskPriority` (`5`) unless the filing request or its template specifies another positive integer. There is no per-origin priority table and no `priority_defaults` column in `grain_config`.
 
-**Rejected: a hidden continuation boost.** We could add `+N` at dispatch time for tasks that have already had a run. That ordering would not appear on any list a person can drag. It is exactly the "rule that lived only in this ORDER BY" that `Store.Ready`'s doc comment warns against, and it would quietly reward long-running flows over short ones. Placement within the band gets the same effect and stays visible.
-
-**Starvation is intended, within limits.** The background band fills spare capacity and can wait indefinitely while higher bands have ready work. That is the purpose of the band. If it starves in practice, the fix is an explicit, visible aging rule (see Open questions), not a per-cycle boost.
-
-### Default priority by origin
-
-A task filed without an explicit priority gets a default based on how it was filed (`Origin.Reason` and the filing path). Grain's built-in defaults:
-
-| Filed by | Default |
-|---|---|
-| Base-branch CI or release repair (`basebranchci`, `basebranchrelease`, base-repair bypass), merge-queue fix (`ReasonFix`), upgrade check | `20` |
-| Console session, interactive task, review follow-up | `10` |
-| A person through the UI or `grain create`; a GitHub issue or event | `0` |
-| A run's `propose_task` | the parent's priority (inherited) |
-| A suite run | the suite's `priority`, else `0` |
-| A schedule fire, path trigger, nightly or hygiene template | the schedule's or template's `priority`, else `-10` |
-| A port (`port.go`) | the source task's priority |
-
-Deployments can override the table per origin in `grain_config` (`priority_defaults`). An explicit `priority` on the schedule, template, suite or request always wins over the table. Most places that pass `atFront=true` today do it to mean "this matters". Once they are given a band of their own, they can file at their band's default position.
+- **Direct and automated filings:** Tasks filed by a person (`/new`, `POST /api/tasks`, `grain create`), base-branch CI and release repairs, merge-queue fixes, upgrade checks, takeovers, console sessions, reviews, GitHub events, imported issues, inline schedules, and branch ports all start at `5` unless composed from a template with a non-zero `Priority`. (Repairs, upgrade checks, console sessions, and ports still pass `atFront = true` when computing `order_key`.)
+- **Follow-up proposals (`propose_task` and `grain task propose`):** Proposals **do not inherit** their parent task's priority. When `priority` is omitted, both live filing (`ui.CreateTask`) and end-of-run relay (`orchestrator.relayProposedTasks` in `pkg/orchestrator/finish.go`) use the referenced template's `Priority` if set, and `DefaultTaskPriority` (`5`) otherwise. A high-priority task that wants an equally urgent follow-up passes `priority` explicitly.
+- **Template composition (`pkg/model/compose.go`):** `composeTemplate` (used by `ComposeTemplateTask`, template-backed `ComposeScheduleTask`, `ComposeSuitePass`, and `ComposeQualificationPass`) resolves `Composition.Priority` to `*tmpl.Priority` when non-nil and non-zero, and `DefaultTaskPriority` (`5`) otherwise. Schedules (`model.Schedule`) and suites (`model.Suite`) have no `Priority` field of their own; inline schedule firings get `5`.
 
 ### Who may set priority
 
-- **People, and tasks holding `api:tasks:write` or `api:task-admin`,** may set any value on create or `PATCH`, and may drag across bands.
-- **An ordinary task calling `propose_task`** may give a child any priority up to its own. Asking for more is not an error: the proposal is held for a person's approval, the way a proposal naming an escalated capability is (`EscalatedCapabilities`), with the requested value shown. This is what stops an unprivileged task from filing itself, or its children, at the top of the deployment.
-- **Any task may lower its own priority, or a child's.**
-- **Automatic writes** (origin defaults, inheritance, blocker raises) are made by grain itself and are never capped by the filing task's grants. A blocker raise cannot exceed the dependent's priority, which was already checked.
-- **The clamp** (`-100..100`) applies to everyone. Values above `20` are reserved by convention for a person's own escalation, and the UI asks for confirmation before setting one.
+- **People** (UI, REST, host CLI) may set any integer `>= 1` when creating or editing a task, without unapproving a queued task.
+- **Proposals (`model.PersonOnlyProposalSettings` in `pkg/model/hold_for_approval.go`):** When a task proposes a child (`propose_task` or `grain task propose`), its auto-approval permission (`AutoSubmits` or `ConsoleSession.TasksApproved`) covers priorities up to `max(parent.Priority, model.DefaultTaskPriority)` (`max(parent.Priority, 5)`). Including `5` in the ceiling lets a lower-priority parent (for example `priority: 2`) file ordinary default-priority (`5`) proposals without escalation. If `child.Priority > max(parent.Priority, 5)` (or `child.KeepRunning` is `true`), the proposal is not refused: it is filed with the requested priority, held unapproved for a person to approve, and annotated with `_Filed for a person to approve: …_`.
+- **Agent API and external agent tokens (`pkg/ui/agent_api_gate.go`):**
+  - `POST /api/tasks` requires `tasks:write` and accepts numeric `priority` (`>= 1`). Agents cannot pass `"approved": true` without `tasks:admin`, and `ProposedBy` calls enforce `PersonOnlyProposalSettings`.
+  - `PATCH /api/tasks/{id}` allows numeric `priority` (`>= 1`) under `tasks:write` (included in presets `api:task-admin` and `api:dispatch-control`). Callers holding the dangerous scope `tasks:admin` *without* `tasks:write` may also call `PATCH /api/tasks/{id}` when the body is a single JSON object containing only numeric `"priority"` (`tasksAdminAllowsTaskPatch` and `tasksAdminTaskPatchBodyAllowed`), with `X-Grain-Acting-Reason` required (MCP-only).
+  - Boolean `"priority"`, `"priorityDispatch"`, and `"priority_dispatch"` on `UpdateTaskRequest` toggle `PriorityDispatchCapability` rather than numeric `Priority`, and remain person-only grant mutations requiring `capabilities:admin`.
 
-### `priority-dispatch` stays an admission grant
+### `priority-dispatch`, `durable`, CI priority, and Kubernetes `PriorityClass`
 
-`priority-dispatch` (and `durable`, which implies it) still means what `PriorityDispatchCapability`'s doc comment says: admitted outside worker and merger counts, passes non-upgrade pauses, is not held behind a red base branch or a connection's concurrency limit, and is person-only. It is not merged into the numeric scale.
-
-The two answer different questions. `priority` answers "in what order?". `priority-dispatch` answers "does this wait for capacity at all?". `Cycle` already puts the priority-dispatch group first, and inside that group numeric priority now orders, for example, two console sessions against a steward. A task never needs `priority-dispatch` just to go first. Templates that grant it only for ordering should drop the grant and set a band instead.
-
-The name is close to Kubernetes `PriorityClass` (`K8sPriorityClass*` in settings), which decides pod preemption on the cluster. That setting is unrelated and unchanged. The docs should say so where both appear.
+- **`priority-dispatch` and `durable`** (`model.PriorityDispatchCapability`, `model.DurableCapability`, `Task.HasPriorityDispatch`) remain person-only admission grants. `priority` decides *in what order* tasks within a group run or merge; `priority-dispatch` decides *whether* a task waits for worker capacity, pauses, red base branches, or model-connection slots at all (`Budget.AdmitsPriority`). Inside the priority-dispatch group, `ReadyPriorityDispatch` orders tasks by `taskQueueOrderSQL` (`priority DESC`, …).
+- **`ci.Priority`** (`pkg/ci/gate.go`: `PriorityNormal`, `PriorityUnderway`, `PriorityMergeHead`, `PriorityReleaseGate`, `PriorityRepair`) ranks Grain CI jobs at `SharedGate` and is separate from `Task.Priority`.
+- **`k8sPriorityClass*`** (`k8sPriorityClassInteractive`, `k8sPriorityClassAgent`, `k8sPriorityClassCi`) configures Kubernetes pod `PriorityClass` names for cluster scheduling and preemption, and is unrelated to `Task.Priority`.
 
 ## Surface
 
-### Store and schema
+### Store, declarations, API, CLI, and MCP
 
-- Add a `task.priority INTEGER NOT NULL DEFAULT 0` column, and an index on `(priority DESC, order_key)`. Existing rows read as `0`, so a deployment that never sets a priority dispatches in exactly today's order.
-- Add `model.Task.Priority int`.
-- `Ready`, `ReadyMergers`, `ReadyPriorityDispatch`, `ReadyTargets` and `ListTasks` use the one ordering. It is written once as a shared SQL fragment, the way `mergerTaskSQL` is, so the queries cannot drift apart.
-- `OrderKeyForNewTask(ctx, priority, atFront)` computes the minimum or maximum key within the given priority, not across the whole table. A new `OrderKeyAfter(ctx, parentID)` places a continuation (rule 2).
-- `Reorder` is unchanged when the drop stays inside one band; see UI.
-- `queueOrder` and `showQueueAtFrontOfBacklog` keep ordering merge-queue members by `order_key` alone. Landing order is a property of the queue, not of importance. The members are completed tasks that are not dispatched from Ready, so this does not conflict with the list.
-
-### Grainfiles, templates, schedules, suites
-
-- `.task.grain.md` and `.process.grain.md` gain an optional `priority` (integer, `-100..100`; default: the origin default) in §7.1 and §7.2 of `design/spec/grainfiles/grainfiles.spec.md`, in `docs/grainfile-v1.md`, and in the JSON schemas.
-- A process's `priority` applies to every task it fires.
-- Task templates, schedules and suites gain the same field. A scheduled template or suite that sets no priority defaults to the background band.
-
-### API, CLI and MCP
-
-- `POST /api/tasks` (`CreateTaskRequest.Priority *int`) and `PATCH /api/tasks/{id}` (`UpdateTaskRequest.Priority *int`) take the field, and the permission rules above apply in `agent_api_gate.go`.
-- `GET /api/tasks` returns it.
-- `propose_task` takes `priority` (integer); when it is omitted, the child inherits.
-- CLI: `grain create -priority N`, `grain update <id> -priority N`, and a `PRIO` column in `grain list`. `-position` keeps its meaning, now within the band.
+- **Schema:** Migration 73 (`pkg/model/migrations.go`) adds `task.priority INTEGER NOT NULL DEFAULT 5` and `template.priority INTEGER NOT NULL DEFAULT 0`.
+- **Declarations:** `.grain/templates/<stem>.yml` (`pkg/repodecl/parse.go`) and config-repo `settings/templates.yml` (`pkg/declschema/declschema.go`, `pkg/staterepo/decl.go`) carry optional `priority` on templates.
+- **REST API:**
+  - `POST /api/tasks` (`CreateTaskRequest.Priority *int`) and `PATCH /api/tasks/{id}` (`UpdateTaskRequest.Priority *int`) accept integers `>= 1`; `GET /api/tasks` and `GET /api/tasks/{id}` return `priority` (`int`, defaulting unset `0` to `5`).
+  - `POST /api/templates` and `PATCH /api/templates/{id}` accept `priority *int` (`>= 0`, where `0` clears a saved template priority).
+- **MCP and CLI:**
+  - `propose_task` and `grain task propose --priority <N>` take an integer `>= 1` (omitted defaults to `5` or the template's priority).
+  - Host CLI: `grain create -priority <N>` and `grain update <id> -priority <N>` (`>= 1`); `grain get <id>` prints `priority:   <N>`; `grain list` filters and sorts via the built-in numeric `priority` attribute (`-filter priority:gt:5`, `-sort priority:desc`).
+  - Sandbox CLI and MCP task views: `grain task list` and `list_tasks` append `(priority <N>)` / `priority <N>` when `N != 5` (and include `priority` in `--json`); `grain task read` and `get_task` print `Priority: <N>`.
 
 ### UI
 
-- The task list shows a small band badge (`urgent`, `flow`, `background`; none for `0`) with the number on hover. The list is grouped visually by band, with a thin divider where the priority changes. Order inside a group is the same as today.
-- The task page's edit form has a priority field with the four bands as presets plus a custom number.
-- **Dragging within a band** rewrites `order_key` only, as today.
-- **Dragging across bands** gives the task the priority of the neighbour it was dropped next to, and then places it between those neighbours. Otherwise a row could sit visually among `20`s while it dispatches as a `0`, and the list would stop being the dispatch order. The drop says what changed ("priority 0 → 20"). Raising a task across bands needs the same permission as setting that priority, and the drop is refused with that reason otherwise.
-- `POST /api/tasks/reorder` gains an optional `adoptPriority` (default `true` for the UI). An API caller that wants to move a task only within its own band can set it to `false`.
+- **Task list (`TaskList.jsx`):** Shows an outlined `P<n>` chip (`data-testid="task-priority-badge"`) when `t.priority != null && t.priority !== 5`, with hover tooltip `Task priority <n> (default 5; higher numbers run first)`. Tasks at the default `5` show no priority chip.
+- **Task detail (`DetailOverlay.jsx`, `Declared.jsx`):** Shows a `priority: <n>` chip in the header strip, and a `Task priority` row reading `<n> (default 5)` under `Declared` when `n != 5`.
+- **Forms (`NewTaskOverlay.jsx`, `EditTaskForm.jsx`, `BulkEditOverlay.jsx`, `TemplateOverlay.jsx`, `CompositionPanel.jsx`):**
+  - `New task`, `Edit`, and `Bulk edit` provide a `Task priority` whole-number input (`min: 1, step: 1`, helper `default 5; higher numbers run first`), rejecting `0`, negative, and fractional values.
+  - `Templates` provides an optional `Task priority` input (`placeholder="5"`, blank clears to `0` on save), and `CompositionPanel` previews `Task priority` attributed to the template.
+- **Filter and sort (`taskAttributes.js`):** Built-in numeric `Task priority` (`priority`) attribute on the narrowing bar (distinct from any deployment-declared `custom.priority` field).
 
-## Rollout
+## Not yet implemented
 
-1. Add the column, the field and the ordering, with every task at `0`. The order is unchanged.
-2. Add inheritance and placing continuations after their parent (rules 1 and 2).
-3. Add origin defaults. Repairs move from `atFront` to the urgent band, schedules to background.
-4. Add the grainfile, template, schedule and suite field, the UI, and blocker raises (rule 3).
+The following ideas from earlier drafts are **not** in the codebase:
 
-Each step is tested by asserting that `ListTasks` and `Ready` return the same order. Tests also cover inheritance through a multi-step chain, a held over-limit proposal, and a cross-band drag.
-
-## Open questions
-
-1. **Aging for the background band.** Should a task waiting more than N hours gain `+1` per period, as a visible written change capped at `0`? Or should the background band be allowed to starve, with an inbox alert when it has waited past a threshold? The recommendation is the alert first, and aging only if the alert fires in practice.
-2. **Mergers versus urgent ordinary work.** Today `Cycle` always tries mergers before ordinary work. Should an ordinary priority-`20` task go before a priority-`0` merger when both have capacity? The recommendation is to keep the groups (mergers use reserved capacity anyway), and order inside each.
-3. **Should `NewestFirst` stay?** Once continuations are placed after their parent, the main reason to turn it on (new work getting buried) mostly goes away. The recommendation is to keep it and revisit after rollout step 2.
-4. **Default bands for console-session follow-ups.** Is `10` right for everything a director or chat files, or should that be the session's own configured priority?
+- Named priority bands (`urgent`, `flow`, `normal`, `background`), band presets or visual band dividers in the UI, an upper clamp on `priority`, and confirmation prompts for high values.
+- Per-origin automatic priority defaults (for repairs, console sessions, schedules, suites, or ports) and a `priority_defaults` map in `grain_config`.
+- Automatic priority inheritance by `propose_task` / `grain task propose` children when `priority` is omitted.
+- Continuation placement immediately after the parent task (`OrderKeyAfter`) and per-priority `OrderKeyForNewTask`.
+- Automatic blocker priority raising when a higher-priority task `depends_on` a lower-priority open task.
+- Cross-priority drag-and-drop priority adoption (`adoptPriority` on `POST /api/tasks/reorder`).
+- `priority` fields on schedules (`model.Schedule`), suites (`model.Suite`), and Grainfiles (`.task.grain.md` and `.process.grain.md`).
+- A `PRIO` column in `grain list`'s default table output, a dedicated SQL index on `(priority DESC, order_key)`, and automatic aging or starvation alerts for low-priority tasks.

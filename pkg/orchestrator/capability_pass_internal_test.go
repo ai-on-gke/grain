@@ -255,6 +255,8 @@ func TestAdmissionKeepsAnExhaustedGrantQueuedUntilRetryAfter(t *testing.T) {
 	}
 }
 
+// The policy's refusal is grain's own: said as grain's, with no
+// capability server's name on it and nothing framed as untrusted text.
 func TestAdmissionRefusesWhatTheCapabilityPolicyDoesNotAdmit(t *testing.T) {
 	caller := &mintCaller{}
 	deps, store, ctx, _ := passHarness(t, caller)
@@ -269,8 +271,15 @@ func TestAdmissionRefusesWhatTheCapabilityPolicyDoesNotAdmit(t *testing.T) {
 	if got := caller.called(); len(got) != 0 {
 		t.Errorf("calls = %q, want nothing minted", got)
 	}
-	if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "capability policy") {
-		t.Errorf("comments = %+v, want the policy refusal", comments)
+	comments, _ := store.Comments(ctx, "7")
+	if len(comments) != 1 || !strings.Contains(comments[0].Body, "grain refused the capability `"+passTestCap+"#gcp-key`") || !strings.Contains(comments[0].Body, "capability policy does not admit") {
+		t.Fatalf("comments = %+v, want the policy refusal as grain's", comments)
+	}
+	if c := comments[0]; strings.Contains(c.Body, "untrusted text") || strings.Contains(c.Body, "not grain's own words") {
+		t.Errorf("comment body = %q, want grain's own refusal not quoted as untrusted", c.Body)
+	}
+	if c := comments[0]; c.Author.OnBehalfOf != nil || c.Author.Actor.ID != "grain" {
+		t.Errorf("comment author = %+v, want grain alone", c.Author)
 	}
 }
 
@@ -304,8 +313,8 @@ func TestAdmissionRefusesGrantsOnHostDirectorySandboxes(t *testing.T) {
 	if got := caller.called(); len(got) != 0 {
 		t.Errorf("calls = %q, want nothing minted", got)
 	}
-	if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "grain's own host") {
-		t.Errorf("comments = %+v, want the host-sandbox refusal", comments)
+	if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "grain's own host") || strings.Contains(comments[0].Body, "untrusted text") {
+		t.Errorf("comments = %+v, want the host-sandbox refusal as grain's own", comments)
 	}
 }
 

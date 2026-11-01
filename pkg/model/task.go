@@ -56,12 +56,13 @@ const (
 	PrincipalAutomation PrincipalKind = "automation" // the controller loop
 	PrincipalAgent      PrincipalKind = "agent"      // one dispatched run
 	PrincipalHuman      PrincipalKind = "human"      // a person
+	PrincipalService    PrincipalKind = "service"    // a service account
 )
 
-// Valid reports whether k is one of the three kinds above.
+// Valid reports whether k is one of the known principal kinds above.
 func (k PrincipalKind) Valid() bool {
 	switch k {
-	case PrincipalAutomation, PrincipalAgent, PrincipalHuman:
+	case PrincipalAutomation, PrincipalAgent, PrincipalHuman, PrincipalService:
 		return true
 	}
 	return false

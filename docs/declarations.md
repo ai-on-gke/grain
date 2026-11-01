@@ -292,6 +292,8 @@ auto-merge: true                   # optional; default false
 network: none                      # optional; "open" or "none"
 model: claude-opus-5-5             # optional; the team's default model if left out
 interactive: true                  # optional; default false -- every task it files is a live chat
+keep-running: false                # optional; default false
+priority: 10                       # optional; positive integer (unset/0 files tasks at default 5)
 custom-fields:                     # optional; this deployment's declared fields
   team: infra
   reviewers: [ana, bo]

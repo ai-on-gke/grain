@@ -99,8 +99,9 @@ func TestForgedIAPAssertionDoesNotFallBackToHeaders(t *testing.T) {
 	reject := func(context.Context, string, string) (*ui.IAPClaims, error) {
 		return nil, errors.New("signature does not verify")
 	}
+	unreg := ui.RegisterIdentityVerifier(ui.NewIAPVerifier(ui.WithIAPValidator(reject)))
+	t.Cleanup(unreg)
 	r := requestFrom("127.0.0.1:4242")
-	r = r.WithContext(ui.WithIAPConfig(r.Context(), ui.IAPConfig{Validator: reject}))
 	r.Header.Set(ui.IAPAssertionHeader, "forged.jwt.value")
 	r.Header.Set("X-Grain-User", "admin@example.com")
 	if p, ok := ui.ExtractPrincipal(r); ok {
