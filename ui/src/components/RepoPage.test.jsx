@@ -2044,6 +2044,42 @@ describe("RepoPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("switching issue import on saves the label typed before it", async () => {
+    // The first pass runs on the next cycle, so a label typed but not
+    // saved has to go with the switch, or that pass reads every open
+    // issue (docs/test-runs/2026-10-31-github-issue-import.md, F2).
+    routeApi({
+      upToDate: {
+        repo: "acme/widgets",
+        issueImport: {
+          enabled: false,
+          approved: false,
+          repo: "",
+          label: "",
+          intervalSeconds: 0,
+          effectiveIntervalSeconds: 600,
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderPage({ tab: "agents" });
+
+    const enable = await screen.findByLabelText(
+      "Import open GitHub issues as tasks in acme/widgets",
+    );
+    await user.type(screen.getByLabelText("Label"), "grain-agent");
+    await user.click(enable);
+    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        issueImportEnabled: true,
+        issueImportRepo: "",
+        issueImportLabel: "grain-agent",
+        issueImportIntervalSeconds: 0,
+      }),
+    });
+  });
+
   it("shows merge when green as on for a repo that has it on", async () => {
     routeApi({
       upToDate: { repo: "acme/widgets", mergeOnGreen: true },
