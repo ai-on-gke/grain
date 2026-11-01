@@ -117,7 +117,9 @@ SURFACE & APPROVAL:
     nobody looking at it, and the same is true of a standing chat session whose
     deployment allows that session to queue its own work. Set hold_for_approval
     on any proposal a human should look at first and it is filed unapproved
-    regardless. Read what the call returns to see whether it queued or held.
+    regardless. A proposal that sets keep_running, or a priority above both your
+    task's own and the default (5), always waits for a person: only a person may
+    give a task either. Read what the call returns to see whether it queued or held.
 
 ARGUMENTS & FLAGS:
   --title <string>             Task title (required unless --template-id is set).
@@ -143,9 +145,11 @@ ARGUMENTS & FLAGS:
                                would have queued it.
   --at-front                   Place at the front of the backlog ahead of already queued work.
   --priority <N>               Task priority (default 5; higher numbers mean higher priority).
+                               Above your task's own and the default, it waits for a person.
   --no-repo                    Standalone task with no git repository or branch.
   --no-port                    Change belongs only on the target branch; do not port to paired branches.
   --keep-running               Immediately restart the task when its run exits instead of completing or parking.
+                               Only a person may ask this, so the proposal waits for one.
   --fixes-base-branch          Marks this task as repairing a red base branch (gives it a base-green
                                goal and lets it run while the branch is red).
   --origin <ref>               GitHub PR or issue origin (owner/repo#N, #N, or URL).
