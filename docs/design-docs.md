@@ -1,7 +1,7 @@
 # Design docs that plan themselves
 
-When a change to a design doc merges, an agent starts (in bwsalmon/grain
-this is turned off for now: see "Turned off in bwsalmon/grain for now"
+When a change to a design doc merges, an agent starts (in this repository
+the trigger is not declared: see "Not declared in this repository"
 below). It works out which
 requirements are new, changed or removed, and files implementation and test
 tasks for them. git is the record of what is built: every implementing
@@ -13,7 +13,7 @@ work, so following its progress needs nothing but GitHub and git
 - open the design pull request and read grain's progress comment on it,
   which lists every task the planner filed, and every task those filed,
   with its state and pull request, and an "n of m done" line;
-- or run `git log --grep 'Origin: bwsalmon/grain#<n>'` for what has landed,
+- or run `git log --grep 'Origin: <owner>/<repo>#<n>'` for what has landed,
   and `git log --grep 'Design-Item: <doc>#<ID>'` for one requirement.
 
 None of this is a grain feature of its own. It is two files on top of path
@@ -26,17 +26,19 @@ triggers (`.grain/triggers`, `docs/declarations.md`):
   with the trigger's variables: `{{group}}` (the doc folder or file),
   `{{paths}}`, `{{from_sha}}`, `{{to_sha}}` and `{{branch}}`.
 
-## Turned off in bwsalmon/grain for now
+## Not declared in this repository
 
-This repository does not currently declare the trigger, so a merge that
-touches `docs/design/**` here files no planner task. Trigger files have no
-`enabled:` flag (`docs/declarations.md`), so it was turned off by removing
+This repository does not declare the trigger, so a merge that touches its
+design folder (`design/design/` and `design/spec/`, described in
+[`contributions.design.md`](../design/design/contributions.design.md#the-design-folder))
+files no planner task. Trigger files have no
+`enabled:` flag (`docs/declarations.md`), so it is left out by not shipping
 `.grain/triggers/design-docs.yml`. Its body is kept in
 `pkg/designdoc/testdata/design-docs.yml`, which the tests fire through the
 path-trigger machinery, and the `design-planner` template is still declared.
 
 - **To plan a doc by hand**, file a task with the `design-planner`
-  template's title and body (`repo:template:bwsalmon:grain:design-planner`
+  template's title and body (`repo:template:<owner>:<repo>:design-planner`
   on the Templates page, or `.grain/templates/design-planner.yml`), with its
   variables written in: `{{group}}` (the doc folder, e.g.
   `docs/design/sample`, or a single-file doc), `{{paths}}` (the changed
@@ -46,12 +48,10 @@ path-trigger machinery, and the `design-planner` template is still declared.
   filled in (with its default) before a trigger's variables are, so
   filing it unchanged leaves them as written. Give the task the merged
   design pull request as its origin so its progress comment lands there.
-- **To turn the trigger back on**, restore `.grain/triggers/design-docs.yml`:
-  revert the commit that removed it, or copy
-  `pkg/designdoc/testdata/design-docs.yml` back without its first
-  paragraph. The trigger starts watching from the first head it sees after
-  the restore, so merges made while it was off are not planned
-  retroactively.
+- **To turn the trigger on**, copy `pkg/designdoc/testdata/design-docs.yml`
+  to `.grain/triggers/design-docs.yml` without its first paragraph, and set
+  its `paths:` to `design/**`. The trigger starts watching from the first
+  head it sees after that, so earlier merges are not planned retroactively.
 
 `pkg/designdoc` reads a doc's requirement IDs and classifies them from a
 branch's commit trailers (`designdoc.History`, `designdoc.Classify`), the
@@ -60,10 +60,10 @@ that wants to show a plan.
 
 ## Adopting it in a repository
 
-1. Copy `.grain/templates/design-planner.yml` from bwsalmon/grain into the
-   same place in your repository, and
-   `pkg/designdoc/testdata/design-docs.yml` (the trigger, turned off here
-   for now) to `.grain/triggers/design-docs.yml`. Change the trigger's `paths:` if your docs
+1. Copy `.grain/templates/design-planner.yml` from this repository into the
+   same place in yours, and
+   `pkg/designdoc/testdata/design-docs.yml` (the trigger, not declared
+   here) to `.grain/triggers/design-docs.yml`. Change the trigger's `paths:` if your docs
    live somewhere other than `docs/design/`.
 2. Make sure grain reads the repository's declarations (an operator turns
    them on in the repository's settings or with `grain repo`). Run
@@ -80,9 +80,11 @@ need approval unless the planner's own task could approve them.
 
 ## Doc conventions
 
-A design doc is either a folder under `docs/design/` whose doc is its
+A design doc is either a folder under the watched path whose doc is its
 `README.md` (other files in the folder are supporting material), or a
-single file such as `docs/design/foo.md`.
+single file such as `docs/design/foo.md` (the example trigger's path; this
+repository's own designs are single files such as
+`design/design/foo.design.md`).
 
 Each requirement heading carries a stable ID at the end of its text:
 
@@ -110,7 +112,7 @@ writes or checks all of them:
   ```
   Design-Item: docs/design/foo/README.md#D-7
   Design-Rev: <sha of the doc revision it implemented>
-  Origin: bwsalmon/grain#2710
+  Origin: <owner>/<repo>#2710
   Filed-by: task 1234
   ```
 

@@ -6,7 +6,7 @@
 - **Test Plan Reference:** `docs/test-plans/2026-10-26.md` §5 (Tabbed `/settings/capabilities` UI, Kubernetes-Style `config-map` & Secret Maps, `workspace` & `gchat` Capability Servers, and `gcp` Ambient Admin Default)
 - **Environment:**
   - OS / Kernel: Debian GNU/Linux sandbox (`linux/amd64`)
-  - Binary: `grain` built from `./google/cmd/grain` (with embedded `pkg/ui/static` bundle from `ui/`)
+  - Binary: `grain` built from a wrapper distribution's `cmd/grain` (with embedded `pkg/ui/static` bundle from `ui/`)
   - Runtime Mode: `grain demo -open=false -addr 127.0.0.1:0 -secrets-store -github-sim -fake-ci`
   - Browser Automation: Playwright Chromium (`PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright`) at desktop (`1440x900` / `1280x720`) and phone (`390x844`) viewports
 

@@ -495,7 +495,7 @@ and the server returns `{"status": "ok"}`, optionally with the grant's audit (§
 
 4.5.8. **Credential sources.** A capability server describes each credential it acts with by its **source**, and SHOULD use these two words for them in its configuration schema, its Test report and its documentation:
 - **configured** — a credential the operator stored in Grain's secret store and handed to the server through a secret field (§4.5.2) or a `$secret:` binding in `env`/`headers` (§3.1.2): a service-account key, a workload-identity config, a token, a webhook URL.
-- **ambient** — no credential is stored: the server acts as whatever identity its own process already has where it runs. In the container that is the container's Application Default Credentials or metadata identity; for a `run: host` server started by `grain hostd` it is the identity of the account hostd runs as — on a Cloudtop, the user's own corp identity.
+- **ambient** — no credential is stored: the server acts as whatever identity its own process already has where it runs. In the container that is the container's Application Default Credentials or metadata identity; for a `run: host` server started by `grain hostd` it is the identity of the account hostd runs as — on a workstation, the user's own corp identity.
 A server offering both names the choice per credential (`credential_source: configured | ambient`), refuses a configured credential that is missing and an ambient one that carries a stored value, and reports, when it is configured, which identity each ambient credential resolved to. Neither word names a network or a company: the same server and the same source behave alike wherever it runs.
 
 ```json

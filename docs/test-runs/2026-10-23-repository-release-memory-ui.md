@@ -12,7 +12,7 @@ real browser against a real `grain demo` server, following up
 - **Platform**: Linux 6.1.0 x86_64 sandbox, Go 1.26.6, Node.js 20.19.0,
   Playwright 1.62.1 driving headless Chromium 151.0.7922.34.
 - **Build**: `cd ui && npm ci && npm run build`, then
-  `go build -tags grain_e2e -o /tmp/grain ./google/cmd/grain` (the binary
+  `go build -tags grain_e2e -o /tmp/grain a wrapper distribution's `cmd/grain` (the binary
   `ui/e2e/global-setup.js` builds), so the frontend served is the one
   built from this tree.
 - **Server**, over a throwaway embedded store in `$TMPDIR/grain-demo-*`:

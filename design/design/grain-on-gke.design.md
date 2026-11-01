@@ -1,4 +1,4 @@
-# Grain on GKE, with hostd dialling in from the cloudtop
+# Grain on GKE, with hostd dialling in from the workstation
 
 > **Status update (2026-10-31): GKE controller cutover retired.**
 > Cutting over the `grain` controller daemon to GKE (`GKE-1`, `GKE-7`–`GKE-9`) is **retired (2026-10-31)**. `grain` continues to run on the host (with GKE sandboxes supported via `-platform=gke-sandboxes`), and the GKE controller deployment script, Kustomize overlay, and Terraform module have been removed:
@@ -27,7 +27,7 @@ task 859. They are the brief, not open questions.
 
 1. **grain runs on the GKE cluster** (`kubernetes-granule`, the cluster
    and node pool this deployment's sandboxes already use). **Only
-   `grain hostd` stays on the cloudtop.** It runs what needs the user's
+   `grain hostd` stays on the workstation.** It runs what needs the user's
    corp identity there: host-run CLIs such as `agy`, `run: host`
    capability servers such as `gcp`, `gchat` and `host-script`, and
    anything that needs the operator's own corp credentials.
@@ -55,7 +55,7 @@ task 859. They are the brief, not open questions.
 
 ## Why
 
-Grain runs on the cloudtop today and reaches every sandbox pod through
+Grain runs on the workstation today and reaches every sandbox pod through
 the API server. Every step, every file write and every `granule forward`
 is a `kubectl exec` (`mcp.KubectlExecRunner`, with
 `orchestrator.K8sGranuleSandboxes.execRunner` adding `granule exec` as
@@ -69,7 +69,7 @@ unable to upgrade connection: error dialing backend: dial timeout, backstop
 Each failure is a failed step or a dropped forward. A CI step that loses
 its exec has no way back to the command, so the job fails, and on a bad
 afternoon that kept main red for hours. Nothing grain does on the
-cloudtop can repair that route, because the route is the cluster's
+workstation can repair that route, because the route is the cluster's
 control plane.
 
 Granule's dial-out mode (#1456) reverses the direction. The pod-side
@@ -80,13 +80,13 @@ reliability argument: the control plane leaves the data path.
 
 Moving grain into the cluster also moves the package cache, the git
 proxy and the model proxy beside the sandboxes. Package bytes stay
-inside GCP rather than crossing to a cloudtop and back, and a sandbox
+inside GCP rather than crossing to a workstation and back, and a sandbox
 reaches those services at a cluster address rather than through a
 reverse forward.
 
-What the cloudtop still has that the cluster cannot have is the user's
+What the workstation still has that the cluster cannot have is the user's
 corp identity. That is why hostd stays there. Because hostd now dials
-grain, the cloudtop needs no inbound route from anything.
+grain, the workstation needs no inbound route from anything.
 
 ## Terms
 
@@ -103,7 +103,7 @@ grain, the cloudtop needs no inbound route from anything.
   socket-attached `grain hostd` and today's `grain executor` are both
   hostds after GKE-5.
 - **Ambient credential.** A login that belongs to a hostd's host user,
-  such as `agy`'s corp login or `gcloud`'s user credentials. Grain
+  such as `agy`'s the host user's own login or `gcloud`'s user credentials. Grain
   stores nothing for it.
 
 ## Non-goals
@@ -160,7 +160,7 @@ So the new work is not "make grain run in Kubernetes". It is:
 ## Topology
 
 ```
-cloudtop                       GKE Gateway (IAP)              GKE cluster, namespace grain
+workstation                       GKE Gateway (IAP)              GKE cluster, namespace grain
 --------                       -----------------              ----------------------------
 grain hostd  --dials out-->    /api/hostd/*      ------->     Deployment grain (1 replica)
  allowlist                     /*  (UI, API)     ------->       :8080  UI / API / hostd
@@ -218,12 +218,12 @@ authentication. grain already supports this
 Why Cloud SQL rather than in-cluster Postgres (CloudNativePG, which
 grit-split chose for grit's own store):
 
-1. **It is reachable from both sides of the cutover.** The cloudtop
+1. **It is reachable from both sides of the cutover.** The workstation
    daemon can move onto Cloud SQL first, with the existing
-   `POST /api/database/upgrade`, while it is still on the cloudtop
+   `POST /api/database/upgrade`, while it is still on the workstation
    (GKE-1). The cutover then moves only the process, not the data. The
    rollback is the reverse move, with no data copy in either direction
-   (*Migration*). An in-cluster database could not serve the cloudtop
+   (*Migration*). An in-cluster database could not serve the workstation
    daemon without exposing Postgres outside the cluster.
 2. **Grain's store is the deployment.** It holds every task,
    conversation, run and verdict. Point-in-time recovery, automated
@@ -249,7 +249,7 @@ The `grain-data` PVC stays. It holds what is not in the store: repository
 checkouts, agent HOMEs, transcripts, CI artifacts and the job cache, and
 the package cache's objects. All of it can be rebuilt except the
 transcripts and artifacts of recent runs (*Migration*). Size it from the
-cloudtop's current `du` of those directories plus 50%, on `pd-balanced`
+workstation's current `du` of those directories plus 50%, on `pd-balanced`
 or `hyperdisk-balanced`, and keep it `ReadWriteOnce`. The
 `runhost-rwx.yaml` option still applies if run pods are spread across
 nodes.
@@ -259,7 +259,7 @@ nodes.
 grain's credential store stays what it is: the encrypted secrets file in
 the secrets repo, sealed to a private key. Two things move.
 
-- **The private key.** It moves from the cloudtop's data dir into Secret
+- **The private key.** It moves from the workstation's data dir into Secret
   Manager, as `grain-secrets-key`. It is mounted into the daemon pod
   read-only through the Secret Manager CSI driver (GKE's
   `secrets-store-gke` add-on), authorised by Workload Identity. It is
@@ -474,7 +474,7 @@ reaped sandbox's credential is dead the moment its row is.
 Selection is a flag, `-k8s-granule-access=dialout|kubectl`, defaulting to
 `kubectl` until GKE-8. It also requires that grain is in-cluster
 (`KUBERNETES_SERVICE_HOST` is set and `-k8s-sandbox-service` resolves),
-because a cloudtop grain has no address a pod can dial.
+because a workstation grain has no address a pod can dial.
 
 **Bootstrap and fallback.** `kubectl` (exec, or logs) is used for exactly three
 things:
@@ -602,7 +602,7 @@ any number of them.
   `modelexec.RemoteHost` (renamed `hostd.RemoteHost`) is what every
   networked hostd uses.
 - **The socket stays for a co-located daemon.** `-hostd-socket` and
-  `/run/grain-hostd` keep working for today's cloudtop install until the
+  `/run/grain-hostd` keep working for today's workstation install until the
   cutover, and for single-machine installs after it. In the registry a
   socket hostd is simply a hostd named `local` whose transport is the
   socket.
@@ -631,7 +631,7 @@ allowlist on every connect and on `SIGHUP`:
 Hostds (today's Settings → Executors) creates a row
 `hostd(name, owner, labels, created_by, token_hash, revoked_at)` and
 shows the token once. `name` is unique per deployment, for example
-`bsalmon-cloudtop`. `owner` is the person whose identity the hostd
+`bsalmon-workstation`. `owner` is the person whose identity the hostd
 carries, and is required. The install command
 (`/api/hostd/install.sh`) is shown with the name and token filled in.
 
@@ -656,7 +656,7 @@ needs no eviction rule of its own.
 **Routing.** Every host-run CLI start and every `run: hostd` capability
 server start names its hostd in one of two ways:
 
-- **an explicit pin**, `hostd: bsalmon-cloudtop`, on the model
+- **an explicit pin**, `hostd: bsalmon-workstation`, on the model
   connection, the framework's run location or the capability server
   instance;
 - **a pool selector**, `hostd: {labels: {corp-identity: bsalmon}}`. Grain
@@ -706,7 +706,7 @@ empty by default.
 gcp-bsalmon:
   type: gcp
   run: hostd
-  hostd: bsalmon-cloudtop     # ambient gcloud credentials of that user
+  hostd: bsalmon-workstation     # ambient gcloud credentials of that user
 gcp-oncall:
   type: gcp
   run: hostd
@@ -736,7 +736,7 @@ directly.
 **A host-run CLI (`agy`):**
 
 ```
-agy (on the cloudtop, user's corp login)
+agy (on the workstation, user's the host user's own login)
  └─ its MCP server `grain mcpserver …` (argv issued by grain, staged by grain)
      └─ MCP tunnel stream on the hostd connection   [mcpGrants: only argvs grain issued to this hostd's runs]
          └─ grain: the run's MCP tools
@@ -914,13 +914,13 @@ keep it from being a way in.
 The live deployment moves in three steps. Each can be reversed on its
 own, and no step runs two daemons at once.
 
-### Step 1, on the cloudtop: the store moves to Cloud SQL (GKE-1)
+### Step 1, on the workstation: the store moves to Cloud SQL (GKE-1)
 
 1. Terraform the Cloud SQL instance (private IP plus a public IP
    reachable only through the Cloud SQL Auth Proxy), the IAM user, and
    the database.
-2. Run the Cloud SQL Auth Proxy on the cloudtop (`docs/cloudsql-postgres.md`
-   §1) under the cloudtop's own credentials.
+2. Run the Cloud SQL Auth Proxy on the workstation (`docs/cloudsql-postgres.md`
+   §1) under the workstation's own credentials.
 3. Settings → Database → upgrade to Postgres with **migrate data**
    (`POST /api/database/upgrade`). This exists today. It copies the
    SQLite store across, switches `db-config.json`, and restarts.
@@ -940,23 +940,23 @@ not need one.
    DNS.
 2. Copy the secrets key and bootstrap tokens into Secret Manager
    (`push-secrets.sh`).
-3. Pre-seed the PVC from the cloudtop with a one-off Job that pulls a
+3. Pre-seed the PVC from the workstation with a one-off Job that pulls a
    tarball from a GCS staging object:
    - transcripts and CI artifacts of the last 30 days, which are worth
      keeping;
    - the package cache's objects, optionally (they rebuild, but a warm
      cache saves an afternoon of misses);
    - **not** checkouts, agent HOMEs or the job cache, which rebuild.
-4. Register the cloudtop's hostd as `bsalmon-cloudtop` (the deploy
+4. Register the workstation's hostd as `bsalmon-workstation` (the deploy
    script, [Task #1461](/tasks/1461)) and restart it with dial-in
    enabled **alongside** the socket, pointed at the Gateway. One hostd
    process serves both. Until step 3.4 there is no daemon behind the
    Gateway, so the dial-in side retries quietly while the socket keeps
-   serving the cloudtop daemon.
+   serving the workstation daemon.
 
 ### Step 3: the cutover (GKE-8)
 
-1. **Drain the cloudtop daemon.** Pause dispatch (the existing pause),
+1. **Drain the workstation daemon.** Pause dispatch (the existing pause),
    and let running agent runs and CI runs finish, up to a window the
    operator picks (for example 30 m).
    - Anything still running at the end is stopped through the existing
@@ -965,11 +965,11 @@ not need one.
      re-dispatched by the new daemon.
    - Its CI runs are stamped interrupted and re-run.
    - Sandbox pods are already in the cluster and are readopted.
-2. **Force a final state-repo export** from the cloudtop daemon, then
+2. **Force a final state-repo export** from the workstation daemon, then
    stop it (`systemctl stop grain-daemon`) and `disable` it.
    - Its advisory lock goes with its connection, and that is the moment
      the cluster daemon could take over.
-   - Step 4 below needs that lock released, so a cloudtop daemon that
+   - Step 4 below needs that lock released, so a workstation daemon that
      somehow restarted would block the cluster daemon rather than run
      beside it.
 3. **Final PVC sync** of transcripts and artifacts since step 2's copy.
@@ -977,19 +977,19 @@ not need one.
    same Cloud SQL database, readopts sandbox pods by label, and
    reconnects the hostd (now dial-in only).
 5. **Rewrite placements.** Today's `run: host`, `GRAIN_*_RUN=host` and
-   Settings → Models "Host" become `run: hostd, hostd: bsalmon-cloudtop`.
+   Settings → Models "Host" become `run: hostd, hostd: bsalmon-workstation`.
    The deploy script (#1461) applies this through a state-repo pull
    request against grain/config, so the change is reviewed and recorded
    like any settings change.
 6. **Flip sandbox access** to `-k8s-granule-access=dialout` once one
    canary task and one CI run pass on the channel.
-7. **Unpause.** DNS for the UI now points at the Gateway. The cloudtop's
+7. **Unpause.** DNS for the UI now points at the Gateway. The workstation's
    old UI port is closed.
 
 **Rollback**, at any point before step 7 or within the soak:
 
 1. scale the cluster Deployment to 0 and wait for its lock to drop;
-2. `systemctl enable --now grain-daemon` on the cloudtop. It is still
+2. `systemctl enable --now grain-daemon` on the workstation. It is still
    configured for the same Cloud SQL database, so no data moves;
 3. the placements rewrite is reverted by reverting its grain/config pull
    request;
@@ -1028,7 +1028,7 @@ implicitly:
 | Running CI runs | Drained. Any left are interrupted, re-run (`Run.Interrupted`). |
 | Sandbox pods | Already in the cluster. Readopted by the new daemon. |
 | Persistent sandboxes | Readopted. Their next tool call goes over whichever access mode is set. |
-| Host-run CLIs on the cloudtop's hostd | Drained. A detached process that outlives the drain belongs to the same hostd process that now also dials in, so the cluster grain re-attaches to it over that connection (protocol 2 attach). Its staged files stay in the cloudtop's data dir, where the socket path put them; new runs stage under hostd's own root. |
+| Host-run CLIs on the workstation's hostd | Drained. A detached process that outlives the drain belongs to the same hostd process that now also dials in, so the cluster grain re-attaches to it over that connection (protocol 2 attach). Its staged files stay in the workstation's data dir, where the socket path put them; new runs stage under hostd's own root. |
 | Scheduled work | Resumes from the store on unpause. |
 
 ## What happens to the grit work
@@ -1081,7 +1081,7 @@ The grit split is **deferred, not abandoned**.
 ## Open questions (for the operator)
 
 1. **Cloud SQL or in-cluster Postgres?** The recommendation is Cloud
-   SQL, for the reasons in *The state store*, chiefly that the cloudtop
+   SQL, for the reasons in *The state store*, chiefly that the workstation
    can move onto it first and roll back without copying data. Also: the
    tier (`db-custom-2-8192` is the suggested start), and whether to use
    regional HA (about 2× cost) or zonal with PITR.
@@ -1094,7 +1094,7 @@ The grit split is **deferred, not abandoned**.
    - Which OAuth client IAP uses.
    - Whether hostd authenticates to IAP with the user's own identity
      (programmatic IAP with a desktop OAuth client) or with a service
-     account key on the cloudtop. The suggestion is the user's identity,
+     account key on the workstation. The suggestion is the user's identity,
      which needs no key file.
 3. **HA.** One fenced replica (this design), a warm standby waiting on
    the fence, or real multi-replica (which needs reconcile-loop
@@ -1103,7 +1103,7 @@ The grit split is **deferred, not abandoned**.
    restart actually costs.
 4. **Reattach timeouts.** The suggested defaults are 2 m for the
    sandbox channel and 15 m for hostd. The 15 m for hostd assumes a
-   cloudtop network blip or reboot. Is that right for this deployment?
+   workstation network blip or reboot. Is that right for this deployment?
 5. **Region and project.** Is grain's Deployment in the same project
    and region as the sandbox node pool (the suggestion), and is Cloud
    SQL in the same region?
@@ -1134,7 +1134,7 @@ Depends on: nothing.
 - Terraform the Cloud SQL instance, database, IAM user and backups,
   beside the existing `terraform` job.
 - Document and run step 1 of *Migration* on this deployment: the
-  cloudtop daemon moves to Cloud SQL through the Auth Proxy with
+  workstation daemon moves to Cloud SQL through the Auth Proxy with
   `POST /api/database/upgrade`.
 - Tests: two daemons against one Postgres (the second waits, then
   exits); the lock connection killed mid-run (dispatch stops and the
@@ -1278,7 +1278,7 @@ Depends on: GKE-4, GKE-6, GKE-7, and the deploy script
 
 - Steps 2 and 3 of *Migration*, as a runbook and
   as far as possible in #1461's script. The script registers the
-  cloudtop as hostd `bsalmon-cloudtop`, installs it in dial-in mode,
+  workstation as hostd `bsalmon-workstation`, installs it in dial-in mode,
   and rewrites placements through a grain/config pull request.
 - Flip `-k8s-granule-access=dialout` after a canary task and CI run.
 - A two-week soak:
@@ -1293,7 +1293,7 @@ Depends on: GKE-4, GKE-6, GKE-7, and the deploy script
 
 Depends on: GKE-8.
 
-- Remove the cloudtop daemon's systemd unit and data (keep one cold
+- Remove the workstation daemon's systemd unit and data (keep one cold
   backup), and the `granule forward`-over-exec path for in-cluster
   grain.
 - Make `dialout` the default for `-k8s-granule-sandboxes` when

@@ -36,7 +36,7 @@ Processes (all real, all on 127.0.0.1):
 
 - **Cloud Run's front end:** `frontdoor`, a ~40-line Go `httputil.ReverseProxy` (not committed).
   It sends every request, upgrades included, to the backend named in a file, which it reads again
-  for each request. That matches how Google's front end sends each new request to the serving
+  for each request. That matches how an identity-aware front end sends each new request to the serving
   revision. With `-websocket-only` it answers 400 to any upgrade other than `websocket`, as the
   front end before a `*.run.app` service does.
   - The first attempt used a TCP-level proxy that chose the backend per connection. It pinned the

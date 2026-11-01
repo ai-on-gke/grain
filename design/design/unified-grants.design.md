@@ -197,7 +197,7 @@ per-capability list, with what each one becomes:
 | `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | **done** (task 2037): providers removed, `https://grain.dev/capabilities/grain#sql` (`{write: bool}`, with `write: true` dangerous) added on the in-process `…/grain` server, stored grants rewritten to `https://grain.dev/capabilities/grain#sql={"write":false}` / `{"write":true}` by schema migration 82 |
 | `grain-ci` | `…/grain#ci` | new method |
 | `image-signing`, `registry-push`, `package-publish` (CI) | `…/release#image-signing`, `…/release#registry-push`, `…/release#package-publish` | new in-process server `…/release` |
-| `corp-research` (google build) | a `…/corp#research` method registered by the google build through the same `capability.Register` seam | contributed server method |
+| `corp-research` (wrapper distribution build) | a `…/corp#research` method registered by the wrapper distribution's build through the same `capability.Register` seam | contributed server method |
 
 How `self-debug`, `grain-log` and `deployment-health` style grants fit:
 they are grain reading itself. Each becomes either api scopes (anything

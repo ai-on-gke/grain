@@ -14,7 +14,7 @@ it shared reached its usage limit.
   in the browser against a demo rebuilt from this branch.
 - **Server**: `grain demo -addr 127.0.0.1:18080 -open=false
   -access-code-file …`, built with `go build -tags grain_e2e
-  ./google/cmd/grain` over the production bundle from `npm run build`
+  a wrapper distribution's `cmd/grain` over the production bundle from `npm run build`
   (Vite). It used a throwaway SQLite store under `/var/tmp`. Secrets were
   exercised on a second start with `-secrets-store`.
 - **Browser**: Playwright `1.62.1` driving Chromium (`chromium-1234`) from

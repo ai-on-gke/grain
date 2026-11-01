@@ -147,7 +147,7 @@ GKE. A local install is `linux-kvm` or `linux-container`, set up by
 cluster on the `k8s-granule` backend
 (`deploy/kubernetes/grain-granule.yaml`), and `grain hostd` keeps
 running on the host and dials out to it. So does a `grain
-model-server`, for host-bound CLIs such as `agy` on a Cloudtop. It is
+model-server`, for host-bound CLIs such as `agy` on a workstation. It is
 the same deployment, with the same store, history, secrets key,
 installation id and state repository; only the place the controller
 runs has changed.

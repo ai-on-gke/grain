@@ -54,7 +54,7 @@ the chat is in:
 
 | setting | shipped as | what it decides |
 |---|---|---|
-| `Capabilities` | self-debug, grain-log, deployment-health, bootstrap-playbooks (plus build defaults, e.g. corp-research on Google builds) | what the agent may reach |
+| `Capabilities` | self-debug, grain-log, deployment-health, bootstrap-playbooks (plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
 | `NetworkAccess` | none | whether its sandbox reaches the internet |
 | `TasksApproved` | false | whether the tasks it files are queued or wait for a person |
 | `Title` | "Director" | what the rail calls it |
@@ -96,13 +96,9 @@ is the one grant here that can break the deployment it is talking about,
 and **memory**, which writes the standing instructions every later run is
 given.
 
-On a Google / Cloudtop install (`google/cmd/grain`, installed by
-`google/scripts/cloudtop-install.sh`), **corp-research** is also on by
-default for the director (`pkg/capability.Registration.DefaultOn`): it lets
-antigravity runs call the agy host's own search tools, as
-the host's corp identity -- see
-[corp-research.md](../google/docs/corp-research.md), and untick it in the
-director's pane to turn it off.
+A wrapper distribution can register further capabilities as on by default
+for the director (`pkg/capability.Registration.DefaultOn`); each shows in
+the director's pane like any other, and can be unticked there.
 
 `TasksApproved` is false because a chat is a fast way to ask for a lot of
 work: a director that could queue its own tasks would be one

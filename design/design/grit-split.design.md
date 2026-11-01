@@ -74,7 +74,7 @@ not reopen them:
    Grit is grain's own CI engine (today's `pkg/ci`), moved into the
    cluster. It is not Argo, Tekton, ARC, Buildkite or Cloud Build.
 2. **Grain keeps everything else**, on a single node with the local
-   `granule` backend. That node is the cloudtop itself
+   `granule` backend. That node is the workstation itself
    (a 96 vCPU workstation with about 236 GB RAM), and its size is
    the whole agent and chat budget. Grain keeps:
    - tasks, agents and chats, and their sandboxes;
@@ -127,7 +127,7 @@ not reopen them:
 
 ## Why
 
-On this deployment grain's daemon runs on a cloudtop
+On this deployment grain's daemon runs on a workstation
 (a single workstation). It runs every sandbox on a remote GKE cluster
 through the `kubernetes-granule` backend
 (`orchestrator.K8sGranuleSandboxes`). Every interaction with a sandbox
@@ -150,7 +150,7 @@ grain uses the fragile half for everything that touches a sandbox.
 Most of the cluster's capacity, bandwidth and churn is CI. A full
 `tests.yml` suite is about 20 jobs. Each job is a privileged pod booting
 a cloud-hypervisor VM, and every package it installs crosses the WAN
-twice: pod, then `kubectl exec` forward, then the cloudtop's cache, then
+twice: pod, then `kubectl exec` forward, then the workstation's cache, then
 back. A grain restart also kills every CI job in flight:
 `StoredRunStore.RecoverInterrupted` marks them `Interrupted` on the next
 start.
@@ -321,7 +321,7 @@ brief's numbers differ, the measured ones are given.
 ## Architecture
 
 ```
- cloudtop (single node, 96 vCPU)                GKE cluster, grain-sandbox-dev (existing node pool)
+ workstation (single node, 96 vCPU)                GKE cluster, grain-sandbox-dev (existing node pool)
  ┌───────────────────────────────┐              ┌──────────────────────────────────────────────┐
  │ grain daemon                  │ one HTTPS    │ namespace grit                               │
  │   orchestrator, merge queue,  │ session out  │   Gateway (TLS, IAP) ─▶ grit API (2 replicas)│
@@ -341,7 +341,7 @@ brief's numbers differ, the measured ones are given.
 ```
 
 All traffic between the two sides is opened by grain. Nothing in the
-cluster dials the cloudtop. Requests flow up grain's connection; events,
+cluster dials the workstation. Requests flow up grain's connection; events,
 and the model calls CI jobs make, come back down the same connection.
 
 ## Grit as an independent service
@@ -722,7 +722,7 @@ once if events are waiting, and otherwise after up to `wait`:
   3. It resumes from the cursor the resync's first page carried.
 
   It raises `grit-resync` so the operator knows.
-- **Events come back on grain's own connection.** The cloudtop accepts
+- **Events come back on grain's own connection.** The workstation accepts
   no inbound connections, so there are no webhooks. Grain holds the long
   poll open as a stream on its multiplexed session (*Connectivity and
   auth*), so events arrive as soon as they are written; over plain HTTPS
@@ -873,7 +873,7 @@ removes all four.
 
 ## Connectivity and auth
 
-The cloudtop and the cluster share no L3 network, and the cloudtop
+The workstation and the cluster share no L3 network, and the workstation
 accepts no inbound connections. So **grain always dials grit, and grit
 never dials grain.** Anything grit has to say to grain, or ask of it,
 comes back on a connection grain opened.
@@ -921,11 +921,11 @@ Each layer can be swapped without touching the others:
    secret (`Grit-Signature: t=…,v1=…` over method, path, body digest and
    time) is an option for clients behind a TLS-terminating proxy they do
    not trust; grain does not need it, because nothing terminates TLS
-   between grain and Google's front end.
+   between grain and an identity-aware front end.
 3. **Edge identity: IAP** on the Gateway's backend services, which the
    operator has allowed in `grain-sandbox-dev` (GS-3). Grain's
    identity is a Google service account, `grain-client@<project>`. The
-   cloudtop's ADC impersonates it to mint a Google-signed ID token, with
+   workstation's ADC impersonates it to mint a Google-signed ID token, with
    the IAP OAuth client as audience, sent as `Authorization: Bearer` and
    renewed at 50 minutes. Grit verifies the `x-goog-iap-jwt-assertion`
    header with `pkg/jwks` (signature, `aud`, expiry), and requires the
@@ -1069,8 +1069,8 @@ sandbox, with no cluster involved.
 `live-frameworks.yml` and similar workflows ask for `claude-proxy`,
 `openai-proxy` or `gemini-proxy`. Today those place a per-run token and
 a base URL for grain's own model proxies (`pkg/modelproxy`), which run
-on the cloudtop and hold the real model credentials. The cluster cannot
-dial the cloudtop, so the calls travel back down grain's session.
+on the workstation and hold the real model credentials. The cluster cannot
+dial the workstation, so the calls travel back down grain's session.
 
 - **Direction stays outbound-only.** When grain opens its session it
   offers the `model-proxy` stream type. For each model request a job
@@ -1093,7 +1093,7 @@ dial the cloudtop, so the calls travel back down grain's session.
   forwarded request with the run and job (`Grit-Run`, `Grit-Job`). Grain's
   proxy checks the token again, as it does for a sandbox, and applies the
   same quotas, usage-limit pauses and audit. Real model credentials never
-  leave the cloudtop. Grain revokes the token's lease when the job ends
+  leave the workstation. Grain revokes the token's lease when the job ends
   (it learns that from the event stream), and the token also expires at
   the job's `timeout-minutes`. Grit cannot mint tokens: it can only pass
   on ones grain gave it, for the job grain gave them to.
@@ -1112,13 +1112,13 @@ dial the cloudtop, so the calls travel back down grain's session.
   place its endpoint, pointed at the relay Service instead of a
   `kubectl exec` tunnel.
 - **Rollout:** GS-4. Until it lands, workflows that ask for a
-  model-proxy capability stay embedded on the cloudtop (*Requests that
+  model-proxy capability stay embedded on the workstation (*Requests that
   stay in grain*).
 
 **Possible future work, not part of this plan:** the same reverse-proxy
-pattern could carry other host-run capability servers on the cloudtop
+pattern could carry other host-run capability servers on the workstation
 to CI jobs in the cluster, so that a capability whose server cannot
-leave the cloudtop no longer forces its workflows to run embedded.
+leave the workstation no longer forces its workflows to run embedded.
 
 ## Package cache
 
@@ -1147,16 +1147,16 @@ The first draft had grain's local cache become a pass-through to the
 cluster cache (at `127.0.0.1:9729` in the guest), with an upstream
 fallback and a small local tier for the Go build cache. **That is
 removed from the plan.** After the cutover grain's sandboxes are on the
-cloudtop and CI is in the cluster, so the two caches serve disjoint
+workstation and CI is in the cluster, so the two caches serve disjoint
 traffic, and a pass-through would only add a WAN hop and GCP egress to
 grain's package fetches.
 
 It would be worth building if grain's own sandboxes start to suffer from
-what a shared cache fixes: for example, if the cloudtop's cache keeps
+what a shared cache fixes: for example, if the workstation's cache keeps
 hitting Docker Hub's anonymous pull limit or upstream outages that the
 cluster cache has already absorbed, or if agent and CI sandboxes would
 gain from sharing warm Go build outputs. The trigger is measured: a
-sustained upstream-error or rate-limit rate on the cloudtop's cache, or
+sustained upstream-error or rate-limit rate on the workstation's cache, or
 a cold-miss rate on objects the cluster cache already holds, that costs
 agents measurable time. The first draft's design (a circuit-breaking
 pass-through, index requests straight to upstream, a local Go tier) is
@@ -1329,10 +1329,10 @@ Settings → CI.
     wrote a row.
   - Merge batches, base-branch rows and release records that name old
     run IDs keep resolving locally.
-  - Grit's job cache starts cold (decided). The cloudtop's `DirCache` keys would
+  - Grit's job cache starts cold (decided). The workstation's `DirCache` keys would
     mostly miss anyway, because the sandbox image differs, so this costs
     about one full suite per repository.
-  - The cloudtop's job-cache and artifact directories are deleted after a
+  - The workstation's job-cache and artifact directories are deleted after a
     two-week soak (GS-5).
 - **What grain keeps locally:**
   - *The mirror*, under grain's existing retention
@@ -1353,7 +1353,7 @@ Settings → CI.
   for now** (decision 10). Today that pool is 3 nodes with about 287
   vCPU allocatable, and its nested virtualization already runs CI.
   Grit's job pods share it with grain's `kubernetes-granule` sandboxes
-  until GS-5 moves those to the cloudtop.
+  until GS-5 moves those to the workstation.
   - The gate (`gate.go`) changes from "admit what fits in the ledger" to
     "admit up to a ceiling of *pending* pods" (`maxPendingJobs`). Its
     priority order and age boost are unchanged.
@@ -1368,7 +1368,7 @@ Settings → CI.
     `maxPendingJobs: 4`. That keeps shadow runs from crowding out live
     CI and agents.
   - **At GS-5** grain's CI moves to grit and its agent sandboxes move to
-    the cloudtop, so the cluster stops carrying grain's sandboxes. The
+    the workstation, so the cluster stops carrying grain's sandboxes. The
     room reserved for them shrinks as they leave, and `grit-jobs`'
     quota and `maxPendingJobs` are re-sized into it (to roughly
     `requests.cpu: 240` and `maxPendingJobs: 12`, leaving headroom for
@@ -1407,7 +1407,7 @@ Settings → CI.
   signal. A step that exits non-zero is a test failure and is never
   retried for infrastructure. Grain's existing `infraverdict.go` reads
   these conclusions unchanged.
-- **Grain's budget becomes the single node's**: the cloudtop's 96 vCPU
+- **Grain's budget becomes the single node's**: the workstation's 96 vCPU
   and about 236 GB of RAM (decision 2). In remote mode `model.Limits`
   comes from the local host's capacity, as on any host backend. The ledger counts agent sandboxes plus embedded-mode jobs
   (`grain/config` checks and the routed workflows). The CI settings that
@@ -1478,7 +1478,7 @@ behind.
   that is separate from the signing key (*Key management*). The GCM
   associated data is the client id, the `requestId` and the tree's
   sha256, so a sealed payload cannot be replayed onto another request or
-  tree. TLS terminates at Google's front end, which therefore sees only
+  tree. TLS terminates at an identity-aware front end, which therefore sees only
   ciphertext.
 - **Memory only.** Grit unwraps the key with one KMS call at admission
   and holds each job's material in process memory, never in Postgres,
@@ -1966,7 +1966,7 @@ of them, and they are written into the sections above. In brief:
 4. **Release secrets in Secret Manager:** answered by a later decision.
    Moot, because secrets are passed per request and grit has no store
    (*Secrets and trust*).
-5. **The single node:** the cloudtop, 96 vCPU and about 236 GB (decision
+5. **The single node:** the workstation, 96 vCPU and about 236 GB (decision
    2).
 6. **Credentials for CI jobs and the model proxies:** grain mints the
    same temporary credentials it would give a sandbox and passes them
@@ -2139,13 +2139,13 @@ this deployment:
 
 1. Turn on `-ci-remote`.
 2. Move grain's agent and chat sandboxes to local `granule` on the
-   cloudtop (96 vCPU, about 236 GB), and size the budget to it.
+   workstation (96 vCPU, about 236 GB), and size the budget to it.
 3. Turn the `kubernetes-granule` agent backend off on this deployment.
    Keep its code and document it as not recommended across networks
    (demote, do not delete).
 4. Re-size `grit-jobs`' quota and `maxPendingJobs` into the room grain's
    sandboxes leave on the node pool.
 
-After a two-week soak, delete the cloudtop's job-cache and artifact
+After a two-week soak, delete the workstation's job-cache and artifact
 directories. Update `design/design/non-disruptive-upgrade.design.md` to say that Stage 3
 is superseded by this doc.

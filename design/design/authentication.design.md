@@ -68,7 +68,7 @@ An external agent can do the same with its own service account. It can also pres
 
 ### `grain hostd`
 
-hostd dials `/api/hostd/connect` through the Gateway with an ID token from its service account (Workload Identity or a key on the cloudtop) or from the user's login. It uses the token sources above, through `IAPTokenProvider`, as it does now. The hello frame still carries the hostd token. That token names which hostd this is, and it is what GKE-5 makes per hostd.
+hostd dials `/api/hostd/connect` through the Gateway with an ID token from its service account (Workload Identity or a key on the workstation) or from the user's login. It uses the token sources above, through `IAPTokenProvider`, as it does now. The hello frame still carries the hostd token. That token names which hostd this is, and it is what GKE-5 makes per hostd.
 
 What changes is that the verified IAP principal is recorded as the connection's principal and checked against the allowlist. Optionally, it can also be checked against the hostd row's `owner`, so a stolen hostd token is useless without its owner's Google identity. The executor bootstrap routes (`executorBootstrapRoute`) stay open, as `docs/access-code.md` describes.
 

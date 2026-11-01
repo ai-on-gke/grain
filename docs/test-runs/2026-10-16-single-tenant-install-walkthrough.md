@@ -1,6 +1,6 @@
 # 2026-10-16: fresh single-tenant install, end to end
 
-Task 4344. A new user's walk through `scripts/cloudtop-install.sh` on a
+Task 4344. A new user's walk through a wrapper distribution's own installer on a
 machine with no Grain: install, find the access code, log in remotely, add a
 model and a git connection, file a first task, rotate the code, re-run the
 installer, uninstall.
@@ -11,7 +11,7 @@ installer, uninstall.
 |---|---|
 | Host | The task sandbox itself: Debian 12 (bookworm), kernel 6.1, 4 vCPU, 7.8 GiB, systemd as PID 1, Docker 29.9, `/dev/kvm` with nested virtualisation. It runs the installer faithfully, so no GCP VM was created (none to delete) |
 | User | `debian`, a normal account with sudo. The installer was run as it, with no `sudo` in front, as the README says |
-| Build | `main` at 1cf49bd (2026-10-16 21:34Z), built with `make build` and installed with `GRAIN_CHANNEL=main GRAIN_HOST_BINARY=$PWD/bin/grain GRAIN_HOST_SOURCE_DIR=$PWD ./scripts/cloudtop-install.sh` |
+| Build | `main` at 1cf49bd (2026-10-16 21:34Z), built with `make build` and installed with `GRAIN_CHANNEL=main GRAIN_HOST_BINARY=$PWD/bin/grain GRAIN_HOST_SOURCE_DIR=$PWD a wrapper distribution's own installer |
 | Why not the image | `ghcr.io/bwsalmon/grain/grain:main` is **stale**: it is f09c277 (built 15:04Z), from before the access code merged (393cc69, 15:26Z). Every `release images` run on `main` since then has failed in `tests/container`, so nothing newer was published. `GRAIN_CHANNEL=main` alone would have tested the build *without* access codes. The binary had to be built from the checkout |
 | "Remote" access | Chromium (Playwright 1.62, headless) with `--host-resolver-rules=MAP wt4344.proxy.corp.example 172.17.0.5`. The browser sent `Host: wt4344.proxy.corp.example` (matched by the installer's `*.proxy.corp.example`) from the host's non-loopback address, so the daemon saw a non-loopback source and a proxy-style Host. There was no TLS, and no real corp-proxy in front |
 | Model | Antigravity (`agy` 1.2.2, copied out of the `main` image to `/usr/local/bin/agy`) with the Gemini API key this task was given |
@@ -32,8 +32,8 @@ installer, uninstall.
 | 8 | Git connection, starter policy for that one repo | **PASS after workarounds** (B7, B8). `grain team git-ambient --kind git` accepted `http://172.17.0.5:8088`, but grain's git proxy always refuses plain HTTP to a non-loopback host. The run said only "502", and the reason was in `audit.log`. Moved to `127.0.0.1:8088`. The setup.sh installer has no way to pass `-policy`, so I edited it into the unit. The policy denied the other repo ("local policy does not allow repository 172.17.0.5:8088/walk/demo"), but it **also held the owner's own task** until `local_requesters: [debian]` was added. Each policy edit took a daemon restart |
 | 9 | First task: run, push, CI, merge queue | **PARTIAL / blocked by the environment**. Filed in the UI (after the B1 fix). Dispatched on `agy --model gemini-3.1-pro`, cloned through the git proxy, and ran about 1m40s. Then every call failed `API_KEY_INVALID`: this task's Gemini key stopped working mid-run, and a direct `generateContent` call with it returns the same 400. So no push and no CI. The merge queue was never reachable here anyway, because a plain git host has no forge, so grain refuses PRs and the merge queue for it (`docs/git-hosts.md`). Also, the branch check on that host called the GitHub API for `walk/demo` and got a 404 (B8). Needs the human checklist |
 | 10 | Rotate the access code | **PASS**. `grain access-code rotate` prints a new code of the right shape, which matches the file. The open browser session gets the 401 login page on reload. The old code is refused both as a bearer (401) and in the form. The new code signs in. `grain list` works at once with no setup |
-| 11 | Re-run the installer | **PASS for tenancy, address, hosts, code and data; FAIL for the policy** (B3). Three re-runs (adding the key, a new binary, a plain re-run after rotation). Each kept `single`, `0.0.0.0:4242`, the allowed hosts, the access code (sha256 unchanged, the rotated one included), the models, the git connections and the tasks. **Each re-run silently dropped `-policy`**: after the last one, the task the policy had been holding (on the disallowed repo) **went straight to running**. The summary also names a model `cloudtop-antigravity` that doesn't exist |
-| 12 | Uninstall as documented | **PASS with gaps** (B9). `sudo GRAIN_USER=debian ./scripts/setup.sh --uninstall` removed the units, binaries, profile script, `cli.env`, sudoers drop-in, sandbox directory, granule VMs and the grain and k8s-sandbox images, and kept `/var/lib/grain` (23 MB) as documented. It left `ghcr.io/bwsalmon/grain/guest:latest` (**8.1 GB**). `--purge` was *not* run: with `GRAIN_USER=<you>`, as the README tells a cloudtop user, it runs `userdel` on **your own account** (`setup.sh:1587`, no guard). The cloudtop section has no uninstall instructions at all |
+| 11 | Re-run the installer | **PASS for tenancy, address, hosts, code and data; FAIL for the policy** (B3). Three re-runs (adding the key, a new binary, a plain re-run after rotation). Each kept `single`, `0.0.0.0:4242`, the allowed hosts, the access code (sha256 unchanged, the rotated one included), the models, the git connections and the tasks. **Each re-run silently dropped `-policy`**: after the last one, the task the policy had been holding (on the disallowed repo) **went straight to running**. The summary also names a model `workstation-antigravity` that doesn't exist |
+| 12 | Uninstall as documented | **PASS with gaps** (B9). `sudo GRAIN_USER=debian ./scripts/setup.sh --uninstall` removed the units, binaries, profile script, `cli.env`, sudoers drop-in, sandbox directory, granule VMs and the grain and k8s-sandbox images, and kept `/var/lib/grain` (23 MB) as documented. It left `ghcr.io/bwsalmon/grain/guest:latest` (**8.1 GB**). `--purge` was *not* run: with `GRAIN_USER=<you>`, as the README tells a workstation user, it runs `userdel` on **your own account** (`setup.sh:1587`, no guard). The workstation section has no uninstall instructions at all |
 
 ## Bugs found
 
@@ -66,7 +66,7 @@ Filed as tasks (numbers in the closing comment):
   says `sudo -u grain env GRAIN_DATA_DIR=…`, naming the wrong account (B5).
 - **B3. An installer re-run silently drops `-policy`, and setup.sh has no way to set it.**
   `docs/local-policy.md` says to start the daemon with `-policy`, but neither
-  setup.sh nor cloudtop-install.sh can pass it, so you edit the unit. Every
+  setup.sh nor wrapper-installer can pass it, so you edit the unit. Every
   re-run rewrites the unit without it, with no warning. Work the policy was
   holding is then dispatched (seen here: task 2, on a repo the policy refuses,
   went to `running`). It needs a `GRAIN_POLICY` knob, and a re-run should keep
@@ -77,9 +77,9 @@ Filed as tasks (numbers in the closing comment):
   "loopback: trusted", "accounts: everyone else signs in, so every account
   needs a password", and "single-tenant: nobody signs in; loopback and this
   host's grain CLI are the operator". All three contradict the access code that
-  cloudtop-install.sh's own summary then describes correctly. It also says
+  wrapper-installer's own summary then describes correctly. It also says
   "Installing as debian: host-mode daemon, host-directory sandboxes" while the
-  readiness says "sandboxing: granule VMs". The cloudtop NOTE says "every run …
+  readiness says "sandboxing: granule VMs". The workstation NOTE says "every run …
   executes directly on this machine, as you … under /var/lib/grain-sandbox",
   and the README says "Each run's tools execute in a Docker container". With
   `/dev/kvm` they run in granule VMs. "max workers: 1" is reported from a
@@ -89,7 +89,7 @@ Filed as tasks (numbers in the closing comment):
   times in the last 30 minutes" after deliberate restarts and re-runs.
 - **B5. CLI and server hints name a `grain` account on installs that run as the user.**
   `grain access-code` and `grain list` as another user, and the 401 hint, all
-  say `sudo -u grain grain …` and "(grain owns it)". On a cloudtop install the
+  say `sudo -u grain grain …` and "(grain owns it)". On a workstation install the
   account is the user (`debian` here) and there is no `grain` user.
 - **B6. The installer's agent-key advice configures no connection.**
   "Set GRAIN_GEMINI_API_KEY … and re-run" puts it in `-gemini-api-key-file`,
@@ -117,12 +117,12 @@ Filed as tasks (numbers in the closing comment):
   `state/git-proxy/audit.log`. After a run on `127.0.0.1:8088/walk/demo`, the
   orchestrator's branch check called the GitHub API (`cannot read walk/demo …
   GitHub API error 404`), dropping the host.
-- **B9. Uninstall: `--purge` deletes the cloudtop user's own account, and `--uninstall` leaves 8 GB behind.**
+- **B9. Uninstall: `--purge` deletes the workstation user's own account, and `--uninstall` leaves 8 GB behind.**
   The README tells you to uninstall "with the same `GRAIN_USER`", which on a
-  cloudtop is you. `--purge` then runs `userdel "$GRAIN_USER"` and `groupdel`
+  workstation is you. `--purge` then runs `userdel "$GRAIN_USER"` and `groupdel`
   on your primary group, with no check that it's a system account grain created.
   `--uninstall` left `ghcr.io/bwsalmon/grain/guest:latest` (8.1 GB), the
-  container sandbox image the install pulled. The cloudtop section has no
+  container sandbox image the install pulled. The workstation section has no
   uninstall instructions.
 - **B10 (noted, not filed). `ghcr.io/bwsalmon/grain/grain:main` is a day-old build without access codes.**
   `release images` on `main` has failed in `tests/container` on every commit
@@ -131,15 +131,15 @@ Filed as tasks (numbers in the closing comment):
   That is base-branch release triage's job, so it isn't filed again here. But
   `GRAIN_CHANNEL=main` doesn't install what `main` holds until it's fixed.
 
-## Human checklist (Cloudtop only)
+## Human checklist (Workstation only)
 
-These need a real cloudtop, a corp login and the access code. Run them on the
+These need a real workstation, a the host user's own login and the access code. Run them on the
 build that carries this PR's B1 fix, and after B2 and B3 land.
 
-1. **Install as yourself:** `GRAIN_CHANNEL=main ./scripts/cloudtop-install.sh`.
+1. **Install as yourself:** `GRAIN_CHANNEL=main a wrapper distribution's own installer.
    Check the summary's Model line says `created` (it says "not set up" until B2
    is fixed) and that `Git` shows the depot connection.
-2. **Uberproxy URL:** open `https://<id>.proxy.corp.example/`. Expect the
+2. **an identity-aware reverse proxy URL:** open `https://<id>.proxy.corp.example/`. Expect the
    "Enter access code" page, not 421. Enter `grain access-code`'s output, and
    check that the app loads with **no** "create account" dialog (B1). Reload,
    and check you stay signed in. Open it in a second browser profile and check
@@ -151,9 +151,9 @@ build that carries this PR's B1 fix, and after B2 and B3 land.
 4. **Ambient `agy` login:** Settings, then Models: the seeded "Antigravity
    (ambient login)" connection should list models. `grain settings
    -check-agent-key antigravity` should say ok.
-5. **`forgecli`/depot:** `GH_HOST=depot.code.corp.example forgecli auth status`. Then
+5. **`forgecli`/depot:** `GH_HOST=git.example.com forgecli auth status`. Then
    re-run the installer with
-   `GRAIN_TARGET_REPOS=depot.code.corp.example/<you>/<scratch-repo>` and check
+   `GRAIN_TARGET_REPOS=git.example.com/<you>/<scratch-repo>` and check
    it reports the git connection as created.
 6. **First task through the merge queue:** file a small task on that depot
    repo in the UI. Watch it dispatch on agy, push a branch, open a PR on depot,
@@ -175,11 +175,11 @@ build that carries this PR's B1 fix, and after B2 and B3 land.
 
 ### 1. Installer
 
-`./scripts/cloudtop-install.sh` (with the channel and binary variables above)
+a wrapper distribution's own installer (with the channel and binary variables above)
 printed, in order:
 
 ```
-==> Tenancy: single (the default for a fresh cloudtop install; export GRAIN_TENANCY=multi for a shared one)
+==> Tenancy: single (the default for a fresh workstation install; export GRAIN_TENANCY=multi for a shared one)
 ==> UI/API address: 0.0.0.0:4242 (the default for a fresh install)
 ==> UI/API allowed hosts: debuerreotype,*.proxy.corp.example (this machine's own names, plus *.proxy.corp.example ...)
 ==> WARNING: /opt/corp/bin/releases/agy-devs/tools/cli is not an executable file on this host.

@@ -114,7 +114,7 @@ Each credential in the deployment's credential store
 or, for a host reached only through a proxy (section 12):
 
 ```json
-{"host": "depot.code.forge.test", "kind": "github", "proxy": "http://127.0.0.1:3128"}
+{"host": "git.forge.test", "kind": "github", "proxy": "http://127.0.0.1:3128"}
 ```
 
 - `host` is the git host, normalized (`model.NormalizeGitHost`): lowercase
@@ -471,8 +471,8 @@ again.
 deployment should reach only some repositories, and a GitHub App when it
 is shared, needs the Checks API, or should act as a bot rather than a
 person. Ambient suits one operator running grain as their own account on
-their own machine (`google/scripts/cloudtop-install.sh` sets one up on the default
-team with `GRAIN_CLOUDTOP_GIT_HOST=github.com`, when `gh` is logged in and no
+their own machine (a wrapper distribution's own installer sets one up on the default
+team with `GRAIN_WRAPPER_GIT_HOST=github.com`, when `gh` is logged in and no
 `GRAIN_GITHUB_TOKEN` was given; its own default is depot, section 11). It
 replaces seeding the store once with `gh auth token`, which stored a
 snapshot that didn't follow logouts or rotation.
@@ -481,14 +481,14 @@ snapshot that didn't follow logouts or rotation.
 
 The measurements behind ambient credentials on one self-hosted,
 proxy-fronted forge are an edition's own, and are documented with it
-(`google/docs/depot-ambient.md` in the Google build). What they settled
+(the wrapper distribution's own docs in the wrapper distribution's build). What they settled
 for core is section 12: a forge reached through a registered command-line
 tool, and a login redirect read as "renew the login".
 
 ### 12. A forge reached through a command-line tool (tasks 3905, 4529)
 
 Some forges answer only a client that holds a credential grain cannot get
-at: a corp login a host-side tool refreshes, say. A registered ambient
+at: a the host user's own login a host-side tool refreshes, say. A registered ambient
 source can be **command-backed** for those (`AmbientCommandSource.ForgeViaCommand`,
 `pkg/gitproxy/commandforge.go`): every forge API call goes through
 `<tool> api`, git goes through the git proxy with the git auth header the
@@ -501,7 +501,7 @@ from the registration (`AmbientSourceUI`). Core's tests use the made-up
 `forgecli` source on `*.code.forge.test` (`pkg/gitproxy/gitproxytest`).
 
 Google's GitHub-on-Prem is the one such source today; its design and the
-manual checks are in [google/docs/ghop.md](../google/docs/ghop.md).
+manual checks are in the wrapper distribution's own docs.
 
 ## Phase 1: what this change does
 

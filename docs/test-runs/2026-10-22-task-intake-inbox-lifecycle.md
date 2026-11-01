@@ -7,7 +7,7 @@
   - Go: `go1.26.2 linux/amd64`
   - Node.js / npm: `v20.19.0` / `10.8.2`
   - Browser: Playwright Chromium (`@playwright/test` 1.58.2, headless Chromium `1400x900` viewport; `UTC` default and `Asia/Tokyo` for cross-timezone deferral check)
-  - Server under test: `./google/cmd/grain demo -addr 127.0.0.1:<port> -open=false -merge-rules -access-code-file <path>` serving the production Vite bundle built into `pkg/ui/static` over a throwaway embedded SQLite store (`$TMPDIR/grain-demo-*/grain.db`) and local `githubsim` git repositories (`$TMPDIR/grain-demo-*/repos/acme/widgets.git` and `acme/docs-site.git`).
+  - Server under test: a wrapper distribution's `cmd/grain` demo -addr 127.0.0.1:<port> -open=false -merge-rules -access-code-file <path>` serving the production Vite bundle built into `pkg/ui/static` over a throwaway embedded SQLite store (`$TMPDIR/grain-demo-*/grain.db`) and local `githubsim` git repositories (`$TMPDIR/grain-demo-*/repos/acme/widgets.git` and `acme/docs-site.git`).
 
 ---
 

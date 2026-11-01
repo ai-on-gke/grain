@@ -10,13 +10,13 @@ its section below is history.
 ## Problem
 
 This section describes the problem as it stood before host mode was
-removed. A host-mode deployment (`GRAIN_INSTALL_MODE=host`, the Cloudtop
+removed. A host-mode deployment (`GRAIN_INSTALL_MODE=host`, the Workstation
 install) ran `grain-daemon.service` as the user on the bare machine. The daemon
 starts each run's agent CLI as its own child (`agent.LocalHost`). The
 CLI's tools act inside the run's sandbox, a Granule microVM or a Docker
 container, through grain's MCP server.
 
-A Cloudtop's exec policy blocks `claude` on the bare machine, but it runs
+A Workstation's exec policy blocks `claude` on the bare machine, but it runs
 `docker run --entrypoint claude ghcr.io/bwsalmon/grain/grain:main`. The
 release image already ships a pinned, checksum-verified `claude` and
 `codex`.
@@ -29,7 +29,7 @@ mean depends on where the daemon runs (`pkg/daemon/hostexec.go`,
 
 | daemon                                         | `container`                               | `host`                        | default                           |
 |------------------------------------------------|-------------------------------------------|-------------------------------|-----------------------------------|
-| in the release container, with grain hostd     | a subprocess in the daemon's container     | through grain hostd           | `container` (agy `host` on the Google build) |
+| in the release container, with grain hostd     | a subprocess in the daemon's container     | through grain hostd           | `container` (agy `host` on the wrapper distribution's build) |
 | in a container with no hostd, or on Kubernetes | a subprocess in the daemon's container     | not offered                   | `container`                       |
 | on the bare machine (development only)         | not offered                               | the daemon's own child        | `host`                            |
 
@@ -78,7 +78,7 @@ containers. Neither means anything without the per-run launcher:
 ## History: Design A, a per-run container of the release image (removed)
 
 This section describes the per-run docker launcher as it was built for
-host-mode Cloudtops (#5012) and removed in task 5118, once task 5041 had
+host-mode workstations (#5012) and removed in task 5118, once task 5041 had
 removed host mode. `agent.ContainerHost`, `ReapCLIContainers` and the
 `ViaDocker` resolution no longer exist; the history is kept for the
 reasoning behind the MCP choice, which still holds for grain hostd.
@@ -108,7 +108,7 @@ path (`pkg/daemon/clirun.go`):
    installer writes them from `GRAIN_CLAUDE_RUN`, `GRAIN_CODEX_RUN` and
    `GRAIN_AGY_RUN`.
 3. **Built-in default:** `auto` for claude and codex, `host` for agy and
-   custom commands. `google/scripts/cloudtop-install.sh` writes
+   custom commands. a wrapper distribution's own installer writes
    `container` for claude and codex and `host` for agy.
 
 A per-CLI **image** override sits beside the location. The default image
@@ -217,7 +217,7 @@ endpoint.
 ## Host CLIs through grain hostd (one install shape)
 
 The owner's decision of 10-22 is one install shape: the daemon runs in the
-release container everywhere, Cloudtops included, and only the few things
+release container everywhere, workstations included, and only the few things
 that must run on the bare machine do. agy is the first: it needs the
 user's corp identity. A stdio capability server that needs host-only
 tooling is the second. The first of those is grain's own `host-git`
@@ -240,7 +240,7 @@ It is being landed in three stacked changes:
    host` field.
 3. **Installer (landed; "Installed by setup.sh" below).** The installer
    writes the systemd unit and the allowlist on the Google track and
-   migrates host-mode Cloudtops.
+   migrates host-mode workstations.
 4. **Host mode removed (task 5041).** Every machine install is the
    release container plus hostd, by default on both tracks;
    `GRAIN_HOSTD=0` leaves hostd out. `GRAIN_INSTALL_MODE=host` is
@@ -514,7 +514,7 @@ and Settings -> Models say which hostd answer the install has.
 installer chooses Granule microVMs, so the daemon's container does not need
 the docker socket for sandboxes, and the install sits at level 1, or level 3
 with hostd. On a host without `/dev/kvm`, container sandboxes put it at
-level 2. Enable nested virtualization (on a Cloudtop or GCE VM) rather than
+level 2. Enable nested virtualization (on a workstation or GCE VM) rather than
 accepting the socket.
 
 ## Deployments with no host executor
@@ -585,7 +585,7 @@ allowlist, so the card can be seen this way.
 **Defaults.** Behind hostd every CLI's built-in default is `container`,
 the daemon's own. An edition can register another with
 `daemon.RegisterHostdDefault`, which applies only behind hostd. The
-Google build registers agy `host`, so a Google-track install defaults to
+wrapper distribution build registers agy `host`, so a Google-track install defaults to
 agy on the host and claude, codex and custom commands in the container.
 The bare machine, Kubernetes and a container with no hostd keep their
 defaults.
@@ -677,7 +677,7 @@ Every machine install is container mode: `grain-daemon.service` is a
 beside it on every install, on the core track and the Google track alike,
 unless `GRAIN_HOSTD=0` is set. `GRAIN_HOSTD=auto` and `GRAIN_HOSTD=1` both
 install it; `auto` installs none for `GRAIN_USER=root`, since hostd refuses
-to run as root. `google/scripts/cloudtop-install.sh` installs the same shape.
+to run as root. a wrapper distribution's own installer installs the same shape.
 
 - **The binary.** The host extractor (`write_host_extractor`) takes the
   image's `grain` alone, to `/usr/local/bin/grain` on the host. The
@@ -748,7 +748,7 @@ to run as root. `google/scripts/cloudtop-install.sh` installs the same shape.
   (`/var/lib/grain/{data,scratch}` by default). It also removes what only
   host mode left on the machine: the nft sudoers rule, the old extractor's
   marker, the source copy under `/usr/local/share/grain/src`, and the
-  systemd drop-in a host-mode Upgrade wrote. `--git` on a Cloudtop no
+  systemd drop-in a host-mode Upgrade wrote. `--git` on a workstation no
   longer selects host mode. An ambient git connection borrows the user's
   own login, which only a daemon on the bare machine could, so `--git` now
   reports that and the summary says how to add a token connection instead.
@@ -803,7 +803,7 @@ When it does, the daemon:
   to run, since the next build expects container mode.
 
 The fix is the migration above: `sudo ./scripts/setup.sh` (or
-`./google/scripts/cloudtop-install.sh` on a Cloudtop). It keeps the data
+a wrapper distribution's own installer on a workstation). It keeps the data
 directory and the unit name, and the restart it ends in clears the notice.
 A container install with or without hostd, and a development daemon, show
 nothing. `grain demo -host-mode-install` shows the notice without being
@@ -845,8 +845,8 @@ Tests:
   directory.
 - `tests/deploy` covers hostd as the default on both tracks, the opt-out,
   the readiness lines and the migration's cleanup. `google/scripts`'
-  `TestCloudtopInstallerMigratesEveryHostInstallAndRefusesHostMode`
-  covers the Cloudtop installer's side.
+  `the wrapper installer's tests`
+  covers the Workstation installer's side.
 
 ## Upgrades and host runs
 
@@ -1053,8 +1053,8 @@ for the next hostd to list.
   machine executes nothing model-facing. It needs the credential and
   MCP path to cross into the guest, so it is parked.
 - **C: a full container release (now the shape).** The daemon itself
-  runs as the container (`GRAIN_INSTALL_MODE=container`), Cloudtops
-  included. It used to be parked because a Cloudtop would lose the host's
+  runs as the container (`GRAIN_INSTALL_MODE=container`), workstations
+  included. It used to be parked because a workstation would lose the host's
   corp environment for agy. grain hostd is what answers that: agy, and
   any `run: host` capability server, runs on the bare machine through
   hostd, and only those do ("Installed by setup.sh" above). Host mode

@@ -15,7 +15,7 @@ The inventory was built from the tree at `main` b93646ebc:
 - **Docs:** `docs/user-journeys.md`, `quickstart.md`, `git-hosts.md`,
   `connections-and-models.md`, `schedules.md`, `merge-queue-batching.md`,
   `release-candidate-management.md`, `closing-a-task-from-a-run.md`,
-  `local-policy.md`, `access-code.md`, and `google/docs/` (`cloudtop-install.md`,
+  `local-policy.md`, `access-code.md`, and `google/docs/` (`wrapper-installer.md`,
   `ghop.md`, `user-journeys.md`).
 - **API:** the 251 API routes in `pkg/ui/server.go`, grouped by resource (repos 55, tasks 39, executors 10,
   ci 10, state-repo 7, schedules 7, auth 7, agent-backends 7, upgrade 6,
@@ -31,12 +31,12 @@ row (S1), covered route by route by `tests/security`.
 
 | Code | Means |
 |---|---|
-| **D** | `scripts/post-reset-e2e.sh`: real daemons built from the tree, run four ways (core and Google builds, each on SQLite and on Postgres). Row ids D-I1 etc. match the script's own |
+| **D** | `scripts/post-reset-e2e.sh`: real daemons built from the tree, run four ways (core and wrapper distribution builds, each on SQLite and on Postgres). Row ids D-I1 etc. match the script's own |
 | **H** | the e2e harness, `go test ./tests/e2e/`: a real daemon, real git and git proxy, and real sandboxes, with GitHub played by `pkg/github/githubsim`. The test is named |
 | **C** | a grain CI job in `.grain/workflows/tests.yml` (`installer`, `ui e2e`, `postgres`, `frontend`, `go`, `run host`) |
 | **B** | the browser pass in this run: Playwright (Chromium) against a core build with the frontend embedded |
 | **L** | a live external service: the Gemini API through a real `agy` |
-| **M** | manual. A human on a Cloudtop, or with a real github.com sandbox repo. These rows are in the release checklist (`docs/release-candidate-management.md`) |
+| **M** | manual. A human on a workstation, or with a real github.com sandbox repo. These rows are in the release checklist (`docs/release-candidate-management.md`) |
 
 The **Standing** column says whether `.grain/workflows/post-reset-e2e.yml`
 re-runs the row every day. **CI** means `tests.yml` already runs it on every
@@ -50,8 +50,8 @@ pull request.
 | 2 | Access-code sign-in: no code gives 401, a wrong code 401, the code 200 (as a bearer); `grain access-code` prints it | access-code.md | D-I2 | yes |
 | 3 | The login form takes the code in lower case with spaces and sets the session cookie | access-code.md | D-I2b, B | yes |
 | 4 | `scripts/setup.sh` (core build) on a fresh host: the unit runs, the API answers, data ownership, the CLI wrapper | quickstart.md, user-journeys §1–2 | C `installer` (`TestSetupRunsToCompletion`, `TestTheDaemonServiceExistsAndIsRunning`, `TestTheCLIWrapperTalksToTheDeploymentItInstalled`, …) | CI |
-| 5 | The Cloudtop installer (Google build): fresh install, re-run changes nothing, no account made, model seeded, depot opt-in | google/docs/cloudtop-install.md | `google/scripts` tests (stubbed grain/gh/forgecli) + **M** on a real Cloudtop | yes (security job) + M |
-| 6 | Installer re-run: setup.sh and the Cloudtop installer | cloudtop-install.md | `TestCloudtopInstallerReRunChangesNothing`, `…ReRunKeepsAnExistingGitConnection`, `…ReRunKeepsTheInstalledAddress` + C `installer` | yes + CI |
+| 5 | The Workstation installer (wrapper distribution build): fresh install, re-run changes nothing, no account made, model seeded, depot opt-in | the wrapper distribution's own docs | `google/scripts` tests (stubbed grain/gh/forgecli) + **M** on a real Workstation | yes (security job) + M |
+| 6 | Installer re-run: setup.sh and the Workstation installer | wrapper-installer.md | `the wrapper installer's tests`, `…ReRunKeepsAnExistingGitConnection`, `…ReRunKeepsTheInstalledAddress` + C `installer` | yes + CI |
 | 7 | Upgrade from v1.13.0: the new build refuses the old data dir, leaves it untouched, and says to start fresh and seed with `grain connections import` | single-tenant-reset.md "What grain does about it itself" | D-I5 (builds v1.13.0 from the tag) | yes |
 | 8 | The startup guard on a pre-reset or multi-tenant dir; a store a schema back; a dump with a second team or team members | reset stage 5, 6-ii | D-I5; `go` (`TestADumpWithASecondTeamIsRefused`, `TestADumpWithAnotherTeamsMemberIsRefused`, `TestTheGoldenDumpMigratesIntoThisBuildsSchema`); interim check 8 rows 5–8 | yes + CI |
 | 9 | Restarting on a dir this build wrote is clean | reset stage 5 | D-I3 | yes |
@@ -65,9 +65,9 @@ pull request.
 |---|---|---|---|---|
 | 13 | A PAT git connection against a **real github.com** sandbox repo | git-hosts.md | **M** (github-sandbox isn't configured on this deployment; the owner said to use git servers and githubsim). The githubsim equivalent is H (every lifecycle test runs with a PAT-style connection) | M |
 | 14 | A GitHub App connection against real github.com | git-hosts.md | **M**. githubsim equivalent: H `TestARunGitHubRefusesTheDeploymentsCredential…`, `TestARunWrongHostCredentialFails…` | M |
-| 15 | The command-backed forge (`forgecli`) is advertised only by the Google build | git-hosts.md, google/docs/ghop.md | D-C3 (fake `forgecli` on PATH) | yes |
+| 15 | The command-backed forge (`forgecli`) is advertised only by the wrapper distribution's build | git-hosts.md, the wrapper distribution's own docs | D-C3 (fake `forgecli` on PATH) | yes |
 | 16 | Core refuses the `forgecli` source cleanly | git-hosts.md | D-C3b | yes |
-| 17 | Depot / GHOP (`depot.code.corp.example`) through the real `forgecli` | google/docs/ghop.md | **M** on a Cloudtop | M |
+| 17 | Depot / GHOP (`git.example.com`) through the real `forgecli` | the wrapper distribution's own docs | **M** on a workstation | M |
 | 18 | Gemini model discovery: saving a key advertises the provider's models | connections-and-models.md "Advertised models" | L (real `agy` 1.2.2 + the Gemini API) | no (no live key in a scheduled run) |
 | 19 | Per-model pause and resume; pipeline pause | connections-and-models.md "Per-model pauses" | D-L3; H `TestWalkthroughRefusalBurstPausesTheFrameworkAndQueuedTasksWait`, `…ReplayedClaudeSessionLimitPausesUntilItsReset`, `…AShortPauseExpires…` | yes |
 | 20 | Default model on a fresh install: none until set; then it reads back | connections-and-models.md | D-C5, D-I4 | yes |

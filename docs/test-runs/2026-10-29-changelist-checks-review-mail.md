@@ -20,7 +20,7 @@
 
 ## Stubs
 
-Everything ran against the real server, store, built frontend, browser and `grain mcpserver`. The only boundary replaced is the one the brief names: the Critique/TAP edition is not in this repository, so the demo's in-process change provider (`pkg/demo`'s `demoChangelists`) stands in for it. On the base commit that stand-in answered only Observe, Submit and Sync (finding F1). On this branch it also answers Checks, Reply/Resolve, Publish and Mail from its remembered observations. Nothing leaves the process.
+Everything ran against the real server, store, built frontend, browser and `grain mcpserver`. The only boundary replaced is the one the brief names: the code review/TAP edition is not in this repository, so the demo's in-process change provider (`pkg/demo`'s `demoChangelists`) stands in for it. On the base commit that stand-in answered only Observe, Submit and Sync (finding F1). On this branch it also answers Checks, Reply/Resolve, Publish and Mail from its remembered observations. Nothing leaves the process.
 
 Credential expiry (gap 4) cannot be triggered in the demo: its provider has no credentials to expire, and the demo does not run `change.Watch`. It is exercised by a Go test over real components instead (step 12).
 
