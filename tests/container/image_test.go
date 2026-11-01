@@ -265,10 +265,11 @@ echo source-readable`
 }
 
 // sourceExportMaxMB is what that tree may weigh. grain's tracked source
-// is ~27MB, so this is roughly five times the room it needs; raise it
-// when the repository honestly grows into it, and keep
+// is ~118MB (2026-11-01), so this is roughly twice the room it needs
+// while the gigabytes of a leaked build cache still fail; raise it when
+// the repository honestly grows into it, and keep
 // scripts/export-source.sh's own ceiling in step.
-const sourceExportMaxMB = 128
+const sourceExportMaxMB = 256
 
 // ...and it carries nothing else.
 //
