@@ -787,14 +787,18 @@ const SETTING_BY_ID = new Map(
 
 // settingLocation is the Settings section and card anchor that hold a
 // setting key (the keys in GET /api/settings's pendingRestart and
-// unrunnable), or null for a key no section draws.
+// unrunnable), or null for a key no section draws. target is what a link
+// to the setting scrolls to: the field itself (its data-setting-id), as
+// the filter's own pick does, since a card's top can be a screen or more
+// above a field near its foot (Legacy capabilities' GitHub host).
 export function settingLocation(id) {
   const entry = SETTING_BY_ID.get(id);
   if (!entry) return null;
   return {
     section: entry.section,
     anchor: entry.anchor,
-    href: `/settings/${entry.section}#${entry.anchor}`,
+    target: entry.id,
+    href: `/settings/${entry.section}#${entry.id}`,
   };
 }
 
