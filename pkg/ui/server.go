@@ -237,6 +237,9 @@ func (s *Server) routes() {
 	// the same shape (and the same verb) /api/secrets/{secret}/{key}
 	// already uses for the write this one delegates to.
 	s.route("PUT /api/tasks/{id}/secret", s.handleSetTaskSecret)
+	s.route("POST /api/tasks/{id}/config-change", s.handleProposeConfigChange)
+	s.route("POST /api/tasks/{id}/config-change/approve", s.handleApproveConfigChange)
+	s.route("POST /api/tasks/{id}/config-change/reject", s.handleRejectConfigChange)
 	s.route("GET /api/tasks/{id}/attachments/{attachmentId}", s.handleGetAttachment)
 	s.route("POST /api/tasks/{id}/close", s.handleClose)
 	s.route("POST /api/tasks/{id}/stop", s.handleStop)

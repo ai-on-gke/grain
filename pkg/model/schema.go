@@ -351,7 +351,11 @@ import "strconv"
 // branch names in addition to the deployment and task-id uniquifiers.
 // Existing tasks keep the branch recorded on their row, and any other
 // template is left alone.
-const SchemaVersion = 78
+//
+// 79 adds `pending_config_change` to `task_observation`: the grain/config
+// change a session proposed and is parked on (model.PendingConfigChange),
+// as JSON.
+const SchemaVersion = 79
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -721,6 +725,7 @@ var Tables = []string{
   ` + "`pending_question_comment_id`" + ` INTEGER  NULL,
   ` + "`baseline_comment_id`" + `         INTEGER  NULL,
   ` + "`pending_secret`" + `              TEXT     NULL,
+  ` + "`pending_config_change`" + `       TEXT     NULL,
   ` + "`merge_queue_blocked_at`" + `      DATETIME NULL,
   ` + "`merge_queue_refreshed_at`" + `    DATETIME NULL,
   ` + "`merge_queue_repair_at`" + `       DATETIME NULL,

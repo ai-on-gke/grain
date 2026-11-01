@@ -534,6 +534,30 @@ func (d daemonSandbox) RecreateSandbox(ctx context.Context) (mcp.SandboxRecreati
 // daemon's store, and this process holds a transport into a sandbox and
 // nothing else. Which task it lands on is fixed by -task at process
 // start, so a run can only ever narrate itself.
+// daemonConfigChanges is propose_config_change's mcp.ConfigChangeProposer:
+// the daemon diffs, validates and records the branch the tool pushed, for
+// this run's own task.
+type daemonConfigChanges struct {
+	client *ui.HTTPClient
+	taskID string
+}
+
+func (d daemonConfigChanges) ProposeConfigChange(ctx context.Context, p mcp.ConfigChangeProposal) (*model.PendingConfigChange, error) {
+	return d.client.ProposeConfigChange(ctx, d.taskID, ui.ConfigChangeProposal{
+		Summary: p.Summary, Description: p.Description, Branch: p.Branch, HeadSHA: p.HeadSHA,
+	})
+}
+
+// writesConfigRepo reports whether t may push grain/config.
+func writesConfigRepo(t ui.Task) bool {
+	for _, w := range t.Writes {
+		if ref, err := model.ParseRepo(w.Repo); err == nil && model.IsConfigRepo(ref) {
+			return true
+		}
+	}
+	return false
+}
+
 type daemonStatus struct {
 	client *ui.HTTPClient
 	taskID string
@@ -2078,6 +2102,13 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		// (ui.Client.RenameConsoleSessionOfTask refuses any other
 		// task), and this gate is so an ordinary run is not shown a
 		// tool that could only ever refuse.
+		// propose_config_change is a grain/config writer's: the director,
+		// as grain_config.console_sessions declares it, or any task
+		// somebody granted grain/config as a write target.
+		if writesConfigRepo(taskDetail.Task) {
+			registry.Register(mcp.NewProposeConfigChangeTools(
+				daemonConfigChanges{client: client, taskID: *taskID}, *taskID, tools)...)
+		}
 		if taskDetail.Task.ConsoleSession != "" && taskDetail.Task.Interactive {
 			registry.Register(mcp.NewRenameSessionTools(
 				daemonSessionRenamer{client: client, taskID: *taskID})...)
