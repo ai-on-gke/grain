@@ -140,8 +140,19 @@ async function runNow(page, title) {
   const before = new Set((await ciRuns(page)).map((r) => r.id));
   await page.goto("/processes?kind=workflow");
   await page.getByRole("link", { name: title, exact: true }).click();
-  page.once("dialog", (dialog) => dialog.accept());
+  let question = "";
+  page.once("dialog", (dialog) => {
+    question = dialog.message();
+    return dialog.accept();
+  });
   await page.getByRole("button", { name: "Run now" }).click();
+  // It is the start that is immediate, not the review.
+  await expect
+    .poll(() => question)
+    .toContain(
+      "It starts a CI run of the workflow it was declared in straight away, " +
+        "to be reviewed when it finishes;",
+    );
   let run;
   await expect
     .poll(async () => {
