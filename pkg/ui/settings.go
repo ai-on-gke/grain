@@ -755,6 +755,12 @@ type Settings struct {
 	// settings are locked in the UI and REST API in favour of config
 	// repository pull requests. False by default.
 	SettingsLocked bool `json:"settingsLocked"`
+	// ConfigRepoOnly is GET /api/config's configRepoOnly for this row:
+	// whether the API refuses its non-bootstrap writes in favour of a
+	// config pull request. Unlike SettingsLocked it is false under the
+	// directConfigWrites opt-out, so it is what the UI draws read-only
+	// on (settings-mutability D-10).
+	ConfigRepoOnly bool `json:"configRepoOnly"`
 }
 
 type UnrunnableSetting struct {
@@ -1155,6 +1161,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxCommitment:                  c.sandboxCommitment(cfg),
 		ShowClosedByDefault:                cfg.ShowClosedByDefault,
 		SettingsLocked:                     cfg.SettingsLocked,
+		ConfigRepoOnly:                     c.rowConfigRepoOnly(ctx, cfg),
 		EnvironmentName:                    cfg.EnvironmentName,
 		PromptExtension:                    cfg.PromptExtension,
 		RepairTemplateID:                   cfg.RepairTemplateID,
@@ -1451,6 +1458,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 		out.Sources = sources
 		out.SettingSources = sources
 		out.ExternalConfigRepo, out.ExternalConfigBranch = c.externalConfigRepo(ctx)
+		out.ConfigRepoOnly = c.rowConfigRepoOnly(ctx, def)
 		return out, nil
 	}
 	settings := c.settingsFrom(ctx, *cfg, repoConfigs)

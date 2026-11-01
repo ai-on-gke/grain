@@ -436,9 +436,14 @@ export default function ModelBackendPage({
                       Use a credential for this connection
                     </MenuItem>
                   )}
+                  {/* Named as the connection list names it, by id when it
+                      has no name: every source shares this one's framework,
+                      so modelBackendLabel's framework fallback gave several
+                      nameless ones the same "Reuse authentication from
+                      Claude" and no way to tell them apart. */}
                   {sources.map((source) => (
                     <MenuItem key={source.id} value={`reuse:${source.id}`}>
-                      Reuse authentication from {modelBackendLabel(source)}
+                      Reuse authentication from {source.name || source.id}
                     </MenuItem>
                   ))}
                 </TextField>

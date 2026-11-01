@@ -339,19 +339,26 @@ func TestRunDispatchRecordsTheLeasesOfARunItDetachesFrom(t *testing.T) {
 // followed, for its sandbox to be rebuilt -- what an adopted run's agent
 // calling recreate_sandbox does.
 type recreatingHost struct {
-	recreations *orchestrator.SandboxRecreations
-	taskID      string
-	stale       string
-	got         orchestrator.SandboxRecreation
-	err         error
-	staleKept   bool
-	released    []string
+	recreations  *orchestrator.SandboxRecreations
+	taskID       string
+	sandboxName  string
+	stale        string
+	got          orchestrator.SandboxRecreation
+	err          error
+	bySandboxGot orchestrator.SandboxRecreation
+	bySandboxOK  bool
+	bySandboxErr error
+	staleKept    bool
+	released     []string
 }
 
 func (h *recreatingHost) Attach(ctx context.Context, _ runhost.Info, _ int64, _ io.Writer) (string, error) {
 	h.got, h.err = h.recreations.Recreate(ctx, h.taskID)
 	_, statErr := os.Stat(h.stale)
 	h.staleKept = statErr == nil
+	if h.sandboxName != "" {
+		h.bySandboxGot, h.bySandboxOK, h.bySandboxErr = h.recreations.RecreateBySandbox(ctx, h.sandboxName)
+	}
 	return "", errors.New("the CLI exited")
 }
 
@@ -389,7 +396,7 @@ func TestResumeAdoptedRunCanRecreateItsSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	recreations := orchestrator.NewSandboxRecreations()
-	host := &recreatingHost{recreations: recreations, taskID: task.ID, stale: stale}
+	host := &recreatingHost{recreations: recreations, taskID: task.ID, sandboxName: d.RunID, stale: stale}
 	fw := parsingFramework{parsed: make(chan string, 1), earlier: make(chan string, 1)}
 	deps := orchestrator.Deps{Store: store, Client: client, Sandboxes: sandboxes,
 		Framework: orchestrator.StaticFramework(fw),
@@ -402,6 +409,10 @@ func TestResumeAdoptedRunCanRecreateItsSandbox(t *testing.T) {
 
 	if host.err != nil {
 		t.Fatalf("Recreate during the adopted run: %v, want a rebuild", host.err)
+	}
+	if !host.bySandboxOK || host.bySandboxErr != nil || host.bySandboxGot.Sandbox != d.RunID {
+		t.Fatalf("RecreateBySandbox during the adopted run: ok=%v err=%v got=%+v, want rebuild of %q",
+			host.bySandboxOK, host.bySandboxErr, host.bySandboxGot, d.RunID)
 	}
 	if host.staleKept {
 		t.Error("the old sandbox's contents survived the rebuild")
@@ -417,6 +428,9 @@ func TestResumeAdoptedRunCanRecreateItsSandbox(t *testing.T) {
 	_, err = recreations.Recreate(ctx, task.ID)
 	if err == nil || !strings.Contains(err.Error(), "no run of this task is registered") {
 		t.Fatalf("Recreate after the adopted run ended: %v, want no run registered", err)
+	}
+	if _, ok, _ := recreations.RecreateBySandbox(ctx, d.RunID); ok {
+		t.Fatalf("RecreateBySandbox after the adopted run ended reported ok=true, want false")
 	}
 	if _, err := os.Stat(filepath.Join(sandboxDir, d.RunID)); !os.IsNotExist(err) {
 		t.Fatalf("the sandbox outlived the run: %v", err)
