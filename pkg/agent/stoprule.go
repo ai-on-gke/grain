@@ -139,12 +139,13 @@ func DecideStop(interactive bool, finalText string, calls []ToolCall) StopDecisi
 // that has been pushed. add_review_comment is how a run reviewing
 // another task's change says what it found, and counts for that reason.
 var closingTools = map[string]bool{
-	"comment_on_issue":   true,
-	"ask_question":       true,
-	"nothing_needed":     true,
-	"request_secret":     true,
-	"open_pull_request":  true,
-	"add_review_comment": true,
+	"comment_on_issue":      true,
+	"ask_question":          true,
+	"nothing_needed":        true,
+	"request_secret":        true,
+	"propose_config_change": true,
+	"open_pull_request":     true,
+	"add_review_comment":    true,
 }
 
 // MadeClosingMove reports whether calls include a move a background run
