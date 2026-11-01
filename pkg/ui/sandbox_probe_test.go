@@ -14,10 +14,10 @@
 
 package ui_test
 
-// POST /api/sandbox-probe: what `grain sandbox probe`, and through it
-// scripts/deploy-gke.sh --check, asks the daemon for. The backend that
-// builds the sandbox is pkg/daemon's; these tests stand a fake in its
-// place, the way sandbox_recreate_test.go does for its neighbour.
+// POST /api/sandbox-probe: what `grain sandbox probe` asks the daemon
+// for. The backend that builds the sandbox is pkg/daemon's; these tests
+// stand a fake in its place, the way sandbox_recreate_test.go does for
+// its neighbour.
 
 import (
 	"context"
@@ -110,11 +110,10 @@ func TestSandboxProbeUnavailableWithoutAProber(t *testing.T) {
 	}
 }
 
-// scripts/deploy-gke.sh --check reaches the daemon from inside its own
-// pod, over loopback. Loopback is not trusted on its own: the check has
-// to present the local API token, which the grain CLI does when
-// GRAIN_DATA_DIR names the daemon's data directory. A bare request --
-// what the check used to make with wget -- is refused.
+// A health check reaching the daemon over loopback is not trusted on
+// its own: the caller has to present the local API token, which the
+// grain CLI does when GRAIN_DATA_DIR names the daemon's data directory.
+// A bare request without a token is refused.
 func TestLoopbackWithoutTheLocalAPITokenIsRefused(t *testing.T) {
 	t.Parallel()
 	client := sandboxProbeClient(t, &fakeSandboxProber{})

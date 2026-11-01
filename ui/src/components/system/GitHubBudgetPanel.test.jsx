@@ -12,9 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { GitHubBudgetView } from "./GitHubBudgetPanel.jsx";
+import { act, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import api from "../../api.js";
+import GitHubBudgetPanel, {
+  BUDGET_REFRESH_MS,
+  GitHubBudgetView,
+} from "./GitHubBudgetPanel.jsx";
+
+vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
 const now = Date.parse("2026-10-26T04:10:00Z");
 
@@ -96,5 +102,52 @@ describe("GitHubBudgetView", () => {
     expect(screen.getByTestId("health-github-polls")).toHaveTextContent(
       "Idle-poll backoff: 3 of 4 tracked PRs backed off · poll interval median 2m 0s, max 8m 0s (30s base, 8m 0s cap).",
     );
+  });
+});
+
+describe("GitHubBudgetPanel", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    api.mockReset();
+  });
+
+  const polls = (backedOff, medianSeconds) => ({
+    github: {
+      ...github({ remaining: 3200 }),
+      polls: {
+        tracked: 3,
+        backedOff,
+        baseSeconds: 30,
+        capSeconds: 480,
+        medianSeconds,
+        maxSeconds: 480,
+      },
+    },
+  });
+
+  // An open Health page follows the backoff: a webhook resetting a pull
+  // request's interval shows without a reload, and a failed read keeps
+  // the last figures (docs/test-runs/2026-10-31-hostd-builtins-github-backoff.md).
+  it("re-reads the budget while it is open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api
+      .mockResolvedValueOnce(polls(2, 480))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(polls(1, 30));
+    render(<GitHubBudgetPanel />);
+    expect(await screen.findByTestId("health-github-polls")).toHaveTextContent(
+      "2 of 3 tracked PRs backed off · poll interval median 8m 0s",
+    );
+    await act(() => vi.advanceTimersByTimeAsync(BUDGET_REFRESH_MS));
+    expect(api).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("health-github-polls")).toHaveTextContent(
+      "2 of 3 tracked PRs backed off",
+    );
+    await act(() => vi.advanceTimersByTimeAsync(BUDGET_REFRESH_MS));
+    expect(api).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId("health-github-polls")).toHaveTextContent(
+      "1 of 3 tracked PRs backed off · poll interval median 30s",
+    );
+    expect(api).toHaveBeenCalledWith("/api/metrics?section=github");
   });
 });

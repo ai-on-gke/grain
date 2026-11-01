@@ -917,6 +917,11 @@ type Config struct {
 	// admission before anything is minted. Stored as JSON in one column
 	// and exported to grain/config with the rest of this row.
 	CapabilityPolicy CapabilityPolicy
+	// NewTaskForm is the New Task form's configuration
+	// (settings/new-task-form.yml, new_task_form.go); nil when the
+	// deployment has none, and the form is drawn as it always was.
+	// Stored as JSON in one column.
+	NewTaskForm *NewTaskForm
 	// CLIRun is where each agent CLI runs, keyed by framework name
 	// (claude, codex, antigravity, custom): on the host, in a per-run
 	// container of an image, or whichever of those the host allows
@@ -1128,7 +1133,7 @@ const DefaultTaskBranchTemplate = "grain/{deployment}/task-{id}-{slug}"
 
 // UnsluggedTaskBranchTemplate is the DefaultTaskBranchTemplate
 // NewDeploymentConfig seeded before grain/task-56 added {slug} to it.
-// Schema migration 70 upgrades a stored grain_config row still holding
+// Schema migration 78 upgrades a stored grain_config row still holding
 // this template to DefaultTaskBranchTemplate so existing deployments
 // include a slug of the task's title on new task branches in addition
 // to the deployment and task-id uniquifiers.

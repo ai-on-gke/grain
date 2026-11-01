@@ -2133,7 +2133,7 @@ func TestNewTaskBranchesCarryTheDeploymentID(t *testing.T) {
 }
 
 // A deployment seeded before grain/task-56 has UnsluggedTaskBranchTemplate
-// ("grain/{deployment}/task-{id}") stored in grain_config. Migration 75
+// ("grain/{deployment}/task-{id}") stored in grain_config. Migration 78
 // upgrades that stored default to DefaultTaskBranchTemplate
 // ("grain/{deployment}/task-{id}-{slug}") so newly created tasks include
 // a portion of the task's title in their branch name in addition to the
@@ -2153,11 +2153,11 @@ func TestMigrationUpgradesUnsluggedDefaultTaskBranchTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 74 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 77 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-74 store: %v", err)
+		t.Fatalf("migrating a version-77 store: %v", err)
 	}
 
 	after, err := store.GetConfig(ctx)
@@ -3592,6 +3592,47 @@ func TestStartRunRejectsASecondLiveRunOnTheSameTask(t *testing.T) {
 	}
 	if err := store.StartRun(ctx, second, model.Limits{}); err != nil {
 		t.Fatalf("StartRun for a second attempt after the first finished: %v", err)
+	}
+}
+
+// TestStartRunNeverRefusesAConsoleSessionAtFullCapacity is the store's
+// half of the session admission guarantee (docs/sandbox-budget.md): the
+// in-transaction capacity check that refuses ordinary work at a full pool,
+// and a merger at a full merger pool, never refuses a console session or a
+// task holding priority-dispatch.
+func TestStartRunNeverRefusesAConsoleSessionAtFullCapacity(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	session := task("sess1", true)
+	session.Origin.Reason = model.ReasonConsoleSession
+	session.Interactive = true
+	session.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
+	session.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
+	steward := task("stew1", true)
+	steward.Grants = []model.Grant{{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel}}
+	for _, tk := range []model.Task{task("w0rk", true), task("w1rk", true), session, steward} {
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limits := model.Limits{Workers: 1}
+	start := func(id string) error {
+		return store.StartRun(ctx, model.Run{ID: id + "-1", TaskID: id, Sandbox: id + "-1", Attempt: 1, StartedAt: now}, limits)
+	}
+	if err := start("w0rk"); err != nil {
+		t.Fatalf("filling the worker pool: %v", err)
+	}
+	if err := start("w1rk"); !errors.Is(err, model.ErrAtCapacity) {
+		t.Fatalf("an ordinary task at full capacity = %v, want ErrAtCapacity", err)
+	}
+	if err := start("sess1"); err != nil {
+		t.Fatalf("a console session at full capacity was refused: %v", err)
+	}
+	if err := start("stew1"); err != nil {
+		t.Fatalf("a priority-dispatch task at full capacity was refused: %v", err)
+	}
+	if live, err := store.LiveRunCounts(ctx); err != nil || live != (model.RunCounts{Workers: 1, Directors: 2}) {
+		t.Fatalf("live = %+v (%v), want one worker and both priority runs counted apart", live, err)
 	}
 }
 

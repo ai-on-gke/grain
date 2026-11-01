@@ -10,12 +10,12 @@ It is the end-to-end design that the more detailed docs fit into. It does not re
 
 A deployment has four planes:
 
-1. **The controller** (`grain daemon`). It holds the state, runs the reconcilers and the CI engine, serves the UI and API, and terminates every connection the other planes make.
-2. **Sandboxes.** These are disposable granule microVMs, one per agent run or CI job, in pods on Kubernetes. They are where repository code, tests and builds run.
-3. **`grain hostd`.** Zero or more processes outside the cluster. Each runs allowlisted programs under its host user's identity: detached agent CLIs, host-pinned capability servers, host scripts, and anything else that needs that user's ambient credentials.
+1. **The controller** (`grain daemon`). It runs on the host, holds the state, runs the reconcilers and the CI engine, serves the UI and API, and terminates every connection the other planes make.
+2. **Sandboxes.** These are disposable granule microVMs, one per agent run or CI job, either locally over `/dev/kvm` or in pods on a GKE sandbox cluster (`kubernetes-granule`). They are where repository code, tests and builds run.
+3. **`grain hostd`.** One or more processes running outside the controller container — on the same host (over `/run/grain-hostd/hostd.sock`) or on remote workstations dialling in. Each runs allowlisted programs under its host user's identity: detached agent CLIs, host-pinned capability servers, host scripts, and anything else that needs that user's ambient credentials.
 4. **Agent CLIs and the agent surface.** `claude`, `codex` and `antigravity` (`agy`) run in the controller's container or detached under hostd. Their tools are grain's MCP control server (`grain mcpserver`) and, inside the sandbox, the `grain` CLI.
 
-`docs/architecture.md` and `docs/three-pieces.md` describe an earlier four-component split: grain, a separate grit CI controller, a model-server for agent CLIs, and hostd. Two decisions in `docs/design/grain-on-gke.md` change that. CI stays inside grain, with grit's package boundary kept but no separate service (decisions 2 and 4). Remote executors and hostd become one concept, hostd (decision 5). The four planes here are the result: grit is a package boundary inside the controller, and model-server is a hostd.
+`docs/architecture.md` and `docs/three-pieces.md` describe an earlier four-component split: grain, a separate grit CI controller, a model-server for agent CLIs, and hostd. Two decisions in `docs/design/grain-on-gke.md` change that. CI stays inside grain, with grit's package boundary kept but no separate service (decisions 2 and 4). Remote executors and hostd become one concept, hostd (decision 5). (Cutting over the `grain` controller itself to a GKE pod was retired on 2026-10-31; `grain daemon` continues to run on the host.) The four planes here are the result: grit is a package boundary inside the controller, and model-server is a hostd.
 
 ```mermaid
 flowchart LR
@@ -23,49 +23,45 @@ flowchart LR
     repos[(repositories)]
     hooks[webhooks]
   end
-  subgraph gcp["GCP"]
-    sql[(Cloud SQL<br/>PostgreSQL)]
-    sm[(Secret Manager)]
-  end
-  subgraph cluster["GKE cluster"]
-    subgraph ctl["Controller pod: grain daemon (1 replica, fenced)"]
+  subgraph host["Controller host (cloudtop / server)"]
+    store[("Local state (/var/lib/grain)<br/>SQLite or Postgres · secrets.enc")]
+    subgraph ctl["Controller container: grain daemon"]
       rec[reconcilers<br/>dispatch · CI · merge queue<br/>sync · schedules]
       api[UI / REST / SSE]
       acc[sandbox-access acceptor<br/>pkg/sandboxaccess :4244]
       gsvc["guest services<br/>git proxy · /fs · /cli · /cap<br/>model proxy · package cache"]
-      hacc["hostd acceptor<br/>/api/hostd/connect"]
+      hacc["hostd acceptor<br/>unix socket & /api/hostd/connect"]
       mcpc[grain mcpserver<br/>for container-run CLIs]
     end
-    subgraph pod["Sandbox pod (one per run or CI job)"]
-      wrap[granule wrapper]
-      guest[guest VM<br/>repo · tests · grain CLI]
-    end
-  end
-  subgraph host["Cloudtop / workstation"]
-    hostd["grain hostd<br/>allowlist /etc/grain/hostd.yaml"]
+    hostd["grain hostd (local or remote)<br/>allowlist /etc/grain/hostd.yaml"]
     cli[detached agent CLI<br/>claude · codex · agy]
     hmcp[grain mcpserver /<br/>grain codex-detached]
     caps[host capability servers<br/>gcp · gchat · host-script · host-git]
   end
-  browser((operator)) -->|IAP| api
+  subgraph cluster["Sandbox pool (GKE kubernetes-granule or local KVM)"]
+    subgraph pod["Sandbox pod / VM (one per run or CI job)"]
+      wrap[granule wrapper]
+      guest[guest VM<br/>repo · tests · grain CLI]
+    end
+  end
+  browser((operator)) --> api
   hooks --> api
-  rec <--> sql
-  ctl -. Workload Identity .-> sm
+  rec <--> store
   rec <-->|forge API, git| repos
-  wrap ==>|dial-out mTLS channel| acc
-  guest -->|127.0.0.1:9728 and Service IP| gsvc
-  hostd ==>|dial-in WebSocket| hacc
+  ctl <-->|pod lifecycle / tunnels or dial-out mTLS| wrap
+  guest -->|127.0.0.1:9728 forwarded / Service| gsvc
+  hostd ==>|unix socket or dial-in WebSocket| hacc
   hostd --> cli
   cli --> hmcp
   hostd --> caps
-  hmcp -. MCP tunnel on the hostd connection .-> hacc
+  hmcp -. HTTP or MCP tunnel on the hostd connection .-> hacc
 ```
 
-Thick arrows are the two long-lived connections that other planes open to the controller. Nothing opens a connection to a sandbox, and nothing opens a connection to a hostd. Both of those dial the controller.
+Nothing opens an unsolicited inbound connection to a guest VM or to a remote hostd: hostd connects to the controller (over the local unix socket on the same host, or an outbound WebSocket from a remote machine), and sandboxes reach only the controller's explicitly exposed proxy ports.
 
 ### 1. The controller
 
-The controller is one `grain` process. On GKE it is a Deployment with one replica and `strategy: Recreate`. A fence keeps a partitioned old pod from acting next to its replacement (`docs/design/grain-on-gke.md`, "The daemon" and "High availability"). On a single machine it is the release container, with hostd beside it on the bare machine (`docs/design/cli-run-location.md`, "Trust levels"). A bare-machine daemon still exists for `grain demo`, development and the e2e harness. No installer creates one.
+The controller is one `grain` process (`grain daemon`), running on the host inside the release container (`grain-daemon.service`), with `grain hostd` beside it on the bare machine (`docs/design/cli-run-location.md`, "Trust levels"). Standalone Kubernetes manifests (`deploy/kubernetes/`) also exist for self-contained cluster installs, though cutting over the host deployment's controller to GKE was retired (`docs/design/grain-on-gke.md`). A bare-machine daemon still exists for `grain demo`, development and the e2e harness. No installer creates one.
 
 **Reconcilers.** All behaviour is level-triggered. Each reconciler reads the store and the forge, then moves things one step toward where they should be. The main ones:
 
@@ -80,20 +76,20 @@ The controller is one `grain` process. On GKE it is a Deployment with one replic
 
 | Store | Holds | Where |
 | --- | --- | --- |
-| Database | Tasks, observations, runs, comments, links, CI runs, merge batches, sandbox rows, cursors | SQLite on one machine, PostgreSQL (Cloud SQL, IAM auth, no password) on GKE |
+| Database | Tasks, observations, runs, comments, links, CI runs, merge batches, sandbox rows, cursors | SQLite under `/var/lib/grain/store/grain.db` by default (or PostgreSQL configured via `db-config.json`) |
 | `grain/config` state repo | Config tables (scrubbed of secrets), memory, release notes, operator scripts | A git repository. Settings changes are committed to it, and merged PRs are applied back |
-| Secrets | Model keys, GitHub App key, capability server credentials, values set through `request_secret` | `secrets.enc`, sealed to a private key. On GKE the key and the bootstrap tokens are in Secret Manager, mounted through the CSI driver, never as Kubernetes Secret objects |
-| Data volume | Checkouts, agent HOMEs and session stores, transcripts, run spools, CI cache and artifacts, package cache objects | The `grain-data` PVC (ReadWriteOnce) on GKE, `/var/lib/grain` on a machine |
+| Secrets | Model keys, GitHub App key, capability server credentials, values set through `request_secret` | `secrets.enc` under `/var/lib/grain/secrets/`, sealed to a `0600` private key (`secrets.key`) on the host |
+| Data volume | Checkouts, agent HOMEs and session stores, transcripts, run spools, CI cache and artifacts, package cache objects | `/var/lib/grain` on the controller host (or the `grain-data` ReadWriteOnce PVC on standalone Kubernetes installs) |
 
 The database is the operational source of truth. `grain/config` is the reviewable copy of the configuration, and the way to change it from git. Secrets never appear in either one.
 
-**Control plane and API.** The UI, the REST and SSE API, webhooks and the agent API share one HTTP server (`pkg/ui`). On GKE, operators reach it through a Gateway behind IAP. Webhooks reach it through a separate path without IAP. Every route has a scope (`pkg/ui/route_scopes.go`), and a credential is accepted only on the routes its kind is for. A UI session, an agent API token, a sandbox token and a hostd token are four different kinds, and none of them works where another is expected (`accesscode_internal_test.go`).
+**Control plane and API.** The UI, the REST and SSE API, webhooks and the agent API share one HTTP server (`pkg/ui`). Operators reach it on loopback, over an SSH or reverse proxy, or behind IAP when configured. Every route has a scope (`pkg/ui/route_scopes.go`), and a credential is accepted only on the routes its kind is for. A UI session, an agent API token, a sandbox token and a hostd token are four different kinds, and none of them works where another is expected (`accesscode_internal_test.go`).
 
 **Services the controller runs for other planes.** The controller also terminates:
 
-- the **sandbox-access acceptor** (`pkg/sandboxaccess`, `Service/grain-access`, port 4244);
-- the **guest-facing services** (`Service/grain-sandbox`): the git proxy and the namespace, CLI, API and capability routes behind it, the model proxies, and the package cache's DNS and HTTP(S) listeners;
-- the **hostd acceptor** (`/api/hostd/connect`, which aliases the older `/api/executors/connect`);
+- the **sandbox-access acceptor** (`pkg/sandboxaccess`, port 4244, used when in-cluster `k8s-granule` sandboxes dial out; off-cluster `gke-sandboxes` hosts reach pods via `kubectl exec` and `granule forward`);
+- the **guest-facing services**: the git proxy and the namespace, CLI, API and capability routes behind it, the model proxies, and the package cache's DNS and HTTP(S) listeners;
+- the **hostd acceptor** (`/run/grain-hostd/hostd.sock` on the same machine, and `/api/hostd/connect` over WebSocket for remote hostds, aliasing the older `/api/executors/connect`);
 - the **capability broker**, which attaches to every configured capability server, mints and releases passes, and proxies attempt-scoped MCP endpoints (`docs/capabilities-spec.md` §4 and §5).
 
 **Package boundaries.** Inside the process, the code keeps the rule in `docs/three-pieces.md`: tasks, then the forge, then sandboxes, and nothing points up. `pkg/granule` and `pkg/sandboxaccess` import nothing from `pkg/model`. `pkg/grit/...` takes no grain-core imports (`pkg/grit/independence_test.go`). That is what keeps a later split of CI into its own service a matter of new interface implementations rather than extraction.
@@ -158,7 +154,7 @@ Long waits are run by the controller. `grain ci wait` holds its HTTP request for
 
 ### 3. `grain hostd`
 
-hostd is the same `grain` binary, run as `grain hostd` by a systemd unit, as the installing user, outside the controller's lifecycle. It exists for one reason: some work needs a host user's own identity, which the cluster cannot have. Examples are `agy`'s corp login, `gcloud`'s user credentials, the user's SSH signing key, or a CitC workspace.
+hostd is the same `grain` binary, run as `grain hostd` by a systemd unit, as the installing user, outside the controller container's lifecycle. It exists because some work needs a host user's own identity (which the isolated controller container or a remote machine cannot hold) or runs detached so agent CLIs survive controller restarts. Examples of ambient host identity are `agy`'s corp login, `gcloud`'s user credentials, the user's SSH signing key, or a CitC workspace.
 
 **Dial-in.** A hostd connects out to the controller over a WebSocket-framed stream (`pkg/hostd/dialout.go`, `/api/hostd/connect`). The framing lets it pass Google's front end and IAP, so the host needs no inbound route from anything. The connection is the old executor connection (`pkg/modelexec`): token auth in the hello frame, remote staging under a hostd-owned root (`/var/lib/grain-hostd/runs/<run>/`), exec, MCP tunnel streams and capability streams, all multiplexed. A daemon on the same machine can still use the unix socket (`/run/grain-hostd/hostd.sock`). In the registry it is simply a hostd named `local`.
 
@@ -298,7 +294,7 @@ Each plane upgrades on its own schedule. A mixed fleet is the normal state durin
 1. Stage and health-check the new build, and decide the schema step. Schema changes are additive within an adoption window, so a rollback meets a store it can read.
 2. Hold dispatch (`UpgradeHold`), so no new run starts.
 3. Flush every spool cursor and stop writing to the store.
-4. Restart only the controller. Sandboxes, hostd and their processes are not signalled. On GKE this is a `Recreate` roll of the Deployment, fenced.
+4. Restart only the controller (`grain-daemon.service`). Sandboxes, hostd and their processes are not signalled.
 5. Adopt. The new controller readopts sandbox pods by claim, reattaches CI step execs from persisted `(run, job, step, sandbox, exec id, cursor)` rows once wrappers redial, adopts run pods and hostd processes from their cursors, and credits the gap as wait time. Any live run with nothing left to adopt is finished with the reason the listing gave.
 6. Release the hold. The post-upgrade check reports how many runs were adopted, how many were lost, and why.
 
@@ -321,7 +317,7 @@ Peers exchange `{protocol_version, min_compatible, build}` in the hello. Skew of
 
 | Zone | Trusted with | Bounded by |
 | --- | --- | --- |
-| Controller | Everything: the store, secrets, forge credentials, the CA | One fenced replica. Workload Identity scoped to its own service account. A Role that can create pods and their Secrets in one namespace |
+| Controller | Everything: the store, secrets, forge credentials, the CA | Single host-local controller container. Least-privilege `/var/lib/grain/kubeconfig` scoped to sandbox pods in one namespace (`gke-sandboxes`) |
 | Capability servers | The credentials configured for them, and the sandboxes they serve | Only operator-configured commands and URLs. Root credentials scoped per server. Control plane unreachable from any sandbox (`docs/capabilities-spec.md` §3.2) |
 | hostd | Its host user's ambient identity | The root-owned allowlist, per-entry deadlines, a token that is good only for hostd routes, and revocation from Settings |
 | Granule wrapper | Its own sandbox's access credential | One certificate and token per sandbox. The most it can do is drive its own VM |
@@ -335,8 +331,8 @@ A credential placed in the guest can be read by any process running as `debian`.
 | Credential | Lives in | Never in the VM because |
 | --- | --- | --- |
 | Model API keys and OAuth tokens | Secrets, then the CLI's environment in the container or on hostd, or the model proxy | The CLI runs outside the VM. Its tools reach the VM. The VM never reaches it |
-| GitHub App key and forge tokens | Secrets (Secret Manager on GKE) | The git proxy acts for the sandbox. The guest gets a per-attempt `gpx_` token that can only fetch granted repositories and push its own branch |
-| Deployment secrets and the sealing key | Secret Manager, mounted read-only into the controller pod | Read only by the controller. Values set through `request_secret` go straight into the store and are never shown to an agent |
+| GitHub App key and forge tokens | `secrets.enc` on the controller host | The git proxy acts for the sandbox. The guest gets a per-attempt `gpx_` token that can only fetch granted repositories and push its own branch |
+| Deployment secrets and the sealing key | `/var/lib/grain/secrets/` (`secrets.enc` and `0600` `secrets.key`), mounted only into the controller | Read only by the controller. Values set through `request_secret` go straight into the store and are never shown to an agent |
 | Host ambient credentials (corp login, `gcloud`, SSH signing key, kube credentials) | The hostd host | Only allowlisted entries use them. `host-git` signs payloads and returns signatures. A host script returns its output |
 | Sandbox access certificate and token | A Secret mounted only into the wrapper container | Not on the guest's disk, kernel command line or environment. The guest has no route to the acceptor (in-pod drop filter), and could not complete the mTLS handshake without the key |
 | Leased capability credentials (`gcp-key` and similar) | Placed in the VM on purpose, attempt-scoped and short-lived | These are the exception. They are granted to the run, expire at its deadline, and are released when the attempt ends |
@@ -372,10 +368,10 @@ This doc describes the target. As of this writing:
 
 | Piece | Status | Detail |
 | --- | --- | --- |
-| Controller on GKE with Cloud SQL and Secret Manager | Staged (GKE-1 to GKE-9) | `docs/design/grain-on-gke.md`, "The stages" |
-| Sandbox-access channel and acceptor | `pkg/sandboxaccess` exists. The in-pod drop was settled in GKE-2. The default stays `kubectl` until GKE-8 | `docs/design/grain-on-gke.md`, "Sandbox access" |
+| Controller on GKE with Cloud SQL and Secret Manager | Retired (2026-10-31); `grain daemon` continues to run on the host | `docs/design/grain-on-gke.md` |
+| Sandbox-access channel, acceptor and CI step reattach | Implemented (`GKE-2`–`GKE-4`). Off-cluster `gke-sandboxes` keeps `kubectl` | `docs/design/grain-on-gke.md`, "Sandbox access" |
 | hostd allowlist, protocol 2, detached runs, drain and versioned upgrade | Implemented | `docs/design/cli-run-location.md` |
-| hostd dial-in, many hostds, placement settings | Dial-out client exists (`pkg/hostd/dialout.go`). Registry and placement are GKE-5 and GKE-6 | `docs/design/grain-on-gke.md`, "hostd" |
+| hostd dial-in, many hostds, placement settings | Dial-out client exists (`pkg/hostd/dialout.go`). Unified registry and placement deferred to [Task #2164](/tasks/2164) and [Task #2165](/tasks/2165) (`GKE-5`–`GKE-6`) | `docs/design/grain-on-gke.md`, "hostd" |
 | `/fs/` namespace (`ci://`, `src://`) | Implemented. `task://`, `config://`, `memory://` and `deploy://` follow | `docs/design/grain-namespace.md` |
 | `grain` CLI on `/cli/`, and the shrunken control set | In progress, by stage | `docs/design/sandbox-first-agent-surface.md` §8 |
 | Unified grants | Design. Slice 1 (UI) has landed | `docs/design/unified-grants.md` |
@@ -384,6 +380,6 @@ This doc describes the target. As of this writing:
 
 ## Open questions for reviewers
 
-1. **High availability.** This design runs one fenced controller replica, and every other plane survives its restarts. Is that enough, or should a second replica, with leader election over Postgres, be in scope? The recommendation is to stay at one replica until adoption numbers from real upgrades say otherwise.
+1. **High availability.** With the GKE controller cutover retired, `grain daemon` runs as a single controller process on the host, while every other plane (`hostd`, sandboxes, CI step cursors) survives its restarts. Is single-host controller operation sufficient, or should multi-replica leader election over Postgres ever be revisited? The recommendation is to stay at one host-local controller process.
 2. **Agent CLIs inside the VM.** Running the CLI inside the VM (`docs/design/cli-run-location.md`, "Parked alternatives", B) would put it next to its tools, but it would put the model credential in the VM. This design keeps the CLI outside the VM. Should the parked alternative stay parked? The recommendation is yes, unless a model credential can be issued that is scoped to one run and worthless outside it.
 3. **Where the design folder lives.** `contributions.design.md` allows a per-repo `design/` folder or a separate design repository. This doc is written for the per-repo layout. Should the architecture doc move if a team picks the separate repository?

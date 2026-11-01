@@ -189,6 +189,9 @@ func check(ctx context.Context, db *sql.DB, dir, scratch string, version int, mi
 	if err := checkCapabilities(dir); err != nil {
 		return report, err
 	}
+	if err := checkNewTaskForm(dir); err != nil {
+		return report, err
+	}
 	warnings, err := describeDump(ctx, db, dir, tables, migrating)
 	if err != nil {
 		return report, err
@@ -408,6 +411,21 @@ func withheldCarried(path, table string, rows []map[string]any) []string {
 					"repository; applying this keeps the value the running database holds. Remove the "+
 					"column from the file, set the value through the settings API instead, and rotate "+
 					"it if it was ever committed here",
+				path, i, name))
+			break
+		}
+	}
+	for _, name := range declaredColumns[table] {
+		for i, row := range rows {
+			v, ok := row[name]
+			if !ok || v == nil || v == "" {
+				continue
+			}
+			out = append(out, fmt.Sprintf(
+				"%s row %d carries %q, which the repository declares in its own .grain/settings.yml "+
+					"and which is never imported from this repository; applying this keeps the value "+
+					"the declaration sync wrote. Remove the column from the file, and edit "+
+					".grain/settings.yml on the repository's default branch to change it",
 				path, i, name))
 			break
 		}

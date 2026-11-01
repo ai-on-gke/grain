@@ -33,9 +33,8 @@ const SandboxProbePrefix = "probe-"
 // SandboxProbeRequest is one `grain sandbox probe`: acquire a sandbox
 // called SandboxProbePrefix+ID, run Argv in it, release it.
 type SandboxProbeRequest struct {
-	// ID names the probe. It is part of the sandbox pod's name, which is
-	// what scripts/deploy-gke.sh --check searches the API server's audit
-	// log for afterwards.
+	// ID names the probe. It is part of the sandbox pod's name, which a
+	// caller can search the API server's audit log for afterwards.
 	ID string
 	// Access is the guest-access channel the caller expects the probe to
 	// use: K8sGranuleAccessKubectl or K8sGranuleAccessDialout. Empty
@@ -110,8 +109,8 @@ type SandboxProbeDeps struct {
 // deployment's default shape, runs req.Argv in its guest over the
 // backend's own access channel -- the same transport a run's tool calls
 // use -- and releases it. It is what `grain sandbox probe` asks the
-// daemon for, so that scripts/deploy-gke.sh --check exercises the real
-// sandbox path rather than reasoning about it.
+// daemon for, so an operator check exercises the real sandbox path
+// rather than reasoning about it.
 //
 // A command that ran and exited non-zero is not an error: the result
 // carries its exit code. An error means no command ran -- the backend

@@ -84,7 +84,7 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
   grain cap <server> <tool> [flags | --json '<args>']
                                          Call one (--help lists its flags, generated from its input schema)
   grain quarantine <pkg> <test> --reason <why> [--no-follow-up]
-                                         Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (quarantine-test)
+                                         Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (api:test-quarantine)
   grain metrics [<section>] [--window 7d | --since <d> --until <d>]
                                          grain's own measurements (self-debug)
   grain health                           This deployment's health (deployment-health)
@@ -244,7 +244,7 @@ var sandboxCommandHelp = map[string]string{
 	"release-notes":         "grain release-notes (stats | publish --version <v> <body|--file f>)\n",
 	"release-notes stats":   "grain release-notes stats [--since <rfc3339>] [--until <rfc3339>]\n\nCompute task and PR statistics for a release window. Needs api:release-notes or api:release-notes:read.\n",
 	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--since <rfc3339>] [--until <rfc3339>]\n\nPublish release notes for a version. Needs api:release-notes or api:release-notes:write.\n",
-	"quarantine":            "grain quarantine <package> <test-name> --reason <why> [--expires <YYYY-MM-DD>] [--Follow-up-title <t>] [--no-follow-up] [-C <dir>]\n\nAdd a flaky test entry to .grain/quarantine.yml in the workspace and file a follow-up task.\nNeeds quarantine-test.\n",
+	"quarantine":            "grain quarantine <package> <test-name> --reason <why> [--expires <YYYY-MM-DD>] [--Follow-up-title <t>] [--no-follow-up] [-C <dir>]\n\nAdd a flaky test entry to .grain/quarantine.yml in the workspace and file a follow-up task.\nNeeds api:test-quarantine or api:tests:write.\n",
 	"metrics": "grain metrics [<section>] [--window 7d | --since <date> [--until <date>]] [--repo owner/name]... [--author <a>]...\n\n" +
 		"grain's own measurements (deploy://metrics). Needs self-debug.\n\n" +
 		"  --window   how far back to measure: 36h, 7d, 2w (default: the daemon's own)\n" +

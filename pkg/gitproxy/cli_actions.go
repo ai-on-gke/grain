@@ -46,7 +46,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1301,8 +1300,8 @@ func (p *GitProxy) serveProposals(w http.ResponseWriter, r *http.Request, scope 
 
 // serveQuarantine answers POST /cli/quarantine (and POST /cap/quarantine).
 func (p *GitProxy) serveQuarantine(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
-	if !slices.Contains(scope.Grants, "test-quarantine") && !slices.Contains(scope.Grants, "quarantine-test") {
-		cliError(w, namespace.RefuseCapability("grain quarantine", "test-quarantine"))
+	if !model.SandboxAPIGrantsOf(scope.Grants).Allows("tests:write", scope.TaskRepo) {
+		cliError(w, namespace.RefuseCapability("grain quarantine", "api:test-quarantine"))
 		return
 	}
 	var req CLIQuarantineRequest

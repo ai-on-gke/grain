@@ -427,6 +427,23 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     75,
+		Description: "rewrite stored self-upgrade grants to api:self-upgrade (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"self-upgrade": "api:self-upgrade"}),
+	},
+	{
+		Version:     76,
+		Description: "rewrite stored test-quarantine grants to api:test-quarantine (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"test-quarantine": "api:test-quarantine"}),
+	},
+	{
+		Version:     77,
+		Description: "add the New Task form's configuration to grain_config",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `new_task_form` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     78,
 		Description: "upgrade the pre-slug default task_branch_template (grain/{deployment}/task-{id}) to grain/{deployment}/task-{id}-{slug}",
 		Statements: []string{
 			"UPDATE `grain_config` SET `task_branch_template` = '" + DefaultTaskBranchTemplate + "' WHERE `task_branch_template` = '" + UnsluggedTaskBranchTemplate + "'",

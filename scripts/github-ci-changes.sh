@@ -167,7 +167,7 @@ classify_file() {
     lint=true
   fi
 
-  if [[ "$file" == deploy/terraform/* || "$file" == deploy/gke/terraform/* || "$file" == ".github/workflows/tests.yml" ]]; then
+  if [[ "$file" == deploy/terraform/* || "$file" == ".github/workflows/tests.yml" ]]; then
     terraform=true
   fi
 }

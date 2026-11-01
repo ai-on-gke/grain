@@ -1360,6 +1360,18 @@ func releaseFramework(f agent.Framework) {
 	}
 }
 
+// The gates grantAdmitter names on a refusal (dispatch.Admission.Gate),
+// so a log line saying a candidate was refused says which one did.
+const (
+	// admissionGateModel is Deps.ModelAvailability: no connection that
+	// could serve the task's model can take it now -- every one is paused
+	// after a usage limit, disabled, draining or (for ordinary work)
+	// busy.
+	admissionGateModel = "model availability"
+	// admissionGatePolicy is local policy (checkPolicy).
+	admissionGatePolicy = "local policy"
+)
+
 // grantAdmitter reserves finite capability resources before dispatch records a
 // run. A full pool declines only this candidate, leaving Cycle free to fill the
 // same worker capacity with later tasks that do not need it.
@@ -1395,7 +1407,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 					}); setErr != nil {
 						return dispatch.Admission{}, setErr
 					}
-					return dispatch.Admission{}, nil
+					return dispatch.Admission{Gate: admissionGateModel, Reason: reason}, nil
 				}
 			}
 			frameworks[candidate.RunID] = reservedFramework{
@@ -1456,7 +1468,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 				}); err != nil {
 					return dispatch.Admission{}, err
 				}
-				return dispatch.Admission{}, nil
+				return dispatch.Admission{Gate: admissionGateModel, Reason: reason}, nil
 			}
 		}
 		// Every path out of here that admits the candidate has decided
@@ -1494,7 +1506,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 				if setErr := recordPolicyRefusal(callCtx, deps, *task, policyStageAdmission, err, at); setErr != nil {
 					return dispatch.Admission{}, setErr
 				}
-				return dispatch.Admission{}, nil
+				return dispatch.Admission{Gate: admissionGatePolicy, Reason: err.Error()}, nil
 			}
 		}
 		if deps.Config.Capabilities == nil || !hasScarceGrant(deps.Config.Capabilities, *task) {
@@ -1529,7 +1541,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 			}); setErr != nil {
 				return dispatch.Admission{}, setErr
 			}
-			return dispatch.Admission{}, nil
+			return dispatch.Admission{Gate: "capability " + capability, Reason: "exhausted: " + resource}, nil
 		}
 		if err != nil {
 			// Preserve the established behavior for configuration and provider
