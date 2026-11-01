@@ -453,6 +453,20 @@ not taken from the repository's CI capabilities list.
   that default, with a note on the proposal, instead. Whatever template
   a review comes from, it never carries a dangerous api grant the
   reviewed task did not hold itself.
+- **Task priority is 1 or more, everywhere.** `priority` on
+  `POST`/`PATCH /api/tasks`, `grain create -priority` and
+  `grain update -priority`, `grain task propose --priority`,
+  `propose_task`'s `priority` and the Edit form all refuse 0 and below
+  with the same message. No value means "the default": leave the field
+  out to file at 5 (or at the template's priority), and set 5 to put an
+  edited task back on it. A `propose_task` priority above both the
+  proposer's own and 5 is filed for a person to approve.
+- **Follow-ups do not inherit their parent's priority.** A proposal
+  that names no `priority` files at 5, or at its template's priority,
+  whatever the proposing task's priority is
+  (`pkg/orchestrator/finish.go`). A follow-up from a priority-9 task
+  that should run as urgently has to ask for 9 itself, which it may do
+  without a person's approval because 9 is not above its parent's.
 - **Edits to grants go through the existing policy.** Approval rules,
   `capability_policy.go` and the proposal trust gate apply to api grants
   exactly as they apply to any other capability.

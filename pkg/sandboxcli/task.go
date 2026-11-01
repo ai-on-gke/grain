@@ -231,8 +231,8 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 	}
 	if rawPri := strings.TrimSpace(p.get("priority")); rawPri != "" {
 		pri, err := strconv.Atoi(rawPri)
-		if err != nil || pri < 0 {
-			return fmt.Errorf("--priority %q must be a non-negative integer", rawPri)
+		if err != nil || pri < 1 {
+			return fmt.Errorf("--priority %q must be a positive integer (1 or more; leave it out for the default, 5)", rawPri)
 		}
 		req.Priority = &pri
 	}
