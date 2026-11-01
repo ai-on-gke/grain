@@ -21,7 +21,7 @@ The rules:
 
 - **A bad assertion is final.** If the assertion is present but fails to verify, the request is refused (401, logged by `logRefusedAssertion`). It does not fall back to the access code or to an anonymous route. A request that bypasses the Gateway and reaches the pod directly cannot forge the assertion, so the network path no longer matters.
 - **Plaintext identity headers never authenticate.** This includes `X-Goog-Authenticated-User-Email`. They stay logged and ignored, as today.
-- **The assertion wins over the access code.** If a request carries both, the caller is the IAP principal. The access code does not make a named person anonymous again.
+- **Precedence over the access code is per verifier.** For IAP, the assertion wins over the access code: if a request carries both, the caller is the IAP principal, and the access code does not make a named person anonymous again. A wrapper's `IdentityVerifier` whose proxy attaches a signed header to every proxied request may instead declare that the access code beats it (`AccessCodeWins() bool`, see *IdentityVerifier* below), so an operator can break glass with the access code when the allowlist or group lookup is broken. Even then, a present assertion that fails to verify still fails closed with a 401 and no fallback.
 
 ### 2. Who is admitted: an allowlist on top of IAP
 
@@ -32,8 +32,8 @@ IAP's IAM binding (managed by `pkg/iapreconciler`) is the perimeter. Grain adds 
 ```
 
 - **Default.** The deployment owner (the email `grain init` records for the operator) plus the service accounts grain itself provisions. A new deployment admits only its owner until somebody widens the list.
-- **`group:`.** IAP assertions carry no group claims. A `group:` entry is resolved through the Cloud Identity groups API, with the result cached for a few minutes. If the lookup fails, the request is refused. A deployment that does not want that lookup leaves groups to IAP's own binding and lists only `user:`, `serviceAccount:` and `domain:` entries.
-- **Same powers for everyone.** Grain is single-tenant (`docs/access-code.md`): every admitted principal gets the access the access code gives today. Roles, such as read-only viewers, are out of scope here (*Open questions*).
+- **`group:`.** IAP assertions carry no group claims. `group:` entries in `-ui-allowed-principals` are resolved by grain through the Cloud Identity groups API, with results cached for a few minutes. The lookup is **optional**: grain calls Cloud Identity only when at least one `group:` entry is configured, so a deployment with no `group:` entries never makes the call and never needs Cloud Identity read access for `grain-daemon@…`. Direct entries (`user:`, `serviceAccount:`, `domain:`) are checked first, so a failed lookup refuses only requests that depend on a `group:` entry to be admitted.
+- **No roles in v1 (same powers for everyone).** Grain is single-tenant (`docs/access-code.md`): every admitted principal is an operator with the access the access code gives today, including minting `gma_` external-agent tokens and hostd tokens. Roles (such as read-only viewers, or restricting who may mint tokens) come later in a separate authorization (RBAC) design.
 
 A verified caller that is not on the list gets a 403. The response names the email, so the operator knows what to add.
 
@@ -70,7 +70,7 @@ An external agent can do the same with its own service account. It can also pres
 
 hostd dials `/api/hostd/connect` through the Gateway with an ID token from its service account (Workload Identity or a key on the cloudtop) or from the user's login. It uses the token sources above, through `IAPTokenProvider`, as it does now. The hello frame still carries the hostd token. That token names which hostd this is, and it is what GKE-5 makes per hostd.
 
-What changes is that the verified IAP principal is recorded as the connection's principal and checked against the allowlist. Optionally, it can also be checked against the hostd row's `owner`, so a stolen hostd token is useless without its owner's Google identity. The executor bootstrap routes (`executorBootstrapRoute`) stay open, as `docs/access-code.md` describes.
+What changes is that the verified IAP principal is recorded as the connection's principal and checked against the allowlist. A **remote** hostd (one that dials `/api/hostd/connect` through the IAP Gateway or another verifier's proxy) must present a verified identity equal to its hostd row's `owner`, so a stolen hostd token is useless without its owner's Google identity. Service accounts may be owners. A hostd reached locally (over its socket, with no proxy and no assertion) is unchanged and keeps using its token. The executor bootstrap routes (`executorBootstrapRoute`) stay open, as `docs/access-code.md` describes.
 
 ## Fallback and the `IdentityVerifier` seam
 
@@ -94,6 +94,14 @@ type IdentityVerifier interface {
 	Verify(r *http.Request) (id VerifiedIdentity, ok bool, err error)
 }
 
+// AccessCodePrecedence may be implemented by an IdentityVerifier whose proxy
+// attaches a signed header to every proxied request, so a valid access code
+// can still be used as break-glass recovery. Verifiers that do not implement
+// it default to false (the verified identity wins over the access code).
+type AccessCodePrecedence interface {
+	AccessCodeWins() bool
+}
+
 type VerifiedIdentity struct {
 	Email string              // the principal's ID
 	Kind  model.PrincipalKind // human or service
@@ -102,7 +110,7 @@ type VerifiedIdentity struct {
 func RegisterIdentityVerifier(v IdentityVerifier) (unregister func())
 ```
 
-`identifyCaller` asks each registered verifier in turn, with IAP registered by default when its audience is set. The first verifier whose header is present decides the request. Its error refuses the request; it never falls through to the next verifier. Whatever identity comes out goes through the same allowlist, CSRF check, principal attribution and audit logging, so a wrapper only supplies the cryptography. `IAPConfig.Validator` becomes the IAP verifier's own option. A test in this tree, using a fake verifier, pins the contract the wrapper relies on.
+`identifyCaller` asks each registered verifier in turn, with IAP registered by default when its audience is set. The first verifier whose header is present decides the request. Its error refuses the request; it never falls through to the next verifier. By default (including IAP), a verified identity beats the access code when a request carries both; if the deciding verifier implements `AccessCodePrecedence` with `AccessCodeWins() == true`, a request carrying a valid access code is instead judged by the code alone, as today, while a request without the code uses the verified identity (and a failed verification still fails closed with a 401 and no fallback). Whatever identity is used goes through the same allowlist, CSRF check, principal attribution and audit logging, so a wrapper only supplies the cryptography. `IAPConfig.Validator` becomes the IAP verifier's own option. A test in this tree, using a fake verifier, pins the contract the wrapper relies on.
 
 ### In-sandbox calls do not change
 
@@ -112,12 +120,9 @@ Agent calls from inside a sandbox never pass IAP and never carry a person's iden
 
 1. `IdentityVerifier` and the registry, with IAP as the first implementation. No behaviour change.
 2. Verified IAP callers pass `singleTenantGate` and become principals: `PrincipalService`, the allowlist, the CSRF check, and the UI header and logout.
-3. IAP mode for the CLI, and recording hostd's IAP principal.
+3. IAP mode for the CLI, and recording hostd's IAP principal (including matching a remote hostd's verified identity to its row's `owner`).
 4. `-ui-require-iap`. Then update `docs/access-code.md`, which says grain does not check the assertion.
 
 ## Open questions
 
-- Should `group:` entries be resolved by grain (which needs Cloud Identity read access for `grain-daemon@…`), or left entirely to IAP's IAM binding?
-- Are roles needed now? For example, a viewer who can read but not approve or submit. Or is "everyone admitted is an operator" acceptable for v1?
-- Should a hostd connection have to match its row's `owner`, or should the hostd token alone keep naming the hostd?
-- Should a principal admitted through IAP be able to mint `gma_` tokens and hostd tokens, or only the deployment owner?
+- In the future authorization/RBAC design, who should be allowed to mint `gma_` tokens and hostd tokens? (In v1, any admitted principal can mint both.)

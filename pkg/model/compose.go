@@ -673,6 +673,63 @@ func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 	}
 }
 
+// scheduleReviewsWorkflowRun reports whether sched files a task to review a
+// workflow run (a GitHub workflow-run trigger, or a schedule bound to the
+// system workflow-review template) and which layer owns the read-only CI
+// grant when the target repository does not use grain CI.
+func scheduleReviewsWorkflowRun(sched Schedule, tmpl *Template) (CompositionLayer, bool) {
+	if tmpl != nil {
+		if _, ok := WorkflowReviewStem(tmpl.ID); ok {
+			return LayerTemplate, true
+		}
+	}
+	if sched.Recurrence.Kind == RecurrenceGitHubWorkflowRun {
+		return LayerSchedule, true
+	}
+	return "", false
+}
+
+// applyWorkflowReviewCIReadGrant attaches a repo-scoped api:ci-read@<repo>
+// grant (Via GrantByGrain) to a workflow-run review composition whose target
+// repository is not gated by grain CI (applyGrainCIGrant has just stripped
+// workflowReviewTemplate's grain-ci grant). Keeping grain-ci itself would
+// make grainci.GrantedExplicitly true and change merge gating on a
+// repository with no explicit CI mode; api:ci-read@<repo> opens only
+// read-only CI access (grain ci log / list_ci_runs / get_ci_log) for that
+// repository.
+func applyWorkflowReviewCIReadGrant(comp *Composition, from CompositionLayer) {
+	if comp.Target == nil || *comp.Target == (RepoRef{}) {
+		return
+	}
+	repo := comp.Target.String()
+	names := make([]string, len(comp.Grants))
+	for i, g := range comp.Grants {
+		names[i] = g.Capability
+	}
+	if APIGrantsOf(names).Allows("ci:read", repo) {
+		return
+	}
+	sources := make([]CompositionLayer, len(comp.Grants))
+	for i := range comp.Grants {
+		if i < len(comp.GrantSources) && comp.GrantSources[i] != "" {
+			sources[i] = comp.GrantSources[i]
+		} else if comp.Grants[i].Via == GrantByDefault {
+			sources[i] = LayerRepo
+		} else {
+			sources[i] = comp.Sources.Grants
+		}
+	}
+	hadGrants := len(comp.Grants) > 0
+	comp.Grants = append(slices.Clip(comp.Grants), Grant{
+		Capability: APIGrantPrefix + "ci-read@" + repo,
+		Via:        GrantByGrain,
+	})
+	comp.GrantSources = append(sources, from)
+	if !hadGrants {
+		comp.Sources.Grants = from
+	}
+}
+
 // composeScheduleTask resolves what one firing of a task-backed schedule
 // files: its template, fresh (fireTaskSchedule's own doc comment on why
 // never a stale copy), and the values it carries for this deployment's
@@ -710,6 +767,11 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 			return Composition{}, nil, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
+		if !usesGrainCI {
+			if from, ok := scheduleReviewsWorkflowRun(sched, tmpl); ok {
+				applyWorkflowReviewCIReadGrant(&comp, from)
+			}
+		}
 	}
 	return comp, tmpl, nil
 }

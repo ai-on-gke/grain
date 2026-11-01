@@ -37,18 +37,20 @@ func serveFrom(srv *ui.Server, remoteAddr, method, path, body string, headers ma
 	return rec
 }
 
-// grain/task-2142: the frontend shapes what it offers by how the caller
-// authenticated, which it can only do if the server says. A daemon that
-// keeps no accounts has one answer for whoever gets in: the access code's
-// caller is the operator, signed in as nobody. Anybody else -- a person
-// IAP vouched for included -- does not get as far as asking.
+// grain/task-2142 & grain/task-2309: the frontend shapes what it offers by how
+// the caller authenticated, which it can only do if the server says. The access
+// code's caller is the trusted operator (signed in as nobody); an allowed IAP
+// caller is admitted as themselves with authMethod "iap"; an unallowed IAP
+// caller gets 403 naming the email; and a caller with no credential gets 401.
 func TestAuthUserReportsHowTheCallerAuthenticated(t *testing.T) {
 	priv, pemStr := generateECDSATestKey(t)
 	assertionKeys(t, priv, pemStr, false)
 	ui.SetIAPAudience(tunnelAudience)
-	srv, _ := testServer(t)
+	srv, client := testServer(t)
+	client.Config.AllowedPrincipals = []string{"user:iap@example.com"}
 	ui.SetAccessCodeForTest(srv, testAccessCode)
-	assertion := signIAPToken(t, priv, tunnelKid, tunnelAudience, "iap@example.com", "x", ui.GoogleIAPIssuer, time.Now().Add(5*time.Minute))
+	admittedAssertion := signIAPToken(t, priv, tunnelKid, tunnelAudience, "iap@example.com", "x", ui.GoogleIAPIssuer, time.Now().Add(5*time.Minute))
+	strangerAssertion := signIAPToken(t, priv, tunnelKid, tunnelAudience, "stranger@example.com", "y", ui.GoogleIAPIssuer, time.Now().Add(5*time.Minute))
 	code := map[string]string{"Authorization": "Bearer " + testAccessCode}
 
 	for _, path := range []string{"/api/auth/user", "/api/config"} {
@@ -60,6 +62,7 @@ func TestAuthUserReportsHowTheCallerAuthenticated(t *testing.T) {
 		var got struct {
 			Authenticated bool          `json:"authenticated"`
 			User          string        `json:"user"`
+			Actor         string        `json:"actor"`
 			AuthMethod    ui.AuthMethod `json:"authMethod"`
 			Tenancy       string        `json:"tenancy"`
 		}
@@ -76,13 +79,39 @@ func TestAuthUserReportsHowTheCallerAuthenticated(t *testing.T) {
 			t.Errorf("access code: GET %s = %+v, want the trusted operator, nobody signed in, tenancy %q", path, got, wantTenancy)
 		}
 
-		for name, headers := range map[string]map[string]string{
-			"verified IAP assertion": {ui.IAPAssertionHeader: assertion},
-			"no credential":          nil,
-		} {
-			if rec := serveFrom(srv, "127.0.0.1:1", http.MethodGet, path, "", headers); rec.Code != http.StatusUnauthorized {
-				t.Errorf("%s: GET %s: code %d, want 401: %s", name, path, rec.Code, rec.Body)
+		// Admitted IAP caller gets 200 with authMethod "iap" and their email.
+		recIAP := serveFrom(srv, "127.0.0.1:1", http.MethodGet, path, "", map[string]string{ui.IAPAssertionHeader: admittedAssertion})
+		if recIAP.Code != http.StatusOK {
+			t.Errorf("admitted IAP assertion: GET %s: code %d, want 200: %s", path, recIAP.Code, recIAP.Body)
+		} else {
+			var gotIAP struct {
+				Authenticated bool          `json:"authenticated"`
+				User          string        `json:"user"`
+				Actor         string        `json:"actor"`
+				AuthMethod    ui.AuthMethod `json:"authMethod"`
 			}
+			if err := json.NewDecoder(recIAP.Body).Decode(&gotIAP); err != nil {
+				t.Fatalf("decoding IAP %s: %v", path, err)
+			}
+			wantWho := "iap@example.com"
+			gotWho := gotIAP.User
+			if path == "/api/config" {
+				gotWho = gotIAP.Actor
+			}
+			if !gotIAP.Authenticated || gotIAP.AuthMethod != ui.AuthMethodIAP || gotWho != wantWho {
+				t.Errorf("admitted IAP assertion: GET %s = %+v, want authenticated iap@example.com via iap", path, gotIAP)
+			}
+		}
+
+		// Verified IAP caller not on the allowlist gets 403 naming the email.
+		recStranger := serveFrom(srv, "127.0.0.1:1", http.MethodGet, path, "", map[string]string{ui.IAPAssertionHeader: strangerAssertion})
+		if recStranger.Code != http.StatusForbidden || !strings.Contains(recStranger.Body.String(), "stranger@example.com") {
+			t.Errorf("unallowed IAP assertion: GET %s: code %d, want 403 naming stranger@example.com: %s", path, recStranger.Code, recStranger.Body)
+		}
+
+		// Caller with no credential gets 401.
+		if rec := serveFrom(srv, "127.0.0.1:1", http.MethodGet, path, "", nil); rec.Code != http.StatusUnauthorized {
+			t.Errorf("no credential: GET %s: code %d, want 401: %s", path, rec.Code, rec.Body)
 		}
 	}
 }

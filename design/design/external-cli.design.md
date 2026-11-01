@@ -242,7 +242,7 @@ The engineer is partway through a change and says: "Hand off the granule API bum
    c=$(grain create --repo ai-on-gke/grain --title "Document per-repo CI quotas" \
          --body-file - --depends-on "$a" --depends-on "$b" --json < c.md | jq -r .id)
    ```
-   The `--priority` the brief mentions is today's `--position front|end`, which is the only ordering grain has. Grain records each task with `Author` set to the engineer and `filed_via` set to the Jetski session. Under the filing gate they land proposed or queued. `b` and `c` wait on their dependencies the way any `depends_on` does.
+   Alongside `--position front|end` (which places `order_key` within a priority level), `grain create -priority <N>` sets numeric task priority (`1` or more, default `5`; higher numbers run first). Grain records each task with `Author` set to the engineer and `filed_via` set to the Jetski session. Under the filing gate they land proposed or queued. `b` and `c` wait on their dependencies the way any `depends_on` does.
 2. **Keep working, check in asynchronously.** Jetski starts a background shell, or just checks between turns:
    ```sh
    grain wait $a $b $c --until=merged,awaiting-reply --timeout=2h --json

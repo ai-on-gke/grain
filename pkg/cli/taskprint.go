@@ -103,7 +103,17 @@ func (p *printer) detail(d ui.TaskDetail) {
 	if len(d.Transitions) > 0 {
 		fmt.Println("\nhistory:")
 		for _, tr := range d.Transitions {
-			fmt.Printf("  -> %-*s %s\n", stateColumn, tr.State, tr.At.Format(time.RFC3339))
+			line := fmt.Sprintf("  -> %-*s %s", stateColumn, tr.State, tr.At.Format(time.RFC3339))
+			if tr.By != "" {
+				line += " by " + tr.By
+			}
+			if tr.Reason != "" {
+				line += fmt.Sprintf(" (%s)", tr.Reason)
+			}
+			if tr.Detail != "" {
+				line += "; " + tr.Detail
+			}
+			fmt.Println(line)
 		}
 	}
 	// Each attempt, with the model it actually ran on: a task left to

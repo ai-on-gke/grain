@@ -284,9 +284,11 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 	if gotPri, ok := proxy.bodies["POST /cli/proposals"]["priority"].(float64); !ok || gotPri != 8 {
 		t.Errorf("task propose priority in body = %v, want 8", proxy.bodies["POST /cli/proposals"]["priority"])
 	}
-	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--priority", "-1"); code != 1 ||
-		!strings.Contains(errOut, "--priority") {
-		t.Errorf("task propose --priority -1: %d %s", code, errOut)
+	for _, bad := range []string{"-1", "0"} {
+		if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--priority", bad); code != 1 ||
+			!strings.Contains(errOut, "--priority") || !strings.Contains(errOut, "positive integer") {
+			t.Errorf("task propose --priority %s: %d %s", bad, code, errOut)
+		}
 	}
 	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--supersedes", "5"); code != 1 ||
 		!strings.Contains(errOut, "propose_task") {

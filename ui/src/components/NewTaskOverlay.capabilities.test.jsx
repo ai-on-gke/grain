@@ -88,6 +88,39 @@ describe("NewTaskOverlay", () => {
     expect(payload.capabilities).toEqual(["web-search"]);
   });
 
+  // The answer to the filing goes to onCreated, so the page behind the
+  // form can say what it carries beyond "filed": the default grants the
+  // capability policy kept off the task (DroppedDefaultsNotice).
+  it("hands the filed task, dropped defaults and all, to onCreated", async () => {
+    const created = {
+      id: "41",
+      droppedDefaults: [
+        {
+          grant: "https://grain.dev/capabilities/grain#journal",
+          reason: "the capability policy denies it (rule 1)",
+        },
+      ],
+    };
+    api.mockImplementation(async (path) =>
+      path === "/api/tasks" ? created : null,
+    );
+    const onCreated = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        tasks={[]}
+        config={{}}
+        onClose={() => {}}
+        onCreated={onCreated}
+        showError={() => {}}
+      />,
+    );
+    await user.type(screen.getByLabelText(/Title/), "Ship");
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+    await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(created));
+  });
+
   // The picker used to offer every capability grain ships with no sign
   // of whether this deployment could honour it, so ticking gemini-key on
   // a deployment with no GCP project filed a task whose only symptom was

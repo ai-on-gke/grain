@@ -409,8 +409,9 @@ func TestCreateTaskRefusesAGrantThePolicyDenies(t *testing.T) {
 }
 
 // A repository default the policy denies is dropped when a task is
-// filed -- nobody asked for it -- and the task's thread says which one
-// and why, so the filer is not left to find it missing.
+// filed -- nobody asked for it -- and both the answer to the filing and
+// the task's thread say which one and why, so the filer is not left to
+// find it missing. The note is grain's, not the filer's.
 func TestCreateTaskReportsADefaultThePolicyDrops(t *testing.T) {
 	ts, client := grantTestServer(t)
 	ctx := context.Background()
@@ -421,6 +422,14 @@ func TestCreateTaskReportsADefaultThePolicyDrops(t *testing.T) {
 	var out map[string]any
 	if code := postJSON(t, ts, "POST", "/api/tasks", map[string]any{"title": "defaults", "repo": "acme/widgets"}, &out); code != 201 {
 		t.Fatalf("filing: %d %v", code, out)
+	}
+	dropped, _ := out["droppedDefaults"].([]any)
+	if len(dropped) != 1 {
+		t.Fatalf("droppedDefaults = %v, want the one denied default", out["droppedDefaults"])
+	}
+	entry, _ := dropped[0].(map[string]any)
+	if reason, _ := entry["reason"].(string); entry["grant"] != grantTestCap+"#viewer" || !strings.Contains(reason, "rule 1: deny") {
+		t.Fatalf("droppedDefaults[0] = %v, want the grant and the rule that denied it", entry)
 	}
 	id, _ := out["id"].(string)
 	task, err := client.Store.GetTask(ctx, id)
@@ -438,6 +447,17 @@ func TestCreateTaskReportsADefaultThePolicyDrops(t *testing.T) {
 	}
 	if len(comments) != 1 || !strings.Contains(comments[0].Body, "Default grant "+grantTestCap+"#viewer was not attached") || !strings.Contains(comments[0].Body, "rule 1: deny") {
 		t.Fatalf("thread = %+v, want one note naming the dropped default and the rule", comments)
+	}
+	if by := comments[0].Author.Actor; by.Kind != model.PrincipalAutomation || by.ID != "grain" {
+		t.Fatalf("note authored by %+v, want grain automation", by)
+	}
+	// A filing the policy leaves alone carries no droppedDefaults at all.
+	out = nil
+	if code := postJSON(t, ts, "POST", "/api/tasks", map[string]any{"title": "elsewhere", "repo": "acme/gadgets"}, &out); code != 201 {
+		t.Fatalf("filing elsewhere: %d %v", code, out)
+	}
+	if _, ok := out["droppedDefaults"]; ok {
+		t.Fatalf("droppedDefaults on a filing that dropped nothing: %v", out["droppedDefaults"])
 	}
 }
 

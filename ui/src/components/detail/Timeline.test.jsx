@@ -307,6 +307,43 @@ describe("DetailOverlay timeline", () => {
     expect(items[0].textContent).toContain("Closed");
   });
 
+  // A close somebody asked for and the reopen that undid it
+  // (model.TaskEvent): both on the timeline, each saying who.
+  it("shows who closed and reopened a task, why, and what the close cancelled", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          transitions: [
+            { state: "queued", at: "2026-08-28T09:00:00Z" },
+            {
+              state: "closed",
+              at: "2026-08-28T10:00:00Z",
+              by: "human bob@example.com",
+              reason: "cycling in-flight tasks",
+              detail:
+                "cancelled run 1920-1 (attempt 1) and CI run b8d940e14a9aef1d",
+            },
+            { state: "reopened", at: "2026-08-28T10:00:05Z", by: "agent 1937" },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Reopened")).toBeInTheDocument();
+    expect(screen.getByText("by agent 1937")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "by human bob@example.com · cycling in-flight tasks · cancelled run 1920-1 (attempt 1) and CI run b8d940e14a9aef1d",
+      ),
+    ).toBeInTheDocument();
+  });
+
   // bwsalmon/agents#503: a pull request re-linked to a reopened task keeps
   // its own original open time, which can predate this lifecycle's first
   // transition -- it should not sort ahead of everything else. Under the
