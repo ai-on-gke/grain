@@ -236,3 +236,62 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 		}
 	}
 }
+
+// encoding/json matches an object key to a struct field under Unicode
+// simple folding, where U+017F (ſ) is an s and U+212A (the Kelvin sign) a
+// k. The agent gates read body keys with strings.ToLower, which leaves
+// those runes alone, so "priorityDiſpatch" attached priority-dispatch
+// under api:tasks:write without capabilities:admin, and
+// "autoApproveProposalſ" / "reviewerſ" filed past the refusals of the
+// spellings they fold to (docs/test-runs/2026-11-01-task-priorities.md).
+func TestAgentGatesFoldBodyKeysAsEncodingJSONDoes(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "2", "acme/widgets")
+
+	for _, payload := range []string{
+		"{\"priorityDiſpatch\": true}",
+		"{\"PRIORITY_DIſPATCH\": true}",
+		"{\"grantſ\": []}",
+		"{\"KeepRunning\": true}",
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", payload, "testing"); code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 with %s under api:tasks:write: status %d (%s), want 403", payload, code, resp)
+		}
+	}
+	stored, err := client.Store.GetTask(context.Background(), "2")
+	if err != nil || stored == nil {
+		t.Fatalf("GetTask(2): %v", err)
+	}
+	for _, g := range stored.Grants {
+		t.Errorf("task 2 gained grant %q through a folded key", g.Capability)
+	}
+
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "fold-bot",
+		Scopes: []string{"tasks:write"},
+		Repos:  []string{"acme/widgets"},
+	})
+	if err != nil {
+		t.Fatalf("CreateExternalAgentToken: %v", err)
+	}
+	for _, extra := range []string{
+		"\"autoApproveProposalſ\": true",
+		"\"reviewerſ\": [\"mallory\"]",
+		"\"writeſ\": [{\"repo\": \"other/repo\"}]",
+		"\"priorityDiſpatch\": true",
+	} {
+		payload := `{"title": "folded", "description": "d", "repo": "acme/widgets", ` + extra + `}`
+		req := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBufferString(payload))
+		req.Header.Set("Authorization", "Bearer "+issued.Token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("external POST /api/tasks with %s: status %d (%s), want 403", extra, rec.Code, rec.Body.String())
+		}
+	}
+}
