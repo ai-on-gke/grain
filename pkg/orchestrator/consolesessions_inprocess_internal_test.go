@@ -172,14 +172,14 @@ func TestEvictOldestWarmSessionSandboxesEvictsInIdleOrderAndMarksReclaimed(t *te
 	}
 
 	// Evicted tasks report wasReclaimed=true when later claimed.
-	if entry, reclaimed := claimWarmSessionSandbox(deps, "t2", now); entry != nil || !reclaimed {
+	if entry, reclaimed := claimWarmSessionSandbox(deps, "t2", "", now); entry != nil || !reclaimed {
 		t.Errorf("claimWarmSessionSandbox(t2) = (%v, %v), want (nil, true)", entry, reclaimed)
 	}
-	if entry, reclaimed := claimWarmSessionSandbox(deps, "t1", now); entry != nil || !reclaimed {
+	if entry, reclaimed := claimWarmSessionSandbox(deps, "t1", "", now); entry != nil || !reclaimed {
 		t.Errorf("claimWarmSessionSandbox(t1) = (%v, %v), want (nil, true)", entry, reclaimed)
 	}
 	// Remaining warm sandbox t3 is still claimable.
-	entry, reclaimed := claimWarmSessionSandbox(deps, "t3", now)
+	entry, reclaimed := claimWarmSessionSandbox(deps, "t3", "", now)
 	if entry == nil || entry.SandboxID != "sb-3" || reclaimed {
 		t.Fatalf("claimWarmSessionSandbox(t3) = (%+v, %v), want sb-3 and reclaimed=false", entry, reclaimed)
 	}

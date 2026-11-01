@@ -179,6 +179,10 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 		}
 		return abandon(reason)
 	}
+	// A session's sandbox may be named for an earlier run than this one;
+	// held so reconcileSandboxes leaves it alone once this run's row is
+	// finished and before it is parked warm.
+	defer holdSessionSandbox(store, a.Sandbox.Name(), runID)()
 	if deps.Framework == nil {
 		return abandon("has no agent framework to read its result with")
 	}
