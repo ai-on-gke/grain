@@ -36,8 +36,17 @@ test("a stuck task's row offers its sub-case's control and leaves the group once
   const running = group.locator(".inbox-item", {
     hasText: "Regenerate the protobuf bindings",
   });
+  const deferred = group.locator(".inbox-item", {
+    hasText: "Rotate the staging signing keys",
+  });
   await expect(queued).toContainText("reconcileDispatch");
   await expect(running).toContainText("ProcessResult");
+  await expect(deferred).toContainText("reconcileWake");
+
+  // Undefer: the deferral whose wake time nothing acted on is picked back
+  // up by hand, and is queued -- not stuck -- from then on.
+  await deferred.getByRole("button", { name: "Undefer", exact: true }).click();
+  await expect(deferred).toHaveCount(0);
 
   // Run now: nothing to confirm, the task stays queued and is no longer
   // read as stuck.
@@ -60,6 +69,9 @@ test("a stuck task's row offers its sub-case's control and leaves the group once
   ).toHaveCount(0);
   await expect(
     page.locator(".inbox-item", { hasText: "Regenerate the protobuf" }),
+  ).toHaveCount(0);
+  await expect(
+    page.locator(".inbox-item", { hasText: "Rotate the staging signing" }),
   ).toHaveCount(0);
 });
 

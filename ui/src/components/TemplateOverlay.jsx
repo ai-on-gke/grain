@@ -215,6 +215,13 @@ function TemplateOverlay({
       // (ui.UpdateTemplateRequest.Fields).
       fields: templateFieldsPayload(fields),
     };
+    // The priority every task this template files starts at
+    // (ui.CreateTemplateRequest.Priority). Blank leaves it on the
+    // default; on an edit that is said as 0, which clears a saved one
+    // (ui.UpdateTemplateRequest.Priority).
+    const priority = parseInt(String(data.get("priority") || "").trim(), 10);
+    if (!Number.isNaN(priority)) payload.priority = priority;
+    else if (!isNew) payload.priority = 0;
     try {
       const saved = isNew
         ? await api("/api/templates", {
@@ -373,6 +380,19 @@ function TemplateOverlay({
             defaultValue={(template?.reviewers || []).join(", ")}
             placeholder="alice, bob"
             helperText="optional -- comma-separated usernames passed to workspace grants and used when mailing a CL"
+            fullWidth
+            margin="normal"
+            size="small"
+          />
+          <TextField
+            name="priority"
+            label="Task priority"
+            type="number"
+            defaultValue={template?.priority ?? ""}
+            placeholder="5"
+            helperText="optional -- every task this template files starts at this priority; default 5, higher numbers run first"
+            inputProps={{ min: 1, step: 1 }}
+            autoComplete="off"
             fullWidth
             margin="normal"
             size="small"
