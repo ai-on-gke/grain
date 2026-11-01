@@ -2384,6 +2384,9 @@ func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, ou
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_relayed_call` WHERE `run_id` = ?", runID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_sandbox_key` WHERE `run_id` = ?", runID); err != nil {
+		return err
+	}
 	if err := recordSuspensionTx(ctx, tx, runID, taskID, outcome, detail, at, susp); err != nil {
 		return err
 	}
@@ -2473,6 +2476,38 @@ func (s *Store) SetRunSandbox(ctx context.Context, runID, sandbox string, target
 			sandbox, owner, name, runID)
 		return err
 	})
+}
+
+// SetRunSandboxKeys records the sessionSandboxKey and sessionGrantsKey runID's
+// sandbox was built or reused under, so an adopting daemon after a restart
+// parks a warm session sandbox only under the exact isolation key it was
+// provisioned with.
+func (s *Store) SetRunSandboxKeys(ctx context.Context, runID, sandboxKey, grantsKey string) error {
+	return s.write(ctx, "set run "+runID+" sandbox keys", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			"INSERT INTO `task_run_sandbox_key` (`run_id`, `sandbox_key`, `grants_key`) VALUES (?, ?, ?) "+
+				"ON CONFLICT (`run_id`) DO UPDATE SET `sandbox_key` = excluded.`sandbox_key`, `grants_key` = excluded.`grants_key`",
+			runID, sandboxKey, grantsKey)
+		return err
+	})
+}
+
+// RunSandboxKeys returns the sessionSandboxKey and sessionGrantsKey recorded
+// for runID, if any.
+func (s *Store) RunSandboxKeys(ctx context.Context, runID string) (sandboxKey, grantsKey string, ok bool, err error) {
+	if runID == "" {
+		return "", "", false, nil
+	}
+	err = s.db.QueryRowContext(ctx,
+		"SELECT `sandbox_key`, `grants_key` FROM `task_run_sandbox_key` WHERE `run_id` = ?",
+		runID).Scan(&sandboxKey, &grantsKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	return sandboxKey, grantsKey, true, nil
 }
 
 // SetRunAgentStarted records the moment a run's agent actually got its

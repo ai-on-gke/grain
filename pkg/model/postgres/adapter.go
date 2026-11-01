@@ -46,6 +46,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_run_exec_failure":          {"run_id"},
 	"task_run_capability_audit":      {"run_id", "seq"},
 	"task_run_startup":               {"run_id"},
+	"task_run_sandbox_key":           {"run_id"},
 	"task_suspension":                {"run_id"},
 	"task_goal":                      {"task_id"},
 	"task_link":                      {"task_id", "kind", "target"},

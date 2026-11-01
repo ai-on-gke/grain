@@ -553,4 +553,101 @@ describe("TaskChat", () => {
       screen.queryByRole("button", { name: "Copy response" }),
     ).not.toBeInTheDocument();
   });
+
+  it("keeps optimistic comments visible across running, awaiting_reply, and queued transitions and never drops back-to-back sends", async () => {
+    let resolveFirstPost;
+    const firstPostGate = new Promise((r) => {
+      resolveFirstPost = r;
+    });
+    let callCount = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        await firstPostGate;
+      }
+      return {
+        ok: true,
+        headers: new Headers({ "Content-Type": "application/json" }),
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <TaskChat t={task({ state: "running", comments: [] })} act={act} />,
+    );
+
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await user.click(box);
+    await user.paste("first message while running");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    // Optimistic message appears immediately while POST #1 is still in flight.
+    expect(screen.getByText("first message while running")).toBeInTheDocument();
+
+    // While POST #1 is still in flight, user sends a second message back-to-back.
+    await user.click(box);
+    await user.paste("second message back-to-back");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(screen.getByText("first message while running")).toBeInTheDocument();
+    expect(screen.getByText("second message back-to-back")).toBeInTheDocument();
+
+    // Task transitions running -> awaiting_reply -> queued on intermediate polls
+    // before the new comments appear in t.comments: neither optimistic message is hidden.
+    rerender(
+      <TaskChat
+        t={task({ state: "awaiting_reply", comments: [] })}
+        act={act}
+      />,
+    );
+    expect(screen.getByText("waiting for your reply")).toBeInTheDocument();
+    expect(screen.getByText("first message while running")).toBeInTheDocument();
+    expect(screen.getByText("second message back-to-back")).toBeInTheDocument();
+
+    rerender(
+      <TaskChat t={task({ state: "queued", comments: [] })} act={act} />,
+    );
+    expect(screen.getByText("first message while running")).toBeInTheDocument();
+    expect(screen.getByText("second message back-to-back")).toBeInTheDocument();
+
+    // Release POST #1; POST #2 must also be sent in order.
+    resolveFirstPost();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).body).toBe(
+      "first message while running",
+    );
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).body).toBe(
+      "second message back-to-back",
+    );
+
+    // Once the server poll includes both comments, they render once each without duplication.
+    rerender(
+      <TaskChat
+        t={task({
+          state: "running",
+          comments: [
+            {
+              id: 1,
+              author: "brandon",
+              authorKind: "human",
+              body: "first message while running",
+              createdAt: "2026-09-08T10:01:00Z",
+            },
+            {
+              id: 2,
+              author: "brandon",
+              authorKind: "human",
+              body: "second message back-to-back",
+              createdAt: "2026-09-08T10:01:01Z",
+            },
+          ],
+        })}
+        act={act}
+      />,
+    );
+    expect(screen.getAllByText("first message while running")).toHaveLength(1);
+    expect(screen.getAllByText("second message back-to-back")).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
 });

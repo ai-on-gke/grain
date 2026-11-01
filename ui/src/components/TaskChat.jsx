@@ -120,7 +120,65 @@ export default function TaskChat({
   // identity and this list -- its sort included -- is computed once per
   // actual change rather than once per render. See the transcript memo
   // below for what the render it is inside otherwise costs.
-  const entries = useMemo(() => chatEntries(t), [t]);
+  const serverEntries = useMemo(() => chatEntries(t), [t]);
+  // Optimistic outgoing comments currently in flight or awaiting the next
+  // task snapshot that includes them, so a comment submitted while the
+  // task transitions between running, awaiting_reply, and queued is never
+  // hidden between the POST and the poll that catches up.
+  const [pendingComments, setPendingComments] = useState([]);
+  const pendingSeq = useRef(0);
+  const sendChain = useRef(Promise.resolve());
+  useEffect(() => {
+    setPendingComments([]);
+  }, [t.id]);
+  useEffect(() => {
+    if (pendingComments.length === 0) return;
+    const serverComments = t.comments || [];
+    const consumed = new Set();
+    const remaining = pendingComments.filter((p) => {
+      const idx = serverComments.findIndex(
+        (c, i) =>
+          !consumed.has(i) &&
+          (c.authorKind === "human" || !c.authorKind) &&
+          (typeof c.id === "number"
+            ? c.id > p.afterMaxId
+            : i >= p.afterCommentLen) &&
+          (c.body || "") === (p.body || ""),
+      );
+      if (idx !== -1) {
+        consumed.add(idx);
+        return false;
+      }
+      return true;
+    });
+    if (remaining.length !== pendingComments.length) {
+      setPendingComments(remaining);
+    }
+  }, [t.comments, pendingComments]);
+  const entries = useMemo(() => {
+    if (pendingComments.length === 0) return serverEntries;
+    const serverComments = t.comments || [];
+    const consumed = new Set();
+    const unpersisted = pendingComments.filter((p) => {
+      const idx = serverComments.findIndex(
+        (c, i) =>
+          !consumed.has(i) &&
+          (c.authorKind === "human" || !c.authorKind) &&
+          (typeof c.id === "number"
+            ? c.id > p.afterMaxId
+            : i >= p.afterCommentLen) &&
+          (c.body || "") === (p.body || ""),
+      );
+      if (idx !== -1) {
+        consumed.add(idx);
+        return false;
+      }
+      return true;
+    });
+    return unpersisted.length === 0
+      ? serverEntries
+      : [...serverEntries, ...unpersisted];
+  }, [serverEntries, pendingComments, t.comments]);
   const busy = working(t);
   const note = typingNote(t);
   const waiting = awaitsReply(t);
@@ -130,7 +188,14 @@ export default function TaskChat({
   // post the comment -- and a poll landing mid-message must not lose
   // either (AttachmentPicker's own doc comment on why the files are read
   // only at send).
-  const [attachments, setAttachments] = useState([]);
+  const [attachments, setAttachmentsState] = useState([]);
+  const attachmentsRef = useRef([]);
+  const setAttachments = (next) => {
+    const resolved =
+      typeof next === "function" ? next(attachmentsRef.current) : next;
+    attachmentsRef.current = resolved;
+    setAttachmentsState(resolved);
+  };
   // Two spellings of the same draft, because the box and the API want
   // different ones. `html` is what the library's contenteditable is
   // controlled by -- give it plain text and a message typed over several
@@ -139,10 +204,19 @@ export default function TaskChat({
   // innerText rather than its textContent for the same reason in reverse:
   // textContent of "a<div>b</div>" is "ab", with the break the person
   // typed silently gone.
-  const [draft, setDraft] = useState(() => ({
+  const [draft, setDraftState] = useState(() => ({
     html: draftRequest?.text || "",
     text: draftRequest?.text || "",
   }));
+  const draftRef = useRef({
+    html: draftRequest?.text || "",
+    text: draftRequest?.text || "",
+  });
+  const setDraft = (next) => {
+    const resolved = typeof next === "function" ? next(draftRef.current) : next;
+    draftRef.current = resolved;
+    setDraftState(resolved);
+  };
   // The library's contenteditable takes no props of its own -- MessageInput
   // spreads what it is given onto the wrapper around it, not onto the
   // editor -- so the box a screen reader lands on had no role and no
@@ -175,7 +249,6 @@ export default function TaskChat({
     root.addEventListener("scroll", onScroll, true);
     return () => root.removeEventListener("scroll", onScroll, true);
   }, []);
-  const sending = useRef(false);
   const stopping = useRef(false);
 
   // A shortcut elsewhere in the shell can bring somebody here with words
@@ -286,50 +359,80 @@ export default function TaskChat({
   );
 
   const send = async () => {
-    const body = draft.text;
-    const sent = draft;
-    const files = attachments;
-    if (sending.current) return;
-    if (!body.trim() && attachments.length === 0) return;
-    sending.current = true;
-    try {
-      const uploaded = await Promise.all(
-        attachments.map((f) => fileToAttachment(f)),
-      );
-      // Cleared before the request rather than after it, so the next
-      // message can be typed while this one is still in flight -- act()
-      // reports a failure in the error banner either way, the same as the
-      // task pane's own reply box.
-      setDraft({ html: "", text: "" });
-      setAttachments([]);
-      let posted = false;
-      if (onSend) {
-        posted = (await onSend({ body, attachments: uploaded })) !== false;
-      } else {
-        await act(async () => {
-          await api(`/api/tasks/${t.id}/comments`, {
-            method: "POST",
-            body: JSON.stringify({
-              body,
-              attachments: uploaded,
-            }),
-          });
-          posted = true;
-        }, t.id);
-      }
-      // act() reports a failure and swallows it, so whether the message
-      // landed is only known from here. One that did not -- the network
-      // dropped, the daemon answered 5xx -- goes back in the box rather
-      // than being lost with the banner, unless something new has been
-      // typed there meanwhile (grain/task-1360).
-      if (!posted) {
+    const sent = draftRef.current;
+    const body = sent.text;
+    const files = attachmentsRef.current;
+    if (!body.trim() && files.length === 0) return;
+    // Cleared synchronously before the first await so double-clicks on the
+    // same draft are ignored while a second message typed while this one is
+    // still in flight can be sent immediately without being dropped.
+    setDraft({ html: "", text: "" });
+    setAttachments([]);
+    const serverComments = t.comments || [];
+    const afterCommentLen = serverComments.length;
+    const afterMaxId = serverComments.reduce(
+      (m, c) => (typeof c.id === "number" && c.id > m ? c.id : m),
+      0,
+    );
+    const optimisticKey = `optimistic-${++pendingSeq.current}`;
+    if (!onSend && body.trim()) {
+      setPendingComments((cur) => [
+        ...cur,
+        {
+          key: optimisticKey,
+          kind: "message",
+          at: new Date(),
+          direction: "outgoing",
+          sender: t.creator || t.author || "human",
+          body,
+          attachments: [],
+          afterCommentLen,
+          afterMaxId,
+        },
+      ]);
+    }
+    const task = sendChain.current.then(async () => {
+      try {
+        const uploaded = await Promise.all(
+          files.map((f) => fileToAttachment(f)),
+        );
+        let posted = false;
+        if (onSend) {
+          posted = (await onSend({ body, attachments: uploaded })) !== false;
+        } else {
+          await act(async () => {
+            await api(`/api/tasks/${t.id}/comments`, {
+              method: "POST",
+              body: JSON.stringify({
+                body,
+                attachments: uploaded,
+              }),
+            });
+            posted = true;
+          }, t.id);
+        }
+        // act() reports a failure and swallows it, so whether the message
+        // landed is only known from here. One that did not -- the network
+        // dropped, the daemon answered 5xx -- goes back in the box rather
+        // than being lost with the banner, unless something new has been
+        // typed there meanwhile (grain/task-1360).
+        if (!posted) {
+          setPendingComments((cur) =>
+            cur.filter((p) => p.key !== optimisticKey),
+          );
+          setDraft((cur) => (cur.text.trim() ? cur : sent));
+          setAttachments((cur) => (cur.length ? cur : files));
+        }
+        onDraftConsumed?.(draftRequest);
+      } catch (err) {
+        setPendingComments((cur) => cur.filter((p) => p.key !== optimisticKey));
         setDraft((cur) => (cur.text.trim() ? cur : sent));
         setAttachments((cur) => (cur.length ? cur : files));
+        throw err;
       }
-      onDraftConsumed?.(draftRequest);
-    } finally {
-      sending.current = false;
-    }
+    });
+    sendChain.current = task.catch(() => {});
+    await task;
   };
 
   const stop = async () => {
