@@ -145,3 +145,52 @@ func (r *PR) Note() string {
 		"or suggest the changes on %s itself in review comments.\n", r.Ref.Number, r.Ref, author, r.Ref)
 	return b.String()
 }
+
+// StripNote is body with the Note appended for ref taken back out, and
+// whether one was. It is for a task moved off ref's repository: ref is
+// not a pull request there, so the guidance to fetch its head and to
+// follow it up is wrong for the next run. Only a note still worded as
+// Note wrote it is recognised; one a person has since edited is left,
+// for the caller to say something about (MovedNote).
+func StripNote(body string, ref model.PullRequestRef) (string, bool) {
+	const lead = "\n\n---\nThis task was filed against `"
+	head := "`, the head of pull request " + ref.String()
+	ends := []string{
+		"or suggest the changes on " + ref.String() + " itself in review comments.\n",
+		", updating " + ref.String() + ".\n",
+	}
+	for from := 0; ; {
+		i := strings.Index(body[from:], lead)
+		if i < 0 {
+			return body, false
+		}
+		start := from + i
+		from = start + len(lead)
+		rest := body[from:]
+		j := strings.Index(rest, head)
+		if j < 0 || strings.Contains(rest[:j], "\n") {
+			continue
+		}
+		if after := rest[j+len(head):]; after != "" && after[0] >= '0' && after[0] <= '9' {
+			continue // another pull request: #41 is not #410
+		}
+		end := -1
+		for _, e := range ends {
+			if k := strings.Index(rest, e); k >= 0 && (end < 0 || k+len(e) < end) {
+				end = k + len(e)
+			}
+		}
+		if end < 0 || strings.Contains(rest[:end], "\n---\n") {
+			continue
+		}
+		return body[:start] + rest[end:], true
+	}
+}
+
+// MovedNote is what a task moved off ref's repository to target is told
+// when its body still names ref but StripNote could not find the note
+// to take out: that ref is no longer its pull request.
+func MovedNote(ref model.PullRequestRef, target model.RepoRef) string {
+	return fmt.Sprintf("\n\n---\nThis task was moved to %s, where %s is not a pull request: grain dropped its link to it, "+
+		"so anything above about fetching %s's head or following it up no longer applies.\n", target, ref, ref)
+}
