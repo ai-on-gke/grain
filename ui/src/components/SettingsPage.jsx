@@ -160,6 +160,13 @@ export default function SettingsPage({
   const configManaged = configRepoOnly && isConfigRepoSection(current);
   const readOnly = external || configManaged;
   s.readOnly = readOnly;
+  // configLocked is for the sections that mix bootstrap settings with
+  // config-managed ones (Engine, Sandboxes, Legacy capabilities): the
+  // API refuses a change to the config-managed fields while this is on
+  // (settings-mutability.spec.md D-1, D-2), so those fields are drawn
+  // read-only one by one and the bootstrap ones beside them stay
+  // editable.
+  s.configLocked = configRepoOnly;
 
   useEffect(() => {
     if (READS_SETTINGS.has(current) && !settings) reloadSettings();

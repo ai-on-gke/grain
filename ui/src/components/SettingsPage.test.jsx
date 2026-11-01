@@ -901,4 +901,75 @@ describe("SettingsPage", () => {
     ).toBeChecked();
     expect(screen.queryByTestId("config-managed-notice")).toBeNull();
   });
+
+  // settings-mutability.spec.md D-1, D-2: while settings are locked the
+  // API refuses every config-managed grain_config field with 409, so the
+  // UI draws those read-only and leaves the bootstrap ones editable.
+  describe("with settings locked", () => {
+    const locked = { configRepoOnly: true, settingsLocked: true };
+    function setupLocked(section) {
+      const lockedSettings = {
+        ...settings,
+        settingsLocked: true,
+        configRepoOnly: true,
+      };
+      api.mockImplementation((path, opts) => {
+        if (path === "/api/settings" && !opts)
+          return Promise.resolve(lockedSettings);
+        return Promise.resolve({});
+      });
+      return render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={locked}
+            section={section}
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+    }
+
+    it("locks Engine's poll interval and merge queue but not max workers", async () => {
+      setupLocked("engine");
+      expect(await screen.findByLabelText("Poll interval")).toBeDisabled();
+      expect(
+        screen.getByLabelText("Max merges per repo branch"),
+      ).toBeDisabled();
+      expect(screen.getByLabelText("Merge batch size")).toBeDisabled();
+      expect(screen.getByLabelText("Merge gather window")).toBeDisabled();
+      expect(screen.getByLabelText("Max worker agents")).toBeEnabled();
+      expect(screen.getByTestId("config-managed-notice")).toBeInTheDocument();
+    });
+
+    it("draws Caches read-only", async () => {
+      setupLocked("caches");
+      const box = await screen.findByRole("checkbox", {
+        name: /Cache apt, pip/,
+      });
+      expect(box).toBeDisabled();
+      expect(screen.getByTestId("config-managed-notice")).toBeInTheDocument();
+    });
+
+    it("locks the session sandbox idle TTL but not sandbox sizes", async () => {
+      setupLocked("sandboxes");
+      expect(
+        await screen.findByLabelText("Session sandbox idle TTL"),
+      ).toBeDisabled();
+      expect(screen.getByLabelText("Sandbox vCPUs")).toBeEnabled();
+    });
+
+    it("locks Legacy capabilities' GitHub host and GCP project", async () => {
+      setupLocked("credentials");
+      expect(await screen.findByLabelText("GitHub host")).toBeDisabled();
+      expect(screen.getByLabelText(/GCP project/)).toBeDisabled();
+    });
+
+    it("leaves Engine editable when settings are unlocked", async () => {
+      setup({ section: "engine", config: { settingsLocked: false } });
+      expect(await screen.findByLabelText("Poll interval")).toBeEnabled();
+      expect(screen.getByLabelText("Merge batch size")).toBeEnabled();
+      expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+    });
+  });
 });
