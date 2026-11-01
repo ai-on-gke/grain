@@ -39,7 +39,7 @@ describe("CapabilityPolicyEditor", () => {
               name: ".grain/workflows/deploy.yml · ship",
               repo: "acme/widgets",
               grant: `${CAP}#key`,
-              reason: `the capability policy denies ${CAP}#key to this ci on acme/widgets (push)`,
+              reason: `the capability policy denies ${CAP}#key to this CI job on acme/widgets (push)`,
             },
           ],
         };
