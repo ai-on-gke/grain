@@ -637,6 +637,19 @@ func queueOrder(entries []queueEntry) []queueEntry {
 		}
 	}
 	sort.SliceStable(members, func(i, j int) bool {
+		pi, pj := members[i].task.Priority, members[j].task.Priority
+		if pi == 0 {
+			pi = model.DefaultTaskPriority
+		}
+		if pj == 0 {
+			pj = model.DefaultTaskPriority
+		}
+		if pi != pj {
+			return pi > pj
+		}
+		if fi, fj := model.FixesBaseBranch(members[i].task), model.FixesBaseBranch(members[j].task); fi != fj {
+			return fi
+		}
 		if ni, nj := newToQueue(members[i]), newToQueue(members[j]); ni != nj {
 			return nj
 		}
@@ -1770,8 +1783,9 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			}
 			if recheck.held != "" {
 				// A batch just started has written its own row
-				// (setBatchState); anything else is said here.
-				if recheck.held != "started" {
+				// (setBatchState); a task already blocked keeps its
+				// merge_failed row; anything else is said here.
+				if recheck.held != "started" && recheck.held != "blocked" {
 					if err := setMergeQueueState(ctx, store, e.obs, task.ID,
 						queueStatus{state: mergeStateWaitingQueue, note: recheck.held}, now); err != nil {
 						return err

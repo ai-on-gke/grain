@@ -206,6 +206,7 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 		Capabilities:    splitMultiFlag(p, "capability"),
 		FixesBaseBranch: p.has("fixes-base-branch"),
 		NoPort:          p.has("no-port"),
+		KeepRunning:     p.has("keep-running"),
 		Origin:          strings.TrimSpace(p.get("origin")),
 		Reads:           splitMultiFlag(p, "read"),
 		HoldForApproval: &hold,
@@ -227,6 +228,13 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 			return err
 		}
 		req.NotBefore = &t
+	}
+	if rawPri := strings.TrimSpace(p.get("priority")); rawPri != "" {
+		pri, err := strconv.Atoi(rawPri)
+		if err != nil || pri < 0 {
+			return fmt.Errorf("--priority %q must be a non-negative integer", rawPri)
+		}
+		req.Priority = &pri
 	}
 	var buf bytes.Buffer
 	if err := c.post("/cli/proposals", req, &buf); err != nil {

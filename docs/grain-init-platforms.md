@@ -152,12 +152,11 @@ the same deployment, with the same store, history, secrets key,
 installation id and state repository; only the place the controller
 runs has changed.
 
-It differs from [`scripts/deploy-gke.sh`](deploy-gke.md), which builds a
-new deployment behind Cloud SQL, a Gateway and IAP. This script keeps
-the store the local daemon already has: SQLite moves onto the
-`grain-data` PVC, and a Postgres recorded in `db-config.json` is reached
-from the cluster instead. It also copies the whole data directory,
-where `deploy-gke.sh` copies only part of it.
+This script keeps the store the local daemon already has: SQLite moves
+onto the `grain-data` PVC, and a Postgres recorded in `db-config.json`
+is reached from the cluster instead. It copies the whole data directory
+so the in-cluster controller comes up with all existing checkouts,
+history and configuration intact.
 
 ```sh
 sudo scripts/migrate-local-to-gke.sh --dry-run \

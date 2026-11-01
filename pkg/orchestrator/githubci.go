@@ -466,6 +466,7 @@ type ConcludedGitHubWorkflowRun struct {
 	Attempt      int
 	Conclusion   string
 	HeadSHA      string
+	HeadRepo     string
 	Ref          string
 	Event        string
 	HTMLURL      string
@@ -518,6 +519,7 @@ func recordGitHubWorkflowRunEvent(ctx context.Context, deps Deps, repo model.Rep
 		Attempt:      attempt,
 		Conclusion:   strings.ToLower(strings.TrimSpace(ev.CheckConclusion)),
 		HeadSHA:      ev.HeadSHA,
+		HeadRepo:     ev.HeadRepo,
 		Ref:          strings.TrimPrefix(strings.TrimSpace(ev.HeadRef), "refs/heads/"),
 		Event:        ev.WorkflowEvent,
 		HTMLURL:      ev.HTMLURL,
@@ -579,6 +581,7 @@ func pollConcludedGitHubWorkflowRuns(ctx context.Context, deps Deps, now time.Ti
 				Attempt:      attempt,
 				Conclusion:   strings.ToLower(strings.TrimSpace(r.Conclusion)),
 				HeadSHA:      r.HeadSHA,
+				HeadRepo:     r.HeadRepo,
 				Ref:          strings.TrimPrefix(strings.TrimSpace(r.HeadBranch), "refs/heads/"),
 				Event:        r.Event,
 				HTMLURL:      r.HTMLURL,
@@ -637,12 +640,46 @@ func reposWantingGitHubWorkflowRunPoll(ctx context.Context, store *model.Store) 
 	return out, nil
 }
 
+// isGitHubWorkflowRunForeignHead reports whether a workflow run's head
+// repository is explicitly a repository other than repo (such as a pull
+// request opened from a fork).
+func isGitHubWorkflowRunForeignHead(repo model.RepoRef, headRepo string) bool {
+	hr := strings.TrimSpace(headRepo)
+	if hr == "" {
+		return false
+	}
+	fullName := repo.Owner + "/" + repo.Name
+	return !strings.EqualFold(hr, fullName) && !strings.EqualFold(hr, repo.String())
+}
+
+// isGitHubBranchWorkflowEvent reports whether a GitHub Actions workflow_run's
+// triggering event names a branch of the repository itself -- never
+// pull_request or pull_request_target, whose head_branch is the pull request's
+// head ref rather than a branch of the base repository.
+func isGitHubBranchWorkflowEvent(event string) bool {
+	switch strings.ToLower(strings.TrimSpace(event)) {
+	case "push", "schedule", "workflow_dispatch", "release", "merge_group":
+		return true
+	default:
+		return false
+	}
+}
+
 // handleConcludedGitHubWorkflowRun deduplicates a concluded workflow run by
 // (repo, run_id, attempt), ensures its jobs and failure tails are recorded in
 // github_ci_job, fires any matching github_workflow_run schedules, and checks
 // release triage parity on the base branch.
 func handleConcludedGitHubWorkflowRun(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun, now time.Time) error {
 	if deps.Store == nil || run.RunID == 0 || run.Conclusion == "" {
+		return nil
+	}
+	if isGitHubWorkflowRunForeignHead(run.Repo, run.HeadRepo) {
+		sayOnce("github-workflow-run-fork:"+strings.ToLower(run.Repo.String())+":"+strings.ToLower(strings.TrimSpace(run.HeadRepo)),
+			"orchestrator: ignoring concluded GitHub workflow run %d on %s from head repository %s",
+			run.RunID, run.Repo, strings.TrimSpace(run.HeadRepo))
+		return nil
+	}
+	if !isGitHubBranchWorkflowEvent(run.Event) {
 		return nil
 	}
 	if !markConcludedGitHubRunSeen(deps.Store, run.Repo, run.RunID, run.Attempt) {
@@ -666,6 +703,9 @@ func handleConcludedGitHubWorkflowRun(ctx context.Context, deps Deps, run Conclu
 // jobs and failure tails so review and release-triage tasks have the failing
 // jobs, steps, and log tails immediately in their prompt and via grain ci log.
 func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun, now time.Time) ([]model.GitHubCIJob, error) {
+	if isGitHubWorkflowRunForeignHead(run.Repo, run.HeadRepo) || !isGitHubBranchWorkflowEvent(run.Event) {
+		return nil, nil
+	}
 	if reader, ok := deps.Client.(github.WorkflowRunsReader); ok && deps.Client != nil {
 		ghJobs, err := reader.ListWorkflowRunJobs(run.Repo.Owner, run.Repo.Name, run.RunID)
 		if err != nil {

@@ -988,3 +988,113 @@ func TestPlaybooksServedFromTheEmbeddedCopy(t *testing.T) {
 		})
 	}
 }
+
+func TestGrepOnCIRunSkipsAttemptsUnlessAsked(t *testing.T) {
+	t.Parallel()
+
+	store := ci.NewRunStore(10)
+	now := time.Now().UTC()
+	store.Put(ci.Run{
+		ID:         "run-dup",
+		Repo:       "bwsalmon/grain",
+		Ref:        "main",
+		Conclusion: ci.ConclusionFailure,
+		StartedAt:  &now,
+		FinishedAt: &now,
+		Jobs: []ci.JobRun{
+			{
+				JobID:      "go",
+				Name:       "go",
+				Conclusion: ci.ConclusionFailure,
+				Steps: []ci.StepRun{
+					{
+						Name:       "Test",
+						Conclusion: ci.ConclusionFailure,
+						Output:     "step summary: latest attempt failed\n",
+					},
+				},
+				Attempts: []ci.JobAttempt{
+					{
+						Attempt:    1,
+						Conclusion: ci.ConclusionFailure,
+						Steps: []ci.StepRun{
+							{
+								Name:       "Test",
+								Conclusion: ci.ConclusionFailure,
+								Output:     "step summary: attempt 1 failed\n",
+							},
+						},
+					},
+					{
+						Attempt:    2,
+						Conclusion: ci.ConclusionFailure,
+						Steps: []ci.StepRun{
+							{
+								Name:       "Test",
+								Conclusion: ci.ConclusionFailure,
+								Output:     "step summary: latest attempt failed\n",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	srcDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(srcDir, "pkg", "sub", "deeper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "pkg", "sub", "deeper", "note.txt"), []byte("nested match\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "pkg", "sub", "deeper", "skip.go"), []byte("nested match\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := newTestServer(t, store, srcDir, nil)
+	scope := Scope{TaskRepo: "bwsalmon/grain", MayReadCI: true, MayReadSrc: true}
+
+	// 1. Grepping ci://<repo>/<run> returns the latest attempt match once under go/Test.log, not duplicated under go/attempts/2/Test.log.
+	rec := serveRequest(srv, scope, http.MethodGet, "/fs/ci/bwsalmon/grain/run-dup?grep=latest+attempt+failed&n=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run grep status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Body.String(), "go/Test.log:1:step summary: latest attempt failed\n"; got != want {
+		t.Errorf("run grep = %q, want %q", got, want)
+	}
+
+	// 2. Grepping ci://<repo> likewise skips nested attempts/ directories.
+	rec = serveRequest(srv, scope, http.MethodGet, "/fs/ci/bwsalmon/grain?grep=latest+attempt+failed&n=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repo grep status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Body.String(), "run-dup/go/Test.log:1:step summary: latest attempt failed\n"; got != want {
+		t.Errorf("repo grep = %q, want %q", got, want)
+	}
+
+	// 3. Passing --glob mentioning attempts or grepping the attempts/ directory directly still searches attempts/.
+	rec = serveRequest(srv, scope, http.MethodGet, "/fs/ci/bwsalmon/grain/run-dup?grep=attempt+1+failed&glob=*/attempts/*/*.log&n=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("attempts glob grep status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Body.String(), "go/attempts/1/Test.log:1:step summary: attempt 1 failed\n"; got != want {
+		t.Errorf("attempts glob grep = %q, want %q", got, want)
+	}
+	rec = serveRequest(srv, scope, http.MethodGet, "/fs/ci/bwsalmon/grain/run-dup/go/attempts?grep=attempt+1+failed&n=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("attempts dir grep status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Body.String(), "1/Test.log:1:step summary: attempt 1 failed\n"; got != want {
+		t.Errorf("attempts dir grep = %q, want %q", got, want)
+	}
+
+	// 4. A bare filename --glob in Grep (no "/") still searches nested subdirectories.
+	rec = serveRequest(srv, scope, http.MethodGet, "/fs/src/pkg?grep=nested+match&glob=*.txt&n=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bare glob grep status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Body.String(), "sub/deeper/note.txt:1:nested match\n"; got != want {
+		t.Errorf("bare glob grep = %q, want %q", got, want)
+	}
+}

@@ -169,6 +169,32 @@ describe("DetailOverlay edit form", () => {
     );
   });
 
+  it("toggles keepRunning from the edit form", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={baseTask}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /Keep running \(immediately restart when a run exits\)/,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).keepRunning).toBe(true);
+  });
+
   // grain/task-110: the same form moves a task that is already filed
   // onto one particular model -- the case this is for, since "this one
   // needs the expensive model" is usually learned after a run. The model
@@ -477,5 +503,35 @@ describe("DetailOverlay edit form", () => {
       expect(onClose).toHaveBeenCalledTimes(1);
       confirm.mockRestore();
     });
+  });
+
+  it("shows the priority badge and edits Task priority via PATCH", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, priority: 7 }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    expect(screen.getByTestId("detail-priority-badge")).toHaveTextContent(
+      "priority: 7",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const priorityInput = screen.getByLabelText("Task priority");
+    expect(priorityInput).toHaveValue(7);
+
+    await user.clear(priorityInput);
+    await user.type(priorityInput, "9");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(9);
   });
 });

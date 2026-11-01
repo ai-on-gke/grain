@@ -68,6 +68,7 @@ type TaskSummary struct {
 	Title         string
 	State         string
 	Repo          string
+	Priority      int
 	Interactive   bool
 	Configuration bool
 	CreatedAt     *time.Time
@@ -543,6 +544,9 @@ func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit in
 		if t.Repo != "" {
 			fmt.Fprintf(&b, "  %s", t.Repo)
 		}
+		if t.Priority > 0 && t.Priority != 5 {
+			fmt.Fprintf(&b, "  priority %d", t.Priority)
+		}
 		if t.Configuration {
 			b.WriteString("  (configuration agent)")
 		} else if t.Interactive {
@@ -780,6 +784,11 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 	if t.Stall != "" {
 		fmt.Fprintf(&b, "  %s\n", singleLine(t.Stall))
 	}
+	priority := t.Priority
+	if priority <= 0 {
+		priority = 5
+	}
+	fmt.Fprintf(&b, "Priority: %d\n", priority)
 	if t.Author != "" {
 		fmt.Fprintf(&b, "Filed by: %s (%s)\n", t.Author, t.AuthorKind)
 	}

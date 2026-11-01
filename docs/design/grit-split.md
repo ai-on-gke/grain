@@ -1,9 +1,11 @@
 # Moving CI (grit) and the package cache into the cluster
 
 > **Superseded on 2026-10-27 by
-> [`docs/design/grain-on-gke.md`](grain-on-gke.md).** The operator
-> decided to run grain itself on the cluster, with only `grain hostd` on
-> the cloudtop. CI stays inside grain. The grit split is **deferred, not
+> [`docs/design/grain-on-gke.md`](grain-on-gke.md) (updated 2026-10-31).**
+> CI stays inside grain rather than splitting out into a separate service
+> (and on 2026-10-31 the GKE controller cutover in `grain-on-gke.md` was
+> also retired, keeping `grain daemon` on the host while sandboxes use
+> GKE via `-platform=gke-sandboxes`). The grit split remains **deferred, not
 > abandoned**: everything GS-1 and GS-2 merged (`ci.Runner`, the
 > `pkgcache` interfaces, the neutral packages, `grit serve`, `/v1`,
 > `pkg/gritapi`, `pkg/attest`, `pkg/treeid`, `pkg/grit/independence_test.go`

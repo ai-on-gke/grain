@@ -120,20 +120,25 @@ func (t GitHubWorkflowRunTrigger) MatchesConclusion(conclusion string) bool {
 	return false
 }
 
-// MatchesBranch reports whether branch matches t.Branches (or fallbackBase when
-// Branches is empty). When both Branches and fallbackBase are empty, any branch matches.
+// MatchesBranch reports whether branch matches t.Branches, or fallbackBase when
+// Branches is empty. When both Branches and fallbackBase are empty, no branch
+// matches -- the caller must resolve the schedule's base or the repository's
+// default branch first.
 func (t GitHubWorkflowRunTrigger) MatchesBranch(branch, fallbackBase string) bool {
 	b := strings.TrimPrefix(strings.TrimSpace(branch), "refs/heads/")
+	if b == "" {
+		return false
+	}
 	if len(t.Branches) == 0 {
 		fb := strings.TrimPrefix(strings.TrimSpace(fallbackBase), "refs/heads/")
 		if fb == "" {
-			return true
+			return false
 		}
 		return b == fb
 	}
 	for _, want := range t.Branches {
 		w := strings.TrimPrefix(strings.TrimSpace(want), "refs/heads/")
-		if w == b {
+		if w != "" && w == b {
 			return true
 		}
 	}

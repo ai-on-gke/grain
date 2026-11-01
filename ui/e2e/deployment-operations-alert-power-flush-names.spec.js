@@ -104,3 +104,117 @@ test("the two whole-cache flush buttons on System → Caches are named apart", a
   const actionsBox = await actions.boundingBox();
   expect(proxyBox.y).toBeLessThan(actionsBox.y);
 });
+
+test("pending-restart and not-runnable settings on System → Health link to their Settings section and card", async ({
+  page,
+}) => {
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    return route.fulfill({
+      response: res,
+      json: {
+        ...(await res.json()),
+        pendingRestart: ["pollInterval", "githubHost"],
+        unrunnable: [
+          { key: "pollInterval", stored: "0s", running: "30s" },
+          { key: "sandboxBackend", stored: "bogus", running: "docker" },
+        ],
+      },
+    });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/system");
+
+  const pendingRow = page.getByTestId("health-pending-restart");
+  await expect(pendingRow).toContainText(
+    "Saved, not applied until restart: Poll interval, GitHub host.",
+  );
+  const pollPending = pendingRow.getByRole("link", { name: "Poll interval" });
+  const githubPending = pendingRow.getByRole("link", { name: "GitHub host" });
+  const powerBtn = pendingRow.getByRole("button", { name: "Power" });
+  await expect(pollPending).toHaveAttribute("href", "/settings/engine#polling");
+  await expect(githubPending).toHaveAttribute(
+    "href",
+    "/settings/credentials#credentials",
+  );
+
+  // Power stays in the right-hand action slot of the pending-restart alert.
+  const pendingBox = await pendingRow.boundingBox();
+  const githubBox = await githubPending.boundingBox();
+  const powerBox = await powerBtn.boundingBox();
+  expect(powerBox.x).toBeGreaterThan(githubBox.x + githubBox.width);
+  expect(powerBox.x + powerBox.width).toBeLessThanOrEqual(
+    pendingBox.x + pendingBox.width + 0.5,
+  );
+
+  await pollPending.click();
+  await expect(page).toHaveURL(/\/settings\/engine#polling$/);
+  await expect(page.getByTestId("settings-section")).toHaveAttribute(
+    "data-section",
+    "engine",
+  );
+  await expect(page.locator("#polling")).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/system$/);
+
+  const unrunnableRow = page.getByTestId("health-unrunnable");
+  await expect(unrunnableRow).toContainText(
+    "Stored, but not runnable: Poll interval (stored 0s, running 30s), Sandbox backend (stored bogus, running docker).",
+  );
+  const pollUnrunnable = unrunnableRow.getByRole("link", {
+    name: "Poll interval",
+  });
+  const backendUnrunnable = unrunnableRow.getByRole("link", {
+    name: "Sandbox backend",
+  });
+  await expect(pollUnrunnable).toHaveAttribute(
+    "href",
+    "/settings/engine#polling",
+  );
+  await expect(backendUnrunnable).toHaveAttribute(
+    "href",
+    "/settings/sandboxes#backend-and-size",
+  );
+
+  await backendUnrunnable.click();
+  await expect(page).toHaveURL(/\/settings\/sandboxes#backend-and-size$/);
+  await expect(page.getByTestId("settings-section")).toHaveAttribute(
+    "data-section",
+    "sandboxes",
+  );
+  await expect(page.locator("#backend-and-size")).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/system$/);
+  await pendingRow.getByRole("button", { name: "Power" }).click();
+  await expect(page).toHaveURL(/\/system\/power$/);
+
+  // At phone width (390×844), both rows and their links/actions stay inside
+  // the viewport without horizontal overflow, and each link opens its card.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/system/health");
+  const phonePending = page.getByTestId("health-pending-restart");
+  const phoneUnrunnable = page.getByTestId("health-unrunnable");
+  await expect(phonePending).toBeVisible();
+  await expect(phoneUnrunnable).toBeVisible();
+
+  const phonePendingBox = await phonePending.boundingBox();
+  const phonePowerBox = await phonePending
+    .getByRole("button", { name: "Power" })
+    .boundingBox();
+  const phoneUnrunnableBox = await phoneUnrunnable.boundingBox();
+  expect(phonePendingBox.x + phonePendingBox.width).toBeLessThanOrEqual(390);
+  expect(phonePowerBox.x + phonePowerBox.width).toBeLessThanOrEqual(
+    phonePendingBox.x + phonePendingBox.width + 0.5,
+  );
+  expect(phoneUnrunnableBox.x + phoneUnrunnableBox.width).toBeLessThanOrEqual(
+    390,
+  );
+
+  await phonePending.getByRole("link", { name: "GitHub host" }).click();
+  await expect(page).toHaveURL(/\/settings\/credentials#credentials$/);
+  await expect(page.locator("#credentials")).toBeVisible();
+});

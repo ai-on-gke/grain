@@ -36,10 +36,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -264,7 +262,7 @@ func (d DaemonMetrics) Metrics(ctx context.Context, q mcp.MetricsQuery) (string,
 // judgement agent reads and the expect its writes are checked against
 // agree by construction.
 func taskSummary(t ui.Task) mcp.TaskSummary {
-	return mcp.TaskSummary{ID: t.ID, Title: t.Title, State: string(t.State), Repo: t.Repo, Interactive: t.Interactive, CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall, MergeQueue: mcp.TaskMergeQueue{State: t.MergeQueueState, Note: t.MergeQueueNote, At: t.MergeQueueStateAt, StalledAt: t.MergeQueueStalledAt, BlockedAt: t.MergeQueueBlockedAt},
+	return mcp.TaskSummary{ID: t.ID, Title: t.Title, State: string(t.State), Repo: t.Repo, Priority: t.Priority, Interactive: t.Interactive, CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall, MergeQueue: mcp.TaskMergeQueue{State: t.MergeQueueState, Note: t.MergeQueueNote, At: t.MergeQueueStateAt, StalledAt: t.MergeQueueStalledAt, BlockedAt: t.MergeQueueBlockedAt},
 		Kinds: ui.TaskKindTags(t), DependsOn: t.DependsOn, ChangedAt: taskChangedAt(t)}
 }
 
@@ -294,112 +292,6 @@ func (d DaemonPipeline) PipelineChanges(ctx context.Context, after string, limit
 		out.Changes = append(out.Changes, mcp.PipelineChange{At: c.At, ID: c.ID, Kind: c.Kind, From: c.From, To: c.To, Detail: c.Detail})
 	}
 	return out, nil
-}
-
-// daemonUpgrade implements selfupgrade.Deployment by asking a running
-// "grain daemon" to read, schedule or cancel this deployment's own
-// upgrade (pkg/ui's GET/POST /api/upgrade and DELETE
-// /api/upgrade/scheduled) -- the same REST hop daemonPullRequests and
-// daemonSandbox make, over the same client.
-//
-// The hop is not a formality here either. The upgrader is a handle the
-// daemon holds (ui.Config.Upgrader, built from -upgrade-image or
-// -upgrade-src-dir), the queue an upgrade shuts is a row in the store,
-// and the counts a scheduled upgrade waits on are queries against it --
-// none of which exists in this short-lived fork. Which deployment is
-// upgraded is not a parameter anywhere: it is whichever daemon -server
-// names, and that is the one this run is running inside.
-//
-// A 404 from either write means the deployment has no upgrader
-// configured at all, which is a fact about how it was installed rather
-// than a failed call, so it is translated into the sentinel the tools
-// turn into a sentence (selfupgrade.ErrNotConfigured).
-//
-// taskID is this run's own task, sent with a scheduled upgrade so the
-// schedule records the task that asked for it rather than the operator
-// principal every write through this API would otherwise default to
-// (grain/task-353). Same spelling and same reasoning as
-// daemonMemory.author: a dispatched run knows its own task, and the
-// daemon on the other end of the hop cannot tell it from the browser.
-type daemonUpgrade struct {
-	client *ui.HTTPClient
-	taskID string
-}
-
-// requester is the run this process serves, as a principal, and the zero
-// Principal when there is no task to name -- which the route reads as
-// this deployment's own actor, since a schedule with nobody to name is
-// better recorded as the operator than as an agent that does not exist.
-func (d daemonUpgrade) requester() model.Principal {
-	if d.taskID == "" {
-		return model.Principal{}
-	}
-	return model.Principal{Kind: model.PrincipalAgent, ID: d.taskID}
-}
-
-func (d daemonUpgrade) UpgradeStatus(ctx context.Context) (selfupgrade.Status, error) {
-	status, err := d.client.UpgradeStatus(ctx)
-	if err != nil {
-		return selfupgrade.Status{}, upgradeError(err)
-	}
-	return selfUpgradeStatus(status), nil
-}
-
-func (d daemonUpgrade) StartUpgrade(ctx context.Context, branch string, afterTasksFinish bool) (selfupgrade.Status, error) {
-	status, err := d.client.StartUpgrade(ctx, branch, afterTasksFinish, d.requester())
-	if err != nil {
-		return selfupgrade.Status{}, upgradeError(err)
-	}
-	return selfUpgradeStatus(status), nil
-}
-
-func (d daemonUpgrade) CancelScheduledUpgrade(ctx context.Context) (selfupgrade.Status, bool, error) {
-	status, cancelled, err := d.client.CancelScheduledUpgrade(ctx)
-	if err != nil {
-		return selfupgrade.Status{}, false, upgradeError(err)
-	}
-	return selfUpgradeStatus(status), cancelled, nil
-}
-
-// upgradeError maps the one error these routes have a specific meaning
-// for onto the capability's own sentinel, and passes everything else
-// through as it came.
-func upgradeError(err error) error {
-	var notFound *ui.NotFoundError
-	if errors.As(err, &notFound) {
-		return fmt.Errorf("%w: %s", selfupgrade.ErrNotConfigured, notFound)
-	}
-	return err
-}
-
-// selfUpgradeStatus converts the daemon's reading into the capability's own,
-// which is the same flattening in a package that must not import pkg/ui
-// (selfupgrade.Status's own doc comment).
-func selfUpgradeStatus(status ui.UpgradeStatus) selfupgrade.Status {
-	out := selfupgrade.Status{
-		Enabled:       status.Enabled,
-		Mode:          status.Mode,
-		RunningImage:  status.RunningImage,
-		RunningCommit: status.RunningCommit,
-		Channel:       status.Channel,
-		Branch:        status.Branch,
-		Phase:         status.Phase,
-		Detail:        status.Detail,
-		StartedAt:     status.StartedAt,
-		FinishedAt:    status.FinishedAt,
-		InFlightRuns:  status.InFlightRuns,
-	}
-	if status.Scheduled != nil {
-		out.Scheduled = &selfupgrade.Scheduled{
-			Branch:      status.Scheduled.Branch,
-			RequestedAt: status.Scheduled.RequestedAt,
-			ByKind:      status.Scheduled.ByKind,
-			ByID:        status.Scheduled.ByID,
-			BusyRuns:    status.Scheduled.BusyRuns,
-			BusyCIRuns:  status.Scheduled.BusyCIRuns,
-		}
-	}
-	return out
 }
 
 type daemonDB struct {
@@ -1359,7 +1251,6 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 var servedGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
 	grainci.CapabilityName, deploymenthealth.CapabilityName,
-	selfupgrade.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 }
@@ -1370,6 +1261,9 @@ func warnUnknownGrants(grants GrantNames) {
 		if _, isAPI, err := ui.ParseAPIGrant(name); isAPI && err == nil {
 			continue // served as generated tools (ui.AgentAPITools)
 		}
+		if model.APIAliasPreset(name) != "" {
+			continue // bare alias for an api preset (ui.AgentAPITools)
+		}
 		if !slices.Contains(served, name) {
 			fmt.Fprintf(os.Stderr,
 				"grain mcpserver: -grant %q names no capability this binary serves tools for "+
@@ -1378,8 +1272,6 @@ func warnUnknownGrants(grants GrantNames) {
 		}
 	}
 }
-
-var ConfirmPollInterval = chatPollInterval
 
 func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID string, client *ui.HTTPClient) []mcp.Tool {
 	var tools []mcp.Tool
@@ -1403,55 +1295,6 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 	}
 	if grants.Has(bootstrap.CapabilityName) {
 		tools = append(tools, bootstrap.PlaybookTools()...)
-	}
-	if grants.Has(selfupgrade.CapabilityName) {
-		// nil when this run has no daemon to ask, which puts all three
-		// tools on the roster refusing every call rather than leaving
-		// the roster to depend on how the process was started
-		// (selfupgrade.Tools' own doc comment).
-		var deployment selfupgrade.Deployment
-		var confirm func(ctx context.Context, question string) (bool, string, error)
-		if client != nil {
-			deployment = daemonUpgrade{client: client, taskID: taskID}
-			if taskID != "" {
-				confirm = func(ctx context.Context, question string) (bool, string, error) {
-					posted, err := client.PostTaskMessage(ctx, taskID, question, model.DeriveQuestionSummary(question), nil)
-					if err != nil {
-						return false, "", err
-					}
-					deadline := time.Now().Add(selfupgrade.DefaultConfirmTimeout)
-					poll := ConfirmPollInterval
-					if poll <= 0 {
-						poll = chatPollInterval
-					}
-					ticker := time.NewTicker(poll)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-ctx.Done():
-							return false, "the run was cancelled while waiting for a reply", nil
-						case now := <-ticker.C:
-							messages, err := client.TaskMessages(ctx, taskID, posted.ID)
-							if err == nil && len(messages) > 0 {
-								for _, m := range messages {
-									if m.AuthorKind == string(model.PrincipalHuman) {
-										return selfupgrade.Decide(m.Body), m.Body, nil
-									}
-								}
-							}
-							if now.After(deadline) {
-								return false, "no reply within the timeout", nil
-							}
-						}
-					}
-				}
-			}
-		}
-		tools = append(tools, selfupgrade.Tools(selfupgrade.Config{
-			TaskID:     taskID,
-			Deployment: deployment,
-			Confirm:    confirm,
-		})...)
 	}
 	if grants.Has(dbaccess.CapabilityDBRead) || grants.Has(dbaccess.CapabilityDBWrite) {
 		var executor dbaccess.DBExecutor
@@ -1674,6 +1517,11 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		c := append([]string(nil), p.Capabilities...)
 		caps = &c
 	}
+	var priority *int
+	if p.Priority != 0 {
+		prio := p.Priority
+		priority = &prio
+	}
 	// A local `id` from an earlier call in this run resolves here too: a
 	// run that re-files the same proposal twice in one turn is replacing
 	// the task it filed a moment ago, and it knows that one by the name
@@ -1683,7 +1531,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		supersedes = real
 	}
 	created, err := f.client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, AutoMerge: auto,
+		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, Priority: priority, AutoMerge: auto,
 		TemplateID: p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
 		DependsOn: deps, CustomFields: fields, Supersedes: supersedes,
 		Reads: p.Reads, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
@@ -1692,6 +1540,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		SandboxCPUs: p.SandboxCPUs, SandboxMemoryMB: p.SandboxMemoryMB,
 		SandboxDiskGB: p.SandboxDiskGB, NetworkAccess: p.NetworkAccess,
 		NothingNeededAction: p.NothingNeededAction,
+		KeepRunning:         p.KeepRunning,
 		Goal:                p.Goal,
 		NoPort:              p.NoPort,
 		FixesBaseBranch:     p.FixesBaseBranch,
@@ -1905,9 +1754,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 			"over -server, along with the api:self-debug preset tools (api:tasks:read and api:deployment:read); "+
 			"\"grain-log\" serves read_grain_log over this host's journal, "+
 			"redacted with -grain-secrets-dir; \"bootstrap-playbooks\" serves list_bootstrap_playbooks/"+
-			"read_bootstrap_playbook off the playbooks embedded in this binary; \"self-upgrade\" "+
-			"serves deployment_upgrade_status/upgrade_deployment/cancel_deployment_upgrade, which "+
-			"ask the -server daemon to upgrade the deployment this run is running inside. Passed "+
+			"read_bootstrap_playbook off the playbooks embedded in this binary. Passed "+
 			"by a Framework from the grants on the run's own task (agent.RunConfig.Grants, "+
 			"agent.GrantArgs).")
 	grainSrcDir := fs.String("grain-src-dir", "",
@@ -2337,24 +2184,6 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		}
 		registry.Register(mcp.NewLiveProposalTools(escapeSink, proposeRepoList.Nameable(), *taskID,
 			liveFiler)...)
-		if grants.Has(quarantine.CapabilityName) {
-			ws := *root
-			if ws == "" {
-				ws = *workspace
-			}
-			var filer mcp.ProposalFiler
-			if client != nil {
-				filer = &daemonProposalFiler{client: client, parent: *taskID, baseURL: *server, filed: map[string]string{}}
-			}
-			registry.Register(mcp.NewQuarantineTools(mcp.QuarantineToolConfig{
-				WorkspaceDir: ws,
-				TaskID:       *taskID,
-				Repo:         *prRepo,
-				Branch:       *prBranch,
-				Sink:         escapeSink,
-				Filer:        filer,
-			})...)
-		}
 	}
 
 	registry.Register(GrantedDaemonTools(grants, *grainSrcDir, *grainSecretsDir, *grainStateDir, *taskID, client)...)

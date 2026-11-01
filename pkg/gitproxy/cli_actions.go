@@ -46,7 +46,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -234,11 +233,13 @@ type CLIProposeRequest struct {
 	NotBefore       *time.Time          `json:"not_before,omitempty"`
 	FixesBaseBranch bool                `json:"fixes_base_branch,omitempty"`
 	NoPort          bool                `json:"no_port,omitempty"`
+	KeepRunning     bool                `json:"keep_running,omitempty"`
 	Origin          string              `json:"origin,omitempty"`
 	Reads           []string            `json:"reads,omitempty"`
 	HoldForApproval *bool               `json:"hold_for_approval,omitempty"`
 	AutoMerge       *bool               `json:"auto_merge,omitempty"`
 	Supersedes      string              `json:"supersedes,omitempty"`
+	Priority        *int                `json:"priority,omitempty"`
 }
 
 // CLIProposeResult is POST /cli/proposals' answer.
@@ -1299,8 +1300,8 @@ func (p *GitProxy) serveProposals(w http.ResponseWriter, r *http.Request, scope 
 
 // serveQuarantine answers POST /cli/quarantine (and POST /cap/quarantine).
 func (p *GitProxy) serveQuarantine(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
-	if !slices.Contains(scope.Grants, "test-quarantine") && !slices.Contains(scope.Grants, "quarantine-test") {
-		cliError(w, namespace.RefuseCapability("grain quarantine", "test-quarantine"))
+	if !model.SandboxAPIGrantsOf(scope.Grants).Allows("tests:write", scope.TaskRepo) {
+		cliError(w, namespace.RefuseCapability("grain quarantine", "api:test-quarantine"))
 		return
 	}
 	var req CLIQuarantineRequest

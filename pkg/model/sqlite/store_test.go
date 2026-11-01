@@ -3494,6 +3494,47 @@ func TestStartRunRejectsASecondLiveRunOnTheSameTask(t *testing.T) {
 	}
 }
 
+// TestStartRunNeverRefusesAConsoleSessionAtFullCapacity is the store's
+// half of the session admission guarantee (docs/sandbox-budget.md): the
+// in-transaction capacity check that refuses ordinary work at a full pool,
+// and a merger at a full merger pool, never refuses a console session or a
+// task holding priority-dispatch.
+func TestStartRunNeverRefusesAConsoleSessionAtFullCapacity(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	session := task("sess1", true)
+	session.Origin.Reason = model.ReasonConsoleSession
+	session.Interactive = true
+	session.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
+	session.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
+	steward := task("stew1", true)
+	steward.Grants = []model.Grant{{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel}}
+	for _, tk := range []model.Task{task("w0rk", true), task("w1rk", true), session, steward} {
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limits := model.Limits{Workers: 1}
+	start := func(id string) error {
+		return store.StartRun(ctx, model.Run{ID: id + "-1", TaskID: id, Sandbox: id + "-1", Attempt: 1, StartedAt: now}, limits)
+	}
+	if err := start("w0rk"); err != nil {
+		t.Fatalf("filling the worker pool: %v", err)
+	}
+	if err := start("w1rk"); !errors.Is(err, model.ErrAtCapacity) {
+		t.Fatalf("an ordinary task at full capacity = %v, want ErrAtCapacity", err)
+	}
+	if err := start("sess1"); err != nil {
+		t.Fatalf("a console session at full capacity was refused: %v", err)
+	}
+	if err := start("stew1"); err != nil {
+		t.Fatalf("a priority-dispatch task at full capacity was refused: %v", err)
+	}
+	if live, err := store.LiveRunCounts(ctx); err != nil || live != (model.RunCounts{Workers: 1, Directors: 2}) {
+		t.Fatalf("live = %+v (%v), want one worker and both priority runs counted apart", live, err)
+	}
+}
+
 // TestStartRunRefusesToExceedTheConcurrencyLimit pins the guard that
 // replaced the one-run-per-slot index as the thing keeping two
 // overlapping dispatch.Cycle callers from over-dispatching. Cycle reads
@@ -5290,5 +5331,92 @@ func TestSandboxNamespaceScopeReadsNoSiblingTasksWithoutAGrant(t *testing.T) {
 		if !scope.AllowedRepos[r] {
 			t.Errorf("%s not in AllowedRepos %v", r, scope.AllowedRepos)
 		}
+	}
+}
+
+func TestTaskPriorityDefaultUpdateAndQueueOrdering(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+
+	defaultTask := task("prio-default", true)
+	defaultTask.CreatedAt = &now
+	if err := store.PutTask(ctx, defaultTask); err != nil {
+		t.Fatal(err)
+	}
+	gotDefault, err := store.GetTask(ctx, "prio-default")
+	if err != nil || gotDefault == nil {
+		t.Fatalf("GetTask prio-default: %v", err)
+	}
+	if gotDefault.Priority != model.DefaultTaskPriority {
+		t.Errorf("Priority = %d, want default %d", gotDefault.Priority, model.DefaultTaskPriority)
+	}
+
+	lowTask := task("prio-low", true)
+	lowTask.Priority = 2
+	t1 := now.Add(time.Minute)
+	lowTask.CreatedAt = &t1
+	if err := store.PutTask(ctx, lowTask); err != nil {
+		t.Fatal(err)
+	}
+
+	highTask := task("prio-high", true)
+	highTask.Priority = 8
+	t2 := now.Add(2 * time.Minute)
+	highTask.CreatedAt = &t2
+	if err := store.PutTask(ctx, highTask); err != nil {
+		t.Fatal(err)
+	}
+
+	midFrontTask := task("prio-mid-front", true)
+	midFrontTask.Priority = 5
+	t3 := now.Add(3 * time.Minute)
+	midFrontTask.CreatedAt = &t3
+	if err := store.PutTask(ctx, midFrontTask); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MoveToFrontOfBacklog(ctx, []string{"prio-mid-front"}); err != nil {
+		t.Fatal(err)
+	}
+
+	midFixesBase := task("prio-mid-fixes-base", true)
+	midFixesBase.Priority = 5
+	model.SetFixesBaseBranch(&midFixesBase, true)
+	t4 := now.Add(4 * time.Minute)
+	midFixesBase.CreatedAt = &t4
+	if err := store.PutTask(ctx, midFixesBase); err != nil {
+		t.Fatal(err)
+	}
+
+	ready, err := store.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	wantIDs := []string{"prio-high", "prio-mid-fixes-base", "prio-mid-front", "prio-default", "prio-low"}
+	if !slices.Equal(ready, wantIDs) {
+		t.Errorf("Ready order = %v, want %v", ready, wantIDs)
+	}
+
+	// Updating priority moves lowTask ahead of highTask.
+	lowStored, err := store.GetTask(ctx, "prio-low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowStored.Priority = 10
+	if err := store.PutTask(ctx, *lowStored); err != nil {
+		t.Fatal(err)
+	}
+	updatedLow, err := store.GetTask(ctx, "prio-low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedLow.Priority != 10 {
+		t.Errorf("updated Priority = %d, want 10", updatedLow.Priority)
+	}
+	readyAfter, err := store.Ready(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readyAfter) == 0 || readyAfter[0] != "prio-low" {
+		t.Errorf("Ready after priority update first = %v, want prio-low", readyAfter)
 	}
 }

@@ -458,7 +458,7 @@ namespace relaxed for `k8s-granule`'s sandboxes is a namespace
 
 Both `grain.yaml` (`k8s-container`) and `grain-granule.yaml`
 (`k8s-granule`) run the grain daemon *inside* the cluster as a
-Deployment. In the Stage 1 hybrid shape (`grain init -platform=gke-sandboxes`),
+Deployment. In the hybrid shape (`grain init -platform=gke-sandboxes`),
 the grain controller — the daemon, its SQLite or Postgres store, its
 git proxy, and its package cache — stays on its existing host outside
 the cluster, while sandbox VMs run as privileged `k8s-granule` pods on a

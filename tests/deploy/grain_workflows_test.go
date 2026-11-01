@@ -950,9 +950,6 @@ func TestTheGoJobDeclaresEveryFileItsOwnTestsRead(t *testing.T) {
 		"deploy/terraform/gcp/variables.tf",
 		"deploy/terraform/gcp/instance.tf",
 		"deploy/terraform/gcp/files/deploy.sh",
-		"deploy/gke/terraform/variables.tf",
-		"deploy/kubernetes/gke/gateway.yaml",
-		"scripts/deploy-gke.sh",
 		"scripts/setup.sh",
 		"Makefile",
 		// The agent surface captures, which pkg/agent's own tests assert

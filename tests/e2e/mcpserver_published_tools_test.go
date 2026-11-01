@@ -40,7 +40,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 )
 
 // Every grant this binary serves tools for, so the server started below
@@ -52,7 +51,6 @@ var everyToolGrant = []string{
 	grainlog.CapabilityName,
 	deploymenthealth.CapabilityName,
 	bootstrap.CapabilityName,
-	selfupgrade.CapabilityName,
 	grainci.CapabilityName,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead,

@@ -92,6 +92,7 @@ type Task struct {
 	// piece missing.
 	Writes               []WriteTarget `json:"writes,omitempty"`
 	Base                 string        `json:"base,omitempty"`
+	Priority             int           `json:"priority"`
 	AutoMerge            bool          `json:"autoMerge"`
 	AutoApproveProposals bool          `json:"autoApproveProposals"`
 	// Interactive mirrors model.Task's own field of the same name
@@ -152,6 +153,10 @@ type Task struct {
 	// what a run ending on nothing_needed does to this task, "close" or
 	// "ack", with "" meaning close.
 	NothingNeededAction string `json:"nothingNeededAction,omitempty"`
+	// KeepRunning is model.Task.KeepRunning: when true, the orchestrator
+	// immediately restarts the task when its run exits rather than completing
+	// or parking it.
+	KeepRunning bool `json:"keepRunning,omitempty"`
 	// NoPort is model.Task.NoPort: this task's change is not ported to
 	// its repository's other paired branches.
 	NoPort bool `json:"noPort,omitempty"`
@@ -579,7 +584,13 @@ func grantWaitActivity(wait model.GrantWait) *model.RunActivity {
 		wait.Capability == model.QuotaWaitCapability || wait.Capability == model.ChangeTargetWaitCapability {
 		// The resource is already the whole sentence: "no enabled
 		// connection serves model X", "all connections serving X are busy",
-		// 'team "x" has no GitHub credential for o/r -- ...'.
+		// 'team "x" has no GitHub credential for o/r -- ...'. One that
+		// already says what it is waiting for (a session's "waiting for
+		// sandbox budget: ...", dispatch.capacityReasonFor) is not
+		// prefixed a second time.
+		if strings.HasPrefix(wait.Resource, "waiting for ") {
+			return &model.RunActivity{Note: wait.Resource, At: &wait.WaitingAt, BySetup: true}
+		}
 		return &model.RunActivity{Note: "waiting: " + wait.Resource, At: &wait.WaitingAt, BySetup: true}
 	}
 	return &model.RunActivity{
@@ -951,6 +962,10 @@ type AttemptStartup struct {
 func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueueBlockedAt *time.Time,
 	repairing bool, mergeQueue model.MergeQueueActivity, activity *model.RunActivity,
 	reviewTemplateName string, span model.TaskSpan, stall string) Task {
+	priority := t.Priority
+	if priority == 0 {
+		priority = model.DefaultTaskPriority
+	}
 	out := Task{
 		ID:                   t.ID,
 		Title:                t.Title,
@@ -959,6 +974,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		AuthorKind:           string(t.Origin.Attribution.Actor.Kind),
 		State:                state,
 		Base:                 t.Base,
+		Priority:             priority,
 		Issue:                t.Issue,
 		AutoMerge:            t.AutoMerge,
 		AutoApproveProposals: t.AutoApproveProposals,
@@ -973,6 +989,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		ModelSource:          string(t.ModelSource),
 		NetworkAccess:        string(t.NetworkAccess),
 		NothingNeededAction:  string(t.NothingNeededAction),
+		KeepRunning:          t.KeepRunning,
 		NoPort:               t.NoPort,
 		FixesBaseBranch:      model.FixesBaseBranch(t),
 		GrainBaseRepair:      model.GrainBaseRepair(t),
@@ -1691,6 +1708,11 @@ type configResponse struct {
 	// (docs/design/config-repo-settings.md §2.1).
 	ConfigRepoOnly bool `json:"configRepoOnly,omitempty"`
 	SettingsLocked bool `json:"settingsLocked,omitempty"`
+	// NewTaskForm is settings/new-task-form.yml as stored
+	// (model.NewTaskForm), which the New Task form resolves for the
+	// repository, template and board it is filled in for; nil draws the
+	// form as built (docs/design/config-repo-settings.md §6).
+	NewTaskForm *model.NewTaskForm `json:"newTaskForm,omitempty"`
 }
 
 // CustomFieldDeclaration is one declared field on the wire -- the JSON
@@ -1931,6 +1953,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		resp.ModelsConfigured = len(cfg.AgentBackends) > 0
 		resp.ShowClosedByDefault = cfg.ShowClosedByDefault
 		resp.SettingsLocked = cfg.SettingsLocked
+		resp.NewTaskForm = cfg.NewTaskForm
 		resp.DefaultFilters = cfg.DefaultFilters
 		resp.EnvironmentName = cfg.EnvironmentName
 		// The stored zone, which before this never reached the frontend:
@@ -2262,6 +2285,19 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// The browser's zone when the body names none (TimeZoneHeader).
 	if strings.TrimSpace(req.TimeZone) == "" {
 		req.TimeZone = requestTimeZone(r)
+	}
+	// The fields settings/new-task-form.yml hides file as it says -- for
+	// a person's filing, never an agent's. agentAPIGate judged an agent's
+	// escalations (autoMerge, approved, writes, reads, grants, repo) on
+	// the body it sent, so a default put in after it would be a grant
+	// that gate never saw.
+	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalAgent {
+		// filed as the body says
+	} else if cfg, err := s.tasks.Store.GetConfig(r.Context()); err == nil && cfg != nil {
+		if err := applyHiddenFormDefaults(&req, cfg.NewTaskForm); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 	}
 	task, err := s.tasks.CreateTask(r.Context(), req)
 	if err != nil {
@@ -2855,11 +2891,28 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return readJSONLimit(w, r, v, maxJSONBody)
 }
 
+func ensureJSONEOF(dec *json.Decoder) error {
+	var extra any
+	err := dec.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return errors.New("unexpected trailing JSON data after request body")
+}
+
 // readJSONLimit is readJSON with the body bound set by the caller, for
 // the few routes whose bodies are legitimately larger than maxJSONBody.
 func readJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	defer r.Body.Close()
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(v); err != nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	if err := dec.Decode(v); err != nil {
+		writeBodyError(w, err)
+		return false
+	}
+	if err := ensureJSONEOF(dec); err != nil {
 		writeBodyError(w, err)
 		return false
 	}
@@ -2877,7 +2930,12 @@ func readJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) b
 func readAttachmentJSON[T any](w http.ResponseWriter, r *http.Request, v *T, uploads func(*T) []AttachmentUpload) bool {
 	defer r.Body.Close()
 	body := &countingReader{r: http.MaxBytesReader(w, r.Body, maxAttachmentJSONBody)}
-	if err := json.NewDecoder(body).Decode(v); err != nil {
+	dec := json.NewDecoder(body)
+	if err := dec.Decode(v); err != nil {
+		writeBodyError(w, err)
+		return false
+	}
+	if err := ensureJSONEOF(dec); err != nil {
 		writeBodyError(w, err)
 		return false
 	}
@@ -2924,11 +2982,16 @@ func writeBodyError(w http.ResponseWriter, err error) {
 // nothing to decode", and is the only error swallowed here.
 func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	defer r.Body.Close()
-	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(v)
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
+	err := dec.Decode(v)
 	if errors.Is(err, io.EOF) {
 		return true
 	}
 	if err != nil {
+		writeBodyError(w, err)
+		return false
+	}
+	if err := ensureJSONEOF(dec); err != nil {
 		writeBodyError(w, err)
 		return false
 	}

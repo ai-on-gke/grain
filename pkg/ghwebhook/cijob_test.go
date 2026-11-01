@@ -63,6 +63,38 @@ func TestParseWorkflowJobAndCheckRunDeliveries(t *testing.T) {
 	}
 }
 
+func TestParseWorkflowRunDeliveryCarriesHeadRepository(t *testing.T) {
+	ev, err := ParsePayload("workflow_run", "d-3", []byte(`{
+		"action": "completed",
+		"repository": {"full_name": "acme/widgets"},
+		"workflow_run": {
+			"id": 7001,
+			"name": "publish",
+			"path": ".github/workflows/publish.yml",
+			"event": "pull_request",
+			"run_attempt": 1,
+			"head_branch": "main",
+			"head_sha": "a77ac4e2a77ac4e2",
+			"head_repository": {"full_name": "mallory/widgets"},
+			"status": "completed",
+			"conclusion": "failure",
+			"html_url": "https://github.com/acme/widgets/actions/runs/7001",
+			"run_started_at": "2026-10-31T01:00:00Z",
+			"updated_at": "2026-10-31T01:02:00Z"
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.WorkflowRun != 7001 || ev.WorkflowName != "publish" ||
+		ev.WorkflowPath != ".github/workflows/publish.yml" ||
+		ev.WorkflowEvent != "pull_request" || ev.HeadRef != "main" ||
+		ev.HeadSHA != "a77ac4e2a77ac4e2" || ev.HeadRepo != "mallory/widgets" ||
+		ev.CheckConclusion != "failure" {
+		t.Fatalf("workflow_run event = %+v", ev)
+	}
+}
+
 func TestParseWorkflowRunTimedOutStepAndStatusPushDeliveries(t *testing.T) {
 	// 1. workflow_run delivery with run_attempt=0 defaults RunAttempt to 1 and populates workflow metadata.
 	ev, err := ParsePayload("workflow_run", "d-wr-1", []byte(`{

@@ -145,7 +145,7 @@ func TestInteractiveInitialStartupLatencyAndBreakdown(t *testing.T) {
 	startWall := time.Now()
 	t1 := startWall.UTC()
 	replyToSession(t, store, director.ID, t1)
-	if err := orchestrator.RunDispatchCycle(ctx, deps, t1.Add(10*time.Millisecond)); err != nil {
+	if err := orchestrator.RunDispatchCycle(ctx, deps, time.Now().UTC()); err != nil {
 		t.Fatalf("RunDispatchCycle: %v", err)
 	}
 	startupElapsed := firstTurnAt.Sub(startWall)
@@ -214,6 +214,85 @@ func TestInteractiveInitialStartupLatencyAndBreakdown(t *testing.T) {
 	}
 	if rep.Latency.BatchStartup.StartedToFirstTurn.N != 0 {
 		t.Errorf("BatchStartup.StartedToFirstTurn.N = %d, want 0 for interactive-only store", rep.Latency.BatchStartup.StartedToFirstTurn.N)
+	}
+}
+
+// interactiveStartupBound is the production ceiling on a session's initial
+// startup (task 2080): message posted to agent's first turn.
+const interactiveStartupBound = 45 * time.Second
+
+// TestConsoleSessionStartsWithinStartupBoundWhenSandboxBudgetFullOfCI is
+// task 2189's end-to-end regression: with the deployment's sandbox budget
+// saturated by CI sandboxes (vCPU, memory and disk, and committed over its
+// cap), a message to a console session still has its run started and its
+// first turn taken inside the startup bound -- in the very dispatch cycle
+// that sees the message, rather than after CI drains. Session 2174 waited
+// 16 minutes on 2026-10-31.
+func TestConsoleSessionStartsWithinStartupBoundWhenSandboxBudgetFullOfCI(t *testing.T) {
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID: model.DirectorSessionID, Title: "Director", NetworkAccess: model.NetworkOpen,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	ledger := &model.Ledger{}
+	budget := model.Budget{
+		Host:             model.Commitment{CPUs: 16, MemoryMB: 32 * 1024, DiskGB: 200},
+		CPUOvercommit:    1,
+		MemoryOvercommit: 1,
+		DiskOvercommit:   1,
+		RepairReserve:    model.Commitment{CPUs: 4, MemoryMB: 8 * 1024},
+	}
+	shape := model.Commitment{CPUs: 4, MemoryMB: 8 * 1024, DiskGB: 20}
+	// Fake CI sandboxes: 34 of them, together over every ceiling.
+	for i := 0; i < 34; i++ {
+		ledger.Charge(model.PoolCI, fmt.Sprintf("ci-job-%d", i), model.Commitment{CPUs: 1, MemoryMB: 1024, DiskGB: 8})
+	}
+	limits := model.Limits{Budget: budget, AgentShape: shape, Ledger: ledger}
+	if limits.SandboxAdmitsShape(shape) || budget.WithinCap(ledger.Live()) {
+		t.Fatalf("the budget should be saturated by CI and over its cap: %s", ledger.Describe())
+	}
+
+	var firstTurnAt time.Time
+	ag := &recordingSessionAgent{
+		onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
+			firstTurnAt = time.Now()
+			return &agent.Result{FinalText: "answer", Transcript: "answer", ResumableSession: "sess-ci-full"}, nil
+		},
+	}
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  orchestrator.NewHostSandboxes(t.TempDir()),
+		Framework:  orchestrator.StaticFramework(ag),
+		MaxWorkers: 1,
+		Budget:     budget,
+		AgentShape: shape,
+		Ledger:     ledger,
+		Config: orchestrator.Config{
+			StateRepo: func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+		},
+	}
+
+	startWall := time.Now()
+	replyToSession(t, store, director.ID, startWall.UTC())
+	if err := orchestrator.RunDispatchCycle(ctx, deps, time.Now().UTC()); err != nil {
+		t.Fatalf("RunDispatchCycle: %v", err)
+	}
+	runs, err := store.Runs(ctx, director.ID)
+	if err != nil || len(runs) != 1 {
+		wait, _ := store.GrantWaitOf(ctx, director.ID)
+		t.Fatalf("the session's runs after one cycle with the budget full of CI = %v (%v), want one; its wait: %+v", runs, err, wait)
+	}
+	if firstTurnAt.IsZero() {
+		t.Fatal("the session's agent never took its first turn")
+	}
+	elapsed := firstTurnAt.Sub(startWall)
+	t.Logf("session startup with the budget full of CI: %v", elapsed)
+	if elapsed >= interactiveStartupBound {
+		t.Errorf("session startup with the budget full of CI took %v, want < %v", elapsed, interactiveStartupBound)
 	}
 }
 

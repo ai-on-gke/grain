@@ -276,10 +276,17 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 		t.Errorf("task wait --park: %d %s", code, errOut)
 	}
 
-	// 4. task propose (draft allowed; --supersedes and --auto-merge refused)
-	if out, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "Follow-up", "--body", "Do x", "--depends-on", "7,8"); code != 0 ||
+	// 4. task propose (draft allowed; --priority forwarded; --supersedes and --auto-merge refused)
+	if out, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "Follow-up", "--body", "Do x", "--depends-on", "7,8", "--priority", "8"); code != 0 ||
 		!strings.Contains(out, "Proposed task #101") || !strings.Contains(out, "held for human approval") {
 		t.Errorf("task propose: %d %s %s", code, out, errOut)
+	}
+	if gotPri, ok := proxy.bodies["POST /cli/proposals"]["priority"].(float64); !ok || gotPri != 8 {
+		t.Errorf("task propose priority in body = %v, want 8", proxy.bodies["POST /cli/proposals"]["priority"])
+	}
+	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--priority", "-1"); code != 1 ||
+		!strings.Contains(errOut, "--priority") {
+		t.Errorf("task propose --priority -1: %d %s", code, errOut)
 	}
 	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--supersedes", "5"); code != 1 ||
 		!strings.Contains(errOut, "propose_task") {
@@ -326,6 +333,38 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 	qRaw, err := os.ReadFile(filepath.Join(qDir, ".grain", "quarantine.yml"))
 	if err != nil || !strings.Contains(string(qRaw), "pkg/foo.TestFlaky") || !strings.Contains(string(qRaw), "102") {
 		t.Errorf("quarantine.yml = %q, %v", qRaw, err)
+	}
+}
+
+func TestSandboxActionsUseGitCredentialsWithoutProxyEnv(t *testing.T) {
+	proxy := &fakeActionProxy{
+		bodies:  map[string]map[string]any{},
+		headers: map[string]http.Header{},
+		answers: map[string]string{
+			"/cli/ci/wait": `{"status":"passed","run_id":"ci-gw","commit":"abcdef0123456789","conclusion":"success",
+				"jobs":[{"name":"go","conclusion":"success"}]}`,
+			"/cli/pr/open": "Opened pull request #42: https://github.com/ai-on-gke/grain/pull/42\n",
+		},
+	}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	// Point .git-credentials at the listener without setting GRAIN_SANDBOX_PROXY
+	// or GRAIN_SANDBOX_TOKEN, matching a Granule VM or host sandbox session.
+	creds := "http://sandbox:tok-from-creds@" + strings.TrimPrefix(srv.URL, "http://") + "\n"
+	env := fakeSandboxEnv(map[string]string{}, creds)
+
+	var out, errOut bytes.Buffer
+	code, handled := maybeRunSandboxCLI([]string{"ci", "wait"}, env, &out, &errOut)
+	if !handled || code != 0 || !strings.Contains(out.String(), "ci-gw") {
+		t.Fatalf("ci wait via .git-credentials: handled=%v code=%d out=%q err=%q", handled, code, out.String(), errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code, handled = maybeRunSandboxCLI([]string{"pr", "open"}, env, &out, &errOut)
+	if !handled || code != 0 || !strings.Contains(out.String(), "#42") {
+		t.Fatalf("pr open via .git-credentials: handled=%v code=%d out=%q err=%q", handled, code, out.String(), errOut.String())
 	}
 }
 

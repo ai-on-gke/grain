@@ -73,6 +73,9 @@ type ConsoleSessionSetting struct {
 	// approved rather than waiting for a person. False is the default --
 	// see model.ConsoleSession's own doc comment on why.
 	TasksApproved bool `json:"tasksApproved"`
+	// KeepRunning is whether the session's task immediately restarts when
+	// its run exits rather than parking until the next message.
+	KeepRunning bool `json:"keepRunning"`
 	// Reads is every repo this session may read but never push to --
 	// model.ConsoleSession.Reads, rendered as owner/name strings.
 	Reads []string `json:"reads,omitempty"`
@@ -148,14 +151,16 @@ type ConsoleSessionSettingsResponse struct {
 // model.ConsoleSession on why a settings form may not rewrite what an
 // agent holding this deployment's own host is for.
 type UpdateConsoleSessionRequest struct {
-	Title           *string        `json:"title"`
-	Team            *string        `json:"team"`
-	Capabilities    *[]string      `json:"capabilities"`
-	NetworkAccess   *string        `json:"networkAccess"`
-	TasksApproved   *bool          `json:"tasksApproved"`
-	Reads           *[]string      `json:"reads"`
-	Writes          *[]WriteTarget `json:"writes"`
-	GoogleChatSpace *string        `json:"googleChatSpace"`
+	Title            *string        `json:"title"`
+	Team             *string        `json:"team"`
+	Capabilities     *[]string      `json:"capabilities"`
+	NetworkAccess    *string        `json:"networkAccess"`
+	TasksApproved    *bool          `json:"tasksApproved"`
+	KeepRunning      *bool          `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool          `json:"keep_running,omitempty"`
+	Reads            *[]string      `json:"reads"`
+	Writes           *[]WriteTarget `json:"writes"`
+	GoogleChatSpace  *string        `json:"googleChatSpace"`
 	// Model is the model the session runs on; "" puts it back on its
 	// team's default model.
 	Model *string `json:"model"`
@@ -187,15 +192,17 @@ type UpdateConsoleSessionRequest struct {
 // a title nor a message is refused, which is what keeps an opened-and-
 // abandoned chat out of the sessions list.
 type CreateConsoleSessionRequest struct {
-	ID              string        `json:"id,omitempty"`
-	Title           string        `json:"title,omitempty"`
-	Team            string        `json:"team,omitempty"`
-	Capabilities    []string      `json:"capabilities,omitempty"`
-	NetworkAccess   string        `json:"networkAccess,omitempty"`
-	TasksApproved   bool          `json:"tasksApproved,omitempty"`
-	Reads           []string      `json:"reads,omitempty"`
-	Writes          []WriteTarget `json:"writes,omitempty"`
-	GoogleChatSpace string        `json:"googleChatSpace,omitempty"`
+	ID               string        `json:"id,omitempty"`
+	Title            string        `json:"title,omitempty"`
+	Team             string        `json:"team,omitempty"`
+	Capabilities     []string      `json:"capabilities,omitempty"`
+	NetworkAccess    string        `json:"networkAccess,omitempty"`
+	TasksApproved    bool          `json:"tasksApproved,omitempty"`
+	KeepRunning      bool          `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool         `json:"keep_running,omitempty"`
+	Reads            []string      `json:"reads,omitempty"`
+	Writes           []WriteTarget `json:"writes,omitempty"`
+	GoogleChatSpace  string        `json:"googleChatSpace,omitempty"`
 	// Model is the model the session runs on, or "" for its team's
 	// default model.
 	Model string `json:"model,omitempty"`
@@ -260,6 +267,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 		if err != nil {
 			return nil, err
 		}
+		var openTask *model.Task
 		if taskID != "" {
 			obs, err := c.Store.GetObservation(ctx, taskID)
 			if err != nil {
@@ -267,8 +275,20 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 			}
 			if obs != nil && obs.ClosedAt != nil {
 				taskID = ""
+			} else {
+				openTask, err = c.Store.GetTask(ctx, taskID)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
+		title := model.ConsoleSessionTitle(s)
+		capabilities := append([]string{}, s.Capabilities...)
+		networkAccess := string(s.NetworkAccess)
+		tasksApproved := s.TasksApproved
+		keepRunning := s.KeepRunning
+		googleChatSpace := s.GoogleChatSpace
+		modelChoice := s.Model
 		reads := make([]string, 0, len(s.Reads))
 		for _, r := range s.Reads {
 			reads = append(reads, r.String())
@@ -280,6 +300,67 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 				Base: w.Base,
 			})
 		}
+		if openTask != nil {
+			prev, hasPrev := model.LastSyncedConsoleSession(c.Store, openTask.ID)
+			if c.configRepoOnly(ctx) && hasPrev && strings.TrimSpace(openTask.Title) != "" &&
+				(openTask.Title != prev.Title || model.ConsoleSessionTitle(s) == prev.Title) {
+				title = openTask.Title
+			}
+			if hasPrev {
+				if len(openTask.Grants) > 0 {
+					capabilities = make([]string, 0, len(openTask.Grants))
+					for _, g := range openTask.Grants {
+						if g.Capability == "" || g.Capability == model.DurableCapability {
+							continue
+						}
+						if g.Via == model.GrantByDefault && !slices.Contains(s.Capabilities, g.Capability) {
+							continue
+						}
+						if !slices.Contains(capabilities, g.Capability) {
+							capabilities = append(capabilities, g.Capability)
+						}
+					}
+				}
+				if openTask.NetworkAccess != "" || prev.NetworkAccess != openTask.NetworkAccess {
+					if !(s.NetworkAccess == model.NetworkNone && c.Config.SandboxShapeIgnored && openTask.NetworkAccess == model.NetworkOpen) {
+						networkAccess = string(openTask.NetworkAccess)
+					}
+				}
+				tasksApproved = model.ConsoleSessionQueuesProposals(sessions, *openTask)
+				keepRunning = openTask.KeepRunning
+				if openTask.Reads != nil || len(s.Reads) == 0 {
+					stateRepo := c.stateRepoRef()
+					reads = make([]string, 0, len(openTask.Reads))
+					for _, r := range openTask.Reads {
+						if stateRepo.Owner != "" && r.Same(stateRepo) &&
+							!slices.ContainsFunc(s.Reads, func(sr model.RepoRef) bool { return sr.Same(stateRepo) }) {
+							continue
+						}
+						reads = append(reads, r.String())
+					}
+				}
+				if openTask.Writes != nil || len(s.Writes) == 0 {
+					writes = make([]WriteTarget, 0, len(openTask.Writes))
+					for _, w := range openTask.Writes {
+						writes = append(writes, WriteTarget{
+							Repo: w.Repo.String(),
+							Base: w.Base,
+						})
+					}
+				}
+				if openTask.Model != "" || prev.Model != openTask.Model {
+					modelChoice = openTask.Model
+				}
+				var linkedSpace string
+				for _, l := range openTask.Links {
+					if l.Kind == model.LinkGoogleChat {
+						linkedSpace = l.Target
+						break
+					}
+				}
+				googleChatSpace = linkedSpace
+			}
+		}
 		crowded, note, err := c.consoleSessionCrowding(ctx, taskID)
 		if err != nil {
 			return nil, err
@@ -290,16 +371,17 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 		}
 		out = append(out, ConsoleSessionSetting{
 			ID:              s.ID,
-			Title:           model.ConsoleSessionTitle(s),
+			Title:           title,
 			Team:            team,
 			TaskID:          taskID,
-			Capabilities:    append([]string{}, s.Capabilities...),
-			NetworkAccess:   string(s.NetworkAccess),
-			TasksApproved:   s.TasksApproved,
+			Capabilities:    capabilities,
+			NetworkAccess:   networkAccess,
+			TasksApproved:   tasksApproved,
+			KeepRunning:     keepRunning,
 			Reads:           reads,
 			Writes:          writes,
-			GoogleChatSpace: s.GoogleChatSpace,
-			Model:           s.Model,
+			GoogleChatSpace: googleChatSpace,
+			Model:           modelChoice,
 			Crowded:         crowded,
 			CrowdedNote:     note,
 		})
@@ -361,9 +443,6 @@ func (c *Client) consoleSessionCrowding(ctx context.Context, taskID string) (boo
 // (orchestrator.syncConsoleSessionTask), which is the same one-writer
 // discipline every other setting follows.
 func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req UpdateConsoleSessionRequest) ([]ConsoleSessionSetting, error) {
-	if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
-		return nil, err
-	}
 	cfg, err := c.consoleSessionConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -377,12 +456,47 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		}
 	}
 	if index < 0 {
+		if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
+			return nil, err
+		}
 		return nil, &NotFoundError{ID: id}
 	}
-	session := sessions[index]
+	taskID, err := c.Store.TaskIDWithTag(ctx, model.ConsoleSessionTag(id))
+	if err != nil {
+		return nil, err
+	}
+	var openTask *model.Task
+	if taskID != "" {
+		obs, err := c.Store.GetObservation(ctx, taskID)
+		if err != nil {
+			return nil, err
+		}
+		if obs != nil && obs.ClosedAt != nil {
+			taskID = ""
+		} else {
+			openTask, err = c.Store.GetTask(ctx, taskID)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	hasParamEdit := req.Capabilities != nil || req.NetworkAccess != nil || req.TasksApproved != nil ||
+		req.Reads != nil || req.Writes != nil || req.GoogleChatSpace != nil || req.Model != nil
+	if openTask == nil || (!hasParamEdit && req.Title == nil) {
+		if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
+			return nil, err
+		}
+	}
+	origSession := sessions[index]
+	session := origSession
+	staticCaps := append([]string{}, session.Capabilities...)
 	if req.Title != nil {
 		switch {
 		case req.renameByAgent:
+			if c.configRepoOnly(ctx) && openTask != nil && strings.TrimSpace(openTask.Title) != "" && strings.TrimSpace(openTask.Title) != strings.TrimSpace(model.ConsoleSessionTitle(session)) {
+				session.Title = openTask.Title
+				session.TitleSource = model.TitleSourceAgent
+			}
 			// Checked here, against the row this write replaces, rather
 			// than by the caller against a read of its own.
 			if source := session.ResolvedTitleSource(req.firstMessage); source != model.TitleSourceHeuristic {
@@ -439,6 +553,11 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 	if req.TasksApproved != nil {
 		session.TasksApproved = *req.TasksApproved
 	}
+	if req.KeepRunning != nil {
+		session.KeepRunning = *req.KeepRunning
+	} else if req.KeepRunningSnake != nil {
+		session.KeepRunning = *req.KeepRunningSnake
+	}
 	if req.Reads != nil {
 		reads, err := c.parseReads(*req.Reads)
 		if err != nil {
@@ -470,14 +589,166 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 	if err := model.ValidateConsoleSessions(sessions); err != nil {
 		return nil, validationErrorf("%v", err)
 	}
-	cfg.ConsoleSessions = sessions
-	if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
-		return nil, err
+	writable := !c.configRepoOnly(ctx)
+	if openTask != nil {
+		stateRepo := c.stateRepoRef()
+		if err := c.Store.UpdateTask(ctx, openTask.ID, func(t *model.Task) error {
+			if req.Title != nil {
+				t.Title = model.ConsoleSessionTitle(session)
+			}
+			if req.Capabilities != nil {
+				existingByCap := make(map[string]bool, len(t.Grants))
+				for _, g := range t.Grants {
+					existingByCap[g.Capability] = true
+				}
+				policy, configured, err := c.capabilityPolicyFor(ctx)
+				if err != nil {
+					return err
+				}
+				for _, capID := range session.Capabilities {
+					if capID == "" || existingByCap[capID] {
+						continue
+					}
+					if model.IsCapabilityRef(capID) {
+						subject := model.CapabilitySubject{Repo: t.Target, Kind: model.CapabilityRunTask}
+						if err := policy.Permits(capID, subject, configured); err != nil {
+							return validationErrorf("%v", err)
+						}
+					}
+					if err := c.catalogueEditRefusal(ctx, *t, capID); err != nil {
+						return err
+					}
+				}
+				newGrants := make([]model.Grant, 0, len(session.Capabilities)+1)
+				newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
+				seen := map[string]bool{model.DurableCapability: true}
+				for _, capID := range session.Capabilities {
+					if capID == "" || seen[capID] {
+						continue
+					}
+					seen[capID] = true
+					via := model.GrantByLabel
+					if writable || slices.Contains(staticCaps, capID) {
+						via = model.GrantByGrain
+					}
+					newGrants = append(newGrants, model.Grant{Capability: capID, Via: via})
+				}
+				t.Grants = newGrants
+			}
+			if req.NetworkAccess != nil {
+				t.NetworkAccess = model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored)
+			}
+			if req.TasksApproved != nil {
+				t.AutoApproveProposals = *req.TasksApproved
+				t.Tags = slices.DeleteFunc(t.Tags, func(tag string) bool {
+					return tag == model.ConsoleSessionTasksApprovedTag || tag == model.ConsoleSessionTasksUnapprovedTag
+				})
+				if *req.TasksApproved {
+					t.Tags = append(t.Tags, model.ConsoleSessionTasksApprovedTag)
+				} else {
+					t.Tags = append(t.Tags, model.ConsoleSessionTasksUnapprovedTag)
+				}
+			}
+			if req.Reads != nil {
+				var taskReads []model.RepoRef
+				if stateRepo.Owner != "" {
+					taskReads = append(taskReads, stateRepo)
+				}
+				for _, r := range session.Reads {
+					if r.Owner != "" && r.Name != "" && !r.Same(stateRepo) {
+						taskReads = append(taskReads, r)
+					}
+				}
+				t.Reads = taskReads
+			}
+			if req.Writes != nil {
+				t.Writes = append([]model.WriteTarget{}, session.Writes...)
+			}
+			if req.GoogleChatSpace != nil {
+				var links []model.Link
+				for _, l := range t.Links {
+					if l.Kind != model.LinkGoogleChat {
+						links = append(links, l)
+					}
+				}
+				if session.GoogleChatSpace != "" {
+					links = append(links, model.Link{Kind: model.LinkGoogleChat, Target: session.GoogleChatSpace})
+				}
+				t.Links = links
+			}
+			if req.Model != nil {
+				t.Model = session.Model
+				t.ModelSource = ""
+			}
+			if req.KeepRunning != nil || req.KeepRunningSnake != nil {
+				t.KeepRunning = session.KeepRunning
+			}
+			t.Body = model.DirectorSessionBody(stateRepo, session)
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		if writable {
+			model.RecordSyncedConsoleSession(c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
+				Capabilities:    session.Capabilities,
+				Reads:           session.Reads,
+				Writes:          session.Writes,
+				NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
+				Model:           strings.TrimSpace(session.Model),
+				Title:           model.ConsoleSessionTitle(session),
+				TasksApproved:   session.TasksApproved,
+				KeepRunning:     session.KeepRunning,
+				GoogleChatSpace: session.GoogleChatSpace,
+			})
+		} else if _, hasPrev := model.LastSyncedConsoleSession(c.Store, openTask.ID); !hasPrev {
+			model.RecordSyncedConsoleSession(c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
+				Capabilities:    origSession.Capabilities,
+				Reads:           origSession.Reads,
+				Writes:          origSession.Writes,
+				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, !c.Config.SandboxShapeIgnored),
+				Model:           strings.TrimSpace(origSession.Model),
+				Title:           model.ConsoleSessionTitle(origSession),
+				TasksApproved:   origSession.TasksApproved,
+				KeepRunning:     origSession.KeepRunning,
+				GoogleChatSpace: origSession.GoogleChatSpace,
+			})
+		}
 	}
-	if err := c.Store.PutConfig(ctx, cfg); err != nil {
-		return nil, err
+	if writable {
+		cfg.ConsoleSessions = sessions
+		if err := c.Store.PutConfig(ctx, cfg); err != nil {
+			return nil, err
+		}
 	}
 	return c.ListConsoleSessions(ctx)
+}
+
+func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Task) {
+	sessionID, ok := model.ConsoleSessionIDOf(task)
+	if !ok {
+		return
+	}
+	if _, hasPrev := model.LastSyncedConsoleSession(c.Store, task.ID); hasPrev {
+		return
+	}
+	cfg, err := c.consoleSessionConfig(ctx)
+	if err != nil {
+		return
+	}
+	session, ok := model.ConsoleSessionByID(model.ConsoleSessionsOr(cfg.ConsoleSessions), sessionID)
+	if !ok {
+		return
+	}
+	model.RecordSyncedConsoleSession(c.Store, task.ID, model.ConsoleSessionConfigSnapshot{
+		Capabilities:    session.Capabilities,
+		Reads:           session.Reads,
+		Writes:          session.Writes,
+		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
+		Model:           strings.TrimSpace(session.Model),
+		Title:           model.ConsoleSessionTitle(session),
+		TasksApproved:   session.TasksApproved,
+		GoogleChatSpace: session.GoogleChatSpace,
+	})
 }
 
 func slugifySessionID(title string) string {
@@ -597,10 +868,31 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 			caps = append(caps, capability)
 		}
 	} else {
-		// The director's set.
+		// The director's set, plus any deployment defaults offered here so a
+		// newly created session starts holding what its own proposals are
+		// seeded with (grain/task-1983) while keeping session.Capabilities as
+		// the single source of truth an operator can untick (grain/task-2126).
+		seen := map[string]bool{}
 		defs := model.DefaultConsoleSessions()
 		if len(defs) > 0 {
-			caps = append([]string(nil), defs[0].Capabilities...)
+			for _, capability := range defs[0].Capabilities {
+				if capability == "" || seen[capability] {
+					continue
+				}
+				seen[capability] = true
+				caps = append(caps, capability)
+			}
+		}
+		for _, capability := range cfg.DefaultCapabilities {
+			capability, err := c.normalizeCapabilityID(capability)
+			if err != nil || capability == "" || seen[capability] {
+				continue
+			}
+			if _, ok := c.capabilityByID(capability); !ok {
+				continue
+			}
+			seen[capability] = true
+			caps = append(caps, capability)
 		}
 	}
 
@@ -649,6 +941,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		Capabilities:    caps,
 		NetworkAccess:   access,
 		TasksApproved:   req.TasksApproved,
+		KeepRunning:     req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
 		Reads:           reads,
 		Writes:          writes,
 		GoogleChatSpace: strings.TrimSpace(req.GoogleChatSpace),
