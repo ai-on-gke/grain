@@ -154,9 +154,13 @@ func configureGitProxyDemo(dir string, store *model.Store, repo model.RepoRef, b
 	logPath := filepath.Join(dir, "demo-daemon.log")
 	_ = os.WriteFile(logPath, []byte("2026-10-29T00:00:00Z grain demo: started daemon log\n"), 0o644)
 	api := &daemon.InProcessAPI{}
+	srcDir := demoSrcDir(dir)
+	coreSrcDir, coreModule := namespace.CoreSource(srcDir, "/usr/local/share/grain/core-src")
 	nsServer := &namespace.Server{
 		ArtifactDir: filepath.Join(dir, "state", "ci-artifacts"),
-		SrcDir:      demoSrcDir(dir),
+		SrcDir:      srcDir,
+		CoreSrcDir:  coreSrcDir,
+		CoreModule:  coreModule,
 		NewRedactor: func() *redact.Redactor { return daemon.BuildNamespaceRedactor(dir) },
 	}
 	cliBackend := daemon.WireSandboxNamespace(nsServer, daemon.SandboxNamespaceConfig{
