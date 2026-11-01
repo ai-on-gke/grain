@@ -1740,7 +1740,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 	}
 
 	if truncated {
-		fmt.Fprintf(&out, "[truncated at match limit (%d matches); pass ?max=%d to raise the limit]\n", maxMatches, maxMatches*2)
+		fmt.Fprintf(&out, "[truncated at match limit (%d matches); pass --max %d (grain grep) to raise the limit]\n", maxMatches, maxMatches*2)
 	} else if walkTruncated {
 		truncated = true
 		fmt.Fprintf(&out, "[truncated: walked %d entries; narrow the path]\n", maxWalkFiles)
