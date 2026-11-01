@@ -77,7 +77,7 @@ func TestSandboxTaskListFiltersAndBounds(t *testing.T) {
 	tasks[115].ChangedAt = &recentChange
 
 	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
-	raw, _ := json.Marshal(map[string]string{"debug": "tok-debug", "plain": "tok-plain"})
+	raw, _ := json.Marshal(map[string]string{"debug": "tok-debug", "plain": "tok-plain", "repo": "tok-repo"})
 	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +91,7 @@ func TestSandboxTaskListFiltersAndBounds(t *testing.T) {
 		NamespaceScopes: cliTestScopes{
 			"debug": {TaskID: "7", RunID: "r", TaskRepo: "acme/widgets", MayReadAllTasks: true},
 			"plain": {TaskID: "7", RunID: "r2", TaskRepo: "acme/widgets"},
+			"repo":  {TaskID: "7", RunID: "r3", TaskRepo: "acme/widgets", TaskReadRepos: map[string]bool{"acme/gadgets": true}},
 		},
 	}
 	srv := httptest.NewServer(gitproxy.NewHandler(proxy))
@@ -201,5 +202,19 @@ func TestSandboxTaskListFiltersAndBounds(t *testing.T) {
 	}
 	if lines, _, _ := run("tok-plain", "task", "list", "--state", "proposed"); len(lines) != 0 {
 		t.Errorf("task list --state proposed without self-debug = %q", lines)
+	}
+
+	// An api:tasks:read@acme/gadgets grant lists what task:// serves it:
+	// its own task and every acme/gadgets task, and no other acme/widgets
+	// task. Before, the list stopped at its own task, so a sibling it may
+	// read was only found by guessing its id.
+	lines, errOut, code = run("tok-repo", "task", "list", "--limit", "200")
+	if code != 0 || len(lines) != 41 {
+		t.Fatalf("task list with api:tasks:read@acme/gadgets: exit %d, %d lines (want 41): %s", code, len(lines), errOut)
+	}
+	for _, l := range lines {
+		if !strings.Contains(l, "acme/gadgets") && !strings.HasPrefix(l, "7 ") {
+			t.Errorf("task list with api:tasks:read@acme/gadgets listed %q", l)
+		}
 	}
 }
