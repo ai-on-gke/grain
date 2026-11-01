@@ -927,7 +927,9 @@ re-attach to what is running.
 
 The allowlist's `drain_cap` (default `1h`) bounds how long a stuck child
 can hold up the upgrade. At the cap, each remaining child is cancelled
-through the normal path, and a line naming it is logged.
+through the normal path, and a line naming it is logged. hostd logs the
+cap as the drain starts, and reads it again on every pass, so an edit
+made during a drain counts and a read that fails keeps the last cap read.
 
 Drain was chosen over having the new hostd adopt the old one's children.
 With drain, the children stay hostd's own: exit status, the deadline and

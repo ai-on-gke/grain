@@ -28,6 +28,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -756,6 +758,34 @@ func grantsInBody(pattern string, body []byte) []string {
 	return addedGrantsInBody(pattern, body, nil, nil)
 }
 
+// gateKey is a JSON object key folded the way encoding/json matches one
+// against a struct field: case-insensitively, under Unicode simple
+// folding, so U+017F (ſ) is an s and U+212A (the Kelvin sign) a k. The
+// gates below compare body keys by gateKey, never by strings.ToLower:
+// ToLower leaves ſ as it is, so "autoApproveProposalſ" or
+// "priorityDiſpatch" reached the field it names while missing the case
+// that refuses it.
+func gateKey(key string) string {
+	var b strings.Builder
+	b.Grow(len(key))
+	for _, r := range key {
+		if r >= utf8.RuneSelf {
+			// The smallest rune in r's folding orbit, as
+			// encoding/json's foldRune picks it.
+			for {
+				next := unicode.SimpleFold(r)
+				if next <= r {
+					r = next
+					break
+				}
+				r = next
+			}
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
+}
+
 func patchTouchesTaskGrants(body []byte) bool {
 	if len(body) == 0 {
 		return false
@@ -769,7 +799,7 @@ func patchTouchesTaskGrants(body []byte) bool {
 		if trimmed == "" || trimmed == "null" {
 			continue
 		}
-		lower := strings.ToLower(key)
+		lower := gateKey(key)
 		// "priority" is the numeric dispatch priority unless it is a
 		// boolean, which UpdateTaskRequest reads as priorityDispatch:
 		// the priority-dispatch grant, under either spelling.
@@ -802,7 +832,7 @@ func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, 
 	}
 	var names []string
 	for key, raw := range fields {
-		lower := strings.ToLower(key)
+		lower := gateKey(key)
 		if lower == "priority" || lower == "prioritydispatch" || lower == "priority_dispatch" {
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
@@ -932,7 +962,7 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 		return nil
 	}
 	for key, raw := range fields {
-		switch strings.ToLower(key) {
+		switch gateKey(key) {
 		case "writes":
 			var targets []WriteTarget
 			if json.Unmarshal(raw, &targets) != nil {
@@ -1606,7 +1636,7 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 		return set.Allows(scope, r)
 	}
 	for key, raw := range fields {
-		switch strings.ToLower(key) {
+		switch gateKey(key) {
 		case "writes":
 			var targets []WriteTarget
 			if json.Unmarshal(raw, &targets) != nil {

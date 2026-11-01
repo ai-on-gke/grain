@@ -361,7 +361,7 @@ In `pkg/orchestrator/run.go`, `BuildPrompt` adds a compact `### Grain CLI (`grai
 ```markdown
 ### Grain CLI (`grain`)
 
-Inside your sandbox, the `grain` CLI (`run_command`) reaches this deployment's namespace, CI, pull request, merge queue, and any non-dangerous capabilities granted to this task — with no MCP tool-result size cap:
+Inside your sandbox, the `grain` CLI (`run_command`) reaches this deployment's namespace, CI, pull request, merge queue, and any non-dangerous capabilities granted to this task — with no size cap of its own. What `run_command` hands back is still cut to about 20 KB, and counts at that size towards any tool budget the run is under, so send long output to a file and `grep`, `jq` or `head` it:
 
 - **Namespace (`ci://`, `src://`, `task://`, `config://`, `memory://`, `deploy://`):**
   `grain ls <uri>`, `grain read <uri> [--tail N]`, `grain grep <re> <uri>`.

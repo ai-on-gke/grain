@@ -44,6 +44,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
 // sandboxProxyEnv names the sandbox proxy explicitly; sandboxCLIEnv=0
@@ -189,7 +191,7 @@ var sandboxCommands = map[string][]string{
 // nobody asked (grain cap's flags are its tool's, checked there).
 var sandboxCommandFlags = map[string][]string{
 	"ls":                    {"glob"},
-	"read":                  {"tail", "offset", "limit", "lines", "n"},
+	"read":                  {"tail", "offset", "limit", "lines", "n", "cursor", "since", "page"},
 	"grep":                  {"i", "C", "glob", "max"},
 	"ci list":               {"ref", "conclusion", "job", "since", "limit", "repo", "task"},
 	"ci test-history":       {"limit", "repo"},
@@ -235,7 +237,12 @@ var sandboxCommandFlags = map[string][]string{
 
 // sandboxCountFlags take a non-negative integer, checked before the
 // command runs rather than dropped from its query.
-var sandboxCountFlags = []string{"tail", "offset", "limit", "lines", "n", "max", "max-lines", "attempt"}
+var sandboxCountFlags = []string{"tail", "offset", "limit", "lines", "n", "max", "max-lines", "attempt", "page"}
+
+// pipelineChangesFlags are the flags only deploy://pipeline-changes reads:
+// the cursor a page ended with (--since is its other name) and how many
+// changes a page holds.
+var pipelineChangesFlags = []string{"cursor", "since", "page"}
 
 // usageError is a command line no command can answer: printed as it is,
 // with exit status 2.
@@ -408,6 +415,14 @@ func (c *sandboxCLI) run(args []string) error {
 		if err != nil {
 			return err
 		}
+		if !isPipelineChangesURI(uri) {
+			for _, name := range pipelineChangesFlags {
+				if p.has(name) {
+					return usageError{fmt.Sprintf("grain read: %s pages deploy://pipeline-changes, not %s\n\n%s",
+						flagName(name), uri, sandboxCommandHelp["read"])}
+				}
+			}
+		}
 		return c.read(uri, p, false)
 	case "grep":
 		pattern, err := p.arg(0, "pattern")
@@ -534,7 +549,7 @@ func (c *sandboxCLI) run(args []string) error {
 		if source := grainLogSource(p); source != "" {
 			uri += "/" + source
 		}
-		return c.fs(uri, grainLogQuery(p))
+		return c.fs(uri, grainLogQuery(p, time.Now()))
 	case "playbooks":
 		if name := p.optArg(0); name != "" {
 			return c.fs("src://playbooks/"+name, nil)
@@ -596,6 +611,14 @@ func fsPath(uri string) (string, error) {
 		p += "/" + joined
 	}
 	return p, nil
+}
+
+// isPipelineChangesURI is whether uri names deploy://pipeline-changes, the
+// one file --cursor and --page page through.
+func isPipelineChangesURI(uri string) bool {
+	scheme, rel, _ := strings.Cut(uri, "://")
+	rel = strings.Trim(rel, "/")
+	return scheme == "deploy" && (rel == "pipeline-changes" || rel == "pipeline-changes.md")
 }
 
 func (c *sandboxCLI) fs(uri string, q url.Values) error {
@@ -899,8 +922,26 @@ func flagName(name string) string {
 // grainLogQuery is `grain log`'s flags as deploy://grain.log's query:
 // the window, priority, substring and line cap read_grain_log takes, and
 // --tail, which the namespace applies to whatever that answers.
-func grainLogQuery(p sandboxArgs) url.Values {
-	q := p.query("tail", "since", "until", "contains")
+//
+// read_grain_log takes RFC 3339 instants and nothing else, but every
+// other window flag this CLI has (ci list --since, task list
+// --changed-since) also takes a span back from now, so `grain log
+// --since 10m` was refused while `grain ci list --since 10m` was not.
+// A --since or --until the CLI can read (ci.ParseSince) is sent as the
+// instant it names, relative to now; one it cannot is sent as given, for
+// the tool to refuse in its own words.
+func grainLogQuery(p sandboxArgs, now time.Time) url.Values {
+	q := p.query("tail", "contains")
+	for _, name := range []string{"since", "until"} {
+		v := p.get(name)
+		if v == "" {
+			continue
+		}
+		if at, err := ci.ParseSince(v, now); err == nil && !at.IsZero() {
+			v = at.UTC().Format(time.RFC3339)
+		}
+		q.Set(name, v)
+	}
 	for _, name := range []string{"priority", "min-priority"} {
 		if v := p.get(name); v != "" {
 			q.Set("min_priority", v)
@@ -970,7 +1011,7 @@ func (c *sandboxCLI) read(uri string, p sandboxArgs, sayingSize bool) error {
 	if err != nil {
 		return err
 	}
-	resp, err := c.do(path, p.query("tail", "offset", "limit"))
+	resp, err := c.do(path, p.query("tail", "offset", "limit", "cursor", "since", "page"))
 	if err != nil {
 		return err
 	}

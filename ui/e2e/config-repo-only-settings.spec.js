@@ -97,6 +97,64 @@ for (const [name, viewport] of [
     ).toBeVisible();
     await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
   });
+
+  // A bootstrap field stays writable under the lock and can be left
+  // pending a restart, so Health links it to its card -- here Sandboxes →
+  // Kubernetes, which is taller than either screen. Centring such a card
+  // scrolled its heading and the field Health named (focused without
+  // scrolling) off the top of the page; it is aligned to its top instead.
+  test(`a Health link to a card taller than the screen lands on its heading and named field on a ${name} screen`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await configRepoOnly(page);
+    await page.route("**/api/settings", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          configRepoOnly: true,
+          pendingRestart: ["k8sNamespace"],
+        },
+      });
+    });
+    await page.goto("/system/health");
+
+    const link = page
+      .getByTestId("health-pending-restart")
+      .getByRole("link", { name: "Kubernetes namespace" });
+    await expect(link).toHaveAttribute(
+      "href",
+      "/settings/sandboxes#kubernetes",
+    );
+    await link.click();
+    await expect(page).toHaveURL(/\/settings\/sandboxes#kubernetes$/);
+    await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+
+    const card = page.locator("#kubernetes");
+    const field = card.getByLabel("Kubernetes namespace");
+    await expect(field).toBeFocused();
+    await expect(field).toBeEnabled();
+    expect((await card.boundingBox()).height).toBeGreaterThan(viewport.height);
+    await expect(field).toBeInViewport();
+    await expect
+      .poll(async () => (await card.boundingBox()).y)
+      .toBeGreaterThanOrEqual(0);
+    // Nothing fixed covers the card's top edge.
+    const top = await card.boundingBox();
+    expect(
+      await page.evaluate(
+        ([x, y]) =>
+          document
+            .getElementById("kubernetes")
+            .contains(document.elementFromPoint(x, y)),
+        [top.x + top.width / 2, top.y + 4],
+      ),
+    ).toBe(true);
+  });
 }
 
 // Git connections are grain_config.git_connections / git_credential and a

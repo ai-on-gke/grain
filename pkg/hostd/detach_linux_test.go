@@ -581,6 +581,51 @@ func TestCutoverDrainsWhenNothingStopsWithinTheCap(t *testing.T) {
 	waitGone(t, st.PID, 10*time.Second)
 }
 
+// drain_cap is read on every pass of a drain, not once as it starts: a
+// drain that began on an allowlist it could not read, or one that set no
+// cap, takes the cap the file holds as soon as it holds one, rather than
+// waiting DefaultDrainCap on a run that never ends.
+func TestCutoverTakesADrainCapTheAllowlistGainsAfterItStarted(t *testing.T) {
+	ts := startServer(t, "", nil)
+	started := make(chan Started, 1)
+	c := detachedClient(ts, started)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 60"}, Detach: true, Run: "stuck"}, nil, nil, nil)
+	}()
+	st := <-started
+	good, err := os.ReadFile(ts.srv.Allowlist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file as an in-place edit leaves it for a moment: cut short.
+	if err := os.WriteFile(ts.srv.Allowlist, []byte("clis:\n  sh:\n    path: [\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts.srv.Cutover()
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(ts.logs.String(), "using "+DefaultDrainCap.String()); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the drain did not start on the unreadable allowlist:\n%s", ts.logs.String())
+		}
+	}
+	if err := os.WriteFile(ts.srv.Allowlist, append(good, "drain_cap: 300ms\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-ts.done:
+		ts.done <- err
+	case <-time.After(15 * time.Second):
+		t.Fatalf("hostd did not exit at the drain_cap the allowlist gained:\n%s", ts.logs.String())
+	}
+	waitGone(t, st.PID, 10*time.Second)
+	for _, want := range []string{"drain_cap is now 300ms", "drain cap 300ms reached: cancelling cli \"sh\""} {
+		if !strings.Contains(ts.logs.String(), want) {
+			t.Errorf("no %q line:\n%s", want, ts.logs.String())
+		}
+	}
+}
+
 func TestAProtocol1StartIsListedButNotAttachable(t *testing.T) {
 	ts := startServer(t, "", nil)
 	done := make(chan struct{})

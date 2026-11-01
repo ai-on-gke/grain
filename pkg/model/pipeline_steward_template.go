@@ -15,6 +15,7 @@
 package model
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -170,7 +171,9 @@ func pipelineStewardBody() string {
 		"dispatch-control preset serves (pausing, resuming, Run now) " +
 		"are tool calls.\n\n")
 	b.WriteString("1. **Work from deltas.** Read your handover's cursor, then run " +
-		"`grain api GET '/api/pipeline/changes?after=<cursor>'` (no cursor: leave `after` off). " +
+		"`grain read deploy://pipeline-changes --cursor <cursor>` (no cursor: leave `--cursor` off). " +
+		"Its last line is the command that reads the next page: run it while the page says more " +
+		"changes follow, and hand over the cursor the last page ended with. " +
 		"Read nothing else unless a change, or the note that woke you, names it. Do not sweep " +
 		"`grain task list` or `grain ci list`; `grain merge-queue`, `grain ci log`, " +
 		"`grain health` and `grain log` are for what a change names.\n" +
@@ -224,10 +227,12 @@ func pipelineStewardBody() string {
 // mcp's tool_budget.go): the pipeline steward's standing task, and any
 // task holding the durable grant.
 func UsesToolBudget(t Task) bool {
-	for _, tag := range t.Tags {
-		if tag == ScheduleFiringTag(PipelineStewardTemplateID) {
-			return true
-		}
-	}
-	return t.IsDurable()
+	return IsPipelineStewardFiring(t) || t.IsDurable()
+}
+
+// IsPipelineStewardFiring reports whether t is one of the pipeline
+// steward's own firings, whose wakes start from the pipeline-changes
+// cursor the last one handed over.
+func IsPipelineStewardFiring(t Task) bool {
+	return slices.Contains(t.Tags, ScheduleFiringTag(PipelineStewardTemplateID))
 }

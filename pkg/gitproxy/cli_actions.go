@@ -309,6 +309,10 @@ type CLIQuarantineRequest struct {
 type CLIQuarantineResult struct {
 	TaskID         string `json:"task_id"`
 	FollowUpTaskID string `json:"follow_up_task_id,omitempty"`
+	// FollowUpError is why the repair proposal asked for was not filed,
+	// so the caller can say so rather than report a quarantine that
+	// quietly has nobody fixing it.
+	FollowUpError string `json:"follow_up_error,omitempty"`
 }
 
 // CLIAPIRoute is one route returned by GET /cli/api-routes.
@@ -1464,7 +1468,7 @@ func (p *GitProxy) serveQuarantine(w http.ResponseWriter, r *http.Request, scope
 	if req.FileFollowUp != nil {
 		fileFollowUp = *req.FileFollowUp
 	}
-	var followUpID string
+	var followUpID, followUpErr string
 	if fileFollowUp {
 		if ta, ok := p.taskActions(); ok {
 			limitKey := scope.RunID
@@ -1488,12 +1492,17 @@ func (p *GitProxy) serveQuarantine(w http.ResponseWriter, r *http.Request, scope
 			})
 			if err == nil {
 				followUpID = filed.ID
+			} else {
+				followUpErr = err.Error()
 			}
+		} else {
+			followUpErr = "this deployment's sandbox proxy cannot file task proposals"
 		}
 	}
 	writeCLIJSON(w, http.StatusOK, CLIQuarantineResult{
 		TaskID:         scope.TaskIDStr,
 		FollowUpTaskID: followUpID,
+		FollowUpError:  followUpErr,
 	})
 }
 

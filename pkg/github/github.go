@@ -306,9 +306,13 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 	respHeaders := headerMap(resp.Header)
 	out := ApiResponse{Status: resp.StatusCode, Headers: respHeaders, Body: data,
 		URL: method + " " + req.URL.String()}
-	t.counts.record(endpointOf(path), false, out.Status >= 400)
+	// A caller that sent its own validator (CompletedWorkflowRuns keeps
+	// one per repository) and got a 304 back was revalidated all the
+	// same: GitHub does not charge it, so neither does Health's budget.
+	callerRevalidated := out.Status == http.StatusNotModified && headerValue(headers, "If-None-Match") != ""
+	t.counts.record(endpointOf(path), callerRevalidated, out.Status >= 400)
 	t.counts.noteLimit(respHeaders, now)
-	t.ledgerOf().record(caller, method, path, false, out.Status >= 400)
+	t.ledgerOf().record(caller, method, path, callerRevalidated, out.Status >= 400)
 	t.ledgerOf().noteLimit(headerValue(headers, "Authorization"), respHeaders, now)
 
 	if until, reason, throttled := throttledUntil(now, out); throttled {
