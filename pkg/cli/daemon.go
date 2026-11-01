@@ -1175,16 +1175,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	if err := removedRelaySettings(passed, unknownFlags); err != nil {
 		return daemon.Config{}, fs, unknownFlags, err
 	}
-	allowedPrincipals := ui.SplitAllowedPrincipals(*uiAllowedPrincipals)
-	if len(allowedPrincipals) > 0 {
-		if _, err := ui.ParseAllowedPrincipals(allowedPrincipals); err != nil {
-			return daemon.Config{}, fs, unknownFlags, err
-		}
-	} else if envAllowed := os.Getenv("GRAIN_ALLOWED_PRINCIPALS"); envAllowed != "" {
-		if _, err := ui.ParseAllowedPrincipals(ui.SplitAllowedPrincipals(envAllowed)); err != nil {
-			return daemon.Config{}, fs, unknownFlags, err
-		}
-	}
 
 	if *executorAddr == "" && *modelExecAddr != "" {
 		*executorAddr = *modelExecAddr
@@ -1220,7 +1210,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
-		UiAllowedPrincipals:     allowedPrincipals,
+		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
 		ExecutorAddr:            *executorAddr,
 		ExecutorTokenFile:       *executorTokenFile,
 		ExecutorWait:            *executorWait,
@@ -1497,28 +1487,11 @@ func checkConfig(cfg daemon.Config) error {
 	if cfg.MaxMergers < 0 {
 		return errors.New("-max-mergers cannot be negative")
 	}
-	// Negative rather than zero: 0 is "use grain's own default" for each
-	// of these (ci.OpenDirCache reads it that way), so only a value that
-	// cannot mean anything at all is refused. A cache bounded at a
-	// negative size would otherwise be silently promoted to the default
-	// and run nothing like what the unit file asked for.
-	switch {
-	case cfg.CiCacheMaxAge < 0:
-		return errors.New("-ci-cache-max-age cannot be negative")
-	case cfg.CiCacheMaxBytes < 0:
-		return errors.New("-ci-cache-max-bytes cannot be negative")
-	case cfg.CiCacheMaxEntries < 0:
-		return errors.New("-ci-cache-max-entries cannot be negative")
-	case cfg.CiCacheMaxEntryBytes < 0:
-		return errors.New("-ci-cache-max-entry-bytes cannot be negative")
-	case cfg.CiArtifactMaxAge < 0:
-		return errors.New("-ci-artifact-max-age cannot be negative")
-	case cfg.CiArtifactMaxBytes < 0:
-		return errors.New("-ci-artifact-max-bytes cannot be negative")
-	case cfg.CiArtifactMaxRunBytes < 0:
-		return errors.New("-ci-artifact-max-run-bytes cannot be negative")
-	case cfg.CiArtifactMaxEntryBytes < 0:
-		return errors.New("-ci-artifact-max-entry-bytes cannot be negative")
+	if err := daemon.CheckUIAllowedPrincipals(cfg); err != nil {
+		return err
+	}
+	if err := daemon.CheckCICacheBounds(cfg); err != nil {
+		return err
 	}
 	return daemon.CheckGritURL(cfg)
 }

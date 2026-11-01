@@ -35,6 +35,20 @@ import (
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
+// CheckUIAllowedPrincipals validates -ui-allowed-principals (or
+// $GRAIN_ALLOWED_PRINCIPALS when the flag is unset).
+func CheckUIAllowedPrincipals(cfg Config) error {
+	if len(cfg.UiAllowedPrincipals) > 0 {
+		_, err := ui.ParseAllowedPrincipals(cfg.UiAllowedPrincipals)
+		return err
+	}
+	if env := strings.TrimSpace(os.Getenv("GRAIN_ALLOWED_PRINCIPALS")); env != "" {
+		_, err := ui.ParseAllowedPrincipals(ui.SplitAllowedPrincipals(env))
+		return err
+	}
+	return nil
+}
+
 // startUIServer serves pkg/ui.Server -- the JSON API plus the static
 // frontend -- on addr, over the same store RunCycle dispatches against,
 // returning a shutdown func the same shape startGitProxy's own is.

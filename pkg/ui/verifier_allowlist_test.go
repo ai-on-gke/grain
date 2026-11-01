@@ -197,7 +197,7 @@ func TestIdentityVerifierRegistryOrderRefusalAndProxyHeaders(t *testing.T) {
 }
 
 // TestFakeVerifierContractPinsBothAccessCodePrecedenceModes pins the exact
-// seam contract wrapper builds (such as Google's signed ÜberProxy verifier)
+// seam contract wrapper builds (such as a wrapper's signed proxy verifier)
 // rely on, including both AccessCodeWins()==false and AccessCodeWins()==true.
 func TestFakeVerifierContractPinsBothAccessCodePrecedenceModes(t *testing.T) {
 	ui.ResetIAPConfig()
@@ -262,8 +262,8 @@ func TestFakeVerifierContractPinsBothAccessCodePrecedenceModes(t *testing.T) {
 	t.Run("AccessCodeWins verifier: valid access code beats verified identity for break-glass", func(t *testing.T) {
 		unreg := ui.RegisterIdentityVerifier(&fakePrecedenceVerifier{
 			fakeHeaderVerifier: &fakeHeaderVerifier{
-				name:           "uberproxy",
-				headers:        []string{"X-UberProxy-Signed-UpTick"},
+				name:           "corp-proxy",
+				headers:        []string{"X-Corp-Proxy-Assertion"},
 				accessCodeWins: true,
 				verifyFn:       parseSimpleSignedHeader,
 			},
@@ -283,20 +283,20 @@ func TestFakeVerifierContractPinsBothAccessCodePrecedenceModes(t *testing.T) {
 		// 1. Without the access code: verified identity is used.
 		// Direct match (alice@example.com) succeeds without touching broken group lookup.
 		rec := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/api/auth/user", "", map[string]string{
-			"X-UberProxy-Signed-UpTick": "ok:alice@example.com",
+			"X-Corp-Proxy-Assertion": "ok:alice@example.com",
 		})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("alice without code: got %d, want 200: %s", rec.Code, rec.Body)
 		}
 		var got ui.AuthUserResponse
 		_ = json.Unmarshal(rec.Body.Bytes(), &got)
-		if !got.Authenticated || got.User != "alice@example.com" || got.AuthMethod != "uberproxy" {
-			t.Fatalf("alice without code: got %+v, want alice@example.com via uberproxy", got)
+		if !got.Authenticated || got.User != "alice@example.com" || got.AuthMethod != "corp-proxy" {
+			t.Fatalf("alice without code: got %+v, want alice@example.com via corp-proxy", got)
 		}
 
 		// Caller relying on broken group lookup without access code -> refused 403!
 		rec = serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/api/tasks", "", map[string]string{
-			"X-UberProxy-Signed-UpTick": "ok:oncall@example.com",
+			"X-Corp-Proxy-Assertion": "ok:oncall@example.com",
 		})
 		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "oncall@example.com") {
 			t.Fatalf("oncall without code during group outage: got %d, want 403 naming oncall@example.com: %s", rec.Code, rec.Body)
@@ -306,12 +306,12 @@ func TestFakeVerifierContractPinsBothAccessCodePrecedenceModes(t *testing.T) {
 		// judged by the code alone, succeeds as trusted operator despite group outage!
 		for mode, hdrs := range map[string]map[string]string{
 			"bearer": {
-				"X-UberProxy-Signed-UpTick": "ok:oncall@example.com",
-				"Authorization":             "Bearer " + testAccessCode,
+				"X-Corp-Proxy-Assertion": "ok:oncall@example.com",
+				"Authorization":          "Bearer " + testAccessCode,
 			},
 			"cookie": {
-				"X-UberProxy-Signed-UpTick": "ok:oncall@example.com",
-				"Cookie":                    ui.AccessCookieName + "=" + cookieVal,
+				"X-Corp-Proxy-Assertion": "ok:oncall@example.com",
+				"Cookie":                 ui.AccessCookieName + "=" + cookieVal,
 			},
 		} {
 			recTasks := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/api/tasks", "", hdrs)
@@ -331,8 +331,8 @@ func TestFakeVerifierContractPinsBothAccessCodePrecedenceModes(t *testing.T) {
 
 		// 3. Wrong bearer access code alongside valid proxy header -> 401 (no silent fallback to alice).
 		rec = serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/api/tasks", "", map[string]string{
-			"X-UberProxy-Signed-UpTick": "ok:alice@example.com",
-			"Authorization":             "Bearer WRNG-ACCESS-CODE-9999",
+			"X-Corp-Proxy-Assertion": "ok:alice@example.com",
+			"Authorization":          "Bearer WRNG-ACCESS-CODE-9999",
 		})
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("wrong break-glass code: got %d, want 401: %s", rec.Code, rec.Body)
@@ -342,12 +342,12 @@ func TestFakeVerifierContractPinsBothAccessCodePrecedenceModes(t *testing.T) {
 		// even when the caller presents a valid access code or session cookie!
 		for mode, hdrs := range map[string]map[string]string{
 			"bearer": {
-				"X-UberProxy-Signed-UpTick": "bad:tampered",
-				"Authorization":             "Bearer " + testAccessCode,
+				"X-Corp-Proxy-Assertion": "bad:tampered",
+				"Authorization":          "Bearer " + testAccessCode,
 			},
 			"cookie": {
-				"X-UberProxy-Signed-UpTick": "bad:tampered",
-				"Cookie":                    ui.AccessCookieName + "=" + cookieVal,
+				"X-Corp-Proxy-Assertion": "bad:tampered",
+				"Cookie":                 ui.AccessCookieName + "=" + cookieVal,
 			},
 		} {
 			rec := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/api/tasks", "", hdrs)
