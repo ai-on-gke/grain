@@ -291,6 +291,50 @@ func TestQueryMergeQueueCompactAndChangedSince(t *testing.T) {
 	}
 }
 
+// TestToolBudgetNoticeWordedPerSurface: the hard line names the handover
+// and the pipeline cursor as the run can reach them -- tools on the full
+// surface, `grain` commands on the control one -- asks for the cursor
+// only of a steward wake, and tells a control-surface run what its
+// run_command results cost.
+func TestToolBudgetNoticeWordedPerSurface(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		w             ToolBudgetWording
+		want, wantNot []string
+	}{
+		{"full director", ToolBudgetWording{},
+			[]string{"(write_handover)", "what you settled and what is left --"},
+			[]string{"pipeline", "grain handover", "run_command"}},
+		{"full steward", ToolBudgetWording{PipelineCursor: true},
+			[]string{"(write_handover)", "the read_pipeline_changes cursor"},
+			[]string{"grain handover", "run_command"}},
+		{"control director", ToolBudgetWording{CLI: true},
+			[]string{"`grain handover write --file <f>`", "run_command result counts towards the budget", "about 20 KB", "to a file and grep it"},
+			[]string{"write_handover", "pipeline"}},
+		{"control steward", ToolBudgetWording{CLI: true, PipelineCursor: true},
+			[]string{"`grain handover write --file <f>`", "`grain read deploy://pipeline-changes`", "run_command result counts"},
+			[]string{"write_handover", "read_pipeline_changes"}},
+	} {
+		got := toolBudgetNotice(ToolBudgetHardCalls, 0, tc.w)
+		for _, w := range tc.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: notice lacks %q:\n%s", tc.name, w, got)
+			}
+		}
+		for _, w := range tc.wantNot {
+			if strings.Contains(got, w) {
+				t.Errorf("%s: notice says %q:\n%s", tc.name, w, got)
+			}
+		}
+	}
+	if soft := toolBudgetNotice(ToolBudgetSoftCalls, 0, ToolBudgetWording{CLI: true}); !strings.Contains(soft, "run_command result counts") {
+		t.Errorf("control surface's soft notice does not say what run_command costs:\n%s", soft)
+	}
+	if soft := toolBudgetNotice(ToolBudgetSoftCalls, 0, ToolBudgetWording{}); strings.Contains(soft, "run_command") {
+		t.Errorf("full surface's soft notice names run_command:\n%s", soft)
+	}
+}
+
 func TestToolBudgetNoticesPastEachLine(t *testing.T) {
 	for _, tc := range []struct {
 		calls, bytes int
@@ -302,7 +346,7 @@ func TestToolBudgetNoticesPastEachLine(t *testing.T) {
 		{ToolBudgetHardCalls, 0, "Write your handover now"},
 		{1, ToolBudgetHardBytes, "Write your handover now"},
 	} {
-		got := toolBudgetNotice(tc.calls, tc.bytes)
+		got := toolBudgetNotice(tc.calls, tc.bytes, ToolBudgetWording{})
 		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
 			t.Errorf("notice(%d calls, %d bytes) = %q, want %q", tc.calls, tc.bytes, got, tc.want)
 		}

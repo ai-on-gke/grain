@@ -1899,6 +1899,9 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 			"budget (mcp.ToolBudgetSoftCalls and the rest, docs/design/durable-tasks.md#DT-13), passed "+
 			"on by the Framework that forked this process (agent.GrantArgs, for "+
 			"agent.RunConfig.ToolBudget). Unset, nothing is counted.")
+	toolBudgetPipelineCursor := fs.Bool("tool-budget-pipeline-cursor", false,
+		"with -tool-budget: this run is a pipeline steward wake, whose handover the budget's notice asks "+
+			"to carry the pipeline-changes cursor (agent.RunConfig.ToolBudgetPipelineCursor)")
 	recordedTools := fs.String("recorded-tools", "",
 		"path to append full tool call records (JSON lines) as tools run")
 	var localScriptsList LocalScriptsFlags
@@ -2330,7 +2333,9 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		registry.Register(mcp.NewMetricsTools(metricsReader)...)
 	}
 
-	if ResolveMCPSurface(*surface, *granuleVM != "" || *root != "" || *container != "" || *k8sPod != "") == MCPSurfaceControl {
+	control := ResolveMCPSurface(*surface, *granuleVM != "" || *root != "" || *container != "" || *k8sPod != "") == MCPSurfaceControl
+	registry.WordToolBudget(mcp.ToolBudgetWording{CLI: control, PipelineCursor: *toolBudgetPipelineCursor})
+	if control {
 		keep := controlRoster(tools, localTools, grants,
 			taskDetail.Task.ChangeTargetKind != "" || len(taskDetail.Task.Changelists) > 0)
 		registry.Retain(func(name string) bool { return keep[name] })
