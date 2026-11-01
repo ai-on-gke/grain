@@ -111,7 +111,7 @@ func (c *Client) ProposeConfigChange(ctx context.Context, id string, proposal Co
 		}
 	}
 	if !writable {
-		return nil, forbiddenErrorf("task %s does not hold %s in its writes", id, model.ConfigRepo())
+		return nil, validationErrorf("task %s does not hold %s in its writes", id, model.ConfigRepo())
 	}
 	proposal.Summary = strings.TrimSpace(proposal.Summary)
 	if proposal.Summary == "" {
