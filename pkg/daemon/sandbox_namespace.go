@@ -247,9 +247,26 @@ func (d sandboxDeploy) ReadMetrics(ctx context.Context, section string, q namesp
 
 func (d sandboxDeploy) ListMetricsSections() []string { return slices.Clone(mcp.MetricsSections) }
 
-func (d sandboxDeploy) ReadPipelineChanges(ctx context.Context) (string, error) {
-	tool := mcp.NewPipelineTools(DaemonPipeline{Client: d.client})[0]
-	return toolText(tool.Handler(ctx, map[string]any{}))
+// ReadPipelineChanges ends its page with the `grain read` command that
+// reads the next one, so a sandbox run pages on by running that line.
+func (d sandboxDeploy) ReadPipelineChanges(ctx context.Context, cursor string, limit int) (string, error) {
+	text, err := mcp.ReadPipelineChangesText(ctx, DaemonPipeline{Client: d.client}, cursor, limit, func(next string) string {
+		return pipelineChangesReadCommand(next, limit)
+	})
+	if err != nil {
+		return "", fmt.Errorf("reading pipeline changes: %w", err)
+	}
+	return toolText(mcp.Result{Text: text})
+}
+
+// pipelineChangesReadCommand is the `grain read` that reads the page after
+// cursor, carrying the page size the last read asked for.
+func pipelineChangesReadCommand(cursor string, limit int) string {
+	cmd := "grain read deploy://pipeline-changes --cursor " + cursor
+	if limit > 0 {
+		cmd += fmt.Sprintf(" --page %d", limit)
+	}
+	return cmd
 }
 
 // health is read_deployment_health and read_deployment_state, built per

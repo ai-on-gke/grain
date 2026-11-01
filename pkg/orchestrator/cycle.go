@@ -792,6 +792,7 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
+				deps.Config.sessionIdleTTLStored = true
 			}
 		}
 	}
@@ -880,6 +881,7 @@ func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
+				deps.Config.sessionIdleTTLStored = true
 			}
 		}
 	}
