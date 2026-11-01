@@ -29,7 +29,9 @@ import { alertRow, closeAlerts, openAlerts } from "./alerts.js";
 // local-script call, a notification -- is answered, closed or cleared in
 // `finally`. localStorage belongs to the test's own browser context.
 
-test.setTimeout(120_000);
+// The notification test waits out up to one notifications poll
+// (POLL_MS, 30s in src/notifications.js) at each of two widths.
+test.setTimeout(180_000);
 
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
@@ -302,9 +304,11 @@ test("a critical notification arriving while Notifications is folded is counted 
       "raise a critical notification",
     );
     try {
-      // Without a reload: the page's own poll brings it in.
+      // Without a reload: the page's own poll brings it in. That poll
+      // runs every 30s, so waiting exactly 30s misses it whenever the
+      // tick lands late on a loaded runner; allow one poll and change.
       await expect(toggle.locator(".count")).toHaveText(String(before + 1), {
-        timeout: 30_000,
+        timeout: 45_000,
       });
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
       expect(await headingCount(page)).toBe(total + 1);
