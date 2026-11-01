@@ -4972,6 +4972,10 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 	return c.mutate(ctx, id, func(task *model.Task) error {
 		kept := make([]model.Grant, 0, len(task.Grants)+len(targetIDs))
 		for _, g := range task.Grants {
+			if !attach && g.Capability == model.DurableCapability && task.IsConsoleSession() {
+				kept = append(kept, g)
+				continue
+			}
 			if !slices.Contains(targetIDs, g.Capability) {
 				kept = append(kept, g)
 			}
