@@ -99,37 +99,13 @@ for (const [name, viewport] of [
   });
 
   // A bootstrap field stays writable under the lock and can be left
-  // pending a restart, so Health links it to the field itself -- here
-  // Sandboxes → Kubernetes namespace, in a card taller than either screen.
-  // Landing there shows the card's heading and the named field, focused.
-  // A deep link to the card itself (the settings filter, old links) is
-  // aligned to the card's top rather than centred, since centring a card
-  // that tall scrolled its heading and first field off the top of the page.
-  async function landsOnHeadingAndField(page, viewport) {
-    await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
-    const card = page.locator("#kubernetes");
-    const field = card.getByLabel("Kubernetes namespace");
-    await expect(field).toBeFocused();
-    await expect(field).toBeEnabled();
-    expect((await card.boundingBox()).height).toBeGreaterThan(viewport.height);
-    await expect(field).toBeInViewport();
-    await expect
-      .poll(async () => (await card.boundingBox()).y)
-      .toBeGreaterThanOrEqual(0);
-    // Nothing fixed covers the card's top edge.
-    const top = await card.boundingBox();
-    expect(
-      await page.evaluate(
-        ([x, y]) =>
-          document
-            .getElementById("kubernetes")
-            .contains(document.elementFromPoint(x, y)),
-        [top.x + top.width / 2, top.y + 4],
-      ),
-    ).toBe(true);
-  }
-
-  test(`a Health link to a field in a card taller than the screen lands on its heading and the field on a ${name} screen`, async ({
+  // pending a restart, so Health links it to its own field (#k8sNamespace)
+  // inside Sandboxes → Kubernetes, a card taller than either screen. Both
+  // Health's field link and the card's own anchor (#kubernetes, used by
+  // the Settings filter and card deep links, aligned to its top rather
+  // than centred past its heading) land with the card's heading on screen
+  // and the named field focused and in the viewport.
+  test(`Health's field link and a tall card's anchor both land on its heading and named field on a ${name} screen`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport);
@@ -158,16 +134,38 @@ for (const [name, viewport] of [
     );
     await link.click();
     await expect(page).toHaveURL(/\/settings\/sandboxes#k8sNamespace$/);
-    await landsOnHeadingAndField(page, viewport);
-  });
+    await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
 
-  test(`a deep link to a card taller than the screen lands on its heading and first field on a ${name} screen`, async ({
-    page,
-  }) => {
-    await page.setViewportSize(viewport);
-    await configRepoOnly(page);
+    const card = page.locator("#kubernetes");
+    const field = card.getByLabel("Kubernetes namespace");
+    const assertHeadingAndField = async () => {
+      await expect(field).toBeFocused();
+      await expect(field).toBeEnabled();
+      expect((await card.boundingBox()).height).toBeGreaterThan(
+        viewport.height,
+      );
+      await expect(field).toBeInViewport();
+      await expect
+        .poll(async () => (await card.boundingBox()).y)
+        .toBeGreaterThanOrEqual(0);
+      // Nothing fixed covers the card's top edge.
+      const top = await card.boundingBox();
+      expect(
+        await page.evaluate(
+          ([x, y]) =>
+            document
+              .getElementById("kubernetes")
+              .contains(document.elementFromPoint(x, y)),
+          [top.x + top.width / 2, top.y + 4],
+        ),
+      ).toBe(true);
+    };
+    await assertHeadingAndField();
+
+    // Opening the tall card's own anchor aligns the card to its top rather
+    // than centring it past its heading and first field.
     await page.goto("/settings/sandboxes#kubernetes");
-    await landsOnHeadingAndField(page, viewport);
+    await assertHeadingAndField();
   });
 }
 
