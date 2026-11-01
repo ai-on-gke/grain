@@ -34,7 +34,7 @@ func TestCoreBuildDefaultsNoCapabilityOn(t *testing.T) {
 	if got := capability.NewDeploymentConfig().DefaultCapabilities; len(got) != 0 {
 		t.Errorf("a fresh core deployment's DefaultCapabilities = %v, want none", got)
 	}
-	wantDirector := []string{"self-debug", "grain-log", "deployment-health", "bootstrap-playbooks"}
+	wantDirector := []string{"self-debug", model.GrainJournalGrant, "api:deployment:read", model.GrainHealthGrant, "bootstrap-playbooks"}
 	if got := model.DefaultConsoleSessions()[0].Capabilities; !slices.Equal(got, wantDirector) {
 		t.Errorf("a fresh core deployment's Director capabilities = %v, want %v", got, wantDirector)
 	}

@@ -41,7 +41,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
@@ -190,18 +189,14 @@ func OfferedCapabilities() []Capability {
 			Description: "Mint a short-lived Gemini API key for this task"},
 		{ID: "self-debug", Name: "Self debug",
 			Description: "Let this task read grain's own source checkout, this deployment's own tasks and runs, and the measurements it keeps about itself -- throughput, latency, the tool-use census -- to help it debug or explain grain's own behavior. All read-only, and all of it is what anyone with this UI open can already see."},
-		{ID: "grain-log", Name: "Grain log",
-			Description: "Let this task read a bounded slice of grain's own systemd journal on this host -- the daemon's log and the kernel's -- with known credentials redacted before it leaves. Separate from self-debug on purpose: the journal carries whatever anything here has ever logged, which is far more than grain's source code."},
 	}
 	// Capabilities contributed from outside core
-	// (capability.RegisterProvider) follow grain-log, where the
+	// (capability.RegisterProvider) follow self-debug, where the
 	// deployment-level ones begin.
 	for _, r := range capability.Registered() {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
 	}
 	offered = append(offered, []Capability{
-		{ID: "deployment-health", Name: "Deployment health",
-			Description: "Read bounded controller host, sandbox, and deployment-state health without host shell or sandbox network access"},
 		{ID: "self-repair", Name: "Self repair",
 			Description: "Let this task run commands on grain's own host -- restart services, edit config, call the grain CLI -- each one needing a live reply in the task's chat before it runs"},
 		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
@@ -223,10 +218,6 @@ func OfferedCapabilities() []Capability {
 		// grainci.Refusal, by way of capabilityRefusal.
 		{ID: readissues.CapabilityName, Name: "Read issues",
 			Description: "Let this task read issues and comments from GitHub"},
-		{ID: dbaccess.CapabilityDBRead, Name: "Grain DB read",
-			Description: "Let this task execute read-only SQL queries directly against Grain's database"},
-		{ID: dbaccess.CapabilityDBWrite, Name: "Grain DB read/write",
-			Description: "Let this task execute SQL queries and statements (read and write) directly against Grain's database"},
 	}...)
 	// One row per vendor grain proxies to -- claude-proxy, openai-proxy
 	// and gemini-proxy -- written from the vendor itself rather than
