@@ -1722,6 +1722,11 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
 				return fmt.Errorf("an agent cannot name somebody else as the %s of work it files", key)
 			}
+		case "proposalkey":
+			var k string
+			if json.Unmarshal(raw, &k) == nil && strings.TrimSpace(k) != "" {
+				return errors.New("an agent cannot set proposalKey directly")
+			}
 		case "reviewers":
 			if hasReviewersField(pattern, raw) {
 				return errAgentReviewers
@@ -2104,88 +2109,55 @@ func (s *Server) redactAgentTaskResponse(ctx context.Context, call agentCall, ki
 }
 
 // createDrawsOnOtherText reports whether a POST /api/tasks body names a
-// template or a task to supersede, either of which fills the new task with
-// text the caller did not send.
+// template, a task to supersede, or a proposalKey, any of which can populate
+// or resolve the response from an existing record rather than only what the
+// caller sent.
 func createDrawsOnOtherText(body []byte) bool {
-	var req struct {
-		TemplateID string `json:"templateId"`
-		Supersedes string `json:"supersedes"`
-	}
+	var req CreateTaskRequest
 	if len(body) == 0 || json.Unmarshal(body, &req) != nil {
 		return true
 	}
-	return strings.TrimSpace(req.TemplateID) != "" || strings.TrimSpace(req.Supersedes) != ""
+	return strings.TrimSpace(req.TemplateID) != "" ||
+		strings.TrimSpace(req.Supersedes) != "" ||
+		strings.TrimSpace(req.ProposalKey) != ""
 }
 
 func editedPatchResponseKeys(body []byte) []string {
-	var fields map[string]json.RawMessage
-	if len(body) == 0 || json.Unmarshal(body, &fields) != nil {
+	var req UpdateTaskRequest
+	if len(body) == 0 || json.Unmarshal(body, &req) != nil {
 		return nil
 	}
 	var keys []string
-	for k, raw := range fields {
-		trimmed := strings.TrimSpace(string(raw))
-		if trimmed == "" || trimmed == "null" {
-			continue
-		}
-		switch gateKey(k) {
-		case "title":
-			keys = append(keys, "title")
-		case "description":
-			keys = append(keys, "description")
-		case "repo":
-			keys = append(keys, "repo")
-		case "base":
-			keys = append(keys, "base")
-		case "priority":
-			var b bool
-			if json.Unmarshal(raw, &b) == nil {
-				keys = append(keys, "priorityDispatch")
-			} else {
-				keys = append(keys, "priority")
-			}
-		case "prioritydispatch", "priority_dispatch":
-			keys = append(keys, "priorityDispatch")
-		case "issue":
-			keys = append(keys, "issue")
-		case "automerge":
-			keys = append(keys, "autoMerge")
-		case "autoapproveproposals", "auto_approve_proposals":
-			keys = append(keys, "autoApproveProposals")
-		case "sandboxcpus":
-			keys = append(keys, "sandboxCpus")
-		case "sandboxmemorymb":
-			keys = append(keys, "sandboxMemoryMb")
-		case "sandboxdiskgb":
-			keys = append(keys, "sandboxDiskGb")
-		case "agentframework":
-			keys = append(keys, "agentFramework")
-		case "model":
-			keys = append(keys, "model")
-		case "agentbackendid":
-			keys = append(keys, "agentBackendId")
-		case "networkaccess", "network_access":
-			keys = append(keys, "networkAccess")
-		case "nothingneededaction":
-			keys = append(keys, "nothingNeededAction")
-		case "keeprunning", "keep_running":
-			keys = append(keys, "keepRunning")
-		case "noport":
-			keys = append(keys, "noPort")
-		case "fixesbasebranch":
-			keys = append(keys, "fixesBaseBranch")
-		case "promptextension":
-			keys = append(keys, "promptExtension")
-		case "reviewtemplateid":
-			keys = append(keys, "reviewTemplateId")
-		case "reads":
-			keys = append(keys, "reads")
-		case "writes":
-			keys = append(keys, "writes")
-		case "googlechatspace":
-			keys = append(keys, "googleChatSpace")
+	add := func(set bool, key string) {
+		if set {
+			keys = append(keys, key)
 		}
 	}
+	add(req.Title != nil, "title")
+	add(req.Description != nil, "description")
+	add(req.Repo != nil, "repo")
+	add(req.Base != nil, "base")
+	add(req.Priority != nil, "priority")
+	add(req.PriorityDispatch != nil, "priorityDispatch")
+	add(req.Issue != nil, "issue")
+	add(req.AutoMerge != nil, "autoMerge")
+	add(req.AutoApproveProposals != nil, "autoApproveProposals")
+	add(req.SandboxCPUs != nil, "sandboxCpus")
+	add(req.SandboxMemoryMB != nil, "sandboxMemoryMb")
+	add(req.SandboxDiskGB != nil, "sandboxDiskGb")
+	add(req.AgentFramework != nil, "agentFramework")
+	add(req.Model != nil, "model")
+	add(req.AgentBackendID != nil, "agentBackendId")
+	add(req.NetworkAccess != nil, "networkAccess")
+	add(req.NothingNeededAction != nil, "nothingNeededAction")
+	add(req.KeepRunning != nil || req.KeepRunningSnake != nil, "keepRunning")
+	add(req.NoPort != nil, "noPort")
+	add(req.FixesBaseBranch != nil, "fixesBaseBranch")
+	add(req.PromptExtension != nil, "promptExtension")
+	add(req.ReviewTemplateID != nil, "reviewTemplateId")
+	add(req.Reads != nil, "reads")
+	add(req.Writes != nil, "writes")
+	add(req.GoogleChatSpace != nil, "googleChatSpace")
 	return keys
 }
 

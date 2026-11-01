@@ -109,11 +109,11 @@ func TestTaskMutationResponseClassificationIsTotal(t *testing.T) {
 	}
 	rt := reflect.TypeFor[UpdateTaskRequest]()
 	for i := range rt.NumField() {
-		tag, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		field := rt.Field(i)
+		tag, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		if tag == "" || tag == "-" || omittedFromPatchEcho[tag] {
 			continue
 		}
-		sample := []byte(`{"` + tag + `":1}`)
 		if tag == "priority" {
 			if got := editedPatchResponseKeys([]byte(`{"priority":5}`)); !slices.Equal(got, []string{"priority"}) {
 				t.Errorf("editedPatchResponseKeys(numeric priority) = %v, want [priority]", got)
@@ -123,9 +123,29 @@ func TestTaskMutationResponseClassificationIsTotal(t *testing.T) {
 			}
 			continue
 		}
-		if got := editedPatchResponseKeys(sample); !slices.Equal(got, []string{tag}) {
-			t.Errorf("UpdateTaskRequest field %q (json %q) is not mapped by editedPatchResponseKeys: got %v", rt.Field(i).Name, tag, got)
+		ft := field.Type
+		for ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
 		}
+		rawVal := `"x"`
+		switch ft.Kind() {
+		case reflect.Bool:
+			rawVal = `true`
+		case reflect.Int, reflect.Int64:
+			rawVal = `1`
+		case reflect.Slice:
+			rawVal = `[]`
+		}
+		sample := []byte(`{"` + tag + `":` + rawVal + `}`)
+		if got := editedPatchResponseKeys(sample); !slices.Equal(got, []string{tag}) {
+			t.Errorf("UpdateTaskRequest field %q (json %q) is not mapped by editedPatchResponseKeys: got %v", field.Name, tag, got)
+		}
+	}
+	if got := editedPatchResponseKeys([]byte(`{"base":"main","description":"x","DESCRIPTION":null,"title":"x","TITLE":null}`)); !slices.Equal(got, []string{"base"}) {
+		t.Errorf("editedPatchResponseKeys(case-folded null override) = %v, want [base]", got)
+	}
+	if !createDrawsOnOtherText([]byte(`{"repo":"acme/widgets","title":"x","proposalKey":"fixes-base-branch"}`)) {
+		t.Errorf("createDrawsOnOtherText(proposalKey) = false, want true")
 	}
 }
 

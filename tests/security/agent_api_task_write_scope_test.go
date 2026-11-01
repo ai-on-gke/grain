@@ -216,10 +216,11 @@ func TestExternalAgentTaskWriteDoesNotReturnTaskRecord(t *testing.T) {
 	}
 
 	otherTask, err := client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title:       otherMarker,
-		Description: otherMarker + "-desc",
-		Repo:        "other/gadgets",
-		Approved:    true,
+		Title:           otherMarker,
+		Description:     otherMarker + "-desc",
+		Repo:            "other/gadgets",
+		FixesBaseBranch: true,
+		Approved:        true,
 	})
 	if err != nil {
 		t.Fatalf("CreateTask(other): %v", err)
@@ -259,7 +260,8 @@ func TestExternalAgentTaskWriteDoesNotReturnTaskRecord(t *testing.T) {
 		assertNoSecretMarkers(t, "MCP empty PATCH", text, allMarkers...)
 	}
 
-	// 3. Valid PATCH returns only {id, state, <editedField>} over both HTTP and MCP.
+	// 3. Valid PATCH returns only {id, state, <editedField>} over both HTTP and MCP,
+	// and case-folded duplicate keys cancelled by null never echo untouched fields.
 	code, body := doBearerJSON(t, srv, writeOnlyTok, http.MethodPatch, "/api/tasks/"+victim.ID, `{"base":"release-1.0"}`, nil)
 	if code != http.StatusOK {
 		t.Fatalf("PATCH base status = %d: %s", code, body)
@@ -269,6 +271,14 @@ func TestExternalAgentTaskWriteDoesNotReturnTaskRecord(t *testing.T) {
 	if gotPatch["id"] != victim.ID || gotPatch["base"] != "release-1.0" {
 		t.Errorf("PATCH base response = %v", gotPatch)
 	}
+
+	code, body = doBearerJSON(t, srv, writeOnlyTok, http.MethodPatch, "/api/tasks/"+victim.ID,
+		`{"base":"release-1.1","title":"ignored","TITLE":null,"description":"ignored","DESCRIPTION":null,"promptExtension":"ignored","PROMPTEXTENSION":null}`, nil)
+	if code != http.StatusOK {
+		t.Fatalf("PATCH case-folded null override status = %d: %s", code, body)
+	}
+	assertNoSecretMarkers(t, "PATCH case-folded null override", body, allMarkers...)
+	assertJSONKeysAtMost(t, "PATCH case-folded null override", body, "id", "state", "base")
 
 	if isErr, text := callExternalMCPTool(t, srv, writeOnlyTok, patchTool, map[string]any{
 		"id":   victim.ID,
@@ -322,7 +332,8 @@ func TestExternalAgentTaskWriteDoesNotReturnTaskRecord(t *testing.T) {
 		assertJSONKeysAtMost(t, "MCP comment", text, "id", "state")
 	}
 
-	// 5. Creating a task from a template without tasks:read returns {id, state} and hides the template prompt.
+	// 5. Creating a task from a template or with supersedes without tasks:read returns {id, state}
+	// and hides template prompts and supersede refusal notes.
 	code, body = doBearerJSON(t, srv, writeOnlyTok, http.MethodPost, "/api/tasks",
 		`{"repo":"acme/widgets","templateId":"sec-tmpl","title":"filed"}`, nil)
 	if code != http.StatusCreated {
@@ -331,7 +342,16 @@ func TestExternalAgentTaskWriteDoesNotReturnTaskRecord(t *testing.T) {
 	assertNoSecretMarkers(t, "POST /api/tasks with template", body, allMarkers...)
 	assertJSONKeysAtMost(t, "POST /api/tasks with template", body, "id", "state")
 
-	// 5b. A plain filing echoes only what the caller wrote, so it comes back whole.
+	code, body = doBearerJSON(t, srv, writeOnlyTok, http.MethodPost, "/api/tasks",
+		fmt.Sprintf(`{"repo":"acme/widgets","supersedes":%q,"title":"superseding"}`, otherTask.ID), nil)
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/tasks with supersedes status = %d: %s", code, body)
+	}
+	assertNoSecretMarkers(t, "POST /api/tasks with supersedes", body, allMarkers...)
+	assertJSONKeysAtMost(t, "POST /api/tasks with supersedes", body, "id", "state")
+
+	// 5b. A plain filing echoes only what the caller wrote, so it comes back whole,
+	// while proposalKey on POST /api/tasks is refused and never resolves an existing tagged task.
 	code, body = doBearerJSON(t, srv, writeOnlyTok, http.MethodPost, "/api/tasks",
 		`{"repo":"acme/widgets","title":"plain filing","description":"caller text"}`, nil)
 	if code != http.StatusCreated {
@@ -341,6 +361,13 @@ func TestExternalAgentTaskWriteDoesNotReturnTaskRecord(t *testing.T) {
 	if !strings.Contains(body, "caller text") || !strings.Contains(body, `"author"`) {
 		t.Fatalf("plain POST /api/tasks = %s, want the filed record echoed back", body)
 	}
+
+	code, body = doBearerJSON(t, srv, writeOnlyTok, http.MethodPost, "/api/tasks",
+		`{"repo":"acme/widgets","title":"probe","proposalKey":"fixes-base-branch"}`, nil)
+	if code != http.StatusForbidden {
+		t.Errorf("POST /api/tasks with proposalKey status = %d, want 403: %s", code, body)
+	}
+	assertNoSecretMarkers(t, "POST /api/tasks with proposalKey", body, allMarkers...)
 
 	// 6. POST /api/tasks/{id}/wait-on strips target title and closing note without tasks:read.
 	code, body = doBearerJSON(t, srv, writeOnlyTok, http.MethodPost, "/api/tasks/"+helperTask.ID+"/wait-on",
@@ -563,8 +590,9 @@ func TestSandboxChannelTaskWriteDoesNotReturnTaskRecord(t *testing.T) {
 		assertNoSecretMarkers(t, "sandbox empty PATCH", body, markers...)
 	}
 
-	// Valid PATCH over sandbox channel returns only {id, state, base}.
-	code, body := doSandboxAPI("sandbox-writer", "tok-writer", http.MethodPatch, "/api/tasks/"+sibling.ID, `{"base":"sandbox-branch"}`)
+	// Valid PATCH over sandbox channel returns only {id, state, base}, even with case-folded null overrides.
+	code, body := doSandboxAPI("sandbox-writer", "tok-writer", http.MethodPatch, "/api/tasks/"+sibling.ID,
+		`{"base":"sandbox-branch","title":"ignored","TITLE":null,"description":"ignored","DESCRIPTION":null}`)
 	if code != http.StatusOK {
 		t.Fatalf("sandbox PATCH status = %d: %s", code, body)
 	}
