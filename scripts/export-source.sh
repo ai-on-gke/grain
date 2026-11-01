@@ -64,11 +64,13 @@ fi
 
 # The ceiling, in MB, on what may be staged -- a backstop for the
 # fallback below, which is the only path that can still copy something
-# nobody chose. grain's tracked tree is ~126MB on disk (November 2026;
-# mostly docs/ screenshots and pkg/), so this leaves about twice the room
-# it needs, still far below the 3.1GB leak it was set against; raise it
-# here (or with the environment variable, for a one-off) if the
-# repository itself ever legitimately grows into it, and keep
+# nobody chose. grain's tracked tree was ~27MB when this was set at
+# 128; it is ~118MB (2026-11-01) -- test-run screenshots under docs/ and
+# the vendored third_party/granule -- which stood at 127-129MB in du's
+# blocks and failed every installer build. 256 is room for honest growth
+# while a leak of build output, which runs to gigabytes, still stops
+# here; raise it here (or with the environment variable, for a one-off)
+# if the repository itself grows into it again, and keep
 # tests/container's sourceExportMaxMB in step.
 #
 # It fails the build that would publish the leak, which is the whole
