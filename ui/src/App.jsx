@@ -858,9 +858,15 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // 10 (half a minute at POLL_INTERVAL_MS), so a halted host is asked
   // less and less often rather than every three seconds for as long as
   // it stays down. pollTick counts ticks against it; both reset to 1/0
-  // the moment a tick gets through.
+  // the moment a tick gets through. The backoff spaces out the main
+  // poll's own asking, not how soon the page notices grain is back: the
+  // restart watch below keeps asking every POLL_INTERVAL_MS through the
+  // outage, and the first answer it gets resets both and calls pollNow,
+  // so the banner clears within a tick of grain answering rather than
+  // up to half a minute later.
   const pollBackoff = useRef(1);
   const pollTick = useRef(0);
+  const pollNow = useRef(null);
   const hiddenTick = useRef(0);
 
   // isUnreachable/unreachableReason first: a toast for a mutation that
@@ -2396,12 +2402,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
       }
     }
     const interval = setInterval(poll, POLL_INTERVAL_MS);
+    pollNow.current = poll;
     const onVisible = () => {
       if (document.visibilityState === "visible") poll();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(interval);
+      if (pollNow.current === poll) pollNow.current = null;
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [
@@ -2433,20 +2441,36 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // the poll, not this, is what reports the daemon unreachable. A hidden
   // tab stops asking, as it stops polling (HIDDEN_POLL_EVERY), and asks
   // again the moment it is shown.
+  //
+  // It is also how the page hears that grain is back. After a failed
+  // ask, the next one is ?quick=1, which the daemon answers at once
+  // rather than holding, and an answer that finds the main poll backed
+  // off resets its backoff and polls now: otherwise the banner waited
+  // for the poll's next backed-off tick, up to half a minute after
+  // grain was answering again (grain/task-2258).
   const watchingRestart = Boolean(config) && !pollDenied;
   useEffect(() => {
     if (!watchingRestart) return undefined;
     let stopped = false;
     let asking = false;
     let timer = null;
+    let failed = false;
     async function watch() {
       timer = null;
       if (stopped || asking || document.visibilityState === "hidden") return;
       asking = true;
       const started = Date.now();
       try {
-        const answer = await api("/api/restart-watch");
+        const answer = await api(
+          failed ? "/api/restart-watch?quick=1" : "/api/restart-watch",
+        );
+        failed = false;
         if (stopped) return;
+        if (pollBackoff.current > 1) {
+          pollBackoff.current = 1;
+          pollTick.current = 0;
+          pollNow.current?.();
+        }
         if (answer?.restarting) {
           restartingRef.current = true;
           // A request that failed while this answer was on its way
@@ -2459,6 +2483,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         }
       } catch {
         // Unreachable, refused or anything else: the poll says so.
+        failed = true;
       }
       asking = false;
       if (stopped) return;
