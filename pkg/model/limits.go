@@ -356,8 +356,8 @@ func (l Limits) ChargeSandboxShape(id string, want Commitment) (BudgetVerdict, f
 
 // DirectorSandboxVerdict is what the deployment-wide budget says about one
 // more sandbox for a run with priority dispatch -- a console session's, or
-// a task's holding PriorityDispatchCapability -- under the exception
-// policy.
+// a task's holding PriorityDispatchCapability -- under the priority policy
+// (Budget.AdmitsPriority): refused only by the disk floor or the cluster.
 func (l Limits) DirectorSandboxVerdict() BudgetVerdict {
 	return l.DirectorSandboxVerdictFor(l.AgentShape)
 }
@@ -367,18 +367,19 @@ func (l Limits) DirectorSandboxVerdictFor(want Commitment) BudgetVerdict {
 	if !l.Budget.Known() {
 		return BudgetVerdict{OK: true}
 	}
-	return l.Ledger.VerdictException(l.Budget, want)
+	return l.Ledger.VerdictPriority(l.Budget, want)
 }
 
 // DirectorSandboxAdmits reports whether a console/director session may
-// start now under the exception policy.
+// start now under the priority policy.
 func (l Limits) DirectorSandboxAdmits() bool { return l.DirectorSandboxVerdict().OK }
 
-// AdmitDirectorSandbox is ChargeSandbox for a console/director session
-// under the explicit exception policy (Budget.AdmitsException): a director
-// or chat session may exceed the budget by at most one sandbox while
-// existing commitments are within the cap. Once committed exceeds the cap,
-// additional sessions wait until committed is back under the cap.
+// AdmitDirectorSandbox is ChargeSandbox for a run with priority dispatch
+// (a console/director session, or a task holding priority-dispatch) under
+// the priority policy (Budget.AdmitsPriority): it is charged like any
+// other sandbox, but no budget ceiling, repair reserve or CI commitment
+// refuses it -- only the host's disk floor or a cluster with no node that
+// can schedule it.
 func (l Limits) AdmitDirectorSandbox(id string) (BudgetVerdict, func()) {
 	return l.AdmitDirectorSandboxShape(id, l.AgentShape)
 }
@@ -388,11 +389,11 @@ func (l Limits) AdmitDirectorSandboxShape(id string, want Commitment) (BudgetVer
 	if !l.Budget.Known() {
 		return BudgetVerdict{OK: true}, l.Ledger.Charge(PoolAgent, id, want)
 	}
-	return l.Ledger.AdmitException(l.Budget, PoolAgent, id, want)
+	return l.Ledger.AdmitPriority(l.Budget, PoolAgent, id, want)
 }
 
 // ChargeDirectorSandbox is AdmitDirectorSandbox returning only the release
-// closure (or a no-op if the exception cap is already exceeded).
+// closure (or a no-op if the sandbox was refused).
 func (l Limits) ChargeDirectorSandbox(id string) func() {
 	_, release := l.AdmitDirectorSandbox(id)
 	if release == nil {

@@ -27,8 +27,8 @@ import (
 // of mergers and ordinary work, passes a pipeline pause other than an
 // upgrade's own hold, is never parked behind a red base branch's repair,
 // and is not held by a provider connection's concurrency limit. It still
-// charges the sandbox budget, on the same exception policy a session's
-// does (Limits.AdmitDirectorSandboxShape).
+// charges the sandbox budget, on the same priority policy a session's
+// does (Limits.AdmitDirectorSandboxShape, Budget.AdmitsPriority).
 //
 // Only a person may grant it (IsPersonOnlyGrant): it lets the task jump
 // the queue, so an agent can neither attach it to work it files nor pass
