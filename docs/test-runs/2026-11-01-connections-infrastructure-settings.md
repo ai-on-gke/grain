@@ -461,6 +461,6 @@ Minor, noted and not filed:
 - `go test ./pkg/ui -count=1`: pass. `go test ./pkg/cli ./pkg/staterepo ./pkg/demo -run 'Sync|Settings|GCP|Gcp|Seed|Import|Demo'`: pass.
 - No screenshots were taken. The UI changes are an option disabled in a menu, a link inside an existing list, one sentence, and a box's value after a refusal, each asserted in the browser walk above.
 - CI on the first push of this series (`305140b0`), as the pull request:
-  - `installer` failed at "Assemble the image to install": `export-source.sh` refuses the 129 MB staged source, over its 128 MB ceiling. It fails the same way on `main`, and a follow-up was proposed.
+  - `installer` failed at "Assemble the image to install": `export-source.sh` refuses the 129 MB staged source, over its 128 MB ceiling. It failed the same way on `main` until [Task #2237](/tasks/2237) raised the ceiling to 256 MB. This branch merged that fix, and the follow-up this run had proposed for it is a duplicate.
   - `go unit` failed on a data race in `pkg/hostd`'s tests, which this branch does not touch. It passes on `main`, and `go test -race -count=3 ./pkg/hostd` passed locally, so it is a flake. A follow-up was proposed.
   - Every other check passed, `ui e2e` included.
