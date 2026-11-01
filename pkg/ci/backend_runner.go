@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -197,8 +198,12 @@ type BackendRunner struct {
 	secretResolver    func(ctx context.Context, req Request) (gritapi.SecretPayload, error)
 	onVerdictVerified func(run Run)
 
-	mu      sync.Mutex
-	outbox  []OutboxEntry
+	mu     sync.Mutex
+	outbox []OutboxEntry
+	// flushMu serialises FlushOutbox, so two flushes never deliver the
+	// same entry twice and the one writing the outbox back knows that
+	// anything past what it read was appended while it was delivering.
+	flushMu sync.Mutex
 	tracked map[string]trackedRunMeta // runID -> metadata
 	byReqID map[string]string         // requestID -> runID
 	syncMu  sync.Mutex
@@ -408,30 +413,108 @@ func (r *BackendRunner) Start(ctx context.Context, req Request) (Run, error) {
 			return existingRun, nil
 		}
 	}
-	entry := OutboxEntry{
-		Kind:        OutboxStart,
-		RequestID:   startReq.RequestID,
-		StartReq:    &startReq,
-		TreeArchive: archive,
-		RequestedBy: req.RequestedBy,
-		Recheck:     req.Recheck,
-		CreatedAt:   time.Now().UTC(),
+	// The same start asked for again while the first is still waiting
+	// in the outbox -- a caller retrying the 503 an unreachable grit
+	// answered with -- joins that one rather than queueing a second run
+	// that would be delivered beside it. A recheck's attempt is fresh
+	// on every call, so it is left out of what counts as the same.
+	if queued, ok := r.queuedStartLocked(startReq); ok {
+		startReq.RequestID = queued
+	} else {
+		r.outbox = append(r.outbox, OutboxEntry{
+			Kind:        OutboxStart,
+			RequestID:   startReq.RequestID,
+			StartReq:    &startReq,
+			TreeArchive: archive,
+			RequestedBy: req.RequestedBy,
+			Recheck:     req.Recheck,
+			CreatedAt:   time.Now().UTC(),
+		})
+		r.saveOutboxLocked()
 	}
-	r.outbox = append(r.outbox, entry)
-	r.saveOutboxLocked()
 	r.mu.Unlock()
 
 	if err := r.FlushOutbox(ctx); err != nil {
-		return Run{}, err
+		r.mu.Lock()
+		_, stillQueued := r.queuedStartLocked(startReq)
+		r.mu.Unlock()
+		if stillQueued {
+			return Run{}, &StartQueuedError{RequestID: startReq.RequestID, Err: err}
+		}
+		// Delivered by this flush after all, and only something queued
+		// behind it failed.
+		if _, recorded := r.recordedRunID(startReq.RequestID); !recorded {
+			return Run{}, err
+		}
 	}
 
-	r.mu.Lock()
-	runID := r.byReqID[startReq.RequestID]
-	r.mu.Unlock()
+	runID, _ := r.recordedRunID(startReq.RequestID)
 	if run, ok := r.store.Get(runID); ok {
 		return run, nil
 	}
 	return Run{}, fmt.Errorf("ci: run for request %s was not recorded", startReq.RequestID)
+}
+
+// queuedStartLocked is the request id of a start in the outbox that asks
+// for what req does, ignoring the attempt a recheck draws afresh each
+// time. r.mu must be held.
+func (r *BackendRunner) queuedStartLocked(req gritapi.StartRun) (string, bool) {
+	for _, e := range r.outbox {
+		if e.Kind != OutboxStart || e.StartReq == nil {
+			continue
+		}
+		q := e.StartReq
+		if q.Repo == req.Repo && q.Ref == req.Ref && q.Commit == req.Commit && q.Tree == req.Tree &&
+			q.Event == req.Event && q.TrustedRelease == req.TrustedRelease && slices.Equal(q.Jobs, req.Jobs) &&
+			(q.RequestID == req.RequestID || (q.Attempt > 1) == (req.Attempt > 1)) {
+			return e.RequestID, true
+		}
+	}
+	return "", false
+}
+
+func (r *BackendRunner) recordedRunID(requestID string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.byReqID[requestID]
+	return id, ok
+}
+
+// ErrStartQueued is a start that could not be handed to the grit server
+// yet -- it is unreachable, or answering 5xx -- and is waiting in the
+// durable outbox, from which it is delivered once grit answers again.
+// The run will happen; starting it again is what must not.
+var ErrStartQueued = errors.New("ci: the grit server could not be reached; the run is queued and will be submitted when it is back")
+
+// StartQueuedError is ErrStartQueued for one request: the id the queued
+// start is delivered under, and what the attempt to deliver it met.
+type StartQueuedError struct {
+	RequestID string
+	Err       error
+}
+
+func (e *StartQueuedError) Error() string {
+	return fmt.Sprintf("%v (request %s; the last attempt failed: %v) -- asking for the same run again joins it rather than starting a second", ErrStartQueued, e.RequestID, e.Err)
+}
+
+func (e *StartQueuedError) Is(target error) bool { return target == ErrStartQueued }
+
+func (e *StartQueuedError) Unwrap() error { return e.Err }
+
+// rejectedStart reports whether err is the grit server refusing a start
+// outright -- a request it will refuse however often it is sent -- rather
+// than failing to answer. Authentication and rate limits are left out:
+// those clear up without the request changing.
+func rejectedStart(err error) bool {
+	var apiErr *gritapi.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.StatusCode {
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return true
+	}
+	return false
 }
 
 func (r *BackendRunner) resolveTree(ctx context.Context, req Request) (treeid.ID, []byte, error) {
@@ -474,6 +557,8 @@ func (r *BackendRunner) resolveTree(ctx context.Context, req Request) (treeid.ID
 // Entries that succeed are removed from the persisted outbox; if an entry fails,
 // it remains in the outbox for the next flush attempt.
 func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
 	r.mu.Lock()
 	pending := make([]OutboxEntry, len(r.outbox))
 	copy(pending, r.outbox)
@@ -486,6 +571,8 @@ func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
 	var firstErr error
 	var remaining []OutboxEntry
 	for i, entry := range pending {
+		// The first failure stops delivery; it and everything behind it
+		// stay queued, in order.
 		if firstErr != nil {
 			remaining = append(remaining, pending[i:]...)
 			break
@@ -498,8 +585,11 @@ func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
 			rs, err := r.submitStartEntry(ctx, *entry.StartReq, entry.TreeArchive)
 			if err != nil {
 				firstErr = err
-				remaining = append(remaining, pending[i:]...)
-				break
+				if !rejectedStart(err) {
+					remaining = append(remaining, entry)
+				}
+				// else sending it again would only be refused again.
+				continue
 			}
 			r.recordSubmittedRun(rs, *entry.StartReq, entry.RequestedBy, entry.Recheck)
 
@@ -514,8 +604,8 @@ func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
 					continue
 				}
 				firstErr = err
-				remaining = append(remaining, pending[i:]...)
-				break
+				remaining = append(remaining, entry)
+				continue
 			}
 			r.applyCancelStatus(rs, entry.CancelReason, entry.CancelBy)
 
@@ -526,8 +616,8 @@ func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
 			rs, err := r.backend.RetriggerRun(ctx, entry.RunID, *entry.RetriggerReq)
 			if err != nil {
 				firstErr = err
-				remaining = append(remaining, pending[i:]...)
-				break
+				remaining = append(remaining, entry)
+				continue
 			}
 			r.mu.Lock()
 			meta := r.tracked[entry.RunID]
@@ -540,7 +630,8 @@ func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
 	}
 
 	r.mu.Lock()
-	r.outbox = remaining
+	// Starts queued while this flush was delivering are kept for the next.
+	r.outbox = append(remaining, r.outbox[len(pending):]...)
 	r.saveOutboxLocked()
 	r.mu.Unlock()
 	return firstErr

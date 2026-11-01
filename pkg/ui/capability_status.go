@@ -284,8 +284,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"gemini-key":          "Gemini key",
 	"github-sandbox":      "GitHub sandbox",
 	"self-debug":          "Self debug",
-	"deployment-health":   "Deployment health",
-	"grain-log":           "Grain log",
 	"self-repair":         "Self repair",
 	"bootstrap-playbooks": "Bootstrap playbooks",
 	"grain-ci":            "grain CI",
@@ -297,8 +295,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"priority-dispatch":   "Priority dispatch",
 	"durable":             "Durable",
 	"read-issues":         "Read issues",
-	"db-read":             "Grain DB read",
-	"db-write":            "Grain DB read/write",
 })
 
 // withModelProxyDisplayNames adds one row per vendor's proxy capability

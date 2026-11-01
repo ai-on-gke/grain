@@ -268,3 +268,34 @@ func TestCheckIsSilentAboutADashboardGrainStored(t *testing.T) {
 		t.Errorf("grain's own export of a dashboard warned: %q", joined)
 	}
 }
+
+// grain_config is edited by hand in a config pull request too, and an
+// upgrade_check_mode typo reads as "auto": the check says so, naming the
+// word, the vocabulary and the file, and still loads the dump. The
+// words this build has, and the empty default, say nothing.
+func TestCheckWarnsAboutAGrainConfigModeThisBuildDoesNotHave(t *testing.T) {
+	t.Parallel()
+	withRow := func(mode, access string) string {
+		dir := dumpWithConfig(t)
+		rows := readTable(t, dir, "grain_config")
+		if len(rows) == 0 {
+			t.Fatal("the dump has no grain_config row")
+		}
+		rows[0]["upgrade_check_mode"] = mode
+		rows[0]["network_access"] = access
+		writeTable(t, dir, "grain_config", rows)
+		return dir
+	}
+
+	joined := warningsOf(t, withRow("aprove", "closed"))
+	for _, want := range []string{`"aprove"`, `"approve"`, `"auto"`, `"closed"`, "grain_config.json"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("warnings do not mention %s: %q", want, joined)
+		}
+	}
+	for _, mode := range append(model.UpgradeCheckModes(), "") {
+		if joined := warningsOf(t, withRow(mode, "")); strings.Contains(joined, "upgrade_check_mode") || strings.Contains(joined, "network_access") {
+			t.Errorf("mode %q warned: %q", mode, joined)
+		}
+	}
+}

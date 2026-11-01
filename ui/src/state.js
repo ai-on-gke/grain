@@ -136,6 +136,29 @@ export function stateLabels(states) {
   return [...new Set((states || []).map((s) => STATE_LABELS[s] || s))];
 }
 
+// ASKED_PART_LABELS name one of ASKED_STATES on its own, for a list
+// holding only one of the pair: a board whose own columns collect
+// awaiting_reply ("Talking") and nothing collects awaiting_submit must
+// not say "Asked" is in no column while a column of Asked cards sits
+// right above that note.
+const ASKED_PART_LABELS = {
+  awaiting_reply: "Asked for a reply",
+  awaiting_submit: "Asked to submit",
+};
+
+// partStateLabels is stateLabels for a list that may hold only part of
+// a display state: "Asked" for both asked states together, and the one
+// that is there by its own name when the other is not.
+export function partStateLabels(states) {
+  const list = states || [];
+  const asked = ASKED_STATES.filter((s) => list.includes(s));
+  return stateLabels(
+    list.map((s) =>
+      asked.length === 1 && s === asked[0] ? ASKED_PART_LABELS[s] : s,
+    ),
+  );
+}
+
 // displayCounts folds a per-state count (an object keyed by state, or a
 // list of {state, count}) into one entry per display state, in
 // DISPLAY_STATE_ORDER: a legend counting both asked states shows one

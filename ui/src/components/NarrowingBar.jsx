@@ -31,6 +31,7 @@ import SwapVertIcon from "@mui/icons-material/SwapVert";
 import {
   NONE_LABEL_FALLBACK,
   TYPE_DATE,
+  attributeById,
   attributesFor,
   valueLabel,
 } from "../taskAttributes.js";
@@ -126,6 +127,13 @@ export default function NarrowingBar({
 }) {
   const attributes = ownAttributes || attributesFor(config);
   const { search, sort, filters } = narrowing;
+  // The sort keys this view has an attribute for. A key naming none --
+  // a stale or mistyped link's `?sort=bogus` -- has no row in the
+  // editor (SortRow) and no words in describeSort, so the button and
+  // the editor go by these: going by `sort` itself drew the sort button
+  // with no label at all and an editor offering "Then by…" under
+  // nothing (found in the 2026-11-01 Processes walkthrough).
+  const knownSort = sort.filter((key) => attributeById(attributes, key.attr));
   const conditions = resolveConditions(filters, attributes);
   // The conditions resolveConditions dropped, which get a chip of their
   // own saying so (taskFilters.js's unknownConditions). Not until the
@@ -200,7 +208,7 @@ export default function NarrowingBar({
           title="Choose the order this list is shown in"
           onClick={() => setEditingSort((open) => !open)}
         >
-          {sort.length > 0 ? describeSort(sort, attributes) : orderLabel}
+          {knownSort.length > 0 ? describeSort(sort, attributes) : orderLabel}
         </Button>
         {isNarrowed(narrowing, defaults) && (
           <Button
@@ -287,11 +295,11 @@ export default function NarrowingBar({
             />
           ))}
           <AttributeMenu
-            label={sort.length > 0 ? "Then by…" : "Sort by…"}
+            label={knownSort.length > 0 ? "Then by…" : "Sort by…"}
             attributes={attributes}
             onPick={addSortKey}
           />
-          {sort.length === 0 && (
+          {knownSort.length === 0 && (
             <span className="narrowing-note">{orderNote}</span>
           )}
         </div>

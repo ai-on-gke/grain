@@ -249,10 +249,17 @@ type Task struct {
 	// declaration may say the field holds a set (custom_fields.go's own
 	// doc comment on which, and why the one-value case is still a bare
 	// string).
-	CustomFields  map[string]CustomFieldValue `json:"customFields,omitempty"`
-	Issue         int                         `json:"issue,omitempty"`
-	PullRequest   string                      `json:"pullRequest,omitempty"`
-	GeneratedFrom string                      `json:"generatedFrom,omitempty"`
+	CustomFields map[string]CustomFieldValue `json:"customFields,omitempty"`
+	Issue        int                         `json:"issue,omitempty"`
+	PullRequest  string                      `json:"pullRequest,omitempty"`
+	// ExternalPullRequests are the pull requests this task is about but
+	// does not own (model.LinkExternalPR, "owner/repo#number"): a fork's
+	// pull request the task was filed against by its head label
+	// (pkg/forkhead), or a contributor's pull request grain took over.
+	// PullRequest beside it is the one grain pushes to; these it only
+	// reads and comments on.
+	ExternalPullRequests []string `json:"externalPullRequests,omitempty"`
+	GeneratedFrom        string   `json:"generatedFrom,omitempty"`
 	// Origin is the pull request, issue or grain task this task's tree of
 	// work came from (model.WorkOrigin): "owner/repo#12" or "task:1766",
 	// empty for a task that has none.
@@ -713,6 +720,10 @@ type TaskDetail struct {
 	// read a stored secret back, and PUT /api/tasks/{id}/secret is the
 	// one direction this travels (see task_secret.go).
 	PendingSecret *CapabilitySecret `json:"pendingSecret,omitempty"`
+	// PendingConfigChange is the grain/config change a parked session
+	// proposed (propose_config_change, task_config_change.go): what the
+	// task pane renders as an inline diff with Approve and Reject.
+	PendingConfigChange *model.PendingConfigChange `json:"pendingConfigChange,omitempty"`
 	// CI is what grain's own CI last said about the branch this task
 	// pushed (model.Observation.CI), nil for the overwhelming majority of
 	// tasks -- one that does not hold the grain-ci capability, or whose
@@ -1051,6 +1062,9 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 	for _, l := range t.Links {
 		if l.Kind == model.LinkFixes && !model.LinkOffTarget(t, l) {
 			out.PullRequest = l.Target
+		}
+		if l.Kind == model.LinkExternalPR {
+			out.ExternalPullRequests = append(out.ExternalPullRequests, l.Target)
 		}
 		if l.Kind == model.LinkProposedBy {
 			out.GeneratedFrom = l.Target
@@ -2771,6 +2785,10 @@ func writeError(w http.ResponseWriter, status int, err error) {
 func writeClientError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ci.ErrNotUp) {
 		writeCINotUp(w)
+		return
+	}
+	if errors.Is(err, ci.ErrStartQueued) {
+		writeCIStartQueued(w, err)
 		return
 	}
 	var fe *ForbiddenError
