@@ -70,7 +70,7 @@ import SessionsPage from "./components/SessionsPage.jsx";
 import PanelBoard from "./components/PanelBoard.jsx";
 import ReportBoard from "./components/ReportBoard.jsx";
 import RepoList from "./components/RepoList.jsx";
-import RepoPage from "./components/RepoPage.jsx";
+import RepoPage, { REPO_TABS } from "./components/RepoPage.jsx";
 import PullRequestPage from "./components/PullRequestPage.jsx";
 import ProcessesList from "./components/ProcessesList.jsx";
 import { declaringRepos, triggersOf } from "./processes.js";
@@ -253,6 +253,17 @@ function repoTabAt(parsed, hash) {
   if (parsed.repoTab) return parsed.repoTab;
   const fromHash = (hash || "").replace(/^#/, "");
   return isRepoTab(fromHash) ? fromHash : null;
+}
+
+// repoTabCrumb is the " / <tab>" a repo page's crumbs end in when one of
+// its tabs other than Overview is showing -- "repositories /
+// acme/widgets / merge queue" -- so the rail says where in the repo the
+// reader is, as it does for a settings section or a system tab. Without
+// it every tab read the same as Overview.
+function repoTabCrumb(tab) {
+  const found =
+    tab && tab !== "overview" && REPO_TABS.find((t) => t.id === tab);
+  return found ? ` / ${found.label.toLowerCase()}` : "";
 }
 
 // WhenRailReady holds the page back until the header rail's slot has
@@ -3285,7 +3296,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
             ? " / releases"
             : repoComparison !== null
               ? " / pull request"
-              : ""
+              : repoTabCrumb(repoTab)
         }`
       : view === "settings"
         ? `settings / ${settingsSectionLabel(settingsSection || DEFAULT_SETTINGS_SECTION).toLowerCase()}`

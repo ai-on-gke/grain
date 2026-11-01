@@ -956,6 +956,7 @@ export default function Sidebar({
               <IconButton
                 size="small"
                 onClick={onOpenCustomize}
+                aria-haspopup="dialog"
                 aria-label="Customize sidebar"
                 sx={{ p: 0.5 }}
               >
@@ -966,6 +967,7 @@ export default function Sidebar({
             <Button
               size="small"
               onClick={onOpenCustomize}
+              aria-haspopup="dialog"
               sx={{
                 ml: "auto",
                 minWidth: 0,
