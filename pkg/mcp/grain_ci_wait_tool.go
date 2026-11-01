@@ -119,32 +119,111 @@ type GrainCIRunner interface {
 // before falling back to the whole repository. wait_for_checks needs none of it --
 // it starts a run for this run's own branch and can reach no other.
 func NewGrainCIWaitTools(runner GrainCIRunner, scope CIRepoScope, branch ...string) []Tool {
+	readTools := NewGrainCIReadTools(runner, scope, branch...)
+	waitTool := Tool{
+		Name:          "wait_for_checks",
+		Description:   fmt.Sprintf("Start grain CI for your task's pushed branch (or reuse the identical run already in progress), then wait for its verdict and report status only. A failing job is reported with whether the same job is failing the same way on other branches right now -- how many, which, and any open pull request that touches the file the failure names -- so an inherited outage is distinguishable from your own red build without going looking for it. It never returns test logs; use get_ci_log with the returned run id for output you actually need -- including while the run is still going, which is how you watch a long job rather than waiting it out blind. It does not read GitHub checks. Optional jobs selects job ids for fast feedback and includes their dependencies; omit jobs for the complete required suite. A selective run never satisfies the task's full-suite gate. Job results are cached by content fingerprint, failures as well as passes, but a cached red that a retrigger_ci run has since cleared is no longer replayed: the recheck's verdict replaced it, so there is no need to make cosmetic edits to change the fingerprint. The full-suite verdict, and the merge gate that reads it, combine each job's latest result: after retrigger_ci re-runs just the failed jobs and they pass, the gate is green without the passed jobs running again, and while that recheck is still going this waits for it rather than starting a run that would read the old red. Optional timeout_seconds defaults to %d and is capped at %d.", int(DefaultWaitForChecksTimeout.Seconds()), int(MaxWaitForChecksTimeout.Seconds())),
+		InputSchema:   map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"timeout_seconds": map[string]any{"type": "number"}, "jobs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1}}},
+		ElisionAdvice: elisionAdviceCIRun,
+		Handler: func(ctx context.Context, args map[string]any) Result {
+			if runner == nil {
+				return Result{Text: "Grain CI is unavailable for this run.", IsError: true}
+			}
+			budget := waitForChecksBudget(ctx, args)
+			if budget.tooLate {
+				return Result{Text: noTimeToWait(budget.remaining, "grain CI")}
+			}
+			jobs := argStringSlice(args, "jobs")
+			text, err := waitForGrainCI(ctx, runner, jobs, budget.timeout)
+			if err != nil {
+				return Result{Text: err.Error(), IsError: true}
+			}
+			return Result{Text: budget.note + text}
+		},
+	}
+	retriggerTool := Tool{
+		Name: "retrigger_ci",
+		Description: "Rerun just the failed jobs of your branch's grain CI, fresh and uncached, on the same commit -- " +
+			"to show a red was a flake, or to sample a job again. By default it reruns only the jobs whose latest result " +
+			"at the commit did not pass; jobs names the ones to rerun instead, and jobs: [\"*\"] reruns every job of the " +
+			"workflow. Jobs that passed are not rerun, and a named job's dependencies reuse their cached pass rather than " +
+			"running again. Each rerun job's fresh success or failure is saved as the cached verdict for its own fingerprint, " +
+			"replacing the one it re-ran, and the passed jobs' verdicts stay as they are: the full-suite verdict that " +
+			"wait_for_checks and the merge-queue gate read combines every job's latest result, so once the rerun jobs pass " +
+			"the gate is green, with no need to run the whole suite again or to change the tree.",
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"workflow": map[string]any{
+					"type":        "string",
+					"description": "Specific workflow file path (e.g. \".grain/workflows/ci.yml\") to run. Leave empty to run all matching workflows.",
+				},
+				"commit": map[string]any{
+					"type":        "string",
+					"description": "Specific commit SHA to test (defaults to the commit of your branch's latest grain CI run).",
+				},
+				"jobs": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"minItems":    1,
+					"description": "Jobs to rerun, by id or name as a run reports them (\"go\", \"ui e2e\"). Leave it out to rerun only the jobs that failed; [\"*\"] reruns every job. A name the workflows do not have is refused with the names they do.",
+				},
+			},
+		},
+		ElisionAdvice: elisionAdviceCIRun,
+		Handler: func(ctx context.Context, args map[string]any) Result {
+			if runner == nil {
+				return Result{Text: "Grain CI is unavailable for this run.", IsError: true}
+			}
+			workflow, _ := argString(args, "workflow")
+			commit, _ := argString(args, "commit")
+			var jobs []string
+			all := false
+			for _, job := range argStringSlice(args, "jobs") {
+				job = strings.TrimSpace(job)
+				if job == "*" {
+					all = true
+				} else if job != "" {
+					jobs = append(jobs, job)
+				}
+			}
+			if all {
+				jobs = nil
+			}
+			run, err := runner.RetriggerGrainCI(ctx, strings.TrimSpace(workflow), strings.TrimSpace(commit), jobs, all)
+			if err != nil {
+				return Result{Text: fmt.Sprintf("retriggering grain CI: %v", err), IsError: true}
+			}
+			var jobNames []string
+			for _, j := range run.Jobs {
+				if j.Name != "" {
+					jobNames = append(jobNames, j.Name)
+				} else if j.JobID != "" {
+					jobNames = append(jobNames, j.JobID)
+				}
+			}
+			jobsClause := ""
+			if len(jobNames) > 0 {
+				jobsClause = fmt.Sprintf("\nJobs queued: %s", strings.Join(jobNames, ", "))
+			}
+			return Result{Text: fmt.Sprintf("Triggered fresh uncached Grain CI run %s against commit %s.%s\nEach rerun job's result replaces the cached verdict for its fingerprint and the other jobs keep theirs, so the full-suite verdict wait_for_checks and the merge-queue gate read combines this run's answer with the jobs that had already passed.\nUse wait_for_checks or get_ci_log (run_id: %s) to monitor progress.", run.ID, run.Commit, jobsClause, run.ID)}
+		},
+	}
+	return []Tool{waitTool, readTools[0], readTools[1], retriggerTool, readTools[2]}
+}
+
+// NewGrainCIReadTools is the read-only CI tools -- list_ci_runs, get_ci_log
+// and query_test_history -- without grain CI's wait_for_checks or
+// retrigger_ci: for a run that holds a ci:read grant (such as a GitHub
+// workflow-run review on a ci_mode: github repository) without its own
+// branch being gated by grain CI.
+func NewGrainCIReadTools(runner GrainCIRunner, scope CIRepoScope, branch ...string) []Tool {
 	var taskBranch string
 	if len(branch) > 0 {
 		taskBranch = strings.TrimSpace(branch[0])
 	}
 	return []Tool{
-		{
-			Name:          "wait_for_checks",
-			Description:   fmt.Sprintf("Start grain CI for your task's pushed branch (or reuse the identical run already in progress), then wait for its verdict and report status only. A failing job is reported with whether the same job is failing the same way on other branches right now -- how many, which, and any open pull request that touches the file the failure names -- so an inherited outage is distinguishable from your own red build without going looking for it. It never returns test logs; use get_ci_log with the returned run id for output you actually need -- including while the run is still going, which is how you watch a long job rather than waiting it out blind. It does not read GitHub checks. Optional jobs selects job ids for fast feedback and includes their dependencies; omit jobs for the complete required suite. A selective run never satisfies the task's full-suite gate. Job results are cached by content fingerprint, failures as well as passes, but a cached red that a retrigger_ci run has since cleared is no longer replayed: the recheck's verdict replaced it, so there is no need to make cosmetic edits to change the fingerprint. The full-suite verdict, and the merge gate that reads it, combine each job's latest result: after retrigger_ci re-runs just the failed jobs and they pass, the gate is green without the passed jobs running again, and while that recheck is still going this waits for it rather than starting a run that would read the old red. Optional timeout_seconds defaults to %d and is capped at %d.", int(DefaultWaitForChecksTimeout.Seconds()), int(MaxWaitForChecksTimeout.Seconds())),
-			InputSchema:   map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"timeout_seconds": map[string]any{"type": "number"}, "jobs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1}}},
-			ElisionAdvice: elisionAdviceCIRun,
-			Handler: func(ctx context.Context, args map[string]any) Result {
-				if runner == nil {
-					return Result{Text: "Grain CI is unavailable for this run.", IsError: true}
-				}
-				budget := waitForChecksBudget(ctx, args)
-				if budget.tooLate {
-					return Result{Text: noTimeToWait(budget.remaining, "grain CI")}
-				}
-				jobs := argStringSlice(args, "jobs")
-				text, err := waitForGrainCI(ctx, runner, jobs, budget.timeout)
-				if err != nil {
-					return Result{Text: err.Error(), IsError: true}
-				}
-				return Result{Text: budget.note + text}
-			},
-		},
 		{
 			Name: "list_ci_runs",
 			Description: fmt.Sprintf("List the status of the grain CI runs this deployment still remembers %s, including the ones still going -- the %d most recent by default, or as many as \"limit\" asks for, and the answer says how many it left out. Narrow it rather than reading it all: \"repo\" is one of the repositories this run may see, \"ref\" matches a branch by any part of its name, \"conclusion\" is one or more of %s (the last two being a run that has not finished), \"job\" is one job by name or id -- which also puts that job's own result and duration on every line, so a flaky job is distinguishable from a broken tree -- and \"since\" is how far back (24h, 7d, or a date). \"sort\" orders by %s and \"order\" points it. Use it to find similar failures on other branches, or to find the id of a run in flight; use get_ci_log with a returned run id to inspect its output, or to tail a run that has not finished. A failing job grain has already found on several branches at once says so on its own line, with the branches it is shared with.",
@@ -271,13 +350,20 @@ func NewGrainCIWaitTools(runner GrainCIRunner, scope CIRepoScope, branch ...stri
 				runID, _ := argString(args, "run_id")
 				runID = strings.TrimSpace(runID)
 				if runID == "" {
+					defaultRepo := scope.Repo
+					if defaultRepo == "" && !scope.AllRepos && len(scope.Reads) == 1 {
+						defaultRepo = scope.Reads[0]
+					}
+					if defaultRepo == "" && !scope.AllRepos {
+						return Result{Text: "Specify run_id (list_ci_runs reports the runs this run may read).", IsError: true}
+					}
 					var page ci.RunPage
 					var err error
-					if taskBranch != "" {
-						page, err = runner.FindGrainCIRuns(ctx, ci.RunFilter{Repo: scope.Repo, Ref: taskBranch, Descending: true}, 1)
+					if taskBranch != "" && scope.Repo != "" {
+						page, err = runner.FindGrainCIRuns(ctx, ci.RunFilter{Repo: defaultRepo, Ref: taskBranch, Descending: true}, 1)
 					}
-					if taskBranch == "" || err != nil || len(page.Runs) == 0 {
-						page, err = runner.FindGrainCIRuns(ctx, ci.RunFilter{Repo: scope.Repo, Descending: true}, 1)
+					if taskBranch == "" || scope.Repo == "" || err != nil || len(page.Runs) == 0 {
+						page, err = runner.FindGrainCIRuns(ctx, ci.RunFilter{Repo: defaultRepo, Descending: true}, 1)
 					}
 					if err != nil || len(page.Runs) == 0 {
 						return Result{Text: "No grain CI runs are currently remembered for this repository.", IsError: true}
@@ -362,74 +448,6 @@ func NewGrainCIWaitTools(runner GrainCIRunner, scope CIRepoScope, branch ...stri
 			},
 		},
 		{
-			Name: "retrigger_ci",
-			Description: "Rerun just the failed jobs of your branch's grain CI, fresh and uncached, on the same commit -- " +
-				"to show a red was a flake, or to sample a job again. By default it reruns only the jobs whose latest result " +
-				"at the commit did not pass; jobs names the ones to rerun instead, and jobs: [\"*\"] reruns every job of the " +
-				"workflow. Jobs that passed are not rerun, and a named job's dependencies reuse their cached pass rather than " +
-				"running again. Each rerun job's fresh success or failure is saved as the cached verdict for its own fingerprint, " +
-				"replacing the one it re-ran, and the passed jobs' verdicts stay as they are: the full-suite verdict that " +
-				"wait_for_checks and the merge-queue gate read combines every job's latest result, so once the rerun jobs pass " +
-				"the gate is green, with no need to run the whole suite again or to change the tree.",
-			InputSchema: map[string]any{
-				"type":                 "object",
-				"additionalProperties": false,
-				"properties": map[string]any{
-					"workflow": map[string]any{
-						"type":        "string",
-						"description": "Specific workflow file path (e.g. \".grain/workflows/ci.yml\") to run. Leave empty to run all matching workflows.",
-					},
-					"commit": map[string]any{
-						"type":        "string",
-						"description": "Specific commit SHA to test (defaults to the commit of your branch's latest grain CI run).",
-					},
-					"jobs": map[string]any{
-						"type":        "array",
-						"items":       map[string]any{"type": "string"},
-						"minItems":    1,
-						"description": "Jobs to rerun, by id or name as a run reports them (\"go\", \"ui e2e\"). Leave it out to rerun only the jobs that failed; [\"*\"] reruns every job. A name the workflows do not have is refused with the names they do.",
-					},
-				},
-			},
-			ElisionAdvice: elisionAdviceCIRun,
-			Handler: func(ctx context.Context, args map[string]any) Result {
-				if runner == nil {
-					return Result{Text: "Grain CI is unavailable for this run.", IsError: true}
-				}
-				workflow, _ := argString(args, "workflow")
-				commit, _ := argString(args, "commit")
-				var jobs []string
-				all := false
-				for _, job := range argStringSlice(args, "jobs") {
-					if job = strings.TrimSpace(job); job == "*" {
-						all = true
-					} else if job != "" {
-						jobs = append(jobs, job)
-					}
-				}
-				if all {
-					jobs = nil
-				}
-				run, err := runner.RetriggerGrainCI(ctx, strings.TrimSpace(workflow), strings.TrimSpace(commit), jobs, all)
-				if err != nil {
-					return Result{Text: fmt.Sprintf("retriggering grain CI: %v", err), IsError: true}
-				}
-				var jobNames []string
-				for _, j := range run.Jobs {
-					if j.Name != "" {
-						jobNames = append(jobNames, j.Name)
-					} else if j.JobID != "" {
-						jobNames = append(jobNames, j.JobID)
-					}
-				}
-				jobsClause := ""
-				if len(jobNames) > 0 {
-					jobsClause = fmt.Sprintf("\nJobs queued: %s", strings.Join(jobNames, ", "))
-				}
-				return Result{Text: fmt.Sprintf("Triggered fresh uncached Grain CI run %s against commit %s.%s\nEach rerun job's result replaces the cached verdict for its fingerprint and the other jobs keep theirs, so the full-suite verdict wait_for_checks and the merge-queue gate read combines this run's answer with the jobs that had already passed.\nUse wait_for_checks or get_ci_log (run_id: %s) to monitor progress.", run.ID, run.Commit, jobsClause, run.ID)}
-			},
-		},
-		{
 			Name:        "query_test_history",
 			Description: "Query recent execution records across Grain CI runs for a specific test name or suite to report historical pass, failure, and flake rates.",
 			InputSchema: map[string]any{
@@ -466,6 +484,9 @@ func NewGrainCIWaitTools(runner GrainCIRunner, scope CIRepoScope, branch ...stri
 				repo = strings.TrimSpace(repo)
 				if repo == "" {
 					repo = scope.Repo
+					if repo == "" && !scope.AllRepos && len(scope.Reads) == 1 {
+						repo = scope.Reads[0]
+					}
 				}
 				if !scope.permits(repo) {
 					if !scope.mayReadAny() {

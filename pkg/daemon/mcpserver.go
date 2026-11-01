@@ -760,6 +760,32 @@ func CiRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.
 	}
 }
 
+// ciReadRepoScope is which repositories list_ci_runs, get_ci_log and
+// get_ci_artifact may read when a run holds an api ci:read grant rather
+// than grain-ci: only the repositories its ci:read grants name (plus all
+// repositories for deployment-wide self-debug or an unscoped api:ci-read),
+// never -pr-repo on its own when the grant was scoped elsewhere.
+func ciReadRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.CIRepoScope {
+	own := strings.TrimSpace(prRepo)
+	wide := grants.Has(selfdebug.CapabilityName) &&
+		slices.Contains(deploymentWide, selfdebug.CapabilityName)
+	apiGrants := model.APIGrantsOf(grants)
+	if wide || apiGrants.Allows("ci:read", "") {
+		return mcp.CIRepoScope{Repo: own, AllRepos: true}
+	}
+	repos := apiGrants.Repos("ci:read")
+	if own != "" && apiGrants.Allows("ci:read", own) {
+		var extra []string
+		for _, r := range repos {
+			if !strings.EqualFold(r, own) {
+				extra = append(extra, r)
+			}
+		}
+		return mcp.CIRepoScope{Repo: own, Reads: extra}
+	}
+	return mcp.CIRepoScope{Reads: repos}
+}
+
 // daemonGrainCI implements mcp.GrainCIReader by reading this run's own
 // task back from a running "grain daemon" (pkg/ui's GET /api/tasks/{id})
 // -- the fifth REST hop this file makes, over the same client as the
@@ -2151,6 +2177,23 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 			if *root != "" {
 				registry.Register(mcp.NewGrainCIArtifactTools(
 					DaemonGrainCI{Client: client, TaskID: *taskID}, CiRepoScope(*prRepo, grants, taskDetail.DeploymentWide), *root, taskBranch)...)
+			}
+		} else if model.APIGrantsOf(grants).Has("ci:read") {
+			// A run holding an api ci:read grant (for instance, a GitHub
+			// workflow-run review task on a ci_mode: github repository)
+			// reads synthesized and stored CI runs through list_ci_runs and
+			// get_ci_log without replacing GitHub's wait_for_checks or
+			// advertising grain CI's run_ci_job / retrigger_ci.
+			taskBranch := strings.TrimSpace(*prBranch)
+			if taskBranch == "" {
+				taskBranch = strings.TrimSpace(taskDetail.Task.Branch)
+			}
+			readScope := ciReadRepoScope(*prRepo, grants, taskDetail.DeploymentWide)
+			registry.Register(mcp.NewGrainCIReadTools(
+				DaemonGrainCI{Client: client, TaskID: *taskID}, readScope, taskBranch)...)
+			if *root != "" {
+				registry.Register(mcp.NewGrainCIArtifactTools(
+					DaemonGrainCI{Client: client, TaskID: *taskID}, readScope, *root, taskBranch)...)
 			}
 		}
 		// A task whose change is a CL has no pull request and no grain CI:
