@@ -327,6 +327,7 @@ type WorkflowRun struct {
 	Status     string
 	Conclusion string
 	RunAttempt int
+	HTMLURL    string
 	Jobs       []WorkflowJob
 }
 
@@ -2705,6 +2706,13 @@ func jobID(runID, index int) int { return runID*1000 + index }
 // more thing to invert and GitHub's real ids are opaque to a test either
 // way.
 func (s *Sim) jobByID(id int) (WorkflowJob, bool) {
+	if wr, ok := s.workflowRunByID(int64(id / 1000)); ok {
+		index := id % 1000
+		if index >= len(wr.Jobs) {
+			return WorkflowJob{}, false
+		}
+		return wr.Jobs[index], true
+	}
 	key, ok := s.runKeyFor(id / 1000)
 	if !ok {
 		return WorkflowJob{}, false
@@ -2758,8 +2766,86 @@ func workflowRunsJSON(owner, repo string, runID int, jobs []WorkflowJob) map[str
 // otherwise the run its jobs imply. Run ids come from runIDFor, the same
 // as every other answer here, so the jobs endpoint can be asked about
 // anything named in this list.
+// AddWorkflowRun appends r to WorkflowRuns under Sim's mutex, filling in
+// the defaults repoRunsJSON serves (an unused run ID, status "completed",
+// conclusion from r.Jobs, attempt 1, HeadSHA from HeadBranch and HeadRepo
+// from Owner/Repo) and returning the stored WorkflowRun. Posting a later
+// attempt of an existing run ID replaces the earlier entry so the runs
+// listing and jobs endpoint serve the latest attempt.
+func (s *Sim) AddWorkflowRun(r WorkflowRun) WorkflowRun {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r.ID <= 0 {
+		id := int64(runIDBase + 500 + len(s.WorkflowRuns))
+		for {
+			if _, taken := s.workflowRunByID(id); !taken {
+				break
+			}
+			id++
+		}
+		r.ID = id
+	}
+	if r.Status == "" {
+		r.Status = "completed"
+	}
+	if r.Conclusion == "" && r.Status == "completed" {
+		r.Conclusion = "success"
+		for _, job := range r.Jobs {
+			switch jobConclusion(job) {
+			case "failure", "timed_out", "startup_failure":
+				r.Conclusion = "failure"
+			}
+		}
+	}
+	if r.RunAttempt <= 0 {
+		r.RunAttempt = 1
+	}
+	if r.Name == "" {
+		if r.Path != "" {
+			base := filepath.Base(r.Path)
+			r.Name = strings.TrimSuffix(strings.TrimSuffix(base, ".yml"), ".yaml")
+		}
+		if r.Name == "" {
+			r.Name = "tests"
+		}
+	}
+	if r.HeadBranch == "" {
+		r.HeadBranch = s.defaultBranch()
+	}
+	if r.HeadSHA == "" && r.HeadBranch != "" {
+		r.HeadSHA = s.branchSHA(r.HeadBranch)
+	}
+	if r.HeadRepo == "" {
+		r.HeadRepo = s.Owner + "/" + s.Repo
+	}
+	if r.Event == "" {
+		r.Event = "push"
+	}
+	if r.HTMLURL == "" {
+		r.HTMLURL = fmt.Sprintf("https://github.example/%s/%s/actions/runs/%d", s.Owner, s.Repo, r.ID)
+	}
+	if len(r.Jobs) > 0 {
+		jobs := make([]WorkflowJob, len(r.Jobs))
+		copy(jobs, r.Jobs)
+		r.Jobs = jobs
+	}
+	kept := s.WorkflowRuns[:0]
+	for i, existing := range s.WorkflowRuns {
+		existingID := existing.ID
+		if existingID <= 0 {
+			existingID = int64(runIDBase + 500 + i)
+		}
+		if existingID != r.ID {
+			kept = append(kept, existing)
+		}
+	}
+	s.WorkflowRuns = append(kept, r)
+	return r
+}
+
 func (s *Sim) workflowRunByID(id int64) (WorkflowRun, bool) {
-	for i, r := range s.WorkflowRuns {
+	for i := len(s.WorkflowRuns) - 1; i >= 0; i-- {
+		r := s.WorkflowRuns[i]
 		runID := r.ID
 		if runID <= 0 {
 			runID = int64(runIDBase + 500 + i)
@@ -2809,6 +2895,10 @@ func (s *Sim) repoRunsJSON(owner, repo string) map[string]any {
 		if headRepo == "" {
 			headRepo = owner + "/" + repo
 		}
+		htmlURL := wr.HTMLURL
+		if htmlURL == "" {
+			htmlURL = fmt.Sprintf("https://github.example/%s/%s/actions/runs/%d", owner, repo, runID)
+		}
 		runs = append(runs, map[string]any{
 			"id":              runID,
 			"name":            name,
@@ -2820,7 +2910,7 @@ func (s *Sim) repoRunsJSON(owner, repo string) map[string]any {
 			"status":          status,
 			"conclusion":      conclusion,
 			"run_attempt":     attempt,
-			"html_url":        fmt.Sprintf("https://github.example/%s/%s/actions/runs/%d", owner, repo, runID),
+			"html_url":        htmlURL,
 		})
 	}
 	for _, key := range s.runCommits() {
