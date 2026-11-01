@@ -746,6 +746,9 @@ func patchTouchesTaskGrants(body []byte) bool {
 			continue
 		}
 		lower := strings.ToLower(key)
+		// "priority" is the numeric dispatch priority unless it is a
+		// boolean, which UpdateTaskRequest reads as priorityDispatch:
+		// the priority-dispatch grant, under either spelling.
 		if lower == "priority" {
 			var on bool
 			if json.Unmarshal(raw, &on) == nil {
@@ -754,14 +757,9 @@ func patchTouchesTaskGrants(body []byte) bool {
 			continue
 		}
 		if strings.Contains(lower, "capabilit") || lower == "grants" ||
-			lower == "keeprunning" || lower == "keep_running" {
+			lower == "keeprunning" || lower == "keep_running" ||
+			lower == "prioritydispatch" || lower == "priority_dispatch" {
 			return true
-		}
-		if lower == "priority" {
-			var b bool
-			if json.Unmarshal(raw, &b) == nil {
-				return true
-			}
 		}
 	}
 	return false
