@@ -476,6 +476,28 @@ var Migrations = []Migration{
 	},
 }
 
+// ApplyDataMigrations runs the row rewrites (Up) of every migration past
+// from, inside tx, on tables already at SchemaVersion's shape. It is for
+// rows that arrive by another way than the store they were written in --
+// a state repository dump stamped from, imported into a store at this
+// build's schema -- which an in-place migration never sees: without it a
+// dump from before the capability retirements would keep the retired
+// names in grain_config's and repo_config's default_capabilities and in
+// the standing console sessions. Every Up is idempotent, so a row that is
+// already canonical is left as it is.
+func ApplyDataMigrations(ctx context.Context, tx *sql.Tx, from int) error {
+	for v := from + 1; v <= SchemaVersion; v++ {
+		m, ok := migrationFor(v)
+		if !ok || m.Up == nil {
+			continue
+		}
+		if err := m.Up(ctx, tx); err != nil {
+			return fmt.Errorf("applying schema %d's rewrite to rows from schema %d: %w", v, from, err)
+		}
+	}
+	return nil
+}
+
 // migrationFor returns the migration that produces version, or false.
 func migrationFor(version int) (Migration, bool) {
 	for _, m := range Migrations {

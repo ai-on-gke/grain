@@ -677,6 +677,13 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 			out.Content = append(out.Content, key(f.key), node)
 			continue
 		}
+		if !hasColumn(f, row) {
+			// A store at an older schema has no such column (a schema-65
+			// schedule has no keep_running): leave the key out, so the
+			// import gives the column its default rather than a null its
+			// NOT NULL refuses.
+			continue
+		}
 		name, node, err := columnNode(f, row)
 		if err != nil {
 			return nil, err
@@ -687,6 +694,17 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 		out.Content = append(out.Content, key(name), node)
 	}
 	return out, nil
+}
+
+// hasColumn reports whether row was read from a table that has f's
+// column. Only a one-column field can be missing that way: the cadence,
+// target and change target are older than any schema this build migrates.
+func hasColumn(f declFieldShape, row map[string]any) bool {
+	if f.shape != shapeBool && f.shape != shapeScalar {
+		return true
+	}
+	_, ok := row[f.columns[0]]
+	return ok
 }
 
 // mine is the companion rows belonging to one parent.
