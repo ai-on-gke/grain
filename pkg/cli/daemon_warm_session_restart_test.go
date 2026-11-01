@@ -469,6 +469,75 @@ models:
 	}) {
 		t.Errorf("GET /api/sandboxes after the TTL release still holds turn 4's sandbox: %s", lastSandboxes)
 	}
+
+	// 5. recreate_sandbox mid-turn, before and after a restart: the
+	// rebuilt sandbox has no capability placements to lose, so the
+	// adopter parks it and turn 6 reuses it.
+	recreate := func() string {
+		t.Helper()
+		code, err := os.ReadFile(filepath.Join(dataDir, "local-api-token"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+uiAddr+"/api/tasks/"+taskID+"/sandbox/recreate", nil)
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(code)))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST sandbox/recreate: %s: %s", resp.Status, raw)
+		}
+		return string(raw)
+	}
+	reply("turn 5, please")
+	run5 := liveRun(5)
+	marker5 := filepath.Join(sandboxDir, run5.Sandbox, "pre-recreate-marker")
+	if err := os.WriteFile(marker5, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("recreate before the restart: %s", recreate())
+	if _, err := os.Stat(marker5); err == nil {
+		t.Fatalf("sandbox %s still holds a file written before recreate_sandbox", run5.Sandbox)
+	}
+	stopLiveDaemon(t, stop, done)
+	stop, done, stopped = start()
+	// Recreate again from the adopting daemon, once it has registered the
+	// adopted run (it refuses a task whose run it does not hold yet).
+	var adoptedRecreate string
+	if !pollUntil(ctx, 30*time.Second, func() bool {
+		code, _ := os.ReadFile(filepath.Join(dataDir, "local-api-token"))
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+uiAddr+"/api/tasks/"+taskID+"/sandbox/recreate", nil)
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(code)))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		adoptedRecreate = resp.Status + " " + string(raw)
+		return resp.StatusCode == http.StatusOK
+	}) {
+		t.Fatalf("the adopting daemon never rebuilt turn 5's sandbox: %s", adoptedRecreate)
+	}
+	t.Logf("recreate in the adopting daemon: %s", adoptedRecreate)
+	release(5)
+	finished(run5.ID, stopped)
+	if !sandboxExists(run5.Sandbox) {
+		t.Fatalf("turn 5's rebuilt sandbox %s was released, want it parked warm (nothing it lost)", run5.Sandbox)
+	}
+	reply("turn 6, please")
+	run6 := liveRun(6)
+	if run6.Sandbox != run5.Sandbox {
+		t.Fatalf("turn 6's sandbox = %q, want turn 5's rebuilt warm sandbox %q", run6.Sandbox, run5.Sandbox)
+	}
+	release(6)
+	finished(run6.ID, stopped)
+	if !pollUntil(ctx, idleTTL+45*time.Second, func() bool { return !sandboxExists(run6.Sandbox) }) {
+		t.Fatalf("turn 6's warm sandbox %s outlived its idle TTL", run6.Sandbox)
+	}
 	if infos, _ := driver.List(ctx, deployment); len(infos) != 0 {
 		t.Errorf("run hosts left behind: %+v", infos)
 	}
