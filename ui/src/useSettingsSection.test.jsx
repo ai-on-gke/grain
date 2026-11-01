@@ -186,6 +186,47 @@ describe("useSettingsSection", () => {
     expect(dismissError).toHaveBeenCalledWith("Poll interval must be positive");
   });
 
+  it("takes a refusal's banner down when that setting saves after another one did", async () => {
+    const { result, dismissError } = await loaded({
+      pollInterval: "10s",
+      maxAgentTurns: 5,
+    });
+    api.mockRejectedValueOnce(new Error("pollInterval must be positive"));
+    await act(async () =>
+      result.current.onTextBlur("pollInterval")({ target: { value: "0s" } }),
+    );
+    // A box refused before it is sent is outstanding too.
+    await act(async () =>
+      result.current.onIntBlur("maxAgentTurns")({
+        target: { value: "1.5", validity: {} },
+      }),
+    );
+    // Another setting saving in between leaves both banners up...
+    api.mockResolvedValueOnce({ maxWorkers: 7 });
+    await act(async () =>
+      result.current.onIntBlur("maxWorkers")({
+        target: { value: "7", validity: {} },
+      }),
+    );
+    expect(dismissError).not.toHaveBeenCalled();
+
+    // ...and each comes down once its own setting saves.
+    api.mockResolvedValueOnce({ pollInterval: "12s" });
+    await act(async () =>
+      result.current.onTextBlur("pollInterval")({ target: { value: "12s" } }),
+    );
+    expect(dismissError).toHaveBeenCalledTimes(1);
+    expect(dismissError).toHaveBeenCalledWith("Poll interval must be positive");
+    api.mockResolvedValueOnce({ maxAgentTurns: 6 });
+    await act(async () =>
+      result.current.onIntBlur("maxAgentTurns")({
+        target: { value: "6", validity: {} },
+      }),
+    );
+    expect(dismissError).toHaveBeenCalledTimes(2);
+    expect(result.current.status).toBe("saved");
+  });
+
   it("clears a failed number box's error when it is put back", async () => {
     const { result } = await loaded({ maxAgentTurns: 5, budget: 1.5 });
     api.mockRejectedValueOnce(new Error("boom"));
