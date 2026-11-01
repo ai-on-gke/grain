@@ -2004,6 +2004,14 @@ type Observation struct {
 	// waiting to hear from would be an offer to write a value nothing
 	// asked for.
 	PendingSecret string
+	// PendingConfigChange is the grain/config change a parked session
+	// proposed with propose_config_change, waiting for a person to
+	// approve or reject it in the chat (PendingConfigChange's own doc).
+	// Like PendingSecret it sits beside PendingQuestionCommentID, which
+	// is what parks the task; unlike it, a reply in words leaves it
+	// offered, since the branch it pins is still there to approve.
+	// Cleared by the approval or the rejection.
+	PendingConfigChange *PendingConfigChange
 	// MergeQueueBlockedAt is set once the merge queue has stopped driving
 	// this task, for any of the three reasons it ever does: the repair
 	// run it asked for finished and the PR is still conflicted or

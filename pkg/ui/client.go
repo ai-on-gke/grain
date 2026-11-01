@@ -1168,6 +1168,9 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		detail.RunNowAt = obs.RunNowAt
 	}
 	detail.PendingSecret = c.pendingSecretFor(obs)
+	if obs != nil {
+		detail.PendingConfigChange = obs.PendingConfigChange
+	}
 	detail.LocalScriptApprovals = c.localScriptApprovals().ForTask(id, c.now())
 	detail.CI = ciStatusFrom(obs)
 	if ownerID, inPlace := t.CIOwner(); inPlace {
