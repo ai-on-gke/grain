@@ -18,18 +18,31 @@ import MergeBatchingNote from "../MergeBatchingNote.jsx";
 import MergeGatheringNote from "../MergeGatheringNote.jsx";
 import SettingsCard, { settingHints } from "./SettingsCard.jsx";
 import { identifierField } from "../../identifierField.js";
+import { ConfigManagedNotice } from "../ConfigRepoLink.jsx";
 
 // EngineSection is Settings → Engine (docs/design/settings-panel.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function EngineSection({ s }) {
-  const { settings, onTextBlur, onIntBlur, onEnterKey } = s;
+  const { settings, onTextBlur, onIntBlur, onEnterKey, readOnly } = s;
   const { unrunnableHint, unrunnableChip } = settingHints(settings);
+  // Max worker agents is a bootstrap setting and stays editable while
+  // settings are locked; the poll interval and the merge queue are
+  // config-managed and the API refuses them then
+  // (settings-mutability.spec.md D-1).
+  const locked = Boolean(s.configLocked);
   return (
     <>
+      {locked && !readOnly && (
+        <ConfigManagedNotice
+          what="The poll interval and the merge queue settings"
+          paths={["tables/grain_config.json"]}
+        />
+      )}
       <SettingsCard title="Polling" anchor="polling">
         <TextField
           key={`poll-${settings.pollInterval || ""}`}
           name="pollInterval"
+          disabled={locked}
           data-setting-id="pollInterval"
           label="Poll interval"
           helperText={unrunnableHint("pollInterval", "Go duration, e.g. 10s")}
@@ -64,6 +77,7 @@ export default function EngineSection({ s }) {
         <TextField
           key={`mergesPerRepo-${settings.maxMergesPerRepo ?? ""}`}
           name="maxMergesPerRepo"
+          disabled={locked}
           data-setting-id="maxMergesPerRepo"
           label="Max merges per repo branch"
           helperText="maximum ready pull requests merged into each branch of a repository per queue cycle"
@@ -81,6 +95,7 @@ export default function EngineSection({ s }) {
         <TextField
           key={`mergeBatch-${settings.mergeBatchSizeChosen || ""}`}
           name="mergeBatchSize"
+          disabled={locked}
           data-setting-id="mergeBatchSize"
           label="Merge batch size"
           helperText="how many queued changes the merge queue tests together on a throwaway ref before merging the lot. 1 turns batching off and merges one at a time; a bigger batch saves suites when every change in it is good and costs an extra one, plus the latency of the changes that were fine, when one is not. Blank uses grain's default"
@@ -103,6 +118,7 @@ export default function EngineSection({ s }) {
         <TextField
           key={`mergeGatherWindow-${settings.mergeGatherWindow || ""}`}
           name="mergeGatherWindow"
+          disabled={locked}
           data-setting-id="mergeGatherWindow"
           label="Merge gather window"
           helperText="how long the queue holds a change that is ready to merge, so that another change whose Grain CI run is still going can be tested with it rather than after it. It only waits while there is such a run in flight on the same branch, and it lets go the moment that run reports. Blank uses grain's default; a negative duration (-1s) turns the wait off and merges a ready change at once."

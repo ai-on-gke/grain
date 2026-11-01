@@ -141,7 +141,7 @@ Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `s
 | Surface | 1. Standalone / demo (`StateRepo == nil`) | 2. Internal, unlocked | 3. Internal, `settings_locked` | 4. External config repo |
 | --- | --- | --- | --- | --- |
 | **Bootstrap `grain_config` fields** (`clearBootstrap`, §2.4: models and connections, sandbox resources/backend/image/`k8s*`, `maxWorkers`, CLI run locations, `settingsLocked` itself) | P, R, A. No C. | P, R, A, each synced to `grain/config` (`SyncAfterWrite`); C | P, R, A; C. Guard **B** / **G** with `bootstrapOnlyChange` allows the write. Exception: an agent turning the lock **off** goes through **S** and gets 409 (§2.9.2). | C only. P / R / A get 409. Guard **B** refuses in external mode. |
-| **Config-managed `grain_config` fields** (every other column, §2.4) | P, R, A. No C. With `settings_locked` on, **G** gets 409 anyway (D-12). | P, R, A (synced); C | C only. P / R / A get 409 (`internal: true`, rehearsed patch to `tables/grain_config.json` or `settings/capabilities.yml`). The UI does not grey out every such field (D-1, D-2). | C only. P / R / A get 409. |
+| **Config-managed `grain_config` fields** (every other column, §2.4) | P, R, A. No C. With `settings_locked` on, **G** gets 409 anyway (D-12). | P, R, A (synced); C | C only. P / R / A get 409 (`internal: true`, rehearsed patch to `tables/grain_config.json` or `settings/capabilities.yml`). The UI greys out each such field it draws in a bootstrap or operations section (D-1, D-2, fixed 2026-11-01). | C only. P / R / A get 409. |
 | **`repo_config`** (repo page, `PUT /api/repos/{o}/{n}/…`, guard **S**) | P, R, A (`repos:*`, `capabilities:admin` for grants, without self-escalation) | P, R, A (synced); C | C only. P / R / A get 409. Release secrets get 409 too (**S·u**, D-6). | C only. P / R / A get 409. |
 | **Composed entities**: templates, schedules, suites, qualifications, boards, custom fields, API scope sets, standing / persistent sandboxes, `repo_workflow` (guard **S**) | P, R, A | P, R, A (synced); C | C only. P / R / A get 409. The UI is not lock-aware for boards and processes (D-4). An open console session's live task row stays writable (D-5). | C only. P / R / A get 409. |
 | ↳ **Memory** (`memory/**`; no guard) | P, R, A (`memory:write`) | P, R, A; C | P, R, A (the UI renders it read-only, D-3); C | P, R, A, until the next import replaces them (D-3); C |
@@ -185,7 +185,7 @@ Columns:
 | `sandboxBackend`, `sandboxCpus`, `sandboxMemoryMb`, `sandboxDiskGb`, overcommit ratios and adaptive `sandboxOvercommit`, `sandboxMemoryReserveMb`, `sandboxDiskFloor*`, `networkAccess` | Yes — Sandboxes; `PUT /api/settings` | Yes — `tables/grain_config.json` | Unlocked (Bootstrap; G) / editable | Yes | `sandboxBackend` is `restartRequired` (reports `pendingRestart`). |
 | `sandboxImage`, `sandboxImageMirror` | Yes (image) / No (mirror) — Sandboxes → Custom sandbox image; `PUT /api/settings` | Yes — `tables/grain_config.json` | Unlocked (Bootstrap; G) / editable | Yes | |
 | Kubernetes `k8sNamespace`, `k8sKubectl`, `k8sSandboxImage`, `k8sGranuleImage`, `k8sWorkspace`, `k8sGitProxyHost`, `k8sSandboxService`, `k8sServiceAccount`, `k8sNodeSelector`, `k8sPrivileged`, `k8sNetworkPolicy`, `k8sDeployment`, `k8sContainer`, `k8sPriorityClass{Interactive,Agent,Ci}` | Yes — Sandboxes; `PUT /api/settings` | Yes — `tables/grain_config.json` | Unlocked (Bootstrap; G) / editable | Yes | The first nine are `restartRequired`. |
-| Session sandbox idle TTL `sessionSandboxIdleTtl` | Yes — Sandboxes; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (non-bootstrap; G) / **editable** | Yes | Discrepancy D-1. |
+| Session sandbox idle TTL `sessionSandboxIdleTtl` | Yes — Sandboxes; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (non-bootstrap; G) / **read-only** | Yes | D-1 (fixed). |
 | Standing / persistent sandboxes (image, env, bound secret keys) | Action only — System → Sandboxes; `POST /api/persistent-sandboxes/{name}/{action}` (stop/start/restart/rebuild) | Yes — `tables/standing_sandbox.json`, `standing_sandbox_secret.json`, `standing_sandbox_env.json`, `persistent_sandbox.json` | Unlocked (Action) | No | Declarations are config-repo only; never auto-merge. |
 | Sandbox probe | Action — `POST /api/sandbox-probe` | No — action | Unlocked (Action) | No | |
 
@@ -204,8 +204,8 @@ Columns:
 | Secret values (`<secret>/<key>`) | Write-only — Legacy capabilities; `PUT /api/secrets/{secret}/{key}`, `DELETE /api/secrets/{secret}[/{key}]`, `PUT /api/tasks/{id}/secret` (`request_secret`) | No — secret material; config holds only `$secret:<name>` / `<secret>/<key>` references | Unlocked (Secret; —) / editable | No | `secrets:write`. `statecheck` rejects raw credentials in config PRs. |
 | GitHub tokens | Write-only — `PUT`/`DELETE /api/github-tokens/{name}` | No — secret material | Unlocked (Secret; —) | No | Setting the first token also records a default git credential, only when `settingsWritable` (not external). |
 | GCP keys (metadata + key material) | Write-only — `POST /api/gcp-keys`, `PUT`/`DELETE /api/gcp-keys/{name}` | Metadata Yes — `tables/gcp_key.json`; material No | Unlocked (Bootstrap; B·u) / editable | Yes | Never auto-merges. |
-| GitHub host `githubHost`, `githubInsecureHttp` | Yes — Legacy capabilities → deployment-wide; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **editable** | Yes | Discrepancy D-2. |
-| GCP project / SA `gcpProject`, `gcpServiceAccountEmail`, `gcpServiceAccountCount` | Yes — Legacy capabilities; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **editable** | Yes | Discrepancy D-2. |
+| GitHub host `githubHost`, `githubInsecureHttp` | Yes — Legacy capabilities → deployment-wide; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **read-only** | Yes | D-2 (fixed). |
+| GCP project / SA `gcpProject`, `gcpServiceAccountEmail`, `gcpServiceAccountCount` | Yes — Legacy capabilities; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **read-only** | Yes | D-2 (fixed). |
 | IAP `iapBackendService`, `iapResource` | No — API only (`PUT /api/settings`) | Yes — `tables/grain_config.json` | Locked (G) | Yes | Triggers an IAP sync. |
 | Legacy capability catalogue entries (`settings.capabilities`) | Yes — Legacy capabilities panel (secrets bound to them) | Yes — `settings/capabilities.yml` | Secret parts Unlocked; entries Locked (S) | Yes | |
 
@@ -235,7 +235,7 @@ Columns:
 
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `packageCacheEnabled`, `packageCacheSizeGb`, `actionsCacheEnabled`, `actionsCacheSizeGb` | Yes — Caches; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **editable** | Yes | Discrepancy D-1. |
+| `packageCacheEnabled`, `packageCacheSizeGb`, `actionsCacheEnabled`, `actionsCacheSizeGb` | Yes — Caches; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **read-only** | Yes | D-1 (fixed). |
 | Flush package / actions / CI cache | Action — System → Caches; `POST /api/package-cache/flush`, `POST /api/actions-cache/flush`, `DELETE /api/ci/cache` | No — action | Unlocked (Action) | No | `caches:write`. |
 
 ### 3.9 Engine (`/settings/engine`)
@@ -243,7 +243,7 @@ Columns:
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `maxWorkers` | Yes — Engine; `PUT /api/settings` | Yes — `tables/grain_config.json` | Unlocked (Bootstrap; G) / editable | Yes | |
-| `pollInterval`, `maxMergesPerRepo`, `mergeBatchSize`, `mergeGatherWindow` | Yes — Engine; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **editable** | Yes | Discrepancy D-1. |
+| `pollInterval`, `maxMergesPerRepo`, `mergeBatchSize`, `mergeGatherWindow` | Yes — Engine; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **read-only** | Yes | D-1 (fixed). |
 | `maxMergers`, `maxCIJobs`, `baseCIRedStreak`, `agentFramework`, `defaultFilters` | No | Yes — `tables/grain_config.json` | Locked (no route) | — | Retired or config-only columns. |
 | Pipeline pause | Action — System → Pipeline; `POST`/`DELETE /api/pipeline-pause`, `DELETE /api/pause` | No — action | Unlocked (Action) | No | `dispatch:write`. |
 | Database migrate / test | Action — `POST /api/settings/db/migrate-to-postgres`, `POST /api/database/{test,upgrade}` | No — action | Unlocked (Action) | No | `settings:write`. |
@@ -366,9 +366,13 @@ Each item is a mismatch between what the React UI lets somebody edit and what th
 
 ### D-1: Engine, Caches and `sessionSandboxIdleTtl` are editable in the UI but refused while locked
 
+*Fixed in the UI 2026-11-01 (`docs/test-runs/2026-11-01-settings-bootstrap-operations-verification.md`): `caches` is in `CONFIG_REPO_SECTION_PATHS`, so the section is read-only with the config-managed notice while locked; Engine disables `pollInterval` and the three merge-queue fields one by one and keeps `maxWorkers` editable; Sandboxes disables `sessionSandboxIdleTtl` only. All four sections key this on the page's `configRepoOnly` (`s.configLocked`).*
+
 `CONFIG_REPO_SECTION_PATHS` omits `engine`, `caches` and `sandboxes`, so with `settings_locked: true` those sections render editable. The server classifies only `maxWorkers` (Engine) and the Sandboxes resource/backend/k8s fields as bootstrap; `pollInterval`, `maxMergesPerRepo`, `mergeBatchSize`, `mergeGatherWindow`, all four cache fields and `sessionSandboxIdleTtl` are non-bootstrap and `PUT /api/settings` answers 409. The operator sees an editable field whose save fails with the config-repo dialog. Fix either side: mark the non-bootstrap fields read-only per field when locked, or add them to `clearBootstrap`.
 
 ### D-2: Legacy capabilities' deployment-wide fields are editable while locked
+
+*Fixed in the UI 2026-11-01: the deployment-wide fieldset is disabled while locked as well as in external mode, with the config-managed notice; the secret entry below it stays writable.*
 
 `githubHost`, `githubInsecureHttp`, `gcpProject`, `gcpServiceAccountEmail` (and `gcpServiceAccountCount`) live in the `credentials` section, which is not a config-repo section, so they are editable when locked; the server refuses them (non-bootstrap, G). In external mode the fieldset is disabled, so only the locked case differs.
 
