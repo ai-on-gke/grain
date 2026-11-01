@@ -25,6 +25,16 @@
 #      `:vX.Y.0-rc.N`, `:candidate`, and `:rc` images.
 #
 # On non-main refs, `dry_run` defaults to and is enforced as `true`.
+#
+# This repository's gate is GitHub Actions (ci_mode: github), so the train
+# reads main's tests.yml, release.yml and nightly.yml verdicts from this
+# repository's own workflow runs (RELEASE_CI_SOURCE=github, through
+# GITHUB_TOKEN with `actions: read`); grain CI has none. The soak and the
+# task list still come from the grain deployment and grain-candidate, which
+# a GitHub-hosted runner can only reach at the URLs vars.GRAIN_API_URL and
+# vars.RELEASE_STAGING_URL name (with secrets.GRAIN_API_TOKEN): a live run
+# without them is refused before anything is tagged. A dry run without
+# them still selects the LKG from GitHub's runs, with an empty task list.
 
 name: release-train
 
@@ -45,6 +55,7 @@ on:
         type: boolean
 
 permissions:
+  actions: read
   contents: write
   packages: write
   id-token: write
@@ -222,11 +233,33 @@ jobs:
             exit 1
           fi
 
+      - name: Require the grain API and staging endpoints
+        env:
+          GRAIN_API_URL: ${{ vars.GRAIN_API_URL }}
+          GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
+          RELEASE_STAGING_URL: ${{ vars.RELEASE_STAGING_URL }}
+        run: |
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Dry-run mode enabled: skipping the grain API and staging endpoint requirement"
+            exit 0
+          fi
+          missing=""
+          [ -n "${GRAIN_API_URL:-}" ] || missing="$missing vars.GRAIN_API_URL"
+          [ -n "${GRAIN_API_TOKEN:-}" ] || missing="$missing secrets.GRAIN_API_TOKEN"
+          [ -n "${RELEASE_STAGING_URL:-}" ] || missing="$missing vars.RELEASE_STAGING_URL"
+          if [ -n "$missing" ]; then
+            echo "release-train: a GitHub-hosted runner cannot reach the grain deployment or grain-candidate on localhost; set${missing} to URLs it can reach; nothing was tagged." >&2
+            echo "release-train: see docs/github-actions-ci.md." >&2
+            exit 1
+          fi
+
       - name: Run the release train
         env:
-          GRAIN_API_URL: ${{ vars.GRAIN_API_URL || 'http://127.0.0.1:4200' }}
+          GRAIN_API_URL: ${{ vars.GRAIN_API_URL }}
           GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
-          RELEASE_STAGING_URL: ${{ vars.RELEASE_STAGING_URL || 'http://127.0.0.1:4280' }}
+          RELEASE_STAGING_URL: ${{ vars.RELEASE_STAGING_URL }}
+          RELEASE_CI_SOURCE: ${{ vars.RELEASE_CI_SOURCE || 'github' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
           RELEASE_NOTES_TASK: ${{ vars.RELEASE_NOTES_TASK }}
           RELEASE_NOTIFY: ${{ vars.RELEASE_NOTIFY }}
@@ -235,7 +268,9 @@ jobs:
           set -euo pipefail
           if [ "${DRY_RUN}" = "true" ] && [ -z "${GRAIN_API_TOKEN:-}" ]; then
             echo '[]' > "${RUNNER_TEMP}/dry-run-empty.json"
-            export RELEASE_RUNS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
+            if [ "${RELEASE_CI_SOURCE}" != github ]; then
+              export RELEASE_RUNS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
+            fi
             export RELEASE_TASKS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
           fi
           bash ./scripts/release-from-trunk.sh
