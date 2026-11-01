@@ -603,9 +603,6 @@ func parseCLIQuarantineTTL(s string) (time.Duration, error) {
 // task. The count and elision come back in a header and go to stderr, so
 // what reaches stdout is the task lines alone.
 func (c *sandboxCLI) taskList(p sandboxArgs) error {
-	if err := p.only("task list", "state", "repo", "limit", "search", "changed-since", "stalled", "kind", "json"); err != nil {
-		return err
-	}
 	if len(p.positional) > 0 {
 		return fmt.Errorf("task list: unexpected argument %q: run 'grain task list --help' for usage", p.positional[0])
 	}

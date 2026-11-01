@@ -773,19 +773,25 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 		for _, capID := range *req.DefaultCapabilities {
 			t := strings.TrimSpace(capID)
 			if t != "" {
-				if !slices.Contains(cfg.DefaultCapabilities, t) {
-					normalized, err := c.normalizeCapabilityID(t)
-					if err != nil {
-						return DeploymentRepoConfigResponse{}, err
+				if slices.Contains(cfg.DefaultCapabilities, t) {
+					if !seen[t] {
+						seen[t] = true
+						clean = append(clean, t)
 					}
-					t = normalized
-					if _, ok := c.capabilityByID(t); !ok {
-						return DeploymentRepoConfigResponse{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(t))
-					}
+					continue
 				}
-				if !seen[t] {
-					seen[t] = true
-					clean = append(clean, t)
+				normalizedIDs, err := c.normalizeCapabilityIDs(t)
+				if err != nil {
+					return DeploymentRepoConfigResponse{}, err
+				}
+				for _, nid := range normalizedIDs {
+					if _, ok := c.capabilityByID(nid); !ok {
+						return DeploymentRepoConfigResponse{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(nid))
+					}
+					if !seen[nid] {
+						seen[nid] = true
+						clean = append(clean, nid)
+					}
 				}
 			}
 		}

@@ -107,12 +107,15 @@ func TestDetectSandboxProxy(t *testing.T) {
 }
 
 func TestIsSandboxCommandLeavesOtherModesAlone(t *testing.T) {
-	for _, args := range [][]string{{"ls", "ci://a/b"}, {"ci", "log"}, {"task", "read", "1"}, {"db", "query", "SELECT 1"}, {"help"}, {"pr", "--help"}} {
+	// A sandbox command's unknown subcommand is the sandbox CLI's to
+	// refuse, never the host CLI's to answer.
+	for _, args := range [][]string{{"ls", "ci://a/b"}, {"ci", "log"}, {"task", "read", "1"}, {"db", "query", "SELECT 1"}, {"help"}, {"pr", "--help"},
+		{"ci", "run"}, {"task", "lsit"}} {
 		if !isSandboxCommand(args) {
 			t.Errorf("%q should be a sandbox command", args)
 		}
 	}
-	for _, args := range [][]string{{}, {"mcpserver"}, {"capability", "serve"}, {"db", "upgrade-postgres"}, {"ci", "run"}, {"task", "create"}, {"daemon"}} {
+	for _, args := range [][]string{{}, {"mcpserver"}, {"capability", "serve"}, {"daemon"}, {"frobnicate"}} {
 		if isSandboxCommand(args) {
 			t.Errorf("%q should not be a sandbox command", args)
 		}
@@ -131,7 +134,7 @@ func (s cliTestScopes) SandboxNamespaceScope(_ context.Context, sb string) (mode
 func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	store := ci.NewRunStore(10)
 	at := time.Now()
-	store.Put(ci.Run{ID: "run-1", Repo: "bwsalmon/grain", Ref: "grain/task-7", Conclusion: ci.ConclusionFailure, StartedAt: &at,
+	store.Put(ci.Run{ID: "run-1", Repo: "ai-on-gke/grain", Ref: "grain/task-7", Conclusion: ci.ConclusionFailure, StartedAt: &at,
 		Jobs: []ci.JobRun{{Name: "go", Conclusion: ci.ConclusionFailure, Steps: []ci.StepRun{
 			{Name: "Test", Conclusion: ci.ConclusionFailure, Output: "--- FAIL: TestWidget (0.01s)\nFAIL\n"}}}}})
 	// No playbooks/ here: src://playbooks is the binary's embedded copy.
@@ -152,8 +155,8 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	proxy := &gitproxy.GitProxy{
 		Tokens:    tokens,
 		Namespace: &namespace.Server{CIStore: store, SrcDir: src, Redactor: redact.New(nil)},
-		NamespaceScopes: cliTestScopes{"sb": {TaskID: "7", RunID: "r", TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7",
-			MayReadCI: true, AllowedRepos: map[string]bool{"bwsalmon/grain": true}, MayReadPlaybooks: true}},
+		NamespaceScopes: cliTestScopes{"sb": {TaskID: "7", RunID: "r", TaskRepo: "ai-on-gke/grain", TaskBranch: "grain/task-7",
+			MayReadCI: true, AllowedRepos: map[string]bool{"ai-on-gke/grain": true}, MayReadPlaybooks: true}},
 	}
 	srv := httptest.NewServer(gitproxy.NewHandler(proxy))
 	defer srv.Close()
@@ -174,13 +177,13 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	if out, _, code := run("ci", "log", "--help"); code != 0 || !strings.HasPrefix(out, "grain ci log") {
 		t.Errorf("ci log --help: %d %s", code, out)
 	}
-	if out, errOut, code := run("ls", "ci://bwsalmon/grain"); code != 0 || strings.TrimSpace(out) != "run-1/" {
+	if out, errOut, code := run("ls", "ci://ai-on-gke/grain"); code != 0 || strings.TrimSpace(out) != "run-1/" {
 		t.Errorf("ls: %d %q %s", code, out, errOut)
 	}
 	if out, errOut, code := run("ci", "log", "--job", "go", "--step", "Test"); code != 0 || !strings.Contains(out, "--- FAIL: TestWidget") {
 		t.Errorf("ci log: %d %q %s", code, out, errOut)
 	}
-	if out, errOut, code := run("grep", "--", "--- FAIL", "ci://bwsalmon/grain/run-1/go/Test.log"); code != 0 || !strings.Contains(out, "TestWidget") {
+	if out, errOut, code := run("grep", "--", "--- FAIL", "ci://ai-on-gke/grain/run-1/go/Test.log"); code != 0 || !strings.Contains(out, "TestWidget") {
 		t.Errorf("grep: %d %q %s", code, out, errOut)
 	}
 	if out, errOut, code := run("ci", "list", "--conclusion", "failure"); code != 0 || !strings.Contains(out, "run-1 grain/task-7") {
@@ -290,8 +293,8 @@ func TestSandboxCLIIssuesAndDBAgainstTheProxy(t *testing.T) {
 		Tokens:    tokens,
 		Namespace: &namespace.Server{Redactor: redact.New(nil)},
 		NamespaceScopes: cliTestScopes{
-			"sb":   {TaskID: "7", RunID: "r", TaskRepo: "bwsalmon/grain", MayReadIssues: true, MayReadDB: true},
-			"bare": {TaskID: "8", RunID: "r8", TaskRepo: "bwsalmon/grain"},
+			"sb":   {TaskID: "7", RunID: "r", TaskRepo: "ai-on-gke/grain", MayReadIssues: true, MayReadDB: true},
+			"bare": {TaskID: "8", RunID: "r8", TaskRepo: "ai-on-gke/grain"},
 		},
 		CLI: cliTestBackend{db: cliTestDB{queries: &queries}},
 	}
@@ -308,7 +311,7 @@ func TestSandboxCLIIssuesAndDBAgainstTheProxy(t *testing.T) {
 	}
 
 	if out, errOut, code := runAs("tok", "issue", "list"); code != 0 ||
-		!strings.Contains(out, "Open issues for bwsalmon/grain (1)") || !strings.Contains(out, "#5 [open] Widget wobbles (by @octo) -- labels: bug") {
+		!strings.Contains(out, "Open issues for ai-on-gke/grain (1)") || !strings.Contains(out, "#5 [open] Widget wobbles (by @octo) -- labels: bug") {
 		t.Errorf("issue list: %d %q %s", code, out, errOut)
 	}
 	if out, errOut, code := runAs("tok", "issue", "read", "5", "--repo", "acme/widgets"); code != 0 ||

@@ -226,7 +226,8 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	if runtime := cfg.maxRunRuntime(); runtime > 0 {
 		clockBase = clockStart.Add(runtime)
 	}
-	agentCtx, clock := newAdoptedRunClock(runCtx, clockBase, cfg.runWaitCreditCap(), a.Gap)
+	agentCtx, clock := newAdoptedRunClock(runCtx, clockBase, cfg.runWaitCreditCap(), a.Gap,
+		adoptedWaitLedger(ctx, store, runID))
 	stopCrediting := cfg.RunWaitCredits.register(task.ID, clock)
 	stopCancelling := cfg.TaskCancellers.register(task.ID, cancelRun)
 	defer stopCancelling()
@@ -295,7 +296,9 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	stopPause()
 	stopTokenRefresh()
 	if errors.Is(attachErr, agent.ErrDetached) {
-		// Stopping again: the next daemon adopts it from here.
+		// Stopping again: the next daemon adopts it from here, with the
+		// wait credit carried so far.
+		leaveWaitLedger(ctx, store, runID, clock)
 		cancelRun(nil)
 		<-watcherDone
 		return fmt.Errorf("orchestrator: adopted run %s: %w", runID, attachErr)
@@ -501,6 +504,41 @@ func registerAdoptedRecreation(ctx context.Context, deps Deps, task model.Task, 
 		return rec.wasRecreated() && (hasSandboxCap || !isUnisolated(deps.Sandboxes))
 	}
 	return deps.Config.SandboxRecreations.register(task.ID, rec), degraded
+}
+
+// leaveWaitLedger records what clock has credited runID with, per source,
+// for the daemon that adopts the run next (newAdoptedRunClock): called
+// once the run has detached and its clock is stopped, so no report can
+// land after it. Best-effort: a run whose ledger is not written loses
+// only the credit, and its adopter starts from the restart gap as it did
+// before the ledger existed.
+func leaveWaitLedger(ctx context.Context, store *model.Store, runID string, clock *runClock) {
+	if store == nil {
+		return
+	}
+	sources := clock.sources()
+	if len(sources) == 0 {
+		return
+	}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
+	defer cancel()
+	if err := store.SetRunWaitLedger(wctx, runID, sources); err != nil {
+		log.Printf("orchestrator: run %s: recording its wait ledger for the daemon that adopts it: %v", runID, err)
+	}
+}
+
+// adoptedWaitLedger is what the previous daemon left of runID's wait
+// ledger (leaveWaitLedger), or nil when it left none or it cannot be read.
+func adoptedWaitLedger(ctx context.Context, store *model.Store, runID string) map[string]time.Duration {
+	if store == nil {
+		return nil
+	}
+	ledger, err := store.RunWaitLedger(ctx, runID)
+	if err != nil {
+		log.Printf("orchestrator: adopted run %s: reading the wait ledger its previous daemon left, so only the restart is credited: %v", runID, err)
+		return nil
+	}
+	return ledger
 }
 
 // adoptedClockStart is where run's own clock started, which is where its

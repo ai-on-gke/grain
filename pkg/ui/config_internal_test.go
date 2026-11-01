@@ -235,6 +235,44 @@ func TestDirectConfigWritesLetsTheAPIWriteInInternalMode(t *testing.T) {
 	}
 }
 
+// GET /api/settings, and the answer to a write of the lock, carry the
+// same configRepoOnly as GET /api/config for the row they answer with,
+// which the Settings page draws read-only on (settings-mutability D-10):
+// true once settings_locked is on, false again under directConfigWrites.
+func TestSettingsSayWhenTheyAreConfigRepoOnly(t *testing.T) {
+	t.Parallel()
+	_, client := testServer(t)
+	storeSettingsRow(t, client)
+	client.Config.StateRepo = &fakeStateRepo{status: ui.StateRepoStatus{Branch: "main"}}
+	client.Config.DataDir = t.TempDir()
+	srv := ui.NewServerWithClient(client)
+	configRepoOnly := func(rec *httptest.ResponseRecorder) bool {
+		t.Helper()
+		var got struct {
+			ConfigRepoOnly *bool `json:"configRepoOnly"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil || got.ConfigRepoOnly == nil {
+			t.Fatalf("settings: %d %s", rec.Code, rec.Body)
+		}
+		return *got.ConfigRepoOnly
+	}
+	if configRepoOnly(do(t, srv, http.MethodGet, "/api/settings", "")) {
+		t.Fatal("configRepoOnly before settings_locked")
+	}
+	if !configRepoOnly(do(t, srv, http.MethodPut, "/api/settings", `{"settingsLocked":true}`)) {
+		t.Fatal("the answer to locking says configRepoOnly false")
+	}
+	if !configRepoOnly(do(t, srv, http.MethodGet, "/api/settings", "")) {
+		t.Fatal("configRepoOnly false once settings_locked is on")
+	}
+	if err := staterepo.SaveSettings(client.Config.DataDir, staterepo.Settings{DirectConfigWrites: true}); err != nil {
+		t.Fatal(err)
+	}
+	if configRepoOnly(do(t, srv, http.MethodGet, "/api/settings", "")) {
+		t.Fatal("configRepoOnly under directConfigWrites")
+	}
+}
+
 // GET /api/config says when the API refuses config-repo-only settings,
 // so the UI draws them read-only exactly then: when settings_locked is
 // enabled in internal mode (not by default), not after the
@@ -278,6 +316,19 @@ func TestConfigSaysWhenSettingsAreConfigRepoOnly(t *testing.T) {
 	}
 	if configRepoOnly(srv) {
 		t.Fatal("configRepoOnly after the directConfigWrites opt-out")
+	}
+	// GET /api/settings says so too: the Settings page reads its lock
+	// from there (settings-mutability.spec.md D-10).
+	rec := do(t, srv, http.MethodGet, "/api/settings", "")
+	var settings struct {
+		SettingsLocked bool `json:"settingsLocked"`
+		ConfigRepoOnly bool `json:"configRepoOnly"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &settings) != nil {
+		t.Fatalf("GET /api/settings: %d %s", rec.Code, rec.Body)
+	}
+	if !settings.SettingsLocked || settings.ConfigRepoOnly {
+		t.Fatalf("GET /api/settings after the opt-out: %+v, want settingsLocked but not configRepoOnly", settings)
 	}
 }
 

@@ -80,6 +80,29 @@ describe("ModelsSection", () => {
     );
   });
 
+  // A config pull request disabling every connection is refused as
+  // locking dispatch; the same change made here is written, so the page
+  // says what it did (the 2026-10-31 config-repo write-path test run).
+  it("warns when every connection is disabled", async () => {
+    backends[0].disabled = true;
+    try {
+      render(<ModelsSection config={{}} showError={vi.fn()} />);
+      expect(
+        await screen.findByTestId("all-connections-disabled"),
+      ).toHaveTextContent("Every provider connection is disabled");
+    } finally {
+      delete backends[0].disabled;
+    }
+  });
+
+  it("does not warn while a connection is enabled", async () => {
+    render(<ModelsSection config={{}} showError={vi.fn()} />);
+    await screen.findByText("Primary Antigravity");
+    expect(
+      screen.queryByTestId("all-connections-disabled"),
+    ).not.toBeInTheDocument();
+  });
+
   it("removes a connection through the deployment's agent-backends route", async () => {
     const user = userEvent.setup();
     vi.spyOn(window, "confirm").mockReturnValue(true);

@@ -120,6 +120,10 @@ func agentMessageRail(acting, pattern, target string) error {
 // sender, so recordAgentCall writes no second note about it.
 const agentMessagesRoute = "POST /api/tasks/{id}/agent-messages"
 
+// taskNotesRoute is message_task (Client.PostTaskNote): a note for the
+// acting task's parent or child.
+const taskNotesRoute = "POST /api/tasks/{id}/notes"
+
 // agentCall is one authorized call, for recordAgentCall.
 type agentCall struct {
 	taskID      string
@@ -468,7 +472,13 @@ func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, me
 			return fmt.Errorf("task %s cannot call %s on itself: a run does not end, orphan or regrant its own task", acting.ID, pattern)
 		}
 		if t, err := s.tasks.Store.GetTask(ctx, target); err == nil && t != nil {
-			if session, ok := model.ConsoleSessionIDOf(*t); ok && session != ownSession {
+			// A note between parent and child (message_task) is the one
+			// call on a session the acting task does not own that the rail
+			// lets through: it never parks the session or acts on its run,
+			// and the CLI and MCP hops already carry it, so a director's
+			// child reports back whichever tool it uses.
+			if session, ok := model.ConsoleSessionIDOf(*t); ok && session != ownSession &&
+				!(pattern == taskNotesRoute && related(acting, t)) {
 				return fmt.Errorf("task %s is the standing session %q, which task %s does not own", target, session, acting.ID)
 			}
 		}
@@ -611,10 +621,24 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 	if name == "" {
 		return nil
 	}
+	if expanded := model.CanonicalLegacyGrants(name); len(expanded) > 1 {
+		for _, part := range expanded {
+			if err := agentGrantRefusal(held, part, normalize); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if canonical := model.CanonicalLegacyGrant(name); canonical != name && model.IsCapabilityRef(canonical) {
+		name = canonical
+	}
 	// APIGrantsOf reads an alias (self-upgrade) as the preset it now is,
 	// which ParseAPIGrant alone does not.
 	if slices.ContainsFunc(APIGrantsOf([]string{name}).Scopes(), IsDangerousAPIScope) || model.IsDangerousAPIGrant(name) {
 		return fmt.Errorf("%s is a dangerous api grant: only a person may grant it", name)
+	}
+	if model.IsDangerousGrant(name) {
+		return fmt.Errorf("%s is a dangerous grant: only a person may grant it", name)
 	}
 	// priority-dispatch lets a task jump the queue, so it is a person's
 	// to give even to an agent whose own task holds it.

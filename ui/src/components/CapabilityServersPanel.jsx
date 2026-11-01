@@ -400,7 +400,15 @@ export function UsageList({ holders }) {
           key={`${h.kind}:${h.id}:${h.grant}`}
           data-holder={`${h.kind}:${h.id}`}
         >
-          {holderKind[h.kind] || h.kind} {h.kind === "task" ? `#${h.id} ` : ""}
+          {h.kind === "task" ? (
+            // A task is the one holder with a page of its own to open,
+            // where its grant is changed (2026-11-01 walkthrough).
+            <Link href={`/tasks/${encodeURIComponent(h.id)}`}>
+              Task #{h.id}
+            </Link>
+          ) : (
+            holderKind[h.kind] || h.kind
+          )}{" "}
           {h.name ? `“${h.name}”` : h.id}
           {h.repo ? ` on ${h.repo}` : ""}
           <Typography

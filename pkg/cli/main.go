@@ -248,7 +248,24 @@ func Main() {
 			return
 		}
 	}
+	if len(args) == 0 {
+		// Inside a sandbox, a bare grain gets the sandbox CLI's help.
+		if code, handled := sandboxcli.Unknown(args, os.Stderr); handled {
+			os.Exit(code)
+		}
+	}
 	if err := runCLI(args); err != nil {
+		var unknown unknownCommandError
+		if errors.As(err, &unknown) {
+			// Inside a sandbox, a command neither CLI has is answered with
+			// the sandbox CLI's help, not this CLI's daemon-facing usage;
+			// the task-CLI commands above (grain declarations check) still
+			// run there.
+			if code, handled := sandboxcli.Unknown(args, os.Stderr); handled {
+				os.Exit(code)
+			}
+			fmt.Fprint(os.Stderr, usage)
+		}
 		fmt.Fprintln(os.Stderr, "grain: "+err.Error())
 		os.Exit(1)
 	}
@@ -570,10 +587,15 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 	case "release":
 		return cmdRelease(ctx, c, out, cmdArgs)
 	default:
-		fs.Usage()
-		return fmt.Errorf("unknown command %q", cmd)
+		return unknownCommandError{cmd}
 	}
 }
+
+// unknownCommandError is a command dispatchCLI does not have; Main prints
+// the usage for it (the sandbox CLI's, inside a sandbox).
+type unknownCommandError struct{ cmd string }
+
+func (e unknownCommandError) Error() string { return fmt.Sprintf("unknown command %q", e.cmd) }
 
 // taskID reads the task id positional argument. It is not parsed as a
 // number: ids are decimal today because that is what Store.NewTaskID

@@ -68,9 +68,13 @@ func TestSandboxTaskListFiltersAndBounds(t *testing.T) {
 			repo = "acme/gadgets"
 		}
 		tasks = append(tasks, mcp.TaskSummary{ID: fmt.Sprint(i), State: state, Repo: repo,
-			Title: fmt.Sprintf("Fix thing %d", i), CreatedAt: &at})
+			Title: fmt.Sprintf("Fix thing %d", i), CreatedAt: &at, ChangedAt: &at})
 	}
 	tasks[99].Title = "Flaky go-long test"
+	tasks[104].Kinds = []string{"session"}
+	tasks[110].Stall = "queued for 4h without a worker"
+	recentChange := base.Add(200 * time.Minute)
+	tasks[115].ChangedAt = &recentChange
 
 	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
 	raw, _ := json.Marshal(map[string]string{"debug": "tok-debug", "plain": "tok-plain"})
@@ -150,6 +154,20 @@ func TestSandboxTaskListFiltersAndBounds(t *testing.T) {
 		t.Errorf("--search GO-LONG = %q", lines)
 	}
 
+	// --kind, --stalled, and --changed-since filters reach the endpoint.
+	lines, errOut, code = run("tok-debug", "task", "list", "--kind", "session")
+	if code != 0 || len(lines) != 1 || !strings.HasPrefix(lines[0], "105 ") {
+		t.Errorf("--kind session: exit %d, lines=%q, err=%q", code, lines, errOut)
+	}
+	lines, errOut, code = run("tok-debug", "task", "list", "--stalled")
+	if code != 0 || len(lines) != 1 || !strings.HasPrefix(lines[0], "111 ") {
+		t.Errorf("--stalled: exit %d, lines=%q, err=%q", code, lines, errOut)
+	}
+	lines, errOut, code = run("tok-debug", "task", "list", "--changed-since", base.Add(150*time.Minute).Format(time.RFC3339))
+	if code != 0 || len(lines) != 1 || !strings.HasPrefix(lines[0], "116 ") {
+		t.Errorf("--changed-since: exit %d, lines=%q, err=%q", code, lines, errOut)
+	}
+
 	// --json.
 	env := fakeSandboxEnv(map[string]string{"GRAIN_SANDBOX_PROXY": srv.URL, "GRAIN_SANDBOX_TOKEN": "tok-debug"}, "")
 	var out, stderr bytes.Buffer
@@ -166,7 +184,7 @@ func TestSandboxTaskListFiltersAndBounds(t *testing.T) {
 
 	// An unknown flag, or a kind outside the vocabulary, is refused rather
 	// than ignored.
-	if _, errOut, code := run("tok-debug", "task", "list", "--bogus", "x"); code != 1 || !strings.Contains(errOut, "unknown flag --bogus") {
+	if _, errOut, code := run("tok-debug", "task", "list", "--bogus", "x"); code != 2 || !strings.Contains(errOut, "unknown flag --bogus") {
 		t.Errorf("--bogus: exit %d %q", code, errOut)
 	}
 	if _, errOut, code := run("tok-debug", "task", "list", "--kind", "nope"); code != 1 || !strings.Contains(errOut, `kind "nope"`) {

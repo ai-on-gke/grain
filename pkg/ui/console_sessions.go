@@ -301,7 +301,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 			})
 		}
 		if openTask != nil {
-			prev, hasPrev := model.LastSyncedConsoleSession(c.Store, openTask.ID)
+			prev, hasPrev := model.LastSyncedConsoleSession(ctx, c.Store, openTask.ID)
 			if c.configRepoOnly(ctx) && hasPrev && strings.TrimSpace(openTask.Title) != "" &&
 				(openTask.Title != prev.Title || model.ConsoleSessionTitle(s) == prev.Title) {
 				title = openTask.Title
@@ -526,19 +526,21 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		// somebody choosing a set, in front of the thing it applies to.
 		seen := map[string]bool{}
 		ids := make([]string, 0, len(*req.Capabilities))
-		for _, capability := range *req.Capabilities {
-			capability, err := c.normalizeCapabilityID(capability)
+		for _, rawCap := range *req.Capabilities {
+			normalizedIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return nil, err
 			}
-			if _, ok := c.capabilityByID(capability); !ok {
-				return nil, validationErrorf("capabilities: %s", capabilityRefusal(capability))
+			for _, capability := range normalizedIDs {
+				if _, ok := c.capabilityByID(capability); !ok {
+					return nil, validationErrorf("capabilities: %s", capabilityRefusal(capability))
+				}
+				if seen[capability] {
+					continue
+				}
+				seen[capability] = true
+				ids = append(ids, capability)
 			}
-			if seen[capability] {
-				continue
-			}
-			seen[capability] = true
-			ids = append(ids, capability)
 		}
 		session.Capabilities = ids
 	}
@@ -689,7 +691,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			return nil, err
 		}
 		if writable {
-			model.RecordSyncedConsoleSession(c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
+			if err := model.RecordSyncedConsoleSession(ctx, c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
 				Capabilities:    session.Capabilities,
 				Reads:           session.Reads,
 				Writes:          session.Writes,
@@ -699,19 +701,34 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				TasksApproved:   session.TasksApproved,
 				KeepRunning:     session.KeepRunning,
 				GoogleChatSpace: session.GoogleChatSpace,
-			})
-		} else if _, hasPrev := model.LastSyncedConsoleSession(c.Store, openTask.ID); !hasPrev {
-			model.RecordSyncedConsoleSession(c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
+			}); err != nil {
+				return nil, err
+			}
+		} else if _, hasPrev := model.LastSyncedConsoleSession(ctx, c.Store, openTask.ID); !hasPrev {
+			// With no snapshot, an edit that left reads or writes alone
+			// records the task's own as last synced, so the next sync
+			// holds them to the declaration (ensureConsoleSessionSnapshot's
+			// reason) rather than keeping an entry it no longer names.
+			prevReads, prevWrites := origSession.Reads, origSession.Writes
+			if req.Reads == nil {
+				prevReads = openTask.Reads
+			}
+			if req.Writes == nil {
+				prevWrites = openTask.Writes
+			}
+			if err := model.RecordSyncedConsoleSession(ctx, c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
 				Capabilities:    origSession.Capabilities,
-				Reads:           origSession.Reads,
-				Writes:          origSession.Writes,
+				Reads:           prevReads,
+				Writes:          prevWrites,
 				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, !c.Config.SandboxShapeIgnored),
 				Model:           strings.TrimSpace(origSession.Model),
 				Title:           model.ConsoleSessionTitle(origSession),
 				TasksApproved:   origSession.TasksApproved,
 				KeepRunning:     origSession.KeepRunning,
 				GoogleChatSpace: origSession.GoogleChatSpace,
-			})
+			}); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if writable {
@@ -728,7 +745,7 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 	if !ok {
 		return
 	}
-	if _, hasPrev := model.LastSyncedConsoleSession(c.Store, task.ID); hasPrev {
+	if _, hasPrev := model.LastSyncedConsoleSession(ctx, c.Store, task.ID); hasPrev {
 		return
 	}
 	cfg, err := c.consoleSessionConfig(ctx)
@@ -739,10 +756,15 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 	if !ok {
 		return
 	}
-	model.RecordSyncedConsoleSession(c.Store, task.ID, model.ConsoleSessionConfigSnapshot{
+	// The reads and writes recorded are the task's own, not the
+	// declaration's: with no snapshot the declaration is authoritative
+	// (orchestrator.mergeConsoleSessionWrites), so the next sync drops an
+	// entry the declaration no longer names -- one removed while the
+	// daemon was down -- and keeps only what this edit adds.
+	_ = model.RecordSyncedConsoleSession(ctx, c.Store, task.ID, model.ConsoleSessionConfigSnapshot{
 		Capabilities:    session.Capabilities,
-		Reads:           session.Reads,
-		Writes:          session.Writes,
+		Reads:           task.Reads,
+		Writes:          task.Writes,
 		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
 		Model:           strings.TrimSpace(session.Model),
 		Title:           model.ConsoleSessionTitle(session),
@@ -853,19 +875,21 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 	if req.Capabilities != nil {
 		seen := map[string]bool{}
 		caps = make([]string, 0, len(req.Capabilities))
-		for _, capability := range req.Capabilities {
-			capability, err := c.normalizeCapabilityID(capability)
+		for _, rawCap := range req.Capabilities {
+			normalizedIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return "", nil, err
 			}
-			if _, ok := c.capabilityByID(capability); !ok {
-				return "", nil, validationErrorf("capabilities: %s", capabilityRefusal(capability))
+			for _, capability := range normalizedIDs {
+				if _, ok := c.capabilityByID(capability); !ok {
+					return "", nil, validationErrorf("capabilities: %s", capabilityRefusal(capability))
+				}
+				if seen[capability] {
+					continue
+				}
+				seen[capability] = true
+				caps = append(caps, capability)
 			}
-			if seen[capability] {
-				continue
-			}
-			seen[capability] = true
-			caps = append(caps, capability)
 		}
 	} else {
 		// The director's set, plus any deployment defaults offered here so a

@@ -355,7 +355,20 @@ import "strconv"
 // 79 adds `pending_config_change` to `task_observation`: the grain/config
 // change a session proposed and is parked on (model.PendingConfigChange),
 // as JSON.
-const SchemaVersion = 79
+//
+// 80 rewrites stored `grain-log` grants to
+// `https://grain.dev/capabilities/grain#journal={}`: the in-process
+// `grain-log` provider is retired for the `grain#journal` method.
+//
+// 81 rewrites stored `deployment-health` grants to `api:deployment:read` and
+// `https://grain.dev/capabilities/grain#health={}`: the in-process
+// `deployment-health` provider is retired.
+//
+// 82 rewrites stored `db-read` and `db-write` grants to
+// `https://grain.dev/capabilities/grain#sql={"write":false}` and
+// `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
+// `db-read` and `db-write` providers are retired.
+const SchemaVersion = 82
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -657,6 +670,22 @@ var Tables = []string{
   ` + "`immediate`" + `         INTEGER  NOT NULL DEFAULT 0,
   ` + "`grace_until`" + `       DATETIME NULL,
   ` + "`run_id`" + `            TEXT     NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`,
+
+	// console_session_sync is the standing-session declaration last synced
+	// onto a session's task (model.ConsoleSessionConfigSnapshot, as JSON),
+	// so the sync that tells a config change from an operator's own edit
+	// on the task still can after a daemon restart. Held in memory only, a
+	// reads: or writes: entry dropped from the declaration while the
+	// daemon was down stayed on the task for good.
+	//
+	// Needs no SchemaVersion bump, for task_write's own reason: an older
+	// store gains an empty table, and a task with no row is synced as one
+	// that has never been, with the declaration authoritative.
+	`CREATE TABLE IF NOT EXISTS ` + "`console_session_sync`" + ` (
+  ` + "`task_id`" + `  TEXT NOT NULL,
+  ` + "`snapshot`" + ` TEXT NOT NULL,
   PRIMARY KEY (` + "`task_id`" + `)
 )`,
 
@@ -1204,6 +1233,22 @@ var Tables = []string{
   ` + "`fingerprint`" + ` TEXT    NOT NULL,
   ` + "`count`" + `       INTEGER NOT NULL,
   PRIMARY KEY (` + "`run_id`" + `, ` + "`fingerprint`" + `)
+)`,
+
+	// task_run_wait_ledger is a live run's CI wait time per reporting
+	// source (orchestrator.WaitSourceMCP, WaitSourceCLI, ...), written
+	// when the daemon stops and leaves the run for the next one to
+	// adopt. The adopting daemon seeds the run's clock from it
+	// (orchestrator.newAdoptedRunClock), so wait time credited before the
+	// restart is not lost -- the sandbox proxy's own ledger is held only
+	// in memory and starts again from zero. Deleted when the run
+	// finishes. Needs no SchemaVersion bump and no migration rung, for
+	// the reason the tables above give.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_wait_ledger`" + ` (
+  ` + "`run_id`" + `     TEXT    NOT NULL,
+  ` + "`source`" + `     TEXT    NOT NULL,
+  ` + "`blocked_ms`" + ` INTEGER NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`source`" + `)
 )`,
 
 	// task_run_unmatched_failure is one row per failed run whose own

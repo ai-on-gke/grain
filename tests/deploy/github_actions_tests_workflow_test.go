@@ -51,6 +51,7 @@ type githubActionsWorkflow struct {
 		Steps   []struct {
 			Name string            `yaml:"name"`
 			ID   string            `yaml:"id"`
+			If   string            `yaml:"if"`
 			Uses string            `yaml:"uses"`
 			Env  map[string]string `yaml:"env"`
 			Run  string            `yaml:"run"`
@@ -550,6 +551,144 @@ func TestGitHubCIChangesGitDiffResolutionAndFailOpen(t *testing.T) {
 	for _, group := range []string{"go_program", "go_backend", "go_unit", "granule", "frontend", "lint", "terraform"} {
 		if failOpenOutputs[group] != "true" {
 			t.Errorf("fail-open group %q = %q, want \"true\"", group, failOpenOutputs[group])
+		}
+	}
+}
+
+// The path filter must not judge a change to itself: an edited
+// scripts/github-ci-changes.sh that reports "nothing changed" would skip
+// every job, and a skipped job does not fail the pull request (2026-11-01
+// security review, finding 2). The changes job decides that case in the
+// workflow file, in a step that runs before the script and skips it.
+func TestGitHubActionsTestsWorkflowGuardsThePathFilter(t *testing.T) {
+	raw := read(t, ".github", "workflows", "tests.yml")
+	var wf githubActionsWorkflow
+	if err := yaml.Unmarshal([]byte(raw), &wf); err != nil {
+		t.Fatalf(".github/workflows/tests.yml does not parse as YAML: %v", err)
+	}
+	changesJob := wf.Jobs["changes"]
+
+	guardIdx, filterIdx := -1, -1
+	for i, step := range changesJob.Steps {
+		switch step.ID {
+		case "guard":
+			guardIdx = i
+		case "filter":
+			filterIdx = i
+		}
+	}
+	if guardIdx < 0 || filterIdx < 0 {
+		t.Fatalf("jobs.changes needs steps with id guard and filter, got guard=%d filter=%d", guardIdx, filterIdx)
+	}
+	if guardIdx > filterIdx {
+		t.Errorf("jobs.changes guard step (index %d) must run before the filter step (index %d)", guardIdx, filterIdx)
+	}
+	guard, filter := changesJob.Steps[guardIdx], changesJob.Steps[filterIdx]
+	if strings.Contains(guard.Run, "./scripts/github-ci-changes.sh") {
+		t.Errorf("jobs.changes guard step must not run the script it guards: %q", guard.Run)
+	}
+	for _, path := range []string{"scripts/github-ci-changes.sh", ".github/workflows/tests.yml"} {
+		if !strings.Contains(guard.Run, path) {
+			t.Errorf("jobs.changes guard step does not key on %s", path)
+		}
+	}
+	if filter.If != "steps.guard.outputs.run_all != 'true'" {
+		t.Errorf("jobs.changes filter step if = %q, want it skipped when steps.guard.outputs.run_all is true", filter.If)
+	}
+	for key, value := range changesJob.Outputs {
+		want := "${{ steps.guard.outputs." + key + " || steps.filter.outputs." + key + " }}"
+		if value != want {
+			t.Errorf("jobs.changes.outputs.%s = %q, want %q", key, value, want)
+		}
+	}
+
+	// Run the guard step's own shell against a pull request that edits the
+	// path filter, one that does not, and push / dispatch events.
+	tmpRepo := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tmpRepo
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	commit := func(path, body string) string {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(tmpRepo, filepath.Dir(path)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tmpRepo, path), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGit("add", path)
+		runGit("commit", "-m", "touch "+path)
+		return runGit("rev-parse", "HEAD")
+	}
+	runGit("init", "-b", "main")
+	base := commit("scripts/github-ci-changes.sh", "#!/bin/sh\n")
+	goOnly := commit("pkg/ui/x.go", "package ui\n")
+	scriptEdit := commit("scripts/github-ci-changes.sh", "#!/bin/sh\nexit 0\n")
+	runGit("checkout", "-q", "-b", "wf", goOnly)
+	workflowEdit := commit(".github/workflows/tests.yml", "name: Tests\n")
+
+	runGuard := func(env map[string]string) map[string]string {
+		t.Helper()
+		outFile := filepath.Join(t.TempDir(), "github_output")
+		cmd := exec.Command("bash", "-c", guard.Run)
+		cmd.Dir = tmpRepo
+		cmd.Env = append(os.Environ(), "GITHUB_OUTPUT="+outFile, "EVENT_NAME=", "BASE_SHA=", "HEAD_SHA=")
+		for k, v := range env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("guard step: %v\n%s", err, out)
+		}
+		data, err := os.ReadFile(outFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]string{}
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if k, v, ok := strings.Cut(line, "="); ok {
+				got[k] = v
+			}
+		}
+		return got
+	}
+
+	for _, tc := range []struct {
+		name   string
+		env    map[string]string
+		runAll bool
+	}{
+		{"pull request editing the path filter", map[string]string{"EVENT_NAME": "pull_request", "BASE_SHA": base, "HEAD_SHA": scriptEdit}, true},
+		{"pull request editing the workflow", map[string]string{"EVENT_NAME": "pull_request", "BASE_SHA": base, "HEAD_SHA": workflowEdit}, true},
+		{"pull request with an unresolvable base", map[string]string{"EVENT_NAME": "pull_request", "BASE_SHA": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "HEAD_SHA": goOnly}, true},
+		{"pull request touching only Go", map[string]string{"EVENT_NAME": "pull_request", "BASE_SHA": base, "HEAD_SHA": goOnly}, false},
+		{"push", map[string]string{"EVENT_NAME": "push"}, true},
+		{"merge_group", map[string]string{"EVENT_NAME": "merge_group"}, true},
+		{"workflow_dispatch keeps its job selection", map[string]string{"EVENT_NAME": "workflow_dispatch"}, false},
+	} {
+		got := runGuard(tc.env)
+		if want := map[bool]string{true: "true", false: "false"}[tc.runAll]; got["run_all"] != want {
+			t.Errorf("%s: run_all = %q, want %q", tc.name, got["run_all"], want)
+		}
+		for key := range changesJob.Outputs {
+			if tc.runAll && got[key] != "true" {
+				t.Errorf("%s: guard output %s = %q, want true", tc.name, key, got[key])
+			}
+			if !tc.runAll && got[key] != "" {
+				t.Errorf("%s: guard set %s = %q but should leave it to the filter", tc.name, key, got[key])
+			}
 		}
 	}
 }

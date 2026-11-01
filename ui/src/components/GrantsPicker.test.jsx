@@ -634,6 +634,63 @@ describe("GrantsPicker", () => {
     );
   });
 
+  // A task's one run on a known repo is judged by the listing: a method
+  // a repo-conditional rule admits there is not "may be refused" because
+  // some other repo's task would be. A CI job's event is still unknown,
+  // so its picker keeps the kind's verdict.
+  it("drops the kind's verdict once the listing judged the task's repo", async () => {
+    const mayBe = {
+      ...hostScript,
+      policy: { task: "may_be_refused", ci: "may_be_refused" },
+    };
+    api.mockImplementation(async (path, opts) => {
+      if (path.startsWith("/api/capability-methods?kind=")) return [mayBe];
+      if (path === "/api/capability-grants/check")
+        return JSON.parse(opts.body).grants.map(({ grant }) => ({
+          grant,
+          recorded: grant,
+        }));
+      throw new Error(`unexpected ${path}`);
+    });
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <GrantsPicker
+        grants={[hostScript.ref]}
+        config={{ capabilityMethods: 1 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+        policyRepo="acme/gadgets"
+      />,
+    );
+    const line = await screen.findByLabelText("example.com › host-script");
+    expect(line).not.toHaveTextContent("may be refused");
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    const item = await screen.findByRole("menuitem", { name: /host-script/ });
+    expect(item).not.toHaveTextContent("may be refused");
+    expect(item).not.toHaveAttribute("data-policy-verdict");
+    unmount();
+
+    render(
+      <GrantsPicker
+        grants={[]}
+        config={{ capabilityMethods: 1 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+        runKind="ci"
+        policyRepo="acme/gadgets"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    expect(
+      await screen.findByRole("menuitem", { name: /host-script/ }),
+    ).toHaveTextContent("may be refused by the capability policy for CI jobs");
+    expect(api).toHaveBeenCalledWith(
+      "/api/capability-methods?kind=ci&repo=acme%2Fgadgets",
+    );
+  });
+
   it("asks about no repo while the one typed is not owner/name", async () => {
     serve({ current: [hostScript] });
     render(

@@ -114,14 +114,16 @@ var capabilityForTool = map[string]string{
 	"read_grain_task_transcript": "self-debug",
 	"read_pipeline_changes":      "self-debug",
 	"read_grain_metrics":         "self-debug",
-	"read_grain_log":             "grain-log",
+	"read_grain_log":             "https://grain.dev/capabilities/grain#journal",
 	"list_bootstrap_playbooks":   "bootstrap-playbooks",
 	"read_bootstrap_playbook":    "bootstrap-playbooks",
-	"read_deployment_health":     "deployment-health",
-	"read_deployment_state":      "deployment-health",
+	"read_deployment_health":     "https://grain.dev/capabilities/grain#health",
+	"read_deployment_state":      "https://grain.dev/capabilities/grain#health",
 	"run_host_command":           "self-repair",
 	"list_issues":                "read-issues",
 	"read_issue":                 "read-issues",
+	"query_grain_db":             "https://grain.dev/capabilities/grain#sql",
+	"exec_grain_db":              `https://grain.dev/capabilities/grain#sql={"write":true}`,
 }
 
 // CapabilityForTool names the capability that puts tool on a run's

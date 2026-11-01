@@ -55,33 +55,41 @@ export default function SettingsCard({
           {title}
         </Typography>
       )}
-      {readOnly ? (
-        // A disabled fieldset disables every native control inside it,
-        // but MUI draws a Select, a Checkbox's box and a chip's delete as
-        // elements of its own: those are dimmed and stopped by hand, so a
-        // read-only card neither looks nor acts editable. Links still
-        // work -- "View in config repo" is one.
-        <Box
-          component="fieldset"
-          disabled
-          data-settings-readonly
-          sx={{
-            border: 0,
-            p: 0,
-            m: 0,
-            minInlineSize: 0,
-            "& button:disabled, & .MuiCheckbox-root:has(input:disabled), & .MuiSwitch-root:has(input:disabled), & .MuiRadio-root:has(input:disabled)":
-              { opacity: 0.5, cursor: "default" },
-            "& .MuiSelect-select, & .MuiChip-deleteIcon, & .MuiAutocomplete-root":
-              { pointerEvents: "none" },
-          }}
-        >
-          {children}
-        </Box>
-      ) : (
-        children
-      )}
+      <ReadOnlyFieldset disabled={readOnly}>{children}</ReadOnlyFieldset>
     </Paper>
+  );
+}
+
+// ReadOnlyFieldset draws its children read-only: what a read-only
+// card wraps itself in, and what a card that stays usable in external
+// mode wraps round the parts of it the API still refuses there (a model
+// connection's own fields, beside its credential).
+export function ReadOnlyFieldset({ disabled = true, children }) {
+  if (!disabled) return children;
+  return (
+    // A disabled fieldset disables every native control inside it,
+    // but MUI draws a Select, a Checkbox's box and a chip's delete as
+    // elements of its own: those are dimmed and stopped by hand, so a
+    // read-only card neither looks nor acts editable. Links still
+    // work -- "View in config repo" is one.
+    <Box
+      component="fieldset"
+      disabled
+      data-settings-readonly
+      sx={{
+        border: 0,
+        p: 0,
+        m: 0,
+        minInlineSize: 0,
+        "& button:disabled, & .MuiCheckbox-root:has(input:disabled), & .MuiSwitch-root:has(input:disabled), & .MuiRadio-root:has(input:disabled)":
+          { opacity: 0.5, cursor: "default" },
+        "& .MuiSelect-select, & .MuiChip-deleteIcon, & .MuiAutocomplete-root": {
+          pointerEvents: "none",
+        },
+      }}
+    >
+      {children}
+    </Box>
   );
 }
 
@@ -290,6 +298,20 @@ export function DefaultableField({
     s.saveChoice?.({ [name]: emptyValue });
   };
 
+  // save sends value, and puts the box back to what the server holds if
+  // the server refuses it: the draft is this field's own state, which a
+  // rolled-back setting does not reach when its source chip is
+  // unchanged (2026-11-01 walkthrough: a refused namespace "Walk NS"
+  // stayed in the box, looking saved).
+  const save = (value) => {
+    const before = { draft: effectiveValue, custom: isStoredCustom };
+    Promise.resolve(s.saveChoice?.({ [name]: value })).then((saved) => {
+      if (saved !== false) return;
+      setDraft(before.draft);
+      setHasSavedCustom(before.custom);
+    });
+  };
+
   const handleBlur = () => {
     const val = draft.trim();
     if (!isStoredCustom && !hasSavedCustom) {
@@ -300,13 +322,13 @@ export function DefaultableField({
       }
       setDraft(val);
       setHasSavedCustom(true);
-      s.saveChoice?.({ [name]: val });
+      save(val);
       return;
     }
     if (val === "" || val === defaultStr.trim()) {
       setDraft(defaultStr);
       setHasSavedCustom(false);
-      s.saveChoice?.({ [name]: emptyValue });
+      save(emptyValue);
       return;
     }
     if (val === storedStr.trim()) {
@@ -316,7 +338,7 @@ export function DefaultableField({
     }
     setDraft(val);
     setHasSavedCustom(true);
-    s.saveChoice?.({ [name]: val });
+    save(val);
   };
 
   return (

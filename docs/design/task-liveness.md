@@ -198,7 +198,10 @@ Checked and found to comply:
 - **Deferred with no wake time.** This is a person's deliberate "not now":
   the task is person-owned with "Undefer". It is deliberately kept out of
   the inbox (`waitsOnUser`), because deferring is the answer the inbox
-  asks for. A deferral with a wake time is driven by `reconcileWake`.
+  asks for. A deferral with a wake time is driven by `reconcileWake`,
+  measured from the wake time (`model.StateTimes.Since`) with one
+  cycle's grace (`deferredWake`); past that it is in the inbox's stalled
+  group with "Undefer".
 - **Blocked on a task that is itself stuck.** The wait is on a named
   resource, the other task, and the escalation belongs to that task. A
   stuck blocker is in the inbox's stalled group, or merge_failed, so the

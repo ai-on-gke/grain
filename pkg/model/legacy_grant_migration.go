@@ -38,13 +38,38 @@ import (
 // so a later conversion adding to that table never changes what an
 // earlier migration did.
 func rewriteLegacyGrants(renames map[string]string) func(ctx context.Context, tx *sql.Tx) error {
+	multi := make(map[string][]string, len(renames))
+	for from, to := range renames {
+		multi[from] = []string{to}
+	}
+	return rewriteLegacyGrantsMulti(multi)
+}
+
+// rewriteLegacyGrantsMulti is rewriteLegacyGrants for retirements where one
+// legacy capability splits into one or more canonical grants (such as
+// deployment-health -> [api:deployment:read, grain#health={}]).
+func rewriteLegacyGrantsMulti(renames map[string][]string) func(ctx context.Context, tx *sql.Tx) error {
 	return func(ctx context.Context, tx *sql.Tx) error {
 		for _, t := range []struct{ table, owner string }{
 			{"task_grant", "task_id"},
 			{"template_grant", "template_id"},
 			{"schedule_grant", "schedule_id"},
 		} {
-			for from, to := range renames {
+			for from, tos := range renames {
+				if len(tos) == 0 {
+					continue
+				}
+				for _, extra := range tos[1:] {
+					if _, err := tx.ExecContext(ctx,
+						"INSERT INTO `"+t.table+"` (`"+t.owner+"`, `capability`, `via`, `folder`) "+
+							"SELECT `"+t.owner+"`, ?, `via`, `folder` FROM `"+t.table+"` "+
+							"WHERE `capability` = ? AND `"+t.owner+"` NOT IN "+
+							"(SELECT `"+t.owner+"` FROM `"+t.table+"` WHERE `capability` = ?)",
+						extra, from, extra); err != nil {
+						return fmt.Errorf("%s: inserting %s for %s: %w", t.table, extra, from, err)
+					}
+				}
+				to := tos[0]
 				if _, err := tx.ExecContext(ctx, "DELETE FROM `"+t.table+"` WHERE `capability` = ? AND `"+t.owner+"` IN "+
 					"(SELECT `"+t.owner+"` FROM `"+t.table+"` WHERE `capability` = ?)", from, to); err != nil {
 					return fmt.Errorf("%s: dropping %s where %s is already held: %w", t.table, from, to, err)
@@ -54,23 +79,29 @@ func rewriteLegacyGrants(renames map[string]string) func(ctx context.Context, tx
 				}
 			}
 		}
-		if err := rewriteCapabilityListColumn(ctx, tx, "grain_config", []string{"id"}, "default_capabilities", renames); err != nil {
+		if err := rewriteCapabilityListColumnMulti(ctx, tx, "grain_config", []string{"id"}, "default_capabilities", renames); err != nil {
 			return err
 		}
-		if err := rewriteCapabilityListColumn(ctx, tx, "repo_config", []string{"owner", "name"}, "default_capabilities", renames); err != nil {
+		if err := rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "default_capabilities", renames); err != nil {
 			return err
 		}
-		return rewriteConsoleSessionGrants(ctx, tx, renames)
+		return rewriteConsoleSessionGrantsMulti(ctx, tx, renames)
 	}
 }
 
-// renameCapabilityList is names with every entry of renames rewritten,
-// and each name kept once, where it first appears. changed is false when
+// renameCapabilityListMulti is names with every entry of renames expanded in
+// place and each name kept once, where it first appears. changed is false when
 // nothing was renamed.
-func renameCapabilityList(names []string, renames map[string]string) (out []string, changed bool) {
+func renameCapabilityListMulti(names []string, renames map[string][]string) (out []string, changed bool) {
 	for _, name := range names {
-		if to, ok := renames[name]; ok {
-			name, changed = to, true
+		if tos, ok := renames[name]; ok {
+			changed = true
+			for _, to := range tos {
+				if !slices.Contains(out, to) {
+					out = append(out, to)
+				}
+			}
+			continue
 		}
 		if !slices.Contains(out, name) {
 			out = append(out, name)
@@ -79,10 +110,10 @@ func renameCapabilityList(names []string, renames map[string]string) (out []stri
 	return out, changed
 }
 
-// rewriteCapabilityListColumn rewrites a column holding a stored
+// rewriteCapabilityListColumnMulti rewrites a column holding a stored
 // capability list (joinCapabilities' text) in every row of table, each
 // row named by its key columns.
-func rewriteCapabilityListColumn(ctx context.Context, tx *sql.Tx, table string, keys []string, column string, renames map[string]string) error {
+func rewriteCapabilityListColumnMulti(ctx context.Context, tx *sql.Tx, table string, keys []string, column string, renames map[string][]string) error {
 	var cols, where []string
 	for _, k := range keys {
 		cols = append(cols, "`"+k+"`")
@@ -109,7 +140,7 @@ func rewriteCapabilityListColumn(ctx context.Context, tx *sql.Tx, table string, 
 			rows.Close()
 			return fmt.Errorf("%s.%s: reading: %w", table, column, err)
 		}
-		if names, changed := renameCapabilityList(splitCapabilities(stored), renames); changed {
+		if names, changed := renameCapabilityListMulti(splitCapabilities(stored), renames); changed {
 			updates = append(updates, update{key, joinCapabilities(names)})
 		}
 	}
@@ -129,12 +160,12 @@ func rewriteCapabilityListColumn(ctx context.Context, tx *sql.Tx, table string, 
 	return nil
 }
 
-// rewriteConsoleSessionGrants rewrites the Capabilities of each standing
+// rewriteConsoleSessionGrantsMulti rewrites the Capabilities of each standing
 // session in grain_config.console_sessions. The JSON is edited as JSON,
 // every other field passed through exactly as stored, so the migration
 // does not depend on what ConsoleSession looks like in whichever build
 // runs it.
-func rewriteConsoleSessionGrants(ctx context.Context, tx *sql.Tx, renames map[string]string) error {
+func rewriteConsoleSessionGrantsMulti(ctx context.Context, tx *sql.Tx, renames map[string][]string) error {
 	var stored string
 	err := tx.QueryRowContext(ctx, "SELECT `console_sessions` FROM `grain_config` WHERE `id` = 1").Scan(&stored)
 	if err == sql.ErrNoRows || (err == nil && stored == "") {
@@ -159,7 +190,7 @@ func rewriteConsoleSessionGrants(ctx context.Context, tx *sql.Tx, renames map[st
 		if err := json.Unmarshal(raw, &names); err != nil {
 			continue
 		}
-		renamed, did := renameCapabilityList(names, renames)
+		renamed, did := renameCapabilityListMulti(names, renames)
 		if !did {
 			continue
 		}

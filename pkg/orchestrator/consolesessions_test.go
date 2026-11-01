@@ -106,7 +106,7 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{"bootstrap-playbooks", "deployment-health", "durable", "grain-log", "self-debug"}) {
+	if !slices.Equal(grants, []string{"api:deployment:read", "bootstrap-playbooks", "durable", model.GrainHealthGrant, model.GrainJournalGrant, "self-debug"}) {
 		t.Errorf("Grants = %v, want the shipped default set plus durable", grants)
 	}
 	goal, err := store.TaskGoal(ctx, director.ID)
@@ -2437,5 +2437,119 @@ func TestUIEditsWithStateRepoUnlockedPersistAcrossOrchestratorAndStateRepoCycles
 		return slices.Contains(tk.Tags, model.ConsoleSessionTag("ops-chat"))
 	}) {
 		t.Fatalf("expected ops-chat session task to be reconciled and preserved across staterepo sync, got %+v", sessions)
+	}
+}
+
+// declareDirector stores a director declaring reads and writes on the
+// acme repositories this file's restart tests use.
+func declareDirector(t *testing.T, store *model.Store, reads []model.RepoRef, writes []model.WriteTarget) {
+	t.Helper()
+	settings(t, store, func(cfg *model.Config) {
+		cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "acme/infra"}
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID:            model.DirectorSessionID,
+			Title:         "Director",
+			NetworkAccess: model.NetworkOpen,
+			Reads:         reads,
+			Writes:        writes,
+		}}
+	})
+}
+
+func hasWrite(writes []model.WriteTarget, owner, name string) bool {
+	return slices.ContainsFunc(writes, func(w model.WriteTarget) bool {
+		return w.Repo.Same(model.RepoRef{Owner: owner, Name: name})
+	})
+}
+
+func hasRead(reads []model.RepoRef, owner, name string) bool {
+	return slices.ContainsFunc(reads, func(r model.RepoRef) bool {
+		return r.Same(model.RepoRef{Owner: owner, Name: name})
+	})
+}
+
+// A reads: or writes: entry dropped from a standing session's declaration
+// while there is no record of what was last synced onto its task -- a
+// store from before console_session_sync existed, the first sync after
+// the upgrade that brings it -- is dropped from the task too: the
+// declaration is authoritative, the way it already was for GrantByGrain
+// grants. Kept, it was kept for good, since every later sync saw it as
+// already synced, and the session went on pushing to a repository the
+// deployment's configuration no longer let it write.
+func TestConsoleSessionSyncDropsUndeclaredWritesWithoutSnapshot(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	docs, infra := model.RepoRef{Owner: "acme", Name: "docs"}, model.RepoRef{Owner: "acme", Name: "infra"}
+	widgets := model.WriteTarget{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, Base: "main"}
+	infraWrite := model.WriteTarget{Repo: infra, Base: "main"}
+	declareDirector(t, store, []model.RepoRef{docs, infra}, []model.WriteTarget{widgets, infraWrite})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+	if !hasWrite(director.Writes, "acme", "infra") || !hasRead(director.Reads, "acme", "infra") {
+		t.Fatalf("filed director Reads = %v, Writes = %v, want acme/infra on both", director.Reads, director.Writes)
+	}
+
+	declareDirector(t, store, []model.RepoRef{docs}, []model.WriteTarget{widgets})
+	if _, err := store.DB().ExecContext(ctx, "DELETE FROM `console_session_sync`"); err != nil {
+		t.Fatal(err)
+	}
+	runSessions(t, store, baseTime.Add(time.Minute))
+	runSessions(t, store, baseTime.Add(2*time.Minute))
+
+	synced, err := store.GetTask(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasWrite(synced.Writes, "acme", "infra") || !hasWrite(synced.Writes, "acme", "widgets") {
+		t.Errorf("Writes = %v, want only the declared acme/widgets", synced.Writes)
+	}
+	if hasRead(synced.Reads, "acme", "infra") || !hasRead(synced.Reads, "acme", "docs") {
+		t.Errorf("Reads = %v, want acme/infra dropped and acme/docs kept", synced.Reads)
+	}
+}
+
+// What a session's sync last applied is in the store, not in the
+// daemon's memory, so a restart tells an operator's own edit on the task
+// from a declaration change exactly as a running daemon does: the write
+// the operator added survives it, and one the declaration dropped while
+// the daemon was down is dropped.
+func TestConsoleSessionSnapshotSurvivesARestart(t *testing.T) {
+	orchestrator.LogToTest(t)
+	dir := t.TempDir()
+	store, db := openStoreInDir(t, dir)
+	ctx := context.Background()
+	docs := model.RepoRef{Owner: "acme", Name: "docs"}
+	infra := model.WriteTarget{Repo: model.RepoRef{Owner: "acme", Name: "infra"}, Base: "main"}
+	declareDirector(t, store, []model.RepoRef{docs}, []model.WriteTarget{infra})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	client := ui.NewClient(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		StateRepoRef: func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+	}, store)
+	client.Now = func() time.Time { return baseTime.Add(time.Minute) }
+	writes := []ui.WriteTarget{{Repo: "acme/infra", Base: "main"}, {Repo: "acme/widgets", Base: "main"}}
+	if _, err := client.UpdateTask(ctx, director.ID, ui.UpdateTaskRequest{Writes: &writes}); err != nil {
+		t.Fatalf("operator adding a write: %v", err)
+	}
+	runSessions(t, store, baseTime.Add(2*time.Minute))
+	db.Close()
+
+	store, db = openStoreInDir(t, dir)
+	defer db.Close()
+	declareDirector(t, store, []model.RepoRef{docs}, nil)
+	runSessions(t, store, baseTime.Add(3*time.Minute))
+
+	synced, err := store.GetTask(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasWrite(synced.Writes, "acme", "widgets") {
+		t.Errorf("Writes = %v after a restart, lost the operator's acme/widgets", synced.Writes)
+	}
+	if hasWrite(synced.Writes, "acme", "infra") {
+		t.Errorf("Writes = %v after a restart, kept acme/infra the declaration dropped while the daemon was down", synced.Writes)
 	}
 }

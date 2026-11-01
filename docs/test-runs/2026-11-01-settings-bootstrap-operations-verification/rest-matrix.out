@@ -1,0 +1,118 @@
+PASS [baseline] configRepoOnly: expect False, got False 
+PASS [a-unlocked-put] defaultModel: expect 200, got 200 readback='claude-opus-5-5' exportCommit=yes
+PASS [a-unlocked-put] maxWorkers: expect 200, got 200 readback=7 exportCommit=yes
+PASS [a-unlocked-put] sandboxCpus: expect 200, got 200 readback=3 exportCommit=yes
+PASS [a-unlocked-put] sandboxMemoryMb: expect 200, got 200 readback=6144 exportCommit=yes
+PASS [a-unlocked-put] sandboxDiskGb: expect 200, got 200 readback=30 exportCommit=yes
+PASS [a-unlocked-put] networkAccess: expect 200, got 200 readback='none' exportCommit=no
+PASS [a-unlocked-put] sandboxCpuOvercommit: expect 200, got 200 readback=3 exportCommit=yes
+PASS [a-unlocked-put] sandboxMemoryOvercommit: expect 200, got 200 readback=1.5 exportCommit=yes
+PASS [a-unlocked-put] sandboxDiskFloorShare: expect 200, got 200 readback=0.2 exportCommit=yes
+PASS [a-unlocked-put] sandboxImage: expect 200, got 200 readback='example.com/img:v1' exportCommit=yes
+PASS [a-unlocked-put] sessionSandboxIdleTtl: expect 200, got 200 readback='45m0s' exportCommit=yes
+PASS [a-unlocked-put] githubHost: expect 200, got 200 readback='github.example.com' exportCommit=yes
+PASS [a-unlocked-put] gcpProject: expect 200, got 200 readback='proj-verif' exportCommit=yes
+PASS [a-unlocked-put] gcpServiceAccountEmail: expect 200, got 200 readback='sa@proj-verif.iam.gserviceaccount.com' exportCommit=no
+PASS [a-unlocked-put] packageCacheSizeGb: expect 200, got 200 readback=12 exportCommit=yes
+PASS [a-unlocked-put] actionsCacheSizeGb: expect 200, got 200 readback=9 exportCommit=yes
+PASS [a-unlocked-put] packageCacheEnabled: expect 200, got 200 readback=False exportCommit=yes
+PASS [a-unlocked-put] actionsCacheEnabled: expect 200, got 200 readback=False exportCommit=yes
+PASS [a-unlocked-put] pollInterval: expect 200, got 200 readback='25s' exportCommit=yes
+PASS [a-unlocked-put] maxMergesPerRepo: expect 200, got 200 readback=2 exportCommit=no
+PASS [a-unlocked-put] mergeBatchSize: expect 200, got 200 readback=3 exportCommit=yes
+PASS [a-unlocked-put] mergeGatherWindow: expect 200, got 200 readback='1m30s' exportCommit=yes
+PASS [a-export] defaultModel: expect value in tables/grain_config.json, got True 
+PASS [a-export] maxWorkers: expect value in tables/grain_config.json, got True 
+PASS [a-export] sandboxCpus: expect value in tables/grain_config.json, got True 
+PASS [a-export] sandboxMemoryMb: expect value in tables/grain_config.json, got True 
+PASS [a-export] sandboxDiskGb: expect value in tables/grain_config.json, got True 
+PASS [a-export] networkAccess: expect value in tables/grain_config.json, got True 
+PASS [a-export] sandboxCpuOvercommit: expect value in tables/grain_config.json, got True 
+PASS [a-export] sandboxMemoryOvercommit: expect value in tables/grain_config.json, got True 
+PASS [a-export] sandboxDiskFloorShare: expect value in tables/grain_config.json, got True 
+PASS [a-export] sandboxImage: expect value in tables/grain_config.json, got True 
+PASS [a-export] sessionSandboxIdleTtl: expect value in tables/grain_config.json, got True 
+PASS [a-export] githubHost: expect value in tables/grain_config.json, got True 
+PASS [a-export] gcpProject: expect value in tables/grain_config.json, got True 
+PASS [a-export] gcpServiceAccountEmail: expect value in tables/grain_config.json, got True 
+PASS [a-export] packageCacheSizeGb: expect value in tables/grain_config.json, got True 
+PASS [a-export] actionsCacheSizeGb: expect value in tables/grain_config.json, got True 
+PASS [a-export] pollInterval: expect value in tables/grain_config.json, got True 
+PASS [a-export] maxMergesPerRepo: expect value in tables/grain_config.json, got True 
+PASS [a-export] mergeBatchSize: expect value in tables/grain_config.json, got True 
+PASS [a-export] mergeGatherWindow: expect value in tables/grain_config.json, got True 
+PASS [a-secret] PUT /api/secrets: expect 200, got 200 
+PASS [a-secret] GET /api/secrets hides value: expect no value, got False 
+PASS [a-secret] secret absent from grain/config: expect absent, got False 
+PASS [a-secret] secret absent from /api/settings: expect absent, got False 
+PASS [a-executor] POST /api/executors/tokens: expect 200, got 201 {'token': 'gxt_aecb004c49c368d2c1d4ae0ed9414e9c', 'record': {'id': 'exec-tok-4',
+PASS [a-executor] token secret not exported: expect absent, got False 
+PASS [a-executor] revoke token: expect 200, got 200 
+PASS [a-executor] executor tokens not exported: expect absent, got  
+PASS [b-repo] grain state check: expect 0, got 0 ain knows loaded:  26 rows across 4 tables   grain_config                 1   schedule                     5   schedule_grant               15   schedule_read                5 ok: grain can load this 
+PASS [b-repo] POST /api/state-repo/sync: expect 200, got 200 
+PASS [b-repo-sync] pollInterval: expect 40s, got 40s 
+PASS [b-repo-sync] mergeBatchSize: expect 5, got 5 
+PASS [b-repo-sync] packageCacheSizeGb: expect 20, got 20 
+PASS [b-repo-sync] sandboxCpus: expect 5, got 5 
+PASS [b-repo-sync] sessionSandboxIdleTtl: expect 50m0s, got 50m0s 
+PASS [b-repo-sync] gcpProject: expect proj-from-repo, got proj-from-repo 
+PASS [c-lock] PUT settingsLocked=true: expect 200, got 200 
+PASS [c-lock] GET /api/config configRepoOnly: expect True, got True 
+PASS [c-locked-put] defaultModel: expect 200, got 200 code=None
+PASS [c-locked-put] maxWorkers: expect 200, got 200 code=None
+PASS [c-locked-put] sandboxCpus: expect 200, got 200 code=None
+PASS [c-locked-put] sandboxMemoryMb: expect 200, got 200 code=None
+PASS [c-locked-put] sandboxDiskGb: expect 200, got 200 code=None
+PASS [c-locked-put] networkAccess: expect 200, got 200 code=None
+PASS [c-locked-put] sandboxCpuOvercommit: expect 200, got 200 code=None
+PASS [c-locked-put] sandboxMemoryOvercommit: expect 200, got 200 code=None
+PASS [c-locked-put] sandboxDiskFloorShare: expect 200, got 200 code=None
+PASS [c-locked-put] sandboxImage: expect 200, got 200 code=None
+PASS [c-locked-put] sessionSandboxIdleTtl: expect 409, got 409 code=config_managed_externally
+PASS [c-locked-put] githubHost: expect 409, got 409 code=config_managed_externally
+PASS [c-locked-put] gcpProject: expect 409, got 409 code=config_managed_externally
+PASS [c-locked-put] gcpServiceAccountEmail: expect 409, got 409 code=config_managed_externally
+PASS [c-locked-put] packageCacheSizeGb: expect 409, got 409 code=config_managed_externally
+PASS [c-locked-put] actionsCacheSizeGb: expect 409, got 409 code=config_managed_externally
+PASS [c-locked-put] packageCacheEnabled: expect 409, got 409 code=config_managed_externally
+PASS [c-locked-put] actionsCacheEnabled: expect 409, got 409 code=config_managed_externally
+PASS [c-locked-put] pollInterval: expect 409, got 409 code=config_managed_externally
+PASS [c-locked-put] maxMergesPerRepo: expect 409, got 409 code=config_managed_externally
+PASS [c-locked-put] mergeBatchSize: expect 409, got 409 code=config_managed_externally
+PASS [c-locked-put] mergeGatherWindow: expect 409, got 409 code=config_managed_externally
+PASS [c-locked] PUT /api/secrets: expect 200, got 200 
+PASS [c-locked] POST /api/executors/tokens: expect 2xx, got 201 
+PASS [c-locked] POST /api/state-repo/sync: expect 200, got 200 
+PASS [c-lock] PUT settingsLocked=false (unlock): expect 200, got 200 
+PASS [c-lock] unlocked configRepoOnly: expect False, got False 
+PASS [c-lock] pollInterval writable again: expect 200, got 200 
+PASS [d-external] POST /api/state-repo/remote: expect 200, got 200 {'available': True, 'mode': 'external', 'repository': 'live/ext', 'remote': 'file:///home/debian/live/ext.git', 'branch': 'main', 'dir': '/home/debian/live/.gra
+PASS [d-external] configRepoOnly: expect True, got True 
+PASS [d-external-put] defaultModel: expect 409, got 409 
+PASS [d-external-put] maxWorkers: expect 409, got 409 
+PASS [d-external-put] sandboxCpus: expect 409, got 409 
+PASS [d-external-put] sandboxMemoryMb: expect 409, got 409 
+PASS [d-external-put] sandboxDiskGb: expect 409, got 409 
+PASS [d-external-put] networkAccess: expect 409, got 409 
+PASS [d-external-put] sandboxCpuOvercommit: expect 409, got 409 
+PASS [d-external-put] sandboxMemoryOvercommit: expect 409, got 409 
+PASS [d-external-put] sandboxDiskFloorShare: expect 409, got 409 
+PASS [d-external-put] sandboxImage: expect 409, got 409 
+PASS [d-external-put] sessionSandboxIdleTtl: expect 409, got 409 
+PASS [d-external-put] githubHost: expect 409, got 409 
+PASS [d-external-put] gcpProject: expect 409, got 409 
+PASS [d-external-put] gcpServiceAccountEmail: expect 409, got 409 
+PASS [d-external-put] packageCacheSizeGb: expect 409, got 409 
+PASS [d-external-put] actionsCacheSizeGb: expect 409, got 409 
+PASS [d-external-put] packageCacheEnabled: expect 409, got 409 
+PASS [d-external-put] actionsCacheEnabled: expect 409, got 409 
+PASS [d-external-put] pollInterval: expect 409, got 409 
+PASS [d-external-put] maxMergesPerRepo: expect 409, got 409 
+PASS [d-external-put] mergeBatchSize: expect 409, got 409 
+PASS [d-external-put] mergeGatherWindow: expect 409, got 409 
+PASS [d-external] PUT /api/secrets: expect 200, got 200 
+PASS [d-external] PUT settingsLocked (bootstrap) in external: expect 409, got 409 
+PASS [d-external] back to internal: expect 200, got 200 
+PASS [d-external] internal again configRepoOnly: expect False, got False 
+FAILS: 0 of 117

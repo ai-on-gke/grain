@@ -136,6 +136,10 @@ var notSettings = []string{
 	// (model.TaskGoal): declared with the task and rewritten by
 	// reconcileTaskGoals every cycle.
 	"task_goal",
+	// The standing-session declaration last synced onto a session's task
+	// (model.ConsoleSessionConfigSnapshot): rewritten by every console
+	// session sync, grain's record of what it applied.
+	"console_session_sync",
 	"task_observation",
 	"task_run",
 	"task_run_tool",
@@ -156,6 +160,10 @@ var notSettings = []string{
 	// on (model.Store.RecordRelayedCalls): runtime bookkeeping deleted
 	// when the run finishes.
 	"task_run_relayed_call",
+	// A live run's CI wait time per source, left by a stopping daemon
+	// for the one that adopts the run (model.Store.SetRunWaitLedger):
+	// runtime bookkeeping deleted when the run finishes.
+	"task_run_wait_ledger",
 	// What a run said when it failed for a reason grain could not name
 	// (model.UnmatchedFailure). grain's own record of what happened to
 	// it, written after the run finished, and nothing a pull request

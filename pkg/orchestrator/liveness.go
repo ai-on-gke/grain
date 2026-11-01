@@ -678,6 +678,12 @@ var taskLane = laneLiveness{
 			// task nobody has put a date on, or every parked task in the
 			// deployment would be waiting on a reconciler that has nothing
 			// to do with it.
+			//
+			// The driven half is deferredWake below, which TaskStallNote
+			// measures a deferral by when it has a wake time: the record
+			// tells the two apart (model.StateTimes.Since answers the wake
+			// time, and nil without one), so the class here can stay the
+			// one that is true of the common case.
 			control:   "Undefer",
 			controlBy: "ui.Client.Undefer",
 			patience:  noPatience,
@@ -696,6 +702,23 @@ var taskLane = laneLiveness{
 	},
 }
 
+// deferredWake is a deferral with a wake time on it, classified: the
+// driven half of model.StateDeferred (see its entry in taskLane), and the
+// sub-case livenessreasons.go calls taskReasonDeferredWake.
+//
+// reconcileWake undefers it on the first cycle at or after the wake time,
+// so the patience is one cycle's grace, measured from the wake time rather
+// than from when the task was deferred (model.StateTimes.Since). Past it,
+// the deferral is one nothing has picked back up, and the row offers
+// Undefer -- the escalation to a person taskReasons names.
+var deferredWake = stateLiveness{
+	class:    livenessDriven,
+	driver:   "reconcileWake",
+	patience: cycleGracePatience,
+	why: "its wake time has passed and it is still deferred -- \"Undefer\" picks it back up by hand, " +
+		"and the daemon's log is where a wake that failed says why",
+}
+
 // of is one state's classification, and whether this lane has one at all.
 func (l laneLiveness) of(state string) (stateLiveness, bool) {
 	liveness, ok := l.states[state]
@@ -711,7 +734,15 @@ func (l laneLiveness) of(state string) (stateLiveness, bool) {
 // "Adding to this list"). The guard is what stops that being indefinite.
 func (l laneLiveness) overdue(state string, since *time.Time, now time.Time) (time.Duration, bool) {
 	liveness, ok := l.of(state)
-	if !ok || since == nil || liveness.patience == nil {
+	if !ok {
+		return 0, false
+	}
+	return liveness.overdue(since, now)
+}
+
+// overdue is laneLiveness.overdue for a classification already in hand.
+func (liveness stateLiveness) overdue(since *time.Time, now time.Time) (time.Duration, bool) {
+	if since == nil || liveness.patience == nil {
 		return 0, false
 	}
 	patience := liveness.patience()
@@ -771,11 +802,19 @@ func (l laneLiveness) stalledAt(state string, since *time.Time, now time.Time) *
 // shape: what a person needs to know is that this is past what it should
 // take, not to the second by how much.
 func (l laneLiveness) noteWithStall(state, note string, since *time.Time, now time.Time) string {
-	patience, ok := l.overdue(state, since, now)
+	liveness, ok := l.of(state)
 	if !ok {
 		return note
 	}
-	liveness, _ := l.of(state)
+	return l.noteWithStallOf(liveness, note, since, now)
+}
+
+// noteWithStallOf is noteWithStall for a classification already in hand.
+func (l laneLiveness) noteWithStallOf(liveness stateLiveness, note string, since *time.Time, now time.Time) string {
+	patience, ok := liveness.overdue(since, now)
+	if !ok {
+		return note
+	}
 	stall := fmt.Sprintf("this has stood here for more than %s, which is longer than %s should take, "+
 		"so read it as stuck rather than as waiting", humanDuration(patience), l.driverWords(liveness))
 	if liveness.why != "" {
@@ -835,7 +874,14 @@ func (l laneLiveness) noteWithWayOut(state, note string) string {
 // stored field something has to keep true (see this file's "Two lanes",
 // and noteWithStall on why the sentence names the patience rather than
 // counting the age up).
+//
+// A deferred task is measured as deferredWake: the only deferral a caller
+// has a since for is one with a wake time (model.StateTimes.Since), and
+// since is then that wake time.
 func TaskStallNote(state model.State, since, now time.Time) string {
+	if state == model.StateDeferred {
+		return taskLane.noteWithStallOf(deferredWake, "", &since, now)
+	}
 	return taskLane.noteWithStall(string(state), "", &since, now)
 }
 
