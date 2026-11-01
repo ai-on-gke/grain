@@ -326,16 +326,17 @@ describe("SettingsPage", () => {
     const popped = vi.fn();
     window.addEventListener("popstate", popped);
     try {
-      const link = within(
+      const links = within(
         screen.getByTestId("config-managed-notice"),
-      ).getByTestId("config-repo-link");
-      expect(link).toHaveAttribute(
-        "href",
+      ).getAllByTestId("config-repo-link");
+      expect(links.map((a) => a.getAttribute("href"))).toEqual([
+        "/config?path=tables%2Fgrain_config.json",
+        "/config?path=tables%2Fapi_scope_set.json",
         "/config?path=settings%2Fcapabilities.yml",
-      );
-      await user.click(link);
+      ]);
+      await user.click(links[0]);
       expect(window.location.pathname).toBe("/config");
-      expect(window.location.search).toBe("?path=settings%2Fcapabilities.yml");
+      expect(window.location.search).toBe("?path=tables%2Fgrain_config.json");
       expect(popped).toHaveBeenCalled();
     } finally {
       window.removeEventListener("popstate", popped);

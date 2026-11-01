@@ -19,11 +19,19 @@ import { expect, test } from "./fixtures.js";
 // configRepoOnly), Settings keeps Models and Sandboxes editable and draws
 // the departing sections -- and a repository's page -- read-only under a
 // notice linking each file into the Config Repo Browser. `grain demo` has
-// no config repo, so the flag is set on its /api/config answer here.
+// no config repo, so the flag is set on its /api/config answer here, and
+// on GET /api/settings, which carries the same configRepoOnly for the
+// row it answers with (the Settings page draws on that once loaded).
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
 async function configRepoOnly(page) {
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({ response, json: { ...body, configRepoOnly: true } });
+  });
   await page.route("**/api/config", async (route) => {
     const response = await route.fetch();
     const body = await response.json();
@@ -119,12 +127,13 @@ test("a View in config repo link opens Settings → Config repo with the file na
   await page
     .getByTestId("config-managed-notice")
     .getByTestId("config-repo-link")
+    .first()
     .click();
   await expect(
     page.getByRole("heading", { name: "Config repo", level: 1 }),
   ).toBeVisible();
   await expect(page).toHaveURL(
-    /\/settings\/config-repo\/settings\/capabilities\.yml$/,
+    /\/settings\/config-repo\/tables\/grain_config\.json$/,
   );
 });
 
