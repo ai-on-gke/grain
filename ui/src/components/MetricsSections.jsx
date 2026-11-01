@@ -16,7 +16,6 @@ import {
   Alert,
   Box,
   Chip,
-  Link,
   Table,
   TableBody,
   TableCell,
@@ -26,6 +25,9 @@ import {
   Typography,
 } from "@mui/material";
 import Sparkline from "./Sparkline.jsx";
+import TaskLink from "./detail/TaskLink.jsx";
+import { buildPath } from "../paths.js";
+import { stateNarrowing } from "../report.js";
 import { countOf, hoursOf } from "./SandboxLifetimePanel.jsx";
 import { STATE_LABELS, displayCounts } from "../state.js";
 import {
@@ -610,13 +612,9 @@ export function PromptsSection({ report, onOpenTask }) {
                 {prompts.heaviest.map((task) => (
                   <TableRow key={task.taskId}>
                     <TableCell>
-                      <Link
-                        component="button"
-                        type="button"
-                        onClick={() => onOpenTask?.(task.taskId)}
-                      >
+                      <TaskLink id={task.taskId} onOpenTask={onOpenTask}>
                         task {task.taskId}
-                      </Link>
+                      </TaskLink>
                     </TableCell>
                     <TableCell
                       align="right"
@@ -1436,7 +1434,12 @@ export function GitHubCISection({ report }) {
 // BacklogSection: what was still unfinished when the report was taken.
 // A gauge, not a window -- see the file's own note on why it says so on
 // screen.
-export function BacklogSection({ report, onOpenTask }) {
+//
+// Each count is a link into the task list narrowed to the report's scope
+// and that state, the way the dashboard's state counts are: a real href,
+// so it can be opened in a new tab or copied, followed in-app on a plain
+// click when the page hands it onOpen (PanelBoard.jsx's StatesPanel).
+export function BacklogSection({ report, onOpenTask, scope, onOpen }) {
   const backlog = backlogRows(report?.backlog?.byState);
   const oldestTaskId = report?.backlog?.oldestQueuedTaskId;
   return (
@@ -1473,37 +1476,51 @@ export function BacklogSection({ report, onOpenTask }) {
             gap: 0.7,
           }}
         >
-          {displayCounts(backlog).map(({ state, count }) => (
-            <Chip
-              key={state}
-              size="small"
-              variant="outlined"
-              icon={
-                <span
-                  className={`dot dot-${state}`}
-                  style={{ marginLeft: 8 }}
-                />
-              }
-              label={`${STATE_LABELS[state] || state} ${count}`}
-            />
-          ))}
+          {displayCounts(backlog).map(({ state, count }) => {
+            const listed = stateNarrowing(scope, state);
+            return (
+              <Chip
+                key={state}
+                size="small"
+                variant="outlined"
+                component="a"
+                clickable
+                href={buildPath({ view: "tasks", narrowing: listed })}
+                onClick={(e) => {
+                  if (!onOpen || !isPlainClick(e)) return;
+                  e.preventDefault();
+                  onOpen({ view: "tasks", narrowing: listed });
+                }}
+                icon={
+                  <span
+                    className={`dot dot-${state}`}
+                    style={{ marginLeft: 8 }}
+                  />
+                }
+                label={`${STATE_LABELS[state] || state} ${count}`}
+              />
+            );
+          })}
         </Box>
       )}
       {oldestTaskId && (
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           Oldest waiting task:{" "}
-          <Link
-            component="button"
-            type="button"
-            onClick={() => onOpenTask?.(oldestTaskId)}
-          >
+          <TaskLink id={oldestTaskId} onOpenTask={onOpenTask}>
             task {oldestTaskId}
-          </Link>
+          </TaskLink>
           , waiting {formatSeconds(report.backlog.oldestQueuedSeconds)}.
         </Typography>
       )}
     </>
   );
+}
+
+// isPlainClick is a click the page should follow itself: the main button
+// with no modifier. Anything else -- a middle click, ctrl/cmd-click --
+// is left to the browser and the link's href.
+function isPlainClick(e) {
+  return !(e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey);
 }
 
 // SandboxesSection: what this deployment's machines have cost it -- how

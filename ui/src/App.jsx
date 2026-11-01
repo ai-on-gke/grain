@@ -3149,6 +3149,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       narrowing={narrowing}
       onNarrow={narrow}
       onOpenTask={openTask}
+      onOpen={openPanelView}
       showError={showError}
       onMoveSection={moveSection}
       pickedWindow={boardWindow}
@@ -3836,6 +3837,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                               metricsWindow={metricsWindow}
                               onPickMetricsWindow={setMetricsWindow}
                               onOpenTask={openTaskFromMetrics}
+                              onOpenView={openPanelView}
                               onAct={act}
                               onOpenSession={openStandingSession}
                             />
