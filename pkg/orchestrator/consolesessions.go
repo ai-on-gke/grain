@@ -769,18 +769,23 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		links = updatedLinks
 	}
 
-	if err := model.RecordSyncedConsoleSession(ctx, deps.Store, task.ID, model.ConsoleSessionConfigSnapshot{
-		Capabilities:    session.Capabilities,
-		Reads:           session.Reads,
-		Writes:          session.Writes,
-		NetworkAccess:   configNetwork,
-		Model:           configModel,
-		Title:           configTitle,
-		TasksApproved:   session.TasksApproved,
-		KeepRunning:     session.KeepRunning,
-		GoogleChatSpace: session.GoogleChatSpace,
-	}); err != nil {
-		return err
+	// The snapshot is recorded only once the task holds what it describes:
+	// recorded first, a task write that failed -- or a daemon stopped
+	// between the two -- would leave a snapshot without an entry the task
+	// still carries, which every later sync would then keep as an
+	// operator's own edit.
+	record := func() error {
+		return model.RecordSyncedConsoleSession(ctx, deps.Store, task.ID, model.ConsoleSessionConfigSnapshot{
+			Capabilities:    session.Capabilities,
+			Reads:           session.Reads,
+			Writes:          session.Writes,
+			NetworkAccess:   configNetwork,
+			Model:           configModel,
+			Title:           configTitle,
+			TasksApproved:   session.TasksApproved,
+			KeepRunning:     session.KeepRunning,
+			GoogleChatSpace: session.GoogleChatSpace,
+		})
 	}
 
 	taskWrites := task.Writes
@@ -801,9 +806,9 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		slices.Equal(taskReads, reads) &&
 		slices.Equal(taskWrites, writes) &&
 		slices.Equal(taskLinks, links) {
-		return nil
+		return record()
 	}
-	return deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+	if err := deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		t.Title = title
 		t.Body = body
 		t.Grants = grants
@@ -817,7 +822,10 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 			t.ModelSource = ""
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	return record()
 }
 
 func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSession,
