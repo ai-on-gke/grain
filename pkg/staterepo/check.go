@@ -415,6 +415,21 @@ func withheldCarried(path, table string, rows []map[string]any) []string {
 			break
 		}
 	}
+	for _, name := range declaredColumns[table] {
+		for i, row := range rows {
+			v, ok := row[name]
+			if !ok || v == nil || v == "" {
+				continue
+			}
+			out = append(out, fmt.Sprintf(
+				"%s row %d carries %q, which the repository declares in its own .grain/settings.yml "+
+					"and which is never imported from this repository; applying this keeps the value "+
+					"the declaration sync wrote. Remove the column from the file, and edit "+
+					".grain/settings.yml on the repository's default branch to change it",
+				path, i, name))
+			break
+		}
+	}
 	return out
 }
 

@@ -1193,6 +1193,16 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// A daemon whose CI service is not up yet (ci.ErrNotUp) has an
+	// engine that cannot answer, not one with no runs: Find on it is an
+	// empty page, which /ci showed as "No CI runs yet" and which blanked
+	// a table already on screen at its next poll. It is the same 503
+	// GET /api/ci/runs/{id} answers, so the pane keeps what it had and
+	// says why it cannot read more.
+	if !ci.IsUp(runner) {
+		writeCINotUp(w)
+		return
+	}
 	filter, err := ciRunFilterFrom(r.URL.Query(), time.Now())
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
