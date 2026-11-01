@@ -383,7 +383,15 @@ func (c *CapabilityCatalogue) Defines(g string) bool {
 		return ok
 	case strings.HasPrefix(g, APIGrantPrefix):
 		what, _, _ := strings.Cut(strings.TrimPrefix(g, APIGrantPrefix), "@")
-		if _, ok := c.APIScopes.Presets[what]; ok || strings.Contains(what, ":") {
+		for _, key := range presetLookupKeys(what) {
+			if _, ok := c.APIScopes.Presets[key]; ok {
+				return true
+			}
+		}
+		if strings.Contains(what, ":") {
+			return true
+		}
+		if _, ok := APIPresetNamed(canonicalPresetKey(what)); ok {
 			return true
 		}
 		for _, s := range BuiltinAPIScopeSets() {

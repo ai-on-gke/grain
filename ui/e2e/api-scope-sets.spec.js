@@ -61,3 +61,111 @@ for (const [label, viewport] of [
     expect(overflow).toBeLessThanOrEqual(0);
   });
 }
+
+test("surfaces retired in_process and api_scopes.presets catalogue entries in Settings -> Capabilities", async ({
+  page,
+  request,
+}) => {
+  const before = await (await request.get("/api/capability-policy")).json();
+  try {
+    const put = await request.put("/api/capability-policy", {
+      data: {
+        policy: {
+          catalogue: {
+            inProcess: {
+              memory: { enabled: false },
+            },
+            apiScopes: {
+              presets: {
+                "release-notes": {
+                  restrictions: {
+                    repos: ["acme/*"],
+                    requiresPerson: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(put.ok()).toBe(true);
+
+    const refused = await request.post("/api/tasks", {
+      data: {
+        title: "Check retired in_process refusal",
+        noRepo: true,
+        capabilities: ["api:memory"],
+      },
+    });
+    expect(refused.status()).toBe(400);
+    expect(await refused.text()).toContain("in_process.memory");
+
+    for (const viewport of [
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/settings/capabilities");
+
+      const policyAlert = page.getByTestId("policy-catalogue-entries");
+      await expect(policyAlert).toBeVisible();
+      await expect(policyAlert).toContainText(
+        "api:grain/memory — disabled (retired in_process.memory → move to api_scopes.presets.memory)",
+      );
+      await expect(policyAlert).toContainText(
+        "api:grain/release-notes — repos acme/* · requires a person (api_scopes.presets.release-notes)",
+      );
+
+      const memory = page.getByTestId("api-scope-set-grain/memory");
+      await expect(memory).toBeVisible();
+      await expect(memory.getByText("disabled", { exact: true })).toBeVisible();
+      await expect(
+        memory.getByText("in_process.memory", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        memory.getByTestId("api-scope-set-catalogue-grain/memory"),
+      ).toHaveText(
+        "settings/capabilities.yml · retired in_process.memory (move to api_scopes.presets.memory): disabled",
+      );
+
+      const rn = page.getByTestId("api-scope-set-grain/release-notes");
+      await expect(rn).toBeVisible();
+      await expect(
+        rn.getByText("requires a person", { exact: true }),
+      ).toBeVisible();
+      await expect(rn.getByText("restricted", { exact: true })).toBeVisible();
+      await expect(
+        rn.getByTestId("api-scope-set-catalogue-grain/release-notes"),
+      ).toHaveText(
+        "settings/capabilities.yml · api_scopes.presets.release-notes: repos acme/* · requires a person",
+      );
+
+      for (const rowEl of [memory, rn]) {
+        const row = await rowEl.boundingBox();
+        for (const chip of await rowEl.locator(".MuiChip-root").all()) {
+          const box = await chip.boundingBox();
+          expect(box.x).toBeGreaterThanOrEqual(row.x - 0.5);
+          expect(box.x + box.width).toBeLessThanOrEqual(
+            row.x + row.width + 0.5,
+          );
+        }
+      }
+      const overflow = await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(0);
+    }
+  } finally {
+    await request.put("/api/capability-policy", {
+      data: {
+        policy: {
+          ...(before.policy || {}),
+          catalogue: before.policy?.catalogue || {},
+        },
+      },
+    });
+  }
+});

@@ -212,3 +212,51 @@ func rewriteConsoleSessionGrantsMulti(ctx context.Context, tx *sql.Tx, renames m
 	}
 	return nil
 }
+
+// foldRetiredCatalogueInProcess is migration 83's Up: it moves retired 1-to-1
+// preset capability entries in grain_config.capability_policy's catalogue from
+// inProcess[<retired>] into apiScopes.presets[<preset>], merging restrictions
+// conservatively when both exist, and rewrites retired task defaults in the
+// catalogue's own defaults section.
+func foldRetiredCatalogueInProcess(retiredPresets map[string]string, defaultRenames map[string][]string) func(ctx context.Context, tx *sql.Tx) error {
+	return func(ctx context.Context, tx *sql.Tx) error {
+		var stored string
+		err := tx.QueryRowContext(ctx, "SELECT `capability_policy` FROM `grain_config` WHERE `id` = 1").Scan(&stored)
+		if err == sql.ErrNoRows || (err == nil && strings.TrimSpace(stored) == "") {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("grain_config.capability_policy: reading: %w", err)
+		}
+		policy, err := DecodeCapabilityPolicy(stored)
+		if err != nil || policy.Catalogue == nil {
+			return nil
+		}
+		cat := policy.Catalogue
+		changed := cat.foldRetiredInProcessMap(retiredPresets)
+		if len(defaultRenames) > 0 {
+			if next, did := renameCapabilityListMulti(cat.Defaults.Task, defaultRenames); did {
+				cat.Defaults.Task = next
+				changed = true
+			}
+			for repo, rd := range cat.Defaults.Repos {
+				if next, did := renameCapabilityListMulti(rd.Task, defaultRenames); did {
+					rd.Task = next
+					cat.Defaults.Repos[repo] = rd
+					changed = true
+				}
+			}
+		}
+		if !changed {
+			return nil
+		}
+		encoded, err := EncodeCapabilityPolicy(policy)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE `grain_config` SET `capability_policy` = ? WHERE `id` = 1", encoded); err != nil {
+			return fmt.Errorf("grain_config.capability_policy: rewriting: %w", err)
+		}
+		return nil
+	}
+}

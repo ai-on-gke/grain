@@ -322,6 +322,11 @@ func describeDump(ctx context.Context, db *sql.DB, dir string, tables []string, 
 	}
 	if !migrating {
 		warnings = append(warnings, settingsMissing(tables, settings, present, nested)...)
+		capWarnings, err := capabilitiesWarnings(dir)
+		if err != nil {
+			return nil, err
+		}
+		warnings = append(warnings, capWarnings...)
 	}
 	sort.Strings(warnings)
 	return warnings, nil

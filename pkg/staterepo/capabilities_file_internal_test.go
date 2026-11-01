@@ -243,3 +243,95 @@ func TestCheckCapabilitiesJudgesTemplateGrants(t *testing.T) {
 		t.Fatalf("checkCapabilities = %v", err)
 	}
 }
+
+func TestRetiredInProcessFoldsOnUpgradeAndWarnsInCheck(t *testing.T) {
+	ctx := context.Background()
+	db := openSchema(t)
+	store := model.New(db)
+	if err := store.PutConfig(ctx, model.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := ExportConfig(ctx, db, dir); err != nil {
+		t.Fatal(err)
+	}
+	writeCapabilities(t, dir, `
+in_process:
+  memory:
+    enabled: false
+  release-notes:
+    restrictions:
+      repos: ["acme/*"]
+      requires_person: true
+  self-debug:
+    restrictions:
+      kinds: ["task"]
+`)
+	if err := WriteSchemaVersion(dir, model.SchemaVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	// At the current schema, `grain state check` warns about retired keys
+	// naming the api_scopes.presets.<name> entry to move them to.
+	checkDB := openSchema(t)
+	report, err := Check(ctx, checkDB, dir, model.SchemaVersion)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	joined := strings.Join(report.Warnings, "\n")
+	for _, want := range []string{"in_process.memory is retired", "api_scopes.presets.memory", "in_process.release-notes is retired", "api_scopes.presets.release-notes"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("Check warnings = %q, want %q", joined, want)
+		}
+	}
+	if strings.Contains(joined, "self-debug") {
+		t.Errorf("Check warned about active self-debug: %q", joined)
+	}
+
+	// Importing a pre-83 dump runs migration 83 and rewrites the export so
+	// the retired entries live under api_scopes.presets.<name> with zero
+	// warnings on the exported tree.
+	if err := WriteSchemaVersion(dir, 65); err != nil {
+		t.Fatal(err)
+	}
+	migratedDB := openSchema(t)
+	if _, err := CheckMigration(ctx, migratedDB, dir, t.TempDir(), model.SchemaVersion); err != nil {
+		t.Fatalf("CheckMigration from 65: %v", err)
+	}
+	out := t.TempDir()
+	if err := Export(ctx, migratedDB, out); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if err := WriteSchemaVersion(out, model.SchemaVersion); err != nil {
+		t.Fatal(err)
+	}
+	exported, err := os.ReadFile(filepath.Join(out, SettingsDir, CapabilitiesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(exported)
+	if strings.Contains(text, "  memory:\n    enabled: false\n  release-notes:") {
+		t.Errorf("exported capabilities.yml still carries retired in_process keys:\n%s", text)
+	}
+	cat, err := ValidateCapabilitiesFile(exported)
+	if err != nil {
+		t.Fatalf("ValidateCapabilitiesFile(exported): %v\n%s", err, text)
+	}
+	if _, ok := cat.InProcess["memory"]; ok {
+		t.Errorf("exported in_process still has memory:\n%s", text)
+	}
+	if p, ok := cat.APIScopes.Presets["memory"]; !ok || p.Enabled == nil || *p.Enabled {
+		t.Errorf("exported api_scopes.presets.memory = %+v, want enabled: false\n%s", p, text)
+	}
+	if p, ok := cat.APIScopes.Presets["release-notes"]; !ok || p.Restrictions == nil || !p.Restrictions.RequiresPerson {
+		t.Errorf("exported api_scopes.presets.release-notes = %+v\n%s", p, text)
+	}
+	recheckDB := openSchema(t)
+	recheck, err := Check(ctx, recheckDB, out, model.SchemaVersion)
+	if err != nil {
+		t.Fatalf("Check(exported): %v", err)
+	}
+	if len(recheck.Warnings) != 0 {
+		t.Errorf("exported dump produced warnings: %v", recheck.Warnings)
+	}
+}

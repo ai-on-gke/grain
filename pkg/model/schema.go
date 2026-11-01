@@ -368,7 +368,12 @@ import "strconv"
 // `https://grain.dev/capabilities/grain#sql={"write":false}` and
 // `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
 // `db-read` and `db-write` providers are retired.
-const SchemaVersion = 82
+//
+// 83 changes no table: it folds retired 1-to-1 preset capability entries in
+// `grain_config`.`capability_policy`'s catalogue from `inProcess[<retired>]`
+// into `apiScopes.presets[<preset>]`, merging restrictions conservatively when
+// both exist, and rewrites retired task defaults in `catalogue.defaults`.
+const SchemaVersion = 83
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

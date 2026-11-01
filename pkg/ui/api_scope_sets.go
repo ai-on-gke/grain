@@ -34,6 +34,16 @@ import (
 // APIScopeSetsFile is where the config repository carries the sets.
 const APIScopeSetsFile = "tables/api_scope_set.json"
 
+// APIScopeSetCatalogue describes any settings/capabilities.yml entry binding
+// a scope set or built-in preset (via api_scopes.presets.<preset>, or a
+// retired in_process.<name> entry).
+type APIScopeSetCatalogue struct {
+	Preset          string                        `json:"preset"`
+	Disabled        bool                          `json:"disabled,omitempty"`
+	Restrictions    *model.CapabilityRestrictions `json:"restrictions,omitempty"`
+	LegacyInProcess []string                      `json:"legacyInProcess,omitempty"`
+}
+
 // APIScopeSetRow is one set as Settings lists it.
 type APIScopeSetRow struct {
 	model.ResolvedAPIScopeSet
@@ -41,6 +51,9 @@ type APIScopeSetRow struct {
 	Source string `json:"source"`
 	// Path is the config repository file a declared set lives in.
 	Path string `json:"path,omitempty"`
+	// Catalogue is any capability catalogue entry disabling or restricting
+	// this preset or scope set.
+	Catalogue *APIScopeSetCatalogue `json:"catalogue,omitempty"`
 }
 
 // APIScopeSetsResponse is GET /api/api-scope-sets.
@@ -110,10 +123,28 @@ func (c *Client) APIScopeSetUsage(ctx context.Context) ([]APIScopeSetUsage, erro
 // APIScopeSets lists the sets in effect.
 func (c *Client) APIScopeSets(ctx context.Context) APIScopeSetsResponse {
 	out := APIScopeSetsResponse{Path: APIScopeSetsFile, Sets: []APIScopeSetRow{}}
+	var cat *model.CapabilityCatalogue
+	if c != nil && c.Store != nil {
+		cat, _ = c.capabilityCatalogue(ctx)
+	}
 	for _, r := range model.APIScopeSetsInEffect() {
 		row := APIScopeSetRow{ResolvedAPIScopeSet: r, Source: "builtin"}
 		if !r.Builtin {
 			row.Source, row.Path = "config", APIScopeSetsFile
+		}
+		if preset, entry, legacy, ok := cat.EffectivePreset(r.Name); ok {
+			disabled := entry.Enabled != nil && !*entry.Enabled
+			if entry.Restrictions != nil && entry.Restrictions.RequiresPerson {
+				row.Person = true
+			}
+			if disabled || entry.Restrictions != nil || len(legacy) > 0 {
+				row.Catalogue = &APIScopeSetCatalogue{
+					Preset:          preset,
+					Disabled:        disabled,
+					Restrictions:    entry.Restrictions,
+					LegacyInProcess: legacy,
+				}
+			}
 		}
 		out.Sets = append(out.Sets, row)
 	}

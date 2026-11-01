@@ -69,4 +69,38 @@ describe("CapabilityPolicyEditor", () => {
       },
     });
   });
+
+  it("surfaces retired in_process and api_scopes.presets catalogue entries", async () => {
+    api.mockResolvedValue({
+      policy: {
+        rules: [],
+        catalogue: {
+          inProcess: {
+            memory: { enabled: false },
+          },
+          apiScopes: {
+            presets: {
+              "release-notes": {
+                restrictions: {
+                  repos: ["acme/*"],
+                  requiresPerson: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    render(<CapabilityPolicyEditor showError={() => {}} />);
+    const cat = await screen.findByTestId("policy-catalogue-entries");
+    expect(cat).toHaveTextContent(
+      "api:grain/memory — disabled (retired in_process.memory → move to api_scopes.presets.memory)",
+    );
+    expect(cat).toHaveTextContent(
+      "api:grain/release-notes — repos acme/* · requires a person (api_scopes.presets.release-notes)",
+    );
+    expect(
+      within(cat).getByRole("link", { name: "API scope sets" }),
+    ).toHaveAttribute("href", "/settings/capabilities#api-scope-sets");
+  });
 });

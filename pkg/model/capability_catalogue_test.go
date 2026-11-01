@@ -282,3 +282,102 @@ func TestCatalogueKindOf(t *testing.T) {
 		t.Fatalf("an interactive task tagged as the director is %q, want task", got)
 	}
 }
+
+func TestFoldRetiredInProcessMergesConservatively(t *testing.T) {
+	cat := &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"memory": {Enabled: boolp(false)},
+			"release-notes": {Restrictions: &model.CapabilityRestrictions{
+				Repos:          model.Patterns{"acme/*"},
+				Kinds:          model.Patterns{"task", "session"},
+				RequiresPerson: true,
+			}},
+			"test-quarantine": {Restrictions: &model.CapabilityRestrictions{
+				Repos:     model.Patterns{"acme/widgets", "other/*"},
+				Kinds:     model.Patterns{"task", "review"},
+				Templates: model.Patterns{"quarantine-*"},
+			}},
+			"pipeline-control": {Restrictions: &model.CapabilityRestrictions{
+				CIOnly: true,
+			}},
+			"self-debug": {Restrictions: &model.CapabilityRestrictions{
+				Repos: model.Patterns{"ai-on-gke/grain"},
+			}},
+			"deployment-health": {Restrictions: &model.CapabilityRestrictions{
+				Kinds: model.Patterns{"director"},
+			}},
+		},
+		APIScopes: model.CatalogueAPIScopes{
+			Presets: map[string]model.CataloguePreset{
+				"test-quarantine": {
+					Enabled: boolp(true),
+					Restrictions: &model.CapabilityRestrictions{
+						Repos:     model.Patterns{"acme/*"},
+						Kinds:     model.Patterns{"task", "director"},
+						Templates: model.Patterns{"quarantine-fix"},
+					},
+				},
+				"pipeline-control": {
+					Restrictions: &model.CapabilityRestrictions{
+						Kinds: model.Patterns{"task"},
+					},
+				},
+			},
+		},
+	}
+
+	if !cat.FoldRetiredInProcess() {
+		t.Fatal("FoldRetiredInProcess = false, want true")
+	}
+	if cat.FoldRetiredInProcess() {
+		t.Fatal("second FoldRetiredInProcess = true, want idempotent false")
+	}
+	if err := cat.Validate(); err != nil {
+		t.Fatalf("Validate after fold: %v", err)
+	}
+
+	for _, retired := range []string{"memory", "release-notes", "test-quarantine", "pipeline-control"} {
+		if _, ok := cat.InProcess[retired]; ok {
+			t.Errorf("retired %q still in InProcess: %+v", retired, cat.InProcess)
+		}
+	}
+	if _, ok := cat.InProcess["self-debug"]; !ok {
+		t.Error("active self-debug was dropped from InProcess")
+	}
+	if _, ok := cat.InProcess["deployment-health"]; !ok {
+		t.Error("split deployment-health was dropped from InProcess")
+	}
+
+	mem := cat.APIScopes.Presets["memory"]
+	if mem.Enabled == nil || *mem.Enabled {
+		t.Fatalf("Presets[memory] = %+v, want disabled", mem)
+	}
+	for _, g := range []string{"api:memory", "api:grain/memory"} {
+		if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{g}}); err == nil || !strings.Contains(err.Error(), "disabled") {
+			t.Errorf("ValidateGrants(%s) = %v, want disabled refusal", g, err)
+		}
+	}
+
+	tq := cat.APIScopes.Presets["test-quarantine"]
+	if tq.Restrictions == nil {
+		t.Fatal("Presets[test-quarantine] has nil restrictions")
+	}
+	if got := []string(tq.Restrictions.Repos); len(got) != 1 || got[0] != "acme/widgets" {
+		t.Errorf("merged test-quarantine repos = %v, want [acme/widgets]", got)
+	}
+	if got := []string(tq.Restrictions.Kinds); len(got) != 1 || got[0] != "task" {
+		t.Errorf("merged test-quarantine kinds = %v, want [task]", got)
+	}
+	if got := []string(tq.Restrictions.Templates); len(got) != 1 || got[0] != "quarantine-fix" {
+		t.Errorf("merged test-quarantine templates = %v, want [quarantine-fix]", got)
+	}
+
+	// pipeline-control had CIOnly: true in inProcess and Kinds: [task] in
+	// presets -> disjoint kinds, so nobody may hold it and Validate passes.
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "ci", Grants: []string{"api:pipeline-control"}}); err == nil {
+		t.Error("merged pipeline-control admitted ci, want refused because preset allowed only task")
+	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"api:pipeline-control"}}); err == nil {
+		t.Error("merged pipeline-control admitted task, want refused because in_process was ci_only")
+	}
+}
