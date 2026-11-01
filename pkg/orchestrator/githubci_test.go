@@ -23,6 +23,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -557,6 +558,20 @@ trigger:
 		t.Fatalf("filed %d tasks after webhook, want 1: %+v", len(tasks), tasks)
 	}
 	reviewTask := tasks[0]
+	// Merge gating on a repo with no explicit CIMode must remain untouched:
+	// the filed review task holds repo-scoped api:ci-read@acme/widgets rather
+	// than grain-ci, so grainci.Granted and grainci.GrantedExplicitly stay false
+	// while SandboxNamespaceScope allows reading acme/widgets's CI runs.
+	if grainci.Granted(reviewTask.Grants) || grainci.GrantedExplicitly(reviewTask.Grants) {
+		t.Fatalf("reviewTask holds grain-ci (%+v), which would change merge gating on an unset-CIMode repo", reviewTask.Grants)
+	}
+	if len(reviewTask.Grants) != 1 || reviewTask.Grants[0].Capability != "api:ci-read@acme/widgets" || reviewTask.Grants[0].Via != model.GrantByGrain {
+		t.Fatalf("reviewTask.Grants = %+v, want [{Capability:api:ci-read@acme/widgets Via:grain}]", reviewTask.Grants)
+	}
+	apiGrants := model.APIGrantsOf([]string{reviewTask.Grants[0].Capability})
+	if !apiGrants.Allows("ci:read", "acme/widgets") || apiGrants.Allows("ci:read", "acme/other") || apiGrants.Allows("ci:read", "") {
+		t.Fatalf("reviewTask api grants = %+v, want ci:read scoped solely to acme/widgets", reviewTask.Grants)
+	}
 	for _, want := range []string{
 		"https://github.com/acme/widgets/actions/runs/903",
 		"failure",
