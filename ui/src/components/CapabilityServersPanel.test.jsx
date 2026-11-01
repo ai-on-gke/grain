@@ -717,9 +717,11 @@ describe("CapabilityServersPanel", () => {
       within(again).getByRole("button", { name: "Save connection" }),
     );
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/Task #42/)).toHaveTextContent(
-      "rotate keys",
-    );
+    // The task that still grants it is a link to its page, where the
+    // grant is changed (2026-11-01 walkthrough: it was plain text).
+    const holder = within(dialog).getByRole("link", { name: "Task #42" });
+    expect(holder).toHaveAttribute("href", "/tasks/42");
+    expect(holder.closest("li")).toHaveTextContent("rotate keys");
     expect(
       api.mock.calls.filter(([p]) => p === "/api/capability-servers").length,
     ).toBe(puts);
