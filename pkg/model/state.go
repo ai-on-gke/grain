@@ -284,6 +284,13 @@ type Transition struct {
 	// in front of dispatch. The state is certain; the time is a lower
 	// bound, and a reader shown it should be told so.
 	Inferred bool
+	// By, Reason and Detail are set on a step somebody asked for -- a
+	// close or a reopen (MergeTaskEvents): who, what they said, and what
+	// grain did because of it. nil and "" on every step Transitions
+	// derives from the record.
+	By     *Principal
+	Reason string
+	Detail string
 }
 
 // Transitions reconstructs, as far as the record allows, when a task

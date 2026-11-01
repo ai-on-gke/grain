@@ -196,6 +196,9 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
+	for _, tr := range detail.Transitions {
+		record.Transitions = append(record.Transitions, mcp.TaskTransition{State: string(tr.State), At: tr.At, Inferred: tr.Inferred, By: tr.By, Reason: tr.Reason, Detail: tr.Detail})
+	}
 	for _, c := range detail.Comments {
 		record.Comments = append(record.Comments, mcp.TaskComment{ID: c.ID, Author: c.Author, AuthorKind: c.AuthorKind, Body: c.Body, CreatedAt: c.CreatedAt, Handover: c.Handover})
 	}
