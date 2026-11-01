@@ -55,33 +55,41 @@ export default function SettingsCard({
           {title}
         </Typography>
       )}
-      {readOnly ? (
-        // A disabled fieldset disables every native control inside it,
-        // but MUI draws a Select, a Checkbox's box and a chip's delete as
-        // elements of its own: those are dimmed and stopped by hand, so a
-        // read-only card neither looks nor acts editable. Links still
-        // work -- "View in config repo" is one.
-        <Box
-          component="fieldset"
-          disabled
-          data-settings-readonly
-          sx={{
-            border: 0,
-            p: 0,
-            m: 0,
-            minInlineSize: 0,
-            "& button:disabled, & .MuiCheckbox-root:has(input:disabled), & .MuiSwitch-root:has(input:disabled), & .MuiRadio-root:has(input:disabled)":
-              { opacity: 0.5, cursor: "default" },
-            "& .MuiSelect-select, & .MuiChip-deleteIcon, & .MuiAutocomplete-root":
-              { pointerEvents: "none" },
-          }}
-        >
-          {children}
-        </Box>
-      ) : (
-        children
-      )}
+      <ReadOnlyFieldset disabled={readOnly}>{children}</ReadOnlyFieldset>
     </Paper>
+  );
+}
+
+// ReadOnlyFieldset draws its children read-only: what a read-only
+// card wraps itself in, and what a card that stays usable in external
+// mode wraps round the parts of it the API still refuses there (a model
+// connection's own fields, beside its credential).
+export function ReadOnlyFieldset({ disabled = true, children }) {
+  if (!disabled) return children;
+  return (
+    // A disabled fieldset disables every native control inside it,
+    // but MUI draws a Select, a Checkbox's box and a chip's delete as
+    // elements of its own: those are dimmed and stopped by hand, so a
+    // read-only card neither looks nor acts editable. Links still
+    // work -- "View in config repo" is one.
+    <Box
+      component="fieldset"
+      disabled
+      data-settings-readonly
+      sx={{
+        border: 0,
+        p: 0,
+        m: 0,
+        minInlineSize: 0,
+        "& button:disabled, & .MuiCheckbox-root:has(input:disabled), & .MuiSwitch-root:has(input:disabled), & .MuiRadio-root:has(input:disabled)":
+          { opacity: 0.5, cursor: "default" },
+        "& .MuiSelect-select, & .MuiChip-deleteIcon, & .MuiAutocomplete-root": {
+          pointerEvents: "none",
+        },
+      }}
+    >
+      {children}
+    </Box>
   );
 }
 
