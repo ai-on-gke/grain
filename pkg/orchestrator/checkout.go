@@ -176,7 +176,7 @@ type checkout struct {
 	// DirectorStateWritable is a ready checkout the session may push
 	// proposal branches from: the state repository is in its Writes.
 	DirectorStateWritable bool
-	ProxyBase         string
+	ProxyBase             string
 	// GrainSource records what placeGrainSource did with the
 	// deployment's baked-in copy of grain's source for a self-debug run.
 	GrainSource grainSourceStatus

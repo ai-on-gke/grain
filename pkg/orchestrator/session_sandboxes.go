@@ -717,6 +717,9 @@ func continueSessionTurns(
 		if _, ok := firstToolCallArg(turnResult, "request_secret", "secret"); ok {
 			break
 		}
+		if _, ok := firstToolCallArg(turnResult, "propose_config_change", "summary"); ok {
+			break
+		}
 		if _, ok, _ := requestedSuspension(daemonCtx, store, task.ID, turnResult); ok {
 			break
 		}
