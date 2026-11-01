@@ -280,6 +280,9 @@ test("a section that empties and refills keeps its fold, and the rail's Inbox ch
 test("a critical notification arriving while Notifications is folded is counted on the heading and in the bell", async ({
   page,
 }) => {
+  // Two waits on the page's poll (POLL_MS, 30s in notifications.js),
+  // one per viewport, on top of the rest.
+  test.setTimeout(180_000);
   for (const viewport of [DESKTOP, PHONE]) {
     await page.setViewportSize(viewport);
     await page.goto("/inbox");
@@ -302,9 +305,12 @@ test("a critical notification arriving while Notifications is folded is counted 
       "raise a critical notification",
     );
     try {
-      // Without a reload: the page's own poll brings it in.
+      // Without a reload: the page's own poll brings it in. That poll
+      // runs every 30s, so a wait of exactly 30s raced it and lost
+      // whenever the raise landed just after a tick; wait out a whole
+      // interval plus slack instead.
       await expect(toggle.locator(".count")).toHaveText(String(before + 1), {
-        timeout: 30_000,
+        timeout: 45_000,
       });
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
       expect(await headingCount(page)).toBe(total + 1);
