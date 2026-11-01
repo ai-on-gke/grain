@@ -40,15 +40,29 @@ var errSecretsUnavailable = errors.New(
 // frontend uses that to hide the pane entirely rather than show controls
 // that can only ever 404.
 type secretsResponse struct {
-	Enabled bool                 `json:"enabled"`
-	Secrets []secrets.SecretInfo `json:"secrets"`
+	Enabled bool          `json:"enabled"`
+	Secrets []secretEntry `json:"secrets"`
+}
+
+// secretEntry is one secret as GET /api/secrets lists it: its name and
+// keys, and who uses it, so Legacy capabilities can tell a capability
+// server's own secret from one nothing claims.
+type secretEntry struct {
+	secrets.SecretInfo
+	// CapabilityServers are the configured capability servers that use
+	// this secret (capabilityServerSecretOwners), by capability_id.
+	CapabilityServers []string `json:"capabilityServers,omitempty"`
+	// Orphaned is set on a secret grain created for a capability server
+	// (grainServerSecret) that no configured server uses any more -- one
+	// left behind by a rename, or by a removal whose cleanup failed.
+	Orphaned bool `json:"orphaned,omitempty"`
 }
 
 // handleListSecrets answers GET /api/secrets: the deployment's whole
 // credential inventory.
 func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	if s.tasks.Config.Secrets == nil {
-		writeJSON(w, http.StatusOK, secretsResponse{Enabled: false, Secrets: []secrets.SecretInfo{}})
+		writeJSON(w, http.StatusOK, secretsResponse{Enabled: false, Secrets: []secretEntry{}})
 		return
 	}
 	s.respondWithSecrets(w, r)
@@ -114,5 +128,22 @@ func (s *Server) respondWithSecrets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, secretsResponse{Enabled: true, Secrets: list})
+	owners, err := s.tasks.CapabilityServerSecretOwners(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, secretsResponse{Enabled: true, Secrets: secretEntries(list, owners)})
+}
+
+// secretEntries is list with each secret's owners from owners
+// (capabilityServerSecretOwners) filled in.
+func secretEntries(list []secrets.SecretInfo, owners map[string][]string) []secretEntry {
+	out := make([]secretEntry, 0, len(list))
+	for _, info := range list {
+		e := secretEntry{SecretInfo: info, CapabilityServers: owners[info.Name]}
+		e.Orphaned = len(e.CapabilityServers) == 0 && grainServerSecret(info.Name)
+		out = append(out, e)
+	}
+	return out
 }

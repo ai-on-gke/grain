@@ -18,12 +18,14 @@ import {
   Box,
   Button,
   Chip,
+  Link,
   Stack,
   TextField,
   Typography,
 } from "@mui/material";
 import api from "../api.js";
 import { identifierField } from "../identifierField.js";
+import { serverPath } from "./CapabilityServersPanel.jsx";
 
 // bwsalmon/agents#357: this pane can set and delete secrets on a server
 // this UI shares a host with, and report which ones exist, but it never
@@ -46,6 +48,14 @@ import { identifierField } from "../identifierField.js";
 // -- a minter renamed through gcpkey.Config.MinterCredential, anything a
 // future capability reads -- is still settable from the UI rather than
 // only from `grain secrets set` on the host.
+//
+// grain/task-2263: GET /api/secrets says which capability servers use
+// each secret (capabilityServers) -- their $secret: references, and the
+// secrets grain made for them. Those are a server's own, set on its page
+// under Settings -> Capabilities, so they are listed apart with a link
+// there and no Delete, which would break the server. One grain made for
+// a server that no configured server uses any more (orphaned: left by a
+// rename) stays in Other secrets, labelled, so it can still be deleted.
 export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
   const [resp, setResp] = useState(null);
 
@@ -136,9 +146,11 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
   // store: setting one from the form below still works, it just shows up
   // where it belongs afterwards rather than here.
   const owned = new Set(claimed || []);
-  const others = (resp.secrets || []).filter(
+  const listed = (resp.secrets || []).filter(
     (s) => !owned.has(s.name) && !s.name.startsWith("repo-release-"),
   );
+  const serverSecrets = listed.filter((s) => s.capabilityServers?.length);
+  const others = listed.filter((s) => !s.capabilityServers?.length);
 
   return (
     <Box sx={{ mt: 3 }}>
@@ -146,9 +158,11 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         Everything in this deployment&apos;s secrets store that nothing above
         claims -- backend credentials are set on each connection under Settings
-        &rarr; Models, and each capability&apos;s own beside it here. Names and
-        keys only, never values: a secret can be set, replaced and deleted from
-        here, and never read back.
+        &rarr; Models, each capability&apos;s own beside it here, and each
+        capability server&apos;s own on its page under{" "}
+        <Link href="/settings/capabilities">Settings &rarr; Capabilities</Link>.
+        Names and keys only, never values: a secret can be set, replaced and
+        deleted from here, and never read back.
       </Typography>
       {!resp.enabled && (
         <Alert severity="info" sx={{ mb: 2 }}>
@@ -160,10 +174,61 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
       )}
       {resp.enabled && (
         <>
+          {serverSecrets.length > 0 && (
+            <>
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                Used by capability servers
+              </Typography>
+              <ul
+                className="secrets-list"
+                aria-label="Secrets used by capability servers"
+              >
+                {serverSecrets.map((s) => (
+                  <li className="secret-row" key={s.name}>
+                    <span className="secret-name">{s.name}</span>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        gap: 0.6,
+                        flexWrap: "wrap",
+                        flex: 1,
+                      }}
+                    >
+                      {s.keys.map((key) => (
+                        <Chip key={key} size="small" label={key} />
+                      ))}
+                    </Box>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      sx={{ overflowWrap: "anywhere" }}
+                    >
+                      Used by{" "}
+                      {s.capabilityServers.map((id, i) => (
+                        <span key={id}>
+                          {i > 0 && ", "}
+                          <Link href={serverPath(id)}>{id}</Link>
+                        </span>
+                      ))}
+                    </Typography>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           <ul className="secrets-list">
             {others.map((s) => (
               <li className="secret-row" key={s.name}>
                 <span className="secret-name">{s.name}</span>
+                {s.orphaned && (
+                  <Chip
+                    size="small"
+                    color="warning"
+                    variant="outlined"
+                    label="orphaned"
+                    title="Grain made this for a capability server that no configured server uses any more"
+                  />
+                )}
                 <Box
                   sx={{ display: "flex", gap: 0.6, flexWrap: "wrap", flex: 1 }}
                 >
