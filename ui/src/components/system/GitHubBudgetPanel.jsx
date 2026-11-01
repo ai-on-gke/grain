@@ -36,17 +36,36 @@ import { formatSeconds } from "../metricsFormat.js";
 // deployment that has made no calls has nothing to say here.
 export default function GitHubBudgetPanel({ sx }) {
   const [github, setGitHub] = useState(null);
+  // Re-read while Health is open, one read at a time, as the sandbox
+  // section below it does: read once, the calls left, the projection
+  // and the idle-poll backoff sat at the moment the page was opened
+  // while everything around them moved. A failed read keeps the last
+  // figures rather than blanking the panel.
   useEffect(() => {
     let live = true;
-    api("/api/metrics?section=github")
-      .then((r) => live && setGitHub(r?.github || null))
-      .catch(() => {});
+    let timer = null;
+    const tick = async () => {
+      try {
+        const r = await api("/api/metrics?section=github");
+        if (live) setGitHub(r?.github || null);
+      } catch {
+        // Keep what was last read.
+      }
+      if (live) timer = setTimeout(tick, BUDGET_REFRESH_MS);
+    };
+    tick();
     return () => {
       live = false;
+      if (timer) clearTimeout(timer);
     };
   }, []);
   return <GitHubBudgetView github={github} sx={sx} />;
 }
+
+// BUDGET_REFRESH_MS is how often an open Health page re-reads the
+// budget: often enough to follow a reconcile cycle's spend and a
+// webhook's backoff reset, and it is a cheap in-memory read.
+export const BUDGET_REFRESH_MS = 10000;
 
 const shownCallers = 6;
 

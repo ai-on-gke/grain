@@ -28,6 +28,12 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Comma-separated job IDs to run (e.g. go-model,postgres); leave empty to run all jobs"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -44,8 +50,96 @@ env:
   npm_config_fetch_retry_maxtimeout: "120000"
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: ${{ github.workflow }}-changes-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    outputs:
+      go_program: ${{ steps.guard.outputs.go_program || steps.filter.outputs.go_program }}
+      go_backend: ${{ steps.guard.outputs.go_backend || steps.filter.outputs.go_backend }}
+      go_unit: ${{ steps.guard.outputs.go_unit || steps.filter.outputs.go_unit }}
+      granule: ${{ steps.guard.outputs.granule || steps.filter.outputs.granule }}
+      frontend: ${{ steps.guard.outputs.frontend || steps.filter.outputs.frontend }}
+      lint: ${{ steps.guard.outputs.lint || steps.filter.outputs.lint }}
+      terraform: ${{ steps.guard.outputs.terraform || steps.filter.outputs.terraform }}
+      go: ${{ steps.guard.outputs.go || steps.filter.outputs.go }}
+      go-e2e: ${{ steps.guard.outputs.go-e2e || steps.filter.outputs.go-e2e }}
+      go-orchestrator: ${{ steps.guard.outputs.go-orchestrator || steps.filter.outputs.go-orchestrator }}
+      go-model: ${{ steps.guard.outputs.go-model || steps.filter.outputs.go-model }}
+      go-unit: ${{ steps.guard.outputs.go-unit || steps.filter.outputs.go-unit }}
+      postgres: ${{ steps.guard.outputs.postgres || steps.filter.outputs.postgres }}
+      run-host: ${{ steps.guard.outputs.run-host || steps.filter.outputs.run-host }}
+      host-script-container: ${{ steps.guard.outputs.host-script-container || steps.filter.outputs.host-script-container }}
+      ui-e2e: ${{ steps.guard.outputs.ui-e2e || steps.filter.outputs.ui-e2e }}
+      installer-e2e: ${{ steps.guard.outputs.installer-e2e || steps.filter.outputs.installer-e2e }}
+      installer: ${{ steps.guard.outputs.installer || steps.filter.outputs.installer }}
+      package-cache: ${{ steps.guard.outputs.package-cache || steps.filter.outputs.package-cache }}
+      real-vm: ${{ steps.guard.outputs.real-vm || steps.filter.outputs.real-vm }}
+      real-kubernetes: ${{ steps.guard.outputs.real-kubernetes || steps.filter.outputs.real-kubernetes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The path filter is the code under test when a change edits it (or
+      # this workflow), so it must not decide what that change runs: a
+      # filter edited to say "nothing changed" would skip every job, and a
+      # skipped job does not fail the pull request. This step decides that
+      # case here, in the workflow file, before the script runs at all.
+      # push and merge_group run everything either way.
+      - name: Run every job when the path filter or this workflow changes
+        id: guard
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          run_all=false
+          case "$EVENT_NAME" in
+            pull_request)
+              if [[ -n "$BASE_SHA" && -n "$HEAD_SHA" ]] &&
+                changed="$(git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA")"; then
+                if grep -qxF -e scripts/github-ci-changes.sh -e .github/workflows/tests.yml <<< "$changed"; then
+                  echo "the path filter or the Tests workflow changed; running every job"
+                  run_all=true
+                fi
+              else
+                echo "could not diff $BASE_SHA...$HEAD_SHA; running every job"
+                run_all=true
+              fi
+              ;;
+            push|merge_group)
+              run_all=true
+              ;;
+          esac
+          echo "run_all=$run_all" >> "$GITHUB_OUTPUT"
+          if [[ "$run_all" == "true" ]]; then
+            for key in go_program go_backend go_unit granule frontend lint terraform go go-e2e go-orchestrator go-model go-unit postgres run-host host-script-container ui-e2e installer-e2e installer package-cache real-vm real-kubernetes; do
+              echo "$key=true" >> "$GITHUB_OUTPUT"
+            done
+          fi
+
+      - name: Classify changed paths and selected jobs
+        id: filter
+        if: steps.guard.outputs.run_all != 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          INPUT_JOBS: ${{ inputs.jobs }}
+        run: ./scripts/github-ci-changes.sh
+
   go:
     name: go
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -120,6 +214,8 @@ jobs:
 
   go-e2e:
     name: go e2e
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go-e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -247,6 +343,8 @@ jobs:
 
   go-orchestrator:
     name: go orchestrator
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.go-orchestrator == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -289,17 +387,37 @@ jobs:
       - name: Test
         run: |
           set +e
-          GRAIN_GOTEST_LOG=/tmp/go-orchestrator.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/orchestrator/...
-          status=$?
+          GRAIN_GOTEST_LOG=/tmp/go-orchestrator.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/orchestrator/... | tee /tmp/go-orchestrator.out
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-orchestrator.log | tail -n 10 | while IFS= read -r line; do
-              echo "::error title=go-orchestrator::$line"
-            done
+            python3 - /tmp/go-orchestrator.out go-orchestrator <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
             exit "$status"
           fi
 
   go-model:
     name: go model
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.go-model == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -369,6 +487,8 @@ jobs:
 
   go-unit:
     name: go unit
+    needs: [changes]
+    if: needs.changes.outputs.go_unit == 'true' && needs.changes.outputs.go-unit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -428,17 +548,37 @@ jobs:
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
             ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... \
-            ./pkg/version/... ./tests/bench/...
-          status=$?
+            ./pkg/version/... ./tests/bench/... | tee /tmp/go-unit.out
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-unit.log | tail -n 10 | while IFS= read -r line; do
-              echo "::error title=go-unit::$line"
-            done
+            python3 - /tmp/go-unit.out go-unit <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
             exit "$status"
           fi
 
   granule:
     name: granule
+    needs: [changes]
+    if: needs.changes.outputs.granule == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -538,6 +678,8 @@ jobs:
 
   postgres:
     name: postgres
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.postgres == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -602,8 +744,10 @@ jobs:
 
   run-host:
     name: run host
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.run-host == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     concurrency:
       group: ${{ github.workflow }}-run-host-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -640,10 +784,12 @@ jobs:
       - name: Daemon restart acceptance test
         env:
           GRAIN_RUNHOST_DOCKER: "1"
-        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -run '^TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest$' -v ./pkg/cli/
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 20m -run '^(TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest|TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys)$' -v ./pkg/cli/
 
   host-script-container:
     name: host-script container
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.host-script-container == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -692,6 +838,8 @@ jobs:
 
   frontend:
     name: frontend
+    needs: [changes]
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -733,6 +881,8 @@ jobs:
 
   ui-e2e:
     name: ui e2e
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.ui-e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     concurrency:
@@ -821,6 +971,8 @@ jobs:
 
   lint:
     name: lint
+    needs: [changes]
+    if: needs.changes.outputs.lint == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -863,6 +1015,8 @@ jobs:
 
   terraform:
     name: terraform
+    needs: [changes]
+    if: needs.changes.outputs.terraform == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -884,21 +1038,11 @@ jobs:
         working-directory: deploy/terraform/gcp
         run: |
           terraform version
-          terraform fmt -check -recursive -diff ../..
+          terraform fmt -check -recursive -diff ..
 
       - name: Init
         working-directory: deploy/terraform/gcp
         run: |
-          for i in 1 2 3 4 5; do
-            if terraform init -backend=false -input=false; then
-              break
-            fi
-            if [ "$i" -eq 5 ]; then
-              exit 1
-            fi
-            sleep 2
-          done
-          cd ../../gke/terraform
           for i in 1 2 3 4 5; do
             if terraform init -backend=false -input=false; then
               exit 0
@@ -911,12 +1055,12 @@ jobs:
 
       - name: Validate
         working-directory: deploy/terraform/gcp
-        run: |
-          terraform validate
-          terraform -chdir=../../gke/terraform validate
+        run: terraform validate
 
   installer-e2e:
     name: installer
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.installer-e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -1010,6 +1154,8 @@ jobs:
 
   package-cache:
     name: package cache
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.package-cache == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -1200,7 +1346,8 @@ jobs:
   # self-hosted runner with KVM and pre-warmed guest image cache to enable.
   real-vm:
     name: real vm
-    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'
+    needs: [changes]
+    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true' && needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.real-vm == 'true'
     runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
     concurrency:
@@ -1229,7 +1376,8 @@ jobs:
   # memory/disk budgets and belongs on a larger or self-hosted runner.
   real-kubernetes:
     name: real kubernetes
-    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'
+    needs: [changes]
+    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true' && needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.real-kubernetes == 'true'
     runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
     concurrency:

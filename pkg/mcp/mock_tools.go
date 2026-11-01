@@ -82,6 +82,12 @@ type FiledProposal struct {
 	// work, or what the proposer's permission does not cover -- and ""
 	// for a queued one or a filer that does not say.
 	ApprovalNote string
+	// Parked is why filing parked the proposal awaiting a reply -- its
+	// repo is off the deployment's target repo list, say -- and "" for one
+	// filing did not park. A parked proposal is not dispatched whatever
+	// Queued says: Queued is its approval, and the park is a second thing
+	// standing between it and a run that only an operator lifts.
+	Parked string
 }
 
 // SupersedeKept is one dependent a supersede left where it was, and why
@@ -135,6 +141,10 @@ type ProposedTask struct {
 	// Branch is the base branch this proposal's work should target.
 	// Empty means the target repository's default branch.
 	Branch string
+
+	// Priority is the numeric task priority (default 5; higher numbers mean higher priority).
+	// 0 means unset (defaults to model.DefaultTaskPriority, or template priority).
+	Priority int
 
 	// NoRepo files this task with no repository at all -- a standalone
 	// task with no repository target,
@@ -216,6 +226,9 @@ type ProposedTask struct {
 	// NoPort files the proposal as one whose change is not ported to its
 	// repository's other paired branches (model.Task.NoPort).
 	NoPort bool
+	// KeepRunning files the proposal so that its task immediately restarts
+	// when its run exits rather than completing or parking (model.Task.KeepRunning).
+	KeepRunning bool
 	// FixesBaseBranch files the proposal marked as fixing its base branch
 	// while that branch is red (model.FixesBaseBranch): it is not made to
 	// wait on the branch's repair, because it is one.
@@ -241,6 +254,9 @@ type ProposedTask struct {
 	// Per call, and not inherited by what the held task files in turn.
 	HoldForApproval bool
 }
+
+// TaskProposal aliases ProposedTask for callers referring to a proposed task record.
+type TaskProposal = ProposedTask
 
 // ReviewComment is one add_review_comment call as this process recorded
 // it. Turning it into a real draft review on the pull request under
@@ -822,7 +838,8 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 		Name: "propose_task",
 		Description: "Propose a follow-up or out-of-scope task for the queue. " + filing +
 			", linked to this task: queued when your task's permission covers it, or held " +
-			"unapproved for human review (pass hold_for_approval: true to hold regardless). " +
+			"unapproved for human review (pass hold_for_approval: true to hold regardless; " +
+			"keep_running or a priority above your task's always holds). " +
 			"Set depends_on for tasks it must wait on, repo if the work belongs in another " +
 			"repository, or supersedes to replace an undispatched task. Run 'grain help propose' " +
 			"for full reference.",
@@ -898,12 +915,17 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					"type": "string",
 					"enum": []any{"close", "ack"},
 				},
+				"keep_running":      map[string]any{"type": "boolean"},
 				"no_port":           map[string]any{"type": "boolean"},
 				"fixes_base_branch": map[string]any{"type": "boolean"},
 				"origin":            map[string]any{"type": "string"},
 				"no_repo":           map[string]any{"type": "boolean"},
 				"at_front":          map[string]any{"type": "boolean"},
-				"template_id":       map[string]any{"type": "string"},
+				"priority": map[string]any{
+					"type":        "integer",
+					"description": "Task priority (default 5; higher numbers mean higher priority)",
+				},
+				"template_id": map[string]any{"type": "string"},
 				"template_fields": map[string]any{
 					"type": "object",
 					"additionalProperties": map[string]any{
@@ -967,6 +989,10 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			}
 			supersedes, _ := argString(args, "supersedes")
 			reviewTemplateID, _ := argString(args, "review_template_id")
+			priority, hasPriority := argInt(args, "priority")
+			if hasPriority && priority < 0 {
+				return Result{Text: "priority must be a positive integer", IsError: true}
+			}
 			cpus, _ := argInt(args, "sandbox_cpus")
 			memoryMB, _ := argInt(args, "sandbox_memory_mb")
 			diskGB, _ := argInt(args, "sandbox_disk_gb")
@@ -1014,6 +1040,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				Body:                body,
 				Repo:                repo,
 				Branch:              strings.TrimSpace(branch),
+				Priority:            priority,
 				NoRepo:              noRepo,
 				ChangeTarget:        changeTarget,
 				AtFront:             atFront,
@@ -1041,6 +1068,9 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			}
 			if noPort, ok := argBool(args, "no_port"); ok {
 				task.NoPort = noPort
+			}
+			if keepRunning, ok := argBool(args, "keep_running"); ok {
+				task.KeepRunning = keepRunning
 			}
 			if fixes, ok := argBool(args, "fixes_base_branch"); ok {
 				task.FixesBaseBranch = fixes
@@ -1099,19 +1129,45 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 // answer partly the run's own choice: a run that asked to hold a
 // proposal and is told only "unapproved" cannot tell whether its request
 // was the reason or its permission was, and so cannot say which in chat.
+//
+// A proposal filing parked (FiledProposal.Parked) is said to be parked
+// as well, and never "queued": an approved one parked on a repo off the
+// target repo list is not dispatched in its turn, and a run told it was
+// would pass that on as fact -- or, holding one, conclude its hold had
+// not worked.
 func proposalStanding(task ProposedTask, filed FiledProposal) string {
-	switch {
-	case filed.Queued:
+	if filed.Queued {
+		if filed.Parked != "" {
+			return "It is filed approved -- your own task's permission covers it -- but it is " +
+				"not queued: filing parked it awaiting a reply, and it is not dispatched until an " +
+				"operator lifts that. " + parkedReason(filed.Parked)
+		}
 		return "It is filed approved -- your own task's permission covers it -- so it is " +
 			"queued already and dispatched in its turn without anybody approving it."
+	}
+	var standing string
+	switch {
 	case filed.ApprovalNote != "":
-		return "It is filed unapproved because " + filed.ApprovalNote +
+		standing = "It is filed unapproved because " + filed.ApprovalNote +
 			". It waits until a human approves it."
 	case task.HoldForApproval:
-		return "It is filed unapproved because you asked to hold it (hold_for_approval). " +
+		standing = "It is filed unapproved because you asked to hold it (hold_for_approval). " +
 			"It waits until a human approves it."
+	default:
+		standing = "It is filed unapproved: your permission does not cover it. It waits until a human approves it."
 	}
-	return "It is filed unapproved: your permission does not cover it. It waits until a human approves it."
+	if filed.Parked != "" {
+		standing += " It is also parked awaiting a reply, and a reply alone does not approve it. " +
+			parkedReason(filed.Parked)
+	}
+	return standing
+}
+
+// parkedReason quotes the comment filing parked a proposal on, which
+// says what lifts the park in grain's own words (model.
+// OffAllowlistParkComment).
+func parkedReason(note string) string {
+	return "Parked because: " + strings.TrimSpace(note)
 }
 
 // ParseNotBefore reads propose_task's `not_before`: a bare date, taken

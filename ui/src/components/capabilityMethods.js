@@ -87,11 +87,14 @@ export function resetCapabilityMethodsForTest() {
 
 const asList = (m) => (Array.isArray(m) ? m : []);
 
-// checkGrants is POST /api/capability-grants/check.
-export function checkGrants(grants) {
+// checkGrants is POST /api/capability-grants/check. subject ({repo},
+// "" for a task with no repository), when the form knows the task the
+// grants are for, also has each judged against settings/capabilities.yml
+// for it (catalogueRefusal on the answer).
+export function checkGrants(grants, subject = null) {
   return api("/api/capability-grants/check", {
     method: "POST",
-    body: JSON.stringify({ grants }),
+    body: JSON.stringify(subject ? { grants, subject } : { grants }),
   });
 }
 

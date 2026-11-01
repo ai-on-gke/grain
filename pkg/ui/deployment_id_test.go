@@ -15,6 +15,7 @@
 package ui_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -120,7 +121,8 @@ func TestSettingsRefusesABranchTemplateWhoseSlugCouldNameAnotherTask(t *testing.
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"grain/task-{id}{slug}", "grain/{slug}/task-{id}", "{slug}-task-{id}",
-		"grain/{deployment}-task-{id}-{slug}", "grain/task-{id}-{slug}-x"} {
+		"grain/{deployment}-task-{id}-{slug}", "grain/task-{id}-{slug}-x",
+		strings.Repeat("a", 210) + "/{deployment}/task-{id}-{slug}"} {
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{TaskBranchTemplate: ptr(bad)}); err == nil {
 			t.Errorf("taskBranchTemplate %q was accepted, want a validation error", bad)
 		}
@@ -132,7 +134,66 @@ func TestSettingsRefusesABranchTemplateWhoseSlugCouldNameAnotherTask(t *testing.
 	if cfg.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
 		t.Fatalf("stored template = %q after refused saves, want %q", cfg.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
 	}
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{TaskBranchTemplate: ptr("grain/task-{id}.lock")}); err == nil || !strings.Contains(err.Error(), "grain/task-123.lock") {
+		t.Errorf("taskBranchTemplate grain/task-{id}.lock error = %v, want it naming grain/task-123.lock", err)
+	}
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{TaskBranchTemplate: ptr("alice/{deployment}/task-{id}-{slug}")}); err != nil {
 		t.Fatalf("taskBranchTemplate alice/{deployment}/task-{id}-{slug} = %v, want it accepted", err)
+	}
+}
+
+func TestCreateTaskWithVeryLongNameProducesValidBranch(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DeploymentID: ptr("prod-1")}); err != nil {
+		t.Fatal(err)
+	}
+
+	longTitle := strings.Repeat("Ensure very long task names never break branch naming or task creation ", 60)
+	created, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:       longTitle,
+		Description: "body",
+		Repo:        "acme/widgets",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask with %d-char title failed: %v", len(longTitle), err)
+	}
+	if created.Title != longTitle {
+		t.Fatalf("created.Title length = %d, want %d", len(created.Title), len(longTitle))
+	}
+	stored, err := store.GetTask(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetTask(%s): %v", created.ID, err)
+	}
+	wantBranch := "grain/prod-1/task-" + created.ID + "-ensure-very-long-task-names"
+	if stored.BranchName() != wantBranch || !model.ValidBranchName(stored.BranchName()) {
+		t.Fatalf("stored.BranchName() = %q, want valid %q", stored.BranchName(), wantBranch)
+	}
+
+	// Custom template close to MaxBranchNameLen trims {slug} to fit rather than failing task creation.
+	longPrefix := strings.Repeat("a", 100) + "/" + strings.Repeat("b", 85)
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+		TaskBranchTemplate: ptr(longPrefix + "/{deployment}/task-{id}-{slug}"),
+	}); err != nil {
+		t.Fatalf("saving long custom template failed: %v", err)
+	}
+	unbrokenTitle := strings.Repeat("supercalifragilisticexpialidocious", 60)
+	created2, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:       unbrokenTitle,
+		Description: "body",
+		Repo:        "acme/widgets",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask with unbroken %d-char title under long template failed: %v", len(unbrokenTitle), err)
+	}
+	stored2, err := store.GetTask(ctx, created2.ID)
+	if err != nil {
+		t.Fatalf("GetTask(%s): %v", created2.ID, err)
+	}
+	if len(stored2.BranchName()) > model.MaxBranchNameLen || !model.ValidBranchName(stored2.BranchName()) {
+		t.Fatalf("stored2.BranchName() = %q (len %d), want valid <= %d", stored2.BranchName(), len(stored2.BranchName()), model.MaxBranchNameLen)
 	}
 }

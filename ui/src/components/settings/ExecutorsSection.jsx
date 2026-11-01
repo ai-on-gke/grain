@@ -21,6 +21,10 @@ import SettingsCard from "./SettingsCard.jsx";
 // ExecutorsSection is Settings → Executors: the join tokens, which are a
 // setting. Which executors are connected is status, and is on System →
 // Sandboxes (docs/design/settings-panel.md §2.1).
+//
+// A join token is a runtime credential, not configuration: the config
+// repo holds none and its routes take writes in external mode, so the
+// card stays usable there (settings-mutability.spec.md D-9).
 export default function ExecutorsSection({ showError, onOpenSystem }) {
   const [connected, setConnected] = useState(null);
   useEffect(() => {
@@ -33,7 +37,11 @@ export default function ExecutorsSection({ showError, onOpenSystem }) {
     };
   }, []);
   return (
-    <SettingsCard title="Executor join tokens" anchor="executors">
+    <SettingsCard
+      title="Executor join tokens"
+      anchor="executors"
+      allowInExternalMode
+    >
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         {connected === null ? "" : `${connected} connected · `}
         <Link

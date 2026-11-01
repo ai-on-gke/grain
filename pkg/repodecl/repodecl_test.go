@@ -19,6 +19,7 @@ package repodecl_test
 // what each of the refusals actually says.
 
 import (
+	"github.com/ai-on-gke/grain/pkg/declschema"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -619,5 +620,48 @@ func TestRefusalsAreGroupedByReason(t *testing.T) {
 	}
 	if !strings.Contains(msg, "identity is its file") {
 		t.Errorf("error = %q, want the other mistake reported too", msg)
+	}
+}
+
+func TestDeclaredTemplatePriorityValidation(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/urgent.yml":  "title: Urgent fix\npriority: 8\n",
+		".grain/templates/default.yml": "title: Default fix\npriority: 0\n",
+	})
+	if len(declared.Templates) != 2 {
+		t.Fatalf("Templates = %d, want 2", len(declared.Templates))
+	}
+	byName := map[string]model.Template{}
+	for _, f := range declared.Templates {
+		byName[f.Template.Name] = f.Template
+	}
+	if byName["urgent"].Priority == nil || *byName["urgent"].Priority != 8 {
+		t.Errorf("urgent Priority = %v, want 8", byName["urgent"].Priority)
+	}
+	if byName["default"].Priority != nil {
+		t.Errorf("default Priority = %v, want nil for 0", *byName["default"].Priority)
+	}
+
+	msg := loadErr(t, map[string]string{
+		".grain/templates/bad.yml": "title: Bad priority\npriority: -1\n",
+	})
+	if !strings.Contains(msg, "priority must be a positive integer") {
+		t.Errorf("negative priority error = %q, want 'priority must be a positive integer'", msg)
+	}
+}
+
+// The issue importer's settings are grain's to set, not the repository's:
+// a .grain/settings.yml declaring them -- above all one queueing imports
+// without approval, which would let whoever can open an issue decide what
+// an agent runs -- is refused as Authority, naming the key and the file
+// (docs/test-runs/2026-10-31-github-issue-import.md, gap 4).
+func TestDeclaredIssueImportIsRefusedAsAuthority(t *testing.T) {
+	err := loadErr(t, map[string]string{
+		".grain/settings.yml": "issue-import:\n  enabled: true\n  approved: true\n  label: grain\n",
+	})
+	for _, want := range []string{".grain/settings.yml", "issue-import", declschema.Authority.Reason()} {
+		if !strings.Contains(err, want) {
+			t.Fatalf("Load = %s\nwant it to say %q", err, want)
+		}
 	}
 }

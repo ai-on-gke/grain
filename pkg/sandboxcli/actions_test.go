@@ -276,10 +276,17 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 		t.Errorf("task wait --park: %d %s", code, errOut)
 	}
 
-	// 4. task propose (draft allowed; --supersedes and --auto-merge refused)
-	if out, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "Follow-up", "--body", "Do x", "--depends-on", "7,8"); code != 0 ||
+	// 4. task propose (draft allowed; --priority forwarded; --supersedes and --auto-merge refused)
+	if out, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "Follow-up", "--body", "Do x", "--depends-on", "7,8", "--priority", "8"); code != 0 ||
 		!strings.Contains(out, "Proposed task #101") || !strings.Contains(out, "held for human approval") {
 		t.Errorf("task propose: %d %s %s", code, out, errOut)
+	}
+	if gotPri, ok := proxy.bodies["POST /cli/proposals"]["priority"].(float64); !ok || gotPri != 8 {
+		t.Errorf("task propose priority in body = %v, want 8", proxy.bodies["POST /cli/proposals"]["priority"])
+	}
+	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--priority", "-1"); code != 1 ||
+		!strings.Contains(errOut, "--priority") {
+		t.Errorf("task propose --priority -1: %d %s", code, errOut)
 	}
 	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--supersedes", "5"); code != 1 ||
 		!strings.Contains(errOut, "propose_task") {
@@ -326,5 +333,128 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 	qRaw, err := os.ReadFile(filepath.Join(qDir, ".grain", "quarantine.yml"))
 	if err != nil || !strings.Contains(string(qRaw), "pkg/foo.TestFlaky") || !strings.Contains(string(qRaw), "102") {
 		t.Errorf("quarantine.yml = %q, %v", qRaw, err)
+	}
+}
+
+func TestSandboxActionsUseGitCredentialsWithoutProxyEnv(t *testing.T) {
+	proxy := &fakeActionProxy{
+		bodies:  map[string]map[string]any{},
+		headers: map[string]http.Header{},
+		answers: map[string]string{
+			"/cli/ci/wait": `{"status":"passed","run_id":"ci-gw","commit":"abcdef0123456789","conclusion":"success",
+				"jobs":[{"name":"go","conclusion":"success"}]}`,
+			"/cli/pr/open": "Opened pull request #42: https://github.com/ai-on-gke/grain/pull/42\n",
+		},
+	}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	// Point .git-credentials at the listener without setting GRAIN_SANDBOX_PROXY
+	// or GRAIN_SANDBOX_TOKEN, matching a Granule VM or host sandbox session.
+	creds := "http://sandbox:tok-from-creds@" + strings.TrimPrefix(srv.URL, "http://") + "\n"
+	env := fakeSandboxEnv(map[string]string{}, creds)
+
+	var out, errOut bytes.Buffer
+	code, handled := maybeRunSandboxCLI([]string{"ci", "wait"}, env, &out, &errOut)
+	if !handled || code != 0 || !strings.Contains(out.String(), "ci-gw") {
+		t.Fatalf("ci wait via .git-credentials: handled=%v code=%d out=%q err=%q", handled, code, out.String(), errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code, handled = maybeRunSandboxCLI([]string{"pr", "open"}, env, &out, &errOut)
+	if !handled || code != 0 || !strings.Contains(out.String(), "#42") {
+		t.Fatalf("pr open via .git-credentials: handled=%v code=%d out=%q err=%q", handled, code, out.String(), errOut.String())
+	}
+}
+
+func TestSandboxAPIInputModesAndCIArtifactDownload(t *testing.T) {
+	proxy := &fakeActionProxy{
+		bodies:  map[string]map[string]any{},
+		headers: map[string]http.Header{},
+		answers: map[string]string{
+			"/cli/api-routes": `[{"method":"DELETE","path":"/api/tasks/{id}","scope":"tasks:write","needs_reason":true}]`,
+			"/api/tasks/9":    `{"ok":true}`,
+			"/cli/context":    `{"repo":"ai-on-gke/grain","branch":"grain/task-7"}`,
+			"/cli/ci/runs":    "ID\nrun-42 grain/task-7\n",
+			"/fs/ci/ai-on-gke/grain/run-42/artifacts/go/cover.out": "mode: atomic\n",
+		},
+	}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	// 1. grain api routes --scope & --json
+	out, errOut, code := runActionCLI(t, srv, nil, "api", "routes", "--scope", "tasks:write")
+	if code != 0 || !strings.Contains(out, "[--reason required]") {
+		t.Errorf("api routes --scope: code=%d out=%q err=%q", code, out, errOut)
+	}
+	out, errOut, code = runActionCLI(t, srv, nil, "api", "routes", "--json")
+	if code != 0 || !strings.Contains(out, `"needs_reason":true`) {
+		t.Errorf("api routes --json: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// 2. grain api --field (JSON boolean/array/object coercion + plain string)
+	out, errOut, code = runActionCLI(t, srv, nil, "api", "POST", "/api/tasks/9",
+		"--field", "enabled=true",
+		"--field", `tags=["ci","fast"]`,
+		"--field", `meta={"tier":1}`,
+		"--field", "title=plain string")
+	if code != 0 || !strings.Contains(out, `"ok":true`) {
+		t.Fatalf("api POST --field: code=%d out=%q err=%q", code, out, errOut)
+	}
+	gotBody := proxy.bodies["POST /api/tasks/9"]
+	if gotBody["enabled"] != true || gotBody["title"] != "plain string" {
+		t.Errorf("POST --field coerced body = %+v", gotBody)
+	}
+	if tags, ok := gotBody["tags"].([]any); !ok || len(tags) != 2 || tags[0] != "ci" {
+		t.Errorf("POST --field tags = %+v", gotBody["tags"])
+	}
+
+	// 3. grain api --file <path> and --file - (stdin)
+	bodyFile := filepath.Join(t.TempDir(), "payload.json")
+	if err := os.WriteFile(bodyFile, []byte(`{"from":"file"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, code := runActionCLI(t, srv, nil, "api", "PUT", "/api/tasks/9", "--file", bodyFile); code != 0 {
+		t.Fatalf("api PUT --file: code=%d err=%q", code, errOut)
+	}
+	if proxy.bodies["PUT /api/tasks/9"]["from"] != "file" {
+		t.Errorf("PUT --file body = %+v", proxy.bodies["PUT /api/tasks/9"])
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cliStdin := &sandboxCLI{
+		base:   srv.URL,
+		token:  "tok",
+		out:    &stdoutBuf,
+		errOut: &stderrBuf,
+		client: http.DefaultClient,
+		in:     strings.NewReader(`{"from":"stdin"}`),
+	}
+	if err := cliStdin.run([]string{"api", "PATCH", "/api/tasks/9", "--file", "-"}); err != nil {
+		t.Fatalf("api PATCH --file -: %v (%s)", err, stderrBuf.String())
+	}
+	if proxy.bodies["PATCH /api/tasks/9"]["from"] != "stdin" {
+		t.Errorf("PATCH --file - body = %+v", proxy.bodies["PATCH /api/tasks/9"])
+	}
+
+	// 4. grain ci artifact to stdout, to -o <file>, and cleanup on missing artifact
+	out, errOut, code = runActionCLI(t, srv, nil, "ci", "artifact", "go", "cover.out")
+	if code != 0 || out != "mode: atomic\n" {
+		t.Errorf("ci artifact stdout: code=%d out=%q err=%q", code, out, errOut)
+	}
+	destFile := filepath.Join(t.TempDir(), "cover.out")
+	if _, errOut, code := runActionCLI(t, srv, nil, "ci", "artifact", "go", "cover.out", "-o", destFile); code != 0 {
+		t.Fatalf("ci artifact -o: code=%d err=%q", code, errOut)
+	}
+	if data, err := os.ReadFile(destFile); err != nil || string(data) != "mode: atomic\n" {
+		t.Errorf("ci artifact file = %q, %v", data, err)
+	}
+	missingDest := filepath.Join(t.TempDir(), "missing.out")
+	if _, _, code := runActionCLI(t, srv, nil, "ci", "artifact", "go", "missing.out", "-o", missingDest); code == 0 {
+		t.Errorf("ci artifact for missing file succeeded unexpectedly")
+	}
+	if _, err := os.Stat(missingDest); !os.IsNotExist(err) {
+		t.Errorf("failed ci artifact left partial file behind at %s: %v", missingDest, err)
 	}
 }

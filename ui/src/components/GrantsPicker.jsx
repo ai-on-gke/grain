@@ -55,6 +55,7 @@ import {
   unsupportedReason,
   validateValue,
 } from "../capabilityArgs.js";
+import { pickerAllows, pickerDisplay, sortByDisplay } from "../newTaskForm.js";
 
 // GrantsPicker is the one "Grants" control of the new task overlay, the
 // task pane, the template editor and the schedule editor
@@ -144,6 +145,14 @@ export default function GrantsPicker({
   idPrefix = "grant",
   runKind = "task",
   policyRepo = "",
+  // formCapabilities is settings/new-task-form.yml's capability picker
+  // configuration as resolved for the New Task form (newTaskForm.js):
+  // offered and hidden narrow the "Add grant…" listing -- a grant
+  // already held is still shown, and removable -- and display relabels,
+  // describes and orders its rows. null everywhere else.
+  formCapabilities = null,
+  label = "Grants",
+  helpText = "",
 }) {
   const all = grants || [];
   const apiHeld = useMemo(() => all.filter(isApiGrant), [all]);
@@ -185,6 +194,12 @@ export default function GrantsPicker({
   const typedRepo = (policyRepo || "").trim();
   const subjectRepo =
     runKind && /^[^/\s]+\/[^/\s]+$/.test(typedRepo) ? typedRepo : "";
+  // With the repo known the listing has judged a task's or process's
+  // one run, so a method it does not refuse is admitted: the kind's
+  // "may be refused" (true of some other repo) would only mislead. A CI
+  // job's trigger event is still unknown, so it keeps the kind's verdict.
+  const kindVerdictShown =
+    Boolean(runKind) && (!subjectRepo || runKind === "ci");
   const load = useCallback(
     (fresh) => {
       const subject = subjectRepo ? { kind: runKind, repo: subjectRepo } : null;
@@ -371,7 +386,9 @@ export default function GrantsPicker({
           </>
         ),
       };
-    const verdict = runKind ? byRef[ref]?.policy?.[runKind] : undefined;
+    const verdict = kindVerdictShown
+      ? byRef[ref]?.policy?.[runKind]
+      : undefined;
     if (!verdict) return null;
     const policyNote = policyVerdictText(verdict, runKind);
     return {
@@ -502,7 +519,24 @@ export default function GrantsPicker({
   const apiMatches = (row) =>
     matches(row.id, row.summary, row.description, ...(row.scopes || []));
   const menuGroups = [];
-  const shownPresets = presets.filter(apiMatches);
+  const formOffers = (id) => pickerAllows(formCapabilities, id);
+  const displayed = (row) => {
+    const d = pickerDisplay(formCapabilities, row.id);
+    return d
+      ? {
+          ...row,
+          displayLabel: d.label || "",
+          summary: d.description || row.summary,
+        }
+      : row;
+  };
+  const arrange = (rows) =>
+    sortByDisplay(
+      formCapabilities,
+      rows.filter((r) => formOffers(r.id)).map(displayed),
+      (r) => r.id,
+    );
+  const shownPresets = arrange(presets).filter(apiMatches);
   if (shownPresets.length > 0)
     menuGroups.push({
       key: "api-presets",
@@ -511,7 +545,7 @@ export default function GrantsPicker({
       rows: shownPresets,
     });
   for (const { area, rows } of areas) {
-    const shown = rows.filter(apiMatches);
+    const shown = arrange(rows).filter(apiMatches);
     if (shown.length > 0)
       menuGroups.push({
         key: `api-${area}`,
@@ -521,8 +555,12 @@ export default function GrantsPicker({
         rows: shown,
       });
   }
-  const shownMethods = (methods || []).filter((m) =>
-    matches(m.ref, m.method, m.description),
+  const shownMethods = sortByDisplay(
+    formCapabilities,
+    (methods || []).filter(
+      (m) => formOffers(m.ref) && matches(m.ref, m.method, m.description),
+    ),
+    (m) => m.ref,
   );
   if (shownMethods.length > 0)
     menuGroups.push({
@@ -533,7 +571,7 @@ export default function GrantsPicker({
     });
 
   const apiItem = (row) => {
-    const name = apiShortName(row.id);
+    const name = row.displayLabel || apiShortName(row.id);
     const held = apiHeld.includes(apiGrantId(row.id, apiRepo));
     return (
       <MenuItem
@@ -610,7 +648,7 @@ export default function GrantsPicker({
     const refused = m.policyRefusal || "";
     const verdict = refused
       ? "denied"
-      : runKind
+      : kindVerdictShown
         ? m.policy?.[runKind]
         : undefined;
     const policyNote = refused || policyVerdictText(verdict, runKind);
@@ -640,7 +678,10 @@ export default function GrantsPicker({
         </ListItemIcon>
         <ListItemText
           sx={{ minWidth: 0 }}
-          primary={methodMenuLabel(m.ref, m.method)}
+          primary={
+            pickerDisplay(formCapabilities, m.ref)?.label ||
+            methodMenuLabel(m.ref, m.method)
+          }
           primaryTypographyProps={
             refused ? { color: "text.disabled" } : undefined
           }
@@ -695,7 +736,7 @@ export default function GrantsPicker({
       sx={{ mt: 1.5 }}
     >
       <Typography id={`${regionId}-label`} variant="subtitle2" component="div">
-        Grants
+        {label}
       </Typography>
       <Typography
         variant="caption"
@@ -703,8 +744,12 @@ export default function GrantsPicker({
         component="p"
         sx={{ mb: 0.75 }}
       >
-        What the agent may use: grain&apos;s own API (docs/agent-api.md) and
-        capability server methods (docs/capabilities.md).
+        {helpText || (
+          <>
+            What the agent may use: grain&apos;s own API (docs/agent-api.md) and
+            capability server methods (docs/capabilities.md).
+          </>
+        )}
       </Typography>
       <Box
         className="grants-held"

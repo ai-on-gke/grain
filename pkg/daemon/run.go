@@ -1185,7 +1185,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		if strings.TrimSpace(cfg.GritURL) != "" {
 			gritRunner := BuildGritBackendRunner(ctx, cfg, live.ciRetention, store)
 			LiveCI.Store(gritRunner)
-			log.Printf("grain daemon: grain CI is wired to remote grit server at %s", cfg.GritURL)
+			log.Printf("grain daemon: grain CI is wired to remote grit server at %s (EXPERIMENTAL, -grit-experimental: it runs no repository's workflows yet)", cfg.GritURL)
 		} else {
 			ciProviders := func() *model.CapabilityRegistry {
 				return newCapabilityRegistryWithStore(store, live.Current().LocalScriptsConfig(), CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
@@ -1478,6 +1478,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// carry that fact across, since the process that performed
 			// the upgrade is not this one.
 			UpgradeStatus: upgradeStatus(upgrader),
+			// And when this process started, so the process that
+			// upgrade is about to restart away does not file that check
+			// itself.
+			ProcessStartedAt: processStartedAt,
 			// And how long that restart left grain unreachable, measured
 			// by this process and the one it replaced (upgrade.GapRecorder).
 			RestartGap: cfg.restartGaps.Last,

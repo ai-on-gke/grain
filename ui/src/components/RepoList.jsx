@@ -412,16 +412,25 @@ export default function RepoList({
         title="Repos"
         icon={<ItemGlyph kind="repos" size={20} />}
         count={visible.length}
-        style={{ alignItems: "center" }}
+        style={{ alignItems: "center", flexWrap: "wrap" }}
         action={
           <Stack
             component="form"
             spacing={0.5}
             onSubmit={addRepo}
-            sx={{ ml: "auto" }}
+            // On a phone the header is drawn in the page rather than in
+            // the rail's slot, and a 300px field beside the title pushed
+            // Add repo past the viewport's right edge, where nothing
+            // could reach it (2026-11-01 walkthrough). There the form
+            // takes a line of its own and its field gives up width.
+            sx={{
+              ml: "auto",
+              minWidth: 0,
+              flexBasis: { xs: "100%", sm: "auto" },
+            }}
             aria-label="Add repo"
           >
-            <Stack direction="row" spacing={1}>
+            <Stack direction="row" spacing={1} sx={{ minWidth: 0 }}>
               <Autocomplete
                 freeSolo
                 forcePopupIcon
@@ -466,7 +475,7 @@ export default function RepoList({
                     }}
                   />
                 )}
-                sx={{ minWidth: 300 }}
+                sx={{ minWidth: { xs: 0, sm: 300 }, flex: "1 1 auto" }}
               />
               {needsCloneUrl && (
                 <TextField
@@ -478,7 +487,12 @@ export default function RepoList({
                   inputProps={{ "aria-label": "Clone URL" }}
                 />
               )}
-              <Button type="submit" variant="outlined" size="small">
+              <Button
+                type="submit"
+                variant="outlined"
+                size="small"
+                sx={{ flex: "none" }}
+              >
                 Add repo
               </Button>
             </Stack>
@@ -598,6 +612,19 @@ export default function RepoList({
                 {r.repo}
               </RowLink>
               <ChipStrip>
+                {/* Blocked leads the strip: ChipStrip hides the last chips
+                    first once the row runs out of width, and a repo with
+                    tasks in every state already fills a desktop row with
+                    its counts -- so behind them, the one chip this list
+                    exists to make stand out was the first to go, at any
+                    width (grain/task-2235). */}
+                {r.blocked > 0 && (
+                  <Chip
+                    size="small"
+                    color="error"
+                    label={`Blocked ${r.blocked}`}
+                  />
+                )}
                 {/* Each chip here counts a repo's tasks in one state, not one
                       task's own status, so "running" keeps the plain CSS spin
                       (style.css's .badge-running) rather than StateDot's grain
@@ -611,13 +638,6 @@ export default function RepoList({
                     label={`${STATE_LABELS[s] || s} ${count}`}
                   />
                 ))}
-                {r.blocked > 0 && (
-                  <Chip
-                    size="small"
-                    color="error"
-                    label={`Blocked ${r.blocked}`}
-                  />
-                )}
                 {defaultsOnly && (
                   <Chip
                     size="small"

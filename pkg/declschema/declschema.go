@@ -594,6 +594,7 @@ func templateSchema() Schema {
 			// decides who the agent talks to while it works, not what the
 			// work may touch.
 			{Model: "Interactive", Keys: carried("interactive"), Columns: []string{"interactive"}},
+			{Model: "KeepRunning", Keys: carried("keep-running"), Columns: []string{"keep_running"}},
 			{Model: "CustomFields", Keys: carried("custom-fields"), Table: "template_custom_field"},
 
 			// The refusals. Each of these would be perfectly natural to
@@ -619,6 +620,11 @@ func templateSchema() Schema {
 				Model:   "Reviewers",
 				Keys:    []Key{settingsOnly("reviewers", Reach)},
 				Columns: []string{"reviewers"},
+			},
+			{
+				Model:   "Priority",
+				Keys:    carried("priority"),
+				Columns: []string{"priority"},
 			},
 			{Model: "Reads", Keys: []Key{settingsOnly("reads", Reach)}, Table: "template_read"},
 			{Model: "Writes", Keys: []Key{settingsOnly("writes", Reach)}, Table: "template_write"},
@@ -793,6 +799,11 @@ func scheduleSchema() Schema {
 				Model:   "NothingNeededAction",
 				Keys:    []Key{settingsOnly("nothing-needed", Inline)},
 				Columns: []string{"nothing_needed_action"},
+			},
+			{
+				Model:   "KeepRunning",
+				Keys:    []Key{settingsOnly("keep-running", Inline)},
+				Columns: []string{"keep_running"},
 			},
 			{
 				Model: "CustomFields",

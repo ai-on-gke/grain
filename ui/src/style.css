@@ -796,6 +796,16 @@ samp,
     transition: none;
   }
 }
+/* MUI's keyboard-focus ripple pulses for as long as a button holds
+   focus -- a 2.5s keyframe loop the theme's reduced-motion transitions
+   (theme.js) cannot reach, since it is an animation, not a transition.
+   Held still, the ring still marks the focused control (2026-11-01
+   responsive walkthrough). */
+@media (prefers-reduced-motion: reduce) {
+  .MuiTouchRipple-childPulsate {
+    animation: none !important;
+  }
+}
 .sidebar-collapsed .MuiListItemButton-root {
   justify-content: center;
   padding-left: 0;
@@ -1092,13 +1102,30 @@ main,
 /* The end of one folder's boards, while a board is being dragged
    (BoardList.jsx). Without it the last position in a folder has no drop
    target of its own: the row below it is the next folder's heading, and
-   dropping on that files the board *into* that folder. Only on screen
-   during a drag, like the task list's own trailing zone, and shorter
-   than it -- it sits inside a list of sections rather than after all of
-   them, so every folder grows by its height the moment a drag starts. */
-.board-drop-end {
+   dropping on that files the board *into* that folder. Overlaid on the
+   seam below the section rather than taking height of its own in the
+   flow, so starting a drag does not shift the folders and rows under it
+   down while the reader is aiming at them, and stopping at the next
+   heading's top edge so the heading keeps its own drop. */
+.template-list > .board-drop-end {
   list-style: none;
-  min-height: 1.25rem;
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin-top: -0.5rem;
+  height: 0.5rem;
+  min-height: 0;
+  z-index: 1;
+}
+.template-list > .board-drop-end.task-drop-target {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.template-list > .board-drop-end:last-child {
+  margin-top: 0;
+  height: 2rem;
+}
+.template-list > .board-drop-end:last-child.task-drop-target {
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 .reorder-slot-button {
   display: flex;
@@ -2733,6 +2760,7 @@ html[data-phone="true"] .gantt-body {
    with everything else about that template, the same "list vs. behind
    a click" split .task-row itself draws against DetailOverlay. */
 .template-list {
+  position: relative;
   list-style: none;
   margin: var(--list-rows-gap) 0 0;
   padding: 0;
@@ -4898,4 +4926,23 @@ fieldset legend {
 :root[data-phone="true"] .question-disclosure-toggle,
 :root[data-phone="true"] .inbox-group-toggle {
   min-height: 44px;
+}
+
+/* An optimistic message not yet on the server (TaskChat.jsx): faded
+   while it is in flight, so it never reads as sent, and outlined in the
+   error colour once it has failed, with its Retry and Discard under it. */
+.task-chat-window .task-chat-sending .cs-message__content {
+  opacity: 0.65;
+}
+.task-chat-window .task-chat-failed .cs-message__content {
+  outline: 1px solid var(--danger);
+}
+.task-chat-window .task-chat-pending .cs-message__sent-time {
+  font-style: italic;
+}
+.task-chat-retry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
 }

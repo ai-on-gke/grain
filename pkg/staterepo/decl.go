@@ -198,6 +198,7 @@ var booleanKeys = map[string]bool{
 	"enabled":                true,
 	"require-approval":       true,
 	"interactive":            true,
+	"keep-running":           true,
 }
 
 // declKinds is the three of them, built from pkg/declschema so the keys,
@@ -356,7 +357,7 @@ func dumpRowsOf(dir, table string) ([]map[string]any, bool, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			// settings/capabilities.yml may still speak for it.
-			return overlayCapabilities(dir, table, nil, false)
+			return overlaySettingsFiles(dir, table, nil, false)
 		}
 		return nil, false, fmt.Errorf("staterepo: reading %s: %w", path, err)
 	}
@@ -366,7 +367,18 @@ func dumpRowsOf(dir, table string) ([]map[string]any, bool, error) {
 	}
 	// The columns settings/capabilities.yml projects onto read as the
 	// file says (capabilities_file.go).
-	return overlayCapabilities(dir, table, rows, true)
+	return overlaySettingsFiles(dir, table, rows, true)
+}
+
+// overlaySettingsFiles puts the settings files that project onto
+// columns -- settings/capabilities.yml and settings/new-task-form.yml --
+// over the rows tables/ holds.
+func overlaySettingsFiles(dir, table string, rows []map[string]any, present bool) ([]map[string]any, bool, error) {
+	rows, present, err := overlayCapabilities(dir, table, rows, present)
+	if err != nil {
+		return nil, false, err
+	}
+	return overlayNewTaskForm(dir, table, rows, present)
 }
 
 // declDocument is one settings file, parsed: the entries in the order
@@ -538,7 +550,10 @@ func exportDeclarations(ctx context.Context, db querier, dir string) error {
 			return err
 		}
 	}
-	return exportCapabilities(ctx, db, dir)
+	if err := exportCapabilities(ctx, db, dir); err != nil {
+		return err
+	}
+	return exportNewTaskForm(ctx, db, dir)
 }
 
 // declDocumentFor renders one kind's whole file.
@@ -662,6 +677,13 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 			out.Content = append(out.Content, key(f.key), node)
 			continue
 		}
+		if !hasColumn(f, row) {
+			// A store at an older schema has no such column (a schema-65
+			// schedule has no keep_running): leave the key out, so the
+			// import gives the column its default rather than a null its
+			// NOT NULL refuses.
+			continue
+		}
 		name, node, err := columnNode(f, row)
 		if err != nil {
 			return nil, err
@@ -672,6 +694,17 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 		out.Content = append(out.Content, key(name), node)
 	}
 	return out, nil
+}
+
+// hasColumn reports whether row was read from a table that has f's
+// column. Only a one-column field can be missing that way: the cadence,
+// target and change target are older than any schema this build migrates.
+func hasColumn(f declFieldShape, row map[string]any) bool {
+	if f.shape != shapeBool && f.shape != shapeScalar {
+		return true
+	}
+	_, ok := row[f.columns[0]]
+	return ok
 }
 
 // mine is the companion rows belonging to one parent.
@@ -1348,12 +1381,13 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 		for _, entry := range node.Content {
 			row := map[string]any{parent: id, "via": string(model.GrantByLabel), "folder": nil}
 			if entry.Kind == yaml.ScalarNode {
-				// A retired in-process capability is read as the api
-				// grant it became (model.CanonicalLegacyGrant), so a
+				// A retired in-process capability is read as the canonical
+				// grant(s) it became (model.CanonicalLegacyGrants), so a
 				// grain/config exported before the store migration that
 				// rewrote it imports as what the store now holds.
-				row["capability"] = model.CanonicalLegacyGrant(entry.Value)
-				out = append(out, row)
+				for _, capID := range model.CanonicalLegacyGrants(entry.Value) {
+					out = append(out, map[string]any{parent: id, "capability": capID, "via": string(model.GrantByLabel), "folder": nil})
+				}
 				continue
 			}
 			v, err := nodeValue(entry)
@@ -1365,16 +1399,24 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 			if !ok {
 				return nil, fail("a grant is a capability, or {capability, via, folder}")
 			}
-			if name, isText := capability.(string); isText {
-				capability = model.CanonicalLegacyGrant(name)
-			}
-			row["capability"] = capability
 			if via, ok := named["via"]; ok {
 				row["via"] = via
 			}
 			if folder, ok := named["folder"]; ok {
 				row["folder"] = folder
 			}
+			if name, isText := capability.(string); isText {
+				for _, capID := range model.CanonicalLegacyGrants(name) {
+					out = append(out, map[string]any{
+						parent:       id,
+						"capability": capID,
+						"via":        row["via"],
+						"folder":     row["folder"],
+					})
+				}
+				continue
+			}
+			row["capability"] = capability
 			out = append(out, row)
 		}
 	case shapeInputs:

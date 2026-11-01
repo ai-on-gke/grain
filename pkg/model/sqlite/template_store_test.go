@@ -272,6 +272,8 @@ func TestUpdateTemplateAppliesAndPersists(t *testing.T) {
 	err := store.UpdateTemplate(ctx, "template-1", func(tmpl *model.Template) error {
 		tmpl.Title = "Bump dependencies (patch only)"
 		tmpl.AutoMerge = true
+		p := 8
+		tmpl.Priority = &p
 		return nil
 	})
 	if err != nil {
@@ -281,7 +283,7 @@ func TestUpdateTemplateAppliesAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Title != "Bump dependencies (patch only)" || !got.AutoMerge {
+	if got.Title != "Bump dependencies (patch only)" || !got.AutoMerge || got.Priority == nil || *got.Priority != 8 {
 		t.Errorf("update did not persist: %+v", got)
 	}
 }

@@ -95,8 +95,8 @@ type Scope struct {
 	MayReadSrc      bool
 	MayReadAllTasks bool
 	// TaskReadRepos are the repositories whose tasks this scope may read
-	// under task:// without MayReadAllTasks: the task's own, its reads
-	// and writes, and any an api:tasks:read@owner/repo grant names.
+	// under task:// without MayReadAllTasks: the ones an
+	// api:tasks:read@owner/repo grant names. TaskRepo is not implied.
 	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
@@ -1469,29 +1469,36 @@ func (s *Server) GlobEntries(ctx context.Context, scope Scope, scheme, relPath, 
 	var matches []string
 	visited := 0
 	truncated := ""
+	pruner := newGlobPruner(pattern)
 	var walk func(curRel string, n *ResolvedNode)
 	walk = func(curRel string, n *ResolvedNode) {
 		if n.Truncated != "" && truncated == "" {
 			truncated = n.Truncated
 		}
 		for _, e := range n.Entries {
+			childRel := e.Name
+			if curRel != "" {
+				childRel = curRel + "/" + e.Name
+			}
+			isDir := e.Type == "dir"
+			if !pruner.canMatchOrDescend(childRel, isDir) {
+				continue
+			}
+			matched := (!dirsOnly || isDir) && (matchGlob(pattern, childRel) || matchGlob(pattern, e.Name))
+			// Avoid descending into both unnumbered job files and attempts/<n> unless pattern asks for attempts.
+			skipAttempts := isDir && e.Name == "attempts" && !strings.Contains(pattern, "attempts") && !strings.Contains(pattern, "**")
+			if skipAttempts && !matched {
+				continue
+			}
 			visited++
 			if visited > maxWalkFiles {
 				truncated = fmt.Sprintf("walked %d entries; narrow the path", maxWalkFiles)
 				return
 			}
-			childRel := e.Name
-			if curRel != "" {
-				childRel = curRel + "/" + e.Name
-			}
-			if (!dirsOnly || e.Type == "dir") && (matchGlob(pattern, childRel) || matchGlob(pattern, e.Name)) {
+			if matched {
 				matches = append(matches, dirName(e, childRel))
 			}
-			if e.Type != "dir" {
-				continue
-			}
-			// Avoid descending into both unnumbered job files and attempts/<n> unless pattern asks for attempts.
-			if e.Name == "attempts" && !strings.Contains(pattern, "attempts") && !strings.Contains(pattern, "**") {
+			if !isDir || skipAttempts || !pruner.canDescend(childRel) {
 				continue
 			}
 			child, err := s.Resolve(ctx, scope, scheme, joinRel(relPath, childRel))
@@ -1507,6 +1514,94 @@ func (s *Server) GlobEntries(ctx context.Context, scope Scope, scheme, relPath, 
 	walk("", node)
 	sort.Strings(matches)
 	return GlobResult{Matches: matches, Truncated: truncated}, nil
+}
+
+// globPruner prunes namespace entries and directory descents that cannot
+// match a slash-containing glob pattern. A pattern without "/" is left
+// unpruned here: GlobEntries handles direct-child globs before walking, and
+// Grep treats a bare filename glob (such as "*.go") as a filter at any depth.
+type globPruner struct {
+	active        bool
+	hasDoubleStar bool
+	segments      []string
+	prefix        []string
+}
+
+func newGlobPruner(pattern string) globPruner {
+	pattern = strings.TrimPrefix(strings.TrimSpace(pattern), "/")
+	if pattern == "" || !strings.Contains(pattern, "/") {
+		return globPruner{}
+	}
+	segs := strings.Split(pattern, "/")
+	if !strings.Contains(pattern, "**") {
+		return globPruner{
+			active:   true,
+			segments: segs,
+			prefix:   segs,
+		}
+	}
+	var prefix []string
+	for _, seg := range segs {
+		if strings.Contains(seg, "**") {
+			break
+		}
+		prefix = append(prefix, seg)
+	}
+	if len(prefix) == 0 {
+		return globPruner{}
+	}
+	return globPruner{
+		active:        true,
+		hasDoubleStar: true,
+		prefix:        prefix,
+	}
+}
+
+func (p globPruner) matchesPrefix(childSegs []string) bool {
+	limit := len(childSegs)
+	if len(p.prefix) < limit {
+		limit = len(p.prefix)
+	}
+	for i := 0; i < limit; i++ {
+		if !matchGlob(p.prefix[i], childSegs[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (p globPruner) canMatchOrDescend(childRel string, isDir bool) bool {
+	if !p.active {
+		return true
+	}
+	childSegs := strings.Split(childRel, "/")
+	if !p.matchesPrefix(childSegs) {
+		return false
+	}
+	if p.hasDoubleStar {
+		return isDir || len(childSegs) >= len(p.prefix)
+	}
+	if len(childSegs) > len(p.segments) {
+		return false
+	}
+	if !isDir && len(childSegs) != len(p.segments) {
+		return false
+	}
+	return true
+}
+
+func (p globPruner) canDescend(childRel string) bool {
+	if !p.active {
+		return true
+	}
+	childSegs := strings.Split(childRel, "/")
+	if !p.matchesPrefix(childSegs) {
+		return false
+	}
+	if p.hasDoubleStar {
+		return true
+	}
+	return len(childSegs) < len(p.segments)
 }
 
 // joinRel joins a namespace path and a path relative to it.
@@ -1629,58 +1724,57 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 		files = append(files, targetFile{label: "", node: node})
 	} else {
 		visited := 0
-		var collect func(curRel string)
-		collect = func(curRel string) {
-			if visited >= maxWalkFiles {
-				walkTruncated = true
-				return
-			}
-			fullRel := relPath
-			if curRel != "" {
-				if fullRel != "" {
-					fullRel = fullRel + "/" + curRel
-				} else {
-					fullRel = curRel
-				}
-			}
-			n, err := s.Resolve(ctx, scope, scheme, fullRel)
-			if err != nil || !n.IsDir {
-				return
-			}
+		globFilter := strings.TrimPrefix(strings.TrimSpace(opts.GlobFilter), "/")
+		pruner := newGlobPruner(globFilter)
+		var collect func(curRel string, n *ResolvedNode)
+		collect = func(curRel string, n *ResolvedNode) {
 			for _, e := range n.Entries {
-				visited++
-				if visited > maxWalkFiles {
-					walkTruncated = true
-					break
-				}
 				childRel := e.Name
 				if curRel != "" {
 					childRel = curRel + "/" + e.Name
 				}
 				if e.Type == "dir" {
-					// When grepping a job directory, skip attempts/ unless asked so we don't duplicate latest attempt matches.
-					if e.Name == "attempts" && curRel == "" {
+					// Skip attempts/ unless asked so grepping a run, job, or task://
+					// does not duplicate latest attempt matches or load old transcripts.
+					if e.Name == "attempts" && !strings.Contains(globFilter, "attempts") && !strings.Contains(globFilter, "**") {
 						continue
 					}
-					collect(childRel)
+					if !pruner.canDescend(childRel) {
+						continue
+					}
+					visited++
+					if visited > maxWalkFiles {
+						walkTruncated = true
+						return
+					}
+					child, err := s.Resolve(ctx, scope, scheme, joinRel(relPath, childRel))
+					if err != nil || !child.IsDir {
+						continue
+					}
+					collect(childRel, child)
+					if walkTruncated {
+						return
+					}
 					continue
 				}
-				if opts.GlobFilter != "" && !matchGlob(opts.GlobFilter, childRel) && !matchGlob(opts.GlobFilter, e.Name) {
+				if !pruner.canMatchOrDescend(childRel, false) {
 					continue
 				}
-				childFull := relPath
-				if childFull != "" {
-					childFull += "/" + childRel
-				} else {
-					childFull = childRel
+				if globFilter != "" && !matchGlob(globFilter, childRel) && !matchGlob(globFilter, e.Name) {
+					continue
 				}
-				fn, err := s.Resolve(ctx, scope, scheme, childFull)
+				visited++
+				if visited > maxWalkFiles {
+					walkTruncated = true
+					return
+				}
+				fn, err := s.Resolve(ctx, scope, scheme, joinRel(relPath, childRel))
 				if err == nil && !fn.IsDir {
 					files = append(files, targetFile{label: childRel, node: fn})
 				}
 			}
 		}
-		collect("")
+		collect("", node)
 	}
 
 	showLineNum := opts.LineNumbers || len(files) > 1 || ctxLines > 0
@@ -1747,7 +1841,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 	}
 
 	if truncated {
-		fmt.Fprintf(&out, "[truncated at match limit (%d matches); pass ?max=%d to raise the limit]\n", maxMatches, maxMatches*2)
+		fmt.Fprintf(&out, "[truncated at match limit (%d matches); pass --max %d (grain grep) to raise the limit]\n", maxMatches, maxMatches*2)
 	} else if walkTruncated {
 		truncated = true
 		fmt.Fprintf(&out, "[truncated: walked %d entries; narrow the path]\n", maxWalkFiles)

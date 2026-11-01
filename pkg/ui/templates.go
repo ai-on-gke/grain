@@ -80,6 +80,7 @@ type Template struct {
 	Fields    []TemplateField `json:"fields,omitempty"`
 	Repo      string          `json:"repo,omitempty"`
 	Base      string          `json:"base,omitempty"`
+	Priority  *int            `json:"priority,omitempty"`
 	AutoMerge bool            `json:"autoMerge"`
 	// NetworkAccess is how much of the internet the sandbox of every
 	// task filed from this template may reach
@@ -102,6 +103,7 @@ type Template struct {
 	// Omitted when false, like Repo, so a template saved before the
 	// switch existed keeps the revision it had.
 	Interactive  bool                        `json:"interactive,omitempty"`
+	KeepRunning  bool                        `json:"keepRunning,omitempty"`
 	Reads        []string                    `json:"reads,omitempty"`
 	Writes       []WriteTarget               `json:"writes,omitempty"`
 	CustomFields map[string]CustomFieldValue `json:"customFields,omitempty"`
@@ -188,6 +190,7 @@ func templateFrom(t model.Template) Template {
 		Fields:        templateFieldsFrom(t.Fields),
 		AutoMerge:     t.AutoMerge,
 		Interactive:   t.Interactive,
+		KeepRunning:   t.KeepRunning,
 		NetworkAccess: string(t.NetworkAccess),
 		Model:         t.Model,
 		CustomFields:  customFieldValues(t.CustomFields),
@@ -198,6 +201,10 @@ func templateFrom(t model.Template) Template {
 	}
 	if t.Target != nil {
 		out.Repo, out.Base = t.Target.String(), t.Base
+	}
+	if t.Priority != nil && *t.Priority != 0 {
+		p := *t.Priority
+		out.Priority = &p
 	}
 	out.ChangeTarget = t.ChangeTarget.Clone()
 	out.Reviewers = slices.Clone(t.Reviewers)
@@ -309,6 +316,7 @@ type CreateTemplateRequest struct {
 	Reviewers []string `json:"reviewers,omitempty"`
 	Repo      string   `json:"repo"`
 	Base      string   `json:"base"`
+	Priority  *int     `json:"priority,omitempty"`
 	AutoMerge bool     `json:"autoMerge"`
 	// NetworkAccess fixes the network of every task this template files
 	// (model.Template.NetworkAccess): one of model.NetworkAccesses(), or
@@ -328,11 +336,13 @@ type CreateTemplateRequest struct {
 	// (model.Template.Model), or "" to leave it to the team's default.
 	Model string `json:"model"`
 	// Interactive sets model.Template.Interactive.
-	Interactive  bool                        `json:"interactive"`
-	Capabilities []string                    `json:"capabilities"`
-	Reads        []string                    `json:"reads"`
-	Writes       []WriteTarget               `json:"writes"`
-	CustomFields map[string]CustomFieldValue `json:"customFields"`
+	Interactive      bool                        `json:"interactive"`
+	KeepRunning      bool                        `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool                       `json:"keep_running,omitempty"`
+	Capabilities     []string                    `json:"capabilities"`
+	Reads            []string                    `json:"reads"`
+	Writes           []WriteTarget               `json:"writes"`
+	CustomFields     map[string]CustomFieldValue `json:"customFields"`
 }
 
 // parseBinding turns a request's repo/base pair into the binding
@@ -363,6 +373,16 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 	}
 	if strings.TrimSpace(req.Title) == "" {
 		return Template{}, validationErrorf("title is required")
+	}
+	var priority *int
+	if req.Priority != nil {
+		if *req.Priority < 0 {
+			return Template{}, validationErrorf("priority must be a positive integer")
+		}
+		if *req.Priority > 0 {
+			p := *req.Priority
+			priority = &p
+		}
 	}
 	if err := validateNetworkAccess(req.NetworkAccess); err != nil {
 		return Template{}, err
@@ -425,8 +445,10 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 		Fields:        fields,
 		Target:        target,
 		Base:          base,
+		Priority:      priority,
 		AutoMerge:     req.AutoMerge,
 		Interactive:   req.Interactive,
+		KeepRunning:   req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
 		NetworkAccess: model.NetworkAccess(req.NetworkAccess),
 		Model:         chosenModel,
 		Reads:         reads,
@@ -541,6 +563,13 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 	}
 	if !req.Interactive {
 		req.Interactive = comp.Interactive
+	}
+	if !req.KeepRunning && req.KeepRunningSnake == nil {
+		req.KeepRunning = comp.KeepRunning
+	}
+	if req.Priority == nil && comp.Priority != 0 {
+		p := comp.Priority
+		req.Priority = &p
 	}
 	if strings.TrimSpace(req.NetworkAccess) == "" {
 		req.NetworkAccess = string(comp.NetworkAccess)
@@ -683,6 +712,7 @@ type UpdateTemplateRequest struct {
 	Reviewers *[]string `json:"reviewers,omitempty"`
 	Repo      *string   `json:"repo,omitempty"`
 	Base      *string   `json:"base,omitempty"`
+	Priority  *int      `json:"priority,omitempty"`
 	AutoMerge *bool     `json:"autoMerge,omitempty"`
 	// NetworkAccess edits what CreateTemplateRequest.NetworkAccess sets,
 	// with an empty string meaningful rather than ignored: it clears the
@@ -696,11 +726,13 @@ type UpdateTemplateRequest struct {
 	// clears it, so the template's tasks go back to the team's default.
 	Model *string `json:"model,omitempty"`
 	// Interactive edits CreateTemplateRequest.Interactive's own field.
-	Interactive  *bool                        `json:"interactive,omitempty"`
-	Capabilities *[]string                    `json:"capabilities,omitempty"`
-	Reads        *[]string                    `json:"reads,omitempty"`
-	Writes       *[]WriteTarget               `json:"writes,omitempty"`
-	CustomFields *map[string]CustomFieldValue `json:"customFields,omitempty"`
+	Interactive      *bool                        `json:"interactive,omitempty"`
+	KeepRunning      *bool                        `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool                        `json:"keep_running,omitempty"`
+	Capabilities     *[]string                    `json:"capabilities,omitempty"`
+	Reads            *[]string                    `json:"reads,omitempty"`
+	Writes           *[]WriteTarget               `json:"writes,omitempty"`
+	CustomFields     *map[string]CustomFieldValue `json:"customFields,omitempty"`
 	// Revision, given, is the template's Revision as the caller last read
 	// it, and the edit is refused (staleEditError) if the template has been
 	// saved since. Absent applies the edit regardless.
@@ -726,6 +758,9 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 	}
 	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 		return Template{}, validationErrorf("title cannot be empty")
+	}
+	if req.Priority != nil && *req.Priority < 0 {
+		return Template{}, validationErrorf("priority must be a positive integer")
 	}
 	if req.NetworkAccess != nil {
 		if err := validateNetworkAccess(*req.NetworkAccess); err != nil {
@@ -867,11 +902,24 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 		if req.Repo != nil || req.Base != nil {
 			t.Target, t.Base = target, base
 		}
+		if req.Priority != nil {
+			if *req.Priority == 0 {
+				t.Priority = nil
+			} else {
+				p := *req.Priority
+				t.Priority = &p
+			}
+		}
 		if req.AutoMerge != nil {
 			t.AutoMerge = *req.AutoMerge
 		}
 		if req.Interactive != nil {
 			t.Interactive = *req.Interactive
+		}
+		if req.KeepRunning != nil {
+			t.KeepRunning = *req.KeepRunning
+		} else if req.KeepRunningSnake != nil {
+			t.KeepRunning = *req.KeepRunningSnake
 		}
 		if req.NetworkAccess != nil {
 			t.NetworkAccess = model.NetworkAccess(*req.NetworkAccess)

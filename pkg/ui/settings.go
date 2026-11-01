@@ -16,9 +16,11 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -749,6 +751,16 @@ type Settings struct {
 	// is managed in read-only Infrastructure-as-Code mode (state-repo.json).
 	ExternalConfigRepo   string `json:"externalConfigRepo,omitempty"`
 	ExternalConfigBranch string `json:"externalConfigBranch,omitempty"`
+	// SettingsLocked is model.Config.SettingsLocked: whether non-bootstrap
+	// settings are locked in the UI and REST API in favour of config
+	// repository pull requests. False by default.
+	SettingsLocked bool `json:"settingsLocked"`
+	// ConfigRepoOnly is GET /api/config's configRepoOnly for this row:
+	// whether the API refuses its non-bootstrap writes in favour of a
+	// config pull request. Unlike SettingsLocked it is false under the
+	// directConfigWrites opt-out, so it is what the UI draws read-only
+	// on (settings-mutability D-10).
+	ConfigRepoOnly bool `json:"configRepoOnly"`
 }
 
 type UnrunnableSetting struct {
@@ -1148,6 +1160,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxShapeIgnored:                c.Config.SandboxShapeIgnored,
 		SandboxCommitment:                  c.sandboxCommitment(cfg),
 		ShowClosedByDefault:                cfg.ShowClosedByDefault,
+		SettingsLocked:                     cfg.SettingsLocked,
+		ConfigRepoOnly:                     c.rowConfigRepoOnly(ctx, cfg),
 		EnvironmentName:                    cfg.EnvironmentName,
 		PromptExtension:                    cfg.PromptExtension,
 		RepairTemplateID:                   cfg.RepairTemplateID,
@@ -1436,6 +1450,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
+			SettingsLocked:                     def.SettingsLocked,
 			RestartRequired:                    restartRequiredKeys(),
 		}
 		c.resolveSandboxImageFields(ctx, def, sandboxImgDefault, granuleImgDefault).apply(&out)
@@ -1443,6 +1458,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 		out.Sources = sources
 		out.SettingSources = sources
 		out.ExternalConfigRepo, out.ExternalConfigBranch = c.externalConfigRepo(ctx)
+		out.ConfigRepoOnly = c.rowConfigRepoOnly(ctx, def)
 		return out, nil
 	}
 	settings := c.settingsFrom(ctx, *cfg, repoConfigs)
@@ -1546,6 +1562,29 @@ type UpdateSettingsRequest struct {
 	TaskBranchTemplate  *string               `json:"taskBranchTemplate"`
 	DeploymentID        *string               `json:"deploymentId"`
 	DefaultCapabilities *[]string             `json:"defaultCapabilities"`
+	SettingsLocked      *bool                 `json:"settingsLocked"`
+}
+
+func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
+	type plain UpdateSettingsRequest
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = UpdateSettingsRequest(p)
+	var snake struct {
+		SettingsLocked      *bool     `json:"settings_locked"`
+		DefaultCapabilities *[]string `json:"default_capabilities"`
+	}
+	if err := json.Unmarshal(data, &snake); err == nil {
+		if r.SettingsLocked == nil && snake.SettingsLocked != nil {
+			r.SettingsLocked = snake.SettingsLocked
+		}
+		if r.DefaultCapabilities == nil && snake.DefaultCapabilities != nil {
+			r.DefaultCapabilities = snake.DefaultCapabilities
+		}
+	}
+	return nil
 }
 
 func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
@@ -1717,10 +1756,25 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.GitHubInsecureHTTP = *req.GitHubInsecureHTTP
 	}
 	if req.GCPProject != nil {
-		cfg.GCPProject = *req.GCPProject
+		// A project ID, which gcp-key and gemini-key put into every
+		// resource name they mint under: the 2026-11-01 walkthrough saved
+		// "Bad Project!", which only failed later, on a task's attempt.
+		project := strings.TrimSpace(*req.GCPProject)
+		if project != "" && !gcpProjectID.MatchString(project) {
+			return model.Config{}, validationErrorf("gcpProject %q is not a GCP project ID: 6 to 30 lowercase letters, digits and '-', starting with a letter and not ending with '-', such as my-project-123", project)
+		}
+		cfg.GCPProject = project
 	}
 	if req.GCPServiceAccountEmail != nil {
-		cfg.GCPServiceAccountEmail = *req.GCPServiceAccountEmail
+		// A service account is an email address; the 2026-11-01
+		// walkthrough saved "not an email", which only failed when a key
+		// was minted.
+		email := strings.TrimSpace(*req.GCPServiceAccountEmail)
+		if local, domain, ok := strings.Cut(email, "@"); email != "" &&
+			(!ok || local == "" || domain == "" || strings.ContainsAny(email, " \t") || strings.Contains(domain, "@")) {
+			return model.Config{}, validationErrorf("gcpServiceAccountEmail %q is not a service account email, such as grain-minter@my-project-123.iam.gserviceaccount.com", email)
+		}
+		cfg.GCPServiceAccountEmail = email
 	}
 	if req.GCPServiceAccountCount != nil {
 		count := *req.GCPServiceAccountCount
@@ -1744,24 +1798,26 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.DefaultCapabilities != nil {
 		seen := map[string]bool{}
 		ids := make([]string, 0, len(*req.DefaultCapabilities))
-		for _, id := range *req.DefaultCapabilities {
-			id, err := c.normalizeCapabilityID(id)
+		for _, rawID := range *req.DefaultCapabilities {
+			normalizedIDs, err := c.normalizeCapabilityIDs(rawID)
 			if err != nil {
 				return model.Config{}, err
 			}
-			if _, ok := c.capabilityByID(id); !ok {
-				// Refused rather than dropped, and named with
-				// capabilityRefusal's own words: this set seeds every
-				// task filed on the deployment (CreateTask), so a
-				// CI-only id landing here would fail every one of them
-				// at model.ResolveGrants at once.
-				return model.Config{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+			for _, id := range normalizedIDs {
+				if _, ok := c.capabilityByID(id); !ok {
+					// Refused rather than dropped, and named with
+					// capabilityRefusal's own words: this set seeds every
+					// task filed on the deployment (CreateTask), so a
+					// CI-only id landing here would fail every one of them
+					// at model.ResolveGrants at once.
+					return model.Config{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+				}
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+				ids = append(ids, id)
 			}
-			if seen[id] {
-				continue
-			}
-			seen[id] = true
-			ids = append(ids, id)
 		}
 		cfg.DefaultCapabilities = ids
 	}
@@ -1920,14 +1976,34 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.K8sKubectl != nil {
 		cfg.K8sKubectl = strings.TrimSpace(*req.K8sKubectl)
 	}
+	// The pod images are checked as the custom sandbox image is, and the
+	// workspace is a directory inside the pod, so an absolute path: the
+	// 2026-11-01 walkthrough saved "not a ref!!" and "relative/dir", which
+	// only failed later, on every pod grain created.
 	if req.K8sSandboxImage != nil {
-		cfg.K8sSandboxImage = strings.TrimSpace(*req.K8sSandboxImage)
+		image := strings.TrimSpace(*req.K8sSandboxImage)
+		if image != "" {
+			if err := sandboximage.ValidateReference(image); err != nil {
+				return model.Config{}, validationErrorf("k8sSandboxImage must be one OCI image reference, such as registry.example/team/k8s-sandbox:v1: %v", err)
+			}
+		}
+		cfg.K8sSandboxImage = image
 	}
 	if req.K8sGranuleImage != nil {
-		cfg.K8sGranuleImage = strings.TrimSpace(*req.K8sGranuleImage)
+		image := strings.TrimSpace(*req.K8sGranuleImage)
+		if image != "" {
+			if err := sandboximage.ValidateReference(image); err != nil {
+				return model.Config{}, validationErrorf("k8sGranuleImage must be one OCI image reference, such as registry.example/team/guest:v1: %v", err)
+			}
+		}
+		cfg.K8sGranuleImage = image
 	}
 	if req.K8sWorkspace != nil {
-		cfg.K8sWorkspace = strings.TrimSpace(*req.K8sWorkspace)
+		ws := strings.TrimSpace(*req.K8sWorkspace)
+		if ws != "" && !path.IsAbs(ws) {
+			return model.Config{}, validationErrorf("k8sWorkspace %q is not an absolute path, such as /home/agent", ws)
+		}
+		cfg.K8sWorkspace = ws
 	}
 	if req.K8sGitProxyHost != nil {
 		host := strings.TrimSpace(*req.K8sGitProxyHost)
@@ -2131,6 +2207,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.ShowClosedByDefault != nil {
 		cfg.ShowClosedByDefault = *req.ShowClosedByDefault
 	}
+	if req.SettingsLocked != nil {
+		cfg.SettingsLocked = *req.SettingsLocked
+	}
 	if req.EnvironmentName != nil {
 		name := strings.TrimSpace(*req.EnvironmentName)
 		if utf8.RuneCountInString(name) > maxEnvironmentNameLen {
@@ -2176,6 +2255,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			if _, err := model.FormatTaskBranchName(template, strings.Repeat("a", 32), "a", "123", title); err != nil {
 				return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
 			}
+		}
+		if _, err := model.FormatTaskBranchName(template, strings.Repeat("a", 32), strings.Repeat("a", model.MaxDeploymentIDLen), "9223372036854775807", ""); err != nil {
+			return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
 		}
 		cfg.TaskBranchTemplate = template
 	}
@@ -2471,6 +2553,10 @@ var (
 	k8sLabelName     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 	k8sSubdomainName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
+
+// gcpProjectID is a GCP project ID, with the "example.com:" prefix a
+// domain-scoped project carries allowed in front of it.
+var gcpProjectID = regexp.MustCompile(`^([a-z0-9][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 
 // k8sAddress is what the git proxy host a sandbox pod is handed may be:
 // a host name or an IP address, with no scheme, path or space in it.

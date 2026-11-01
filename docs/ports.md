@@ -77,7 +77,7 @@ Class:
 |------|-------|-------|-------|
 | 4242 | operator | daemon UI/API | `grain daemon -ui-addr` default `0.0.0.0:4242` (`pkg/cli/daemon.go`), the CLI's `http://127.0.0.1:4242` (`pkg/cli/main.go`), `hostinit.DefaultUIAddr`, `scripts/setup.sh` and `google/scripts/cloudtop-install.sh` `GRAIN_UI_ADDR`, `scripts/client.sh`, `ui/vite.config.js` dev proxy |
 | 4243 | operator | remote-executor listener (suggested) | `-executor-addr` is off by default; its help suggests `:4243` |
-| 4244 | operator | sandbox-access acceptor: k8s-granule sandbox pods' wrappers dial out to it over mTLS | `ports.SandboxAccess`, `sandboxaccess.DefaultPort`; `-sandbox-access-addr=:4244` and the `grain-access` Service in `deploy/kubernetes/grain-granule.yaml`; `deploy/kubernetes/gke/networkpolicy.yaml` |
+| 4244 | operator | sandbox-access acceptor: k8s-granule sandbox pods' wrappers dial out to it over mTLS | `ports.SandboxAccess`, `sandboxaccess.DefaultPort`; `-sandbox-access-addr=:4244` and the `grain-access` Service in `deploy/kubernetes/grain-granule.yaml` |
 | 4280 | operator | the staging grain persistent sandbox | a persistent sandbox's `host_port` (grain/config `tables/persistent_sandbox.json`); see [below](#persistent-sandboxes) |
 | 4251 | operator | gchat capability data plane (container, or on the host via hostd) | `-listen 127.0.0.1:4251`, `intree.DefaultGChatPort`; the built-in entry's args and hostd's `grain-gchat` entry |
 | 4290 | operator | `grain demo` | `-addr` default `127.0.0.1:4290` (`pkg/cli/demo.go`); was `127.0.0.1:8420` |

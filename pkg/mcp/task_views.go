@@ -51,6 +51,11 @@ func renderTaskSummary(t TaskRecord, now time.Time) string {
 	if t.Stall != "" {
 		fmt.Fprintf(&b, "  Stalled: %s\n", clipWords(singleLine(t.Stall), maxSummaryEventBytes*2))
 	}
+	priority := t.Priority
+	if priority <= 0 {
+		priority = 5
+	}
+	fmt.Fprintf(&b, "Priority: %d\n", priority)
 	fmt.Fprintf(&b, "Kind: %s\n", kindWords(t.Kinds))
 	if t.Repo != "" {
 		fmt.Fprintf(&b, "Repo: %s (base %s)\n", t.Repo, blankAsNone(t.Base, "default branch"))

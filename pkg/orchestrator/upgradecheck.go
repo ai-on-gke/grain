@@ -21,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
@@ -123,6 +122,13 @@ func reconcileUpgradeCheck(ctx context.Context, deps Deps, now time.Time) error 
 		return nil
 	}
 	if now.Sub(status.FinishedAt.UTC()) > upgradeCheckWindow {
+		return nil
+	}
+	// This process is the one the upgrade is about to restart away, not
+	// the one it brings up: the check is the next process's to file,
+	// with that build's hash, the restart's gap and what its adoption
+	// pass did -- none of which exists yet (task 1937).
+	if status.RestartPending(deps.Config.ProcessStartedAt) {
 		return nil
 	}
 	tag := upgradeCheckTag(status)
@@ -234,7 +240,7 @@ func fileUpgradeCheck(ctx context.Context, deps Deps, status upgrade.Status, tag
 		Binding: model.BindingDirective,
 		Grants: []model.Grant{
 			{Capability: selfdebug.CapabilityName, Via: model.GrantByGrain},
-			{Capability: grainlog.CapabilityName, Via: model.GrantByGrain},
+			{Capability: model.GrainJournalGrant, Via: model.GrantByGrain},
 		},
 		Tags:      []string{tag},
 		CreatedAt: &now,

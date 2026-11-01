@@ -19,11 +19,19 @@ import { expect, test } from "./fixtures.js";
 // configRepoOnly), Settings keeps Models and Sandboxes editable and draws
 // the departing sections -- and a repository's page -- read-only under a
 // notice linking each file into the Config Repo Browser. `grain demo` has
-// no config repo, so the flag is set on its /api/config answer here.
+// no config repo, so the flag is set on its /api/config answer here, and
+// on GET /api/settings, which carries the same configRepoOnly for the
+// row it answers with (the Settings page draws on that once loaded).
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
 async function configRepoOnly(page) {
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({ response, json: { ...body, configRepoOnly: true } });
+  });
   await page.route("**/api/config", async (route) => {
     const response = await route.fetch();
     const body = await response.json();
@@ -52,8 +60,10 @@ for (const [name, viewport] of [
 
     const notice = page.getByTestId("config-managed-notice");
     await expect(notice).toBeVisible();
+    // Console sessions are grain_config.console_sessions, so the one
+    // file is tables/grain_config.json.
     const links = notice.getByTestId("config-repo-link");
-    await expect(links).toHaveCount(2);
+    await expect(links).toHaveCount(1);
     await expect(links.first()).toHaveAttribute(
       "href",
       "/config?path=tables%2Fgrain_config.json",
@@ -89,6 +99,30 @@ for (const [name, viewport] of [
   });
 }
 
+// Git connections are grain_config.git_connections / git_credential and a
+// repository's choice repo_config.git_credential (schema 22), so the Git
+// notice links those two tables' files, not tables that no longer exist.
+test("the Git section links the files that hold its connections", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await configRepoOnly(page);
+  await page.goto("/settings/git");
+
+  const links = page
+    .getByTestId("config-managed-notice")
+    .getByTestId("config-repo-link");
+  await expect(links).toHaveCount(2);
+  await expect(links.nth(0)).toHaveAttribute(
+    "href",
+    "/config?path=tables%2Fgrain_config.json",
+  );
+  await expect(links.nth(1)).toHaveAttribute(
+    "href",
+    "/config?path=tables%2Frepo_config.json",
+  );
+});
+
 test("a repository's settings are read-only, its default grants chips, its branches still addable", async ({
   page,
 }) => {
@@ -119,11 +153,50 @@ test("a View in config repo link opens Settings → Config repo with the file na
   await page
     .getByTestId("config-managed-notice")
     .getByTestId("config-repo-link")
+    .first()
     .click();
   await expect(
     page.getByRole("heading", { name: "Config repo", level: 1 }),
   ).toBeVisible();
   await expect(page).toHaveURL(
-    /\/settings\/config-repo\/settings\/capabilities\.yml$/,
+    /\/settings\/config-repo\/tables\/grain_config\.json$/,
   );
+});
+
+test("toggling Lock settings in UI in General locks and unlocks settings", async ({
+  page,
+}) => {
+  try {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/settings/general");
+
+    const envBox = page.getByLabel("Environment name");
+    const lockToggle = page.getByRole("checkbox", {
+      name: /Lock settings in UI \(require config repo PRs\)/i,
+    });
+    await expect(envBox).toBeEnabled();
+    await expect(lockToggle).not.toBeChecked();
+    await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+
+    const sectionBox = await page.getByTestId("settings-section").boundingBox();
+    const lockCardBox = await page.locator("#settings-lock").boundingBox();
+    expect(inside(sectionBox, lockCardBox)).toBe(true);
+
+    // Enable settings lock
+    await lockToggle.click();
+    await expect(lockToggle).toBeChecked();
+    await expect(envBox).toBeDisabled();
+    await expect(page.getByTestId("config-managed-notice")).toBeVisible();
+    await expect(lockToggle).toBeEnabled();
+
+    // Disable settings lock again
+    await lockToggle.click();
+    await expect(lockToggle).not.toBeChecked();
+    await expect(envBox).toBeEnabled();
+    await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+  } finally {
+    await page.request
+      .put("/api/settings", { data: { settingsLocked: false } })
+      .catch(() => {});
+  }
 });

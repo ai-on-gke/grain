@@ -41,14 +41,12 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
@@ -191,22 +189,16 @@ func OfferedCapabilities() []Capability {
 			Description: "Mint a short-lived Gemini API key for this task"},
 		{ID: "self-debug", Name: "Self debug",
 			Description: "Let this task read grain's own source checkout, this deployment's own tasks and runs, and the measurements it keeps about itself -- throughput, latency, the tool-use census -- to help it debug or explain grain's own behavior. All read-only, and all of it is what anyone with this UI open can already see."},
-		{ID: "grain-log", Name: "Grain log",
-			Description: "Let this task read a bounded slice of grain's own systemd journal on this host -- the daemon's log and the kernel's -- with known credentials redacted before it leaves. Separate from self-debug on purpose: the journal carries whatever anything here has ever logged, which is far more than grain's source code."},
 	}
 	// Capabilities contributed from outside core
-	// (capability.RegisterProvider) follow grain-log, where the
+	// (capability.RegisterProvider) follow self-debug, where the
 	// deployment-level ones begin.
 	for _, r := range capability.Registered() {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
 	}
 	offered = append(offered, []Capability{
-		{ID: "deployment-health", Name: "Deployment health",
-			Description: "Read bounded controller host, sandbox, and deployment-state health without host shell or sandbox network access"},
 		{ID: "self-repair", Name: "Self repair",
 			Description: "Let this task run commands on grain's own host -- restart services, edit config, call the grain CLI -- each one needing a live reply in the task's chat before it runs"},
-		{ID: selfupgrade.CapabilityName, Name: "Self upgrade",
-			Description: selfupgrade.Description},
 		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
 			Description: prioritydispatch.Description},
 		{ID: durable.CapabilityName, Name: "Durable",
@@ -215,10 +207,6 @@ func OfferedCapabilities() []Capability {
 			Description: "Let this task push any branch or tag of the repositories it may write -- the default branch, force-pushes and deletions included -- rather than only its own task branch. For release jobs"},
 		{ID: "bootstrap-playbooks", Name: "Bootstrap playbooks",
 			Description: "Let this task read grain's own bootstrap playbooks -- the runbooks for setting up GCP service accounts, the primary GitHub connection, CloudRun-based IAP access, and test repos -- so it can walk whoever is on the other end of this chat through one of them"},
-		{ID: "memory", Name: "Memory",
-			Description: "Let this task write down what grain has learned about working here -- notes added to the prompt of every run dispatched afterwards"},
-		{ID: "release-notes", Name: "Release notes",
-			Description: "Let this task read how much work this deployment has done over a week -- pull requests merged, tasks completed, runs, and the same counts per repository -- and publish that week's release notes, shown in the UI and exported to the state repository"},
 		{ID: "github-sandbox", Name: "GitHub sandbox",
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
 		{ID: "console", Name: "Interactive console",
@@ -228,14 +216,8 @@ func OfferedCapabilities() []Capability {
 		// repository's tasks itself (pkg/capability/grainci's package
 		// doc). Every place a capability is chosen refuses it with
 		// grainci.Refusal, by way of capabilityRefusal.
-		{ID: "test-quarantine", Name: "Test quarantine",
-			Description: "Quarantine flaky or failing tests and file follow-up repair tasks"},
 		{ID: readissues.CapabilityName, Name: "Read issues",
 			Description: "Let this task read issues and comments from GitHub"},
-		{ID: dbaccess.CapabilityDBRead, Name: "Grain DB read",
-			Description: "Let this task execute read-only SQL queries directly against Grain's database"},
-		{ID: dbaccess.CapabilityDBWrite, Name: "Grain DB read/write",
-			Description: "Let this task execute SQL queries and statements (read and write) directly against Grain's database"},
 	}...)
 	// One row per vendor grain proxies to -- claude-proxy, openai-proxy
 	// and gemini-proxy -- written from the vendor itself rather than

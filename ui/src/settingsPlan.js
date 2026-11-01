@@ -48,6 +48,7 @@
 // job is completeness.
 const SETTING_LABELS = {
   environmentName: "Environment name",
+  settingsLocked: "Lock settings in UI (require config repo PRs)",
   pollInterval: "Poll interval",
   maxWorkers: "Max worker agents",
   maxMergesPerRepo: "Max merges per repo branch",
@@ -144,6 +145,8 @@ const SETTING_LABELS = {
 export function settingLabel(field) {
   return SETTING_LABELS[field] || field;
 }
+
+export { settingLocation } from "./settingsIndex.js";
 
 // SETTING_MINS is the lower bound on each bounded numeric setting, matching
 // both the input's own `min` in components/settings and the check in

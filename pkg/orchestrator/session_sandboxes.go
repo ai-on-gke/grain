@@ -61,6 +61,14 @@ type storeSessionPool struct {
 	bySandbox     map[string]string              // sandboxID -> taskID
 	inProcessIdle map[string]time.Time           // sandboxID -> idleSince
 	reclaimed     map[string]bool                // taskID -> true if warm sandbox was reclaimed
+	// held names the session sandboxes a run is using under a name
+	// other than its own run ID -- a warm sandbox a later dispatch
+	// claimed, or one an adopted run took back -- by the run using it
+	// (sandboxID -> runID). Neither the store's live runs nor InFlight
+	// name such a sandbox once its run has finished but before it is
+	// parked warm again, nor between a claim and SetRunSandbox, so
+	// reconcileSandboxes reads this to leave it alone.
+	held map[string]string
 }
 
 var (
@@ -78,6 +86,7 @@ func getSessionPool(store *model.Store) *storeSessionPool {
 			bySandbox:     map[string]string{},
 			inProcessIdle: map[string]time.Time{},
 			reclaimed:     map[string]bool{},
+			held:          map[string]string{},
 		}
 		sessionPools[store] = p
 	}
@@ -201,6 +210,9 @@ func parkWarmSessionSandbox(deps Deps, taskID, sandboxID, key, grants string, sb
 	}
 	p.warm[taskID] = entry
 	p.bySandbox[sandboxID] = taskID
+	// From held straight to warm under the one lock, so the reaper never
+	// reads the sandbox as neither.
+	delete(p.held, sandboxID)
 	delete(p.reclaimed, taskID)
 	p.mu.Unlock()
 
@@ -210,37 +222,63 @@ func parkWarmSessionSandbox(deps Deps, taskID, sandboxID, key, grants string, sb
 }
 
 // sessionSandboxKey names what a sandbox was built for: its shape, the
-// task's target, and the capability grants the task holds and the run
-// materialized. Two runs with the same key may share a warm sandbox; a
-// run whose key differs from the warm sandbox's gets a fresh one.
+// task's target, base and repo access, and the capability grants the task
+// holds and the run materialized. Two runs with the same key may share a
+// warm sandbox; a run whose key differs from the warm sandbox's gets a fresh one.
 func sessionSandboxKey(shape Shape, task model.Task, prepared []model.Materialized) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "shape=%+v", shape)
-	if task.Target != nil {
-		fmt.Fprintf(&b, "|target=%s/%s", task.Target.StoredOwner(), task.Target.Name)
+	fmt.Fprintf(&b, "shape=%+v|", shape)
+	b.WriteString(sessionTaskAccessKey(task))
+	if len(prepared) > 0 {
+		runGrants := make([]string, 0, len(prepared))
+		for _, m := range prepared {
+			runGrants = append(runGrants, grantKey(m.Grant))
+		}
+		sort.Strings(runGrants)
+		fmt.Fprintf(&b, "|run_grants=%s", strings.Join(runGrants, ","))
 	}
-	var grants []string
-	for _, g := range task.Grants {
-		grants = append(grants, "task:"+grantKey(g))
-	}
-	for _, m := range prepared {
-		grants = append(grants, "run:"+grantKey(m.Grant))
-	}
-	sort.Strings(grants)
-	fmt.Fprintf(&b, "|grants=%s", strings.Join(grants, ","))
 	return b.String()
 }
 
-// sessionGrantsKey is the task-grant part of sessionSandboxKey: what
-// reconcileSessionSandboxes can check between turns, when no run is
-// there to say what it would materialize.
+// sessionGrantsKey is the task-access and task-grant part of sessionSandboxKey:
+// what reconcileSessionSandboxes can check between turns, when no run is there
+// to say what it would materialize.
 func sessionGrantsKey(task model.Task) string {
+	out := sessionTaskAccessKey(task)
+	if task.NetworkAccess != "" {
+		out += "|net=" + string(task.NetworkAccess)
+	}
+	return out
+}
+
+func sessionTaskAccessKey(task model.Task) string {
+	var b strings.Builder
+	if task.Target != nil {
+		fmt.Fprintf(&b, "target=%s/%s|base=%s|", task.Target.StoredOwner(), task.Target.Name, task.Base)
+	}
+	if len(task.Reads) > 0 {
+		reads := make([]string, 0, len(task.Reads))
+		for _, r := range task.Reads {
+			reads = append(reads, r.StoredOwner()+"/"+r.Name)
+		}
+		sort.Strings(reads)
+		fmt.Fprintf(&b, "reads=%s|", strings.Join(reads, ","))
+	}
+	if len(task.Writes) > 0 {
+		writes := make([]string, 0, len(task.Writes))
+		for _, w := range task.Writes {
+			writes = append(writes, w.Repo.StoredOwner()+"/"+w.Repo.Name+"@"+w.Base)
+		}
+		sort.Strings(writes)
+		fmt.Fprintf(&b, "writes=%s|", strings.Join(writes, ","))
+	}
 	grants := make([]string, 0, len(task.Grants))
 	for _, g := range task.Grants {
 		grants = append(grants, grantKey(g))
 	}
 	sort.Strings(grants)
-	return strings.Join(grants, ",")
+	fmt.Fprintf(&b, "grants=%s", strings.Join(grants, ","))
+	return b.String()
 }
 
 func grantKey(g model.Grant) string {
@@ -285,7 +323,11 @@ func parkWarmSessionInLedger(deps Deps, taskID string) {
 	})
 }
 
-func claimWarmSessionSandbox(deps Deps, taskID string, now time.Time) (*warmSessionSandbox, bool) {
+// claimWarmSessionSandbox takes taskID's warm sandbox, if it has one that
+// has not expired, for runID: the sandbox is held for runID
+// (holdSessionSandbox) from the moment it leaves the warm pool, and the
+// caller releases that hold once the run is done with it.
+func claimWarmSessionSandbox(deps Deps, taskID, runID string, now time.Time) (*warmSessionSandbox, bool) {
 	if deps.Store == nil || taskID == "" {
 		return nil, false
 	}
@@ -297,6 +339,9 @@ func claimWarmSessionSandbox(deps Deps, taskID string, now time.Time) (*warmSess
 		delete(p.warm, taskID)
 		delete(p.bySandbox, entry.SandboxID)
 		if now.Before(entry.ExpiresAt) {
+			if runID != "" {
+				p.held[entry.SandboxID] = runID
+			}
 			delete(p.reclaimed, taskID)
 			p.mu.Unlock()
 			if entry.Ledger != nil {
@@ -316,6 +361,27 @@ func claimWarmSessionSandbox(deps Deps, taskID string, now time.Time) (*warmSess
 		return nil, true
 	}
 	return nil, wasReclaimed
+}
+
+func discardWarmSessionSandbox(ctx context.Context, deps Deps, taskID string) bool {
+	if deps.Store == nil || taskID == "" {
+		return false
+	}
+	p := getSessionPool(deps.Store)
+	p.mu.Lock()
+	entry, ok := p.warm[taskID]
+	if ok {
+		delete(p.warm, taskID)
+		delete(p.bySandbox, entry.SandboxID)
+	}
+	wasReclaimed := p.reclaimed[taskID]
+	delete(p.reclaimed, taskID)
+	p.mu.Unlock()
+	if ok {
+		releaseWarmSandboxEntry(ctx, entry)
+		return true
+	}
+	return wasReclaimed
 }
 
 func releaseWarmSessionSandbox(ctx context.Context, deps Deps, taskID string, markReclaimed bool) bool {
@@ -406,11 +472,12 @@ func reconcileSessionSandboxes(ctx context.Context, deps Deps, now time.Time) {
 		if err != nil {
 			continue
 		}
-		// A grant withdrawn (or added) since the sandbox was built: what
-		// the old grants placed there must not outlive them while the
-		// sandbox waits for a turn that would not reuse it anyway.
+		// A grant or repository access withdrawn (or added) since the sandbox was
+		// built, or keep_running cleared on a non-interactive task: what the run
+		// placed in the warm sandbox (or its live token) must not outlive that
+		// grant or session mode until TTL expiry.
 		if task, terr := deps.Store.GetTask(ctx, entry.TaskID); terr == nil && task != nil &&
-			sessionGrantsKey(*task) != entry.Grants {
+			((!task.Interactive && !task.KeepRunning) || sessionGrantsKey(*task) != entry.Grants) {
 			releaseWarmSessionSandbox(ctx, deps, entry.TaskID, true)
 			continue
 		}
@@ -420,6 +487,53 @@ func reconcileSessionSandboxes(ctx context.Context, deps Deps, now time.Time) {
 			releaseWarmSessionSandbox(ctx, deps, entry.TaskID, true)
 		}
 	}
+}
+
+// holdSessionSandbox marks sandboxID as in use by runID until the
+// returned func is called (or the sandbox is parked warm), so
+// reconcileSandboxes does not read it as leaked by a finished run. The
+// release only drops runID's own hold: a later run that has claimed the
+// sandbox since keeps its own.
+func holdSessionSandbox(store *model.Store, sandboxID, runID string) func() {
+	if store == nil || sandboxID == "" || runID == "" {
+		return func() {}
+	}
+	p := getSessionPool(store)
+	p.mu.Lock()
+	p.held[sandboxID] = runID
+	p.mu.Unlock()
+	return func() { unholdSessionSandbox(store, sandboxID, runID) }
+}
+
+func unholdSessionSandbox(store *model.Store, sandboxID, runID string) {
+	if store == nil || sandboxID == "" {
+		return
+	}
+	p := getSessionPool(store)
+	p.mu.Lock()
+	if p.held[sandboxID] == runID {
+		delete(p.held, sandboxID)
+	}
+	p.mu.Unlock()
+}
+
+// sessionSandboxesInUse returns the names of every session sandbox
+// parked warm or held by a run (holdSessionSandbox), read under one lock.
+func sessionSandboxesInUse(store *model.Store) map[string]bool {
+	if store == nil {
+		return nil
+	}
+	p := getSessionPool(store)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make(map[string]bool, len(p.warm)+len(p.held))
+	for _, entry := range p.warm {
+		out[entry.SandboxID] = true
+	}
+	for id := range p.held {
+		out[id] = true
+	}
+	return out
 }
 
 func warmSessionSandboxIDs(store *model.Store) map[string]model.Commitment {
@@ -584,13 +698,18 @@ func markInProcessSessionIdle(store *model.Store, ledger *model.Ledger, runID, s
 	}
 }
 
+type relayedRunKey struct {
+	store *model.Store
+	runID string
+}
+
 var inProcessRelayedRuns sync.Map
 
-func takeInProcessRelayed(runID string) bool {
-	if runID == "" {
+func takeInProcessRelayed(store *model.Store, runID string) bool {
+	if store == nil || runID == "" {
 		return false
 	}
-	_, ok := inProcessRelayedRuns.LoadAndDelete(runID)
+	_, ok := inProcessRelayedRuns.LoadAndDelete(relayedRunKey{store: store, runID: runID})
 	return ok
 }
 
@@ -636,7 +755,10 @@ func continueSessionTurns(
 	runErr error,
 ) (*agent.Result, error, []model.Comment) {
 	ttl := cfg.sessionSandboxIdleTTL()
-	if !task.Interactive || !cfg.inProcessSessionWait || ttl <= 0 || store == nil {
+	if !task.Interactive || task.KeepRunning || !cfg.inProcessSessionWait || ttl <= 0 || store == nil {
+		return result, runErr, comments
+	}
+	if taskKeepRunning(daemonCtx, store, task) {
 		return result, runErr, comments
 	}
 	goal, err := store.TaskGoal(daemonCtx, task.ID)
@@ -649,7 +771,14 @@ func continueSessionTurns(
 	// (agent.RunConfig.AddendaAfter): what the turn was dispatched with.
 	turnAfter := runCfg.AddendaAfter
 	for {
-		if runErr != nil || turnResult == nil || turnResult.ResumableSession == "" || hostCtx.Err() != nil || daemonCtx.Err() != nil {
+		session := ""
+		if turnResult != nil {
+			session = turnResult.ResumableSession
+		}
+		if session == "" {
+			session = runCfg.ResumeSession
+		}
+		if runErr != nil || turnResult == nil || session == "" || hostCtx.Err() != nil || daemonCtx.Err() != nil {
 			break
 		}
 		if _, ok := firstToolCallArg(turnResult, "nothing_needed", "reason"); ok {
@@ -659,6 +788,9 @@ func continueSessionTurns(
 			break
 		}
 		if _, ok := firstToolCallArg(turnResult, "request_secret", "secret"); ok {
+			break
+		}
+		if _, ok := firstToolCallArg(turnResult, "propose_config_change", "summary"); ok {
 			break
 		}
 		if _, ok, _ := requestedSuspension(daemonCtx, store, task.ID, turnResult); ok {
@@ -699,14 +831,15 @@ func continueSessionTurns(
 		} else {
 			replyBody = finalText
 		}
-		if _, err := relayCommentWithAttachments(daemonCtx, store, task, replyBody, attachments, now); err != nil {
+		relayedID, err := relayCommentWithAttachments(daemonCtx, store, task, replyBody, attachments, now)
+		if err != nil {
 			log.Printf("orchestrator: run %s: relaying session answer in-process: %v", runID, err)
 			break
 		}
 		if hasComment {
 			recordRelayedInProcess(daemonCtx, store, runID, result, "comment_on_issue")
 		}
-		inProcessRelayedRuns.Store(runID, true)
+		inProcessRelayedRuns.Store(relayedRunKey{store: store, runID: runID}, true)
 
 		// What the turn was actually shown: its prompt, and every
 		// comment its forked mcpserver handed it since as an addendum on
@@ -759,6 +892,7 @@ func continueSessionTurns(
 		// close -- reading only the conversation after lastID, never the
 		// whole thread again.
 		var fresh []model.Comment
+		var parkedInWait bool
 		ticker := time.NewTicker(cfg.cancelPollInterval())
 	waitLoop:
 		for {
@@ -776,6 +910,12 @@ func continueSessionTurns(
 				fresh = latest
 				break waitLoop
 			}
+			if !parkedInWait {
+				parkedInWait = true
+				_ = store.ObserveField(daemonCtx, task.ID, now, func(o *model.Observation) {
+					o.PendingQuestionCommentID = &relayedID
+				})
+			}
 			select {
 			case <-waitCtx.Done():
 				break waitLoop
@@ -786,11 +926,28 @@ func continueSessionTurns(
 		ticker.Stop()
 		cancelWait()
 		unmark()
+		if parkedInWait {
+			_ = store.ObserveField(daemonCtx, task.ID, cfg.now(), func(o *model.Observation) {
+				if o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID == relayedID {
+					o.PendingQuestionCommentID = nil
+				}
+			})
+		}
 
 		if len(fresh) == 0 {
 			break
 		}
-		inProcessRelayedRuns.Delete(runID)
+		if latestTask, err := store.GetTask(daemonCtx, task.ID); err == nil && latestTask != nil {
+			if !slices.Equal(latestTask.Grants, task.Grants) ||
+				!slices.Equal(latestTask.Reads, task.Reads) ||
+				!slices.Equal(latestTask.Writes, task.Writes) ||
+				latestTask.Model != task.Model ||
+				latestTask.NetworkAccess != task.NetworkAccess {
+				break
+			}
+			task = *latestTask
+		}
+		inProcessRelayedRuns.Delete(relayedRunKey{store: store, runID: runID})
 
 		// Only a person's message wakes the session, but the turn is told
 		// everything said since what it last saw, each with who said it
@@ -810,7 +967,7 @@ func continueSessionTurns(
 		}
 		comments = append(comments, fresh...)
 		nextCfg := runCfg
-		nextCfg.ResumeSession = turnResult.ResumableSession
+		nextCfg.ResumeSession = session
 		nextCfg.ContinuePrompt = promptBuilder.String()
 		nextCfg.Addenda = addendaPoller(store, task.ID, comments)
 		nextCfg.AddendaAfter = lastCommentID(comments)

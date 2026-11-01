@@ -42,6 +42,28 @@ func (d Deps) dispatchChoiceFor(ctx context.Context, task model.Task) AgentChoic
 	if d.Store == nil {
 		return choice
 	}
+	if choice.Framework == "" && choice.BackendID == "" && choice.Model == "" {
+		if obs, err := d.Store.GetObservation(ctx, task.ID); err == nil && obs != nil && obs.SuspendedSession != nil && obs.SuspendedSession.Token != "" {
+			choice.PreferFramework = obs.SuspendedSession.Framework
+		}
+		if task.Interactive || choice.PreferFramework != "" {
+			if runs, err := d.Store.Runs(ctx, task.ID); err == nil {
+				for i := len(runs) - 1; i >= 0; i-- {
+					r := runs[i]
+					if r.AgentFramework == "" && r.Model == "" {
+						continue
+					}
+					if choice.PreferFramework == "" && r.AgentFramework != "" {
+						choice.PreferFramework = r.AgentFramework
+					}
+					if choice.PreferModel == "" && r.Model != "" && (choice.PreferFramework == "" || r.AgentFramework == choice.PreferFramework) {
+						choice.PreferModel = r.Model
+					}
+					break
+				}
+			}
+		}
+	}
 	avoid, err := d.Store.FailedOverModels(ctx, task.ID)
 	if err != nil {
 		log.Printf("orchestrator: task %s: reading the models it failed over off: %v", task.ID, err)

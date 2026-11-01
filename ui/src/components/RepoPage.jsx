@@ -254,6 +254,19 @@ export function repoCIMode(defaults) {
   return defaults.ciMode || (defaults.ignoreGitHubCI ? "grain" : "github");
 }
 
+// confirmBaseRepairBypass asks before repo's base-branch repair PRs may
+// merge past human gates, naming the repo and the risk, as Promote and
+// Delete do. Both places that offer the switch ask the same question;
+// turning it off never asks.
+export function confirmBaseRepairBypass(repo) {
+  return window.confirm(
+    `Let base-branch repair PRs in ${repo} merge without a human when their CI is green? ` +
+      `While ${repo}'s base branch is red, an agent's repair pull request can then land changes to ` +
+      `.grain/workflows/** or trust-boundary code with no human sign-off before the merge. ` +
+      `Review tasks are still filed afterwards.`,
+  );
+}
+
 // RepoOverview is the at-a-glance strip at the top of the Overview tab:
 // the handful of facts somebody opening the page wants before any form,
 // each a way into the tab that changes it.
@@ -495,6 +508,10 @@ export default function RepoPage({
   // notice linking to those files. The operational actions -- adding a
   // branch, importing issues now, a manual release, a base branch's
   // check -- are not settings, and stay a repo admin's (adminReadOnly).
+  // configRepoOnly alone, not settingsLocked: with directConfigWrites in
+  // state-repo.json the lock is on but the API still takes the write, and
+  // the server folds both into configRepoOnly
+  // (design/spec/settings/settings-mutability.spec.md D-10).
   const configRepoOnly = Boolean(config?.configRepoOnly);
   const readOnly = adminReadOnly || configRepoOnly;
   // The same sentence is each disabled control's own accessible
@@ -988,6 +1005,7 @@ export default function RepoPage({
   };
 
   const saveBaseRepairBypassesHumanGates = async (on) => {
+    if (on && !confirmBaseRepairBypass(repo)) return;
     try {
       setUpToDate(
         await api(`${root}/base-repair-bypasses-human-gates`, {
@@ -1896,6 +1914,7 @@ export default function RepoPage({
                       disabled={readOnly}
                       idPrefix="repo-ci"
                       runKind="ci"
+                      policyRepo={repo}
                     />
                   )}
                 </Box>
@@ -2449,6 +2468,17 @@ export default function RepoPage({
                         : ""));
                 const edit = (field) => (e) =>
                   setImportDraft({ ...draft, [field]: e.target.value });
+                // The fields as typed, in the shape PUT .../settings takes.
+                const draftFields = () => {
+                  const minutes = draft.interval.trim();
+                  return {
+                    issueImportRepo: draft.repo.trim(),
+                    issueImportLabel: draft.label.trim(),
+                    issueImportIntervalSeconds: minutes
+                      ? Math.round(Number(minutes) * 60)
+                      : 0,
+                  };
+                };
                 return (
                   <Stack spacing={1.5} data-testid="repo-issue-import">
                     <Stack direction="row" alignItems="flex-start" spacing={1}>
@@ -2457,8 +2487,14 @@ export default function RepoPage({
                         sx={{ mt: -0.5 }}
                         checked={Boolean(imp.enabled)}
                         onChange={(e) =>
+                          // Switching on saves whatever source, label and
+                          // interval are typed but not yet saved with it:
+                          // the first pass runs on the next cycle, and
+                          // would otherwise read every open issue with
+                          // the label the person had just typed unsaved.
                           saveIssueImport({
                             issueImportEnabled: e.target.checked,
+                            ...(e.target.checked && dirty ? draftFields() : {}),
                           })
                         }
                         disabled={readOnly}
@@ -2508,14 +2544,7 @@ export default function RepoPage({
                       alignItems={{ sm: "flex-start" }}
                       onSubmit={(e) => {
                         e.preventDefault();
-                        const minutes = draft.interval.trim();
-                        saveIssueImport({
-                          issueImportRepo: draft.repo.trim(),
-                          issueImportLabel: draft.label.trim(),
-                          issueImportIntervalSeconds: minutes
-                            ? Math.round(Number(minutes) * 60)
-                            : 0,
-                        });
+                        saveIssueImport(draftFields());
                       }}
                     >
                       <TextField

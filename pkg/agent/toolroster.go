@@ -44,7 +44,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
@@ -110,14 +109,12 @@ func PublishedToolNames() []string {
 	// chat session, and listed unconditionally for the reason every
 	// daemon-gated tool above is.
 	add(mcp.NewRenameSessionTools(nil))
+	add(mcp.NewProposeConfigChangeTools(nil, "", nil))
 	add(mcp.NewWaitForTaskTools(nil, nil))
 	add(mcp.NewResumeLaterTools(nil, nil))
 	add(mcp.NewNotifyTools(nil))
 	add(mcp.NewMergeQueueTools(nil))
 	add(mcp.NewRevertTools(nil))
-	add(mcp.NewMemoryTools(nil))
-	add(mcp.NewReleaseNotesTools(nil))
-	add(mcp.NewQuarantineTools(mcp.QuarantineToolConfig{}))
 
 	// chat needs that daemon and a task somebody is sitting with; the
 	// live proposal tools need the daemon and register propose_task over
@@ -138,7 +135,6 @@ func PublishedToolNames() []string {
 	// wants: the names.
 	add(grainlog.Tools(grainlog.Config{}))
 	add(deploymenthealth.Tools(deploymenthealth.Config{}))
-	add(selfupgrade.Tools(selfupgrade.Config{}))
 	add(bootstrap.PlaybookTools())
 	add(dbaccess.Tools(dbaccess.Config{AllowWrite: true}))
 
@@ -206,16 +202,17 @@ func dedupeToolNames(names []string) []string {
 // add_review_comment are NewMockTools' too, and are not here: they are
 // `grain handover write` and `grain pr review-comment`.
 var controlTools = map[string]bool{
-	"ask_question":     true,
-	"request_secret":   true,
-	"comment_on_issue": true,
-	"nothing_needed":   true,
-	"propose_task":     true,
-	"wait_for_task":    true,
-	"resume_later":     true,
-	"recreate_sandbox": true,
-	"chat":             true,
-	"rename_session":   true,
+	"ask_question":          true,
+	"request_secret":        true,
+	"propose_config_change": true,
+	"comment_on_issue":      true,
+	"nothing_needed":        true,
+	"propose_task":          true,
+	"wait_for_task":         true,
+	"resume_later":          true,
+	"recreate_sandbox":      true,
+	"chat":                  true,
+	"rename_session":        true,
 }
 
 // SandboxToolNames is the four tools that cross from the agent CLI into
@@ -236,21 +233,14 @@ func SandboxToolNames() []string {
 func IsControlTool(name string) bool { return controlTools[name] }
 
 // ModelOnlyGrantToolNames is the tools of the grants a sandbox process
-// must never reach -- self-upgrade and db-write -- which stay on the MCP
-// roster of a run holding them. (dispatch-control's, pipeline-control's
-// and team-broadcast's are api tools now, kept off the sandbox by their
-// scopes, dispatch:write and teams:broadcast: model.IsSandboxDeniedAPIScope.) db-read's query_grain_db is `grain db query`, so only
-// execute_grain_db is here.
+// must never reach -- db-write -- which stay on the MCP
+// roster of a run holding them. (self-upgrade's, dispatch-control's,
+// pipeline-control's and team-broadcast's are api tools now, kept off the
+// sandbox by their scopes, deployment:upgrade, dispatch:write and
+// teams:broadcast: model.IsSandboxDeniedAPIScope.) db-read's query_grain_db
+// is `grain db query`, so only execute_grain_db is here.
 func ModelOnlyGrantToolNames() []string {
-	var names []string
-	add := func(tools []mcp.Tool) {
-		for _, t := range tools {
-			names = append(names, t.Name)
-		}
-	}
-	add(selfupgrade.Tools(selfupgrade.Config{}))
-	names = append(names, "execute_grain_db")
-	return dedupeToolNames(names)
+	return []string{"execute_grain_db"}
 }
 
 var (

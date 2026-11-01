@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { Alert, Box, Button, Chip, Stack, Typography } from "@mui/material";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
 import api from "../../api.js";
 import {
   advertisedModels,
@@ -30,7 +30,7 @@ import { randomUUID } from "../../randomUUID.js";
 import ModelBackendPage, { frameworkLabels } from "../ModelBackendPage.jsx";
 import CLIRunLocations from "./CLIRunLocations.jsx";
 import ModelDefaults from "./ModelDefaults.jsx";
-import SettingsCard from "./SettingsCard.jsx";
+import SettingsCard, { SettingsReadOnlyContext } from "./SettingsCard.jsx";
 
 // ModelsSection is Settings → Models (docs/design/settings-panel.md
 // §3.2): the deployment's provider connections, then the default model
@@ -44,9 +44,17 @@ import SettingsCard from "./SettingsCard.jsx";
 // useSettingsSection: the connections it saves are kept here, and the
 // editor (ModelBackendPage) takes the CLI defaults and efforts from the
 // same read.
+//
+// Read-only (an external config repo), the connections themselves are
+// the config repo's, but their credentials are secrets it never holds
+// and the API still takes: the connection cards stay out of the
+// read-only fieldset, so a credential can be set, cleared and tested,
+// and draw everything else disabled (settings-mutability.spec.md D-9).
 export default function ModelsSection({ config, onSaved, showError }) {
+  const readOnly = useContext(SettingsReadOnlyContext);
   const [editingBackend, setEditingBackend] = useState(null);
   const [settings, setSettings] = useState(null);
+  const [cliRun, setCliRun] = useState(null);
   const [agentBackends, setAgentBackends] = useState([]);
   const [testConnResults, setTestConnResults] = useState({});
   const [testingConnId, setTestingConnId] = useState(null);
@@ -54,12 +62,20 @@ export default function ModelsSection({ config, onSaved, showError }) {
   const {
     deployment,
     error: deploymentError,
+    loading: deploymentLoading,
     saveDeployment,
   } = useDeployment({ onSaved, showError });
 
   const reloadSettings = useCallback(async () => {
     try {
-      const loaded = await api("/api/settings");
+      const [loaded, loadedCliRun] = await Promise.all([
+        api("/api/settings"),
+        api("/api/settings/cli-run").catch((err) => {
+          if (showError) showError(err);
+          return null;
+        }),
+      ]);
+      setCliRun(loadedCliRun);
       setSettings(loaded);
       setAgentBackends(loaded.agentBackends || []);
     } catch (err) {
@@ -135,7 +151,7 @@ export default function ModelsSection({ config, onSaved, showError }) {
     await deleteBackend(id);
   };
 
-  if (!settings) {
+  if (!settings || deploymentLoading) {
     return (
       <Typography variant="body2" color="text.secondary">
         Loading settings...
@@ -145,7 +161,11 @@ export default function ModelsSection({ config, onSaved, showError }) {
 
   if (editingBackend) {
     return (
-      <SettingsCard label="Provider connections" anchor="models">
+      <SettingsCard
+        label="Provider connections"
+        anchor="models"
+        allowInExternalMode
+      >
         <ModelBackendPage
           key={editingBackend.backend.id}
           backend={editingBackend.backend}
@@ -153,6 +173,7 @@ export default function ModelsSection({ config, onSaved, showError }) {
           isNew={editingBackend.isNew}
           showError={showError}
           cliDefaults={settings?.agentCliDefaults || {}}
+          configReadOnly={readOnly}
           onBack={() => setEditingBackend(null)}
           onDiscard={deleteBackend}
           onSave={async (backend) => {
@@ -194,7 +215,11 @@ export default function ModelsSection({ config, onSaved, showError }) {
           {deploymentError.message || String(deploymentError)}
         </Alert>
       )}
-      <SettingsCard label="Provider connections" anchor="models">
+      <SettingsCard
+        label="Provider connections"
+        anchor="models"
+        allowInExternalMode
+      >
         {/* Connections first, then the models: the deployment needs a
               connection before it has any model to choose. */}
         <Stack
@@ -215,6 +240,7 @@ export default function ModelsSection({ config, onSaved, showError }) {
           <Button
             type="button"
             variant="contained"
+            disabled={readOnly}
             onClick={() =>
               setEditingBackend({
                 backend: {
@@ -243,6 +269,8 @@ export default function ModelsSection({ config, onSaved, showError }) {
         <Alert severity="info" sx={{ mb: 2 }}>
           The deployment&apos;s provider connections. Its tasks run only on
           these, and wait until it has one.
+          {readOnly &&
+            " They are managed in the config repository; their credentials can still be set here, under Edit."}
         </Alert>
 
         <Stack spacing={1.5} sx={{ mb: 3 }}>
@@ -338,6 +366,7 @@ export default function ModelsSection({ config, onSaved, showError }) {
                           <Button
                             size="small"
                             variant="outlined"
+                            disabled={readOnly}
                             onClick={async () => {
                               try {
                                 await liftAgentPause(paused);
@@ -429,6 +458,7 @@ export default function ModelsSection({ config, onSaved, showError }) {
                     <Button
                       size="small"
                       variant="outlined"
+                      disabled={readOnly}
                       onClick={() =>
                         saveBackend({
                           ...backend,
@@ -442,10 +472,13 @@ export default function ModelsSection({ config, onSaved, showError }) {
                       size="small"
                       color="error"
                       variant="outlined"
-                      disabled={agentBackends.some(
-                        (candidate) =>
-                          candidate.credentialBackendId === backend.id,
-                      )}
+                      disabled={
+                        readOnly ||
+                        agentBackends.some(
+                          (candidate) =>
+                            candidate.credentialBackendId === backend.id,
+                        )
+                      }
                       onClick={() => removeBackend(backend.id)}
                       title={
                         agentBackends.some(
@@ -509,6 +542,7 @@ export default function ModelsSection({ config, onSaved, showError }) {
                       <Button
                         size="small"
                         variant="outlined"
+                        disabled={readOnly}
                         onClick={async () => {
                           try {
                             await liftAgentPause(entry);
@@ -555,6 +589,18 @@ export default function ModelsSection({ config, onSaved, showError }) {
               Create one to authenticate agent models.
             </Alert>
           )}
+          {/* The config pull request suite refuses this state
+              (staterepo.CheckDispatchLiveness); a direct write here is
+              the escape hatch and is not refused, so it is said here
+              (docs/design/config-repo-settings.md, section 2.2). */}
+          {agentBackends.length > 0 &&
+            agentBackends.every((backend) => backend.disabled) && (
+              <Alert severity="warning" data-testid="all-connections-disabled">
+                Every provider connection is disabled, so no run has anything to
+                run on and this deployment&apos;s tasks wait. Enable one to let
+                them start.
+              </Alert>
+            )}
         </Stack>
       </SettingsCard>
       <SettingsCard label="Models" anchor="model-defaults">
@@ -577,7 +623,11 @@ export default function ModelsSection({ config, onSaved, showError }) {
           <code>grain</code>; see Settings &rarr; Executors for join tokens and
           System &rarr; Sandboxes for connected model servers.
         </Typography>
-        <CLIRunLocations showError={showError} onSaved={onSaved} />
+        <CLIRunLocations
+          showError={showError}
+          onSaved={onSaved}
+          initialLoaded={cliRun}
+        />
       </SettingsCard>
     </>
   );

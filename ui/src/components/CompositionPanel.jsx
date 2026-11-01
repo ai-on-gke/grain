@@ -69,7 +69,9 @@ const LABELS = {
   nothingNeeded: "Nothing needed",
   model: "Model",
   autoMerge: "Auto-merge",
+  keepRunning: "Keep running",
   approval: "Approval",
+  priority: "Task priority",
 };
 
 // EMPTY is what an empty value *means*, per field -- the whole reason

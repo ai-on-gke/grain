@@ -56,6 +56,17 @@ type PR struct {
 	InRepo bool
 }
 
+// noPullRequestError is ErrNoPullRequest with a message of its own. It is
+// not fmt.Errorf's %w because that appends the sentinel's text, and the
+// message already says what the sentinel does: a refusal shown to the
+// person who typed the label read "... has it as its head: no open pull
+// request heads it" (docs/test-runs/2026-10-31-task-targeting-parking.md).
+type noPullRequestError string
+
+func (e noPullRequestError) Error() string { return string(e) }
+
+func (e noPullRequestError) Is(target error) bool { return target == ErrNoPullRequest }
+
 // Resolve finds the open pull request on repo whose head label is head
 // -- GitHub's GET /repos/{o}/{r}/pulls?head=<owner>:<branch> -- and
 // reads it. No open pull request is an error wrapping ErrNoPullRequest.
@@ -65,8 +76,8 @@ func Resolve(f Finder, repo model.RepoRef, head model.ForkHead) (*PR, error) {
 		return nil, fmt.Errorf("looking up the pull request %s heads on %s: %w", head, repo, err)
 	}
 	if found == nil || found.Number <= 0 {
-		return nil, fmt.Errorf("%q is a GitHub fork head (branch %s on %s's fork), but no open pull request "+
-			"on %s has it as its head: %w", head.String(), head.Branch, head.Owner, repo, ErrNoPullRequest)
+		return nil, noPullRequestError(fmt.Sprintf("%q is a GitHub fork head (branch %s on %s's fork), but no open pull request "+
+			"on %s has it as its head", head.String(), head.Branch, head.Owner, repo))
 	}
 	detail, err := f.GetPullRequest(repo.Owner, repo.Name, found.Number)
 	if err != nil {
@@ -133,4 +144,53 @@ func (r *PR) Note() string {
 		"Then either open a follow-up pull request from your branch that names %s and credits %s, "+
 		"or suggest the changes on %s itself in review comments.\n", r.Ref.Number, r.Ref, author, r.Ref)
 	return b.String()
+}
+
+// StripNote is body with the Note appended for ref taken back out, and
+// whether one was. It is for a task moved off ref's repository: ref is
+// not a pull request there, so the guidance to fetch its head and to
+// follow it up is wrong for the next run. Only a note still worded as
+// Note wrote it is recognised; one a person has since edited is left,
+// for the caller to say something about (MovedNote).
+func StripNote(body string, ref model.PullRequestRef) (string, bool) {
+	const lead = "\n\n---\nThis task was filed against `"
+	head := "`, the head of pull request " + ref.String()
+	ends := []string{
+		"or suggest the changes on " + ref.String() + " itself in review comments.\n",
+		", updating " + ref.String() + ".\n",
+	}
+	for from := 0; ; {
+		i := strings.Index(body[from:], lead)
+		if i < 0 {
+			return body, false
+		}
+		start := from + i
+		from = start + len(lead)
+		rest := body[from:]
+		j := strings.Index(rest, head)
+		if j < 0 || strings.Contains(rest[:j], "\n") {
+			continue
+		}
+		if after := rest[j+len(head):]; after != "" && after[0] >= '0' && after[0] <= '9' {
+			continue // another pull request: #41 is not #410
+		}
+		end := -1
+		for _, e := range ends {
+			if k := strings.Index(rest, e); k >= 0 && (end < 0 || k+len(e) < end) {
+				end = k + len(e)
+			}
+		}
+		if end < 0 || strings.Contains(rest[:end], "\n---\n") {
+			continue
+		}
+		return body[:start] + rest[end:], true
+	}
+}
+
+// MovedNote is what a task moved off ref's repository to target is told
+// when its body still names ref but StripNote could not find the note
+// to take out: that ref is no longer its pull request.
+func MovedNote(ref model.PullRequestRef, target model.RepoRef) string {
+	return fmt.Sprintf("\n\n---\nThis task was moved to %s, where %s is not a pull request: grain dropped its link to it, "+
+		"so anything above about fetching %s's head or following it up no longer applies.\n", target, ref, ref)
 }

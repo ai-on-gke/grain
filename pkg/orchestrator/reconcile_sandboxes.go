@@ -305,16 +305,22 @@ func reconcileSandboxes(ctx context.Context, deps Deps, now time.Time) error {
 					liveRunIDs[r.Sandbox] = true
 				}
 			}
-			for id := range warmSessionSandboxIDs(deps.Store) {
-				liveRunIDs[id] = true
-			}
 		}
 	}
 
+	// InFlight is read before the session pool: a run leaves InFlight only
+	// after parking its session sandbox warm, and a warm sandbox moves to a
+	// claiming run's hold under the pool's lock, so a sandbox missed by one
+	// read is in the next.
 	inFlightRunIDs := map[string]bool{}
 	if deps.Runs != nil {
 		for _, id := range deps.Runs.Runs() {
 			inFlightRunIDs[id] = true
+		}
+	}
+	if haveLiveRuns {
+		for id := range sessionSandboxesInUse(deps.Store) {
+			liveRunIDs[id] = true
 		}
 	}
 
@@ -327,7 +333,7 @@ func reconcileSandboxes(ctx context.Context, deps Deps, now time.Time) error {
 	if hasLister && haveLiveRuns && deps.Store != nil {
 		kept := make([]LiveSandbox, 0, len(live))
 		for _, sb := range live {
-			if sb.Pool == model.PoolAgent && !liveRunIDs[sb.Holder] && !inFlightRunIDs[sb.Holder] {
+			if sb.Pool == model.PoolAgent && !liveRunIDs[sb.Holder] && !liveRunIDs[sb.ID] && !inFlightRunIDs[sb.Holder] {
 				if finished, found, err := deps.Store.RunFinished(ctx, sb.Holder); err == nil && found && finished {
 					msg := fmt.Sprintf("reaped leaked agent sandbox %s (%s): run %s already finished", sb.ID, sb.Name, sb.Holder)
 					log.Printf("orchestrator: sandbox reconciliation: %s", msg)

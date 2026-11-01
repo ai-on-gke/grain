@@ -1529,6 +1529,28 @@ func TestUpdateSettingsRoundTripsKubernetesSettingsAndValidatesNodeSelector(t *t
 			t.Errorf("UpdateSettings(k8sGitProxyHost=%q) = %v, want accepted %v", host, err, ok)
 		}
 	}
+	// The pod images are image references and the workspace an absolute
+	// path: the 2026-11-01 walkthrough saved "not a ref!!" and
+	// "relative/dir".
+	for _, tc := range []struct {
+		key       string
+		req       func(*string) ui.UpdateSettingsRequest
+		bad, good string
+	}{
+		{"k8sSandboxImage", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sSandboxImage: v} }, "not a ref!!", "registry.walk.test/team/k8s-sandbox:v1"},
+		{"k8sGranuleImage", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sGranuleImage: v} }, "not a ref!!", "registry.walk.test/team/guest@sha256:" + strings.Repeat("a", 64)},
+		{"k8sWorkspace", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sWorkspace: v} }, "relative/dir", "/home/walk"},
+	} {
+		bad, good, blank := tc.bad, tc.good, ""
+		if _, err := c.UpdateSettings(ctx, tc.req(&bad)); err == nil || !strings.HasPrefix(err.Error(), tc.key+" ") {
+			t.Errorf("UpdateSettings(%s=%q) = %v, want a refusal naming %s", tc.key, bad, err, tc.key)
+		}
+		for _, v := range []*string{&good, &blank} {
+			if _, err := c.UpdateSettings(ctx, tc.req(v)); err != nil {
+				t.Errorf("UpdateSettings(%s=%q): %v", tc.key, *v, err)
+			}
+		}
+	}
 	none := ""
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{K8sPriorityClassCI: &none}); err != nil {
 		t.Errorf("an empty priority class (none) was refused: %v", err)
@@ -1834,5 +1856,80 @@ func TestCheckImageManifestHTTPServer(t *testing.T) {
 	err := ui.CheckImageManifest(ctx, host+"/bwsalmon/grain/k8s-sandbox:missing")
 	if !errors.Is(err, ui.ErrImageNotFound) {
 		t.Fatalf("CheckImageManifest(missing) = %v, want ErrImageNotFound", err)
+	}
+}
+
+// The 2026-11-01 walkthrough saved "not an email" as the GCP service
+// account email, which only failed when gcp-key next minted a key.
+func TestUpdateSettingsRefusesAGCPServiceAccountEmailThatIsNotOne(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		email string
+		ok    bool
+	}{
+		{"not an email", false},
+		{"no-at-sign", false},
+		{"@project.iam.gserviceaccount.com", false},
+		{"minter@", false},
+		{"a@b@c", false},
+		{" grain-minter@walk-1.iam.gserviceaccount.com ", true},
+		{"", true},
+	} {
+		e := tc.email
+		_, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{GCPServiceAccountEmail: &e})
+		if tc.ok != (err == nil) {
+			t.Errorf("UpdateSettings(gcpServiceAccountEmail=%q) = %v, want accepted %v", tc.email, err, tc.ok)
+		}
+		if err != nil && !strings.HasPrefix(err.Error(), "gcpServiceAccountEmail ") {
+			t.Errorf("refusal %q does not name gcpServiceAccountEmail", err)
+		}
+		if tc.ok && err == nil && tc.email != "" {
+			saved, err := c.GetSettings(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved.GCPServiceAccountEmail != strings.TrimSpace(tc.email) {
+				t.Errorf("GCPServiceAccountEmail = %q, want %q trimmed", saved.GCPServiceAccountEmail, tc.email)
+			}
+		}
+	}
+}
+
+// TestUpdateSettingsRefusesAGCPProjectThatIsNotAProjectID: the 2026-11-01
+// walkthrough saved "Bad Project!" from Legacy capabilities, which every
+// gcp-key and gemini-key attempt would then have failed on.
+func TestUpdateSettingsRefusesAGCPProjectThatIsNotAProjectID(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+	for project, ok := range map[string]bool{
+		"Bad Project!":           false,
+		"UPPER-case-1":           false,
+		"short":                  false,
+		"1starts-with-digit":     false,
+		"ends-with-hyphen-":      false,
+		"my-project-123":         true,
+		" walkthrough-project ":  true,
+		"example.com:my-project": true,
+		"":                       true,
+	} {
+		p := project
+		got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{GCPProject: &p})
+		if ok != (err == nil) {
+			t.Errorf("UpdateSettings(gcpProject=%q) = %v, want accepted %v", project, err, ok)
+			continue
+		}
+		if !ok && !strings.HasPrefix(err.Error(), "gcpProject ") {
+			t.Errorf("UpdateSettings(gcpProject=%q) = %v, want a refusal naming gcpProject", project, err)
+		}
+		if ok && got.GCPProject != strings.TrimSpace(project) {
+			t.Errorf("UpdateSettings(gcpProject=%q) stored %q", project, got.GCPProject)
+		}
 	}
 }

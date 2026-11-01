@@ -1,0 +1,52 @@
+# grain's templates, in the format a repository writes one in
+# (.grain/templates/<name>.yml, docs/declarations.md), with the keys a
+# repository is not allowed to write as well. Edit it in a pull request:
+# a merged change is live on the next tick.
+
+# `id` is the identity and is grain's to allocate -- it is what history
+# and the other settings refer this template by, so changing one is a
+# delete and a create rather than a rename. Everything else is yours.
+templates:
+  - id: tpl-nightly
+    name: nightly-review
+    title: Nightly review
+    body: review the day
+    base: main
+    auto-merge: false
+    network: ""
+    nothing-needed: ""
+    model: ""
+    goal: ""
+    interactive: false
+    target: acme/widgets
+    change-target: ""
+    reviewers: ""
+    grants:
+      - capability: deployment-health
+        via: template
+        folder: null
+      - capability: memory
+        via: template
+        folder: null
+      - capability: release-notes
+        via: template
+        folder: null
+      - capability: self-upgrade
+        via: template
+        folder: null
+    created-at: "2026-10-31T10:00:00Z"
+  - id: tpl-plain
+    name: plain
+    title: Plain
+    body: no grants
+    base: null
+    auto-merge: true
+    network: ""
+    nothing-needed: ""
+    model: ""
+    goal: ""
+    interactive: false
+    target: ""
+    change-target: ""
+    reviewers: ""
+    created-at: "2026-10-31T10:05:00Z"
