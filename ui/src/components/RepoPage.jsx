@@ -2453,6 +2453,17 @@ export default function RepoPage({
                         : ""));
                 const edit = (field) => (e) =>
                   setImportDraft({ ...draft, [field]: e.target.value });
+                // The fields as typed, in the shape PUT .../settings takes.
+                const draftFields = () => {
+                  const minutes = draft.interval.trim();
+                  return {
+                    issueImportRepo: draft.repo.trim(),
+                    issueImportLabel: draft.label.trim(),
+                    issueImportIntervalSeconds: minutes
+                      ? Math.round(Number(minutes) * 60)
+                      : 0,
+                  };
+                };
                 return (
                   <Stack spacing={1.5} data-testid="repo-issue-import">
                     <Stack direction="row" alignItems="flex-start" spacing={1}>
@@ -2461,8 +2472,14 @@ export default function RepoPage({
                         sx={{ mt: -0.5 }}
                         checked={Boolean(imp.enabled)}
                         onChange={(e) =>
+                          // Switching on saves whatever source, label and
+                          // interval are typed but not yet saved with it:
+                          // the first pass runs on the next cycle, and
+                          // would otherwise read every open issue with
+                          // the label the person had just typed unsaved.
                           saveIssueImport({
                             issueImportEnabled: e.target.checked,
+                            ...(e.target.checked && dirty ? draftFields() : {}),
                           })
                         }
                         disabled={readOnly}
@@ -2512,14 +2529,7 @@ export default function RepoPage({
                       alignItems={{ sm: "flex-start" }}
                       onSubmit={(e) => {
                         e.preventDefault();
-                        const minutes = draft.interval.trim();
-                        saveIssueImport({
-                          issueImportRepo: draft.repo.trim(),
-                          issueImportLabel: draft.label.trim(),
-                          issueImportIntervalSeconds: minutes
-                            ? Math.round(Number(minutes) * 60)
-                            : 0,
-                        });
+                        saveIssueImport(draftFields());
                       }}
                     >
                       <TextField

@@ -19,6 +19,7 @@ package repodecl_test
 // what each of the refusals actually says.
 
 import (
+	"github.com/ai-on-gke/grain/pkg/declschema"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -646,5 +647,21 @@ func TestDeclaredTemplatePriorityValidation(t *testing.T) {
 	})
 	if !strings.Contains(msg, "priority must be a positive integer") {
 		t.Errorf("negative priority error = %q, want 'priority must be a positive integer'", msg)
+	}
+}
+
+// The issue importer's settings are grain's to set, not the repository's:
+// a .grain/settings.yml declaring them -- above all one queueing imports
+// without approval, which would let whoever can open an issue decide what
+// an agent runs -- is refused as Authority, naming the key and the file
+// (docs/test-runs/2026-10-31-github-issue-import.md, gap 4).
+func TestDeclaredIssueImportIsRefusedAsAuthority(t *testing.T) {
+	err := loadErr(t, map[string]string{
+		".grain/settings.yml": "issue-import:\n  enabled: true\n  approved: true\n  label: grain\n",
+	})
+	for _, want := range []string{".grain/settings.yml", "issue-import", declschema.Authority.Reason()} {
+		if !strings.Contains(err, want) {
+			t.Fatalf("Load = %s\nwant it to say %q", err, want)
+		}
 	}
 }

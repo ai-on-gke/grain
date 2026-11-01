@@ -3092,7 +3092,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	// what every pull request grain opened was called before this.
 	title := titleFromCommits(commits)
 	if title == "" {
-		title = task.Title
+		title = capTitle(commitSummary(task.Title))
 	}
 	if title == "" {
 		title = "grain: " + task.ID
