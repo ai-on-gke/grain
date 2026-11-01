@@ -346,7 +346,8 @@ func (m *StateManager) noteOutcome(err error) {
 		}
 		return
 	}
-	next := &ui.StateRepoSyncFailure{Since: time.Now(), LastSuccess: m.lastSuccess, Error: err.Error(), Repo: m.settingsRepoLocked().String()}
+	remote, _ := m.externalConfigRepo(false)
+	next := &ui.StateRepoSyncFailure{Since: time.Now(), LastSuccess: m.lastSuccess, Error: err.Error(), Repo: m.settingsRepoLocked().String(), External: remote != ""}
 	if prev := m.failure.Load(); prev != nil {
 		next.Since = prev.Since
 	}
@@ -1107,6 +1108,14 @@ func (m *StateManager) Sync(ctx context.Context) (ui.StateRepoStatus, error) {
 		return ui.StateRepoStatus{}, err
 	}
 	return m.status(ctx), nil
+}
+
+// SyncAfterWrite exports a UI/API settings write immediately to
+// grain/config so the repository reflects the database without waiting
+// for the next background sync tick.
+func (m *StateManager) SyncAfterWrite(ctx context.Context) error {
+	_, err := m.sync(ctx)
+	return err
 }
 
 func writeStateRepoToken(dataDir, token string) (string, error) {

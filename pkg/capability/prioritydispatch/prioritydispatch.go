@@ -19,7 +19,7 @@
 // pipeline pause other than an upgrade's own hold, is never parked behind
 // a red base branch's repair, and is not held by a provider connection's
 // concurrency limit. It still charges the sandbox budget, under the
-// exception policy a session's does.
+// priority policy a session's does (model.Budget.AdmitsPriority).
 //
 // The provider places nothing and mints nothing: the grant is read by
 // dispatch, the store and the agent pool, which is where the whole of

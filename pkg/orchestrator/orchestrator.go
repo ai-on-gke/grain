@@ -902,6 +902,12 @@ type Config struct {
 	// a value for the same reason StateRepo above is one -- it is read
 	// per cycle, and the answer changes as upgrades happen.
 	UpgradeStatus func() (upgrade.Status, error)
+	// ProcessStartedAt is when this daemon process started, so that the
+	// upgrade check can tell the process an upgrade is about to restart
+	// away from the one that restart brought up
+	// (upgrade.Status.RestartPending). Zero cannot tell the two apart
+	// once the restart has begun.
+	ProcessStartedAt time.Time
 	// RestartGap, when set, reports how long the restart that started
 	// this process left each of its listeners unreachable
 	// (upgrade.GapRecorder), for the upgrade check to report beside the
@@ -970,6 +976,12 @@ type Config struct {
 	// Deps.Runs is nil. When Deps.Runs is non-nil (an asynchronous daemon loop),
 	// in-process session continuation is enabled automatically.
 	WaitForSessionReply bool
+
+	// sessionIdleTTLStored says SessionSandboxIdleTTL was read from the
+	// stored setting at dispatch rather than pinned by the caller, so an
+	// in-process idle wait follows that setting while it waits
+	// (Config.liveSessionIdleTTL).
+	sessionIdleTTLStored bool
 
 	sandboxReused        bool
 	sandboxReclaimed     bool

@@ -39,7 +39,8 @@ const TaskListNoteHeader = "Grain-Task-List-Note"
 // mcp.TaskListEntry values.
 //
 // A scope that may read every task (self-debug, api:tasks:read) lists
-// them all; any other lists its own task, as task:// itself does.
+// them all; any other lists the tasks task:// would serve it: its own,
+// and those in a repository an api:tasks:read@<repo> grant names.
 func (p *GitProxy) serveTasks(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
 	own := strings.TrimSpace(scope.TaskIDStr)
 	if !scope.MayReadAllTasks && own == "" {
@@ -68,7 +69,7 @@ func (p *GitProxy) serveTasks(w http.ResponseWriter, r *http.Request, scope name
 	if !scope.MayReadAllTasks {
 		visible = nil
 		for _, t := range all {
-			if scope.PermitsTask(t.ID) {
+			if scope.PermitsTask(t.ID) || scope.PermitsTaskRepo(t.Repo) {
 				visible = append(visible, t)
 			}
 		}

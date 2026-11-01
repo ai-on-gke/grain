@@ -37,7 +37,12 @@ import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
 import ReviewBadge from "./ClReview.jsx";
 import { BehindBadge } from "./ClSubmit.jsx";
-import { STATE_SYNC_TITLE, muiSeverity, stateSyncSentence } from "../alerts.js";
+import {
+  muiSeverity,
+  stateSyncImpact,
+  stateSyncSentence,
+  stateSyncTitle,
+} from "../alerts.js";
 import {
   ackNotification,
   investigateNotification,
@@ -547,8 +552,9 @@ const GROUPS = [
   // on the queue longer than the whole of that queue's own deadlines.
   //
   // t.stall is the whole of the test, and it is only ever set for the
-  // three states grain itself drives (model.StateTimes.Since), so the
-  // only tasks this can take from a group above are completed ones --
+  // three states grain itself drives and for a deferral whose wake time
+  // has passed (model.StateTimes.Since, orchestrator's deferredWake), so
+  // the only tasks this can take from a group above are completed ones --
   // which merge_blocked and merge_stalled both claim first, and rightly:
   // where this says only "'completed' has stood too long", they say
   // which state of the merge cycle it is standing in and offer the pull
@@ -657,7 +663,7 @@ const GROUPS = [
 // StateSyncGroup is the inbox row for a deployment admin when this
 // deployment's settings have stopped reaching its state repository
 // (config.stateRepoSyncFailure): the alerts panel says it to everyone
-// (alerts.js, in the same words: STATE_SYNC_TITLE, stateSyncSentence), and this
+// (alerts.js, in the same words: stateSyncTitle, stateSyncSentence), and this
 // puts it on the list of things waiting on the people who can fix it.
 function StateSyncGroup({ failure, onOpenConfigRepo }) {
   const zone = useTimeZone();
@@ -666,9 +672,13 @@ function StateSyncGroup({ failure, onOpenConfigRepo }) {
     <CollapsibleInboxGroup
       key="state-sync"
       sectionId="state-sync"
-      title={STATE_SYNC_TITLE}
+      title={stateSyncTitle(failure)}
       count={1}
-      hint="Until this is fixed, settings changed here are not backed up, and a restart into a newer commit of the state repository has only the last export to merge against."
+      hint={
+        failure.external
+          ? stateSyncImpact(failure)
+          : "Until this is fixed, settings changed here are not backed up, and a restart into a newer commit of the state repository has only the last export to merge against."
+      }
     >
       <ul className="task-list">
         <li className="inbox-item">

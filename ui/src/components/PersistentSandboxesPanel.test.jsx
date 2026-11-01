@@ -114,8 +114,11 @@ describe("PersistentSandboxesPanel", () => {
       /Persistent sandboxes keep a long-lived service running/,
     );
     expect(panel).toHaveTextContent(
-      /ask the director to set one up — e\.g\. 'set up a staging environment for bwsalmon\/grain on main'/i,
+      /ask the director to set one up — e\.g\. 'set up a staging environment for acme\/web on main'/i,
     );
+    // The example names a placeholder repository, never grain's own
+    // retired one (bwsalmon/grain moved to ai-on-gke/grain on 2026-10-28).
+    expect(panel).not.toHaveTextContent("bwsalmon");
     expect(panel).toHaveTextContent("tables/persistent_sandbox.json");
     expect(screen.queryByRole("table")).toBeNull();
 

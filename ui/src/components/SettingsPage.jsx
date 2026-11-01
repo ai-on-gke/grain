@@ -102,7 +102,7 @@ const READS_SETTINGS = new Set([
 // list then a section on a phone.
 //
 // `section` is the open section's id ("" for the bare /settings: the
-// list on a phone, General elsewhere -- App fills that in), and
+// list on a phone, Models elsewhere -- App fills that in), and
 // onSection picks another. One useSettingsSection() holds the save and
 // dirty state for every section, so the nav can mark a dirty one and
 // leaving one asks first.
@@ -147,13 +147,26 @@ export default function SettingsPage({
   // request.
   const external = Boolean(externalConfigRepo) && !NOT_CONFIG.has(current);
   // GET /api/config's configRepoOnly: the API refuses these sections'
-  // writes in favour of a config pull request. Without a config repo
-  // (`grain demo`) they stay editable -- there is nowhere else to.
-  const configRepoOnly =
-    Boolean(config?.configRepoOnly) || Boolean(externalConfigRepo);
+  // writes in favour of a config pull request when settings are locked.
+  // By default (settingsLocked: false) they stay editable in the UI, and
+  // so they do under the directConfigWrites opt-out, which the server
+  // folds into configRepoOnly: the loaded settings carry the same answer
+  // for the row they last wrote, so toggling the lock redraws at once.
+  const lockedInUI =
+    settings && typeof settings.configRepoOnly === "boolean"
+      ? settings.configRepoOnly
+      : Boolean(config?.configRepoOnly);
+  const configRepoOnly = lockedInUI || Boolean(externalConfigRepo);
   const configManaged = configRepoOnly && isConfigRepoSection(current);
   const readOnly = external || configManaged;
   s.readOnly = readOnly;
+  // configLocked is for the sections that mix bootstrap settings with
+  // config-managed ones (Engine, Sandboxes, Legacy capabilities): the
+  // API refuses a change to the config-managed fields while this is on
+  // (settings-mutability.spec.md D-1, D-2), so those fields are drawn
+  // read-only one by one and the bootstrap ones beside them stay
+  // editable.
+  s.configLocked = configRepoOnly;
 
   useEffect(() => {
     if (READS_SETTINGS.has(current) && !settings) reloadSettings();
@@ -186,12 +199,17 @@ export default function SettingsPage({
   }, [anchor]);
   useEffect(() => {
     if (!focusTarget) return;
-    const timer = setTimeout(() => {
+    const reveal = () => {
       const el =
         document.querySelector(`[data-setting-id="${focusTarget}"]`) ||
         document.getElementById(focusTarget);
-      if (!el) return;
-      el.scrollIntoView?.({ block: "center" });
+      if (!el) return false;
+      // Centre a field or a short card; a card taller than the screen
+      // (Sandboxes → Kubernetes) is aligned to its top instead, since
+      // centring it scrolls past its heading and the first field, which is
+      // the one focused below without scrolling.
+      const tall = el.getBoundingClientRect?.().height > window.innerHeight;
+      el.scrollIntoView?.({ block: tall ? "start" : "center" });
       const input = el.matches?.("input,textarea,select,button")
         ? el
         : el.querySelector?.("input:not([type=hidden]),textarea,select,button");
@@ -199,8 +217,14 @@ export default function SettingsPage({
       el.classList.add("setting-highlight");
       setTimeout(() => el.classList.remove("setting-highlight"), 2000);
       setFocusTarget("");
-    }, 50);
-    return () => clearTimeout(timer);
+      return true;
+    };
+    if (reveal()) return;
+    const observer = new MutationObserver(() => {
+      if (reveal()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
   }, [focusTarget, current, settings]);
 
   const go = (next) => {
@@ -235,7 +259,10 @@ export default function SettingsPage({
       onChange={(evt) => setFilter(evt.target.value)}
       onKeyDown={(evt) => {
         if (evt.key === "Escape") setFilter("");
-        if (evt.key === "Enter" && matches[0]) pick(matches[0]);
+        if (evt.key === "Enter" && matches[0]) {
+          evt.preventDefault();
+          pick(matches[0]);
+        }
       }}
       inputProps={{ "aria-label": "Filter settings" }}
       data-testid="settings-filter"

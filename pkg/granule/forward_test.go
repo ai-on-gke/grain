@@ -17,6 +17,7 @@ package granule
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -26,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -98,50 +100,37 @@ func TestServeForwardRoundTrip(t *testing.T) {
 		_, _ = io.Copy(conn, conn)
 	}()
 
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	guestPort := probe.Addr().(*net.TCPAddr).Port
-	_ = probe.Close()
-
-	remotes := []ForwardSpec{
-		{
+	// The guest port is probed free and closed before the guest binds it,
+	// so another listener can take it in between: that is retried on a
+	// fresh port, and any other guest failure is reported rather than read
+	// as a forward that never became ready.
+	var (
+		guestPort int
+		f         *forwardPair
+	)
+	for attempt := 0; ; attempt++ {
+		probe, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		guestPort = probe.Addr().(*net.TCPAddr).Port
+		_ = probe.Close()
+		f = startForwardPair([]ForwardSpec{{
 			BindHost:   "127.0.0.1",
 			BindPort:   guestPort,
 			TargetHost: "127.0.0.1",
 			TargetPort: controllerPort,
-		},
+		}})
+		err = f.awaitReady(30 * time.Second)
+		if err == nil {
+			break
+		}
+		f.stop()
+		if !errors.Is(err, syscall.EADDRINUSE) || attempt == 4 {
+			t.Fatalf("waiting for forward ready: %v", err)
+		}
 	}
-
-	c2gReader, c2gWriter := io.Pipe()
-	g2cReader, g2cWriter := io.Pipe()
-	defer c2gReader.Close()
-	defer c2gWriter.Close()
-	defer g2cReader.Close()
-	defer g2cWriter.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	readyCh := make(chan struct{})
-	clientDone := make(chan error, 1)
-	guestDone := make(chan error, 1)
-
-	go func() {
-		guestDone <- ServeForwardGuest(ctx, c2gReader, g2cWriter, remotes)
-	}()
-	go func() {
-		clientDone <- ServeForwardClient(ctx, g2cReader, c2gWriter, remotes, nil, func() {
-			close(readyCh)
-		})
-	}()
-
-	select {
-	case <-readyCh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for forward ready")
-	}
+	defer f.stop()
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", guestPort), 5*time.Second)
 	if err != nil {
@@ -161,11 +150,6 @@ func TestServeForwardRoundTrip(t *testing.T) {
 		t.Fatalf("got %q, want %q", buf, payload)
 	}
 
-	cancel()
-	_ = c2gWriter.Close()
-	_ = g2cWriter.Close()
-	<-clientDone
-	<-guestDone
 }
 
 // TestForwardKubectlRefusesOpenOutsideRemotePorts stands a fake kubectl in
@@ -290,4 +274,62 @@ func TestFakeKubectlForwardGuest(t *testing.T) {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+// forwardPair is a ServeForwardGuest and ServeForwardClient joined by
+// pipes, as a sandbox and its controller are.
+type forwardPair struct {
+	cancel                context.CancelFunc
+	c2gWriter, g2cWriter  *io.PipeWriter
+	c2gReader, g2cReader  *io.PipeReader
+	ready                 chan struct{}
+	clientDone, guestDone chan error
+	guestErr              error
+	guestExited, stopped  bool
+}
+
+func startForwardPair(remotes []ForwardSpec) *forwardPair {
+	f := &forwardPair{ready: make(chan struct{}), clientDone: make(chan error, 1), guestDone: make(chan error, 1)}
+	f.c2gReader, f.c2gWriter = io.Pipe()
+	f.g2cReader, f.g2cWriter = io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	f.cancel = cancel
+	go func() { f.guestDone <- ServeForwardGuest(ctx, f.c2gReader, f.g2cWriter, remotes) }()
+	go func() {
+		f.clientDone <- ServeForwardClient(ctx, f.g2cReader, f.c2gWriter, remotes, nil, func() { close(f.ready) })
+	}()
+	return f
+}
+
+// awaitReady waits for the client to report the forward ready, or for
+// the guest to give up first (a port it could not bind), or for timeout.
+func (f *forwardPair) awaitReady(timeout time.Duration) error {
+	select {
+	case <-f.ready:
+		return nil
+	case err := <-f.guestDone:
+		f.guestExited = true
+		if err == nil {
+			err = errors.New("guest exited before the forward was ready")
+		}
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("no ready after %v", timeout)
+	}
+}
+
+func (f *forwardPair) stop() {
+	if f.stopped {
+		return
+	}
+	f.stopped = true
+	f.cancel()
+	_ = f.c2gWriter.Close()
+	_ = f.g2cWriter.Close()
+	_ = f.c2gReader.Close()
+	_ = f.g2cReader.Close()
+	<-f.clientDone
+	if !f.guestExited {
+		<-f.guestDone
+	}
 }

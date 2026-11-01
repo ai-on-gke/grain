@@ -122,6 +122,9 @@ func TestCheckConfigRefusesWhatCannotBeRepairedWithoutARestart(t *testing.T) {
 		{"negative CI cache entry size", func(c *daemon.Config) {
 			c.CiCacheMaxEntryBytes = -1
 		}, "-ci-cache-max-entry-bytes cannot be negative"},
+		// Until GS-3 to GS-5 are built, a remote grit runs none of a
+		// repository's workflows (task 1829).
+		{"grit-url with no opt-in", func(c *daemon.Config) { c.GritURL = "http://127.0.0.1:4244" }, "-grit-url is experimental and refused without -grit-experimental"},
 		{"unsupported db driver", func(c *daemon.Config) { c.DbDriver = "mysql" }, "-db-driver must be \"sqlite\" or \"postgres\""},
 	}
 	if !postgres.IsAvailable() {
@@ -336,11 +339,23 @@ func TestParseDaemonArgsGritFlags(t *testing.T) {
 		"-disable-native-sandboxes",
 		"-grit-url", "http://127.0.0.1:4244",
 		"-grit-client-token", "grain-main.secret123",
+		"-grit-experimental",
 	})
 	if err != nil || len(unknown) != 0 {
 		t.Fatalf("parseDaemonArgs with grit flags = %v, unknown %v", err, unknown)
 	}
-	if cfg.GritURL != "http://127.0.0.1:4244" || cfg.GritClientToken != "grain-main.secret123" {
-		t.Fatalf("got GritURL=%q GritClientToken=%q", cfg.GritURL, cfg.GritClientToken)
+	if cfg.GritURL != "http://127.0.0.1:4244" || cfg.GritClientToken != "grain-main.secret123" || !cfg.GritExperimental {
+		t.Fatalf("got GritURL=%q GritClientToken=%q GritExperimental=%v", cfg.GritURL, cfg.GritClientToken, cfg.GritExperimental)
+	}
+}
+
+// -grit-experimental is what lets -grit-url through, for whoever is
+// developing the split itself.
+func TestCheckConfigAllowsGritURLWithTheExperimentalOptIn(t *testing.T) {
+	t.Parallel()
+	cfg := startable()
+	cfg.GritURL, cfg.GritExperimental = "http://127.0.0.1:4244", true
+	if err := checkConfig(cfg); err != nil {
+		t.Fatalf("checkConfig with -grit-url -grit-experimental = %v, want nil", err)
 	}
 }

@@ -503,15 +503,20 @@ type StateTimes struct {
 	// CompletedAt is Observation.CompletedAt, which is both when the run
 	// ended and when the merge queue's own wait began (StateCompleted).
 	CompletedAt *time.Time
+	// DeferredUntil is Task.DeferredUntil: the wake time a deferral was
+	// given, which is when its wait on the orchestrator (reconcileWake)
+	// began. nil for a deferral with no date on it, which nothing drives.
+	DeferredUntil *time.Time
 }
 
 // Since is when a task in `state` entered it, as far as the record can
 // say, and nil when it cannot.
 //
-// Three states, and no more, because only three are ones grain itself is
-// working through: queued, running, and completed with a change on the
-// merge queue (orchestrator's taskLane, which carries a patience for
-// each of those and none for the rest). The other six are waiting on a
+// Three states, and the driven half of a fourth (a deferral with a wake
+// time, below), because only those are ones grain itself is working
+// through: queued, running, and completed with a change on the merge
+// queue (orchestrator's taskLane, which carries a patience for each of
+// those and none for the rest). The other six are waiting on a
 // person by design, and how long one of those has stood is not evidence
 // of anything -- a proposal nobody has approved in a month is a
 // proposal, not a fault -- so nothing asks this about them and this
@@ -538,6 +543,14 @@ type StateTimes struct {
 // existed, which left no trace to read: such a task goes on being
 // measured from its approval until the next time somebody defers and
 // undefers it.
+//
+// A deferral is the one person-owned state with a driven half. One with
+// a wake time on it is grain's to end -- the orchestrator undefers it on
+// the first cycle at or after that instant -- so its wait began at the
+// wake time rather than when it was deferred: a task put aside for a
+// month has not been waiting on anything for a month, only since the
+// month ran out. One without a wake time is a person's decision and
+// answers nil like the others.
 func (t StateTimes) Since(state State) *time.Time {
 	switch state {
 	case StateQueued:
@@ -552,6 +565,8 @@ func (t StateTimes) Since(state State) *time.Time {
 		return t.LiveRunStartedAt
 	case StateCompleted:
 		return t.CompletedAt
+	case StateDeferred:
+		return t.DeferredUntil
 	}
 	return nil
 }
@@ -567,7 +582,8 @@ func (t StateTimes) Since(state State) *time.Time {
 // caller holding runs from anywhere but Store.Runs has promised no
 // order.
 func StateTimesFrom(task Task, obs *Observation, runs []Run) StateTimes {
-	times := StateTimes{ApprovedAt: task.ApprovedAt, RequeuedAt: task.UndeferredAt}
+	times := StateTimes{ApprovedAt: task.ApprovedAt, RequeuedAt: task.UndeferredAt,
+		DeferredUntil: task.DeferredUntil}
 	if obs != nil {
 		times.CompletedAt = obs.CompletedAt
 		times.RequeuedAt = latest(obs.RetryRequestedAt, obs.RunNowAt, task.UndeferredAt)

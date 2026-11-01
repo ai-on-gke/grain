@@ -32,10 +32,8 @@ import (
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -286,25 +284,17 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"gemini-key":          "Gemini key",
 	"github-sandbox":      "GitHub sandbox",
 	"self-debug":          "Self debug",
-	"deployment-health":   "Deployment health",
-	"grain-log":           "Grain log",
 	"self-repair":         "Self repair",
-	"self-upgrade":        "Self upgrade",
 	"bootstrap-playbooks": "Bootstrap playbooks",
 	"grain-ci":            "grain CI",
 	"registry-push":       "Registry push",
 	"package-publish":     "Package publish",
 	"image-signing":       "Image signing",
-	"memory":              "Memory",
-	"release-notes":       "Release notes",
 	"git-push-any-ref":    "Push any ref",
 	"console":             "Interactive console",
-	"test-quarantine":     "Test quarantine",
 	"priority-dispatch":   "Priority dispatch",
 	"durable":             "Durable",
 	"read-issues":         "Read issues",
-	"db-read":             "Grain DB read",
-	"db-write":            "Grain DB read/write",
 })
 
 // withModelProxyDisplayNames adds one row per vendor's proxy capability
@@ -372,12 +362,10 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 	providers = append(providers,
 		gitpushanyref.New(),
 		bootstrap.New(),
-		releasenotes.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
 		packagepublish.New(packagepublish.Config{}),
 		imagesigning.New(imagesigning.Config{}),
 		consolecap.New(),
-		quarantine.New(),
 		readissues.New(),
 		prioritydispatch.New(),
 		durable.New(),

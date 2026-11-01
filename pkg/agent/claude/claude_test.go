@@ -635,12 +635,10 @@ func TestAllowedToolsNamesEveryGrainSandboxTool(t *testing.T) {
 	for _, tool := range []string{"pull_request_status", "base_branch_status", "wait_for_checks",
 		"list_ci_runs", "get_ci_log",
 		"open_pull_request", "recreate_sandbox",
-		"update_status", "chat", "update_memory", "list_memory_documents", "read_memory_document",
-		"read_cluster_stats", "write_release_notes",
+		"update_status", "chat",
 		"read_grain_log",
 		"read_deployment_health", "read_deployment_state",
-		"list_bootstrap_playbooks", "read_bootstrap_playbook",
-		"deployment_upgrade_status", "upgrade_deployment", "cancel_deployment_upgrade"} {
+		"list_bootstrap_playbooks", "read_bootstrap_playbook"} {
 		if !slices.Contains(names, mcp.QualifiedToolName(tool)) {
 			t.Errorf("allowedTools() = %v, want %s admitted", names, tool)
 		}

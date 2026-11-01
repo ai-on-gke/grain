@@ -320,7 +320,55 @@ import "strconv"
 // 68 is 67 again for `dispatch-control`, now `api:dispatch-control`.
 //
 // 69 is 67 again for `pipeline-control`, now `api:pipeline-control`.
-const SchemaVersion = 69
+//
+// 70 adds `settings_locked` to `grain_config`: whether non-bootstrap settings
+// are locked in the UI and REST API in favour of config repository pull
+// requests (off by default).
+//
+// 71 is 67 again for `memory`, now `api:memory`.
+//
+// 72 is 67 again for `release-notes`, now `api:release-notes`.
+//
+// 73 adds `priority` to `task` (default 5) and `template`: numeric task
+// priority where higher numbers mean higher dispatch priority.
+//
+// 74 adds `keep_running` to `task`, `template` and `schedule`
+// (model.Task.KeepRunning, model.Template.KeepRunning, model.Schedule.KeepRunning).
+//
+// 75 is 67 again for `self-upgrade`, now `api:self-upgrade`.
+//
+// 76 is 67 again for `test-quarantine`, now `api:test-quarantine`.
+//
+// 77 adds `new_task_form` to `grain_config`: the New Task form's
+// configuration (settings/new-task-form.yml, model.NewTaskForm).
+//
+// 78 changes no table: it upgrades `grain_config`.`task_branch_template`
+// from the pre-slug default `grain/{deployment}/task-{id}`
+// (model.UnsluggedTaskBranchTemplate, seeded by NewDeploymentConfig
+// before grain/task-56) to `grain/{deployment}/task-{id}-{slug}`
+// (model.DefaultTaskBranchTemplate), so deployments created before
+// {slug} was added include a portion of the task's title in new task
+// branch names in addition to the deployment and task-id uniquifiers.
+// Existing tasks keep the branch recorded on their row, and any other
+// template is left alone.
+//
+// 79 adds `pending_config_change` to `task_observation`: the grain/config
+// change a session proposed and is parked on (model.PendingConfigChange),
+// as JSON.
+//
+// 80 rewrites stored `grain-log` grants to
+// `https://grain.dev/capabilities/grain#journal={}`: the in-process
+// `grain-log` provider is retired for the `grain#journal` method.
+//
+// 81 rewrites stored `deployment-health` grants to `api:deployment:read` and
+// `https://grain.dev/capabilities/grain#health={}`: the in-process
+// `deployment-health` provider is retired.
+//
+// 82 rewrites stored `db-read` and `db-write` grants to
+// `https://grain.dev/capabilities/grain#sql={"write":false}` and
+// `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
+// `db-read` and `db-write` providers are retired.
+const SchemaVersion = 82
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
@@ -532,6 +580,8 @@ var Tables = []string{
   ` + "`change_target_kind`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -643,6 +693,22 @@ var Tables = []string{
   PRIMARY KEY (` + "`task_id`" + `)
 )`,
 
+	// console_session_sync is the standing-session declaration last synced
+	// onto a session's task (model.ConsoleSessionConfigSnapshot, as JSON),
+	// so the sync that tells a config change from an operator's own edit
+	// on the task still can after a daemon restart. Held in memory only, a
+	// reads: or writes: entry dropped from the declaration while the
+	// daemon was down stayed on the task for good.
+	//
+	// Needs no SchemaVersion bump, for task_write's own reason: an older
+	// store gains an empty table, and a task with no row is synced as one
+	// that has never been, with the declaration authoritative.
+	`CREATE TABLE IF NOT EXISTS ` + "`console_session_sync`" + ` (
+  ` + "`task_id`" + `  TEXT NOT NULL,
+  ` + "`snapshot`" + ` TEXT NOT NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`,
+
 	`CREATE TABLE IF NOT EXISTS ` + "`task_grant`" + ` (
   ` + "`task_id`" + `    TEXT NOT NULL,
   ` + "`capability`" + ` TEXT NOT NULL,
@@ -708,6 +774,7 @@ var Tables = []string{
   ` + "`pending_question_comment_id`" + ` INTEGER  NULL,
   ` + "`baseline_comment_id`" + `         INTEGER  NULL,
   ` + "`pending_secret`" + `              TEXT     NULL,
+  ` + "`pending_config_change`" + `       TEXT     NULL,
   ` + "`merge_queue_blocked_at`" + `      DATETIME NULL,
   ` + "`merge_queue_refreshed_at`" + `    DATETIME NULL,
   ` + "`merge_queue_repair_at`" + `       DATETIME NULL,
@@ -1188,6 +1255,22 @@ var Tables = []string{
   PRIMARY KEY (` + "`run_id`" + `, ` + "`fingerprint`" + `)
 )`,
 
+	// task_run_wait_ledger is a live run's CI wait time per reporting
+	// source (orchestrator.WaitSourceMCP, WaitSourceCLI, ...), written
+	// when the daemon stops and leaves the run for the next one to
+	// adopt. The adopting daemon seeds the run's clock from it
+	// (orchestrator.newAdoptedRunClock), so wait time credited before the
+	// restart is not lost -- the sandbox proxy's own ledger is held only
+	// in memory and starts again from zero. Deleted when the run
+	// finishes. Needs no SchemaVersion bump and no migration rung, for
+	// the reason the tables above give.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_wait_ledger`" + ` (
+  ` + "`run_id`" + `     TEXT    NOT NULL,
+  ` + "`source`" + `     TEXT    NOT NULL,
+  ` + "`blocked_ms`" + ` INTEGER NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`source`" + `)
+)`,
+
 	// task_run_unmatched_failure is one row per failed run whose own
 	// account of itself matched none of grain's markers for a provider
 	// refusal -- neither the usage-limit ones (agent/usagelimit.go) nor
@@ -1285,6 +1368,30 @@ var Tables = []string{
   ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
+)`,
+
+	// task_run_startup records the per-phase startup timestamps of a run
+	// (queued_at -> started_at -> sandbox_acquired_at -> sandbox_prepared_at -> first_turn_at)
+	// so interactive and batch startup latency breakdowns can be reported on
+	// Attempt and in grain metrics without altering the frozen task_run DDL.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_startup`" + ` (
+  ` + "`run_id`" + `              TEXT     NOT NULL,
+  ` + "`queued_at`" + `           DATETIME NULL,
+  ` + "`sandbox_acquired_at`" + ` DATETIME NULL,
+  ` + "`sandbox_prepared_at`" + ` DATETIME NULL,
+  ` + "`first_turn_at`" + `       DATETIME NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
+)`,
+
+	// task_run_sandbox_key records the sessionSandboxKey and sessionGrantsKey
+	// a run's sandbox was built or reused under, so an adopting daemon after a
+	// restart enforces the exact same warm-sandbox isolation key even if the
+	// task's grants, network access, target, or size were edited mid-run.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_sandbox_key`" + ` (
+  ` + "`run_id`" + `      TEXT NOT NULL,
+  ` + "`sandbox_key`" + ` TEXT NOT NULL,
+  ` + "`grants_key`" + `  TEXT NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
 )`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`lease`" + ` (
@@ -1454,6 +1561,7 @@ var Tables = []string{
   ` + "`last_run_at`" + `           DATETIME NULL,
   ` + "`created_at`" + `            DATETIME NOT NULL,
   ` + "`every_n_minutes`" + `       INTEGER  NULL,
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1570,6 +1678,8 @@ var Tables = []string{
   ` + "`change_target_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
+  ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2049,6 +2159,8 @@ var Tables = []string{
   ` + "`external_agent_api`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`sandbox_image_mirror`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
+  ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
+  ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

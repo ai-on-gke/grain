@@ -112,6 +112,74 @@ func TestInProcessSessionNearItsDeadlineEndsTheRunRatherThanWaiting(t *testing.T
 	}
 }
 
+// An operator who shortens the session idle TTL (Settings -> Sandboxes)
+// while a session is idle in-process releases it on the new TTL: the run
+// read the stored setting at dispatch, and its idle wait follows that
+// setting rather than the 30 minutes it started with
+// (docs/test-runs/2026-11-01-interactive-sessions-warm-keep-running.md).
+// A TTL its caller pinned is left alone.
+func TestInProcessSessionIdleWaitFollowsAChangedStoredTTL(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		stored  bool
+		follows bool
+	}{
+		{name: "stored setting", stored: true, follows: true},
+		{name: "pinned by the caller", stored: false, follows: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, ctx := openTestStore(t)
+			now := time.Date(2026, 11, 1, 9, 13, 0, 0, time.UTC)
+			task := model.Task{ID: "8", Title: "chat", Interactive: true}
+			if err := store.PutTask(ctx, task); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SetTaskGoal(ctx, task.ID, model.GoalDecl{Kind: model.GoalPersonCloses}, "test", now); err != nil {
+				t.Fatal(err)
+			}
+			const dispatched = 3 * time.Second
+			if err := store.UpdateConfig(ctx, func(c *model.Config) error {
+				c.SessionSandboxIdleTTL = dispatched
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			cfg := Config{SessionSandboxIdleTTL: dispatched, CancelPollInterval: 20 * time.Millisecond,
+				Now: func() time.Time { return now }}
+			cfg.inProcessSessionWait = true
+			cfg.sessionIdleTTLStored = tc.stored
+
+			// The operator shortens the TTL once the session is idle.
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				_ = store.UpdateConfig(ctx, func(c *model.Config) error {
+					c.SessionSandboxIdleTTL = 200 * time.Millisecond
+					return nil
+				})
+			}()
+			fw := &countingTurns{}
+			first := &agent.Result{FinalText: "first answer", ResumableSession: "sess-1"}
+			start := time.Now()
+			if _, runErr, _ := continueSessionTurns(ctx, ctx, store, cfg, fw, agent.RunConfig{}, task, "8-1",
+				nil, nil, first, nil); runErr != nil {
+				t.Fatalf("continueSessionTurns: %v", runErr)
+			}
+			elapsed := time.Since(start)
+			if got := fw.runs.Load(); got != 0 {
+				t.Fatalf("in-process turns = %d, want none", got)
+			}
+			if tc.follows && elapsed >= dispatched {
+				t.Fatalf("idle wait lasted %v, want it released on the shortened TTL well before %v", elapsed, dispatched)
+			}
+			if !tc.follows && elapsed < dispatched {
+				t.Fatalf("idle wait lasted %v, want the pinned %v", elapsed, dispatched)
+			}
+		})
+	}
+}
+
 func commentBodies(comments []model.Comment) string {
 	var b strings.Builder
 	for _, c := range comments {
@@ -119,4 +187,129 @@ func commentBodies(comments []model.Comment) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+type trackingWarmSandbox struct {
+	Sandbox
+	released atomic.Int32
+}
+
+func (s *trackingWarmSandbox) Release(context.Context) error {
+	s.released.Add(1)
+	return nil
+}
+
+func TestEvictOldestWarmSessionSandboxesEvictsInIdleOrderAndMarksReclaimed(t *testing.T) {
+	t.Parallel()
+	store, _ := openTestStore(t)
+	now := time.Date(2026, 10, 31, 6, 0, 0, 0, time.UTC)
+
+	var revoked []string
+	deps := Deps{
+		Store: store,
+		RevokeSandboxToken: func(id string) error {
+			revoked = append(revoked, id)
+			return nil
+		},
+	}
+
+	sb1 := &trackingWarmSandbox{}
+	sb2 := &trackingWarmSandbox{}
+	sb3 := &trackingWarmSandbox{}
+	var counted1, counted2, counted3 atomic.Int32
+
+	// t2 is oldest (now - 10m); t1 and t3 share IdleSince (now - 5m), so tie-break picks t1 before t3.
+	parkWarmSessionSandbox(deps, "t1", "sb-1", "k1", "", sb1, func(context.Context) { counted1.Add(1) }, model.Commitment{}, now.Add(-5*time.Minute), time.Hour)
+	parkWarmSessionSandbox(deps, "t2", "sb-2", "k2", "", sb2, func(context.Context) { counted2.Add(1) }, model.Commitment{}, now.Add(-10*time.Minute), time.Hour)
+	parkWarmSessionSandbox(deps, "t3", "sb-3", "k3", "", sb3, func(context.Context) { counted3.Add(1) }, model.Commitment{}, now.Add(-5*time.Minute), time.Hour)
+
+	if got := EvictOldestWarmSessionSandboxes(deps, 2); got != 2 {
+		t.Fatalf("EvictOldestWarmSessionSandboxes = %d, want 2", got)
+	}
+	if sb2.released.Load() != 1 || counted2.Load() != 1 {
+		t.Errorf("oldest sandbox t2 not released/counted: released=%d counted=%d", sb2.released.Load(), counted2.Load())
+	}
+	if sb1.released.Load() != 1 || counted1.Load() != 1 {
+		t.Errorf("tie-broken sandbox t1 not released/counted: released=%d counted=%d", sb1.released.Load(), counted1.Load())
+	}
+	if sb3.released.Load() != 0 || counted3.Load() != 0 {
+		t.Errorf("newest sandbox t3 should remain warm: released=%d counted=%d", sb3.released.Load(), counted3.Load())
+	}
+	if len(revoked) != 2 || revoked[0] != "sb-2" || revoked[1] != "sb-1" {
+		t.Errorf("revoked tokens = %v, want [sb-2 sb-1]", revoked)
+	}
+
+	// Evicted tasks report wasReclaimed=true when later claimed.
+	if entry, reclaimed := claimWarmSessionSandbox(deps, "t2", "", now); entry != nil || !reclaimed {
+		t.Errorf("claimWarmSessionSandbox(t2) = (%v, %v), want (nil, true)", entry, reclaimed)
+	}
+	if entry, reclaimed := claimWarmSessionSandbox(deps, "t1", "", now); entry != nil || !reclaimed {
+		t.Errorf("claimWarmSessionSandbox(t1) = (%v, %v), want (nil, true)", entry, reclaimed)
+	}
+	// Remaining warm sandbox t3 is still claimable.
+	entry, reclaimed := claimWarmSessionSandbox(deps, "t3", "", now)
+	if entry == nil || entry.SandboxID != "sb-3" || reclaimed {
+		t.Fatalf("claimWarmSessionSandbox(t3) = (%+v, %v), want sb-3 and reclaimed=false", entry, reclaimed)
+	}
+	releaseWarmSandboxEntry(context.Background(), entry)
+}
+
+func TestAddendaPollerUsesMaxSeenIDAndStreamsNewCommentsOnce(t *testing.T) {
+	t.Parallel()
+	store, ctx := openTestStore(t)
+	now := time.Date(2026, 10, 31, 6, 0, 0, 0, time.UTC)
+	task := model.Task{ID: "t-addenda", Title: "session"}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	addComment := func(author, body string) model.Comment {
+		c := model.Comment{
+			TaskID:    task.ID,
+			Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: author}},
+			Body:      body,
+			CreatedAt: now,
+		}
+		id, err := store.AddComment(ctx, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.ID = id
+		return c
+	}
+
+	c1 := addComment("alice", "initial context")
+	_ = addComment("bob", "middle comment")
+	c3 := addComment("alice", "latest prompt comment")
+
+	// Pass seen out of ID order (c3 before c1): lastCommentID must still pick c3.ID
+	// and never replay c2 or c3 on the first poll.
+	poll := addendaPoller(store, task.ID, []model.Comment{c3, c1})
+	initial, err := poll(ctx)
+	if err != nil {
+		t.Fatalf("first poll: %v", err)
+	}
+	if len(initial) != 0 {
+		t.Fatalf("first poll returned %v, want empty when nothing newer than max(seen.ID) arrived", initial)
+	}
+
+	// Two new comments arrive between polls; both are delivered in order on the next poll and not repeated.
+	_ = addComment("alice", "first mid-run addendum")
+	_ = addComment("carol", "second mid-run addendum")
+
+	batch, err := poll(ctx)
+	if err != nil {
+		t.Fatalf("second poll: %v", err)
+	}
+	if len(batch) != 2 || !strings.Contains(batch[0], "first mid-run addendum") || !strings.Contains(batch[1], "second mid-run addendum") {
+		t.Fatalf("second poll = %v, want both new addenda in order", batch)
+	}
+
+	again, err := poll(ctx)
+	if err != nil {
+		t.Fatalf("third poll: %v", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("third poll = %v, want empty after cursor advanced", again)
+	}
 }

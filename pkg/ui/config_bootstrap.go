@@ -50,6 +50,7 @@ func clearBootstrap(c *model.Config) {
 	c.SandboxImage = ""
 	c.SandboxImageMirror = ""
 	c.CLIRun = nil
+	c.SettingsLocked = false
 	v := reflect.ValueOf(c).Elem()
 	for i := 0; i < v.NumField(); i++ {
 		// granule_* and the other Kubernetes sandbox settings.

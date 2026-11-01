@@ -33,7 +33,7 @@ func TestPublishedSurfacesPartitionTheRoster(t *testing.T) {
 	}
 	for _, name := range []string{"run_command", "edit_file", "ask_question", "comment_on_issue",
 		"nothing_needed", "propose_task", "wait_for_task", "resume_later", "recreate_sandbox", "chat",
-		"upgrade_deployment", "execute_grain_db"} {
+		"execute_grain_db"} {
 		if ToolSurface(name) != SurfaceControl {
 			t.Errorf("ToolSurface(%q) = %q, want %q", name, ToolSurface(name), SurfaceControl)
 		}

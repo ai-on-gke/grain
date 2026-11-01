@@ -1,9 +1,11 @@
 # Moving CI (grit) and the package cache into the cluster
 
 > **Superseded on 2026-10-27 by
-> [`docs/design/grain-on-gke.md`](grain-on-gke.md).** The operator
-> decided to run grain itself on the cluster, with only `grain hostd` on
-> the cloudtop. CI stays inside grain. The grit split is **deferred, not
+> [`docs/design/grain-on-gke.md`](grain-on-gke.md) (updated 2026-10-31).**
+> CI stays inside grain rather than splitting out into a separate service
+> (and on 2026-10-31 the GKE controller cutover in `grain-on-gke.md` was
+> also retired, keeping `grain daemon` on the host while sandboxes use
+> GKE via `-platform=gke-sandboxes`). The grit split remains **deferred, not
 > abandoned**: everything GS-1 and GS-2 merged (`ci.Runner`, the
 > `pkgcache` interfaces, the neutral packages, `grit serve`, `/v1`,
 > `pkg/gritapi`, `pkg/attest`, `pkg/treeid`, `pkg/grit/independence_test.go`
@@ -11,6 +13,19 @@
 > being built now. `grain-on-gke.md` §"What happens to the grit work"
 > says what a later split would reuse. The rest of this document is kept
 > as the record of that design.
+>
+> **`grain daemon -grit-url` is experimental** (task 1829) and is refused
+> unless `-grit-experimental` is also set. It is GS-2's plumbing only,
+> and the 2026-10-29 walkthrough (`docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md`,
+> U1–U3) found it runs no repository's CI. No tree resolver uploads the
+> checkout at the commit. `grit serve`'s local executor does not plan
+> `.grain/workflows`, so every run errors `no_executor`. Grit's
+> attestation key is read from grit's own `/v1/info`, with no flag to pin
+> it. No grain process mounts `/v1/session` for the reverse tunnel. A
+> resumed split builds those first: a real tree resolver, workflow
+> planning and execution in grit (GS-3), a `-grit-attestation-key` pin,
+> and a `-grit-reverse` mode serving `gritapi.SessionHub` behind its own
+> token check. Only then is the opt-in dropped.
 
 Status (before it was superseded): proposed. Nothing in this document is built yet. Its requirements
 are the stages at the end (GS-1 to GS-5). Task 1327 has already filed

@@ -755,6 +755,16 @@ export function TaskRow({
             backlog for "the high-priority ones" is reading past
             everything else to find. */}
         <CustomFieldChips fields={shownFields} values={t.customFields} />
+        {t.priority != null && t.priority !== 5 && (
+          <Chip
+            size="small"
+            variant="outlined"
+            className="chip-priority"
+            data-testid="task-priority-badge"
+            title={`Task priority ${t.priority} (default 5; higher numbers run first)`}
+            label={`P${t.priority}`}
+          />
+        )}
         {/* The two chips that say where a task came from carry the
             figure of the thing it came from (ItemGlyph.jsx) -- the same
             hourglass and lobes the nav rail shows for Schedules and

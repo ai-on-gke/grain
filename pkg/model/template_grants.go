@@ -17,6 +17,9 @@ package model
 import (
 	"fmt"
 	"slices"
+	"strings"
+
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // TemplateWithinTask reports why tmpl hands out more than acting holds, or
@@ -92,14 +95,29 @@ func ReviewTemplateRefusedNote(proposer, asked, fallback string, why error) stri
 		proposer, asked, why, instead)
 }
 
-// IsDangerousGrant is IsDangerousAPIGrant for any capability name,
-// including the bare aliases (self-upgrade, dispatch-control, ...) that stand
-// for an api preset.
+// IsDangerousGrant reports whether name is a dangerous grant that only a person
+// may grant: any dangerous api grant (including bare preset aliases), a retired
+// dangerous capability (db-write), or a capability-server reference whose
+// method or arguments require a person (protocol.GrantByPerson).
 func IsDangerousGrant(name string) bool {
-	if preset, ok := apiAliasCapabilities[name]; ok {
-		name = APIGrantPrefix + preset
+	s := strings.TrimSpace(name)
+	if s == "db-write" {
+		return true
 	}
-	return IsDangerousAPIGrant(name)
+	if preset, ok := apiAliasCapabilities[s]; ok {
+		s = APIGrantPrefix + preset
+	}
+	if IsDangerousAPIGrant(s) {
+		return true
+	}
+	if IsCapabilityRef(s) {
+		if spec, err := CapabilityGrantSpec(s); err == nil {
+			if ref, err := protocol.ParseRef(spec.Capability); err == nil {
+				return protocol.GrantKindOf(protocol.Grant{Ref: ref, Args: spec.With}) == protocol.GrantByPerson
+			}
+		}
+	}
+	return false
 }
 
 // ReviewGrants is grants, the grants a review of reviewed is about to be

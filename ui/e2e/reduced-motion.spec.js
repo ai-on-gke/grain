@@ -31,16 +31,20 @@ import { test, expect } from "./fixtures.js";
 // false -- with or without this suite's fixtures.
 const PHONE = { width: 390, height: 844 };
 
-// durations reads every comma-separated duration in an element's
-// computed transition-duration ("0.225s", "0s, 0s") as seconds.
-async function durations(locator) {
-  const raw = await locator.evaluate(
-    (el) => getComputedStyle(el).transitionDuration,
-  );
+// seconds reads every comma-separated duration in a computed
+// transition-duration ("0.225s", "0s, 0s") as seconds.
+function seconds(raw) {
   return raw.split(",").map((d) => {
     const value = parseFloat(d);
     return d.trim().endsWith("ms") ? value / 1000 : value;
   });
+}
+
+// durations is an element's computed transition-duration, in seconds.
+async function durations(locator) {
+  return seconds(
+    await locator.evaluate((el) => getComputedStyle(el).transitionDuration),
+  );
 }
 
 async function openDrawer(page) {
@@ -51,11 +55,42 @@ async function openDrawer(page) {
   return paper;
 }
 
+// openTaskOverlay opens /tasks/2 and returns its paper, with the
+// transition-duration the first Dialog container had as it mounted.
+// That first container is the one to ask: a detail slower than
+// LOADING_PANE_DELAY_MS opens the loading pane first, and the task pane
+// that then takes its place opens without the fade on purpose
+// (Overlay's `animate`, grain/task-2179), so whichever container is on
+// screen by the time the paper is visible depended on how fast the demo
+// answered. Fade writes its transition in the same commit that inserts
+// the container, so a MutationObserver -- run after that commit -- sees
+// it already set.
 async function openTaskOverlay(page) {
+  await page.addInitScript(() => {
+    window.__firstDialogTransition = null;
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          const el = node.matches(".MuiDialog-container")
+            ? node
+            : node.querySelector(".MuiDialog-container");
+          if (!el) continue;
+          window.__firstDialogTransition =
+            getComputedStyle(el).transitionDuration;
+          observer.disconnect();
+          return;
+        }
+      }
+    });
+    observer.observe(document, { childList: true, subtree: true });
+  });
   await page.goto("/tasks/2");
   const paper = page.locator(".MuiDialog-paper").first();
   await expect(paper).toBeVisible();
-  return paper;
+  const raw = await page.evaluate(() => window.__firstDialogTransition);
+  expect(raw, "no .MuiDialog-container was seen mounting").not.toBeNull();
+  return { paper, opening: seconds(raw) };
 }
 
 test.describe("under prefers-reduced-motion: reduce", () => {
@@ -70,10 +105,28 @@ test.describe("under prefers-reduced-motion: reduce", () => {
   });
 
   test("a task's overlay opens without a fade", async ({ page }) => {
-    const paper = await openTaskOverlay(page);
+    const { paper, opening } = await openTaskOverlay(page);
     for (const d of await durations(paper)) expect(d).toBe(0);
+    for (const d of opening) expect(d).toBe(0);
     const container = page.locator(".MuiDialog-container").first();
     for (const d of await durations(container)) expect(d).toBe(0);
+  });
+
+  // A button focused from the keyboard draws MUI's focus ripple, which
+  // pulsed on an endless keyframe loop whatever the preference
+  // (2026-11-01 responsive walkthrough).
+  test("a keyboard-focused button's ripple holds still", async ({ page }) => {
+    await page.goto("/");
+    const menu = page.getByRole("button", { name: "Open navigation" });
+    await expect(menu).toBeVisible();
+    await menu.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    const pulse = menu.locator(".MuiTouchRipple-childPulsate");
+    await expect(pulse).toHaveCount(1);
+    expect(
+      await pulse.evaluate((el) => getComputedStyle(el).animationName),
+    ).toBe("none");
   });
 
   // The preference is read live: turning it off mid-session brings the
@@ -101,8 +154,7 @@ test.describe("without a reduced-motion preference", () => {
   });
 
   test("a task's overlay still fades", async ({ page }) => {
-    await openTaskOverlay(page);
-    const container = page.locator(".MuiDialog-container").first();
-    expect(Math.max(...(await durations(container)))).toBeGreaterThan(0);
+    const { opening } = await openTaskOverlay(page);
+    expect(Math.max(...opening)).toBeGreaterThan(0);
   });
 });

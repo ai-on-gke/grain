@@ -252,3 +252,21 @@ test("a narrowed Processes page fits a phone", async ({ page }) => {
   );
   expect(scroll, "page scrolls sideways").toBeLessThanOrEqual(0);
 });
+
+// A link whose sort names no attribute the page has -- a typo, or a key
+// from a build that had one -- opens in the page's default order and
+// says so, rather than leaving the sort button with no label and the
+// unknown key in the address with no way to take it back (found in the
+// 2026-11-01 Processes walkthrough).
+test("a link's unknown sort key falls back to the default order", async ({
+  page,
+}) => {
+  await page.goto("/processes?sort=bogus:up");
+  const sort = page.getByTitle("Choose the order this list is shown in");
+  await expect(sort).toHaveText("Next run Soonest first");
+  await expect(page).toHaveURL(/\/processes$/);
+
+  await page.goto("/processes?sort=bogus,name:desc");
+  await expect(sort).toHaveText("Name Z–A");
+  await expect(page).toHaveURL(/\/processes\?sort=name:desc$/);
+});

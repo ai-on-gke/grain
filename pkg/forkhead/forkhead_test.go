@@ -82,4 +82,31 @@ func TestResolveNamesALabelNoPullRequestHeads(t *testing.T) {
 	if !errors.Is(err, forkhead.ErrNoPullRequest) || !strings.Contains(err.Error(), `"andrzejfudro:gone"`) {
 		t.Fatalf("err = %v", err)
 	}
+	// The refusal is shown as it stands, so it says "no open pull
+	// request" once rather than ending on the sentinel's own words.
+	if strings.HasSuffix(err.Error(), forkhead.ErrNoPullRequest.Error()) {
+		t.Fatalf("err = %q, want it not to end on %q", err, forkhead.ErrNoPullRequest)
+	}
+}
+
+// StripNote takes out the note Note appended for the one pull request it
+// is given -- not one for another whose number it prefixes -- and keeps
+// whatever was written around it.
+func TestStripNoteTakesOutOnlyThatPullRequestsNote(t *testing.T) {
+	t.Parallel()
+	note := func(n int) string {
+		r := &forkhead.PR{Head: model.ForkHead{Owner: "contrib", Branch: "fix/readme-typo"},
+			Ref:    model.PullRequestRef{Repo: grain, Number: n},
+			Detail: github.PullRequestDetail{Number: n, BaseRef: "main", HeadRepo: "contrib/grain"}, Base: "main"}
+		return r.Note()
+	}
+	ref41 := model.PullRequestRef{Repo: grain, Number: 41}
+	body := "fix it" + note(410) + note(41) + "\n\n---\nlater words\n"
+	got, ok := forkhead.StripNote(body, ref41)
+	if !ok || got != "fix it"+note(410)+"\n\n---\nlater words\n" {
+		t.Fatalf("StripNote = %v, %q", ok, got)
+	}
+	if again, ok := forkhead.StripNote(got, ref41); ok || again != got {
+		t.Fatalf("StripNote with no note for #41 = %v, %q", ok, again)
+	}
 }

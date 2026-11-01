@@ -30,8 +30,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -224,6 +222,11 @@ type RunConfig struct {
 	// tool budget (mcp's tool_budget.go): its forked mcpserver is passed
 	// -tool-budget (GrantArgs) and every result past the budget says so.
 	ToolBudget bool
+	// ToolBudgetPipelineCursor is a pipeline steward wake under that
+	// budget, whose hard-line notice asks for the pipeline-changes cursor
+	// in its handover (-tool-budget-pipeline-cursor); a director's chat
+	// session reads no feed and is not asked for one.
+	ToolBudgetPipelineCursor bool
 	// ProposeRepos are the repositories this deployment works in, which a
 	// propose_task call may ask its proposal to be filed against
 	// (model.Store.WorkRepos, resolved by orchestrator.RunDispatch), most
@@ -691,10 +694,10 @@ func GrantArgs(cfg RunConfig) []string {
 		if grant == selfdebug.CapabilityName && cfg.GrainSourceDir != "" {
 			args = append(args, "-grain-src-dir", cfg.GrainSourceDir)
 		}
-		if (grant == grainlog.CapabilityName || grant == deploymenthealth.CapabilityName) && cfg.GrainSecretsDir != "" {
+		if (model.IsGrainJournalGrant(grant) || model.IsGrainHealthGrant(grant)) && cfg.GrainSecretsDir != "" {
 			args = append(args, "-grain-secrets-dir", cfg.GrainSecretsDir)
 		}
-		if grant == deploymenthealth.CapabilityName && cfg.GrainStateDir != "" {
+		if model.IsGrainHealthGrant(grant) && cfg.GrainStateDir != "" {
 			args = append(args, "-grain-state-dir", cfg.GrainStateDir)
 		}
 	}
@@ -714,6 +717,9 @@ func GrantArgs(cfg RunConfig) []string {
 	// for the process serving its tools, so it travels with them.
 	if cfg.ToolBudget {
 		args = append(args, "-tool-budget")
+		if cfg.ToolBudgetPipelineCursor {
+			args = append(args, "-tool-budget-pipeline-cursor")
+		}
 	}
 	return args
 }

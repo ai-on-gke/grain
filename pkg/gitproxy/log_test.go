@@ -34,8 +34,11 @@ package gitproxy
 // LogToTest is the live tests' way in.
 
 import (
+	"bytes"
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -49,6 +52,12 @@ var testLog testJournal
 // TestMain points the log at testLog for the whole binary. Nothing puts
 // it back: os.Stderr is where testLog sends anything logged with no test
 // to attribute it to, which is the same place those lines went before.
+//
+// It also snapshots the real $HOME/.git-credentials before running the
+// suite and fails if any test modified it (for example, by running `git`
+// against a `http://user:tok@127.0.0.1:...` URL without pointing HOME at
+// t.TempDir(), which lets the sandbox's `credential.helper = store`
+// append the test's loopback token to the real ~/.git-credentials).
 func TestMain(m *testing.M) {
 	if fakeDepotGGHAsked() {
 		// This binary run as commandforge_depot_test.go's fake `forgecli`.
@@ -65,7 +74,117 @@ func TestMain(m *testing.M) {
 	// and the wall clock of a log line is not what someone reading a
 	// failed test is short of.
 	log.SetFlags(0)
-	os.Exit(m.Run())
+
+	credsSnap, err := snapshotGitCredentials(os.Getenv("HOME"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "snapshot ~/.git-credentials: %v\n", err)
+		os.Exit(1)
+	}
+	code := m.Run()
+	if err := credsSnap.verifyAndRestore(); err != nil {
+		fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
+}
+
+type gitCredentialsSnapshot struct {
+	path    string
+	content []byte
+	existed bool
+}
+
+func snapshotGitCredentials(home string) (gitCredentialsSnapshot, error) {
+	if home == "" {
+		return gitCredentialsSnapshot{}, nil
+	}
+	path := filepath.Join(home, ".git-credentials")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return gitCredentialsSnapshot{path: path, existed: false}, nil
+	}
+	if err != nil {
+		return gitCredentialsSnapshot{}, err
+	}
+	return gitCredentialsSnapshot{path: path, content: data, existed: true}, nil
+}
+
+func (s gitCredentialsSnapshot) verifyAndRestore() error {
+	if s.path == "" {
+		return nil
+	}
+	after, err := os.ReadFile(s.path)
+	afterExisted := true
+	if os.IsNotExist(err) {
+		afterExisted = false
+		err = nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading %s after tests: %w", s.path, err)
+	}
+	if s.existed == afterExisted && bytes.Equal(s.content, after) {
+		return nil
+	}
+	if s.existed {
+		_ = os.WriteFile(s.path, s.content, 0o600)
+	} else {
+		_ = os.Remove(s.path)
+	}
+	return fmt.Errorf("%s changed during pkg/gitproxy tests (before: %d bytes, after: %d bytes; a test ran git against a credentialed URL without t.Setenv(\"HOME\", t.TempDir()))",
+		s.path, len(s.content), len(after))
+}
+
+func TestGitCredentialsSnapshotDetectsAndRestoresChanges(t *testing.T) {
+	t.Run("existing file modified", func(t *testing.T) {
+		home := t.TempDir()
+		path := filepath.Join(home, ".git-credentials")
+		original := []byte("http://sandbox:tok@127.0.0.1%3a9728\n")
+		if err := os.WriteFile(path, original, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		snap, err := snapshotGitCredentials(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := snap.verifyAndRestore(); err != nil {
+			t.Fatalf("unchanged file failed verification: %v", err)
+		}
+
+		polluted := append([]byte("http://x:tok0@127.0.0.1%3a40117\n"), original...)
+		if err := os.WriteFile(path, polluted, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := snap.verifyAndRestore(); err == nil {
+			t.Fatal("expected verifyAndRestore to fail when .git-credentials was modified")
+		}
+		restored, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(restored, original) {
+			t.Fatalf("restored .git-credentials = %q, want %q", restored, original)
+		}
+	})
+
+	t.Run("absent file created", func(t *testing.T) {
+		home := t.TempDir()
+		path := filepath.Join(home, ".git-credentials")
+		snap, err := snapshotGitCredentials(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("http://x:tok0@127.0.0.1%3a40117\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := snap.verifyAndRestore(); err == nil {
+			t.Fatal("expected verifyAndRestore to fail when .git-credentials was created")
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be removed on restore, got err=%v", path, err)
+		}
+	})
 }
 
 // testJournal is the io.Writer behind log.Printf while these tests run:

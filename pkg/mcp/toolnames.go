@@ -90,10 +90,10 @@ func BareToolName(reported string) string {
 // orchestrator.Config.GrantTools).
 //
 // It exists for one message: what a run is told when it calls one of
-// these and has not been granted it. "unknown tool upgrade_deployment"
+// these and has not been granted it. "unknown tool run_host_command"
 // reads as a tool grain does not have, which is wrong and sends the
 // agent looking for another way to do the job; "this task does not hold
-// self-upgrade" is the truth, and it is something the agent can put in
+// self-repair" is the truth, and it is something the agent can put in
 // its closing note for a human to act on.
 //
 // Only grant-gated tools belong here. A tool absent for any other reason
@@ -114,20 +114,16 @@ var capabilityForTool = map[string]string{
 	"read_grain_task_transcript": "self-debug",
 	"read_pipeline_changes":      "self-debug",
 	"read_grain_metrics":         "self-debug",
-	"read_grain_log":             "grain-log",
+	"read_grain_log":             "https://grain.dev/capabilities/grain#journal",
 	"list_bootstrap_playbooks":   "bootstrap-playbooks",
 	"read_bootstrap_playbook":    "bootstrap-playbooks",
-	"read_deployment_health":     "deployment-health",
-	"read_deployment_state":      "deployment-health",
+	"read_deployment_health":     "https://grain.dev/capabilities/grain#health",
+	"read_deployment_state":      "https://grain.dev/capabilities/grain#health",
 	"run_host_command":           "self-repair",
-	"update_memory":              "memory",
-	"read_memory_document":       "memory",
-	"list_memory_documents":      "memory",
-	"deployment_upgrade_status":  "self-upgrade",
-	"upgrade_deployment":         "self-upgrade",
-	"cancel_deployment_upgrade":  "self-upgrade",
 	"list_issues":                "read-issues",
 	"read_issue":                 "read-issues",
+	"query_grain_db":             "https://grain.dev/capabilities/grain#sql",
+	"exec_grain_db":              `https://grain.dev/capabilities/grain#sql={"write":true}`,
 }
 
 // CapabilityForTool names the capability that puts tool on a run's

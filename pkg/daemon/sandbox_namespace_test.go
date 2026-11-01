@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,8 +209,9 @@ func TestSandboxProxyServesTheStage2Roots(t *testing.T) {
 		{token: "own", path: "/fs/task/t-7/attempts/1/prompt.md", status: 200, want: []string{"prompt of attempt 1"}},
 		{token: "own", path: "/fs/task/t-7/attempts/1/transcript.md", status: 200, want: []string{"transcript of attempt 1"}},
 		{token: "own", path: "/fs/task/t-7/attempts?list", status: 200, want: []string{"1/", "2/"}},
-		// A sibling task in the run's own repository is readable too.
-		{token: "own", path: "/fs/task/t-8/record.md", status: 200, want: []string{"Widget task t-8"}},
+		// A sibling task in the run's own repository is not, without
+		// self-debug or an api:tasks:read grant naming the repository.
+		{token: "own", path: "/fs/task/t-8/record.md", status: 403, want: []string{"api:tasks:read@"}, not: []string{"Widget task t-8"}},
 		{token: "debug", path: "/fs/task/t-8/record.md", status: 200, want: []string{"Widget task t-8"}},
 		{token: "debug", path: "/fs/task/?list", status: 200, want: []string{"t-7/", "t-8/"}},
 		{token: "debug", path: "/fs/task/t-404/record.md", status: 404},
@@ -321,5 +323,73 @@ func TestGrainLogArgsCarryTheQuery(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("grainLogArgs[%q] = %v, want %v", k, got[k], v)
 		}
+	}
+}
+
+// TestSandboxProxyPagesPipelineChanges reads deploy://pipeline-changes a
+// page at a time, as `grain read --cursor` does: each page ends with the
+// command that reads the next, and running it returns the changes after
+// the first page's rather than the first page again.
+func TestSandboxProxyPagesPipelineChanges(t *testing.T) {
+	srv, store, _ := stage2Proxy(t, stage2Scopes{
+		"steward": {TaskID: "t-1", RunID: "run-1", MayReadPipeline: true},
+	})
+	ctx := context.Background()
+	// A base-branch run that started and finished within the feed's
+	// lookback: two changes, so one to a page is two pages.
+	started := time.Now().Add(-2 * time.Hour)
+	finished := started.Add(time.Hour)
+	if err := store.PutBaseBranchCI(ctx, model.BaseBranchCI{Repo: model.RepoRef{Owner: "acme", Name: "widgets"},
+		Branch: "main", RunID: "run-7", Commit: "abc123", StartedAt: started, FinishedAt: &finished,
+		Conclusion: "failure", Attempts: 1}); err != nil {
+		t.Fatal(err)
+	}
+	status, all := stage2Get(t, srv, "steward", "/fs/deploy/pipeline-changes")
+	if status != http.StatusOK {
+		t.Fatalf("deploy://pipeline-changes: status=%d body=%q", status, all)
+	}
+	entries := func(body string) []string {
+		var out []string
+		for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+			if !strings.HasPrefix(line, "next: ") && !strings.HasPrefix(line, "(") {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+	everything := entries(all)
+	if len(everything) < 2 {
+		t.Fatalf("want at least two changes to page through, got:\n%s", all)
+	}
+
+	status, first := stage2Get(t, srv, "steward", "/fs/deploy/pipeline-changes?page=1")
+	if status != http.StatusOK {
+		t.Fatalf("?page=1: status=%d body=%q", status, first)
+	}
+	if got := entries(first); len(got) != 1 || got[0] != everything[0] {
+		t.Fatalf("first page = %q, want only %q", got, everything[0])
+	}
+	if !strings.Contains(first, "(more changes follow") {
+		t.Errorf("first page does not say more follow:\n%s", first)
+	}
+	_, nextLine, _ := strings.Cut(first, "next: ")
+	nextLine = strings.TrimSpace(nextLine)
+	cursor, ok := strings.CutPrefix(nextLine, "grain read deploy://pipeline-changes --cursor ")
+	if !ok || !strings.HasSuffix(cursor, " --page 1") {
+		t.Fatalf("next line = %q, want the grain read command for the next page", nextLine)
+	}
+	cursor = strings.TrimSuffix(cursor, " --page 1")
+
+	for _, param := range []string{"cursor", "since"} {
+		status, second := stage2Get(t, srv, "steward", "/fs/deploy/pipeline-changes?page=1&"+param+"="+url.QueryEscape(cursor))
+		if status != http.StatusOK {
+			t.Fatalf("?%s=: status=%d body=%q", param, status, second)
+		}
+		if got := entries(second); len(got) != 1 || got[0] != everything[1] {
+			t.Errorf("?%s= second page = %q, want only %q", param, got, everything[1])
+		}
+	}
+	if status, body := stage2Get(t, srv, "steward", "/fs/deploy/pipeline-changes?page=lots"); status != http.StatusBadRequest {
+		t.Errorf("?page=lots: status=%d, want 400; body=%q", status, body)
 	}
 }

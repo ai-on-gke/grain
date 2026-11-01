@@ -98,6 +98,36 @@ describe("ModelBackendPage", () => {
     );
   });
 
+  it("names each connection it can reuse authentication from apart", async () => {
+    const user = userEvent.setup();
+    render(
+      <ModelBackendPage
+        backend={{ id: "backend-new", framework: "claude", models: [] }}
+        backends={[
+          { id: "backend-named", name: "Team Claude", framework: "claude" },
+          { id: "backend-aaa", framework: "claude" },
+          { id: "backend-bbb", framework: "claude" },
+          { id: "gemini-pro", name: "Gemini", framework: "antigravity" },
+        ]}
+        isNew={false}
+        onSave={vi.fn()}
+        onBack={() => {}}
+      />,
+    );
+    await user.click(
+      screen.getByRole("combobox", { name: /Authentication method/ }),
+    );
+    const reuse = screen
+      .getAllByRole("option")
+      .map((o) => o.textContent)
+      .filter((t) => t.startsWith("Reuse authentication from"));
+    expect(reuse).toEqual([
+      "Reuse authentication from Team Claude",
+      "Reuse authentication from backend-aaa",
+      "Reuse authentication from backend-bbb",
+    ]);
+  });
+
   it("offers no CLI path for a custom command", async () => {
     render(
       <ModelBackendPage

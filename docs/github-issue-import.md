@@ -60,3 +60,22 @@ source whose issue authors you would let file work here directly.
 
 For the same reason, grain posts no progress comment on an imported issue
 until somebody has approved its task.
+
+## Trying it in `grain demo`
+
+`grain demo -github-sim` imports from its simulated GitHub: `acme/widgets`
+(the demo's repository, with one open `grain-agent` issue) and
+`acme-upstream/widgets` (an upstream with one open issue, for the
+*Source repository* field). Add `-reconcile 2s` for the periodic pass as
+well as *Import issues now*. A walkthrough can open, label and close
+issues there through the demo's loopback-only hook, which takes GitHub's
+own REST calls under `/api/e2e/github-sim`:
+
+```sh
+curl -X POST  http://127.0.0.1:<port>/api/e2e/github-sim/repos/acme/widgets/issues \
+  -d '{"title":"Add a dark-mode toggle","labels":["grain-agent"]}'
+curl -X POST  .../repos/acme/widgets/issues/8001/labels -d '{"labels":["grain-agent"]}'
+curl -X PATCH .../repos/acme/widgets/issues/8001 -d '{"state":"closed"}'
+```
+
+`ui/e2e/issue-import-walkthrough.spec.js` walks the whole importer this way.

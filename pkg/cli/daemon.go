@@ -531,8 +531,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"workflows run however its CI mode is set, and the CI API reports that this deployment has none. "+
 			"A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of "+
 			"the one repository under test (pkg/ci, \"What a workflow file is trusted with\").")
-	gritURL := fs.String("grit-url", "", "remote grit server base `url` (e.g. http://127.0.0.1:4244); when unset, CI runs in-process")
-	gritClientToken := fs.String("grit-client-token", "", "client `token` (<id>.<secret>) sent in Grit-Client when -grit-url is set")
+	grit := daemon.RegisterGritFlags(fs)
 
 	// The CI job cache's bounds (ci.DirCacheOptions). Seeds, like the CI
 	// history's four below and unlike what they were until
@@ -840,10 +839,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"install-time value an older scripts/setup.sh wrote unconditionally, and the stamp is used instead "+
 			"(chooseSandboxImage). Only used with -granule-sandboxes.")
 	sandboxImageMirror := fs.String("sandbox-image-mirror", "",
-		"OCI repository (without tag, e.g. us-docker.pkg.dev/<cluster-project>/grain/guest) into which "+
-			"off-cluster deployments mirror the build-stamped sandbox guest image on upgrade and startup "+
-			"so a Kubernetes cluster in another GCP organization can pull the commit-matched guest image "+
-			"from its own registry.")
+		"OCI repository (without tag, e.g. us-docker.pkg.dev/<cluster-project>/grain/guest) into which off-cluster "+
+			"deployments mirror the build-stamped sandbox guest image on upgrade and startup, so a cluster in another GCP "+
+			"organization can pull the commit-matched guest from its own registry. This host keeps only the current and "+
+			"previous mirrored tags; the registry is not pruned -- give it a cleanup policy (docs/sandbox-image-mirror.md).")
 	granuleNet := fs.String("granule-net", granule.NetModeFlat,
 		"ignored, and removed in a later release. The granule this build vendors has only the former "+
 			"\"flat\" behaviour -- its own -net says \"deprecated: only the former flat behaviour exists "+
@@ -1251,8 +1250,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		CiStepOutputMB:   *ciStepOutputMB,
 		CiStepOutputDays: *ciStepOutputDays,
 		CiRunOutputKB:    *ciRunOutputKB,
-		GritURL:          *gritURL,
-		GritClientToken:  *gritClientToken,
 
 		DisableNativeSandboxes: *disableNativeSandboxes || (passed["native-sandboxes"] && !*nativeSandboxes),
 		PackageCacheDir:        *packageCacheDir,
@@ -1311,6 +1308,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		SandboxAccessCASecret: *sandboxAccessCASecret,
 		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
+	grit.Apply(&cfg)
 	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
@@ -1510,5 +1508,5 @@ func checkConfig(cfg daemon.Config) error {
 	case cfg.CiArtifactMaxEntryBytes < 0:
 		return errors.New("-ci-artifact-max-entry-bytes cannot be negative")
 	}
-	return nil
+	return daemon.CheckGritURL(cfg)
 }

@@ -68,7 +68,7 @@ func TestADurableRunHasNoDeadlineAndNoWaitCreditCap(t *testing.T) {
 		t.Fatalf("a durable run clock fired: %v", context.Cause(ctx))
 	case <-time.After(50 * time.Millisecond):
 	}
-	actx, aclock := newAdoptedRunClock(context.Background(), time.Time{}, 0, time.Minute)
+	actx, aclock := newAdoptedRunClock(context.Background(), time.Time{}, 0, time.Minute, nil)
 	defer aclock.stop()
 	select {
 	case <-actx.Done():

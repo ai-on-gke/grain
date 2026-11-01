@@ -137,6 +137,62 @@ func TestCatalogueValidateGrants(t *testing.T) {
 	}
 }
 
+// TestCatalogueRetiredInProcessBindsItsPreset is the upgraded store from
+// docs/test-runs/2026-11-01-capability-api-presets.md: a catalogue saved
+// before memory, release-notes and test-quarantine were retired keeps
+// their restrictions under in_process, and the migrations rewrite every
+// grant to the api: preset. The restriction must keep binding the preset
+// rather than being dropped because nothing is called "memory" any more.
+func TestCatalogueRetiredInProcessBindsItsPreset(t *testing.T) {
+	cat := &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"memory": {Enabled: boolp(false)},
+		"release-notes": {Restrictions: &model.CapabilityRestrictions{
+			Repos: model.Patterns{"acme/*"}, RequiresPerson: true,
+		}},
+		"test-quarantine":   {Restrictions: &model.CapabilityRestrictions{Kinds: model.Patterns{"task"}}},
+		"deployment-health": {Restrictions: &model.CapabilityRestrictions{Kinds: model.Patterns{"director"}}},
+	}}
+	cases := []struct {
+		name    string
+		gc      model.GrantContext
+		refused string
+		person  bool
+	}{
+		{name: "disabled memory refuses api:memory", gc: model.GrantContext{Kind: "task", Grants: []string{"api:memory"}},
+			refused: "in_process.memory"},
+		{name: "disabled memory refuses a repo-limited api:memory", gc: model.GrantContext{Kind: "task", Grants: []string{"api:memory@acme/widgets"}},
+			refused: "disabled"},
+		{name: "release-notes repo restriction binds the preset", gc: model.GrantContext{Repo: repo("other/x"), Kind: "task", Grants: []string{"api:release-notes"}},
+			refused: "not granted on other/x"},
+		{name: "release-notes requires a person on an admitted repo", gc: model.GrantContext{Repo: repo("acme/widgets"), Kind: "task", Grants: []string{"api:release-notes"}},
+			person: true},
+		{name: "test-quarantine kind restriction binds the preset", gc: model.GrantContext{Kind: "ci", Grants: []string{"api:test-quarantine"}},
+			refused: "not granted to"},
+		{name: "test-quarantine admitted for its kind", gc: model.GrantContext{Kind: "task", Grants: []string{"api:test-quarantine"}}},
+		{name: "a split retirement binds its api half", gc: model.GrantContext{Kind: "task", Grants: []string{"api:deployment:read"}},
+			refused: "in_process.deployment-health"},
+		{name: "an unrelated preset is not judged", gc: model.GrantContext{Kind: "task", Grants: []string{"api:team-broadcast"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := cat.ValidateGrants(tc.gc)
+			if tc.refused != "" {
+				var refusal *model.GrantRefusal
+				if !errors.As(err, &refusal) || !strings.Contains(err.Error(), tc.refused) {
+					t.Fatalf("ValidateGrants = %v, want a refusal saying %q", err, tc.refused)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateGrants refused: %v", err)
+			}
+			if got := len(v.RequiresPerson) > 0; got != tc.person {
+				t.Fatalf("RequiresPerson = %v, want person %v", v.RequiresPerson, tc.person)
+			}
+		})
+	}
+}
+
 func TestNilCatalogueAdmitsEverything(t *testing.T) {
 	var cat *model.CapabilityCatalogue
 	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"anything"}}); err != nil {

@@ -147,8 +147,10 @@ Usage of grain daemon:
     	working directory run_command/read_file/edit_file/write_file operate in on each granule VM (required with -granule-sandboxes)
   -grit-client-token token
     	client token (<id>.<secret>) sent in Grit-Client when -grit-url is set
+  -grit-experimental
+    	allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, and has no reverse-tunnel mode: for developing the grit split, not for a deployment's CI
   -grit-url url
-    	remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process
+    	EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (docs/design/grit-split.md, GS-3 to GS-5 deferred)
   -host-sandbox-env value
     	NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone
   -host-sandboxes
@@ -338,7 +340,7 @@ Usage of grain daemon:
   -sandbox-image grain sandbox-image
     	the sandbox container image every granule VM is created from, overriding the reference stamped into this build at build time (grain sandbox-image). Left empty (the default), each start resolves that stamp, so an upgrade -- which pulls the new grain image and the sandbox image that grain names -- moves both halves together. Set it only to run something else on purpose: a mirror, a private copy, or a guest held at an older commit. This is where such a pin belongs; a -granule-create-arg -kontur-image naming another tag of the stamp's own repository is read as the install-time value an older scripts/setup.sh wrote unconditionally, and the stamp is used instead (chooseSandboxImage). Only used with -granule-sandboxes.
   -sandbox-image-mirror string
-    	OCI repository (without tag, e.g. us-docker.pkg.dev/<cluster-project>/grain/guest) into which off-cluster deployments mirror the build-stamped sandbox guest image on upgrade and startup so a Kubernetes cluster in another GCP organization can pull the commit-matched guest image from its own registry.
+    	OCI repository (without tag, e.g. us-docker.pkg.dev/<cluster-project>/grain/guest) into which off-cluster deployments mirror the build-stamped sandbox guest image on upgrade and startup, so a cluster in another GCP organization can pull the commit-matched guest from its own registry. This host keeps only the current and previous mirrored tags; the registry is not pruned -- give it a cleanup policy (docs/sandbox-image-mirror.md).
   -sandbox-memory-mb granule vm create
     	deployment-wide default guest memory, in MiB, for a granule-managed sandbox VM, passed as granule vm create's own -memory-mb (only used with -granule-sandboxes); 0 uses grain's own default, 8192. Overridable per task from the UI/API (model.Task.SandboxMemoryMB) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -sandbox-memory-overcommit float

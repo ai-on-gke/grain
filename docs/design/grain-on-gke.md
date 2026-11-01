@@ -1,6 +1,13 @@
 # Grain on GKE, with hostd dialling in from the cloudtop
 
-Status: proposed. Nothing in this document is built yet. Its
+> **Status update (2026-10-31): GKE controller cutover retired.**
+> Cutting over the `grain` controller daemon to GKE (`GKE-1`, `GKE-7`–`GKE-9`) is **retired (2026-10-31)**. `grain` continues to run on the host (with GKE sandboxes supported via `-platform=gke-sandboxes`), and the GKE controller deployment script, Kustomize overlay, and Terraform module have been removed:
+>
+> - **`GKE-2`–`GKE-4`** (`pkg/sandboxaccess` dial-out channel and CI step reattach across daemon restarts) already landed as standalone runtime improvements and remain in the tree.
+> - **`GKE-5`–`GKE-6`** (merging remote executors into named `hostd`s and `run: hostd` placement for models and capability servers) remain valid standalone `hostd` unification designs, tracked as deferred tasks ([Task #2164](/tasks/2164), [Task #2165](/tasks/2165)).
+> - **`GKE-1` and `GKE-7`–`GKE-9`** (Cloud SQL store cutover, GKE Gateway + IAP + Secret Manager CSI controller overlay, controller cutover, and post-soak host removal) are retired and will not be built.
+
+Status (before GKE controller cutover was retired): proposed. Nothing in this document was built when written. Its
 requirements are the stages at the end (GKE-1 to GKE-9). Each stage is
 filed as its own task, held for approval and chained on the stage before
 it, once this doc merges. Implementing commits carry
@@ -190,8 +197,8 @@ become a StatefulSet.
   The fence in *High availability* closes that gap. `maxSurge: 0` cannot
   close it.
 
-The production manifest is a new overlay,
-`deploy/kubernetes/gke/` (kustomize over `grain-granule.yaml`), so the
+The production manifest in this retired controller plan was a kustomize
+overlay over `grain-granule.yaml`, so the
 generic manifests stay generic. It adds the Cloud SQL connector,
 Workload Identity, the access port and Service, the Gateway, the
 PodMonitoring and the NetworkPolicies below.
@@ -852,7 +859,7 @@ keep it from being a way in.
      traffic and health checks come from. Nothing in the namespace
      reaches 8080: grain polls `grain-webhook`, not the other way round.
    - These policies are only objects on a cluster that does not
-     enforce NetworkPolicy, so `scripts/deploy-gke.sh` refuses to adopt
+     enforce NetworkPolicy, so the deployment tooling must refuse to adopt
      one that runs neither Dataplane V2 nor network policy enforcement.
    - The wrapper's egress requirement (4244) and the guest's (the
      proxies and the internet) are separate rules with separate
@@ -1245,7 +1252,7 @@ Depends on: GKE-5.
 
 Depends on: GKE-1.
 
-- `deploy/kubernetes/gke/`: a kustomize overlay over
+- A kustomize overlay over
   `grain-granule.yaml` with the Cloud SQL connector, WI, Secret Manager
   CSI mounts, `Service/grain-sandbox` and `Service/grain-access`, the
   NetworkPolicies, the Gateway and HTTPRoutes, the `GCPBackendPolicy`

@@ -59,6 +59,7 @@ func newCIRig(t *testing.T) ciRig {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
+	t.Setenv("HOME", t.TempDir())
 
 	upstreamDir := t.TempDir()
 	newBareRepoWithOneCommit(t, upstreamDir, "owner", "widgets")

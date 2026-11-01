@@ -128,6 +128,7 @@ every `DELETE`.
 | `merge:force` | force-merge past the gate | yes |
 | `ci:read` | read CI runs (job logs included), artifacts, merge batches, base-branch gates | |
 | `ci:write` | start, re-run and cancel CI runs, base-branch and release runs | |
+| `tests:write` | quarantine flaky or failing tests (`POST /api/tests/quarantine` and `grain quarantine`) and file held follow-up repair tasks | |
 | `notifications:write` | raise and clear operator notifications (`POST /api/notifications`, `/{id}/clear`); acknowledging and Investigate are a person's | no |
 | `teams:broadcast` | post a comment to every active task (`POST /api/deployment/broadcast`), un-parking the ones awaiting a reply; signed as the broadcasting task, and model-only (never on the sandbox channel) | |
 | `dispatch:read` | read whether dispatch is paused | |
@@ -144,8 +145,10 @@ every `DELETE`.
 | `repos:write` | add and remove repositories, change their settings, create branches | |
 | `boards:read` | read boards | |
 | `boards:write` | create, edit and delete boards | |
-| `memory:read` | read memory documents and release notes | |
-| `memory:write` | write memory documents and release notes | |
+| `memory:read` | read memory documents | |
+| `memory:write` | write memory documents | |
+| `release-notes:read` | read release notes and weekly cluster stats | |
+| `release-notes:write` | write release notes | |
 | `sessions:read` | read standing sessions and live consoles | |
 | `sessions:write` | edit standing sessions (subject to the rails) | |
 | `caches:read` | read the CI, package and actions caches | |
@@ -183,25 +186,32 @@ table only so the table stays total.
 | `self-upgrade` | `deployment:read`, `deployment:upgrade` |
 | `pipeline-control` | `dispatch:read`, `dispatch:write` |
 | `team-broadcast` | `teams:broadcast` |
+| `memory` | `memory:read`, `memory:write` |
+| `release-notes` | `release-notes:read`, `release-notes:write` |
+| `test-quarantine` | `tests:write` |
 | `release-gate-read` | `ci:read`, `tasks:read`, `sandboxes:read`, `tasks:from-template` limited to the `release-notes` template |
 
-The `self-debug` and `self-upgrade` capabilities are now aliases. A task
-holding either is also served its preset's routes, and keeps the tools
-it always had under their old names (`list_grain_tasks`,
-`read_grain_metrics`, `start_upgrade`, ...).
+The `self-debug` capability is now an alias. A task holding it is also
+served its preset's routes, and keeps the tools it always had under
+their old names (`list_grain_tasks`, `read_grain_metrics`, ...).
 
-`team-broadcast`, `dispatch-control` and `pipeline-control` are aliases
+`team-broadcast`, `dispatch-control`, `pipeline-control`, `memory`,
+`release-notes`, `self-upgrade` and `test-quarantine` are aliases
 too, but their
 in-process capabilities are retired (docs/design/unified-grants.md §4):
 they have no tools of their own any longer, and a run holding one is
-served its preset's `api_*` tools instead (`api_deployment_broadcast`
+served its preset's `api_*` tools and `grain` CLI subcommands instead (`api_deployment_broadcast`
 for `broadcast_team_message`; the pipeline-pause, run-now and defer
 routes for `pause_pipeline`, `resume_pipeline`, `run_task_now` and
 `defer_task`; for pipeline-control, the pipeline-pause routes, which an
 agent calls as itself, so it lifts only a pause it took and never an
-upgrade's hold). Every place a grant is recorded writes it as
+upgrade's hold; for `memory` and `release-notes`, the `/api/memory*` and
+`/api/release-notes*` routes and `grain memory` / `grain release-notes`;
+for `self-upgrade`, `api_start_upgrade` and `api_cancel_scheduled_upgrade`
+plus `GET /api/upgrade` via `grain api`; for `test-quarantine`,
+`POST /api/tests/quarantine` (`api_quarantine_test`) and `grain quarantine`). Every place a grant is recorded writes it as
 `api:<preset>` (`model.CanonicalLegacyGrant`), importing a grain/config
-does the same, and schema migrations 67, 68 and 69 rewrote the grants
+does the same, and schema migrations 67, 68, 69, 71, 72, 75 and 76 rewrote the grants
 already stored -- tasks, templates, schedules, the default capability
 lists and the standing sessions. The bare name keeps granting the preset
 wherever it is still written, such as a repository's own `.grain`
@@ -462,7 +472,12 @@ not taken from the repository's CI capabilities list.
   ([question-summaries.md](question-summaries.md)).
 - **Standing sessions.** A run can't act on a standing session it doesn't
   own. It can never create, restart, cancel or delete a session, and
-  can't type into a live console.
+  can't type into a live console. The one exception is a note
+  (`POST /api/tasks/{id}/notes`, message_task) from the session's own
+  parent or child: a director's child may report back to it. A note never
+  parks the session or acts on its run. It reaches the session the same
+  way whether it is sent through the agent API, `grain task message` or
+  `grain mcpserver`'s `message_task`.
 - **Upgrade holds.** A run honours them. It can't lift a dispatch pause
   someone else took. It can't upgrade, restart or reboot while an upgrade
   check holds dispatch for another task.

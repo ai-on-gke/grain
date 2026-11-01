@@ -135,3 +135,14 @@ func Granted(grants []model.Grant) bool {
 	}
 	return false
 }
+
+// GrantedExplicitly reports whether grants includes a grain-ci grant that did
+// not come from the repository's or deployment's default (model.GrantByDefault).
+func GrantedExplicitly(grants []model.Grant) bool {
+	for _, g := range grants {
+		if g.Capability == CapabilityName && g.Via != model.GrantByDefault {
+			return true
+		}
+	}
+	return false
+}

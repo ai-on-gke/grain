@@ -34,6 +34,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -105,7 +106,7 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{"bootstrap-playbooks", "deployment-health", "durable", "grain-log", "self-debug"}) {
+	if !slices.Equal(grants, []string{"api:deployment:read", "bootstrap-playbooks", "durable", model.GrainHealthGrant, model.GrainJournalGrant, "self-debug"}) {
 		t.Errorf("Grants = %v, want the shipped default set plus durable", grants)
 	}
 	goal, err := store.TaskGoal(ctx, director.ID)
@@ -1521,6 +1522,62 @@ func TestSessionSandboxReusedWithinIdleTTLFallbackAndReclaimedAfterTTL(t *testin
 	}
 }
 
+// A warm sandbox parked under one session idle TTL is reclaimed on a
+// shorter one set while it is parked: the setting as it stands binds, not
+// only the TTL the parking run was dispatched with
+// (docs/test-runs/2026-11-01-interactive-sessions-warm-keep-running.md).
+func TestParkedSessionSandboxIsReclaimedOnAShortenedTTL(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID: model.DirectorSessionID, Title: "Director",
+			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  sbx,
+		Framework:  orchestrator.StaticFramework(&recordingSessionAgent{}),
+		MaxWorkers: 2,
+		Config: orchestrator.Config{
+			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities: model.NewCapabilityRegistry(durable.New()),
+		},
+	}
+
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("turn 1 cycle: %v", err)
+	}
+	if orchestrator.WarmSessionSandboxID(store, director.ID) == "" || sbx.releases != 0 {
+		t.Fatalf("after turn 1: warm=%q releases=%d, want the sandbox parked under the 30m TTL",
+			orchestrator.WarmSessionSandboxID(store, director.ID), sbx.releases)
+	}
+
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.SessionSandboxIdleTTL = 5 * time.Minute
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(6*time.Minute)); err != nil {
+		t.Fatalf("cycle past the shortened TTL: %v", err)
+	}
+	if sbx.releases != 1 {
+		t.Fatalf("6m into a park with the TTL shortened to 5m: releases=%d, want 1", sbx.releases)
+	}
+	if got := orchestrator.WarmSessionSandboxID(store, director.ID); got != "" {
+		t.Fatalf("WarmSessionSandboxID = %q, want it reclaimed", got)
+	}
+}
+
 func TestClosingOrPausingSessionReleasesWarmSandbox(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"pause", "close"} {
@@ -2025,5 +2082,530 @@ func TestWarmSessionSandboxReleasedWhenItsGrantsChange(t *testing.T) {
 	}
 	if sbx.releases <= releases {
 		t.Fatalf("releases = %d, want the warm sandbox released (was %d)", sbx.releases, releases)
+	}
+}
+
+func TestActiveConsoleSessionOperatorEditsPreservedAcrossReconciles(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "acme/infra"}
+		cfg.AgentBackends = []model.AgentBackend{{
+			ID:        "claude-main",
+			Framework: model.AgentFrameworkClaude,
+			Models:    []string{"claude-opus-4", "claude-sonnet-4"},
+			Team:      model.DefaultTeamID,
+		}}
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID:            model.DirectorSessionID,
+			Title:         "Director",
+			Capabilities:  []string{"self-debug"},
+			NetworkAccess: model.NetworkOpen,
+			TasksApproved: false,
+			Reads:         []model.RepoRef{{Owner: "acme", Name: "docs"}},
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	// Configure a UI client where grain_config is managed by a state repo (grain/config).
+	client := ui.NewClient(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		StateRepoRef: func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+	}, store)
+	client.Now = func() time.Time { return baseTime.Add(time.Minute) }
+
+	// 1. Operator edits the active console session task via PATCH /api/tasks/{id}
+	// even though a state repo (grain/config) is configured.
+	hostScriptCap := `https://grain.dev/capabilities/host-script#host-script={"script":"cluster-autoscaler"}`
+	caps := []string{"self-debug", "api:tasks:admin", "api:release-manager", hostScriptCap}
+	reads := []string{"acme/docs", "acme/widgets"}
+	writes := []ui.WriteTarget{{Repo: "acme/widgets", Base: "main"}}
+	chosenModel := "claude-opus-4"
+	netNone := "none"
+	approved := true
+	prio := true
+	keepRunning := true
+	if _, err := client.UpdateTask(ctx, director.ID, ui.UpdateTaskRequest{
+		Capabilities:         &caps,
+		Reads:                &reads,
+		Writes:               &writes,
+		Model:                &chosenModel,
+		NetworkAccess:        &netNone,
+		AutoApproveProposals: &approved,
+		PriorityDispatch:     &prio,
+		KeepRunning:          &keepRunning,
+	}); err != nil {
+		t.Fatalf("UpdateTask on active console session with state repo configured: %v", err)
+	}
+
+	// 2. Subsequent reconcileConsoleSessions cycles must preserve the operator's changes
+	// on the active session task instead of overwriting them back to the config defaults.
+	runSessions(t, store, baseTime.Add(2*time.Minute))
+	runSessions(t, store, baseTime.Add(3*time.Minute))
+
+	updated, err := store.GetTask(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wantCap := range append(caps, "priority-dispatch", model.DurableCapability) {
+		if !slices.ContainsFunc(updated.Grants, func(g model.Grant) bool { return g.Capability == wantCap }) {
+			t.Errorf("active session task Grants = %v after reconcile, missing operator grant %q", updated.Grants, wantCap)
+		}
+	}
+	if !slices.Contains(updated.Reads, model.RepoRef{Owner: "acme", Name: "widgets"}) {
+		t.Errorf("active session task Reads = %v after reconcile, want acme/widgets preserved", updated.Reads)
+	}
+	if len(updated.Writes) != 1 || updated.Writes[0].Repo != (model.RepoRef{Owner: "acme", Name: "widgets"}) || updated.Writes[0].Base != "main" {
+		t.Errorf("active session task Writes = %v after reconcile, want [{acme/widgets main}] preserved", updated.Writes)
+	}
+	if updated.Model != "claude-opus-4" {
+		t.Errorf("active session task Model = %q after reconcile, want claude-opus-4 preserved", updated.Model)
+	}
+	if updated.NetworkAccess != model.NetworkNone {
+		t.Errorf("active session task NetworkAccess = %q after reconcile, want none preserved", updated.NetworkAccess)
+	}
+	if !model.ConsoleSessionQueuesProposals([]model.ConsoleSession{{ID: model.DirectorSessionID, TasksApproved: false}}, *updated) {
+		t.Errorf("ConsoleSessionQueuesProposals = false after reconcile, want true from operator override")
+	}
+
+	// 3. When a new additive capability or read repo is added to console_sessions in grain_config,
+	// reconcileConsoleSessions merges the additive config default while preserving operator changes.
+	settings(t, store, func(cfg *model.Config) {
+		cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "acme/infra"}
+		cfg.AgentBackends = []model.AgentBackend{{
+			ID:        "claude-main",
+			Framework: model.AgentFrameworkClaude,
+			Models:    []string{"claude-opus-4", "claude-sonnet-4"},
+			Team:      model.DefaultTeamID,
+		}}
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID:            model.DirectorSessionID,
+			Title:         "Director",
+			Capabilities:  []string{"self-debug", "self-repair"},
+			NetworkAccess: model.NetworkOpen,
+			TasksApproved: false,
+			Reads: []model.RepoRef{
+				{Owner: "acme", Name: "docs"},
+				{Owner: "acme", Name: "infra"},
+			},
+		}}
+	})
+	runSessions(t, store, baseTime.Add(4*time.Minute))
+
+	merged, err := store.GetTask(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wantCap := range append(caps, "self-repair") {
+		if !slices.ContainsFunc(merged.Grants, func(g model.Grant) bool { return g.Capability == wantCap }) {
+			t.Errorf("merged Grants = %v, missing %q", merged.Grants, wantCap)
+		}
+	}
+	if !slices.Contains(merged.Reads, model.RepoRef{Owner: "acme", Name: "infra"}) {
+		t.Errorf("merged Reads = %v, missing additive config default acme/infra", merged.Reads)
+	}
+	if !slices.Contains(merged.Reads, model.RepoRef{Owner: "acme", Name: "widgets"}) {
+		t.Errorf("merged Reads = %v, lost operator read acme/widgets", merged.Reads)
+	}
+	if merged.Model != "claude-opus-4" || merged.NetworkAccess != model.NetworkNone {
+		t.Errorf("merged Model=%q NetworkAccess=%q, want claude-opus-4 and none preserved", merged.Model, merged.NetworkAccess)
+	}
+}
+
+func TestActiveConsoleSessionPermissionChangesApplyImmediatelyToProposals(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.TargetRepos = []string{"acme/widgets"}
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID:            model.DirectorSessionID,
+			Title:         "Director",
+			Capabilities:  []string{},
+			NetworkAccess: model.NetworkOpen,
+			TasksApproved: false,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	client := ui.NewClient(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		StateRepoRef: func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+	}, store)
+
+	hostScriptCap := `https://grain.dev/capabilities/host-script#host-script={"script":"cluster-autoscaler"}`
+	ag := &recordingSessionAgent{
+		onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
+			// Mid-run, the operator grants the capability, writes scope, and tasksApproved
+			// directly on the active session via PUT /api/console-sessions/director.
+			caps := []string{"api:tasks:admin", hostScriptCap}
+			writes := []ui.WriteTarget{{Repo: "acme/widgets", Base: "main"}}
+			approved := true
+			if _, err := client.UpdateConsoleSession(ctx, model.DirectorSessionID, ui.UpdateConsoleSessionRequest{
+				Capabilities:  &caps,
+				Writes:        &writes,
+				TasksApproved: &approved,
+			}); err != nil {
+				t.Errorf("mid-run UpdateConsoleSession: %v", err)
+			}
+			return &agent.Result{
+				FinalText:  "filed proposal",
+				Transcript: "filed proposal",
+				ToolCalls: []agent.ToolCall{{
+					Name: "propose_task",
+					Arguments: map[string]any{
+						"title":        "Scale cluster",
+						"body":         "Run cluster-autoscaler.",
+						"repo":         "acme/widgets",
+						"capabilities": []any{hostScriptCap},
+					},
+				}},
+			}, nil
+		},
+	}
+
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  orchestrator.NewHostSandboxes(t.TempDir()),
+		Framework:  orchestrator.StaticFramework(ag),
+		MaxWorkers: 1,
+		Config: orchestrator.Config{
+			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities: model.NewCapabilityRegistry(durable.New()),
+		},
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("cycle: %v", err)
+	}
+
+	allTasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proposed *model.Task
+	for i := range allTasks {
+		if allTasks[i].Title == "Scale cluster" {
+			proposed = &allTasks[i]
+			break
+		}
+	}
+	if proposed == nil {
+		t.Fatalf("expected proposed task 'Scale cluster' to be filed, got tasks: %+v", allTasks)
+	}
+	state, err := store.State(ctx, proposed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != model.StateQueued {
+		t.Fatalf("proposed task state = %q, want %q (mid-run session permission change should apply immediately to propose_task)", state, model.StateQueued)
+	}
+}
+
+// TestFirstReplyWakesConsoleSessionRestingWithRequestedSuspension verifies
+// that after a session rests via ParkConsoleSessionTask (which sets both
+// PendingQuestionCommentID and a requested suspension deferral on {message: true}),
+// the very first human reply via ui.Client.AddComment clears both markers so
+// the session never requires the operator to send their message twice.
+func TestFirstReplyWakesConsoleSessionRestingWithRequestedSuspension(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID: model.DirectorSessionID, Title: "Director",
+			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	var calls int
+	deps := orchestrator.Deps{
+		Store:     store,
+		Sandboxes: orchestrator.NewHostSandboxes(t.TempDir()),
+		Framework: orchestrator.StaticFramework(agentFunc(func(_ context.Context, _ agent.RunConfig) (*agent.Result, error) {
+			calls++
+			return &agent.Result{
+				ToolCalls: []agent.ToolCall{{
+					Name:      "comment_on_issue",
+					Arguments: map[string]any{"comment": fmt.Sprintf("reply-%d", calls)},
+				}},
+			}, nil
+		})),
+		Config: orchestrator.Config{
+			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities: model.NewCapabilityRegistry(durable.New()),
+		},
+		MaxWorkers: 1,
+	}
+
+	// Exchange 1: reply -> dispatch -> rest (which calls ParkConsoleSessionTask with ConsoleSessionResting).
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("exchange 1 dispatch cycle: %v", err)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(2*time.Second)); err != nil {
+		t.Fatalf("exchange 1 rest cycle: %v", err)
+	}
+
+	// Explicitly call ParkConsoleSessionTask with ConsoleSessionResting to ensure
+	// both PendingQuestionCommentID != nil and DeferredAt != nil are active simultaneously.
+	if err := model.ParkConsoleSessionTask(ctx, store, director.ID, model.ConsoleSessionResting, t1.Add(3*time.Second)); err != nil {
+		t.Fatalf("ParkConsoleSessionTask: %v", err)
+	}
+
+	// Now send ONE user reply via ui.Client.AddComment. It must wake the session immediately!
+	t2 := t1.Add(10 * time.Second)
+	replyToSession(t, store, director.ID, t2)
+	st, err := store.State(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st != model.StateQueued {
+		t.Fatalf("state after single reply = %q, want %q (must not stay deferred)", st, model.StateQueued)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t2.Add(time.Second)); err != nil {
+		t.Fatalf("exchange 2 dispatch cycle: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("agent calls = %d, want 2 after single follow-up message", calls)
+	}
+}
+
+type testOrchestratorStateRepo struct {
+	repo   *staterepo.Repo
+	store  *model.Store
+	status ui.StateRepoStatus
+}
+
+func (s *testOrchestratorStateRepo) Status(context.Context) (ui.StateRepoStatus, error) {
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) ImportSecretsKey(context.Context, string) (ui.StateRepoStatus, error) {
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) SetRemote(context.Context, ui.StateRepoRemoteRequest) (ui.StateRepoStatus, error) {
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) SetSecretsRepo(context.Context, ui.SecretsRepoRequest) (ui.StateRepoStatus, error) {
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) DismissResetNotices(context.Context) (ui.StateRepoStatus, error) {
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) Sync(ctx context.Context) (ui.StateRepoStatus, error) {
+	if _, err := staterepo.Apply(ctx, s.repo, s.store.DB(), model.SchemaVersion); err != nil {
+		return ui.StateRepoStatus{}, err
+	}
+	if _, err := staterepo.Sync(ctx, s.repo, s.store.DB(), model.SchemaVersion); err != nil {
+		return ui.StateRepoStatus{}, err
+	}
+	return s.status, nil
+}
+func (s *testOrchestratorStateRepo) SyncAfterWrite(ctx context.Context) error {
+	_, err := s.Sync(ctx)
+	return err
+}
+func (s *testOrchestratorStateRepo) Tree(context.Context) (ui.StateRepoTree, error) {
+	return ui.StateRepoTree{}, nil
+}
+func (s *testOrchestratorStateRepo) File(context.Context, string, int64) (ui.StateRepoFile, error) {
+	return ui.StateRepoFile{}, nil
+}
+
+func TestUIEditsWithStateRepoUnlockedPersistAcrossOrchestratorAndStateRepoCycles(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(*model.Config) {})
+
+	stateDir := filepath.Join(t.TempDir(), "state-repo")
+	repo, err := staterepo.Open(ctx, staterepo.Config{Dir: stateDir})
+	if err != nil {
+		t.Fatalf("staterepo.Open: %v", err)
+	}
+	if err := staterepo.Load(ctx, repo, store.DB(), model.SchemaVersion); err != nil {
+		t.Fatalf("staterepo.Load: %v", err)
+	}
+
+	sr := &testOrchestratorStateRepo{
+		repo:   repo,
+		store:  store,
+		status: ui.StateRepoStatus{Branch: "main"},
+	}
+	client := ui.NewClient(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		StateRepo:    sr,
+	}, store)
+	client.Now = func() time.Time { return baseTime }
+
+	// Edit console_sessions, default_capabilities, repo_config, schedules, and templates via UI client while settings_locked is false (default).
+	capID := ui.OfferedCapabilities()[0].ID
+	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+		DefaultCapabilities: &[]string{capID},
+	}); err != nil {
+		t.Fatalf("UpdateSettings(defaultCapabilities): %v", err)
+	}
+	if _, err := client.CreateConsoleSession(ctx, ui.CreateConsoleSessionRequest{
+		ID:    "ops-chat",
+		Title: "Ops Chat",
+	}); err != nil {
+		t.Fatalf("CreateConsoleSession: %v", err)
+	}
+	promptExt := "Always verify tests"
+	if _, err := client.SetRepoSettings(ctx, "acme/widgets", ui.SetRepoSettingsRequest{
+		PromptExtension: &promptExt,
+	}); err != nil {
+		t.Fatalf("SetRepoSettings: %v", err)
+	}
+	if _, err := client.CreateSchedule(ctx, ui.CreateScheduleRequest{
+		Title:      "Hourly sweep",
+		Repo:       "acme/widgets",
+		Recurrence: ui.Recurrence{Kind: "everyNHours", EveryNHours: 1},
+	}); err != nil {
+		t.Fatalf("CreateSchedule: %v", err)
+	}
+	if _, err := client.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name:  "triage",
+		Title: "Triage bug",
+	}); err != nil {
+		t.Fatalf("CreateTemplate: %v", err)
+	}
+
+	// Sync to state repo and run both state-repo reconcile and orchestrator RunCycle.
+	if err := sr.SyncAfterWrite(ctx); err != nil {
+		t.Fatalf("SyncAfterWrite: %v", err)
+	}
+	runSessions(t, store, baseTime.Add(time.Minute))
+	if _, err := sr.Sync(ctx); err != nil {
+		t.Fatalf("second staterepo Sync: %v", err)
+	}
+	runSessions(t, store, baseTime.Add(2*time.Minute))
+
+	// Verify the console session task for ops-chat was created and survived state-repo sync cycles.
+	sessions := sessionTasks(t, store)
+	if !slices.ContainsFunc(sessions, func(tk model.Task) bool {
+		return slices.Contains(tk.Tags, model.ConsoleSessionTag("ops-chat"))
+	}) {
+		t.Fatalf("expected ops-chat session task to be reconciled and preserved across staterepo sync, got %+v", sessions)
+	}
+}
+
+// declareDirector stores a director declaring reads and writes on the
+// acme repositories this file's restart tests use.
+func declareDirector(t *testing.T, store *model.Store, reads []model.RepoRef, writes []model.WriteTarget) {
+	t.Helper()
+	settings(t, store, func(cfg *model.Config) {
+		cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "acme/infra"}
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID:            model.DirectorSessionID,
+			Title:         "Director",
+			NetworkAccess: model.NetworkOpen,
+			Reads:         reads,
+			Writes:        writes,
+		}}
+	})
+}
+
+func hasWrite(writes []model.WriteTarget, owner, name string) bool {
+	return slices.ContainsFunc(writes, func(w model.WriteTarget) bool {
+		return w.Repo.Same(model.RepoRef{Owner: owner, Name: name})
+	})
+}
+
+func hasRead(reads []model.RepoRef, owner, name string) bool {
+	return slices.ContainsFunc(reads, func(r model.RepoRef) bool {
+		return r.Same(model.RepoRef{Owner: owner, Name: name})
+	})
+}
+
+// A reads: or writes: entry dropped from a standing session's declaration
+// while there is no record of what was last synced onto its task -- a
+// store from before console_session_sync existed, the first sync after
+// the upgrade that brings it -- is dropped from the task too: the
+// declaration is authoritative, the way it already was for GrantByGrain
+// grants. Kept, it was kept for good, since every later sync saw it as
+// already synced, and the session went on pushing to a repository the
+// deployment's configuration no longer let it write.
+func TestConsoleSessionSyncDropsUndeclaredWritesWithoutSnapshot(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	docs, infra := model.RepoRef{Owner: "acme", Name: "docs"}, model.RepoRef{Owner: "acme", Name: "infra"}
+	widgets := model.WriteTarget{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, Base: "main"}
+	infraWrite := model.WriteTarget{Repo: infra, Base: "main"}
+	declareDirector(t, store, []model.RepoRef{docs, infra}, []model.WriteTarget{widgets, infraWrite})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+	if !hasWrite(director.Writes, "acme", "infra") || !hasRead(director.Reads, "acme", "infra") {
+		t.Fatalf("filed director Reads = %v, Writes = %v, want acme/infra on both", director.Reads, director.Writes)
+	}
+
+	declareDirector(t, store, []model.RepoRef{docs}, []model.WriteTarget{widgets})
+	if _, err := store.DB().ExecContext(ctx, "DELETE FROM `console_session_sync`"); err != nil {
+		t.Fatal(err)
+	}
+	runSessions(t, store, baseTime.Add(time.Minute))
+	runSessions(t, store, baseTime.Add(2*time.Minute))
+
+	synced, err := store.GetTask(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasWrite(synced.Writes, "acme", "infra") || !hasWrite(synced.Writes, "acme", "widgets") {
+		t.Errorf("Writes = %v, want only the declared acme/widgets", synced.Writes)
+	}
+	if hasRead(synced.Reads, "acme", "infra") || !hasRead(synced.Reads, "acme", "docs") {
+		t.Errorf("Reads = %v, want acme/infra dropped and acme/docs kept", synced.Reads)
+	}
+}
+
+// What a session's sync last applied is in the store, not in the
+// daemon's memory, so a restart tells an operator's own edit on the task
+// from a declaration change exactly as a running daemon does: the write
+// the operator added survives it, and one the declaration dropped while
+// the daemon was down is dropped.
+func TestConsoleSessionSnapshotSurvivesARestart(t *testing.T) {
+	orchestrator.LogToTest(t)
+	dir := t.TempDir()
+	store, db := openStoreInDir(t, dir)
+	ctx := context.Background()
+	docs := model.RepoRef{Owner: "acme", Name: "docs"}
+	infra := model.WriteTarget{Repo: model.RepoRef{Owner: "acme", Name: "infra"}, Base: "main"}
+	declareDirector(t, store, []model.RepoRef{docs}, []model.WriteTarget{infra})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	client := ui.NewClient(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		StateRepoRef: func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+	}, store)
+	client.Now = func() time.Time { return baseTime.Add(time.Minute) }
+	writes := []ui.WriteTarget{{Repo: "acme/infra", Base: "main"}, {Repo: "acme/widgets", Base: "main"}}
+	if _, err := client.UpdateTask(ctx, director.ID, ui.UpdateTaskRequest{Writes: &writes}); err != nil {
+		t.Fatalf("operator adding a write: %v", err)
+	}
+	runSessions(t, store, baseTime.Add(2*time.Minute))
+	db.Close()
+
+	store, db = openStoreInDir(t, dir)
+	defer db.Close()
+	declareDirector(t, store, []model.RepoRef{docs}, nil)
+	runSessions(t, store, baseTime.Add(3*time.Minute))
+
+	synced, err := store.GetTask(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasWrite(synced.Writes, "acme", "widgets") {
+		t.Errorf("Writes = %v after a restart, lost the operator's acme/widgets", synced.Writes)
+	}
+	if hasWrite(synced.Writes, "acme", "infra") {
+		t.Errorf("Writes = %v after a restart, kept acme/infra the declaration dropped while the daemon was down", synced.Writes)
 	}
 }

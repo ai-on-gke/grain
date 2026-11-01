@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
+import PendingConfigChange from "./detail/PendingConfigChange.jsx";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Box, Button, Typography } from "@mui/material";
 import {
@@ -120,7 +121,73 @@ export default function TaskChat({
   // identity and this list -- its sort included -- is computed once per
   // actual change rather than once per render. See the transcript memo
   // below for what the render it is inside otherwise costs.
-  const entries = useMemo(() => chatEntries(t), [t]);
+  const serverEntries = useMemo(() => chatEntries(t), [t]);
+  // Optimistic outgoing comments currently in flight or awaiting the next
+  // task snapshot that includes them, so a comment submitted while the
+  // task transitions between running, awaiting_reply, and queued is never
+  // hidden between the POST and the poll that catches up.
+  const [pendingComments, setPendingComments] = useState([]);
+  const pendingSeq = useRef(0);
+  const sendChain = useRef(Promise.resolve());
+  useEffect(() => {
+    setPendingComments([]);
+  }, [t.id]);
+  useEffect(() => {
+    if (pendingComments.length === 0) return;
+    const serverComments = t.comments || [];
+    const consumed = new Set();
+    const remaining = pendingComments.filter((p) => {
+      if (p.failed) return true;
+      const idx = serverComments.findIndex(
+        (c, i) =>
+          !consumed.has(i) &&
+          (c.authorKind === "human" || !c.authorKind) &&
+          (typeof c.id === "number"
+            ? c.id > p.afterMaxId
+            : i >= p.afterCommentLen) &&
+          (c.body || "") === (p.body || ""),
+      );
+      if (idx !== -1) {
+        consumed.add(idx);
+        return false;
+      }
+      return true;
+    });
+    if (remaining.length !== pendingComments.length) {
+      setPendingComments(remaining);
+    }
+  }, [t.comments, pendingComments]);
+  const entries = useMemo(() => {
+    if (pendingComments.length === 0) return serverEntries;
+    const serverComments = t.comments || [];
+    const consumed = new Set();
+    const unpersisted = pendingComments.filter((p) => {
+      if (p.failed) return true;
+      const idx = serverComments.findIndex(
+        (c, i) =>
+          !consumed.has(i) &&
+          (c.authorKind === "human" || !c.authorKind) &&
+          (typeof c.id === "number"
+            ? c.id > p.afterMaxId
+            : i >= p.afterCommentLen) &&
+          (c.body || "") === (p.body || ""),
+      );
+      if (idx !== -1) {
+        consumed.add(idx);
+        return false;
+      }
+      return true;
+    });
+    return unpersisted.length === 0
+      ? serverEntries
+      : [
+          ...serverEntries,
+          ...unpersisted.map((p) => ({
+            ...p,
+            pending: p.failed ? "failed" : p.sent ? undefined : "sending",
+          })),
+        ];
+  }, [serverEntries, pendingComments, t.comments]);
   const busy = working(t);
   const note = typingNote(t);
   const waiting = awaitsReply(t);
@@ -130,7 +197,14 @@ export default function TaskChat({
   // post the comment -- and a poll landing mid-message must not lose
   // either (AttachmentPicker's own doc comment on why the files are read
   // only at send).
-  const [attachments, setAttachments] = useState([]);
+  const [attachments, setAttachmentsState] = useState([]);
+  const attachmentsRef = useRef([]);
+  const setAttachments = (next) => {
+    const resolved =
+      typeof next === "function" ? next(attachmentsRef.current) : next;
+    attachmentsRef.current = resolved;
+    setAttachmentsState(resolved);
+  };
   // Two spellings of the same draft, because the box and the API want
   // different ones. `html` is what the library's contenteditable is
   // controlled by -- give it plain text and a message typed over several
@@ -139,10 +213,19 @@ export default function TaskChat({
   // innerText rather than its textContent for the same reason in reverse:
   // textContent of "a<div>b</div>" is "ab", with the break the person
   // typed silently gone.
-  const [draft, setDraft] = useState(() => ({
+  const [draft, setDraftState] = useState(() => ({
     html: draftRequest?.text || "",
     text: draftRequest?.text || "",
   }));
+  const draftRef = useRef({
+    html: draftRequest?.text || "",
+    text: draftRequest?.text || "",
+  });
+  const setDraft = (next) => {
+    const resolved = typeof next === "function" ? next(draftRef.current) : next;
+    draftRef.current = resolved;
+    setDraftState(resolved);
+  };
   // The library's contenteditable takes no props of its own -- MessageInput
   // spreads what it is given onto the wrapper around it, not onto the
   // editor -- so the box a screen reader lands on had no role and no
@@ -175,8 +258,17 @@ export default function TaskChat({
     root.addEventListener("scroll", onScroll, true);
     return () => root.removeEventListener("scroll", onScroll, true);
   }, []);
-  const sending = useRef(false);
   const stopping = useRef(false);
+  // What the sending state last came to, for a screen reader: the
+  // bubbles say "Sending…" and "Not sent" in their headers, but nothing
+  // announces a header changing, so the status region below says it.
+  const [sendNotice, setSendNotice] = useState("");
+  const sending = pendingComments.filter((p) => !p.failed && !p.sent).length;
+  // A failed bubble's Retry and Discard, reached through a ref so the
+  // memoised transcript below need not be rebuilt for a new closure on
+  // every keystroke, and still calls this render's (current t, current
+  // pending list) rather than the one that drew it.
+  const bubbleActions = useRef({});
 
   // A shortcut elsewhere in the shell can bring somebody here with words
   // ready to edit. Apply each request once by identity; task polling must not
@@ -251,6 +343,12 @@ export default function TaskChat({
           ) : (
             <Message
               key={e.key}
+              className={
+                e.pending
+                  ? `task-chat-pending task-chat-${e.pending}`
+                  : undefined
+              }
+              aria-busy={e.pending === "sending" ? "true" : undefined}
               model={{
                 direction: e.direction,
                 // "single" rather than the library's own grouping:
@@ -264,7 +362,15 @@ export default function TaskChat({
             >
               <Message.Header
                 sender={e.sender}
-                sentTime={e.at ? formatDateTime(e.at, zone) : ""}
+                sentTime={
+                  e.pending === "sending"
+                    ? "Sending…"
+                    : e.pending === "failed"
+                      ? "Not sent"
+                      : e.at
+                        ? formatDateTime(e.at, zone)
+                        : ""
+                }
               />
               <Message.CustomContent>
                 <div className="task-chat-message-content">
@@ -276,6 +382,22 @@ export default function TaskChat({
                   )}
                 </div>
                 <AttachmentLinks taskId={t.id} attachments={e.attachments} />
+                {e.pending === "failed" && (
+                  <div className="task-chat-retry">
+                    <Button
+                      size="small"
+                      onClick={() => bubbleActions.current.retry(e.key)}
+                    >
+                      Retry
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={() => bubbleActions.current.discard(e.key)}
+                    >
+                      Discard
+                    </Button>
+                  </div>
+                )}
               </Message.CustomContent>
             </Message>
           ),
@@ -286,51 +408,152 @@ export default function TaskChat({
   );
 
   const send = async () => {
-    const body = draft.text;
-    const sent = draft;
-    const files = attachments;
-    if (sending.current) return;
-    if (!body.trim() && attachments.length === 0) return;
-    sending.current = true;
-    try {
-      const uploaded = await Promise.all(
-        attachments.map((f) => fileToAttachment(f)),
-      );
-      // Cleared before the request rather than after it, so the next
-      // message can be typed while this one is still in flight -- act()
-      // reports a failure in the error banner either way, the same as the
-      // task pane's own reply box.
-      setDraft({ html: "", text: "" });
-      setAttachments([]);
-      let posted = false;
-      if (onSend) {
-        posted = (await onSend({ body, attachments: uploaded })) !== false;
-      } else {
-        await act(async () => {
-          await api(`/api/tasks/${t.id}/comments`, {
-            method: "POST",
-            body: JSON.stringify({
-              body,
-              attachments: uploaded,
-            }),
-          });
-          posted = true;
-        }, t.id);
-      }
-      // act() reports a failure and swallows it, so whether the message
-      // landed is only known from here. One that did not -- the network
-      // dropped, the daemon answered 5xx -- goes back in the box rather
-      // than being lost with the banner, unless something new has been
-      // typed there meanwhile (grain/task-1360).
-      if (!posted) {
-        setDraft((cur) => (cur.text.trim() ? cur : sent));
-        setAttachments((cur) => (cur.length ? cur : files));
-      }
-      onDraftConsumed?.(draftRequest);
-    } finally {
-      sending.current = false;
-    }
+    const sent = draftRef.current;
+    const files = attachmentsRef.current;
+    if (!sent.text.trim() && files.length === 0) return;
+    // Cleared synchronously before the first await so double-clicks on the
+    // same draft are ignored while a second message typed while this one is
+    // still in flight can be sent immediately without being dropped.
+    setDraft({ html: "", text: "" });
+    setAttachments([]);
+    await post(sent, files);
   };
+
+  // post sends one message, queued behind any still in flight so they
+  // land in the order they were typed.
+  const post = async (sent, files) => {
+    const body = sent.text;
+    const serverComments = t.comments || [];
+    const afterCommentLen = serverComments.length;
+    const afterMaxId = serverComments.reduce(
+      (m, c) => (typeof c.id === "number" && c.id > m ? c.id : m),
+      0,
+    );
+    const optimisticKey = `optimistic-${++pendingSeq.current}`;
+    if (!onSend && body.trim()) {
+      setPendingComments((cur) => [
+        ...cur,
+        {
+          key: optimisticKey,
+          kind: "message",
+          at: new Date(),
+          direction: "outgoing",
+          sender: t.creator || t.author || "human",
+          body,
+          attachments: [],
+          afterCommentLen,
+          afterMaxId,
+          sent: false,
+          failed: false,
+        },
+      ]);
+      setSendNotice("");
+    }
+    // A message that did not land goes back in the box rather than being
+    // lost with the banner (grain/task-1360). If the box holds something
+    // already -- typed since, or an earlier queued message that failed
+    // and went back first -- it stays in the transcript marked "Not
+    // sent", with Retry, rather than being dropped (2026-11-01 §3).
+    const unsent = () => {
+      if (
+        !draftRef.current.text.trim() &&
+        attachmentsRef.current.length === 0
+      ) {
+        setPendingComments((cur) => cur.filter((p) => p.key !== optimisticKey));
+        setDraft(sent);
+        setAttachments(files);
+        setSendNotice("Message not sent. It is back in the message box.");
+        return;
+      }
+      setPendingComments((cur) => {
+        if (cur.some((p) => p.key === optimisticKey)) {
+          return cur.map((p) =>
+            p.key === optimisticKey ? { ...p, failed: true, sent, files } : p,
+          );
+        }
+        return [
+          ...cur,
+          {
+            key: optimisticKey,
+            kind: "message",
+            at: new Date(),
+            direction: "outgoing",
+            sender: t.creator || t.author || "human",
+            body: body.trim() ? body : files.map((f) => f.name).join(", "),
+            attachments: [],
+            afterCommentLen,
+            afterMaxId,
+            failed: true,
+            sent,
+            files,
+          },
+        ];
+      });
+      setSendNotice("Message not sent. Retry it from the conversation.");
+    };
+    const task = sendChain.current.then(async () => {
+      try {
+        const uploaded = await Promise.all(
+          files.map((f) => fileToAttachment(f)),
+        );
+        let posted = false;
+        if (onSend) {
+          posted = (await onSend({ body, attachments: uploaded })) !== false;
+        } else {
+          await act(async () => {
+            await api(`/api/tasks/${t.id}/comments`, {
+              method: "POST",
+              body: JSON.stringify({
+                body,
+                attachments: uploaded,
+              }),
+            });
+            posted = true;
+          }, t.id);
+        }
+        // act() reports a failure and swallows it, so whether the message
+        // landed is only known from here.
+        if (!posted) {
+          if (onSend) {
+            setDraft((cur) => (cur.text.trim() ? cur : sent));
+            setAttachments((cur) => (cur.length ? cur : files));
+          } else {
+            unsent();
+          }
+        } else {
+          setPendingComments((cur) =>
+            cur.map((p) =>
+              p.key === optimisticKey ? { ...p, sent: true } : p,
+            ),
+          );
+        }
+        onDraftConsumed?.(draftRequest);
+      } catch (err) {
+        if (onSend) {
+          setDraft((cur) => (cur.text.trim() ? cur : sent));
+          setAttachments((cur) => (cur.length ? cur : files));
+        } else {
+          unsent();
+        }
+        throw err;
+      }
+    });
+    sendChain.current = task.catch(() => {});
+    await task;
+  };
+
+  const retry = (key) => {
+    const failed = pendingComments.find((p) => p.key === key);
+    if (!failed) return;
+    setPendingComments((cur) => cur.filter((p) => p.key !== key));
+    post(failed.sent, failed.files || []).catch(() => {});
+  };
+
+  const discard = (key) => {
+    setPendingComments((cur) => cur.filter((p) => p.key !== key));
+    setSendNotice("");
+  };
+  bubbleActions.current = { retry, discard };
 
   const stop = async () => {
     if (stopping.current) return;
@@ -398,7 +621,13 @@ export default function TaskChat({
           </Typography>
         )}
       </Box>
+      <span className="visually-hidden" role="status" aria-live="polite">
+        {sending > 0
+          ? `Sending ${sending} message${sending === 1 ? "" : "s"}…`
+          : sendNotice}
+      </span>
       <LocalScriptApprovals t={t} act={act} />
+      <PendingConfigChange t={t} act={act} />
       <div className="task-chat-window" ref={windowRef} id={windowId}>
         <MainContainer>
           <ChatContainer>

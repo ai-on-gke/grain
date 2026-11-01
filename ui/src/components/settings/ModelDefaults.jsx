@@ -127,6 +127,12 @@ export default function ModelDefaults({
     .map((id) => rows.find((m) => m.id.toLowerCase() === id.toLowerCase()))
     .filter(Boolean);
   const anyDefaultEnabled = defaultRows.some((r) => r.enabled);
+  // A paused connection is still enabled, but it runs nothing until the
+  // pause ends: a default served only by paused connections leaves tasks
+  // waiting just as a disabled one does, and says so.
+  const anyDefaultRunnable = defaultRows.some((r) =>
+    r.connections.some((c) => !c.disabled && !connectionPause(pause, c, r.id)),
+  );
   const remainingRows = rows.filter(
     (m) =>
       !selectedDefaults.some((id) => id.toLowerCase() === m.id.toLowerCase()),
@@ -340,6 +346,15 @@ export default function ModelDefaults({
             {selectedDefaults.length === 1
               ? `No enabled connection serves model ${defaultModel}. Tasks on the default model wait in the queue until one does.`
               : `No enabled connection serves any default model (${selectedDefaults.join(", ")}). Tasks on the default model wait in the queue until one does.`}
+          </Alert>
+        )}
+      {selectedDefaults.length > 0 &&
+        anyDefaultEnabled &&
+        !anyDefaultRunnable && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            {selectedDefaults.length === 1
+              ? `Every enabled connection that serves model ${defaultModel} is paused. Tasks on the default model wait in the queue until a pause ends or is resumed above.`
+              : `Every enabled connection that serves a default model (${selectedDefaults.join(", ")}) is paused. Tasks on the default model wait in the queue until a pause ends or is resumed above.`}
           </Alert>
         )}
 

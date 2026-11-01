@@ -13,8 +13,16 @@
 // limitations under the License.
 
 import { useEffect, useRef, useState } from "react";
-import { Button, MenuItem, Stack, TextField } from "@mui/material";
+import {
+  Button,
+  Checkbox,
+  FormControlLabel,
+  MenuItem,
+  Stack,
+  TextField,
+} from "@mui/material";
 import api from "../../api.js";
+import { wholeNumber } from "../../wholeNumber.js";
 import {
   connectionLabel,
   connectionsServingModels,
@@ -78,6 +86,19 @@ export default function EditTaskForm({
   const savedNothingNeeded = t.nothingNeededAction || "close";
   const [nothingNeededAction, setNothingNeededAction] =
     useState(savedNothingNeeded);
+  const savedKeepRunning = Boolean(t.keepRunning);
+  const [keepRunning, setKeepRunning] = useState(savedKeepRunning);
+  const savedPriority = t.priority ?? 5;
+  const [priority, setPriority] = useState(String(savedPriority));
+  // A whole number from 1 up, or empty for "leave it as it is". This
+  // form is not a <form>, so the box's own min and step are never
+  // enforced on Save: without this a 0 saved as the default 5 (the
+  // server reads 0 as unset) and a 2.5 saved as 2, both without a word
+  // (2026-11-01 intake walkthrough).
+  const priorityText = String(priority).trim();
+  const priorityValid =
+    priorityText === "" ||
+    (/^\d+$/.test(priorityText) && Number(priorityText) >= 1);
   // The deployment's connections and default model: a task names no
   // team of its own.
   const connections = config?.agentBackends || [];
@@ -115,6 +136,8 @@ export default function EditTaskForm({
     if (reviewTemplateId !== (t.reviewTemplateId || "")) return true;
     if (reviewers !== savedReviewers) return true;
     if (nothingNeededAction !== savedNothingNeeded) return true;
+    if (keepRunning !== savedKeepRunning) return true;
+    if (String(priority).trim() !== String(savedPriority)) return true;
     if (model !== (t.model || "")) return true;
     if (agentBackendId !== (t.agentBackendId || "")) return true;
     return false;
@@ -135,11 +158,12 @@ export default function EditTaskForm({
   // what was typed, so the edit can be retried or copied out rather
   // than lost with the error (grain/task-1699).
   const save = async () => {
-    if (!title.trim()) return;
+    if (!title.trim() || !priorityValid) return;
     const parsedReviewers = reviewers
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+    const parsedPriority = wholeNumber(priority);
     const saved = await act(
       () =>
         api(`/api/tasks/${t.id}`, {
@@ -153,6 +177,11 @@ export default function EditTaskForm({
               : {}),
             ...(nothingNeededAction !== savedNothingNeeded
               ? { nothingNeededAction }
+              : {}),
+            ...(keepRunning !== savedKeepRunning ? { keepRunning } : {}),
+            ...(!Number.isNaN(parsedPriority) &&
+            parsedPriority !== savedPriority
+              ? { priority: parsedPriority }
               : {}),
             // Sent on every save, like the review beside it: what the
             // pickers hold is this task's whole answer, and "" is the
@@ -310,9 +339,41 @@ export default function EditTaskForm({
         <MenuItem value="close">Close</MenuItem>
         <MenuItem value="ack">Leave for acknowledgement</MenuItem>
       </TextField>
+      <FormControlLabel
+        control={
+          <Checkbox
+            size="small"
+            name="keepRunning"
+            checked={keepRunning}
+            onChange={(e) => setKeepRunning(e.target.checked)}
+          />
+        }
+        label="Keep running (immediately restart when a run exits)"
+        sx={{ display: "flex", m: 0 }}
+        slotProps={{ typography: { fontSize: "0.8rem" } }}
+      />
+      <TextField
+        label="Task priority"
+        type="number"
+        inputProps={{ min: 1, step: 1 }}
+        value={priority}
+        onChange={(e) => setPriority(e.target.value)}
+        error={!priorityValid}
+        helperText={
+          priorityValid
+            ? "default 5; higher numbers run first"
+            : "a whole number, 1 or more; default 5, higher numbers run first"
+        }
+        fullWidth
+        size="small"
+      />
       <Stack direction="row" spacing={1} justifyContent="flex-end">
         <Button onClick={onDone}>Cancel</Button>
-        <Button variant="contained" disabled={!title.trim()} onClick={save}>
+        <Button
+          variant="contained"
+          disabled={!title.trim() || !priorityValid}
+          onClick={save}
+        >
           Save
         </Button>
       </Stack>

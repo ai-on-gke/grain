@@ -116,7 +116,6 @@ describe("NewTaskOverlay", () => {
         nothingNeededAction: "close",
         promptExtension: "",
         reviewTemplateId: "",
-        capabilities: [],
         dependsOn: [],
         reads: [],
         writes: [],
@@ -712,5 +711,53 @@ describe("NewTaskOverlay", () => {
 
     const body = JSON.parse(api.mock.calls.at(-1)[1].body);
     expect(body.reviewers).toEqual(["alice", "bob"]);
+  });
+
+  it("defaults Task priority to 5 and sends a custom priority in the payload", async () => {
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={null}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    const priorityInput = screen.getByLabelText("Task priority");
+    expect(priorityInput).toHaveValue(5);
+
+    await user.type(screen.getByLabelText(/Title/), "Urgent fix");
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await user.clear(priorityInput);
+    await user.type(priorityInput, "8");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+
+    const body = JSON.parse(api.mock.calls.at(-1)[1].body);
+    expect(body.priority).toBe(8);
+  });
+
+  it("files a Task priority typed in exponent notation as the number it is", async () => {
+    // A number box takes "1e3" as 1000; parseInt read it as 1 and filed
+    // the task at the bottom of the backlog instead of the top.
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={null}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    const priorityInput = screen.getByLabelText("Task priority");
+    await user.type(screen.getByLabelText(/Title/), "Urgent fix");
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await user.clear(priorityInput);
+    await user.type(priorityInput, "1e3");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+
+    const body = JSON.parse(api.mock.calls.at(-1)[1].body);
+    expect(body.priority).toBe(1000);
   });
 });

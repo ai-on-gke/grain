@@ -169,7 +169,9 @@ var MetricsSections = []struct {
 	// deployment was full, and this says what the tick itself cost
 	// regardless of that.
 	{mcp.MetricsSectionCycles, func(w io.Writer, rep ui.MetricsReport) { printCycles(w, rep.Cycles) }},
-	{mcp.MetricsSectionLatency, func(w io.Writer, rep ui.MetricsReport) { printLatency(w, rep.Latency) }},
+	{mcp.MetricsSectionLatency, func(w io.Writer, rep ui.MetricsReport) {
+		printLatency(w, rep.Latency, rep.InteractiveStartup, rep.BatchStartup)
+	}},
 	{mcp.MetricsSectionTools, func(w io.Writer, rep ui.MetricsReport) { printTools(w, rep.Tools) }},
 	{mcp.MetricsSectionPrompts, func(w io.Writer, rep ui.MetricsReport) { printPrompts(w, rep.Prompts) }},
 	{mcp.MetricsSectionAgents, func(w io.Writer, rep ui.MetricsReport) { printAgents(w, rep.Agents) }},
@@ -234,11 +236,36 @@ func printCapacity(w io.Writer, runs ui.MetricsRuns) {
 // says what a window means for it: these are the samples that *ended*
 // inside it, so a task filed last month and completed this morning is in
 // here at its full lead time.
-func printLatency(w io.Writer, stages []ui.MetricsStage) {
-	if len(stages) == 0 {
+func printLatency(w io.Writer, stages, interactiveStartup, batchStartup []ui.MetricsStage) {
+	if len(stages) == 0 && !hasMeasuredStages(interactiveStartup) && !hasMeasuredStages(batchStartup) {
 		return
 	}
-	fmt.Fprintln(w, "\nlatency (stages that ended inside the window)")
+	if len(stages) > 0 {
+		fmt.Fprintln(w, "\nlatency (stages that ended inside the window)")
+		fmt.Fprintf(w, "  %-40s %5s %10s %10s %10s\n", "stage", "n", "p50", "p90", "max")
+		for _, s := range stages {
+			fmt.Fprintf(w, "  %-40s %5d %10s %10s %10s\n", s.Label, s.N,
+				Seconds(s.P50Seconds), Seconds(s.P90Seconds), Seconds(s.MaxSeconds))
+		}
+	}
+	printStartupStages(w, "interactive startup (per-phase breakdown)", interactiveStartup)
+	printStartupStages(w, "batch startup (per-phase breakdown)", batchStartup)
+}
+
+func hasMeasuredStages(stages []ui.MetricsStage) bool {
+	for _, s := range stages {
+		if s.N > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func printStartupStages(w io.Writer, title string, stages []ui.MetricsStage) {
+	if !hasMeasuredStages(stages) {
+		return
+	}
+	fmt.Fprintf(w, "\n%s\n", title)
 	fmt.Fprintf(w, "  %-40s %5s %10s %10s %10s\n", "stage", "n", "p50", "p90", "max")
 	for _, s := range stages {
 		fmt.Fprintf(w, "  %-40s %5d %10s %10s %10s\n", s.Label, s.N,

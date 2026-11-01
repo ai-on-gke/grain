@@ -206,6 +206,7 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 		Capabilities:    splitMultiFlag(p, "capability"),
 		FixesBaseBranch: p.has("fixes-base-branch"),
 		NoPort:          p.has("no-port"),
+		KeepRunning:     p.has("keep-running"),
 		Origin:          strings.TrimSpace(p.get("origin")),
 		Reads:           splitMultiFlag(p, "read"),
 		HoldForApproval: &hold,
@@ -227,6 +228,13 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 			return err
 		}
 		req.NotBefore = &t
+	}
+	if rawPri := strings.TrimSpace(p.get("priority")); rawPri != "" {
+		pri, err := strconv.Atoi(rawPri)
+		if err != nil || pri < 0 {
+			return fmt.Errorf("--priority %q must be a non-negative integer", rawPri)
+		}
+		req.Priority = &pri
 	}
 	var buf bytes.Buffer
 	if err := c.post("/cli/proposals", req, &buf); err != nil {
@@ -395,6 +403,12 @@ func (c *sandboxCLI) memoryWrite(p sandboxArgs) error {
 	} else if repo == "" && p.get("file") != "" && len(p.positional) == 1 && strings.Contains(p.positional[0], "/") {
 		repo = p.positional[0]
 		rest.positional = nil
+	}
+	// Memory is one text per scope, not a store of keyed entries: a first
+	// word that reads as a key ("write notes <body>") would otherwise be
+	// joined into the text and replace the whole deployment memory with it.
+	if p.get("file") == "" && len(rest.positional) >= 2 && !strings.ContainsAny(rest.positional[0], " \t\n") {
+		return fmt.Errorf("grain memory write takes no <key>: it replaces the whole memory text of the deployment (or of --repo owner/name) with one quoted <text> or --file; for a named entry use grain memory doc-write <name>")
 	}
 	text, err := c.textArg(rest, "text")
 	if err != nil {
@@ -577,6 +591,10 @@ func (c *sandboxCLI) quarantine(p sandboxArgs) error {
 	if ans.FollowUpTaskID != "" {
 		fmt.Fprintf(c.out, "Follow-up repair task filed: #%s\n", ans.FollowUpTaskID)
 	}
+	if ans.FollowUpError != "" {
+		fmt.Fprintf(c.errOut, "grain: the test is quarantined, but its follow-up repair task was not filed: %s -- file one with grain task propose\n", ans.FollowUpError)
+		return errSandboxReported
+	}
 	return nil
 }
 
@@ -595,9 +613,6 @@ func parseCLIQuarantineTTL(s string) (time.Duration, error) {
 // task. The count and elision come back in a header and go to stderr, so
 // what reaches stdout is the task lines alone.
 func (c *sandboxCLI) taskList(p sandboxArgs) error {
-	if err := p.only("task list", "state", "repo", "limit", "search", "changed-since", "stalled", "kind", "json"); err != nil {
-		return err
-	}
 	if len(p.positional) > 0 {
 		return fmt.Errorf("task list: unexpected argument %q: run 'grain task list --help' for usage", p.positional[0])
 	}

@@ -223,6 +223,100 @@ func TestFraming_ExitCodeDistinguishableFromTransportCut(t *testing.T) {
 	}
 }
 
+type failPostHandshakeWriteConn struct {
+	net.Conn
+	mu            sync.Mutex
+	handshakeDone bool
+}
+
+func (c *failPostHandshakeWriteConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	done := c.handshakeDone
+	c.mu.Unlock()
+	if done {
+		return 0, io.ErrClosedPipe
+	}
+	return c.Conn.Write(p)
+}
+
+func TestFraming_StdinWriteErrorBeforeGuestExitDoesNotOrphanStream(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Simulates the scheduler race where writing TypeStdinClose to guestConn
+	// fails with EPIPE/ErrClosedPipe (because the guest command exited/closed)
+	// before managedExec.readLoop has observed TypeExit or EOF. The server must
+	// not treat a guestConn write failure as a client stream detach.
+	dialer := func(dialCtx context.Context) (net.Conn, error) {
+		c1, c2 := net.Pipe()
+		wrapped := &failPostHandshakeWriteConn{Conn: c1}
+		go func() {
+			defer c2.Close()
+			br := bufio.NewReader(c2)
+			req, err := execwire.ReadRequest(br)
+			if err != nil {
+				return
+			}
+			wrapped.mu.Lock()
+			wrapped.handshakeDone = true
+			wrapped.mu.Unlock()
+
+			_ = execwire.WriteResponse(c2, execwire.Response{OK: true, Features: execwire.Features})
+			time.Sleep(25 * time.Millisecond)
+			if strings.Contains(req.Line, "CUT") {
+				_ = execwire.WriteFrame(c2, execwire.TypeStdout, []byte("partial\n"))
+				return
+			}
+			_ = execwire.WriteFrame(c2, execwire.TypeStdout, []byte("ok\n"))
+			_ = execwire.WriteFrame(c2, execwire.TypeExit, execwire.EncodeExit(77))
+		}()
+		return wrapped, nil
+	}
+
+	srv := NewServer(ServerConfig{
+		SandboxID: "sbx-stdin-race",
+		Guest:     guestexec.Config{User: currentUsername(t)},
+		DialGuest: dialer,
+	})
+
+	sockDir := t.TempDir()
+	sockPath := filepath.Join(sockDir, "access.sock")
+	go func() {
+		_ = srv.ListenAndServe(ctx, "unix:"+sockPath)
+	}()
+
+	var (
+		cli *Client
+		err error
+	)
+	for range 50 {
+		cli, err = Dial(ctx, "unix:"+sockPath, DialOptions{})
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer cli.Close()
+
+	var out bytes.Buffer
+	code, err := cli.Exec(ctx, ExecRequest{Line: "exit 77"}, nil, &out, nil)
+	if err != nil {
+		t.Fatalf("Exec(exit 77) unexpected error: %v", err)
+	}
+	if code != 77 || out.String() != "ok\n" {
+		t.Fatalf("Exec(exit 77) = (%d, %q), want (77, %q)", code, out.String(), "ok\n")
+	}
+
+	out.Reset()
+	_, err = cli.Exec(ctx, ExecRequest{Line: "CUT"}, nil, &out, nil)
+	if !errors.Is(err, ErrTransportCut) {
+		t.Fatalf("Exec(CUT) error = %v, want errors.Is(..., ErrTransportCut)", err)
+	}
+}
+
 func TestListenMode_ExecFilesSignalAndReattach(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

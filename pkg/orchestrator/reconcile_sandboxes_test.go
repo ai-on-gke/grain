@@ -329,15 +329,20 @@ func TestReconcileSandboxesDetectsDiscrepanciesReapsOrphansAndReports(t *testing
 	}
 }
 
-func TestCommittedNeverExceedsBudgetPlusExceptionAcrossAllPaths(t *testing.T) {
+// Committed never exceeds the budget, plus at most one deadlock-breaking
+// exception, plus one sandbox per live console session (priority
+// dispatch): sessions are never held by the budget (Budget.AdmitsPriority,
+// docs/sandbox-budget.md), and everything else is.
+func TestCommittedNeverExceedsBudgetPlusExceptionAndSessionsAcrossAllPaths(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStoreForOrchestrator(t)
 	now := time.Date(2026, 10, 24, 2, 0, 0, 0, time.UTC)
 
 	// Budget: 16 vCPU / 32 GiB. Each standard sandbox is 4 vCPU / 8 GiB (4 slots total).
-	// At most ONE exception sandbox (4 vCPU / 8 GiB) may exceed the cap (max 20 vCPU / 40 GiB).
+	// The three sessions below may each exceed the cap by their own sandbox
+	// (max 28 vCPU / 56 GiB); nothing else may push committed past it.
 	shape := model.Commitment{CPUs: 4, MemoryMB: 8 * 1024}
-	maxAllowedWithException := model.Commitment{CPUs: 20, MemoryMB: 40 * 1024}
+	maxAllowedWithException := model.Commitment{CPUs: 28, MemoryMB: 56 * 1024}
 	budget := model.Budget{
 		Host:             model.Commitment{CPUs: 16, MemoryMB: 32 * 1024},
 		CPUOvercommit:    1,
@@ -389,8 +394,8 @@ func TestCommittedNeverExceedsBudgetPlusExceptionAcrossAllPaths(t *testing.T) {
 	assertBound("after worker dispatch cycle")
 
 	// 4. Now queue 2 director tasks while budget is at 100% cap (16 vCPU / 32 GiB).
-	// At most 1 director exception may be admitted (bringing live to 20 vCPU / 40 GiB);
-	// the second director must wait.
+	// Both are admitted (bringing live to 24 vCPU / 48 GiB): a session is
+	// never held by the budget; the waiting worker w-3 still is.
 	for i := 1; i <= 2; i++ {
 		if err := st.PutTask(ctx, makeTestTask(fmt.Sprintf("d-%d", i), true)); err != nil {
 			t.Fatal(err)
@@ -400,16 +405,16 @@ func TestCommittedNeverExceedsBudgetPlusExceptionAcrossAllPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dispatchedDirs) != 1 {
-		t.Fatalf("expected at most 1 director exception dispatched over full budget, got %+v", dispatchedDirs)
+	if len(dispatchedDirs) != 2 {
+		t.Fatalf("expected both directors dispatched over a full budget, got %+v", dispatchedDirs)
 	}
-	assertBound("after director exception dispatch cycle")
-	if got := ledger.Live(); got != maxAllowedWithException {
-		t.Fatalf("after director exception dispatch, live = %s, want %s", got, maxAllowedWithException)
+	assertBound("after director dispatch cycle")
+	if got, want := ledger.Live(), (model.Commitment{CPUs: 24, MemoryMB: 48 * 1024}); got != want {
+		t.Fatalf("after director dispatch, live = %s, want %s", got, want)
 	}
 
-	// While at the exception ceiling (20 vCPU / 40 GiB), neither another
-	// director (d-3) nor a Stuck CI job can push committed higher.
+	// While over the cap, a third director (d-3) is still admitted, and
+	// nothing else is: neither the waiting worker nor a Stuck CI job.
 	if err := st.PutTask(ctx, makeTestTask("d-3", true)); err != nil {
 		t.Fatal(err)
 	}
@@ -417,10 +422,10 @@ func TestCommittedNeverExceedsBudgetPlusExceptionAcrossAllPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dispatchedOver) != 0 {
-		t.Fatalf("expected 0 dispatches while already over cap by an exception, got %+v", dispatchedOver)
+	if len(dispatchedOver) != 1 || dispatchedOver[0].TaskID != "d-3" {
+		t.Fatalf("expected only d-3 dispatched while over cap, got %+v", dispatchedOver)
 	}
-	assertBound("after blocked second exception")
+	assertBound("after a third session over the cap")
 
 	gate := &ci.SharedGate{
 		Budget: func() model.Budget { return budget },
@@ -542,5 +547,111 @@ func TestReconcileSandboxesPersistentSandboxMatchesPersistentPool(t *testing.T) 
 		if rec.AccountedCount != 1 || rec.LiveCount != 1 || rec.Committed != shape {
 			t.Fatalf("cycle %d: unexpected reconciliation counts/totals: %+v", cycle, rec)
 		}
+	}
+}
+
+// A session's sandbox keeps the name of the run that built it (2-1) while
+// later runs of the session (2-4, ...) use it. The reaper must not read it
+// as leaked by finished run 2-1 in any of the windows where neither the
+// store's live runs nor InFlight name it: parked warm, claimed by a dispatch
+// before SetRunSandbox records it, or used by a run whose row is finished
+// before the sandbox is parked warm again. Once nothing holds it, it is
+// reaped as before.
+func TestReconcileSandboxesKeepsSessionSandboxThroughClaimAndPark(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStoreForOrchestrator(t)
+	now := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)
+	ttl := 30 * time.Minute
+
+	if err := st.PutTask(ctx, makeTestTask("2", true)); err != nil {
+		t.Fatal(err)
+	}
+	limits := model.Limits{Workers: 10}
+	if err := st.StartRun(ctx, model.Run{ID: "2-1", TaskID: "2", Attempt: 1, StartedAt: now}, limits); err != nil {
+		t.Fatal(err)
+	}
+	backend := newFakeSizedBackend()
+	sb, err := backend.Acquire(ctx, "2-1", Shape{CPUs: 2, MemoryMB: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishRun(ctx, "2-1", now.Add(time.Second), "succeeded", "done"); err != nil {
+		t.Fatal(err)
+	}
+
+	runs := &InFlight{}
+	deps := Deps{Store: st, Sandboxes: backend, Runs: runs}
+	t.Cleanup(func() { discardWarmSessionSandbox(context.Background(), deps, "2") })
+
+	reconcile := func(step string) {
+		t.Helper()
+		if err := ReconcileSandboxes(ctx, deps, now.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		backend.mu.Lock()
+		_, live := backend.live["2-1"]
+		backend.mu.Unlock()
+		if !live {
+			t.Fatalf("%s: session sandbox 2-1 was reaped while the session still held it", step)
+		}
+	}
+
+	parkWarmSessionSandbox(deps, "2", "2-1", "key", "grants", sb, nil, model.Commitment{}, now, ttl)
+	reconcile("parked warm after run 2-1 finished")
+
+	// Run 2-4 is dispatched and claims the warm sandbox; its row is live
+	// but does not yet name the sandbox.
+	if err := st.StartRun(ctx, model.Run{ID: "2-4", TaskID: "2", Attempt: 1, StartedAt: now}, limits); err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	runs.Go("2-4", "2", func() { <-release })
+	claimed, _ := claimWarmSessionSandbox(deps, "2", "2-4", now)
+	if claimed == nil || claimed.SandboxID != "2-1" {
+		t.Fatalf("claimWarmSessionSandbox = %+v, want sandbox 2-1", claimed)
+	}
+	reconcile("claimed by run 2-4 before SetRunSandbox")
+
+	if err := st.SetRunSandbox(ctx, "2-4", "2-1", nil); err != nil {
+		t.Fatal(err)
+	}
+	reconcile("recorded as run 2-4's sandbox")
+
+	// Run 2-4's row is finished while its goroutine is still in flight,
+	// before the sandbox is parked warm again.
+	if err := st.FinishRun(ctx, "2-4", now.Add(2*time.Second), "succeeded", "done"); err != nil {
+		t.Fatal(err)
+	}
+	reconcile("run 2-4 finished, not yet parked")
+
+	parkWarmSessionSandbox(deps, "2", "2-1", "key", "grants", sb, nil, model.Commitment{}, now, ttl)
+	unholdSessionSandbox(st, "2-1", "2-4")
+	close(release)
+	if err := runs.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reconcile("parked warm again after run 2-4")
+
+	// A run that claims the sandbox and lets it go without parking it
+	// leaves nothing holding it: the reaper takes it.
+	if claimed, _ := claimWarmSessionSandbox(deps, "2", "2-5", now); claimed == nil {
+		t.Fatal("claimWarmSessionSandbox(2-5) found no warm sandbox")
+	}
+	unholdSessionSandbox(st, "2-1", "2-5")
+	if err := ReconcileSandboxes(ctx, deps, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	backend.mu.Lock()
+	_, live := backend.live["2-1"]
+	backend.mu.Unlock()
+	if live {
+		t.Fatal("sandbox 2-1 held by nothing should have been reaped")
 	}
 }

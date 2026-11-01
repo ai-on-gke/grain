@@ -93,17 +93,35 @@ export const SETTINGS_GROUPS = [
 // write from that section names).
 export const CONFIG_REPO_SECTION_PATHS = {
   general: ["tables/grain_config.json"],
-  git: ["tables/git_credential.json", "tables/repo_git_credential.json"],
+  // Git connections live in grain_config (git_connections, git_credential)
+  // and each repository's binding in repo_config (git_credential); their
+  // tokens and keys stay in the secret store and are never exported.
+  git: ["tables/grain_config.json", "tables/repo_config.json"],
   repositories: ["tables/repo_config.json", "tables/grain_config.json"],
+  // settings/capabilities.yml is exported only once a deployment has
+  // adopted the capability catalogue; until then capability servers,
+  // policy and default grants are columns of grain_config and scope sets
+  // rows of api_scope_set. So the files that always exist come first,
+  // and the first link opens one.
   tasks: [
-    "settings/capabilities.yml",
     "tables/grain_config.json",
     "tables/custom_field.json",
+    "settings/capabilities.yml",
   ],
-  agents: ["tables/grain_config.json", "tables/console_session.json"],
-  capabilities: ["settings/capabilities.yml"],
+  // Standing console sessions are grain_config.console_sessions.
+  agents: ["tables/grain_config.json"],
+  capabilities: [
+    "tables/grain_config.json",
+    "tables/api_scope_set.json",
+    "settings/capabilities.yml",
+  ],
   ci: ["tables/grain_config.json", "tables/repo_config.json"],
   memory: ["memory/deployment.md"],
+  // Caches sit under System / Operations, but none of their four
+  // settings is a bootstrap one: with settings locked the API refuses
+  // them like any other config-managed field (settings-mutability.spec.md
+  // D-1), so the section is drawn read-only then too.
+  caches: ["tables/grain_config.json"],
 };
 
 // isConfigRepoSection is whether a section's settings are config-repo

@@ -62,6 +62,10 @@ func TestOpenConfigPullRequestCommitsAValidatedHeldChange(t *testing.T) {
 	defer db.Close()
 	cfg := model.DefaultConfig()
 	cfg.MaxWorkers = 2
+	// A deployment's own template, as NewDeploymentConfig gives every
+	// new one: the pull request's task must still name the branch its
+	// commit is on rather than the template's expansion.
+	cfg.TaskBranchTemplate = model.DefaultTaskBranchTemplate
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +116,21 @@ func TestOpenConfigPullRequestCommitsAValidatedHeldChange(t *testing.T) {
 	if state := model.StateOf(*task, obs, false, 0); state != model.StateAwaitingSubmit {
 		t.Fatalf("the pull request's task is %s, want held for a person's submit", state)
 	}
+	// And the sync reads it as open: a task naming another branch had
+	// its pull request read as closed unmerged on the next tick, before
+	// anybody could submit it (2026-10-28 test plan §5 walkthrough).
+	if task.BranchName() != pr.Branch {
+		t.Fatalf("the task names branch %q, but the change was committed to %q", task.BranchName(), pr.Branch)
+	}
+	prClient := &StateRepoPullRequestClient{Manager: manager, Store: store}
+	target := model.ConfigRepo()
+	detail, err := prClient.GetPullRequest(target.Owner, target.Name, pr.Number)
+	if err != nil {
+		t.Fatalf("reading the internal pull request: %v", err)
+	}
+	if detail.State != "open" || detail.Merged || detail.HeadRef != pr.Branch {
+		t.Fatalf("the internal pull request reads %+v, want open with head %s", detail, pr.Branch)
+	}
 
 	// A change that would lock dispatch is refused before anything is
 	// committed.
@@ -120,5 +139,27 @@ func TestOpenConfigPullRequestCommitsAValidatedHeldChange(t *testing.T) {
 	var invalid *ui.ConfigPullRequestInvalid
 	if !errors.As(err, &invalid) || !errors.Is(err, staterepo.ErrDispatchLocked) {
 		t.Fatalf("a dispatch-locking change: err = %v", err)
+	}
+	if invalid.Stale {
+		t.Fatal("a dispatch-locking change was called stale: making it again would not help")
+	}
+
+	// A change refused before grain/config moved under it no longer
+	// applies: it is stale, which a person answers by making the change
+	// again rather than by fixing what it sets.
+	moved := strings.Replace(string(before), `"prompt_extension": ""`, `"prompt_extension": "moved"`, 1)
+	if moved == string(before) {
+		t.Fatalf("grain_config.json has no empty prompt_extension to move:\n%s", before)
+	}
+	if err := os.WriteFile(settingsFile, []byte(moved), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", repo.Dir(), "-c", "user.name=t", "-c", "user.email=t@example.com",
+		"commit", "-qam", "somebody else's change").CombinedOutput(); err != nil {
+		t.Fatalf("moving main: %v\n%s", err, out)
+	}
+	_, err = manager.OpenConfigPullRequest(ctx, ui.ConfigPullRequestRequest{Changes: changes, User: "alice"})
+	if !errors.As(err, &invalid) || !invalid.Stale {
+		t.Fatalf("a change that no longer applies to main: err = %v, want a stale ConfigPullRequestInvalid", err)
 	}
 }
