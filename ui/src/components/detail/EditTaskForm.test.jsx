@@ -534,4 +534,41 @@ describe("DetailOverlay edit form", () => {
     act.mock.calls[0][0]();
     expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(9);
   });
+
+  // The box's min and step are not enforced on Save (this is not a
+  // <form>): a 0 used to save as the default 5 and a 2.5 as 2, silently.
+  it.each(["0", "2.5", "-2"])(
+    "refuses a Task priority of %s rather than saving another",
+    async (typed) => {
+      const act = vi.fn().mockResolvedValue(true);
+      const user = userEvent.setup();
+      render(
+        <DetailOverlay
+          task={{ ...baseTask, priority: 7 }}
+          tasks={[]}
+          config={config}
+          onClose={() => {}}
+          onOpenTask={() => {}}
+          act={act}
+        />,
+      );
+
+      await user.click(screen.getByRole("button", { name: "Edit" }));
+      const priorityInput = screen.getByLabelText("Task priority");
+      await user.clear(priorityInput);
+      await user.type(priorityInput, typed);
+
+      expect(priorityInput).toHaveAttribute("aria-invalid", "true");
+      expect(screen.getByText(/a whole number, 1 or more/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+      expect(act).not.toHaveBeenCalled();
+
+      await user.clear(priorityInput);
+      await user.type(priorityInput, "3");
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      act.mock.calls[0][0]();
+      expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(3);
+    },
+  );
 });

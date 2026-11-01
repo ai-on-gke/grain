@@ -18,7 +18,7 @@ import { test, expect } from "./fixtures.js";
 // type="number" input does: "1e3" is a valid Task priority of 1000 and
 // "8e3" a valid 8000 MiB of memory. The form read them with parseInt,
 // which stops at the "e", and filed priority 1 and 8 MiB without a word
-// (docs/test-runs/2026-11-01-task-intake-inbox-lifecycle.md, bug 1).
+// (docs/test-runs/2026-11-01-task-intake-inbox-lifecycle.md, bug 2).
 
 test("New task files a number box's exponent entry as the number it is", async ({
   page,

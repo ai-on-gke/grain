@@ -449,6 +449,13 @@ var Migrations = []Migration{
 			"UPDATE `grain_config` SET `task_branch_template` = '" + DefaultTaskBranchTemplate + "' WHERE `task_branch_template` = '" + UnsluggedTaskBranchTemplate + "'",
 		},
 	},
+	{
+		Version:     79,
+		Description: "add pending_config_change to task_observation for propose_config_change",
+		Statements: []string{
+			"ALTER TABLE `task_observation` ADD COLUMN `pending_config_change` TEXT NULL",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

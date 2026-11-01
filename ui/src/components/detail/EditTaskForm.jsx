@@ -90,6 +90,15 @@ export default function EditTaskForm({
   const [keepRunning, setKeepRunning] = useState(savedKeepRunning);
   const savedPriority = t.priority ?? 5;
   const [priority, setPriority] = useState(String(savedPriority));
+  // A whole number from 1 up, or empty for "leave it as it is". This
+  // form is not a <form>, so the box's own min and step are never
+  // enforced on Save: without this a 0 saved as the default 5 (the
+  // server reads 0 as unset) and a 2.5 saved as 2, both without a word
+  // (2026-11-01 intake walkthrough).
+  const priorityText = String(priority).trim();
+  const priorityValid =
+    priorityText === "" ||
+    (/^\d+$/.test(priorityText) && Number(priorityText) >= 1);
   // The deployment's connections and default model: a task names no
   // team of its own.
   const connections = config?.agentBackends || [];
@@ -149,7 +158,7 @@ export default function EditTaskForm({
   // what was typed, so the edit can be retried or copied out rather
   // than lost with the error (grain/task-1699).
   const save = async () => {
-    if (!title.trim()) return;
+    if (!title.trim() || !priorityValid) return;
     const parsedReviewers = reviewers
       .split(",")
       .map((s) => s.trim())
@@ -349,13 +358,22 @@ export default function EditTaskForm({
         inputProps={{ min: 1, step: 1 }}
         value={priority}
         onChange={(e) => setPriority(e.target.value)}
-        helperText="default 5; higher numbers run first"
+        error={!priorityValid}
+        helperText={
+          priorityValid
+            ? "default 5; higher numbers run first"
+            : "a whole number, 1 or more; default 5, higher numbers run first"
+        }
         fullWidth
         size="small"
       />
       <Stack direction="row" spacing={1} justifyContent="flex-end">
         <Button onClick={onDone}>Cancel</Button>
-        <Button variant="contained" disabled={!title.trim()} onClick={save}>
+        <Button
+          variant="contained"
+          disabled={!title.trim() || !priorityValid}
+          onClick={save}
+        >
           Save
         </Button>
       </Stack>
