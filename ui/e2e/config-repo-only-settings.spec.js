@@ -99,11 +99,11 @@ for (const [name, viewport] of [
   });
 
   // A bootstrap field stays writable under the lock and can be left
-  // pending a restart, so Health links it to its card -- here Sandboxes →
-  // Kubernetes, which is taller than either screen. Centring such a card
-  // scrolled its heading and the field Health named (focused without
-  // scrolling) off the top of the page; it is aligned to its top instead.
-  test(`a Health link to a card taller than the screen lands on its heading and named field on a ${name} screen`, async ({
+  // pending a restart: Health links it directly to its field
+  // (#k8sNamespace), while a card anchor to Sandboxes → Kubernetes
+  // (#kubernetes, taller than either screen) aligns the card to its top
+  // rather than centring past its heading and first field.
+  test(`a Health pending-restart link and a tall card anchor land on the named field and card heading on a ${name} screen`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport);
@@ -128,14 +128,22 @@ for (const [name, viewport] of [
       .getByRole("link", { name: "Kubernetes namespace" });
     await expect(link).toHaveAttribute(
       "href",
-      "/settings/sandboxes#kubernetes",
+      "/settings/sandboxes#k8sNamespace",
     );
     await link.click();
-    await expect(page).toHaveURL(/\/settings\/sandboxes#kubernetes$/);
+    await expect(page).toHaveURL(/\/settings\/sandboxes#k8sNamespace$/);
     await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
 
     const card = page.locator("#kubernetes");
     const field = card.getByLabel("Kubernetes namespace");
+    await expect(field).toBeFocused();
+    await expect(field).toBeEnabled();
+    await expect(field).toBeInViewport();
+
+    // Opening the tall card's own anchor aligns its heading to the top of
+    // the viewport and focuses its first field in view.
+    await page.goto("/settings/sandboxes#kubernetes");
+    await expect(page).toHaveURL(/\/settings\/sandboxes#kubernetes$/);
     await expect(field).toBeFocused();
     await expect(field).toBeEnabled();
     expect((await card.boundingBox()).height).toBeGreaterThan(viewport.height);
