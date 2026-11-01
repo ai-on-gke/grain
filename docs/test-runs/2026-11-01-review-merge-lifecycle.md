@@ -129,11 +129,14 @@ under "asked: reply" with Reply and Acknowledge. The notifications tab shows
 
 ## Bugs
 
-- **`go` check red on main (fixed here).**
+- **`go` check red on main (fixed here, then on main too).**
   `TestSettingsLockedRefusesExactlyTheFieldsTheUIGreysOut` (fc9c9dcb) and the
   GCP project ID check (374a0736) landed independently. The test's sample
   `{"gcpProject":"proj"}` is a malformed ID. It is now refused with a 400
   before the lock gate can return 409, so `pkg/ui` failed on main and on
   every branch. The test now sends `my-project-123`. Refusing a malformed ID
-  with a 400 is correct, so the server is unchanged.
+  with a 400 is correct, so the server is unchanged. Main made the same fix
+  independently (it also moved the service-account email onto
+  `my-project-123`). The merge takes main's version, which leaves this
+  branch no net change to the test.
 - Nothing found in the §10 fixes themselves.
