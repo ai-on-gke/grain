@@ -96,7 +96,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	hostModeInstall := fs.Bool("host-mode-install", false, "show the notice an unmigrated host-mode install shows (banner, System -> Health, Upgrade), with the CLIs the default bare-machine run locations leave nowhere to run")
 	notifications := fs.Bool("notifications", false, "run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green or ttl) has come true is cleared on its own, as on a daemon's cycle")
 	schedules := fs.Bool("schedules", false, "run the reconcile loop's schedule step every -reconcile interval (default 2s), so a schedule that comes due fires, or records why it was skipped, on its own (what it files is still never dispatched)")
-	reconcile := fs.Duration("reconcile", 0, "run the reconcile loop's suite step every interval, and its release step against -github-sim's simulated GitHub too, logging a failed cycle as the daemon does (default off; agents still never run)")
+	reconcile := fs.Duration("reconcile", 0, "run the reconcile loop's suite step every interval, and its release and issue-import steps against -github-sim's simulated GitHub too, logging a failed cycle as the daemon does (default off; agents still never run)")
 	var upgradeVerifyCmd stringSliceFlag
 	fs.Var(&upgradeVerifyCmd, "upgrade-verify-cmd", "one argument of the command that verifies an -upgrade-image image's signature, repeated for every argument, as on grain daemon")
 	accessCodeFile := fs.String("access-code-file", "", "keep the demo's access code, which every caller, loopback included, signs in with, in this file -- written there if it is not already -- rather than beside its throwaway store, where it is logged")

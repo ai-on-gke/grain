@@ -80,6 +80,12 @@ func demoReconcileCycle(ctx context.Context, store *model.Store, releases github
 		if err := orchestrator.SyncReleases(ctx, store, releases, now); err != nil {
 			errs = append(errs, fmt.Errorf("releases: %w", err))
 		}
+		// The periodic issue import, over the same simulated GitHub, so
+		// a repository with it switched on imports at its interval here
+		// as it does on a daemon, not only on "Import issues now".
+		if err := runDemoReconcilers(ctx, orchestrator.Deps{Store: store, Client: releases}, now, "issue-imports"); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if err := orchestrator.SyncSuites(ctx, store, now); err != nil {
 		errs = append(errs, fmt.Errorf("suites: %w", err))
