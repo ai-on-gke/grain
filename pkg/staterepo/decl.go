@@ -677,6 +677,14 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 			out.Content = append(out.Content, key(f.key), node)
 			continue
 		}
+		if !hasAnyColumn(row, f.columns) {
+			// A store at an older schema, exported by this build (`grain
+			// state prepare-upgrade`), has no column for a field added
+			// since. Writing it as null would import as NULL into a NOT
+			// NULL column; leaving the key out lets the import take the
+			// column's default, as it does for a dump an older build wrote.
+			continue
+		}
 		name, node, err := columnNode(f, row)
 		if err != nil {
 			return nil, err
@@ -687,6 +695,17 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 		out.Content = append(out.Content, key(name), node)
 	}
 	return out, nil
+}
+
+// hasAnyColumn reports whether row, as read from the store, carries any
+// of columns -- whether the table the row came from has them at all.
+func hasAnyColumn(row map[string]any, columns []string) bool {
+	for _, c := range columns {
+		if _, ok := row[c]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // mine is the companion rows belonging to one parent.
