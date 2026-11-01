@@ -408,6 +408,39 @@ func TestCreateTaskRefusesAGrantThePolicyDenies(t *testing.T) {
 	}
 }
 
+// A repository default the policy denies is dropped when a task is
+// filed -- nobody asked for it -- and the task's thread says which one
+// and why, so the filer is not left to find it missing.
+func TestCreateTaskReportsADefaultThePolicyDrops(t *testing.T) {
+	ts, client := grantTestServer(t)
+	ctx := context.Background()
+	if _, err := client.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{grantTestCap + "#viewer"}); err != nil {
+		t.Fatal(err)
+	}
+	setDenyViewerFor(t, client)
+	var out map[string]any
+	if code := postJSON(t, ts, "POST", "/api/tasks", map[string]any{"title": "defaults", "repo": "acme/widgets"}, &out); code != 201 {
+		t.Fatalf("filing: %d %v", code, out)
+	}
+	id, _ := out["id"].(string)
+	task, err := client.Store.GetTask(ctx, id)
+	if err != nil || task == nil {
+		t.Fatalf("task %q: %v", id, err)
+	}
+	for _, g := range task.Grants {
+		if model.CapabilityGrantRef(g.Capability) == grantTestCap+"#viewer" {
+			t.Fatalf("the denied default was attached: %v", task.Grants)
+		}
+	}
+	comments, err := client.Store.Comments(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 || !strings.Contains(comments[0].Body, "Default grant "+grantTestCap+"#viewer was not attached") || !strings.Contains(comments[0].Body, "rule 1: deny") {
+		t.Fatalf("thread = %+v, want one note naming the dropped default and the rule", comments)
+	}
+}
+
 // Attaching a denied grant to a task already filed is refused the same
 // way.
 func TestSetCapabilityGrantRefusesAGrantThePolicyDenies(t *testing.T) {
