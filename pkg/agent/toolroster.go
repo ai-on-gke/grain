@@ -109,6 +109,7 @@ func PublishedToolNames() []string {
 	// chat session, and listed unconditionally for the reason every
 	// daemon-gated tool above is.
 	add(mcp.NewRenameSessionTools(nil))
+	add(mcp.NewProposeConfigChangeTools(nil, "", nil))
 	add(mcp.NewWaitForTaskTools(nil, nil))
 	add(mcp.NewResumeLaterTools(nil, nil))
 	add(mcp.NewNotifyTools(nil))

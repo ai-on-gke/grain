@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
+import PendingConfigChange from "./detail/PendingConfigChange.jsx";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Box, Button, Typography } from "@mui/material";
 import {
@@ -399,6 +400,7 @@ export default function TaskChat({
         )}
       </Box>
       <LocalScriptApprovals t={t} act={act} />
+      <PendingConfigChange t={t} act={act} />
       <div className="task-chat-window" ref={windowRef} id={windowId}>
         <MainContainer>
           <ChatContainer>
