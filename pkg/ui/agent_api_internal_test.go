@@ -72,6 +72,63 @@ func TestRouteScopesAreTotal(t *testing.T) {
 	}
 }
 
+// TestTaskMutationResponseClassificationIsTotal holds taskMutationResponseKinds
+// to routeScopes so a new mutating route under /api/tasks (or any non-GET route
+// under a tasks:* scope) cannot silently return respondWithTask to an agent
+// lacking tasks:read.
+func TestTaskMutationResponseClassificationIsTotal(t *testing.T) {
+	want := map[string]bool{}
+	for pattern, scope := range routeScopes {
+		if scope == scopeInternal {
+			continue
+		}
+		method, path, _ := strings.Cut(pattern, " ")
+		if method == http.MethodGet {
+			continue
+		}
+		if path == "/api/tasks" || strings.HasPrefix(path, "/api/tasks/") || strings.HasPrefix(string(scope), "tasks:") {
+			want[pattern] = true
+		}
+	}
+	for pattern := range want {
+		if _, ok := taskMutationResponseKinds[pattern]; !ok {
+			t.Errorf("mutating task route %q (scope %s) is missing from taskMutationResponseKinds", pattern, routeScopes[pattern])
+		}
+	}
+	for pattern := range taskMutationResponseKinds {
+		if !want[pattern] {
+			t.Errorf("taskMutationResponseKinds names %q, which is not a non-GET, non-internal task route", pattern)
+		}
+	}
+
+	omittedFromPatchEcho := map[string]bool{
+		"customFields": true,
+		"capabilities": true,
+		"reviewers":    true,
+		"keep_running": true,
+	}
+	rt := reflect.TypeFor[UpdateTaskRequest]()
+	for i := range rt.NumField() {
+		tag, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		if tag == "" || tag == "-" || omittedFromPatchEcho[tag] {
+			continue
+		}
+		sample := []byte(`{"` + tag + `":1}`)
+		if tag == "priority" {
+			if got := editedPatchResponseKeys([]byte(`{"priority":5}`)); !slices.Equal(got, []string{"priority"}) {
+				t.Errorf("editedPatchResponseKeys(numeric priority) = %v, want [priority]", got)
+			}
+			if got := editedPatchResponseKeys([]byte(`{"priority":true}`)); !slices.Equal(got, []string{"priorityDispatch"}) {
+				t.Errorf("editedPatchResponseKeys(bool priority) = %v, want [priorityDispatch]", got)
+			}
+			continue
+		}
+		if got := editedPatchResponseKeys(sample); !slices.Equal(got, []string{tag}) {
+			t.Errorf("UpdateTaskRequest field %q (json %q) is not mapped by editedPatchResponseKeys: got %v", rt.Field(i).Name, tag, got)
+		}
+	}
+}
+
 // TestAPIScopeVocabularyIsDocumented holds docs/agent-api.md and the
 // vocabulary to each other the cheap way: every scope and preset is named
 // in the document.
