@@ -321,8 +321,8 @@ in_process:
 func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 	t.Parallel()
 	w := newHoldWorld(t, false)
-	parent := w.create("auto-merging parent", true, []string{"grain-log", "gcp-key"})
-	if !holds(parent, "grain-log") || !holds(parent, "gcp-key") {
+	parent := w.create("auto-merging parent", true, []string{"self-debug", "gcp-key"})
+	if !holds(parent, "self-debug") || !holds(parent, "gcp-key") {
 		t.Fatalf("the parent does not hold both grants: %+v", parent.Grants)
 	}
 	// The parent was filed from the template the catalogue keeps gcp-key
@@ -331,7 +331,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	importCatalogue(t, w.store, `in_process:
-  grain-log:
+  self-debug:
     restrictions: {requires_person: true}
   gcp-key:
     restrictions: {templates: [walk-ops]}
@@ -349,7 +349,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		}
 		steps := w.changeScript(task, "echo 'typo' >> docs/guide.md")
 		return append([]antigravity.Step{
-			propose("needs grain-log", "grain-log"),
+			propose("needs self-debug", "self-debug"),
 			propose("needs gcp-key", "gcp-key"),
 			propose("needs nothing"),
 		}, steps...)
@@ -371,7 +371,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		state        model.State
 		note         string
 	}{
-		{"needs grain-log", "grain-log", model.StateProposed, model.CatalogueRequiresPersonNote([]string{"grain-log"})},
+		{"needs self-debug", "self-debug", model.StateProposed, model.CatalogueRequiresPersonNote([]string{"self-debug"})},
 		{"needs gcp-key", "gcp-key", model.StateProposed, "settings/capabilities.yml refuses what it asked for"},
 		{"needs nothing", "", model.StateQueued, ""},
 	} {

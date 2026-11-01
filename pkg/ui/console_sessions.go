@@ -526,19 +526,21 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		// somebody choosing a set, in front of the thing it applies to.
 		seen := map[string]bool{}
 		ids := make([]string, 0, len(*req.Capabilities))
-		for _, capability := range *req.Capabilities {
-			capability, err := c.normalizeCapabilityID(capability)
+		for _, rawCap := range *req.Capabilities {
+			normalizedIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return nil, err
 			}
-			if _, ok := c.capabilityByID(capability); !ok {
-				return nil, validationErrorf("capabilities: %s", capabilityRefusal(capability))
+			for _, capability := range normalizedIDs {
+				if _, ok := c.capabilityByID(capability); !ok {
+					return nil, validationErrorf("capabilities: %s", capabilityRefusal(capability))
+				}
+				if seen[capability] {
+					continue
+				}
+				seen[capability] = true
+				ids = append(ids, capability)
 			}
-			if seen[capability] {
-				continue
-			}
-			seen[capability] = true
-			ids = append(ids, capability)
 		}
 		session.Capabilities = ids
 	}
@@ -853,19 +855,21 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 	if req.Capabilities != nil {
 		seen := map[string]bool{}
 		caps = make([]string, 0, len(req.Capabilities))
-		for _, capability := range req.Capabilities {
-			capability, err := c.normalizeCapabilityID(capability)
+		for _, rawCap := range req.Capabilities {
+			normalizedIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return "", nil, err
 			}
-			if _, ok := c.capabilityByID(capability); !ok {
-				return "", nil, validationErrorf("capabilities: %s", capabilityRefusal(capability))
+			for _, capability := range normalizedIDs {
+				if _, ok := c.capabilityByID(capability); !ok {
+					return "", nil, validationErrorf("capabilities: %s", capabilityRefusal(capability))
+				}
+				if seen[capability] {
+					continue
+				}
+				seen[capability] = true
+				caps = append(caps, capability)
 			}
-			if seen[capability] {
-				continue
-			}
-			seen[capability] = true
-			caps = append(caps, capability)
 		}
 	} else {
 		// The director's set, plus any deployment defaults offered here so a

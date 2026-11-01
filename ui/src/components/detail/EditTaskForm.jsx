@@ -22,6 +22,7 @@ import {
   TextField,
 } from "@mui/material";
 import api from "../../api.js";
+import { wholeNumber } from "../../wholeNumber.js";
 import {
   connectionLabel,
   connectionsServingModels,
@@ -162,7 +163,7 @@ export default function EditTaskForm({
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
-    const parsedPriority = parseInt(String(priority).trim(), 10);
+    const parsedPriority = wholeNumber(priority);
     const saved = await act(
       () =>
         api(`/api/tasks/${t.id}`, {

@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/change"
@@ -359,22 +360,39 @@ func capabilityAdmitter(deps Deps, admit dispatch.Admitter) dispatch.Admitter {
 	}
 }
 
+// hasExternalCapabilityRef reports whether any grant in grants is a capability
+// reference targeting an external/subprocess capability server rather than the
+// in-process grain server (which opens no control- or data-plane listener).
+func hasExternalCapabilityRef(grants []model.Grant) bool {
+	for _, g := range grants {
+		if model.IsCapabilityRef(g.Capability) && !grainserver.IsInProcessGrant(g.Capability) {
+			return true
+		}
+	}
+	return false
+}
+
 // mintCapabilityPass resolves task's references against their servers,
 // records the normalized args on the task (§2.3.1), checks each against
 // the capability policy (§4.2.2) and mints the pass (§4.2.3).
 func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candidate dispatch.Candidate,
 	at, deadline time.Time) (*protocol.Pass, error) {
 
-	if deps.CapabilityServers == nil {
+	external := hasExternalCapabilityRef(task.Grants)
+	if external && deps.CapabilityServers == nil {
 		return nil, &protocol.RefusedError{Reason: "this deployment attaches no capability servers, so it cannot grant a capability reference"}
 	}
 	// A sandbox that is a directory on the daemon's own host shares its
 	// network namespace and can reach every capability server's control
 	// plane and data-plane listener directly (§3.2.4).
-	if isUnisolated(deps.Sandboxes) {
+	if external && isUnisolated(deps.Sandboxes) {
 		return nil, &protocol.RefusedError{Reason: "this deployment's sandboxes are directories on grain's own host, which cannot keep a capability server's control plane out of a sandbox's reach, so it runs no attempt holding a capability grant"}
 	}
-	lookup := deps.CapabilityServers.Lookup
+	var baseLookup protocol.Lookup
+	if deps.CapabilityServers != nil {
+		baseLookup = deps.CapabilityServers.Lookup
+	}
+	lookup := grainserver.Lookup(baseLookup)
 	recorded, err := model.NormalizeCapabilityGrants(task.Grants, lookup)
 	if err != nil {
 		return nil, &protocol.TransientError{Grant: "capabilities", Err: err}

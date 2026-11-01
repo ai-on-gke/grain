@@ -22,7 +22,7 @@ import (
 )
 
 // A capability registered from outside core is offered in the picker,
-// after grain-log, under the name it was registered with, and Settings
+// after self-debug, under the name it was registered with, and Settings
 // names it the same way.
 func TestOfferedCapabilitiesIncludeRegisteredProviders(t *testing.T) {
 	ids := func() []string {
@@ -45,8 +45,8 @@ func TestOfferedCapabilitiesIncludeRegisteredProviders(t *testing.T) {
 	if c := offered[i]; c.Name != capabilitytest.Name || c.Description != capabilitytest.Description {
 		t.Errorf("offered %+v, want the registered name and description", c)
 	}
-	if i == 0 || offered[i-1].ID != "grain-log" {
-		t.Errorf("%s offered at %d, want it straight after grain-log: %v", capabilitytest.ID, i, ids())
+	if i == 0 || offered[i-1].ID != "self-debug" {
+		t.Errorf("%s offered at %d, want it straight after self-debug: %v", capabilitytest.ID, i, ids())
 	}
 	if got := capabilityDisplayName(capabilitytest.ID); got != capabilitytest.Name {
 		t.Errorf("capabilityDisplayName = %q, want %q", got, capabilitytest.Name)

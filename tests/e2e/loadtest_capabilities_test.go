@@ -57,11 +57,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
@@ -92,11 +90,10 @@ import (
 func loadHarnessRegistry(extra ...model.CapabilityProvider) *model.CapabilityRegistry {
 	providers := append([]model.CapabilityProvider{}, extra...)
 	providers = append(providers,
-		selfdebug.New(), grainlog.New(), deploymenthealth.New(), selfrepair.New(),
+		selfdebug.New(), selfrepair.New(),
 		bootstrap.New(), grainci.New(), registrypush.New(),
 		consolecap.New(), readissues.New(),
-		prioritydispatch.New(), durable.New(),
-		dbaccess.NewReadProvider(), dbaccess.NewWriteProvider())
+		prioritydispatch.New(), durable.New())
 	for _, r := range capability.Registered() {
 		providers = append(providers, r.New())
 	}
@@ -108,17 +105,30 @@ func loadHarnessRegistry(extra ...model.CapabilityProvider) *model.CapabilityReg
 // missingSessionCapabilities names every capability the given console
 // sessions grant that reg has no provider for -- the registry's own
 // Lookup, which is the call model.ResolveGrants makes when a tick
-// prepares one of those sessions' tasks, so this answers the question
-// the dispatch will ask rather than a restatement of it.
+// prepares one of those sessions' tasks, plus grainserver's in-process
+// capability-server check for https://grain.dev/capabilities/grain#*
+// references, so this answers the question the dispatch will ask rather
+// than a restatement of it.
 func missingSessionCapabilities(reg *model.CapabilityRegistry, sessions []model.ConsoleSession) []string {
 	var missing []string
 	seen := map[string]bool{}
+	lookup := grainserver.Lookup(nil)
 	for _, session := range sessions {
 		for _, name := range session.Capabilities {
 			if seen[name] {
 				continue
 			}
 			seen[name] = true
+			if model.IsCapabilityRef(name) {
+				if !grainserver.IsInProcessGrant(name) {
+					missing = append(missing, name)
+					continue
+				}
+				if _, err := model.NormalizeCapabilityNames([]string{name}, lookup); err != nil {
+					missing = append(missing, name)
+				}
+				continue
+			}
 			if _, ok := reg.Lookup(name); !ok {
 				missing = append(missing, name)
 			}

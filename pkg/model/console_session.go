@@ -345,7 +345,7 @@ func defaultConsoleSessionCapabilities() []string {
 // isolating backend can close the director in the same pane the
 // capabilities are in.
 func DefaultConsoleSessions() []ConsoleSession {
-	caps := []string{"self-debug", "grain-log", "deployment-health", "bootstrap-playbooks"}
+	caps := []string{"self-debug", GrainJournalGrant, "api:deployment:read", GrainHealthGrant, "bootstrap-playbooks"}
 	for _, id := range defaultConsoleSessionCapabilities() {
 		if !slices.Contains(caps, id) {
 			caps = append(caps, id)

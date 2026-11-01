@@ -502,12 +502,19 @@ export function processNarrowingFromSearch(params) {
   if (filters.length === 0 && kinds.length === 0 && !q && !rawSort) return null;
   let sort = DEFAULT_PROCESS_SORT;
   if (rawSort in LEGACY_SORTS) sort = LEGACY_SORTS[rawSort];
-  else if (rawSort)
-    sort = rawSort
+  else if (rawSort) {
+    // Only the keys this page has an attribute for, the way parseKinds
+    // drops a kind it does not know: a key naming none orders nothing,
+    // and kept it left a link's `?sort=bogus` showing the default rows
+    // under a sort nobody could see or take back. Nothing left is the
+    // default order rather than the custom one, which only "custom" asks for.
+    const keys = rawSort
       .split(",")
       .map((part) => part.split(":"))
-      .filter(([attr]) => attr)
+      .filter(([attr]) => PROCESS_ATTRIBUTES.some((a) => a.id === attr))
       .map(([attr, dir]) => ({ attr, dir: dir === "desc" ? "desc" : "asc" }));
+    if (keys.length > 0) sort = keys;
+  }
   return {
     search: q,
     sort,

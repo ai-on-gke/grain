@@ -2777,6 +2777,10 @@ func writeClientError(w http.ResponseWriter, err error) {
 		writeCINotUp(w)
 		return
 	}
+	if errors.Is(err, ci.ErrStartQueued) {
+		writeCIStartQueued(w, err)
+		return
+	}
 	var fe *ForbiddenError
 	if errors.As(err, &fe) {
 		writeError(w, http.StatusForbidden, err)

@@ -4628,15 +4628,18 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 			mayReadFullConfig = true
 			mayReadMetrics = true
 			mayReadPipeline = true
-		case "grain-log":
+		case "grain-log", GrainJournalRef, GrainJournalGrant:
 			mayReadGrainLog = true
-		case "deployment-health":
+		case "deployment-health", GrainHealthRef, GrainHealthGrant:
 			mayReadHealth = true
 		case "bootstrap-playbooks":
 			mayReadPlaybooks = true
 		case "read-issues":
 			mayReadIssues = true
 		case "db-read", "db-write":
+			mayReadDB = true
+		}
+		if IsGrainSQLGrant(name) {
 			mayReadDB = true
 		}
 		// An api grant limited to one repository is spelt
