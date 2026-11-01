@@ -88,7 +88,7 @@ creds=$(ls -t $(find ` + sandboxDir + ` -maxdepth 4 -name .git-credentials) 2>/d
 [ -n "$creds" ] || { echo "no sandbox credential under ` + sandboxDir + `" >&2; exit 1; }
 export HOME=$(dirname "$creds")
 unset GRAIN_SANDBOX_PROXY GRAIN_SANDBOX_TOKEN GRAIN_SERVER GRAIN_LOCAL_API_TOKEN_FILE
-cd "$HOME/work"
+cd "$HOME/work" || { echo "no checkout at $HOME/work" >&2; exit 1; }
 echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call-1","name":"run_command","input":{"command":"grain ci wait"}}]}}'
 if [ "$n" = 1 ]; then
   git -c user.email=a@b -c user.name=a commit -q --allow-empty -m change
