@@ -8,6 +8,8 @@ This specification records, for **every setting and configuration entity in Grai
 2. whether it is **settable from the config repository** (`grain/config` or an external Git state repo), and in which file;
 3. whether it is **locked** when `grain_config.settings_locked` (`settingsLocked`) is on, and how it behaves in external config-repo mode, under the `directConfigWrites` opt-out, and beside a repository's own `.grain/settings.yml`.
 
+§2.10 condenses this into one matrix: for each surface (bootstrap and config-managed `grain_config` fields, `repo_config`, composed entities, secrets, `state-repo.json`, browser preferences), who may write it (person via UI, REST API, agent via scoped API, config PR) in each of the four modes.
+
 It is the per-setting companion of the one-page model in [`design/design/settings.design.md`](../../design/settings.design.md), which defines the six state surfaces and the four deployment modes this document relies on. The field-by-field storage reference that design names, [`settings.spec.md`](settings.spec.md), is a separate document and is not restated here.
 
 Ground truth audited: `pkg/ui/config_refusal.go`, `pkg/ui/config_bootstrap.go`, `pkg/ui/settings.go`, every mutating route registered in `pkg/ui/server.go` and `pkg/ui/deployment_routes.go`, `pkg/ui/route_scopes.go`, `pkg/staterepo/bind.go` / `dump.go` / `decl.go` / `capabilities_file.go`, `pkg/trustboundary/trustboundary.go`, `pkg/declschema/declschema.go`, `pkg/repodecl/settings.go`, `ui/src/settingsSections.js`, `ui/src/components/SettingsPage.jsx`, `ui/src/components/RepoPage.jsx` and the section components under `ui/src/components/settings/`, on `main` at the merge of #297 (which includes #275, `settings_locked`).
@@ -111,7 +113,7 @@ Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `s
 
 2.8.1. When `declarations` is on for a repository (`PUT /api/repos/{owner}/{name}/declarations`), the declaration sync reads `.grain/settings.yml` (and `.grain/{workflows,templates,suites,schedules,triggers}/…`, `merge-rules.yml`, `lifecycle.yml`, `review.yml`, `**/*.grain.md`) from the default branch. Its settings keys are exactly `prompt-extension`, `setup-command`, `port-branches` and `port-types` (`pkg/repodecl/settings.go`).
 
-2.8.2. Declared values are stored in their **own** columns — `repo_config.declared_prompt_extension`, `declared_setup_command`, `declared_port_branches`, `declared_port_types` — owned by the declaration sync. They MUST NOT be writable through the UI, the REST API, or a `grain/config` edit that the next sync would not overwrite; the UI shows them read-only ("Declared by {repo} itself in .grain/settings.yml").
+2.8.2. Declared values are stored in their **own** columns — `repo_config.declared_prompt_extension`, `declared_setup_command`, `declared_port_branches`, `declared_port_types` — owned by the declaration sync. They MUST NOT be writable through the UI, the REST API, or a `grain/config` edit that the next sync would not overwrite; the UI shows them read-only ("Declared by {repo} itself in .grain/settings.yml"). Because the sync rewrites them only when the repository's default branch moves, `ExportConfig` leaves them out of `tables/repo_config.json` and applying a settings change keeps the values the database holds (`staterepo.declaredColumns`, beside `withheldColumns`); `grain state check` warns, naming `.grain/settings.yml`, when a file carries one (`TestTheRepositoryDeclaredColumnsAreNeverSetFromTheConfigRepository`).
 
 2.8.3. They **compose with** (`Compose: Append`, `pkg/declschema`) rather than override the operator's columns: the declared prompt extension and setup command run after the operator's, and the declared port branches/types are unioned with `repo_config.port_branches`/`port_types`. The operator's own field stays writable (subject to the lock) and stays meaningful.
 
@@ -124,6 +126,38 @@ Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `s
 2.9.2. An agent MUST NOT unlock `settings_locked` through the API while the lock is effective (§2.3.4). It MAY turn the lock **on** (that is a bootstrap-only change) and it MAY propose `settings_locked: false` in a `grain/config` PR.
 
 2.9.3. Every path in `grain/config` is classified `StatePrivilege` (`RequiresHuman: true`) by `trustboundary.ClassifyState`, so a config PR waits for a person's **Submit** unless `settings/config-policy.yml`'s `auto_merge_paths` exempts it. `NeverAutoMergePaths` bounds that exemption: `settings/config-policy.yml`, `settings/{capabilities,new-task-form,templates,schedules,suites}.yml`, `tables/{grain_config,repo_config,api_scope_set,agent_backend,repo_workflow}.json`, every `template*`/`schedule*`/`suite*`/`qualification*`/`standing_sandbox*`/`persistent_sandbox`/`gcp_key` table, `scripts/**`, `workflows/**`, `.github/**`, `.grain/**` and `schema-version` always need a person. Paths that MAY be exempted include `memory/**`, `release-notes/**`, `tables/board*.json`, `tables/custom_field.json`.
+
+### 2.10 Per-mode write matrix by surface {#SM-10}
+
+2.10.1. The table below is the summary of §2.1–§2.9: for each settings surface, **who** may write it in each of the four modes. §3 is the per-setting detail behind each row, and §4 lists where the code departs from it. Writers:
+
+- **P**: a person, through the UI.
+- **R**: the REST API called by a person or operator credential (no `X-Grain-Acting-Task`). The server applies the same guard as for **P**, but without the UI's read-only rendering (§2.6).
+- **A**: an agent, through the scoped agent API (`agentAPIGate`, `pkg/ui/agent_api_gate.go`). The acting task MUST hold the route's `api:<scope>` grant for the repository the call names. A **Dangerous** scope (§2.9.1) also needs a reason (`X-Grain-Acting-Reason`), and it is refused on the `sandbox-cli` channel together with `repos:write` (`IsSandboxDeniedAPIScope`). So the agent rows here are reachable only by a run that a person granted the scope to, over the model channel. Where **A** is allowed it is the same write as **R**, behind the same config guard.
+- **C**: a config PR, meaning a commit merged into the config repository and imported by `staterepo.Apply` on the next tick (§2.2.2). In modes 2 and 3 that is `grain/config`, opened by a person, through `POST /api/state-repo/pull-requests` (`settings:write`), or by a task with `writes:` on `grain/config`. Every path needs a person's **Submit** unless it is auto-merge-exempt (§2.9.3). In mode 4 it is a pull request on the external remote, merged under that repository's own rules and applied on Grain's next sync.
+- **409**: the write is refused with `config_managed_externally`, and the refusal carries the edit to commit instead (§2.10.3).
+- **—**: no writer on that path.
+
+| Surface | 1. Standalone / demo (`StateRepo == nil`) | 2. Internal, unlocked | 3. Internal, `settings_locked` | 4. External config repo |
+| --- | --- | --- | --- | --- |
+| **Bootstrap `grain_config` fields** (`clearBootstrap`, §2.4: models and connections, sandbox resources/backend/image/`k8s*`, `maxWorkers`, CLI run locations, `settingsLocked` itself) | P, R, A. No C. | P, R, A, each synced to `grain/config` (`SyncAfterWrite`); C | P, R, A; C. Guard **B** / **G** with `bootstrapOnlyChange` allows the write. Exception: an agent turning the lock **off** goes through **S** and gets 409 (§2.9.2). | C only. P / R / A get 409. Guard **B** refuses in external mode. |
+| **Config-managed `grain_config` fields** (every other column, §2.4) | P, R, A. No C. With `settings_locked` on, **G** gets 409 anyway (D-12). | P, R, A (synced); C | C only. P / R / A get 409 (`internal: true`, rehearsed patch to `tables/grain_config.json` or `settings/capabilities.yml`). The UI does not grey out every such field (D-1, D-2). | C only. P / R / A get 409. |
+| **`repo_config`** (repo page, `PUT /api/repos/{o}/{n}/…`, guard **S**) | P, R, A (`repos:*`, `capabilities:admin` for grants, without self-escalation) | P, R, A (synced); C | C only. P / R / A get 409. Release secrets get 409 too (**S·u**, D-6). | C only. P / R / A get 409. |
+| **Composed entities**: templates, schedules, suites, qualifications, boards, custom fields, API scope sets, standing / persistent sandboxes, `repo_workflow` (guard **S**) | P, R, A | P, R, A (synced); C | C only. P / R / A get 409. The UI is not lock-aware for boards and processes (D-4). An open console session's live task row stays writable (D-5). | C only. P / R / A get 409. |
+| ↳ **Memory** (`memory/**`; no guard) | P, R, A (`memory:write`) | P, R, A; C | P, R, A (the UI renders it read-only, D-3); C | P, R, A, until the next import replaces them (D-3); C |
+| ↳ **Repository declarations** (`.grain/settings.yml`, …) | A PR on the target repository, in every mode, by whoever may write that repository. These are composed with the operator's value, never written through Grain's settings API (§2.8, D-13). | ← | ← | ← |
+| **Secrets** (`<data-dir>/secrets`: agent keys, connection credentials, tokens, `PUT /api/secrets/…`; no guard) | P, R, A (`secrets:write` / `connections:write`, person-granted). Never C: not exported. | same | same (except D-6, D-7) | P (the UI greys out some of it, D-9), R, A. Capability-server bindings get 409 before the value is stored (§2.7.2). Never C. |
+| **`<data-dir>/state-repo.json`** (host-local, not in the database) | — (`POST /api/state-repo/remote` answers 501). Operator: edit the file, or `grain state repo <url>`. | `remote` / `branch` / `tokenFile`: P (Config repo page), R, A (`settings:write`) via `POST /api/state-repo/remote`, which calls no config guard; operator CLI or file. `directConfigWrites`, `noWorkflow`, `postCheck`, `checkImage`, `localOnlyAcknowledged`: operator file edit only. Never C. | same | same: `POST /api/state-repo/remote` with `"none": true` is how a deployment leaves external mode. |
+| **Browser preferences** (`localStorage`: theme, time zone, timeline order, sidebar) | P, in that browser only | same | same | same. Never read-only (`NOT_CONFIG`). |
+
+2.10.2. **The `directConfigWrites` escape hatch.** `"directConfigWrites": true` in `state-repo.json` (`staterepo.Settings.DirectConfigWrites`, read through `LoadSettings` on every guarded write, so it needs no restart) MUST make column 3 behave exactly like column 2. `configRepoFor` returns "not managed" before it reads `settings_locked`, `configRepoOnly` reports false, an agent may unlock, and guarded writes sync through `SyncAfterWrite`. It MUST NOT change column 4, because `configRepoFor` checks `externalConfigRepo` first. The flag can only be set by whoever can edit the data directory: no UI, REST route, agent scope or config PR writes it. The UI does not honour it yet (D-10).
+
+2.10.3. **The refusal and its rehearsal.** Each **409** cell above is the same answer: `code: "config_managed_externally"`, `repo`, `branch`, `path`, `change` and, for an agent, `access` (§2.3.2, §2.7.1). How the edit is filled in depends on the guard:
+
+- **Rehearsed guards (S, B, G).** `guardConfigWrite` *arms* the request's `configWriteRehearsal` rather than failing. The handler's write then runs inside `staterepo.Rehearse`, between two exports of the configuration on a transaction that is rolled back. The diff becomes `change`, and `path` lists the files in it. Changes that touch only `*_sequence.json` are carried forward to the next rehearsed write instead of being answered. If the rehearsal fails, or the handler never reaches a write, the refusal goes out with only the paths of the guard's tables (§2.3.3).
+- **Unrehearsed guards (S·u, B·u).** These refuse at once, with `path` and a `description`, before any side effect.
+
+Either way the database is unchanged and nothing syncs. A person or a task holding `settings:write` can pass `change` to `POST /api/state-repo/pull-requests` as it is. A task whose `access.canWrite` is true can commit it to the config repository directly. Grain's own writes, made without a `WriteRehearsal` in context, are never refused (§1.3).
 
 ## 3. Settings mutability and lock matrix
 
@@ -368,16 +402,22 @@ In external mode every Settings section except Config repo, Preferences and Upgr
 
 ### D-10: The UI ignores `directConfigWrites`
 
+*Repo page fixed 2026-10-31 (`docs/test-runs/2026-10-31-settings-git-repositories-verification.md`): `RepoPage` keys its lock on `config.configRepoOnly` alone. `SettingsPage` still prefers `settings.settingsLocked`.*
+
 With `directConfigWrites: true` and `settings_locked: true`, `GET /api/config` reports `configRepoOnly: false`, and the server accepts every write. But `SettingsPage` prefers `settings.settingsLocked` once settings are loaded, and `RepoPage` uses `config.configRepoOnly || config.settingsLocked`, so both render read-only. The UI should key the lock on `config.configRepoOnly` alone.
 
 ### D-11: Config-managed notices link files that do not exist
 
-`CONFIG_REPO_SECTION_PATHS` named `tables/git_credential.json`, `tables/repo_git_credential.json` (Git) and `tables/console_session.json` (Agents); it now links Git to `tables/grain_config.json` / `tables/repo_config.json` and Agents to `tables/grain_config.json`. Those tables do not exist: git connections live in `grain_config.git_connections` / `git_credential` and `repo_config.git_credential`, and console sessions in `grain_config.console_sessions`, all exported to `tables/grain_config.json` / `tables/repo_config.json`. The same names appear in `trustboundary.NeverAutoMergePaths` (harmless there), and `settings/new-task-form.yml` is listed there but is not written by `pkg/staterepo`.
+*Fixed in `CONFIG_REPO_SECTION_PATHS` 2026-10-31: Git links `tables/grain_config.json` and `tables/repo_config.json`, Agents `tables/grain_config.json`. The `trustboundary.NeverAutoMergePaths` entries are left (harmless).*
+
+`CONFIG_REPO_SECTION_PATHS` names `tables/git_credential.json`, `tables/repo_git_credential.json` (Git) and `tables/console_session.json` (Agents). Those tables do not exist: git connections live in `grain_config.git_connections` / `git_credential` and `repo_config.git_credential`, and console sessions in `grain_config.console_sessions`, all exported to `tables/grain_config.json` / `tables/repo_config.json`. The same names appear in `trustboundary.NeverAutoMergePaths` (harmless there), and `settings/new-task-form.yml` is listed there but is not written by `pkg/staterepo`.
 
 ### D-12: `settings_locked` refuses writes on a deployment with no config repository
 
 `configRepoFor` refuses a non-bootstrap API write whenever `settings_locked` is on and `directConfigWrites` is off, without checking that `Config.StateRepo` exists. On a standalone deployment (§2.1) that flag leaves non-bootstrap settings writable by nobody but the unlock toggle. The 409 names `grain/config` and `POST /api/state-repo/pull-requests`, and neither exists there. The guard should treat "no state repository" as unlocked, or the UI should not offer the lock there.
 
 ### D-13: `.grain/settings.yml` composes; it does not override
+
+*Design doc wording corrected 2026-10-31.*
 
 `design/design/settings.design.md` §3 says repository declarations "override both the UI and `grain/config`". In the code (§2.8) the four declarable settings are stored in separate `declared_*` columns and **appended to / unioned with** the operator's value. The design doc's wording should be corrected; no code change is implied.

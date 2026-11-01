@@ -14,8 +14,14 @@
 
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import api from "../api.js";
+import {
+  guardLeaving,
+  leavingLosesEdits,
+  useUnsavedEdits,
+} from "../unsavedEdits.js";
 import ConfigRefusalDialog, {
   configRepoRefusal,
   settingsSectionPath,
@@ -130,6 +136,54 @@ describe("ConfigRefusalDialog for the internal grain/config", () => {
     expect(
       screen.queryByRole("button", { name: "Create Config PR" }),
     ).toBeNull();
+  });
+
+  // The editor the refused write came from stays open behind the
+  // dialog; once the pull request carries its edit, leaving it loses
+  // nothing, so following "task N" must not ask DISCARD_PROMPT.
+  function Editor() {
+    const { formRef, isDirty } = useUnsavedEdits({});
+    useEffect(() => guardLeaving(isDirty), [isDirty]);
+    return (
+      <form ref={formRef}>
+        <input name="name" aria-label="Name" />
+      </form>
+    );
+  }
+
+  it("settles the editor behind it once the pull request opens", async () => {
+    api.mockResolvedValue({ taskId: "42", number: 42 });
+    const user = userEvent.setup();
+    render(
+      <>
+        <Editor />
+        <ConfigRefusalDialog refusal={internal} onClose={() => {}} />
+      </>,
+    );
+    // The dialog is modal; type behind it as the person did before Save.
+    screen.getByLabelText("Name", { hidden: true }).value = "Held template";
+    expect(leavingLosesEdits()).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Create Config PR" }));
+    await screen.findByTestId("config-refusal-opened");
+    expect(leavingLosesEdits()).toBe(false);
+    // An edit made after the pull request is one it does not carry.
+    screen.getByLabelText("Name", { hidden: true }).value = "Changed again";
+    expect(leavingLosesEdits()).toBe(true);
+  });
+
+  it("leaves the editor's edit guarded when the pull request fails", async () => {
+    api.mockRejectedValue(new Error("no"));
+    const user = userEvent.setup();
+    render(
+      <>
+        <Editor />
+        <ConfigRefusalDialog refusal={internal} onClose={() => {}} />
+      </>,
+    );
+    screen.getByLabelText("Name", { hidden: true }).value = "Held template";
+    await user.click(screen.getByRole("button", { name: "Create Config PR" }));
+    await screen.findByTestId("config-refusal-error");
+    expect(leavingLosesEdits()).toBe(true);
   });
 
   it("says why a config pull request could not be opened", async () => {
