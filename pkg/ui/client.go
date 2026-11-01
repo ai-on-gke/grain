@@ -728,8 +728,8 @@ func (c *Client) EachState(ctx context.Context, pageSize int, fn func(id string,
 // than a failure. This deployment's UI may not have been handed the
 // deadlines at all (Config.Stall, nil under `grain demo`); the state may
 // be one whose beginning the record cannot place, which
-// model.StateTimes.Since answers nil for -- every state a person owns,
-// and a queued task approved before Task.ApprovedAt existed; and the
+// model.StateTimes.Since answers nil for -- every state a person owns
+// (a deferral counts only once it has a wake time), and a queued task approved before Task.ApprovedAt existed; and the
 // state may simply be inside its patience, which is what the note itself
 // answers "" for.
 func (c *Client) stallNote(state model.State, times model.StateTimes, now time.Time) string {
