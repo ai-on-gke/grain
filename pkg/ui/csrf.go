@@ -15,8 +15,11 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 )
 
 // crossOriginProtection refuses a state-changing request a browser sent
@@ -41,4 +44,68 @@ func checkCrossOrigin(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// checkVerifiedIdentityCSRF enforces CSRF protection on state-changing
+// requests (any method other than GET or HEAD) authenticated by IAP or
+// another IdentityVerifier, whose browser session cookie is not controlled by
+// grain and is not SameSite=Strict.
+//
+// Browser requests (any request carrying Sec-Fetch-Site, Origin, or Cookie)
+// must carry Sec-Fetch-Site: same-origin (or none) or an Origin matching Host
+// (or X-Forwarded-Host). Non-browser programmatic callers carrying none of
+// those headers pass.
+func checkVerifiedIdentityCSRF(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return true
+	}
+	if err := verifySameOriginForProxyAuth(r); err != nil {
+		writeError(w, http.StatusForbidden, fmt.Errorf("CSRF check refused %s %s: %w", r.Method, r.URL.Path, err))
+		return false
+	}
+	return true
+}
+
+func verifySameOriginForProxyAuth(r *http.Request) error {
+	switch sfs := strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")); sfs {
+	case "":
+		// Fall through to Origin check.
+	case "same-origin", "none":
+		return nil
+	default:
+		return fmt.Errorf("Sec-Fetch-Site %q is not same-origin", sfs)
+	}
+
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("invalid Origin %q", origin)
+		}
+		if originMatchesRequestHost(u.Host, r) {
+			return nil
+		}
+		return fmt.Errorf("Origin %q does not match request host %q", origin, r.Host)
+	}
+
+	// Neither Sec-Fetch-Site nor Origin is present. If the request carries any
+	// Cookie (such as IAP's session cookie), treat it as a browser request and
+	// refuse it; cookie-less requests are programmatic clients (e.g. CLI with
+	// Proxy-Authorization, which IAP strips before forwarding).
+	if strings.TrimSpace(r.Header.Get("Cookie")) != "" {
+		return errors.New("state-changing cookie-authenticated request must carry Sec-Fetch-Site: same-origin or a matching Origin")
+	}
+	return nil
+}
+
+func originMatchesRequestHost(originHost string, r *http.Request) bool {
+	if r.Host != "" && strings.EqualFold(originHost, r.Host) {
+		return true
+	}
+	for _, xfh := range strings.Split(r.Header.Get("X-Forwarded-Host"), ",") {
+		if xfh = strings.TrimSpace(xfh); xfh != "" && strings.EqualFold(originHost, xfh) {
+			return true
+		}
+	}
+	return false
 }

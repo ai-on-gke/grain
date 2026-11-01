@@ -189,3 +189,8 @@ func LogToTest(t *testing.T) {
 	t.Helper()
 	logToTest(t)
 }
+
+func LogBufferForTest(t *testing.T) interface{ String() string } {
+	t.Helper()
+	return logToTest(t)
+}

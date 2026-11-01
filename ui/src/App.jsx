@@ -3279,15 +3279,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
   }, [view, systemTab, isPhone]);
 
   const handleLogout = useCallback(async () => {
+    let redirect = "";
     try {
-      await api("/api/auth/logout", { method: "POST" });
+      const res = await api("/api/auth/logout", { method: "POST" });
+      if (typeof res?.redirect === "string") {
+        redirect = res.redirect;
+      }
     } catch {
       // Ignored
+    }
+    if (!redirect && config?.authMethod === "iap") {
+      redirect = "/_gcp_iap/clear_login_cookie";
+    }
+    if (redirect) {
+      window.location.assign(redirect);
+      return;
     }
     // The page itself is what the daemon gates: loaded again without the
     // session it is the access-code sign-in.
     onReload();
-  }, [onReload]);
+  }, [config?.authMethod, onReload]);
 
   // The persistent sandboxes, for the rail's Staging group. Quiet on
   // failure: a deployment that supervises none answers an empty list,
@@ -3443,6 +3454,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
       config={config}
       onOpenSystem={() => openSystem("")}
       onOpenSettings={() => openSettings()}
+      onOpenAccess={() => openSettings("access")}
+      onLogout={handleLogout}
     />
   );
 
