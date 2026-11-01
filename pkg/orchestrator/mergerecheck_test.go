@@ -615,10 +615,19 @@ func TestMergeRecheckErroredDoesNotSpinInAnInfiniteLoop(t *testing.T) {
 		}
 		syncWithCI(t, ctx, store, fix.client, runner, retryTick.Add(20*time.Second))
 		retryBatch := mustBatch(t, ctx, store, fix.repo)
+		// The retry costs exactly one more re-check (plus the head run
+		// RetryMerge asks for), however many cycles it takes to merge.
+		if got := runner.started() - before; got != 3 {
+			t.Fatalf("after RetryMerge started %d grain CI run(s) in all, want 3: the errored re-check, "+
+				"the retried head and exactly one more re-check", got)
+		}
 		runner.finish(retryBatch.RunID, ci.ConclusionSuccess)
 		syncWithCI(t, ctx, store, fix.client, runner, retryTick.Add(40*time.Second))
 		if !mergedBranch(fix.sim, branch) {
 			t.Fatal("t1 did not merge after RetryMerge and a green overlap re-check")
+		}
+		if got := runner.started() - before; got != 3 {
+			t.Fatalf("merging after RetryMerge started %d grain CI run(s) in all, want 3", got)
 		}
 	})
 
