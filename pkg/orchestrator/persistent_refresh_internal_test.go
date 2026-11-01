@@ -131,7 +131,11 @@ func TestPersistentRefreshManualNeverRefreshes(t *testing.T) {
 }
 
 func TestPersistentRefreshOnPushRestartsOncePerDebouncedBurst(t *testing.T) {
-	fastPersistentRefresh(t, 400*time.Millisecond)
+	// The debounce has to outlast the gap between two of the burst's
+	// pushes, which is the sleep below plus a git add and commit and the
+	// next ls-remote poll to see it: well under a second on an idle
+	// machine, but at 400ms a loaded -race runner split the burst in two.
+	fastPersistentRefresh(t, 2*time.Second)
 	repo := persistentTestRepo(t, map[string]string{"serve.sh": persistentServe})
 	s := newTestPersistentSupervisor(repo)
 	t.Cleanup(s.Close)
@@ -156,7 +160,7 @@ func TestPersistentRefreshOnPushRestartsOncePerDebouncedBurst(t *testing.T) {
 		st := persistentStatus(s, def)
 		return st.State == PersistentRunning && st.Commit == last
 	})
-	time.Sleep(600 * time.Millisecond) // past another debounce: nothing more should happen
+	time.Sleep(2500 * time.Millisecond) // past another debounce: nothing more should happen
 	st := persistentStatus(s, def)
 	if n := countEvents(st, "refresh"); n != 1 {
 		t.Errorf("%d refresh events for one burst, want 1: %+v", n, st.Events)

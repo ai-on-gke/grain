@@ -107,12 +107,15 @@ func TestDetectSandboxProxy(t *testing.T) {
 }
 
 func TestIsSandboxCommandLeavesOtherModesAlone(t *testing.T) {
-	for _, args := range [][]string{{"ls", "ci://a/b"}, {"ci", "log"}, {"task", "read", "1"}, {"db", "query", "SELECT 1"}, {"help"}, {"pr", "--help"}} {
+	// A sandbox command's unknown subcommand is the sandbox CLI's to
+	// refuse, never the host CLI's to answer.
+	for _, args := range [][]string{{"ls", "ci://a/b"}, {"ci", "log"}, {"task", "read", "1"}, {"db", "query", "SELECT 1"}, {"help"}, {"pr", "--help"},
+		{"ci", "run"}, {"task", "lsit"}} {
 		if !isSandboxCommand(args) {
 			t.Errorf("%q should be a sandbox command", args)
 		}
 	}
-	for _, args := range [][]string{{}, {"mcpserver"}, {"capability", "serve"}, {"db", "upgrade-postgres"}, {"ci", "run"}, {"task", "create"}, {"daemon"}} {
+	for _, args := range [][]string{{}, {"mcpserver"}, {"capability", "serve"}, {"daemon"}, {"frobnicate"}} {
 		if isSandboxCommand(args) {
 			t.Errorf("%q should not be a sandbox command", args)
 		}

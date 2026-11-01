@@ -646,7 +646,7 @@ func TestGrepMatchLimitListJSONAndGlob(t *testing.T) {
 	if !strings.Contains(body, "100:match line 100") || strings.Contains(body, "101:match line 101") {
 		t.Errorf("default grep did not stop at 100 matches:\n%s", body)
 	}
-	if !strings.Contains(body, "[truncated at match limit (100 matches); pass ?max=200 to raise the limit]") {
+	if !strings.Contains(body, "[truncated at match limit (100 matches); pass --max 200 (grain grep) to raise the limit]") {
 		t.Errorf("missing truncation notice in:\n%s", body)
 	}
 

@@ -336,3 +336,91 @@ func grainRelayedThreadSomeoneRepliedInIsNeverAutoResolved(t *testing.T, replier
 		t.Errorf("MergeQueueNote = %q, want %q", obs.MergeQueueNote, want)
 	}
 }
+
+// docs/test-plans/2026-11-01.md §10 item 1, the mixed case end to end: one
+// review relays two inline findings, a person replies in one of them, and
+// the owner answers. The decision run replies to and resolves the thread
+// nobody else spoke in, leaves the other open (so with "require
+// conversation resolution" on, the pull request does not merge yet), and
+// once that person resolves their own thread the merge goes through.
+func TestTwoRelayedThreadsOneRepliedToByAPersonMergeOnceThePersonResolvesIt(t *testing.T) {
+	t.Parallel()
+	store, ctx, sim, client, reviewed, review := reviewedAndReviewing(t)
+	sim.RequireConversationResolution = true
+
+	findings := toolResult(
+		reviewFinding("Should the core build also publish the google image? Recommend keeping it core-only.", "Makefile", 3),
+		reviewFinding("Consider renaming this helper.", "pkg/thing/thing.go", 12),
+	)
+	if err := orchestrator.ProcessResult(ctx, store, client, review, findings, review.ID+"-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult (review): %v", err)
+	}
+	relayed := model.RelayedReviewThreadsOf(reloaded(t, ctx, store, reviewed.ID))
+	if len(relayed) != 2 || relayed[0].ThreadID == relayed[1].ThreadID {
+		t.Fatalf("RelayedReviewThreadsOf = %+v, want 2 distinct tracked threads", relayed)
+	}
+	grainThread, peopleThread := relayed[0], relayed[1]
+	prNum := sim.PullRequests[0].Number
+	sim.ReviewComments[prNum] = append(sim.ReviewComments[prNum], github.ReviewComment{
+		ID: 9901, InReplyTo: peopleThread.CommentID, User: "alice",
+		Body: "I disagree -- the name is load-bearing elsewhere.",
+	})
+
+	say(t, ctx, store, reviewed.ID, owner, "Fix the Makefile; keep the helper's name.", baseTime.Add(time.Minute))
+	if err := orchestrator.SyncReviewQuestions(ctx, store, baseTime.Add(2*time.Minute)); err != nil {
+		t.Fatalf("SyncReviewQuestions: %v", err)
+	}
+	got := reloaded(t, ctx, store, reviewed.ID)
+	if err := store.UpdateTask(ctx, reviewed.ID, func(tk *model.Task) error {
+		tk.AutoMerge = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got.AutoMerge = true
+	pushBranch(t, sim.BareRepo, model.BranchName(reviewed.ID))
+	decision := toolResult(agent.ToolCall{
+		Name:      "comment_on_issue",
+		Arguments: map[string]any{"comment": "Kept the core build core-only; left the helper's name as it is."},
+	})
+	if err := orchestrator.ProcessResult(ctx, store, client, got, decision, reviewed.ID+"-2", baseTime.Add(3*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (owner decision run): %v", err)
+	}
+	if !sim.ResolvedThreads[grainThread.ThreadID] {
+		t.Fatalf("thread %s nobody else spoke in was not resolved: %+v", grainThread.ThreadID, sim.ResolvedThreads)
+	}
+	if sim.ResolvedThreads[peopleThread.ThreadID] {
+		t.Fatalf("thread %s alice replied in was resolved by grain", peopleThread.ThreadID)
+	}
+	replies := map[int]int{}
+	for _, c := range sim.ReviewComments[prNum] {
+		if c.InReplyTo != 0 && c.User != "alice" {
+			replies[c.InReplyTo]++
+		}
+	}
+	if replies[grainThread.CommentID] != 1 {
+		t.Fatalf("grain replied %d times on comment %d, want once (comments %+v)",
+			replies[grainThread.CommentID], grainThread.CommentID, sim.ReviewComments[prNum])
+	}
+
+	markMergeable(sim)
+	_ = orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(4*time.Minute))
+	if sim.PullRequests[0].Merged {
+		t.Fatal("PR merged while the thread alice replied in is unresolved")
+	}
+	if sim.ResolvedThreads[peopleThread.ThreadID] {
+		t.Fatal("the merge queue resolved the thread alice replied in")
+	}
+
+	// Alice resolves her own thread on GitHub; the first cycle that polls
+	// the refusal again (mergeRefusalPollInterval) merges, with no Retry
+	// merge pressed.
+	sim.ResolvedThreads[peopleThread.ThreadID] = true
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(7*time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	if !sim.PullRequests[0].Merged {
+		obs, _ := store.GetObservation(ctx, reviewed.ID)
+		t.Fatalf("PR #%d did not merge once every thread was resolved: note %q", prNum, obs.MergeQueueNote)
+	}
+}
