@@ -137,6 +137,13 @@ var demoGitHubSimUpstream = model.RepoRef{Owner: "acme-upstream", Name: "widgets
 // returns the bare repo's path too, so a later seed can push a branch a
 // task of its own is meant to have pushed already (pushDemoGitHubSimBranch).
 func configureGitHubSimDemo(dir string, cfg ui.Config, repo model.RepoRef) (ui.Config, string, error) {
+	return configureGitHubSimDemoWith(dir, cfg, repo, nil)
+}
+
+// configureGitHubSimDemoWith is configureGitHubSimDemo with seed, when
+// not nil, run over the sim and its bare repo before anything reads them
+// (seedDemoForkPullRequests).
+func configureGitHubSimDemoWith(dir string, cfg ui.Config, repo model.RepoRef, seed func(sim *githubsim.Sim, bare string) error) (ui.Config, string, error) {
 	if _, err := exec.LookPath("git"); err != nil {
 		return cfg, "", fmt.Errorf("the simulated GitHub keeps its branches in a real git repo, and git is not installed: %w", err)
 	}
@@ -186,6 +193,11 @@ func configureGitHubSimDemo(dir string, cfg ui.Config, repo model.RepoRef) (ui.C
 	for _, prNum := range []int{9000, 9001, 9002} {
 		sim.ReviewComments[prNum] = []github.ReviewComment{
 			{ID: 501, Path: "README.md", Line: &lineOne, Body: "Please document this flag.", User: "reviewer"},
+		}
+	}
+	if seed != nil {
+		if err := seed(sim, bare); err != nil {
+			return cfg, "", err
 		}
 	}
 	upstream := githubsim.New(demoGitHubSimUpstream.Owner, demoGitHubSimUpstream.Name, bare, demoGitHubSimDefaultBranch)

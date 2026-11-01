@@ -495,9 +495,11 @@ export default function RepoPage({
   // notice linking to those files. The operational actions -- adding a
   // branch, importing issues now, a manual release, a base branch's
   // check -- are not settings, and stay a repo admin's (adminReadOnly).
-  const configRepoOnly = Boolean(
-    config?.configRepoOnly || config?.settingsLocked,
-  );
+  // configRepoOnly alone, not settingsLocked: with directConfigWrites in
+  // state-repo.json the lock is on but the API still takes the write, and
+  // the server folds both into configRepoOnly
+  // (design/spec/settings/settings-mutability.spec.md D-10).
+  const configRepoOnly = Boolean(config?.configRepoOnly);
   const readOnly = adminReadOnly || configRepoOnly;
   // The same sentence is each disabled control's own accessible
   // description, so a screen reader on one hears why it is dimmed
