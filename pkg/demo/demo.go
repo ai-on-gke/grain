@@ -73,7 +73,7 @@ type Options struct {
 	AgentPaused      bool
 	MergeQueueStates bool
 	// StalledTasks hands the UI the orchestrator's stall deadlines and
-	// seeds two tasks past them (demo_stalled.go).
+	// seeds three tasks past them (demo_stalled.go).
 	StalledTasks bool
 	FakeCI       bool
 	GitHubSim    bool
