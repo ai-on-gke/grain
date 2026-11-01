@@ -303,3 +303,76 @@ func TestAFailedCommitReadNeverDowngradesADescription(t *testing.T) {
 		t.Fatalf("description = %q, want the one that was already there (%q)", got, described)
 	}
 }
+
+func TestVeryLongTaskTitleCreatesValidSluggedBranchAndCappedPullRequest(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	cfg := model.NewDeploymentConfig()
+	cfg.DeploymentID = "049f1e09"
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
+
+	longSentenceTitle := strings.Repeat("Investigate and repair intermittent streaming timeout across multi-region clusters 🚀 ", 30)
+	t1 := model.Task{
+		ID: "2077", Intent: model.IntentImplement, Title: longSentenceTitle, Body: "details",
+		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Approval: &model.Attribution{Actor: human},
+		Target:   &repo,
+		Binding:  model.BindingDirective,
+	}
+	if err := store.PutTask(ctx, t1); err != nil {
+		t.Fatalf("PutTask(2077): %v", err)
+	}
+	stored1, err := store.GetTask(ctx, "2077")
+	if err != nil {
+		t.Fatalf("GetTask(2077): %v", err)
+	}
+	wantBranch1 := "grain/049f1e09/task-2077-investigate-and-repair"
+	if stored1.BranchName() != wantBranch1 || !model.ValidBranchName(stored1.BranchName()) {
+		t.Fatalf("stored1.BranchName() = %q, want valid %q", stored1.BranchName(), wantBranch1)
+	}
+	pushCommitSaying(t, sim.BareRepo, stored1.BranchName(), "fix: handle multi-region timeout\n\nAdds retry backoff.")
+	res := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+	if err := orchestrator.ProcessResult(ctx, store, noCompare{client}, *stored1, res, "2077-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult with fallback to very long task title: %v", err)
+	}
+	pr1 := prByHead(t, sim, stored1.BranchName())
+	if len(pr1.Title) > 256 || !strings.HasSuffix(pr1.Title, "...") {
+		t.Fatalf("fallback PR title len = %d (%q), want capped title <= 256 ending in '...'", len(pr1.Title), pr1.Title)
+	}
+	if strings.ToValidUTF8(pr1.Title, "?") != pr1.Title {
+		t.Fatalf("fallback PR title contains invalid UTF-8: %q", pr1.Title)
+	}
+
+	unbrokenWordTitle := strings.Repeat("supercalifragilisticexpialidocious", 60)
+	t2 := model.Task{
+		ID: "2078", Intent: model.IntentImplement, Title: unbrokenWordTitle, Body: "details",
+		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Approval: &model.Attribution{Actor: human},
+		Target:   &repo,
+		Binding:  model.BindingDirective,
+	}
+	if err := store.PutTask(ctx, t2); err != nil {
+		t.Fatalf("PutTask(2078): %v", err)
+	}
+	stored2, err := store.GetTask(ctx, "2078")
+	if err != nil {
+		t.Fatalf("GetTask(2078): %v", err)
+	}
+	wantBranch2 := "grain/049f1e09/task-2078-" + unbrokenWordTitle[:model.MaxBranchSlugLen]
+	if stored2.BranchName() != wantBranch2 || !model.ValidBranchName(stored2.BranchName()) {
+		t.Fatalf("stored2.BranchName() = %q, want valid %q", stored2.BranchName(), wantBranch2)
+	}
+	pushCommitSaying(t, sim.BareRepo, stored2.BranchName(), "feat: support unbroken tokens\n\nCaps slug cleanly.")
+	if err := orchestrator.ProcessResult(ctx, store, client, *stored2, res, "2078-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult(2078): %v", err)
+	}
+	pr2 := prByHead(t, sim, stored2.BranchName())
+	if pr2.Title != "feat: support unbroken tokens" {
+		t.Fatalf("PR 2 title = %q, want commit summary", pr2.Title)
+	}
+}
