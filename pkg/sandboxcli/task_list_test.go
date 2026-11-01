@@ -184,7 +184,7 @@ func TestSandboxTaskListFiltersAndBounds(t *testing.T) {
 
 	// An unknown flag, or a kind outside the vocabulary, is refused rather
 	// than ignored.
-	if _, errOut, code := run("tok-debug", "task", "list", "--bogus", "x"); code != 1 || !strings.Contains(errOut, "unknown flag --bogus") {
+	if _, errOut, code := run("tok-debug", "task", "list", "--bogus", "x"); code != 2 || !strings.Contains(errOut, "unknown flag --bogus") {
 		t.Errorf("--bogus: exit %d %q", code, errOut)
 	}
 	if _, errOut, code := run("tok-debug", "task", "list", "--kind", "nope"); code != 1 || !strings.Contains(errOut, `kind "nope"`) {

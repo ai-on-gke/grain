@@ -54,6 +54,14 @@ func TestSandboxGrainAnswersTheSandboxCLI(t *testing.T) {
 	if code := run([]string{"log", "--help"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "--min-priority") {
 		t.Errorf("grain log --help = %d, %q", code, out.String())
 	}
+
+	// A command it does not have gets the sandbox CLI's help, not this
+	// binary's out-of-sandbox usage.
+	errOut.Reset()
+	if code := run([]string{"frobnicate"}, &out, &errOut); code != 2 ||
+		!strings.Contains(errOut.String(), `unknown command "frobnicate"`) || !strings.Contains(errOut.String(), "sandbox CLI for this grain deployment") {
+		t.Errorf("grain frobnicate = %d, %q", code, errOut.String())
+	}
 }
 
 // Outside a sandbox there is no proxy to answer over, and the error says
