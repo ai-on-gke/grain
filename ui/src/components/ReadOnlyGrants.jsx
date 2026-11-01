@@ -14,23 +14,29 @@
 
 import { Box, Typography } from "@mui/material";
 import GrantChip from "./GrantChip.jsx";
-import ConfigRepoLink from "./ConfigRepoLink.jsx";
+import ConfigRepoLink, { useStateRepoFiles } from "./ConfigRepoLink.jsx";
 
 // CAPABILITIES_FILE is the config repo file default and CI grants live
-// in (design/design/config-repo-settings.design.md §3).
+// in once a deployment has adopted the capability catalogue
+// (design/design/config-repo-settings.design.md §3).
 export const CAPABILITIES_FILE = "settings/capabilities.yml";
 
-// ReadOnlyGrants is a list of default grants as chips, with the link to
-// the file that sets them: what Settings → Tasks and a repository's
-// page show where they used to offer a GrantsPicker
-// (design/design/config-repo-settings.design.md §7.4). Grants are edited in
-// settings/capabilities.yml, not here.
+// ReadOnlyGrants is a list of default grants as chips, with an optional
+// link to settings/capabilities.yml when that file exists: what
+// Settings → Tasks and a repository's page show where they used to offer
+// a GrantsPicker (design/design/config-repo-settings.design.md §7.4). Settings →
+// Tasks suppresses the per-card link (`showLink={false}`) because the
+// section's ConfigManagedNotice already links its config-repo files.
 export default function ReadOnlyGrants({
   grants = [],
   config,
   empty = "None",
   testId = "read-only-grants",
+  showLink = true,
 }) {
+  const present = useStateRepoFiles(showLink);
+  const canLinkCatalogue =
+    showLink && (!present || present.has(CAPABILITIES_FILE));
   return (
     <Box data-testid={testId}>
       {grants.length === 0 ? (
@@ -57,9 +63,14 @@ export default function ReadOnlyGrants({
           ))}
         </Box>
       )}
-      <Typography variant="body2" sx={{ mt: 0.5 }}>
-        <ConfigRepoLink path={CAPABILITIES_FILE} label="Edit in config repo" />
-      </Typography>
+      {canLinkCatalogue && (
+        <Typography variant="body2" sx={{ mt: 0.5 }}>
+          <ConfigRepoLink
+            path={CAPABILITIES_FILE}
+            label="Edit in config repo"
+          />
+        </Typography>
+      )}
     </Box>
   );
 }

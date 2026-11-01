@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { useEffect, useMemo, useState } from "react";
 import { Alert, Box, Link, Typography } from "@mui/material";
+import api from "../api.js";
 import { configBrowserPath } from "../settingsSections.js";
 
 // openInApp follows an in-app link without reloading the page: the
@@ -53,15 +55,45 @@ export default function ConfigRepoLink({
   );
 }
 
+// useStateRepoFiles returns the paths GET /api/state-repo/files lists in
+// the exported working tree, or null before a complete, non-empty listing
+// has answered (for instance on `grain demo`, before the first export, or
+// when the tree is truncated and cannot prove a file is absent).
+export function useStateRepoFiles(enabled = true) {
+  const [present, setPresent] = useState(null);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let active = true;
+    api("/api/state-repo/files")
+      .then((tree) => {
+        if (!active || !Array.isArray(tree?.entries)) return;
+        if (tree.entries.length === 0 || tree.truncated) return;
+        setPresent(new Set(tree.entries.map((entry) => entry.path)));
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [enabled]);
+  return present;
+}
+
 // ConfigManagedNotice is the line a config-repo-only setting leads
 // with: the values below are what grain/config holds, read-only here,
-// and where to change them.
+// and where to change them. Optional files such as settings/capabilities.yml
+// are dropped when the Config Repo Browser's listing says they have not
+// been exported, keeping at least the first path.
 export function ConfigManagedNotice({
   paths,
   what = "These settings",
   id,
   sx,
 }) {
+  const uniquePaths = useMemo(() => [...new Set(paths || [])], [paths]);
+  const present = useStateRepoFiles(uniquePaths.length > 1);
+  const visiblePaths = present
+    ? uniquePaths.filter((p, i) => i === 0 || present.has(p))
+    : uniquePaths;
   return (
     <Alert
       id={id}
@@ -77,7 +109,7 @@ export function ConfigManagedNotice({
         component="ul"
         sx={{ m: 0, mt: 0.5, pl: 2.5, "& li": { typography: "body2" } }}
       >
-        {paths.map((p) => (
+        {visiblePaths.map((p) => (
           <li key={p}>
             <ConfigRepoLink path={p} />
           </li>
