@@ -3834,6 +3834,48 @@ func TestGeneratedFromReadsOffTheProposedByLink(t *testing.T) {
 	}
 }
 
+// ExternalPullRequests is read off the task's LinkExternalPR links -- the
+// contributor pull request a fork head label resolved to (pkg/forkhead)
+// -- beside, not instead of, the LinkFixes pull request that is the
+// task's own (grain/task-2199).
+func TestExternalPullRequestsReadOffTheExternalPRLinks(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+
+	id, err := store.NewTaskID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := model.Task{
+		ID:     id,
+		Intent: model.IntentImplement,
+		Title:  "fix the contributor's typo",
+		Origin: model.Origin{
+			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+			Reason:      model.ReasonDirect,
+		},
+		Links: []model.Link{
+			{Kind: model.LinkExternalPR, Target: "acme/widgets#41"},
+			{Kind: model.LinkExternalPR, Target: "acme/widgets#43"},
+		},
+		CreatedAt: &baseTime,
+	}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := c.Task(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"acme/widgets#41", "acme/widgets#43"}; !slices.Equal(got.ExternalPullRequests, want) {
+		t.Fatalf("ExternalPullRequests = %q, want %q", got.ExternalPullRequests, want)
+	}
+	if got.PullRequest != "" {
+		t.Fatalf("PullRequest = %q, want empty: an external pull request is not the task's own", got.PullRequest)
+	}
+}
+
 // Stacked is true only for a task whose Origin.Reason is model.ReasonFix
 // -- the merge queue's own automatic fix for another task's pull
 // request (bwsalmon/agents#378) -- and false for an ordinary
