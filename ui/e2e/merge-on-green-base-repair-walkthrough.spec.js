@@ -39,7 +39,15 @@ async function reset(page) {
 }
 
 // toggle clicks box and returns the PUT it sent and the body it answered.
+// Turning the bypass on asks first (confirmBaseRepairBypass); toggle
+// accepts, and records what it asked in asked.
 async function toggle(page, box, route, on) {
+  const asked = [];
+  const answer = (d) => {
+    asked.push(d.message());
+    d.accept();
+  };
+  page.on("dialog", answer);
   const put = page.waitForResponse(
     (r) =>
       r.request().method() === "PUT" &&
@@ -53,8 +61,48 @@ async function toggle(page, box, route, on) {
   const res = await put;
   if (on) await expect(box).toBeChecked();
   else await expect(box).not.toBeChecked();
+  page.off("dialog", answer);
   expect(res.ok()).toBe(true);
+  if (on && route === "base-repair-bypasses-human-gates") {
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain(repo);
+    expect(asked[0]).toContain("trust-boundary code");
+  } else {
+    expect(asked).toEqual([]);
+  }
   return { sent: res.request().postDataJSON(), got: await res.json() };
+}
+
+// dismissBypass clicks the off bypass box, dismisses the confirmation, and
+// checks that no PUT went out and the box stayed off.
+async function dismissBypass(page, box) {
+  const puts = [];
+  const onRequest = (r) => {
+    if (
+      r.method() === "PUT" &&
+      r.url().endsWith(`/api/repos/${repo}/base-repair-bypasses-human-gates`)
+    )
+      puts.push(r);
+  };
+  page.on("request", onRequest);
+  const dialog = page.waitForEvent("dialog");
+  await expect(box).not.toBeChecked();
+  await box.click();
+  const d = await dialog;
+  expect(d.type()).toBe("confirm");
+  expect(d.message()).toContain(repo);
+  await d.dismiss();
+  await expect(box).not.toBeChecked();
+  // Give a stray PUT the chance to show itself before saying none went.
+  await page.waitForTimeout(300);
+  page.off("request", onRequest);
+  expect(puts).toEqual([]);
+  const stored = await (
+    await page.request.get(
+      `/api/repos/${repo}/base-repair-bypasses-human-gates`,
+    )
+  ).json();
+  expect(stored.baseRepairBypassesHumanGates).toBe(false);
 }
 
 test("the repository page's merge-queue switches save and survive a reload", async ({
@@ -155,6 +203,27 @@ test("Settings > Repositories' bypass tick saves and survives a reload", async (
       false,
     );
     expect(off.got.baseRepairBypassesHumanGates).toBe(false);
+    await page.reload();
+    await expect(page.getByLabel(settingsBypassLabel)).not.toBeChecked();
+  } finally {
+    await reset(page);
+  }
+});
+
+test("dismissing the bypass confirmation sends nothing and leaves it off", async ({
+  page,
+}) => {
+  try {
+    await reset(page);
+    await page.goto(`/repos/${repo}/settings/merge-queue`);
+    await dismissBypass(page, page.getByLabel(repoBypassLabel));
+    await page.reload();
+    await expect(page.getByLabel(repoBypassLabel)).not.toBeChecked();
+
+    await page.goto(`/settings/repositories`);
+    const box = page.getByLabel(settingsBypassLabel);
+    await expect(box).toBeEnabled();
+    await dismissBypass(page, box);
     await page.reload();
     await expect(page.getByLabel(settingsBypassLabel)).not.toBeChecked();
   } finally {
