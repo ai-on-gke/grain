@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -1950,14 +1951,34 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.K8sKubectl != nil {
 		cfg.K8sKubectl = strings.TrimSpace(*req.K8sKubectl)
 	}
+	// The pod images are checked as the custom sandbox image is, and the
+	// workspace is a directory inside the pod, so an absolute path: the
+	// 2026-11-01 walkthrough saved "not a ref!!" and "relative/dir", which
+	// only failed later, on every pod grain created.
 	if req.K8sSandboxImage != nil {
-		cfg.K8sSandboxImage = strings.TrimSpace(*req.K8sSandboxImage)
+		image := strings.TrimSpace(*req.K8sSandboxImage)
+		if image != "" {
+			if err := sandboximage.ValidateReference(image); err != nil {
+				return model.Config{}, validationErrorf("k8sSandboxImage must be one OCI image reference, such as registry.example/team/k8s-sandbox:v1: %v", err)
+			}
+		}
+		cfg.K8sSandboxImage = image
 	}
 	if req.K8sGranuleImage != nil {
-		cfg.K8sGranuleImage = strings.TrimSpace(*req.K8sGranuleImage)
+		image := strings.TrimSpace(*req.K8sGranuleImage)
+		if image != "" {
+			if err := sandboximage.ValidateReference(image); err != nil {
+				return model.Config{}, validationErrorf("k8sGranuleImage must be one OCI image reference, such as registry.example/team/guest:v1: %v", err)
+			}
+		}
+		cfg.K8sGranuleImage = image
 	}
 	if req.K8sWorkspace != nil {
-		cfg.K8sWorkspace = strings.TrimSpace(*req.K8sWorkspace)
+		ws := strings.TrimSpace(*req.K8sWorkspace)
+		if ws != "" && !path.IsAbs(ws) {
+			return model.Config{}, validationErrorf("k8sWorkspace %q is not an absolute path, such as /home/agent", ws)
+		}
+		cfg.K8sWorkspace = ws
 	}
 	if req.K8sGitProxyHost != nil {
 		host := strings.TrimSpace(*req.K8sGitProxyHost)

@@ -1529,6 +1529,28 @@ func TestUpdateSettingsRoundTripsKubernetesSettingsAndValidatesNodeSelector(t *t
 			t.Errorf("UpdateSettings(k8sGitProxyHost=%q) = %v, want accepted %v", host, err, ok)
 		}
 	}
+	// The pod images are image references and the workspace an absolute
+	// path: the 2026-11-01 walkthrough saved "not a ref!!" and
+	// "relative/dir".
+	for _, tc := range []struct {
+		key       string
+		req       func(*string) ui.UpdateSettingsRequest
+		bad, good string
+	}{
+		{"k8sSandboxImage", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sSandboxImage: v} }, "not a ref!!", "registry.walk.test/team/k8s-sandbox:v1"},
+		{"k8sGranuleImage", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sGranuleImage: v} }, "not a ref!!", "registry.walk.test/team/guest@sha256:" + strings.Repeat("a", 64)},
+		{"k8sWorkspace", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sWorkspace: v} }, "relative/dir", "/home/walk"},
+	} {
+		bad, good, blank := tc.bad, tc.good, ""
+		if _, err := c.UpdateSettings(ctx, tc.req(&bad)); err == nil || !strings.HasPrefix(err.Error(), tc.key+" ") {
+			t.Errorf("UpdateSettings(%s=%q) = %v, want a refusal naming %s", tc.key, bad, err, tc.key)
+		}
+		for _, v := range []*string{&good, &blank} {
+			if _, err := c.UpdateSettings(ctx, tc.req(v)); err != nil {
+				t.Errorf("UpdateSettings(%s=%q): %v", tc.key, *v, err)
+			}
+		}
+	}
 	none := ""
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{K8sPriorityClassCI: &none}); err != nil {
 		t.Errorf("an empty priority class (none) was refused: %v", err)
