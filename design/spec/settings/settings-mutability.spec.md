@@ -390,6 +390,8 @@ The rule of §2.3.4 keeps secret material writable under the lock, but `SetRepoR
 
 ### D-7: Binding a capability-server secret while locked stores the value, then refuses the binding
 
+*Fixed 2026-11-01 (`docs/test-runs/2026-11-01-settings-deployment-work-verification.md`): `BindCapabilityServerSecret` stores the value only when the binding's `mcp_servers` write is not sent to grain/config, so a locked binding answers 409 with the `$secret:` reference to commit and stores nothing (`TestBindingASecretWhileLockedStoresNothing`).*
+
 `BindCapabilityServerSecret` passes its bootstrap guard (allowed while locked), writes the value to the secret store, and then `updateCapabilityServers` runs `checkSettingsWritable`, which refuses with 409. The secret is stored without its `$secret:` reference in `mcp_servers`. In external mode it is refused before storing (§2.7.2). It should either be refused up front under the lock (S·u) or treat the binding as bootstrap.
 
 ### D-8: Release notes are exported to `grain/config` but never imported
