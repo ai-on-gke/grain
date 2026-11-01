@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -664,15 +665,16 @@ func TestCICrossRepoWriteCapabilityGatingAndScopes(t *testing.T) {
 	}
 }
 
-func TestTrustedScheduleHoldsRepoWriteButNotPackagePublish(t *testing.T) {
+func TestTrustedScheduleHoldsOnlyTheProvidersThatOptedIn(t *testing.T) {
 	t.Parallel()
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	reg := model.NewCapabilityRegistry(
-		packagepublish.New(packagepublish.Config{}),
+		packagepublish.New(packagepublish.Config{Credentials: trustedSchedulePackageCredential{}}),
+		registrypush.New(),
 		repowrite.New(repo),
 	)
 	creds := ciCredentialJSON(`{"registry":"ghcr.io","username":"bot","token":"secret"}`)
-	requestedCaps := []string{"package-publish", "repo-write:acme/widgets"}
+	requestedCaps := []string{"package-publish", registrypush.CapabilityName, "repo-write:acme/widgets"}
 
 	// A caller's own `-event schedule` run is untrusted: nothing write-scoped.
 	cc, _, err := daemon.ResolveCICapabilities(context.Background(), reg, creds, repo, "ci-job", ci.EventSchedule, false, requestedCaps)
@@ -683,14 +685,20 @@ func TestTrustedScheduleHoldsRepoWriteButNotPackagePublish(t *testing.T) {
 		t.Fatalf("untrusted schedule grants = %+v, want none", cc.Task.Grants)
 	}
 
-	// The run grain's cron fired holds repo-write, and only the providers
-	// that opted in: package-publish stays release/dispatch only.
+	// The run grain's cron fired holds only the providers that opted in:
+	// repo-write and package-publish, so the release train can tag and
+	// publish (task 1913); registry-push stays release/dispatch only.
 	cc, _, err = daemon.ResolveCICapabilities(context.Background(), reg, creds, repo, "ci-job", ci.EventSchedule, true, requestedCaps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cc.Task.Grants) != 1 || cc.Task.Grants[0].Capability != "repo-write:acme/widgets" {
-		t.Fatalf("trusted schedule grants = %+v, want only repo-write:acme/widgets", cc.Task.Grants)
+	var granted []string
+	for _, g := range cc.Task.Grants {
+		granted = append(granted, g.Capability)
+	}
+	slices.Sort(granted)
+	if want := []string{"package-publish", "repo-write:acme/widgets"}; !slices.Equal(granted, want) {
+		t.Fatalf("trusted schedule grants = %v, want %v", granted, want)
 	}
 
 	// The flag means nothing on any other event.
@@ -701,6 +709,12 @@ func TestTrustedScheduleHoldsRepoWriteButNotPackagePublish(t *testing.T) {
 	if len(cc.Task.Grants) != 0 {
 		t.Fatalf("push with trustedSchedule grants = %+v, want none", cc.Task.Grants)
 	}
+}
+
+type trustedSchedulePackageCredential struct{}
+
+func (trustedSchedulePackageCredential) PackageCredential(registry, _, _ string) (packagepublish.Credential, error) {
+	return packagepublish.Credential{Registry: registry, Username: "bot", Token: "secret", Name: "test"}, nil
 }
 
 // A scheduled workflow declaring repo-write for its own repository holds

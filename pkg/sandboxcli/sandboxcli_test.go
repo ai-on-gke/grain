@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -61,13 +63,37 @@ func TestDetectSandboxProxy(t *testing.T) {
 			base: "http://127.0.0.1:9728", token: "tok-1", ok: true},
 		{name: "git credential-store percent-encoded colon", creds: "http://sandbox:tok-escaped@127.0.0.1%3a9728\n",
 			base: "http://127.0.0.1:9728", token: "tok-escaped", ok: true},
+		{name: "git credential-store upper-case percent-encoded colon", creds: "http://sandbox:tok-upper@127.0.0.1%3A9728\n",
+			base: "http://127.0.0.1:9728", token: "tok-upper", ok: true},
+		{name: "percent-encoded userinfo survives the port unescape", creds: "http://sandbox:tok%2Fa%3Ab%40c%25d@192.168.9.1%3a9728\n",
+			base: "http://192.168.9.1:9728", token: "tok/a:b@c%d", ok: true},
+		{name: "blank lines and github before the escaped proxy", creds: "\n  \nhttps://x-access-token:ghs_x@github.com\n\nhttp://sandbox:tok-blank@192.168.9.1%3a9728\n\n",
+			base: "http://192.168.9.1:9728", token: "tok-blank", ok: true},
+		{name: "bracketed ipv6 loopback percent-encoded colon", creds: "http://sandbox:tok-v6@[::1]%3a9728\n",
+			base: "http://[::1]:9728", token: "tok-v6", ok: true},
+		{name: "env proxy, token from escaped credentials", vars: map[string]string{"GRAIN_SANDBOX_PROXY": "http://192.168.9.1:9728"},
+			creds: "http://sandbox:tok-env-esc@192.168.9.1%3a9728\n", base: "http://192.168.9.1:9728", token: "tok-env-esc", ok: true},
 		{name: "sandbox user on ephemeral loopback port", creds: "http://sandbox:tok-ephem@127.0.0.1:43115\n",
 			base: "http://127.0.0.1:43115", token: "tok-ephem", ok: true},
+		{name: "granule vm bridge gateway x-access-token", creds: "https://x-access-token:ghs_x@github.com\nhttp://x-access-token:tok-gw@192.168.9.1:9728\n",
+			base: "http://192.168.9.1:9728", token: "tok-gw", ok: true},
+		{name: "granule vm bridge gateway sandbox percent-encoded colon", creds: "http://sandbox:tok-gw-esc@192.168.9.1%3a9728\n",
+			base: "http://192.168.9.1:9728", token: "tok-gw-esc", ok: true},
+		{name: "granule vm bridge gateway custom port block", creds: "http://sandbox:tok-gw-block@192.168.9.1:10240\n",
+			base: "http://192.168.9.1:10240", token: "tok-gw-block", ok: true},
+		{name: "docker bridge gateway", creds: "http://x-access-token:tok-docker@172.17.0.1:9728\n",
+			base: "http://172.17.0.1:9728", token: "tok-docker", ok: true},
+		{name: "kubernetes service proxy", creds: "http://sandbox:tok-k8s@grain-sandbox:9728\n",
+			base: "http://grain-sandbox:9728", token: "tok-k8s", ok: true},
+		{name: "localhost proxy", creds: "http://x-access-token:tok-local@localhost:9728\n",
+			base: "http://localhost:9728", token: "tok-local", ok: true},
 		{name: "env names the proxy", vars: map[string]string{"GRAIN_SANDBOX_PROXY": "http://127.0.0.1:9728/", "GRAIN_SANDBOX_TOKEN": "tok-2"},
 			base: "http://127.0.0.1:9728", token: "tok-2", ok: true},
 		{name: "env proxy, token from credentials", vars: map[string]string{"GRAIN_SANDBOX_PROXY": "http://127.0.0.1:9728"},
 			creds: "http://x-access-token:tok-3@127.0.0.1:9728\n", base: "http://127.0.0.1:9728", token: "tok-3", ok: true},
 		{name: "not a sandbox", creds: "https://x-access-token:ghs_x@github.com\n"},
+		{name: "private forge on unrelated port with non-sandbox user", creds: "http://alice:pat@192.168.1.50:3000\n"},
+		{name: "public forge with sandbox username", creds: "https://sandbox:ghp_x@github.com\n"},
 		{name: "turned off", vars: map[string]string{"GRAIN_SANDBOX_CLI": "0"}, creds: "http://x:t@127.0.0.1:9728\n"},
 		{name: "pointed at a daemon", vars: map[string]string{"GRAIN_SERVER": "http://localhost:8080"}, creds: "http://x:t@127.0.0.1:9728\n"},
 	} {
@@ -108,11 +134,10 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	store.Put(ci.Run{ID: "run-1", Repo: "bwsalmon/grain", Ref: "grain/task-7", Conclusion: ci.ConclusionFailure, StartedAt: &at,
 		Jobs: []ci.JobRun{{Name: "go", Conclusion: ci.ConclusionFailure, Steps: []ci.StepRun{
 			{Name: "Test", Conclusion: ci.ConclusionFailure, Output: "--- FAIL: TestWidget (0.01s)\nFAIL\n"}}}}})
+	// No playbooks/ here: src://playbooks is the binary's embedded copy.
 	src := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(src, "playbooks"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(src, "playbooks", "gke.md"), []byte("# GKE\n"), 0o644); err != nil {
+	gke, err := fs.ReadFile(playbooks.FS, "gke-sandbox-cluster.md")
+	if err != nil {
 		t.Fatal(err)
 	}
 	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
@@ -164,11 +189,19 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	if out, errOut, code := run("pr", "status"); code != 0 || !strings.Contains(out, "go: failure") {
 		t.Errorf("pr status: %d %q %s", code, out, errOut)
 	}
-	if out, errOut, code := run("playbooks"); code != 0 || !strings.Contains(out, "gke.md") {
+	if out, errOut, code := run("playbooks"); code != 0 || !strings.Contains("\n"+out, "\ngke-sandbox-cluster\n") || strings.Contains(out, ".md") {
 		t.Errorf("playbooks: %d %q %s", code, out, errOut)
 	}
-	if out, errOut, code := run("read", "src://playbooks/gke.md"); code != 0 || out != "# GKE\n" {
-		t.Errorf("read playbook: %d %q %s", code, out, errOut)
+	for _, name := range []string{"gke-sandbox-cluster", "gke-sandbox-cluster.md"} {
+		if out, errOut, code := run("playbooks", name); code != 0 || out != string(gke) {
+			t.Errorf("playbooks %s: %d, %d bytes, %s", name, code, len(out), errOut)
+		}
+	}
+	if _, errOut, code := run("playbooks", "nope"); code != 1 || !strings.Contains(errOut, "not found") {
+		t.Errorf("playbooks nope: %d %s", code, errOut)
+	}
+	if out, errOut, code := run("read", "src://playbooks/gke-sandbox-cluster.md"); code != 0 || out != string(gke) {
+		t.Errorf("read playbook: %d, %d bytes, %s", code, len(out), errOut)
 	}
 	// Refusals come back in unknownToolMessage's words.
 	_, errOut, code := run("read", "src://pkg/ci/engine.go")
@@ -311,6 +344,23 @@ func TestSandboxLogAndMetricsFlagsBecomeTheirQuery(t *testing.T) {
 	if got, want := grainLogQuery(p).Encode(), "contains=dispatch+failed&max_lines=900&min_priority=err"+
 		"&since=2026-10-29T00%3A00%3A00Z&tail=40&until=2026-10-29T06%3A00%3A00Z"; got != want {
 		t.Errorf("grain log query = %s, want %s", got, want)
+	}
+	p, err = parseSandboxArgs([]string{"--source", "dmesg", "--priority", "warning", "--max-lines", "50"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := grainLogSource(p); got != "dmesg" {
+		t.Errorf("grain log --source dmesg reads source %q", got)
+	}
+	if got, want := grainLogQuery(p).Encode(), "max_lines=50&min_priority=warning"; got != want {
+		t.Errorf("grain log query = %s, want %s", got, want)
+	}
+	p, err = parseSandboxArgs([]string{"summary", "--since", "2026-10-28", "--until", "2026-10-29"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := metricsQuery(p).Encode(), "since=2026-10-28&until=2026-10-29"; got != want {
+		t.Errorf("grain metrics query = %s, want %s", got, want)
 	}
 	p, err = parseSandboxArgs([]string{"summary", "--window", "7d", "--repo", "acme/a,acme/b", "--repo", "acme/c", "--author", "task"})
 	if err != nil {

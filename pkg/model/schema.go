@@ -310,7 +310,48 @@ import "strconv"
 // interactive chat/session task's sandbox (and in-process agent session)
 // stays warm awaiting a reply after a turn ends before being released
 // (model.Config.SessionSandboxIdleTTL).
-const SchemaVersion = 66
+//
+// 67 changes no table: it rewrites every stored `team-broadcast` grant
+// (the grant tables, the default capability lists and the console
+// sessions) to `api:team-broadcast`, the in-process capability having
+// been retired for the agent API's teams:broadcast scope
+// (rewriteLegacyGrants, docs/design/unified-grants.md §4).
+//
+// 68 is 67 again for `dispatch-control`, now `api:dispatch-control`.
+//
+// 69 is 67 again for `pipeline-control`, now `api:pipeline-control`.
+//
+// 70 adds `settings_locked` to `grain_config`: whether non-bootstrap settings
+// are locked in the UI and REST API in favour of config repository pull
+// requests (off by default).
+//
+// 71 is 67 again for `memory`, now `api:memory`.
+//
+// 72 is 67 again for `release-notes`, now `api:release-notes`.
+//
+// 73 adds `priority` to `task` (default 5) and `template`: numeric task
+// priority where higher numbers mean higher dispatch priority.
+//
+// 74 adds `keep_running` to `task`, `template` and `schedule`
+// (model.Task.KeepRunning, model.Template.KeepRunning, model.Schedule.KeepRunning).
+//
+// 75 is 67 again for `self-upgrade`, now `api:self-upgrade`.
+//
+// 76 is 67 again for `test-quarantine`, now `api:test-quarantine`.
+//
+// 77 adds `new_task_form` to `grain_config`: the New Task form's
+// configuration (settings/new-task-form.yml, model.NewTaskForm).
+//
+// 78 changes no table: it upgrades `grain_config`.`task_branch_template`
+// from the pre-slug default `grain/{deployment}/task-{id}`
+// (model.UnsluggedTaskBranchTemplate, seeded by NewDeploymentConfig
+// before grain/task-56) to `grain/{deployment}/task-{id}-{slug}`
+// (model.DefaultTaskBranchTemplate), so deployments created before
+// {slug} was added include a portion of the task's title in new task
+// branch names in addition to the deployment and task-id uniquifiers.
+// Existing tasks keep the branch recorded on their row, and any other
+// template is left alone.
+const SchemaVersion = 78
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -502,6 +543,8 @@ var Tables = []string{
   ` + "`change_target_kind`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1140,6 +1183,24 @@ var Tables = []string{
   PRIMARY KEY (` + "`run_id`" + `, ` + "`path`" + `)
 )`,
 
+	// task_run_relayed_call is a tool call a live run made that grain
+	// has already acted on while the run was still going -- an
+	// interactive session's in-process turns relaying an answer or
+	// filing a proposal before waiting for the next message
+	// (orchestrator.continueSessionTurns) -- keyed by a fingerprint of
+	// the call's name and arguments, with how many such calls there
+	// were. A daemon that adopts the run (orchestrator.ResumeAdoptedRun)
+	// re-reads every turn's calls out of the transcript, and this is what
+	// keeps it from posting the answers and filing the proposals a second
+	// time. Deleted when the run finishes. Needs no SchemaVersion bump and
+	// no migration rung, for the reason the tables above give.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_relayed_call`" + ` (
+  ` + "`run_id`" + `      TEXT    NOT NULL,
+  ` + "`fingerprint`" + ` TEXT    NOT NULL,
+  ` + "`count`" + `       INTEGER NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`fingerprint`" + `)
+)`,
+
 	// task_run_unmatched_failure is one row per failed run whose own
 	// account of itself matched none of grain's markers for a provider
 	// refusal -- neither the usage-limit ones (agent/usagelimit.go) nor
@@ -1237,6 +1298,19 @@ var Tables = []string{
   ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
+)`,
+
+	// task_run_startup records the per-phase startup timestamps of a run
+	// (queued_at -> started_at -> sandbox_acquired_at -> sandbox_prepared_at -> first_turn_at)
+	// so interactive and batch startup latency breakdowns can be reported on
+	// Attempt and in grain metrics without altering the frozen task_run DDL.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_startup`" + ` (
+  ` + "`run_id`" + `              TEXT     NOT NULL,
+  ` + "`queued_at`" + `           DATETIME NULL,
+  ` + "`sandbox_acquired_at`" + ` DATETIME NULL,
+  ` + "`sandbox_prepared_at`" + ` DATETIME NULL,
+  ` + "`first_turn_at`" + `       DATETIME NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
 )`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`lease`" + ` (
@@ -1406,6 +1480,7 @@ var Tables = []string{
   ` + "`last_run_at`" + `           DATETIME NULL,
   ` + "`created_at`" + `            DATETIME NOT NULL,
   ` + "`every_n_minutes`" + `       INTEGER  NULL,
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1522,6 +1597,8 @@ var Tables = []string{
   ` + "`change_target_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
+  ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2001,6 +2078,8 @@ var Tables = []string{
   ` + "`external_agent_api`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`sandbox_image_mirror`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
+  ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
+  ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

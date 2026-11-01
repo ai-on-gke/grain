@@ -436,6 +436,42 @@ func (b Budget) AdmitsException(live, want Commitment) BudgetVerdict {
 	return b.AdmitsRepair(live, want)
 }
 
+// AdmitsPriority reports whether one more sandbox of shape want may be
+// built for a run with priority dispatch (Task.HasPriorityDispatch): a
+// console session's, or a task's holding PriorityDispatchCapability.
+//
+// Policy (docs/sandbox-budget.md, "Sessions are never held by the
+// budget"): such a sandbox is refused only by what is physically short
+// -- the host disk floor, and on a cluster backend whether a node can
+// schedule it now (ClusterFit). None of the budget's ceilings hold it:
+// not the vCPU, memory or disk ratios, not the repair reserve, not a
+// commitment already over the cap (AdmitsException's "at most one over"
+// rule, which a deadlock-breaking CI job keeps), and not a hole the CI
+// gate is holding for a large job, which is the gate's own and never
+// consulted here. A person writing to a session is not made to wait for
+// CI or for ordinary work to drain.
+//
+// The sandbox is still charged (Ledger.AdmitPriority), so everything
+// admitted after it sees it: CI and ordinary agent sandboxes wait for
+// room it took, which is how a session defers CI rather than queueing
+// behind it. The over-commitment this allows is bounded by the number
+// of live priority-dispatch runs, at most one per such task.
+func (b Budget) AdmitsPriority(live, want Commitment) BudgetVerdict {
+	if verdict := b.DiskFloor.Admits(b.Disk); !verdict.OK {
+		return verdict
+	}
+	if want.IsZero() {
+		return BudgetVerdict{OK: true}
+	}
+	if verdict := b.Admits(live, want); verdict.OK {
+		return verdict
+	}
+	if refusal, refused := b.clusterRefuses(want); refused {
+		return refusal
+	}
+	return BudgetVerdict{OK: true, Exception: true}
+}
+
 // Admits reports whether one more sandbox of shape want may be built
 // while live is already committed.
 //

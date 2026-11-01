@@ -150,6 +150,11 @@ type GrantCheck struct {
 	// Unchecked is a reference whose server is not attached here, so
 	// only its syntax could be checked.
 	Unchecked bool `json:"unchecked,omitempty"`
+	// CatalogueRefusal is why settings/capabilities.yml refuses the
+	// grant to the run the check named (checkGrantsRequest.Subject):
+	// filing a task holding it would be refused, or the grant dropped
+	// when it is only a default. Empty when no subject was named.
+	CatalogueRefusal string `json:"catalogueRefusal,omitempty"`
 }
 
 // CheckCapabilityGrants normalizes each grant against its server, the
@@ -296,6 +301,17 @@ func (c *Client) SetCapabilityGrant(ctx context.Context, id string, req GrantReq
 
 type checkGrantsRequest struct {
 	Grants []GrantRequest `json:"grants"`
+	// Subject, when set, is the task the grants are for, and each is
+	// also judged against the capability catalogue for it
+	// (GrantCheck.CatalogueRefusal): what the new-task form marks
+	// against its pre-ticked defaults before anything is filed.
+	Subject *grantCheckSubject `json:"subject,omitempty"`
+}
+
+// grantCheckSubject is the task a grant check is for. Repo is its
+// target, owner/name; "" is a task with no repository.
+type grantCheckSubject struct {
+	Repo string `json:"repo"`
 }
 
 // handleListCapabilityMethods is GET /api/capability-methods. With
@@ -341,6 +357,21 @@ func (s *Server) handleCheckCapabilityGrants(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		writeClientError(w, err)
 		return
+	}
+	if req.Subject != nil {
+		var target *model.RepoRef
+		if repo := strings.TrimSpace(req.Subject.Repo); repo != "" {
+			ref, err := model.ParseRepo(repo)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Errorf("subject repo %q: %w", repo, err))
+				return
+			}
+			target = &ref
+		}
+		if out, err = s.tasks.markCatalogueRefusals(r.Context(), out, target); err != nil {
+			writeClientError(w, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

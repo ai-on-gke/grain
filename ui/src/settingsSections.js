@@ -23,58 +23,35 @@
 // SETTINGS_GROUPS is the section nav, top to bottom. `keywords` is what
 // the filter matches besides the label for a section as a whole; each
 // field's own entry is in settingsIndex.js.
+//
+// The Settings UI edits what a deployment needs before it can read its
+// config repo at all -- Models and Sandboxes -- plus the write-only
+// secret store, sign-in, this browser's preferences and the operational
+// controls (docs/design/config-repo-settings.md §2.1, §2.3). Everything
+// else lives in the config repo: those sections are under "Managed in
+// config repo", drawn read-only with a link to the file that holds them
+// (CONFIG_REPO_SECTION_PATHS) whenever the API sends their writes there
+// (GET /api/config's configRepoOnly).
 export const SETTINGS_GROUPS = [
   {
-    id: "deployment",
-    label: "Deployment",
-    sections: [
-      { id: "general", label: "General" },
-      { id: "access", label: "Access" },
-      { id: "config-repo", label: "Config repo" },
-      // Upgrade is an action rather than a setting: it never joins the
-      // save bar, and stays usable when the config repo is external.
-      { id: "upgrade", label: "Upgrade" },
-    ],
-  },
-  {
-    id: "agents",
-    label: "Agents",
+    id: "bootstrap",
+    label: "Models & sandboxes",
     sections: [
       { id: "models", label: "Models" },
-      { id: "agents", label: "Agents" },
-      { id: "memory", label: "Memory" },
+      { id: "sandboxes", label: "Sandboxes" },
+      { id: "executors", label: "Executors" },
     ],
   },
   {
-    id: "work",
-    label: "Work",
+    id: "secrets",
+    label: "Secrets & access",
     sections: [
-      { id: "tasks", label: "Tasks" },
-      { id: "repositories", label: "Repositories" },
-    ],
-  },
-  {
-    id: "connections",
-    label: "Connections",
-    sections: [
-      { id: "git", label: "Git" },
-      { id: "capabilities", label: "Capabilities" },
       {
         id: "credentials",
         label: "Legacy capabilities",
         keywords: ["credentials", "secrets", "legacy capabilities"],
       },
-      { id: "executors", label: "Executors" },
-    ],
-  },
-  {
-    id: "infrastructure",
-    label: "Infrastructure",
-    sections: [
-      { id: "engine", label: "Engine" },
-      { id: "ci", label: "CI" },
-      { id: "sandboxes", label: "Sandboxes" },
-      { id: "caches", label: "Caches" },
+      { id: "access", label: "Access" },
     ],
   },
   {
@@ -82,7 +59,72 @@ export const SETTINGS_GROUPS = [
     label: "This browser",
     sections: [{ id: "preferences", label: "Preferences" }],
   },
+  {
+    id: "operations",
+    label: "System / Operations",
+    sections: [
+      // Upgrade is an action rather than a setting: it never joins the
+      // save bar, and stays usable when the config repo is external.
+      { id: "upgrade", label: "Upgrade" },
+      { id: "caches", label: "Caches" },
+      { id: "engine", label: "Engine" },
+      { id: "config-repo", label: "Config repo" },
+    ],
+  },
+  {
+    id: "config-managed",
+    label: "Managed in config repo",
+    sections: [
+      { id: "general", label: "General" },
+      { id: "git", label: "Git" },
+      { id: "repositories", label: "Repositories" },
+      { id: "tasks", label: "Tasks" },
+      { id: "agents", label: "Agents" },
+      { id: "capabilities", label: "Capabilities" },
+      { id: "ci", label: "CI" },
+      { id: "memory", label: "Memory" },
+    ],
+  },
 ];
+
+// CONFIG_REPO_SECTION_PATHS are the files of grain/config that hold each
+// config-repo-only section's settings, the first the one its "View in
+// config repo" link opens (staterepo.DumpPath, and the files a refused
+// write from that section names).
+export const CONFIG_REPO_SECTION_PATHS = {
+  general: ["tables/grain_config.json"],
+  // Git connections live in grain_config (git_connections, git_credential)
+  // and each repository's binding in repo_config (git_credential); their
+  // tokens and keys stay in the secret store and are never exported.
+  git: ["tables/grain_config.json", "tables/repo_config.json"],
+  repositories: ["tables/repo_config.json", "tables/grain_config.json"],
+  tasks: [
+    "settings/capabilities.yml",
+    "tables/grain_config.json",
+    "tables/custom_field.json",
+  ],
+  // Standing console sessions are grain_config.console_sessions.
+  agents: ["tables/grain_config.json"],
+  capabilities: ["settings/capabilities.yml"],
+  ci: ["tables/grain_config.json", "tables/repo_config.json"],
+  memory: ["memory/deployment.md"],
+};
+
+// isConfigRepoSection is whether a section's settings are config-repo
+// only, and so drawn read-only.
+export function isConfigRepoSection(id) {
+  return Object.hasOwn(CONFIG_REPO_SECTION_PATHS, id);
+}
+
+// configBrowserPath is the Config Repo Browser's address with path
+// open: Settings → Config repo, which paths.js parses /config to.
+export function configBrowserPath(path) {
+  return path ? `/config?path=${encodeURIComponent(path)}` : "/config";
+}
+
+// DEFAULT_SETTINGS_SECTION is what a bare /settings opens beside the nav
+// (a phone shows the list instead).
+export const DEFAULT_SETTINGS_SECTION = "models";
 
 export const SETTINGS_SECTIONS = SETTINGS_GROUPS.flatMap((g) => g.sections);
 
@@ -139,10 +181,12 @@ const OLD_SYSTEM_TABS = [
 // SETTINGS_SECTION_ALIASES are /settings/<section> paths that name a
 // pane by what it holds rather than by its section: the capability
 // servers card is on Capabilities, and the legacy capabilities' secrets
-// are on Legacy capabilities (whose id stays credentials).
+// are on Legacy capabilities (whose id stays credentials), under
+// Secrets & access.
 const SETTINGS_SECTION_ALIASES = {
   "capability-servers": "capabilities",
   "legacy-capabilities": "credentials",
+  secrets: "credentials",
 };
 
 // settingsSectionFor is the section a /settings/<section> path names,

@@ -26,25 +26,18 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
-	"github.com/ai-on-gke/grain/pkg/capability/pipelinecontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // TeamScoped is the capabilities that a team other than an admin team
 // used to hold scoped to its own work (grain/task-2555). Every grant of
 // them is now deployment-wide: self-debug reads every task and the whole
-// metrics report, pipeline-control pauses the whole deployment, and
-// memory writes the deployment layer.
+// metrics report.
 var TeamScoped = []string{
 	selfdebug.CapabilityName,
-	pipelinecontrol.CapabilityName,
-	memory.CapabilityName,
 }
 
 // IsTeamScoped reports whether id is one of TeamScoped.
@@ -67,12 +60,8 @@ func Providers() []model.CapabilityProvider {
 		grainlog.NewWithConfig(grainlog.ProviderConfig{}),
 		deploymenthealth.NewWithConfig(deploymenthealth.ProviderConfig{}),
 		selfrepair.NewWithConfig(selfrepair.Config{}),
-		selfupgrade.NewWithConfig(selfupgrade.ProviderConfig{}),
-		pipelinecontrol.NewWithConfig(pipelinecontrol.ProviderConfig{}),
-		dispatchcontrol.New(),
 		dbaccess.NewReadProviderWithConfig(dbaccess.Config{}),
 		dbaccess.NewWriteProviderWithConfig(dbaccess.Config{}),
-		memory.NewWithConfig(memory.Config{}),
 	}
 	for _, r := range capability.Registered() {
 		providers = append(providers, r.New())

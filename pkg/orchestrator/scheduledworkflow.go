@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"log"
 	"path"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -282,6 +284,13 @@ func startScheduledWorkflowRun(ctx context.Context, deps Deps, row model.Schedul
 			row.ScheduleID, row.Stem, model.StandingWorkOffReason(row.Repo))
 		return deps.Store.DeleteScheduledWorkflowRun(ctx, row.ScheduleID)
 	}
+	if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, row.Repo); err != nil {
+		return err
+	} else if disabled {
+		log.Printf("orchestrator: schedule %s's firing of %s skipped: %s",
+			row.ScheduleID, row.Stem, cancelReasonForCIMode(mode))
+		return deps.Store.DeleteScheduledWorkflowRun(ctx, row.ScheduleID)
+	}
 	ref, err := scheduledWorkflowRef(deps, row)
 	if err != nil {
 		return failedScheduledWorkflowStart(ctx, deps, row, now, err)
@@ -463,6 +472,15 @@ func collectScheduledWorkflowRun(ctx context.Context, deps Deps, row model.Sched
 	if deps.CI == nil {
 		return concludeScheduledWorkflowRun(ctx, deps, row, now, ci.ConclusionErrored,
 			"this deployment no longer runs CI of its own, so the run cannot be read")
+	}
+	if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, row.Repo); err != nil {
+		return err
+	} else if disabled {
+		reason := cancelReasonForCIMode(mode)
+		deps.CI.Cancel(row.RunID, reason, ci.CancelBySystem)
+		log.Printf("orchestrator: schedule %s's grain CI run %s on %s cancelled: %s",
+			row.ScheduleID, row.RunID, row.Repo, reason)
+		return deps.Store.DeleteScheduledWorkflowRun(ctx, row.ScheduleID)
 	}
 	run, ok := deps.CI.Get(row.RunID)
 	if ok && (run.Interrupted || run.Conclusion.Done()) {
@@ -852,4 +870,223 @@ func tellTheReviewer(ctx context.Context, deps Deps, taskID string, now time.Tim
 		return fmt.Errorf("orchestrator: telling %s which run to review: %w", taskID, err)
 	}
 	return nil
+}
+
+// fireGitHubWorkflowRunSchedules checks every enabled github_workflow_run
+// schedule in run.Repo and fires matching ones for the concluded GitHub
+// Actions workflow run.
+func fireGitHubWorkflowRunSchedules(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun, jobs []model.GitHubCIJob, now time.Time) error {
+	if deps.Store == nil || run.RunID == 0 {
+		return nil
+	}
+	schedules, err := deps.Store.ListSchedules(ctx)
+	if err != nil {
+		return fmt.Errorf("orchestrator: listing schedules for %s: %w", run.Repo, err)
+	}
+	for _, sched := range schedules {
+		if !sched.Enabled || !sched.Target.Same(run.Repo) ||
+			sched.Recurrence.Kind != model.RecurrenceGitHubWorkflowRun || sched.Recurrence.GitHubWorkflowRun == nil {
+			continue
+		}
+		if err := fireOneGitHubWorkflowRunSchedule(ctx, deps, sched, run, jobs, now); err != nil {
+			log.Printf("orchestrator: firing github_workflow_run schedule %s (%s) for run %d: %v",
+				sched.ID, sched.Title, run.RunID, err)
+		}
+	}
+	return nil
+}
+
+func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched model.Schedule, run ConcludedGitHubWorkflowRun, jobs []model.GitHubCIJob, now time.Time) error {
+	trig := sched.Recurrence.GitHubWorkflowRun
+	if trig == nil {
+		return nil
+	}
+	if isGitHubWorkflowRunForeignHead(run.Repo, run.HeadRepo) || !isGitHubBranchWorkflowEvent(run.Event) {
+		return nil
+	}
+	if !trig.MatchesWorkflow(run.WorkflowName, run.WorkflowPath) {
+		return nil
+	}
+	if !trig.MatchesConclusion(run.Conclusion) {
+		return nil
+	}
+	branch := strings.TrimPrefix(run.Ref, "refs/heads/")
+	fallbackBase := strings.TrimSpace(sched.Base)
+	if len(trig.Branches) == 0 && fallbackBase == "" {
+		def, err := scheduledWorkflowRef(deps, model.ScheduledWorkflowRun{Repo: run.Repo})
+		if err != nil {
+			sayOnce("github-workflow-run-default-branch:"+sched.ID,
+				"orchestrator: schedule %s: %v", sched.ID, err)
+			return nil
+		}
+		fallbackBase = def
+	}
+	if !trig.MatchesBranch(branch, fallbackBase) {
+		return nil
+	}
+
+	stem := trig.WorkflowStem()
+	if stem == "" {
+		base := path.Base(run.WorkflowPath)
+		stem = strings.TrimSuffix(strings.TrimSuffix(base, ".yml"), ".yaml")
+		if stem == "" {
+			stem = run.WorkflowName
+		}
+	}
+	wfPath := run.WorkflowPath
+	if wfPath == "" {
+		wfPath = ".github/workflows/" + stem + ".yml"
+	}
+
+	conclusion := gitHubConclusionToCI(run.Conclusion)
+	detail := gitHubWorkflowRunDetail(run, jobs)
+	runIDStr := strconv.FormatInt(run.RunID, 10)
+	started := now
+	if run.StartedAt != nil && !run.StartedAt.IsZero() {
+		started = *run.StartedAt
+	}
+	finished := now
+	if run.CompletedAt != nil && !run.CompletedAt.IsZero() {
+		finished = *run.CompletedAt
+	}
+
+	hasSuite := sched.SuiteID != nil && *sched.SuiteID != ""
+	tmplID := ""
+	if sched.TemplateID != nil {
+		tmplID = *sched.TemplateID
+	}
+	usesWorkflowReviewTemplate := !hasSuite &&
+		(tmplID == "" || tmplID == model.WorkflowReviewTemplateID(stem))
+
+	// When a schedule uses the default workflow-review template and has no
+	// explicit conclusions filter on the trigger, respect sched.WorkflowReview
+	// (default OnFailure). If the user explicitly listed conclusions on the
+	// trigger (e.g. conclusions: [failure, success]), trig.MatchesConclusion
+	// above already checked that and the user asked for a task on success too.
+	if usesWorkflowReviewTemplate && len(trig.Conclusions) == 0 &&
+		conclusion == ci.ConclusionSuccess && !sched.WorkflowReview.Always() {
+		row := model.ScheduledWorkflowRun{
+			ScheduleID:      sched.ID,
+			Repo:            run.Repo,
+			Branch:          branch,
+			Workflow:        wfPath,
+			Stem:            stem,
+			FiredAt:         now,
+			RunID:           runIDStr,
+			Attempts:        max(1, run.Attempt),
+			AttemptedAt:     &started,
+			FinishedAt:      &finished,
+			Conclusion:      string(conclusion),
+			Detail:          detail,
+			ReviewNotNeeded: true,
+		}
+		if err := deps.Store.PutScheduledWorkflowRun(ctx, row); err != nil {
+			return err
+		}
+		sched.LastRunAt = &now
+		return deps.Store.PutSchedule(ctx, sched)
+	}
+
+	// Overlap check: skip if an earlier review/firing for this schedule is still open.
+	if sched.Overlap != model.OverlapAllow {
+		openTask, err := deps.Store.OpenTaskWithTag(ctx, model.ScheduleFiringTag(sched.ID))
+		if err != nil {
+			return err
+		}
+		if openTask != nil {
+			resolved := now
+			_, _ = deps.Store.RecordScheduleSkip(ctx, model.ScheduleSkip{
+				ScheduleID: sched.ID,
+				Occurrence: now,
+				At:         now,
+				Reason:     model.SuppressedByOpenTask,
+				TaskID:     openTask.ID,
+				Outcome:    model.ScheduleSkipDropped,
+				ResolvedAt: &resolved,
+			})
+			return nil
+		}
+	}
+
+	row := model.ScheduledWorkflowRun{
+		ScheduleID:  sched.ID,
+		Repo:        run.Repo,
+		Branch:      branch,
+		Workflow:    wfPath,
+		Stem:        stem,
+		FiredAt:     now,
+		RunID:       runIDStr,
+		Attempts:    max(1, run.Attempt),
+		AttemptedAt: &started,
+		FinishedAt:  &finished,
+		Conclusion:  string(conclusion),
+		Detail:      detail,
+	}
+	if err := deps.Store.PutScheduledWorkflowRun(ctx, row); err != nil {
+		return err
+	}
+
+	if hasSuite {
+		_, err := deps.Store.FireScheduleNow(ctx, sched, now, deps.Config.settingsRepo())
+		return err
+	}
+
+	summarySection := gitHubWorkflowRunSummarySection(run, jobs)
+	schedForFiling := sched
+	if usesWorkflowReviewTemplate && tmplID == "" && schedForFiling.Title == "" && schedForFiling.Body == "" {
+		defaultTmpl := model.WorkflowReviewTemplateID(stem)
+		schedForFiling.TemplateID = &defaultTmpl
+	}
+
+	taskID, filed, err := deps.Store.FileWorkflowReview(ctx, schedForFiling, row, deps.Config.settingsRepo(), now)
+	if err != nil {
+		return fmt.Errorf("filing workflow review for schedule %s: %w", sched.ID, err)
+	}
+	if filed {
+		if task, err := deps.Store.GetTask(ctx, taskID); err == nil && task != nil {
+			if !strings.Contains(task.Body, summarySection) {
+				task.Body = strings.TrimRight(task.Body, "\n") + "\n\n" + summarySection
+				_ = deps.Store.PutTask(ctx, *task)
+			}
+		}
+		if err := tellTheReviewer(ctx, deps, taskID, now, gitHubWorkflowReviewComment(row, run, jobs)); err != nil {
+			return err
+		}
+	}
+	row.ReviewTaskID = taskID
+	if err := deps.Store.PutScheduledWorkflowRun(ctx, row); err != nil {
+		return err
+	}
+	sched.LastRunAt = &now
+	return deps.Store.PutSchedule(ctx, sched)
+}
+
+func gitHubConclusionToCI(conclusion string) ci.Conclusion {
+	switch strings.ToLower(strings.TrimSpace(conclusion)) {
+	case "success":
+		return ci.ConclusionSuccess
+	case "cancelled":
+		return ci.ConclusionCancelled
+	case "skipped", "neutral":
+		return ci.ConclusionSkipped
+	default:
+		return ci.ConclusionFailure
+	}
+}
+
+func gitHubWorkflowReviewComment(row model.ScheduledWorkflowRun, run ConcludedGitHubWorkflowRun, jobs []model.GitHubCIJob) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "GitHub Actions workflow `%s` (`%s`) on `%s` concluded **`%s`**",
+		row.Stem, row.Workflow, row.Branch, run.Conclusion)
+	if run.Attempt > 1 {
+		fmt.Fprintf(&b, " on attempt %d", run.Attempt)
+	}
+	fmt.Fprintf(&b, ": run `%s`", row.RunID)
+	if run.HTMLURL != "" {
+		fmt.Fprintf(&b, " (%s)", run.HTMLURL)
+	}
+	b.WriteString(".\n\n")
+	fmt.Fprintf(&b, "Run `grain ci log %s` to read the stored job failure tails.\n\n", row.RunID)
+	b.WriteString(gitHubWorkflowRunSummarySection(run, jobs))
+	return b.String()
 }

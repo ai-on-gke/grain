@@ -321,6 +321,46 @@ func (l *Ledger) VerdictException(budget Budget, want Commitment) BudgetVerdict 
 	return v
 }
 
+// VerdictPriority is Verdict for a run with priority dispatch
+// (Budget.AdmitsPriority): refused only by the disk floor or the
+// cluster, never by the budget's ceilings or what CI holds.
+func (l *Ledger) VerdictPriority(budget Budget, want Commitment) BudgetVerdict {
+	if l == nil {
+		return budget.AdmitsPriority(Commitment{}, want)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return budget.AdmitsPriority(l.live(), want)
+}
+
+// AdmitPriority is Admit for a run with priority dispatch
+// (Budget.AdmitsPriority). Idle session sandboxes are still evicted
+// first when that makes room inside the budget, so a session's own warm
+// neighbours are what it displaces before it over-commits the host.
+func (l *Ledger) AdmitPriority(budget Budget, pool, id string, want Commitment) (BudgetVerdict, func()) {
+	if l == nil {
+		return budget.AdmitsPriority(Commitment{}, want), func() {}
+	}
+	l.mu.Lock()
+	_, evicts := l.evictIdleForLocked(pool, id, func(committed Commitment) BudgetVerdict {
+		return budget.Admits(committed, want)
+	})
+	verdict := budget.AdmitsPriority(l.liveWithout(pool, id), want)
+	if !verdict.OK {
+		l.mu.Unlock()
+		for _, evict := range evicts {
+			evict()
+		}
+		return verdict, nil
+	}
+	l.charge(pool, id, want)
+	l.mu.Unlock()
+	for _, evict := range evicts {
+		evict()
+	}
+	return verdict, l.releaser(pool, id)
+}
+
 // AdmitsException is VerdictException's boolean.
 func (l *Ledger) AdmitsException(budget Budget, want Commitment) bool {
 	return l.VerdictException(budget, want).OK

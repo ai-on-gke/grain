@@ -11180,6 +11180,23 @@ appends, the security-review system template, and the
   same rule: it fixes what was decided, then goes through. Grain's own
   notes and agents' comments answer nothing. Submit is "ship as is": the
   change merges with the questions left open, and the hold is dropped.
+- **Relayed review threads are resolved once handled.** Inline findings
+  relayed by a review task via `add_review_comment` are tracked on the
+  reviewed task (`model.LinkRelayedReviewThread`), mapping each relayed
+  comment to its GitHub review thread ID. When the owner answers the review
+  questions, the decision run's prompt instructs it to reply to and resolve
+  each relayed thread once handled (`resolve_review_thread` / `grain pr
+  resolve`), and `ProcessResult` (`resolveRelayedThreadsAfterOwnerRun`)
+  replies with a one-line summary and resolves any remaining decided
+  threads through `ResolveReviewThread` so "require conversation
+  resolution" never depends on the agent remembering. As belt-and-braces in
+  the merge queue (`syncEntry` / `resolveOrClassifyUnresolvedThreadsOnMerge`),
+  when a merge is refused by conversation resolution and every unresolved
+  thread was authored by grain's review relay with a recorded decision,
+  the queue resolves them and retries the merge immediately. Threads
+  written by people are never auto-resolved: if human threads remain
+  unresolved, the task and merge-queue view report `"blocked: N unresolved
+  review conversations by <people>"` (`github.RefusalUnresolvedThreads`).
 - **Trust-boundary changes stay gated.** A change caught by a `human:
   required` trigger (in this repository `.grain/triggers/grain-declarations.yml`
   covers `.grain/**`, `sensitive: true`), or touching a path grain's own

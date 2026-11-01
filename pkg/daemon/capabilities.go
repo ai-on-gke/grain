@@ -43,14 +43,11 @@ import (
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
 	"github.com/ai-on-gke/grain/pkg/capability/reporead"
 	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -118,10 +115,7 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 		bootstrap.New(),
 		grainci.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
-		releasenotes.New(),
-		teambroadcast.New(),
 		consolecap.New(),
-		quarantine.New(),
 		readissues.New(),
 		prioritydispatch.New(),
 		durable.New(),

@@ -47,6 +47,25 @@ type fakeCLIActions struct {
 	// whether the latest CIRun was, which is what Ready reports.
 	downStarts, downReads int
 	lastDown              bool
+	githubChecks          bool
+	githubWaitResult      mcp.GitHubCheckWaitResult
+	githubWaits           int
+}
+
+func (f *fakeCLIActions) UsesGitHubChecks(_ context.Context, _ string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.githubChecks, nil
+}
+
+func (f *fakeCLIActions) WaitForGitHubChecks(_ context.Context, _ string, _, _ time.Duration, onPoll func(waited time.Duration)) (mcp.GitHubCheckWaitResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.githubWaits++
+	if onPoll != nil {
+		onPoll(10 * time.Millisecond)
+	}
+	return f.githubWaitResult, nil
 }
 
 func (f *fakeCLIActions) Ready() bool {
@@ -478,7 +497,7 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 		"sb-1": {
 			TaskID: "7", RunID: "run-2", Attempt: 2,
 			TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
-			Grants: []string{"quarantine-test", "api:tasks:read"},
+			Grants: []string{"api:test-quarantine", "api:tasks:read"},
 		},
 	}}
 	var apiHeaderChannel, apiHeaderTask, apiHeaderRun, apiHeaderReason, apiHeaderAuth, apiHeaderTunnel string
@@ -516,7 +535,7 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 	scopes.scopes["sb-1"] = model.NamespaceScope{
 		TaskID: "7", RunID: "run-2", Attempt: 2,
 		TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
-		Grants: []string{"quarantine-test", "api:tasks:read"},
+		Grants: []string{"api:test-quarantine", "api:tasks:read"},
 	}
 
 	// Stage 3 collaboration & blocking-wait endpoints:
@@ -559,6 +578,21 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 	// Quarantine follow-up proposals share the same per-attempt proposal cap.
 	if rec := send(h, http.MethodPost, tok2, "/cli/quarantine", `{"test_name":"pkg/foo.TestBar","reason":"flake"}`); rec.Code != http.StatusTooManyRequests {
 		t.Errorf("quarantine follow-up proposal over cap: %d %s, want 429", rec.Code, rec.Body)
+	}
+	// Without tests:write (or on a mismatched repo-scoped grant), /cli/quarantine is refused with 403.
+	scopes.scopes["sb-1"] = model.NamespaceScope{
+		TaskID: "7", RunID: "run-2", Attempt: 2,
+		TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
+		Grants: []string{"api:tests:write@other/repo"},
+	}
+	if rec := send(h, http.MethodPost, tok2, "/cli/quarantine", `{"test_name":"pkg/foo.TestBar","reason":"flake"}`); rec.Code != http.StatusForbidden ||
+		!strings.Contains(rec.Body.String(), "api:test-quarantine") {
+		t.Errorf("quarantine without grant on repo: got %d %s, want 403 naming api:test-quarantine", rec.Code, rec.Body)
+	}
+	scopes.scopes["sb-1"] = model.NamespaceScope{
+		TaskID: "7", RunID: "run-2", Attempt: 2,
+		TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
+		Grants: []string{"api:test-quarantine", "api:tasks:read"},
 	}
 
 	// /api/ forwarding attaches X-Grain-Channel: sandbox-cli, X-Grain-Acting-Task, and X-Grain-Acting-Run,
@@ -720,5 +754,92 @@ func TestCLIWaitEndsRunningWhenDaemonShutdownStarts(t *testing.T) {
 	}
 	if resp.Status != "running" || resp.ResumeRunID != "run-new" {
 		t.Errorf("answer = %+v, want status=running with resume_run_id=run-new", resp)
+	}
+}
+
+// TestAPIForwardKeepsAnEscapedSlash is a host-qualified repository's
+// route reached through the sandbox proxy: /api/repos/<host>%2F<owner>/
+// <name>/... reaches the agent API with the %2F still one {owner}
+// segment, not three segments no route matches.
+func TestAPIForwardKeepsAnEscapedSlash(t *testing.T) {
+	gitproxy.LogToTest(t)
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-1": "tok-1"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owner, name string
+	api := http.NewServeMux()
+	api.HandleFunc("GET /api/repos/{owner}/{name}/x", func(w http.ResponseWriter, r *http.Request) {
+		owner, name = r.PathValue("owner"), r.PathValue("name")
+	})
+	h := gitproxy.NewHandler(&gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: ci.NewRunStore(10)},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-1": {TaskID: "7", RunID: "run-a", TaskRepo: "h.example/o/n", TaskBranch: "grain/task-7"},
+		}},
+		API: api,
+	})
+	rec := send(h, http.MethodGet, "tok-1", "/api/repos/h.example%2Fo/n/x", "")
+	if rec.Code != http.StatusOK || owner != "h.example/o" || name != "n" {
+		t.Errorf("GET /api/repos/h.example%%2Fo/n/x: %d %s, owner=%q name=%q; want 200, owner h.example/o, name n",
+			rec.Code, rec.Body, owner, name)
+	}
+}
+
+func TestCIWaitPollsGitHubChecksWhenRepoUsesGitHubCIMode(t *testing.T) {
+	gitproxy.LogToTest(t)
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-gh": "tok-gh"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actions := &fakeCLIActions{
+		runs:         map[string]ci.Run{},
+		githubChecks: true,
+		githubWaitResult: mcp.GitHubCheckWaitResult{
+			Status:     "passed",
+			Verdict:    mcp.WaitVerdictPassed,
+			Commit:     "abcdef0123456789",
+			Conclusion: "success",
+			Report:     "Waited 1s for CI on grain/task-7 at abcdef012345.\n\nEvery check against abcdef012345 finished and none of them failed.",
+		},
+	}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: ci.NewRunStore(10)},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-gh": {TaskID: "7", RunID: "run-a", TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
+				MayReadCI: true, AllowedRepos: map[string]bool{"bwsalmon/grain": true}},
+		}},
+		CLIActions: actions,
+	}
+	h := gitproxy.NewHandler(proxy)
+
+	rec := send(h, http.MethodPost, "tok-gh", "/cli/ci/wait", `{"timeout_seconds":30}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /cli/ci/wait: %d %s", rec.Code, rec.Body)
+	}
+	if len(actions.started) != 0 {
+		t.Fatalf("StartTaskCI called %d times on CIModeGitHub repo, want 0", len(actions.started))
+	}
+	if actions.githubWaits != 1 {
+		t.Fatalf("WaitForGitHubChecks called %d times, want 1", actions.githubWaits)
+	}
+	var resp gitproxy.CLIWaitResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != "passed" || resp.RunID != "github" || resp.Commit != "abcdef0123456789" {
+		t.Fatalf("response = %+v, want status=passed run_id=github commit=abcdef0123456789", resp)
 	}
 }

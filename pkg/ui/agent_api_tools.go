@@ -72,7 +72,7 @@ var routeDocs = map[string]string{
 	"POST /api/settings/plan":                                              "Preview a settings change without saving it: what the given fields would change, and what it would take to apply.",
 	"PUT /api/settings/cli-run":                                            "Set the per-framework settings for agent CLI runs, keyed by framework.",
 	"POST /api/capabilities/{id}/check":                                    "Check that a capability's credential works, by making one request to the service it is for; stores nothing.",
-	"GET /api/tasks":                                                       "List tasks, with their state, position in the queue and pull request.",
+	"GET /api/tasks":                                                       "List tasks, with their state, position in the queue and pull request; narrow with state, q, limit and fields=summary rather than reading every task's full record.",
 	"GET /api/pipeline/changes":                                            "Read what changed in the pipeline since a cursor: task transitions, merge-queue states, stalls, base-branch verdicts and merge-batch results, oldest first, with the cursor to read on from.",
 	"POST /api/tasks":                                                      "File a new task: its title, description, repo and base branch, grants, dependencies and attachments.",
 	"POST /api/tasks/from-template":                                        "File a task from a repository's own declared template (.grain/templates/<template>.yml), by its stem, with its fields filled; an agent's call is also held to POST /api/tasks's rules.",
@@ -104,6 +104,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/run-now":                                         "Dispatch a queued task now, ahead of the queue.",
 	"POST /api/tasks/{id}/pull-request":                                    "Open the pull request for a task's pushed branch now, rather than when its run ends.",
 	"POST /api/tasks/{id}/sandbox/recreate":                                "Destroy a task's sandbox and build a fresh one in its place; uncommitted work in it is lost.",
+	"POST /api/sandbox-probe":                                              "Build a throwaway sandbox named probe-<id>, run argv in it over the deployment's guest-access channel (access: dialout or kubectl), return its output and exit code, and delete it.",
 	"POST /api/tasks/{id}/messages":                                        "Say something to the human watching your own task and park it on their reply (the chat tool's write half); only your own task's id is accepted. Give summary too: one line of at most 100 characters naming the decision you need, which is all the inbox and task list show of it. To message another task's agent, use POST /api/tasks/{id}/agent-messages.",
 	"POST /api/tasks/{id}/agent-messages":                                  "Send a message to another task's agent, signed as your task: its live run gets it on its next tool result, or its next run reads it; the task is never parked or re-queued by it.",
 	"POST /api/tasks/{id}/notes":                                           "Leave a note for your parent's or a child's agent (message_task): it never parks that task, reaches its live run, and wakes it if it is a resting durable task. Any other task needs api:task-admin.",
@@ -226,7 +227,7 @@ var routeDocs = map[string]string{
 	"POST /api/host/reboot":                                                "Reboot the machine grain runs on.",
 	"POST /api/host/shutdown":                                              "Power off the machine grain runs on; it does not come back on its own.",
 	"POST /api/host/restart":                                               "Restart the grain service, without touching the machine it runs on.",
-	"POST /api/upgrade":                                                    "Start upgrading grain, to a branch or image; afterTasksFinish waits for running tasks first.",
+	"POST /api/upgrade":                                                    "Start or schedule upgrading grain to a branch or image; set afterTasksFinish: true to drain running tasks and CI jobs first (your own run counts, so finish rather than polling), as false restarts grain immediately and discards in-flight work.",
 	"DELETE /api/upgrade/scheduled":                                        "Cancel an upgrade waiting for running tasks to finish.",
 	"POST /api/database/test":                                              "Check grain can connect to a database DSN.",
 	"POST /api/database/upgrade":                                           "Move grain's store to a Postgres DSN; the first call answers with a confirmation token, which a second identical call must carry.",
@@ -247,6 +248,7 @@ var routeDocs = map[string]string{
 	"GET /api/ci/runs/{id}":                                                "Read one grain CI run in full, every job's steps and their log output included.",
 	"DELETE /api/ci/runs/{id}":                                             "Cancel a grain CI run.",
 	"DELETE /api/ci/cache":                                                 "Empty grain CI's job cache, so every job of the next runs does its work again.",
+	"POST /api/tests/quarantine":                                           "Quarantine a flaky or failing test (returning the rendered .grain/quarantine.yml entry to commit in the workspace) and optionally file a held follow-up repair task.",
 	"POST /api/package-cache/flush":                                        "Empty the package cache: query kind (apt, pypi, docker, npm or go) for one ecosystem, or all of them without.",
 	"POST /api/actions-cache/flush":                                        "Empty the actions cache: query repo (owner/name) for one repository's entries, or every repository's without.",
 	"POST /api/pipeline-pause":                                             "Pause the pipeline: nothing new is dispatched until it is resumed.",
@@ -275,6 +277,7 @@ var routeBodies = map[string]any{
 	"POST /api/tasks/{id}/capabilities":                              setCapabilityRequest{},
 	"POST /api/tasks/{id}/depends-on":                                setDependencyRequest{},
 	"POST /api/tasks/{id}/defer":                                     deferRequest{},
+	"POST /api/sandbox-probe":                                        SandboxProbeRequest{},
 	"POST /api/tasks/{id}/pause":                                     pauseRequest{},
 	"PUT /api/tasks/{id}/goal":                                       setGoalRequest{},
 	"POST /api/tasks/{id}/run-now":                                   runNowRequest{},
@@ -375,6 +378,7 @@ var routeBodies = map[string]any{
 	"POST /api/console-sessions/{id}/restart":                        RestartConsoleSessionRequest{},
 	"POST /api/ci/runs":                                              CIRunRequest{},
 	"DELETE /api/ci/runs/{id}":                                       CICancelRequest{},
+	"POST /api/tests/quarantine":                                     QuarantineTestRequest{},
 	"POST /api/pipeline-pause":                                       pausePipelineRequest{},
 	"POST /api/external-agents/tokens":                               CreateExternalAgentTokenRequest{},
 }
@@ -390,10 +394,21 @@ var routeQueries = map[string]map[string]string{
 		"limit": "At most this many entries (default 100, at most 500).",
 		"repo":  "Only this repository's tasks, base branches and merge batches (owner/name); a repository-scoped tasks:read grant must name its own.",
 	},
-	"GET /api/tasks":                            {"repo": "Only this repository's (owner/name) tasks; a repository-scoped tasks:read grant must name its own."},
-	"GET /api/tasks/states":                     {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
-	"GET /api/states":                           {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
-	"GET /api/tasks/{id}/messages":              {"after": "Only messages after this comment id.", "agents": "true to include other tasks' runs' messages to this task's agent (POST /api/tasks/{id}/agent-messages)."},
+	"GET /api/tasks": {
+		"repo":   "Only this repository's (owner/name) tasks; a repository-scoped tasks:read grant must name its own.",
+		"state":  "Only tasks in these states, repeated or comma-separated (proposed, queued, running, awaiting_reply, failed, awaiting_submit, completed, closed).",
+		"q":      "Only tasks whose title contains this text, case-insensitively.",
+		"search": "The same as q.",
+		"limit":  "At most this many tasks: the newest by filing time, listed oldest first.",
+		"fields": "summary for id, title, state, repo, createdAt, blockedBy and stall only -- no description; use it when the full records are not needed.",
+	},
+	"GET /api/tasks/states": {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
+	"GET /api/states":       {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
+	"GET /api/tasks/{id}/messages": {
+		"after":   "Only messages after this comment id.",
+		"agents":  "true to include other tasks' runs' messages to this task's agent (POST /api/tasks/{id}/agent-messages).",
+		"wait_ms": "Block up to this many milliseconds (at most 5000) for a new message to arrive when none is already waiting after the cursor.",
+	},
 	"GET /api/capability-servers/gchat-usage":   {"id": "The gchat capability server's capability_id."},
 	"GET /api/capability-methods":               {"kind": "The run kind the grants are for (task, process or ci): each method then carries policyRefusal, why the capability policy denies it that run.", "repo": "With kind, the repository (owner/name) the run is on."},
 	"GET /api/notifications":                    {"open": "1 for only notifications not yet cleared.", "after": "Only notifications after this id.", "family": "Only this family (the subject before its first ':')."},
@@ -704,7 +719,7 @@ func AgentAPITools(client *HTTPClient, taskID string, grants []string) []mcp.Too
 	}
 	var tools []mcp.Tool
 	for _, route := range AgentAPIRoutes() {
-		if !set.Has(route.Scope) {
+		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) {
 			continue
 		}
 		tools = append(tools, route.tool(client, taskID))

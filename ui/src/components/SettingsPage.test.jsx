@@ -70,24 +70,24 @@ describe("SettingsPage", () => {
       SETTINGS_GROUPS.flatMap((g) => g.sections.map((s) => s.label)),
     );
     expect(labels).toEqual([
-      "General",
-      "Access",
-      "Config repo",
-      "Upgrade",
       "Models",
-      "Agents",
-      "Memory",
-      "Tasks",
-      "Repositories",
-      "Git",
-      "Capabilities",
-      "Legacy capabilities",
-      "Executors",
-      "Engine",
-      "CI",
       "Sandboxes",
-      "Caches",
+      "Executors",
+      "Legacy capabilities",
+      "Access",
       "Preferences",
+      "Upgrade",
+      "Caches",
+      "Engine",
+      "Config repo",
+      "General",
+      "Git",
+      "Repositories",
+      "Tasks",
+      "Agents",
+      "Capabilities",
+      "CI",
+      "Memory",
     ]);
   });
 
@@ -272,6 +272,68 @@ describe("SettingsPage", () => {
       }),
     );
     expect(screen.queryByTestId("promptExtension-save")).toBeNull();
+  });
+
+  // docs/design/config-repo-settings.md §2.1, §2.3: when the API sends
+  // these sections' writes to the config repo (GET /api/config's
+  // configRepoOnly), a section shows what the config repo holds,
+  // read-only, and links to the files in the Config Repo Browser.
+  it("draws a config-repo-only section read-only with links into the Config Repo Browser", async () => {
+    setup({ section: "agents", config: { configRepoOnly: true } });
+    const box = await screen.findByLabelText(
+      "Standing instructions for every run",
+    );
+    expect(box).toHaveValue("Run make test.");
+    expect(box).toBeDisabled();
+    const notice = screen.getByTestId("config-managed-notice");
+    const links = within(notice).getAllByTestId("config-repo-link");
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "/config?path=tables%2Fgrain_config.json",
+    ]);
+    expect(links[0]).toHaveTextContent(
+      "View in config repo → tables/grain_config.json",
+    );
+    expect(screen.queryByTestId("external-config-repo-banner")).toBeNull();
+  });
+
+  it("leaves Models, Sandboxes and the operational sections editable", async () => {
+    for (const section of ["models", "sandboxes", "engine", "upgrade"]) {
+      const { unmount } = setup({ section, config: { configRepoOnly: true } });
+      expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+      unmount();
+    }
+  });
+
+  it("keeps a section editable where there is no config repo to send it to", async () => {
+    setup({ section: "agents" });
+    const box = await screen.findByLabelText(
+      "Standing instructions for every run",
+    );
+    expect(box).toBeEnabled();
+    expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+  });
+
+  it("opens a config-repo link in the app, without reloading the page", async () => {
+    const user = userEvent.setup();
+    setup({ section: "capabilities", config: { configRepoOnly: true } });
+    const popped = vi.fn();
+    window.addEventListener("popstate", popped);
+    try {
+      const link = within(
+        screen.getByTestId("config-managed-notice"),
+      ).getByTestId("config-repo-link");
+      expect(link).toHaveAttribute(
+        "href",
+        "/config?path=settings%2Fcapabilities.yml",
+      );
+      await user.click(link);
+      expect(window.location.pathname).toBe("/config");
+      expect(window.location.search).toBe("?path=settings%2Fcapabilities.yml");
+      expect(popped).toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("popstate", popped);
+      window.history.replaceState(null, "", "/");
+    }
   });
 
   it("shows the section list on a phone at the bare /settings, and a section under a back arrow", async () => {
@@ -713,5 +775,43 @@ describe("SettingsPage", () => {
         }),
       }),
     );
+  });
+
+  it("allows locking and unlocking settings in the UI from General", async () => {
+    const user = userEvent.setup();
+    setup({ section: "general", config: { settingsLocked: false } });
+
+    const envBox = await screen.findByLabelText("Environment name");
+    const lockToggle = screen.getByRole("checkbox", {
+      name: /Lock settings in UI \(require config repo PRs\)/i,
+    });
+    expect(envBox).toBeEnabled();
+    expect(lockToggle).not.toBeChecked();
+    expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+
+    // Lock settings in UI
+    await user.click(lockToggle);
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ settingsLocked: true }),
+      }),
+    );
+    expect(lockToggle).toBeChecked();
+    expect(screen.getByLabelText("Environment name")).toBeDisabled();
+    expect(screen.getByTestId("config-managed-notice")).toBeInTheDocument();
+    expect(lockToggle).toBeEnabled();
+
+    // Unlock settings in UI again
+    await user.click(lockToggle);
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ settingsLocked: false }),
+      }),
+    );
+    expect(lockToggle).not.toBeChecked();
+    expect(screen.getByLabelText("Environment name")).toBeEnabled();
+    expect(screen.queryByTestId("config-managed-notice")).toBeNull();
   });
 });

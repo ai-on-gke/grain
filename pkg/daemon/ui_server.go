@@ -426,6 +426,17 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// when it was dispatched. No gate, unlike PullRequests above --
 		// see sandboxRecreations' own doc comment.
 		SandboxRecreate: sandboxRecreateAdapter{sandboxRecreations},
+		// SandboxProbe builds one throwaway sandbox from the same backend
+		// runs use, admitted and metered as they are, for `grain sandbox
+		// probe`. Gated by its route's scope, not here.
+		SandboxProbe: sandboxProbeAdapter{
+			sandboxes: sandboxes,
+			meter:     orchestrator.MeterFor(store),
+			cache: orchestrator.PackageCacheSource{
+				Base: pkgCache.sandboxURL(live), CA: pkgCache.sandboxCA(live), DNS: pkgCache.SandboxDNS(live),
+			},
+			config: live.Current,
+		},
 		// StandingSandboxes is what the reconcile loop's own supervisor
 		// is running, for GET /api/sandboxes. No gate, for the reason
 		// SandboxRecreate needs none (standingSandboxes' doc comment).
@@ -488,6 +499,12 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 				return nil
 			}
 			return checkClusterSandboxImageConnectivity(ctx, live.Current(), imageRef)
+		},
+		// The Granule VM image the Settings pane probes is the one this
+		// daemon resolves -- its stamp, mirrored -- not the UI's
+		// version-derived default (k8sGranuleImageForSettings).
+		K8sGranuleImage: func(mc model.Config) string {
+			return k8sGranuleImageForSettings(live.Current(), mc)
 		},
 		// The Settings pane's sandbox image check reads labels the way
 		// the daemon's own startup check does: local docker first, then

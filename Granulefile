@@ -159,12 +159,12 @@ RUN echo 'tmpfs /tmp tmpfs mode=1777,strictatime,nosuid,nodev,size=50% 0 0' >> /
 
 # Stamp the Grain sandbox contract version (pkg/sandboximage.Contract).
 RUN install -d -m0755 /etc/grain \
-    && printf '1\n' > /etc/grain/sandbox-contract
-LABEL dev.grain.sandbox.contract="1"
+    && printf '2\n' > /etc/grain/sandbox-contract
+LABEL dev.grain.sandbox.contract="2"
 
 # Base VM pack target
 VM PACK --variant=debian AS guest_base
-LABEL dev.grain.sandbox.contract="1"
+LABEL dev.grain.sandbox.contract="2"
 
 # ==============================================================================
 # Stage 2: Development toolchains & container runtime
@@ -349,4 +349,4 @@ RUN chown -R debian:debian /home/debian \
 # Pack the final sandbox guest into a bootable VM image
 VM PACK --variant=debian AS sandbox_guest
 VM SET memory-mb=4096 cpus=4
-LABEL dev.grain.sandbox.contract="1"
+LABEL dev.grain.sandbox.contract="2"

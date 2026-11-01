@@ -56,3 +56,64 @@ func TestCapabilityEscalationNoteNamesEachCapability(t *testing.T) {
 		}
 	}
 }
+
+// grain/task-1983: a capability reference seeded on a proposal from this
+// deployment's defaults is still an escalation when its proposer does not
+// hold it, but it is told apart from one the proposal asked for -- and a
+// standing session filed holding the deployment's defaults
+// (ConsoleSessionGrants) holds it, so it is no escalation at all.
+func TestSeededDefaultReferenceIsReportedAsADefault(t *testing.T) {
+	t.Parallel()
+	const ref = `https://caps.example/host-script#host-script={"script":"autoscaler"}`
+	const asked = `https://caps.example/other#m={"x":1}`
+	child := model.Task{Grants: []model.Grant{
+		{Capability: "corp-research", Via: model.GrantByDefault},
+		{Capability: ref, Via: model.GrantByDefault},
+		{Capability: asked, Via: model.GrantByLabel},
+	}}
+	director := model.ConsoleSession{ID: model.DirectorSessionID, Capabilities: []string{"self-debug"}}
+
+	bare := model.Task{ID: "9", Grants: model.ConsoleSessionGrants(director)}
+	escalated := model.EscalatedCapabilities(child, bare)
+	if len(escalated) != 2 {
+		t.Fatalf("EscalatedCapabilities = %v, want both references", escalated)
+	}
+	gotAsked, gotSeeded := model.SeededEscalations(child, escalated)
+	if len(gotAsked) != 1 || !strings.HasPrefix(gotAsked[0], "https://caps.example/other#m") {
+		t.Errorf("asked = %v, want only the reference the proposal named", gotAsked)
+	}
+	if len(gotSeeded) != 1 || !strings.HasPrefix(gotSeeded[0], "https://caps.example/host-script#host-script") {
+		t.Errorf("seeded = %v, want only the default", gotSeeded)
+	}
+	note := model.ProposalEscalationNote("9", child, escalated)
+	if !strings.Contains(note, "this proposal asked for `https://caps.example/other") ||
+		!strings.Contains(note, "default capability") ||
+		strings.Contains(note, "asked for `https://caps.example/host-script") {
+		t.Errorf("note = %q, want the asked reference and the seeded default each explained as what it is", note)
+	}
+	refusal := model.AutoApprovalRefusal(child, bare, true)
+	if !strings.Contains(refusal, "default capability `https://caps.example/host-script") ||
+		strings.Contains(refusal, "asks for `https://caps.example/host-script") {
+		t.Errorf("refusal = %q, want the seeded reference named as a default", refusal)
+	}
+
+	seededSession := model.ConsoleSession{
+		ID:           model.DirectorSessionID,
+		Capabilities: []string{"self-debug", "corp-research", ref, "self-debug", ""},
+	}
+	seeded := model.Task{ID: "9", Grants: model.ConsoleSessionGrants(seededSession)}
+	if got := model.EscalatedCapabilities(model.Task{Grants: child.Grants[:2]}, seeded); len(got) != 0 {
+		t.Errorf("EscalatedCapabilities against a session holding the defaults = %v, want none", got)
+	}
+	if refusal := model.AutoApprovalRefusal(model.Task{Grants: child.Grants[:2]}, seeded, true); refusal != "" {
+		t.Errorf("AutoApprovalRefusal against a session holding the defaults = %q, want none", refusal)
+	}
+	var vias []model.GrantSource
+	for _, g := range seeded.Grants {
+		vias = append(vias, g.Via)
+	}
+	want := []model.GrantSource{model.GrantByGrain, model.GrantByGrain, model.GrantByGrain, model.GrantByGrain}
+	if !slices.Equal(vias, want) {
+		t.Errorf("session grants = %+v, want durable and each configured capability once by grain", seeded.Grants)
+	}
+}

@@ -51,6 +51,8 @@ import {
 import api from "../api.js";
 import GrantChip from "./GrantChip.jsx";
 import GrantsPicker from "./GrantsPicker.jsx";
+import ReadOnlyGrants from "./ReadOnlyGrants.jsx";
+import { ConfigManagedNotice } from "./ConfigRepoLink.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isApiGrant, withoutApiRows } from "../apiGrants.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
@@ -170,6 +172,13 @@ function latestPerName(branches) {
 // warning at the top of the page scrolls to: on a repository grain CI is
 // not enabled for, that switch is what enrols its watched branch.
 const CI_MODE_ID = "repo-ci-mode";
+
+// REPO_CONFIG_PATHS are the config repo files a repository's settings
+// on this page are kept in (docs/design/config-repo-settings.md §2.1).
+const REPO_CONFIG_PATHS = [
+  "tables/repo_config.json",
+  "settings/capabilities.yml",
+];
 
 // REPO_TABS are the page's sections, in the order its tab strip shows
 // them (grain/task-3333). The page used to be one column of a dozen
@@ -474,10 +483,24 @@ export default function RepoPage({
   // (repoAdministered). The server refuses them with a 403, so the page
   // says why once and draws its controls disabled rather than offer ones
   // that can only fail. null is "offer everything".
-  const writeRefusal = repoAdministered(config, repo)
-    ? null
-    : `you can read ${repo}'s settings but not change them: that needs a repository admin`;
-  const readOnly = writeRefusal !== null;
+  const adminReadOnly = !repoAdministered(config, repo);
+  const writeRefusal = adminReadOnly
+    ? `you can read ${repo}'s settings but not change them: that needs a repository admin`
+    : null;
+  // configRepoOnly is GET /api/config's word that a repo's settings are
+  // config-repo only (docs/design/config-repo-settings.md §2.1): kept in
+  // tables/repo_config.json and settings/capabilities.yml, and refused by
+  // the API in favour of a config pull request. Then every configuration
+  // control here is drawn with its current value, read-only, under a
+  // notice linking to those files. The operational actions -- adding a
+  // branch, importing issues now, a manual release, a base branch's
+  // check -- are not settings, and stay a repo admin's (adminReadOnly).
+  // configRepoOnly alone, not settingsLocked: with directConfigWrites in
+  // state-repo.json the lock is on but the API still takes the write, and
+  // the server folds both into configRepoOnly
+  // (design/spec/settings/settings-mutability.spec.md D-10).
+  const configRepoOnly = Boolean(config?.configRepoOnly);
+  const readOnly = adminReadOnly || configRepoOnly;
   // The same sentence is each disabled control's own accessible
   // description, so a screen reader on one hears why it is dimmed
   // rather than having to find the page's one alert (2026-10-14
@@ -486,7 +509,17 @@ export default function RepoPage({
   // already describes the control -- a TextField's own helper text,
   // which setting the attribute would otherwise replace.
   const refusalId = useId();
+  const configNoticeId = useId();
+  // A configuration control is described by the config-repo notice when
+  // that is what makes it read-only, for everybody, and by the admin
+  // sentence otherwise; an operational one only ever by the admin
+  // sentence (adminRefusedBy).
   const refusedBy = (off, ...more) => {
+    const why = configRepoOnly ? configNoticeId : writeRefusal ? refusalId : "";
+    const ids = [off ? why : "", ...more].filter(Boolean);
+    return ids.length ? ids.join(" ") : undefined;
+  };
+  const adminRefusedBy = (off, ...more) => {
     const ids = [off && writeRefusal ? refusalId : "", ...more].filter(Boolean);
     return ids.length ? ids.join(" ") : undefined;
   };
@@ -1414,6 +1447,14 @@ export default function RepoPage({
           </Alert>
         )}
 
+        {configRepoOnly && (
+          <ConfigManagedNotice
+            id={configNoticeId}
+            what={`${repo}'s settings`}
+            paths={REPO_CONFIG_PATHS}
+            sx={{ mb: 0 }}
+          />
+        )}
         {writeRefusal && (
           // The header lowercases its own text; this is a sentence.
           <Alert id={refusalId} severity="info" sx={{ textTransform: "none" }}>
@@ -1843,16 +1884,24 @@ export default function RepoPage({
                   <Typography variant="body2" sx={{ mb: 0.5 }}>
                     CI grants
                   </Typography>
-                  <GrantsPicker
-                    config={{ ...config, capabilities: [] }}
-                    grants={ciCapsSelection}
-                    onApiChange={() => {}}
-                    onSubmit={ciCapsMethods.onSubmit}
-                    onRemove={ciCapsMethods.onRemove}
-                    disabled={readOnly}
-                    idPrefix="repo-ci"
-                    runKind="ci"
-                  />
+                  {configRepoOnly ? (
+                    <ReadOnlyGrants
+                      config={{ ...config, capabilities: [] }}
+                      grants={ciCapsRefs}
+                      testId="repo-ci-grants"
+                    />
+                  ) : (
+                    <GrantsPicker
+                      config={{ ...config, capabilities: [] }}
+                      grants={ciCapsSelection}
+                      onApiChange={() => {}}
+                      onSubmit={ciCapsMethods.onSubmit}
+                      onRemove={ciCapsMethods.onRemove}
+                      disabled={readOnly}
+                      idPrefix="repo-ci"
+                      runKind="ci"
+                    />
+                  )}
                 </Box>
               </Stack>
             )}
@@ -2181,20 +2230,28 @@ export default function RepoPage({
                   <Typography variant="body2" sx={{ mb: 0.5 }}>
                     Default grants
                   </Typography>
-                  <GrantsPicker
-                    config={config}
-                    grants={capsSelection}
-                    onApiChange={(next) => {
-                      const all = [...capsLegacy, ...next, ...capsRefs];
-                      setCapsSelection(all);
-                      saveCapabilities(all);
-                    }}
-                    onSubmit={capsMethods.onSubmit}
-                    onRemove={capsMethods.onRemove}
-                    disabled={readOnly}
-                    idPrefix="repo-default"
-                    policyRepo={repo}
-                  />
+                  {configRepoOnly ? (
+                    <ReadOnlyGrants
+                      config={config}
+                      grants={[...capsApi, ...capsRefs]}
+                      testId="repo-default-grants"
+                    />
+                  ) : (
+                    <GrantsPicker
+                      config={config}
+                      grants={capsSelection}
+                      onApiChange={(next) => {
+                        const all = [...capsLegacy, ...next, ...capsRefs];
+                        setCapsSelection(all);
+                        saveCapabilities(all);
+                      }}
+                      onSubmit={capsMethods.onSubmit}
+                      onRemove={capsMethods.onRemove}
+                      disabled={readOnly}
+                      idPrefix="repo-default"
+                      policyRepo={repo}
+                    />
+                  )}
                 </Box>
                 <Typography variant="body2" color="text.secondary">
                   A task filed against {repo} starts with:{" "}
@@ -2396,6 +2453,17 @@ export default function RepoPage({
                         : ""));
                 const edit = (field) => (e) =>
                   setImportDraft({ ...draft, [field]: e.target.value });
+                // The fields as typed, in the shape PUT .../settings takes.
+                const draftFields = () => {
+                  const minutes = draft.interval.trim();
+                  return {
+                    issueImportRepo: draft.repo.trim(),
+                    issueImportLabel: draft.label.trim(),
+                    issueImportIntervalSeconds: minutes
+                      ? Math.round(Number(minutes) * 60)
+                      : 0,
+                  };
+                };
                 return (
                   <Stack spacing={1.5} data-testid="repo-issue-import">
                     <Stack direction="row" alignItems="flex-start" spacing={1}>
@@ -2404,8 +2472,14 @@ export default function RepoPage({
                         sx={{ mt: -0.5 }}
                         checked={Boolean(imp.enabled)}
                         onChange={(e) =>
+                          // Switching on saves whatever source, label and
+                          // interval are typed but not yet saved with it:
+                          // the first pass runs on the next cycle, and
+                          // would otherwise read every open issue with
+                          // the label the person had just typed unsaved.
                           saveIssueImport({
                             issueImportEnabled: e.target.checked,
+                            ...(e.target.checked && dirty ? draftFields() : {}),
                           })
                         }
                         disabled={readOnly}
@@ -2455,14 +2529,7 @@ export default function RepoPage({
                       alignItems={{ sm: "flex-start" }}
                       onSubmit={(e) => {
                         e.preventDefault();
-                        const minutes = draft.interval.trim();
-                        saveIssueImport({
-                          issueImportRepo: draft.repo.trim(),
-                          issueImportLabel: draft.label.trim(),
-                          issueImportIntervalSeconds: minutes
-                            ? Math.round(Number(minutes) * 60)
-                            : 0,
-                        });
+                        saveIssueImport(draftFields());
                       }}
                     >
                       <TextField
@@ -2514,8 +2581,8 @@ export default function RepoPage({
                         variant="outlined"
                         size="small"
                         onClick={importIssuesNow}
-                        disabled={readOnly || !imp.enabled || importing}
-                        aria-describedby={refusedBy(readOnly)}
+                        disabled={adminReadOnly || !imp.enabled || importing}
+                        aria-describedby={adminRefusedBy(adminReadOnly)}
                         sx={{ whiteSpace: "nowrap" }}
                       >
                         {importing ? "Importing…" : "Import issues now"}
@@ -2568,8 +2635,8 @@ export default function RepoPage({
                 autoComplete="off"
                 inputProps={{
                   ...identifierField,
-                  "aria-describedby": refusedBy(
-                    readOnly,
+                  "aria-describedby": adminRefusedBy(
+                    adminReadOnly,
                     `${refusalId}-branch-helper-text`,
                   ),
                 }}
@@ -2577,14 +2644,14 @@ export default function RepoPage({
                 InputLabelProps={{ required: false }}
                 size="small"
                 fullWidth
-                disabled={readOnly}
+                disabled={adminReadOnly}
               />
               <Button
                 type="submit"
                 variant="outlined"
                 size="small"
-                disabled={readOnly}
-                aria-describedby={refusedBy(readOnly)}
+                disabled={adminReadOnly}
+                aria-describedby={adminRefusedBy(adminReadOnly)}
                 sx={{ whiteSpace: "nowrap", mt: 0.25 }}
               >
                 Add branch
@@ -2686,7 +2753,8 @@ export default function RepoPage({
           <RepoReleaseWorkflowSettings
             repo={repo}
             config={config}
-            readOnly={readOnly}
+            readOnly={adminReadOnly}
+            configReadOnly={configRepoOnly}
             describedBy={refusedBy(readOnly)}
             refreshKey={gateCheck + ownershipSaves}
             onOpenRun={onOpenCIRun}

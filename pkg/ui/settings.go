@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/url"
@@ -749,6 +750,10 @@ type Settings struct {
 	// is managed in read-only Infrastructure-as-Code mode (state-repo.json).
 	ExternalConfigRepo   string `json:"externalConfigRepo,omitempty"`
 	ExternalConfigBranch string `json:"externalConfigBranch,omitempty"`
+	// SettingsLocked is model.Config.SettingsLocked: whether non-bootstrap
+	// settings are locked in the UI and REST API in favour of config
+	// repository pull requests. False by default.
+	SettingsLocked bool `json:"settingsLocked"`
 }
 
 type UnrunnableSetting struct {
@@ -1022,17 +1027,13 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 	cfg, unrunnable := c.runnableSettings(cfg)
 	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
-	effectiveGranuleForWarn := firstNonEmptyString(cfg.K8sGranuleImage, granuleImgDefault)
-	if mirror := strings.TrimSpace(cfg.SandboxImageMirror); mirror != "" {
-		if mirrored := upgrade.MirrorSandboxRef(effectiveGranuleForWarn, mirror); mirrored != "" {
-			effectiveGranuleForWarn = mirrored
-		}
-	}
 	sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
 		ctx,
 		firstNonEmptyString(cfg.K8sSandboxImage, sandboxImgDefault),
-		effectiveGranuleForWarn,
+		c.k8sGranuleImageForWarn(cfg, granuleImgDefault),
 	)
+	sandboxWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sSandboxImage, sandboxImgDefault, nil), sandboxWarn)
+	granuleWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sGranuleImage, granuleImgDefault, nil), granuleWarn)
 	out := Settings{
 		Configured:               true,
 		PollInterval:             cfg.PollInterval.String(),
@@ -1152,6 +1153,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxShapeIgnored:                c.Config.SandboxShapeIgnored,
 		SandboxCommitment:                  c.sandboxCommitment(cfg),
 		ShowClosedByDefault:                cfg.ShowClosedByDefault,
+		SettingsLocked:                     cfg.SettingsLocked,
 		EnvironmentName:                    cfg.EnvironmentName,
 		PromptExtension:                    cfg.PromptExtension,
 		RepairTemplateID:                   cfg.RepairTemplateID,
@@ -1440,6 +1442,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
+			SettingsLocked:                     def.SettingsLocked,
 			RestartRequired:                    restartRequiredKeys(),
 		}
 		c.resolveSandboxImageFields(ctx, def, sandboxImgDefault, granuleImgDefault).apply(&out)
@@ -1550,6 +1553,29 @@ type UpdateSettingsRequest struct {
 	TaskBranchTemplate  *string               `json:"taskBranchTemplate"`
 	DeploymentID        *string               `json:"deploymentId"`
 	DefaultCapabilities *[]string             `json:"defaultCapabilities"`
+	SettingsLocked      *bool                 `json:"settingsLocked"`
+}
+
+func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
+	type plain UpdateSettingsRequest
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = UpdateSettingsRequest(p)
+	var snake struct {
+		SettingsLocked      *bool     `json:"settings_locked"`
+		DefaultCapabilities *[]string `json:"default_capabilities"`
+	}
+	if err := json.Unmarshal(data, &snake); err == nil {
+		if r.SettingsLocked == nil && snake.SettingsLocked != nil {
+			r.SettingsLocked = snake.SettingsLocked
+		}
+		if r.DefaultCapabilities == nil && snake.DefaultCapabilities != nil {
+			r.DefaultCapabilities = snake.DefaultCapabilities
+		}
+	}
+	return nil
 }
 
 func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
@@ -1934,13 +1960,25 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.K8sWorkspace = strings.TrimSpace(*req.K8sWorkspace)
 	}
 	if req.K8sGitProxyHost != nil {
-		cfg.K8sGitProxyHost = strings.TrimSpace(*req.K8sGitProxyHost)
+		host := strings.TrimSpace(*req.K8sGitProxyHost)
+		if host != "" && !k8sAddress.MatchString(host) {
+			return model.Config{}, validationErrorf("k8sGitProxyHost %q is not a host name or IP address", host)
+		}
+		cfg.K8sGitProxyHost = host
 	}
 	if req.K8sSandboxService != nil {
-		cfg.K8sSandboxService = strings.TrimSpace(*req.K8sSandboxService)
+		name, err := k8sObjectName("k8sSandboxService", *req.K8sSandboxService, k8sLabelName, "Service")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sSandboxService = name
 	}
 	if req.K8sServiceAccount != nil {
-		cfg.K8sServiceAccount = strings.TrimSpace(*req.K8sServiceAccount)
+		name, err := k8sObjectName("k8sServiceAccount", *req.K8sServiceAccount, k8sSubdomainName, "ServiceAccount")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sServiceAccount = name
 	}
 	if req.K8sNodeSelector != nil {
 		selectors := make([]string, 0, len(*req.K8sNodeSelector))
@@ -1966,10 +2004,18 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.K8sNetworkPolicy = *req.K8sNetworkPolicy
 	}
 	if req.K8sDeployment != nil {
-		cfg.K8sDeployment = strings.TrimSpace(*req.K8sDeployment)
+		name, err := k8sObjectName("k8sDeployment", *req.K8sDeployment, k8sSubdomainName, "Deployment")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sDeployment = name
 	}
 	if req.K8sContainer != nil {
-		cfg.K8sContainer = strings.TrimSpace(*req.K8sContainer)
+		name, err := k8sObjectName("k8sContainer", *req.K8sContainer, k8sLabelName, "container")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sContainer = name
 	}
 	if req.K8sPriorityClassInteractive != nil {
 		name, err := k8sPriorityClassName("k8sPriorityClassInteractive", *req.K8sPriorityClassInteractive)
@@ -2115,6 +2161,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.ShowClosedByDefault != nil {
 		cfg.ShowClosedByDefault = *req.ShowClosedByDefault
 	}
+	if req.SettingsLocked != nil {
+		cfg.SettingsLocked = *req.SettingsLocked
+	}
 	if req.EnvironmentName != nil {
 		name := strings.TrimSpace(*req.EnvironmentName)
 		if utf8.RuneCountInString(name) > maxEnvironmentNameLen {
@@ -2160,6 +2209,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			if _, err := model.FormatTaskBranchName(template, strings.Repeat("a", 32), "a", "123", title); err != nil {
 				return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
 			}
+		}
+		if _, err := model.FormatTaskBranchName(template, strings.Repeat("a", 32), strings.Repeat("a", model.MaxDeploymentIDLen), "9223372036854775807", ""); err != nil {
+			return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
 		}
 		cfg.TaskBranchTemplate = template
 	}
@@ -2455,6 +2507,26 @@ var (
 	k8sLabelName     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 	k8sSubdomainName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
+
+// k8sAddress is what the git proxy host a sandbox pod is handed may be:
+// a host name or an IP address, with no scheme, path or space in it.
+var k8sAddress = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.:-]*[A-Za-z0-9])?$`)
+
+// k8sObjectName trims a setting naming a Kubernetes object of kind and
+// refuses a name re says the API server never accepts (the 2026-10-30
+// walkthrough saved the ServiceAccount "Bad SA"). Empty is valid: the
+// setting's default or none applies.
+func k8sObjectName(key, raw string, re *regexp.Regexp, kind string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name != "" && (len(name) > 253 || !re.MatchString(name)) {
+		chars := "lowercase letters, digits and '-'"
+		if re == k8sSubdomainName {
+			chars = "lowercase letters, digits, '-' and '.'"
+		}
+		return "", validationErrorf("%s %q is not a Kubernetes %s name: %s, starting and ending with a letter or digit", key, name, kind, chars)
+	}
+	return name, nil
+}
 
 // k8sPriorityClassName trims a priority class setting and refuses a
 // name Kubernetes could never accept. Empty is valid: it sets none.

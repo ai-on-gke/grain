@@ -192,7 +192,7 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 				call, err := s.authorizeExternalAgentCall(r, pattern, scope, tok)
 				if err != nil {
 					log.Printf("grain api: refused {agent, %s} %s: %v", call.principalID(), pattern, err)
-					writeError(w, http.StatusForbidden, err)
+					writeError(w, agentRefusalStatus(err), err)
 					return
 				}
 				agent := model.Principal{Kind: model.PrincipalAgent, ID: call.principalID()}
@@ -211,7 +211,7 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		call, err := s.authorizeAgentCall(r, pattern, scope, taskID)
 		if err != nil {
 			log.Printf("grain api: refused {agent, %s} %s: %v", taskID, pattern, err)
-			writeError(w, http.StatusForbidden, err)
+			writeError(w, agentRefusalStatus(err), err)
 			return
 		}
 		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID}
@@ -220,6 +220,17 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		next(rec, r)
 		s.recordAgentCall(r.Context(), call, rec.status, rec.bytes)
 	}
+}
+
+// agentRefusalStatus is the status a refused agent call answers with: 400
+// for a request that is malformed (a repo that is not one), 403 for
+// every refusal of what the agent may do.
+func agentRefusalStatus(err error) int {
+	var ve *ValidationError
+	if errors.As(err, &ve) {
+		return http.StatusBadRequest
+	}
+	return http.StatusForbidden
 }
 
 var errNoAgentAPI = errors.New("this server has no task store, so it cannot check an agent's api grants")
@@ -258,7 +269,8 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	call.grants = set
 	capAllowed := agentCapabilityAllowsRoute(held, set, pattern, scope)
 	ciCap := grainCIReadsRoute(held, pattern)
-	if !set.Has(scope) && !capAllowed && !ciCap {
+	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
+	if !set.Has(scope) && !capAllowed && !ciCap && !adminPatch {
 		return call, fmt.Errorf("task %s holds no api grant for scope %s, which %s needs: "+
 			"ask a person to grant api:%s or a preset that includes it (docs/agent-api.md)", taskID, scope, pattern, scope)
 	}
@@ -279,16 +291,35 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		// read, as it does over /fs/ci/ and /cli/ci/.
 		capAllowed = true
 	}
+	if adminPatch && !set.Allows(scope, call.repo) && set.Allows("tasks:admin", call.repo) {
+		if err := tasksAdminTaskPatchBodyAllowed(body); err != nil {
+			return call, err
+		}
+		capAllowed = true
+	}
 	if !set.Allows(scope, call.repo) && !capAllowed {
+		missingScope := scope
+		if !set.Has(scope) && adminPatch {
+			missingScope = "tasks:admin"
+		}
 		if call.repo == "" {
 			return call, fmt.Errorf("task %s holds %s only for some repositories, and %s does not name one it reaches",
-				taskID, scope, pattern)
+				taskID, missingScope, pattern)
 		}
-		return call, fmt.Errorf("task %s holds %s, but not on %s", taskID, scope, call.repo)
+		return call, fmt.Errorf("task %s holds %s, but not on %s", taskID, missingScope, call.repo)
 	}
 	if call.channel == SandboxCLIChannel {
 		if err := sandboxChannelGuard(pattern, body); err != nil {
 			return call, err
+		}
+	}
+	if pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body) {
+		if !set.Allows("capabilities:admin", call.repo) {
+			return call, fmt.Errorf("task %s holds no api grant for scope capabilities:admin, which %s needs when editing task capabilities",
+				taskID, pattern)
+		}
+		if call.reason == "" {
+			return call, fmt.Errorf("%s with capabilities is destructive (scope capabilities:admin): give a reason", pattern)
 		}
 	}
 	if (IsDangerousAPIScope(scope) || method == http.MethodDelete) && call.reason == "" {
@@ -309,28 +340,40 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	return call, nil
 }
 
-// agentCapabilityAllowsRoute reports whether a non-API capability grant ("memory",
-// "release-notes") authorizes pattern, or releases:read lets a release
+// agentCapabilityAllowsRoute reports whether releases:read lets a release
 // manager read (never write) the release notes. Writing them stays with
-// the release-notes capability and memory:write: releases:write is a
-// per-repository release scope, and the weekly notes are the
+// release-notes:write (and its preset, api:release-notes): releases:write
+// is a per-repository release scope, and the weekly notes are the
 // deployment's own.
 func agentCapabilityAllowsRoute(held []string, set APIGrantSet, pattern string, scope APIScope) bool {
 	path := pathOf(pattern)
-	if path == "/api/memory" || strings.HasPrefix(path, "/api/memory/") {
-		if (scope == "memory:read" || scope == "memory:write") && slices.Contains(held, "memory") {
-			return true
-		}
-	}
 	if path == "/api/release-notes" || strings.HasPrefix(path, "/api/release-notes/") {
-		if slices.Contains(held, "release-notes") {
-			return true
-		}
-		if scope == "memory:read" && set.Allows("releases:read", "") {
+		if scope == "release-notes:read" && set.Allows("releases:read", "") {
 			return true
 		}
 	}
 	return false
+}
+
+func tasksAdminAllowsTaskPatch(set APIGrantSet, pattern string) bool {
+	return pattern == "PATCH /api/tasks/{id}" && set.Has("tasks:admin")
+}
+
+func tasksAdminTaskPatchBodyAllowed(body []byte) error {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return errors.New("api:tasks:admin without api:tasks:write requires a JSON object editing priority on PATCH /api/tasks/{id}")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil || fields == nil {
+		return errors.New("api:tasks:admin without api:tasks:write requires a single JSON object editing priority on PATCH /api/tasks/{id}")
+	}
+	for k := range fields {
+		if !strings.EqualFold(k, "priority") {
+			return fmt.Errorf("api:tasks:admin without api:tasks:write may only edit priority on PATCH /api/tasks/{id} (got %q)", k)
+		}
+	}
+	return nil
 }
 
 // grainCIReadRoutes are the agent API's CI reads the grain-ci capability
@@ -380,7 +423,7 @@ func sandboxChannelGuard(pattern string, body []byte) error {
 			return errors.New("parking a run (park: true) is a model-only control action; grain task wait supports blocking waits only")
 		}
 	case "PATCH /api/tasks/{id}", "POST /api/tasks/{id}/capabilities":
-		if len(grantsInBody(pattern, body)) > 0 {
+		if len(grantsInBody(pattern, body)) > 0 || (pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body)) {
 			return errors.New("attaching capabilities to an existing task is not permitted from the sandbox CLI")
 		}
 	case "POST /api/tasks":
@@ -628,6 +671,12 @@ var grantBodies = map[string]func(body []byte) []string{
 		if json.Unmarshal(body, &req) != nil {
 			return nil // the handler refuses a body it cannot read
 		}
+		if req.Attach != nil && !*req.Attach {
+			if strings.TrimSpace(req.Replace) == "" {
+				return nil
+			}
+			return []string{req.Replace}
+		}
 		names := []string{req.ID, req.Grant, req.Replace}
 		if req.Capability != "" {
 			grant, err := model.EncodeCapabilityGrant(protocol.GrantSpec{Capability: strings.TrimSpace(req.Capability), With: req.With})
@@ -679,6 +728,34 @@ func grantsInBody(pattern string, body []byte) []string {
 	return addedGrantsInBody(pattern, body, nil, nil)
 }
 
+func patchTouchesTaskGrants(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return false
+	}
+	for key, raw := range fields {
+		trimmed := strings.TrimSpace(string(raw))
+		if trimmed == "" || trimmed == "null" {
+			continue
+		}
+		lower := strings.ToLower(key)
+		if strings.Contains(lower, "capabilit") || lower == "grants" ||
+			lower == "keeprunning" || lower == "keep_running" {
+			return true
+		}
+		if lower == "priority" {
+			var b bool
+			if json.Unmarshal(raw, &b) == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, normalize func(string) (string, error)) []string {
 	if len(body) == 0 {
 		return nil
@@ -693,6 +770,20 @@ func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, 
 	var names []string
 	for key, raw := range fields {
 		lower := strings.ToLower(key)
+		if lower == "priority" {
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
+				names = append(names, model.PriorityDispatchCapability)
+			}
+			continue
+		}
+		if lower == "keeprunning" || lower == "keep_running" {
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
+				names = append(names, model.DurableCapability)
+			}
+			continue
+		}
 		if !strings.Contains(lower, "capabilit") && !strings.EqualFold(key, "grants") {
 			continue
 		}
@@ -811,10 +902,16 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if json.Unmarshal(raw, &on) == nil && on {
 				return errAgentAutoMerge
 			}
-		case "autoapproveproposals":
+		case "autoapproveproposals", "auto_approve_proposals", "tasksapproved":
 			var on bool
-			if json.Unmarshal(raw, &on) == nil && on && !acting.AutoApproveProposals {
+			if json.Unmarshal(raw, &on) == nil && on && !s.agentMayAutoApproveProposals(ctx, acting) {
 				return errors.New("an agent cannot turn on autoApproveProposals, which its own task does not have")
+			}
+		case "networkaccess", "network_access":
+			var access string
+			if json.Unmarshal(raw, &access) == nil && acting.NetworkAccess == model.NetworkNone &&
+				model.NetworkAccess(strings.TrimSpace(access)) != model.NetworkNone {
+				return errors.New("an agent with networkAccess \"none\" cannot widen networkAccess")
 			}
 		case "approved", "interactive":
 			var on bool
@@ -880,7 +977,7 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			// Moving work to another repository (PATCH /api/tasks/{id}
 			// with a new repo) is a call on that repository too.
 			var to string
-			if json.Unmarshal(raw, &to) != nil || strings.TrimSpace(to) == "" || strings.EqualFold(strings.TrimSpace(to), repo) {
+			if json.Unmarshal(raw, &to) != nil || strings.TrimSpace(to) == "" || model.SameRepoText(to, repo) {
 				continue
 			}
 			if !set.Allows(scope, strings.TrimSpace(to)) {
@@ -889,6 +986,21 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 		}
 	}
 	return nil
+}
+
+func (s *Server) agentMayAutoApproveProposals(ctx context.Context, acting *model.Task) bool {
+	if acting == nil {
+		return false
+	}
+	if acting.AutoApproveProposals {
+		return true
+	}
+	if s.tasks != nil {
+		if ok, err := s.tasks.consoleSessionQueuesProposals(ctx, *acting); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 // errAgentAutoMerge is the refusal of anything that would let work merge
@@ -941,10 +1053,10 @@ func agentMayWrite(acting *model.Task, repo string) bool {
 	if repo == "" {
 		return true
 	}
-	if t := taskRepo(acting); t != "" && strings.EqualFold(t, repo) {
+	if t := taskRepo(acting); t != "" && model.SameRepoText(t, repo) {
 		return true
 	}
-	return slices.ContainsFunc(acting.Writes, func(w model.WriteTarget) bool { return strings.EqualFold(w.Repo.String(), repo) })
+	return slices.ContainsFunc(acting.Writes, func(w model.WriteTarget) bool { return model.SameRepoText(w.Repo.String(), repo) })
 }
 
 // agentMayRead reports whether the acting task's own runs may read repo.
@@ -952,7 +1064,7 @@ func agentMayRead(acting *model.Task, repo string) bool {
 	if agentMayWrite(acting, repo) {
 		return true
 	}
-	return slices.ContainsFunc(acting.Reads, func(r model.RepoRef) bool { return strings.EqualFold(r.String(), strings.TrimSpace(repo)) })
+	return slices.ContainsFunc(acting.Reads, func(r model.RepoRef) bool { return model.SameRepoText(r.String(), repo) })
 }
 
 // agentCallRepo is the repository a call acts on, where one can be told:
@@ -966,7 +1078,11 @@ func agentMayRead(acting *model.Task, repo string) bool {
 func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, target string, body []byte,
 	acting *model.Task, set APIGrantSet, scope APIScope, ciCap bool) (string, error) {
 	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
-		return owner + "/" + name, nil
+		// {owner} is host/owner, escaped into one segment, for a
+		// repository off the default host (RepoFromStored), and an
+		// agent may have written a remote there instead; either way
+		// owner/name is the written repository.
+		return s.agentCanonicalRepo(owner + "/" + name)
 	}
 	if target != "" {
 		t, err := s.tasks.Store.GetTask(ctx, target)
@@ -992,7 +1108,7 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 	}
 	if len(body) > 0 && json.Unmarshal(body, &fields) == nil {
 		if fields.Repo != "" {
-			return fields.Repo, nil
+			return s.agentCanonicalRepo(fields.Repo)
 		}
 		if fields.TaskID != "" {
 			if t, err := s.tasks.Store.GetTask(ctx, fields.TaskID); err == nil && t != nil {
@@ -1001,10 +1117,15 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 		}
 	}
 	if repo := r.URL.Query().Get("repo"); repo != "" && r.Method == http.MethodGet {
-		return repo, nil
+		return s.agentCanonicalRepo(repo)
 	}
 	if pathParam.MatchString(pathOf(pattern)) {
 		return "", nil
+	}
+	if pattern == "POST /api/tests/quarantine" && acting != nil {
+		if own := taskRepo(acting); own != "" {
+			return own, nil
+		}
 	}
 	// A read-only collection asked for without ?repo= by a task that
 	// reaches it on some repositories only lists the one it reaches --
@@ -1022,12 +1143,25 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 	return "", nil
 }
 
+// agentCanonicalRepo is the repository text a call names, spelled this
+// deployment's way (Client.parseRepo): the form the acting task's grants,
+// target and reads are written in, whichever of host/owner/name, an SSH
+// remote or a URL the call used. Text that is not a repository is a 400,
+// rather than a string no grant could match.
+func (s *Server) agentCanonicalRepo(text string) (string, error) {
+	ref, err := s.tasks.parseRepo(text)
+	if err != nil {
+		return "", err
+	}
+	return ref.String(), nil
+}
+
 // agentDefaultRepo is the repository a collection read by acting is
 // narrowed to when it names none: the one repository granted, or the
 // task's own where that is among those granted (or grain-ci reaches it).
 func agentDefaultRepo(acting *model.Task, granted []string, ciCap bool) string {
 	own := taskRepo(acting)
-	if own != "" && (ciCap || slices.ContainsFunc(granted, func(g string) bool { return strings.EqualFold(g, own) })) {
+	if own != "" && (ciCap || slices.ContainsFunc(granted, func(g string) bool { return model.SameRepoText(g, own) })) {
 		return own
 	}
 	if len(granted) == 1 {
@@ -1161,7 +1295,8 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		return call, fmt.Errorf("external agent %q has invalid grants: %w", tok.Name, err)
 	}
 	call.grants = set
-	if !set.Has(scope) {
+	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
+	if !set.Has(scope) && !adminPatch {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
 	}
 	body, err := peekBody(r)
@@ -1182,12 +1317,32 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		call.targetTasks = extraTargets
 		call.targetTask = extraTargets[0]
 	}
-	if !set.Allows(scope, call.repo) {
+	adminPatchAllowed := false
+	if adminPatch && !set.Allows(scope, call.repo) && set.Allows("tasks:admin", call.repo) {
+		if err := tasksAdminTaskPatchBodyAllowed(body); err != nil {
+			return call, err
+		}
+		adminPatchAllowed = true
+	}
+	if !set.Allows(scope, call.repo) && !adminPatchAllowed {
+		missingScope := scope
+		if !set.Has(scope) && adminPatch {
+			missingScope = "tasks:admin"
+		}
 		if call.repo == "" {
 			return call, fmt.Errorf("%s holds %s only for %s, and %s does not name a repository it reaches",
-				principal, scope, strings.Join(set.Repos(scope), ", "), pattern)
+				principal, missingScope, strings.Join(set.Repos(missingScope), ", "), pattern)
 		}
-		return call, fmt.Errorf("%s holds %s, but not on %s", principal, scope, call.repo)
+		return call, fmt.Errorf("%s holds %s, but not on %s", principal, missingScope, call.repo)
+	}
+	if pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body) {
+		if !set.Allows("capabilities:admin", call.repo) {
+			return call, fmt.Errorf("%s holds no api grant for scope capabilities:admin, which %s needs when editing task capabilities",
+				principal, pattern)
+		}
+		if call.reason == "" {
+			return call, fmt.Errorf("%s with capabilities is destructive (scope capabilities:admin): give a reason", pattern)
+		}
 	}
 	if (IsDangerousAPIScope(scope) || method == http.MethodDelete) && call.reason == "" {
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
@@ -1232,7 +1387,8 @@ func (s *Server) checkExternalTokenRotationEscalation(ctx context.Context, held 
 
 func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pattern string, scope APIScope, set APIGrantSet, target string, body []byte, tok *model.ExternalAgentToken) (string, []string, error) {
 	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
-		return owner + "/" + name, nil, nil
+		repo, err := s.agentCanonicalRepo(owner + "/" + name)
+		return repo, nil, err
 	}
 	if target != "" {
 		t, err := s.tasks.Store.GetTask(ctx, target)
@@ -1282,11 +1438,13 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 			}
 		}
 		if repo := strings.TrimSpace(fields.Repo); repo != "" {
-			return repo, nil, nil
+			repo, err := s.agentCanonicalRepo(repo)
+			return repo, nil, err
 		}
 	}
 	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" && r.Method == http.MethodGet {
-		return repo, nil, nil
+		repo, err := s.agentCanonicalRepo(repo)
+		return repo, nil, err
 	}
 	// If the credential is restricted to a single repository and calls a
 	// read-only collection endpoint that accepts ?repo=, default the filter
@@ -1419,7 +1577,7 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if json.Unmarshal(raw, &on) == nil && on {
 				return errAgentAutoMerge
 			}
-		case "autoapproveproposals":
+		case "autoapproveproposals", "auto_approve_proposals", "tasksapproved":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on {
 				return errors.New("an external agent cannot turn on autoApproveProposals")
@@ -1476,7 +1634,7 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			}
 		case "repo":
 			var to string
-			if json.Unmarshal(raw, &to) != nil || strings.TrimSpace(to) == "" || strings.EqualFold(strings.TrimSpace(to), repo) {
+			if json.Unmarshal(raw, &to) != nil || strings.TrimSpace(to) == "" || model.SameRepoText(to, repo) {
 				continue
 			}
 			if !set.Allows(scope, strings.TrimSpace(to)) {

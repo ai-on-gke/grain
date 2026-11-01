@@ -2132,6 +2132,107 @@ func TestNewTaskBranchesCarryTheDeploymentID(t *testing.T) {
 	}
 }
 
+// A deployment seeded before grain/task-56 has UnsluggedTaskBranchTemplate
+// ("grain/{deployment}/task-{id}") stored in grain_config. Migration 78
+// upgrades that stored default to DefaultTaskBranchTemplate
+// ("grain/{deployment}/task-{id}-{slug}") so newly created tasks include
+// a portion of the task's title in their branch name in addition to the
+// deployment and task-id uniquifiers, while keeping existing tasks'
+// branches untouched and leaving custom or empty templates alone.
+func TestMigrationUpgradesUnsluggedDefaultTaskBranchTemplate(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+
+	cfg := model.DefaultConfig()
+	cfg.DeploymentID = "prod"
+	cfg.TaskBranchTemplate = model.UnsluggedTaskBranchTemplate
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, task("7", true)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 77 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-77 store: %v", err)
+	}
+
+	after, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
+		t.Fatalf("migrated template = %q, want %q", after.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
+	}
+	// Existing task keeps its pre-migration branch.
+	if got, err := store.GetTask(ctx, "7"); err != nil || got.BranchName() != "grain/prod/task-7" {
+		t.Fatalf("existing task branch = %v, %v; want grain/prod/task-7", got, err)
+	}
+	// Newly created task gets the title slug in addition to the uniquifiers.
+	if err := store.PutTask(ctx, task("8", true)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.GetTask(ctx, "8"); err != nil || got.BranchName() != "grain/prod/task-8-rename-the-endpoint" {
+		t.Fatalf("new task branch = %v, %v; want grain/prod/task-8-rename-the-endpoint", got, err)
+	}
+	// Very long task titles (multi-kilobyte sentence and unbroken token) round-trip
+	// intact on the task row while producing bounded, valid branch names.
+	for _, tc := range []struct {
+		id, title, wantBranch string
+	}{
+		{
+			id:         "9",
+			title:      strings.Repeat("Fix intermittent streaming timeout across multi-region clusters ", 80),
+			wantBranch: "grain/prod/task-9-fix-intermittent-streaming",
+		},
+		{
+			id:         "10",
+			title:      strings.Repeat("supercalifragilisticexpialidocious", 60),
+			wantBranch: "grain/prod/task-10-" + strings.Repeat("supercalifragilisticexpialidocious", 60)[:model.MaxBranchSlugLen],
+		},
+	} {
+		longTask := task(tc.id, true)
+		longTask.Title = tc.title
+		if err := store.PutTask(ctx, longTask); err != nil {
+			t.Fatalf("PutTask(%s) with %d-char title: %v", tc.id, len(tc.title), err)
+		}
+		got, err := store.GetTask(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("GetTask(%s): %v", tc.id, err)
+		}
+		if got.Title != tc.title {
+			t.Fatalf("GetTask(%s).Title length = %d, want %d", tc.id, len(got.Title), len(tc.title))
+		}
+		if got.BranchName() != tc.wantBranch || !model.ValidBranchName(got.BranchName()) {
+			t.Fatalf("GetTask(%s).BranchName() = %q, want valid %q", tc.id, got.BranchName(), tc.wantBranch)
+		}
+	}
+
+	// Custom and empty templates are left untouched by the migration.
+	for _, custom := range []string{"", "alice/{deployment}/task-{id}"} {
+		after.TaskBranchTemplate = custom
+		if err := store.PutConfig(ctx, *after); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 74 WHERE `id` = 1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.New(db).Init(ctx); err != nil {
+			t.Fatalf("migrating a version-74 store with template %q: %v", custom, err)
+		}
+		got, err := store.GetConfig(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.TaskBranchTemplate != custom {
+			t.Fatalf("migrated custom template %q = %q, want it left alone", custom, got.TaskBranchTemplate)
+		}
+	}
+}
+
 func TestNewTaskIDAllocatesDistinctIncreasingIDs(t *testing.T) {
 	t.Parallel()
 	store, _, ctx := openStore(t)
@@ -3491,6 +3592,47 @@ func TestStartRunRejectsASecondLiveRunOnTheSameTask(t *testing.T) {
 	}
 	if err := store.StartRun(ctx, second, model.Limits{}); err != nil {
 		t.Fatalf("StartRun for a second attempt after the first finished: %v", err)
+	}
+}
+
+// TestStartRunNeverRefusesAConsoleSessionAtFullCapacity is the store's
+// half of the session admission guarantee (docs/sandbox-budget.md): the
+// in-transaction capacity check that refuses ordinary work at a full pool,
+// and a merger at a full merger pool, never refuses a console session or a
+// task holding priority-dispatch.
+func TestStartRunNeverRefusesAConsoleSessionAtFullCapacity(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	session := task("sess1", true)
+	session.Origin.Reason = model.ReasonConsoleSession
+	session.Interactive = true
+	session.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
+	session.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
+	steward := task("stew1", true)
+	steward.Grants = []model.Grant{{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel}}
+	for _, tk := range []model.Task{task("w0rk", true), task("w1rk", true), session, steward} {
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limits := model.Limits{Workers: 1}
+	start := func(id string) error {
+		return store.StartRun(ctx, model.Run{ID: id + "-1", TaskID: id, Sandbox: id + "-1", Attempt: 1, StartedAt: now}, limits)
+	}
+	if err := start("w0rk"); err != nil {
+		t.Fatalf("filling the worker pool: %v", err)
+	}
+	if err := start("w1rk"); !errors.Is(err, model.ErrAtCapacity) {
+		t.Fatalf("an ordinary task at full capacity = %v, want ErrAtCapacity", err)
+	}
+	if err := start("sess1"); err != nil {
+		t.Fatalf("a console session at full capacity was refused: %v", err)
+	}
+	if err := start("stew1"); err != nil {
+		t.Fatalf("a priority-dispatch task at full capacity was refused: %v", err)
+	}
+	if live, err := store.LiveRunCounts(ctx); err != nil || live != (model.RunCounts{Workers: 1, Directors: 2}) {
+		t.Fatalf("live = %+v (%v), want one worker and both priority runs counted apart", live, err)
 	}
 }
 
@@ -5218,8 +5360,8 @@ func TestAChangelistIsTheTasksChangeLikeAPullRequest(t *testing.T) {
 // TaskCIRef names the repository a task works in and the branch fixed
 // on it, which is what `grain ci list --task` and `grain pr status --task`
 // read CI under; and a live run's scope may read the task:// records of
-// tasks in its own repository, the ones it reads, and any an
-// api:tasks:read@repo grant names.
+// other tasks only in the repositories an api:tasks:read@repo grant
+// names -- not its own target or the ones it reads.
 func TestTaskCIRefAndTaskReadRepos(t *testing.T) {
 	t.Parallel()
 	store, _, ctx := openStore(t)
@@ -5250,12 +5392,132 @@ func TestTaskCIRefAndTaskReadRepos(t *testing.T) {
 	if scope.MayReadAllTasks {
 		t.Errorf("a repository-limited tasks:read reads every task: %+v", scope)
 	}
-	for _, r := range []string{tk.Target.String(), "owner/shared-lib", "other/repo"} {
-		if !scope.TaskReadRepos[r] {
-			t.Errorf("%s not in TaskReadRepos %v", r, scope.TaskReadRepos)
+	if !scope.TaskReadRepos["other/repo"] {
+		t.Errorf("other/repo not in TaskReadRepos %v", scope.TaskReadRepos)
+	}
+	for r := range scope.TaskReadRepos {
+		if r != "other/repo" {
+			t.Errorf("TaskReadRepos %v holds %s, which no api:tasks:read grant names", scope.TaskReadRepos, r)
 		}
 	}
-	if scope.TaskReadRepos["unrelated/repo"] {
-		t.Errorf("TaskReadRepos %v holds a repository nothing granted", scope.TaskReadRepos)
+}
+
+// A live run of a task with a target, reads and writes but no api: grant
+// reads no other task's task:// record: its repositories are its git and
+// CI scope, not a grant to read the tasks working in them.
+func TestSandboxNamespaceScopeReadsNoSiblingTasksWithoutAGrant(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	tk := task("f1e3", true)
+	tk.Reads = []model.RepoRef{{Owner: "owner", Name: "shared-lib"}}
+	tk.Writes = []model.WriteTarget{{Repo: model.RepoRef{Owner: "owner", Name: "deploy-config"}, Base: "deploy"}}
+	if err := store.PutTask(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{
+		ID: "f1e3-r1", TaskID: "f1e3", Sandbox: "sandbox-nogrant", Attempt: 1, StartedAt: now,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	scope, live, err := store.SandboxNamespaceScope(ctx, "sandbox-nogrant")
+	if err != nil || !live {
+		t.Fatalf("SandboxNamespaceScope = (live %v, %v)", live, err)
+	}
+	if scope.MayReadAllTasks || len(scope.TaskReadRepos) != 0 {
+		t.Errorf("a run with no tasks:read grant reads other tasks: MayReadAllTasks %v, TaskReadRepos %v",
+			scope.MayReadAllTasks, scope.TaskReadRepos)
+	}
+	// Its repositories are still its git and CI scope.
+	for _, r := range []string{tk.Target.String(), "owner/shared-lib", "owner/deploy-config"} {
+		if !scope.AllowedRepos[r] {
+			t.Errorf("%s not in AllowedRepos %v", r, scope.AllowedRepos)
+		}
+	}
+}
+
+func TestTaskPriorityDefaultUpdateAndQueueOrdering(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+
+	defaultTask := task("prio-default", true)
+	defaultTask.CreatedAt = &now
+	if err := store.PutTask(ctx, defaultTask); err != nil {
+		t.Fatal(err)
+	}
+	gotDefault, err := store.GetTask(ctx, "prio-default")
+	if err != nil || gotDefault == nil {
+		t.Fatalf("GetTask prio-default: %v", err)
+	}
+	if gotDefault.Priority != model.DefaultTaskPriority {
+		t.Errorf("Priority = %d, want default %d", gotDefault.Priority, model.DefaultTaskPriority)
+	}
+
+	lowTask := task("prio-low", true)
+	lowTask.Priority = 2
+	t1 := now.Add(time.Minute)
+	lowTask.CreatedAt = &t1
+	if err := store.PutTask(ctx, lowTask); err != nil {
+		t.Fatal(err)
+	}
+
+	highTask := task("prio-high", true)
+	highTask.Priority = 8
+	t2 := now.Add(2 * time.Minute)
+	highTask.CreatedAt = &t2
+	if err := store.PutTask(ctx, highTask); err != nil {
+		t.Fatal(err)
+	}
+
+	midFrontTask := task("prio-mid-front", true)
+	midFrontTask.Priority = 5
+	t3 := now.Add(3 * time.Minute)
+	midFrontTask.CreatedAt = &t3
+	if err := store.PutTask(ctx, midFrontTask); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MoveToFrontOfBacklog(ctx, []string{"prio-mid-front"}); err != nil {
+		t.Fatal(err)
+	}
+
+	midFixesBase := task("prio-mid-fixes-base", true)
+	midFixesBase.Priority = 5
+	model.SetFixesBaseBranch(&midFixesBase, true)
+	t4 := now.Add(4 * time.Minute)
+	midFixesBase.CreatedAt = &t4
+	if err := store.PutTask(ctx, midFixesBase); err != nil {
+		t.Fatal(err)
+	}
+
+	ready, err := store.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	wantIDs := []string{"prio-high", "prio-mid-fixes-base", "prio-mid-front", "prio-default", "prio-low"}
+	if !slices.Equal(ready, wantIDs) {
+		t.Errorf("Ready order = %v, want %v", ready, wantIDs)
+	}
+
+	// Updating priority moves lowTask ahead of highTask.
+	lowStored, err := store.GetTask(ctx, "prio-low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowStored.Priority = 10
+	if err := store.PutTask(ctx, *lowStored); err != nil {
+		t.Fatal(err)
+	}
+	updatedLow, err := store.GetTask(ctx, "prio-low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedLow.Priority != 10 {
+		t.Errorf("updated Priority = %d, want 10", updatedLow.Priority)
+	}
+	readyAfter, err := store.Ready(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readyAfter) == 0 || readyAfter[0] != "prio-low" {
+		t.Errorf("Ready after priority update first = %v, want prio-low", readyAfter)
 	}
 }

@@ -325,3 +325,72 @@ func TestARestartThatNeverStopsThisProcessResumesAfterRestartSettle(t *testing.T
 		t.Errorf("held %d, released %d", held, released)
 	}
 }
+
+// Nothing reads the upgrade as done while the outgoing daemon is still
+// flushing: PhaseOK is what the upgrade check takes for "a new build is
+// up", and written before the flush it let the process about to be
+// restarted away file that check itself (task 1937). By the time the
+// restart command runs the status says succeeded, with the restart step
+// started, so the process the restart brings up does file it.
+func TestAnUpgradeIsNotReportedSucceededUntilItsRestartBegins(t *testing.T) {
+	shortRestartGrace(t)
+	_, checkout := newFixtureRepo(t, "feature")
+	statusFile := filepath.Join(t.TempDir(), "upgrade-status.json")
+	restartMarker := filepath.Join(t.TempDir(), "restarted")
+	duringFlush := make(chan Status, 1)
+	beforeRestart := make(chan Status, 1)
+
+	u := newUpgrader(t, Config{
+		SrcDir:      checkout,
+		BuildCmd:    []string{"sh", "-c", "mkdir -p bin && printf fake-binary > bin/grain"},
+		BuiltBinary: filepath.Join(checkout, "bin", "grain"),
+		InstallPath: filepath.Join(t.TempDir(), "grain"),
+		Flush: func(context.Context) (func(), error) {
+			status, err := ReadStatus(statusFile)
+			if err != nil {
+				t.Errorf("reading the status during the flush: %v", err)
+			}
+			duringFlush <- status
+			return func() {}, nil
+		},
+		BeforeRestart: func(string) {
+			status, err := ReadStatus(statusFile)
+			if err != nil {
+				t.Errorf("reading the status before the restart: %v", err)
+			}
+			beforeRestart <- status
+		},
+		RestartCmd: []string{"sh", "-c", "touch " + restartMarker},
+		StatusFile: statusFile,
+	})
+	outgoing := time.Now().UTC().Add(-time.Hour)
+	if err := u.Start("feature"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForFile(t, restartMarker)
+	waitForIdle(t, u)
+
+	flushing := <-duringFlush
+	if flushing.Phase != PhaseRunning || flushing.FinishedAt != nil {
+		t.Errorf("during the flush the status is %s (finished %v), want still running", flushing.Phase, flushing.FinishedAt)
+	}
+	if flushing.RestartPending(outgoing) {
+		t.Error("RestartPending during the flush: the status is not a success yet, so nothing should be read off it")
+	}
+
+	restarting := <-beforeRestart
+	if restarting.Phase != PhaseOK || restarting.FinishedAt == nil {
+		t.Fatalf("before the restart the status is %s (finished %v), want succeeded", restarting.Phase, restarting.FinishedAt)
+	}
+	for _, step := range restarting.Steps {
+		if step.Name == stepRestart && step.State != StepRunning {
+			t.Errorf("restart step is %s before the restart command runs, want running", step.State)
+		}
+	}
+	if !restarting.RestartPending(outgoing) {
+		t.Error("RestartPending = false for the process the restart replaces, want true")
+	}
+	if restarting.RestartPending(time.Now().UTC().Add(time.Second)) {
+		t.Error("RestartPending = true for a process started after the restart, want false")
+	}
+}

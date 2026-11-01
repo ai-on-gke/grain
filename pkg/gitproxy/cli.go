@@ -53,6 +53,7 @@ var cliRouteTools = map[string]string{
 	"issues":          "list_issues",
 	"issue":           "read_issue",
 	"db/query":        "query_grain_db",
+	"tasks":           "list_grain_tasks",
 	// The acting routes (cli_actions.go).
 	"ci/wait":           "wait_for_checks",
 	"ci/run-job":        "run_ci_job",
@@ -68,7 +69,7 @@ var cliRouteTools = map[string]string{
 	"tasks/notes":       "message_task",
 	"tasks/wait":        "wait_for_task",
 	"proposals":         "propose_task",
-	"quarantine":        "quarantine_test",
+	"quarantine":        "api_quarantine_test",
 }
 
 // CLIRouteActivity names a /cli/<route> request after the MCP tool it
@@ -158,6 +159,8 @@ func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope n
 		p.serveTestHistory(w, q, scope)
 	case route == "pr/status":
 		p.servePRStatus(w, r, scope)
+	case route == "tasks":
+		p.serveTasks(w, r, scope)
 	case route == "pr/base-status":
 		base := scope.TaskBase
 		if base == "" {

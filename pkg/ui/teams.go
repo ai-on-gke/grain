@@ -22,7 +22,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -598,13 +597,18 @@ func (c *Client) BroadcastTeamMessage(ctx context.Context, req BroadcastTeamRequ
 // -- so it is an instruction to all of the deployment's work, and two
 // kinds of caller may give one:
 //
-//   - with taskID, a run of that task, which must hold the team-broadcast
-//     grant (pkg/capability/teambroadcast);
+//   - with taskID, a run of that task, which must hold the agent API's
+//     teams:broadcast scope -- api:team-broadcast, or the bare
+//     team-broadcast it replaced, which is an alias for it;
 //   - without one, whoever ServeHTTP let in: every such caller is the
 //     deployment's own actor.
 //
 // Before grain/task-1568 neither was asked: every run was offered
 // broadcast_team_message and the daemon delivered whatever it was given.
+// teamBroadcastScope is the scope POST /api/deployment/broadcast is
+// served under (route_scopes.go).
+const teamBroadcastScope model.APIScope = "teams:broadcast"
+
 func (c *Client) authorizeBroadcast(ctx context.Context, taskID string) error {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
@@ -620,13 +624,15 @@ func (c *Client) authorizeBroadcast(ctx context.Context, taskID string) error {
 	if task == nil {
 		return forbiddenErrorf("task %s does not exist, so it may not broadcast", taskID)
 	}
-	for _, g := range task.Grants {
-		if g.Capability == teambroadcast.CapabilityName {
-			return nil
-		}
+	names := make([]string, len(task.Grants))
+	for i, g := range task.Grants {
+		names[i] = g.Capability
 	}
-	return forbiddenErrorf("task %s does not hold the %q capability, so its run may not broadcast",
-		taskID, teambroadcast.CapabilityName)
+	if APIGrantsOf(names).Has(teamBroadcastScope) {
+		return nil
+	}
+	return forbiddenErrorf("task %s does not hold the agent API's %s scope (api:team-broadcast), so its run may not broadcast",
+		taskID, teamBroadcastScope)
 }
 
 // DeploymentRepoConfigResponse is the response body of
@@ -766,14 +772,21 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 		seen := make(map[string]bool, len(*req.DefaultCapabilities))
 		for _, capID := range *req.DefaultCapabilities {
 			t := strings.TrimSpace(capID)
-			if t != "" && !seen[t] {
-				seen[t] = true
+			if t != "" {
 				if !slices.Contains(cfg.DefaultCapabilities, t) {
+					normalized, err := c.normalizeCapabilityID(t)
+					if err != nil {
+						return DeploymentRepoConfigResponse{}, err
+					}
+					t = normalized
 					if _, ok := c.capabilityByID(t); !ok {
 						return DeploymentRepoConfigResponse{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(t))
 					}
 				}
-				clean = append(clean, t)
+				if !seen[t] {
+					seen[t] = true
+					clean = append(clean, t)
+				}
 			}
 		}
 		cfg.DefaultCapabilities = clean

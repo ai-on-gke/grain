@@ -141,6 +141,12 @@ type rawTemplate struct {
 	// Interactive is model.Template.Interactive: every task filed from
 	// this template is a live chat.
 	Interactive bool `yaml:"interactive"`
+	// KeepRunning is model.Template.KeepRunning: every task filed from
+	// this template immediately restarts when its run exits.
+	KeepRunning bool `yaml:"keep-running"`
+	// Priority is model.Template.Priority: optional default priority for
+	// tasks filed from this template.
+	Priority *int `yaml:"priority"`
 	// NothingNeeded is model.Template.NothingNeededAction: "close" (what
 	// empty means) or "ack".
 	NothingNeeded string              `yaml:"nothing-needed"`
@@ -270,6 +276,16 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 	if err := checkTeam(f, raw.Team); err != nil {
 		return model.Template{}, raw, err
 	}
+	var priority *int
+	if raw.Priority != nil {
+		if *raw.Priority < 0 {
+			return model.Template{}, raw, fmt.Errorf("%s: priority must be a positive integer, got %d", f.path, *raw.Priority)
+		}
+		if *raw.Priority > 0 {
+			p := *raw.Priority
+			priority = &p
+		}
+	}
 	target := repo
 	tmpl := model.Template{
 		ID:            model.RepoDeclaredID(model.DeclaredTemplate, repo, f.stem),
@@ -287,6 +303,8 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 		Grants:        grants,
 
 		Interactive:         raw.Interactive,
+		KeepRunning:         raw.KeepRunning,
+		Priority:            priority,
 		NothingNeededAction: nothingNeeded,
 	}
 	if raw.AutoMerge != nil {
@@ -552,10 +570,16 @@ type rawSchedule struct {
 	Daily                *rawAt               `yaml:"daily"`
 	Weekly               *rawWeekly           `yaml:"weekly"`
 	Monthly              *rawDayAt            `yaml:"monthly"`
+	Trigger              *rawScheduleTrigger  `yaml:"trigger"`
 	Overlap              string               `yaml:"overlap"`
 	Review               string               `yaml:"review"`
 	Enabled              *bool                `yaml:"enabled"`
 	Model                string               `yaml:"model"`
+}
+
+type rawScheduleTrigger struct {
+	GitHubWorkflowRun     *model.GitHubWorkflowRunTrigger `yaml:"github_workflow_run"`
+	GitHubWorkflowRunDash *model.GitHubWorkflowRunTrigger `yaml:"github-workflow-run"`
 }
 
 type rawEvery struct {
@@ -665,6 +689,27 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		id := model.RepoDeclaredID(model.DeclaredSuite, repo, suite)
 		sched.SuiteID = &id
 		sched.Title = displayName(raw.Name, f.stem)
+	case raw.Trigger != nil && (raw.Trigger.GitHubWorkflowRun != nil || raw.Trigger.GitHubWorkflowRunDash != nil):
+		gh := raw.Trigger.GitHubWorkflowRun
+		if gh == nil {
+			gh = raw.Trigger.GitHubWorkflowRunDash
+		}
+		stem := gh.WorkflowStem()
+		if err := model.ValidateDeclarationStem(stem); err != nil {
+			return model.Schedule{}, fmt.Errorf("%s: github_workflow_run workflow %q: %w", f.path, gh.Workflow, err)
+		}
+		id := model.WorkflowReviewTemplateID(stem)
+		review := model.SystemTemplate(id, model.RepoRef{})
+		if review == nil {
+			return model.Schedule{}, fmt.Errorf("%s: grain has no template to review a workflow with (%s)",
+				f.path, id)
+		}
+		sched.TemplateID = &id
+		sched.Title = strings.TrimSpace(raw.Name)
+		if sched.Title == "" {
+			sched.Title = model.WorkflowReviewTitle(review.Title, sched.Base)
+		}
+		sched.AutoApproveProposals = true
 	default:
 		return model.Schedule{}, fmt.Errorf("%s: a schedule needs a `template:` to fire, a `suite:` to run "+
 			"or a `workflow:` to run", f.path)
@@ -681,7 +726,7 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 	default:
 		return model.Schedule{}, fmt.Errorf("%s: overlap is \"skip\" or \"allow\", got %q", f.path, string(overlap))
 	}
-	if workflow != "" {
+	if workflow != "" || (sched.Recurrence.Kind == model.RecurrenceGitHubWorkflowRun && template == "" && suite == "") {
 		// A workflow firing is unfinished until its run has ended and its
 		// review has been filed, and grain keeps one record of that per
 		// schedule (model.ScheduledWorkflowRun) -- a second firing on top
@@ -701,7 +746,7 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 	if err := sched.WorkflowReview.Validate(); err != nil {
 		return model.Schedule{}, fmt.Errorf("%s: %w", f.path, err)
 	}
-	if sched.WorkflowReview != "" && workflow == "" {
+	if sched.WorkflowReview != "" && workflow == "" && sched.Recurrence.Kind != model.RecurrenceGitHubWorkflowRun {
 		return model.Schedule{}, fmt.Errorf("%s: `review:` says when the run of a scheduled workflow is "+
 			"reviewed, and this schedule runs no `workflow:`", f.path)
 	}
@@ -795,14 +840,27 @@ func parseRecurrence(f file, raw rawSchedule) (model.Recurrence, error) {
 	if raw.Monthly != nil {
 		found = append(found, "monthly")
 	}
+	if raw.Trigger != nil {
+		found = append(found, "trigger")
+	}
 	if len(found) != 1 {
 		return model.Recurrence{}, fmt.Errorf("%s: a schedule needs exactly one cadence -- "+
-			"`every: {hours: N}`, `every: {minutes: N}`, `daily: {at: \"09:00\"}`, `weekly: {day: monday, at: \"09:00\"}` or "+
-			"`monthly: {day: 1, at: \"09:00\"}` -- and this one has %d", f.path, len(found))
+			"`every: {hours: N}`, `every: {minutes: N}`, `daily: {at: \"09:00\"}`, `weekly: {day: monday, at: \"09:00\"}`, "+
+			"`monthly: {day: 1, at: \"09:00\"}` or `trigger: {github_workflow_run: ...}` -- and this one has %d", f.path, len(found))
 	}
 	tz := strings.TrimSpace(raw.TimeZone)
 	var r model.Recurrence
 	switch found[0] {
+	case "trigger":
+		gh := raw.Trigger.GitHubWorkflowRun
+		if gh == nil {
+			gh = raw.Trigger.GitHubWorkflowRunDash
+		}
+		if gh == nil {
+			return model.Recurrence{}, fmt.Errorf("%s: `trigger` needs `github_workflow_run`", f.path)
+		}
+		cp := *gh
+		r = model.Recurrence{Kind: model.RecurrenceGitHubWorkflowRun, GitHubWorkflowRun: &cp, TimeZone: tz}
 	case "every":
 		switch {
 		case raw.Every.Hours != 0 && raw.Every.Minutes != 0:

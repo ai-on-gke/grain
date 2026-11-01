@@ -26,7 +26,7 @@ The daemon hosts a single `namespace.Server` (`pkg/namespace`) that resolves `<s
 | :--- | :--- | :--- | :--- |
 | `ci://` | `ci://<owner>/<repo>/<run>/<job>/[attempts/<n>/]<step>.log`<br>`ci://<owner>/<repo>/<run>/<job>/[attempts/<n>/]gotest.log`<br>`ci://<owner>/<repo>/<run>/<job>/[attempts/<n>/]tests/<pkg>/<Test>.log`<br>`ci://<owner>/<repo>/<run>/artifacts/<job>/<name>` | `api:ci-read` grant (every repository) or `api:ci-read@<owner>/<repo>` (that one), `self-debug` (every repository), or `grain-ci` for the task's own target / `reads:` / `writes:` repositories | `ci.RunStore` (`MemoryRunStore` / `StoredRunStore`) + `ci.ArtifactStore` (`DirArtifacts`) |
 | `src://` | `src://<path>` (e.g. `src://pkg/ci/engine.go`) | `self-debug` capability (or explicit source read grant) | Running build's source directory (`GrainSourceDir`) bounded via `os.Root` |
-| `task://` | `task://<id>/record.md`<br>`task://<id>/conversation.md`<br>`task://<id>/prompt.md`<br>`task://<id>/attempts/<n>/transcript.md`<br>`task://<id>/handover.md` | `self-debug` capability (or task reading its own record/handover) | `model.Store` (`tasks`, `task_comments`, `task_runs`, `run_transcripts`) |
+| `task://` | `task://<id>/record.md`<br>`task://<id>/conversation.md`<br>`task://<id>/prompt.md`<br>`task://<id>/attempts/<n>/transcript.md`<br>`task://<id>/handover.md` | `self-debug` capability, or an `api:tasks:read` grant (`@owner/repo` limits it to tasks in that repository); a task always reads its own `task://<own-id>/` | `model.Store` (`tasks`, `task_comments`, `task_runs`, `run_transcripts`) |
 | `config://` | `config://<path>` | `self-debug` capability or `reads:` grant on the state repository | Deployment state repository (`staterepo`) |
 | `memory://` | `memory://<path>` | `memory` capability (scoped by deployment/repo) | Memory store (`pkg/memory`) |
 | `deploy://` | `deploy://health.json`<br>`deploy://merge-queue.md`<br>`deploy://metrics/<section>.txt` | `self-debug` capability | Daemon health snapshot, merge queue state, and metrics collector |
@@ -87,6 +87,8 @@ Every sandbox already reaches the daemon's per-sandbox HTTP git proxy on loopbac
   - `Accept: application/json` (or `?format=json`): JSON object `{"path": "...", "entries": [{"name": "...", "type": "file"|"dir", "size": 123, "growing": false}]}`.
 - **`GET /fs/<scheme>/<path>?glob=<pattern>`**
   Matches paths beneath `<scheme>://<path>` against `<pattern>` (supporting `*`, `?`, and `**`), returning one matching path per line (or JSON with `Accept: application/json`).
+  A pattern with no `/` and no `**` matches only the directory's direct children, without walking or capping anything. A pattern with either walks the subtree, up to 2000 entries. A trailing `/` matches directories only.
+- **Truncation.** A listing, glob or grep that was cut short says so: text output ends with a `[truncated: <why>]` line, the response carries `X-Grain-Truncated: true`, and JSON gets `"truncated": true` plus a `truncated_reason`. Two caps do this: a walk hitting its 2000-entry bound, and a `ci://<owner>/<repo>` listing, which shows only the newest 200 runs.
 - **`GET /fs/<scheme>/<path>?grep=<re>[&i=1][&n=1][&context=N][&max=N]`**
   Server-side RE2 regular expression search across a single file or recursively across all files under a directory prefix:
   - `i` (`?i` or `?i=1`): case-insensitive matching.
@@ -102,7 +104,8 @@ Every sandbox already reaches the daemon's per-sandbox HTTP git proxy on loopbac
   Every request resolves the caller's token to a `namespace.AccessScope` attached to the token entry:
   - `ci://`: requires an `api:ci-read` grant (`api:ci-read@<owner>/<repo>` for one repository), `self-debug`, or `grain-ci` for the task's own target/read repositories; a grant name the agent API does not parse (a bare `ci-read`, `api:ci-read:<repo>`) widens nothing, checked against `CIRepoScope`. Requests for repositories outside the task's scope—or from tasks without CI read permission—receive `403 Forbidden`.
   - `src://`: requires the `self-debug` grant (`403 Forbidden` otherwise).
-  - `task://`, `deploy://`: requires `self-debug` (`403 Forbidden` otherwise).
+  - `task://`: a run reads its own task; any other task requires `self-debug` or an `api:tasks:read` grant naming that task's repository (`403 Forbidden` otherwise, naming both). Working in, reading or writing a repository does not by itself open the other tasks in it.
+  - `deploy://`: requires `self-debug` (`403 Forbidden` otherwise).
   - `config://`: requires `self-debug` or a `reads:` grant covering the state repository (`403 Forbidden` otherwise).
 - **Redaction**:
   All text streams and grep/list outputs pass through `pkg/redact.Redactor` before leaving the server, scrubbing runtime secrets and credential patterns (`ghp_...`, `ghs_...`, bearer tokens, registered capability secrets) identically to MCP tool outputs.

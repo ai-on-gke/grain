@@ -121,7 +121,7 @@ func (c *Client) PostAgentMessage(ctx context.Context, id, body, summary string,
 		return Message{}, err
 	}
 	agentPrincipal := model.Principal{Kind: model.PrincipalAgent, ID: id}
-	commentID, err := c.Store.AddComment(ctx, model.Comment{
+	commentID, attIDs, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID: id,
 		Author: model.Attribution{
 			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
@@ -130,20 +130,14 @@ func (c *Client) PostAgentMessage(ctx context.Context, id, body, summary string,
 		Body:      body,
 		Summary:   summary,
 		CreatedAt: now,
-	})
+	}, attachments)
 	if err != nil {
 		return Message{}, err
 	}
 	var msgAttachments []Attachment
 	for i := range attachments {
-		attachments[i].TaskID = id
-		attachments[i].CommentID = &commentID
-		attID, err := c.Store.AddAttachment(ctx, attachments[i])
-		if err != nil {
-			return Message{}, err
-		}
 		msgAttachments = append(msgAttachments, Attachment{
-			ID:          attID,
+			ID:          attIDs[i],
 			Filename:    attachments[i].Filename,
 			ContentType: attachments[i].ContentType,
 			Size:        int64(len(attachments[i].Content)),
@@ -233,7 +227,8 @@ func (c *Client) messagesSince(ctx context.Context, id string, after int64, from
 		case comment.Author.Actor.Kind == model.PrincipalHuman:
 		case fromAgents && isAgentMessage(comment, id):
 			author = "task " + author
-		case fromAgents && comment.Author.Actor == model.CLThreadsPrincipal:
+		case fromAgents && (comment.Author.Actor == model.CLThreadsPrincipal ||
+			comment.Author.Actor == model.CapabilityChangePrincipal):
 			author = "grain"
 		default:
 			continue
@@ -336,25 +331,19 @@ func (c *Client) PostMessageToAgent(ctx context.Context, from, to, body string, 
 		return Message{}, err
 	}
 	signed := fmt.Sprintf("Message from %s to this task's agent:\n\n%s", signature, body)
-	commentID, err := c.Store.AddComment(ctx, model.Comment{
+	commentID, attIDs, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID:    to,
 		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: from}},
 		Body:      signed,
 		CreatedAt: now,
-	})
+	}, attachments)
 	if err != nil {
 		return Message{}, err
 	}
 	var msgAttachments []Attachment
 	for i := range attachments {
-		attachments[i].TaskID = to
-		attachments[i].CommentID = &commentID
-		attID, err := c.Store.AddAttachment(ctx, attachments[i])
-		if err != nil {
-			return Message{}, err
-		}
 		msgAttachments = append(msgAttachments, Attachment{
-			ID:          attID,
+			ID:          attIDs[i],
 			Filename:    attachments[i].Filename,
 			ContentType: attachments[i].ContentType,
 			Size:        int64(len(attachments[i].Content)),
@@ -410,11 +399,47 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 		}
 		after = parsed
 	}
+	var wait time.Duration
+	if raw := r.URL.Query().Get("wait_ms"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			writeClientError(w, validationErrorf("wait_ms must be a non-negative integer"))
+			return
+		}
+		if parsed > 5000 {
+			parsed = 5000
+		}
+		wait = time.Duration(parsed) * time.Millisecond
+	}
 	read := s.tasks.MessagesSince
 	if agents, _ := strconv.ParseBool(r.URL.Query().Get("agents")); agents {
 		read = s.tasks.AddendaSince
 	}
-	messages, err := read(r.Context(), r.PathValue("id"), after)
+	id := r.PathValue("id")
+	if wait > 0 && s.tasks != nil && s.tasks.Store != nil {
+		waitCtx, cancel := context.WithTimeout(r.Context(), wait)
+		defer cancel()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			ch := s.tasks.Store.CommentAdded(id)
+			messages, err := read(r.Context(), id, after)
+			if err != nil {
+				writeClientError(w, err)
+				return
+			}
+			if len(messages) > 0 || waitCtx.Err() != nil {
+				writeJSON(w, http.StatusOK, messages)
+				return
+			}
+			select {
+			case <-ch:
+			case <-ticker.C:
+			case <-waitCtx.Done():
+			}
+		}
+	}
+	messages, err := read(r.Context(), id, after)
 	if err != nil {
 		writeClientError(w, err)
 		return

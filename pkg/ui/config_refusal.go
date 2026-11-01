@@ -258,6 +258,10 @@ type configWriteRehearsal struct {
 	// refusal, which is the only answer an armed request may send
 	// (configRefusalWriter).
 	refused bool
+	// wroteSettings is set when guardConfigWrite permits a settings write
+	// so configRefusalWriter can export the updated tables immediately to
+	// grain/config once the handler succeeds.
+	wroteSettings bool
 }
 
 // pending is the refusal an armed request still owes its caller: armed,
@@ -336,6 +340,36 @@ func (r *configWriteRehearsal) markRefused() {
 	r.mu.Unlock()
 }
 
+func (r *configWriteRehearsal) markWroteSettings() {
+	r.mu.Lock()
+	r.wroteSettings = true
+	r.mu.Unlock()
+}
+
+func (r *configWriteRehearsal) didWriteSettings() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.wroteSettings && r.refusal == nil
+}
+
+// StateRepoWriteSyncer is what a StateRepoManager implements when it can
+// export a direct UI/API settings write immediately to grain/config
+// (pkg/daemon's StateManager does).
+type StateRepoWriteSyncer interface {
+	SyncAfterWrite(ctx context.Context) error
+}
+
+func (c *Client) syncStateRepoAfterWrite(ctx context.Context) {
+	if c == nil || c.Config.StateRepo == nil {
+		return
+	}
+	if syncer, ok := c.Config.StateRepo.(StateRepoWriteSyncer); ok {
+		if err := syncer.SyncAfterWrite(ctx); err != nil {
+			log.Printf("grain api: syncing config repository after settings write: %v", err)
+		}
+	}
+}
+
 // settingsWritable reports whether this deployment takes configuration
 // writes, for a caller that only wants to know: unlike
 // checkSettingsWritable it arms nothing. It answers for a direct write
@@ -392,10 +426,25 @@ func (c *Client) checkBootstrapWritableUnrehearsed(ctx context.Context, tables .
 // saying (it failed validation), in which case only an external config
 // repository refuses it, leaving the validation error to answer.
 func (c *Client) checkGrainConfigWritable(ctx context.Context, before, after *model.Config) error {
+	if before != nil && after != nil && before.SettingsLocked && !after.SettingsLocked {
+		if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+			return c.checkSettingsWritable(ctx, "grain_config")
+		}
+	}
 	if after == nil || before == nil || before.ConnectionsOnly() || bootstrapOnlyChange(*before, *after) {
 		return c.checkBootstrapWritable(ctx, "grain_config")
 	}
 	return c.checkSettingsWritable(ctx, "grain_config")
+}
+
+// settingsLocked reports whether the deployment has opted into locking
+// non-bootstrap settings in the UI and REST API (grain_config.settings_locked).
+func (c *Client) settingsLocked(ctx context.Context) bool {
+	if c == nil || c.Store == nil {
+		return false
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	return err == nil && cfg != nil && cfg.SettingsLocked
 }
 
 // configRepoFor is the config repository a write must go through, or
@@ -404,7 +453,7 @@ func (c *Client) configRepoFor(ctx context.Context, bootstrap bool) (remote, bra
 	if remote, branch := c.externalConfigRepo(ctx); remote != "" {
 		return remote, branch, true
 	}
-	if bootstrap || c == nil || c.Config.StateRepo == nil || c.directConfigWrites() {
+	if bootstrap || c == nil || c.directConfigWrites() || !c.settingsLocked(ctx) {
 		return "", "", false
 	}
 	// Only an API caller is sent to the config repository: grain's own
@@ -414,6 +463,19 @@ func (c *Client) configRepoFor(ctx context.Context, bootstrap bool) (remote, bra
 		return "", "", false
 	}
 	return "", "main", true
+}
+
+// configRepoOnly is whether the API refuses a non-bootstrap settings
+// write in favour of a config pull request -- configRepoFor's answer for
+// a request that came through the API, asked without one.
+func (c *Client) configRepoOnly(ctx context.Context) bool {
+	if c == nil {
+		return false
+	}
+	if remote, _ := c.externalConfigRepo(ctx); remote != "" {
+		return true
+	}
+	return !c.directConfigWrites() && c.settingsLocked(ctx)
 }
 
 // directConfigWrites is the host-local opt-out from the config
@@ -431,6 +493,11 @@ func (c *Client) directConfigWrites() bool {
 func (c *Client) guardConfigWrite(ctx context.Context, rehearse, bootstrap bool, tables []string) error {
 	remote, branch, managed := c.configRepoFor(ctx, bootstrap)
 	if !managed {
+		if r, ok := model.WriteRehearsalFrom(ctx); ok {
+			if cr, ok := r.(*configWriteRehearsal); ok {
+				cr.markWroteSettings()
+			}
+		}
 		return nil
 	}
 	refusal := c.configRefusal(ctx, remote, branch, tables)
@@ -458,6 +525,7 @@ func (c *Client) guardConfigWrite(ctx context.Context, rehearse, bootstrap bool,
 type configRefusalWriter struct {
 	http.ResponseWriter
 	rehearsal *configWriteRehearsal
+	onSuccess func()
 	decided   bool
 	swallow   bool
 }
@@ -473,6 +541,11 @@ func (w *configRefusalWriter) WriteHeader(status int) {
 	if w.rehearsal.pending() != nil {
 		w.swallow = true
 		return
+	}
+	if status < http.StatusMultipleChoices && w.rehearsal.didWriteSettings() && w.onSuccess != nil {
+		onSuccess := w.onSuccess
+		w.onSuccess = nil
+		onSuccess()
 	}
 	w.ResponseWriter.WriteHeader(status)
 }

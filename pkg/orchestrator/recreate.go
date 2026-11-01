@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/ai-on-gke/grain/pkg/mcp"
@@ -223,13 +224,20 @@ func (r *SandboxRecreations) setCapabilityPass(taskID string, pass *passMaterial
 	rec.capabilityPass = pass
 }
 
-// errNoLiveRun is what Recreate reports for a task with nothing running
-// on it here. It is phrased for the agent that will read it: by the time
-// a run's own tool call can arrive, the run is live by construction, so
-// this really does mean "your run has ended" (or "it is being run by
-// some other daemon process than the one you asked").
+// errNoLiveRun is what Recreate reports for a task with no run
+// registered here. It is phrased for the agent that will read it, and
+// deliberately does not claim the run has ended: a run's own tool call
+// arrives while that run is live by construction, so "nothing
+// registered" means the run is being driven by some other daemon
+// process than the one asked, or by one that has not registered it.
 var errNoLiveRun = errors.New(
-	"orchestrator: this task has no live run on this daemon, so there is no sandbox to rebuild")
+	"orchestrator: no run of this task is registered for a sandbox rebuild on this daemon, " +
+		"so there is no sandbox to rebuild here")
+
+// errRunEnded is what Recreate reports for a run that was registered
+// but has since ended: its sandbox is being, or has been, released.
+var errRunEnded = errors.New(
+	"orchestrator: this task's run has ended, so there is no sandbox to rebuild")
 
 // Recreate destroys the sandbox of taskID's live run and builds an empty
 // one under the same name, then puts back as much of what grain itself
@@ -304,6 +312,13 @@ type sandboxRecreation struct {
 	// capabilityPass is the attempt's minted pass as runOne materialized
 	// it, nil for a run holding no capability references.
 	capabilityPass *passMaterialization
+
+	// unrestorable names the capabilities whose sandbox-side setup this
+	// daemon cannot put back: those of a run adopted from a daemon that
+	// was restarted (ResumeAdoptedRun), whose materialized placements and
+	// capability pass were held only in that daemon's memory. A rebuild
+	// goes ahead without them and says so (restoreUnrestorable).
+	unrestorable []string
 }
 
 // close marks this run as no longer recreatable, waiting for any
@@ -318,7 +333,7 @@ func (s *sandboxRecreation) recreate(ctx context.Context) (SandboxRecreation, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return SandboxRecreation{}, errNoLiveRun
+		return SandboxRecreation{}, errRunEnded
 	}
 
 	rebuilder, ok := s.sandbox.(SandboxRebuilder)
@@ -340,6 +355,7 @@ func (s *sandboxRecreation) recreate(ctx context.Context) (SandboxRecreation, er
 	s.restorePackageCache(ctx, &out)
 	s.restorePlacements(ctx, &out)
 	s.restoreCapabilityPass(ctx, &out)
+	s.restoreUnrestorable(&out)
 	s.restoreAttachments(ctx, &out)
 	s.restoreCheckout(ctx, &out)
 	return out, nil
@@ -444,6 +460,20 @@ func (s *sandboxRecreation) restoreCapabilityPass(ctx context.Context, out *Sand
 	default:
 		out.Warnings = append(out.Warnings, fmt.Sprintf("this task's capability grants could not be set up again in the new sandbox: %v", err))
 	}
+}
+
+// restoreUnrestorable reports the capabilities whose setup could not be
+// put back, rather than refusing the whole rebuild over them: the agent
+// asked for a clean sandbox, and one missing a credential file it can be
+// told about is worth more than none at all.
+func (s *sandboxRecreation) restoreUnrestorable(out *SandboxRecreation) {
+	if len(s.unrestorable) == 0 {
+		return
+	}
+	out.Warnings = append(out.Warnings, fmt.Sprintf(
+		"the files and setup this task's capabilities (%s) put in the sandbox were not restored: "+
+			"this run was carried over a daemon restart, and only the daemon that started it held them. "+
+			"They return on this task's next run", strings.Join(s.unrestorable, ", ")))
 }
 
 // restoreAttachments writes the task's attachments back under

@@ -340,6 +340,21 @@ func (c *runClock) creditFrom(source string, blocked time.Duration) RunWaitCredi
 	}
 }
 
+// deadline is when the run is cancelled as things stand: base plus the
+// credit granted so far. Zero for a run with no deadline (a durable run),
+// and for a nil clock.
+func (c *runClock) deadline() time.Time {
+	if c == nil {
+		return time.Time{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.base.IsZero() {
+		return time.Time{}
+	}
+	return c.base.Add(c.credited)
+}
+
 // stop ends the clock and the ctx it derived, whether or not the timer
 // ever fired. Cancelling with no cause of its own leaves whatever cause
 // the timer (or an ancestor) already recorded in place, which is what

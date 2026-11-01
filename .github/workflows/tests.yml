@@ -1,0 +1,1320 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# GitHub Actions port of .grain/workflows/tests.yml on GitHub-hosted runners
+# (ubuntu-latest).
+#
+# See docs/github-actions-ci.md for the job-by-job mapping from grain CI,
+# how the pre-provisioned Granulefile guest environment is emulated on
+# stock ubuntu-latest runners, and which suites remain gated for
+# self-hosted runners.
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Comma-separated job IDs to run (e.g. go-model,postgres); leave empty to run all jobs"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+  PLAYWRIGHT_BROWSERS_PATH: /var/cache/playwright
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+  npm_config_prefer_offline: "true"
+  npm_config_audit: "false"
+  npm_config_fund: "false"
+  npm_config_fetch_retries: "5"
+  npm_config_fetch_retry_mintimeout: "10000"
+  npm_config_fetch_retry_maxtimeout: "120000"
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: ${{ github.workflow }}-changes-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    outputs:
+      go_program: ${{ steps.filter.outputs.go_program }}
+      go_backend: ${{ steps.filter.outputs.go_backend }}
+      go_unit: ${{ steps.filter.outputs.go_unit }}
+      granule: ${{ steps.filter.outputs.granule }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      lint: ${{ steps.filter.outputs.lint }}
+      terraform: ${{ steps.filter.outputs.terraform }}
+      go: ${{ steps.filter.outputs.go }}
+      go-e2e: ${{ steps.filter.outputs.go-e2e }}
+      go-orchestrator: ${{ steps.filter.outputs.go-orchestrator }}
+      go-model: ${{ steps.filter.outputs.go-model }}
+      go-unit: ${{ steps.filter.outputs.go-unit }}
+      postgres: ${{ steps.filter.outputs.postgres }}
+      run-host: ${{ steps.filter.outputs.run-host }}
+      host-script-container: ${{ steps.filter.outputs.host-script-container }}
+      ui-e2e: ${{ steps.filter.outputs.ui-e2e }}
+      installer-e2e: ${{ steps.filter.outputs.installer-e2e }}
+      installer: ${{ steps.filter.outputs.installer }}
+      package-cache: ${{ steps.filter.outputs.package-cache }}
+      real-vm: ${{ steps.filter.outputs.real-vm }}
+      real-kubernetes: ${{ steps.filter.outputs.real-kubernetes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify changed paths and selected jobs
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          INPUT_JOBS: ${{ inputs.jobs }}
+        run: ./scripts/github-ci-changes.sh
+
+  go:
+    name: go
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}-go-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache npm and node_modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Install sandbox guest dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            bubblewrap expect zstd socat psmisc
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+
+      - name: Format
+        run: make fmt
+
+      - name: Fill the npm cache from the registry
+        run: ./scripts/warm-npm-cache.sh ui
+
+      - name: Build frontend
+        run: make frontend
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...
+
+  go-e2e:
+    name: go e2e
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go-e2e == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}-go-e2e-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache npm and node_modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Install sandbox guest dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            bubblewrap expect zstd socat psmisc shellcheck
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.yama.ptrace_scope=0 || true
+          tmpsrc="$(mktemp -d)"
+          cat >"$tmpsrc/main.go" <<'EOF'
+          package main
+
+          import (
+          	"os"
+          	"strconv"
+          	"strings"
+          	"time"
+          )
+
+          func main() {
+          	for _, arg := range os.Args[1:] {
+          		if strings.HasPrefix(arg, "-") {
+          			continue
+          		}
+          		if d, err := time.ParseDuration(arg); err == nil {
+          			time.Sleep(d)
+          			continue
+          		}
+          		s := strings.TrimSuffix(arg, "s")
+          		if v, err := strconv.ParseFloat(s, 64); err == nil {
+          			time.Sleep(time.Duration(v * float64(time.Second)))
+          		}
+          	}
+          }
+          EOF
+          CGO_ENABLED=0 go build -o "$tmpsrc/sleep" "$tmpsrc/main.go"
+          sudo rm -f /usr/local/bin/sleep /usr/bin/sleep
+          sudo cp -f "$tmpsrc/sleep" /usr/local/bin/sleep
+          sudo cp -f "$tmpsrc/sleep" /usr/bin/sleep
+          sudo chmod 0755 /usr/local/bin/sleep /usr/bin/sleep
+          rm -rf "$tmpsrc"
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+
+      - name: Fill the npm cache from the registry
+        run: ./scripts/warm-npm-cache.sh ui
+
+      - name: Build frontend
+        run: make frontend
+
+      - name: Test
+        run: |
+          set +e
+          GRAIN_GOTEST_LOG=/tmp/go-e2e.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./tests/e2e/... ./tests/deploy/... | tee /tmp/go-e2e.out
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            python3 - /tmp/go-e2e.out go-e2e <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
+            exit "$status"
+          fi
+
+  go-orchestrator:
+    name: go orchestrator
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.go-orchestrator == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}-go-orchestrator-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install sandbox guest dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            bubblewrap expect zstd socat psmisc iproute2 iptables
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+
+      - name: Test
+        run: |
+          set +e
+          GRAIN_GOTEST_LOG=/tmp/go-orchestrator.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/orchestrator/...
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-orchestrator.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=go-orchestrator::$line"
+            done
+            exit "$status"
+          fi
+
+  go-model:
+    name: go model
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.go-model == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}-go-model-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Configure git identity
+        run: |
+          sudo systemctl stop postgresql 2>/dev/null || true
+          sudo systemctl disable postgresql 2>/dev/null || true
+          sudo rm -rf /usr/lib/postgresql
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+
+      - name: Test
+        run: |
+          set +e
+          GRAIN_GOTEST_LOG=/tmp/go-model.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/model/... ./pkg/staterepo/... ./tests/security/... | tee /tmp/go-model.out
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            python3 - /tmp/go-model.out go-model <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
+            exit "$status"
+          fi
+
+  go-unit:
+    name: go unit
+    needs: [changes]
+    if: needs.changes.outputs.go_unit == 'true' && needs.changes.outputs.go-unit == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}-go-unit-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install sandbox guest dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            bubblewrap expect zstd socat psmisc iproute2 iptables
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+
+      - name: Test
+        run: |
+          set +e
+          GRAIN_GOTEST_LOG=/tmp/go-unit.log ./scripts/run-go-tests.sh go test -race -timeout 25m \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-connect/... ./cmd/grain-sandbox/... ./cmd/grit/... \
+            ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
+            ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/apierror/... ./pkg/attest/... \
+            ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
+            ./pkg/ci/... ./pkg/cifault/... ./pkg/cli/... ./pkg/console/... ./pkg/daemon/... \
+            ./pkg/declschema/... ./pkg/demo/... ./pkg/designdoc/... ./pkg/dispatch/... \
+            ./pkg/forge/... ./pkg/forkhead/... ./pkg/gcpsetup/... ./pkg/ghwebhook/... ./pkg/github/... ./pkg/gitproxy/... ./pkg/gitrefs/... \
+            ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
+            ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
+            ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
+            ./pkg/metrics/... ./pkg/modelexec/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/pkgcache/... \
+            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registryauth/... \
+            ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
+            ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
+            ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
+            ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... \
+            ./pkg/version/... ./tests/bench/...
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-unit.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=go-unit::$line"
+            done
+            exit "$status"
+          fi
+
+  granule:
+    name: granule
+    needs: [changes]
+    if: needs.changes.outputs.granule == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-granule-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    env:
+      GOFLAGS: -mod=vendor
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Configure /dev/kvm udev permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          if [ -e /dev/kvm ]; then
+            sudo chmod 0666 /dev/kvm
+          fi
+          sudo usermod -aG kvm "$USER" || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            iproute2 iptables dnsmasq-base e2fsprogs socat
+
+      - name: Test
+        working-directory: third_party/granule
+        run: |
+          set +e
+          export PATH="$PATH:/sbin:/usr/sbin"
+          python3 -c '
+          import socket, time
+          try:
+              s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+              s.bind((socket.VMADDR_CID_ANY, 1024))
+              s.listen(1)
+              time.sleep(3600)
+          except Exception:
+              pass
+          ' &
+          vsock_pid=$!
+          sleep 0.2
+          GRAIN_GOTEST_LOG=/tmp/granule.log ../../scripts/run-go-tests.sh go test -race -count=1 -timeout 10m ./... | tee /tmp/granule.out
+          status=${PIPESTATUS[0]}
+          kill "$vsock_pid" 2>/dev/null || true
+          if [ "$status" -ne 0 ]; then
+            python3 - /tmp/granule.out granule <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
+            exit "$status"
+          fi
+
+  postgres:
+    name: postgres
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.postgres == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: ${{ github.workflow }}-postgres-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: graintest
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+          --tmpfs /var/lib/postgresql/data:rw
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install PostgreSQL
+        run: |
+          sudo systemctl stop postgresql 2>/dev/null || true
+          sudo systemctl disable postgresql 2>/dev/null || true
+          if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
+            if [ ! -e /usr/sbin/policy-rc.d ]; then
+              printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+              sudo chmod +x /usr/sbin/policy-rc.d
+            fi
+            sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql >/dev/null
+          fi
+          ls /usr/lib/postgresql/*/bin/initdb
+
+      - name: Test
+        env:
+          GRAIN_REQUIRE_POSTGRES: "1"
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/
+
+  run-host:
+    name: run host
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.run-host == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-run-host-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Pull the run-host test image
+        run: docker pull -q debian:bookworm-slim
+
+      - name: Test
+        env:
+          GRAIN_RUNHOST_DOCKER: "1"
+        run: ./scripts/run-go-tests.sh go test -race -count=1 -timeout 15m ./pkg/runhost/
+
+      - name: Daemon restart acceptance test
+        env:
+          GRAIN_RUNHOST_DOCKER: "1"
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -run '^TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest$' -v ./pkg/cli/
+
+  host-script-container:
+    name: host-script container
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.host-script-container == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-host-script-container-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build the sandbox image
+        run: |
+          set -euo pipefail
+          docker build -q -f Dockerfile.k8s-sandbox \
+            --build-arg INSTALL_CLAUDE_CLI=0 --build-arg INSTALL_AGY_CLI=0 --build-arg INSTALL_CODEX_CLI=0 \
+            -t grain-k8s-sandbox:host-script .
+
+      - name: Test
+        env:
+          GRAIN_HOST_SCRIPT_CONTAINER_IMAGE: grain-k8s-sandbox:host-script
+        run: |
+          set -euo pipefail
+          GRAIN_GOTEST_LOG=/tmp/host-script.log ./scripts/run-go-tests.sh \
+            go test -count=1 -timeout 10m -run '^TestHostScriptGrantInARealContainerSandbox$' -v ./pkg/orchestrator/
+          if ! grep -q -- "--- PASS: TestHostScriptGrantInARealContainerSandbox" /tmp/host-script.log; then
+            echo "TestHostScriptGrantInARealContainerSandbox did not run and pass; this job only means something when it does" >&2
+            exit 1
+          fi
+
+  frontend:
+    name: frontend
+    needs: [changes]
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-frontend-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Cache npm and node_modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Fill the npm cache from the registry
+        run: ./scripts/warm-npm-cache.sh ui
+
+      - name: Build frontend
+        run: make frontend
+
+      - name: Format frontend
+        run: make fmt-frontend
+
+      - name: Test frontend
+        working-directory: ui
+        run: npm test -- --maxWorkers=4
+
+  ui-e2e:
+    name: ui e2e
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.ui-e2e == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    concurrency:
+      group: ${{ github.workflow }}-ui-e2e-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    env:
+      PLAYWRIGHT_BROWSERS: chromium
+      PLAYWRIGHT_PROJECT: chromium
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache npm and node_modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Prepare Playwright browser cache directory
+        run: |
+          sudo mkdir -p /var/cache/playwright
+          sudo chown -R "$USER:$USER" /var/cache/playwright
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /var/cache/playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+
+      - name: Disable unused third-party apt sources
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+
+      - name: Fill the npm cache from the registry
+        run: ./scripts/warm-npm-cache.sh ui
+
+      - name: Build frontend
+        run: make frontend
+
+      - name: Download the browsers the suite drives
+        run: make playwright-browsers
+
+      - name: Test e2e
+        run: |
+          set -uo pipefail
+          make test-e2e-suite
+          status=$?
+          node ui/scripts/summarize-trace-network.mjs || true
+          exit $status
+
+      - name: Upload Playwright test results
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-test-results
+          path: ui/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  lint:
+    name: lint
+    needs: [changes]
+    if: needs.changes.outputs.lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-lint-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install shellcheck and actionlint
+        run: |
+          # Pin ShellCheck to v0.9.0 (matching Debian Bookworm in Granulefile) so
+          # newer ShellCheck releases on ubuntu-latest (0.11.0+) do not fail on
+          # unmodified scripts.
+          curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.9.0/shellcheck-v0.9.0.linux.x86_64.tar.xz \
+            | sudo tar -xJ --strip-components=1 -C /usr/local/bin shellcheck-v0.9.0/shellcheck
+          if ! command -v actionlint >/dev/null 2>&1; then
+            curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz \
+              | sudo tar -xz -C /usr/local/bin actionlint
+          fi
+          /usr/local/bin/shellcheck --version
+          actionlint -version
+
+      - name: Lint GitHub Actions workflows
+        run: actionlint
+
+      - name: Lint scripts
+        run: |
+          set -euo pipefail
+          /usr/local/bin/shellcheck --version
+          mapfile -t scripts < <(git ls-files -- 'scripts/*.sh' 'deploy/terraform/*.sh')
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "no shell scripts matched; this job is checking nothing" >&2
+            exit 1
+          fi
+          printf 'checking %s\n' "${scripts[@]}"
+          /usr/local/bin/shellcheck --color=always "${scripts[@]}"
+
+  terraform:
+    name: terraform
+    needs: [changes]
+    if: needs.changes.outputs.terraform == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-terraform-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: Format
+        working-directory: deploy/terraform/gcp
+        run: |
+          terraform version
+          terraform fmt -check -recursive -diff ..
+
+      - name: Init
+        working-directory: deploy/terraform/gcp
+        run: |
+          for i in 1 2 3 4 5; do
+            if terraform init -backend=false -input=false; then
+              exit 0
+            fi
+            if [ "$i" -eq 5 ]; then
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Validate
+        working-directory: deploy/terraform/gcp
+        run: terraform validate
+
+  installer-e2e:
+    name: installer
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.installer-e2e == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: ${{ github.workflow }}-installer-e2e-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache npm and node_modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Fill the npm cache from the registry
+        run: |
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+          ./scripts/warm-npm-cache.sh ui
+
+      - name: Assemble the image to install
+        env:
+          GRAIN_INSTALLER_BASE_IMAGE: ghcr.io/bwsalmon/grain/grain:main
+          GRAIN_INSTALLER_SANDBOX_IMAGE: ghcr.io/bwsalmon/grain/k8s-sandbox:main
+        run: |
+          set +e
+          ./scripts/installer-test-image.sh grain-installer:test 2>&1 | tee /tmp/installer-image.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            tail -n 10 /tmp/installer-image.log | while IFS= read -r line; do
+              echo "::error title=installer-image::$line"
+            done
+            exit "$status"
+          fi
+
+      - name: Run the installer e2e suite
+        env:
+          GRAIN_TEST_IMAGE: grain-installer:test
+          GRAIN_INSTALLER_E2E: "1"
+        run: |
+          set +e
+          GRAIN_GOTEST_LOG=/tmp/installer.log ./scripts/run-go-tests.sh \
+            go test ./tests/installer -count=1 -v -timeout 15m
+          status=$?
+          if grep -q -- "--- SKIP" /tmp/installer.log; then
+            grep -- "--- SKIP" /tmp/installer.log >&2
+            echo "::error title=installer-e2e::tests/installer skipped a test"
+            status=1
+          fi
+          if ! grep -q -- "--- PASS" /tmp/installer.log; then
+            echo "::error title=installer-e2e::tests/installer passed no test at all"
+            status=1
+          fi
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|--- SKIP:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/installer.log | tail -n 8 | while IFS= read -r line; do
+              echo "::error title=installer-e2e::$line"
+            done
+            exit "$status"
+          fi
+
+  package-cache:
+    name: package cache
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.package-cache == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: ${{ github.workflow }}-package-cache-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Seed Granulefile /etc/docker/daemon.json
+        run: |
+          sudo mkdir -p /usr/local/lib/grain-real-bin
+          if [ ! -e /usr/local/lib/grain-real-bin/install ]; then
+            real_install="$(readlink -f "$(command -v install)")"
+            sudo cp -f "$real_install" /usr/local/lib/grain-real-bin/install
+            sudo chmod 0755 /usr/local/lib/grain-real-bin/install
+          fi
+          tmpsrc="$(mktemp -d)"
+          cat >"$tmpsrc/main.go" <<'EOF'
+          package main
+
+          import (
+          	"fmt"
+          	"io"
+          	"os"
+          	"os/exec"
+          	"path/filepath"
+          	"strconv"
+          	"syscall"
+          )
+
+          func main() {
+          	args := os.Args[1:]
+          	if len(args) == 4 && args[0] == "-m" {
+          		mode, err := strconv.ParseUint(args[1], 8, 32)
+          		if err == nil {
+          			src, dst := args[2], args[3]
+          			var data []byte
+          			if src == "/dev/stdin" || src == "-" {
+          				data, err = io.ReadAll(os.Stdin)
+          			} else {
+          				data, err = os.ReadFile(src)
+          			}
+          			if err != nil {
+          				fmt.Fprintf(os.Stderr, "install: reading %s: %v\n", src, err)
+          				os.Exit(1)
+          			}
+          			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+          				fmt.Fprintf(os.Stderr, "install: mkdir %s: %v\n", filepath.Dir(dst), err)
+          				os.Exit(1)
+          			}
+          			tmp := fmt.Sprintf("%s.tmp.%d", dst, os.Getpid())
+          			if err := os.WriteFile(tmp, data, os.FileMode(mode)); err != nil {
+          				fmt.Fprintf(os.Stderr, "install: writing %s: %v\n", tmp, err)
+          				os.Exit(1)
+          			}
+          			_ = os.Chmod(tmp, os.FileMode(mode))
+          			if err := os.Rename(tmp, dst); err != nil {
+          				_ = os.Remove(tmp)
+          				fmt.Fprintf(os.Stderr, "install: renaming %s: %v\n", dst, err)
+          				os.Exit(1)
+          			}
+          			os.Exit(0)
+          		}
+          	}
+          	const realInstall = "/usr/local/lib/grain-real-bin/install"
+          	if err := syscall.Exec(realInstall, append([]string{"install"}, args...), os.Environ()); err != nil {
+          		cmd := exec.Command(realInstall, args...)
+          		cmd.Stdin = os.Stdin
+          		cmd.Stdout = os.Stdout
+          		cmd.Stderr = os.Stderr
+          		if err := cmd.Run(); err != nil {
+          			os.Exit(1)
+          		}
+          	}
+          }
+          EOF
+          CGO_ENABLED=0 go build -o "$tmpsrc/install" "$tmpsrc/main.go"
+          sudo rm -f /usr/local/bin/install /usr/bin/install
+          sudo cp -f "$tmpsrc/install" /usr/local/bin/install
+          sudo cp -f "$tmpsrc/install" /usr/bin/install
+          sudo chmod 0755 /usr/local/bin/install /usr/bin/install
+          rm -rf "$tmpsrc"
+          sudo mkdir -p /etc/docker
+          sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
+          {
+            "bip": "10.240.0.1/24",
+            "default-address-pools": [
+              {"base": "10.241.0.0/16", "size": 24}
+            ],
+            "features": {
+              "containerd-snapshotter": true
+            },
+            "mtu": 1460
+          }
+          EOF
+          sudo systemctl restart docker
+          docker info >/dev/null
+
+      - name: Pull an image through the cache this sandbox is pointed at
+        env:
+          GRAIN_REAL_DOCKER_CACHE_TESTS: "1"
+        run: |
+          set +e
+          GRAIN_GOTEST_LOG=/tmp/pkgcache.log ./scripts/run-go-tests.sh \
+            go test ./pkg/orchestrator/ -run 'PackageCache|ReloadDockerScript|AsRootScript' \
+            -count=1 -v -timeout 20m | tee /tmp/pkgcache.out
+          status=${PIPESTATUS[0]}
+          for want in TestPackageCachePullsThroughARealDockerd TestPackageCacheReachesAChildContainerBuild TestPackageCacheLeavesASandboxWithNoRunningDockerdAlone; do
+            if ! grep -q -- "--- PASS: $want" /tmp/pkgcache.log; then
+              status=1
+            fi
+          done
+          if [ "$status" -ne 0 ]; then
+            python3 - /tmp/pkgcache.out package-cache <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
+            exit "$status"
+          fi
+
+      - name: Serve a container's own fetches through real interception
+        env:
+          GRAIN_REAL_INTERCEPT_TESTS: "1"
+        run: |
+          set +e
+          want=TestInterceptionServesASandboxFromStandInArchives
+          go test -c -o /var/tmp/grain-intercept.test ./pkg/daemon
+          sudo setcap cap_net_bind_service=+ep /var/tmp/grain-intercept.test
+          GRAIN_GOTEST_LOG=/tmp/intercept.log ./scripts/run-go-tests.sh \
+            /var/tmp/grain-intercept.test -test.v -test.count=1 -test.timeout 15m \
+            -test.run "$want"
+          status=$?
+          if ! grep -q -- "--- PASS: $want" /tmp/intercept.log; then
+            status=1
+          fi
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|--- SKIP:|_test\.go:[0-9]+:|^FAIL' /tmp/intercept.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=package-cache-intercept::$line"
+            done
+            exit "$status"
+          fi
+
+  # Disabled on GitHub-hosted ubuntu-latest runners:
+  #
+  # real-vm boots two concurrent Firecracker/Cloud-Hypervisor microVMs
+  # inside Docker containers (TestGranuleSandboxesAgainstARealDockerBackedVM,
+  # TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently, and
+  # TestTheModelProxiesAreReachableFromInsideARealGuest). It requires a
+  # pre-published guest VM image in GHCR matching ./scripts/granule/guest-inputs.sh
+  # (or ~45 minutes and >30 GB disk to build Granulefile from scratch), plus
+  # nested KVM with at least 16 GiB dedicated RAM and 60 GB disk. Move to a
+  # self-hosted runner with KVM and pre-warmed guest image cache to enable.
+  real-vm:
+    name: real vm
+    needs: [changes]
+    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true' && needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.real-vm == 'true'
+    runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}-real-vm-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Real VM sandbox tests
+        env:
+          GRAIN_REAL_VM_TESTS: "1"
+        run: |
+          ./scripts/run-go-tests.sh go test -v -count=1 -timeout 20m \
+            -run 'TestGranuleSandboxesAgainstARealDockerBackedVM|TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently|TestTheModelProxiesAreReachableFromInsideARealGuest' \
+            ./pkg/orchestrator/
+
+  # Disabled on GitHub-hosted ubuntu-latest runners:
+  #
+  # real-kubernetes boots a multi-node kind cluster with Calico CNI to enforce
+  # NetworkPolicy egress isolation and tests real pod sandboxes and Kubernetes
+  # run-host handoffs (pkg/orchestrator and pkg/cli). Provisioning kind + Calico
+  # + building and loading the sandbox images exceeds standard hosted runner
+  # memory/disk budgets and belongs on a larger or self-hosted runner.
+  real-kubernetes:
+    name: real kubernetes
+    needs: [changes]
+    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true' && needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.real-kubernetes == 'true'
+    runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}-real-kubernetes-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Real Kubernetes sandbox tests
+        env:
+          GRAIN_REAL_K8S_TESTS: "1"
+        run: |
+          ./scripts/run-go-tests.sh go test -v -count=1 -timeout 20m ./pkg/k8s/...

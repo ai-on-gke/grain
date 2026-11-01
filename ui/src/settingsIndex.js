@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { fuzzyScore } from "./fuzzy.js";
+import { isConfigRepoSection } from "./settingsSections.js";
 
 // settingsIndex is what the Settings filter searches
 // (docs/design/settings-panel.md §3.3): one entry per field and per
@@ -37,6 +38,13 @@ export const SETTINGS_INDEX = [
     anchor: "deployment",
     label: "Show closed tasks by default",
     keywords: [],
+  },
+  {
+    id: "settingsLocked",
+    section: "general",
+    anchor: "settings-lock",
+    label: "Lock settings in UI (require config repo PRs)",
+    keywords: ["lock", "read-only", "config repo"],
   },
   {
     id: "upgradeCheckMode",
@@ -773,6 +781,23 @@ export const SETTINGS_INDEX = [
   },
 ];
 
+const SETTING_BY_ID = new Map(
+  SETTINGS_INDEX.filter((e) => !e.card).map((e) => [e.id, e]),
+);
+
+// settingLocation is the Settings section and card anchor that hold a
+// setting key (the keys in GET /api/settings's pendingRestart and
+// unrunnable), or null for a key no section draws.
+export function settingLocation(id) {
+  const entry = SETTING_BY_ID.get(id);
+  if (!entry) return null;
+  return {
+    section: entry.section,
+    anchor: entry.anchor,
+    href: `/settings/${entry.section}#${entry.anchor}`,
+  };
+}
+
 // matchSettings is the filter's answer for a query: the entries whose
 // label, then keywords, fuzzy-match it, best first. Values are never
 // searched (§3.3's decision).
@@ -798,5 +823,13 @@ export function matchSettings(query) {
   const kept = scored.some((x) => x.exact)
     ? scored.filter((x) => x.exact)
     : scored;
-  return kept.sort((a, b) => b.score - a.score).map((x) => x.entry);
+  // A field of a config-repo-only section is still found -- its value is
+  // shown -- but says it is read-only here (configRepo).
+  return kept
+    .sort((a, b) => b.score - a.score)
+    .map((x) =>
+      isConfigRepoSection(x.entry.section)
+        ? { ...x.entry, configRepo: true }
+        : x.entry,
+    );
 }

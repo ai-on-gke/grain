@@ -62,7 +62,9 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "merge:force", Description: "Force-merge a task's pull request past its gate", Dangerous: true},
 	{Scope: "ci:read", Description: "Read grain CI runs, their job logs and artifacts, merge batches and base-branch gates"},
 	{Scope: "ci:write", Description: "Start, re-run and cancel grain CI runs, base-branch and release runs"},
+	{Scope: "tests:write", Description: "Quarantine flaky or failing tests and file their follow-up repair tasks"},
 	{Scope: "notifications:write", Description: "Raise and clear operator notifications"},
+	{Scope: "teams:broadcast", Description: "Post a comment to every active task of the deployment"},
 	{Scope: "dispatch:read", Description: "Read whether dispatch is paused"},
 	{Scope: "dispatch:write", Description: "Pause and resume dispatch, and run a task now"},
 	{Scope: "schedules:read", Description: "Read schedules and what they compose"},
@@ -77,8 +79,10 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "repos:write", Description: "Add and remove repositories, change their settings, create branches"},
 	{Scope: "boards:read", Description: "Read boards"},
 	{Scope: "boards:write", Description: "Create, edit and delete boards"},
-	{Scope: "memory:read", Description: "Read memory documents and release notes"},
-	{Scope: "memory:write", Description: "Write memory documents and release notes"},
+	{Scope: "memory:read", Description: "Read memory and memory documents"},
+	{Scope: "memory:write", Description: "Write memory and memory documents"},
+	{Scope: "release-notes:read", Description: "Read weekly release notes, cluster stats and release versions"},
+	{Scope: "release-notes:write", Description: "Write weekly release notes"},
 	{Scope: "sessions:read", Description: "Read standing sessions and live consoles"},
 	{Scope: "sessions:write", Description: "Create, edit and restart standing sessions, and type into consoles"},
 	{Scope: "caches:read", Description: "Read the CI, package and actions caches"},
@@ -94,7 +98,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "deployment:read", Description: "Read host, sandbox, log, metric and upgrade status"},
 	{Scope: "sandboxes:read", Description: "Read the status of persistent sandboxes (implied by deployment:read)"},
 	{Scope: "deployment:upgrade", Description: "Upgrade grain and its database, or cancel a scheduled upgrade", Dangerous: true},
-	{Scope: "deployment:restart", Description: "Restart grain, and act on persistent sandboxes", Dangerous: true},
+	{Scope: "deployment:restart", Description: "Restart grain, act on persistent sandboxes, and run sandbox probes", Dangerous: true},
 	{Scope: "deployment:reboot", Description: "Reboot or shut down grain's host", Dangerous: true},
 }
 
@@ -120,9 +124,7 @@ type APIPreset struct {
 // apiPresets are the bundles a picker offers first. Each is what one of
 // the per-ability capabilities that used to be filed one at a time asked
 // for (tasks 399, 420, 421, 422, 425), plus the older capabilities
-// whose own tools are kept for compatibility (self-debug, self-upgrade
-// and pipeline-control, which now also grant their preset's routes -- see
-// apiAliasCapabilities).
+// that now also grant their preset's routes (see apiAliasCapabilities).
 var apiPresets = []APIPreset{
 	{Name: "task-admin", Description: "Edit, reorder, retry and close tasks, open and retry their merges, and re-run CI",
 		Scopes: []APIScope{"tasks:read", "tasks:write", "merge:write", "ci:read", "ci:write", "notifications:write"}},
@@ -137,10 +139,18 @@ var apiPresets = []APIPreset{
 			"schedules:read", "schedules:write", "releases:read", "releases:write", "repos:read"}},
 	{Name: "self-debug", Description: "What the self-debug capability grants: read tasks, runs and deployment status",
 		Scopes: []APIScope{"tasks:read", "deployment:read"}},
-	{Name: "self-upgrade", Description: "What the self-upgrade capability grants: read and start upgrades",
+	{Name: "self-upgrade", Description: "What the self-upgrade capability granted: read and start upgrades",
 		Scopes: []APIScope{"deployment:read", "deployment:upgrade"}},
-	{Name: "pipeline-control", Description: "What the pipeline-control capability grants: pause and resume dispatch",
+	{Name: "pipeline-control", Description: "What the pipeline-control capability granted: pause and resume dispatch",
 		Scopes: []APIScope{"dispatch:read", "dispatch:write"}},
+	{Name: "team-broadcast", Description: "What the team-broadcast capability granted: post a comment to every active task",
+		Scopes: []APIScope{"teams:broadcast"}},
+	{Name: "memory", Description: "What the memory capability granted: read and write memory and memory documents",
+		Scopes: []APIScope{"memory:read", "memory:write"}},
+	{Name: "release-notes", Description: "What the release-notes capability granted: read cluster stats and weekly release notes, and publish weekly release notes",
+		Scopes: []APIScope{"release-notes:read", "release-notes:write"}},
+	{Name: "test-quarantine", Description: "What the test-quarantine capability granted: quarantine flaky or failing tests and file follow-up repair tasks",
+		Scopes: []APIScope{"tests:write"}},
 	{Name: ReleaseGateReadCapability, Description: "What a release workflow reads and files: its repository's CI runs " +
 		"and tasks, the persistent sandboxes' status, and its release-notes task",
 		Scopes:    []APIScope{"ci:read", "tasks:read", "sandboxes:read", "tasks:from-template"},
@@ -149,11 +159,44 @@ var apiPresets = []APIPreset{
 
 // apiAliasCapabilities are the older capabilities that are now aliases
 // for a preset: a task holding one is granted that preset's routes as
-// well as the tools it always had, under their old names.
+// well as whatever tools it still has under their old names (none, for
+// one legacyGrantReplacements retires).
 var apiAliasCapabilities = map[string]string{
 	"self-debug":       "self-debug",
 	"self-upgrade":     "self-upgrade",
 	"pipeline-control": "pipeline-control",
+	"team-broadcast":   "team-broadcast",
+	"dispatch-control": "dispatch-control",
+	"memory":           "memory",
+	"release-notes":    "release-notes",
+	"test-quarantine":  "test-quarantine",
+}
+
+// legacyGrantReplacements are the bare capabilities converted to api
+// grants (docs/design/unified-grants.md §4) whose in-process provider is
+// gone: each is written as its api preset wherever a grant is recorded
+// (CanonicalLegacyGrant), and the store migration that retired it
+// rewrote the rows already stored. The bare name stays in
+// apiAliasCapabilities as well, so a grant nothing rewrote -- a
+// repository's own .grain declaration, an older grain/config -- keeps
+// granting what it did.
+var legacyGrantReplacements = map[string]string{
+	"team-broadcast":   APIGrantPrefix + "team-broadcast",
+	"dispatch-control": APIGrantPrefix + "dispatch-control",
+	"pipeline-control": APIGrantPrefix + "pipeline-control",
+	"memory":           APIGrantPrefix + "memory",
+	"release-notes":    APIGrantPrefix + "release-notes",
+	"self-upgrade":     APIGrantPrefix + "self-upgrade",
+	"test-quarantine":  APIGrantPrefix + "test-quarantine",
+}
+
+// CanonicalLegacyGrant is name, or the api grant a retired in-process
+// capability of that name became.
+func CanonicalLegacyGrant(name string) string {
+	if to, ok := legacyGrantReplacements[strings.TrimSpace(name)]; ok {
+		return to
+	}
+	return name
 }
 
 // APIAliasPreset returns the preset name that a bare capability name aliases,
@@ -204,15 +247,16 @@ func IsDangerousAPIScope(scope APIScope) bool {
 // sandboxModelOnlyScopes are non-dangerous scopes that remain model-only
 // (never reachable via the sandbox proxy credential / X-Grain-Channel: sandbox-cli).
 var sandboxModelOnlyScopes = map[APIScope]bool{
-	"dispatch:write": true,
-	"repos:write":    true,
-	"sessions:write": true,
+	"dispatch:write":  true,
+	"repos:write":     true,
+	"sessions:write":  true,
+	"teams:broadcast": true,
 }
 
 // IsSandboxDeniedAPIScope reports whether scope is refused on the sandbox
 // proxy channel (X-Grain-Channel: sandbox-cli): every Dangerous scope, plus
-// model-only scopes (dispatch:write, repos:write, sessions:write, and any
-// deployment:* scope other than deployment:read).
+// model-only scopes (dispatch:write, repos:write, sessions:write,
+// teams:broadcast, and any deployment:* scope other than deployment:read).
 func IsSandboxDeniedAPIScope(scope APIScope) bool {
 	if scope == "" || scope == APIScopeInternal {
 		return true
@@ -430,7 +474,7 @@ func (s APIGrantSet) Allows(scope APIScope, repo string) bool {
 	if repo == "" {
 		return false
 	}
-	return slices.ContainsFunc(s.scopes[scope], func(r string) bool { return strings.EqualFold(r, repo) })
+	return slices.ContainsFunc(s.scopes[scope], func(r string) bool { return SameRepoText(r, repo) })
 }
 
 // Repos is the repositories the set grants scope on, sorted, when it

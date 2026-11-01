@@ -1,0 +1,287 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# GitHub Actions port of .grain/workflows/image.yml.
+#
+# Provides on-demand full image rebuild + container/installer e2e verification
+# (`container-e2e`) and content-addressed sandbox guest cache warming
+# (`guest-cache`).
+#
+# On non-main refs (such as PR branches), `dry_run` defaults to and is enforced
+# as `true` so real registry tags are never published from a PR branch.
+
+name: image
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build everything and push nothing (always true on non-main refs)"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+
+jobs:
+  container-e2e:
+    name: container and installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: ${{ github.workflow }}-container-e2e-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache npm and node_modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Fill the npm cache from the registry
+        run: |
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+          ./scripts/warm-npm-cache.sh ui
+
+      - name: Build the image pair
+        run: |
+          set -euo pipefail
+          docker build -f Dockerfile.k8s-sandbox -t grain-k8s-sandbox:e2e-test .
+          make image IMAGE=grain-e2e:test K8S_SANDBOX_IMAGE=grain-k8s-sandbox:e2e-test
+
+      - name: Run the container e2e suite
+        env:
+          GRAIN_TEST_IMAGE: grain-e2e:test
+        run: |
+          set -euo pipefail
+          go test ./tests/container/... -count=1 -v -timeout 30m 2>&1 | tee /tmp/container.log
+          if grep -q -- "--- SKIP" /tmp/container.log; then
+            grep -- "--- SKIP" /tmp/container.log >&2
+            echo "tests/container skipped a test in a sandbox that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this job is for." >&2
+            exit 1
+          fi
+          if ! grep -q -- "--- PASS" /tmp/container.log; then
+            echo "tests/container passed no test at all, so its green tick would mean nothing." >&2
+            exit 1
+          fi
+
+      - name: Run the installer e2e suite
+        env:
+          GRAIN_TEST_IMAGE: grain-e2e:test
+          GRAIN_INSTALLER_E2E: "1"
+          GRAIN_INSTALLER_TRIXIE_E2E: "1"
+          GRAIN_INSTALLER_HOSTMODE_E2E: "1"
+        run: |
+          set -euo pipefail
+          go test -p 1 ./tests/installer/... -count=1 -v -timeout 30m 2>&1 | tee /tmp/installer.log
+          if grep -q -- "--- SKIP" /tmp/installer.log; then
+            grep -- "--- SKIP" /tmp/installer.log >&2
+            echo "tests/installer skipped a test in a sandbox that has everything it asks for: a skip here is this commit's verdict quietly not existing, which is what this job is for." >&2
+            exit 1
+          fi
+          if ! grep -q -- "--- PASS" /tmp/installer.log; then
+            echo "tests/installer passed no test at all, so its green tick would mean nothing." >&2
+            exit 1
+          fi
+
+  guest-cache:
+    name: sandbox guest cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    concurrency:
+      group: ${{ github.workflow }}-guest-cache-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h
+
+      - name: Resolve release context and dry-run mode
+        env:
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF:-}" in
+            refs/heads/main|refs/heads/candidate|refs/heads/rc/v*|refs/heads/release/v*)
+              is_release_ref=true
+              ;;
+            *)
+              is_release_ref=false
+              ;;
+          esac
+
+          dry_run="${INPUT_DRY_RUN:-}"
+          if [ "$is_release_ref" != "true" ]; then
+            dry_run="true"
+          elif [ -z "$dry_run" ]; then
+            dry_run="false"
+          fi
+          {
+            echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
+            echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"
+            echo "GRAIN_CI_REF=${GH_REF_NAME}"
+            echo "DRY_RUN=${dry_run}"
+          } >> "$GITHUB_ENV"
+          echo "Resolved GRAIN_CI_REF=${GH_REF_NAME} DRY_RUN=${dry_run}"
+
+          if [ "${dry_run}" = "true" ]; then
+            wrapper_dir="${RUNNER_TEMP}/dry-run-docker-bin"
+            mkdir -p "$wrapper_dir"
+            cat > "${wrapper_dir}/docker" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          real_docker=/usr/bin/docker
+          case "${1:-}" in
+            login)
+              echo "[dry-run] skipping docker login" >&2
+              exit 0
+              ;;
+            push)
+              image="${!#}"
+              digest=$("$real_docker" image inspect "$image" --format '{{index .RepoDigests 0}}' 2>/dev/null | sed -n 's/.*@\(sha256:[0-9a-f]\{64\}\).*/\1/p' | head -n 1 || true)
+              if [ -z "$digest" ]; then
+                id=$("$real_docker" image inspect "$image" --format '{{.Id}}' 2>/dev/null | sed -n 's/.*\(sha256:[0-9a-f]\{64\}\).*/\1/p' | head -n 1 || true)
+                digest="${id:-sha256:0000000000000000000000000000000000000000000000000000000000000000}"
+              fi
+              echo "[dry-run] skipping docker push $*" >&2
+              echo "dry-run: digest: ${digest} size: 0"
+              exit 0
+              ;;
+            buildx)
+              if [ "${2:-}" = "imagetools" ] && [ "${3:-}" = "create" ]; then
+                echo "[dry-run] skipping docker $*" >&2
+                exit 0
+              fi
+              ;;
+          esac
+          exec "$real_docker" "$@"
+          EOF
+            chmod +x "${wrapper_dir}/docker"
+            echo "${wrapper_dir}" >> "$GITHUB_PATH"
+          fi
+
+      - name: Authenticate to Google Cloud (WIF)
+        if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+
+      - name: Configure Artifact Registry Docker authentication
+        if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
+
+      - name: Configure package-publish credentials
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
+          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
+          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" = "true" ]; then
+            {
+              echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
+              echo "PACKAGE_PUBLISH_USERNAME=${PUBLISH_USERNAME}"
+              echo "PACKAGE_PUBLISH_TOKEN=dry-run-token"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+          token="${GHCR_PAT:-}"
+          username="${PUBLISH_USERNAME}"
+          if [ -z "$token" ]; then
+            case "${RELEASE_IMAGE_REPO}" in
+              bwsalmon/*)
+                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
+                exit 1
+                ;;
+              *)
+                token="${FALLBACK_TOKEN}"
+                username="${GITHUB_ACTOR}"
+                ;;
+            esac
+          fi
+          echo "::add-mask::${token}"
+          {
+            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
+            echo "PACKAGE_PUBLISH_USERNAME=${username}"
+            echo "PACKAGE_PUBLISH_TOKEN=${token}"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish the sandbox guest for this commit's inputs
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Running guest-cache in dry-run mode (builds/resolves guest and pushes nothing)"
+            bash ./scripts/release-images.sh --dry-run guest-cache
+            bash ./scripts/release-images.sh guest-cache
+          else
+            bash ./scripts/release-images.sh guest-cache
+          fi

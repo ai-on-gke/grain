@@ -42,15 +42,12 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
@@ -207,12 +204,6 @@ func OfferedCapabilities() []Capability {
 			Description: "Read bounded controller host, sandbox, and deployment-state health without host shell or sandbox network access"},
 		{ID: "self-repair", Name: "Self repair",
 			Description: "Let this task run commands on grain's own host -- restart services, edit config, call the grain CLI -- each one needing a live reply in the task's chat before it runs"},
-		{ID: selfupgrade.CapabilityName, Name: "Self upgrade",
-			Description: selfupgrade.Description},
-		{ID: "pipeline-control", Name: "Pipeline control",
-			Description: "Emergency controls to pause or resume automated merges and pipeline dispatch on repositories"},
-		{ID: dispatchcontrol.CapabilityName, Name: "Dispatch control",
-			Description: dispatchcontrol.Description},
 		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
 			Description: prioritydispatch.Description},
 		{ID: durable.CapabilityName, Name: "Durable",
@@ -221,12 +212,6 @@ func OfferedCapabilities() []Capability {
 			Description: "Let this task push any branch or tag of the repositories it may write -- the default branch, force-pushes and deletions included -- rather than only its own task branch. For release jobs"},
 		{ID: "bootstrap-playbooks", Name: "Bootstrap playbooks",
 			Description: "Let this task read grain's own bootstrap playbooks -- the runbooks for setting up GCP service accounts, the primary GitHub connection, CloudRun-based IAP access, and test repos -- so it can walk whoever is on the other end of this chat through one of them"},
-		{ID: "memory", Name: "Memory",
-			Description: "Let this task write down what grain has learned about working here -- notes added to the prompt of every run dispatched afterwards"},
-		{ID: "release-notes", Name: "Release notes",
-			Description: "Let this task read how much work this deployment has done over a week -- pull requests merged, tasks completed, runs, and the same counts per repository -- and publish that week's release notes, shown in the UI and exported to the state repository"},
-		{ID: teambroadcast.CapabilityName, Name: "Team broadcast",
-			Description: teambroadcast.Description},
 		{ID: "github-sandbox", Name: "GitHub sandbox",
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
 		{ID: "console", Name: "Interactive console",
@@ -236,8 +221,6 @@ func OfferedCapabilities() []Capability {
 		// repository's tasks itself (pkg/capability/grainci's package
 		// doc). Every place a capability is chosen refuses it with
 		// grainci.Refusal, by way of capabilityRefusal.
-		{ID: "test-quarantine", Name: "Test quarantine",
-			Description: "Quarantine flaky or failing tests and file follow-up repair tasks"},
 		{ID: readissues.CapabilityName, Name: "Read issues",
 			Description: "Let this task read issues and comments from GitHub"},
 		{ID: dbaccess.CapabilityDBRead, Name: "Grain DB read",
@@ -1007,6 +990,11 @@ type Config struct {
 	// nil-means-unavailable contract PullRequests and Sandboxes above
 	// already give.
 	SandboxRecreate SandboxRecreator
+	// SandboxProbe, when set, is what POST /api/sandbox-probe builds a
+	// throwaway sandbox through (sandbox_probe.go): pkg/daemon's adapter
+	// over orchestrator.ProbeSandbox and the daemon's own backend. nil
+	// answers 404, the contract SandboxRecreate above gives.
+	SandboxProbe SandboxProber
 	// StandingSandboxes, when set, reports the standing sandboxes the
 	// daemon's reconcile loop is supervising, for GET /api/sandboxes'
 	// standingSandboxes -- pkg/cli/daemon.go's adapter over the same
@@ -1241,6 +1229,13 @@ type Config struct {
 	// boundaries and returns an actionable warning suggesting
 	// -sandbox-image-mirror when the cluster cannot pull the image.
 	CheckClusterImageConnectivity func(ctx context.Context, imageRef string) error
+	// K8sGranuleImage, when set, returns the guest image the daemon
+	// creates kubernetes-granule pods from under cfg -- its own stamp,
+	// mirrored into cfg's SandboxImageMirror when one is set -- which is
+	// the image the Settings pane probes for its Granule VM image
+	// warning. nil probes cfg's own k8s-granule image, or this UI's
+	// version-derived default, mirrored the same way.
+	K8sGranuleImage func(cfg model.Config) string
 	// InspectImageLabels, when set, reads an image's OCI labels -- how
 	// the Settings pane checks a custom sandbox image's contract
 	// (sandboximage.CheckCustomImage). nil reports every custom image's
@@ -1408,4 +1403,9 @@ type StateRepoSyncFailure struct {
 	// Repo names the repository the settings are not reaching, for the
 	// sentence ("not exported to grain/config since ...").
 	Repo string `json:"repo,omitempty"`
+	// External is set when Repo is an external config repository, which
+	// grain only reads from: what is failing there is configuration
+	// merged in that repository not reaching this deployment, not the
+	// UI's settings failing to be exported (UI settings are read-only).
+	External bool `json:"external,omitempty"`
 }

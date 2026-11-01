@@ -39,6 +39,18 @@ one). The daemon's gate then:
    task, a note in that task's conversation, signed by grain on behalf of
    the run.
 
+A repository off the default git host is `host/owner/name`. In a
+`/api/repos/{owner}/{name}/...` path its `{owner}` is `host/owner`
+escaped into one segment, as the UI writes it:
+`/api/repos/git.forge.example%2Fexperimental/grain/releases`. The
+unescaped `/api/repos/<host>/<owner>/<name>/...` is read as that same
+route when no other matches (a first segment holding a `.` or a `:` is
+a host, as `model.ParseRepo` reads one). The gate reads every
+repository a call names -- in its path, a `repo` in its body, or a
+`?repo=` -- the way the deployment spells it, so an SSH remote, a URL
+or another capitalisation matches the grant naming that repository.
+Text that is not a repository is refused with 400.
+
 The header can only narrow a request. A request without it is whatever
 the access gate already let in, so anyone able to send the header could
 also have left it off.
@@ -116,7 +128,9 @@ every `DELETE`.
 | `merge:force` | force-merge past the gate | yes |
 | `ci:read` | read CI runs (job logs included), artifacts, merge batches, base-branch gates | |
 | `ci:write` | start, re-run and cancel CI runs, base-branch and release runs | |
+| `tests:write` | quarantine flaky or failing tests (`POST /api/tests/quarantine` and `grain quarantine`) and file held follow-up repair tasks | |
 | `notifications:write` | raise and clear operator notifications (`POST /api/notifications`, `/{id}/clear`); acknowledging and Investigate are a person's | no |
+| `teams:broadcast` | post a comment to every active task (`POST /api/deployment/broadcast`), un-parking the ones awaiting a reply; signed as the broadcasting task, and model-only (never on the sandbox channel) | |
 | `dispatch:read` | read whether dispatch is paused | |
 | `dispatch:write` | pause and resume dispatch, run a task now | |
 | `schedules:read` | read schedules and what they compose | |
@@ -131,8 +145,10 @@ every `DELETE`.
 | `repos:write` | add and remove repositories, change their settings, create branches | |
 | `boards:read` | read boards | |
 | `boards:write` | create, edit and delete boards | |
-| `memory:read` | read memory documents and release notes | |
-| `memory:write` | write memory documents and release notes | |
+| `memory:read` | read memory documents | |
+| `memory:write` | write memory documents | |
+| `release-notes:read` | read release notes and weekly cluster stats | |
+| `release-notes:write` | write release notes | |
 | `sessions:read` | read standing sessions and live consoles | |
 | `sessions:write` | edit standing sessions (subject to the rails) | |
 | `caches:read` | read the CI, package and actions caches | |
@@ -148,7 +164,7 @@ every `DELETE`.
 | `deployment:read` | read host, sandbox, log, metric and upgrade status | |
 | `sandboxes:read` | read the persistent sandboxes' status (`GET /api/persistent-sandboxes`); `deployment:read` implies it | |
 | `deployment:upgrade` | upgrade grain and its database, or cancel a scheduled upgrade | yes |
-| `deployment:restart` | restart grain, act on persistent sandboxes | yes |
+| `deployment:restart` | restart grain, act on persistent sandboxes, run sandbox probes | yes |
 | `deployment:reboot` | reboot or shut down the host | yes |
 
 `internal` marks grain's own plumbing, which no agent can ever reach.
@@ -169,13 +185,37 @@ table only so the table stays total.
 | `self-debug` | `tasks:read`, `deployment:read` |
 | `self-upgrade` | `deployment:read`, `deployment:upgrade` |
 | `pipeline-control` | `dispatch:read`, `dispatch:write` |
+| `team-broadcast` | `teams:broadcast` |
+| `memory` | `memory:read`, `memory:write` |
+| `release-notes` | `release-notes:read`, `release-notes:write` |
+| `test-quarantine` | `tests:write` |
 | `release-gate-read` | `ci:read`, `tasks:read`, `sandboxes:read`, `tasks:from-template` limited to the `release-notes` template |
 
-The `self-debug`, `self-upgrade` and `pipeline-control` capabilities are
-now aliases. A task holding any of them is also served its preset's
-routes, and keeps the tools it always had under their old names
-(`list_grain_tasks`, `read_grain_metrics`, `start_upgrade`,
-`pause_pipeline`, ...).
+The `self-debug` capability is now an alias. A task holding it is also
+served its preset's routes, and keeps the tools it always had under
+their old names (`list_grain_tasks`, `read_grain_metrics`, ...).
+
+`team-broadcast`, `dispatch-control`, `pipeline-control`, `memory`,
+`release-notes`, `self-upgrade` and `test-quarantine` are aliases
+too, but their
+in-process capabilities are retired (docs/design/unified-grants.md §4):
+they have no tools of their own any longer, and a run holding one is
+served its preset's `api_*` tools and `grain` CLI subcommands instead (`api_deployment_broadcast`
+for `broadcast_team_message`; the pipeline-pause, run-now and defer
+routes for `pause_pipeline`, `resume_pipeline`, `run_task_now` and
+`defer_task`; for pipeline-control, the pipeline-pause routes, which an
+agent calls as itself, so it lifts only a pause it took and never an
+upgrade's hold; for `memory` and `release-notes`, the `/api/memory*` and
+`/api/release-notes*` routes and `grain memory` / `grain release-notes`;
+for `self-upgrade`, `api_start_upgrade` and `api_cancel_scheduled_upgrade`
+plus `GET /api/upgrade` via `grain api`; for `test-quarantine`,
+`POST /api/tests/quarantine` (`api_quarantine_test`) and `grain quarantine`). Every place a grant is recorded writes it as
+`api:<preset>` (`model.CanonicalLegacyGrant`), importing a grain/config
+does the same, and schema migrations 67, 68, 69, 71, 72, 75 and 76 rewrote the grants
+already stored -- tasks, templates, schedules, the default capability
+lists and the standing sessions. The bare name keeps granting the preset
+wherever it is still written, such as a repository's own `.grain`
+declarations.
 
 The per-ability capabilities that were queued separately are presets over
 this mechanism rather than new tool plumbing:

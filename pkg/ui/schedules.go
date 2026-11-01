@@ -43,13 +43,14 @@ func (e *scheduleNotFoundError) Error() string { return "no schedule " + e.ID }
 // depends on Kind,
 // the same sum-type-as-struct shape model.Recurrence itself uses.
 type Recurrence struct {
-	Kind          string `json:"kind"`
-	EveryNHours   int    `json:"everyNHours,omitempty"`
-	EveryNMinutes int    `json:"everyNMinutes,omitempty"`
-	TimeOfDay     string `json:"timeOfDay,omitempty"`
-	Weekday       string `json:"weekday,omitempty"`
-	DayOfMonth    int    `json:"dayOfMonth,omitempty"`
-	TimeZone      string `json:"timeZone,omitempty"`
+	Kind              string                          `json:"kind"`
+	EveryNHours       int                             `json:"everyNHours,omitempty"`
+	EveryNMinutes     int                             `json:"everyNMinutes,omitempty"`
+	TimeOfDay         string                          `json:"timeOfDay,omitempty"`
+	Weekday           string                          `json:"weekday,omitempty"`
+	DayOfMonth        int                             `json:"dayOfMonth,omitempty"`
+	TimeZone          string                          `json:"timeZone,omitempty"`
+	GitHubWorkflowRun *model.GitHubWorkflowRunTrigger `json:"githubWorkflowRun,omitempty"`
 }
 
 var weekdayNames = [...]string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
@@ -95,6 +96,8 @@ func recurrenceFrom(r model.Recurrence) Recurrence {
 	case model.RecurrenceMonthly:
 		out.TimeOfDay = formatTimeOfDay(r.TimeOfDay)
 		out.DayOfMonth = r.DayOfMonth
+	case model.RecurrenceGitHubWorkflowRun:
+		out.GitHubWorkflowRun = r.GitHubWorkflowRun
 	}
 	return out
 }
@@ -107,11 +110,12 @@ func recurrenceFrom(r model.Recurrence) Recurrence {
 // minute through the API any more than through the editor.
 func parseRecurrence(req Recurrence) (model.Recurrence, error) {
 	r := model.Recurrence{
-		Kind:          model.RecurrenceKind(req.Kind),
-		EveryNHours:   req.EveryNHours,
-		EveryNMinutes: req.EveryNMinutes,
-		DayOfMonth:    req.DayOfMonth,
-		TimeZone:      strings.TrimSpace(req.TimeZone),
+		Kind:              model.RecurrenceKind(req.Kind),
+		EveryNHours:       req.EveryNHours,
+		EveryNMinutes:     req.EveryNMinutes,
+		DayOfMonth:        req.DayOfMonth,
+		TimeZone:          strings.TrimSpace(req.TimeZone),
+		GitHubWorkflowRun: req.GitHubWorkflowRun,
 	}
 	if req.TimeOfDay != "" {
 		minutes, err := parseTimeOfDay(req.TimeOfDay)
@@ -196,6 +200,7 @@ type Schedule struct {
 	// "ack", "close", or "" for close -- the template's while TemplateID
 	// is set, kept in sync like the content fields around it.
 	NothingNeededAction string `json:"nothingNeededAction,omitempty"`
+	KeepRunning         bool   `json:"keepRunning,omitempty"`
 	// Model is the model every firing asks for (model.Schedule.Model):
 	// this schedule's own choice, which beats its template's. Empty for
 	// a schedule that chose none.
@@ -433,6 +438,7 @@ func scheduleFrom(s model.Schedule, templateName, suiteName string) Schedule {
 		AutoApproveProposals: s.AutoApproveProposals,
 		NetworkAccess:        string(s.NetworkAccess),
 		NothingNeededAction:  string(s.NothingNeededAction),
+		KeepRunning:          s.KeepRunning,
 		Model:                s.Model,
 		CustomFields:         customFieldValues(s.CustomFields),
 		Capabilities:         []string{},
@@ -702,6 +708,8 @@ type CreateScheduleRequest struct {
 	// content, refused like NetworkAccess when TemplateID or SuiteID is
 	// given.
 	NothingNeededAction string `json:"nothingNeededAction"`
+	KeepRunning         bool   `json:"keepRunning,omitempty"`
+	KeepRunningSnake    *bool  `json:"keep_running,omitempty"`
 	// Model is the model every firing asks for (model.Schedule.Model),
 	// or empty to take the template's, and failing that the team's
 	// default. Not content: it is this schedule's own, given alongside
@@ -960,6 +968,7 @@ func (c *Client) scheduleFromRequest(ctx context.Context, req CreateScheduleRequ
 			AutoApproveProposals: req.AutoApproveProposals,
 			NetworkAccess:        model.NetworkAccess(req.NetworkAccess),
 			NothingNeededAction:  nothingNeeded,
+			KeepRunning:          req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
 			Reads:                reads,
 			Writes:               writes,
 			Grants:               grants,
@@ -1075,6 +1084,13 @@ func (c *Client) templateNameFor(ctx context.Context, id string) string {
 // distinction UpdateSchedule already makes one field along, where a
 // resent recurrence identical to the stored one is not a cadence edit
 // and must not push the next firing out.
+func updateKeepRunningChoice(req UpdateScheduleRequest) *bool {
+	if req.KeepRunning != nil {
+		return req.KeepRunning
+	}
+	return req.KeepRunningSnake
+}
+
 func refuseSystemScheduleContentEdit(sched model.Schedule, req UpdateScheduleRequest) error {
 	if sched.TemplateID == nil || !model.IsSystemTemplateID(*sched.TemplateID) {
 		return nil
@@ -1086,6 +1102,7 @@ func refuseSystemScheduleContentEdit(sched model.Schedule, req UpdateScheduleReq
 	if sched.Target != (model.RepoRef{}) {
 		repo = sched.Target.String()
 	}
+	keepRunning := updateKeepRunningChoice(req)
 	changes := func(given *string, current string) bool { return given != nil && *given != current }
 	refused := ""
 	switch {
@@ -1108,6 +1125,8 @@ func refuseSystemScheduleContentEdit(sched model.Schedule, req UpdateScheduleReq
 		refused = "which repository it targets"
 	case req.AutoMerge != nil && *req.AutoMerge != sched.AutoMerge:
 		refused = "whether its work merges on its own"
+	case keepRunning != nil && *keepRunning != sched.KeepRunning:
+		refused = "whether its tasks keep running"
 	case changes(req.TemplateID, *sched.TemplateID), req.SuiteID != nil:
 		refused = "what it fires"
 	}
@@ -1141,6 +1160,7 @@ type scheduleContentOffered struct {
 	NetworkAccess *string
 
 	NothingNeededAction *string
+	KeepRunning         *bool
 }
 
 // contentOfferedOnCreate is req's content fields, in the shape
@@ -1175,6 +1195,10 @@ func contentOfferedOnCreate(req CreateScheduleRequest) scheduleContentOffered {
 	if strings.TrimSpace(req.NothingNeededAction) != "" {
 		out.NothingNeededAction = &req.NothingNeededAction
 	}
+	if req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake) {
+		on := true
+		out.KeepRunning = &on
+	}
 	return out
 }
 
@@ -1192,6 +1216,7 @@ func contentOfferedOnUpdate(req UpdateScheduleRequest) scheduleContentOffered {
 		NetworkAccess: req.NetworkAccess,
 
 		NothingNeededAction: req.NothingNeededAction,
+		KeepRunning:         updateKeepRunningChoice(req),
 	}
 }
 
@@ -1258,6 +1283,9 @@ func refuseIgnoredScheduleContent(kind, name string, effective model.Schedule, g
 	}
 	if given.NothingNeededAction != nil && strings.TrimSpace(*given.NothingNeededAction) != current.NothingNeededAction {
 		refused = append(refused, "nothingNeededAction")
+	}
+	if given.KeepRunning != nil && *given.KeepRunning != current.KeepRunning {
+		refused = append(refused, "keepRunning")
 	}
 	if len(refused) == 0 {
 		return nil
@@ -1360,6 +1388,7 @@ func scheduleContentFromTemplate(t model.Template) model.Schedule {
 		TemplateID:    &t.ID,
 
 		NothingNeededAction: t.NothingNeededAction,
+		KeepRunning:         t.KeepRunning,
 	}
 }
 
@@ -1423,6 +1452,8 @@ type UpdateScheduleRequest struct {
 	// setting; an empty string sets it back to close. Content, refused
 	// while a template or a suite decides it.
 	NothingNeededAction *string `json:"nothingNeededAction,omitempty"`
+	KeepRunning         *bool   `json:"keepRunning,omitempty"`
+	KeepRunningSnake    *bool   `json:"keep_running,omitempty"`
 	// Model edits CreateScheduleRequest.Model; an empty string clears
 	// the schedule's own choice. Allowed while a template is attached --
 	// it is not content -- and on one of grain's own schedules, whose
@@ -1753,9 +1784,9 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		} else if attaching != nil {
 			content := scheduleContentFromTemplate(*attaching)
 			s.Title, s.Body, s.AutoMerge, s.Reads, s.Writes, s.Grants, s.CustomFields,
-				s.NetworkAccess, s.NothingNeededAction, s.TemplateID =
+				s.NetworkAccess, s.NothingNeededAction, s.KeepRunning, s.TemplateID =
 				content.Title, content.Body, content.AutoMerge, content.Reads, content.Writes,
-				content.Grants, content.CustomFields, content.NetworkAccess, content.NothingNeededAction, content.TemplateID
+				content.Grants, content.CustomFields, content.NetworkAccess, content.NothingNeededAction, content.KeepRunning, content.TemplateID
 		} else {
 			// req.TemplateID != nil here means the empty-string case:
 			// detach, keeping whatever content is already on the row and
@@ -1802,6 +1833,9 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			}
 			if req.NothingNeededAction != nil {
 				s.NothingNeededAction = nothingNeeded
+			}
+			if kr := updateKeepRunningChoice(req); kr != nil && s.TemplateID == nil {
+				s.KeepRunning = *kr
 			}
 		}
 		// Target and Base are applied on their own, template attached or

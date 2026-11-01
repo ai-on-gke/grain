@@ -186,6 +186,22 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 	}
 	resetPullRequestPolls(*task)
 	full := len(opt.Jobs) == 0 && opt.Workflow == "" && !opt.Recheck
+	if full && !grainci.RequiredFor(*task.Target) && c.Store != nil {
+		repoCfg, err := c.Store.GetRepoConfig(ctx, *task.Target)
+		if err != nil {
+			return ci.Run{}, err
+		}
+		if !grainci.RepoUsesGrainCI(repoCfg, *task.Target) {
+			rulesRequire := false
+			if rules, rerr := c.Store.MergeRulesOf(ctx, *task.Target); rerr == nil && !rules.Empty() {
+				rulesRequire = rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()
+			}
+			explicitDisabled := repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone)
+			if !rulesRequire && (explicitDisabled || !grainci.GrantedExplicitly(task.Grants)) {
+				return ci.Run{}, forbiddenErrorf("%s", ciNotEnabledMessage(*task.Target))
+			}
+		}
+	}
 	previous, err := c.Store.GetObservation(ctx, id)
 	if err != nil {
 		return ci.Run{}, err
@@ -1185,6 +1201,16 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// A daemon whose CI service is not up yet (ci.ErrNotUp) has an
+	// engine that cannot answer, not one with no runs: Find on it is an
+	// empty page, which /ci showed as "No CI runs yet" and which blanked
+	// a table already on screen at its next poll. It is the same 503
+	// GET /api/ci/runs/{id} answers, so the pane keeps what it had and
+	// says why it cannot read more.
+	if !ci.IsUp(runner) {
+		writeCINotUp(w)
+		return
+	}
 	filter, err := ciRunFilterFrom(r.URL.Query(), time.Now())
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1383,29 +1409,41 @@ func writeCIStartQueued(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
 	runner := s.tasks.Config.CI
+	if runner != nil {
+		if run, ok := runner.Get(id); ok {
+			// What a job kept is not a stored column of the run (see
+			// ci.JobRun.Artifacts): it is a directory the daemon sweeps, so the
+			// answer is read at the moment the run is served rather than
+			// remembered from when it finished.
+			run = runner.WithArtifacts(r.Context(), run)
+			writeJSON(w, http.StatusOK, run)
+			return
+		}
+	}
+	if s.tasks != nil && s.tasks.Store != nil {
+		if runID, err := strconv.ParseInt(strings.TrimSpace(id), 10, 64); err == nil && runID > 0 {
+			if ghJobs, err := s.tasks.Store.ListGitHubCIJobs(r.Context(), model.GitHubCIFilter{RunID: runID}); err == nil && len(ghJobs) > 0 {
+				if run, ok := ci.GitHubCIRun(ghJobs); ok {
+					writeJSON(w, http.StatusOK, run)
+					return
+				}
+			}
+		}
+	}
 	if runner == nil {
 		writeError(w, http.StatusNotFound, fmt.Errorf("this deployment has no grain CI wired"))
 		return
 	}
-	run, ok := runner.Get(r.PathValue("id"))
-	if !ok {
-		// A daemon whose CI service is not up yet remembers nothing, so
-		// its false is not "forgotten": saying so would end every wait
-		// that was polling this run across a restart (grain/task-1863).
-		if !ci.IsUp(runner) {
-			writeCINotUp(w)
-			return
-		}
-		writeError(w, http.StatusNotFound, fmt.Errorf("no CI run %q -- a run is remembered for a while and then forgotten", r.PathValue("id")))
+	// A daemon whose CI service is not up yet remembers nothing, so
+	// its false is not "forgotten": saying so would end every wait
+	// that was polling this run across a restart (grain/task-1863).
+	if !ci.IsUp(runner) {
+		writeCINotUp(w)
 		return
 	}
-	// What a job kept is not a stored column of the run (see
-	// ci.JobRun.Artifacts): it is a directory the daemon sweeps, so the
-	// answer is read at the moment the run is served rather than
-	// remembered from when it finished.
-	run = runner.WithArtifacts(r.Context(), run)
-	writeJSON(w, http.StatusOK, run)
+	writeError(w, http.StatusNotFound, fmt.Errorf("no CI run %q -- a run is remembered for a while and then forgotten", id))
 }
 
 // handleListCIRunArtifacts answers "what did this run leave behind" --

@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -483,9 +482,8 @@ func (s *Server) memoryWriter(r *http.Request, id, kind, repo string) (model.Pri
 }
 
 // requireMemoryGrant refuses a write attributed to task id's run unless
-// that task holds the memory capability. Every memory grant reaches
-// every scope: there is no team memory agent writing only its own
-// team's layer any more.
+// that task holds the memory:write scope (via api:memory, api:memory:write,
+// or the bare memory alias) for repo.
 func (c *Client) requireMemoryGrant(ctx context.Context, id, repo string) error {
 	if call, ok := agentCallFromContext(ctx); ok && call.external != nil {
 		if call.grants.Has("memory:write") {
@@ -500,15 +498,10 @@ func (c *Client) requireMemoryGrant(ctx context.Context, id, repo string) error 
 	if task == nil {
 		return forbiddenErrorf("task %s does not exist, so its run may not write memory", id)
 	}
-	for _, g := range task.Grants {
-		if g.Capability == memory.CapabilityName {
-			return nil
-		}
-	}
 	if APIGrantsOf(grantNames(task.Grants)).Allows("memory:write", strings.TrimSpace(repo)) {
 		return nil
 	}
-	return forbiddenErrorf("task %s does not hold the %q capability, so its run may not write memory", id, memory.CapabilityName)
+	return forbiddenErrorf("task %s does not hold the memory:write scope (api:memory), so its run may not write memory", id)
 }
 
 // handleListMemories answers GET /api/memory. An old client's ?team= is

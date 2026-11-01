@@ -198,6 +198,7 @@ var booleanKeys = map[string]bool{
 	"enabled":                true,
 	"require-approval":       true,
 	"interactive":            true,
+	"keep-running":           true,
 }
 
 // declKinds is the three of them, built from pkg/declschema so the keys,
@@ -356,7 +357,7 @@ func dumpRowsOf(dir, table string) ([]map[string]any, bool, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			// settings/capabilities.yml may still speak for it.
-			return overlayCapabilities(dir, table, nil, false)
+			return overlaySettingsFiles(dir, table, nil, false)
 		}
 		return nil, false, fmt.Errorf("staterepo: reading %s: %w", path, err)
 	}
@@ -366,7 +367,18 @@ func dumpRowsOf(dir, table string) ([]map[string]any, bool, error) {
 	}
 	// The columns settings/capabilities.yml projects onto read as the
 	// file says (capabilities_file.go).
-	return overlayCapabilities(dir, table, rows, true)
+	return overlaySettingsFiles(dir, table, rows, true)
+}
+
+// overlaySettingsFiles puts the settings files that project onto
+// columns -- settings/capabilities.yml and settings/new-task-form.yml --
+// over the rows tables/ holds.
+func overlaySettingsFiles(dir, table string, rows []map[string]any, present bool) ([]map[string]any, bool, error) {
+	rows, present, err := overlayCapabilities(dir, table, rows, present)
+	if err != nil {
+		return nil, false, err
+	}
+	return overlayNewTaskForm(dir, table, rows, present)
 }
 
 // declDocument is one settings file, parsed: the entries in the order
@@ -538,7 +550,10 @@ func exportDeclarations(ctx context.Context, db querier, dir string) error {
 			return err
 		}
 	}
-	return exportCapabilities(ctx, db, dir)
+	if err := exportCapabilities(ctx, db, dir); err != nil {
+		return err
+	}
+	return exportNewTaskForm(ctx, db, dir)
 }
 
 // declDocumentFor renders one kind's whole file.
@@ -781,6 +796,26 @@ func recurrenceNode(row map[string]any) (string, *yaml.Node, error) {
 	case model.RecurrenceMonthly:
 		if !hoursSet && !minutesSet && atSet && !weekdaySet && daySet && timeOfDay(at) != "" {
 			return "monthly", block(key("day"), number(day), key("at"), clock(at)), nil
+		}
+	default:
+		if recKind, ghTrig := model.ParseStoredRecurrenceKind(kind); recKind == model.RecurrenceGitHubWorkflowRun &&
+			ghTrig != nil && !hoursSet && !minutesSet && !atSet && !weekdaySet && !daySet {
+			inner := block(key("workflow"), str(ghTrig.Workflow))
+			if len(ghTrig.Conclusions) > 0 {
+				seq := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+				for _, c := range ghTrig.Conclusions {
+					seq.Content = append(seq.Content, str(c))
+				}
+				inner.Content = append(inner.Content, key("conclusions"), seq)
+			}
+			if len(ghTrig.Branches) > 0 {
+				seq := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+				for _, b := range ghTrig.Branches {
+					seq.Content = append(seq.Content, str(b))
+				}
+				inner.Content = append(inner.Content, key("branches"), seq)
+			}
+			return "trigger", block(key("github_workflow_run"), inner), nil
 		}
 	}
 	out := block()
@@ -1251,8 +1286,23 @@ func decodeRecurrence(path, id string, node *yaml.Node, row map[string]any) erro
 			row["day_of_month"] = v
 		}
 		return nil
+	case "trigger":
+		ghNode, ok := inside["github_workflow_run"]
+		if !ok {
+			ghNode, ok = inside["github-workflow-run"]
+		}
+		if !ok || ghNode.Kind != yaml.MappingNode {
+			return fail("`trigger` needs `github_workflow_run`")
+		}
+		var trig model.GitHubWorkflowRunTrigger
+		if err := ghNode.Decode(&trig); err != nil {
+			return fail(err.Error())
+		}
+		r := model.Recurrence{Kind: model.RecurrenceGitHubWorkflowRun, GitHubWorkflowRun: &trig}
+		row["recurrence_kind"] = r.StoredKind()
+		return nil
 	}
-	return fail("a cadence is one of `every`, `daily`, `weekly`, `monthly` or `recurrence`")
+	return fail("a cadence is one of `every`, `daily`, `weekly`, `monthly`, `trigger` or `recurrence`")
 }
 
 func minutesOfDay(at string) (int64, error) {
@@ -1313,7 +1363,11 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 		for _, entry := range node.Content {
 			row := map[string]any{parent: id, "via": string(model.GrantByLabel), "folder": nil}
 			if entry.Kind == yaml.ScalarNode {
-				row["capability"] = entry.Value
+				// A retired in-process capability is read as the api
+				// grant it became (model.CanonicalLegacyGrant), so a
+				// grain/config exported before the store migration that
+				// rewrote it imports as what the store now holds.
+				row["capability"] = model.CanonicalLegacyGrant(entry.Value)
 				out = append(out, row)
 				continue
 			}
@@ -1325,6 +1379,9 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 			capability, ok := named["capability"]
 			if !ok {
 				return nil, fail("a grant is a capability, or {capability, via, folder}")
+			}
+			if name, isText := capability.(string); isText {
+				capability = model.CanonicalLegacyGrant(name)
 			}
 			row["capability"] = capability
 			if via, ok := named["via"]; ok {

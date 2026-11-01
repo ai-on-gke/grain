@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,14 +35,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -397,6 +395,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	}
 	if task.Target != nil {
 		prompt += pairedBranchesSection(history.PairedBranches)
+		prompt += relayedReviewThreadsSection(task)
 	}
 	// Said out loud because neither half is discoverable from the tools
 	// alone. Nothing stops a run pushing repeatedly -- the branch is its
@@ -654,6 +653,9 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	}
 	if history.BaseIncident != "" {
 		prompt += "\n\n" + strings.TrimRight(history.BaseIncident, "\n")
+	}
+	if task.Target != nil {
+		prompt += relayedReviewThreadsSection(task)
 	}
 	if task.Target != nil && !grainci.Granted(task.Grants) && (history.Repair || model.FixesBaseBranch(task)) {
 		prompt += repairCISection()
@@ -1167,11 +1169,11 @@ func resolvePromptExtension(ctx context.Context, store *model.Store, deployment 
 // made to read any of it. now is what turns a row's timestamp into that
 // age.
 //
-// Only for a task holding the memory capability, because reading a
-// document is one of that capability's tools (pkg/mcp's
-// read_memory_document): telling every other run that a note it has no
-// way to open exists would be a line of prompt whose only possible
-// effect is to send a run looking for a tool it does not have.
+// Only for a task holding the memory:read scope (via api:memory,
+// api:memory:read, or the bare memory alias): telling every other run
+// that a note it has no way to open exists would be a line of prompt
+// whose only possible effect is to send a run looking for a tool it does
+// not have.
 func resolveMemory(ctx context.Context, store *model.Store, task model.Task, now time.Time) (string, error) {
 	deployment, err := store.GetMemory(ctx, nil)
 	if err != nil {
@@ -1185,7 +1187,7 @@ func resolveMemory(ctx context.Context, store *model.Store, task model.Task, now
 		}
 	}
 	text := model.MemoryFor(memoryText(deployment), memoryText(repoMemory))
-	if !hasGrant(task, memory.CapabilityName) {
+	if !hasAPIScope(task, "memory:read") {
 		return text, nil
 	}
 	scopes := []model.MemoryScope{{Repo: nil}}
@@ -1477,12 +1479,12 @@ func grainCLISection(task model.Task) string {
 
 // grainCLIGrants is the `grain` commands each of grain's own capability
 // grants unlocks, in the order grainCLIGrantBullets lists them. A grant
-// whose tools stay model tools (dispatch-control, self-upgrade, db-write,
-// team-broadcast) is not here: the tool roster already names those.
+// whose tools stay model tools (db-write) is not here: the
+// tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
 	{model.SelfDebugCapability, "`grain ls/read/grep src://...`, `grain task list`, `grain task read <id>`, " +
-		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d] [--repo <r>]`, `grain read deploy://pipeline-changes`"},
-	{"grain-log", "`grain log [--since <t>] [--min-priority err] [--contains <s>] [--max-lines N]`"},
+		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes`"},
+	{"grain-log", "`grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority err] [--contains <s>] [--max-lines N]`"},
 	{"deployment-health", "`grain health`, `grain read deploy://state`"},
 	{"bootstrap-playbooks", "`grain playbooks [<name>]`"},
 	{"memory", "`grain memory list`, `grain memory read <key>`, `grain memory write [--repo owner/name] --file <f>`, " +
@@ -1497,12 +1499,24 @@ var grainCLIGrants = []struct{ grant, commands string }{
 // `grain` commands it unlocks, plus one for any api grant.
 func grainCLIGrantBullets(grants []model.Grant) string {
 	held := map[string]bool{}
+	names := make([]string, 0, len(grants))
 	api := false
 	for _, g := range grants {
 		held[g.Capability] = true
+		names = append(names, g.Capability)
 		if strings.HasPrefix(g.Capability, model.APIGrantPrefix) {
 			api = true
 		}
+	}
+	apiSet := model.APIGrantsOf(names)
+	if apiSet.Has("memory:write") {
+		held["memory"] = true
+	}
+	if apiSet.Has("release-notes:read") || apiSet.Has("release-notes:write") {
+		held["release-notes"] = true
+	}
+	if apiSet.Has("tests:write") {
+		held["test-quarantine"] = true
 	}
 	var b strings.Builder
 	for _, c := range grainCLIGrants {
@@ -2279,7 +2293,7 @@ func sessionSandboxSection(task model.Task, h History) string {
 			"packages, clones and uncommitted changes are still in place, so do not redo setup, " +
 			"re-clone or reinstall packages that are already there."
 	}
-	if h.SandboxReclaimed || (task.Interactive && len(h.Attempts) > 0) {
+	if h.SandboxReclaimed || ((task.Interactive || task.KeepRunning) && len(h.Attempts) > 0) {
 		return "\n\nThe sandbox is not the same one: your previous session sandbox was reclaimed, " +
 			"so this run has a new sandbox with a fresh clone and only what you committed and " +
 			"pushed still exists."
@@ -2929,8 +2943,10 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	// Before the clone, so the CLI every prompt names is there whatever
 	// the clone does. After the grants' own placements, so nothing a
 	// grant installs in the same directory is placed over it.
-	if err := placeSandboxGrain(ctx, cfg.SandboxGrainBinary, sandboxRoot, placer); err != nil {
-		log.Printf("orchestrator: task %s: the sandbox keeps its image's grain: %v", task.ID, err)
+	if !cfg.sandboxReused {
+		if err := placeSandboxGrain(ctx, cfg.SandboxGrainBinary, sandboxRoot, placer); err != nil {
+			log.Printf("orchestrator: task %s: the sandbox keeps its image's grain: %v", task.ID, err)
+		}
 	}
 
 	var prepared checkout
@@ -2944,9 +2960,27 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		if (cfg.GitRemoteBase != "" || cloneURL != "") && task.Target != nil && !cfg.sandboxReused {
 			notes.say(ctx, cloningNote(*task.Target))
 		}
-		prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
-		if checkoutErr == nil {
-			placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
+		if task.Target == nil && hasGrant(task, model.SelfDebugCapability) {
+			var srcOut checkout
+			var srcWG sync.WaitGroup
+			srcWG.Add(1)
+			go func() {
+				defer srcWG.Done()
+				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &srcOut, cfg.sandboxReused)
+			}()
+			prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			srcWG.Wait()
+			if checkoutErr == nil {
+				prepared.GrainSource = srcOut.GrainSource
+				prepared.GrainSourceWhy = srcOut.GrainSourceWhy
+				prepared.GrainSourceRevision = srcOut.GrainSourceRevision
+				prepared.GrainSourceCommits = srcOut.GrainSourceCommits
+			}
+		} else {
+			prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			if checkoutErr == nil {
+				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
+			}
 		}
 	}
 
@@ -3239,6 +3273,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// taking it can cost one: a task must not fail because a
 		// bookkeeping write did (Store.SetRunAgentStarted).
 		agentStartedAt := cfg.now()
+		if cfg.Now == nil && agentStartedAt.Before(at) {
+			agentStartedAt = at
+		}
 		if err := store.SetRunAgentStarted(ctx, d.RunID, agentStartedAt); err != nil {
 			log.Printf("orchestrator: run %s: recording when its agent started: %v", d.RunID, err)
 		}
@@ -3313,8 +3350,33 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// legitimately end; runhost.Host adds its adoption allowance.
 		hostCtx := runhost.WithRun(agentCtx, runhost.Run{Task: task.ID, Run: d.RunID,
 			Deadline: runHostDeadline(cfg)})
+		var firstTurnOnce sync.Once
+		noteFirstTurn := func() {
+			firstTurnOnce.Do(func() {
+				if store != nil {
+					firstTurnAt := cfg.now()
+					if cfg.Now == nil && firstTurnAt.Before(agentStartedAt) {
+						firstTurnAt = agentStartedAt
+					}
+					if ferr := store.SetRunFirstTurn(context.WithoutCancel(ctx), d.RunID, firstTurnAt); ferr != nil {
+						log.Printf("orchestrator: run %s: recording first turn: %v", d.RunID, ferr)
+					}
+				}
+			})
+		}
+		runTools := make([]mcp.Tool, len(tools))
+		for i, t := range tools {
+			orig := t.Handler
+			if orig != nil {
+				t.Handler = func(tctx context.Context, args map[string]any) mcp.Result {
+					noteFirstTurn()
+					return orig(tctx, args)
+				}
+			}
+			runTools[i] = t
+		}
 		runCfg := agent.RunConfig{
-			Prompt: prompt, SuspendedPrompt: suspendedPrompt, Tools: tools, SandboxRoot: sandboxRoot, GranuleVM: granuleVM, Container: container, K8sPod: cfg.sandboxPod,
+			Prompt: prompt, SuspendedPrompt: suspendedPrompt, Tools: runTools, SandboxRoot: sandboxRoot, GranuleVM: granuleVM, Container: container, K8sPod: cfg.sandboxPod,
 			SandboxEnvFile: cfg.sandboxEnvFile,
 			SandboxHide:    cfg.sandboxHide,
 			// The MCP servers this run's capability grants expose, each
@@ -3404,12 +3466,17 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			OnResumableSession: early.record,
 		}
 		result, runErr = framework.Run(hostCtx, runCfg)
+		if runErr == nil || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != "")) {
+			noteFirstTurn()
+		}
 		// The stop rule, for a framework whose CLI cannot apply it from
 		// inside the run: a turn that ended promising more work, or a
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
-		result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
-		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, comments, result, runErr)
+		if !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
+			result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
+		}
+		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)
 		agentRan = true
 		if result != nil {
 			resumableSession = result.ResumableSession
@@ -3800,9 +3867,12 @@ const textOnlyAnswerDetail = "the agent answered in text without calling a tool"
 // session (grain/task-1774). A run that produced neither a tool call nor
 // any text is still a failure, interactive or not.
 func outcomeFor(task model.Task, result *agent.Result) (outcome, detail string) {
-	if task.Interactive && result != nil && len(result.ToolCalls) == 0 &&
+	if (task.Interactive || task.KeepRunning) && result != nil && len(result.ToolCalls) == 0 &&
 		strings.TrimSpace(result.FinalText) != "" {
 		return "succeeded", textOnlyAnswerDetail
+	}
+	if task.KeepRunning && result != nil && len(result.ToolCalls) == 0 {
+		return "succeeded", "the run exited cleanly"
 	}
 	return outcomeOf(result)
 }
@@ -4090,13 +4160,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 //
 // selfrepair's own grant is absent because its one tool blocks on a
 // human's reply in the task's chat, and that needs a store handle the
-// mcpserver process deliberately does not have. self-upgrade is here
-// precisely because it does not block on one: its three tools act on
-// this deployment's own upgrade through the daemon's REST API, which is
-// a hop the mcpserver process already makes, and a task granted it is
-// usually a scheduled one with nobody watching its chat
-// (pkg/capability/selfupgrade's own doc comment on why it is not a
-// relaxation of self-repair).
+// mcpserver process deliberately does not have.
 //
 // A fixed order, so that a run's own arguments read the same way twice
 // for the same task rather than following whatever order the grants were
@@ -4105,9 +4169,9 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // serves no MCP tool at all may be read by the run's agent framework
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName, memory.CapabilityName,
-	grainci.CapabilityName, deploymenthealth.CapabilityName, selfupgrade.CapabilityName,
-	dispatchcontrol.CapabilityName, readissues.CapabilityName,
+	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
+	grainci.CapabilityName, deploymenthealth.CapabilityName,
+	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 }
 
@@ -4252,6 +4316,14 @@ func hasGrant(task model.Task, capability string) bool {
 		}
 	}
 	return false
+}
+
+func hasAPIScope(task model.Task, scope model.APIScope) bool {
+	names := make([]string, 0, len(task.Grants))
+	for _, g := range task.Grants {
+		names = append(names, g.Capability)
+	}
+	return model.APIGrantsOf(names).Has(scope)
 }
 
 // appendSection joins one more section onto a prompt, blank-line
@@ -4763,6 +4835,7 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		detail = runErr.Error() + partialWorkSuffix(result) + suspectedRefusalSuffix(unmatched)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	default:
+		task.KeepRunning = taskKeepRunning(ctx, store, task)
 		outcome, detail = outcomeFor(task, result)
 	}
 	// A run that stopped by itself during a graceful pause's grace period

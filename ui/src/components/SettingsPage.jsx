@@ -56,9 +56,13 @@ import {
   configRepoRefusal,
   settingsSectionPath,
 } from "./ConfigRefusal.jsx";
+import { ConfigManagedNotice } from "./ConfigRepoLink.jsx";
 import {
+  CONFIG_REPO_SECTION_PATHS,
+  DEFAULT_SETTINGS_SECTION,
   SETTINGS_GROUPS,
   SETTINGS_SECTIONS,
+  isConfigRepoSection,
   settingsSectionLabel,
 } from "../settingsSections.js";
 import { matchSettings } from "../settingsIndex.js";
@@ -131,13 +135,28 @@ export default function SettingsPage({
   const [filter, setFilter] = useState("");
   const filterRef = useRef(null);
   const matches = useMemo(() => matchSettings(filter), [filter]);
-  const current = section || (isPhone ? "" : "general");
+  const current = section || (isPhone ? "" : DEFAULT_SETTINGS_SECTION);
   const externalConfigRepo =
     (settings ? settings.externalConfigRepo : config?.externalConfigRepo) || "";
   const externalConfigBranch =
     (settings ? settings.externalConfigBranch : config?.externalConfigBranch) ||
     "main";
-  const readOnly = Boolean(externalConfigRepo) && !NOT_CONFIG.has(current);
+  // A config-repo-only section is read-only whichever repository holds
+  // the configuration (docs/design/config-repo-settings.md §2.1): what it
+  // draws is what the config repo says, and changing it is a pull
+  // request.
+  const external = Boolean(externalConfigRepo) && !NOT_CONFIG.has(current);
+  // GET /api/config's configRepoOnly: the API refuses these sections'
+  // writes in favour of a config pull request when settings are locked.
+  // By default (settingsLocked: false) they stay editable in the UI.
+  const lockedInUI =
+    Boolean(config?.configRepoOnly && !config?.settingsLocked) ||
+    (settings && typeof settings.settingsLocked === "boolean"
+      ? settings.settingsLocked
+      : Boolean(config?.configRepoOnly) || Boolean(config?.settingsLocked));
+  const configRepoOnly = lockedInUI || Boolean(externalConfigRepo);
+  const configManaged = configRepoOnly && isConfigRepoSection(current);
+  const readOnly = external || configManaged;
   s.readOnly = readOnly;
 
   useEffect(() => {
@@ -171,11 +190,11 @@ export default function SettingsPage({
   }, [anchor]);
   useEffect(() => {
     if (!focusTarget) return;
-    const timer = setTimeout(() => {
+    const reveal = () => {
       const el =
         document.querySelector(`[data-setting-id="${focusTarget}"]`) ||
         document.getElementById(focusTarget);
-      if (!el) return;
+      if (!el) return false;
       el.scrollIntoView?.({ block: "center" });
       const input = el.matches?.("input,textarea,select,button")
         ? el
@@ -184,8 +203,14 @@ export default function SettingsPage({
       el.classList.add("setting-highlight");
       setTimeout(() => el.classList.remove("setting-highlight"), 2000);
       setFocusTarget("");
-    }, 50);
-    return () => clearTimeout(timer);
+      return true;
+    };
+    if (reveal()) return;
+    const observer = new MutationObserver(() => {
+      if (reveal()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
   }, [focusTarget, current, settings]);
 
   const go = (next) => {
@@ -220,7 +245,10 @@ export default function SettingsPage({
       onChange={(evt) => setFilter(evt.target.value)}
       onKeyDown={(evt) => {
         if (evt.key === "Escape") setFilter("");
-        if (evt.key === "Enter" && matches[0]) pick(matches[0]);
+        if (evt.key === "Enter" && matches[0]) {
+          evt.preventDefault();
+          pick(matches[0]);
+        }
       }}
       inputProps={{ "aria-label": "Filter settings" }}
       data-testid="settings-filter"
@@ -272,7 +300,14 @@ export default function SettingsPage({
                       onClick={() => pick(m)}
                       data-testid="settings-result"
                     >
-                      <ListItemText primary={`${m.label}, ${sec.label}`} />
+                      <ListItemText
+                        primary={`${m.label}, ${sec.label}`}
+                        secondary={
+                          m.configRepo && configRepoOnly
+                            ? "Read-only: in the config repo"
+                            : null
+                        }
+                      />
                     </ListItemButton>
                   </ListItem>
                 ))}
@@ -497,6 +532,8 @@ export default function SettingsPage({
         body = (
           <ConfigRepoSection
             {...common}
+            item={item}
+            onItem={onItem}
             onStatusChange={() => {
               reloadSettings();
               onSaved?.();
@@ -508,7 +545,9 @@ export default function SettingsPage({
         body = <ModelsSection {...common} onSaved={onSaved} />;
         break;
       case "git":
-        body = <GitSection showError={showError} onSaved={onSaved} />;
+        body = (
+          <GitSection showError={showError} onSaved={onSaved} onSection={go} />
+        );
         break;
       case "tasks":
         body = (
@@ -618,7 +657,10 @@ export default function SettingsPage({
             Not configured yet -- nothing has been saved for this deployment.
           </Alert>
         )}
-        {readOnly && (
+        {configManaged && !external && (
+          <ConfigManagedNotice paths={CONFIG_REPO_SECTION_PATHS[current]} />
+        )}
+        {external && (
           <Alert
             severity="info"
             sx={{ mb: 2 }}

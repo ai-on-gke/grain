@@ -29,6 +29,15 @@ import api from "../api.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
+// filed is the body of the form's POST /api/tasks: the form also asks
+// POST /api/capability-grants/check about whatever it holds, so the
+// filing is not necessarily the first call.
+const filed = () =>
+  JSON.parse(api.mock.calls.find(([path]) => path === "/api/tasks")[1].body);
+
+// ticked is what the Legacy capabilities picker shows as held.
+const ticked = () => screen.getByLabelText("Legacy capabilities").textContent;
+
 describe("NewTaskOverlay", () => {
   afterEach(() => {
     api.mockReset();
@@ -74,7 +83,7 @@ describe("NewTaskOverlay", () => {
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    const payload = filed();
     expect(payload.dependsOn).toEqual(["12", "15"]);
     expect(payload.capabilities).toEqual(["web-search"]);
   });
@@ -158,9 +167,9 @@ describe("NewTaskOverlay", () => {
     await user.type(screen.getByLabelText(/Title/), "Ship");
     await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
-    expect(JSON.parse(api.mock.calls[0][1].body).capabilities).toEqual([
-      "gemini-key",
-    ]);
+    // Untouched, so left to the server's own defaults, which hold it.
+    expect(ticked()).toMatch(/Gemini key/);
+    expect(filed()).not.toHaveProperty("capabilities");
   });
 
   // Unticking that default used to take its row away with it: the
@@ -198,9 +207,10 @@ describe("NewTaskOverlay", () => {
   // grain/task-14: the deployment's own default capabilities arrive
   // on GET /api/config and open the form already ticked, so filing a
   // task on a deployment that defaults gcp-key gets one without anyone
-  // remembering to ask -- and the payload names them explicitly rather
-  // than relying on the server to fill them in, which is what makes
-  // unticking one work.
+  // remembering to ask. The payload leaves an untouched picker to the
+  // server, which applies the same defaults for the task's own target
+  // and drops one the capability catalogue refuses there; a picker
+  // somebody has changed is named exactly (the test after this one).
   it("seeds the capability picker from the deployment's defaults", async () => {
     const config = {
       capabilities: [
@@ -223,8 +233,8 @@ describe("NewTaskOverlay", () => {
     await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
-    expect(payload.capabilities).toEqual(["gcp-key"]);
+    expect(ticked()).toMatch(/GCP key/);
+    expect(filed()).not.toHaveProperty("capabilities");
   });
 
   it("files a task without a defaulted capability once it is unticked", async () => {
@@ -252,7 +262,7 @@ describe("NewTaskOverlay", () => {
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    const payload = filed();
     expect(payload.capabilities).toEqual([]);
   });
 
@@ -307,12 +317,9 @@ describe("NewTaskOverlay", () => {
 
     await user.type(screen.getByLabelText(/Title/), "Key");
     await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    expect(ticked()).toMatch(/Gemini key.*GCP key/);
     await user.click(screen.getByRole("button", { name: "Create task" }));
-
-    expect(JSON.parse(api.mock.calls[0][1].body).capabilities).toEqual([
-      "gemini-key",
-      "gcp-key",
-    ]);
+    expect(filed()).not.toHaveProperty("capabilities");
   });
 
   // Switching away from a repo that adds one drops it again: leaving the
@@ -341,11 +348,10 @@ describe("NewTaskOverlay", () => {
     await user.type(screen.getByLabelText(/Title/), "Else");
     await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/gadgets");
+    expect(ticked()).toMatch(/Gemini key/);
+    expect(ticked()).not.toMatch(/GCP key/);
     await user.click(screen.getByRole("button", { name: "Create task" }));
-
-    expect(JSON.parse(api.mock.calls[0][1].body).capabilities).toEqual([
-      "gemini-key",
-    ]);
+    expect(filed()).not.toHaveProperty("capabilities");
   });
 
   // Once the picker has been touched the ticks are the human's own: a
@@ -378,7 +384,7 @@ describe("NewTaskOverlay", () => {
     await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
-    expect(JSON.parse(api.mock.calls[0][1].body).capabilities).toEqual([]);
+    expect(filed().capabilities).toEqual([]);
   });
 
   it("renders retired or unoffered capabilities from draft so they can be unticked", async () => {
@@ -416,9 +422,7 @@ describe("NewTaskOverlay", () => {
     await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
-    expect(JSON.parse(api.mock.calls[0][1].body).capabilities).toEqual([
-      "self-debug",
-    ]);
+    expect(filed().capabilities).toEqual(["self-debug"]);
   });
 
   it("marks a capability method denied by the capability policy for agent tasks and links to the policy", async () => {
@@ -472,5 +476,100 @@ describe("NewTaskOverlay", () => {
     expect(
       within(repoRow).getByRole("link", { name: "Settings → Capabilities" }),
     ).toHaveAttribute("href", "/settings/capabilities#capability-policy");
+  });
+  // 2026-10-29 test run, Bug 3: a deployment default the capability
+  // catalogue restricts to one repo, on a No repo task. The form asks
+  // the server about what it holds for that target, marks the refused
+  // default where it is ticked, and leaves the untouched list to the
+  // server -- which drops it -- rather than naming it and being refused.
+  const refusingCheck = async (path, opts) => {
+    if (path !== "/api/capability-grants/check") return null;
+    const body = JSON.parse(opts.body);
+    return body.grants.map(({ grant }) => ({
+      grant,
+      recorded: grant,
+      ...(grant === "gcp-key" && body.subject?.repo !== "acme/widgets"
+        ? {
+            catalogueRefusal:
+              "capability gcp-key is not granted on a task with no repository (none) by settings/capabilities.yml (repos: acme/widgets)",
+          }
+        : {}),
+    }));
+  };
+  const restrictedConfig = {
+    capabilities: [
+      { id: "gcp-key", name: "GCP key" },
+      { id: "gemini-key", name: "Gemini key" },
+    ],
+    targetRepos: ["acme/widgets"],
+    defaultCapabilities: ["gcp-key", "gemini-key"],
+  };
+
+  it("marks a default the catalogue refuses on No repo and leaves it to the server", async () => {
+    api.mockImplementation(refusingCheck);
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={restrictedConfig}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    await user.type(screen.getByLabelText(/Title/), "Standalone");
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    const note = await screen.findByTestId("new-task-catalogue-refused");
+    expect(note).toHaveTextContent(
+      "settings/capabilities.yml refuses gcp-key on a task with no repo, so that default is left off this task.",
+    );
+    const check = api.mock.calls.filter(
+      ([path]) => path === "/api/capability-grants/check",
+    );
+    expect(JSON.parse(check.at(-1)[1].body).subject).toEqual({ repo: "" });
+    expect(
+      screen
+        .getByLabelText("Legacy capabilities")
+        .querySelectorAll("[data-catalogue-refused]"),
+    ).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+    expect(filed()).not.toHaveProperty("capabilities");
+    expect(filed().noRepo).toBe(true);
+  });
+
+  it("asks for a refused grant to be unticked once the picker is the person's", async () => {
+    api.mockImplementation(refusingCheck);
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={restrictedConfig}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await user.click(screen.getByLabelText("Legacy capabilities"));
+    await user.click(await screen.findByRole("option", { name: /Gemini key/ }));
+    const gcp = screen.getByRole("option", { name: /GCP key/ });
+    // Still ticked, so still enabled: its row is how it comes off.
+    expect(gcp).not.toHaveAttribute("aria-disabled", "true");
+    expect(gcp).toHaveTextContent("repos: acme/widgets");
+    await user.keyboard("{Escape}");
+    expect(
+      await screen.findByTestId("new-task-catalogue-refused"),
+    ).toHaveTextContent(
+      "settings/capabilities.yml refuses gcp-key on a task with no repo: untick it, or the task will not be filed.",
+    );
+
+    // On the repo it is restricted to, nothing is refused.
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await vi.waitFor(() =>
+      expect(
+        screen.queryByTestId("new-task-catalogue-refused"),
+      ).not.toBeInTheDocument(),
+    );
   });
 });

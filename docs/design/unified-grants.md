@@ -184,14 +184,14 @@ per-capability list, with what each one becomes:
 | `grain-log` | `…/grain#journal` | new in-process server method; deliberately not part of any api preset (journal may hold secrets; its redaction stays) |
 | `deployment-health` | `…/api#deployment:read` plus `…/grain#health` for the host/sandbox probes | api scope + new method |
 | `self-repair` | `…/grain#host-exec` (each command still needs a live chat reply) | new method, dangerous (Q7) |
-| `self-upgrade` | `…/api#self-upgrade` preset | api preset (alias today) |
-| `pipeline-control` | `…/api#pipeline-control` preset | api preset (alias today) |
-| `dispatch-control` | `…/api#dispatch-control` preset | api preset |
-| `test-quarantine` | `…/api#tests:write` (new scope) | api scope |
+| `self-upgrade` | `…/api#self-upgrade` preset | **done** (task 2036): provider and its three tools removed, stored grants rewritten to `api:self-upgrade` by schema migration 75 |
+| `pipeline-control` | `…/api#pipeline-control` preset | **done** (task 2004): provider and its two tools removed, stored grants rewritten to `api:pipeline-control` by schema migration 69 |
+| `dispatch-control` | `…/api#dispatch-control` preset | **done** (task 2004): provider and its four tools removed, stored grants rewritten to `api:dispatch-control` by schema migration 68 |
+| `test-quarantine` | `…/api#tests:write` (new scope), preset `test-quarantine` | **done** (task 2036): provider and `quarantine_test` removed, `POST /api/tests/quarantine` added under `tests:write` and `grain quarantine` gated on it, stored grants rewritten to `api:test-quarantine` by schema migration 76 |
 | `read-issues` | `…/github#read-issues` | new method on `github` server |
-| `release-notes` | `…/api#releases:read` + `…/api#releases:write` | api scopes |
-| `memory` | `…/api#memory:write` (new scope) | api scope |
-| `team-broadcast` | `…/api#teams:broadcast` (new scope) | api scope |
+| `release-notes` | `…/api#release-notes` preset (`release-notes:read` + `release-notes:write`) | **done** (task 2035): provider and its tools removed, `/api/release-notes*` routes moved to `release-notes:read`/`release-notes:write`, stored grants rewritten to `api:release-notes` by schema migration 72 |
+| `memory` | `…/api#memory` preset (`memory:read` + `memory:write`) | **done** (task 2035): provider and its tools removed, stored grants rewritten to `api:memory` by schema migration 71 |
+| `team-broadcast` | `…/api#teams:broadcast` (new scope), preset `team-broadcast` | **done** (task 2004): provider and `broadcast_team_message` removed, stored grants rewritten to `api:team-broadcast` by schema migration 67 |
 | `bootstrap-playbooks` | `…/skill#skill` `{dir: bootstrap}` | existing server method |
 | `console` | stays a task setting, not a grant (it changes how the run is hosted, not what it may reach) | moved out of grants (Q8) |
 | `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | new method, `write: true` dangerous |

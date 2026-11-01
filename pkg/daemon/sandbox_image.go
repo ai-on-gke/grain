@@ -521,6 +521,9 @@ var (
 	sandboxMirrorDockerCmd   = []string{"docker"}
 	sandboxMirrorTokenSource = registryauth.Token
 	mirrorSandboxImageFunc   = defaultMirrorSandboxImage
+	// cleanMirroredSandboxImagesFunc runs after every mirror that
+	// succeeded; tests replace it.
+	cleanMirroredSandboxImagesFunc = cleanOldMirroredSandboxImages
 	// sandboxMirrorRegistryDigest is what the mirror registry answers
 	// for a tag; tests replace it.
 	sandboxMirrorRegistryDigest = upgrade.RegistryManifestDigest
@@ -535,11 +538,29 @@ func ResetMirroredSandboxImageCacheForTest() {
 	clear(mirroredSandboxWarned)
 }
 
+// mirroredSandboxImageIfKnown is resolveOrMirrorSandboxImage without the
+// copy: the digest-pinned reference sourceRef was already mirrored to,
+// else its tag in mirrorRepo.
+func mirroredSandboxImageIfKnown(sourceRef, mirrorRepo string) string {
+	mirrorRepo = imageRepository(strings.TrimSpace(mirrorRepo))
+	targetTagRef := upgrade.MirrorSandboxRef(sourceRef, mirrorRepo)
+	if targetTagRef == "" {
+		return sourceRef
+	}
+	mirroredSandboxImagesMu.Lock()
+	defer mirroredSandboxImagesMu.Unlock()
+	if cached, ok := mirroredSandboxImages[sourceRef+"|"+mirrorRepo]; ok {
+		return cached
+	}
+	return targetTagRef
+}
+
 // resolveOrMirrorSandboxImage resolves the mirrored guest image reference in
 // mirrorRepo corresponding to sourceRef (pulling sourceRef, tagging and
 // pushing it to mirrorRepo, and pinning to mirrorRepo's RepoDigest when local
-// docker is available).
-func resolveOrMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo string) string {
+// docker is available). After a mirror that succeeded, local tags of older
+// mirrored images are removed (cleanOldMirroredSandboxImages).
+func resolveOrMirrorSandboxImage(ctx context.Context, cfg Config, sourceRef, mirrorRepo string) string {
 	mirrorRepo = imageRepository(strings.TrimSpace(mirrorRepo))
 	targetTagRef := upgrade.MirrorSandboxRef(sourceRef, mirrorRepo)
 	if targetTagRef == "" {
@@ -570,17 +591,26 @@ func resolveOrMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo stri
 	mirroredSandboxImagesMu.Lock()
 	mirroredSandboxImages[cacheKey] = pinned
 	mirroredSandboxImagesMu.Unlock()
+	cleanMirroredSandboxImagesFunc(ctx, cfg, sourceRef, mirrorRepo, targetTagRef)
 	return pinned
 }
 
-func defaultMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo, targetTagRef string) (string, error) {
+// sandboxMirrorUsesDocker reports whether mirroring runs real docker
+// commands on this host, rather than handing back the target tag
+// untouched (local test sandboxes, no docker installed).
+func sandboxMirrorUsesDocker() bool {
 	if LocalSandboxes != nil && slices.Equal(sandboxMirrorDockerCmd, []string{"docker"}) {
-		return targetTagRef, nil
+		return false
 	}
 	if len(sandboxMirrorDockerCmd) == 0 {
-		return targetTagRef, nil
+		return false
 	}
-	if _, err := exec.LookPath(sandboxMirrorDockerCmd[0]); err != nil {
+	_, err := exec.LookPath(sandboxMirrorDockerCmd[0])
+	return err == nil
+}
+
+func defaultMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo, targetTagRef string) (string, error) {
+	if !sandboxMirrorUsesDocker() {
 		return targetTagRef, nil
 	}
 
@@ -730,7 +760,7 @@ func logCustomSandboxImage(ctx context.Context, cfg Config, image, stock string,
 	backend := string(cfg.SandboxBackend())
 	base := sandboximage.BaseImageForBackend(backend, stock)
 	labels, err := read(ctx, image)
-	check := sandboximage.CheckCustomImage(image, backend, base, labels, err)
+	check := sandboximage.CheckCustomImage(image, backend, base, stock, labels, err)
 	if check.Warning != "" {
 		log.Printf("WARNING: %s", check.Warning)
 		return

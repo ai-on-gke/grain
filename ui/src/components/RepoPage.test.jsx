@@ -2044,6 +2044,42 @@ describe("RepoPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("switching issue import on saves the label typed before it", async () => {
+    // The first pass runs on the next cycle, so a label typed but not
+    // saved has to go with the switch, or that pass reads every open
+    // issue (docs/test-runs/2026-10-31-github-issue-import.md, F2).
+    routeApi({
+      upToDate: {
+        repo: "acme/widgets",
+        issueImport: {
+          enabled: false,
+          approved: false,
+          repo: "",
+          label: "",
+          intervalSeconds: 0,
+          effectiveIntervalSeconds: 600,
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderPage({ tab: "agents" });
+
+    const enable = await screen.findByLabelText(
+      "Import open GitHub issues as tasks in acme/widgets",
+    );
+    await user.type(screen.getByLabelText("Label"), "grain-agent");
+    await user.click(enable);
+    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        issueImportEnabled: true,
+        issueImportRepo: "",
+        issueImportLabel: "grain-agent",
+        issueImportIntervalSeconds: 0,
+      }),
+    });
+  });
+
   it("shows merge when green as on for a repo that has it on", async () => {
     routeApi({
       upToDate: { repo: "acme/widgets", mergeOnGreen: true },
@@ -2735,5 +2771,78 @@ describe("RepoPage", () => {
         screen.getByRole("button", { name: "release: on" }),
       ).toHaveAttribute("aria-pressed", "true"),
     );
+  });
+
+  // docs/design/config-repo-settings.md §2.1, §7.4: when the API sends
+  // a repo's settings to the config repo (configRepoOnly), even an admin
+  // sees them read-only, with the files to change them in, and the
+  // default and CI grants as chips; the operational actions stay theirs.
+  describe("when its settings are config-repo only", () => {
+    const managed = {
+      configRepoOnly: true,
+      adminScoped: true,
+      adminRepos: ["acme/*"],
+      capabilities: [{ id: "gcp-key", name: "GCP key" }],
+    };
+    const notice =
+      /acme\/widgets's settings live in the config repo and are read-only here/;
+
+    it("draws settings read-only for an admin, linked to the config repo", async () => {
+      routeApi({
+        workflows: {
+          ...noWorkflows,
+          workflows: [{ path: ".grain/workflows/tests.yml", text: "jobs: {}" }],
+        },
+      });
+      renderPage({ tab: "ci", config: managed });
+      const radio = await screen.findByRole("radio", {
+        name: "Use GitHub CI for acme/widgets",
+      });
+      expect(radio).toBeDisabled();
+      expect(radio).toHaveAccessibleDescription(notice);
+      expect(
+        await screen.findByRole("button", { name: "Add workflow" }),
+      ).toBeDisabled();
+      expect(screen.queryByText(/but not change them/)).not.toBeInTheDocument();
+      expect(
+        within(screen.getByTestId("config-managed-notice"))
+          .getAllByTestId("config-repo-link")
+          .map((a) => a.getAttribute("href")),
+      ).toEqual([
+        "/config?path=tables%2Frepo_config.json",
+        "/config?path=settings%2Fcapabilities.yml",
+      ]);
+      await openTab("Branches");
+      expect(screen.getByLabelText("Branch name")).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Add branch" })).toBeEnabled();
+      expect(
+        api.mock.calls.filter(([, opts]) => opts?.method === "PUT"),
+      ).toEqual([]);
+    });
+
+    it("lists the default and CI grants as chips linked to settings/capabilities.yml", async () => {
+      routeApi({
+        caps: {
+          repo: "acme/widgets",
+          defaultCapabilities: ["gcp-key", "api:tasks:read"],
+          ciCapabilities: [],
+          deploymentDefaultCapabilities: [],
+          effectiveDefaultCapabilities: ["gcp-key", "api:tasks:read"],
+        },
+      });
+      renderPage({ tab: "agents", config: managed });
+      const grants = await screen.findByTestId("repo-default-grants");
+      await waitFor(() =>
+        expect(
+          grants.querySelectorAll("[data-grant-chip]").length,
+        ).toBeGreaterThan(0),
+      );
+      expect(grants.querySelector("input")).toBeNull();
+      expect(within(grants).getByTestId("config-repo-link")).toHaveAttribute(
+        "href",
+        "/config?path=settings%2Fcapabilities.yml",
+      );
+      expect(screen.getByTestId("repo-ci-grants")).toHaveTextContent("None");
+    });
   });
 });

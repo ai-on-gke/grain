@@ -85,9 +85,19 @@ function fileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function StateRepoBrowser({ showError, status, onSync }) {
+// openPath is a file to open as soon as the pane draws -- the one a
+// "View in config repo" link names (/config?path=...) -- and onOpenPath
+// hears every file somebody opens, so the address can name it.
+export default function StateRepoBrowser({
+  showError,
+  status,
+  onSync,
+  openPath = "",
+  onOpenPath,
+}) {
   const zone = useTimeZone();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(Boolean(openPath));
+  const paneRef = useRef(null);
   const [tree, setTree] = useState(null);
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [path, setPath] = useState("");
@@ -146,6 +156,20 @@ export default function StateRepoBrowser({ showError, status, onSync }) {
     [setPath],
   );
 
+  // A file asked for by the address is opened, its directories shown,
+  // and the pane scrolled to: it sits below the repository's settings.
+  useEffect(() => {
+    if (!openPath || openPath === wanted.current) return;
+    setExpanded(true);
+    open(openPath);
+    paneRef.current?.scrollIntoView?.({ block: "start" });
+  }, [openPath, open]);
+
+  const pick = (name) => {
+    open(name);
+    onOpenPath?.(name);
+  };
+
   // Exporting now, from the pane that is showing what the last export
   // left: the listing and the open file are both re-read afterwards,
   // since a cycle that changed something changed exactly what is on
@@ -175,7 +199,7 @@ export default function StateRepoBrowser({ showError, status, onSync }) {
     });
 
   return (
-    <Box sx={{ mt: 3 }}>
+    <Box sx={{ mt: 3 }} ref={paneRef} data-testid="config-repo-browser">
       <Typography variant="subtitle2">Browse this repository</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         What grain exports, as it stands on this host: templates, suites and
@@ -257,7 +281,7 @@ export default function StateRepoBrowser({ showError, status, onSync }) {
                   type="button"
                   title={entry.path}
                   onClick={() =>
-                    entry.dir ? toggle(entry.path) : open(entry.path)
+                    entry.dir ? toggle(entry.path) : pick(entry.path)
                   }
                   sx={{
                     display: "flex",

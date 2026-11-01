@@ -34,17 +34,10 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/dispatchcontrol"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
-	"github.com/ai-on-gke/grain/pkg/capability/pipelinecontrol"
-	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -218,21 +211,6 @@ func (d DaemonTasks) AttemptTranscript(ctx context.Context, id string, attempt i
 	return d.Client.AttemptTranscript(ctx, id, attempt)
 }
 
-// BroadcastTeamMessage broadcasts to the deployment's active tasks.
-func (d DaemonTasks) BroadcastTeamMessage(ctx context.Context, message string) (mcp.BroadcastResult, error) {
-	resp, err := d.Client.BroadcastDeploymentMessage(ctx, ui.BroadcastTeamRequest{
-		Message: message,
-		Task:    d.taskID,
-	})
-	if err != nil {
-		return mcp.BroadcastResult{}, err
-	}
-	return mcp.BroadcastResult{
-		DeliveredCount: resp.DeliveredCount,
-		TaskIDs:        resp.TaskIDs,
-	}, nil
-}
-
 // daemonMetrics implements mcp.MetricsReader by asking a running "grain
 // daemon" for the measurement report (GET /api/metrics, the same request
 // `grain metrics` makes over the same client) and rendering it here with
@@ -284,7 +262,7 @@ func (d DaemonMetrics) Metrics(ctx context.Context, q mcp.MetricsQuery) (string,
 // judgement agent reads and the expect its writes are checked against
 // agree by construction.
 func taskSummary(t ui.Task) mcp.TaskSummary {
-	return mcp.TaskSummary{ID: t.ID, Title: t.Title, State: string(t.State), Repo: t.Repo, Interactive: t.Interactive, CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall, MergeQueue: mcp.TaskMergeQueue{State: t.MergeQueueState, Note: t.MergeQueueNote, At: t.MergeQueueStateAt, StalledAt: t.MergeQueueStalledAt, BlockedAt: t.MergeQueueBlockedAt},
+	return mcp.TaskSummary{ID: t.ID, Title: t.Title, State: string(t.State), Repo: t.Repo, Priority: t.Priority, Interactive: t.Interactive, CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall, MergeQueue: mcp.TaskMergeQueue{State: t.MergeQueueState, Note: t.MergeQueueNote, At: t.MergeQueueStateAt, StalledAt: t.MergeQueueStalledAt, BlockedAt: t.MergeQueueBlockedAt},
 		Kinds: ui.TaskKindTags(t), DependsOn: t.DependsOn, ChangedAt: taskChangedAt(t)}
 }
 
@@ -314,245 +292,6 @@ func (d DaemonPipeline) PipelineChanges(ctx context.Context, after string, limit
 		out.Changes = append(out.Changes, mcp.PipelineChange{At: c.At, ID: c.ID, Kind: c.Kind, From: c.From, To: c.To, Detail: c.Detail})
 	}
 	return out, nil
-}
-
-// daemonUpgrade implements selfupgrade.Deployment by asking a running
-// "grain daemon" to read, schedule or cancel this deployment's own
-// upgrade (pkg/ui's GET/POST /api/upgrade and DELETE
-// /api/upgrade/scheduled) -- the same REST hop daemonPullRequests and
-// daemonSandbox make, over the same client.
-//
-// The hop is not a formality here either. The upgrader is a handle the
-// daemon holds (ui.Config.Upgrader, built from -upgrade-image or
-// -upgrade-src-dir), the queue an upgrade shuts is a row in the store,
-// and the counts a scheduled upgrade waits on are queries against it --
-// none of which exists in this short-lived fork. Which deployment is
-// upgraded is not a parameter anywhere: it is whichever daemon -server
-// names, and that is the one this run is running inside.
-//
-// A 404 from either write means the deployment has no upgrader
-// configured at all, which is a fact about how it was installed rather
-// than a failed call, so it is translated into the sentinel the tools
-// turn into a sentence (selfupgrade.ErrNotConfigured).
-//
-// taskID is this run's own task, sent with a scheduled upgrade so the
-// schedule records the task that asked for it rather than the operator
-// principal every write through this API would otherwise default to
-// (grain/task-353). Same spelling and same reasoning as
-// daemonMemory.author: a dispatched run knows its own task, and the
-// daemon on the other end of the hop cannot tell it from the browser.
-type daemonUpgrade struct {
-	client *ui.HTTPClient
-	taskID string
-}
-
-// requester is the run this process serves, as a principal, and the zero
-// Principal when there is no task to name -- which the route reads as
-// this deployment's own actor, since a schedule with nobody to name is
-// better recorded as the operator than as an agent that does not exist.
-func (d daemonUpgrade) requester() model.Principal {
-	if d.taskID == "" {
-		return model.Principal{}
-	}
-	return model.Principal{Kind: model.PrincipalAgent, ID: d.taskID}
-}
-
-func (d daemonUpgrade) UpgradeStatus(ctx context.Context) (selfupgrade.Status, error) {
-	status, err := d.client.UpgradeStatus(ctx)
-	if err != nil {
-		return selfupgrade.Status{}, upgradeError(err)
-	}
-	return selfUpgradeStatus(status), nil
-}
-
-func (d daemonUpgrade) StartUpgrade(ctx context.Context, branch string, afterTasksFinish bool) (selfupgrade.Status, error) {
-	status, err := d.client.StartUpgrade(ctx, branch, afterTasksFinish, d.requester())
-	if err != nil {
-		return selfupgrade.Status{}, upgradeError(err)
-	}
-	return selfUpgradeStatus(status), nil
-}
-
-func (d daemonUpgrade) CancelScheduledUpgrade(ctx context.Context) (selfupgrade.Status, bool, error) {
-	status, cancelled, err := d.client.CancelScheduledUpgrade(ctx)
-	if err != nil {
-		return selfupgrade.Status{}, false, upgradeError(err)
-	}
-	return selfUpgradeStatus(status), cancelled, nil
-}
-
-// upgradeError maps the one error these routes have a specific meaning
-// for onto the capability's own sentinel, and passes everything else
-// through as it came.
-func upgradeError(err error) error {
-	var notFound *ui.NotFoundError
-	if errors.As(err, &notFound) {
-		return fmt.Errorf("%w: %s", selfupgrade.ErrNotConfigured, notFound)
-	}
-	return err
-}
-
-// selfUpgradeStatus converts the daemon's reading into the capability's own,
-// which is the same flattening in a package that must not import pkg/ui
-// (selfupgrade.Status's own doc comment).
-func selfUpgradeStatus(status ui.UpgradeStatus) selfupgrade.Status {
-	out := selfupgrade.Status{
-		Enabled:       status.Enabled,
-		Mode:          status.Mode,
-		RunningImage:  status.RunningImage,
-		RunningCommit: status.RunningCommit,
-		Channel:       status.Channel,
-		Branch:        status.Branch,
-		Phase:         status.Phase,
-		Detail:        status.Detail,
-		StartedAt:     status.StartedAt,
-		FinishedAt:    status.FinishedAt,
-		InFlightRuns:  status.InFlightRuns,
-	}
-	if status.Scheduled != nil {
-		out.Scheduled = &selfupgrade.Scheduled{
-			Branch:      status.Scheduled.Branch,
-			RequestedAt: status.Scheduled.RequestedAt,
-			ByKind:      status.Scheduled.ByKind,
-			ByID:        status.Scheduled.ByID,
-			BusyRuns:    status.Scheduled.BusyRuns,
-			BusyCIRuns:  status.Scheduled.BusyCIRuns,
-		}
-	}
-	return out
-}
-
-// daemonPipelineControl is pipeline-control's Controller over the
-// daemon's REST API. There is one pause, the deployment's own: team
-// pipeline pauses were removed with the rest of multi-tenant mode
-// (grain/task-4682, single-tenant reset stage 3). Only a task holding
-// pipeline-control deployment-wide (ui.TaskDetail.DeploymentWide) may
-// take it, asked at the moment of the call; any other task is refused
-// rather than reaching a pause wider than its grant.
-type daemonPipelineControl struct {
-	client *ui.HTTPClient
-	taskID string
-}
-
-// authorize refuses a run whose pipeline-control is not deployment-wide.
-func (d daemonPipelineControl) authorize(ctx context.Context) error {
-	detail, err := d.client.GetTask(ctx, d.taskID)
-	if err != nil {
-		return fmt.Errorf("reading task %s to see what its pipeline-control reaches: %w", d.taskID, err)
-	}
-	if !slices.Contains(detail.DeploymentWide, pipelinecontrol.CapabilityName) {
-		return fmt.Errorf("task %s holds %s only for its team, and team pipeline pauses no longer exist: "+
-			"only a task granted it deployment-wide pauses the deployment", d.taskID, pipelinecontrol.CapabilityName)
-	}
-	return nil
-}
-
-func (d daemonPipelineControl) PausePipeline(ctx context.Context, repo, reason string) (string, error) {
-	fullReason := reason
-	if repo != "" {
-		fullReason = fmt.Sprintf("[%s] %s", repo, reason)
-	}
-	if err := d.authorize(ctx); err != nil {
-		return "", err
-	}
-	_, _, err := d.client.PausePipeline(ctx, fullReason)
-	return "", err
-}
-
-func (d daemonPipelineControl) ResumePipeline(ctx context.Context, repo, reason string) (string, error) {
-	if err := d.authorize(ctx); err != nil {
-		return "", err
-	}
-	_, _, err := d.client.ResumePipeline(ctx)
-	return "", err
-}
-
-// daemonDispatchControl is dispatch-control's Controller over the
-// daemon's REST API: the pipeline pause and Run now, made as this run's
-// own agent ({agent, <task id>}, the way daemonUpgrade schedules an
-// upgrade) so the pause row and each task's conversation say which task
-// decided. The grant is re-read on every call, so taking it off the
-// task stops the next call rather than the next run.
-type daemonDispatchControl struct {
-	client *ui.HTTPClient
-	taskID string
-}
-
-func (d daemonDispatchControl) agent() model.Principal {
-	if d.taskID == "" {
-		return model.Principal{}
-	}
-	return model.Principal{Kind: model.PrincipalAgent, ID: d.taskID}
-}
-
-// authorize refuses a run whose task no longer holds dispatch-control.
-func (d daemonDispatchControl) authorize(ctx context.Context) error {
-	if d.taskID == "" {
-		return errors.New("this run serves no task, so there is no grant of dispatch-control to act under")
-	}
-	detail, err := d.client.GetTask(ctx, d.taskID)
-	if err != nil {
-		return fmt.Errorf("reading task %s to see whether it still holds %s: %w", d.taskID, dispatchcontrol.CapabilityName, err)
-	}
-	if !slices.Contains(detail.Capabilities, dispatchcontrol.CapabilityName) {
-		return fmt.Errorf("task %s no longer holds %s", d.taskID, dispatchcontrol.CapabilityName)
-	}
-	return nil
-}
-
-func (d daemonDispatchControl) PausePipeline(ctx context.Context, reason string) (bool, error) {
-	if err := d.authorize(ctx); err != nil {
-		return false, err
-	}
-	_, paused, err := d.client.PausePipelineAs(ctx, reason, d.agent())
-	return paused, err
-}
-
-// ResumePipeline refuses while an upgrade holds the queue -- the pause
-// RunNowPasses is false for, an upgrade's own hold or one running or
-// scheduled under somebody else's pause. Lifting that hold is passing it
-// with every task at once, and lifting a scheduled upgrade's calls the
-// upgrade off (ui.Client.ResumePipeline), which is self-upgrade's
-// cancel_deployment_upgrade rather than anything this grant gives. Not
-// knowing the pause refuses too, as it holds a Run now back.
-func (d daemonDispatchControl) ResumePipeline(ctx context.Context) (bool, error) {
-	if err := d.authorize(ctx); err != nil {
-		return false, err
-	}
-	pause, err := d.client.PipelinePause(ctx)
-	if err != nil {
-		return false, fmt.Errorf("reading the pause to see whether an upgrade holds it: %w", err)
-	}
-	if pause.Paused && !pause.RunNowPasses {
-		return false, fmt.Errorf("an upgrade holds the queue (%s), and %s does not lift that: "+
-			"the hold goes when the upgrade is over, or a person resumes from the banner", pause.Reason,
-			dispatchcontrol.CapabilityName)
-	}
-	_, resumed, err := d.client.ResumePipeline(ctx)
-	return resumed, err
-}
-
-func (d daemonDispatchControl) RunTaskNow(ctx context.Context, taskID string) (string, bool, error) {
-	if err := d.authorize(ctx); err != nil {
-		return "", false, err
-	}
-	if err := d.client.RunNowAs(ctx, taskID, d.agent()); err != nil {
-		return "", false, err
-	}
-	pause, err := d.client.PipelinePause(ctx)
-	if err != nil || !pause.Paused {
-		// The request is made either way; not knowing the pause only
-		// costs the sentence that says whether it is passed.
-		return "", false, nil
-	}
-	return pause.Reason, pause.RunNowPasses, nil
-}
-
-func (d daemonDispatchControl) DeferTask(ctx context.Context, taskID string, until *time.Time) error {
-	if err := d.authorize(ctx); err != nil {
-		return err
-	}
-	return d.client.Defer(ctx, taskID, ui.DeferOptions{Until: until})
 }
 
 type daemonDB struct {
@@ -1106,7 +845,7 @@ func (d DaemonGrainCI) GrainCI(ctx context.Context) (*mcp.GrainCIVerdict, error)
 // not a conversation. The cost is one indexed read of task_comment per
 // second per waiting run, over loopback, which is nothing beside a
 // sandbox standing idle for the same second.
-const chatPollInterval = time.Second
+const chatPollInterval = 100 * time.Millisecond
 
 // daemonChat implements mcp.Chatter by asking a running "grain daemon" to
 // post what this run has to say into its own task's conversation (pkg/ui's
@@ -1161,11 +900,44 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 	if wait <= 0 {
 		return mcp.ChatTurn{}, nil
 	}
-	interval := d.poll
-	if interval <= 0 {
-		interval = chatPollInterval
-	}
 	deadline := time.Now().Add(wait)
+	if d.poll <= 0 {
+		for {
+			if ctx.Err() != nil {
+				return mcp.ChatTurn{}, ctx.Err()
+			}
+			rem := time.Until(deadline)
+			if rem <= 0 {
+				return mcp.ChatTurn{}, nil
+			}
+			waitSlice := min(rem, 5*time.Second)
+			pollStart := time.Now()
+			pollCtx, cancelPoll := context.WithDeadline(ctx, deadline)
+			messages, err := d.client.TaskMessagesWait(pollCtx, d.taskID, posted.ID, waitSlice)
+			cancelPoll()
+			if err == nil && len(messages) > 0 {
+				placeMessageAttachments(ctx, d.client, d.taskID, messages, d.writeFile)
+				d.delivered.deliveredByChat(ctx, messages)
+				return mcp.ChatTurn{Reply: joinMessages(messages)}, nil
+			}
+			if time.Now().After(deadline) {
+				return mcp.ChatTurn{}, nil
+			}
+			if elapsed := time.Since(pollStart); elapsed < chatPollInterval {
+				sleep := min(chatPollInterval-elapsed, time.Until(deadline))
+				if sleep > 0 {
+					timer := time.NewTimer(sleep)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return mcp.ChatTurn{}, ctx.Err()
+					case <-timer.C:
+					}
+				}
+			}
+		}
+	}
+	interval := d.poll
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -1173,18 +945,6 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 		case <-ctx.Done():
 			return mcp.ChatTurn{}, ctx.Err()
 		case now := <-ticker.C:
-			// A read that fails is not a wait that ends: the next tick is
-			// a second away and will most likely succeed, where treating
-			// one dropped request as "nobody is there" would end a
-			// conversation over a blip. That covers a daemon restart too
-			// (docs/non-disruptive-upgrade.md): this process is the CLI's,
-			// not the daemon's, so it outlives an upgrade with the CLI,
-			// and the first poll the new daemon answers reads everything
-			// said since the run's own message, a reply posted after the
-			// restart included. Each read is bounded by the wait's own
-			// deadline, so the client's restart-gap retry (ui.RetryPolicy,
-			// two minutes) cannot hold the turn past the time it said it
-			// would wait.
 			pollCtx, cancelPoll := context.WithDeadline(ctx, deadline)
 			messages, err := d.client.TaskMessages(pollCtx, d.taskID, posted.ID)
 			cancelPoll()
@@ -1390,204 +1150,6 @@ func (c *deliveredCursor) notByChat(messages []ui.Message) []ui.Message {
 	return kept
 }
 
-// daemonMemory implements mcp.MemoryStore by asking a running "grain
-// daemon" for what it has learned about working here (pkg/ui's
-// /api/memory routes) -- the fourth REST hop this file makes, over the
-// same client as the three above.
-//
-// What it names a task for is not which memory it writes -- a memory is
-// about the deployment or about a repository, never about the run
-// writing it, and the run's authority to touch one at all is the
-// "memory" capability its task holds (pkg/capability/memory) rather than
-// anything in the call. It is who the write is *recorded as*
-// (model.Memory.UpdatedBy): a run and a person editing the Settings pane
-// send the same body to the same handler, so unless this hop says which
-// it is, nothing about a landed write does -- and memory is replaced
-// wholesale, so an operator's correction could be overwritten by
-// tonight's memory agent with no trace that a person had said otherwise.
-// This process knows the answer for its own side of that, from -task, so
-// it says so; the browser says nothing and is recorded as the
-// deployment's own actor (ui.Client.PutMemory).
-//
-// It is also the one hop here that formats an answer rather than passing
-// one along, and only for one field: how old a note is, in the words
-// model.MemoryAge already gives every prompt. pkg/mcp does not import
-// pkg/model (its own limits are restated there for the same reason), and
-// this is the one place that has both.
-type daemonMemory struct {
-	client *ui.HTTPClient
-	taskID string
-	now    func() time.Time
-}
-
-// newDaemonMemory is the memory store for the run of task taskID. Its
-// memory grant reaches every scope: memory is the deployment's, with no
-// team layer to narrow a run to (single-tenant reset, stage 4d).
-func newDaemonMemory(client *ui.HTTPClient, taskID string) daemonMemory {
-	return daemonMemory{client: client, taskID: taskID}
-}
-
-func (d daemonMemory) WriteMemory(ctx context.Context, repo, text string) error {
-	_, err := d.client.PutMemory(ctx, repo, text, d.author())
-	return err
-}
-
-func (d daemonMemory) WriteMemoryDocument(ctx context.Context, repo, name, summary, text string) error {
-	_, err := d.client.PutMemoryDocument(ctx, repo, name, summary, text, d.author())
-	return err
-}
-
-// author is the run this process serves, as a principal: an agent, named
-// by its task, which is the spelling everything else that attributes
-// work to a run uses (orchestrator.finish's own agentPrincipal, and
-// pkg/capability/selfrepair's). The zero Principal when there is no task
-// to name -- which cannot happen through `grain daemon`, since -task and
-// -server are required together, but can when somebody points a real MCP
-// client at this binary by hand: a write with nobody to name is better
-// recorded as the deployment's own actor than as an agent that does not
-// exist.
-func (d daemonMemory) author() model.Principal {
-	if d.taskID == "" {
-		return model.Principal{}
-	}
-	return model.Principal{Kind: model.PrincipalAgent, ID: d.taskID}
-}
-
-func (d daemonMemory) ListMemoryDocuments(ctx context.Context) ([]mcp.MemoryDocumentEntry, error) {
-	docs, err := d.client.ListMemoryDocuments(ctx)
-	if err != nil {
-		return nil, err
-	}
-	entries := make([]mcp.MemoryDocumentEntry, 0, len(docs))
-	for _, doc := range docs {
-		entries = append(entries, mcp.MemoryDocumentEntry{
-			Repo: doc.Repo, Name: doc.Name, Summary: doc.Summary,
-			Age: d.age(doc.UpdatedAt), Length: doc.Length, ByHand: byHand(doc.UpdatedByKind),
-		})
-	}
-	return entries, nil
-}
-
-func (d daemonMemory) ReadMemoryDocument(ctx context.Context, repo, name string) (mcp.MemoryDocumentText, error) {
-	doc, err := d.client.GetMemoryDocument(ctx, repo, name)
-	if err != nil {
-		return mcp.MemoryDocumentText{}, err
-	}
-	return mcp.MemoryDocumentText{
-		Repo: doc.Repo, Name: doc.Name, Summary: doc.Summary,
-		Age: d.age(doc.UpdatedAt), Text: doc.Text, ByHand: byHand(doc.UpdatedByKind),
-	}, nil
-}
-
-// daemonReleaseNotes implements mcp.ReleaseNotesStore by asking a
-// running "grain daemon" for what this deployment has been doing and for
-// somewhere to publish the week (pkg/ui's /api/release-notes routes) --
-// the fifth REST hop this file makes, over the same client as the four
-// above.
-//
-// What it names a task for is daemonMemory's own reason and not a
-// different one: the run's authority to publish at all is the
-// "release-notes" capability its task holds
-// (pkg/capability/releasenotes), and the task id is who the write is
-// *recorded as* (model.ReleaseNote.UpdatedBy). A week's notes are this
-// deployment's public account of itself, so whether a week was written
-// by an agent or corrected afterwards by a person is exactly the kind of
-// thing a reader is entitled to see, and this hop is the only place that
-// knows which of the two it is.
-//
-// Neither call resolves a week for itself. An empty period travels as an
-// empty period and the daemon fills it in with the week that just ended
-// on the deployment's own clock (ui.Client.releaseNotePeriod), so the
-// numbers a run reads and the week it publishes cannot end up being
-// different weeks because this process and the daemon disagree about
-// what day it is.
-type daemonReleaseNotes struct {
-	client *ui.HTTPClient
-	taskID string
-}
-
-func (d daemonReleaseNotes) ClusterStats(ctx context.Context, period string) (mcp.ClusterStats, error) {
-	stats, err := d.client.ClusterStats(ctx, period)
-	if err != nil {
-		return mcp.ClusterStats{}, err
-	}
-	out := mcp.ClusterStats{
-		Period: stats.Period,
-		// Dates rather than timestamps: the window is whole days on the
-		// deployment's own calendar, and a reader of the sentence this
-		// ends up in wants "2026-09-14 to 2026-09-21".
-		Since:                stats.Since.Format(time.DateOnly),
-		Until:                stats.Until.Format(time.DateOnly),
-		PullRequestsMerged:   stats.PullRequestsMerged,
-		PullRequestsMeasured: stats.PullRequestsMeasured,
-		LinesAdded:           stats.LinesAdded,
-		LinesDeleted:         stats.LinesDeleted,
-		TasksCompleted:       stats.TasksCompleted,
-		TasksFiled:           stats.TasksFiled,
-		Runs:                 stats.Runs,
-		RunsSucceeded:        stats.RunsSucceeded,
-		AgentHours:           stats.AgentHours,
-	}
-	for _, r := range stats.Repos {
-		out.Repos = append(out.Repos, mcp.RepoStats{
-			Repo: r.Repo, PullRequestsMerged: r.PullRequestsMerged,
-			PullRequestsMeasured: r.PullRequestsMeasured,
-			LinesAdded:           r.LinesAdded,
-			LinesDeleted:         r.LinesDeleted,
-			TasksCompleted:       r.TasksCompleted, TasksFiled: r.TasksFiled, Runs: r.Runs,
-		})
-	}
-	return out, nil
-}
-
-// WriteReleaseNotes publishes the week and answers with the week that
-// was actually written -- which is the point of the return value: a run
-// that named no period has just published something, and the sentence it
-// reports back to the person reading its closing note should name the
-// week rather than "this one".
-func (d daemonReleaseNotes) WriteReleaseNotes(ctx context.Context, period, title, text string) (string, error) {
-	note, err := d.client.PutReleaseNote(ctx, period, title, text, d.author())
-	if err != nil {
-		return "", err
-	}
-	return note.Period, nil
-}
-
-// author is daemonMemory.author's principal, for daemonMemory.author's
-// reasons: the run this process serves, as an agent named by its task,
-// and the zero Principal when there is no task to name.
-func (d daemonReleaseNotes) author() model.Principal {
-	if d.taskID == "" {
-		return model.Principal{}
-	}
-	return model.Principal{Kind: model.PrincipalAgent, ID: d.taskID}
-}
-
-// byHand is whether a note was written by a person rather than by an
-// agent (model.Memory.UpdatedBy), read off the kind the API reports.
-//
-// The second field this file translates rather than passes along, for
-// the reason age above is the first: pkg/mcp deliberately does not
-// import pkg/model, and this process is the one place holding both. A
-// kind that is neither -- automation, or the empty string every row
-// written before the author was recorded carries -- is false, since the
-// mark is a claim that somebody typed it and unknown is not that claim.
-func byHand(kind string) bool { return kind == string(model.PrincipalHuman) }
-
-// age is model.MemoryAge against this process's own clock, and "" for a
-// row that carries no timestamp -- the same silence MemoryAge keeps
-// rather than inventing an age for a note whose write left none.
-func (d daemonMemory) age(updated *time.Time) string {
-	if updated == nil {
-		return ""
-	}
-	now := time.Now().UTC()
-	if d.now != nil {
-		now = d.now()
-	}
-	return model.MemoryAge(*updated, now)
-}
-
 // SandboxEnv collects the repeated -sandbox-env flag: NAME=VALUE entries
 // a -sandbox-root server's run_command sets on top of its allowlist
 // (mcp.NewSandboxTools), checked by mcp.ValidateSandboxEnv once
@@ -1688,10 +1250,9 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
-	memory.CapabilityName, grainci.CapabilityName, deploymenthealth.CapabilityName,
-	selfupgrade.CapabilityName, pipelinecontrol.CapabilityName, dispatchcontrol.CapabilityName,
+	grainci.CapabilityName, deploymenthealth.CapabilityName,
 	readissues.CapabilityName,
-	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite, teambroadcast.CapabilityName,
+	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -1699,6 +1260,9 @@ func warnUnknownGrants(grants GrantNames) {
 	for _, name := range grants {
 		if _, isAPI, err := ui.ParseAPIGrant(name); isAPI && err == nil {
 			continue // served as generated tools (ui.AgentAPITools)
+		}
+		if model.APIAliasPreset(name) != "" {
+			continue // bare alias for an api preset (ui.AgentAPITools)
 		}
 		if !slices.Contains(served, name) {
 			fmt.Fprintf(os.Stderr,
@@ -1708,8 +1272,6 @@ func warnUnknownGrants(grants GrantNames) {
 		}
 	}
 }
-
-var ConfirmPollInterval = chatPollInterval
 
 func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID string, client *ui.HTTPClient) []mcp.Tool {
 	var tools []mcp.Tool
@@ -1733,78 +1295,6 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 	}
 	if grants.Has(bootstrap.CapabilityName) {
 		tools = append(tools, bootstrap.PlaybookTools()...)
-	}
-	if grants.Has(selfupgrade.CapabilityName) {
-		// nil when this run has no daemon to ask, which puts all three
-		// tools on the roster refusing every call rather than leaving
-		// the roster to depend on how the process was started
-		// (selfupgrade.Tools' own doc comment).
-		var deployment selfupgrade.Deployment
-		var confirm func(ctx context.Context, question string) (bool, string, error)
-		if client != nil {
-			deployment = daemonUpgrade{client: client, taskID: taskID}
-			if taskID != "" {
-				confirm = func(ctx context.Context, question string) (bool, string, error) {
-					posted, err := client.PostTaskMessage(ctx, taskID, question, model.DeriveQuestionSummary(question), nil)
-					if err != nil {
-						return false, "", err
-					}
-					deadline := time.Now().Add(selfupgrade.DefaultConfirmTimeout)
-					poll := ConfirmPollInterval
-					if poll <= 0 {
-						poll = chatPollInterval
-					}
-					ticker := time.NewTicker(poll)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-ctx.Done():
-							return false, "the run was cancelled while waiting for a reply", nil
-						case now := <-ticker.C:
-							messages, err := client.TaskMessages(ctx, taskID, posted.ID)
-							if err == nil && len(messages) > 0 {
-								for _, m := range messages {
-									if m.AuthorKind == string(model.PrincipalHuman) {
-										return selfupgrade.Decide(m.Body), m.Body, nil
-									}
-								}
-							}
-							if now.After(deadline) {
-								return false, "no reply within the timeout", nil
-							}
-						}
-					}
-				}
-			}
-		}
-		tools = append(tools, selfupgrade.Tools(selfupgrade.Config{
-			TaskID:     taskID,
-			Deployment: deployment,
-			Confirm:    confirm,
-		})...)
-	}
-	if grants.Has(dispatchcontrol.CapabilityName) {
-		var controller dispatchcontrol.Controller
-		if client != nil {
-			controller = daemonDispatchControl{client: client, taskID: taskID}
-		}
-		tools = append(tools, dispatchcontrol.Tools(dispatchcontrol.Config{
-			TaskID:     taskID,
-			Controller: controller,
-		})...)
-	}
-	// pipeline-control's two tools share their names with
-	// dispatch-control's first two, which do what they do and more, so a
-	// run holding both is served dispatch-control's.
-	if grants.Has(pipelinecontrol.CapabilityName) && !grants.Has(dispatchcontrol.CapabilityName) {
-		var controller pipelinecontrol.Controller
-		if client != nil {
-			controller = daemonPipelineControl{client: client, taskID: taskID}
-		}
-		tools = append(tools, pipelinecontrol.Tools(pipelinecontrol.Config{
-			TaskID:     taskID,
-			Controller: controller,
-		})...)
 	}
 	if grants.Has(dbaccess.CapabilityDBRead) || grants.Has(dbaccess.CapabilityDBWrite) {
 		var executor dbaccess.DBExecutor
@@ -2027,6 +1517,11 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		c := append([]string(nil), p.Capabilities...)
 		caps = &c
 	}
+	var priority *int
+	if p.Priority != 0 {
+		prio := p.Priority
+		priority = &prio
+	}
 	// A local `id` from an earlier call in this run resolves here too: a
 	// run that re-files the same proposal twice in one turn is replacing
 	// the task it filed a moment ago, and it knows that one by the name
@@ -2036,7 +1531,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		supersedes = real
 	}
 	created, err := f.client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, AutoMerge: auto,
+		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, Priority: priority, AutoMerge: auto,
 		TemplateID: p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
 		DependsOn: deps, CustomFields: fields, Supersedes: supersedes,
 		Reads: p.Reads, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
@@ -2045,6 +1540,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		SandboxCPUs: p.SandboxCPUs, SandboxMemoryMB: p.SandboxMemoryMB,
 		SandboxDiskGB: p.SandboxDiskGB, NetworkAccess: p.NetworkAccess,
 		NothingNeededAction: p.NothingNeededAction,
+		KeepRunning:         p.KeepRunning,
 		Goal:                p.Goal,
 		NoPort:              p.NoPort,
 		FixesBaseBranch:     p.FixesBaseBranch,
@@ -2072,16 +1568,42 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		SupersedeKept:  supersedeKept(created.SupersedeKept),
 		// Approval rather than state: a proposal filed deferred
 		// (not_before) reads "deferred" either way, and only its
-		// approval says whether a human still has to look at it. The
-		// state is the fallback for a daemon that does not report
-		// approval.
-		Queued: created.Approved ||
-			(created.State != model.StateProposed && created.State != model.StateDeferred),
+		// approval says whether a human still has to look at it.
+		Queued: filedApproved(created),
 		// The daemon's own account of why it is not queued, which only it
 		// can give: it is the side that read the parent's permission.
 		Held:         created.HeldBy != "",
 		ApprovalNote: created.ApprovalNote,
+		Parked:       filedParked(created),
 	}, nil
+}
+
+// filedApproved is whether a proposal CreateTask just filed carries an
+// approval. Task.Approved says so whenever it is set; it is omitted when
+// false, so the state stands in for it only as far as it can -- queued
+// or running is a task that was approved, and every other state
+// (proposed, deferred, and awaiting_reply above all, which filing parks a
+// task in whatever its approval: a repo off the target repo list) proves
+// nothing either way and is read as unapproved. Reading those as queued
+// told a run that had held its proposal that the hold had not worked
+// (grain/task-2050).
+func filedApproved(created ui.Task) bool {
+	return created.Approved ||
+		created.State == model.StateQueued || created.State == model.StateRunning
+}
+
+// filedParked is why filing parked a proposal awaiting a reply, or "".
+// The daemon's own comment when it reports one (Task.ParkNote); a daemon
+// that does not still shows the park in the state, and is relayed as a
+// park with the thread named as the place to read why.
+func filedParked(created ui.Task) string {
+	if created.ParkNote != "" {
+		return created.ParkNote
+	}
+	if created.State == model.StateAwaitingReply {
+		return "filing parked it awaiting a reply; grain's comment on its thread says what lifts that."
+	}
+	return ""
 }
 
 // mcpGitHubPins is the daemon's own answer to where a tunnelled MCP
@@ -2232,9 +1754,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 			"over -server, along with the api:self-debug preset tools (api:tasks:read and api:deployment:read); "+
 			"\"grain-log\" serves read_grain_log over this host's journal, "+
 			"redacted with -grain-secrets-dir; \"bootstrap-playbooks\" serves list_bootstrap_playbooks/"+
-			"read_bootstrap_playbook off the playbooks embedded in this binary; \"self-upgrade\" "+
-			"serves deployment_upgrade_status/upgrade_deployment/cancel_deployment_upgrade, which "+
-			"ask the -server daemon to upgrade the deployment this run is running inside. Passed "+
+			"read_bootstrap_playbook off the playbooks embedded in this binary. Passed "+
 			"by a Framework from the grants on the run's own task (agent.RunConfig.Grants, "+
 			"agent.GrantArgs).")
 	grainSrcDir := fs.String("grain-src-dir", "",
@@ -2503,13 +2023,6 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		// notify_operator and message_task are every run's, with no
 		// grant: the daemon applies their rules for -task.
 		registry.Register(mcp.NewNotifyTools(daemonNotifier{client: client, taskID: *taskID})...)
-		// broadcast_team_message writes into other tasks' conversations,
-		// so it is the team-broadcast grant's (pkg/capability/
-		// teambroadcast). The daemon is told which task is asking and
-		// checks the grant itself.
-		if grants.Has(teambroadcast.CapabilityName) {
-			registry.Register(mcp.NewBroadcastTools(DaemonTasks{Client: client, taskID: *taskID})...)
-		}
 		if grants.Has(grainci.CapabilityName) {
 			taskBranch := strings.TrimSpace(*prBranch)
 			if taskBranch == "" {
@@ -2615,13 +2128,8 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 				taskReadRepos[strings.ToLower(r)] = true
 			}
 		}
-		addTaskRepo(taskDetail.Task.Repo)
-		for _, r := range taskDetail.Task.Reads {
-			addTaskRepo(r)
-		}
-		for _, w := range taskDetail.Task.Writes {
-			addTaskRepo(w.Repo)
-		}
+		// Only an api:tasks:read@repo grant opens other tasks' records;
+		// the task's own target, reads and writes do not.
 		for _, r := range apiGrants.Repos("tasks:read") {
 			addTaskRepo(r)
 		}
@@ -2645,7 +2153,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 				TaskReadRepos:    taskReadRepos,
 				MayReadFullConfig: grants.Has(selfdebug.CapabilityName) ||
 					apiGrants.Allows("settings:read", "") || apiGrants.Allows("repos:read", ""),
-				MayReadAllMemory: grants.Has(memory.CapabilityName) || apiGrants.Allows("memory:read", ""),
+				MayReadAllMemory: apiGrants.Allows("memory:read", ""),
 				MayReadMetrics:   grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", ""),
 				MayReadPipeline:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", "") || apiGrants.Allows("dispatch:read", ""),
 				MayReadHealth:    grants.Has(deploymenthealth.CapabilityName) || apiGrants.Allows("deployment:read", ""),
@@ -2676,42 +2184,6 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		}
 		registry.Register(mcp.NewLiveProposalTools(escapeSink, proposeRepoList.Nameable(), *taskID,
 			liveFiler)...)
-		// update_memory is the one grant-gated tool that also needs the
-		// daemon: what it writes is a row in the daemon's store, so a
-		// run granted memory with no daemon to ask gets no tool at all
-		// rather than one that could only refuse. The grant is still
-		// what decides whether it appears -- see grantedTools for the
-		// tools that depend on the grant alone.
-		if grants.Has(memory.CapabilityName) {
-			registry.Register(mcp.NewMemoryTools(
-				newDaemonMemory(client, *taskID))...)
-		}
-		// The same arrangement for the weekly release-notes job: what it
-		// counts and what it publishes are both the daemon's, so a run
-		// granted release-notes with no daemon to ask gets no tools at
-		// all rather than two that could only refuse.
-		if grants.Has(releasenotes.CapabilityName) {
-			registry.Register(mcp.NewReleaseNotesTools(
-				daemonReleaseNotes{client: client, taskID: *taskID})...)
-		}
-		if grants.Has(quarantine.CapabilityName) {
-			ws := *root
-			if ws == "" {
-				ws = *workspace
-			}
-			var filer mcp.ProposalFiler
-			if client != nil {
-				filer = &daemonProposalFiler{client: client, parent: *taskID, baseURL: *server, filed: map[string]string{}}
-			}
-			registry.Register(mcp.NewQuarantineTools(mcp.QuarantineToolConfig{
-				WorkspaceDir: ws,
-				TaskID:       *taskID,
-				Repo:         *prRepo,
-				Branch:       *prBranch,
-				Sink:         escapeSink,
-				Filer:        filer,
-			})...)
-		}
 	}
 
 	registry.Register(GrantedDaemonTools(grants, *grainSrcDir, *grainSecretsDir, *grainStateDir, *taskID, client)...)

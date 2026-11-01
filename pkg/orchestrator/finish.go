@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
@@ -386,6 +387,12 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		}
 	}
 	if !staleBranch && !inPlace {
+		pushedCommit := true
+		if preRunBranchSHA != "" && client != nil && task.Target != nil {
+			if head, herr := client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName()); herr == nil && head != nil {
+				pushedCommit = head.SHA != preRunBranchSHA
+			}
+		}
 		handled, err := salvagePushedBranch(ctx, store, client, task, now)
 		if empty, ok := emptyBranch(err); ok {
 			// The task has already been told, and parked (noteEmptyBranch).
@@ -404,6 +411,9 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			return err
 		}
 		if handled {
+			if pushedCommit || hasComment || hasNothingNeeded || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != "")) {
+				resolveRelayedThreadsAfterOwnerRun(ctx, store, client, task, proxyResult, pushedCommit)
+			}
 			return nil
 		}
 	}
@@ -418,7 +428,8 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if err != nil {
 		return err
 	}
-	relayedInProcess := takeInProcessRelayed(runID)
+	relayedInProcess := takeInProcessRelayed(store, runID)
+	keepRunning := taskKeepRunning(ctx, store, task)
 
 	// A goal task (model.TaskGoal, docs/design/durable-tasks.md#DT-4) is
 	// never completed or closed on its agent's word: a closing comment,
@@ -426,7 +437,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// its goal or a message instead (restOnGoal). Its words are relayed as
 	// an ordinary comment; reconcileTaskGoals closes it once the goal is
 	// met, and a person may close it any time.
-	if !waitingMessage {
+	if !waitingMessage && !keepRunning {
 		finalText := !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && strings.TrimSpace(result.FinalText) != "" &&
 			!taskPaused(ctx, store, task.ID)
 		if relayedInProcess || hasComment || hasNothingNeeded || finalText {
@@ -455,6 +466,12 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 				return err
 			}
 		}
+		if keepRunning {
+			markKeepRunningRequeued(store, task.ID, runID, true)
+			return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+				o.CompletedAt = nil
+			})
+		}
 		return finishNothingNeeded(ctx, store, task, runID, now)
 	}
 
@@ -473,7 +490,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// When comment_on_issue was absent, but the run completed an investigation /
 	// non-code task with a final assistant response (and did not push a branch or
 	// ask a question), use the final assistant text as the closing note.
-	if !hasComment && !hasNothingNeeded && result != nil && strings.TrimSpace(result.FinalText) != "" {
+	if !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && strings.TrimSpace(result.FinalText) != "" {
 		comment := strings.TrimSpace(result.FinalText)
 		if _, err := relayCommentWithAttachments(ctx, store, task, comment, nil, now); err != nil {
 			return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
@@ -490,6 +507,13 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		log.Printf("orchestrator: task %s run %s: a message was posted that the run was never shown; "+
 			"leaving the task ready to be dispatched for it", task.ID, runID)
 		return nil
+	}
+
+	if keepRunning {
+		markKeepRunningRequeued(store, task.ID, runID, false)
+		return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+			o.CompletedAt = nil
+		})
 	}
 
 	// A closing comment ends the task, and so does a review that posted
@@ -774,6 +798,12 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 				if err := noteOnTask(ctx, store, task.ID, note, now); err != nil {
 					return true, err
 				}
+				if taskKeepRunning(ctx, store, task) {
+					markKeepRunningRequeued(store, task.ID, "", false)
+					return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+						o.CompletedAt = nil
+					})
+				}
 				return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
 					o.CompletedAt = &now
 					o.RetryRequestedAt = nil
@@ -785,6 +815,10 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 		// Work that already landed is an ending, not a failure: no pull
 		// request, the task told and marked done (finishAlreadyLanded).
 		if landed, ok := alreadyLanded(err); ok {
+			if taskKeepRunning(ctx, store, task) {
+				markKeepRunningRequeued(store, task.ID, "", false)
+				return true, noteOnTask(ctx, store, task.ID, landed.Error(), now)
+			}
 			return true, finishAlreadyLanded(ctx, store, task, landed, now)
 		}
 		// A branch with nothing on it is the one failure here that is not
@@ -794,6 +828,9 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 		// ProcessResult, RunCycle and recoverRun, which want three
 		// different outcomes on the row and the same thing on the task.
 		if empty, ok := emptyBranch(err); ok {
+			if taskKeepRunning(ctx, store, task) {
+				return false, nil
+			}
 			if noteErr := noteEmptyBranch(ctx, store, task, empty, now); noteErr != nil {
 				// Deliberately not wrapping err: the task was *not*
 				// told, so this is an ordinary failure to report and
@@ -1386,6 +1423,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	if len(proposals) == 0 {
 		return nil
 	}
+	if latest, err := store.GetTask(ctx, task.ID); err == nil && latest != nil {
+		task = *latest
+	}
 	atFront, err := newestFirst(ctx, store)
 	if err != nil {
 		return err
@@ -1516,7 +1556,16 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			nothingNeeded, _ = model.ParseNothingNeededAction(strings.TrimSpace(v))
 		}
 		noPort, _ := p["no_port"].(bool)
+		keepRunning, keepRunningSet := p["keep_running"].(bool)
 		fixesBase, _ := p["fixes_base_branch"].(bool)
+		priority := model.DefaultTaskPriority
+		var hasExplicitPriority bool
+		if v, ok := p["priority"]; ok {
+			if parsed, ok := argInt(v); ok && parsed > 0 {
+				priority = parsed
+				hasExplicitPriority = true
+			}
+		}
 		goal, goalErr := model.ParseGoalArg(p["goal"])
 		if goalErr != nil {
 			body += fmt.Sprintf("\n\n_grain could not use this proposal's goal: %v. It was filed without one._", goalErr)
@@ -1554,7 +1603,13 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				if netAccess == "" && comp.NetworkAccess != "" {
 					netAccess = comp.NetworkAccess
 				}
+				if !hasExplicitPriority && comp.Priority != 0 {
+					priority = comp.Priority
+				}
 				interactive = comp.Interactive
+				if !keepRunningSet {
+					keepRunning = comp.KeepRunning
+				}
 			}
 		}
 
@@ -1735,6 +1790,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Target:              target,
 			Binding:             model.BindingDirective,
 			Base:                base,
+			Priority:            priority,
 			Interactive:         interactive,
 			Grants:              grants,
 			SandboxCPUs:         cpus,
@@ -1745,6 +1801,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			AgentBackendID:      agentBackendID,
 			Model:               agentModel,
 			NothingNeededAction: nothingNeeded,
+			KeepRunning:         keepRunning,
 			NoPort:              noPort,
 			WorkOrigin:          explicitOrigin,
 			// What the run asked this proposal to say about this
@@ -1909,15 +1966,18 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// whatever the permission below would have said, and marked as
 		// held only if it would have said yes -- ui.CreateTask's rule for
 		// the identical call filed live. Per call: the held task's own
-		// proposals are judged on its own permission when it runs.
-		hold, _ := p["hold_for_approval"].(bool)
-		hold = hold || needsPersonWhy != ""
+		// proposals are judged on its own permission when it runs. A
+		// proposal grain itself files for a person (needsPersonWhy) waits
+		// too, but its note above already says why, and it is not marked
+		// as held: the run made no choice there.
+		heldByRun, _ := p["hold_for_approval"].(bool)
+		hold := heldByRun || needsPersonWhy != ""
 		switch {
 		case len(escalated) > 0:
-			proposal.Body += model.CapabilityEscalationNote(task.ID, escalated)
+			proposal.Body += model.ProposalEscalationNote(task.ID, proposal, escalated)
 		case len(ungranted) > 0, len(ungrantedReads) > 0:
 			// Filed for a person; the notes above say why.
-		case hold && (approved || model.AutoSubmits(proposal, task)):
+		case heldByRun && (approved || model.AutoSubmits(proposal, task)):
 			proposal.Body += model.HeldForApprovalNote(task.ID)
 			proposal.Tags = append(proposal.Tags, model.HeldForApprovalTag)
 		case hold:
@@ -1944,7 +2004,18 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		asked := proposedAutoMerge(p, task) &&
 			model.GrantsSubsetOf(proposal.Grants, task.Grants)
 		proposal.AutoMerge = asked && model.LandsWhereGranted(proposal, task)
-		if asked && !proposal.AutoMerge && len(ungranted) == 0 {
+		if proposal.ChangeTarget != nil {
+			// A change target's change is a CL, not a pull request, so
+			// there is nothing for auto-merge to merge and
+			// model.ValidateTaskChangeTarget refuses it -- checked above
+			// before this was decided, so inheriting it here filed a task
+			// every dispatch refused (task 1860). Its CL is submitted by
+			// a person through its provider instead.
+			if proposal.AutoMerge {
+				proposal.Body += changeTargetAutoMergeNote(task, proposal)
+			}
+			proposal.AutoMerge = false
+		} else if asked && !proposal.AutoMerge && len(ungranted) == 0 {
 			proposal.Body += otherBranchAutoMergeNote(task, proposal)
 		}
 		if err := store.PutTask(ctx, proposal); err != nil {
@@ -2557,6 +2628,16 @@ func otherBranchAutoMergeNote(task, proposal model.Task) string {
 		task.ID, landingBranch(task), landingBranch(proposal))
 }
 
+// changeTargetAutoMergeNote is otherBranchAutoMergeNote for a proposal
+// with a change target: it would have inherited auto-merge, and has no
+// pull request for it to apply to.
+func changeTargetAutoMergeNote(task, proposal model.Task) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: task %s, which proposed this, is an auto-merge job, but this "+
+		"task's change is a %s change with no git pull request, so it did not inherit that. "+
+		"Its change is submitted by a person through its provider.",
+		task.ID, proposal.ChangeTarget.Kind)
+}
+
 // landingBranch names the branch a task's work lands on, for the sentence
 // above: its Base when it has one, and otherwise the target repo's
 // default branch, unnamed for the same reason baseDescription leaves it
@@ -2774,9 +2855,89 @@ func finishWithPullRequest(ctx context.Context, store *model.Store, client githu
 			"it is judged again before it merges", ref, err)
 	}
 
+	if taskKeepRunning(ctx, store, task) {
+		markKeepRunningRequeued(store, task.ID, "", false)
+		return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+			o.CompletedAt = nil
+		})
+	}
 	return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
 		o.CompletedAt = &now
 		o.RetryRequestedAt = nil
+	})
+}
+
+func taskKeepRunning(ctx context.Context, store *model.Store, task model.Task) bool {
+	if store != nil && task.ID != "" {
+		if fresh, err := store.GetTask(ctx, task.ID); err == nil && fresh != nil {
+			return fresh.KeepRunning
+		}
+	}
+	return task.KeepRunning
+}
+
+type keepRunningPending struct {
+	runID         string
+	nothingNeeded bool
+}
+
+var keepRunningRequeued sync.Map // map[*model.Store]*sync.Map (taskID -> keepRunningPending)
+
+func markKeepRunningRequeued(store *model.Store, taskID, runID string, nothingNeeded bool) {
+	if store == nil || taskID == "" {
+		return
+	}
+	v, _ := keepRunningRequeued.LoadOrStore(store, &sync.Map{})
+	v.(*sync.Map).Store(taskID, keepRunningPending{runID: runID, nothingNeeded: nothingNeeded})
+}
+
+func clearKeepRunningRequeued(store *model.Store, taskID string) {
+	if store == nil || taskID == "" {
+		return
+	}
+	if v, ok := keepRunningRequeued.Load(store); ok {
+		v.(*sync.Map).Delete(taskID)
+	}
+}
+
+func settleStoppedKeepRunningTasks(ctx context.Context, store *model.Store, now time.Time) {
+	if store == nil {
+		return
+	}
+	v, ok := keepRunningRequeued.Load(store)
+	if !ok {
+		return
+	}
+	m := v.(*sync.Map)
+	m.Range(func(key, value any) bool {
+		taskID := key.(string)
+		pending := value.(keepRunningPending)
+		t, err := store.GetTask(ctx, taskID)
+		if err != nil || t == nil {
+			m.Delete(taskID)
+			return true
+		}
+		if t.KeepRunning {
+			return true
+		}
+		m.Delete(taskID)
+		st, err := store.State(ctx, taskID)
+		if err != nil || st != model.StateQueued {
+			return true
+		}
+		if goal, _ := store.TaskGoal(ctx, taskID); goal != nil {
+			_, _ = restOnGoal(ctx, store, *t, pending.runID, now)
+			return true
+		}
+		if pending.nothingNeeded {
+			_ = finishNothingNeeded(ctx, store, *t, pending.runID, now)
+			return true
+		}
+		_ = observeField(ctx, store, taskID, now, func(o *model.Observation) {
+			o.CompletedAt = &now
+			o.RetryRequestedAt = nil
+		})
+		return true
 	})
 }
 
@@ -2931,7 +3092,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	// what every pull request grain opened was called before this.
 	title := titleFromCommits(commits)
 	if title == "" {
-		title = task.Title
+		title = capTitle(commitSummary(task.Title))
 	}
 	if title == "" {
 		title = "grain: " + task.ID

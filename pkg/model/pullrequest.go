@@ -35,6 +35,9 @@ type PullRequestRef struct {
 // with no escaping.
 func (r PullRequestRef) String() string { return fmt.Sprintf("%s#%d", r.Repo, r.Number) }
 
+// WebURL is r's page on its repository's git host.
+func (r PullRequestRef) WebURL() string { return fmt.Sprintf("%s/pull/%d", r.Repo.WebURL(), r.Number) }
+
 // ParsePullRequestRef reverses PullRequestRef.String.
 func ParsePullRequestRef(s string) (PullRequestRef, error) {
 	repoPart, numPart, ok := strings.Cut(s, "#")
@@ -50,6 +53,22 @@ func ParsePullRequestRef(s string) (PullRequestRef, error) {
 		return PullRequestRef{}, fmt.Errorf("pull request ref %q: bad number: %w", s, err)
 	}
 	return PullRequestRef{Repo: repo, Number: number}, nil
+}
+
+// SamePullRequest reports whether a and b are one pull request: the same
+// number in the same repository (RepoRef.Same, so case-insensitively).
+func SamePullRequest(a, b PullRequestRef) bool {
+	return a.Number == b.Number && a.Repo.Same(b.Repo)
+}
+
+// PullRequestRefLess orders pull requests by repository, then by number
+// as a number. Ordering them by String() instead, as a task's links are
+// read back, puts "o/r#100" before "o/r#99".
+func PullRequestRefLess(a, b PullRequestRef) bool {
+	if !a.Repo.Same(b.Repo) {
+		return strings.ToLower(a.Repo.String()) < strings.ToLower(b.Repo.String())
+	}
+	return a.Number < b.Number
 }
 
 // PrHealth is GitHub's own view of one pull request, as far as grain has

@@ -82,4 +82,9 @@ func TestResolveNamesALabelNoPullRequestHeads(t *testing.T) {
 	if !errors.Is(err, forkhead.ErrNoPullRequest) || !strings.Contains(err.Error(), `"andrzejfudro:gone"`) {
 		t.Fatalf("err = %v", err)
 	}
+	// The refusal is shown as it stands, so it says "no open pull
+	// request" once rather than ending on the sentinel's own words.
+	if strings.HasSuffix(err.Error(), forkhead.ErrNoPullRequest.Error()) {
+		t.Fatalf("err = %q, want it not to end on %q", err, forkhead.ErrNoPullRequest)
+	}
 }

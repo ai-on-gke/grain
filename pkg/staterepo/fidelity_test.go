@@ -427,6 +427,11 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err := store.SetSpoolCursor(ctx, "a1b2-1", 987654, sub); err != nil {
 		t.Fatalf("advancing a spool cursor: %v", err)
 	}
+	// A tool call a live run's in-process session turns already relayed
+	// (task_run_relayed_call): a fingerprint and how many times.
+	if err := store.RecordRelayedCalls(ctx, "a1b2-1", []string{"9f86d081884c7d65", "9f86d081884c7d65"}); err != nil {
+		t.Fatalf("recording relayed calls: %v", err)
+	}
 	// A live k8s-granule sandbox's reverse-channel token hash and expiry
 	// (sandbox_access).
 	if err := store.SetSandboxAccess(ctx, "c3d4-1",
@@ -471,6 +476,15 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		{Grant: "host-script#host-script", AttemptID: "e1-a1b2-1-0", At: sub, Note: "the capability server left out 1 further record(s)"},
 	}); err != nil {
 		t.Fatalf("recording a capability audit: %v", err)
+	}
+	if err := store.RecordRunStartup(ctx, model.RunStartup{
+		RunID:             "a1b2-1",
+		QueuedAt:          &sub,
+		SandboxAcquiredAt: &sub,
+		SandboxPreparedAt: &sub,
+		FirstTurnAt:       &sub,
+	}); err != nil {
+		t.Fatalf("recording run startup: %v", err)
 	}
 	// A run of grain's own CI (ci_run, ci_job, ci_step): the three tables
 	// whose interesting column is a step's output, which is raw bytes

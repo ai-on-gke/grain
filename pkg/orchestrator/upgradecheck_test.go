@@ -231,7 +231,7 @@ func TestUpgradeCheckBodySendsTheQueueQuestionToTheTaskTools(t *testing.T) {
 	}
 	body := checks[0].Body
 
-	if !strings.Contains(body, "list_grain_tasks") || !strings.Contains(body, "read_grain_task") {
+	if !strings.Contains(body, "grain task list") || !strings.Contains(body, "grain task read") {
 		t.Errorf("the body asks what the deployment has dispatched without naming the tools "+
 			"that read it:\n%s", body)
 	}
@@ -1073,5 +1073,59 @@ func TestUpgradeCheckIgnoresUnchangedUpgrade(t *testing.T) {
 	}
 	if pause, err := store.GetPipelinePause(ctx); err != nil || pause != nil {
 		t.Errorf("GetPipelinePause = (%+v, %v), want no pause for an unchanged upgrade", pause, err)
+	}
+}
+
+// An upgrade with a restart to come is the next process's to check: a
+// cycle on the outgoing daemon -- one that ticks between the upgrade
+// staging the new build and the restart replacing this process, while
+// in-flight runs are flushed -- files nothing, because the build hash,
+// the restart gap and the adoption it would report do not exist yet
+// (task 1937). The daemon the restart brings up files it.
+func TestUpgradeCheckWaitsForTheRestartToComplete(t *testing.T) {
+	t.Parallel()
+	finished := baseTime.Add(-time.Minute)
+	restartAt := baseTime.Add(-30 * time.Second)
+	restarting := func(state upgrade.StepState, at *time.Time) upgrade.Status {
+		status := upgradeDone("main", finished)
+		status.Steps = []upgrade.Step{
+			{Name: "install", State: upgrade.StepDone},
+			{Name: "restart", State: state, StartedAt: at},
+		}
+		return status
+	}
+	outgoing := baseTime.Add(-24 * time.Hour)
+	incoming := baseTime.Add(-10 * time.Second)
+
+	for _, c := range []struct {
+		name    string
+		status  upgrade.Status
+		process time.Time
+		want    int
+	}{
+		{"outgoing daemon, restart not yet started", restarting(upgrade.StepPending, nil), outgoing, 0},
+		{"outgoing daemon, restart command running", restarting(upgrade.StepRunning, &restartAt), outgoing, 0},
+		{"outgoing kube pod, rollout under way", upgradeDone("main", finished), outgoing, 0},
+		{"daemon the restart brought up", restarting(upgrade.StepRunning, &restartAt), incoming, 1},
+		{"pod the rollout brought up", upgradeDone("main", finished), incoming, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store, _ := openStore(t)
+			status := c.status
+			deps := orchestrator.Deps{
+				Store: store,
+				Config: orchestrator.Config{
+					UpgradeStatus:    func() (upgrade.Status, error) { return status, nil },
+					ProcessStartedAt: c.process,
+					StateRepo:        func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+				},
+			}
+			if err := orchestrator.RunCycle(t.Context(), deps, baseTime); err != nil {
+				t.Fatalf("cycle: %v", err)
+			}
+			if got := upgradeChecks(t, store); len(got) != c.want {
+				t.Fatalf("filed %d upgrade checks, want %d", len(got), c.want)
+			}
+		})
 	}
 }

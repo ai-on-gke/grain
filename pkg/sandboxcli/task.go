@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -205,6 +206,7 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 		Capabilities:    splitMultiFlag(p, "capability"),
 		FixesBaseBranch: p.has("fixes-base-branch"),
 		NoPort:          p.has("no-port"),
+		KeepRunning:     p.has("keep-running"),
 		Origin:          strings.TrimSpace(p.get("origin")),
 		Reads:           splitMultiFlag(p, "read"),
 		HoldForApproval: &hold,
@@ -226,6 +228,13 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 			return err
 		}
 		req.NotBefore = &t
+	}
+	if rawPri := strings.TrimSpace(p.get("priority")); rawPri != "" {
+		pri, err := strconv.Atoi(rawPri)
+		if err != nil || pri < 0 {
+			return fmt.Errorf("--priority %q must be a non-negative integer", rawPri)
+		}
+		req.Priority = &pri
 	}
 	var buf bytes.Buffer
 	if err := c.post("/cli/proposals", req, &buf); err != nil {
@@ -588,4 +597,57 @@ func parseCLIQuarantineTTL(s string) (time.Duration, error) {
 		}
 	}
 	return time.ParseDuration(s)
+}
+
+// taskList is grain task list: /cli/tasks, list_grain_tasks one line per
+// task. The count and elision come back in a header and go to stderr, so
+// what reaches stdout is the task lines alone.
+func (c *sandboxCLI) taskList(p sandboxArgs) error {
+	if err := p.only("task list", "state", "repo", "limit", "search", "changed-since", "stalled", "kind", "json"); err != nil {
+		return err
+	}
+	if len(p.positional) > 0 {
+		return fmt.Errorf("task list: unexpected argument %q: run 'grain task list --help' for usage", p.positional[0])
+	}
+	q := url.Values{}
+	for _, v := range p.getAll("state") {
+		q.Add("state", v)
+	}
+	for _, name := range []string{"repo", "search", "kind"} {
+		if v := strings.TrimSpace(p.get(name)); v != "" {
+			q.Set(name, v)
+		}
+	}
+	if v := strings.TrimSpace(p.get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err != nil || n <= 0 {
+			return fmt.Errorf("task list: --limit %q is not a positive number", v)
+		}
+		q.Set("limit", v)
+	}
+	if v := strings.TrimSpace(p.get("changed-since")); v != "" {
+		q.Set("changed_since", v)
+	}
+	if p.has("stalled") {
+		q.Set("stalled", "1")
+	}
+	if p.has("json") {
+		q.Set("format", "json")
+	}
+	resp, err := c.do("/cli/tasks", q)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		fmt.Fprintln(c.errOut, "grain: "+strings.TrimSpace(string(body)))
+		return errSandboxReported
+	}
+	if _, err := io.Copy(c.out, resp.Body); err != nil {
+		return err
+	}
+	if note := resp.Header.Get(gitproxy.TaskListNoteHeader); note != "" && !p.has("json") {
+		fmt.Fprintln(c.errOut, note)
+	}
+	return nil
 }

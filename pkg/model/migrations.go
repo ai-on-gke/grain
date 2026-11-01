@@ -376,6 +376,79 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `session_sandbox_idle_ttl_ms` INTEGER NOT NULL DEFAULT 0",
 		},
 	},
+	{
+		Version:     67,
+		Description: "rewrite stored team-broadcast grants to api:team-broadcast (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"team-broadcast": "api:team-broadcast"}),
+	},
+	{
+		Version:     68,
+		Description: "rewrite stored dispatch-control grants to api:dispatch-control (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"dispatch-control": "api:dispatch-control"}),
+	},
+	{
+		Version:     69,
+		Description: "rewrite stored pipeline-control grants to api:pipeline-control (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"pipeline-control": "api:pipeline-control"}),
+	},
+	{
+		Version:     70,
+		Description: "add settings_locked to grain_config for opt-in UI/API settings lock",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `settings_locked` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     71,
+		Description: "rewrite stored memory grants to api:memory (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"memory": "api:memory"}),
+	},
+	{
+		Version:     72,
+		Description: "rewrite stored release-notes grants to api:release-notes (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"release-notes": "api:release-notes"}),
+	},
+	{
+		Version:     73,
+		Description: "add numeric priority to task (default 5) and template",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 5",
+			"ALTER TABLE `template` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     74,
+		Description: "add keep_running flag to task, template and schedule",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `template` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `schedule` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     75,
+		Description: "rewrite stored self-upgrade grants to api:self-upgrade (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"self-upgrade": "api:self-upgrade"}),
+	},
+	{
+		Version:     76,
+		Description: "rewrite stored test-quarantine grants to api:test-quarantine (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"test-quarantine": "api:test-quarantine"}),
+	},
+	{
+		Version:     77,
+		Description: "add the New Task form's configuration to grain_config",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `new_task_form` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     78,
+		Description: "upgrade the pre-slug default task_branch_template (grain/{deployment}/task-{id}) to grain/{deployment}/task-{id}-{slug}",
+		Statements: []string{
+			"UPDATE `grain_config` SET `task_branch_template` = '" + DefaultTaskBranchTemplate + "' WHERE `task_branch_template` = '" + UnsluggedTaskBranchTemplate + "'",
+		},
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.
@@ -441,6 +514,11 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
+					(strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") ||
+						strings.Contains(strings.ToLower(err.Error()), "already exists")) {
+					continue
+				}
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
 		}

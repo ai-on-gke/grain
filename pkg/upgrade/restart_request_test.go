@@ -112,3 +112,36 @@ func TestRestartRequestedAtIsOnlyASuccessfulUpgradesRestart(t *testing.T) {
 		})
 	}
 }
+
+func TestRestartPending(t *testing.T) {
+	started := time.Date(2026, 10, 30, 4, 53, 56, 0, time.UTC)
+	finished := started.Add(-time.Minute)
+	before, after := started.Add(-time.Hour), started.Add(4*time.Second)
+	withRestart := func(state StepState, at *time.Time) Status {
+		return Status{Phase: PhaseOK, FinishedAt: &finished, Detail: "installed; restarting",
+			Steps: []Step{{Name: stepInstall, State: StepDone}, {Name: stepRestart, State: state, StartedAt: at}}}
+	}
+	for _, c := range []struct {
+		name    string
+		status  Status
+		process time.Time
+		want    bool
+	}{
+		{"restart started, outgoing process", withRestart(StepRunning, &started), before, true},
+		{"restart started, new process", withRestart(StepRunning, &started), after, false},
+		{"restart started, process start unknown", withRestart(StepRunning, &started), time.Time{}, false},
+		{"restart not started yet, outgoing process", withRestart(StepPending, nil), before, true},
+		{"restart not started yet, process start unknown", withRestart(StepPending, nil), time.Time{}, true},
+		{"restart never started, later process", withRestart(StepPending, nil), after, false},
+		{"restart failed", Status{Phase: PhaseFailed, FinishedAt: &finished,
+			Steps: []Step{{Name: stepRestart, State: StepFailed, StartedAt: &started}}}, before, false},
+		{"kube rollout, outgoing pod", Status{Phase: PhaseOK, FinishedAt: &finished, Detail: "repointed; restarting"}, before, true},
+		{"kube rollout, new pod", Status{Phase: PhaseOK, FinishedAt: &finished, Detail: "repointed; restarting"}, after, false},
+		{"no restart at all", Status{Phase: PhaseOK, FinishedAt: &finished, Detail: "installed"}, before, false},
+		{"unchanged", Status{Phase: PhaseOK, Unchanged: true, FinishedAt: &finished, Detail: "same; restarting"}, before, false},
+	} {
+		if got := c.status.RestartPending(c.process); got != c.want {
+			t.Errorf("%s: RestartPending = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

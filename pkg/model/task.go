@@ -203,6 +203,12 @@ func (r RepoRef) GitHost() string {
 	return DefaultRepoHost()
 }
 
+// WebURL is r's page on its git host: https://<host>/<owner>/<name>, on
+// the deployment's default host when r names none.
+func (r RepoRef) WebURL() string {
+	return "https://" + r.GitHost() + "/" + r.Owner + "/" + r.Name
+}
+
 // StoredOwner is what r's owner column holds: Owner, or host/Owner for a
 // repository off the default host. An owner can never contain a slash
 // (validRepoSegment), so RepoFromStored splits it back unambiguously,
@@ -242,6 +248,20 @@ func RepoFromStored(owner, name string) RepoRef {
 func (r RepoRef) Same(other RepoRef) bool {
 	return strings.EqualFold(r.Owner, other.Owner) && strings.EqualFold(r.Name, other.Name) &&
 		r.OffDefaultHost() == other.OffDefaultHost()
+}
+
+// SameRepoText reports whether two written repositories name the same
+// one: parsed and compared with Same where both parse (so
+// git@host:owner/name, https://host/owner/name.git and host/owner/name
+// are one repository however they are cased), and compared as text,
+// case-insensitively, where either does not.
+func SameRepoText(a, b string) bool {
+	ra, errA := ParseRepo(a)
+	rb, errB := ParseRepo(b)
+	if errA != nil || errB != nil {
+		return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+	}
+	return ra.Same(rb)
 }
 
 // ParseRepo reads the written form of a repository: owner/name, or
@@ -1125,6 +1145,10 @@ const (
 	// so the inline comments it carries are never mistaken for review
 	// threads somebody else opened (orchestrator's reviewthreads.go).
 	LinkDraftReview LinkKind = "draft-review"
+	// LinkRelayedReviewThread maps a grain-relayed inline review comment on
+	// this task's pull request to its GitHub review thread ID and records
+	// whether the finding's decision has been made (-> RelayedReviewThread.Target()).
+	LinkRelayedReviewThread LinkKind = "relayed-review-thread"
 	// LinkReviewThread records one GitHub review thread on this task's
 	// pull request that grain has already sent a run to deal with (-> the
 	// REST ID of the comment that opened it). One run per new batch of
@@ -1296,6 +1320,15 @@ const (
 // its comments as addenda (pkg/ui's AddendaSince): a reviewer's thread
 // opened mid-run is the run's to deal with before it ends.
 var CLThreadsPrincipal = Principal{Kind: PrincipalAutomation, ID: "cl-review-threads"}
+
+// CapabilityChangePrincipal is who tells a task with a live run that its
+// grants changed (orchestrator's reconcileCapabilityChanges). Like
+// CLThreadsPrincipal, its comments reach a live run as addenda: a notice
+// saying the run is about to be restarted, or that a new `api:*` route
+// arrives only with the next run, is written for the run. An interactive
+// task's chat draws it as a system line rather than as a message
+// (ui/src/chat.js).
+var CapabilityChangePrincipal = Principal{Kind: PrincipalAutomation, ID: "capability-change"}
 
 // IsChange reports whether a link of kind k is the task's own change --
 // a pull request (LinkFixes) or a changelist (LinkChangelist) -- which
@@ -1477,10 +1510,16 @@ func NeverEndingDependencyNote(refs []string) string {
 		"`"+strings.Join(refs, "`, `")+"`")
 }
 
+// DefaultTaskPriority is the priority assigned to a task when none is specified
+// (or when Priority is 0). Higher numbers mean higher priority.
+const DefaultTaskPriority = 5
+
 // Task is the declared half: what a human, or grain proposing, asked for.
 // No State field and no StateSince — see StateOf.
 type Task struct {
 	ID string
+	// Priority is the numeric task priority (DefaultTaskPriority = 5; higher = higher priority).
+	Priority int `json:"priority"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a
@@ -1684,6 +1723,11 @@ type Task struct {
 	// presentation of this flag -- what a run does, and how, is
 	// unchanged by it.
 	Interactive bool
+	// KeepRunning restarts this task immediately when its run exits
+	// without asking a question or requesting a secret, re-queueing it
+	// instead of completing, closing on nothing_needed, or resting on a
+	// goal.
+	KeepRunning bool
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) override
 	// Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB for this task's
@@ -2535,7 +2579,27 @@ type Run struct {
 	// *finished* run it is the only record of how far setup got before it
 	// broke (ui.Attempt.SetupNote, which is exactly that pairing).
 	AgentStartedAt *time.Time
-	Leases         []Lease
+	// QueuedAt, SandboxAcquiredAt, SandboxPreparedAt, and FirstTurnAt record
+	// the per-phase startup breakdown of this attempt (task_run_startup):
+	//   - QueuedAt -> StartedAt: queued -> dispatched
+	//   - StartedAt -> SandboxAcquiredAt: sandbox acquire
+	//   - SandboxAcquiredAt -> SandboxPreparedAt (or AgentStartedAt): prepare sandbox
+	//   - SandboxPreparedAt (or AgentStartedAt) -> FirstTurnAt: agent launch -> first turn
+	QueuedAt          *time.Time
+	SandboxAcquiredAt *time.Time
+	SandboxPreparedAt *time.Time
+	FirstTurnAt       *time.Time
+	Leases            []Lease
+}
+
+// RunStartup holds the per-phase startup timestamps for one attempt
+// (task_run_startup).
+type RunStartup struct {
+	RunID             string
+	QueuedAt          *time.Time
+	SandboxAcquiredAt *time.Time
+	SandboxPreparedAt *time.Time
+	FirstTurnAt       *time.Time
 }
 
 // RunActivity is Run.Activity and Run.ActivityAt on their own -- what a
@@ -2703,10 +2767,17 @@ func FormatBranchName(template, instanceID, deploymentID, taskID string) (string
 // {slug} may only end the template, after {id} and a hyphen
 // (checkSlugPlacement), so the name is unique whatever the title says. A
 // title with nothing usable in it expands {slug} to nothing, taking the
-// hyphen in front of it along so the name does not end in a stray one.
+// hyphen in front of it along so the name does not end in a stray one;
+// when a long custom template leaves fewer than MaxBranchSlugLen bytes
+// below MaxBranchNameLen, {slug} is trimmed (or omitted) to fit so adding
+// the title never pushes a valid branch past its allowed length.
 func FormatTaskBranchName(template, instanceID, deploymentID, taskID, title string) (string, error) {
 	if template == "" {
-		return BranchName(taskID), nil
+		name := BranchName(taskID)
+		if !ValidBranchName(name) {
+			return "", fmt.Errorf("branch template produces invalid branch name %q", name)
+		}
+		return name, nil
 	}
 	if !strings.Contains(template, "{id}") {
 		return "", fmt.Errorf("branch template must contain {id}")
@@ -2714,12 +2785,28 @@ func FormatTaskBranchName(template, instanceID, deploymentID, taskID, title stri
 	if err := checkSlugPlacement(template); err != nil {
 		return "", err
 	}
-	template = expandSlug(template, BranchSlug(title))
-	name := strings.NewReplacer("{instance}", instanceID, "{deployment}", deploymentID, "{id}", taskID).Replace(template)
-	if strings.ContainsAny(name, "{}") {
-		return "", fmt.Errorf("branch template contains an unknown placeholder")
+	replacer := strings.NewReplacer("{instance}", instanceID, "{deployment}", deploymentID, "{id}", taskID)
+	var name string
+	if baseTpl, hasSlug := strings.CutSuffix(template, "-{slug}"); hasSlug {
+		base := replacer.Replace(baseTpl)
+		if strings.ContainsAny(base, "{}") {
+			return "", fmt.Errorf("branch template contains an unknown placeholder")
+		}
+		if slug := branchSlug(title, min(MaxBranchSlugLen, MaxBranchNameLen-len(base)-1)); slug != "" {
+			name = base + "-" + slug
+		} else {
+			name = base
+		}
+	} else {
+		name = replacer.Replace(template)
+		if strings.ContainsAny(name, "{}") {
+			return "", fmt.Errorf("branch template contains an unknown placeholder")
+		}
 	}
 	if !ValidBranchName(name) {
+		if len(name) > MaxBranchNameLen {
+			return "", fmt.Errorf("branch template produces %d-character branch name, over the %d-character limit", len(name), MaxBranchNameLen)
+		}
 		return "", fmt.Errorf("branch template produces invalid branch name %q", name)
 	}
 	return name, nil
@@ -2737,6 +2824,13 @@ const MaxBranchSlugLen = 30
 // in the header parser" is "fix-the-off-by-one-in-the". Empty when the
 // title has no ASCII letter or digit in it at all.
 func BranchSlug(title string) string {
+	return branchSlug(title, MaxBranchSlugLen)
+}
+
+func branchSlug(title string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
 	var words []string
 	var cur strings.Builder
 	flush := func() {
@@ -2759,11 +2853,11 @@ func BranchSlug(title string) string {
 		if n > 0 {
 			n++
 		}
-		if n+len(w) > MaxBranchSlugLen {
+		if n+len(w) > limit {
 			if slug.Len() == 0 {
 				// One word longer than the whole budget: keep what
 				// fits of it rather than nothing.
-				slug.WriteString(w[:MaxBranchSlugLen])
+				slug.WriteString(w[:limit])
 			}
 			break
 		}
@@ -2823,26 +2917,6 @@ func checkSlugPlacement(template string) error {
 			"(as in grain/{deployment}/task-{id}-{slug}), so a task's title can never make another deployment's branch name")
 	}
 	return nil
-}
-
-// expandSlug replaces {slug} in a branch template that checkSlugPlacement
-// accepted with slug. An empty slug takes the hyphen in front of the
-// placeholder with it, so task-{id}-{slug} for an untitled task is
-// task-{id}, not task-{id}-.
-func expandSlug(template, slug string) string {
-	const placeholder = "{slug}"
-	i := strings.Index(template, placeholder)
-	if i < 0 {
-		return template
-	}
-	if slug != "" {
-		return template[:i] + slug + template[i+len(placeholder):]
-	}
-	start := i
-	if start > 0 && template[start-1] == '-' {
-		start--
-	}
-	return template[:start] + template[i+len(placeholder):]
 }
 
 // deploymentIDDefaultLen is how much of the installation id the default

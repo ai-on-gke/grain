@@ -15,7 +15,8 @@
 // Package sandboxcli is the grain CLI as an agent's sandbox sees it
 // (docs/design/sandbox-first-agent-surface.md, §4): read commands that
 // reach this deployment over the sandbox's own scoped proxy
-// (http://127.0.0.1:9728, the same address and credential git uses), with
+// (http://127.0.0.1:9728 or the guest's bridge gateway on :9728, the same
+// address and credential git uses), with
 // no size cap, so a run can pipe a CI log to grep or redirect a transcript
 // to a file instead of paging through an MCP tool's 16 KB results.
 //
@@ -28,14 +29,17 @@ package sandboxcli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,12 +52,43 @@ const (
 	sandboxProxyEnv     = "GRAIN_SANDBOX_PROXY"
 	sandboxTokenEnv     = "GRAIN_SANDBOX_TOKEN"
 	sandboxCLIEnv       = "GRAIN_SANDBOX_CLI"
-	sandboxProxyAddr    = "127.0.0.1:9728"
+	sandboxProxyPort    = "9728"
 	sandboxGitCredsPath = "/home/debian/.git-credentials"
 	// serverEnvVar is pkg/cli's own: a CLI pointed at a daemon is not in
 	// sandbox mode, wherever it runs.
 	serverEnvVar = "GRAIN_SERVER"
 )
+
+var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
+
+func isSandboxProxyCredential(u *url.URL) bool {
+	if (u.Scheme != "http" && u.Scheme != "https") || u.User == nil {
+		return false
+	}
+	host, port := u.Hostname(), u.Port()
+	if host == "" || port == "" {
+		return false
+	}
+	if port == sandboxProxyPort {
+		return true
+	}
+	return u.User.Username() == "sandbox" && isSandboxProxyHost(host)
+}
+
+func isSandboxProxyHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap()
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || cgnatPrefix.Contains(ip)
+	}
+	lower := strings.ToLower(host)
+	return !strings.Contains(lower, ".") ||
+		strings.HasSuffix(lower, ".internal") ||
+		strings.HasSuffix(lower, ".local") ||
+		strings.HasSuffix(lower, ".svc")
+}
 
 // sandboxEnv is what sandbox mode is detected from, injectable for tests.
 type sandboxEnv struct {
@@ -104,7 +139,7 @@ func detectSandboxProxy(env sandboxEnv) (base, token string, ok bool) {
 			if err != nil || u.User == nil {
 				continue
 			}
-			if base == "" && u.Host != sandboxProxyAddr && (u.User.Username() != "sandbox" || !strings.HasPrefix(u.Host, "127.0.0.1:")) {
+			if base == "" && !isSandboxProxyCredential(u) {
 				continue
 			}
 			if base != "" && !strings.HasSuffix(base, "//"+u.Host) {
@@ -333,7 +368,7 @@ func (c *sandboxCLI) run(args []string) error {
 	case "notify":
 		return c.notify(p)
 	case "task list":
-		return c.fs("task://", url.Values{"list": {""}})
+		return c.taskList(p)
 	case "task read":
 		id, err := p.arg(0, "id")
 		if err != nil {
@@ -385,7 +420,7 @@ func (c *sandboxCLI) run(args []string) error {
 		return c.fs("deploy://health", nil)
 	case "log":
 		uri := "deploy://grain.log"
-		if source := p.optArg(0); source != "" {
+		if source := grainLogSource(p); source != "" {
 			uri += "/" + source
 		}
 		return c.fs(uri, grainLogQuery(p))
@@ -393,7 +428,21 @@ func (c *sandboxCLI) run(args []string) error {
 		if name := p.optArg(0); name != "" {
 			return c.fs("src://playbooks/"+name, nil)
 		}
-		return c.fs("src://playbooks", url.Values{"list": {""}})
+		// One playbook name per line, as `grain playbooks <name>` takes it.
+		var listing bytes.Buffer
+		p, err := fsPath("src://playbooks")
+		if err != nil {
+			return err
+		}
+		if err := c.get(p, url.Values{"list": {""}}, &listing); err != nil {
+			return err
+		}
+		for _, line := range strings.Split(strings.TrimSpace(listing.String()), "\n") {
+			if name := strings.TrimSuffix(line, ".md"); name != "" && !strings.HasSuffix(name, "/") {
+				fmt.Fprintln(c.out, name)
+			}
+		}
+		return nil
 	case "issue list":
 		return c.get("/cli/issues", p.query("repo", "label", "limit"), c.out)
 	case "issue read":
@@ -644,9 +693,9 @@ type sandboxArgs struct {
 // sandboxBoolFlags take no value.
 var sandboxBoolFlags = map[string]bool{
 	"i": true, "full": true, "json": true, "all": true, "comments": true,
-	"no-repo": true, "fixes-base-branch": true, "no-port": true,
+	"no-repo": true, "fixes-base-branch": true, "no-port": true, "keep-running": true,
 	"no-follow-up": true, "park": true, "auto-merge": true,
-	"hold-for-approval": true, "at-front": true,
+	"hold-for-approval": true, "at-front": true, "stalled": true,
 }
 
 func parseSandboxArgs(args []string) (sandboxArgs, error) {
@@ -702,13 +751,26 @@ func (p sandboxArgs) getAll(name string) []string { return p.multiFlags[name] }
 
 func (p sandboxArgs) has(name string) bool { _, ok := p.flags[name]; return ok }
 
+// only refuses any flag not among names, for a command whose every flag
+// narrows its answer: one it ignored would answer a question nobody asked.
+func (p sandboxArgs) only(cmd string, names ...string) error {
+	for name := range p.flags {
+		if !slices.Contains(names, name) {
+			return fmt.Errorf("%s: unknown flag --%s: run 'grain %s --help' for usage", cmd, name, cmd)
+		}
+	}
+	return nil
+}
+
 // grainLogQuery is `grain log`'s flags as deploy://grain.log's query:
 // the window, priority, substring and line cap read_grain_log takes, and
 // --tail, which the namespace applies to whatever that answers.
 func grainLogQuery(p sandboxArgs) url.Values {
 	q := p.query("tail", "since", "until", "contains")
-	if v := p.get("min-priority"); v != "" {
-		q.Set("min_priority", v)
+	for _, name := range []string{"priority", "min-priority"} {
+		if v := p.get(name); v != "" {
+			q.Set("min_priority", v)
+		}
 	}
 	for _, name := range []string{"max-lines", "lines"} {
 		if v := p.get(name); v != "" {
@@ -716,6 +778,15 @@ func grainLogQuery(p sandboxArgs) url.Values {
 		}
 	}
 	return q
+}
+
+// grainLogSource is the journal `grain log` reads: --source when given,
+// else its first argument, else "" for the daemon's own.
+func grainLogSource(p sandboxArgs) string {
+	if v := p.get("source"); v != "" {
+		return v
+	}
+	return p.optArg(0)
 }
 
 // metricsQuery is `grain metrics`' flags as deploy://metrics' query;
