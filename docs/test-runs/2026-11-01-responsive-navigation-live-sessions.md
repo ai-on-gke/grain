@@ -493,3 +493,137 @@ keyframe loop (**bug 5**).
   in light and dark.
 
 No screenshots or browser artifacts are committed.
+
+## 7. Second pass on a later `main` (task 2240)
+
+Task 2240 ran the same brief again later the same day. Its first draft
+was made at `4f71b139`, a tree that had none of task 2092's fixes. It
+reported no bugs, and dismissed two leads that §5 above, and later
+`main`, treat as real bugs:
+
+- Customize closing the phone drawer (Bug 3);
+- the disconnected banner taking about 11.6 s to clear after an outage
+  (fixed on `main` by `59879e39`).
+
+That draft was dropped in favour of this report. This section records
+what was re-checked on the newer tree.
+
+### 7.1 Commit and environment
+
+- **Commit tested**: `928c4fbd`, the branch `grain/049f1e09/task-2240`
+  after merging `main` at `f54480e7`. Its tree is identical to
+  `f54480e7`, which is 203 commits past `4f71b139` and touches 60 files
+  under `ui/src`.
+- **Sandbox, browsers, Gemini key and server**: the same as §1.
+  - The server was started as `grain demo -addr 127.0.0.1:18080
+    -open=false -access-code-file <file>` over its own throwaway store,
+    from a fresh `npm ci && npm run build` and `go build ./cmd/grain`.
+  - There was no Gemini key, so `LOOK=1` was not used.
+- **Driving**: throwaway scripts outside the repository
+  (`/home/debian/walk`: `matrix.mjs`, `walk.mjs`, `chat.mjs`,
+  `probe.mjs`). Every step went through visible controls.
+
+### 7.2 Stubs
+
+These are Playwright `route` stubs on single contexts only:
+
+1. `GET /api/persistent-sandboxes`, with three staging sandboxes:
+   - `web-preview`, running, on host port 8081;
+   - a long-named restarting one on a `/staging/…` sub-path;
+   - one that is disabled.
+2. `GET /api/config`: the real response with `proxied: true` and an
+   `installNotice` added.
+3. An outage: every `/api/**` request aborted with
+   `internetdisconnected` for about 9 s, then the stub was removed.
+4. `POST /api/tasks/<id>/comments` delayed by 2.5 s before it was
+   passed on to the real server, to show the in-flight "sending" state.
+5. `POST /api/tasks/<id>/pause` answering 500, to raise the snackbar.
+
+### 7.3 Outcomes
+
+- **Page matrix** (`matrix.mjs`): the same 49 pages and five viewports
+  as §4.1, with the same checks. It ran in Chromium and WebKit, 245
+  loads each.
+  - The only flags were the expected ones. `/tasks/1` and `/new` are
+    modal panes, so they have no globals or stamp at the wide sizes.
+    `/tasks/1` logs the known `github-branches` 404 (no `-github-sim`).
+  - No overflow, no off-screen control, no clipped globals or stamp,
+    and no team wording, in either engine.
+- **Shell and sessions** (`walk.mjs`): 0 failures in both engines.
+  - **Desktop rail**: the create menu lists New task, New session and
+    New board, and Escape hands focus back to Create options.
+  - **Staging**: lists the enabled sandboxes only, marks the
+    unreachable port, and the rail does not overflow.
+  - The rail shows Tasks, Boards, Sessions, Processes, Repos and CI.
+    The build stamp opens `/settings/upgrade`. Processes lights up once
+    it is opened. Back and Forward work.
+  - **Banner**: with the install notice up at 820×1180, the
+    disconnected banner showed during the outage. It cleared **3.3 s**
+    after the network came back, in both engines (it was 11.6 s at
+    `4f71b139`).
+  - **Phone (390×844, touch)**:
+    - the bar holds Open navigation, Alerts and Settings;
+    - the drawer is a modal dialog, and the body is
+      `overflow: hidden` behind it;
+    - the drawer stays open through the create menu, and through
+      opening and closing Customize (task 2092's fix holds);
+    - System (y=752–796) and the stamp (y=807–830) are in view;
+    - the drawer closes when Processes is opened;
+    - the alerts panel spans x=24–366 of 390;
+    - nothing overflows after rotating to 844×390.
+  - **Sessions at 1440×900**:
+    - New session, from the create menu, opens `/session/new` with the
+      composer focused. Session name, the model picker and Pin to
+      sidebar are present. Pause, Resume, Start a fresh chat and Delete
+      session are absent.
+    - Sending a named, pinned first message, with bold text and a
+      table holding a 140-character cell, moves the URL to
+      `/session/walk-<engine>-<n>`. The bold text and the table render
+      without overflow, and the pinned rail entry is lit.
+    - The session survives a reload.
+    - Start a fresh chat offers both options. "start fresh with
+      summary" keeps the URL.
+    - `/director` redirects to `/session/director`.
+    - Delete: declining the prompt (`Delete session "<name>"? This
+      removes the session from this deployment.`) keeps the session,
+      with focus back on Delete session. Accepting it goes to
+      `/session` and removes the rail entry.
+    - A deep link to the deleted session lists the sessions, with no
+      composer.
+  - **Header rail at 820×1180**:
+    - On `/tasks`, `/repos`, `/boards/board-2` and `/processes`, More
+      page actions opens the expanded slot below the rail. Settings
+      does not move. Escape closes the slot and hands focus back.
+    - The repository merge-queue tab fits, and its crumbs read
+      `repositories / acme/widgets / merge queue` (Bug 1's fix holds).
+  - **Themes** (dark and light, reduced motion): the body is
+    `rgb(15, 16, 19)` in dark and `rgb(247, 246, 243)` in light.
+  - No page errors and no 5xx in either engine.
+- **Interactive task chat** (`chat.mjs`): 0 failures in both engines.
+  The tasks were filed through `POST /api/tasks` (`interactive: true`,
+  tasks 28 and 29).
+  - The in-flight message is marked `.task-chat-sending`, and the mark
+    clears once the POST lands (`727a76a3` holds).
+  - Inline code and links render, and focus stays in the composer.
+  - Pause survives a reload, and Resume turns back into Pause.
+  - A failed Pause raises the snackbar at 610,828 (220×48), and the
+    snackbar is what `elementFromPoint` finds at that point.
+  - At 820×1180, 390×844 and 844×390, nothing overflows and the
+    composer stays inside the window.
+  - Declining the schedule pane's discard prompt ("You have unsaved
+    changes here. Leave and discard them?") keeps the URL and puts
+    focus back in Title.
+- **Playwright** (the repository's config):
+  `responsive-navigation-2026-11-01-walkthrough`,
+  `page-header-rail-walkthrough`, `disconnected-banner-recovery` and
+  `sessions-list-delete` all passed: 39 tests in 1.8 min.
+
+### 7.4 Observation, not filed
+
+A failed write whose 500 body is plain text, as stub 5 sends, is
+announced as the status line "500 Internal Server Error", not as its
+body. The real server answers with JSON `{error}`, so this was not
+treated as a bug.
+
+No bugs were found on this tree, so this pass changes no code. No
+screenshots or browser artifacts are committed.
