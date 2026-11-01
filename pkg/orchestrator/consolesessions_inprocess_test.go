@@ -191,9 +191,21 @@ func TestInProcessSessionWaitPollsAtTheConfiguredInterval(t *testing.T) {
 					switch turn {
 					case 1:
 						go func() {
-							// Long enough for the wait to have made its
-							// first poll.
-							time.Sleep(100 * time.Millisecond)
+							// Not until the wait has made its first poll:
+							// it marks the question pending right after
+							// that read, and a message already there at
+							// it is found at once -- which, behind a fixed
+							// sleep, a loaded -race run kept doing.
+							for {
+								o, err := store.GetObservation(ctx, director.ID)
+								if err == nil && o != nil && o.PendingQuestionCommentID != nil {
+									break
+								}
+								if ctx.Err() != nil {
+									return
+								}
+								time.Sleep(5 * time.Millisecond)
+							}
 							mu.Lock()
 							posted = time.Now()
 							mu.Unlock()
