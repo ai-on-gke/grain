@@ -15,6 +15,7 @@
 import { describe, expect, it } from "vitest";
 import {
   fieldRows,
+  hiddenLinkValues,
   initialFieldValues,
   unfiledLinkValues,
 } from "./CustomFields.jsx";
@@ -85,6 +86,24 @@ describe("unfiledLinkValues", () => {
     expect(unfiledLinkValues(config, { priority: ["low", "high"] })).toEqual([
       "Priority: “high” is not one of its values",
     ]);
+  });
+});
+
+// What a /new link carried for custom fields settings/new-task-form.yml
+// hides: left out, since a hidden field files its default (2026-11-01
+// walkthrough).
+describe("hiddenLinkValues", () => {
+  it("names every value the link kept, and none it already drops", () => {
+    expect(hiddenLinkValues(config, null)).toEqual([]);
+    expect(
+      hiddenLinkValues(config, { priority: "high", customer: "globex" }),
+    ).toEqual([
+      "Priority: “high” is in a field this form hides",
+      "customer: “globex” is in a field this form hides",
+    ]);
+    expect(
+      hiddenLinkValues(config, { priority: "bogus", nosuch: "1" }),
+    ).toEqual([]);
   });
 });
 
