@@ -73,7 +73,7 @@ func TestOpenConfigPullRequestCommitsAValidatedHeldChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := loadStateRepo(ctx, dataDir, repo, db, false); err != nil {
+	if err := loadStateRepo(ctx, dataDir, repo, db, storeMigration{}); err != nil {
 		t.Fatal(err)
 	}
 	manager := NewStateManager(dataDir, db, repo, OpenSecrets(dataDir), nil, nil)
