@@ -534,6 +534,30 @@ func (d daemonSandbox) RecreateSandbox(ctx context.Context) (mcp.SandboxRecreati
 // daemon's store, and this process holds a transport into a sandbox and
 // nothing else. Which task it lands on is fixed by -task at process
 // start, so a run can only ever narrate itself.
+// daemonConfigChanges is propose_config_change's mcp.ConfigChangeProposer:
+// the daemon diffs, validates and records the branch the tool pushed, for
+// this run's own task.
+type daemonConfigChanges struct {
+	client *ui.HTTPClient
+	taskID string
+}
+
+func (d daemonConfigChanges) ProposeConfigChange(ctx context.Context, p mcp.ConfigChangeProposal) (*model.PendingConfigChange, error) {
+	return d.client.ProposeConfigChange(ctx, d.taskID, ui.ConfigChangeProposal{
+		Summary: p.Summary, Description: p.Description, Branch: p.Branch, HeadSHA: p.HeadSHA,
+	})
+}
+
+// writesConfigRepo reports whether t may push grain/config.
+func writesConfigRepo(t ui.Task) bool {
+	for _, w := range t.Writes {
+		if ref, err := model.ParseRepo(w.Repo); err == nil && model.IsConfigRepo(ref) {
+			return true
+		}
+	}
+	return false
+}
+
 type daemonStatus struct {
 	client *ui.HTTPClient
 	taskID string
@@ -901,6 +925,66 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 		return mcp.ChatTurn{}, nil
 	}
 	deadline := time.Now().Add(wait)
+	checkedPrePost := false
+	pollOnce := func(firstPoll bool, waitSlice time.Duration) (mcp.ChatTurn, bool) {
+		after := posted.ID
+		needPrePost := !checkedPrePost
+		if needPrePost {
+			waitSlice = 0
+			if d.delivered != nil {
+				if cur := d.delivered.current(); cur < after {
+					after = cur
+				}
+			} else if firstPoll {
+				after = 0
+			}
+		}
+		pollCtx, cancelPoll := context.WithDeadline(ctx, deadline)
+		var (
+			messages []ui.Message
+			err      error
+		)
+		if waitSlice > 0 {
+			messages, err = d.client.TaskMessagesWait(pollCtx, d.taskID, after, waitSlice)
+		} else {
+			messages, err = d.client.TaskMessages(pollCtx, d.taskID, after)
+		}
+		cancelPoll()
+		if err != nil {
+			return mcp.ChatTurn{}, false
+		}
+		if needPrePost {
+			checkedPrePost = true
+		}
+		if len(messages) == 0 {
+			return mcp.ChatTurn{}, false
+		}
+		var beforePost, afterPost []ui.Message
+		for _, m := range messages {
+			if m.ID > posted.ID {
+				afterPost = append(afterPost, m)
+			} else {
+				beforePost = append(beforePost, m)
+			}
+		}
+		beforePost = d.delivered.notByChat(beforePost)
+		chosen := afterPost
+		if len(chosen) == 0 {
+			chosen = beforePost
+		}
+		if len(chosen) == 0 {
+			return mcp.ChatTurn{}, false
+		}
+		placeMessageAttachments(ctx, d.client, d.taskID, chosen, d.writeFile)
+		d.delivered.deliveredByChat(ctx, chosen)
+		return mcp.ChatTurn{Reply: joinMessages(chosen)}, true
+	}
+	if turn, ok := pollOnce(true, 0); ok {
+		return turn, nil
+	}
+	if time.Now().After(deadline) {
+		return mcp.ChatTurn{}, nil
+	}
 	if d.poll <= 0 {
 		for {
 			if ctx.Err() != nil {
@@ -912,13 +996,8 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 			}
 			waitSlice := min(rem, 5*time.Second)
 			pollStart := time.Now()
-			pollCtx, cancelPoll := context.WithDeadline(ctx, deadline)
-			messages, err := d.client.TaskMessagesWait(pollCtx, d.taskID, posted.ID, waitSlice)
-			cancelPoll()
-			if err == nil && len(messages) > 0 {
-				placeMessageAttachments(ctx, d.client, d.taskID, messages, d.writeFile)
-				d.delivered.deliveredByChat(ctx, messages)
-				return mcp.ChatTurn{Reply: joinMessages(messages)}, nil
+			if turn, ok := pollOnce(false, waitSlice); ok {
+				return turn, nil
 			}
 			if time.Now().After(deadline) {
 				return mcp.ChatTurn{}, nil
@@ -945,13 +1024,20 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 		case <-ctx.Done():
 			return mcp.ChatTurn{}, ctx.Err()
 		case now := <-ticker.C:
-			pollCtx, cancelPoll := context.WithDeadline(ctx, deadline)
-			messages, err := d.client.TaskMessages(pollCtx, d.taskID, posted.ID)
-			cancelPoll()
-			if err == nil && len(messages) > 0 {
-				placeMessageAttachments(ctx, d.client, d.taskID, messages, d.writeFile)
-				d.delivered.deliveredByChat(ctx, messages)
-				return mcp.ChatTurn{Reply: joinMessages(messages)}, nil
+			// A read that fails is not a wait that ends: the next tick is
+			// moments away and will most likely succeed, where treating
+			// one dropped request as "nobody is there" would end a
+			// conversation over a blip. That covers a daemon restart too
+			// (docs/non-disruptive-upgrade.md): this process is the CLI's,
+			// not the daemon's, so it outlives an upgrade with the CLI,
+			// and the first poll the new daemon answers reads everything
+			// said since the run's own message, a reply posted after the
+			// restart included. Each read is bounded by the wait's own
+			// deadline, so the client's restart-gap retry (ui.RetryPolicy,
+			// two minutes) cannot hold the turn past the time it said it
+			// would wait.
+			if turn, ok := pollOnce(false, 0); ok {
+				return turn, nil
 			}
 			if now.After(deadline) {
 				return mcp.ChatTurn{}, nil
@@ -1098,6 +1184,16 @@ func newDeliveredCursor(client *ui.HTTPClient, taskID string, seed int64) *deliv
 		through: seed,
 		byChat:  map[int64]bool{},
 	}
+}
+
+// current returns the highest comment ID this cursor has recorded as delivered.
+func (c *deliveredCursor) current() int64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.through
 }
 
 // advance moves the mark to through, if that is forward, and tells the
@@ -2006,6 +2102,13 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		// (ui.Client.RenameConsoleSessionOfTask refuses any other
 		// task), and this gate is so an ordinary run is not shown a
 		// tool that could only ever refuse.
+		// propose_config_change is a grain/config writer's: the director,
+		// as grain_config.console_sessions declares it, or any task
+		// somebody granted grain/config as a write target.
+		if writesConfigRepo(taskDetail.Task) {
+			registry.Register(mcp.NewProposeConfigChangeTools(
+				daemonConfigChanges{client: client, taskID: *taskID}, *taskID, tools)...)
+		}
 		if taskDetail.Task.ConsoleSession != "" && taskDetail.Task.Interactive {
 			registry.Register(mcp.NewRenameSessionTools(
 				daemonSessionRenamer{client: client, taskID: *taskID})...)

@@ -705,7 +705,14 @@ func continueSessionTurns(
 	// (agent.RunConfig.AddendaAfter): what the turn was dispatched with.
 	turnAfter := runCfg.AddendaAfter
 	for {
-		if runErr != nil || turnResult == nil || turnResult.ResumableSession == "" || hostCtx.Err() != nil || daemonCtx.Err() != nil {
+		session := ""
+		if turnResult != nil {
+			session = turnResult.ResumableSession
+		}
+		if session == "" {
+			session = runCfg.ResumeSession
+		}
+		if runErr != nil || turnResult == nil || session == "" || hostCtx.Err() != nil || daemonCtx.Err() != nil {
 			break
 		}
 		if _, ok := firstToolCallArg(turnResult, "nothing_needed", "reason"); ok {
@@ -715,6 +722,9 @@ func continueSessionTurns(
 			break
 		}
 		if _, ok := firstToolCallArg(turnResult, "request_secret", "secret"); ok {
+			break
+		}
+		if _, ok := firstToolCallArg(turnResult, "propose_config_change", "summary"); ok {
 			break
 		}
 		if _, ok, _ := requestedSuspension(daemonCtx, store, task.ID, turnResult); ok {
@@ -755,7 +765,8 @@ func continueSessionTurns(
 		} else {
 			replyBody = finalText
 		}
-		if _, err := relayCommentWithAttachments(daemonCtx, store, task, replyBody, attachments, now); err != nil {
+		relayedID, err := relayCommentWithAttachments(daemonCtx, store, task, replyBody, attachments, now)
+		if err != nil {
 			log.Printf("orchestrator: run %s: relaying session answer in-process: %v", runID, err)
 			break
 		}
@@ -815,6 +826,7 @@ func continueSessionTurns(
 		// close -- reading only the conversation after lastID, never the
 		// whole thread again.
 		var fresh []model.Comment
+		var parkedInWait bool
 		ticker := time.NewTicker(cfg.cancelPollInterval())
 	waitLoop:
 		for {
@@ -832,6 +844,12 @@ func continueSessionTurns(
 				fresh = latest
 				break waitLoop
 			}
+			if !parkedInWait {
+				parkedInWait = true
+				_ = store.ObserveField(daemonCtx, task.ID, now, func(o *model.Observation) {
+					o.PendingQuestionCommentID = &relayedID
+				})
+			}
 			select {
 			case <-waitCtx.Done():
 				break waitLoop
@@ -842,6 +860,13 @@ func continueSessionTurns(
 		ticker.Stop()
 		cancelWait()
 		unmark()
+		if parkedInWait {
+			_ = store.ObserveField(daemonCtx, task.ID, cfg.now(), func(o *model.Observation) {
+				if o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID == relayedID {
+					o.PendingQuestionCommentID = nil
+				}
+			})
+		}
 
 		if len(fresh) == 0 {
 			break
@@ -876,7 +901,7 @@ func continueSessionTurns(
 		}
 		comments = append(comments, fresh...)
 		nextCfg := runCfg
-		nextCfg.ResumeSession = turnResult.ResumableSession
+		nextCfg.ResumeSession = session
 		nextCfg.ContinuePrompt = promptBuilder.String()
 		nextCfg.Addenda = addendaPoller(store, task.ID, comments)
 		nextCfg.AddendaAfter = lastCommentID(comments)
