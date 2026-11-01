@@ -142,11 +142,99 @@ func WriteSchemaUpgrade(ctx context.Context, dataDir string, db *sql.DB, branch 
 	return dir, nil
 }
 
+// inPlaceMigrationFile records an in-place store migration until loadStateRepo
+// has had its turn to bring the state repository's dump across, so a process
+// that dies between opening the store and loading the repository does not
+// strand the next start on a dump whose store has already moved on.
+func inPlaceMigrationFile(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	return filepath.Join(dataDir, "store-migrated.json")
+}
+
+func writeInPlaceMigration(dataDir string, from, to int) {
+	path := inPlaceMigrationFile(dataDir)
+	if path == "" {
+		return
+	}
+	note := schemaUpgrade{
+		From:      from,
+		To:        to,
+		WrittenAt: time.Now().UTC(),
+		Build:     version.Get().Revision,
+	}
+	data, err := json.MarshalIndent(note, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		log.Printf("grain: recording in-place store migration in %s: %v", path, err)
+	}
+}
+
+func readInPlaceMigration(dataDir string) (int, bool) {
+	path := inPlaceMigrationFile(dataDir)
+	if path == "" {
+		return 0, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	var note schemaUpgrade
+	if err := json.Unmarshal(data, &note); err != nil {
+		return 0, false
+	}
+	if note.From < model.V2BaselineSchemaVersion || note.From >= model.SchemaVersion || note.To != model.SchemaVersion {
+		return 0, false
+	}
+	if time.Since(note.WrittenAt) > schemaUpgradeMaxAge {
+		return 0, false
+	}
+	return note.From, true
+}
+
+// storeMigration records whether openStoreForSchemaUpgrade migrated this
+// deployment's store, and how, so loadStateRepo knows which state-repository
+// dump it may rewrite through migrateStateRepo.
+type storeMigration struct {
+	// note is true when <data-dir>/schema-upgrade authorised this start:
+	// any incompatible dump in the state repository is rewritten, and the
+	// note is discarded once loadStateRepo returns.
+	note bool
+	// from is the schema Init migrated the store in place from
+	// (>= model.V2BaselineSchemaVersion), or 0 when Init did not migrate.
+	// Without an upgrade note it authorises rewriting a dump stamped at
+	// that exact schema, and no other.
+	from int
+}
+
+func (m storeMigration) any() bool {
+	return m.note || m.from > 0
+}
+
+func (m storeMigration) authorisesDump(repo *staterepo.Repo) bool {
+	if m.note {
+		return true
+	}
+	if m.from <= 0 || repo == nil || !staterepo.HasDump(repo.Dir()) {
+		return false
+	}
+	found, err := staterepo.ReadSchemaVersion(repo.Dir())
+	return err == nil && found == m.from
+}
+
 // discardSchemaUpgrade removes the note. It is pkg/upgrade's Discard
 // hook -- an upgrade that prepared a migration and then did not cut over
 // must leave nothing armed behind it -- and it is also how a completed
 // migration is spent.
 func discardSchemaUpgrade(dataDir string) {
+	if path := inPlaceMigrationFile(dataDir); path != "" {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("grain: removing %s: %v", path, err)
+		}
+	}
 	dir := SchemaUpgradeDir(dataDir)
 	if err := os.RemoveAll(dir); err != nil {
 		log.Printf("grain: removing %s: %v -- remove it by hand, or a later start will migrate this "+
@@ -218,32 +306,42 @@ func readSchemaUpgrade(dataDir string) (schemaUpgrade, bool) {
 // It reports whether it migrated, because the state repository holds the
 // same rows at the same old schema and the load that follows has to know
 // that the answer there is "rewrite it" rather than "refuse to start".
-func openStoreForSchemaUpgrade(ctx context.Context, driver, dsn, dataDir string) (*model.Store, *sql.DB, bool, error) {
-	store, db, err := OpenStore(driver, dsn, dataDir)
+func openStoreForSchemaUpgrade(ctx context.Context, driver, dsn, dataDir string) (*model.Store, *sql.DB, storeMigration, error) {
+	store, db, migratedFrom, err := openStore(driver, dsn, dataDir)
 	if err == nil {
 		// A store that opens perfectly well, with the note still beside
-		// it, is the middle of a migration this process did not start:
-		// an earlier start rebuilt the store and died -- or was killed --
-		// before the state repository's dump was rewritten from it. The
-		// note is deliberately not removed until both halves are done
-		// (run's own comment), and this is the half it is still standing
-		// for. Without this the next start would meet a dump it cannot
-		// read with nothing authorising a rewrite, and stop: the same
-		// restart loop this file exists to end, one step further along.
+		// it, is the middle of a migration this process did not start (or one
+		// whose store Init just migrated in place): an earlier start rebuilt
+		// the store and died -- or was killed -- before the state repository's
+		// dump was rewritten from it. The note is deliberately not removed
+		// until both halves are done (run's own comment), and this is the half
+		// it is still standing for. Without this the next start would meet a
+		// dump it cannot read with nothing authorising a rewrite, and stop:
+		// the same restart loop this file exists to end, one step further along.
 		if note, ok := readSchemaUpgrade(dataDir); ok {
 			log.Printf("grain: the store is already at schema %d and %s is still here, so the state "+
 				"repository has not been brought across yet -- doing that now", note.To,
 				SchemaUpgradeDir(dataDir))
-			return store, db, true, nil
+			return store, db, storeMigration{note: true, from: migratedFrom}, nil
 		}
-		return store, db, false, nil
+		if migratedFrom > 0 {
+			writeInPlaceMigration(dataDir, migratedFrom, model.SchemaVersion)
+			return store, db, storeMigration{from: migratedFrom}, nil
+		}
+		if prevFrom, ok := readInPlaceMigration(dataDir); ok {
+			log.Printf("grain: the store was migrated in place from schema %d to %d on an earlier start "+
+				"before the state repository could be brought across -- finishing that now",
+				prevFrom, model.SchemaVersion)
+			return store, db, storeMigration{from: prevFrom}, nil
+		}
+		return store, db, storeMigration{}, nil
 	}
 	if !errors.Is(err, model.ErrSchemaTooOld) && !errors.Is(err, model.ErrSchemaTooNew) {
-		return nil, nil, false, err
+		return nil, nil, storeMigration{}, err
 	}
 	note, ok := readSchemaUpgrade(dataDir)
 	if !ok {
-		return nil, nil, false, err
+		return nil, nil, storeMigration{}, err
 	}
 	// Opened again, without Init this time, purely to ask the store what
 	// it is stamped with: the note only authorises a migration away from
@@ -251,18 +349,18 @@ func openStoreForSchemaUpgrade(ctx context.Context, driver, dsn, dataDir string)
 	// one this note does not describe.
 	found, verr := storeSchemaVersion(ctx, driver, dsn, dataDir)
 	if verr != nil {
-		return nil, nil, false, fmt.Errorf("%w (and the store's own schema could not be read to check the "+
+		return nil, nil, storeMigration{}, fmt.Errorf("%w (and the store's own schema could not be read to check the "+
 			"upgrade note against it: %v)", err, verr)
 	}
 	if found != note.From {
-		return nil, nil, false, fmt.Errorf("%w -- %s says this deployment was upgrading from schema %d, "+
+		return nil, nil, storeMigration{}, fmt.Errorf("%w -- %s says this deployment was upgrading from schema %d, "+
 			"and the store is at %d, so the rows in it are not the rows that note describes",
 			err, filepath.Join(SchemaUpgradeDir(dataDir), SchemaUpgradeManifest), note.From, found)
 	}
 
 	archived, err := archiveStore(ctx, driver, dsn, dataDir, found)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, storeMigration{}, err
 	}
 	log.Printf("grain: this deployment's schema changed from %d to %d. The store written at %d is now %s "+
 		"-- it is not deleted, and it is where anything this migration cannot carry stays -- and grain is "+
@@ -271,14 +369,14 @@ func openStoreForSchemaUpgrade(ctx context.Context, driver, dsn, dataDir string)
 
 	store, db, err = OpenStore(driver, dsn, dataDir)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("creating a store at schema %d after moving the old one to %s: %w",
+		return nil, nil, storeMigration{}, fmt.Errorf("creating a store at schema %d after moving the old one to %s: %w",
 			model.SchemaVersion, archived, err)
 	}
 	if err := importSchemaUpgrade(ctx, dataDir, db, note); err != nil {
 		db.Close()
-		return nil, nil, false, fmt.Errorf("%w (the store it came from is still here, at %s)", err, archived)
+		return nil, nil, storeMigration{}, fmt.Errorf("%w (the store it came from is still here, at %s)", err, archived)
 	}
-	return store, db, true, nil
+	return store, db, storeMigration{note: true, from: note.From}, nil
 }
 
 // importSchemaUpgrade fills a freshly created store from the note's dump.

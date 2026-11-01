@@ -102,7 +102,7 @@ func TestInProcessServerMintsOnTheCallersClock(t *testing.T) {
 }
 
 // repo#write normalizes to the one value the git proxy honours, which is
-// what migration 83 writes for git-push-any-ref, and nothing narrower
+// what migration 84 writes for git-push-any-ref, and nothing narrower
 // validates: a task-level refs list the proxy would not honour is refused
 // rather than recorded as though it did something.
 func TestRepoServerNormalizesGitPushAnyRef(t *testing.T) {

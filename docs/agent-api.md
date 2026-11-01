@@ -598,7 +598,12 @@ Each external agent is issued its own scoped bearer token (`gma_<hex>`):
   `<area>:<level>@owner/name` in `scopes` (`tasks:write@acme/widgets`).
   Each level is its own scope: a credential holding only `tasks:write`
   can file and edit tasks but is offered no `tasks:read` tool to list or
-  read them.
+  read them, and mutating task routes answer with `{id, state}` (plus any
+  fields that `PATCH /api/tasks/{id}` itself just replaced; empty `PATCH`
+  bodies are refused) rather than echoing the full task record unless the
+  caller also holds `tasks:read` on that repository. A plain `POST
+  /api/tasks` still answers with the whole new task, since it holds only
+  what the caller sent; one naming a `templateId` or `supersedes` does not.
 - **Expiry and limits**: an optional `expiresAt` timestamp, a per-credential
   request rate limit (`rateLimit`, requests per minute, default `60`), and
   an in-flight concurrency cap (`maxConcurrent`, default `8`).

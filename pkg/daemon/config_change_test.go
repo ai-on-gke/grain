@@ -50,7 +50,7 @@ func proposalFixture(t *testing.T, sqlText, branch string) (*StateManager, *mode
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := loadStateRepo(ctx, dataDir, repo, db, false); err != nil {
+	if err := loadStateRepo(ctx, dataDir, repo, db, storeMigration{}); err != nil {
 		t.Fatal(err)
 	}
 	manager := NewStateManager(dataDir, db, repo, OpenSecrets(dataDir), nil, nil)

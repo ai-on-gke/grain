@@ -476,8 +476,35 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     83,
+		Description: "rewrite retired capability grants in repo_config.ci_capabilities",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", map[string][]string{
+				"team-broadcast":    {"api:team-broadcast"},
+				"dispatch-control":  {"api:dispatch-control"},
+				"pipeline-control":  {"api:pipeline-control"},
+				"memory":            {"api:memory"},
+				"release-notes":     {"api:release-notes"},
+				"self-upgrade":      {"api:self-upgrade"},
+				"test-quarantine":   {"api:test-quarantine"},
+				"grain-log":         {GrainJournalGrant},
+				"deployment-health": {"api:deployment:read", GrainHealthGrant},
+				"db-read":           {GrainSQLReadGrant},
+				"db-write":          {GrainSQLWriteGrant},
+			})
+		},
+	},
+	{
+		Version:     84,
 		Description: "rewrite stored git-push-any-ref grants to https://grain.dev/capabilities/repo#write (the in-process capability is retired)",
-		Up:          rewriteLegacyGrants(map[string]string{GitPushAnyRefCapability: GitPushAnyRefGrant}),
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string][]string{GitPushAnyRefCapability: {GitPushAnyRefGrant}}
+			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+				return err
+			}
+			// Unlike 67-82 (which 83 caught up on), this one rewrites
+			// repo_config.ci_capabilities at once.
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+		},
 	},
 }
 
@@ -487,7 +514,7 @@ var Migrations = []Migration{
 // a state repository dump stamped from, imported into a store at this
 // build's schema -- which an in-place migration never sees: without it a
 // dump from before the capability retirements would keep the retired
-// names in grain_config's and repo_config's default_capabilities and in
+// names in grain_config's and repo_config's capability lists and in
 // the standing console sessions. Every Up is idempotent, so a row that is
 // already canonical is left as it is.
 func ApplyDataMigrations(ctx context.Context, tx *sql.Tx, from int) error {
