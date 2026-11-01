@@ -85,13 +85,16 @@ async function dismissBypass(page, box) {
       puts.push(r);
   };
   page.on("request", onRequest);
-  const dialog = page.waitForEvent("dialog");
+  const asked = [];
+  page.once("dialog", (d) => {
+    asked.push({ type: d.type(), message: d.message() });
+    d.dismiss();
+  });
   await expect(box).not.toBeChecked();
   await box.click();
-  const d = await dialog;
-  expect(d.type()).toBe("confirm");
-  expect(d.message()).toContain(repo);
-  await d.dismiss();
+  await expect.poll(() => asked.length).toBe(1);
+  expect(asked[0].type).toBe("confirm");
+  expect(asked[0].message).toContain(repo);
   await expect(box).not.toBeChecked();
   // Give a stray PUT the chance to show itself before saying none went.
   await page.waitForTimeout(300);
