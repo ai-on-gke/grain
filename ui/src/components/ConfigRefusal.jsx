@@ -28,6 +28,7 @@ import {
 import api from "../api.js";
 import CopyButton from "./CopyButton.jsx";
 import ConfigRepoLink, { openInApp } from "./ConfigRepoLink.jsx";
+import { settleEdits } from "../unsavedEdits.js";
 
 // The refusal a configuration write gets when the deployment's
 // configuration lives in an external config repository (pkg/ui's
@@ -203,15 +204,17 @@ export default function ConfigRefusalDialog({ refusal, onClose }) {
     setOpening(true);
     setOpenError(null);
     try {
-      setOpened(
-        await api("/api/state-repo/pull-requests", {
-          method: "POST",
-          body: JSON.stringify({
-            title: configPullRequestTitle(refusal, paths),
-            changes,
-          }),
+      const pr = await api("/api/state-repo/pull-requests", {
+        method: "POST",
+        body: JSON.stringify({
+          title: configPullRequestTitle(refusal, paths),
+          changes,
         }),
-      );
+      });
+      // The editor behind this dialog holds the edit the pull request
+      // now carries: leaving it loses nothing, so it should not ask.
+      settleEdits();
+      setOpened(pr);
     } catch (err) {
       setOpenError(err);
     } finally {
