@@ -60,6 +60,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if code, handled := sandboxcli.Main(args, stdout, stderr); handled {
 		return code
 	}
+	if code, handled := sandboxcli.Unknown(args, stderr); handled {
+		// Inside a sandbox, a command it does not have gets the sandbox
+		// CLI's help.
+		return code
+	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		// Only outside a sandbox: inside one, sandboxcli answers help itself.
 		fmt.Fprint(stdout, usage)
