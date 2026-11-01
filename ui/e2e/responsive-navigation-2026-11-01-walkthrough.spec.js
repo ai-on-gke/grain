@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Three things the 2026-11-01 responsive navigation walkthrough found
+// What the 2026-11-01 responsive navigation walkthrough found
 // (docs/test-runs/2026-11-01-responsive-navigation-live-sessions.md):
 // a repository tab missing from the rail's crumbs, the Logs source
-// select cut off by the header slot on a tablet, and Customize sidebar
-// closing the phone drawer whose pinned items it edits.
+// select cut off by the header slot on a tablet, Customize sidebar
+// closing the phone drawer whose pinned items it edits, and Back from a
+// phone's Models section skipping the Settings list. (The focus
+// ripple's reduced-motion fix is in reduced-motion.spec.js.)
 
 import { expect, test } from "./fixtures.js";
 
@@ -97,5 +99,31 @@ test.describe("on a touch phone", () => {
     await drawer.getByRole("button", { name: /^processes/i }).tap();
     await expect(page).toHaveURL(/\/processes$/);
     await expect(drawer).toHaveCount(0);
+  });
+
+  test("Back from any Settings section returns to the section list, Models included", async ({
+    page,
+  }) => {
+    for (const section of ["Models", "Sandboxes"]) {
+      await page.goto("/inbox");
+      await page.getByTestId("phone-settings").tap();
+      await expect(page).toHaveURL(/\/settings$/);
+      const entry = page.getByRole("button", {
+        name: new RegExp(`^${section}`, "i"),
+      });
+      await entry.first().tap();
+      await expect(page).toHaveURL(
+        new RegExp(`/settings/${section.toLowerCase()}$`),
+      );
+      // Before the fix Models replaced the list's entry, so Back went
+      // all the way to /inbox while every other section came back here.
+      await page.goBack();
+      await expect(page).toHaveURL(/\/settings$/);
+      await expect(
+        page.getByRole("button", { name: /^sandboxes/i }).first(),
+      ).toBeVisible();
+      await page.goBack();
+      await expect(page).toHaveURL(/\/inbox$/);
+    }
   });
 });

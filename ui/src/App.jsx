@@ -2727,7 +2727,13 @@ function AppContent({ onReload = () => window.location.reload() }) {
         /^\/(schedules|templates|suites|processes\/triggers)(\/|$)/.test(
           window.location.pathname,
         ) ||
-        (view === "settings" &&
+        // A bare /settings becoming /settings/models is the same page
+        // renamed everywhere but a phone, where the bare path is the
+        // section list: picking Models from it is a step Back has to
+        // return from, as it does for every other section (2026-11-01
+        // responsive walkthrough).
+        (!isPhone &&
+          view === "settings" &&
           settingsSection === DEFAULT_SETTINGS_SECTION &&
           window.location.pathname === "/settings") ||
         (view === "session" &&
@@ -2787,6 +2793,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     config,
     urlTask,
     showError,
+    isPhone,
   ]);
 
   // Mirrors the browser's own back/forward buttons onto the same state
