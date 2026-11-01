@@ -164,10 +164,14 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 	if store != nil {
 		fallbackCI = ci.NewStoredRunStore(store, ci.StoredRunStoreOptions{})
 	}
+	srcDir := sourceDir("")
+	coreSrcDir, coreModule := namespace.CoreSource(srcDir, defaultCoreSourceDir)
 	nsServer := &namespace.Server{
 		CIStore:     daemonNamespaceCIStore{fallback: fallbackCI},
 		ArtifactDir: ciArtifactDir(dataDir),
-		SrcDir:      sourceDir(""),
+		SrcDir:      srcDir,
+		CoreSrcDir:  coreSrcDir,
+		CoreModule:  coreModule,
 		// Rebuilt per request, as grainlog's redactor is per run
 		// (capabilities.go), so a secret set after the daemon started
 		// is redacted over /fs/ without waiting for a restart.
