@@ -345,13 +345,12 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	}
 	finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
 	defer cancelFinish()
-	finishErr := recordRunEnd(ctx, finishCtx, store, cfg, *task, runID, obs, result, end, waitCredit,
-		true, resumableSession, recordedEarly)
-	if transcriptPath != "" {
-		os.Remove(transcriptPath)
-	}
-	revokeLeases(finishCtx, framework)
-	if finishErr == nil && end.outcome == "succeeded" && task.Interactive && store != nil {
+	// The comments the run's prompt held, marked delivered before
+	// recordRunEnd asks whether a message is still waiting, as runOne
+	// does: marked after, a message posted while the turn wrote its
+	// answer was read as answered when nothing had been marked yet, and
+	// the prompt's own message as unseen when an older mark stood.
+	if end.outcome == "succeeded" && task.Interactive && store != nil {
 		if comments, cerr := store.Comments(finishCtx, task.ID); cerr == nil {
 			var promptCutoff int64
 			for _, c := range comments {
@@ -359,11 +358,17 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 					promptCutoff = c.ID
 				}
 			}
-			if promptCutoff > 0 && (obs == nil || obs.DeliveredCommentID == nil || promptCutoff > *obs.DeliveredCommentID) {
-				_ = store.AdvanceDelivered(finishCtx, task.ID, promptCutoff, cfg.now())
+			if err := store.AdvanceDeliveredFrom(finishCtx, task.ID, promptCutoff, cfg.now()); err != nil {
+				log.Printf("orchestrator: adopted run %s: recording the conversation it was dispatched for: %v", runID, err)
 			}
 		}
 	}
+	finishErr := recordRunEnd(ctx, finishCtx, store, cfg, *task, runID, obs, result, end, waitCredit,
+		true, resumableSession, recordedEarly)
+	if transcriptPath != "" {
+		os.Remove(transcriptPath)
+	}
+	revokeLeases(finishCtx, framework)
 
 	var errs []error
 	var afterErr error
@@ -375,6 +380,10 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 		errs = append(errs, afterErr)
 	}
 	stopRecreating()
+	if task.Interactive && degradedRebuild() {
+		log.Printf("orchestrator: adopted run %s: releasing its sandbox %s rather than parking it warm: "+
+			"a rebuild during the run could not restore its capabilities or isolation", runID, a.Sandbox.Name())
+	}
 	if finishErr == nil && afterErr == nil && end.runErr == nil && task.Interactive && store != nil && !degradedRebuild() {
 		cleanupCtx := context.WithoutCancel(ctx)
 		finishNow := cfg.now()
@@ -386,12 +395,20 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 				st != model.StateCompleted && st != model.StateAwaitingSubmit {
 				sandboxKey, grantsKey := recordedSandboxKey, recordedGrantsKey
 				canPark := hasRecordedKeys
+				if !canPark {
+					log.Printf("orchestrator: adopted run %s: releasing its sandbox %s rather than parking it warm: "+
+						"no isolation keys were recorded when it was dispatched", runID, a.Sandbox.Name())
+				}
 				if canPark && sessionGrantsKey(*latestTask) != grantsKey {
 					canPark = false
+					log.Printf("orchestrator: adopted run %s: releasing its sandbox %s rather than parking it warm: "+
+						"task %s's repos, grants or network access changed since it was dispatched", runID, a.Sandbox.Name(), task.ID)
 				}
 				if canPark && (deps.Config.Capabilities == nil || !hasScarceGrant(deps.Config.Capabilities, *latestTask)) {
 					if sessionSandboxKey(adoptedSessionShape(cleanupCtx, deps, *latestTask), *latestTask, nil) != sandboxKey {
 						canPark = false
+						log.Printf("orchestrator: adopted run %s: releasing its sandbox %s rather than parking it warm: "+
+							"task %s's sandbox shape changed since it was dispatched", runID, a.Sandbox.Name(), task.ID)
 					}
 				}
 				if canPark {
@@ -409,6 +426,8 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 					}
 					parkWarmSessionSandbox(deps, task.ID, a.Sandbox.Name(), sandboxKey, grantsKey, a.Sandbox, counted, commitShape, finishNow, ttl)
 					keptWarm = true
+					log.Printf("orchestrator: adopted run %s: parked its sandbox %s warm for task %s's next turn (idle for up to %s)",
+						runID, a.Sandbox.Name(), task.ID, ttl)
 				}
 			}
 		}

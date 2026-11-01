@@ -442,6 +442,65 @@ func TestInteractiveConcurrentCommentDuringProcessResultLeavesTaskQueued(t *test
 	}
 }
 
+// A chat filed with only a body has no comment for its first turn's
+// prompt, so that turn delivered nothing. A message a person posts while
+// it writes its last answer reaches it by no tool call, and must still be
+// dispatched for rather than read as answered: with no delivered mark
+// recorded, undeliveredHumanComment could not tell it was unseen, and the
+// task sat awaiting a reply to a message nobody had answered
+// (docs/test-runs/2026-11-01-warm-sandbox-adoption.md).
+func TestInteractiveFirstTurnWithNoCommentsDispatchesForAMessageItNeverSaw(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
+	task := model.Task{
+		ID: "first-turn-chat", Intent: model.IntentAnalyze, Interactive: true,
+		Title: "a chat", Body: "hello session",
+		Origin:  model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Binding: model.BindingDirective,
+	}
+	task.Approval = &model.Attribution{Actor: human}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	userClient := ui.NewClient(ui.Config{Actor: ui.DefaultActor("alice"), Capabilities: ui.OfferedCapabilities()}, store)
+
+	var prompts []string
+	deps := orchestrator.Deps{
+		Store:     store,
+		Sandboxes: orchestrator.NewHostSandboxes(t.TempDir()),
+		Framework: orchestrator.StaticFramework(agentFunc(func(ctx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+			prompts = append(prompts, cfg.Prompt)
+			if len(prompts) == 1 {
+				if err := userClient.AddComment(ctx, task.ID, "one more thing while you answer", nil); err != nil {
+					t.Errorf("AddComment: %v", err)
+				}
+			}
+			return textAnswer(fmt.Sprintf("answer %d", len(prompts))).Run(ctx, cfg)
+		})),
+		Config: orchestrator.Config{
+			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities: model.NewCapabilityRegistry(durable.New()),
+		},
+		MaxWorkers: 1,
+	}
+	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
+		t.Fatalf("RunCycle (turn 1): %v", err)
+	}
+	if len(prompts) != 1 {
+		t.Fatalf("turn 1 dispatched %d time(s), want 1", len(prompts))
+	}
+	if st, err := store.State(ctx, task.ID); err != nil || st != model.StateQueued {
+		t.Fatalf("state after turn 1 = %q (%v), want %q: the message posted while it answered was never shown to it", st, err, model.StateQueued)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("RunCycle (turn 2): %v", err)
+	}
+	if len(prompts) != 2 || !strings.Contains(prompts[1], "one more thing while you answer") {
+		t.Fatalf("turn 2 was not dispatched for the unseen message (%d dispatch(es))", len(prompts))
+	}
+}
+
 // TestInteractiveFrameworkStickinessAndUsageLimitFallback verifies that an
 // unpinned interactive task prefers the framework and model of its previous
 // attempt (preserving warm CLI sessions across runs), and falls back to the
