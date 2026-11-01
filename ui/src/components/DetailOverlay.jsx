@@ -68,6 +68,7 @@ import GrainCIStatus from "./detail/GrainCIStatus.jsx";
 import LiveAttemptTranscript from "./detail/LiveAttemptTranscript.jsx";
 import PendingQuestion from "./detail/PendingQuestion.jsx";
 import PendingSecret from "./detail/PendingSecret.jsx";
+import PendingConfigChange from "./detail/PendingConfigChange.jsx";
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
 import ReadOnlyRepos from "./detail/ReadOnlyRepos.jsx";
 import SuspendedSession from "./detail/SuspendedSession.jsx";
@@ -584,6 +585,10 @@ export default function DetailOverlay({
           <GrainCIStatus t={t} onOpenCIRun={onOpenCIRun} act={act} />
 
           <PendingSecret t={t} act={act} showError={showError} />
+
+          {/* A proposed config change, like a local-script approval, is
+              answered in an interactive task's chat (TaskChat). */}
+          {!t.interactive && <PendingConfigChange t={t} act={act} />}
 
           {/* A run's local-script calls waiting on a person. An
               interactive task shows them in its chat instead (TaskChat),

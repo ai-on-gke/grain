@@ -713,6 +713,10 @@ type TaskDetail struct {
 	// read a stored secret back, and PUT /api/tasks/{id}/secret is the
 	// one direction this travels (see task_secret.go).
 	PendingSecret *CapabilitySecret `json:"pendingSecret,omitempty"`
+	// PendingConfigChange is the grain/config change a parked session
+	// proposed (propose_config_change, task_config_change.go): what the
+	// task pane renders as an inline diff with Approve and Reject.
+	PendingConfigChange *model.PendingConfigChange `json:"pendingConfigChange,omitempty"`
 	// CI is what grain's own CI last said about the branch this task
 	// pushed (model.Observation.CI), nil for the overwhelming majority of
 	// tasks -- one that does not hold the grain-ci capability, or whose
