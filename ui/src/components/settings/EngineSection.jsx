@@ -93,7 +93,11 @@ export default function EngineSection({ s }) {
           margin="normal"
         />
         <TextField
-          key={`mergeBatch-${settings.mergeBatchSizeChosen || ""}`}
+          // Keyed on the size saved too, not only the one chosen: a
+          // refused save rolls mergeBatchSize back, and that remount is
+          // what takes the refused number out of the box (2026-11-01
+          // walkthrough: 21 stayed in it, looking saved).
+          key={`mergeBatch-${settings.mergeBatchSizeChosen || ""}-${settings.mergeBatchSize ?? ""}`}
           name="mergeBatchSize"
           disabled={locked}
           data-setting-id="mergeBatchSize"

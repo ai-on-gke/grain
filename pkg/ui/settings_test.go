@@ -1898,3 +1898,38 @@ func TestUpdateSettingsRefusesAGCPServiceAccountEmailThatIsNotOne(t *testing.T) 
 		}
 	}
 }
+
+// TestUpdateSettingsRefusesAGCPProjectThatIsNotAProjectID: the 2026-11-01
+// walkthrough saved "Bad Project!" from Legacy capabilities, which every
+// gcp-key and gemini-key attempt would then have failed on.
+func TestUpdateSettingsRefusesAGCPProjectThatIsNotAProjectID(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+	for project, ok := range map[string]bool{
+		"Bad Project!":           false,
+		"UPPER-case-1":           false,
+		"short":                  false,
+		"1starts-with-digit":     false,
+		"ends-with-hyphen-":      false,
+		"my-project-123":         true,
+		" walkthrough-project ":  true,
+		"example.com:my-project": true,
+		"":                       true,
+	} {
+		p := project
+		got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{GCPProject: &p})
+		if ok != (err == nil) {
+			t.Errorf("UpdateSettings(gcpProject=%q) = %v, want accepted %v", project, err, ok)
+			continue
+		}
+		if !ok && !strings.HasPrefix(err.Error(), "gcpProject ") {
+			t.Errorf("UpdateSettings(gcpProject=%q) = %v, want a refusal naming gcpProject", project, err)
+		}
+		if ok && got.GCPProject != strings.TrimSpace(project) {
+			t.Errorf("UpdateSettings(gcpProject=%q) stored %q", project, got.GCPProject)
+		}
+	}
+}
