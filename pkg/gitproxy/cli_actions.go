@@ -46,6 +46,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -609,7 +610,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	for {
 		got, err := p.startCIWait(ctx, scope, req.ResumeRunID, jobs)
 		if err == nil {
-			run = got
+			run = p.followSuperseded(ctx, scope, got, jobs)
 			break
 		}
 		if !ci.IsNotUp(err) || !p.napBefore(ctx, end) {
@@ -636,7 +637,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	defer poll.Stop()
 	heartbeat := time.NewTicker(cliWaitHeartbeat)
 	defer heartbeat.Stop()
-	for !run.Conclusion.Done() && !p.shuttingDown() {
+	for !waitSettled(run, jobs) && !p.shuttingDown() {
 		remaining := time.Until(end)
 		if remaining <= 0 {
 			break
@@ -647,7 +648,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		case <-p.ShutdownStarted:
 		case <-poll.C:
 			if got, ok := p.CLIActions.CIRun(ctx, run.ID); ok {
-				run = got
+				run = p.followSuperseded(ctx, scope, got, jobs)
 			}
 		case now := <-heartbeat.C:
 			p.noteDeclaredWait(ctx, scope.TaskIDStr, phrase)
@@ -674,7 +675,16 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		CreditCapMS: credit.Cap.Milliseconds(),
 		CreditLive:  credit.Live,
 	}
+	// A selective wait that followed into a fuller run is answered by
+	// the jobs it asked about alone (waitSettled).
+	asked := jobs
+	if !selectiveRun(run, jobs) {
+		asked = nil
+	}
 	for _, job := range ci.SortJobRuns(run.Jobs) {
+		if len(asked) > 0 && !slices.ContainsFunc(asked, func(name string) bool { return jobNamed(job, name) }) {
+			continue
+		}
 		verdict := string(job.Conclusion)
 		if verdict == "" {
 			verdict = "running"
@@ -683,9 +693,21 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	}
 	verdict := mcp.WaitVerdictTimedOut
 	switch {
-	case !run.Conclusion.Done():
+	case !waitSettled(run, jobs):
 		resp.Status = "running"
 		resp.ResumeRunID = run.ID
+	case len(asked) > 0:
+		// Every job asked about has finished in the run followed into,
+		// and they alone are the answer, whatever the rest of it did.
+		resp.Error = ""
+		resp.Status, verdict = "passed", mcp.WaitVerdictPassed
+		resp.Conclusion = string(ci.ConclusionSuccess)
+		for _, job := range resp.Jobs {
+			if job.Conclusion != string(ci.ConclusionSuccess) && job.Conclusion != string(ci.ConclusionSkipped) {
+				resp.Status, verdict = "failed", mcp.WaitVerdictFailed
+				resp.Conclusion = string(ci.ConclusionFailure)
+			}
+		}
 	case run.Conclusion == ci.ConclusionSuccess:
 		resp.Status = "passed"
 		verdict = mcp.WaitVerdictPassed
@@ -771,6 +793,73 @@ func (p *GitProxy) startCIWait(ctx context.Context, scope namespace.Scope, resum
 		return ci.Run{}, fmt.Errorf("%w: CI run %s is not on this task's branch (%s in %s)", namespace.ErrForbidden, id, scope.TaskBranch, scope.TaskRepo)
 	}
 	return got, nil
+}
+
+// followSuperseded is the run a wait on run should follow instead, when
+// grain cancelled run to make way for a newer one started for the same
+// task at the same commit (ci.SupersedingRun) -- what wait_for_checks
+// does (pkg/mcp's followSupersede). That cancellation is not the
+// branch's verdict; the newer run's is. A selective wait (grain ci
+// run-job b, superseded by the full run a grain ci wait started) follows
+// too, but only into a run that runs every job it asked about, and is
+// then answered by those jobs alone (waitSettled). A run on another
+// branch or commit is a different question and is never followed.
+func (p *GitProxy) followSuperseded(ctx context.Context, scope namespace.Scope, run ci.Run, jobs []string) ci.Run {
+	seen := map[string]bool{run.ID: true}
+	for {
+		id, ok := ci.SupersedingRun(run)
+		if !ok || seen[id] {
+			return run
+		}
+		next, found := p.CLIActions.CIRun(ctx, id)
+		if !found || next.ID != id || next.Commit != run.Commit ||
+			!strings.EqualFold(next.Repo, scope.TaskRepo) || next.Ref != scope.TaskBranch {
+			return run
+		}
+		for _, name := range jobs {
+			if !slices.ContainsFunc(next.Jobs, func(job ci.JobRun) bool { return jobNamed(job, name) }) {
+				return run
+			}
+		}
+		seen[id] = true
+		run = next
+	}
+}
+
+// waitSettled is whether a wait on run for jobs has its answer: the run
+// has concluded, or -- for a selective wait that followed into a run
+// with more jobs than it asked about -- every job it asked about has.
+func waitSettled(run ci.Run, jobs []string) bool {
+	if run.Conclusion.Done() {
+		return true
+	}
+	if !selectiveRun(run, jobs) {
+		return false
+	}
+	for _, job := range run.Jobs {
+		if slices.ContainsFunc(jobs, func(name string) bool { return jobNamed(job, name) }) && !job.Conclusion.Done() {
+			return false
+		}
+	}
+	return true
+}
+
+// selectiveRun is whether a wait for jobs is following run as a run with
+// jobs it did not ask about -- one it followed into (followSuperseded).
+func selectiveRun(run ci.Run, jobs []string) bool {
+	if len(jobs) == 0 {
+		return false
+	}
+	for _, job := range run.Jobs {
+		if !slices.ContainsFunc(jobs, func(name string) bool { return jobNamed(job, name) }) {
+			return true
+		}
+	}
+	return false
+}
+
+func jobNamed(job ci.JobRun, name string) bool {
+	return job.Name == name || (job.JobID != "" && job.JobID == name)
 }
 
 // napBefore sleeps one poll before asking again, reporting false --
