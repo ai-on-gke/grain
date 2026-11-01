@@ -316,6 +316,20 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 	if out, errOut, code := runActionCLI(t, srv, nil, "memory", "write", "remember this"); code != 0 || !strings.Contains(out, "remember this") {
 		t.Errorf("memory write: %d %s %s", code, out, errOut)
 	}
+	// Memory has no keys: the form the old help advertised ("write <key>
+	// <body>") must be refused rather than replace the deployment's whole
+	// memory with "<key> <body>".
+	delete(proxy.bodies, "PUT /api/memory")
+	if _, errOut, code := runActionCLI(t, srv, nil, "memory", "write", "walk-key", "a body"); code == 0 || !strings.Contains(errOut, "takes no <key>") {
+		t.Errorf("memory write <key> <body>: %d %s, want a refusal", code, errOut)
+	}
+	if body, sent := proxy.bodies["PUT /api/memory"]; sent {
+		t.Errorf("memory write <key> <body> reached PUT /api/memory with %v", body)
+	}
+	if _, errOut, code := runActionCLI(t, srv, nil, "memory", "write", "acme/widgets", "repo memory"); code != 0 ||
+		proxy.bodies["PUT /api/memory"]["repo"] != "acme/widgets" || proxy.bodies["PUT /api/memory"]["text"] != "repo memory" {
+		t.Errorf("memory write <repo> <text>: %d %s %v", code, errOut, proxy.bodies["PUT /api/memory"])
+	}
 	if out, errOut, code := runActionCLI(t, srv, nil, "memory", "doc", "write", "arch", "doc body", "--summary", "Arch"); code != 0 || !strings.Contains(out, `"arch"`) {
 		t.Errorf("memory doc write: %d %s %s", code, out, errOut)
 	}

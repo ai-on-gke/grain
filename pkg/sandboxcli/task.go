@@ -404,6 +404,12 @@ func (c *sandboxCLI) memoryWrite(p sandboxArgs) error {
 		repo = p.positional[0]
 		rest.positional = nil
 	}
+	// Memory is one text per scope, not a store of keyed entries: a first
+	// word that reads as a key ("write notes <body>") would otherwise be
+	// joined into the text and replace the whole deployment memory with it.
+	if p.get("file") == "" && len(rest.positional) >= 2 && !strings.ContainsAny(rest.positional[0], " \t\n") {
+		return fmt.Errorf("grain memory write takes no <key>: it replaces the whole memory text of the deployment (or of --repo owner/name) with one quoted <text> or --file; for a named entry use grain memory doc-write <name>")
+	}
 	text, err := c.textArg(rest, "text")
 	if err != nil {
 		return err

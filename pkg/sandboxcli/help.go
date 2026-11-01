@@ -76,7 +76,7 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
   grain api routes [--scope <s>]         List agent API routes granted to this attempt
   grain api <METHOD> <path> [--body '<json>' | --field k=v] [--reason <why>]
                                          Call a granted non-dangerous agent API route
-  grain memory (list | read <key> | write <key> <body|--file f> | doc-write <path> <body|--file f>)
+  grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)
                                          Deployment memory and standing docs (api:memory / api:memory:write)
   grain release-notes (stats | publish --version <v> <body|--file f>)
                                          Release notes stats and publishing (api:release-notes)
@@ -239,10 +239,10 @@ var sandboxCommandHelp = map[string]string{
 	"propose":               sandboxProposeHelp,
 	"api":                   "grain api routes [--scope <s>]\ngrain api <METHOD> <path> [--body '<json>' | --file <f> | --field k=v] [--reason <why>]\n\nList or call non-dangerous agent API routes granted to this run.\n\nA repository off the default git host goes in a /api/repos/{owner}/{name}/... path\nwith its host and owner escaped into one segment:\n  grain api GET '/api/repos/git.forge.example%2Fexperimental/grain/releases'\n",
 	"api routes":            "grain api routes [--scope <s>]\n\nList the non-dangerous agent API routes this run's capabilities unlock.\n",
-	"memory":                "grain memory (list | read <key> | write <key> <body|--file f> | doc-write <path> <body|--file f>)\n",
+	"memory":                "grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)\n",
 	"memory list":           "grain memory list\n\nList entries in deployment memory (memory://).\n",
-	"memory read":           "grain memory read <key>\n\nRead a file from deployment memory (memory://<key>).\n",
-	"memory write":          "grain memory write <key> (<content> | --file <f>)\n\nWrite an entry under memory/entries/<key>. Needs api:memory or api:memory:write.\n",
+	"memory read":           "grain memory read <path>\n\nRead a file from deployment memory (memory://<path>; grain memory list names them).\n",
+	"memory write":          "grain memory write [--repo owner/name] (<text> | --file <f>)\n\nReplace the deployment's memory text (or a repository's, with --repo) with <text>. It is one text, not keyed entries: a named entry is grain memory doc-write. Needs api:memory or api:memory:write.\n",
 	"memory doc-write":      "grain memory doc-write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs api:memory or api:memory:write.\n",
 	"memory doc":            "grain memory doc write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs api:memory or api:memory:write.\n",
 	"release-notes":         "grain release-notes (stats | publish --version <v> <body|--file f>)\n",
