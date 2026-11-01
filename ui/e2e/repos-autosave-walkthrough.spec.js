@@ -84,15 +84,16 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
       });
       await expect(capsSelect).toBeVisible();
       await capsSelect.click();
-      // Select "Self debug" from capabilities menu list. Not GCP key: the
-      // demo makes that a deployment default, which every repo has on
-      // whatever it says, so choosing it here would prove nothing saved.
-      const selfDebugOption = page.getByRole("option", {
-        name: "Self debug",
+      // Select "Bootstrap playbooks" from capabilities menu list. Not GCP
+      // key or Self debug: the demo makes those deployment defaults, which
+      // every repo has on whatever it says, so choosing one here would
+      // prove nothing saved.
+      const playbooksOption = page.getByRole("option", {
+        name: "Bootstrap playbooks",
         exact: true,
       });
-      await expect(selfDebugOption).toBeVisible();
-      await selfDebugOption.click();
+      await expect(playbooksOption).toBeVisible();
+      await playbooksOption.click();
       await page.keyboard.press("Escape"); // Close select dropdown
 
       // 3. Modify Prompt Extension
@@ -149,7 +150,7 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
       );
       expect(capsRes.ok()).toBe(true);
       expect((await capsRes.json()).defaultCapabilities).toContain(
-        "self-debug",
+        "bootstrap-playbooks",
       );
     });
   });
