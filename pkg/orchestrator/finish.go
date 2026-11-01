@@ -322,7 +322,21 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		return err
 	}
 	if waiting {
-		return nil
+		// If a human message arrived concurrently (for example just before
+		// PostAgentMessage set PendingQuestionCommentID as the run was tearing
+		// down, or while ProcessResult was starting), clear the stale question
+		// marker and fall through so the task stays queued for the unanswered
+		// human message instead of parking on it.
+		if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
+			if err := observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+				o.PendingQuestionCommentID = nil
+				o.PendingSecret = ""
+			}); err != nil {
+				return err
+			}
+		} else {
+			return nil
+		}
 	}
 
 	// A run that stopped through resume_later -- or wait_for_task's park
@@ -437,6 +451,11 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// its goal or a message instead (restOnGoal). Its words are relayed as
 	// an ordinary comment; reconcileTaskGoals closes it once the goal is
 	// met, and a person may close it any time.
+	if !waitingMessage {
+		if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
+			waitingMessage = true
+		}
+	}
 	if !waitingMessage && !keepRunning {
 		finalText := !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && strings.TrimSpace(result.FinalText) != "" &&
 			!taskPaused(ctx, store, task.ID)
@@ -450,9 +469,22 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 					if _, err := relayCommentWithAttachments(ctx, store, task, strings.TrimSpace(result.FinalText), nil, now); err != nil {
 						return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 					}
+					hasComment = true
 				}
-				_, err := restOnGoal(ctx, store, task, runID, now)
-				return err
+				if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
+					waitingMessage = true
+				} else {
+					_, err := restOnGoal(ctx, store, task, runID, now)
+					if err != nil {
+						return err
+					}
+					if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
+						if _, werr := store.WakeOnMessage(ctx, task.ID, now); werr != nil {
+							return werr
+						}
+					}
+					return nil
+				}
 			}
 		}
 	}
@@ -496,6 +528,14 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 		}
 		hasComment = true
+	} else if relayedInProcess {
+		hasComment = true
+	}
+
+	if !waitingMessage {
+		if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
+			waitingMessage = true
+		}
 	}
 
 	// Its words are in the conversation; its task stays open for the

@@ -114,18 +114,24 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 		}
 		return nil
 	}
+	var task *model.Task
+	keptWarm := false
 	if deps.Ledger != nil {
 		if !deps.AgentShape.IsZero() {
 			deps.Ledger.Charge(model.PoolAgent, runID, deps.AgentShape)
 		}
-		defer deps.Ledger.Release(model.PoolAgent, runID)
+		defer func() {
+			deps.Ledger.Release(model.PoolAgent, runID)
+			if keptWarm && task != nil {
+				parkWarmSessionInLedger(deps, task.ID)
+			}
+		}()
 	}
 
 	// The leases the previous daemon recorded for this run, revoked once
 	// it has ended however it ends, as RunDispatch's revokeAll would have.
 	// Their task is what a provider reads its credential's team from, so
 	// without one they are left for the reaper.
-	var task *model.Task
 	revokeLeases := func(finishCtx context.Context, framework agent.Framework) {
 		if task == nil {
 			return
@@ -176,10 +182,18 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	if deps.Framework == nil {
 		return abandon("has no agent framework to read its result with")
 	}
-	framework, err := deps.Framework(ctx, deps.choiceFor(*task))
+	choice := deps.choiceFor(*task)
+	if run.AgentFramework != "" {
+		choice.Framework = run.AgentFramework
+	}
+	if run.Model != "" {
+		choice.Model = run.Model
+	}
+	framework, err := deps.Framework(ctx, choice)
 	if err != nil {
 		return abandon("could not build its agent framework: " + err.Error())
 	}
+	defer releaseFramework(framework)
 	parser, ok := framework.(agent.ResultParser)
 	// A wrapper (the daemon's connection pool hands back one) parses
 	// only if what it wraps does.
@@ -225,10 +239,23 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	scope := runPauseScope(framework, *task, cfg)
 	stopPause := cfg.Pause.register(runID, scope, cfg.now(), cancelRun)
 	stopTokenRefresh := keepSandboxTokenFresh(ctx, deps.RefreshSandboxToken, a.Sandbox.Name(), deps.SandboxTokenRefreshInterval)
+	var (
+		recordedSandboxKey string
+		recordedGrantsKey  string
+		hasRecordedKeys    bool
+	)
+	if store != nil {
+		// A run with no recorded keys -- one a daemon from before
+		// task_run_sandbox_key started, or one whose SetRunSandboxKeys
+		// failed -- is never parked warm: what its sandbox was built
+		// for cannot be told from the task as it stands now, which may
+		// have been narrowed since.
+		recordedSandboxKey, recordedGrantsKey, hasRecordedKeys, _ = store.RunSandboxKeys(ctx, runID)
+	}
 	// Recreatable as runOne's runs are (recreate_sandbox): unregistered
 	// before releaseAdoptedSandbox below, which waits out a rebuild in
 	// flight before the sandbox it was building is destroyed.
-	stopRecreating := registerAdoptedRecreation(ctx, deps, *task, *run, a.Sandbox)
+	stopRecreating, degradedRebuild := registerAdoptedRecreation(ctx, deps, *task, *run, a.Sandbox)
 	defer stopRecreating()
 
 	// The live transcript the previous daemon was writing, appended to
@@ -317,42 +344,118 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 		os.Remove(transcriptPath)
 	}
 	revokeLeases(finishCtx, framework)
+	if finishErr == nil && end.outcome == "succeeded" && task.Interactive && store != nil {
+		if comments, cerr := store.Comments(finishCtx, task.ID); cerr == nil {
+			var promptCutoff int64
+			for _, c := range comments {
+				if !c.CreatedAt.After(run.StartedAt) && c.ID > promptCutoff {
+					promptCutoff = c.ID
+				}
+			}
+			if promptCutoff > 0 && (obs == nil || obs.DeliveredCommentID == nil || promptCutoff > *obs.DeliveredCommentID) {
+				_ = store.AdvanceDelivered(finishCtx, task.ID, promptCutoff, cfg.now())
+			}
+		}
+	}
 
 	var errs []error
+	var afterErr error
 	switch {
 	case finishErr != nil:
 		errs = append(errs, end.runErr, fmt.Errorf("orchestrator: finishing adopted run %s: %w", runID, finishErr))
 	default:
-		errs = append(errs, afterAgentRun(ctx, deps, *task, runID, result, end.runErr, preRunBranchSHA, "", cfg.now()))
+		afterErr = afterAgentRun(ctx, deps, *task, runID, result, end.runErr, preRunBranchSHA, "", cfg.now())
+		errs = append(errs, afterErr)
 	}
 	stopRecreating()
-	releaseAdoptedSandbox(ctx, deps, a.Sandbox, runID, run)
+	if finishErr == nil && afterErr == nil && end.runErr == nil && task.Interactive && store != nil && !degradedRebuild() {
+		cleanupCtx := context.WithoutCancel(ctx)
+		finishNow := cfg.now()
+		if ttl := sessionSandboxIdleTTL(cleanupCtx, deps); ttl > 0 && !taskPaused(cleanupCtx, store, task.ID) {
+			latestTask, terr := store.GetTask(cleanupCtx, task.ID)
+			st, serr := store.State(cleanupCtx, task.ID)
+			if terr == nil && latestTask != nil && serr == nil && st != "" &&
+				st != model.StateClosed && st != model.StateFailed &&
+				st != model.StateCompleted && st != model.StateAwaitingSubmit {
+				sandboxKey, grantsKey := recordedSandboxKey, recordedGrantsKey
+				canPark := hasRecordedKeys
+				if canPark && sessionGrantsKey(*latestTask) != grantsKey {
+					canPark = false
+				}
+				if canPark && (deps.Config.Capabilities == nil || !hasScarceGrant(deps.Config.Capabilities, *latestTask)) {
+					if sessionSandboxKey(adoptedSessionShape(cleanupCtx, deps, *latestTask), *latestTask, nil) != sandboxKey {
+						canPark = false
+					}
+				}
+				if canPark {
+					commitShape := (model.Limits{AgentShape: deps.AgentShape}).TaskShape(*latestTask)
+					counted := func(cctx context.Context) {
+						if usages, err := store.SandboxUsages(cctx); err == nil {
+							for _, u := range usages {
+								if u.Kind == model.SandboxKindAgent && u.Created > u.Finished {
+									ended := cfg.now()
+									_ = store.RecordSandboxFinish(cctx, model.SandboxKindAgent, max(ended.Sub(run.StartedAt), 0), ended)
+									break
+								}
+							}
+						}
+					}
+					parkWarmSessionSandbox(deps, task.ID, a.Sandbox.Name(), sandboxKey, grantsKey, a.Sandbox, counted, commitShape, finishNow, ttl)
+					keptWarm = true
+				}
+			}
+		}
+	}
+	if !keptWarm {
+		releaseAdoptedSandbox(ctx, deps, a.Sandbox, runID, run)
+	}
 	return errors.Join(errs...)
+}
+
+// adoptedSessionShape is the sandbox Shape runOne would build for task,
+// as far as an adopting daemon can tell it from the task alone: what the
+// latest task's sessionSandboxKey is computed from before a warm park.
+func adoptedSessionShape(ctx context.Context, deps Deps, tk model.Task) Shape {
+	sh := Shape{
+		CPUs:          tk.SandboxCPUs,
+		MemoryMB:      tk.SandboxMemoryMB,
+		DiskGB:        tk.SandboxDiskGB,
+		NetworkAccess: tk.NetworkAccess,
+		GrainSource:   hasGrant(tk, model.SelfDebugCapability),
+		Class:         sandboxClassFor(tk),
+	}
+	if isUnisolated(deps.Sandboxes) {
+		sh.OperatorEnv, _ = localTask(ctx, deps.Store, deps.Policy, tk)
+	}
+	return sh
 }
 
 // registerAdoptedRecreation registers an adopted run with
 // Config.SandboxRecreations, as runOne does a run it dispatched, and
-// returns what unregisters it.
+// returns what unregisters it alongside a predicate reporting whether a
+// mid-run rebuild degraded the sandbox's capabilities or isolation shape
+// so that it must not be parked warm across turns.
 //
 // What runOne records after registering -- the capabilities RunDispatch
 // materialized and the pass it applied -- was held only by the daemon
 // that started the run, so a rebuild cannot put that back. It names
 // those capabilities instead (sandboxRecreation.unrestorable): the
 // task's grants and the leases recorded against the run.
-func registerAdoptedRecreation(ctx context.Context, deps Deps, task model.Task, run model.Run, sb Sandbox) func() {
+func registerAdoptedRecreation(ctx context.Context, deps Deps, task model.Task, run model.Run, sb Sandbox) (func(), func() bool) {
+	noop := func() bool { return false }
 	if deps.Config.SandboxRecreations == nil {
-		return func() {}
+		return func() {}, noop
 	}
 	tools, err := sb.Tools(ctx)
 	if err != nil {
 		log.Printf("orchestrator: adopted run %s: reading its sandbox's tools, so it cannot be recreated: %v", run.ID, err)
-		return func() {}
+		return func() {}, noop
 	}
 	var sandboxRoot string
 	if rooted, ok := sb.(rootedSandbox); ok {
 		if sandboxRoot, err = rooted.Root(); err != nil {
 			log.Printf("orchestrator: adopted run %s: reading its sandbox's root, so it cannot be recreated: %v", run.ID, err)
-			return func() {}
+			return func() {}, noop
 		}
 	}
 	placer, _ := sb.(SandboxPlacer)
@@ -375,7 +478,7 @@ func registerAdoptedRecreation(ctx context.Context, deps Deps, task model.Task, 
 		}
 	}
 	sort.Strings(unrestorable)
-	return deps.Config.SandboxRecreations.register(task.ID, &sandboxRecreation{
+	rec := &sandboxRecreation{
 		store:              deps.Store,
 		cfg:                deps.Config,
 		task:               task,
@@ -386,7 +489,18 @@ func registerAdoptedRecreation(ctx context.Context, deps Deps, task model.Task, 
 		mint:               deps.MintSandboxToken,
 		credentialIdentity: deps.CredentialGitIdentity,
 		unrestorable:       unrestorable,
-	})
+	}
+	hasSandboxCap := false
+	for _, capName := range unrestorable {
+		if capName != model.DurableCapability && capName != model.PriorityDispatchCapability {
+			hasSandboxCap = true
+			break
+		}
+	}
+	degraded := func() bool {
+		return rec.wasRecreated() && (hasSandboxCap || !isUnisolated(deps.Sandboxes))
+	}
+	return deps.Config.SandboxRecreations.register(task.ID, rec), degraded
 }
 
 // adoptedClockStart is where run's own clock started, which is where its

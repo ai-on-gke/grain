@@ -401,3 +401,10 @@ func StartMergeRecheckForTest(ctx context.Context, store *model.Store, client gi
 func ReconcileTaskCI(ctx context.Context, deps Deps, task model.Task, now time.Time) error {
 	return reconcileTaskCI(ctx, deps, task, now)
 }
+
+// SessionKeysForTest is the sessionSandboxKey (with nothing materialized)
+// and sessionGrantsKey an adopting daemon compares task's against before
+// parking its sandbox warm: what a test records with SetRunSandboxKeys.
+func SessionKeysForTest(ctx context.Context, deps Deps, task model.Task) (sandboxKey, grantsKey string) {
+	return sessionSandboxKey(adoptedSessionShape(ctx, deps, task), task, nil), sessionGrantsKey(task)
+}

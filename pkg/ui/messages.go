@@ -143,7 +143,30 @@ func (c *Client) PostAgentMessage(ctx context.Context, id, body, summary string,
 			Size:        int64(len(attachments[i].Content)),
 		})
 	}
+	// A person who has already said something the run has not been shown
+	// has answered before the question was asked: the chat call returns
+	// that comment at once (daemonChat's pre-post poll), so parking the
+	// task on this message would leave it reading awaiting_reply on a
+	// question nobody is left to answer. RecordDelivered will not un-park
+	// it either, since the comment predates the question. Only a task
+	// whose run keeps a delivered mark can say what it has not been shown;
+	// without one every earlier comment would look unread.
+	var waitingHuman []int64
+	if obs, err := c.Store.GetObservation(ctx, id); err == nil && obs != nil && obs.DeliveredCommentID != nil {
+		if later, err := c.Store.CommentsAfter(ctx, id, *obs.DeliveredCommentID); err == nil {
+			for _, comment := range later {
+				if comment.ID < commentID && comment.Author.Actor.Kind == model.PrincipalHuman {
+					waitingHuman = append(waitingHuman, comment.ID)
+				}
+			}
+		}
+	}
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		if o.DeliveredCommentID != nil &&
+			slices.ContainsFunc(waitingHuman, func(cid int64) bool { return cid > *o.DeliveredCommentID }) {
+			o.PendingQuestionCommentID = nil
+			return
+		}
 		o.PendingQuestionCommentID = &commentID
 	}); err != nil {
 		return Message{}, err
@@ -492,7 +515,31 @@ func (c *Client) RecordDelivered(ctx context.Context, id string, through int64) 
 	if !slices.ContainsFunc(comments, func(comment model.Comment) bool { return comment.ID == through }) {
 		return validationErrorf("through must be the id of a comment on task %s", id)
 	}
-	return c.Store.AdvanceDelivered(ctx, id, through, c.now())
+	now := c.now()
+	return c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		prev := int64(0)
+		if o.DeliveredCommentID != nil {
+			prev = *o.DeliveredCommentID
+		}
+		if through <= prev {
+			return
+		}
+		o.DeliveredCommentID = &through
+		// Only a person's comment after the question answers it: one
+		// said before the run asked, and only now marked delivered,
+		// must not un-park the question the run is waiting on.
+		after := prev
+		if o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID > after {
+			after = *o.PendingQuestionCommentID
+		}
+		for _, comment := range comments {
+			if comment.ID > after && comment.ID <= through && comment.Author.Actor.Kind == model.PrincipalHuman {
+				o.PendingQuestionCommentID = nil
+				o.PendingSecret = ""
+				break
+			}
+		}
+	})
 }
 
 // handleRecordDelivered answers POST /api/tasks/{id}/delivered.

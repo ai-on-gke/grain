@@ -639,19 +639,31 @@ func (ex *managedExec) attach(ctx context.Context, st *guestforward.Stream, from
 	defer markDetached()
 
 	// Pump client input frames -> guestConn. A client stream read error
-	// (such as a dropped connection) detaches cleanly without closing the
-	// guest's stdin or terminating the guest command.
+	// (such as a dropped connection or client detach reset) detaches cleanly
+	// without closing the guest's stdin or terminating the guest command.
+	//
+	// A clean EOF on st (half-close of the client's write side) or a write
+	// error on guestConn (because the guest command already exited or its
+	// transport cut before stdin frames arrived) does NOT mean the client
+	// detached: the client is still waiting on st for buffered output and
+	// the terminal TypeExit frame (or guest-transport-cut reset).
 	go func() {
-		defer markDetached()
+		guestWritable := true
 		for {
 			typ, payload, err := execwire.ReadFrame(st)
 			if err != nil {
+				if !errors.Is(err, io.EOF) {
+					markDetached()
+				}
 				return
+			}
+			if !guestWritable {
+				continue
 			}
 			switch typ {
 			case execwire.TypeStdin, execwire.TypeStdinClose, execwire.TypeWinsize, execwire.TypeSignal:
 				if err := ex.writeFrame(typ, payload); err != nil {
-					return
+					guestWritable = false
 				}
 			}
 		}
@@ -660,6 +672,7 @@ func (ex *managedExec) attach(ctx context.Context, st *guestforward.Stream, from
 	go func() {
 		select {
 		case <-ctx.Done():
+			st.Reset("server context canceled")
 			markDetached()
 		case <-detachCh:
 		}
