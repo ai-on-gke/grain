@@ -2401,6 +2401,11 @@ func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, ou
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_relayed_call` WHERE `run_id` = ?", runID); err != nil {
 		return err
 	}
+	// Nor any wait time to carry into an adopting daemon's clock
+	// (RunWaitLedger).
+	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_wait_ledger` WHERE `run_id` = ?", runID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_sandbox_key` WHERE `run_id` = ?", runID); err != nil {
 		return err
 	}
