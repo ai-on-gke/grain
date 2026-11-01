@@ -474,6 +474,11 @@ var Migrations = []Migration{
 			"db-write": GrainSQLWriteGrant,
 		}),
 	},
+	{
+		Version:     83,
+		Description: "rewrite stored self-repair grants to https://grain.dev/capabilities/grain#host-exec={} (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"self-repair": GrainHostExecGrant}),
+	},
 }
 
 // ApplyDataMigrations runs the row rewrites (Up) of every migration past

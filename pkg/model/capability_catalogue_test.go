@@ -151,6 +151,7 @@ func TestCatalogueRetiredInProcessBindsItsPreset(t *testing.T) {
 		}},
 		"test-quarantine":   {Restrictions: &model.CapabilityRestrictions{Kinds: model.Patterns{"task"}}},
 		"deployment-health": {Restrictions: &model.CapabilityRestrictions{Kinds: model.Patterns{"director"}}},
+		"self-repair":       {Restrictions: &model.CapabilityRestrictions{Kinds: model.Patterns{"director"}}},
 	}}
 	cases := []struct {
 		name    string
@@ -171,6 +172,9 @@ func TestCatalogueRetiredInProcessBindsItsPreset(t *testing.T) {
 		{name: "test-quarantine admitted for its kind", gc: model.GrantContext{Kind: "task", Grants: []string{"api:test-quarantine"}}},
 		{name: "a split retirement binds its api half", gc: model.GrantContext{Kind: "task", Grants: []string{"api:deployment:read"}},
 			refused: "in_process.deployment-health"},
+		{name: "self-repair kind restriction binds grain#host-exec", gc: model.GrantContext{Kind: "task", Grants: []string{model.GrainHostExecGrant}},
+			refused: "in_process.self-repair"},
+		{name: "grain#host-exec admitted for its kind", gc: model.GrantContext{Kind: "director", Grants: []string{model.GrainHostExecGrant}}},
 		{name: "an unrelated preset is not judged", gc: model.GrantContext{Kind: "task", Grants: []string{"api:team-broadcast"}}},
 	}
 	for _, tc := range cases {

@@ -368,7 +368,11 @@ import "strconv"
 // `https://grain.dev/capabilities/grain#sql={"write":false}` and
 // `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
 // `db-read` and `db-write` providers are retired.
-const SchemaVersion = 82
+//
+// 83 rewrites stored `self-repair` grants to
+// `https://grain.dev/capabilities/grain#host-exec={}`: the in-process
+// `self-repair` provider is retired for the `grain#host-exec` method.
+const SchemaVersion = 83
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

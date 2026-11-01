@@ -52,16 +52,6 @@ func putTask(t *testing.T, store *model.Store, ctx context.Context) string {
 	return id
 }
 
-func TestSpecIsAGrantCapabilityNamedSelfRepair(t *testing.T) {
-	spec := New().Spec()
-	if CapabilityName != "self-repair" || spec.Name != CapabilityName {
-		t.Fatalf("Name = %q, want %q", spec.Name, "self-repair")
-	}
-	if spec.Provision != model.ProvisionGrant {
-		t.Fatalf("Provision = %q, want %q", spec.Provision, model.ProvisionGrant)
-	}
-}
-
 func humanReply(t *testing.T, store *model.Store, ctx context.Context, taskID, body string) {
 	t.Helper()
 	if _, err := store.AddComment(ctx, model.Comment{

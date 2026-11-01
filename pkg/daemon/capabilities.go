@@ -299,6 +299,9 @@ func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, t
 		selfrepair.CapabilityName: func(store *model.Store, taskID string) []mcp.Tool {
 			return selfrepair.HostCommandTools(store, taskID, 0, 0)
 		},
+		grainserver.HostExecGrant: func(store *model.Store, taskID string) []mcp.Tool {
+			return selfrepair.HostCommandTools(store, taskID, 0, 0)
+		},
 		bootstrap.CapabilityName: func(*model.Store, string) []mcp.Tool {
 			return bootstrap.PlaybookTools()
 		},
