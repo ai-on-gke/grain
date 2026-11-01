@@ -96,6 +96,8 @@ async function answer(request, taskId, approvalId) {
 test("folds and unfolds every section by mouse, Enter and Space, and keeps the choice across reload and navigation", async ({
   page,
 }) => {
+  // Each viewport may wait out a whole notifications poll below.
+  test.setTimeout(180_000);
   for (const viewport of [DESKTOP, PHONE]) {
     await page.setViewportSize(viewport);
     await page.goto("/inbox");
@@ -280,6 +282,8 @@ test("a section that empties and refills keeps its fold, and the rail's Inbox ch
 test("a critical notification arriving while Notifications is folded is counted on the heading and in the bell", async ({
   page,
 }) => {
+  // Each viewport may wait out a whole notifications poll below.
+  test.setTimeout(180_000);
   for (const viewport of [DESKTOP, PHONE]) {
     await page.setViewportSize(viewport);
     await page.goto("/inbox");
@@ -302,9 +306,12 @@ test("a critical notification arriving while Notifications is folded is counted 
       "raise a critical notification",
     );
     try {
-      // Without a reload: the page's own poll brings it in.
+      // Without a reload: the page's own poll brings it in. That poll
+      // (notifications.js's POLL_MS, 30s) started when the page loaded,
+      // just before this was raised, so the wait has to outlast a whole
+      // interval with room to spare on a loaded runner.
       await expect(toggle.locator(".count")).toHaveText(String(before + 1), {
-        timeout: 30_000,
+        timeout: 45_000,
       });
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
       expect(await headingCount(page)).toBe(total + 1);
