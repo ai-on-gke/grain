@@ -65,7 +65,7 @@ interactive startup (per-phase breakdown)
 | 3b | Stale token after narrowing | **Pass, and not a security bug.** See F2. |
 | 3c | The next turn holds the new grants | **Pass.** After `self-debug` was removed and the model changed to `claude-stub-2`, the next turn ran in a new `grain-sandbox-1-2` with `--model claude-stub-2`. Its token's `grain task list` shows only its own task (it had shown all 9 with `self-debug`). |
 | 3d | Narrowing `writes` | **Not walked.** There is no GitHub credential, so no push can be exercised. |
-| 3e | A removed default is not re-added after a restart (#299 `7622acf3`) | **Finding F3, filed.** A removal made through the task capability endpoint is reverted on restart. |
+| 3e | A removed default is not re-added after a restart (#299 `7622acf3`) | **Finding F3: fails on `30f47366`, fixed on current `main`.** A removal made through the task capability endpoint was reverted on restart. `b7036151` and `49cce17b`, which landed during this run, persist the snapshot, and the repro passes on the merged tree. |
 | 4a | `keep_running` restarts after a normal finish, with no failure streak | **Pass.** Console session `kr3` (task 4, stub sleeping 3 s) ran attempts 1–4 back to back in one sandbox, all `succeeded`, with no streak. A `noRepo` batch task with `keepRunning` (09:44) did the same in `grain-sandbox-2-1`. |
 | 4b | No restart after an operator stop | **Pass.** `POST /api/console-sessions/kr3/cancel` at 09:32:08: attempt 5 `cancelled`, state `awaiting_reply`, no new attempt in the following 14 s, sandbox released. |
 | 4c | No restart after a question | **Not walked.** The stub cannot call `ask_question`. CI covers it in `TestKeepRunningTaskStopsWhenClosedDeferredOrParked`. |
@@ -132,7 +132,7 @@ EDIT SENT 09:40:51.343 / EDIT RETURNED 09:40:51.359
 - The sidebar edit (09:40:07.8 → refused 09:40:09.556 → revoked 09:40:09.951) and the earlier API edit (09:19:56.338 → revoked 09:19:57.683) behaved the same way.
 - Not walked: narrowing `writes` (3d).
 
-### F3: console-session grant edits made through the task are reverted at the next restart (filed)
+### F3: console-session grant edits made through the task are reverted at the next restart (fixed on main during this run)
 
 **Repro** (fresh `-data-dir`, so `consoleSessions` has never been stored):
 1. The director (task 1) is filed with `self-debug`.
@@ -147,7 +147,9 @@ The same happened at 09:19:56 → 09:20:07 in the main run.
 - `GET /api/console-sessions` derives capabilities from the task, which makes the edit look as if it landed on the session.
 - After a restart `hasPrev` is false and the session config's capability is re-added. An attached capability the config does not list is dropped the same way.
 
-It appears to work once anything has persisted `cfg.ConsoleSessions` from the live view. Creating any console session does that, which is why later attempts in the main run held. Filed with the repro and a fix direction (persist the snapshot).
+It appears to work once anything has persisted `cfg.ConsoleSessions` from the live view. Creating any console session does that, which is why later attempts in the main run held.
+
+**Fixed on main while this run was in progress.** `b7036151` ("persist the standing-session sync snapshot so declared reads and writes hold after a restart") and `49cce17b` arrived when `main` was merged into this branch. The same fresh-data-dir repro on the merged tree keeps `self-debug` off across the restart. The follow-up this run proposed for F3 is redundant and can be closed.
 
 ### F4: the reaper removed a keep_running session's warm sandbox between two runs (filed)
 
@@ -174,8 +176,8 @@ The hot loop itself is `keep_running` as designed, at the stub's speed. A real a
 ## Bugs fixed and filed
 
 - **Fixed here:** F1, with two orchestrator regression tests and a live re-check on the daemon.
+- **Fixed on main during this run:** F3 (`b7036151`, `49cce17b`), re-verified on the merged tree. The F3 proposal filed before that merge is redundant.
 - **Filed** (each depends on this task):
-  - F3: console-session grant edits reverted on restart;
   - F4: keep_running warm sandbox reaped mid-reuse;
   - F5: attachments on in-process and mid-run messages.
 - **Security:** no token outlives a grant narrowing with its old grants (F2).
