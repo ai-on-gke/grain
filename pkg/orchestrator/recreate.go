@@ -308,6 +308,7 @@ type sandboxRecreation struct {
 	// run's sandbox is never released out from under a rebuild.
 	mu           sync.Mutex
 	closed       bool
+	recreated    bool
 	materialized []model.Materialized
 	// capabilityPass is the attempt's minted pass as runOne materialized
 	// it, nil for a run holding no capability references.
@@ -329,6 +330,12 @@ func (s *sandboxRecreation) close() {
 	s.closed = true
 }
 
+func (s *sandboxRecreation) wasRecreated() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recreated
+}
+
 func (s *sandboxRecreation) recreate(ctx context.Context) (SandboxRecreation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -342,6 +349,7 @@ func (s *sandboxRecreation) recreate(ctx context.Context) (SandboxRecreation, er
 			"orchestrator: run %s's sandbox (%T) has no way to destroy and rebuild itself",
 			s.sandbox.Name(), s.sandbox)
 	}
+	s.recreated = true
 	if err := rebuilder.Rebuild(ctx); err != nil {
 		return SandboxRecreation{}, fmt.Errorf(
 			"orchestrator: rebuilding run %s's sandbox: %w", s.sandbox.Name(), err)

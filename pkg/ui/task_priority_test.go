@@ -141,9 +141,14 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 		t.Errorf("stored Priority = %d (err=%v), want 9", stored.Priority, err)
 	}
 
-	// api:tasks:admin without api:tasks:write cannot edit title.
+	// api:tasks:admin without api:tasks:write cannot edit title or toggle priority-dispatch.
 	if code, _ := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", `{"title": "hijacked"}`, ""); code != http.StatusForbidden {
 		t.Errorf("PATCH /api/tasks/2 with title edit under api:tasks:admin: status %d, want 403", code)
+	}
+	for _, grantBody := range []string{`{"priority": true}`, `{"priority": false}`, `{"priorityDispatch": true}`, `{"priority_dispatch": true}`} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", grantBody, "testing"); code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 with %s under api:tasks:admin: status %d (%s), want 403", grantBody, code, resp)
+		}
 	}
 
 	// Regression: concatenated JSON objects or non-object JSON must not bypass
