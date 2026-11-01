@@ -290,6 +290,20 @@ export function DefaultableField({
     s.saveChoice?.({ [name]: emptyValue });
   };
 
+  // save sends value, and puts the box back to what the server holds if
+  // the server refuses it: the draft is this field's own state, which a
+  // rolled-back setting does not reach when its source chip is
+  // unchanged (2026-11-01 walkthrough: a refused namespace "Walk NS"
+  // stayed in the box, looking saved).
+  const save = (value) => {
+    const before = { draft: effectiveValue, custom: isStoredCustom };
+    Promise.resolve(s.saveChoice?.({ [name]: value })).then((saved) => {
+      if (saved !== false) return;
+      setDraft(before.draft);
+      setHasSavedCustom(before.custom);
+    });
+  };
+
   const handleBlur = () => {
     const val = draft.trim();
     if (!isStoredCustom && !hasSavedCustom) {
@@ -300,13 +314,13 @@ export function DefaultableField({
       }
       setDraft(val);
       setHasSavedCustom(true);
-      s.saveChoice?.({ [name]: val });
+      save(val);
       return;
     }
     if (val === "" || val === defaultStr.trim()) {
       setDraft(defaultStr);
       setHasSavedCustom(false);
-      s.saveChoice?.({ [name]: emptyValue });
+      save(emptyValue);
       return;
     }
     if (val === storedStr.trim()) {
@@ -316,7 +330,7 @@ export function DefaultableField({
     }
     setDraft(val);
     setHasSavedCustom(true);
-    s.saveChoice?.({ [name]: val });
+    save(val);
   };
 
   return (
