@@ -378,6 +378,8 @@ Each item is a mismatch between what the React UI lets somebody edit and what th
 
 ### D-3: Memory is read-only in the UI when locked, but the API writes it in every mode
 
+*Reproduced live 2026-11-01 (`docs/test-runs/2026-11-01-settings-ownership-lock.md`): `PUT /api/memory` answers 200 in locked internal mode and in external mode.*
+
 `memory` is in `CONFIG_REPO_SECTION_PATHS`, so the Memory section renders read-only under the lock, but `PUT /api/memory` and `PUT /api/memory/documents` call no guard: they write in locked internal mode **and in external mode** (where the next import of the external repository's `memory/**` can then replace them). Either the server should guard memory like other config-repo content (keeping the memory agent's MCP `update_memory` path working), or the UI should stop gating it and memory should be documented as a runtime surface that is merely exported.
 
 ### D-4: Boards, Processes and console sessions are not lock-aware in the UI
@@ -416,11 +418,15 @@ With `directConfigWrites: true` and `settings_locked: true`, `GET /api/config` r
 
 ### D-11: Config-managed notices link files that do not exist
 
+*Remainder, 2026-11-01 (`docs/test-runs/2026-11-01-settings-ownership-lock.md`): the Tasks and Capabilities notices still link `settings/capabilities.yml`, which a deployment that has not adopted the capability catalogue does not export, so the Config Repo Browser answers "file does not exist" (and Tasks draws that link twice). Filed as a follow-up.*
+
 *Fixed in `CONFIG_REPO_SECTION_PATHS` 2026-10-31: Git links `tables/grain_config.json` and `tables/repo_config.json`, Agents `tables/grain_config.json`. The `trustboundary.NeverAutoMergePaths` entries are left (harmless).*
 
 `CONFIG_REPO_SECTION_PATHS` names `tables/git_credential.json`, `tables/repo_git_credential.json` (Git) and `tables/console_session.json` (Agents). Those tables do not exist: git connections live in `grain_config.git_connections` / `git_credential` and `repo_config.git_credential`, and console sessions in `grain_config.console_sessions`, all exported to `tables/grain_config.json` / `tables/repo_config.json`. The same names appear in `trustboundary.NeverAutoMergePaths` (harmless there), and `settings/new-task-form.yml` is listed there but is not written by `pkg/staterepo`.
 
 ### D-12: `settings_locked` refuses writes on a deployment with no config repository
+
+*Reproduced live 2026-11-01 on `grain demo` (`docs/test-runs/2026-11-01-settings-ownership-lock.md`): with `settings_locked: true`, `PUT /api/settings {"pollInterval":…}` answers 409 with `repo: "grain/config"`, `url: "/repos/grain/config"` and a pointer to `POST /api/state-repo/pull-requests`, none of which exists there. Filed as a follow-up.*
 
 `configRepoFor` refuses a non-bootstrap API write whenever `settings_locked` is on and `directConfigWrites` is off, without checking that `Config.StateRepo` exists. On a standalone deployment (§2.1) that flag leaves non-bootstrap settings writable by nobody but the unlock toggle. The 409 names `grain/config` and `POST /api/state-repo/pull-requests`, and neither exists there. The guard should treat "no state repository" as unlocked, or the UI should not offer the lock there.
 

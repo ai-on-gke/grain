@@ -1453,7 +1453,9 @@ func grainCLISection(task model.Task) string {
 	s := "\n\n### Grain CLI (`grain`)\n\n" +
 		"Inside your sandbox, the `grain` CLI (run it with `run_command`) reaches this deployment's " +
 		"namespace, CI, pull request, merge queue and the capabilities granted to this task, with no " +
-		"tool-result size cap -- pipe it to `grep`, `jq` or a file:\n\n" +
+		"size cap of its own. What `run_command` hands back is still cut to about 20 KB, and counts at " +
+		"that size towards any tool budget the run is under, so send long output to a file and " +
+		"`grep`, `jq` or `head` it rather than printing it all:\n\n" +
 		"- **Namespace** (`ci://`, `src://`, `task://`, `config://`, `memory://`, `deploy://`): " +
 		"`grain ls <uri>`, `grain read <uri> [--tail N]`, `grain grep <re> <uri>`. For example " +
 		"`grain ls ci://" + repo + "`.\n"
@@ -1484,7 +1486,7 @@ func grainCLISection(task model.Task) string {
 // tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
 	{model.SelfDebugCapability, "`grain ls/read/grep src://...`, `grain task list`, `grain task read <id>`, " +
-		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes`"},
+		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes [--cursor <c>] [--page N]`"},
 	{"grain-log", "`grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority err] [--contains <s>] [--max-lines N]`"},
 	{"deployment-health", "`grain health`, `grain read deploy://state`"},
 	{"bootstrap-playbooks", "`grain playbooks [<name>]`"},
@@ -3445,8 +3447,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			Deadline: clock.base,
 			// A durable judgement task's wake runs under the per-wake
 			// tool budget (model.UsesToolBudget, DT-13).
-			ToolBudget: model.UsesToolBudget(task),
-			Grants:     grants, GrainSourceDir: grainSourceDir, GrainSecretsDir: grainSecretsDir, GrainStateDir: grainStateDir,
+			ToolBudget:               model.UsesToolBudget(task),
+			ToolBudgetPipelineCursor: model.IsPipelineStewardFiring(task),
+			Grants:                   grants, GrainSourceDir: grainSourceDir, GrainSecretsDir: grainSecretsDir, GrainStateDir: grainStateDir,
 			LocalScripts: localScripts, LocalScriptsEnvFile: localScriptsEnvFile,
 			// Which repositories a proposal this run makes may be filed
 			// against -- the half of propose_task's `repo` argument only

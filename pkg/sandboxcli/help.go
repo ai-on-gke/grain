@@ -78,7 +78,7 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
   grain api routes [--scope <s>]         List agent API routes granted to this attempt
   grain api <METHOD> <path> [--body '<json>' | --field k=v] [--reason <why>]
                                          Call a granted non-dangerous agent API route
-  grain memory (list | read <key> | write <key> <body|--file f> | doc-write <path> <body|--file f>)
+  grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)
                                          Deployment memory and standing docs (api:memory / api:memory:write)
   grain release-notes (stats | publish --version <v> <body|--file f>)
                                          Release notes stats and publishing (api:release-notes)
@@ -183,9 +183,15 @@ var sandboxCommandHelp = map[string]string{
 		"tool and the proxy refuses it. Each tool's flags are generated from its input schema.\n\n" +
 		"  grain cap list\n  grain cap widgets ping --help\n  grain cap widgets ping --host example.com --count 3\n  grain cap widgets ping --json '{\"host\":\"example.com\"}'\n",
 	"ls": "grain ls <uri> [--glob <pat>]\n\nList a namespace directory. --glob matches the directory's own entries; a\npattern with / or ** walks the subtree instead, and ends with a [truncated: ...]\nline if the walk was cut short. A trailing / matches directories only.\n\n  grain ls ci://<owner>/<repo>\n  grain ls task:// --glob '19*'\n  grain ls src://cmd --glob '**/*.go'\n\nsrc:// is the source this daemon was built from. A daemon whose own module builds on grain core (github.com/ai-on-gke/grain) serves core's source under src://core/, and for any src:// path its own module has no copy of.\n",
-	"read": "grain read <uri> [--tail N] [--offset N --limit N] [--lines N]\n\nPrint a namespace file to stdout, whole: there is no size cap.\n\n" +
-		byteRangeHelp + "\n" +
-		"  grain read task://1436/record.md\n  grain read ci://<owner>/<repo>/<run>/go/gotest.log --tail 4000\n  grain read deploy://pipeline-changes -n 20\n",
+	"read": "grain read <uri> [--tail N] [--offset N --limit N] [--lines N]\n" +
+		"grain read deploy://pipeline-changes [--cursor <c>] [--page N]\n\nPrint a namespace file to stdout, whole: there is no size cap.\n\n" +
+		byteRangeHelp +
+		"  --cursor <c>        deploy://pipeline-changes only: the changes after the cursor a page ended\n" +
+		"                      with (its last line is the command that reads the next page), or after\n" +
+		"                      an RFC 3339 time; --since is the same flag. Without it, the last 24 hours\n" +
+		"  --page N            deploy://pipeline-changes only: at most N changes (default 100, at most 500)\n\n" +
+		"  grain read task://1436/record.md\n  grain read ci://<owner>/<repo>/<run>/go/gotest.log --tail 4000\n" +
+		"  grain read deploy://pipeline-changes --page 20\n  grain read deploy://pipeline-changes --cursor 2026-10-29T11:50:43.079363246Z~1\n",
 	"grep": "grain grep <pattern> <uri> [-i] [-C N] [--glob <pat>] [--max N]\n\nSearch a namespace file or subtree with an RE2 regular expression.\n\n" +
 		"  -i           match case-insensitively\n" +
 		"  -C N         N lines of context around each match\n" +
@@ -253,10 +259,10 @@ var sandboxCommandHelp = map[string]string{
 	"propose":               sandboxProposeHelp,
 	"api":                   "grain api routes [--scope <s>]\ngrain api <METHOD> <path> [--body '<json>' | --file <f> | --field k=v] [--reason <why>]\n\nList or call non-dangerous agent API routes granted to this run.\n\nA repository off the default git host goes in a /api/repos/{owner}/{name}/... path\nwith its host and owner escaped into one segment:\n  grain api GET '/api/repos/git.forge.example%2Fexperimental/grain/releases'\n",
 	"api routes":            "grain api routes [--scope <s>]\n\nList the non-dangerous agent API routes this run's capabilities unlock.\n",
-	"memory":                "grain memory (list | read <key> | write <key> <body|--file f> | doc-write <path> <body|--file f>)\n",
+	"memory":                "grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)\n",
 	"memory list":           "grain memory list\n\nList entries in deployment memory (memory://).\n",
-	"memory read":           "grain memory read <key>\n\nRead a file from deployment memory (memory://<key>).\n",
-	"memory write":          "grain memory write <key> (<content> | --file <f>) [--repo <owner/name>] [--reason <why>]\n\nWrite an entry under memory/entries/<key>. Needs api:memory or api:memory:write.\n",
+	"memory read":           "grain memory read <path>\n\nRead a file from deployment memory (memory://<path>; grain memory list names them).\n",
+	"memory write":          "grain memory write [--repo owner/name] (<text> | --file <f>) [--reason <why>]\n\nReplace the deployment's memory text (or a repository's, with --repo) with <text>. It is one text, not keyed entries: a named entry is grain memory doc-write. Needs api:memory or api:memory:write.\n",
 	"memory doc-write":      "grain memory doc-write <path> (<content> | --file <f>) [--summary <s>] [--repo <owner/name>] [--reason <why>]\n\nWrite a standing document in the memory repository. Needs api:memory or api:memory:write.\n",
 	"memory doc":            "grain memory doc write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs api:memory or api:memory:write.\n",
 	"release-notes":         "grain release-notes (stats | publish --version <v> <body|--file f>)\n",

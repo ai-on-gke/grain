@@ -170,6 +170,41 @@ func TestReadTakesBytesAndLines(t *testing.T) {
 	}
 }
 
+// grain read deploy://pipeline-changes pages with --cursor (or --since)
+// and --page, which every other file refuses.
+func TestReadPagesPipelineChanges(t *testing.T) {
+	env, asked := fakeFileProxy(t, "a change\nnext: grain read deploy://pipeline-changes --cursor c~2\n")
+	for _, tc := range []struct {
+		args []string
+		path string
+	}{
+		{[]string{"read", "deploy://pipeline-changes"}, "/fs/deploy/pipeline-changes"},
+		{[]string{"read", "deploy://pipeline-changes", "--cursor", "2026-10-29T11:50:43.079363246Z~1"},
+			"/fs/deploy/pipeline-changes?cursor=2026-10-29T11%3A50%3A43.079363246Z~1"},
+		{[]string{"read", "deploy://pipeline-changes", "--since", "2026-10-29T11:50:43Z", "--page", "20"},
+			"/fs/deploy/pipeline-changes?page=20&since=2026-10-29T11%3A50%3A43Z"},
+	} {
+		*asked = nil
+		_, errOut, code := runIn(t, env, tc.args...)
+		if code != 0 || len(*asked) != 1 || (*asked)[0] != tc.path {
+			t.Errorf("%q: exit %d %s, asked %q; want %s", tc.args, code, errOut, *asked, tc.path)
+		}
+	}
+	for _, args := range [][]string{
+		{"read", "config://README.md", "--cursor", "c~1"},
+		{"read", "deploy://metrics", "--page", "5"},
+	} {
+		*asked = nil
+		_, errOut, code := runIn(t, env, args...)
+		if code == 0 || len(*asked) != 0 || !strings.Contains(errOut, "pages deploy://pipeline-changes") {
+			t.Errorf("%q: exit %d, asked %q, stderr %q; want a refusal before any read", args, code, *asked, errOut)
+		}
+	}
+	if _, errOut, code := runIn(t, env, "read", "deploy://pipeline-changes", "--page", "lots"); code == 0 || !strings.Contains(errOut, "not a count") {
+		t.Errorf("--page lots: exit %d, stderr %q; want a usage error", code, errOut)
+	}
+}
+
 // grain task transcript says on stderr how big the transcript is, so a run
 // knows to read part of it, and takes the same range flags as read.
 func TestTaskTranscriptSaysHowBigItIs(t *testing.T) {

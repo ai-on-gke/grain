@@ -185,4 +185,11 @@ func TestGrantArgsCarriesTheToolBudget(t *testing.T) {
 	if args := agent.GrantArgs(agent.RunConfig{Grants: []string{"self-debug"}}); slices.Contains(args, "-tool-budget") {
 		t.Errorf("GrantArgs = %v, want no -tool-budget", args)
 	}
+	steward := agent.RunConfig{ToolBudget: true, ToolBudgetPipelineCursor: true}
+	if args := agent.GrantArgs(steward); !slices.Contains(args, "-tool-budget-pipeline-cursor") {
+		t.Errorf("GrantArgs = %v, want -tool-budget-pipeline-cursor for a steward wake", args)
+	}
+	if args := agent.GrantArgs(agent.RunConfig{ToolBudget: true}); slices.Contains(args, "-tool-budget-pipeline-cursor") {
+		t.Errorf("GrantArgs = %v, want no pipeline cursor for a durable task that is no steward", args)
+	}
 }

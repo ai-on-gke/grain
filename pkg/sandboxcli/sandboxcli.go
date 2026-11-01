@@ -191,7 +191,7 @@ var sandboxCommands = map[string][]string{
 // nobody asked (grain cap's flags are its tool's, checked there).
 var sandboxCommandFlags = map[string][]string{
 	"ls":                    {"glob"},
-	"read":                  {"tail", "offset", "limit", "lines", "n"},
+	"read":                  {"tail", "offset", "limit", "lines", "n", "cursor", "since", "page"},
 	"grep":                  {"i", "C", "glob", "max"},
 	"ci list":               {"ref", "conclusion", "job", "since", "limit", "repo", "task"},
 	"ci test-history":       {"limit", "repo"},
@@ -237,7 +237,12 @@ var sandboxCommandFlags = map[string][]string{
 
 // sandboxCountFlags take a non-negative integer, checked before the
 // command runs rather than dropped from its query.
-var sandboxCountFlags = []string{"tail", "offset", "limit", "lines", "n", "max", "max-lines", "attempt"}
+var sandboxCountFlags = []string{"tail", "offset", "limit", "lines", "n", "max", "max-lines", "attempt", "page"}
+
+// pipelineChangesFlags are the flags only deploy://pipeline-changes reads:
+// the cursor a page ended with (--since is its other name) and how many
+// changes a page holds.
+var pipelineChangesFlags = []string{"cursor", "since", "page"}
 
 // usageError is a command line no command can answer: printed as it is,
 // with exit status 2.
@@ -409,6 +414,14 @@ func (c *sandboxCLI) run(args []string) error {
 		uri, err := p.arg(0, "uri")
 		if err != nil {
 			return err
+		}
+		if !isPipelineChangesURI(uri) {
+			for _, name := range pipelineChangesFlags {
+				if p.has(name) {
+					return usageError{fmt.Sprintf("grain read: %s pages deploy://pipeline-changes, not %s\n\n%s",
+						flagName(name), uri, sandboxCommandHelp["read"])}
+				}
+			}
 		}
 		return c.read(uri, p, false)
 	case "grep":
@@ -598,6 +611,14 @@ func fsPath(uri string) (string, error) {
 		p += "/" + joined
 	}
 	return p, nil
+}
+
+// isPipelineChangesURI is whether uri names deploy://pipeline-changes, the
+// one file --cursor and --page page through.
+func isPipelineChangesURI(uri string) bool {
+	scheme, rel, _ := strings.Cut(uri, "://")
+	rel = strings.Trim(rel, "/")
+	return scheme == "deploy" && (rel == "pipeline-changes" || rel == "pipeline-changes.md")
 }
 
 func (c *sandboxCLI) fs(uri string, q url.Values) error {
@@ -990,7 +1011,7 @@ func (c *sandboxCLI) read(uri string, p sandboxArgs, sayingSize bool) error {
 	if err != nil {
 		return err
 	}
-	resp, err := c.do(path, p.query("tail", "offset", "limit"))
+	resp, err := c.do(path, p.query("tail", "offset", "limit", "cursor", "since", "page"))
 	if err != nil {
 		return err
 	}

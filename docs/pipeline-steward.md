@@ -161,7 +161,9 @@ A wake is meant to fit in context with no compaction
 compactly by default: `read_pipeline_changes(after, limit)` is one line per
 change since a cursor (task transitions, merge-queue moves, stalls,
 base-branch verdicts, merge-batch results; `GET /api/pipeline/changes`) and
-ends with the next cursor; `read_grain_task` answers in a ~1 KB `summary`
+ends with the next cursor -- in a sandbox, `grain read deploy://pipeline-changes
+[--cursor <c>] [--page N]`, whose last line is the `grain read` that reads
+the next page; `read_grain_task` answers in a ~1 KB `summary`
 unless asked for `full` or `conversation`; `list_grain_tasks` filters by
 `changed_since`, `stalled` and `kind`; `list_ci_runs` is one line per run
 with `after` paging; `query_merge_queue` is `compact` with `changed_since`.
@@ -169,7 +171,13 @@ with `after` paging; `query_merge_queue` is `compact` with `changed_since`.
 Its runs are under a per-wake tool budget (`model.UsesToolBudget`, the
 mcpserver's `-tool-budget`): past 40 calls or 150 KB of tool output each
 result says so, and past 60 calls or 300 KB each result asks it to write
-its handover and end the wake. Ending in `resume_later()` rather than a
+its handover and end the wake. The notice names what the run can call:
+`grain handover write` and `grain read deploy://pipeline-changes` on the
+control surface, `write_handover` and `read_pipeline_changes` on the full
+one. It asks for the pipeline cursor only of a steward wake
+(`-tool-budget-pipeline-cursor`), not of a director's chat session, and on
+the control surface it says that each `run_command` result counts at the
+size it reaches the run (up to about 20 KB after elision). Ending in `resume_later()` rather than a
 plain end arrives with DT-S4. `TestAStewardWakeFitsItsToolBudget` (pkg/mcp)
 replays a wake's reads through these tools and holds them to the budget.
 
@@ -218,8 +226,9 @@ release watchdog's to report (`.grain/templates/release-watchdog.yml`).
 The prompt is `pipelineStewardBody`, written around the four rules of
 `docs/design/durable-tasks.md#DT-12`:
 
-1. **Work from deltas.** Read the handover's cursor and call
-   `read_pipeline_changes(after: <cursor>)`. Read nothing else unless a
+1. **Work from deltas.** Read the handover's cursor and run
+   `grain read deploy://pipeline-changes --cursor <cursor>`, paging on with
+   the command each page ends with. Read nothing else unless a
    change, or the note that woke it, names it.
 2. **Re-read before acting or naming.** Call `read_grain_task(id,
    view: "summary")` immediately before acting on a task or naming it,

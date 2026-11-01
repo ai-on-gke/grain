@@ -464,7 +464,10 @@ func reconcileSessionSandboxes(ctx context.Context, deps Deps, now time.Time) {
 	p.mu.Unlock()
 
 	for _, entry := range snapshot {
-		if ttl <= 0 || !now.Before(entry.ExpiresAt) {
+		// ExpiresAt is the TTL the parking run was dispatched with; the
+		// TTL as it stands now binds too, so a shortened setting reclaims
+		// a sandbox parked under the longer one.
+		if ttl <= 0 || !now.Before(entry.ExpiresAt) || !now.Before(entry.IdleSince.Add(ttl)) {
 			releaseWarmSessionSandbox(ctx, deps, entry.TaskID, true)
 			continue
 		}
@@ -713,6 +716,23 @@ func takeInProcessRelayed(store *model.Store, runID string) bool {
 	return ok
 }
 
+// liveSessionIdleTTL is the idle TTL an in-process session waiting
+// since its turn ended is held to now: ttl, unless the run's TTL came
+// from the stored setting, in which case it is that setting as it stands
+// -- so shortening (or turning off) Settings -> Sandboxes' session TTL
+// while a session idles releases it on the new TTL rather than the one
+// its run was dispatched with.
+func (c Config) liveSessionIdleTTL(ctx context.Context, store *model.Store, ttl time.Duration) time.Duration {
+	if !c.sessionIdleTTLStored || store == nil {
+		return ttl
+	}
+	mc, err := store.GetConfig(ctx)
+	if err != nil || mc == nil {
+		return ttl
+	}
+	return mc.SessionSandboxIdleTTLOr()
+}
+
 func (c Config) sessionSandboxIdleTTL() time.Duration {
 	if c.SessionSandboxIdleTTL < 0 {
 		return 0
@@ -883,8 +903,10 @@ func continueSessionTurns(
 			}
 		}
 
-		waitCtx, cancelWait := context.WithTimeout(hostCtx, ttl)
+		waitCtx, cancelWait := context.WithCancel(hostCtx)
 		unmark := markInProcessSessionIdle(store, cfg.sessionLedger, runID, cfg.sessionSandboxName, cfg.sessionShape, now, cancelWait)
+		waitStart := time.Now()
+		expiry := time.NewTimer(ttl)
 
 		// Woken by AddComment the moment a comment lands in this process
 		// (Store.CommentAdded), and otherwise polled at the deployment's
@@ -919,10 +941,22 @@ func continueSessionTurns(
 			select {
 			case <-waitCtx.Done():
 				break waitLoop
+			case <-expiry.C:
+				break waitLoop
 			case <-ticker.C:
+				if live := cfg.liveSessionIdleTTL(daemonCtx, store, ttl); live != ttl {
+					log.Printf("orchestrator: run %s: the session idle TTL changed from %s to %s while it waited", runID, ttl, live)
+					ttl = live
+					left := ttl - time.Since(waitStart)
+					if ttl <= 0 || left <= 0 {
+						break waitLoop
+					}
+					expiry.Reset(left)
+				}
 			case <-added:
 			}
 		}
+		expiry.Stop()
 		ticker.Stop()
 		cancelWait()
 		unmark()
