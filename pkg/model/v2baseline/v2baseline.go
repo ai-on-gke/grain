@@ -298,6 +298,8 @@ func CheckDeployment(ctx context.Context, t *testing.T, store *model.Store) {
 	cfg, err := store.GetConfig(ctx)
 	if err != nil || cfg == nil || cfg.MaxWorkers != 7 {
 		t.Errorf("the deployment's config survived as %+v (%v)", cfg, err)
+	} else if cfg.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
+		t.Errorf("the deployment's task branch template survived as %q, want %q", cfg.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
 	}
 }
 
