@@ -56,6 +56,17 @@ type PR struct {
 	InRepo bool
 }
 
+// noPullRequestError is ErrNoPullRequest with a message of its own. It is
+// not fmt.Errorf's %w because that appends the sentinel's text, and the
+// message already says what the sentinel does: a refusal shown to the
+// person who typed the label read "... has it as its head: no open pull
+// request heads it" (docs/test-runs/2026-10-31-task-targeting-parking.md).
+type noPullRequestError string
+
+func (e noPullRequestError) Error() string { return string(e) }
+
+func (e noPullRequestError) Is(target error) bool { return target == ErrNoPullRequest }
+
 // Resolve finds the open pull request on repo whose head label is head
 // -- GitHub's GET /repos/{o}/{r}/pulls?head=<owner>:<branch> -- and
 // reads it. No open pull request is an error wrapping ErrNoPullRequest.
@@ -65,8 +76,8 @@ func Resolve(f Finder, repo model.RepoRef, head model.ForkHead) (*PR, error) {
 		return nil, fmt.Errorf("looking up the pull request %s heads on %s: %w", head, repo, err)
 	}
 	if found == nil || found.Number <= 0 {
-		return nil, fmt.Errorf("%q is a GitHub fork head (branch %s on %s's fork), but no open pull request "+
-			"on %s has it as its head: %w", head.String(), head.Branch, head.Owner, repo, ErrNoPullRequest)
+		return nil, noPullRequestError(fmt.Sprintf("%q is a GitHub fork head (branch %s on %s's fork), but no open pull request "+
+			"on %s has it as its head", head.String(), head.Branch, head.Owner, repo))
 	}
 	detail, err := f.GetPullRequest(repo.Owner, repo.Name, found.Number)
 	if err != nil {

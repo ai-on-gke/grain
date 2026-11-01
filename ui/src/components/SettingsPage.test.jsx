@@ -289,7 +289,6 @@ describe("SettingsPage", () => {
     const links = within(notice).getAllByTestId("config-repo-link");
     expect(links.map((a) => a.getAttribute("href"))).toEqual([
       "/config?path=tables%2Fgrain_config.json",
-      "/config?path=tables%2Fconsole_session.json",
     ]);
     expect(links[0]).toHaveTextContent(
       "View in config repo → tables/grain_config.json",

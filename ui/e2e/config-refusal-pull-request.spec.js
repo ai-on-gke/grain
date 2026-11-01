@@ -109,12 +109,19 @@ test("a refused setting opens a held config pull request that Submit lands", asy
     expect(await templateNames(page.request, url)).not.toContain(
       "Held template",
     );
-    // The template editor behind the dialog still holds the edit the
-    // pull request now carries, and leaving it asks whether to discard
-    // it (App.jsx's onPopState): yes.
-    page.once("dialog", (d) => d.accept());
+    // The template editor behind the dialog still holds the edit, but
+    // the pull request now carries it: leaving loses nothing, so the
+    // task link goes straight there without asking DISCARD_PROMPT.
+    const prompts = [];
+    const onPrompt = (d) => {
+      prompts.push(d.message());
+      d.dismiss();
+    };
+    page.on("dialog", onPrompt);
     await opened.getByRole("link", { name: /^task \d+$/ }).click();
     await expect(page).toHaveURL(/\/tasks\/\d+$/);
+    page.off("dialog", onPrompt);
+    expect(prompts, "following the task link asked a question").toEqual([]);
     const taskId = page.url().match(/\/tasks\/(\d+)$/)[1];
 
     await page.goto(`${url}/inbox`);
