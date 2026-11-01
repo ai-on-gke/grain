@@ -874,6 +874,32 @@ describe("SettingsPage", () => {
       expect(screen.getByLabelText(/GCP project/)).toBeDisabled();
     });
 
+    // D-10: with state-repo.json's directConfigWrites the API writes
+    // every setting despite the lock, so the page does not lock either.
+    it("leaves sections editable under directConfigWrites", async () => {
+      api.mockImplementation((path, opts) => {
+        if (path === "/api/settings" && !opts)
+          return Promise.resolve({
+            ...settings,
+            settingsLocked: true,
+            directConfigWrites: true,
+          });
+        return Promise.resolve({});
+      });
+      render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={{ settingsLocked: true }}
+            section="engine"
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      expect(await screen.findByLabelText("Poll interval")).toBeEnabled();
+      expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+    });
+
     it("leaves Engine editable when settings are unlocked", async () => {
       setup({ section: "engine", config: { settingsLocked: false } });
       expect(await screen.findByLabelText("Poll interval")).toBeEnabled();

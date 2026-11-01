@@ -754,6 +754,13 @@ type Settings struct {
 	// settings are locked in the UI and REST API in favour of config
 	// repository pull requests. False by default.
 	SettingsLocked bool `json:"settingsLocked"`
+	// DirectConfigWrites is state-repo.json's directConfigWrites: the
+	// host-local opt-out under which the API writes every setting
+	// directly even with SettingsLocked on (configRepoOnly). Read-only:
+	// no route writes it. The Settings UI reads it so a lock the API
+	// does not enforce is not drawn either (settings-mutability.spec.md
+	// D-10).
+	DirectConfigWrites bool `json:"directConfigWrites,omitempty"`
 }
 
 type UnrunnableSetting struct {
@@ -1154,6 +1161,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxCommitment:                  c.sandboxCommitment(cfg),
 		ShowClosedByDefault:                cfg.ShowClosedByDefault,
 		SettingsLocked:                     cfg.SettingsLocked,
+		DirectConfigWrites:                 c.directConfigWrites(),
 		EnvironmentName:                    cfg.EnvironmentName,
 		PromptExtension:                    cfg.PromptExtension,
 		RepairTemplateID:                   cfg.RepairTemplateID,

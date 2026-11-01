@@ -279,6 +279,19 @@ func TestConfigSaysWhenSettingsAreConfigRepoOnly(t *testing.T) {
 	if configRepoOnly(srv) {
 		t.Fatal("configRepoOnly after the directConfigWrites opt-out")
 	}
+	// GET /api/settings says so too: the Settings page reads its lock
+	// from there (settings-mutability.spec.md D-10).
+	rec := do(t, srv, http.MethodGet, "/api/settings", "")
+	var settings struct {
+		SettingsLocked     bool `json:"settingsLocked"`
+		DirectConfigWrites bool `json:"directConfigWrites"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &settings) != nil {
+		t.Fatalf("GET /api/settings: %d %s", rec.Code, rec.Body)
+	}
+	if !settings.SettingsLocked || !settings.DirectConfigWrites {
+		t.Fatalf("GET /api/settings after the opt-out: %+v, want settingsLocked and directConfigWrites", settings)
+	}
 }
 
 type realSyncStateRepo struct {

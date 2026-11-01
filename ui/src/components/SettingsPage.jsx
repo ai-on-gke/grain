@@ -149,11 +149,15 @@ export default function SettingsPage({
   // GET /api/config's configRepoOnly: the API refuses these sections'
   // writes in favour of a config pull request when settings are locked.
   // By default (settingsLocked: false) they stay editable in the UI.
+  // Once settings are loaded their settingsLocked wins, so locking or
+  // unlocking from General redraws at once; directConfigWrites (the
+  // host-local opt-out, state-repo.json) means the API does not enforce
+  // the lock, so neither does the UI (settings-mutability.spec.md D-10).
   const lockedInUI =
     Boolean(config?.configRepoOnly && !config?.settingsLocked) ||
     (settings && typeof settings.settingsLocked === "boolean"
-      ? settings.settingsLocked
-      : Boolean(config?.configRepoOnly) || Boolean(config?.settingsLocked));
+      ? settings.settingsLocked && !settings.directConfigWrites
+      : Boolean(config?.configRepoOnly));
   const configRepoOnly = lockedInUI || Boolean(externalConfigRepo);
   const configManaged = configRepoOnly && isConfigRepoSection(current);
   const readOnly = external || configManaged;
