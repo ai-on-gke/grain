@@ -125,3 +125,33 @@ func TestDirectorProxyGuidanceRedactsProvisioningCredential(t *testing.T) {
 		t.Fatalf("prompt exposed credential: %q", prompt)
 	}
 }
+
+func TestDirectorStateRepositoryIsWritableWhenInWrites(t *testing.T) {
+	t.Parallel()
+	remoteBase := t.TempDir()
+	repo := model.ConfigRepo()
+	seedStateRemote(t, remoteBase, repo)
+	root := t.TempDir()
+	task := directorTask()
+	task.Writes = []model.WriteTarget{{Repo: repo}}
+
+	prepared, err := prepareCheckout(context.Background(), mcp.NewSandboxTools(root), remoteBase,
+		task, "", setupNotes{}, repo)
+	if err != nil {
+		t.Fatalf("prepareCheckout: %v", err)
+	}
+	if prepared.DirectorState != directorStateReady || !prepared.DirectorStateWritable {
+		t.Fatalf("state = %q writable = %v, want a ready writable checkout", prepared.DirectorState, prepared.DirectorStateWritable)
+	}
+	dir := filepath.Join(root, DirectorStateDir)
+	if got := git(t, dir, "remote", "get-url", "--push", "origin"); got == "grain-read-only" {
+		t.Fatalf("push URL = %q, want the proxy's", got)
+	}
+	if got := git(t, dir, "config", "user.email"); got == "" {
+		t.Fatal("no author identity configured on the writable checkout")
+	}
+	prompt := directorStateSection(prepared, task)
+	if !strings.Contains(prompt, "propose_config_change") || !strings.Contains(prompt, dir) {
+		t.Fatalf("prompt does not explain the proposal workflow: %q", prompt)
+	}
+}
