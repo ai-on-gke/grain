@@ -216,10 +216,35 @@ func reconcileCI(ctx context.Context, deps Deps, now time.Time) error {
 	}
 	if deps.CI != nil {
 		for _, run := range deps.CI.List() {
-			if run.Interrupted || run.RequestedBy == "" {
+			if run.Interrupted {
 				continue
 			}
 			running := !run.Conclusion.Done()
+			if running {
+				if repo, err := model.ParseRepo(run.Repo); err == nil {
+					if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, repo); err == nil && disabled {
+						if rules, rerr := deps.Store.MergeRulesOf(ctx, repo); rerr == nil && (rules == nil || !rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()) {
+							reason := cancelReasonForCIMode(mode)
+							deps.CI.Cancel(run.ID, reason, ci.CancelBySystem)
+							if run.RequestedBy != "" {
+								_ = observeField(ctx, deps.Store, run.RequestedBy, now, func(o *model.Observation) {
+									if o.CI == nil || o.CI.RunID != run.ID || o.CI.Done() {
+										return
+									}
+									o.CI.Conclusion = string(ci.ConclusionCancelled)
+									o.CI.FinishedAt = &now
+									o.CI.Detail = "cancelled: " + reason
+									o.CI.CancelledBy = string(ci.CancelBySystem)
+								})
+							}
+							continue
+						}
+					}
+				}
+			}
+			if run.RequestedBy == "" {
+				continue
+			}
 			if !running && run.Conclusion != ci.ConclusionCancelled {
 				continue
 			}
@@ -320,36 +345,12 @@ func reconcileTaskCI(ctx context.Context, deps Deps, task model.Task, now time.T
 	if taskPaused(ctx, deps.Store, task.ID) {
 		return nil
 	}
-	if !grainci.Granted(task.Grants) {
-		required, err := taskRequiresGrainCI(ctx, deps.Store, task)
-		if err != nil {
-			return fmt.Errorf("orchestrator: checking Grain CI policy for task %s: %w", task.ID, err)
-		}
-		if required {
-			if err := deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
-				if !grainci.Granted(t.Grants) {
-					t.Grants = append(t.Grants, model.Grant{
-						Capability: grainci.CapabilityName,
-						Via:        model.GrantByDefault,
-					})
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-			task.Grants = append(task.Grants, model.Grant{
-				Capability: grainci.CapabilityName,
-				Via:        model.GrantByDefault,
-			})
-			// Logged rather than returned: the grant has been written, and
-			// failing here would cost this task its run over a marker the
-			// no-status path below clears again.
-			if err := deps.Store.ClearGrantWait(ctx, task.ID); err != nil {
-				log.Printf("orchestrator: clearing the grain-ci grant wait on %s: %v", task.ID, err)
-			}
-		} else {
-			return nil
-		}
+	usesGrainCI, cancelReason, err := taskUsesGrainCI(ctx, deps.Store, &task)
+	if err != nil {
+		return fmt.Errorf("orchestrator: checking Grain CI policy for task %s: %w", task.ID, err)
+	}
+	if !usesGrainCI {
+		return cancelTaskGrainCI(ctx, deps, task, cancelReason, now)
 	}
 	obs, err := deps.Store.GetObservation(ctx, task.ID)
 	if err != nil {
@@ -452,6 +453,117 @@ func reconcileTaskCI(ctx context.Context, deps Deps, task model.Task, now time.T
 	default:
 		return collectCIRun(ctx, deps, task, *status, now)
 	}
+}
+
+// repoExplicitlyDisablesGrainCI reports whether repo's stored RepoConfig
+// explicitly sets CIMode to CIModeGitHub or CIModeNone (and is not the
+// deployment's own config repository).
+func repoExplicitlyDisablesGrainCI(ctx context.Context, store *model.Store, repo model.RepoRef) (bool, model.CIMode, error) {
+	if grainci.RequiredFor(repo) || store == nil {
+		return false, "", nil
+	}
+	cfg, err := store.GetRepoConfig(ctx, repo)
+	if err != nil {
+		return false, "", fmt.Errorf("orchestrator: reading %s's CI mode: %w", repo, err)
+	}
+	if cfg == nil {
+		return false, "", nil
+	}
+	if cfg.CIMode == model.CIModeGitHub || cfg.CIMode == model.CIModeNone {
+		return true, cfg.CIMode, nil
+	}
+	return false, cfg.CIMode, nil
+}
+
+func cancelReasonForCIMode(mode model.CIMode) string {
+	if mode == model.CIModeNone {
+		return "repository CI mode is none"
+	}
+	return "repository switched to GitHub CI"
+}
+
+func taskUsesGrainCI(ctx context.Context, store *model.Store, task *model.Task) (bool, string, error) {
+	if task == nil || task.Target == nil {
+		return false, "", nil
+	}
+	required, err := taskRequiresGrainCI(ctx, store, *task)
+	if err != nil {
+		return false, "", err
+	}
+	if required {
+		if !grainci.Granted(task.Grants) {
+			if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+				if !grainci.Granted(t.Grants) {
+					t.Grants = append(t.Grants, model.Grant{
+						Capability: grainci.CapabilityName,
+						Via:        model.GrantByDefault,
+					})
+				}
+				return nil
+			}); err != nil {
+				return false, "", err
+			}
+			task.Grants = append(task.Grants, model.Grant{
+				Capability: grainci.CapabilityName,
+				Via:        model.GrantByDefault,
+			})
+			// Logged rather than returned: the grant has been written, and
+			// failing here would cost this task its run over a marker the
+			// no-status path below clears again.
+			if err := store.ClearGrantWait(ctx, task.ID); err != nil {
+				log.Printf("orchestrator: clearing the grain-ci grant wait on %s: %v", task.ID, err)
+			}
+		}
+		return true, "", nil
+	}
+	ruleRequires, err := mergeRulesRequireGrainCI(ctx, store, *task, *task.Target)
+	if err != nil {
+		return false, "", err
+	}
+	if ruleRequires {
+		return true, "", nil
+	}
+	disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, store, *task.Target)
+	if err != nil {
+		return false, "", err
+	}
+	if disabled {
+		return false, cancelReasonForCIMode(mode), nil
+	}
+	if !grainci.GrantedExplicitly(task.Grants) {
+		return false, cancelReasonForCIMode(model.CIModeGitHub), nil
+	}
+	return true, "", nil
+}
+
+func cancelTaskGrainCI(ctx context.Context, deps Deps, task model.Task, reason string, now time.Time) error {
+	if reason == "" {
+		reason = "repository switched to GitHub CI"
+	}
+	branch := task.BranchName()
+	for _, r := range liveBranchCIRuns(deps.CI, task.Target.String(), branch) {
+		deps.CI.Cancel(r.ID, reason, ci.CancelBySystem)
+	}
+	obs, err := deps.Store.GetObservation(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("orchestrator: reading %s's observation: %w", task.ID, err)
+	}
+	status := ciStatusOf(obs)
+	if status == nil || status.Done() {
+		return nil
+	}
+	if status.RunID != "" {
+		deps.CI.Cancel(status.RunID, reason, ci.CancelBySystem)
+	}
+	return observeField(ctx, deps.Store, task.ID, now, func(o *model.Observation) {
+		if o.CI == nil || o.CI.RunID != status.RunID || o.CI.Done() {
+			return
+		}
+		o.CI.Conclusion = string(ci.ConclusionCancelled)
+		o.CI.FinishedAt = &now
+		o.CI.Detail = "cancelled: " + reason
+		o.CI.CancelledBy = string(ci.CancelBySystem)
+	})
 }
 
 // ciReplacementFor says whether grain owes this commit another run, for a
@@ -934,17 +1046,22 @@ func ciVerdictSentence(run ci.Run, commit string) string {
 // off its own LinkFixes link -- the same link finishWithPullRequest wrote
 // and Store.OpenPullRequestLinks selects on. A task with several (a
 // branch reopened by hand) yields the first, which is the one grain
-// itself opened.
+// itself opened -- first by number, compared as a number
+// (model.PullRequestRefLess), not by the link's text, under which
+// "o/r#100" comes before "o/r#99".
 func trackedPullRequest(task model.Task) (model.PullRequestRef, bool) {
+	var out model.PullRequestRef
+	found := false
 	for _, l := range task.Links {
 		if l.Kind != model.LinkFixes {
 			continue
 		}
-		if ref, err := model.ParsePullRequestRef(l.Target); err == nil {
-			return ref, true
+		if ref, err := model.ParsePullRequestRef(l.Target); err == nil &&
+			(!found || model.PullRequestRefLess(ref, out)) {
+			out, found = ref, true
 		}
 	}
-	return model.PullRequestRef{}, false
+	return out, found
 }
 
 // ciDetail is the verdict in one line: what goes in the task's record,

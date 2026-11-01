@@ -27,28 +27,11 @@ import (
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/mcp"
-	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 const CapabilityName = "deployment-health"
 const maxStateBytes = 256 * 1024
 const maxStateFiles = 200
-
-type Provider struct {
-	model.BaseCapability
-}
-
-type ProviderConfig struct{}
-
-func New() *Provider                           { return &Provider{} }
-func NewWithConfig(_ ProviderConfig) *Provider { return &Provider{} }
-func (p *Provider) Spec() model.CapabilitySpec {
-	return model.CapabilitySpec{
-		Name: CapabilityName, Label: "Deployment health", Source: model.GrantByLabel,
-		Provision:   model.ProvisionGrant,
-		Description: "Read bounded controller-side host and sandbox health and the local synchronized deployment-state snapshot, without host shell or sandbox network access.",
-	}
-}
 
 type Reader interface {
 	DeploymentHealth(context.Context) (any, error)

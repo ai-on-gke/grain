@@ -713,7 +713,13 @@ function GitConnectionsList({
                 label="Kind"
                 size="small"
                 value={kind}
-                onChange={(evt) => setKind(evt.target.value)}
+                onChange={(evt) => {
+                  setKind(evt.target.value);
+                  // A plain git host has no App API, and the save
+                  // refuses an App there.
+                  if (evt.target.value === "git" && authType === "app")
+                    setAuthType("pat");
+                }}
                 sx={{ flex: 1 }}
               >
                 <MenuItem value="github">GitHub</MenuItem>
@@ -730,7 +736,21 @@ function GitConnectionsList({
               >
                 <MenuItem value="pat">PAT</MenuItem>
                 <MenuItem value="ssh">SSH key</MenuItem>
-                <MenuItem value="app">GitHub App</MenuItem>
+                {/* Offered only for a GitHub host: the 2026-10-29..11-01
+                  walkthroughs picked it for a plain git host, filled in
+                  the App's ID, installation and key, and were refused
+                  only on save. */}
+                <MenuItem
+                  value="app"
+                  disabled={kind === "git"}
+                  title={
+                    kind === "git"
+                      ? "A GitHub App needs a GitHub host: a plain git host has no App API"
+                      : undefined
+                  }
+                >
+                  GitHub App
+                </MenuItem>
                 <MenuItem value={AMBIENT_TYPE.value}>
                   {AMBIENT_TYPE.label}
                 </MenuItem>

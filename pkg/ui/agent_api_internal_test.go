@@ -30,7 +30,6 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -310,8 +309,15 @@ func TestAPIPresetsExpand(t *testing.T) {
 	// The old capabilities are aliases for their presets.
 	has("self-debug", "tasks:read", "deployment:read")
 	has("api:self-debug", "tasks:read", "deployment:read")
-	has(selfupgrade.CapabilityName, "deployment:read", "deployment:upgrade")
+	has("self-upgrade", "deployment:read", "deployment:upgrade")
+	has("api:self-upgrade", "deployment:read", "deployment:upgrade")
 	has("pipeline-control", "dispatch:write")
+	has("memory", "memory:read", "memory:write")
+	has("api:memory", "memory:read", "memory:write")
+	has("release-notes", "release-notes:read", "release-notes:write")
+	has("api:release-notes", "release-notes:read", "release-notes:write")
+	has("test-quarantine", "tests:write")
+	has("api:test-quarantine", "tests:write")
 	for _, p := range model.APIPresets() {
 		for _, s := range p.Scopes {
 			if _, ok := apiScopeInfo(s); !ok {
@@ -321,14 +327,6 @@ func TestAPIPresetsExpand(t *testing.T) {
 	}
 	if APIGrantsOf([]string{"api:task-admin"}).Has("merge:force") {
 		t.Error("task-admin grants merge:force")
-	}
-
-	// The old self-upgrade tool names are still published and served.
-	published := agent.PublishedToolNames()
-	for _, tool := range selfupgrade.Tools(selfupgrade.Config{}) {
-		if !slices.Contains(published, tool.Name) {
-			t.Errorf("self-upgrade's %s is no longer published", tool.Name)
-		}
 	}
 }
 
@@ -933,6 +931,26 @@ func TestAnAgentCannotGrantPriorityDispatchEvenHoldingIt(t *testing.T) {
 	}
 }
 
+// Write access to grain's database (grain#sql with write: true, the
+// retired db-write) is a person's to grant: an agent holding it cannot
+// pass it on, however the grant is spelt, while the read-only grant it
+// holds passes on as any covered grant does.
+func TestAnAgentCannotGrantSQLWriteEvenHoldingIt(t *testing.T) {
+	held := []string{model.GrainSQLWriteGrant, model.GrainSQLReadGrant}
+	for _, name := range []string{model.GrainSQLWriteGrant, "db-write", model.GrainSQLRef + `={"write": true}`} {
+		if err := agentGrantRefusal(held, name, nil); err == nil || !strings.Contains(err.Error(), "only a person") {
+			t.Errorf("agentGrantRefusal(%s) = %v, want it refused as a person's to grant", name, err)
+		}
+	}
+	if err := agentGrantRefusal(held, model.GrainSQLReadGrant, nil); err != nil {
+		t.Errorf("agentGrantRefusal(%s), which it holds = %v, want allowed", model.GrainSQLReadGrant, err)
+	}
+	if agentGrantEscalation(held, "POST /api/tasks/{id}/capabilities",
+		[]byte(`{"capability":"`+model.GrainSQLRef+`","with":{"write":true},"attach":true}`), nil) == nil {
+		t.Error("an agent attached grain#sql write: true through the capability pane's route")
+	}
+}
+
 // durable implies priority-dispatch and holds a sandbox with no deadline,
 // so it is a person's to grant in the same way.
 func TestAnAgentCannotGrantDurableEvenHoldingIt(t *testing.T) {
@@ -944,5 +962,26 @@ func TestAnAgentCannotGrantDurableEvenHoldingIt(t *testing.T) {
 	if agentGrantEscalation(held, "POST /api/tasks/{id}/capabilities",
 		[]byte(`{"capability":"durable","attach":true}`), nil) == nil {
 		t.Error("an agent attached durable through the capability pane's route")
+	}
+}
+
+// TestPatchTouchesTaskGrantsCoversPriorityDispatch pins that every
+// spelling of the priority-dispatch toggle on PATCH /api/tasks/{id} is a
+// grant edit (capabilities:admin and a reason), while the numeric
+// priority stays an ordinary task edit.
+func TestPatchTouchesTaskGrantsCoversPriorityDispatch(t *testing.T) {
+	for _, body := range []string{
+		`{"priority": true}`, `{"priority": false}`,
+		`{"priorityDispatch": true}`, `{"priorityDispatch": false}`,
+		`{"PriorityDispatch": true}`, `{"priority_dispatch": true}`,
+	} {
+		if !patchTouchesTaskGrants([]byte(body)) {
+			t.Errorf("patchTouchesTaskGrants(%s) = false, want true", body)
+		}
+	}
+	for _, body := range []string{`{"priority": 7}`, `{"priority": null}`, `{"title": "x"}`} {
+		if patchTouchesTaskGrants([]byte(body)) {
+			t.Errorf("patchTouchesTaskGrants(%s) = true, want false", body)
+		}
 	}
 }

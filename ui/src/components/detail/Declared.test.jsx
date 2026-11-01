@@ -127,4 +127,25 @@ describe("Declared", () => {
     );
     expect(screen.queryByText("Filed by")).not.toBeInTheDocument();
   });
+
+  it("shows Task priority when non-default and omits it for default 5", () => {
+    const { rerender } = render(
+      <Declared
+        t={{ id: "7", team: "default", priority: 8 }}
+        config={{}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Task priority")).toBeInTheDocument();
+    expect(screen.getByText("8 (default 5)")).toBeInTheDocument();
+
+    rerender(
+      <Declared
+        t={{ id: "7", team: "default", priority: 5 }}
+        config={{}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Task priority")).not.toBeInTheDocument();
+  });
 });

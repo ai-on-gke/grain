@@ -68,10 +68,11 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	unconfigured := fs.Bool("unconfigured", false, "serve a deployment with no agent model and no git credential configured, as a fresh install has")
 	agentPaused := fs.Bool("agent-paused", false, "serve a deployment whose agent dispatch is paused on a provider's usage limit")
 	mergeQueueStates := fs.Bool("merge-queue-states", false, "also seed two pull requests the merge queue is waiting on: one for its base branch to go green, one for an approval GitHub requires")
-	stalledTasks := fs.Bool("stalled-tasks", false, "hand the UI the orchestrator's stall deadlines and seed a queued task and a run past them, for the Inbox's stuck-task group")
+	stalledTasks := fs.Bool("stalled-tasks", false, "hand the UI the orchestrator's stall deadlines and seed a queued task, a run and a deferral past them, for the Inbox's stuck-task group")
 	fakeCI := fs.Bool("fake-ci", false, "wire a grain CI stub that accepts and reports runs but never executes anything")
 	githubSim := fs.Bool("github-sim", false, "wire a simulated GitHub whose -default-target-repo has branches main and release/1.0")
 	scheduledWorkflows := fs.Bool("scheduled-workflows", false, "with -github-sim and -fake-ci, add a candidate branch to the simulated repo, read its .grain declarations and start and settle its workflow schedules' runs every -reconcile interval (default 2s), and let POST /api/e2e/fake-ci/runs/{id}/finish end a run")
+	forkPullRequest := fs.Bool("fork-pull-request", false, "with -github-sim, also seed two pull requests from the fork contrib/<repo>: contrib:fix/readme-typo (#41, open) and contrib:feat/old-idea (#42, closed), each head at refs/pull/N/head, for filing a task against a fork head label")
 	githubSimPublic := fs.Bool("github-sim-public", false, "with -git-proxy, let the simulated GitHub serve its repo to an anonymous fetch, as GitHub does a public repository; an anonymous push is still refused")
 	gitProxy := fs.Bool("git-proxy", false, "with -github-sim, serve grain's git proxy in front of the simulated repo on loopback, and POST /api/e2e/git-proxy/runs to start a task's run and mint its sandbox a token to push with")
 	baseBranchCI := fs.Bool("base-branch-ci", false, "with -github-sim and -fake-ci, let POST /api/e2e/base-branch/{red,green} {\"branch\": ...} (loopback only) turn a branch red or green on a -fake-ci verdict, through grain's own base-branch reconciler and dispatch's linking step, dispatching nothing")
@@ -95,7 +96,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	hostModeInstall := fs.Bool("host-mode-install", false, "show the notice an unmigrated host-mode install shows (banner, System -> Health, Upgrade), with the CLIs the default bare-machine run locations leave nowhere to run")
 	notifications := fs.Bool("notifications", false, "run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green or ttl) has come true is cleared on its own, as on a daemon's cycle")
 	schedules := fs.Bool("schedules", false, "run the reconcile loop's schedule step every -reconcile interval (default 2s), so a schedule that comes due fires, or records why it was skipped, on its own (what it files is still never dispatched)")
-	reconcile := fs.Duration("reconcile", 0, "run the reconcile loop's suite step every interval, and its release step against -github-sim's simulated GitHub too, logging a failed cycle as the daemon does (default off; agents still never run)")
+	reconcile := fs.Duration("reconcile", 0, "run the reconcile loop's suite step every interval, and its release and issue-import steps against -github-sim's simulated GitHub too, logging a failed cycle as the daemon does (default off; agents still never run)")
 	var upgradeVerifyCmd stringSliceFlag
 	fs.Var(&upgradeVerifyCmd, "upgrade-verify-cmd", "one argument of the command that verifies an -upgrade-image image's signature, repeated for every argument, as on grain daemon")
 	accessCodeFile := fs.String("access-code-file", "", "keep the demo's access code, which every caller, loopback included, signs in with, in this file -- written there if it is not already -- rather than beside its throwaway store, where it is logged")
@@ -160,6 +161,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		GitProxy:               *gitProxy,
 		BaseBranchCI:           *baseBranchCI,
 		GitHubSimPublic:        *githubSimPublic,
+		ForkPullRequest:        *forkPullRequest,
 		MergeRules:             *mergeRules,
 		SensitiveHold:          *sensitiveHold,
 		ReviewQuestions:        *reviewQuestions,

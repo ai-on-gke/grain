@@ -167,7 +167,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// managed by an external config repository (checkSettingsWritable).
 	rehearsal := &configWriteRehearsal{}
 	r = r.WithContext(model.WithWriteRehearsal(r.Context(), rehearsal))
-	rw := &configRefusalWriter{ResponseWriter: w, rehearsal: rehearsal}
+	rw := &configRefusalWriter{
+		ResponseWriter: w,
+		rehearsal:      rehearsal,
+		onSuccess: func() {
+			s.tasks.syncStateRepoAfterWrite(r.Context())
+		},
+	}
 	s.mux.ServeHTTP(rw, r)
 	rw.finish()
 }
@@ -187,13 +193,14 @@ func requiresAccess(r *http.Request) bool {
 		return true
 	}
 	return strings.HasPrefix(r.URL.Path, "/api/") &&
-		r.URL.Path != "/api/config" &&
+		!(r.URL.Path == "/api/config" && (r.Method == http.MethodGet || r.Method == http.MethodHead)) &&
 		!strings.HasPrefix(r.URL.Path, "/api/auth/") &&
 		!executorBootstrapRoute(r)
 }
 
 func (s *Server) routes() {
 	s.route("GET /api/config", s.handleConfig)
+	s.mux.HandleFunc("PUT /api/config", s.agentAPIGate("PUT /api/settings", s.handleUpdateSettings))
 	s.route("GET /api/restart-watch", s.handleRestartWatch)
 	s.route("GET /api/auth/access-code", s.handleAccessCodeStatus)
 	s.route("POST /api/auth/access-code", s.handleAccessCodeLogin)
@@ -230,6 +237,9 @@ func (s *Server) routes() {
 	// the same shape (and the same verb) /api/secrets/{secret}/{key}
 	// already uses for the write this one delegates to.
 	s.route("PUT /api/tasks/{id}/secret", s.handleSetTaskSecret)
+	s.route("POST /api/tasks/{id}/config-change", s.handleProposeConfigChange)
+	s.route("POST /api/tasks/{id}/config-change/approve", s.handleApproveConfigChange)
+	s.route("POST /api/tasks/{id}/config-change/reject", s.handleRejectConfigChange)
 	s.route("GET /api/tasks/{id}/attachments/{attachmentId}", s.handleGetAttachment)
 	s.route("POST /api/tasks/{id}/close", s.handleClose)
 	s.route("POST /api/tasks/{id}/stop", s.handleStop)
@@ -580,6 +590,7 @@ func (s *Server) routes() {
 	// an operator does to it.
 	s.route("GET /api/ci/cache", s.handleGetCICache)
 	s.route("DELETE /api/ci/cache", s.handleClearCICache)
+	s.route("POST /api/tests/quarantine", s.handleQuarantineTest)
 
 	// The merge queue's speculative batches: which changes one suite is
 	// deciding together (pkg/ui/mergebatches.go). Read-only, and beside

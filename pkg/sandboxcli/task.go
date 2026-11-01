@@ -206,6 +206,7 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 		Capabilities:    splitMultiFlag(p, "capability"),
 		FixesBaseBranch: p.has("fixes-base-branch"),
 		NoPort:          p.has("no-port"),
+		KeepRunning:     p.has("keep-running"),
 		Origin:          strings.TrimSpace(p.get("origin")),
 		Reads:           splitMultiFlag(p, "read"),
 		HoldForApproval: &hold,
@@ -227,6 +228,13 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 			return err
 		}
 		req.NotBefore = &t
+	}
+	if rawPri := strings.TrimSpace(p.get("priority")); rawPri != "" {
+		pri, err := strconv.Atoi(rawPri)
+		if err != nil || pri < 0 {
+			return fmt.Errorf("--priority %q must be a non-negative integer", rawPri)
+		}
+		req.Priority = &pri
 	}
 	var buf bytes.Buffer
 	if err := c.post("/cli/proposals", req, &buf); err != nil {
@@ -595,9 +603,6 @@ func parseCLIQuarantineTTL(s string) (time.Duration, error) {
 // task. The count and elision come back in a header and go to stderr, so
 // what reaches stdout is the task lines alone.
 func (c *sandboxCLI) taskList(p sandboxArgs) error {
-	if err := p.only("task list", "state", "repo", "limit", "search", "changed-since", "stalled", "kind", "json"); err != nil {
-		return err
-	}
 	if len(p.positional) > 0 {
 		return fmt.Errorf("task list: unexpected argument %q: run 'grain task list --help' for usage", p.positional[0])
 	}

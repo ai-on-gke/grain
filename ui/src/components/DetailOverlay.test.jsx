@@ -1710,4 +1710,54 @@ describe("DetailOverlay", () => {
       expect(onOpenTask).toHaveBeenCalledWith("91");
     });
   });
+
+  it("lets an operator edit model and network access directly in the sidebar on an active console session task", async () => {
+    const user = userEvent.setup();
+    const act = vi.fn((fn) => fn().then(() => true));
+    const sessionTask = {
+      ...baseTask,
+      interactive: true,
+      consoleSession: "director",
+      model: "",
+      networkAccess: "open",
+    };
+    const sessionConfig = {
+      ...config,
+      deployment: { id: "default", defaultModel: "gpt-5.6-sol" },
+      agentBackends: [
+        {
+          id: "claude-deep",
+          framework: "claude",
+          models: ["claude-opus-5"],
+        },
+      ],
+    };
+
+    render(
+      <DetailOverlay
+        task={sessionTask}
+        tasks={[]}
+        config={sessionConfig}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    const netSelect = screen.getByLabelText("Network access");
+    expect(netSelect).toHaveValue("open");
+    await user.selectOptions(netSelect, "none");
+    expect(api).toHaveBeenCalledWith("/api/tasks/12", {
+      method: "PATCH",
+      body: JSON.stringify({ networkAccess: "none" }),
+    });
+
+    const picker = screen.getByRole("combobox", { name: "Model" });
+    await user.click(picker);
+    await user.click(screen.getByRole("option", { name: "claude-opus-5" }));
+    expect(api).toHaveBeenCalledWith("/api/tasks/12", {
+      method: "PATCH",
+      body: JSON.stringify({ model: "claude-opus-5" }),
+    });
+  });
 });

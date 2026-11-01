@@ -38,15 +38,14 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/gitpushanyref"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
 	"github.com/ai-on-gke/grain/pkg/capability/reporead"
 	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
@@ -117,9 +116,7 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 		bootstrap.New(),
 		grainci.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
-		releasenotes.New(),
 		consolecap.New(),
-		quarantine.New(),
 		readissues.New(),
 		prioritydispatch.New(),
 		durable.New(),
@@ -288,6 +285,12 @@ func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, t
 		// since this process started is redacted by the next run that
 		// reads the journal rather than by the next restart.
 		grainlog.CapabilityName: func(_ *model.Store, taskID string) []mcp.Tool {
+			return grainlog.Tools(grainlog.Config{
+				TaskID:   taskID,
+				Redactor: grainLogRedactor(secretsDir),
+			})
+		},
+		grainserver.JournalGrant: func(_ *model.Store, taskID string) []mcp.Tool {
 			return grainlog.Tools(grainlog.Config{
 				TaskID:   taskID,
 				Redactor: grainLogRedactor(secretsDir),

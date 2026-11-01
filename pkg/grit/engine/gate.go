@@ -17,6 +17,7 @@ package engine
 import (
 	"context"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +41,10 @@ type Gate interface {
 // what the job is worth against everything else queueing, and where to
 // report a wait.
 type GateRequest struct {
+	// Job, when set, names the job asking for this sandbox (such as
+	// "<repo>/<run>/<job>") for the gate's log lines. Nothing in the gate
+	// branches on it.
+	Job string
 	// Want is what this job's sandbox will commit -- its shape, resolved
 	// to the machine it actually takes (grain/task-173). A gate that only
 	// counts ignores it; the deployment's own also holds it against a
@@ -218,4 +223,16 @@ func plural(n int, one, many string) string {
 		word = one
 	}
 	return strconv.Itoa(n) + " " + word
+}
+
+// gateJobLabel formats the optional "<repo>/<run>/<job>" identifier passed on
+// GateRequest.Job so gate log messages name the waiting job.
+func gateJobLabel(repo, runID, jobID string) string {
+	parts := make([]string, 0, 3)
+	for _, p := range []string{repo, runID, jobID} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return strings.Join(parts, "/")
 }

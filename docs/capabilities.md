@@ -370,7 +370,7 @@ The API behind this:
 | Route | What it does |
 |---|---|
 | `GET /api/capability-methods` | Each attached method: `ref`, `capability`, `method`, `description`, `args` (the normalized schema), `requiresArgs`, `releasable`, and `policy` (any capability-policy verdict per run kind: `"denied"` or `"may_be_refused"`). With `?kind=task` (or `process`, `ci`) and `&repo=owner/name`, each method also carries `policyRefusal`: why the capability policy denies it that one run, empty where it admits it. `/api/config`'s `capabilityMethods` is just the count. |
-| `POST /api/capability-grants/check` | `{"grants": [{"capability", "with"} or {"grant"}]}` returns, for each grant, `recorded`, `args`, `error`, `fields`, `changed` and `unchecked`. It writes nothing. |
+| `POST /api/capability-grants/check` | `{"grants": [{"capability", "with"} or {"grant"}]}` returns, for each grant, `recorded`, `args`, `error`, `fields`, `changed` and `unchecked`. With `"subject": {"repo": "owner/name"}` (`""` for a task with no repository) each grant also carries `catalogueRefusal`, the reason `settings/capabilities.yml` refuses it to such a task, which the new-task form marks against its pre-ticked defaults. It writes nothing. |
 | `POST /api/tasks/{id}/capabilities` | `{id, attach}` as before, or `{capability, with, attach}`. `{grant, attach: false}` removes one recorded grant exactly. `replace` on an attach swaps one grant for the new one in place. A grant nothing offers any more can still be removed. |
 
 `grain demo` attaches a real capability server for trying this out: `https://capabilities.demo.grain.example/cloud`, with a `cloud-key` method that has required, enum, pattern, bounded, boolean, array and nested arguments, and a `cloud-viewer` method with no arguments.
@@ -383,9 +383,11 @@ pipeline, such as the pipeline steward (`docs/pipeline-steward.md`),
 which would otherwise be starved by that congestion. Such a task:
 
 - starts whenever it is ready, even with every worker busy: it isn't
-  counted against or held by `max_workers` or the merger count. It
-  still needs room in the sandbox budget, which it is charged under the
-  same exception policy a session's sandbox is;
+  counted against or held by `max_workers` or the merger count. Its
+  sandbox is charged to the sandbox budget, but, like a session's, it
+  is refused only by the host disk floor or a cluster with no room. The
+  budget's ceilings, the repair reserve and what CI holds never refuse it
+  ([Sandbox budget](sandbox-budget.md#sessions-are-never-held-by-the-budget));
 - is ordered ahead of merge-queue repairs and ordinary work, alongside
   console sessions;
 - passes a pipeline pause, a manual one included. The exception is an

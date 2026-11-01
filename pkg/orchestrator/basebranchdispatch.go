@@ -141,6 +141,20 @@ func reconcileBaseBranchDispatch(ctx context.Context, deps Deps, now time.Time) 
 		if !row.InFlight() {
 			continue
 		}
+		if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, row.Repo); err != nil {
+			errs = append(errs, err)
+			continue
+		} else if disabled {
+			reason := cancelReasonForCIMode(mode)
+			deps.CI.Cancel(row.RunID, reason, ci.CancelBySystem)
+			row.Conclusion = string(ci.ConclusionCancelled)
+			row.Detail = "cancelled: " + reason
+			row.FinishedAt = &now
+			if err := deps.Store.PutBaseBranchDispatch(ctx, row); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
 		// In flight at the start of this cycle, so nothing new is started
 		// for the branch on it -- whatever the conclusion recorded here
 		// turns out to be. The cycle after is soon enough, and it reads

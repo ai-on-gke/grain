@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -34,6 +35,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // The deployment's capability servers: grain_config.mcp_servers, keyed by
@@ -460,6 +462,53 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 func configSecretName(id, field string) string {
 	sum := sha256.Sum256([]byte(id))
 	return "capability-server-" + hex.EncodeToString(sum[:4]) + "/" + field
+}
+
+// grainServerSecret reports whether secret is one grain itself creates for
+// a capability server: configSecretName's for a config field's value, or
+// protocol.ManagedSecretName's for a field grain manages.
+func grainServerSecret(secret string) bool {
+	return strings.HasPrefix(secret, "capability-server-") || strings.HasPrefix(secret, "capability-managed-")
+}
+
+// capabilityServerSecretOwners maps each secret in the store's sense --
+// a reference's name before any /<key> -- to the capability servers in m
+// that use it, sorted: every $secret: reference in an entry's config, env
+// or headers, and the managed-field secret named for its capability_id,
+// which the registry resolves by name rather than by reference.
+func capabilityServerSecretOwners(m map[string]protocol.ServerConfig) map[string][]string {
+	owners := map[string][]string{}
+	claim := func(name, id string) {
+		secret, _, _ := strings.Cut(name, "/")
+		if !slices.Contains(owners[secret], id) {
+			owners[secret] = append(owners[secret], id)
+		}
+	}
+	for id, sc := range m {
+		for _, name := range sc.SecretRefs() {
+			claim(name, id)
+		}
+		claim(protocol.ManagedSecretName(id, ""), id)
+	}
+	for _, ids := range owners {
+		sort.Strings(ids)
+	}
+	return owners
+}
+
+// CapabilityServerSecretOwners is capabilityServerSecretOwners for the
+// deployment's configured servers, built-ins included.
+func (c *Client) CapabilityServerSecretOwners(ctx context.Context) (map[string][]string, error) {
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var configured map[string]protocol.ServerConfig
+	if cfg != nil {
+		configured = cfg.MCPServers
+	}
+	configured, _ = intree.EnsureBuiltins(configured)
+	return capabilityServerSecretOwners(configured), nil
 }
 
 // configuredSecretKeys inspects a JSON-map secret field (such as
@@ -891,9 +940,13 @@ func (c *Client) GChatUsage(ctx context.Context, id string) ([]intree.GChatUsage
 	return out, nil
 }
 
-// RemoveCapabilityServer deletes one entry.
+// RemoveCapabilityServer deletes one entry, and then the secrets grain
+// created for it (grainServerSecret) that no remaining entry uses: they
+// hold that server's own config values, which nothing else reads, and
+// left behind they would sit in the store with nothing naming them.
 func (c *Client) RemoveCapabilityServer(ctx context.Context, id string) error {
-	return c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
+	var orphaned []string
+	err := c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
 		sc, ok := m[id]
 		if !ok {
 			return validationErrorf("no capability server %q is configured", id)
@@ -901,9 +954,28 @@ func (c *Client) RemoveCapabilityServer(ctx context.Context, id string) error {
 		if sc.Builtin != "" {
 			return validationErrorf("capability server %q is grain's built-in %s server and cannot be removed: disable it instead (grain capability-servers disable %s)", id, sc.Builtin, id)
 		}
+		used := capabilityServerSecretOwners(map[string]protocol.ServerConfig{id: sc})
 		delete(m, id)
+		remaining := capabilityServerSecretOwners(m)
+		orphaned = orphaned[:0]
+		for secret := range used {
+			if grainServerSecret(secret) && len(remaining[secret]) == 0 {
+				orphaned = append(orphaned, secret)
+			}
+		}
 		return nil
 	})
+	if err != nil || c.Config.Secrets == nil {
+		return err
+	}
+	for _, secret := range orphaned {
+		// Best effort: the entry is gone either way, and a secret left
+		// behind is listed as orphaned on Legacy capabilities.
+		if err := c.Config.Secrets.DeleteSecret(secret); err != nil && !errors.Is(err, secrets.ErrNoSecret) {
+			log.Printf("capability server %s removed, but deleting its secret %s: %v", id, secret, err)
+		}
+	}
+	return nil
 }
 
 // DismissCapabilityServerNotice clears one entry's one-time notice
@@ -974,7 +1046,11 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 	if err := c.checkBootstrapWritableUnrehearsed(ctx, "grain_config"); err != nil {
 		return err
 	}
-	if req.Value != "" {
+	// The value is bootstrap, but the binding is a write of mcp_servers
+	// that settings_locked sends to grain/config: store the value only
+	// when that write will go through, so a refused binding leaves no
+	// secret behind without its $secret: reference.
+	if _, _, managed := c.configRepoFor(ctx, false); req.Value != "" && !managed {
 		if c.Config.Secrets == nil {
 			return errSecretsUnavailable
 		}

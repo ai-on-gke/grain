@@ -69,7 +69,7 @@ var cliRouteTools = map[string]string{
 	"tasks/notes":       "message_task",
 	"tasks/wait":        "wait_for_task",
 	"proposals":         "propose_task",
-	"quarantine":        "quarantine_test",
+	"quarantine":        "api_quarantine_test",
 }
 
 // CLIRouteActivity names a /cli/<route> request after the MCP tool it

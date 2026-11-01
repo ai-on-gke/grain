@@ -1815,3 +1815,76 @@ func TestGrainCIRetargetedReviewLosesAutoMerge(t *testing.T) {
 		t.Fatal("review retargeted onto candidate kept AutoMerge; want it cleared so a person submits it")
 	}
 }
+
+func TestSwitchingRepoToGitHubCIModeCancelsInFlightRunsAndStopsStartingNewOnes(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:   repo,
+		CIMode: model.CIModeGrain,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	task, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Grants = []model.Grant{{Capability: grainci.CapabilityName, Via: model.GrantByDefault}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := newFakeCI()
+	status := startRequiredCI(t, ctx, store, client, runner, task, repo, branch)
+
+	// Also start an unrecorded/ad-hoc run on the same repo to verify reconcileCI sweeps it.
+	extraRun, err := runner.Start(ctx, ci.Request{
+		Repo: repo.String(), Ref: branch, Commit: status.Commit,
+		Event: ci.EventPush, RequestedBy: task.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startedBefore := runner.started()
+
+	// Switch the repository from CIModeGrain to CIModeGitHub.
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:   repo,
+		CIMode: model.CIModeGitHub,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	at := baseTime.Add(time.Minute)
+	if err := runCIReconcilerAt(t, ctx, store, client, runner, at); err != nil {
+		t.Fatalf("runCIReconciler: %v", err)
+	}
+
+	for _, runID := range []string{status.RunID, extraRun.ID} {
+		if got := runner.reasons[runID]; got != "repository switched to GitHub CI" {
+			t.Errorf("run %s cancel reason = %q, want %q", runID, got, "repository switched to GitHub CI")
+		}
+	}
+	gotStatus := ciStatusOf(t, ctx, store, task.ID)
+	if gotStatus == nil || gotStatus.Conclusion != string(ci.ConclusionCancelled) {
+		t.Fatalf("status after switching to GitHub CI = %+v, want cancelled", gotStatus)
+	}
+
+	// Advancing past ciRetryDelay must NOT start a replacement Grain CI run.
+	if err := runCIReconcilerAt(t, ctx, store, client, runner, at.Add(10*time.Minute)); err != nil {
+		t.Fatalf("runCIReconciler after retry delay: %v", err)
+	}
+	if got := runner.started(); got != startedBefore {
+		t.Fatalf("runs started after switching to GitHub CI = %d, want %d (no new runs)", got, startedBefore)
+	}
+
+	// With green GitHub checks, the PR merges without waiting on the cancelled Grain CI run.
+	greenOnGitHub(sim, branch)
+	if err := orchestrator.SyncPullRequests(ctx, store, client, at.Add(11*time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	if !mergedBranch(sim, branch) {
+		t.Fatal("PR on a CIModeGitHub repo with green GitHub checks was held by a cancelled Grain CI run")
+	}
+}

@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProcessRows } from "./processes.js";
 import {
   DEFAULT_PROCESS_NARROWING,
+  DEFAULT_PROCESS_SORT,
   PROCESS_ATTRIBUTES,
   kindNarrowing,
   kindsOf,
@@ -345,6 +346,15 @@ describe("processFilters", () => {
     });
     expect(processNarrowingQuery(parsed)).toBe(query);
     expect(processNarrowingFromSearch(new URLSearchParams(""))).toBe(null);
+    // A key the page has no attribute for is dropped, as an unknown kind
+    // is; with nothing left the order is the default one.
+    expect(
+      processNarrowingFromSearch(new URLSearchParams("?sort=bogus:up")).sort,
+    ).toEqual(DEFAULT_PROCESS_SORT);
+    expect(
+      processNarrowingFromSearch(new URLSearchParams("?sort=bogus,name:desc"))
+        .sort,
+    ).toEqual([{ attr: "name", dir: "desc" }]);
     expect(processNarrowingQuery(DEFAULT_PROCESS_NARROWING)).toBe("");
     expect(processNarrowingQuery(kindNarrowing(["schedule"]))).toBe(
       "?kind=schedule",

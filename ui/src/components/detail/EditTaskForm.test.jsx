@@ -169,6 +169,32 @@ describe("DetailOverlay edit form", () => {
     );
   });
 
+  it("toggles keepRunning from the edit form", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={baseTask}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /Keep running \(immediately restart when a run exits\)/,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).keepRunning).toBe(true);
+  });
+
   // grain/task-110: the same form moves a task that is already filed
   // onto one particular model -- the case this is for, since "this one
   // needs the expensive model" is usually learned after a run. The model
@@ -478,4 +504,71 @@ describe("DetailOverlay edit form", () => {
       confirm.mockRestore();
     });
   });
+
+  it("shows the priority badge and edits Task priority via PATCH", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, priority: 7 }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    expect(screen.getByTestId("detail-priority-badge")).toHaveTextContent(
+      "priority: 7",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const priorityInput = screen.getByLabelText("Task priority");
+    expect(priorityInput).toHaveValue(7);
+
+    await user.clear(priorityInput);
+    await user.type(priorityInput, "9");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(9);
+  });
+
+  // The box's min and step are not enforced on Save (this is not a
+  // <form>): a 0 used to save as the default 5 and a 2.5 as 2, silently.
+  it.each(["0", "2.5", "-2"])(
+    "refuses a Task priority of %s rather than saving another",
+    async (typed) => {
+      const act = vi.fn().mockResolvedValue(true);
+      const user = userEvent.setup();
+      render(
+        <DetailOverlay
+          task={{ ...baseTask, priority: 7 }}
+          tasks={[]}
+          config={config}
+          onClose={() => {}}
+          onOpenTask={() => {}}
+          act={act}
+        />,
+      );
+
+      await user.click(screen.getByRole("button", { name: "Edit" }));
+      const priorityInput = screen.getByLabelText("Task priority");
+      await user.clear(priorityInput);
+      await user.type(priorityInput, typed);
+
+      expect(priorityInput).toHaveAttribute("aria-invalid", "true");
+      expect(screen.getByText(/a whole number, 1 or more/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+      expect(act).not.toHaveBeenCalled();
+
+      await user.clear(priorityInput);
+      await user.type(priorityInput, "3");
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      act.mock.calls[0][0]();
+      expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(3);
+    },
+  );
 });

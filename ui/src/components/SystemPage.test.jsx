@@ -106,6 +106,82 @@ describe("SystemPage", () => {
     expect(onOpenSettings).toHaveBeenCalledWith("config-repo");
   });
 
+  it("links each pending-restart and not-runnable setting on Health to its Settings section and card, while keeping Power", async () => {
+    api.mockImplementation((path) =>
+      Promise.resolve(
+        path === "/api/settings"
+          ? {
+              pendingRestart: ["pollInterval", "githubHost"],
+              unrunnable: [
+                { key: "pollInterval", stored: "0s", running: "30s" },
+                { key: "sandboxBackend", stored: "bogus", running: "docker" },
+              ],
+            }
+          : {},
+      ),
+    );
+    const onOpenSettings = vi.fn();
+    const onTab = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SystemPage
+        config={{}}
+        alerts={[]}
+        tab=""
+        onTab={onTab}
+        showError={vi.fn()}
+        onOpenSettings={onOpenSettings}
+      />,
+    );
+    const pendingRow = await screen.findByTestId("health-pending-restart");
+    expect(pendingRow).toHaveTextContent(
+      "Saved, not applied until restart: Poll interval, GitHub host.",
+    );
+    const pollPendingLink = within(pendingRow).getByRole("link", {
+      name: "Poll interval",
+    });
+    expect(pollPendingLink).toHaveAttribute(
+      "href",
+      "/settings/engine#pollInterval",
+    );
+    const githubPendingLink = within(pendingRow).getByRole("link", {
+      name: "GitHub host",
+    });
+    expect(githubPendingLink).toHaveAttribute(
+      "href",
+      "/settings/credentials#githubHost",
+    );
+    await user.click(pollPendingLink);
+    expect(onOpenSettings).toHaveBeenCalledWith("engine", "pollInterval");
+    onOpenSettings.mockClear();
+    await user.click(githubPendingLink);
+    expect(onOpenSettings).toHaveBeenCalledWith("credentials", "githubHost");
+    await user.click(within(pendingRow).getByRole("button", { name: "Power" }));
+    expect(onTab).toHaveBeenCalledWith("power");
+
+    const unrunnableRow = screen.getByTestId("health-unrunnable");
+    expect(unrunnableRow).toHaveTextContent(
+      "Stored, but not runnable: Poll interval (stored 0s, running 30s), Sandbox backend (stored bogus, running docker). grain is running with a value it can use instead; save it in Settings to store it.",
+    );
+    const pollUnrunnableLink = within(unrunnableRow).getByRole("link", {
+      name: "Poll interval",
+    });
+    expect(pollUnrunnableLink).toHaveAttribute(
+      "href",
+      "/settings/engine#pollInterval",
+    );
+    const backendUnrunnableLink = within(unrunnableRow).getByRole("link", {
+      name: "Sandbox backend",
+    });
+    expect(backendUnrunnableLink).toHaveAttribute(
+      "href",
+      "/settings/sandboxes#sandboxBackend",
+    );
+    onOpenSettings.mockClear();
+    await user.click(backendUnrunnableLink);
+    expect(onOpenSettings).toHaveBeenCalledWith("sandboxes", "sandboxBackend");
+  });
+
   it("opens Config repo when clicking Config repo on a failing state-repo sync in Health", async () => {
     const onOpenSettings = vi.fn();
     const user = userEvent.setup();

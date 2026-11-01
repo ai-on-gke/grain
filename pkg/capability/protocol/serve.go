@@ -208,6 +208,29 @@ func (s *CapabilityServer) lookupTool(name string) (servedTool, bool) {
 	return t, ok
 }
 
+// InProcessCaller returns a Caller that invokes s directly in-process with no
+// stdio subprocess or HTTP listener: for grain's own in-process capability
+// servers (docs/design/unified-grants.md §1, §4).
+func (s *CapabilityServer) InProcessCaller() Caller {
+	return inProcessCaller{s: s}
+}
+
+type inProcessCaller struct{ s *CapabilityServer }
+
+func (c inProcessCaller) ListTools(_ context.Context) ([]Tool, error) {
+	return c.s.listTools(), nil
+}
+
+func (c inProcessCaller) CallTool(ctx context.Context, name string, arguments map[string]any) ([]byte, error) {
+	t, ok := c.s.lookupTool(name)
+	if !ok {
+		return nil, fmt.Errorf("unknown tool %q", name)
+	}
+	return t.handle(ctx, arguments)
+}
+
+func (c inProcessCaller) Close() error { return nil }
+
 type rpcMessage struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`

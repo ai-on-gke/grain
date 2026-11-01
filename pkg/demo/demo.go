@@ -40,6 +40,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -72,7 +73,7 @@ type Options struct {
 	AgentPaused      bool
 	MergeQueueStates bool
 	// StalledTasks hands the UI the orchestrator's stall deadlines and
-	// seeds two tasks past them (demo_stalled.go).
+	// seeds three tasks past them (demo_stalled.go).
 	StalledTasks bool
 	FakeCI       bool
 	GitHubSim    bool
@@ -94,6 +95,10 @@ type Options struct {
 	// public repository -- what a team whose git credential is "None
 	// (public)" reaches. An anonymous push is refused either way.
 	GitHubSimPublic bool
+	// ForkPullRequest is -fork-pull-request: -github-sim's repo also has
+	// an open and a closed pull request from a contributor's fork
+	// (demo_fork_pull_request.go).
+	ForkPullRequest bool
 	MergeRules      bool
 	SensitiveHold   bool
 	MechanicalPort  bool
@@ -398,9 +403,15 @@ func Run(opts Options) error {
 	}
 	var githubSimRepo string
 	if opts.GitHubSim {
-		if cfg, githubSimRepo, err = configureGitHubSimDemo(dir, cfg, repo); err != nil {
+		var seed func(*githubsim.Sim, string) error
+		if opts.ForkPullRequest {
+			seed = func(sim *githubsim.Sim, bare string) error { return seedDemoForkPullRequests(sim, bare, repo) }
+		}
+		if cfg, githubSimRepo, err = configureGitHubSimDemoWith(dir, cfg, repo, seed); err != nil {
 			return fmt.Errorf("grain demo: -github-sim: %v", err)
 		}
+	} else if opts.ForkPullRequest {
+		return fmt.Errorf("grain demo: -fork-pull-request seeds -github-sim's repo, so it needs -github-sim too")
 	}
 	var scheduledWorkflows *orchestrator.Deps
 	if opts.ScheduledWorkflows {
@@ -601,6 +612,11 @@ func Run(opts Options) error {
 	}
 	if baseBranch != nil {
 		srv = baseBranchDemoHandler(srv, baseBranch)
+	}
+	if opts.GitHubSim {
+		if simClient, ok := cfg.GitHubBranches.(github.Client); ok {
+			srv = githubSimDemoHandler(srv, simClient)
+		}
 	}
 	ln, err := net.Listen("tcp", opts.Addr)
 	if err != nil {

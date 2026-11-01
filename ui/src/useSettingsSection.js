@@ -50,6 +50,21 @@ export function useSettingsSection({ showError, dismissError, onSaved } = {}) {
   const [error, setError] = useState(null);
   const errorRef = useRef(null);
   errorRef.current = error;
+  // Every refusal whose banner is still up, by the setting it is about.
+  // error above is only the latest, and another setting saving clears
+  // it, so the banner of a setting refused before that would otherwise
+  // outlive its own later save.
+  const refusalsRef = useRef(new Map());
+  const refused = (key, message) => refusalsRef.current.set(key, message);
+  const settled = (key) => {
+    if (!key) return;
+    const message = refusalsRef.current.get(key);
+    if (message === undefined) return;
+    refusalsRef.current.delete(key);
+    dismissError?.(message);
+  };
+  const settledRef = useRef(settled);
+  settledRef.current = settled;
   // Which Save cards hold an edit, by card title. A ref as well as
   // state: the leave guard reads it outside of any render.
   const [dirtyCards, setDirtyCards] = useState([]);
@@ -94,9 +109,8 @@ export function useSettingsSection({ showError, dismissError, onSaved } = {}) {
         // A refusal of the setting just saved is over, so its banner
         // comes down with the status; one about another setting is left
         // up, as it is when that box is merely left alone.
-        const failed = errorRef.current;
-        if (failed && (failed.key === errorKey || failed.key in payload)) {
-          dismissError?.(failed.message);
+        for (const key of [errorKey, ...Object.keys(payload)]) {
+          settledRef.current(key);
         }
         setError(null);
         try {
@@ -115,6 +129,7 @@ export function useSettingsSection({ showError, dismissError, onSaved } = {}) {
           raw = `${errorKey}${raw.slice(sent.length)}`;
         }
         const message = settingErrorMessage(raw);
+        refused(field, message);
         setError({
           key: field,
           field: settingLabel(field),
@@ -159,13 +174,12 @@ export function useSettingsSection({ showError, dismissError, onSaved } = {}) {
   // save, but a failed save of that field is no longer outstanding --
   // the box was put back -- so the status stops saying it failed.
   const unchanged = (key) => {
-    const failed = errorRef.current;
-    if (failed?.key !== key) return;
-    setError(null);
-    dismissError?.(failed.message);
+    settled(key);
+    if (errorRef.current?.key === key) setError(null);
   };
 
   const refuseBox = (key, message) => {
+    refused(key, message);
     setError({
       key,
       field: settingLabel(key),

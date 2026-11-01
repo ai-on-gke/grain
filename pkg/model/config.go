@@ -917,6 +917,11 @@ type Config struct {
 	// admission before anything is minted. Stored as JSON in one column
 	// and exported to grain/config with the rest of this row.
 	CapabilityPolicy CapabilityPolicy
+	// NewTaskForm is the New Task form's configuration
+	// (settings/new-task-form.yml, new_task_form.go); nil when the
+	// deployment has none, and the form is drawn as it always was.
+	// Stored as JSON in one column.
+	NewTaskForm *NewTaskForm
 	// CLIRun is where each agent CLI runs, keyed by framework name
 	// (claude, codex, antigravity, custom): on the host, in a per-run
 	// container of an image, or whichever of those the host allows
@@ -942,6 +947,11 @@ type Config struct {
 	// SessionSandboxIdleTTLOr; a negative duration turns warm retention off
 	// so the sandbox is released as soon as the turn ends.
 	SessionSandboxIdleTTL time.Duration
+	// SettingsLocked opts into locking non-bootstrap settings in the UI
+	// and REST API when an internal config repository (grain/config) is
+	// configured, requiring changes to go through config pull requests.
+	// False by default so settings remain editable from the UI and API.
+	SettingsLocked bool `json:"settings_locked"`
 }
 
 // Default Kubernetes sandbox configuration values.
@@ -1120,6 +1130,14 @@ func NewDeploymentConfig() Config {
 // ({slug}, FormatTaskBranchName), so a branch and its pull request say
 // what they are about rather than only which task they are.
 const DefaultTaskBranchTemplate = "grain/{deployment}/task-{id}-{slug}"
+
+// UnsluggedTaskBranchTemplate is the DefaultTaskBranchTemplate
+// NewDeploymentConfig seeded before grain/task-56 added {slug} to it.
+// Schema migration 78 upgrades a stored grain_config row still holding
+// this template to DefaultTaskBranchTemplate so existing deployments
+// include a slug of the task's title on new task branches in addition
+// to the deployment and task-id uniquifiers.
+const UnsluggedTaskBranchTemplate = "grain/{deployment}/task-{id}"
 
 // DefaultPollInterval is Config.PollInterval for a deployment that has
 // never chosen one -- named here rather than repeated at each of the

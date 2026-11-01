@@ -33,8 +33,8 @@
 name: nightly
 
 on:
-  schedule:
-    - cron: "11 2 * * *"
+  # Retired from automatic schedule triggering: ai-on-gke/grain runs the
+  # nightly long suite on GitHub Actions (.github/workflows/nightly.yml).
   workflow_dispatch:
 
 env:
@@ -291,18 +291,6 @@ jobs:
             echo "tests/installer/hostmode passed no test at all, so its green tick would mean nothing." >&2
             exit 1
           fi
-
-  security-audit:
-    capabilities: []
-    name: Security suite and audit
-    sandbox:
-      cpus: 4
-      memory-mb: 16384
-      disk-gb: 60
-    timeout-minutes: 20
-    steps:
-      - name: Security suite
-        run: make security
 
   vulns:
     capabilities: []

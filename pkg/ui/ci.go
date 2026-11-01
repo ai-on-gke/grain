@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -185,6 +186,22 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 	}
 	resetPullRequestPolls(*task)
 	full := len(opt.Jobs) == 0 && opt.Workflow == "" && !opt.Recheck
+	if full && !grainci.RequiredFor(*task.Target) && c.Store != nil {
+		repoCfg, err := c.Store.GetRepoConfig(ctx, *task.Target)
+		if err != nil {
+			return ci.Run{}, err
+		}
+		if !grainci.RepoUsesGrainCI(repoCfg, *task.Target) {
+			rulesRequire := false
+			if rules, rerr := c.Store.MergeRulesOf(ctx, *task.Target); rerr == nil && !rules.Empty() {
+				rulesRequire = rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()
+			}
+			explicitDisabled := repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone)
+			if !rulesRequire && (explicitDisabled || !grainci.GrantedExplicitly(task.Grants)) {
+				return ci.Run{}, forbiddenErrorf("%s", ciNotEnabledMessage(*task.Target))
+			}
+		}
+	}
 	previous, err := c.Store.GetObservation(ctx, id)
 	if err != nil {
 		return ci.Run{}, err
@@ -239,7 +256,10 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 		// A daemon still starting is not a fact about the request: left
 		// as the ErrNotUp it is, so it is served as 503 and a waiting
 		// caller asks again rather than giving up on a 400.
-		if errors.Is(err, ci.ErrNotUp) {
+		// Nor is a start queued for a grit server that cannot be reached
+		// (ci.ErrStartQueued): it runs once grit is back, so it is served
+		// as 503 too, and asking again joins it.
+		if errors.Is(err, ci.ErrNotUp) || errors.Is(err, ci.ErrStartQueued) {
 			return ci.Run{}, err
 		}
 		// A fact about the request, as handleStartCIRun says of the same
@@ -1099,6 +1119,10 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		writeCINotUp(w)
 		return
 	}
+	if errors.Is(err, ci.ErrStartQueued) {
+		writeCIStartQueued(w, err)
+		return
+	}
 	if err != nil {
 		// Everything else Start refuses is a fact about the request -- a
 		// branch that does not resolve, a workflow file that does not
@@ -1175,6 +1199,16 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 			Enabled: false,
 			Faults:  s.tasks.CISharedFaults(r.Context()),
 		})
+		return
+	}
+	// A daemon whose CI service is not up yet (ci.ErrNotUp) has an
+	// engine that cannot answer, not one with no runs: Find on it is an
+	// empty page, which /ci showed as "No CI runs yet" and which blanked
+	// a table already on screen at its next poll. It is the same 503
+	// GET /api/ci/runs/{id} answers, so the pane keeps what it had and
+	// says why it cannot read more.
+	if !ci.IsUp(runner) {
+		writeCINotUp(w)
 		return
 	}
 	filter, err := ciRunFilterFrom(r.URL.Query(), time.Now())
@@ -1356,6 +1390,22 @@ func ciRunFilterFrom(query url.Values, now time.Time) (ci.RunFilter, error) {
 // and safe to show anyone.
 func writeCINotUp(w http.ResponseWriter) {
 	writeError(w, http.StatusServiceUnavailable, apierror.Public(ci.ErrNotUp.Error()))
+}
+
+// writeCIStartQueued answers a start the remote grit server could not
+// take yet (ci.ErrStartQueued) with 503, not the 400 a refused request
+// gets: the run is in the durable outbox and is submitted once grit is
+// back, and asking for the same run again joins it rather than queueing
+// another. What the attempt met -- a transport error naming grit's
+// address -- stays in the daemon's log.
+func writeCIStartQueued(w http.ResponseWriter, err error) {
+	msg := ci.ErrStartQueued.Error()
+	var queued *ci.StartQueuedError
+	if errors.As(err, &queued) {
+		log.Printf("ci: start %s queued for grit: %v", queued.RequestID, queued.Err)
+		msg = fmt.Sprintf("%s (request %s); asking for the same run again joins it rather than starting a second", msg, queued.RequestID)
+	}
+	writeError(w, http.StatusServiceUnavailable, apierror.Public(msg))
 }
 
 func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {

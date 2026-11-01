@@ -244,10 +244,10 @@ func (p *progress) start(name string) {
 	p.current = i
 	// The pane's own Detail line, for the sake of anything (an older
 	// UI, curl) that reads the status without understanding steps --
-	// but only while the upgrade is still running: the restart step
-	// starts *after* succeed has already written what the upgrade
-	// achieved, and overwriting that with "step 5 of 5" would throw
-	// away the one line that says which image is now installed.
+	// but only while the upgrade is still running: once succeed has
+	// written what the upgrade achieved, overwriting that with "step 5
+	// of 5" would throw away the one line that says which image is now
+	// installed.
 	if p.status.Phase == PhaseRunning {
 		p.status.Detail = fmt.Sprintf("step %d of %d: %s", i+1, len(p.status.Steps), name)
 	}

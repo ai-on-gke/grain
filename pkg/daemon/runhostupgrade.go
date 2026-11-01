@@ -194,7 +194,7 @@ func adoptRunHosts(ctx context.Context, store *model.Store, client github.Client
 	now := time.Now().UTC()
 	plan, err := orchestrator.RecoverRunHosts(ctx, store, client, host, now,
 		func(a runhost.Adoption, cursor int64) bool {
-			sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, a.Claim.Run)
+			sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, a.Claim.SandboxName())
 			if err != nil {
 				log.Printf("grain daemon: not adopting run %s: its sandbox: %v", a.Claim.Run, err)
 				return false
@@ -267,7 +267,7 @@ func adoptHostd(ctx context.Context, store *model.Store, client github.Client, h
 	now := time.Now().UTC()
 	plan, err := orchestrator.RecoverHostd(ctx, store, client, hd.Client, hd.Client.Build, now,
 		func(a runhost.Adoption, cursor int64) bool {
-			sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, a.Claim.Run)
+			sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, a.Claim.SandboxName())
 			if err != nil {
 				log.Printf("grain daemon: not adopting run %s from grain hostd: its sandbox: %v", a.Claim.Run, err)
 				return false

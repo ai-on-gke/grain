@@ -70,7 +70,7 @@ import SessionsPage from "./components/SessionsPage.jsx";
 import PanelBoard from "./components/PanelBoard.jsx";
 import ReportBoard from "./components/ReportBoard.jsx";
 import RepoList from "./components/RepoList.jsx";
-import RepoPage from "./components/RepoPage.jsx";
+import RepoPage, { REPO_TABS } from "./components/RepoPage.jsx";
 import PullRequestPage from "./components/PullRequestPage.jsx";
 import ProcessesList from "./components/ProcessesList.jsx";
 import { declaringRepos, triggersOf } from "./processes.js";
@@ -253,6 +253,17 @@ function repoTabAt(parsed, hash) {
   if (parsed.repoTab) return parsed.repoTab;
   const fromHash = (hash || "").replace(/^#/, "");
   return isRepoTab(fromHash) ? fromHash : null;
+}
+
+// repoTabCrumb is the " / <tab>" a repo page's crumbs end in when one of
+// its tabs other than Overview is showing -- "repositories /
+// acme/widgets / merge queue" -- so the rail says where in the repo the
+// reader is, as it does for a settings section or a system tab. Without
+// it every tab read the same as Overview.
+function repoTabCrumb(tab) {
+  const found =
+    tab && tab !== "overview" && REPO_TABS.find((t) => t.id === tab);
+  return found ? ` / ${found.label.toLowerCase()}` : "";
 }
 
 // WhenRailReady holds the page back until the header rail's slot has
@@ -847,9 +858,15 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // 10 (half a minute at POLL_INTERVAL_MS), so a halted host is asked
   // less and less often rather than every three seconds for as long as
   // it stays down. pollTick counts ticks against it; both reset to 1/0
-  // the moment a tick gets through.
+  // the moment a tick gets through. The backoff spaces out the main
+  // poll's own asking, not how soon the page notices grain is back: the
+  // restart watch below keeps asking every POLL_INTERVAL_MS through the
+  // outage, and the first answer it gets resets both and calls pollNow,
+  // so the banner clears within a tick of grain answering rather than
+  // up to half a minute later.
   const pollBackoff = useRef(1);
   const pollTick = useRef(0);
+  const pollNow = useRef(null);
   const hiddenTick = useRef(0);
 
   // isUnreachable/unreachableReason first: a toast for a mutation that
@@ -1092,8 +1109,27 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // rail is waiting on can arrive without anybody doing anything here: a
   // session configured a moment ago has no task until the next cycle's
   // reconciler files one, and the chat cannot open until it does.
+  //
+  // Reads are sequenced: the background poll's read can still be out
+  // when a restart answers with the session's replacement task, and
+  // written after it, its older list would point the pane back at the
+  // closed task and draw that conversation again. So a list is only
+  // written if no read started later (or answer applied by
+  // applySessions) has been written already; a stale one is dropped
+  // and refreshSessions answers null.
+  const sessionsSeq = useRef(0);
+  const sessionsWritten = useRef(0);
+  const applySessions = useCallback((next) => {
+    sessionsSeq.current += 1;
+    sessionsWritten.current = sessionsSeq.current;
+    setSessions((prev) => keepIfSame(prev, next));
+  }, []);
   const refreshSessions = useCallback(async () => {
+    sessionsSeq.current += 1;
+    const seq = sessionsSeq.current;
     const res = await api("/api/console-sessions");
+    if (seq < sessionsWritten.current) return null;
+    sessionsWritten.current = seq;
     const next = (res && res.sessions) || [];
     setSessions((prev) => keepIfSame(prev, next));
     setSessionsLoaded(true);
@@ -1146,8 +1182,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const [sessionTask, setSessionTask] = useState(null);
   const sessionTaskRef = useRef(null);
   sessionTaskRef.current = sessionTask;
+  const sessionTaskSeq = useRef(0);
   const loadSessionTask = useCallback(
     async (taskId = openSessionTaskId) => {
+      const seq = ++sessionTaskSeq.current;
       if (!taskId) {
         setSessionTask(null);
         return;
@@ -1155,11 +1193,17 @@ function AppContent({ onReload = () => window.location.reload() }) {
       let detail = await api(`/api/tasks/${taskId}`, {
         poll: true,
       });
+      if (seq !== sessionTaskSeq.current) {
+        return;
+      }
       if (detail === UNCHANGED) {
         if (String(sessionTaskRef.current?.id) === String(taskId)) {
           return;
         }
         detail = await api(`/api/tasks/${taskId}`);
+        if (seq !== sessionTaskSeq.current) {
+          return;
+        }
       }
       if (String(openSessionTaskIdRef.current) !== String(taskId)) {
         return;
@@ -1185,13 +1229,20 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // sent in a chat should leave them in the chat.
   const sessionAct = useCallback(
     async (mutate) => {
+      sessionTaskSeq.current += 1;
       try {
         await mutate();
+      } catch (err) {
+        showError(err);
+        return false;
+      }
+      try {
         await loadSessionTask();
         await refreshList();
       } catch (err) {
         showError(err);
       }
+      return true;
     },
     [loadSessionTask, refreshList, showError],
   );
@@ -1201,18 +1252,34 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // capability toggle) completes so the chat's Stop button, state badge,
   // and separator reflect the mutation immediately rather than waiting
   // for the next poll tick.
-  const refreshSessionSaved = useCallback(async () => {
-    const [nextSessions] = await Promise.all([
-      refreshSessions(),
-      refreshList(),
-    ]);
-    const currentSession = openSessionIdRef.current
-      ? nextSessions.find((s) => s.id === openSessionIdRef.current) || null
-      : nextSessions[0] || null;
-    const nextTaskId = currentSession?.taskId || null;
-    openSessionTaskIdRef.current = nextTaskId;
-    await loadSessionTask(nextTaskId);
-  }, [refreshSessions, loadSessionTask, refreshList]);
+  //
+  // A control whose answer already lists the sessions (Start a fresh
+  // chat answers with the replacement task in it) passes that list,
+  // which is written at once: until it is, the pane is still pointed at
+  // the task the restart closed.
+  const refreshSessionSaved = useCallback(
+    async (answered) => {
+      const pointAt = (listed) => {
+        const currentSession = openSessionIdRef.current
+          ? listed.find((s) => s.id === openSessionIdRef.current) || null
+          : listed[0] || null;
+        openSessionTaskIdRef.current = currentSession?.taskId || null;
+      };
+      if (Array.isArray(answered)) {
+        applySessions(answered);
+        pointAt(answered);
+      }
+      const [nextSessions] = await Promise.all([
+        refreshSessions(),
+        refreshList(),
+      ]);
+      // null: a later read or answer has already been written, and the
+      // pane already points where that one said.
+      if (nextSessions) pointAt(nextSessions);
+      await loadSessionTask(openSessionTaskIdRef.current);
+    },
+    [applySessions, refreshSessions, loadSessionTask, refreshList],
+  );
 
   // refreshConfig re-fetches /api/config -- needed after adding a target
   // repo (RepoList's own "Add") or removing one (RepoPage's own
@@ -1798,6 +1865,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
           at.settingsSection || (isPhone ? "" : DEFAULT_SETTINGS_SECTION),
         );
         setSettingsItem("");
+        setSettingsAnchor("");
       }
       // The rail's Processes entry is the whole list, whatever it was
       // last narrowed to; the pages it replaced, if anything still asks
@@ -1956,7 +2024,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       }
       const listed = res?.sessions || [];
       if (listed.length) {
-        setSessions((prev) => keepIfSame(prev, listed));
+        applySessions(listed);
       }
       // The answer names what it created; the diff against what the
       // rail knew is for a daemon older than that field.
@@ -1972,6 +2040,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       await Promise.all([refreshSessions(), refreshList()]);
     },
     [
+      applySessions,
       refreshSessions,
       refreshList,
       openStandingSession,
@@ -2369,12 +2438,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
       }
     }
     const interval = setInterval(poll, POLL_INTERVAL_MS);
+    pollNow.current = poll;
     const onVisible = () => {
       if (document.visibilityState === "visible") poll();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(interval);
+      if (pollNow.current === poll) pollNow.current = null;
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [
@@ -2406,20 +2477,36 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // the poll, not this, is what reports the daemon unreachable. A hidden
   // tab stops asking, as it stops polling (HIDDEN_POLL_EVERY), and asks
   // again the moment it is shown.
+  //
+  // It is also how the page hears that grain is back. After a failed
+  // ask, the next one is ?quick=1, which the daemon answers at once
+  // rather than holding, and an answer that finds the main poll backed
+  // off resets its backoff and polls now: otherwise the banner waited
+  // for the poll's next backed-off tick, up to half a minute after
+  // grain was answering again (grain/task-2258).
   const watchingRestart = Boolean(config) && !pollDenied;
   useEffect(() => {
     if (!watchingRestart) return undefined;
     let stopped = false;
     let asking = false;
     let timer = null;
+    let failed = false;
     async function watch() {
       timer = null;
       if (stopped || asking || document.visibilityState === "hidden") return;
       asking = true;
       const started = Date.now();
       try {
-        const answer = await api("/api/restart-watch");
+        const answer = await api(
+          failed ? "/api/restart-watch?quick=1" : "/api/restart-watch",
+        );
+        failed = false;
         if (stopped) return;
+        if (pollBackoff.current > 1) {
+          pollBackoff.current = 1;
+          pollTick.current = 0;
+          pollNow.current?.();
+        }
         if (answer?.restarting) {
           restartingRef.current = true;
           // A request that failed while this answer was on its way
@@ -2432,6 +2519,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         }
       } catch {
         // Unreachable, refused or anything else: the poll says so.
+        failed = true;
       }
       asking = false;
       if (stopped) return;
@@ -2700,14 +2788,22 @@ function AppContent({ onReload = () => window.location.reload() }) {
         /^\/(schedules|templates|suites|processes\/triggers)(\/|$)/.test(
           window.location.pathname,
         ) ||
-        (view === "settings" &&
+        // A bare /settings becoming /settings/models is the same page
+        // renamed everywhere but a phone, where the bare path is the
+        // section list: picking Models from it is a step Back has to
+        // return from, as it does for every other section (2026-11-01
+        // responsive walkthrough).
+        (!isPhone &&
+          view === "settings" &&
           settingsSection === DEFAULT_SETTINGS_SECTION &&
           window.location.pathname === "/settings") ||
         (view === "session" &&
           !openTaskId &&
           /^\/(tasks|director)(\/|$)/.test(window.location.pathname));
       if (mountedRef.current && !samePage && !dropped && !oldProcessPath) {
-        window.history.pushState(entry, "", path);
+        const anchorHash =
+          view === "settings" && settingsAnchor ? `#${settingsAnchor}` : "";
+        window.history.pushState(entry, "", path + anchorHash);
       } else {
         // A correction of the address on screen -- the first write on
         // load -- keeps its #fragment, which is a
@@ -2742,6 +2838,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     openCIRunId,
     openSessionId,
     settingsSection,
+    settingsAnchor,
     settingsItem,
     systemTab,
     metricsNarrowing,
@@ -2757,6 +2854,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     config,
     urlTask,
     showError,
+    isPhone,
   ]);
 
   // Mirrors the browser's own back/forward buttons onto the same state
@@ -2826,6 +2924,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
       // as well as in and out of the views, since both are in the path.
       setSettingsSection(parsed.settingsSection || "");
       setSettingsItem(parsed.settingsItem || "");
+      setSettingsAnchor(
+        parsed.view === "settings" && window.location.hash
+          ? decodeURIComponent(window.location.hash.slice(1))
+          : "",
+      );
       setSystemTab(parsed.systemTab || "");
       // Back out of a scoped report is how that scope is undone, exactly
       // as it is for a narrowed list above.
@@ -3046,6 +3149,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       narrowing={narrowing}
       onNarrow={narrow}
       onOpenTask={openTask}
+      onOpen={openPanelView}
       showError={showError}
       onMoveSection={moveSection}
       pickedWindow={boardWindow}
@@ -3261,7 +3365,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
             ? " / releases"
             : repoComparison !== null
               ? " / pull request"
-              : ""
+              : repoTabCrumb(repoTab)
         }`
       : view === "settings"
         ? `settings / ${settingsSectionLabel(settingsSection || DEFAULT_SETTINGS_SECTION).toLowerCase()}`
@@ -3733,6 +3837,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                               metricsWindow={metricsWindow}
                               onPickMetricsWindow={setMetricsWindow}
                               onOpenTask={openTaskFromMetrics}
+                              onOpenView={openPanelView}
                               onAct={act}
                               onOpenSession={openStandingSession}
                             />

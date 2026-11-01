@@ -181,20 +181,20 @@ per-capability list, with what each one becomes:
 | `local-scripts:<name>` | `…/host-script#host-script` `{script}` | existing server method |
 | `repo-read:<repo>`, `repo-write:<repo>` (CI) | `…/repo#read` / `…/repo#write` `{repo}` | repo grant |
 | `self-debug` | `…/api#self-debug` preset (already an alias) plus a new `…/grain#source` method for the source checkout and metrics tools | api scope + new in-process server `…/grain` |
-| `grain-log` | `…/grain#journal` | new in-process server method; deliberately not part of any api preset (journal may hold secrets; its redaction stays) |
-| `deployment-health` | `…/api#deployment:read` plus `…/grain#health` for the host/sandbox probes | api scope + new method |
+| `grain-log` | `…/grain#journal` | **done** (task 2037): provider removed, `https://grain.dev/capabilities/grain#journal` added on the in-process `…/grain` server (redaction kept, deliberately in no api preset), stored grants rewritten to `https://grain.dev/capabilities/grain#journal={}` by schema migration 80 |
+| `deployment-health` | `…/api#deployment:read` plus `…/grain#health` for the host/sandbox probes | **done** (task 2037): provider removed, `https://grain.dev/capabilities/grain#health` added on the in-process `…/grain` server alongside `api:deployment:read`, stored grants rewritten to `api:deployment:read` + `https://grain.dev/capabilities/grain#health={}` by schema migration 81 |
 | `self-repair` | `…/grain#host-exec` (each command still needs a live chat reply) | new method, dangerous (Q7) |
-| `self-upgrade` | `…/api#self-upgrade` preset | api preset (alias today) |
+| `self-upgrade` | `…/api#self-upgrade` preset | **done** (task 2036): provider and its three tools removed, stored grants rewritten to `api:self-upgrade` by schema migration 75 |
 | `pipeline-control` | `…/api#pipeline-control` preset | **done** (task 2004): provider and its two tools removed, stored grants rewritten to `api:pipeline-control` by schema migration 69 |
 | `dispatch-control` | `…/api#dispatch-control` preset | **done** (task 2004): provider and its four tools removed, stored grants rewritten to `api:dispatch-control` by schema migration 68 |
-| `test-quarantine` | `…/api#tests:write` (new scope) | api scope |
+| `test-quarantine` | `…/api#tests:write` (new scope), preset `test-quarantine` | **done** (task 2036): provider and `quarantine_test` removed, `POST /api/tests/quarantine` added under `tests:write` and `grain quarantine` gated on it, stored grants rewritten to `api:test-quarantine` by schema migration 76 |
 | `read-issues` | `…/github#read-issues` | new method on `github` server |
-| `release-notes` | `…/api#releases:read` + `…/api#releases:write` | api scopes |
-| `memory` | `…/api#memory:write` (new scope) | api scope |
+| `release-notes` | `…/api#release-notes` preset (`release-notes:read` + `release-notes:write`) | **done** (task 2035): provider and its tools removed, `/api/release-notes*` routes moved to `release-notes:read`/`release-notes:write`, stored grants rewritten to `api:release-notes` by schema migration 72 |
+| `memory` | `…/api#memory` preset (`memory:read` + `memory:write`) | **done** (task 2035): provider and its tools removed, stored grants rewritten to `api:memory` by schema migration 71 |
 | `team-broadcast` | `…/api#teams:broadcast` (new scope), preset `team-broadcast` | **done** (task 2004): provider and `broadcast_team_message` removed, stored grants rewritten to `api:team-broadcast` by schema migration 67 |
 | `bootstrap-playbooks` | `…/skill#skill` `{dir: bootstrap}` | existing server method |
 | `console` | stays a task setting, not a grant (it changes how the run is hosted, not what it may reach) | moved out of grants (Q8) |
-| `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | new method, `write: true` dangerous |
+| `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | **done** (task 2037): providers removed, `https://grain.dev/capabilities/grain#sql` (`{write: bool}`, with `write: true` dangerous) added on the in-process `…/grain` server, stored grants rewritten to `https://grain.dev/capabilities/grain#sql={"write":false}` / `{"write":true}` by schema migration 82 |
 | `grain-ci` | `…/grain#ci` | new method |
 | `image-signing`, `registry-push`, `package-publish` (CI) | `…/release#image-signing`, `…/release#registry-push`, `…/release#package-publish` | new in-process server `…/release` |
 | `corp-research` (google build) | a `…/corp#research` method registered by the google build through the same `capability.Register` seam | contributed server method |

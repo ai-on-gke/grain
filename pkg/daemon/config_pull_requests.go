@@ -71,7 +71,7 @@ func (m *StateManager) OpenConfigPullRequest(ctx context.Context, req ui.ConfigP
 		return ui.ConfigPullRequest{}, err
 	}
 	if err := staterepo.ApplyChanges(candidate, req.Changes); err != nil {
-		return ui.ConfigPullRequest{}, &ui.ConfigPullRequestInvalid{Err: fmt.Errorf("the change does not apply to %s: %w", base, err)}
+		return ui.ConfigPullRequest{}, &ui.ConfigPullRequestInvalid{Err: fmt.Errorf("the change does not apply to %s: %w", base, err), Stale: true}
 	}
 	report, err := staterepo.ValidateCandidateConfig(ctx, m.db, candidate)
 	if err != nil {
@@ -100,6 +100,11 @@ func (m *StateManager) OpenConfigPullRequest(ctx context.Context, req ui.ConfigP
 	actor := model.Principal{Kind: model.PrincipalHuman, ID: req.User}
 	now := time.Now().UTC()
 	ref := fmt.Sprintf("%s#%s", target.String(), id)
+	// Branch names the branch the commit is on. Left empty, PutTask would
+	// give the task the deployment's branch template instead, and the
+	// internal pull request client -- which finds the head by
+	// task.BranchName() -- would read a head that does not exist as a
+	// pull request closed unmerged on the next tick.
 	task := model.Task{
 		ID:        id,
 		Intent:    model.IntentImplement,
@@ -109,6 +114,7 @@ func (m *StateManager) OpenConfigPullRequest(ctx context.Context, req ui.ConfigP
 		Approval:  &model.Attribution{Actor: actor},
 		Target:    &target,
 		Base:      base,
+		Branch:    branch,
 		Links:     []model.Link{{Kind: model.LinkFixes, Target: ref}},
 		Creator:   req.User,
 		CreatedAt: &now,

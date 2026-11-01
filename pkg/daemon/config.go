@@ -419,6 +419,10 @@ type Config struct {
 	Ci              bool
 	GritURL         string
 	GritClientToken string
+	// GritExperimental is -grit-experimental: the opt-in -grit-url is
+	// refused without, because the remote grit path runs no workflows
+	// yet (docs/design/grit-split.md, GS-3 to GS-5 deferred).
+	GritExperimental bool
 
 	// ciCacheMaxAge, ciCacheMaxBytes, ciCacheMaxEntries and
 	// ciCacheMaxEntryBytes are the CI job cache's bounds

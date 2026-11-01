@@ -32,10 +32,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -75,9 +73,10 @@ func runWithGrants(t *testing.T, grants []model.Grant, sourceDir string) ([]stri
 	framework := &grantCapturingFramework{}
 	deps := orchestrator.Deps{
 		Store: store, Client: client, Sandboxes: orchestrator.NewHostSandboxes(t.TempDir()),
-		Framework:  orchestrator.StaticFramework(framework),
-		Config:     orchestrator.Config{GrainSourceDir: sourceDir},
-		MaxWorkers: 1,
+		Framework:        orchestrator.StaticFramework(framework),
+		Config:           orchestrator.Config{GrainSourceDir: sourceDir},
+		CapabilityPasses: orchestrator.NewCapabilityPasses(),
+		MaxWorkers:       1,
 	}
 	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
 		t.Fatalf("RunCycle: %v", err)
@@ -148,10 +147,10 @@ func TestRunCycleTellsADBAccessTaskItHoldsTheGrant(t *testing.T) {
 // forked MCP server still cannot serve either diagnostic tool.
 func TestRunCycleTellsADeploymentHealthTaskItHoldsTheGrant(t *testing.T) {
 	t.Parallel()
-	grants := []model.Grant{{Capability: "deployment-health", Via: model.GrantByGrain}}
+	grants := []model.Grant{{Capability: model.GrainHealthGrant, Via: model.GrantByGrain}}
 	held, _ := runWithGrants(t, grants, "/usr/local/share/grain/src")
-	if !slices.Contains(held, "deployment-health") {
-		t.Errorf("RunConfig.Grants = %v, want the deployment-health grant among them", held)
+	if !slices.Contains(held, model.GrainHealthGrant) {
+		t.Errorf("RunConfig.Grants = %v, want the %s grant among them", held, model.GrainHealthGrant)
 	}
 }
 
@@ -176,10 +175,12 @@ func TestRunCycleForwardsAllKnownToolGrants(t *testing.T) {
 	allToolGrants := []string{
 		selfdebug.CapabilityName,
 		grainlog.CapabilityName,
+		model.GrainJournalGrant,
 		deploymenthealth.CapabilityName,
+		model.GrainHealthGrant,
+		model.GrainSQLReadGrant,
+		model.GrainSQLWriteGrant,
 		bootstrap.CapabilityName,
-		selfupgrade.CapabilityName,
-		memory.CapabilityName,
 		grainci.CapabilityName,
 		readissues.CapabilityName,
 	}

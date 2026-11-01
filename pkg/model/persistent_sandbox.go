@@ -39,7 +39,8 @@ import (
 type PersistentSandbox struct {
 	// Name identifies the sandbox, and is the <name> of its UI sub-path.
 	Name string `json:"name"`
-	// Repo is the repository checked out into the sandbox (owner/name).
+	// Repo is the repository checked out into the sandbox (owner/name,
+	// or host/owner/name off the default git host).
 	Repo string `json:"repo"`
 	// Ref is the branch, tag or commit checked out. Empty is the
 	// repository's default branch.
@@ -157,9 +158,8 @@ func ValidatePersistentSandbox(sb PersistentSandbox) error {
 	if err := ValidateStandingSandboxName(sb.Name); err != nil {
 		return fmt.Errorf("persistent sandbox: %w", err)
 	}
-	repo := strings.TrimSpace(sb.Repo)
-	if owner, name, ok := strings.Cut(repo, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-		return fmt.Errorf("persistent sandbox %q: repo %q is not owner/name", sb.Name, sb.Repo)
+	if _, err := ParseRepo(sb.Repo); err != nil {
+		return fmt.Errorf("persistent sandbox %q: repo %q is not owner/name or host/owner/name", sb.Name, sb.Repo)
 	}
 	if strings.TrimSpace(sb.Command) == "" {
 		return fmt.Errorf("persistent sandbox %q needs a command to run", sb.Name)

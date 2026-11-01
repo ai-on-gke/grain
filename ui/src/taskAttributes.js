@@ -443,6 +443,12 @@ export const ATTRIBUTES = [
     values: one((t) => t.id),
     key: idKey,
   },
+  {
+    id: "priority",
+    label: "Task priority",
+    type: TYPE_NUMBER,
+    values: (t) => [String(t.priority ?? 5)],
+  },
 ];
 
 // CUSTOM_PREFIX namespaces every deployment-defined attribute, so

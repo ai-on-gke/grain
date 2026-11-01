@@ -110,3 +110,56 @@ func TestProcessResultHoldWithoutPermissionIsAnOrdinaryProposal(t *testing.T) {
 		t.Error("tagged held, but nothing was held back")
 	}
 }
+
+// keep_running and a priority above the proposer's wait for a person in
+// the end-of-run relay too (model.PersonOnlyProposalSettings), beside a
+// proposal at the proposer's priority that the same run let queue.
+func TestProcessResultFilesKeepRunningOrHigherPriorityForAPerson(t *testing.T) {
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "t1", repo)
+	task.AutoMerge = true
+	task.Priority = 7
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	result := toolResult(
+		agent.ToolCall{Name: "propose_task", Arguments: map[string]any{
+			"title": "at its priority", "body": "b", "priority": 7,
+		}},
+		agent.ToolCall{Name: "propose_task", Arguments: map[string]any{
+			"title": "forever", "body": "b", "keep_running": true,
+		}},
+		agent.ToolCall{Name: "propose_task", Arguments: map[string]any{
+			"title": "first in line", "body": "b", "priority": 1000000,
+		}},
+	)
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	filed := proposalsByTitle(t, ctx, store, "t1")
+
+	if filed["at its priority"].Approval == nil {
+		t.Error("the proposal at its proposer's priority was not approved -- its permission covers it")
+	}
+	for title, want := range map[string]string{"forever": "keep_running", "first in line": "priority 1000000"} {
+		p, ok := filed[title]
+		if !ok {
+			t.Fatalf("%q was never filed", title)
+		}
+		if p.Approval != nil {
+			t.Errorf("%q approved by %+v, want nobody", title, p.Approval)
+		}
+		if model.HeldForApproval(p) {
+			t.Errorf("%q tagged held -- the run did not choose to hold it", title)
+		}
+		if !strings.Contains(p.Body, "Filed for a person to approve") || !strings.Contains(p.Body, want) {
+			t.Errorf("%q body does not say why it waits:\n%s", title, p.Body)
+		}
+	}
+	if !filed["forever"].KeepRunning || filed["first in line"].Priority != 1000000 {
+		t.Error("the settings were not filed as asked")
+	}
+}

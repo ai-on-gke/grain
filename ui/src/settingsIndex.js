@@ -40,6 +40,13 @@ export const SETTINGS_INDEX = [
     keywords: [],
   },
   {
+    id: "settingsLocked",
+    section: "general",
+    anchor: "settings-lock",
+    label: "Lock settings in UI (require config repo PRs)",
+    keywords: ["lock", "read-only", "config repo"],
+  },
+  {
     id: "upgradeCheckMode",
     section: "general",
     anchor: "updates",
@@ -773,6 +780,27 @@ export const SETTINGS_INDEX = [
     card: true,
   },
 ];
+
+const SETTING_BY_ID = new Map(
+  SETTINGS_INDEX.filter((e) => !e.card).map((e) => [e.id, e]),
+);
+
+// settingLocation is the Settings section and card anchor that hold a
+// setting key (the keys in GET /api/settings's pendingRestart and
+// unrunnable), or null for a key no section draws. target is what a link
+// to the setting scrolls to: the field itself (its data-setting-id), as
+// the filter's own pick does, since a card's top can be a screen or more
+// above a field near its foot (Legacy capabilities' GitHub host).
+export function settingLocation(id) {
+  const entry = SETTING_BY_ID.get(id);
+  if (!entry) return null;
+  return {
+    section: entry.section,
+    anchor: entry.anchor,
+    target: entry.id,
+    href: `/settings/${entry.section}#${entry.id}`,
+  };
+}
 
 // matchSettings is the filter's answer for a query: the entries whose
 // label, then keywords, fuzzy-match it, best first. Values are never

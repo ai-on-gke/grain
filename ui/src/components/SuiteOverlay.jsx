@@ -74,7 +74,9 @@ function SuiteOverlay({
   const [templateIds, setTemplateIds] = useState(
     (suite?.items || []).map((it) => it.templateId),
   );
-  const [mode, setMode] = useState(suite?.mode || "until_clean");
+  const [mode, setMode] = useState(
+    suite?.mode === "count" ? "count" : "until_clean",
+  );
   const offered = Array.isArray(templates) ? templates : [];
   // Names alone where they are unique, more where they are not
   // (templateLabels.js).

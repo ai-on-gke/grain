@@ -173,8 +173,9 @@ type AddendaAcknowledger interface {
 type runAddenda struct {
 	reader AddendaReader
 
-	mu    sync.Mutex
-	after int64
+	mu      sync.Mutex
+	after   int64
+	unacked int64
 }
 
 // AnnounceAddenda tells r to carry what a person says on this run's task
@@ -196,6 +197,34 @@ func (r *Registry) AnnounceAddenda(after int64, reader AddendaReader) {
 		return
 	}
 	r.addenda = &runAddenda{reader: reader, after: after}
+}
+
+// ackPendingAddenda reports any addenda appended to a prior tool result as
+// delivered once the agent makes a subsequent tool call, proving the turn did
+// not exit immediately on the tool call that carried them. If a comment is
+// appended to the final tool call of a run and the agent exits without making
+// another tool call, it remains unacknowledged so ProcessResult re-queues the
+// task to answer it.
+func (r *Registry) ackPendingAddenda(ctx context.Context) {
+	if r.addenda == nil {
+		return
+	}
+	r.addenda.ackPending(ctx)
+}
+
+func (a *runAddenda) ackPending(ctx context.Context) {
+	a.mu.Lock()
+	through := a.unacked
+	a.unacked = 0
+	a.mu.Unlock()
+	if through <= 0 {
+		return
+	}
+	if ack, ok := a.reader.(AddendaAcknowledger); ok {
+		ackCtx, cancel := context.WithTimeout(ctx, addendaPollTimeout)
+		defer cancel()
+		ack.Delivered(ackCtx, through)
+	}
 }
 
 // addendaNotice is what a person has said since the last answer, worded
@@ -244,11 +273,10 @@ func (a *runAddenda) poll(ctx context.Context) []Addendum {
 		a.after = addendum.ID
 		fresh = append(fresh, addendum)
 	}
-	through := a.after
-	a.mu.Unlock()
-	if ack, ok := a.reader.(AddendaAcknowledger); ok && len(fresh) > 0 {
-		ack.Delivered(ctx, through)
+	if len(fresh) > 0 && a.after > a.unacked {
+		a.unacked = a.after
 	}
+	a.mu.Unlock()
 	return fresh
 }
 

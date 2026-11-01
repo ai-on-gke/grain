@@ -221,12 +221,14 @@ export default function ConsoleSessionPage({
   const restart = async (carryHandover = false) => {
     setRestarting(true);
     try {
-      await api(`/api/console-sessions/${session.id}/restart`, {
+      const res = await api(`/api/console-sessions/${session.id}/restart`, {
         method: "POST",
         body: JSON.stringify({ carryHandover: Boolean(carryHandover) }),
       });
       setRestartOpen(false);
-      await onSaved();
+      // The answer lists the session on its replacement task: handed on,
+      // so the shell stops pointing at the closed one before re-reading.
+      await onSaved(res?.sessions);
     } catch (err) {
       showError(err);
     } finally {
@@ -594,6 +596,35 @@ export default function ConsoleSessionPage({
             </span>
           }
           sx={{ display: "flex", alignItems: "flex-start" }}
+        />
+        <FormControlLabel
+          control={
+            <Checkbox
+              size="small"
+              name="keepRunning"
+              checked={Boolean(session.keepRunning)}
+              disabled={saving === "keepRunning"}
+              onChange={() =>
+                save({ keepRunning: !session.keepRunning }, "keepRunning")
+              }
+            />
+          }
+          label={
+            <span>
+              Keep running
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                component="span"
+                sx={{ display: "block" }}
+              >
+                Off, the session rests when a turn ends and waits for your next
+                message. On, it immediately starts a new turn whenever a run
+                exits.
+              </Typography>
+            </span>
+          }
+          sx={{ display: "flex", alignItems: "flex-start", mt: 0.5 }}
         />
       </Box>
     </Box>

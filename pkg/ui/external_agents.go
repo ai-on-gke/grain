@@ -560,7 +560,7 @@ func ExternalAgentAPITools(s *Server, tok *model.ExternalAgentToken) ([]mcp.Tool
 		if _, blocked := isNoTaskContextRoute(route.Pattern); blocked {
 			continue
 		}
-		if !set.Has(route.Scope) {
+		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) {
 			continue
 		}
 		tools = append(tools, route.externalTool(s, tok))

@@ -20,10 +20,13 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -66,9 +69,6 @@ type CapabilityMethod struct {
 // but not attached offers nothing: a grant of it could not be normalized.
 func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 	out := []CapabilityMethod{}
-	if c.Config.CapabilityServers == nil {
-		return out
-	}
 	var policy model.CapabilityPolicy
 	var configured map[string]protocol.ServerConfig
 	if c.Store != nil {
@@ -78,7 +78,17 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 		}
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
-	for _, s := range c.Config.CapabilityServers.Statuses() {
+	statuses := []servers.Status{grainserver.Status()}
+	if c.Config.CapabilityServers != nil {
+		for _, s := range c.Config.CapabilityServers.Statuses() {
+			if s.ID == grainserver.ID {
+				continue
+			}
+			statuses = append(statuses, s)
+		}
+	}
+	sort.Slice(statuses, func(i, j int) bool { return statuses[i].ID < statuses[j].ID })
+	for _, s := range statuses {
 		for _, m := range s.MethodDetails {
 			ref := s.ID + "#" + m.Name
 			out = append(out, CapabilityMethod{
@@ -150,6 +160,11 @@ type GrantCheck struct {
 	// Unchecked is a reference whose server is not attached here, so
 	// only its syntax could be checked.
 	Unchecked bool `json:"unchecked,omitempty"`
+	// CatalogueRefusal is why settings/capabilities.yml refuses the
+	// grant to the run the check named (checkGrantsRequest.Subject):
+	// filing a task holding it would be refused, or the grant dropped
+	// when it is only a default. Empty when no subject was named.
+	CatalogueRefusal string `json:"catalogueRefusal,omitempty"`
 }
 
 // CheckCapabilityGrants normalizes each grant against its server, the
@@ -173,8 +188,12 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 			out = append(out, check)
 			continue
 		}
-		if lookup != nil {
-			if _, err := lookup(protocolCapabilityID(s)); err != nil {
+		grantLookup := lookup
+		if grantLookup == nil && grainserver.IsInProcessGrant(s) {
+			grantLookup = grainserver.Lookup(nil)
+		}
+		if grantLookup != nil {
+			if _, err := grantLookup(protocolCapabilityID(s)); err != nil {
 				check.Unchecked = true
 			}
 		} else {
@@ -189,7 +208,7 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 			out = append(out, check)
 			continue
 		}
-		names, err := model.NormalizeCapabilityNames([]string{s}, lookup)
+		names, err := model.NormalizeCapabilityNames([]string{s}, grantLookup)
 		if err != nil {
 			check.Error, check.Fields = err.Error(), grantFieldErrors(err)
 			out = append(out, check)
@@ -296,6 +315,17 @@ func (c *Client) SetCapabilityGrant(ctx context.Context, id string, req GrantReq
 
 type checkGrantsRequest struct {
 	Grants []GrantRequest `json:"grants"`
+	// Subject, when set, is the task the grants are for, and each is
+	// also judged against the capability catalogue for it
+	// (GrantCheck.CatalogueRefusal): what the new-task form marks
+	// against its pre-ticked defaults before anything is filed.
+	Subject *grantCheckSubject `json:"subject,omitempty"`
+}
+
+// grantCheckSubject is the task a grant check is for. Repo is its
+// target, owner/name; "" is a task with no repository.
+type grantCheckSubject struct {
+	Repo string `json:"repo"`
 }
 
 // handleListCapabilityMethods is GET /api/capability-methods. With
@@ -341,6 +371,21 @@ func (s *Server) handleCheckCapabilityGrants(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		writeClientError(w, err)
 		return
+	}
+	if req.Subject != nil {
+		var target *model.RepoRef
+		if repo := strings.TrimSpace(req.Subject.Repo); repo != "" {
+			ref, err := model.ParseRepo(repo)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Errorf("subject repo %q: %w", repo, err))
+				return
+			}
+			target = &ref
+		}
+		if out, err = s.tasks.markCatalogueRefusals(r.Context(), out, target); err != nil {
+			writeClientError(w, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

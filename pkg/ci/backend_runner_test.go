@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -663,5 +664,166 @@ func TestBackendRunnerConcludesARunLostWhileNoDaemonWatched(t *testing.T) {
 	done := waitRunnerRunDone(t, runner2, run.ID)
 	if done.Conclusion != ConclusionErrored || !strings.Contains(done.Error, "no longer has run") {
 		t.Fatalf("done = (conclusion=%q, error=%q), want errored naming the lost run", done.Conclusion, done.Error)
+	}
+}
+
+// unreachableBackend fails every call that would reach the grit server
+// while down is set, the way a gritapi.Client does when grit is not
+// listening, and counts the runs actually started.
+type unreachableBackend struct {
+	gritapi.Backend
+	mu      sync.Mutex
+	down    bool
+	reject  error
+	started int
+}
+
+func (b *unreachableBackend) fault() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.reject != nil {
+		return b.reject
+	}
+	if b.down {
+		return errors.New("Post http://grit/v1/trees:negotiate: EOF")
+	}
+	return nil
+}
+
+func (b *unreachableBackend) NegotiateTrees(ctx context.Context, sha256s []string) ([]string, error) {
+	if err := b.fault(); err != nil {
+		return nil, err
+	}
+	return b.Backend.NegotiateTrees(ctx, sha256s)
+}
+
+func (b *unreachableBackend) StartRun(ctx context.Context, req gritapi.StartRun) (gritapi.RunStatus, error) {
+	if err := b.fault(); err != nil {
+		return gritapi.RunStatus{}, err
+	}
+	rs, err := b.Backend.StartRun(ctx, req)
+	if err == nil {
+		b.mu.Lock()
+		b.started++
+		b.mu.Unlock()
+	}
+	return rs, err
+}
+
+// TestBackendRunnerQueuesAStartGritCannotTakeYet is the regression for the
+// 2026-10-29 walkthrough's U4: with grit unreachable, Start answered the
+// bare transport error (served as a 400) while the start stayed in the
+// outbox and ran once grit was back, so a caller that retried a recheck got
+// two runs. It now says the start is queued, and asking again joins it.
+func TestBackendRunnerQueuesAStartGritCannotTakeYet(t *testing.T) {
+	signer, err := attest.LoadOrCreateFileSigner(filepath.Join(t.TempDir(), "attest.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := newBackendTestEnv(t, "remote", t.TempDir(), signer, "", func(ctx context.Context, jenv grit.JobExecEnv) (grit.JobExecResult, error) {
+		return grit.JobExecResult{Conclusion: "success"}, nil
+	})
+	defer env.close()
+	tree, archive := buildTestTree(t, map[string]string{"a.txt": "a"})
+	backend := &unreachableBackend{Backend: env.backend, down: true}
+	runner := NewBackendRunner(BackendRunnerConfig{
+		Backend:  backend,
+		StateDir: t.TempDir(),
+		TreeResolver: func(ctx context.Context, req Request) (treeid.ID, []byte, error) {
+			return tree, archive, nil
+		},
+	})
+	ctx := context.Background()
+	req := Request{
+		Repo: "acme/widgets", Ref: "main", Commit: "6666666666666666666666666666666666666666",
+		Event: EventPush, Jobs: []string{"go"}, Recheck: true,
+	}
+
+	_, err = runner.Start(ctx, req)
+	var queued *StartQueuedError
+	if !errors.As(err, &queued) || !errors.Is(err, ErrStartQueued) {
+		t.Fatalf("Start with grit down = %v, want a StartQueuedError", err)
+	}
+	first := queued.RequestID
+	if got := runner.PendingOutbox(); len(got) != 1 || got[0].RequestID != first {
+		t.Fatalf("outbox = %+v, want the one queued start %s", got, first)
+	}
+
+	// The caller retries the recheck, which draws a fresh attempt.
+	_, err = runner.Start(ctx, req)
+	if !errors.As(err, &queued) || queued.RequestID != first {
+		t.Fatalf("retried Start = %v, want the same queued request %s", err, first)
+	}
+	if got := runner.PendingOutbox(); len(got) != 1 {
+		t.Fatalf("outbox after retry holds %d starts, want 1: %+v", len(got), got)
+	}
+
+	backend.mu.Lock()
+	backend.down = false
+	backend.mu.Unlock()
+	run, err := runner.Start(ctx, req)
+	if err != nil {
+		t.Fatalf("Start once grit is back: %v", err)
+	}
+	if run.ID == "" {
+		t.Fatal("Start once grit is back returned no run")
+	}
+	if got := runner.PendingOutbox(); len(got) != 0 {
+		t.Fatalf("outbox once grit is back = %+v, want empty", got)
+	}
+	if backend.started != 1 {
+		t.Fatalf("grit started %d runs, want 1", backend.started)
+	}
+	waitRunnerRunDone(t, runner, run.ID)
+}
+
+// TestBackendRunnerDropsAStartGritRefuses: a start grit answers with a 4xx
+// it will give however often it is asked is reported as that refusal and
+// not kept in the outbox, where it would be resent for ever and called
+// "queued".
+func TestBackendRunnerDropsAStartGritRefuses(t *testing.T) {
+	env := newBackendTestEnv(t, "remote", t.TempDir(), nil, "", nil)
+	defer env.close()
+	tree, archive := buildTestTree(t, map[string]string{"a.txt": "a"})
+	refusal := &gritapi.APIError{StatusCode: http.StatusBadRequest, Code: "bad_request", Message: "no such job"}
+	backend := &unreachableBackend{Backend: env.backend, reject: refusal}
+	runner := NewBackendRunner(BackendRunnerConfig{
+		Backend:  backend,
+		StateDir: t.TempDir(),
+		TreeResolver: func(ctx context.Context, req Request) (treeid.ID, []byte, error) {
+			return tree, archive, nil
+		},
+	})
+	_, err := runner.Start(context.Background(), Request{
+		Repo: "acme/widgets", Ref: "main", Commit: "7777777777777777777777777777777777777777",
+		Event: EventPush, Jobs: []string{"go"},
+	})
+	if err == nil || errors.Is(err, ErrStartQueued) || !strings.Contains(err.Error(), "no such job") {
+		t.Fatalf("Start refused by grit = %v, want the refusal itself", err)
+	}
+	if got := runner.PendingOutbox(); len(got) != 0 {
+		t.Fatalf("outbox = %+v, want the refused start dropped", got)
+	}
+}
+
+// TestBackendRunnerFlushKeepsEachQueuedEntryOnce: a failed delivery used to
+// append the entries behind it to what stays queued twice over, so every
+// flush against an unreachable grit doubled the outbox.
+func TestBackendRunnerFlushKeepsEachQueuedEntryOnce(t *testing.T) {
+	env := newBackendTestEnv(t, "remote", t.TempDir(), nil, "", nil)
+	defer env.close()
+	backend := &unreachableBackend{Backend: env.backend, down: true}
+	runner := NewBackendRunner(BackendRunnerConfig{Backend: backend, StateDir: t.TempDir()})
+	ctx := context.Background()
+	for _, commit := range []string{"8888888888888888888888888888888888888888", "9999999999999999999999999999999999999999", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"} {
+		if _, err := runner.Start(ctx, Request{Repo: "acme/widgets", Ref: "main", Commit: commit, Event: EventPush, Jobs: []string{"go"}}); !errors.Is(err, ErrStartQueued) {
+			t.Fatalf("Start %s = %v, want queued", commit, err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		_ = runner.FlushOutbox(ctx)
+	}
+	if got := runner.PendingOutbox(); len(got) != 3 {
+		t.Fatalf("outbox holds %d entries after repeated flushes, want 3", len(got))
 	}
 }

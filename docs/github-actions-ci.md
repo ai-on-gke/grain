@@ -11,7 +11,7 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 ## Triggers, Concurrency, and Permissions
 
 - **Triggers (`on:`)**:
-  - `tests.yml`: `push` on `main`, `pull_request`, `merge_group`, and `workflow_dispatch`
+  - `tests.yml`: `push` on `main`, `pull_request`, `merge_group`, and `workflow_dispatch` (with optional comma-separated `jobs` input for selective job execution)
   - `nightly.yml`: `schedule` (`cron: "11 2 * * *"`) and `workflow_dispatch`
   - `post-reset-e2e.yml`: `schedule` (`cron: "23 5 * * *"`) and `workflow_dispatch`
   - `kvm-route-stress.yml`: `workflow_dispatch`
@@ -31,6 +31,7 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 
 | Job ID | Display Name | Grain CI (`.grain/workflows/tests.yml`) | GitHub Actions (`.github/workflows/tests.yml`) | Hosted Runner Status |
 | :--- | :--- | :--- | :--- | :--- |
+| `changes` | `changes` | Native per-job `paths:` / `paths-ignore:` cache keys evaluated by `pkg/ci` | Lightweight pre-job running `./scripts/github-ci-changes.sh` to emit per-group and per-job booleans to `$GITHUB_OUTPUT` for `pull_request` path filtering and `workflow_dispatch` `inputs.jobs` selection | Active (`ubuntu-latest`) |
 | `go` | `go` | Runs `make fmt`, `make frontend`, `go build ./...`, `go vet ./...`, and `-race` tests for `./pkg/ui/... ./cmd/grain/... ./ui/e2e/...` | Same commands on `ubuntu-latest` with `actions/setup-go`, `actions/setup-node`, `actions/cache`, and `bubblewrap` setup | Active (`ubuntu-latest`) |
 | `go-e2e` | `go e2e` | Builds frontend (`make frontend`) and runs `-race` tests for `./tests/e2e/... ./tests/deploy/...` | Same commands on `ubuntu-latest` with Go/Node setup, caches, `bubblewrap`, and `shellcheck` | Active (`ubuntu-latest`) |
 | `go-orchestrator` | `go orchestrator` | Runs `-race` tests for `./pkg/orchestrator/...` | Same commands on `ubuntu-latest` with Go setup, cache, and `bubblewrap` + network tools | Active (`ubuntu-latest`) |
@@ -43,11 +44,26 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 | `frontend` | `frontend` | Runs `make frontend`, `make fmt-frontend`, and `npm test -- --maxWorkers=4` | Same commands on `ubuntu-latest` with `actions/setup-node` and npm/`ui/node_modules` caching | Active (`ubuntu-latest`) |
 | `ui-e2e` | `ui e2e` | Builds frontend, installs Playwright Chromium (`make playwright-browsers`), runs `make test-e2e-suite`, collects `ui/test-results` | Same commands on `ubuntu-latest` with third-party apt source cleanup, `/var/cache/playwright` caching, and `actions/upload-artifact` on failure | Active (`ubuntu-latest`) |
 | `lint` | `lint` | Runs `shellcheck` over `git ls-files -- 'scripts/*.sh' 'deploy/terraform/*.sh'` | Runs `actionlint` over `.github/workflows/` and `shellcheck` over tracked shell scripts | Active (`ubuntu-latest`) |
-| `terraform` | `terraform` | Runs `terraform fmt -check`, `init -backend=false`, and `validate` across `deploy/terraform/gcp` and `deploy/gke/terraform` | Pins Terraform `1.9.8` via `hashicorp/setup-terraform` and runs the same format/init/validate steps | Active (`ubuntu-latest`) |
+| `terraform` | `terraform` | Runs `terraform fmt -check`, `init -backend=false`, and `validate` for `deploy/terraform/gcp` | Pins Terraform `1.9.8` via `hashicorp/setup-terraform` and runs the same format/init/validate steps | Active (`ubuntu-latest`) |
 | `installer-e2e` | `installer` | Assembles `grain-installer:test` via `scripts/installer-test-image.sh` and runs `./tests/installer` (`GRAIN_INSTALLER_E2E=1`) | Same commands on `ubuntu-latest` (uses anonymous GHCR pulls from `ghcr.io/bwsalmon/grain/*` and host systemd/Docker) | Active (`ubuntu-latest`) |
 | `package-cache` | `package cache` | Runs `pkg/orchestrator` real-dockerd cache tests (`GRAIN_REAL_DOCKER_CACHE_TESTS=1`) and `pkg/daemon` transparent interception test (`GRAIN_REAL_INTERCEPT_TESTS=1`) | Seeds `/etc/docker/daemon.json` with `Granulefile`'s `bip`/`default-address-pools`/`mtu`, restarts Docker, and runs the same tests | Active (`ubuntu-latest`) |
 | `real-vm` | `real vm` | Formerly in `tests.yml` (now in `nightly.yml` as `kvm-sandboxes`): boots real Firecracker/Cloud-Hypervisor VMs | Present in `.github/workflows/tests.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
 | `real-kubernetes` | `real kubernetes` | Boots a `kind` + Calico cluster and exercises Kubernetes pod sandboxes | Present in `.github/workflows/tests.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
+
+#### Per-Job Path Filtering (`pull_request`) and `workflow_dispatch` Job Selection
+
+Because GitHub Actions only supports native `paths:` / `paths-ignore:` filters at the workflow trigger level (`on.pull_request`), `.github/workflows/tests.yml` runs a fast `changes` pre-job (`./scripts/github-ci-changes.sh`) and gates every downstream job with `needs: [changes]` and an `if:` condition:
+
+- **Path filtering on `pull_request`** (mirroring `.grain/workflows/tests.yml`, plus `.github/workflows/tests.yml` itself so workflow edits run all jobs):
+  - **`go_program`** (gates `go`, `go-e2e`, `ui-e2e`, `installer-e2e`): `true` when any changed file is outside `*not-read-by-the-go-program` (`docs/**` except `docs/*-surface.md`, top-level `*.md`, `LICENSE`, `NOTICE`).
+  - **`go_backend`** (gates `go-orchestrator`, `go-model`, `postgres`, `run-host`, `host-script-container`, `package-cache`, `real-vm`, `real-kubernetes`): `true` when any changed file is outside `*not-read-by-the-go-backend` (`*not-read-by-the-go-program` plus `ui/**`).
+  - **`go_unit`** (gates `go-unit`): `true` when any changed file is outside `*not-read-by-the-go-backend`, or touches `ui/src/state.js` or `ui/src/taskAttributes.js`.
+  - **`granule`** (gates `granule`): `true` when any changed file matches `third_party/granule/**`, `scripts/run-go-tests.sh`, or `.github/workflows/tests.yml`.
+  - **`frontend`** (gates `frontend`): `true` when any changed file matches `ui/**`, `Makefile`, `scripts/warm-npm-cache.sh`, or `.github/workflows/tests.yml`.
+  - **`lint`** (gates `lint`): `true` when any changed file matches `scripts/**/*.sh`, `deploy/terraform/**/*.sh`, or `.github/workflows/tests.yml`.
+  - **`terraform`** (gates `terraform`): `true` when any changed file matches `deploy/terraform/**` or `.github/workflows/tests.yml`.
+- **Full suite on `push` and `merge_group`**: When `github.event_name` is `push` or `merge_group` (or when `git diff` against the PR base cannot be resolved cleanly), `scripts/github-ci-changes.sh` fails open (`true` for every group and job).
+- **Subset selection on `workflow_dispatch` (`inputs.jobs`)**: Operators or agents can pass a comma-separated list of job IDs (e.g. `go-model,postgres`) via the `jobs` workflow input to run only those jobs on a branch; leaving `jobs` empty runs all active jobs. Grain's GitHub check reader (`pkg/forge/health.go`, `HealthFrom`) treats `"skipped"` check runs as passing (`PrClean`).
 
 ### 2. Nightly Suite (`.grain/workflows/nightly.yml` -> `.github/workflows/nightly.yml`)
 
@@ -55,7 +71,7 @@ Schedule: `cron: "11 2 * * *"` and `workflow_dispatch`.
 
 | Job ID | Display Name | Grain CI (`.grain/workflows/nightly.yml`) | GitHub Actions (`.github/workflows/nightly.yml`) | Hosted Runner Status |
 | :--- | :--- | :--- | :--- | :--- |
-| `go-long` | `go, shuffled and repeated` | Runs `make test-long` (`make frontend` + `go test -race -shuffle=on -count=2 -timeout 90m ./...`) | Same commands on `ubuntu-latest` with `fetch-depth: 0`, Go/Node setup, caches, `bubblewrap`, system `postgresql` stopped, and `git config` | Active (`ubuntu-latest`) |
+| `go-long` | `go, shuffled and repeated` | Runs `make test-long` (`make frontend` + `go test -race -shuffle=on -count=2 -timeout 90m ./...`) | Sharded across `matrix.shard: [1, 2, 3, 4]` on `ubuntu-latest` with `fetch-depth: 0`, Go/Node setup, caches, `bubblewrap`, `/usr/lib/postgresql` removed, `kernel.yama.ptrace_scope=0`, standalone `/usr/bin/sleep`, structured `::error` annotations, and `go-long-log-<shard>` artifact upload on failure | Active (`ubuntu-latest`) |
 | `staterepo-soak` | `state repository soak` | Runs `make soak` (2,000 rounds of `TestSoak` in `./pkg/staterepo/`) | Same commands on `ubuntu-latest` with Go setup, cache, and `git config` | Active (`ubuntu-latest`) |
 | `loadtest` | `sustained load` | Runs `make loadtest` (`make frontend` + `TestLoadSustainedConcurrency` in `./tests/e2e/`) | Same commands on `ubuntu-latest` with Go/Node setup, caches, `bubblewrap`, and `git config` | Active (`ubuntu-latest`) |
 | `scalability` | `metadata and model scalability` | Runs `make scalability` (`make frontend` + `TestScalabilityLimits` in `./tests/e2e/`) | Same commands on `ubuntu-latest` with Go/Node setup, caches, `bubblewrap`, and `git config` | Active (`ubuntu-latest`) |
@@ -64,9 +80,8 @@ Schedule: `cron: "11 2 * * *"` and `workflow_dispatch`.
 | `long-sim` | `long randomized cluster simulation` | Runs `make long-sim` (20-minute `TestRandomizedClusterLong` in `./tests/e2e/`) | Same commands on `ubuntu-latest` with Go setup, cache, `bubblewrap`, and `git config` | Active (`ubuntu-latest`) |
 | `postgres-stress` | `postgres concurrency and stress` | Installs `postgresql` binaries and runs `GRAIN_REQUIRE_POSTGRES=1 make postgres-stress` (`./pkg/model/postgres/... -run TestPostgres`) | Declares `services: postgres` (`postgres:16-bookworm`), stops default system cluster on port 5432, ensures `postgresql` binaries are present, and runs `GRAIN_REQUIRE_POSTGRES=1 make postgres-stress` | Active (`ubuntu-latest`) |
 | `tunnel-stress` | `reverse tunnel multiplexer stress` | Runs `make tunnel-stress` (30-minute `./pkg/tunnel/...` stress suite) | Same commands on `ubuntu-latest` with Go setup and cache | Active (`ubuntu-latest`) |
-| `ui-e2e-long` | `ui e2e, repeated` | Runs `make test-e2e-long` (3 full passes of Chromium + WebKit Playwright e2e suite) and uploads `ui/playwright-report` + `ui/test-results` | Same commands on `ubuntu-latest` with third-party apt list cleanup, `/var/cache/playwright` caching, and `actions/upload-artifact` on failure | Active (`ubuntu-latest`) |
+| `ui-e2e-long` | `ui e2e, repeated` | Runs `make test-e2e-long` (3 full passes of Chromium + WebKit Playwright e2e suite) and uploads `ui/playwright-report` + `ui/test-results` | Sharded across `matrix.pass: [1, 2, 3]` on `ubuntu-latest` (`timeout-minutes: 60` per pass) with third-party apt list cleanup, `/var/cache/playwright` caching, `::error` annotations, and `actions/upload-artifact` on failure | Active (`ubuntu-latest`) |
 | `installer-variants` | `installer trixie and hostmode` | Assembles `grain-installer:test` (`GRAIN_INSTALLER_SANDBOX_IMAGE=debian:trixie`) and runs `./tests/installer/trixie` + `./tests/installer/hostmode` | Same commands on `ubuntu-latest` with `fetch-depth: 0` (required by `scripts/export-source.sh`), Go/Node setup, caches, and `git config` | Active (`ubuntu-latest`) |
-| `security-audit` | `Security suite and audit` | Runs `make security` (`go vet ./...` + `go test -race -count=1 ./tests/security/...`) | Same commands on `ubuntu-latest` with Go setup and cache | Active (`ubuntu-latest`) |
 | `vulns` | `govulncheck` | Runs `make vuln` (`govulncheck ./...` under `go.mod` toolchain) | Same commands on `ubuntu-latest` with Go setup and cache | Active (`ubuntu-latest`) |
 | `cmd-grain-stress` | `pkg/cli stress under load` | Runs 4-way parallel `go test -race -count=1 ./pkg/cli` rounds within a 1,800s budget | Same stress loop on `ubuntu-latest` with Go setup, cache, `bubblewrap`, and `git config` | Active (`ubuntu-latest`) |
 | `kvm-sandboxes` | `real KVM sandboxes` | Resolves guest image (`scripts/granule-guest-resolve.sh`) and runs real KVM VM tests in `./pkg/orchestrator/` | Present in `.github/workflows/nightly.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
@@ -167,7 +182,7 @@ The five release and image-building workflows under `.grain/workflows/` are port
 
 - **Decision**: Keep publishing under **`ghcr.io/bwsalmon/grain/*`** (`RELEASE_IMAGE_REPO=bwsalmon/grain`, producing `ghcr.io/bwsalmon/grain/{grain,guest,guest-base,k8s-sandbox,k8s-sandbox-base}` with `sha-<short>`, `main`, `candidate`, `rc`, and `vX.Y.Z` / `latest` tags) and authenticate using a **`GHCR_TOKEN` Personal Access Token (PAT) secret** rather than renaming images to `ghcr.io/ai-on-gke/grain/*`.
 - **Why**:
-  - The deployment upgrader (`pkg/upgrade`), host installer (`scripts/setup.sh`, `scripts/install-grain.sh`), GKE deployer (`scripts/deploy-gke.sh`), sandbox guest resolver (`scripts/granule-guest-resolve.sh`), package pruner (`cmd/ghcr-prune`), and `scripts/release-images.sh` (enforced by `tests/deploy/release_images_test.go`) all expect `ghcr.io/bwsalmon/grain/*`.
+  - The deployment upgrader (`pkg/upgrade`), host installer (`scripts/setup.sh`, `scripts/install-grain.sh`), sandbox guest resolver (`scripts/granule-guest-resolve.sh`), package pruner (`cmd/ghcr-prune`), and `scripts/release-images.sh` (enforced by `tests/deploy/release_images_test.go`) all expect `ghcr.io/bwsalmon/grain/*`.
   - GitHub's automatic `GITHUB_TOKEN` issued to `ai-on-gke/grain` cannot push or prune packages under the `bwsalmon` user namespace. Providing `secrets.GHCR_TOKEN` (a PAT for `bwsalmon` with `write:packages`, `read:packages`, and `delete:packages`) preserves the exact image names and tags every deployment and upgrader expects with **no image rename**.
   - If `vars.RELEASE_IMAGE_REPO` is ever overridden to `ai-on-gke/grain` in the future, the workflows automatically fall back to `secrets.GITHUB_TOKEN` and `github.actor`.
 - **Optional Google Cloud Artifact Registry (`us-docker.pkg.dev`) Support**:

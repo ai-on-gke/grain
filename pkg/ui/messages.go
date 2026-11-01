@@ -121,7 +121,7 @@ func (c *Client) PostAgentMessage(ctx context.Context, id, body, summary string,
 		return Message{}, err
 	}
 	agentPrincipal := model.Principal{Kind: model.PrincipalAgent, ID: id}
-	commentID, err := c.Store.AddComment(ctx, model.Comment{
+	commentID, attIDs, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID: id,
 		Author: model.Attribution{
 			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
@@ -130,26 +130,43 @@ func (c *Client) PostAgentMessage(ctx context.Context, id, body, summary string,
 		Body:      body,
 		Summary:   summary,
 		CreatedAt: now,
-	})
+	}, attachments)
 	if err != nil {
 		return Message{}, err
 	}
 	var msgAttachments []Attachment
 	for i := range attachments {
-		attachments[i].TaskID = id
-		attachments[i].CommentID = &commentID
-		attID, err := c.Store.AddAttachment(ctx, attachments[i])
-		if err != nil {
-			return Message{}, err
-		}
 		msgAttachments = append(msgAttachments, Attachment{
-			ID:          attID,
+			ID:          attIDs[i],
 			Filename:    attachments[i].Filename,
 			ContentType: attachments[i].ContentType,
 			Size:        int64(len(attachments[i].Content)),
 		})
 	}
+	// A person who has already said something the run has not been shown
+	// has answered before the question was asked: the chat call returns
+	// that comment at once (daemonChat's pre-post poll), so parking the
+	// task on this message would leave it reading awaiting_reply on a
+	// question nobody is left to answer. RecordDelivered will not un-park
+	// it either, since the comment predates the question. Only a task
+	// whose run keeps a delivered mark can say what it has not been shown;
+	// without one every earlier comment would look unread.
+	var waitingHuman []int64
+	if obs, err := c.Store.GetObservation(ctx, id); err == nil && obs != nil && obs.DeliveredCommentID != nil {
+		if later, err := c.Store.CommentsAfter(ctx, id, *obs.DeliveredCommentID); err == nil {
+			for _, comment := range later {
+				if comment.ID < commentID && comment.Author.Actor.Kind == model.PrincipalHuman {
+					waitingHuman = append(waitingHuman, comment.ID)
+				}
+			}
+		}
+	}
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		if o.DeliveredCommentID != nil &&
+			slices.ContainsFunc(waitingHuman, func(cid int64) bool { return cid > *o.DeliveredCommentID }) {
+			o.PendingQuestionCommentID = nil
+			return
+		}
 		o.PendingQuestionCommentID = &commentID
 	}); err != nil {
 		return Message{}, err
@@ -337,25 +354,19 @@ func (c *Client) PostMessageToAgent(ctx context.Context, from, to, body string, 
 		return Message{}, err
 	}
 	signed := fmt.Sprintf("Message from %s to this task's agent:\n\n%s", signature, body)
-	commentID, err := c.Store.AddComment(ctx, model.Comment{
+	commentID, attIDs, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID:    to,
 		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: from}},
 		Body:      signed,
 		CreatedAt: now,
-	})
+	}, attachments)
 	if err != nil {
 		return Message{}, err
 	}
 	var msgAttachments []Attachment
 	for i := range attachments {
-		attachments[i].TaskID = to
-		attachments[i].CommentID = &commentID
-		attID, err := c.Store.AddAttachment(ctx, attachments[i])
-		if err != nil {
-			return Message{}, err
-		}
 		msgAttachments = append(msgAttachments, Attachment{
-			ID:          attID,
+			ID:          attIDs[i],
 			Filename:    attachments[i].Filename,
 			ContentType: attachments[i].ContentType,
 			Size:        int64(len(attachments[i].Content)),
@@ -411,11 +422,47 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 		}
 		after = parsed
 	}
+	var wait time.Duration
+	if raw := r.URL.Query().Get("wait_ms"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			writeClientError(w, validationErrorf("wait_ms must be a non-negative integer"))
+			return
+		}
+		if parsed > 5000 {
+			parsed = 5000
+		}
+		wait = time.Duration(parsed) * time.Millisecond
+	}
 	read := s.tasks.MessagesSince
 	if agents, _ := strconv.ParseBool(r.URL.Query().Get("agents")); agents {
 		read = s.tasks.AddendaSince
 	}
-	messages, err := read(r.Context(), r.PathValue("id"), after)
+	id := r.PathValue("id")
+	if wait > 0 && s.tasks != nil && s.tasks.Store != nil {
+		waitCtx, cancel := context.WithTimeout(r.Context(), wait)
+		defer cancel()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			ch := s.tasks.Store.CommentAdded(id)
+			messages, err := read(r.Context(), id, after)
+			if err != nil {
+				writeClientError(w, err)
+				return
+			}
+			if len(messages) > 0 || waitCtx.Err() != nil {
+				writeJSON(w, http.StatusOK, messages)
+				return
+			}
+			select {
+			case <-ch:
+			case <-ticker.C:
+			case <-waitCtx.Done():
+			}
+		}
+	}
+	messages, err := read(r.Context(), id, after)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -468,7 +515,31 @@ func (c *Client) RecordDelivered(ctx context.Context, id string, through int64) 
 	if !slices.ContainsFunc(comments, func(comment model.Comment) bool { return comment.ID == through }) {
 		return validationErrorf("through must be the id of a comment on task %s", id)
 	}
-	return c.Store.AdvanceDelivered(ctx, id, through, c.now())
+	now := c.now()
+	return c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		prev := int64(0)
+		if o.DeliveredCommentID != nil {
+			prev = *o.DeliveredCommentID
+		}
+		if through <= prev {
+			return
+		}
+		o.DeliveredCommentID = &through
+		// Only a person's comment after the question answers it: one
+		// said before the run asked, and only now marked delivered,
+		// must not un-park the question the run is waiting on.
+		after := prev
+		if o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID > after {
+			after = *o.PendingQuestionCommentID
+		}
+		for _, comment := range comments {
+			if comment.ID > after && comment.ID <= through && comment.Author.Actor.Kind == model.PrincipalHuman {
+				o.PendingQuestionCommentID = nil
+				o.PendingSecret = ""
+				break
+			}
+		}
+	})
 }
 
 // handleRecordDelivered answers POST /api/tasks/{id}/delivered.
