@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Alert, Button, TextField, Typography } from "@mui/material";
+import { Alert, Button, Link, TextField, Typography } from "@mui/material";
 import SettingsCard, { MultilineSetting } from "./SettingsCard.jsx";
 import {
   DEFAULT_GIT_IDENTITY_EMAIL,
@@ -148,9 +148,10 @@ export default function AgentsSection({ s }) {
           data-testid="commit-identity-pointer"
         >
           Agents commit as the account the git credential they push with acts as
-          -- a token&apos;s owner, a GitHub App&apos;s bot account -- which
-          Settings &rarr; Git shows. A credential that names nobody commits as
-          grain&apos;s own, {DEFAULT_GIT_IDENTITY_NAME} &lt;
+          -- a token&apos;s owner, a GitHub App&apos;s bot account -- which{" "}
+          <Link href="/settings/git">Settings &rarr; Git</Link> shows. A
+          credential that names nobody commits as grain&apos;s own,{" "}
+          {DEFAULT_GIT_IDENTITY_NAME} &lt;
           {DEFAULT_GIT_IDENTITY_EMAIL}&gt;.
         </Typography>
       </SettingsCard>
