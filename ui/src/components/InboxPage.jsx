@@ -552,8 +552,9 @@ const GROUPS = [
   // on the queue longer than the whole of that queue's own deadlines.
   //
   // t.stall is the whole of the test, and it is only ever set for the
-  // three states grain itself drives (model.StateTimes.Since), so the
-  // only tasks this can take from a group above are completed ones --
+  // three states grain itself drives and for a deferral whose wake time
+  // has passed (model.StateTimes.Since, orchestrator's deferredWake), so
+  // the only tasks this can take from a group above are completed ones --
   // which merge_blocked and merge_stalled both claim first, and rightly:
   // where this says only "'completed' has stood too long", they say
   // which state of the merge cycle it is standing in and offer the pull

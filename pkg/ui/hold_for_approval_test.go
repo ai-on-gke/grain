@@ -250,3 +250,85 @@ func TestReplyToAHeldProposalParkedOffTheTargetRepoListDoesNotApproveIt(t *testi
 		}
 	}
 }
+
+// keep_running and a priority above the proposer's are settings only a
+// person may give a task: an auto-merge job's proposal asking for either
+// is filed proposed, saying why, where the same proposal without them
+// queues. A priority at or below the proposer's own still queues.
+func TestProposalWithKeepRunningOrHigherPriorityWaitsForAPerson(t *testing.T) {
+	prio := func(n int) *int { return &n }
+	for _, tc := range []struct {
+		name        string
+		keepRunning bool
+		priority    *int
+		want        model.State
+		reason      string
+	}{
+		{"keep running", true, nil, model.StateProposed, "keep_running"},
+		{"priority above the proposer's", false, prio(1000000), model.StateProposed, "priority 1000000"},
+		{"priority equal to the proposer's", false, prio(7), model.StateQueued, ""},
+		{"priority below the proposer's", false, prio(2), model.StateQueued, ""},
+		{"default priority", false, nil, model.StateQueued, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, store, ctx := testClient(t)
+			parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+				Title: "the whole job", Approved: true, AutoMerge: true, Priority: prio(7),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			filed, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+				Title: "a piece of it", Description: "d", ProposedBy: parent.ID,
+				AutoMerge: true, KeepRunning: tc.keepRunning, Priority: tc.priority,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if filed.State != tc.want {
+				t.Errorf("state = %s, want %s", filed.State, tc.want)
+			}
+			stored := mustGetTask(t, ctx, store, filed.ID)
+			if stored.KeepRunning != tc.keepRunning {
+				t.Errorf("KeepRunning = %v, want %v as asked", stored.KeepRunning, tc.keepRunning)
+			}
+			if tc.priority != nil && stored.Priority != *tc.priority {
+				t.Errorf("Priority = %d, want %d as asked", stored.Priority, *tc.priority)
+			}
+			if tc.reason == "" {
+				if filed.ApprovalNote != "" {
+					t.Errorf("approvalNote = %q on a queued proposal, want none", filed.ApprovalNote)
+				}
+				return
+			}
+			if !strings.Contains(filed.ApprovalNote, tc.reason) {
+				t.Errorf("approvalNote = %q, want it to say %q", filed.ApprovalNote, tc.reason)
+			}
+			if !strings.Contains(filed.Description, "Filed for a person to approve") ||
+				!strings.Contains(filed.Description, tc.reason) {
+				t.Errorf("body = %q, want a note saying why it waits for a person", filed.Description)
+			}
+			if model.HeldForApproval(stored) {
+				t.Error("held tag set, want none: the run did not choose to hold it")
+			}
+		})
+	}
+}
+
+// A person filing a task may give it either setting and have it queued.
+func TestPersonMayFileKeepRunningAtAnyPriority(t *testing.T) {
+	client, store, ctx := testClient(t)
+	n := 1000000
+	filed, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "forever", Description: "d", Approved: true, KeepRunning: true, Priority: &n,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filed.State != model.StateQueued {
+		t.Errorf("state = %s, want queued", filed.State)
+	}
+	if stored := mustGetTask(t, ctx, store, filed.ID); !stored.KeepRunning || stored.Priority != n {
+		t.Errorf("KeepRunning = %v, Priority = %d; want true, %d", stored.KeepRunning, stored.Priority, n)
+	}
+}

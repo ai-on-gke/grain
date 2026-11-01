@@ -109,6 +109,36 @@ describe("App resilience", () => {
     expect(screen.queryByText(/cannot be reached/i)).toBeNull();
   });
 
+  // grain/task-2258: the backoff spaces out the main poll through an
+  // outage, but it must not keep the banner up once grain answers
+  // again. The restart watch keeps asking every POLL_INTERVAL_MS, and
+  // its first answer resets the backoff and polls at once.
+  it("clears the banner within a tick of grain answering after a long outage", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    setupApi(initialTasks);
+    const base = api.getMockImplementation();
+    let offline = false;
+    api.mockImplementation((p, opts) =>
+      offline
+        ? Promise.reject(new TypeError("Failed to fetch"))
+        : base(p, opts),
+    );
+    render(<App />);
+    await runTimers();
+    expect(screen.getByText("Fix bug")).toBeInTheDocument();
+
+    // Long enough for the backoff to reach its cap of ten ticks.
+    offline = true;
+    await runTimers(POLL_INTERVAL_MS * 30);
+    expect(screen.getByText(/cannot be reached/i)).toBeInTheDocument();
+
+    offline = false;
+    await runTimers(POLL_INTERVAL_MS + 500);
+    expect(screen.queryByText(/cannot be reached/i)).toBeNull();
+    expect(api).toHaveBeenCalledWith("/api/restart-watch?quick=1");
+  });
+
   it("ignores a single transient unreachable poll blip and only raises the banner on 2 consecutive failed ticks", async () => {
     vi.useFakeTimers();
     vi.spyOn(console, "warn").mockImplementation(() => {});

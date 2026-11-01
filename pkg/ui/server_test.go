@@ -1607,6 +1607,30 @@ func TestRestartWatchAnswersAtOnceWhenItHasNothingToWaitFor(t *testing.T) {
 	}
 }
 
+// ?quick=1 is the frontend asking whether grain is answering again after
+// an ask of its own failed: it is answered at once even where the watch
+// would otherwise be held (grain/task-2258).
+func TestRestartWatchQuickDoesNotHold(t *testing.T) {
+	t.Parallel()
+	client, _, _ := testClient(t)
+	client.Config.Restarting = func() bool { return false }
+	client.Config.ShutdownStarted = make(chan struct{})
+	srv := ui.NewServerWithClient(client)
+	done := make(chan map[string]any, 1)
+	go func() {
+		rec := do(t, srv, http.MethodGet, "/api/restart-watch?quick=1", "")
+		done <- decode[map[string]any](t, rec)
+	}()
+	select {
+	case got := <-done:
+		if got["restarting"] != false {
+			t.Fatalf("restarting = %v, want false", got["restarting"])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("?quick=1 was held, want an answer at once")
+	}
+}
+
 // --- state that lives on one disk --------------------------------------
 //
 // grain/task-27: a local-only deployment's whole history and its secrets

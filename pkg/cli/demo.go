@@ -68,7 +68,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	unconfigured := fs.Bool("unconfigured", false, "serve a deployment with no agent model and no git credential configured, as a fresh install has")
 	agentPaused := fs.Bool("agent-paused", false, "serve a deployment whose agent dispatch is paused on a provider's usage limit")
 	mergeQueueStates := fs.Bool("merge-queue-states", false, "also seed two pull requests the merge queue is waiting on: one for its base branch to go green, one for an approval GitHub requires")
-	stalledTasks := fs.Bool("stalled-tasks", false, "hand the UI the orchestrator's stall deadlines and seed a queued task and a run past them, for the Inbox's stuck-task group")
+	stalledTasks := fs.Bool("stalled-tasks", false, "hand the UI the orchestrator's stall deadlines and seed a queued task, a run and a deferral past them, for the Inbox's stuck-task group")
 	fakeCI := fs.Bool("fake-ci", false, "wire a grain CI stub that accepts and reports runs but never executes anything")
 	githubSim := fs.Bool("github-sim", false, "wire a simulated GitHub whose -default-target-repo has branches main and release/1.0")
 	scheduledWorkflows := fs.Bool("scheduled-workflows", false, "with -github-sim and -fake-ci, add a candidate branch to the simulated repo, read its .grain declarations and start and settle its workflow schedules' runs every -reconcile interval (default 2s), and let POST /api/e2e/fake-ci/runs/{id}/finish end a run")

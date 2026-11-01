@@ -573,3 +573,44 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Errorf("suite sources = %v, want [template repo]", suiteCaps.Sources)
 	}
 }
+
+// A template's own priority is what every task filed from it starts at
+// (model.Template.Priority), so the preview of a filing names it -- once
+// it says anything other than the default every task gets anyway.
+func TestCompositionShowsATemplatesOwnPriority(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	nine := 9
+	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Urgent", Title: "Urgent work", Repo: "acme/widgets", Priority: &nine,
+	})
+	plain := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Plain", Title: "Plain work", Repo: "acme/widgets",
+	})
+
+	got, err := c.TemplateComposition(ctx, tmpl.ID, "acme/widgets", "main", nil, true)
+	if err != nil {
+		t.Fatalf("composing the template: %v", err)
+	}
+	wantField(t, got.Tasks[0], "priority", "template", "9")
+
+	sched, err := c.CreateSchedule(ctx, ui.CreateScheduleRequest{TemplateID: tmpl.ID, Recurrence: everyDay})
+	if err != nil {
+		t.Fatalf("creating a schedule: %v", err)
+	}
+	fired, err := c.ScheduleComposition(ctx, sched.ID)
+	if err != nil {
+		t.Fatalf("composing the schedule: %v", err)
+	}
+	wantField(t, fired.Tasks[0], "priority", "template", "9")
+
+	other, err := c.TemplateComposition(ctx, plain.ID, "acme/widgets", "main", nil, true)
+	if err != nil {
+		t.Fatalf("composing the plain template: %v", err)
+	}
+	for _, f := range other.Tasks[0].Fields {
+		if f.Name == "priority" {
+			t.Errorf("a template with no priority of its own previews %+v; want no priority row", f)
+		}
+	}
+}
