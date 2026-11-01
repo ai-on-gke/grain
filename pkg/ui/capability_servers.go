@@ -974,7 +974,11 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 	if err := c.checkBootstrapWritableUnrehearsed(ctx, "grain_config"); err != nil {
 		return err
 	}
-	if req.Value != "" {
+	// The value is bootstrap, but the binding is a write of mcp_servers
+	// that settings_locked sends to grain/config: store the value only
+	// when that write will go through, so a refused binding leaves no
+	// secret behind without its $secret: reference.
+	if _, _, managed := c.configRepoFor(ctx, false); req.Value != "" && !managed {
 		if c.Config.Secrets == nil {
 			return errSecretsUnavailable
 		}

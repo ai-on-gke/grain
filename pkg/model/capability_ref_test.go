@@ -235,6 +235,8 @@ func TestCapabilityPolicyDenyRuleRefusesWhatItCovers(t *testing.T) {
 	}
 	if err := p.Permits(g, CapabilitySubject{Repo: acme, Kind: CapabilityRunCI, Event: "push"}); err == nil {
 		t.Error("a CI run a deny rule covers was granted the reference an allow rule also names")
+	} else if !strings.Contains(err.Error(), "to this CI job on acme/widgets (push) (rule 1:") {
+		t.Errorf("refusal = %q, want it to name the CI job, its repo and event, and the rule", err)
 	}
 	if err := p.Permits(g, CapabilitySubject{Repo: acme, Kind: CapabilityRunTask}); err != nil {
 		t.Errorf("a task the deny rule does not cover was refused: %v", err)

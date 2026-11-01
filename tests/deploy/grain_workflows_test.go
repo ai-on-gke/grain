@@ -699,7 +699,7 @@ func TestTheGuestCacheJobIsWhatAPostMergeDispatchPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, err := ci.PlanRun(ci.Request{
-		Repo: "bwsalmon/grain", Ref: "main",
+		Repo: model.GrainSourceRepo().String(), Ref: "main",
 		Commit: "0123456789abcdef0123456789abcdef01234567",
 		Event:  ci.EventManual,
 		Jobs:   []string{".grain/workflows/image.yml:guest-cache"},
@@ -769,7 +769,7 @@ func TestTheBaseBranchGateForThisRepositoryRunsItsTests(t *testing.T) {
 	// automatically run them alongside GitHub Actions (.github/workflows/tests.yml).
 	for _, event := range []ci.Event{ci.EventPush, ci.EventPullRequest, ci.EventRelease} {
 		autoPlan, err := ci.PlanRun(ci.Request{
-			Repo: "bwsalmon/grain", Ref: "main", Commit: commit,
+			Repo: model.GrainSourceRepo().String(), Ref: "main", Commit: commit,
 			Event:          event,
 			TrustedRelease: event == ci.EventRelease,
 		}, workflows)
@@ -785,7 +785,9 @@ func TestTheBaseBranchGateForThisRepositoryRunsItsTests(t *testing.T) {
 	// Dispatched manually, .grain/workflows/tests.yml still plans the full
 	// test suite and none of the publisher jobs.
 	gate, err := ci.PlanRun(ci.Request{
-		Repo: "bwsalmon/grain", Ref: "main", Commit: commit,
+		Repo:     model.GrainSourceRepo().String(),
+		Ref:      "main",
+		Commit:   commit,
 		Event:    ci.EventManual,
 		Workflow: ".grain/workflows/tests.yml",
 	}, workflows)

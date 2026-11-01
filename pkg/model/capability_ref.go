@@ -666,8 +666,11 @@ func (r CapabilityPolicyRule) covers(s CapabilitySubject) bool {
 
 func (s CapabilitySubject) describe() string {
 	out := s.Kind
-	if out == "" {
+	switch out {
+	case "":
 		out = "run"
+	case CapabilityRunCI:
+		out = "CI job"
 	}
 	if s.Repo != nil {
 		out += " on " + s.Repo.Owner + "/" + s.Repo.Name

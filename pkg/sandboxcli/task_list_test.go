@@ -68,9 +68,13 @@ func TestSandboxTaskListFiltersAndBounds(t *testing.T) {
 			repo = "acme/gadgets"
 		}
 		tasks = append(tasks, mcp.TaskSummary{ID: fmt.Sprint(i), State: state, Repo: repo,
-			Title: fmt.Sprintf("Fix thing %d", i), CreatedAt: &at})
+			Title: fmt.Sprintf("Fix thing %d", i), CreatedAt: &at, ChangedAt: &at})
 	}
 	tasks[99].Title = "Flaky go-long test"
+	tasks[104].Kinds = []string{"session"}
+	tasks[110].Stall = "queued for 4h without a worker"
+	recentChange := base.Add(200 * time.Minute)
+	tasks[115].ChangedAt = &recentChange
 
 	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
 	raw, _ := json.Marshal(map[string]string{"debug": "tok-debug", "plain": "tok-plain"})
@@ -148,6 +152,20 @@ func TestSandboxTaskListFiltersAndBounds(t *testing.T) {
 	lines, _, _ = run("tok-debug", "task", "list", "--state", "queued,proposed", "--search", "GO-LONG")
 	if len(lines) != 1 || !strings.HasPrefix(lines[0], "100  proposed  acme/widgets  Flaky go-long test") {
 		t.Errorf("--search GO-LONG = %q", lines)
+	}
+
+	// --kind, --stalled, and --changed-since filters reach the endpoint.
+	lines, errOut, code = run("tok-debug", "task", "list", "--kind", "session")
+	if code != 0 || len(lines) != 1 || !strings.HasPrefix(lines[0], "105 ") {
+		t.Errorf("--kind session: exit %d, lines=%q, err=%q", code, lines, errOut)
+	}
+	lines, errOut, code = run("tok-debug", "task", "list", "--stalled")
+	if code != 0 || len(lines) != 1 || !strings.HasPrefix(lines[0], "111 ") {
+		t.Errorf("--stalled: exit %d, lines=%q, err=%q", code, lines, errOut)
+	}
+	lines, errOut, code = run("tok-debug", "task", "list", "--changed-since", base.Add(150*time.Minute).Format(time.RFC3339))
+	if code != 0 || len(lines) != 1 || !strings.HasPrefix(lines[0], "116 ") {
+		t.Errorf("--changed-since: exit %d, lines=%q, err=%q", code, lines, errOut)
 	}
 
 	// --json.

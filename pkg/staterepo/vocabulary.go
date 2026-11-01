@@ -71,9 +71,11 @@ import (
 // vocabularyWarnings reads one table file's rows for words this build
 // does not have.
 //
-// Only the board tables, and that is not an accident of where somebody
-// started: these are the rows a person or an agent writes by hand into
-// the dump, in prose, from a prompt -- every other table here is
+// Only the board tables and grain_config, and that is not an accident
+// of where somebody started: these are the rows a person or an agent
+// writes by hand into the dump, in prose, from a prompt (a dashboard;
+// a Settings change settings_locked sent to a config pull request) --
+// every other table here is
 // written by the daemon out of values it already had. A typo needs
 // somewhere for a typo to come from.
 //
@@ -107,6 +109,8 @@ func vocabularyWarnings(path, table string, rows []map[string]any) []string {
 			}
 		case "board_panel":
 			panelWarnings(path, i, row, say)
+		case "grain_config":
+			grainConfigWarnings(path, i, row, say)
 		case "board_section":
 			if word, ok := wordIn(row, "kind"); ok && !model.ReportSection(word).Valid() {
 				say("kind", word, "%s row %d names section %q, which is not %s; a section this build "+
@@ -117,6 +121,26 @@ func vocabularyWarnings(path, table string, rows []map[string]any) []string {
 		}
 	}
 	return out
+}
+
+// grainConfigWarnings is the deployment's own row, which a config pull
+// request edits by hand too (settings_locked sends every Settings change
+// there). Two of its columns are closed vocabularies that fall back
+// rather than fail, and one falls back the wrong way for a typo: an
+// upgrade_check_mode this build does not know reads as "auto"
+// (model.NormalizeUpgradeCheckMode), so "approve " spelt wrong turns
+// unattended upgrades on. Empty is each column's own default, not a
+// word.
+func grainConfigWarnings(path string, i int, row map[string]any, say func(column, word, format string, args ...any)) {
+	if word, ok := wordIn(row, "upgrade_check_mode"); ok && word != "" && !model.ValidUpgradeCheckMode(word) {
+		say("upgrade_check_mode", word, "%s row %d has upgrade_check_mode %q, which is not one of %q; "+
+			"grain reads a mode it does not know as %q, so this would upgrade the deployment unattended",
+			path, i, word, model.UpgradeCheckModes(), model.NormalizeUpgradeCheckMode(word))
+	}
+	if word, ok := wordIn(row, "network_access"); ok && word != "" && !model.ValidNetworkAccess(model.NetworkAccess(word)) {
+		say("network_access", word, "%s row %d has network_access %q, which is not %s",
+			path, i, word, model.NetworkAccessNames())
+	}
 }
 
 // panelWarnings is the dashboard row: three closed vocabularies on one
