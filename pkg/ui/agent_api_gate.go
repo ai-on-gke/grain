@@ -120,6 +120,10 @@ func agentMessageRail(acting, pattern, target string) error {
 // sender, so recordAgentCall writes no second note about it.
 const agentMessagesRoute = "POST /api/tasks/{id}/agent-messages"
 
+// taskNotesRoute is message_task (Client.PostTaskNote): a note for the
+// acting task's parent or child.
+const taskNotesRoute = "POST /api/tasks/{id}/notes"
+
 // agentCall is one authorized call, for recordAgentCall.
 type agentCall struct {
 	taskID      string
@@ -464,7 +468,13 @@ func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, me
 			return fmt.Errorf("task %s cannot call %s on itself: a run does not end, orphan or regrant its own task", acting.ID, pattern)
 		}
 		if t, err := s.tasks.Store.GetTask(ctx, target); err == nil && t != nil {
-			if session, ok := model.ConsoleSessionIDOf(*t); ok && session != ownSession {
+			// A note between parent and child (message_task) is the one
+			// call on a session the acting task does not own that the rail
+			// lets through: it never parks the session or acts on its run,
+			// and the CLI and MCP hops already carry it, so a director's
+			// child reports back whichever tool it uses.
+			if session, ok := model.ConsoleSessionIDOf(*t); ok && session != ownSession &&
+				!(pattern == taskNotesRoute && related(acting, t)) {
 				return fmt.Errorf("task %s is the standing session %q, which task %s does not own", target, session, acting.ID)
 			}
 		}
