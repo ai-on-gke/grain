@@ -50,7 +50,7 @@ import (
 // (orchestrator.Deps.PolicyAudit). No HTTP route reads, writes or
 // removes it (TestLocalAuditLogIsReachedByNoRoute). The file keeps the
 // name it had when a Silo hub's messages were logged there too
-// (docs/hub-removed.md), so a deployment's existing log is appended to
+// (the Silo hub connection has since been removed), so a deployment's existing log is appended to
 // rather than left behind.
 func LocalAuditPath(dataDir string) string {
 	return filepath.Join(dataDir, "hub-audit.log")
@@ -88,7 +88,7 @@ func LogIgnoredRelaySettings(dataDir string, secretStore *secrets.Store, logf fu
 	if logf == nil {
 		logf = log.Printf
 	}
-	logf("grain daemon: ignoring stored %s -- the rendezvous relay has been removed (docs/relay-removed.md)", strings.Join(found, " and "))
+	logf("grain daemon: ignoring stored %s -- the rendezvous relay has been removed", strings.Join(found, " and "))
 }
 
 // run wires every piece pkg/orchestrator needs from real, on-disk material
@@ -106,7 +106,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// Before anything binds: how long the restart that started this
 	// process left each listener unreachable is measured from the times
 	// the previous process wrote down, against when each is bound below
-	// (upgrade.GapRecorder, docs/non-disruptive-upgrade.md Stage 1).
+	// (upgrade.GapRecorder, design/design/non-disruptive-upgrade.design.md Stage 1).
 	// Opened here so its start time is this process's, but it writes
 	// nothing until the first listener is up: a start refused before then
 	// -- the store guard, a bad flag -- leaves restart-gap.json as the
@@ -989,7 +989,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	cfg.gitProxyHandler = proxyHandler
 
 	// The relay a capability grant's ports reach a sandbox through
-	// (docs/capabilities-spec.md §5.3), on the same fabric as the git
+	// (design/spec/capabilities/capabilities.spec.md §5.3), on the same fabric as the git
 	// proxy, so a sandbox with no network reaches it as it reaches that.
 	// Not fatal: without it, a run whose grants return ports is refused
 	// at materialization, and every other run is unaffected.

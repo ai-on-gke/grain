@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // The New Task form's configuration (settings/new-task-form.yml,
-// docs/design/config-repo-settings.md §6), as GET /api/config carries it
+// design/design/config-repo-settings.design.md §6), as GET /api/config carries it
 // (config.newTaskForm, model.NewTaskForm): resolveNewTaskForm merges the
 // built-in form with the deployment's layer, then the board's, the
 // repo's and the template's, into one map of fields NewTaskOverlay.jsx

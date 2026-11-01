@@ -23,7 +23,7 @@ export function actorName(config) {
 }
 
 // AccessSection is Settings → Access: how this browser is signed in
-// (docs/design/settings-panel.md §3.2). grain has no users (§6): the access
+// (design/design/settings-panel.design.md §3.2). grain has no users (§6): the access
 // code is the one credential, so the only name shown is the actor the server
 // reports for an IAP sign-in.
 export default function AccessSection({ config, onLogout }) {

@@ -13,9 +13,9 @@ Task 180 (`grain/049f1e09/task-180`): end-to-end browser walkthrough of user set
 
 ---
 
-## Architecture Mapping (`docs/design/settings-panel.md`)
+## Architecture Mapping (`design/design/settings-panel.design.md`)
 
-Following `docs/design/settings-panel.md` (SET-1..SET-3), the legacy System overlay (`/admin/<tab>`) and standalone `/settings` / `/memory` surfaces referenced in `.grain/templates/ui-walkthrough-settings.yml` are unified into:
+Following `design/design/settings-panel.design.md` (SET-1..SET-3), the legacy System overlay (`/admin/<tab>`) and standalone `/settings` / `/memory` surfaces referenced in `.grain/templates/ui-walkthrough-settings.yml` are unified into:
 
 1. **Settings (`/settings/<section>`)** — opened from the top-bar gear icon (`data-testid="top-bar-settings"`), with 16 sections across 4 groups:
    - **Deployment**: `General` (`/settings/general`), `Access` (`/settings/access`), `Config repo` (`/settings/config-repo`)

@@ -20,7 +20,7 @@ import (
 )
 
 // StewardAuditTemplateID names the weekly sampled steward audit
-// (docs/design/durable-tasks.md#DT-14): a weekly job on the judgement model
+// (design/design/durable-tasks.design.md#DT-14): a weekly job on the judgement model
 // that samples one pipeline-steward wake in ten, checks every claim in each
 // sampled wake's report against the record in grain, and writes the resulting
 // counts to task_run_report_check through its closing report.

@@ -15,7 +15,7 @@
 // Package actions runs one GitHub Actions job with act, in a disposable
 // Kontur guest: the `grit act` subcommand and the script pkg/ci hands an
 // Actions job's sandbox. It moved here from pkg/grit, which is now the
-// CI service (docs/design/grit-split.md, "pkg/grit and cmd/grit").
+// CI service (design/design/grit-split.design.md, "pkg/grit and cmd/grit").
 package actions
 
 import (

@@ -23,7 +23,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// propose_config_change (docs/design/config-repo-settings.md, section
+// propose_config_change (design/design/config-repo-settings.design.md, section
 // 4.3): a session holding grain/config in its writes edits its checkout
 // of it, grain-state, and calls this. The tool commits and pushes the
 // edits to one of the session's own proposal branches

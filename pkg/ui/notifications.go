@@ -28,7 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// Operator notifications over the API (docs/design/durable-tasks.md,
+// Operator notifications over the API (design/design/durable-tasks.design.md,
 // DT-5): raise, list, acknowledge, clear and investigate, plus the
 // sandbox's two hops -- notify_operator (POST /api/tasks/{id}/notify)
 // and message_task (POST /api/tasks/{id}/notes, DT-10).

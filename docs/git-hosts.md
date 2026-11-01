@@ -405,7 +405,7 @@ it can reach, not only the team's. So:
     using an ambient connection is refused, saying which piece is
     missing, while hostd does not answer or its allowlist does not offer
     `host-git`. The daemon still holds the token it is handed, just as a
-    daemon on the host does. docs/design/cli-run-location.md ("Security")
+    daemon on the host does. design/design/cli-run-location.design.md ("Security")
     explains why that is no wider than before: grain is trusted as the
     installing user in both modes.
   - **A daemon in a container with no hostd** (`GRAIN_HOSTD=0`, or

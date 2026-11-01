@@ -19,7 +19,7 @@ import { test, expect } from "./fixtures.js";
 // as a development daemon on the bare machine (pkg/demo's
 // demoCLIRunConfig): every CLI on the host, with claude's flag set to the
 // container a release before v2.3.0 could have written, which runs on the
-// host with a warning. docs/design/cli-run-location.md.
+// host with a warning. design/design/cli-run-location.design.md.
 
 test("a bare-machine daemon offers only host, and a run location saves and survives a reload", async ({
   page,

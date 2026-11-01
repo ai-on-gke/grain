@@ -31,7 +31,7 @@ import (
 // that is 1.7 MB of JSON built out of a scan of most of the database --
 // 197ms to 3.0s of it, median around a second -- and nearly every one of
 // those answers is identical to the one three seconds earlier
-// (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5, which
+// (the 2026-09-07 panel-dashboard hand run, section 5, which
 // measured it and left this as the thing it could not fix from the
 // dashboard's end). A deployment three months older pays five times as
 // much for the same nothing.

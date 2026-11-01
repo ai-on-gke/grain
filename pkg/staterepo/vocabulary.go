@@ -40,7 +40,7 @@ package staterepo
 // dashboard with a second timeline panel "ranged to a single day" and
 // measured it as identical to the seven-day one, and concluded that a
 // panel's range does not decide what it draws
-// (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5). It does.
+// (the 2026-09-07 panel-dashboard hand run, section 5). It does.
 // The seed said `"1d"`, the day-wide range is `"24h"`, and the panel
 // fell back to the week the browser was already showing. A measurement
 // was wrong for a whole section because a word nobody recognised looked

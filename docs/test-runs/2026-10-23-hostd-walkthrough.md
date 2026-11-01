@@ -129,7 +129,7 @@ description.
 | Socket 0600 and mounted | **PASS.** Host: `drwx------ debian debian /run/grain-hostd`, `srw------- debian debian hostd.sock`. Mount: `/run/grain-hostd -> /run/grain-hostd true`. The container sees the same socket, as its uid 1000 |
 | Allowlist owned outside the container, and it has agy | **PASS.** `-rw-r--r-- root root /etc/grain/hostd.yaml`. `docker exec grain-daemon ls /etc/grain` gives "No such file or directory", so it isn't mounted. The file has `clis.agy.path: /opt/fakeagy/agy`, `paths_under` and `cwd_under` of `[/srv/grain/data, /srv/grain/scratch]`, the proxy variables as `pass_env`, and an empty `capabilities:` |
 | Settings → Models shows each CLI's location and hostd's status | **PASS**, with gaps. See the screenshots. claude: container ("set by -claude-run: a subprocess in the daemon's own container"). codex: container (auto). agy: host ("through grain hostd at /run/grain-hostd/hostd.sock, as its allowlist entry \"agy\""). custom: container. Banner: "grain hostd is up at /run/grain-hostd/hostd.sock, offering capability fakecap, cli agy". Gaps: the agy row shows no host path (`/opt/fakeagy/agy`), and nothing shows hostd's build (see step 7) |
-| Readiness summary shows each CLI's location and hostd | **FAIL (bug B).** The `Done.` block has a correct `hostd:` paragraph. But the `Readiness:` block says `agy CLI: /usr/local/bin/agy (in ghcr.io/bwsalmon/grain/google-grain:main)`, which is the image's own copy, not the host binary hostd runs. It has no run location for any CLI and no hostd status line. `docs/design/cli-run-location.md` says the readiness summary shows the same resolution as Settings (`agy: host (/opt/corp/bin/…)`) |
+| Readiness summary shows each CLI's location and hostd | **FAIL (bug B).** The `Done.` block has a correct `hostd:` paragraph. But the `Readiness:` block says `agy CLI: /usr/local/bin/agy (in ghcr.io/bwsalmon/grain/google-grain:main)`, which is the image's own copy, not the host binary hostd runs. It has no run location for any CLI and no hostd status line. `design/design/cli-run-location.design.md` says the readiness summary shows the same resolution as Settings (`agy: host (/opt/corp/bin/…)`) |
 
 Screenshots of the "Where each agent CLI runs" card (final install, hostd on):
 
@@ -324,7 +324,7 @@ On `grain-wt-5047-mig`:
 ## 7. Upgrades with a host run in flight: FAIL as specified (bug C)
 
 The daemon's half of #4468 (task 5046) is not wired yet.
-`docs/design/cli-run-location.md` says so under "Not yet wired":
+`design/design/cli-run-location.design.md` says so under "Not yet wired":
 
 - `HostdHost` starting detached;
 - the adoption pass reading `processes`;

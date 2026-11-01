@@ -17,7 +17,7 @@
 // declares its arguments as JSON Schema -- mint_<method>'s
 // inputSchema.properties.args, which GET /api/capability-methods carries
 // as `args` -- restricted to the keywords grain enforces
-// (docs/capabilities-spec.md §4.2.1). CapabilityArgsForm renders a form
+// (design/spec/capabilities/capabilities.spec.md §4.2.1). CapabilityArgsForm renders a form
 // from that schema; this file is the part of it that is not React: which
 // schemas the form can render at all, the initial value, a live check of
 // the same keywords the server checks, and how a grant reads as a chip.

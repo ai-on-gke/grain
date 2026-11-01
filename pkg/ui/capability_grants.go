@@ -33,7 +33,7 @@ import (
 // Granting capability methods with arguments from the UI
 // (docs/capabilities.md, "Granting from the UI"). A capability server's
 // methods each declare their with: arguments as JSON Schema
-// (inputSchema.properties.args, docs/capabilities-spec.md §4.1.3); the
+// (inputSchema.properties.args, design/spec/capabilities/capabilities.spec.md §4.1.3); the
 // pickers render a form from that schema, and these routes are the
 // server side of it: the methods and their schemas, a grant checked and
 // normalized exactly as task creation does it, with each refusal pinned to

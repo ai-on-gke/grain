@@ -63,7 +63,7 @@ var CiReadScopes = gitproxy.NewReadScopes()
 
 // SandboxCapabilities is the registry of capability tools a sandbox may
 // call through the proxy's /cap/<server>/mcp (grain cap,
-// docs/capabilities-spec.md §5.2.6): filled by each agent run's and CI
+// design/spec/capabilities/capabilities.spec.md §5.2.6): filled by each agent run's and CI
 // job's capability pass for as long as it is materialized, and read by
 // the proxy BuildProxy wires.
 var SandboxCapabilities = gitproxy.NewCapRegistry()
@@ -85,7 +85,7 @@ var CiSandboxTeams = gitproxy.NewSandboxTeams()
 // only an operator clicking within the first second of a start can.
 //
 // It holds a ci.Runner, which is all anything reading it asks of CI
-// (docs/design/grit-split.md#GS-1). Only this package's own wiring
+// (design/design/grit-split.design.md#GS-1). Only this package's own wiring
 // reaches past that to the in-process service (embedded).
 var LiveCI LiveCIRunner
 
@@ -201,7 +201,7 @@ func (CiGate) Cancel(id, reason string, by ci.CancelSource) bool {
 // type assertion this gate did not satisfy), so a daemon has never
 // marked a recheck's flakes or evicted a base's cached failures through
 // it. Forwarding them is a behaviour change of its own, kept out of the
-// interface split (docs/design/grit-split.md#GS-1).
+// interface split (design/design/grit-split.design.md#GS-1).
 func (CiGate) MarkFlake(string, []string, string) bool { return false }
 
 func (CiGate) EvictBaseTransitionFailures(context.Context, string) (int, bool, error) {
@@ -715,7 +715,7 @@ func (s CiSandboxes) Acquire(ctx context.Context, req ci.SandboxRequest) (ci.San
 	// carried in last, so its setup commands find the checkout there, and
 	// before any step runs: ports, placements, setup, then every
 	// mcp_endpoint proxied into the sandbox and listed in
-	// /home/debian/.grain/mcp.json (docs/capabilities-spec.md §5).
+	// /home/debian/.grain/mcp.json (design/spec/capabilities/capabilities.spec.md §5).
 	if err := s.Grants.materializeCIPass(ctx, req.Name, backing); err != nil {
 		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ciReleaseTimeout)
 		defer cancel()
@@ -2684,7 +2684,7 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 		Log:   log.Printf,
 	}
 	// Each running step's exec id and cursor go where its run does, so a
-	// restart can reattach the step (docs/design/grain-on-gke.md#GKE-4).
+	// restart can reattach the step (design/design/grain-on-gke.design.md#GKE-4).
 	if attachments, ok := service.Runs.(ci.StepAttachments); ok {
 		service.Engine.Attachments = attachments
 	}
@@ -2697,7 +2697,7 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 
 // AdoptCIRuns inspects unconcluded CI runs in service.Runs before ReapOrphans
 // runs, and reattaches what it can before anything is recovered
-// (docs/design/grain-on-gke.md, "Restart: reattach rather than interrupt").
+// (design/design/grain-on-gke.design.md, "Restart: reattach rather than interrupt").
 //
 // For each run it rebuilds the engine's job state from the store (the run's
 // jobs and steps as last written, and each running step's attachment),
@@ -3194,7 +3194,7 @@ func RegisterGritFlags(fs *flag.FlagSet) GritFlags {
 	return GritFlags{
 		url: fs.String("grit-url", "", "EXPERIMENTAL, refused without -grit-experimental: remote grit server base `url` "+
 			"(e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet "+
-			"(docs/design/grit-split.md, GS-3 to GS-5 deferred)"),
+			"(design/design/grit-split.design.md, GS-3 to GS-5 deferred)"),
 		clientToken: fs.String("grit-client-token", "", "client `token` (<id>.<secret>) sent in Grit-Client when -grit-url is set"),
 		experimental: fs.Bool("grit-experimental", false,
 			"allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, "+
@@ -3215,7 +3215,7 @@ func (g GritFlags) Apply(cfg *Config) {
 // key is read from grit itself rather than pinned, and nothing mounts
 // /v1/session for the reverse tunnel. Refused unless asked for by name,
 // so nobody points a deployment's CI at it as a second way of running
-// the same thing (docs/design/grit-split.md).
+// the same thing (design/design/grit-split.design.md).
 func CheckGritURL(cfg Config) error {
 	if strings.TrimSpace(cfg.GritURL) == "" || cfg.GritExperimental {
 		return nil
@@ -3223,7 +3223,7 @@ func CheckGritURL(cfg Config) error {
 	return errors.New("-grit-url is experimental and refused without -grit-experimental: a remote grit server " +
 		"runs none of a repository's .grain/workflows (no checkout is uploaded and grit plans no workflows, so " +
 		"every run errors), its attestation key is taken from grit itself rather than pinned, and there is no " +
-		"reverse-tunnel mode (docs/design/grit-split.md: GS-3 to GS-5 are deferred). Drop -grit-url to run CI " +
+		"reverse-tunnel mode (design/design/grit-split.design.md: GS-3 to GS-5 are deferred). Drop -grit-url to run CI " +
 		"in-process")
 }
 

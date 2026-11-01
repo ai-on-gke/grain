@@ -16,7 +16,7 @@ package mcp
 
 // task_views.go is read_grain_task's two compact views -- summary and
 // conversation -- and the kind vocabulary list_grain_tasks filters by
-// (docs/design/durable-tasks.md#DT-13). The full record is
+// (design/design/durable-tasks.design.md#DT-13). The full record is
 // renderTaskRecord's, in task_tools.go.
 
 import (

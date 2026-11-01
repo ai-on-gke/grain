@@ -40,12 +40,12 @@ func removedTunnelGatewaySettings(passed map[string]bool) error {
 	if len(set) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%s: the tunnel gateway has been removed (docs/relay-removed.md). "+
+	return fmt.Errorf("%s: the tunnel gateway has been removed. "+
 		"Remove %s to start", strings.Join(set, ", "), strings.Join(set, " and "))
 }
 
 // removedRelaySettings refuses the settings of the rendezvous relay
-// (cmd/grain-relay, pkg/relay), which has been removed (docs/relay-removed.md).
+// (cmd/grain-relay, pkg/relay), which has been removed.
 // Ignoring them would start a daemon its operator can no longer reach through
 // the relay URL they configured. passed is the set of flags given on the
 // command line; unknown are any unrecognised flags splitDaemonFlags set aside.
@@ -98,6 +98,6 @@ func removedRelaySettings(passed map[string]bool, unknown []string) error {
 	if len(set) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%s: the relay has been removed (see docs/relay-removed.md). "+
+	return fmt.Errorf("%s: the relay has been removed. "+
 		"Remove %s to start", strings.Join(set, ", "), strings.Join(set, " and "))
 }

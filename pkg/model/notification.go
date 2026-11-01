@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-// Operator notifications (docs/design/durable-tasks.md, DT-5): something
+// Operator notifications (design/design/durable-tasks.design.md, DT-5): something
 // a person should know about or act on, raised by a reconciler, an agent
 // (notify_operator) or the API, which never parks whoever raised it.
 //
@@ -195,7 +195,7 @@ func PrincipalString(p Principal) string {
 }
 
 // The notification families grain's own escalations are raised under
-// (docs/design/durable-tasks.md, DT-5's "Existing escalations, mapped").
+// (design/design/durable-tasks.design.md, DT-5's "Existing escalations, mapped").
 // A subject is the family, ':', and what it is about.
 const (
 	// FamilyBaseRed is a confirmed-red base branch, "<repo>@<branch>".
@@ -218,7 +218,7 @@ const (
 	FamilyRevertRequest = "request.revert"
 	// FamilyReleasePending is a trunk release whose soak passed and that
 	// waits for a person to approve or reject it, "<vX.Y.0>"
-	// (docs/design/release-from-trunk.md, §4). Raised by the release
+	// (design/design/release-from-trunk.design.md, §4). Raised by the release
 	// train through the release gate, with ReleasePendingActions.
 	FamilyReleasePending = "release.pending"
 )
@@ -655,7 +655,7 @@ func NotificationFamilyMatches(pattern, family string) bool {
 // NotificationSink is an external channel notifications are delivered
 // to (a webhook, a chat): once per instance, with retries, at or above
 // a minimum severity. An interface only for now -- the first sink is its
-// own task (docs/design/durable-tasks.md, DT-5 "External channels").
+// own task (design/design/durable-tasks.design.md, DT-5 "External channels").
 type NotificationSink interface {
 	// Name identifies the sink in Notification.Delivered.External.
 	Name() string

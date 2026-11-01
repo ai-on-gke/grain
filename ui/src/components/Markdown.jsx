@@ -127,7 +127,7 @@ function Markdown({ children, className }) {
 // without this, one character typed re-parsed every message in the
 // conversation. Measured at 112ms of script per keystroke on a 41-message
 // chat before this, growing linearly with the conversation:
-// docs/hand-runs/2026-09-17-chat-keystroke.md.
+// the 2026-09-17 chat-keystroke hand run.
 //
 // It is safe in the way memo usually is not, because there is nothing
 // else in the props to get stale: no children beyond the string, no

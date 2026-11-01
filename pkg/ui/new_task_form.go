@@ -22,7 +22,7 @@ import (
 )
 
 // applyHiddenFormDefaults is POST /api/tasks' half of
-// settings/new-task-form.yml (docs/design/config-repo-settings.md §6.3):
+// settings/new-task-form.yml (design/design/config-repo-settings.design.md §6.3):
 // a field the resolved form hides is filed with the default the form
 // gives it, whatever the request says, so hiding a field is a decision
 // the form's configuration makes rather than one only the browser keeps.

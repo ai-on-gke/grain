@@ -27,7 +27,7 @@ test.use({ demoArgs: ["-default-target-repo=acme/rename"] });
 test.describe("as a system admin", () => {
   // A bare /system once opened on Logs -- from when /system was the old
   // Debug pane. System is status and operations only now
-  // (docs/design/settings-panel.md §2.1), so it opens on Health, and a
+  // (design/design/settings-panel.design.md §2.1), so it opens on Health, and a
   // /system link naming a settings tab goes where /admin/<tab> does.
   test("a bare /system opens on Health, and /admin on Settings → General", async ({
     page,
@@ -81,7 +81,7 @@ test.describe("as a system admin", () => {
   });
 });
 
-// Settings and System show every control (docs/design/settings-panel.md
+// Settings and System show every control (design/design/settings-panel.design.md
 // assumes #4880's removal of the admin gates), and a browser names nobody
 // (§6): a fresh browser gets the same destinations from the same links.
 test.describe("from a fresh browser", () => {

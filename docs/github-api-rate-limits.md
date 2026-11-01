@@ -51,7 +51,7 @@ default -- for each pull request grain is still watching (`P` below):
 GitHub returns `additions`/`deletions`/`changed_files` on this response
 and on no list endpoint, and `orchestrator.recordPullRequestEvents`
 records them from the read it was already making
-(`docs/release-notes.md`) -- so the week's lines-changed figure costs
+(`docs/releases/`) -- so the week's lines-changed figure costs
 nothing in this table.
 
 So the steady state is 2 requests per watched pull request per cycle,

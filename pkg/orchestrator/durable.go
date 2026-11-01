@@ -28,7 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// durable.go is a durable task's run (docs/design/durable-tasks.md#DT-1,
+// durable.go is a durable task's run (design/design/durable-tasks.design.md#DT-1,
 // model.Task.IsDurable): no wall-clock deadline, no wait-credit cap, an
 // idle watchdog in their place, and setup failures that suspend rather
 // than count.
@@ -265,7 +265,7 @@ var transientSetupRetries = []time.Duration{10 * time.Second, 30 * time.Second, 
 // never a strike, held for dispatch.DurableSetupBackoff. The
 // model.DurableSetupFailingAfter'th setup suspension in a row raises
 // model.DurableSetupFailingSubject -- logged until operator notifications
-// exist (docs/design/durable-tasks.md#DT-5, DT-S6).
+// exist (design/design/durable-tasks.design.md#DT-5, DT-S6).
 //
 // Any task's setup that failed on the path to its sandbox's container
 // (kubectlgate.IsTransientTransport: the cluster's exec tunnel failing,

@@ -631,7 +631,7 @@ export function sortTasks(tasks, sort, attributes, config) {
 // three-second poll. Measured on a store of 929 tasks: 1.0-1.2s of
 // script per poll tick at six panels and 2.1-2.3s at ten, which is a
 // main thread saturated by a deployment where nothing is happening
-// (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5). The tasks
+// (the 2026-09-07 panel-dashboard hand run, section 5). The tasks
 // were the same tasks and the question was usually the same question --
 // a panel with no query of its own inherits the dashboard's -- so the
 // cost was N copies of one answer, N times a minute, for as long as the

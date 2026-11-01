@@ -585,7 +585,7 @@ func templateSchema() Schema {
 			// filing team already has.
 			{Model: "Model", Keys: carried("model"), Columns: []string{"agent_model"}},
 			// The goal every task it files is declared with
-			// (model.Template.Goal, docs/design/durable-tasks.md#DT-4): JSON
+			// (model.Template.Goal, design/design/durable-tasks.design.md#DT-4): JSON
 			// model.GoalDecl. Settings only: a goal decides when grain
 			// closes the work, which is the deployment's to say.
 			{Model: "Goal", Keys: []Key{settingsOnly("goal", Inline)}, Columns: []string{"goal"}},

@@ -186,7 +186,7 @@ Each upgrade was started with `POST /api/upgrade {"branch": …}`. The branch mu
   - The sandbox-image step pulled `ghcr.io/bwsalmon/grain/k8s-sandbox:latest` until it was loaded.
     It is bounded at 10m.
 
-### 7. `docs/non-disruptive-upgrade.md` §Stage 2
+### 7. `design/design/non-disruptive-upgrade.design.md` §Stage 2
 
 Contradicted by this run, and corrected on this branch:
 - **"Reaching the daemon":** the doc said a run pod's `mcpserver` "execs into sandbox pods just as
@@ -321,7 +321,7 @@ container grain of deployment/grain at it; the rollout restarts this pod`, as se
 | `fix(daemon): exit on a startup error instead of hanging in the state sync` | F3 | Go test + live step 5 |
 | `fix(daemon): say what a Kubernetes upgrade repoints at startup` | F5 | Go test + live log |
 
-`docs/non-disruptive-upgrade.md` §Stage 2 is corrected as in step 7.
+`design/design/non-disruptive-upgrade.design.md` §Stage 2 is corrected as in step 7.
 
 ## Grain CI
 

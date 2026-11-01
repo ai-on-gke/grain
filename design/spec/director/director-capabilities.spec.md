@@ -33,7 +33,7 @@ only when, they appear in all capitals.
   (`api:ci:read`), `api:<preset>` (`api:task-admin`), or either api form
   narrowed with `@owner/name`.
 - The **canonical** unified-grant spelling of
-  [`docs/design/unified-grants.md`](../../../docs/design/unified-grants.md)
+  [`design/design/unified-grants.design.md`](../../design/unified-grants.design.md)
   §3–§4: `https://grain.dev/capabilities/api#<scope-or-preset>`,
   `…/grain#<method>`, `…/repo#read|write`, `…/skill#skill`, and so on.
   Below, `…/` abbreviates `https://grain.dev/capabilities/`. Canonical
@@ -95,7 +95,7 @@ refused without it. The reason is written to the controller log
   catalogue, which admits everything, and no shipped rule names the
   director kind.
 - `propose_config_change` is designed
-  (`docs/design/config-repo-settings.md` §4.3) but **not implemented**.
+  (`design/design/config-repo-settings.design.md` §4.3) but **not implemented**.
   No tool or route of that name exists under `pkg/`.
 
 ## 2. Workflow-to-capability traceability matrix {#DC-2}

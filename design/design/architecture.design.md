@@ -6,12 +6,12 @@ Grain is a single-tenant control plane that drives coding agents against git rep
 
 Each section links to the specifications and reference documents that define individual subsystems in detail:
 
-- **Settings and configuration:** [`settings.design.md`](settings.design.md) and [`design/spec/settings/`](../spec/settings/)
-- **Authentication and operator attribution:** [`authentication.design.md`](authentication.design.md), [`operator-attribution.design.md`](operator-attribution.design.md), and [`design/spec/operator-attribution/`](../spec/operator-attribution/)
+- **Settings and configuration:** [`settings.design.md`](settings.design.md) and [`design/spec/settings/`](../spec/settings)
+- **Authentication and operator attribution:** [`authentication.design.md`](authentication.design.md), [`operator-attribution.design.md`](operator-attribution.design.md), and [`design/spec/operator-attribution/`](../spec/operator-attribution)
 - **Contributions and contributor attribution:** [`contributions.design.md`](contributions.design.md) and [`attribution.design.md`](attribution.design.md)
-- **Standing director sessions and external CLIs:** [`director.design.md`](director.design.md), [`design/spec/director/`](../spec/director/), and [`external-cli.design.md`](external-cli.design.md)
+- **Standing director sessions and external CLIs:** [`director.design.md`](director.design.md), [`design/spec/director/`](../spec/director), and [`external-cli.design.md`](external-cli.design.md)
 - **Task priorities:** [`task-priorities.design.md`](task-priorities.design.md)
-- **Capabilities, sandboxes, and agent API contracts:** [`docs/capabilities-spec.md`](../../docs/capabilities-spec.md), [`docs/sandbox-image-contract.md`](../../docs/sandbox-image-contract.md), [`docs/agent-api.md`](../../docs/agent-api.md), and [`docs/non-disruptive-upgrade.md`](../../docs/non-disruptive-upgrade.md)
+- **Capabilities, sandboxes, and agent API contracts:** [`design/spec/capabilities/capabilities.spec.md`](../spec/capabilities/capabilities.spec.md), [`docs/sandbox-image-contract.md`](../../docs/sandbox-image-contract.md), [`docs/agent-api.md`](../../docs/agent-api.md), and [`design/design/non-disruptive-upgrade.design.md`](non-disruptive-upgrade.design.md)
 
 **The core rule:** the controller is the only component that holds authority, the sandbox is the only place untrusted repository code runs, and nothing that grants authority enters the sandbox. Model keys, forge credentials, deployment secrets, and a host user's own logins stay in the controller or in `grain hostd`. A sandbox receives per-attempt tokens scoped strictly to what its run was granted, and actions that end a run, file auto-approved work, or mutate deployment policy are reachable only through model control tools outside the sandbox, never from a process inside it.
 
@@ -99,7 +99,7 @@ The relational database is the live source of truth read on every reconcile tick
 - **Sandbox-access acceptor** (`pkg/sandboxaccess`, port `4244` by default when `-k8s-sandbox-access-listen` is set), accepting outbound mTLS connections from `kubernetes-granule` pod wrappers.
 - **Guest-facing services** on the `-sandbox-port-base` port block (`9728` by default, `pkg/ports`): the git and sandbox HTTP proxy (`9728`), model inference proxies (`pkg/modelproxy`), the `host-script` data plane (`9733`), the GitHub Actions cache service (`pkg/actionscache`), and the package cache's DNS (`53`) and HTTP/TLS (`80`/`443`) interception listeners (`pkg/pkgcache`).
 - **`hostd` and remote executor acceptors**: `/run/grain-hostd/hostd.sock` on the local host, `/api/hostd/connect` for a remote `grain hostd` dialling out (`pkg/hostd`), and `/api/executors/connect` for remote model executors (`pkg/modelexec`).
-- **Capability broker** (`pkg/capability`, `pkg/daemon/capabilities.go`), attaching to in-process, container, and `hostd`-pinned capability servers to mint and release per-attempt passes and proxy MCP tool calls ([`docs/capabilities-spec.md`](../../docs/capabilities-spec.md) §4–§5).
+- **Capability broker** (`pkg/capability`, `pkg/daemon/capabilities.go`), attaching to in-process, container, and `hostd`-pinned capability servers to mint and release per-attempt passes and proxy MCP tool calls ([`design/spec/capabilities/capabilities.spec.md`](../spec/capabilities/capabilities.spec.md) §4–§5).
 
 **Package boundaries.** Inside the controller binary, packages follow strict downward dependencies: orchestration and task state (`pkg/orchestrator`, `pkg/model`) sit above forge integration (`pkg/forge`, `pkg/github`, `pkg/change`) and sandbox runtimes (`pkg/granule`, `pkg/sandboxaccess`, `pkg/k8s`). `pkg/granule` and `pkg/sandboxaccess` import nothing from `pkg/model`. The CI workflow engine under `pkg/grit/...` imports no grain-core packages (`pkg/grit/independence_test.go`), keeping CI isolated as a package boundary inside the controller process without a separate CI service.
 
@@ -277,7 +277,7 @@ flowchart TD
 ```
 
 1. **Filing and queueing.** A task is recorded with its target repository, base branch, priority, `depends_on` edges, and requested grants. Proposals filed via `propose_task` inherit auto-approval only when their grants stay within the parent's (`model.GrantsSubsetOf`) and include no person-only capabilities.
-2. **Admission and `Prepare`.** Dispatch admits the task and mints every grant before booting the sandbox. In-process providers (`api`, `git`, `config-map`, `model-proxy`, `skill`), container capability servers, and `hostd`-pinned servers each return an attempt-scoped `Pass` with `placements`, `ports`, `setup_root` and `setup` hooks, optional `mcp_endpoint`, and prompt text ([`docs/capabilities-spec.md`](../../docs/capabilities-spec.md) §4–§5). `gcp#gcp-key` mints a short-lived service-account key for its permission set and revokes it on release; `config-map` places configured files and `0600` secrets.
+2. **Admission and `Prepare`.** Dispatch admits the task and mints every grant before booting the sandbox. In-process providers (`api`, `git`, `config-map`, `model-proxy`, `skill`), container capability servers, and `hostd`-pinned servers each return an attempt-scoped `Pass` with `placements`, `ports`, `setup_root` and `setup` hooks, optional `mcp_endpoint`, and prompt text ([`design/spec/capabilities/capabilities.spec.md`](../spec/capabilities/capabilities.spec.md) §4–§5). `gcp#gcp-key` mints a short-lived service-account key for its permission set and revokes it on release; `config-map` places configured files and `0600` secrets.
 3. **Sandbox and execution.** The sandbox is provisioned, the repository is cloned, placements and setup hooks run, the prompt is assembled (task, conversation or handover, memory, `grain` CLI guide, and capability prompt sections), and the CLI starts in its run location.
 4. **Run completion (`orchestrator.ProcessResult`).** When the CLI exits, the controller inspects its control calls and pushed refs:
    - Pushed commits open or update a pull request.
@@ -291,7 +291,7 @@ flowchart TD
 
 ### Non-disruptive upgrades
 
-Each plane upgrades on its own schedule across at least one protocol generation of version skew ([`docs/non-disruptive-upgrade.md`](../../docs/non-disruptive-upgrade.md)).
+Each plane upgrades on its own schedule across at least one protocol generation of version skew ([`design/design/non-disruptive-upgrade.design.md`](non-disruptive-upgrade.design.md)).
 
 **Controller upgrade:**
 
@@ -320,7 +320,7 @@ Authentication survives the restart because no active run credential lives only 
 | Zone | Trusted with | Bounded by |
 | --- | --- | --- |
 | Controller | Operational store, `secrets.enc` and `secrets.key`, forge credentials, deployment CA | Single-tenant gate and scoped routes (`pkg/ui`); least-privilege cluster credentials scoped to the sandbox namespace |
-| Capability servers | Server-specific root credentials and minting logic | Operator-configured commands/URLs only; per-server secret bindings; control plane unreachable from sandboxes ([`docs/capabilities-spec.md`](../../docs/capabilities-spec.md) §3.2) |
+| Capability servers | Server-specific root credentials and minting logic | Operator-configured commands/URLs only; per-server secret bindings; control plane unreachable from sandboxes ([`design/spec/capabilities/capabilities.spec.md`](../spec/capabilities/capabilities.spec.md) §3.2) |
 | `grain hostd` | Host user's ambient logins and tools | Root-owned `/etc/grain/hostd.yaml` allowlist, exact env/arg checks, per-entry `max_duration`, dedicated `hostd` token |
 | Sandbox wrapper (`granule`) | Its single sandbox's mTLS certificate and channel token | Per-sandbox credentials checked against live sandbox rows; can drive only its own guest VM |
 | Sandbox guest | Nothing | Treated as hostile: untrusted repository code, tests, build scripts, and package hooks run here as `debian` |
@@ -359,7 +359,7 @@ Each of those requires a tool call from the model to `grain mcpserver` outside t
 
 - **No inbound connections to sandboxes.** Sandbox pods and VMs expose no ingress. On Kubernetes, `NetworkPolicy` (`deploy/kubernetes/networkpolicy.yaml`) restricts egress to the controller's guest services, the `sandboxaccess` acceptor (from the wrapper only), DNS, and—for open-network runs—public internet destinations, while blocking cloud metadata servers (`169.254.169.254`), cluster control-plane endpoints, and peer pod/node CIDRs. On local `granule`, host nftables chains enforce the same per-block rules (`pkg/orchestrator/granule_firewall.go`).
 - **No direct path between sandboxes and `hostd`.** Traffic between a sandbox and a host-pinned capability server or `hostd` traverses the controller, keeping policy and auditing centralized.
-- **Capability control planes are unreachable from sandboxes.** A sandbox backend that cannot isolate capability control-plane endpoints from guest processes may not run attempts holding capability grants ([`docs/capabilities-spec.md`](../../docs/capabilities-spec.md) §3.2).
+- **Capability control planes are unreachable from sandboxes.** A sandbox backend that cannot isolate capability control-plane endpoints from guest processes may not run attempts holding capability grants ([`design/spec/capabilities/capabilities.spec.md`](../spec/capabilities/capabilities.spec.md) §3.2).
 - **Cluster API server stays out of the steady-state exec data path.** When the `sandboxaccess` acceptor is active on `kubernetes-granule`, `pods/exec` is used only for bootstrap probes and diagnostics, making unexpected `pods/exec` volume visible in audit logs.
 
 ## Where each piece stands
@@ -368,13 +368,13 @@ As of this writing, implementation status on `main` is:
 
 | Piece | Status | Detail |
 | --- | --- | --- |
-| Declarative settings, `grain/config` sync, and sealed `secrets.enc` | Implemented | [`settings.design.md`](settings.design.md), [`design/spec/settings/`](../spec/settings/) |
+| Declarative settings, `grain/config` sync, and sealed `secrets.enc` | Implemented | [`settings.design.md`](settings.design.md), [`design/spec/settings/`](../spec/settings) |
 | Sandbox-access mTLS channel, acceptor, and CI step cursor reattach | Implemented (in-cluster `kubernetes-granule` wrappers dial out; off-cluster pools use `kubectl exec` and `granule forward`) | [§2 Sandboxes](#2-sandboxes), [`docs/sandbox-image-contract.md`](../../docs/sandbox-image-contract.md) |
-| `hostd` allowlist, protocol 3 detached runs, spool cursors, drain, and versioned upgrade | Implemented | [§3 `grain hostd`](#3-grain-hostd), [`docs/non-disruptive-upgrade.md`](../../docs/non-disruptive-upgrade.md) |
+| `hostd` allowlist, protocol 3 detached runs, spool cursors, drain, and versioned upgrade | Implemented | [§3 `grain hostd`](#3-grain-hostd), [`design/design/non-disruptive-upgrade.design.md`](non-disruptive-upgrade.design.md) |
 | `hostd` remote dial-in, multi-`hostd` registry, and placement selectors | In progress — single remote `hostd` dial-in (`pkg/hostd/dialout.go`, `pkg/hostd/remote.go`) and multi-node model executors (`pkg/modelexec`) are implemented; unifying them into one multi-`hostd` registry with label/pin placement and disconnect holds remains | [§3 `grain hostd`](#3-grain-hostd) |
 | `/fs/` virtual namespace (`ci://`, `src://`, `task://`, `config://`, `memory://`, `deploy://`) | Implemented | [§2 Sandboxes](#2-sandboxes) (`pkg/namespace`) |
-| In-sandbox `grain` CLI (`/cli/`, `/cap/`) and shrunken MCP control set | Implemented | [`docs/agent-api.md`](../../docs/agent-api.md), [`docs/capabilities-spec.md`](../../docs/capabilities-spec.md) |
+| In-sandbox `grain` CLI (`/cli/`, `/cap/`) and shrunken MCP control set | Implemented | [`docs/agent-api.md`](../../docs/agent-api.md), [`design/spec/capabilities/capabilities.spec.md`](../spec/capabilities/capabilities.spec.md) |
 | Durable tasks, suspensions (`resume_later`), goals, and operator notifications | Implemented | [§A task's lifecycle](#a-tasks-lifecycle) (`pkg/model`, `pkg/orchestrator`) |
-| Standing director sessions and external interactive CLIs | Implemented | [`director.design.md`](director.design.md), [`design/spec/director/`](../spec/director/), [`external-cli.design.md`](external-cli.design.md) |
-| Unified grants | In progress — unified Grants UI picker is implemented; canonical backend grant storage, migrating legacy in-process capability flags, and unifying repository read/write grants remain | [`docs/capabilities-spec.md`](../../docs/capabilities-spec.md) |
-| Verified proxy authentication (`IdentityVerifier` and direct IAP sign-in) | Design — IAP JWT refusal checks and programmatic OIDC dialing exist; authenticating callers directly via `IdentityVerifier` and per-principal attribution remain | [`authentication.design.md`](authentication.design.md), [`operator-attribution.design.md`](operator-attribution.design.md), [`design/spec/operator-attribution/`](../spec/operator-attribution/) |
+| Standing director sessions and external interactive CLIs | Implemented | [`director.design.md`](director.design.md), [`design/spec/director/`](../spec/director), [`external-cli.design.md`](external-cli.design.md) |
+| Unified grants | In progress — unified Grants UI picker is implemented; canonical backend grant storage, migrating legacy in-process capability flags, and unifying repository read/write grants remain | [`design/spec/capabilities/capabilities.spec.md`](../spec/capabilities/capabilities.spec.md) |
+| Verified proxy authentication (`IdentityVerifier` and direct IAP sign-in) | Design — IAP JWT refusal checks and programmatic OIDC dialing exist; authenticating callers directly via `IdentityVerifier` and per-principal attribution remain | [`authentication.design.md`](authentication.design.md), [`operator-attribution.design.md`](operator-attribution.design.md), [`design/spec/operator-attribution/`](../spec/operator-attribution) |

@@ -14,7 +14,7 @@
 
 package mcp
 
-// notify_operator and message_task (docs/design/durable-tasks.md, DT-5
+// notify_operator and message_task (design/design/durable-tasks.design.md, DT-5
 // and DT-10): "tell the operator" and "tell another task's agent", two
 // separate tools, neither of which parks anybody. ask_question keeps its
 // meaning -- this task cannot continue without an answer -- and these

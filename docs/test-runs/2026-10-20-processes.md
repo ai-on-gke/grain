@@ -1,6 +1,6 @@
 # 2026-10-20: Processes (settings-panel stage b)
 
-Stage (b) of `docs/design/settings-panel.md`: Schedules, Templates and
+Stage (b) of `design/design/settings-panel.design.md`: Schedules, Templates and
 Suites became one Processes page. This is the run of
 `ui/e2e/processes-walkthrough.spec.js` that goes with it, and the
 screenshots in `2026-10-20-processes/`.

@@ -38,7 +38,7 @@ const capabilityServerPrincipal = "capability-servers"
 
 // startCapabilityServers builds the registry of the deployment's
 // attached capability servers (pkg/capability/servers,
-// docs/capabilities-spec.md §3.1-§3.2) and starts the loop that keeps it
+// design/spec/capabilities/capabilities.spec.md §3.1-§3.2) and starts the loop that keeps it
 // in step with grain_config.mcp_servers until ctx ends.
 //
 // A server whose configure schema declares grain's identity fields

@@ -41,7 +41,7 @@ export function taskBranchSuggestion(settings) {
   return null;
 }
 
-// AgentsSection is Settings → Agents (docs/design/settings-panel.md
+// AgentsSection is Settings → Agents (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function AgentsSection({ s }) {
   const { settings, saveChoice, onTextBlur, onIntBlur, onEnterKey } = s;

@@ -2381,7 +2381,7 @@ as *superseded* (`Store.Supersede`) hands its open dependents over to
 its replacement first, so they go on waiting rather than being released
 alongside the task that took over the work. The replacement's own wait
 on the old task, and a dependent the replacement already waits on, stay
-where they are (implementation-notes, "A task is superseded when its
+where they are ("A task is superseded when its
 replacement is filed"). `FIXES` is `OpenPullRequest.fix_issue` read from the other
 direction. `PROPOSED_BY` is the English sentence `_file_proposed_tasks`
 writes today, made queryable — it never blocks anything, it just answers

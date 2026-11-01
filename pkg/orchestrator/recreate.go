@@ -213,7 +213,7 @@ func (r *SandboxRecreations) setMaterialized(taskID string, materialized []model
 
 // setCapabilityPass records the pass materialized into taskID's run's
 // sandbox, so a rebuild can apply it to the new one without minting
-// again (docs/capabilities-spec.md §4.4.3).
+// again (design/spec/capabilities/capabilities.spec.md §4.4.3).
 func (r *SandboxRecreations) setCapabilityPass(taskID string, pass *passMaterialization) {
 	rec := r.lookup(taskID)
 	if rec == nil {

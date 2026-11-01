@@ -735,7 +735,7 @@ type k8sService struct {
 // own labels.
 //
 // This is what lets a run the next daemon pod adopts after a rollout
-// (docs/non-disruptive-upgrade.md, Stage 2b) still push its pull
+// (design/design/non-disruptive-upgrade.design.md, Stage 2b) still push its pull
 // request. A sandbox is handed its URLs once, when it is created, so
 // they have to name something that outlives the pod that created it --
 // the Service's cluster IP, on ports the -sandbox-port-base block fixes.

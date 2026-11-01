@@ -15,7 +15,7 @@
 package container
 
 // A daemon restart underneath a `grain mcpserver` call
-// (docs/non-disruptive-upgrade.md, Stage 1).
+// (design/design/non-disruptive-upgrade.design.md, Stage 1).
 //
 // An agent's tools reach the daemon through pkg/ui.HTTPClient, the same
 // client `grain mcpserver` is built on. While an upgrade restarts the

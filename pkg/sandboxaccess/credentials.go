@@ -28,7 +28,7 @@ import (
 
 // MaxCredentialLife caps how long a sandbox's client certificate and
 // token are minted for, whatever life the sandbox asks for
-// (docs/design/grain-on-gke.md, "Credentials, per sandbox").
+// (design/design/grain-on-gke.design.md, "Credentials, per sandbox").
 const MaxCredentialLife = 7 * 24 * time.Hour
 
 // MountDir is where the wrapper container finds a sandbox's

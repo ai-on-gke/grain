@@ -138,9 +138,9 @@ operator decides otherwise.
 | Ports | Owner |
 |-------|-------|
 | `:0` / ephemeral | test servers, `grain demo -addr 127.0.0.1:0` in e2e, the daemon with `-sandbox-port-base=0` |
-| per attempt | capability `ports` grants' `host_port` (`docs/capabilities-spec.md` §5.3) |
+| per attempt | capability `ports` grants' `host_port` (`design/spec/capabilities/capabilities.spec.md` §5.3) |
 | `-granule-base-port` | ignored, and to be removed; it used to forward 12000-12255 |
-| test-only literals | `_test.go` files, `tests/`, `docs/test-runs/` and `docs/hand-runs/` (8421, 8430, 18080, 18420 and the like) are what one run happened to pick, not defaults |
+| test-only literals | `_test.go` files, `tests/`, `docs/test-runs/` (8421, 8430, 18080, 18420 and the like) are what one run happened to pick, not defaults |
 
 ## Persistent sandboxes
 

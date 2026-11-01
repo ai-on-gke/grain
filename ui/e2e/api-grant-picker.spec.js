@@ -19,7 +19,7 @@ import { expect, test } from "./fixtures.js";
 // agent API's presets and scopes (ui.APICapabilities, docs/agent-api.md).
 // They are one "Add grant…" menu with the capability server methods,
 // grouped by kind -- presets first, then scopes by area -- and every
-// grant held is one section in one list (docs/design/unified-grants.md).
+// grant held is one section in one list (design/design/unified-grants.design.md).
 
 async function fileTask(request, capabilities) {
   const created = await request.post("/api/tasks", {

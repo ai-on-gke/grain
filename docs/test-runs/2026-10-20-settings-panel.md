@@ -1,7 +1,7 @@
 # 2026-10-20: the Settings panel, stage (a)
 
 Task 4882, building stage (a) of
-[docs/design/settings-panel.md](../design/settings-panel.md) (SET-1):
+[design/design/settings-panel.design.md](../../design/design/settings-panel.design.md) (SET-1):
 one Settings view behind a gear in the top bar, a status-only System
 view beside it, Memory in Settings, and the team leftovers gone.
 

@@ -198,7 +198,7 @@ their old names (`list_grain_tasks`, `read_grain_metrics`, ...).
 `team-broadcast`, `dispatch-control`, `pipeline-control`, `memory`,
 `release-notes`, `self-upgrade` and `test-quarantine` are aliases
 too, but their
-in-process capabilities are retired (docs/design/unified-grants.md §4):
+in-process capabilities are retired (design/design/unified-grants.design.md §4):
 they have no tools of their own any longer, and a run holding one is
 served its preset's `api_*` tools and `grain` CLI subcommands instead (`api_deployment_broadcast`
 for `broadcast_team_message`; the pipeline-pause, run-now and defer
@@ -410,7 +410,7 @@ repository access, a job is granted them by declaring them: they are
 not taken from the repository's CI capabilities list.
 
 `release-gate-read`, the release train's capability
-(`docs/design/release-from-trunk.md`, RFT-3), is the built-in preset
+(`design/design/release-from-trunk.design.md`, RFT-3), is the built-in preset
 `api:release-gate-read`. A job may declare it under either name.
 
 ## Policy
@@ -526,7 +526,7 @@ any other read -- and refuses,
 changing nothing, when any field given disagrees with the record, naming
 both versions. `kind` is one of the kind tags `port`, `repair`, `session`,
 `proposal`, `durable` (`ui.TaskKindTags`), or `none`
-(docs/design/durable-tasks.md#DT-13).
+(design/design/durable-tasks.design.md#DT-13).
 
 Descriptions come from `routeDocs`, or, for a read with none, from the
 handler's name. `TestEveryScopedRouteIsDescribed` (in

@@ -417,7 +417,7 @@ describe("panelMetricsWindow", () => {
 // is a different thing: a panel written `1d` drew a week and looked
 // exactly like a panel that had asked for one. A hand run measuring the
 // real dashboard was misled by precisely that
-// (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5).
+// (the 2026-09-07 panel-dashboard hand run, section 5).
 describe("panelRangeNote", () => {
   it("says nothing about a panel whose range this build has", () => {
     for (const range of RANGES.map((r) => r.id)) {

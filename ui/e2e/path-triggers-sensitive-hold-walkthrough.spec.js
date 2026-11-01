@@ -89,7 +89,7 @@ test.describe("Sensitive path hold walkthrough", () => {
   // A trigger row on Processes is declared like every other declared row
   // -- the chip names the repository, its title the file -- and it opens
   // the repository's Advanced tab, which lists that file by path
-  // (docs/design/settings-panel.md §5.1). Found in the 2026-10-29
+  // (design/design/settings-panel.design.md §5.1). Found in the 2026-10-29
   // recurring and composed-work walkthrough: the row carried no chip and
   // the tab only counted "1 trigger(s)".
   test("a trigger row says it is declared and opens the tab that names its file", async ({

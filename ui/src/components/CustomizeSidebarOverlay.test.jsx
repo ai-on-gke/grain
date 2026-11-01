@@ -88,7 +88,7 @@ describe("CustomizeSidebarOverlay", () => {
   });
 
   it("offers Processes in place of Schedules, Templates and Suites", async () => {
-    // docs/design/settings-panel.md §5.6: the three views are one
+    // design/design/settings-panel.design.md §5.6: the three views are one
     // Processes view, which pins as itself and has its own glyph.
     const onSave = vi.fn();
 

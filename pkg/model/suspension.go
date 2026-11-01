@@ -18,7 +18,7 @@ import "time"
 
 // SuspensionKind is why a run stopped without its task being judged: the
 // task is not done and nothing about the stop is evidence against it, so
-// it is resumed rather than retried (docs/design/durable-tasks.md#DT-2).
+// it is resumed rather than retried (design/design/durable-tasks.design.md#DT-2).
 //
 // The set is closed and this file is the whole of it. The constants
 // below are read by orchestrator's TestEverySuspensionKindKeepsDispatchStanding
@@ -270,7 +270,7 @@ type Suspension struct {
 }
 
 // SuspensionNote is the one line a run's prompt opens with when the run
-// before it was suspended (docs/design/durable-tasks.md#DT-2, Continuity).
+// before it was suspended (design/design/durable-tasks.design.md#DT-2, Continuity).
 func SuspensionNote(kind SuspensionKind, detail string, at time.Time) string {
 	what := string(kind)
 	if detail != "" {

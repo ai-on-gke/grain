@@ -26,7 +26,7 @@ import (
 )
 
 // grain's own escalations, raised as operator notifications
-// (docs/design/durable-tasks.md, DT-5's "Existing escalations, mapped").
+// (design/design/durable-tasks.design.md, DT-5's "Existing escalations, mapped").
 //
 // Each is raised where the escalation already happens and cleared by the
 // same code when its condition goes away, so a notification is never the

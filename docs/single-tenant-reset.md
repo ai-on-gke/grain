@@ -796,8 +796,7 @@ starts before the one it builds on has merged.
              - **3e-iv-b2c-ii (task 4840, landed):** the two places
                membership still decided anything. The hub's check that a
                hub task's submitter and approver are on the team it files
-               into went with the hub itself (commit 6f5d809e4,
-               [hub-removed.md](hub-removed.md)), which landed first.
+               into went with the hub itself (commit 6f5d809e4), which landed first.
                `Store.IsApprover` reads a `team:` or `team-admins:` token
                as the deployment's admin accounts (`system-admins`), so
                the default approver of a sensitive trigger with no

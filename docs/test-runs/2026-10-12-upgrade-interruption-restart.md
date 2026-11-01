@@ -115,7 +115,7 @@ restarts logged `API 300ms` each (09:15:00, 09:15:11).
   measured from the earlier SIGTERM, which it had recorded as `down.shutdown`.
 - **`kill -9` with no stop first:** the old process wrote no `down` times, so the 09:06:32 start logged **no gap line
   at all**. Its `services` entries carry `upAt` only. This follows from the design, but the doc did not say it. It now
-  does (`docs/non-disruptive-upgrade.md`, "The gap is measured").
+  does (`design/design/non-disruptive-upgrade.design.md`, "The gap is measured").
 - While the daemon was down, the file's `down` map held `shutdown` and each listener's close time, all within
   4 ms of each other.
 
@@ -224,7 +224,7 @@ endpoints, 5 attempts each. Verified live: 114.6 s.
 
 ### 5. The design doc still said a leftover run ends `orphaned` with a strike (fixed, docs)
 
-`docs/non-disruptive-upgrade.md`'s "What a restart costs today" table predates `6e0b3c0e9`. It now says
+`design/design/non-disruptive-upgrade.design.md`'s "What a restart costs today" table predates `6e0b3c0e9`. It now says
 `RecoverOrphanedRuns` finishes such a run as `interrupted` with no strike, which is what step 2 observed. The gap
 paragraph now says that a process killed without a stop leaves nothing to measure from.
 

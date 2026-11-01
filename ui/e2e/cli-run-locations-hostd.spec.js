@@ -19,7 +19,7 @@ import { test, expect } from "./fixtures.js";
 // against the real `grain demo -host-executor=hostd` server -- whose hostd
 // is a real one, on a throwaway allowlist offering agy and the
 // corp-search capability (pkg/demo's startDemoHostd). None of grain's own
-// APIs are mocked. docs/design/cli-run-location.md, "Container mode".
+// APIs are mocked. design/design/cli-run-location.design.md, "Container mode".
 
 test.use({ demoArgs: ["-host-executor=hostd"] });
 

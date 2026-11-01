@@ -77,7 +77,7 @@ import (
 //	   - Required Granule microVM boundary: `systemd`, passwordless `sudo` for
 //	     `debian`, `/usr/local/bin/grain-connect` (`/run/grain` tmpfiles.d),
 //	     and Granule guest contract `dev.granule.guest.contract` = 1.
-//	2: In-sandbox grain CLI (docs/design/sandbox-first-agent-surface.md):
+//	2: In-sandbox grain CLI (design/design/sandbox-first-agent-surface.design.md):
 //	   - Required common boundary: executable `/usr/local/bin/grain`
 //	     (cmd/grain-sandbox) carrying the sandbox CLI -- `grain ls`, `read`,
 //	     `grep`, `ci`, `pr`, `task`, `api` -- beside `grain host-script`. The

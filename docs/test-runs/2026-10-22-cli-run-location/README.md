@@ -1,7 +1,7 @@
 # 2026-10-22: agent CLI run locations (task 5012)
 
 What was run to verify per-CLI run locations
-([docs/design/cli-run-location.md](../../design/cli-run-location.md)) in
+([design/design/cli-run-location.design.md](../../../design/design/cli-run-location.design.md)) in
 the harness. A real Cloudtop is the owner's to test after the merge.
 
 ## Container launcher, end to end against real docker

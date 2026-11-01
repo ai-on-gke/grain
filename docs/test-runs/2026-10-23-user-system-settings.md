@@ -37,7 +37,7 @@ it shared reached its usage limit.
 The brief describes an older layout: a user tile at the foot of the rail,
 an `/admin/<tab>` System pane holding configuration, a standalone
 `/memory` page, and a System administrators card. Since
-`docs/design/settings-panel.md` (SET-1..3), configuration lives in
+`design/design/settings-panel.design.md` (SET-1..3), configuration lives in
 **Settings** (`/settings/<section>`, from the top-bar gear) and operations
 live in **System** (`/system/<tab>`, from the top-bar System icon and the
 footer build stamp). The walkthrough mapped the brief onto that layout:
@@ -297,7 +297,7 @@ There were no uncaught page errors.
   open the Inbox with a config-repo sync failure (stubbed). The time was
   still printed on the browser's clock.
 - **Cause**: `TimeZoneProvider` was fed only `config.timeZone`, and nothing
-  but the picker read `usePreferences().timeZone`. `docs/design/settings-panel.md`
+  but the picker read `usePreferences().timeZone`. `design/design/settings-panel.design.md`
   §6.2 names `TimeZoneContext` as its consumer, and SET-3 left that wiring
   out. The sync sentence also used a bare `toLocaleString()`.
 - **Fix**: `AppContent` feeds `preferredTimeZone || config.timeZone` to

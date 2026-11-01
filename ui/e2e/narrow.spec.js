@@ -264,7 +264,7 @@ const CROWDED = {
     "Bump every direct dependency to its latest patch release and open one pull request per module",
 };
 
-// The Processes table (docs/design/settings-panel.md §5.1) replaced the
+// The Processes table (design/design/settings-panel.design.md §5.1) replaced the
 // Templates and Suites pages' flex rows, whose floors and drop orders
 // the tests here used to pin down. In a column of its own a name wraps
 // rather than ellipsising, so what is left to hold at this width is the

@@ -782,7 +782,7 @@ func collectBaseBranchCI(ctx context.Context, deps Deps, row model.BaseBranchCI,
 		// A failure whose every failing job failed on the deployment --
 		// a capability or credential grain could not hand over, a quota,
 		// a registry rate limit -- is an `infra` verdict, not a red tree
-		// (infraVerdict, docs/design/release-from-trunk.md RFT-2). While
+		// (infraVerdict, design/design/release-from-trunk.design.md RFT-2). While
 		// it has re-runs left it is recorded as errored, which holds no
 		// merge and earns no repair, and re-run like any other verdict
 		// about nothing (baseCIRetryDue). Once they are spent it stands

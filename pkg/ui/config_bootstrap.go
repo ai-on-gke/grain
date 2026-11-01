@@ -24,7 +24,7 @@ import (
 
 // clearBootstrap zeroes the bootstrap fields of the deployment's row:
 // the Models and Sandboxes settings that stay writable from the UI in
-// internal mode (docs/design/config-repo-settings.md, section 2.2), so
+// internal mode (design/design/config-repo-settings.design.md, section 2.2), so
 // what is left is the configuration only the config repository writes.
 func clearBootstrap(c *model.Config) {
 	// Models.

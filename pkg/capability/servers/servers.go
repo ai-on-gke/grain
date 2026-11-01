@@ -14,7 +14,7 @@
 
 // Package servers keeps the daemon's attached capability servers: the
 // mcpServers entries of grain_config (model.Config.MCPServers,
-// docs/capabilities-spec.md §3.1), each attached with protocol.Attach and
+// design/spec/capabilities/capabilities.spec.md §3.1), each attached with protocol.Attach and
 // held under its capability_id for as long as its configuration says it
 // should be.
 //
@@ -139,7 +139,7 @@ type MethodDetail struct {
 	// stateful and its leases are released at teardown.
 	Releasable bool `json:"releasable"`
 	// Delivery is how the tools its grants' endpoints serve are
-	// delivered unless a tool says otherwise (docs/capabilities-spec.md
+	// delivered unless a tool says otherwise (design/spec/capabilities/capabilities.spec.md
 	// §5.2.6): "sandbox", through grain cap, or "model_only", the
 	// default, on the agent's own MCP channel alone.
 	Delivery string `json:"delivery"`

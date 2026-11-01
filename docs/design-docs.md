@@ -164,4 +164,4 @@ does not write design docs.
 
 For the end-to-end architecture overview of how Grain itself holds together
 (as opposed to how design-doc triggers plan work), see
-[`architecture.md`](architecture.md).
+[`architecture.design.md`](../design/design/architecture.design.md).

@@ -198,7 +198,7 @@ and **Container** both mean here. `PUT /api/settings/cli-run` refuses
 `-codex-run=host`, `-agy-run=host` or `-hostd-socket`. A `host` stored by
 an earlier install runs in the container instead: the daemon logs it once
 and Settings shows a warning until it is changed
-([docs/design/cli-run-location.md](../../docs/design/cli-run-location.md)).
+([design/design/cli-run-location.design.md](../../design/design/cli-run-location.design.md)).
 
 The **Sandbox health** pane stays: those are pods this deployment really
 does own. Two of its figures mean something slightly different here —

@@ -63,7 +63,7 @@ FROM ${BASE_IMAGE} AS k8s-sandbox-base
 # python3-minimal is not a convenience: grain's own guest port forwarder
 # (pkg/capability/portforward.GuestForwarder) is a python3 script, started in
 # the sandbox before the agent is, for every capability grant that forwards a
-# port (docs/capabilities-spec.md §5.3). Without it that grant fails at
+# port (design/spec/capabilities/capabilities.spec.md §5.3). Without it that grant fails at
 # dispatch, and an apt-get the run could make comes too late. The minimal
 # package carries every module the forwarder imports, which the build checks
 # below; it is about 5MB where python3 with its standard library is about 25MB.
@@ -88,7 +88,7 @@ RUN install -d -m0755 /etc/grain \
 COPY --from=grain_sandbox_builder /out/grain /usr/local/bin/grain
 
 # The sandbox user is debian, uid 1000, in /home/debian: the user and home
-# capability materialization writes into (docs/capabilities-spec.md §5.1,
+# capability materialization writes into (design/spec/capabilities/capabilities.spec.md §5.1,
 # pkg/orchestrator/capability_materialize.go) and the granule guest
 # already has. It was agent in /home/agent, and every capability grant
 # with a port or a placement then failed before the agent started --
@@ -222,7 +222,7 @@ RUN if [ "$INSTALL_CLAUDE_CLI" = "1" ]; then \
 
 # agy updates itself in place during an ordinary run ("The Antigravity
 # CLI automatically self-updates in the background during regular runs",
-# says its own installer; docs/hand-runs/2026-09-17-agy-self-update.md is
+# says its own installer; the 2026-09-17 agy-self-update hand run is
 # the measurement). Here that cannot succeed -- the install below is
 # root-owned and a+rX and this image's USER is unprivileged -- so what
 # the variable buys is an image that carries the agy it says it carries
@@ -238,7 +238,7 @@ ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
 # manifest, so installing through it put whatever agy was current on
 # build day into this image -- two builds of the same grain commit
 # carrying two different agys, with nothing in the tree saying which.
-# That was the half task 185 left open (docs/hand-runs/2026-09-17-agy-self-update.md,
+# That was the half task 185 left open (the 2026-09-17 agy-self-update hand run,
 # "Still owed"): disabling the updater stopped the binary changing under
 # a running task, and settled nothing about which binary the image
 # started with.

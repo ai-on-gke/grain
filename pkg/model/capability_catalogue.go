@@ -14,7 +14,7 @@
 
 package model
 
-// The capability catalogue (docs/design/config-repo-settings.md §3): one
+// The capability catalogue (design/design/config-repo-settings.design.md §3): one
 // declarative account of every capability a run may hold and who may
 // hold it, written in grain/config as settings/capabilities.yml
 // (pkg/staterepo/capabilities_file.go) and kept at runtime inside

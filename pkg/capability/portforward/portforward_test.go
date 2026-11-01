@@ -266,7 +266,7 @@ func TestRelayFallsBackToInodeOwnerWhenProcFDsAreUnreadable(t *testing.T) {
 
 // TestServeAppliesTheRelaysRulesToAChannelConnection covers Forward.Serve,
 // the path a sandbox's dial-out channel carries a guest connection by
-// (docs/design/grain-on-gke.md#GKE-3): it reaches host_port while the
+// (design/design/grain-on-gke.design.md#GKE-3): it reaches host_port while the
 // listener belongs to the service, is refused once it does not -- the
 // check runs per connection, not only at Open -- and closing the forward
 // cuts a connection it is carrying (§5.3.2, §5.3.4).

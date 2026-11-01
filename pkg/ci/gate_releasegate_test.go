@@ -22,7 +22,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// PriorityReleaseGate (docs/design/release-from-trunk.md, RFT-2): the
+// PriorityReleaseGate (design/design/release-from-trunk.design.md, RFT-2): the
 // runs a trunk release is selected on rank above a merge-queue head and
 // below a repair, may spend the repair reserve, and have a hole held for
 // them from their first refusal. Driven through take directly, one

@@ -16,7 +16,7 @@ package deploy
 
 // A Kubernetes deployment has no host and no grain hostd: every agent
 // CLI runs as a subprocess in the daemon pod's own container
-// (docs/design/cli-run-location.md, "Deployments with no host
+// (design/design/cli-run-location.design.md, "Deployments with no host
 // executor"). Both manifests are held to starting a daemon that agrees:
 // no run location is asked for, so each CLI takes its default, which
 // resolves to the pod's own container -- and nothing looks for hostd's

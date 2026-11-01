@@ -57,7 +57,7 @@ type SupersedeKeptEntry struct {
 // task nobody proposed.
 type Task struct {
 	// Goal is the task's goal and grain's progress towards it
-	// (model.TaskGoal, docs/design/durable-tasks.md#DT-4); filled on a
+	// (model.TaskGoal, design/design/durable-tasks.design.md#DT-4); filled on a
 	// single task's read, nil in a list and for a task with none.
 	Goal        *model.TaskGoal `json:"goal,omitempty"`
 	ID          string          `json:"id"`
@@ -1454,7 +1454,7 @@ type configResponse struct {
 	// for a restart, or an upgrade that ends in one is running. The
 	// frontend remembers it, so that when the next poll cannot reach
 	// the API it says "grain is restarting" rather than that the
-	// deployment cannot be reached (docs/non-disruptive-upgrade.md,
+	// deployment cannot be reached (design/design/non-disruptive-upgrade.design.md,
 	// Stage 1).
 	Restarting bool `json:"restarting,omitempty"`
 	// SandboxCount is the number of live agent and CI sandboxes the
@@ -1731,13 +1731,13 @@ type configResponse struct {
 	// external config repository, or the internal grain/config with
 	// settings_locked enabled and without the directConfigWrites opt-out.
 	// The UI draws the config-repo-only settings read-only exactly then
-	// (docs/design/config-repo-settings.md §2.1).
+	// (design/design/config-repo-settings.design.md §2.1).
 	ConfigRepoOnly bool `json:"configRepoOnly,omitempty"`
 	SettingsLocked bool `json:"settingsLocked,omitempty"`
 	// NewTaskForm is settings/new-task-form.yml as stored
 	// (model.NewTaskForm), which the New Task form resolves for the
 	// repository, template and board it is filled in for; nil draws the
-	// form as built (docs/design/config-repo-settings.md §6).
+	// form as built (design/design/config-repo-settings.design.md §6).
 	NewTaskForm *model.NewTaskForm `json:"newTaskForm,omitempty"`
 }
 

@@ -184,7 +184,7 @@ describe("TasksSection", () => {
     });
   });
 
-  // docs/design/config-repo-settings.md §7.4: under the config repo the
+  // design/design/config-repo-settings.design.md §7.4: under the config repo the
   // defaults are settings/capabilities.yml's, listed as chips beside a
   // link to it rather than edited with a GrantsPicker.
   it("lists default method and api grants as read-only chips linked to settings/capabilities.yml", async () => {

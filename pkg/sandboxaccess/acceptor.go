@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package sandboxaccess is grain's end of granule's dial-out sandbox
-// access channel (docs/design/grain-on-gke.md, "Sandbox access"): the
+// access channel (design/design/grain-on-gke.design.md, "Sandbox access"): the
 // mTLS acceptor sandbox wrappers dial, the per-deployment CA, the
 // per-sandbox client certificate and token it mints, the admission
 // checks, and the table of which sandboxes are connected.
@@ -35,7 +35,7 @@
 // but nothing persists them yet, so a sandbox pod readopted by a
 // restarted grain has no credentials here and its wrapper is refused
 // until the pod is rebuilt (reattach is GKE-4,
-// docs/design/grain-on-gke.md "Restart").
+// design/design/grain-on-gke.design.md "Restart").
 package sandboxaccess
 
 import (

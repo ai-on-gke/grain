@@ -39,7 +39,7 @@ import (
 )
 
 // The deployment's capability servers: grain_config.mcp_servers, keyed by
-// capability_id (model.Config.MCPServers, docs/capabilities-spec.md
+// capability_id (model.Config.MCPServers, design/spec/capabilities/capabilities.spec.md
 // §3.1). Settings and `grain capability-servers` add, remove, enable and
 // disable them here and bind their env and headers entries to secrets in
 // the encrypted secrets store; the daemon attaches what is saved on its

@@ -28,7 +28,7 @@ import (
 // types a Request and a Job carry, the name checks the parser applies,
 // the environment a step is given (which is part of a job's key), and
 // the guest-cache key. They moved here with the parser so that it stays
-// neutral (docs/design/grit-split.md, "Neutral packages"); pkg/ci
+// neutral (design/design/grit-split.design.md, "Neutral packages"); pkg/ci
 // re-exports each of them under its old name.
 
 // LifecycleImageEnv is model.LifecycleImageEnv, restated because this
@@ -61,7 +61,7 @@ type CapabilitySyntax struct {
 // installs grain's when it is linked, which every grain binary does.
 // What it holds before then accepts plain names only and checks nothing
 // of a reference's grammar: deciding what a capability means is grain's
-// business, not the executor's (docs/design/grit-split.md, "Secrets and
+// business, not the executor's (design/design/grit-split.design.md, "Secrets and
 // trust").
 var Capabilities = CapabilitySyntax{
 	CheckGrant: func(string) error { return nil },
@@ -160,7 +160,7 @@ const (
 	// release-train). Their verdicts are what a release candidate is
 	// selected on, and on 2026-10-22 a nightly at PriorityNormal was
 	// starved and then OOM-cancelled by ordinary task load
-	// (docs/design/release-from-trunk.md, RFT-2). It ranks above a
+	// (design/design/release-from-trunk.design.md, RFT-2). It ranks above a
 	// merge-queue head and below a repair, and it is the lowest rank that
 	// may spend the repair reserve (MaySpendReserve) and that has a hole
 	// held for it the moment the budget refuses it (ReservesAtOnce). It

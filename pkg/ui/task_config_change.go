@@ -27,7 +27,7 @@ import (
 )
 
 // A config change a session proposed in its own chat
-// (docs/design/config-repo-settings.md, section 4.3). The session's
+// (design/design/config-repo-settings.design.md, section 4.3). The session's
 // propose_config_change tool pushes a branch of grain/config and asks the
 // daemon here to diff and validate it (POST /api/tasks/{id}/config-change,
 // grain's own plumbing, called by the mcpserver for the run's own task);

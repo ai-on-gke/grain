@@ -353,7 +353,7 @@ export function panelMetricsWindow(panel, scope) {
 // That is not hypothetical. A hand run seeded a dashboard with a second
 // timeline panel "ranged to a single day", measured it as identical to
 // the seven-day one, and concluded from that that a panel's range does
-// not decide what it draws (docs/hand-runs/2026-09-07-panel-dashboard.md,
+// not decide what it draws (the 2026-09-07 panel-dashboard hand run,
 // section 5). The row said `"1d"`; the day-wide range is `"24h"`. A
 // person measuring the thing, looking straight at it, was wrong about
 // it for a whole section, and this line is what would have told them.

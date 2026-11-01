@@ -27,7 +27,7 @@ import (
 // when one of them outlives its state's patience.
 //
 // liveness.go classifies states. A state is too coarse to be the unit of
-// the rule (docs/design/task-liveness.md): waiting_ci is driven by
+// the rule (design/design/task-liveness.design.md): waiting_ci is driven by
 // reconcileTaskCI while a run is owed, by GitHub while GitHub's checks are
 // pending, and -- before grain/task-418 -- by nothing at all once a person
 // cancelled the run, all under one word and one row. Tasks 335, 351, 360

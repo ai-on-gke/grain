@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package protocol implements Grain's side of the capability control-plane
-// protocol specified in docs/capabilities-spec.md (the author's guide is
+// protocol specified in design/spec/capabilities/capabilities.spec.md (the author's guide is
 // docs/capabilities.md): the target architecture in which a capability is
 // an MCP server configured under mcpServers in grain/config, advertising a
 // mint_<method> tool per capability method and a release_<method> tool for

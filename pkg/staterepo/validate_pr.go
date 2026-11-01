@@ -28,7 +28,7 @@ import (
 )
 
 // The pre-review validation of a config pull request
-// (docs/design/config-repo-settings.md, section 4.4): what a candidate
+// (design/design/config-repo-settings.design.md, section 4.4): what a candidate
 // grain/config tree has to pass before a person is asked to look at it,
 // let alone merge it. Each stage answers one question:
 //

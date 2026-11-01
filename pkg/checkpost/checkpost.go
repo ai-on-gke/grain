@@ -39,7 +39,7 @@
 // of a bug in the endpoint is everything.
 //
 // And it is the first piece of the forge to live outside the daemon
-// (docs/three-pieces.md). Nothing here knows what a task is, what a
+// (design/design/architecture.design.md). Nothing here knows what a task is, what a
 // sandbox is, or what grain's store looks like. It holds no GitHub
 // credential -- it never calls GitHub, only receives from it -- and the
 // only secret it has is the one it verifies signatures with. That is

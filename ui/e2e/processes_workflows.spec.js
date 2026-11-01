@@ -16,7 +16,7 @@ import { test, expect } from "./fixtures.js";
 
 // The schedule, template and suite workflows, which were three files when
 // each kind had a page of its own. They are one Processes page now
-// (docs/design/settings-panel.md §5), and each kind's old path is that
+// (design/design/settings-panel.design.md §5), and each kind's old path is that
 // page narrowed to the kind, which is where each of these starts.
 
 // Comprehensive UI workflows for Schedules: creating schedules with custom

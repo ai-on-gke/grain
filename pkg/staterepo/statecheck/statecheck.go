@@ -347,7 +347,7 @@ func UnrunnableSettings(ctx context.Context, db *sql.DB) ([]string, error) {
 // (model.Config.MCPServers): an entry protocol.ServerConfig.Validate
 // refuses is one the daemon will not attach, and an env or headers value
 // that looks like a credential but is not a $secret:<name> reference is
-// one this repository is carrying in cleartext (docs/capabilities-spec.md
+// one this repository is carrying in cleartext (design/spec/capabilities/capabilities.spec.md
 // §3.1.2). Neither value is ever repeated in the warning.
 func mcpServerWarnings(servers map[string]protocol.ServerConfig) []string {
 	ids := make([]string, 0, len(servers))

@@ -275,7 +275,7 @@ granted, but it is unreachable configuration.
      the base.
    - Related, and not changed: an agent holding `api:capabilities:admin`
      can still replace the catalogue by sending one. The design
-     (`docs/design/config-repo-settings.md` §2.2) has this route refused
+     (`design/design/config-repo-settings.design.md` §2.2) has this route refused
      with 409 in favour of a config PR.
 3. **Fixed (wording)**: the no-repo refusal said "on none". It now says "on
    a task with no repository (none)".

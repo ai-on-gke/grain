@@ -1,7 +1,7 @@
 # 2026-10-20: the Settings panel walkthrough, checked against SET-1
 
 Task 4895, the test task for stage (a) of
-[docs/design/settings-panel.md](../design/settings-panel.md) (SET-1, at
+[design/design/settings-panel.design.md](../../design/design/settings-panel.design.md) (SET-1, at
 design rev e4761b5). Task 4882 wrote
 `ui/e2e/settings-panel-walkthrough.spec.js` and recorded its first run in
 [2026-10-20-settings-panel.md](2026-10-20-settings-panel.md). This run

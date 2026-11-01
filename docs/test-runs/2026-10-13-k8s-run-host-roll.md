@@ -1,7 +1,7 @@
 # A run pod survives a daemon roll on kind (task 2991)
 
 **What it checks:** the Kubernetes half of Stage 2's acceptance test,
-from the run host's side (docs/non-disruptive-upgrade.md). A run is
+from the run host's side (design/design/non-disruptive-upgrade.design.md). A run is
 started in a run pod. The daemon Deployment is rolled mid-run. The run
 pod keeps running with no daemon, and the next daemon pod adopts it.
 

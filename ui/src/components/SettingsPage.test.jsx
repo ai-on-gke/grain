@@ -60,7 +60,7 @@ function setup(props = {}) {
   return { ...view, onSection };
 }
 
-// docs/design/settings-panel.md §3.
+// design/design/settings-panel.design.md §3.
 describe("SettingsPage", () => {
   afterEach(() => {
     api.mockReset();
@@ -281,7 +281,7 @@ describe("SettingsPage", () => {
     expect(screen.queryByTestId("promptExtension-save")).toBeNull();
   });
 
-  // docs/design/config-repo-settings.md §2.1, §2.3: when the API sends
+  // design/design/config-repo-settings.design.md §2.1, §2.3: when the API sends
   // these sections' writes to the config repo (GET /api/config's
   // configRepoOnly), a section shows what the config repo holds,
   // read-only, and links to the files in the Config Repo Browser.

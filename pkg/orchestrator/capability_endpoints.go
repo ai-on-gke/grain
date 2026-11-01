@@ -30,7 +30,7 @@ import (
 )
 
 // This file is the last two steps of materializing a pass
-// (docs/capabilities-spec.md §5, steps 5 and 6): every grant's
+// (design/spec/capabilities/capabilities.spec.md §5, steps 5 and 6): every grant's
 // mcp_endpoint proxied, handshaken and named (§5.2), and every grant's
 // prompt_section rendered as an attributed block (§5.4). Each proxy is a
 // loopback listener on grain's own host, where the agent CLI runs, aimed
@@ -132,7 +132,7 @@ func (m *passMaterialization) wireEndpoints(ctx context.Context, dataPlane func(
 
 // capabilityMCPTools is what probeCapabilityMCPTools learned of one
 // grant's endpoint: its handshake, and its tools partitioned by their
-// resolved delivery (docs/capabilities-spec.md §5.2.6).
+// resolved delivery (design/spec/capabilities/capabilities.spec.md §5.2.6).
 type capabilityMCPTools struct {
 	protocol.EndpointRoster
 	// ModelOnlyTools are wired to the agent CLI's own MCP configuration

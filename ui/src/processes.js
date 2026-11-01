@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// processes.js is the Processes page's model (docs/design/settings-panel.md
+// processes.js is the Processes page's model (design/design/settings-panel.design.md
 // §5): the schedules, workflow schedules, templates, suites and triggers
 // the four old lists showed, normalised into one row shape so one table
 // can list, search, sort and filter them together. What the rows can be

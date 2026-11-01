@@ -70,7 +70,7 @@ const storageKey = (list) => `${ORDER_STORAGE_PREFIX}${list}`;
 // loadOrder is the ids this browser last stored for one list, oldest
 // entry first, or [] for a list nobody has dragged yet.
 // LEGACY_PROCESS_ORDERS are the three lists Processes replaced
-// (docs/design/settings-panel.md §5.6), each with the prefix its rows'
+// (design/design/settings-panel.design.md §5.6), each with the prefix its rows'
 // keys carry in the one list now (processes.js's row `key`).
 const LEGACY_PROCESS_ORDERS = [
   ["schedules", "schedule:"],

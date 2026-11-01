@@ -1,6 +1,6 @@
 # Authentication: IAP as a first-class sign-in
 
-A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy (`docs/design/grain-on-gke.md`, *UI and API ingress*). IAP already knows who every caller is. Grain does not use that. This doc proposes that a verified IAP assertion authenticates the caller on its own, as a named principal, for the browser, the `grain` CLI, external agents and `grain hostd`. The access code stays for deployments without IAP.
+A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy (`design/design/grain-on-gke.design.md`, *UI and API ingress*). IAP already knows who every caller is. Grain does not use that. This doc proposes that a verified IAP assertion authenticates the caller on its own, as a named principal, for the browser, the `grain` CLI, external agents and `grain hostd`. The access code stays for deployments without IAP.
 
 ## What exists today
 

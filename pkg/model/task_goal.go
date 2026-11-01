@@ -15,7 +15,7 @@
 package model
 
 // Goals: a task that ends when grain sees its goal met rather than when
-// its agent stops (docs/design/durable-tasks.md#DT-4).
+// its agent stops (design/design/durable-tasks.design.md#DT-4).
 //
 // A goal is declared on the task -- by its template (Template.Goal), by
 // the propose_task call that filed it, by a person on the task page, or

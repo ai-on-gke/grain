@@ -49,7 +49,7 @@ up and provisioned, **10** means manual or refused steps remain
 below.
 
 The runs are repeatable:
-[`scripts/platform-verify/`](../scripts/platform-verify/) holds one
+[`scripts/platform-verify/`](../scripts/platform-verify) holds one
 script per platform, each of which builds its host or cluster from
 nothing, asserts the exit code and tears everything down again. A row
 here that has gone stale is re-earned by running the matching script,

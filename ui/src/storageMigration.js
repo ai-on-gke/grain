@@ -21,7 +21,7 @@ import {
 import { TIMEZONE_STORAGE_KEY } from "./PreferencesContext.jsx";
 
 // The one-time move of this browser's per-user keys to deployment-wide
-// ones (docs/design/settings-panel.md §6.3). grain has no users, so the
+// ones (design/design/settings-panel.design.md §6.3). grain has no users, so the
 // name a browser once chose (grain.username) no longer picks which
 // pinned list or time zone it reads. main.jsx runs this before the first
 // render, so nothing ever reads an old key.

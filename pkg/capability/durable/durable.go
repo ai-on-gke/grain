@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package durable is the durable capability
-// (docs/design/durable-tasks.md#DT-1): a task holding it keeps going
+// (design/design/durable-tasks.design.md#DT-1): a task holding it keeps going
 // until its work is done rather than until a clock runs out
 // (model.Task.IsDurable). A run of it has no wall-clock deadline and no
 // wait-credit cap; an idle watchdog suspends it instead, and it is

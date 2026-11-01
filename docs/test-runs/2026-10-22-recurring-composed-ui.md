@@ -5,7 +5,7 @@ schedules, templates, suites, suite runs, and repository-declared rows, in a
 real Chromium browser against a real `grain demo` server. It follows
 [2026-10-15-recurring-composed-ui.md](2026-10-15-recurring-composed-ui.md).
 Since then `candidate` has merged the unified `/processes` surface
-(`docs/design/settings-panel.md` §5, `2b832a8eb`) and the single-tenant reset
+(`design/design/settings-panel.design.md` §5, `2b832a8eb`) and the single-tenant reset
 (`docs/single-tenant-reset.md`), and this pass covered those changes end to
 end:
 

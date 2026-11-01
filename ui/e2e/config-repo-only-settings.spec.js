@@ -14,7 +14,7 @@
 
 import { expect, test } from "./fixtures.js";
 
-// docs/design/config-repo-settings.md §2.1, §2.3, §7.4: when the API
+// design/design/config-repo-settings.design.md §2.1, §2.3, §7.4: when the API
 // sends a settings write to the config repo (GET /api/config's
 // configRepoOnly), Settings keeps Models and Sandboxes editable and draws
 // the departing sections -- and a repository's page -- read-only under a

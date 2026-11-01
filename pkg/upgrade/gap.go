@@ -17,7 +17,7 @@ package upgrade
 // How long a restart made grain unreachable, per listener, measured by
 // the daemon itself on both sides of the restart.
 //
-// This is Stage 1's measurement in docs/non-disruptive-upgrade.md: the
+// This is Stage 1's measurement in design/design/non-disruptive-upgrade.design.md: the
 // API, the git proxy and the model proxies all refuse connections while
 // one process replaces another, and whether that gap is worth a
 // long-lived front door to hide depends on how long it actually is in

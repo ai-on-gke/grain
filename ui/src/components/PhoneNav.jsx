@@ -58,7 +58,7 @@ export default function PhoneNav({
   running,
   onOpenNewTask,
   alerts = null,
-  // The gear, between the alerts button and "+" (docs/design/settings-panel.md
+  // The gear, between the alerts button and "+" (design/design/settings-panel.design.md
   // §4.1): the way into Settings on a phone. System is the row at the
   // foot of the drawer.
   onOpenSettings,

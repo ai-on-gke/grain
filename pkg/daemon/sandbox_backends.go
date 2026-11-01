@@ -116,7 +116,7 @@ func K8sGitProxyHostOrPodIP(flagValue string) string {
 //
 // The address has to outlive this pod. A run pod survives a rollout of
 // the daemon Deployment and is adopted by the next daemon pod
-// (docs/non-disruptive-upgrade.md, Stage 2b), and its sandbox was handed
+// (design/design/non-disruptive-upgrade.design.md, Stage 2b), and its sandbox was handed
 // its URLs once, when it was created: this pod's IP is gone after the
 // roll, and the Service's cluster IP is not. The port block
 // (-sandbox-port-base) is what keeps the port half of those URLs.

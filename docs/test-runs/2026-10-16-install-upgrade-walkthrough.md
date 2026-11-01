@@ -26,7 +26,7 @@ throwaway Debian 12 VMs in `example-sandbox`.
 | 0 | `sudo ./scripts/setup.sh` as the README says | **FAIL**, fixed in this PR: `scripts/setup.sh` has been mode 100644 since a4a39e1a7 (2026-09-14), so `sudo ./scripts/setup.sh` is `command not found`. `bash ./scripts/setup.sh` was used from then on |
 | 1 | Fresh install, container mode, `GRAIN_CHANNEL=latest` | **FAIL**: daemon up, but `-tenancy` ignored and **no admin account** (`unknown user subcommand "bootstrap-admin"`). The fix the readiness report prints fails the same way. Sign-in page OK. Second user and team added by hand |
 | 2 | Re-run unchanged | **PASS**: same channel, address, hosts, users, teams, tasks and admins (state diff identical). The stale "no sign-in account was set up for debian" line is repeated |
-| 3 | Upgrade by `GRAIN_CHANNEL=main` | **PASS** (data). Users, teams, admins, tasks and settings survive. `tenancy: multi (set by -tenancy)`. With `GRAIN_TENANCY=auto`: `tenancy: multi (this installation already has sign-in accounts)`. Running-task drain **not tested** (no agent credential), and docs/non-disruptive-upgrade.md is marked "Proposal ... most of this has not been built", so it promises nothing for a setup.sh re-run |
+| 3 | Upgrade by `GRAIN_CHANNEL=main` | **PASS** (data). Users, teams, admins, tasks and settings survive. `tenancy: multi (set by -tenancy)`. With `GRAIN_TENANCY=auto`: `tenancy: multi (this installation already has sign-in accounts)`. Running-task drain **not tested** (no agent credential), and design/design/non-disruptive-upgrade.design.md is marked "Proposal ... most of this has not been built", so it promises nothing for a setup.sh re-run |
 | 3b | Re-run without `GRAIN_TENANCY` after `auto` | **FAIL**: unit silently rewritten to `-tenancy multi` |
 | 4 | Old-style unit (no `-tenancy`) on main | **PASS**: `tenancy: multi (this installation already has sign-in accounts)`, everyone can still sign in |
 | 5 | Roll back to `latest` | **PASS** at equal schema (17 to 17): all data kept, and a clear unit/image drift warning. **FAIL** across a schema change: users and tasks gone, teams kept, nothing in the readiness report |
@@ -130,7 +130,7 @@ debian pw sign-in: {"error":"invalid username or password"}
 Users and tasks were gone, while teams (rebuilt from `team-state-repos`) still listed
 the vanished users. The readiness report says nothing. Restoring by hand
 worked (stop, move `store.schema16-*` and `state-repo.schema16-*` back, write
-`17`, start). docs/non-disruptive-upgrade.md only says "a rollback meets a
+`17`, start). design/design/non-disruptive-upgrade.design.md only says "a rollback meets a
 store it can still read", about run hosts, and nothing documents setup.sh's
 store reset or how to undo it.
 

@@ -6,7 +6,7 @@ it holds one backlog, belongs to the account that runs
 it, and needs no sign-in. It runs the tasks you file.
 
 > **Want the mental model first (or next)?** Read
-> **[Architecture](architecture.md)** for a 25-minute end-to-end guide to how
+> **[Architecture](../design/design/architecture.design.md)** for a 25-minute end-to-end guide to how
 > Grain holds together—the daemon, sandboxes, task states, CI and merge queue,
 > where state lives, and where to look when something is stuck.
 
@@ -28,7 +28,7 @@ Releases are published as the signed container image
 Google build (`./google/cmd/grain`) is `ghcr.io/bwsalmon/grain/google-grain`,
 with the same tags. Its `/usr/local/bin/grain` is a static Linux binary
 (`CGO_ENABLED=0`). Use a release tag (`vX.Y.Z`, listed
-in [docs/releases](releases/)) rather than `latest`, and pin the digest you
+in [docs/releases](releases)) rather than `latest`, and pin the digest you
 verified:
 
 ```sh

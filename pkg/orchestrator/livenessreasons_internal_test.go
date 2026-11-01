@@ -71,7 +71,7 @@ func TestEveryReasonIsClassified(t *testing.T) {
 }
 
 // TestEveryReasonSaysWhatItHasTo is the shape of a sub-case, per class.
-// The rule (docs/design/task-liveness.md): waiting on a named resource
+// The rule (design/design/task-liveness.design.md): waiting on a named resource
 // with something to free it, executing, or in a person's inbox with the
 // control that ends it.
 func TestEveryReasonSaysWhatItHasTo(t *testing.T) {

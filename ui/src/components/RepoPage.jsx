@@ -174,7 +174,7 @@ function latestPerName(branches) {
 const CI_MODE_ID = "repo-ci-mode";
 
 // REPO_CONFIG_PATHS are the config repo files a repository's settings
-// on this page are kept in (docs/design/config-repo-settings.md §2.1).
+// on this page are kept in (design/design/config-repo-settings.design.md §2.1).
 const REPO_CONFIG_PATHS = [
   "tables/repo_config.json",
   "settings/capabilities.yml",
@@ -187,7 +187,7 @@ const REPO_CONFIG_PATHS = [
 // healthy (Overview), how is it tested (CI), how does work land (Merge
 // queue), what does an agent here get (Agents), and what happens after
 // merge (Releases). The selected tab is in the page's path
-// (/repos/acme/widgets/settings/ci, docs/design/settings-panel.md §2.3,
+// (/repos/acme/widgets/settings/ci, design/design/settings-panel.design.md §2.3,
 // paths.js's REPO_TAB_IDS), so a tab is a link somebody can share and
 // Settings → Repositories can point at. It used to ride in the hash
 // (/repos/acme/widgets#ci), and a link from then still opens its tab.
@@ -501,7 +501,7 @@ export default function RepoPage({
     ? `you can read ${repo}'s settings but not change them: that needs a repository admin`
     : null;
   // configRepoOnly is GET /api/config's word that a repo's settings are
-  // config-repo only (docs/design/config-repo-settings.md §2.1): kept in
+  // config-repo only (design/design/config-repo-settings.design.md §2.1): kept in
   // tables/repo_config.json and settings/capabilities.yml, and refused by
   // the API in favour of a config pull request. Then every configuration
   // control here is drawn with its current value, read-only, under a

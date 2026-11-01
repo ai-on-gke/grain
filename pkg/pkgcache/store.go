@@ -21,7 +21,7 @@ import "io"
 //
 // The Server takes this rather than a *Cache so that the store can be
 // something other than a directory on this host -- the cluster's cache in
-// GCS, or a pass-through to it (docs/design/grit-split.md#GS-1). *Cache
+// GCS, or a pass-through to it (design/design/grit-split.design.md#GS-1). *Cache
 // is the one implementation today.
 type Store interface {
 	// Open returns a stored copy of url, if there is one. The caller

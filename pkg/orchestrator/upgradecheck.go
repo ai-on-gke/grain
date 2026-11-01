@@ -372,7 +372,7 @@ func restartGapFor(cfg Config, status upgrade.Status) upgrade.RestartGap {
 // gap, when it has any services, is how long the restart left grain
 // unreachable (restartGapFor), reported so the check can say whether the
 // gap was ordinary for this mode -- the measurement Stage 1 of
-// docs/non-disruptive-upgrade.md asks every upgrade to take.
+// design/design/non-disruptive-upgrade.design.md asks every upgrade to take.
 //
 // adoption, when set, is what the restart did to the agent runs in run
 // hosts (adoptionFor): how many were adopted, how many lost, and why.

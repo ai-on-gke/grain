@@ -1496,7 +1496,7 @@ func TestReconcilerDownReportsConfiguredFunc(t *testing.T) {
 
 // A daemon on its way down for a restart says so on the call the UI
 // polls, so the banner for the gap that follows can say "restarting"
-// (docs/non-disruptive-upgrade.md, Stage 1).
+// (design/design/non-disruptive-upgrade.design.md, Stage 1).
 func TestConfigReportsRestarting(t *testing.T) {
 	t.Parallel()
 	srv, _ := testServer(t)

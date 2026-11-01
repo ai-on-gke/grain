@@ -39,7 +39,7 @@ import (
 // by codex's own parser (codex.Framework.ParseResult) rather than a fake
 // -- so the run is finished by what it did, its tool call included, and
 // not as interrupted, which is what an adopted codex run came to while
-// codex could not read one (docs/non-disruptive-upgrade.md, "Which
+// codex could not read one (design/design/non-disruptive-upgrade.design.md, "Which
 // substrate carries which CLI").
 //
 // Not parallel: hostd binds its socket under a process-wide umask

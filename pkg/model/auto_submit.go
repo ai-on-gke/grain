@@ -236,7 +236,7 @@ func EscalatedCapabilities(child, parent Task) []string {
 	}
 	// A capability reference the parent's recorded grants do not cover
 	// is an escalation however it came to be on the child, a default
-	// included (docs/capabilities-spec.md §2.3.4).
+	// included (design/spec/capabilities/capabilities.spec.md §2.3.4).
 	return append(out, UncoveredCapabilityRefs(child.Grants, parent.Grants)...)
 }
 

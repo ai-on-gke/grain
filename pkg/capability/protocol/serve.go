@@ -210,7 +210,7 @@ func (s *CapabilityServer) lookupTool(name string) (servedTool, bool) {
 
 // InProcessCaller returns a Caller that invokes s directly in-process with no
 // stdio subprocess or HTTP listener: for grain's own in-process capability
-// servers (docs/design/unified-grants.md §1, §4).
+// servers (design/design/unified-grants.design.md §1, §4).
 func (s *CapabilityServer) InProcessCaller() Caller {
 	return inProcessCaller{s: s}
 }

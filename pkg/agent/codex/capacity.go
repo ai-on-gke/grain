@@ -35,7 +35,7 @@ import "github.com/ai-on-gke/grain/pkg/agent"
 //
 // The exception, and the reason this list carries a status code as well
 // as sentences. Measured on codex-cli 0.153.0 against a stub of the
-// responses API (docs/hand-runs/2026-09-08-codex-retry.md §7): codex
+// responses API (the 2026-09-08 codex-retry hand run §7): codex
 // does not retry an HTTP 429 at all -- one request, about 1.2 seconds --
 // and collapses it to
 //

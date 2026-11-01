@@ -146,15 +146,15 @@ import "strconv"
 //
 // 29 adds `grain_config`.`mcp_servers`: the capability servers this
 // deployment attaches, keyed by capability_id, as a JSON mcpServers
-// object (model.Config.MCPServers, docs/capabilities-spec.md §3.1).
+// object (model.Config.MCPServers, design/spec/capabilities/capabilities.spec.md §3.1).
 //
 // 30 adds `grain_config`.`capability_policy`: which repositories, run
 // kinds and events may hold which capability reference
-// (model.Config.CapabilityPolicy, docs/capabilities-spec.md §4.2.2).
+// (model.Config.CapabilityPolicy, design/spec/capabilities/capabilities.spec.md §4.2.2).
 //
 // 31 adds `grain_config`.`cli_run`: where each agent CLI runs -- on the
 // host, in a container of the release image, or whichever of the two the
-// host allows (model.Config.CLIRun, docs/design/cli-run-location.md).
+// host allows (model.Config.CLIRun, design/design/cli-run-location.design.md).
 //
 // 32 adds `task_observation`.`merge_queue_cancel_handoff_at` and
 // `merge_queue_cancel_handoff_run`: the grain CI run a person cancelled
@@ -217,7 +217,7 @@ import "strconv"
 // reference built FROM guest-base or k8s-sandbox-base
 // (model.Config.SandboxImage), not a script the daemon runs at dispatch.
 //
-// 45 adds the suspension record (docs/design/durable-tasks.md#DT-2):
+// 45 adds the suspension record (design/design/durable-tasks.design.md#DT-2):
 // `task_suspension`, and on `task_run` its `suspend_kind` (backfilled
 // for the four outcomes that were suspensions before the record existed)
 // and `standing`, the model.DispatchStanding snapshot startRun takes.
@@ -245,13 +245,13 @@ import "strconv"
 //
 // 50 adds `task`.`resume_on_deadline` (Task.ResumeOnDeadline), and
 // backfills `task_run`.`suspend_kind` = 'requested' for parked runs, which
-// are now the agent's own suspension (docs/design/durable-tasks.md#DT-9).
+// are now the agent's own suspension (design/design/durable-tasks.design.md#DT-9).
 //
 // 51 adds `ci_job`.`attempts`: each CI job's per-attempt logs and metadata
 // across automatic job retries (model.CIJob.Attempts).
 //
 // 52 adds the `task_goal` table, each task's daemon-checked goal and the
-// progress it has seen (model.TaskGoal, docs/design/durable-tasks.md#DT-4),
+// progress it has seen (model.TaskGoal, design/design/durable-tasks.design.md#DT-4),
 // and `template`.`goal`, the goal a template files its tasks with.
 //
 // 53 adds the `usage_limit_pause` table: the usage-limit pauses in force
@@ -259,7 +259,7 @@ import "strconv"
 //
 // 54 adds `grain_config`.`judgement_model`, the model the symbolic
 // `judgement` model resolves to (model.Config.JudgementModel,
-// docs/design/durable-tasks.md#DT-11).
+// design/design/durable-tasks.design.md#DT-11).
 //
 // 55 adds the `api_scope_set` table: a deployment's own named sets of
 // agent API scopes (model.APIScopeSet, docs/agent-api.md).
@@ -290,7 +290,7 @@ import "strconv"
 //
 // 62 adds the `sandbox_access` table: the SHA-256 token digest and expiry
 // time for each live k8s-granule sandbox's reverse control channel
-// (model.SandboxAccessCredential, docs/design/grain-on-gke.md#GKE-2).
+// (model.SandboxAccessCredential, design/design/grain-on-gke.design.md#GKE-2).
 //
 // 63 adds `sandbox_image_mirror` to `grain_config`: an optional OCI
 // repository into which grain mirrors the build-stamped sandbox image on
@@ -299,7 +299,7 @@ import "strconv"
 // 64 adds the `ci_step_attachment` table: each running CI step's sandbox,
 // exec id and output cursor, so a restarted grain reattaches the step
 // rather than marking its run interrupted (model.CIStepAttachment,
-// docs/design/grain-on-gke.md#GKE-4).
+// design/design/grain-on-gke.design.md#GKE-4).
 //
 // 65 adds `repo_config`.`issue_import_enabled`, `issue_import_repo`,
 // `issue_import_label`, `issue_import_approved` and
@@ -315,7 +315,7 @@ import "strconv"
 // (the grant tables, the default capability lists and the console
 // sessions) to `api:team-broadcast`, the in-process capability having
 // been retired for the agent API's teams:broadcast scope
-// (rewriteLegacyGrants, docs/design/unified-grants.md §4).
+// (rewriteLegacyGrants, design/design/unified-grants.design.md §4).
 //
 // 68 is 67 again for `dispatch-control`, now `api:dispatch-control`.
 //
@@ -1017,7 +1017,7 @@ var Tables = []string{
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_suspension_open`" + ` ON ` + "`task_suspension`" + ` (` + "`task_id`" + `) WHERE ` + "`resumed_at`" + ` IS NULL`,
 
-	// One task's goal (model.TaskGoal, docs/design/durable-tasks.md#DT-4):
+	// One task's goal (model.TaskGoal, design/design/durable-tasks.design.md#DT-4):
 	// what grain checks to close or rest the task, and the progress it
 	// has seen towards it. spec is the JSON model.GoalSpec; max_stall is
 	// in seconds.
@@ -1183,7 +1183,7 @@ var Tables = []string{
 )`,
 
 	// task_run_api_call is one row per agent-API / grain tool call a run
-	// made (docs/design/durable-tasks.md#DT-14): which tool, the target
+	// made (design/design/durable-tasks.design.md#DT-14): which tool, the target
 	// ids it read or touched, how many bytes the answer carried back, and
 	// when. High volume, local only (staterepo.LocalTables), and pruned
 	// after 30 days (model.RunAPICallRetention).
@@ -1200,7 +1200,7 @@ var Tables = []string{
 
 	// task_run_report_check is one row per steward wake (or weekly sampled
 	// judgement audit) whose closing report was checked against the run's
-	// call log and the cited task records (docs/design/durable-tasks.md#DT-14).
+	// call log and the cited task records (design/design/durable-tasks.design.md#DT-14).
 	`CREATE TABLE IF NOT EXISTS ` + "`task_run_report_check`" + ` (
   ` + "`run_id`" + `     TEXT     NOT NULL,
   ` + "`claims`" + `     INTEGER  NOT NULL DEFAULT 0,
@@ -1216,7 +1216,7 @@ var Tables = []string{
 	// It is what lets the next daemon resume the tail with neither a
 	// hole nor a duplicate in the transcript, and updated_at is the start
 	// of the gap an adoption credits as wait time
-	// (docs/non-disruptive-upgrade.md, "Run hosts never touch the store").
+	// (design/design/non-disruptive-upgrade.design.md, "Run hosts never touch the store").
 	// The run host itself never writes it, or anything else here. Needs no
 	// SchemaVersion bump and no migration rung, for the reason the tables
 	// above give.
@@ -1351,7 +1351,7 @@ var Tables = []string{
 
 	// task_run_capability_audit is what a run's capability grants did
 	// for it, as their servers reported it when the run released them
-	// (docs/capabilities-spec.md §4.4.4, model.CapabilityAuditRecord):
+	// (design/spec/capabilities/capabilities.spec.md §4.4.4, model.CapabilityAuditRecord):
 	// host-script's one record per call -- script, argv, exit code,
 	// duration -- above all. One row per record, in the order the
 	// servers returned them, `seq` counting from 1 within the run.
@@ -3823,14 +3823,14 @@ var Tables = []string{
 )`,
 
 	// Each live k8s-granule sandbox's reverse-channel token hash and expiry
-	// (model.SandboxAccessCredential, docs/design/grain-on-gke.md#GKE-2),
+	// (model.SandboxAccessCredential, design/design/grain-on-gke.design.md#GKE-2),
 	// kept so a restarting daemon can re-register readopted sandboxes with
 	// its acceptor before their wrappers reconnect. The raw token is never
 	// stored.
 	sandboxAccessTable,
 
 	// Each running CI step's sandbox, exec id and output cursor
-	// (model.CIStepAttachment, docs/design/grain-on-gke.md#GKE-4), written
+	// (model.CIStepAttachment, design/design/grain-on-gke.design.md#GKE-4), written
 	// when the step starts and checkpointed as it runs, so a restarted
 	// daemon reattaches the step instead of interrupting its run.
 	ciStepAttachmentTable,

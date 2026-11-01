@@ -25,7 +25,7 @@ import (
 )
 
 // V1Stats is the JSON payload returned by GET /pkg/v1/stats
-// (docs/design/grit-split.md, "Package cache").
+// (design/design/grit-split.design.md, "Package cache").
 type V1Stats struct {
 	Enabled bool        `json:"enabled"`
 	Entries int         `json:"entries"`
@@ -116,7 +116,7 @@ func httpErrorJSON(w http.ResponseWriter, status int, msg string) {
 }
 
 // JobAccess describes the package-cache permissions of one CI job pod
-// (docs/design/grit-split.md, "Package cache").
+// (design/design/grit-split.design.md, "Package cache").
 type JobAccess struct {
 	// Job identifies the CI job pod for logs and diagnostics.
 	Job string

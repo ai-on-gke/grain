@@ -90,7 +90,7 @@ After each action it reads four values:
 | phone Clear | 6 | 22 (10) | 10 | 10 / 6 |
 | phone Investigate | 6 | 22 (10) | 10 | 10 / 6; task 23 filed |
 
-This is what the design says (`docs/design/durable-tasks.md`, "Acknowledge is not clear"):
+This is what the design says (`design/design/durable-tasks.design.md`, "Acknowledge is not clear"):
 
 - Acknowledge lowers only the bell.
 - Clear lowers the bell, the chip and the section.

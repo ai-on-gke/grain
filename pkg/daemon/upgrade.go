@@ -228,7 +228,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			Schema:           upgradeSchemaConfig(cfg, db),
 			Hold:             orchestrator.UpgradeHold(store),
 			// Every run in a run host lets go, its cursor written,
-			// before the restart (docs/non-disruptive-upgrade.md, piece
+			// before the restart (design/design/non-disruptive-upgrade.design.md, piece
 			// 6); the next build adopts it.
 			Flush:      cfg.runHostUpgrade.flushHook(),
 			RestartCmd: cfg.UpgradeRestartCmd,

@@ -39,7 +39,7 @@
 // write it there. Anything else not on the allowlist, or not accepted by
 // its entry, is refused and logged. Nothing here runs as root, and nothing here forwards the
 // daemon's own environment: a child's environment is built from the entry.
-// docs/design/cli-run-location.md ("Host CLIs through grain hostd") is the
+// design/design/cli-run-location.design.md ("Host CLIs through grain hostd") is the
 // design and its security argument.
 package hostd
 
@@ -148,7 +148,7 @@ type Entry struct {
 	// does a name set_env or pass_env already supplies. PATH, HOME, the
 	// other identity variables and LD_* are admitted only by their exact
 	// name, never by a pattern; listing one hands the daemon what the child
-	// runs, loads or reads its config from (docs/design/cli-run-location.md).
+	// runs, loads or reads its config from (design/design/cli-run-location.design.md).
 	// A value that looks like a path must sit under PathsUnder.
 	Env []string `yaml:"env"`
 	// PassEnv are names copied from hostd's own environment -- the corp

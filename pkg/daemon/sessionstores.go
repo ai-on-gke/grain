@@ -29,7 +29,7 @@ import (
 //
 // A durable run that is not adopted across a restart is a restart
 // suspension, resumed on the new daemon's first cycle into the
-// conversation it was in (docs/design/durable-tasks.md#DT-1, case 2), and
+// conversation it was in (design/design/durable-tasks.design.md#DT-1, case 2), and
 // that conversation is only there if the session store survived the
 // restart. On Kubernetes that means the data claim -- -data-dir, which
 // both shipped manifests (deploy/kubernetes/grain.yaml,
@@ -89,7 +89,7 @@ func sessionStoresOffClaim(cfg Config, getenv func(string) string) []string {
 func warnSessionStoresOffClaim(cfg Config) {
 	for _, why := range sessionStoresOffClaim(cfg, os.Getenv) {
 		log.Printf("grain daemon: warning: %s -- a durable run this daemon does not adopt across a restart "+
-			"will start its conversation over instead of resuming it (docs/design/durable-tasks.md#DT-1)", why)
+			"will start its conversation over instead of resuming it (design/design/durable-tasks.design.md#DT-1)", why)
 	}
 }
 

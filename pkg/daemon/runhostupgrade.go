@@ -29,7 +29,7 @@ import (
 )
 
 // runHostUpgrade is the daemon's half of the upgrade protocol for runs in
-// run hosts (docs/non-disruptive-upgrade.md, piece 6): the flush an
+// run hosts (design/design/non-disruptive-upgrade.design.md, piece 6): the flush an
 // upgrade makes before it restarts this daemon (upgrade.Config.Flush),
 // the re-adoption if that restart leaves this process running, and the
 // report of what the startup adoption pass did, for the post-upgrade

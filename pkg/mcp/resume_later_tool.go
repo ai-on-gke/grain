@@ -14,7 +14,7 @@
 
 package mcp
 
-// resume_later: the agent's own exit (docs/design/durable-tasks.md#DT-9).
+// resume_later: the agent's own exit (design/design/durable-tasks.design.md#DT-9).
 //
 // A run that is not done but has to stop -- it is waiting on CI, on a
 // person's message, on another task, on the clock, or is a durable task

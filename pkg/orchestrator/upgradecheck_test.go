@@ -743,7 +743,7 @@ func TestUpgradeCheckReportsTheRestartGap(t *testing.T) {
 }
 
 // The check reports how many runs the restart's adoption pass adopted,
-// how many it lost, and why (docs/non-disruptive-upgrade.md, piece 6
+// how many it lost, and why (design/design/non-disruptive-upgrade.design.md, piece 6
 // step 6) -- when this process is the one that restart started.
 func TestUpgradeCheckReportsAdoptedAndLostRuns(t *testing.T) {
 	t.Parallel()

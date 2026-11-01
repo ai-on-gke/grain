@@ -33,7 +33,7 @@ import (
 
 // AdoptedRun is a live run RecoverRunHosts matched to a run host that is
 // still going, as the daemon that adopts it carries it to its end
-// (ResumeAdoptedRun, docs/non-disruptive-upgrade.md, Stage 2).
+// (ResumeAdoptedRun, design/design/non-disruptive-upgrade.design.md, Stage 2).
 type AdoptedRun struct {
 	runhost.Adoption
 	// Cursor is the spool cursor the previous daemon persisted: where

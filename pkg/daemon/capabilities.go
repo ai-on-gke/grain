@@ -146,7 +146,7 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	// for the api:release-gate-read preset (pkg/capability/ciapi), and
 	// what it needs is this process's CI API listener (CIAPI), which its
 	// own Resolve refuses without, and a job of grain's own repository,
-	// which it refuses every other one for (docs/design/release-from-trunk.md §6).
+	// which it refuses every other one for (design/design/release-from-trunk.design.md §6).
 	providers = append(providers, ciapi.NewAlias(CIAPI, ciapi.Config{}, model.ReleaseGateReadCapability,
 		ciapi.Aliases[model.ReleaseGateReadCapability]))
 	// claude-proxy, openai-proxy and gemini-proxy register

@@ -97,7 +97,7 @@ async function expectRenderedIds(element, expected) {
   }
 }
 
-// docs/design/settings-panel.md §3.3: the filter is only as good as its
+// design/design/settings-panel.design.md §3.3: the filter is only as good as its
 // index, so a field added to a section without an entry here fails.
 describe("settingsIndex", () => {
   it.each(Object.keys(SECTIONS))(

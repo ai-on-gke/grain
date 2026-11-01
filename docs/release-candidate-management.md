@@ -3,7 +3,7 @@
 This document describes how `bwsalmon/grain` is released: from `main`, by a
 daily release train, after a staging soak, with a person's approval as the
 last step. The design and the reasons for it are in
-`docs/design/release-from-trunk.md`. This document is the operating manual.
+`design/design/release-from-trunk.design.md`. This document is the operating manual.
 
 There is no stabilization branch. Nothing is merged into `candidate`, nothing
 is back-merged from it, and no fix is ported between branches. Every release
@@ -90,7 +90,7 @@ release just staged or promoted, so a new rc is always newer than the last.
   regression. Grain re-runs `infra` verdicts of `main`'s gates on its own
   (up to two uncached re-runs) before filing a failure review, and trunk
   release gates run at `PriorityReleaseGate`, ahead of the merge queue for
-  sandbox capacity (`docs/design/release-from-trunk.md`, RFT-2).
+  sandbox capacity (`design/design/release-from-trunk.design.md`, RFT-2).
 
 If no commit after the floor qualifies, the run cuts nothing. A `main` that
 stays red for a week ships nothing, and `latest` stays where it is.
@@ -176,7 +176,7 @@ for the commit before it is cut (section 2).
 ## 5. The `vX.Y.0-pending` stage and a person's approval
 
 **The pipeline does everything up to the final tag, and a person makes the
-release official** (task 1236, `docs/design/release-from-trunk.md` RFT-8).
+release official** (task 1236, `design/design/release-from-trunk.design.md` RFT-8).
 
 1. **The soak passes, so the release is staged, not promoted.** When
    `vX.Y.0-rc.N` passes its soak, the train:
@@ -406,7 +406,7 @@ release from trunk. `v2.5.0` is an annotated placeholder tag on `main`, a
 version number and not a release: nothing is published for it, and
 `RELEASE_NEVER_PROMOTE` names it so the train writes the next release's notes
 from `v2.4.0`. Because of it, `main` builds `v2.6.0-dev`, and the first
-release from trunk is `v2.6.0` (`docs/design/release-from-trunk.md`, "Version
+release from trunk is `v2.6.0` (`design/design/release-from-trunk.design.md`, "Version
 Numbering Rules").
 
 Semver orders these correctly:

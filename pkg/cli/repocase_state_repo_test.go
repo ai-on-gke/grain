@@ -18,7 +18,7 @@ package cli
 // reconciliation that is not in the database.
 //
 // The failure the state repository guards against is the one a hand run
-// found (docs/hand-runs/2026-09-07-repo-case.md, finding 2): the
+// found (the 2026-09-07 repo-case hand run, finding 2): the
 // repository is authoritative for the settings tables, and most of what a
 // reconciliation rewrites is settings tables. A rewrite the repository
 // has not been told about is one the next start imports its own dump

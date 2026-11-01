@@ -15,7 +15,7 @@
 package sqlite_test
 
 // Operator notifications against a real database (model.Notification,
-// docs/design/durable-tasks.md DT-5): raise is an upsert on the open
+// design/design/durable-tasks.design.md DT-5): raise is an upsert on the open
 // subject, severity only rises, acknowledging is not clearing, and a
 // cleared subject raised again is a new instance.
 

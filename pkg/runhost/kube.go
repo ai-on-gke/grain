@@ -29,7 +29,7 @@ import (
 
 // The Kubernetes driver: one pod per run, created, listed and deleted
 // through the same pkg/k8s client sandbox pods are
-// (docs/non-disruptive-upgrade.md, "Run hosts", and the Kubernetes half
+// (design/design/non-disruptive-upgrade.design.md, "Run hosts", and the Kubernetes half
 // of Stage 2).
 //
 // A run pod sees the directories it is given at the paths the daemon

@@ -108,7 +108,7 @@ import (
 // runner can establish it: a fake answers whatever the test told it to.
 //
 // It has been measured, against claude-code 2.1.197, and the transcript
-// is docs/hand-runs/2026-09-08-claude-resume.md. What it says:
+// is the 2026-09-08 claude-resume hand run. What it says:
 //
 //   - --resume takes that whole argv, and the resumed exec still reads
 //     its new turn from stdin.
@@ -198,7 +198,7 @@ import (
 // minutes inside Framework.Run read as a hung run to whoever is watching
 // the row. So the number is written down here, in agent/retry.go beside
 // the retry budget it sits under, and in
-// docs/hand-runs/2026-09-08-claude-resume.md §5 -- the three places
+// the 2026-09-08 claude-resume hand run §5 -- the three places
 // somebody working out where a slow run's time went would look.
 //
 // A deployment that disagrees does not need a change here. Nothing in
@@ -217,11 +217,11 @@ import (
 // 25 seconds rather than ten over 2m51s, with no environment variable to
 // leave alone, since it takes the bound per model provider and refuses to
 // override a key on the built-in one (agent/codex/retry.go,
-// docs/hand-runs/2026-09-08-codex-retry.md). agy does not retry an HTTP
+// the 2026-09-08 codex-retry hand run). agy does not retry an HTTP
 // refusal at all -- one request, 0.15 seconds -- and has no flag,
 // variable or setting that would change it, so there was nothing to
 // decide about beyond writing the number down
-// (agent/antigravity/resume.go, docs/hand-runs/2026-09-08-agy-retry.md).
+// (agent/antigravity/resume.go, the 2026-09-08 agy-retry hand run).
 //
 // So claude's three minutes are the outlier of the three, in both
 // directions: the most outage absorbed before grain hears anything, and

@@ -14,7 +14,7 @@
 
 package cli
 
-// The acceptance test of docs/non-disruptive-upgrade.md, against a real
+// The acceptance test of design/design/non-disruptive-upgrade.design.md, against a real
 // daemon and a real docker run host:
 //
 //	With an agent run in flight, restart the daemon. The same run

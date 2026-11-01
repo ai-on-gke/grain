@@ -1,6 +1,6 @@
 # 2026-10-20: repo tab paths and the Settings → Repositories index
 
-Task 4909 implements [docs/design/settings-panel.md](../design/settings-panel.md)
+Task 4909 implements [design/design/settings-panel.design.md](../../design/design/settings-panel.design.md)
 §2.3 and the `/repos/<o>/<n>/settings/<tab>` row of §3.5. Task 4893 had found
 both missing on `main` at 7ea12f4e9.
 

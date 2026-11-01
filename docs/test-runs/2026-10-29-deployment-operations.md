@@ -52,7 +52,7 @@ banners, walked in a real browser against real `grain demo` servers.
 - **Surface:** the bell in every page's header rail and on a phone's bar
   (`ui/src/components/AlertsButton.jsx`).
 - **Reproduction:** open the bell on any page. The popover lists the
-  alerts and nothing else. `docs/design/settings-panel.md` §4.1 says "Its
+  alerts and nothing else. `design/design/settings-panel.design.md` §4.1 says "Its
   'see all' goes to System → Health", and the brief asks to verify it. No
   control in the tree did it (`grep -rni "see all" ui/src` found nothing).
 - **Fix:** a "See all on System → Health" button below the list, shown

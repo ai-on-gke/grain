@@ -24,7 +24,7 @@ import (
 
 // SandboxAccessCredential is the persisted SHA-256 token digest and expiry
 // for a live k8s-granule sandbox's reverse control channel
-// (docs/design/grain-on-gke.md#GKE-2). The raw bearer token is never stored.
+// (design/design/grain-on-gke.design.md#GKE-2). The raw bearer token is never stored.
 type SandboxAccessCredential struct {
 	Sandbox   string
 	TokenHash string

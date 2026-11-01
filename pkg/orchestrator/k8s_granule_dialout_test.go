@@ -43,7 +43,7 @@ func (neverConnects) WaitClient(ctx context.Context, _ string) (*granulesandbox.
 // wrapper container's own log in the error, where granule-shim's stderr
 // (and so its dial-out lines) ends up, read by one bounded kubectl logs;
 // its credentials are revoked and its pod deleted
-// (docs/design/grain-on-gke.md#GKE-3).
+// (design/design/grain-on-gke.design.md#GKE-3).
 func TestK8sGranuleDialoutAcquireFailsWithTheWrapperLogWhenTheChannelNeverConnects(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

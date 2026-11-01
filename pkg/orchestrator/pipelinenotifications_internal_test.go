@@ -26,7 +26,7 @@ import (
 )
 
 // The existing escalations, raised and cleared as operator notifications
-// (docs/design/durable-tasks.md, DT-5's "Existing escalations, mapped").
+// (design/design/durable-tasks.design.md, DT-5's "Existing escalations, mapped").
 
 func openNotification(t *testing.T, ctx context.Context, store *model.Store, subject string) *model.Notification {
 	t.Helper()

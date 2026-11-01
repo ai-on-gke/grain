@@ -17,7 +17,7 @@ package model
 // What a run's capability grants did for it.
 //
 // A capability server may answer release_<method> with audit records
-// about the grant it is releasing (docs/capabilities-spec.md §4.4.4):
+// about the grant it is releasing (design/spec/capabilities/capabilities.spec.md §4.4.4):
 // host-script's one record per call -- script, argv, exit code, duration,
 // the refusal reason of a refused call -- is the first. Grain releases a
 // run's grants once the run has ended, so these are written after the

@@ -647,7 +647,7 @@ func TestSyncPullRequestsStartsRepairAtFirstCIFailure(t *testing.T) {
 // healthFrom's own doc comment carries the whole argument.
 //
 // The shape is not invented. It was read off bwsalmon/grain itself on
-// 2026-09-07 (docs/hand-runs/2026-09-07-merge-queue.md): five `tests`
+// 2026-09-07 (the 2026-09-07 merge-queue hand run): five `tests`
 // runs cancelled that day, each leaving `go` -- the whole Go suite --
 // `completed`/`cancelled` beside checks that concluded `success`. The
 // list below is four of the eleven on one of those commits. What kept

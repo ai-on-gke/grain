@@ -400,11 +400,11 @@ type Config struct {
 	CapabilityPortsURL string
 	// CapabilitySandboxServers is where a run's sandbox-callable
 	// capability tools are registered for the sandbox proxy's /cap/
-	// (grain cap, docs/capabilities-spec.md §5.2.6). Nil reaches none of
+	// (grain cap, design/spec/capabilities/capabilities.spec.md §5.2.6). Nil reaches none of
 	// them from the sandbox; model-only tools are unaffected.
 	CapabilitySandboxServers *gitproxy.CapRegistry
 	// CapabilitySetupTimeout bounds each capability setup command
-	// (docs/capabilities-spec.md §5.5.3); zero is
+	// (design/spec/capabilities/capabilities.spec.md §5.5.3); zero is
 	// DefaultCapabilitySetupTimeout.
 	CapabilitySetupTimeout time.Duration
 	// PreparedCapabilities are finite resources reserved before dispatch
@@ -528,7 +528,7 @@ type Config struct {
 	// instead of switching this off.
 	MaxRunRuntime time.Duration
 	// MaxDurableRuns is how many runs of durable tasks (model.Task.IsDurable,
-	// docs/design/durable-tasks.md#DT-1) may be live at once. They are
+	// design/design/durable-tasks.design.md#DT-1) may be live at once. They are
 	// admitted outside every worker and merger count, as every task with
 	// priority dispatch is, so this is the one count that holds them:
 	// a safety ceiling, not a queue (model.Limits.Durable). Zero uses
@@ -1443,7 +1443,7 @@ func (s *hostSandbox) Release(ctx context.Context) error {
 // SandboxReadopter is a Sandboxes backend that can take back a sandbox a
 // previous process created and never released: the sandbox of a run this
 // daemon adopted from the one that started it (ResumeAdoptedRun,
-// docs/non-disruptive-upgrade.md, Stage 2). Readopt claims it -- it is
+// design/design/non-disruptive-upgrade.design.md, Stage 2). Readopt claims it -- it is
 // live from then on, so ReapOrphans and SweepOrphans spare it exactly as
 // they spare one Acquire built -- and returns a Sandbox whose Release
 // destroys it. It builds nothing: a sandbox that is not there is an

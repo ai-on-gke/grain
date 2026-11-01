@@ -51,7 +51,7 @@ func grantRows(t *testing.T, ctx context.Context, db *sql.DB, table, owner strin
 // sameGrantMeaning fails t unless before and after grant the same api
 // scopes, on the model's and the sandbox's channel alike, are equally
 // dangerous, and hold the same names other than the renamed ones -- the
-// fidelity docs/design/unified-grants.md §3 asks of every migrated row.
+// fidelity design/design/unified-grants.design.md §3 asks of every migrated row.
 func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 	t.Helper()
 	for _, s := range model.APIScopes() {

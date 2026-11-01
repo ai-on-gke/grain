@@ -506,7 +506,7 @@ export default function Sidebar({
   onNewBoard,
   // System's entry is the page header rail's icon beside the gear; on a
   // phone, where PhoneNav's bar has room for the gear alone, it is a row at the foot
-  // of this rail instead (docs/design/settings-panel.md §4.3).
+  // of this rail instead (design/design/settings-panel.design.md §4.3).
   onOpenSystem,
   // The build stamp at the foot is a link to Settings -> Upgrade.
   onOpenUpgrade,
@@ -1106,7 +1106,7 @@ export default function Sidebar({
               );
             }
             // A pin of a System tab or a Settings section
-            // (docs/design/settings-panel.md §5.6) -- or of the bare
+            // (design/design/settings-panel.design.md §5.6) -- or of the bare
             // view. The old Sandboxes and Caches pins became the System
             // tabs of the same names, and keep their counts.
             if (item.id === "system" || item.id === "settings") {
@@ -1472,7 +1472,7 @@ export default function Sidebar({
             </ListItemButton>
           )}
 
-          {/* Processes (docs/design/settings-panel.md §4.2): schedules,
+          {/* Processes (design/design/settings-panel.design.md §4.2): schedules,
             templates, suites and triggers in one entry, counted the
             way the page lists them. Then CI. */}
           {shows("processes") && (

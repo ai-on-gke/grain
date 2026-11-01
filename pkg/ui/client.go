@@ -349,7 +349,7 @@ func sanitizeAttachmentFilename(name string) string {
 }
 
 // capabilityLookup is the attached capability servers a capability
-// reference is normalized against (docs/capabilities-spec.md §4.2.1),
+// reference is normalized against (design/spec/capabilities/capabilities.spec.md §4.2.1),
 // or nil in a process that attaches none -- where only a reference's
 // syntax can be checked, and admission normalizes it again anyway.
 func (c *Client) capabilityLookup() protocol.Lookup {
@@ -1342,7 +1342,7 @@ func (c *Client) AttemptTranscript(ctx context.Context, taskID string, number in
 
 // AttemptCapabilityAudit returns what one attempt's capability grants did
 // for it, as their servers reported it when the attempt released them
-// (docs/capabilities-spec.md §4.4.4): host-script's record of every call
+// (design/spec/capabilities/capabilities.spec.md §4.4.4): host-script's record of every call
 // -- script, argv verbatim, exit code, duration -- above all. Empty until
 // the attempt has ended, since grants are released only then. A stored
 // record that is somehow not JSON is shown as a note rather than breaking
@@ -1621,7 +1621,7 @@ type CreateTaskRequest struct {
 	KeepRunning      bool  `json:"keepRunning,omitempty"`
 	KeepRunningSnake *bool `json:"keep_running,omitempty"`
 	// Goal declares the task's goal (model.TaskGoal,
-	// docs/design/durable-tasks.md#DT-4) as it is filed; nil for none, or
+	// design/design/durable-tasks.design.md#DT-4) as it is filed; nil for none, or
 	// for the goal of the template it is filed from.
 	Goal *model.GoalDecl `json:"goal,omitempty"`
 	// NoPort sets model.Task.NoPort: this task's change stays on the
@@ -1633,7 +1633,7 @@ type CreateTaskRequest struct {
 	// "This fixes a red <base>" checkbox. It is never made to wait on the
 	// branch's repair, because it is one: it counts as the branch's open
 	// repair once approved, and is declared with a base-green goal, so a
-	// green branch closes it (docs/design/durable-tasks.md#DT-4). Refused
+	// green branch closes it (design/design/durable-tasks.design.md#DT-4). Refused
 	// for a task with no repo.
 	FixesBaseBranch bool `json:"fixesBaseBranch,omitempty"`
 	// Origin is the GitHub pull request or issue this task's work comes
@@ -5396,7 +5396,7 @@ func humanSubmitted(t *model.Task, now time.Time, head string) {
 // drawn with: a push landing between the page loading and the click is
 // recorded as what the human saw. That window is accepted, being seconds
 // against the old one of a whole cycle; closing it means the page
-// sending the head it showed with the request (docs/architecture.md,
+// sending the head it showed with the request (design/design/architecture.design.md,
 // "When something is stuck").
 func (c *Client) submittedHead(ctx context.Context, task model.Task) string {
 	ref := pullRequestRefOf(task)

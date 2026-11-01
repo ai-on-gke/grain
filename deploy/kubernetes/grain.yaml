@@ -405,7 +405,7 @@ spec:
       # grain-interactive sandbox pod preempts lower-priority pods, and at
       # the default priority of 0 that would include this one.
       priorityClassName: grain-daemon
-      # Run pods (-run-host-image; docs/non-disruptive-upgrade.md, Stage 2)
+      # Run pods (-run-host-image; design/design/non-disruptive-upgrade.design.md, Stage 2)
       # are pinned to this pod's node by a required podAffinity, because
       # they share grain-data, which is ReadWriteOnce: RWO is per node, so
       # pods on the node it is attached to share it read-write. That pin
@@ -453,7 +453,7 @@ spec:
       # Dockerfile fetched and checksummed. That is not hypothetical: agy
       # was replacing its own pinned, sha256-verified 1.1.27 with
       # whatever its updater served, on the first dispatch of every fresh
-      # pod (docs/hand-runs/2026-09-17-agy-self-update.md §3). That one
+      # pod (the 2026-09-17 agy-self-update hand run §3). That one
       # hole is held shut by an environment variable now, because no
       # permission could cover every case of it
       # (pkg/agent/antigravity/selfupdate.go) -- but nothing at all was
@@ -608,7 +608,7 @@ spec:
             # Without it a task asking for no network access is refused
             # rather than quietly given a networked pod.
             # - -k8s-network-policy
-            # Run hosts (docs/non-disruptive-upgrade.md, Stage 2): each
+            # Run hosts (design/design/non-disruptive-upgrade.design.md, Stage 2): each
             # claude run in a pod of its own, which a rollout of this
             # Deployment does not stop and the next daemon pod adopts.
             # The pod runs this image, under this pod's securityContext
@@ -796,7 +796,7 @@ spec:
 #
 # A Service rather than the daemon pod's own IP because a sandbox is
 # handed these addresses once, when it is created, and under run hosts
-# (docs/non-disruptive-upgrade.md, Stage 2) it can outlive the pod that
+# (design/design/non-disruptive-upgrade.design.md, Stage 2) it can outlive the pod that
 # created it: the next daemon pod adopts its run, and the run still has
 # a pull request to push. The cluster IP survives a rollout; a pod IP
 # does not. The daemon resolves this Service at startup

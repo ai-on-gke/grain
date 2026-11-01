@@ -24,7 +24,7 @@ import { HostdHealthNote } from "../HostdMissingNote.jsx";
 import { settingLabel, settingLocation } from "../../settingsPlan.js";
 
 // HealthTab is System → Health, System's default tab
-// (docs/design/settings-panel.md §2.1): is anything wrong? It is the
+// (design/design/settings-panel.design.md §2.1): is anything wrong? It is the
 // alerts the bell already lists, each with the link it already carries,
 // and the two settings states that used to sit at the top of every
 // settings tab -- saved but not applied until a restart, and stored but

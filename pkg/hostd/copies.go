@@ -30,7 +30,7 @@ import (
 // write_host_extractor). grain-hostd.service runs hostd through
 // current/grain, so the copy a hostd runs and the one current names
 // differ exactly while an upgrade waits on hostd's drain
-// (docs/design/cli-run-location.md, "Upgrades and host runs").
+// (design/design/cli-run-location.design.md, "Upgrades and host runs").
 const (
 	CopiesDir   = "/usr/local/lib/grain/hostd"
 	CurrentName = "current"

@@ -25,8 +25,8 @@ package antigravity
 // digest at the top of the file.
 //
 // Neither survives a binary that rewrites itself, and agy does. Measured
-// on 2026-09-17 (docs/hand-runs/2026-09-17-agy-self-update.md, and first
-// noticed as an aside in docs/hand-runs/2026-09-17-agy-resume.md §5): one
+// on 2026-09-17 (the 2026-09-17 agy-self-update hand run, and first
+// noticed as an aside in the 2026-09-17 agy-resume hand run §5): one
 // dispatch-shaped exec of the pinned 1.1.27 -- the argv Framework.Run
 // builds, the private HOME writeAgyHome writes, the turn on stdin --
 // replaced the binary in place with 1.2.5 within seconds. 210,551,040

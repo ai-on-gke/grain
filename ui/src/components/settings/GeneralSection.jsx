@@ -21,7 +21,7 @@ import {
 import SettingsCard from "./SettingsCard.jsx";
 import { UpgradeCheckSettings } from "../UpgradePanel.jsx";
 
-// GeneralSection is Settings → General (docs/design/settings-panel.md
+// GeneralSection is Settings → General (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function GeneralSection({ s, config }) {
   const { settings, saveChoice, onTextBlur, onEnterKey } = s;

@@ -604,7 +604,7 @@ type AgentChoice struct {
 	// Durable is model.Task.IsDurable: the pool places the run on a
 	// framework this daemon can adopt across its own restart when it has
 	// one, ahead of the rotation's order but behind a pinned model or
-	// connection (docs/design/durable-tasks.md#DT-1, "Adoption across
+	// connection (design/design/durable-tasks.design.md#DT-1, "Adoption across
 	// restarts and upgrades").
 	Durable bool
 	// AvoidModels are models this task's latest runs were suspended off
@@ -1797,7 +1797,7 @@ func pendingBranchHold(ctx context.Context, deps Deps) func(string) string {
 
 // catalogueHold re-judges a queued task's grants against the capability
 // catalogue (settings/capabilities.yml) before anything is minted or a
-// sandbox started for it (docs/design/config-repo-settings.md §3.4): a
+// sandbox started for it (design/design/config-repo-settings.design.md §3.4): a
 // config change merged after the task was filed may have revoked a
 // capability or narrowed who may hold it, and the task waits, saying
 // which grant and why (model.CatalogueWaitCapability), rather than
@@ -2799,7 +2799,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		log.Printf("orchestrator: run %s: renewing its capability grants for its extended budget: %v", d.RunID, err)
 	}
 	// The pass admission minted, carried into the sandbox before anything
-	// runs in it (docs/capabilities-spec.md §5): ports, placements, then
+	// runs in it (design/spec/capabilities/capabilities.spec.md §5): ports, placements, then
 	// setup commands. A failure aborts the attempt here, as a setup
 	// failure -- the guard above finishes the row, the deferred release
 	// tears the sandbox down, and the dispatch goroutine releases the

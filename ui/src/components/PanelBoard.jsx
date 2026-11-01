@@ -186,7 +186,7 @@ import { rowFields } from "./CustomFields.jsx";
 // layout a phone already gets, which is the order itself with nothing
 // else in the way. It also makes the slots reachable: six panels on real
 // history are 2,500px of scrolling
-// (docs/hand-runs/2026-09-07-panel-dashboard.md section 6), and choosing
+// (the 2026-09-07 panel-dashboard hand run section 6), and choosing
 // between drop targets three screens apart is not choosing.
 //
 // A mouse dragging a panel gets neither: the grid stays exactly as it

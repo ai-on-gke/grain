@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package gritapi defines the wire types and HTTP client for grit's /v1 API
-// (docs/design/grit-split.md, "The API" and "Event stream").
+// (design/design/grit-split.design.md, "The API" and "Event stream").
 //
 // It is a neutral package shared by grain and grit, so it imports no
 // grain-only or grit-only internal packages.

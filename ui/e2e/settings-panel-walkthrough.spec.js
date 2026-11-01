@@ -15,7 +15,7 @@
 import { test, expect } from "./fixtures.js";
 
 // Walkthrough: the Settings view behind the gear, and System behind the
-// icon beside it (docs/design/settings-panel.md, stage (a)), against the
+// icon beside it (design/design/settings-panel.design.md, stage (a)), against the
 // real `grain demo` server with none of grain's own APIs mocked. The
 // run is recorded in docs/test-runs/2026-10-20-settings-panel.md.
 

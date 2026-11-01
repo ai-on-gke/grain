@@ -413,7 +413,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // in has nothing to work with: it gets AccessDenied, which sends it to
   // the access-code sign-in, rather than an empty app. grain has no
   // users, so there is no name to choose here
-  // (docs/design/settings-panel.md §6.1). A caller the server trusts
+  // (design/design/settings-panel.design.md §6.1). A caller the server trusts
   // without a session (loopback) is named, and is let in; nor is a page
   // whose /api/config never got grain's answer at all held here.
   const isSignedOut =
@@ -543,7 +543,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     () => parsePath(window.location.pathname).repo || null,
   );
   // repoTab is which of that page's tabs is showing, null for Overview:
-  // /repos/<o>/<n>/settings/<tab> (docs/design/settings-panel.md §2.3).
+  // /repos/<o>/<n>/settings/<tab> (design/design/settings-panel.design.md §2.3).
   // The tab used to ride in the hash (/repos/acme/widgets#ci), and a link
   // kept from then still opens its tab -- the first address written
   // below moves it into the path.
@@ -633,7 +633,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // restartingRef is the last GET /api/config's `restarting`: the daemon
   // said it was draining for a restart, or running an upgrade that ends
   // in one. A disconnection that starts while it is set is that restart
-  // (docs/non-disruptive-upgrade.md, Stage 1), and the banner says
+  // (design/design/non-disruptive-upgrade.design.md, Stage 1), and the banner says
   // "grain is restarting" rather than that the deployment cannot be
   // reached.
   const restartingRef = useRef(false);
@@ -804,7 +804,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // metricsNarrowing).
   // processQuery is the Processes list's narrowing -- search, sort and
   // conditions, the kind chips among them (processFilters.js)
-  // (docs/design/settings-panel.md §5.4), in the URL so a filtered view
+  // (design/design/settings-panel.design.md §5.4), in the URL so a filtered view
   // is a link. Null until somebody narrows it.
   const [processQuery, setProcessQuery] = useState(
     () =>
@@ -1858,7 +1858,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // following a link something else drew, and ask nothing new.
   //
   // A pin of a System tab or a Settings section names it in `at`
-  // (docs/design/settings-panel.md §5.6): { systemTab } or
+  // (design/design/settings-panel.design.md §5.6): { systemTab } or
   // { settingsSection }, "" for the view's own default.
   const navigateFromRail = useCallback(
     (v, at = {}) => {
@@ -2789,7 +2789,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       // Back to it would only be corrected all over again.
       // An address Processes replaced (/schedules/sched-1, /suites) is
       // rewritten in place too: it is the same page under its new name
-      // (docs/design/settings-panel.md §5.4), and a step back to it would
+      // (design/design/settings-panel.design.md §5.4), and a step back to it would
       // only redirect forward again.
       const oldProcessPath =
         /^\/(schedules|templates|suites|processes\/triggers)(\/|$)/.test(
@@ -3435,7 +3435,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // The far end of every page's header rail: the bell, System and the
   // gear. A phone has no rail: PhoneNav's bar holds the bell and the
   // gear and System is the row at the foot of the drawer
-  // (docs/design/settings-panel.md §4.1).
+  // (design/design/settings-panel.design.md §4.1).
   const globalButtons = (
     <GlobalButtons
       alerts={alertsButton}

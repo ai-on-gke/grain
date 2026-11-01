@@ -20,7 +20,7 @@ import SettingsCard from "./SettingsCard.jsx";
 
 // ExecutorsSection is Settings → Executors: the join tokens, which are a
 // setting. Which executors are connected is status, and is on System →
-// Sandboxes (docs/design/settings-panel.md §2.1).
+// Sandboxes (design/design/settings-panel.design.md §2.1).
 //
 // A join token is a runtime credential, not configuration: the config
 // repo holds none and its routes take writes in external mode, so the

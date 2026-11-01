@@ -98,7 +98,7 @@ export function PageHeaderActions({ children }) {
 // are drawn after everything else the page put there and pushed to the
 // right-hand end of the slot, just before the global buttons, whatever
 // order the page's header and toolbar portalled them in
-// (docs/design/settings-panel.md §4.1). Out of the rail it is a plain
+// (design/design/settings-panel.design.md §4.1). Out of the rail it is a plain
 // inline row of them.
 export function PageHeaderPageActions({ children }) {
   return (
@@ -129,7 +129,7 @@ export function PageHeaderProvider({ slot, children }) {
 }
 
 // GlobalButtons is the far-right cluster every page's rail ends in
-// (docs/design/settings-panel.md §4.1): the alerts bell, System with the
+// (design/design/settings-panel.design.md §4.1): the alerts bell, System with the
 // unbacked-config-repo dot, and the Settings gear -- the only way into
 // Settings. Each reads as selected while its view is showing. The test
 // ids are the ones the old top bar's buttons had, so a test that clicks

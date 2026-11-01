@@ -18,7 +18,7 @@ import (
 	"strings"
 )
 
-// The judgement model (docs/design/durable-tasks.md#DT-11).
+// The judgement model (design/design/durable-tasks.design.md#DT-11).
 //
 // A durable judgement agent -- the pipeline steward -- is pinned to a
 // strong model rather than run on the rotation: 768's first wake ran on

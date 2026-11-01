@@ -27,7 +27,7 @@ import (
 )
 
 // K8sGranuleAccessKubectl and K8sGranuleAccessDialout are the values of
-// -k8s-granule-access (docs/design/grain-on-gke.md#GKE-3).
+// -k8s-granule-access (design/design/grain-on-gke.design.md#GKE-3).
 const (
 	K8sGranuleAccessKubectl = "kubectl"
 	K8sGranuleAccessDialout = "dialout"
@@ -66,7 +66,7 @@ type SandboxAccessStore interface {
 
 // K8sGranuleAccess turns on granule's dial-out sandbox access channel
 // for every pod K8sGranuleSandboxes builds
-// (docs/design/grain-on-gke.md, "Credentials, per sandbox").
+// (design/design/grain-on-gke.design.md, "Credentials, per sandbox").
 type K8sGranuleAccess struct {
 	// Acceptor mints, registers, and revokes credentials. When Acceptor also
 	// implements sandboxaccess.ChannelProvider (as *sandboxaccess.Acceptor
