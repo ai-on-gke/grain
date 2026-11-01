@@ -745,6 +745,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // rides on the filing as boardId for the server's hidden defaults.
   // Null for the form opened anywhere else.
   const [newTaskBoard, setNewTaskBoard] = useState(null);
+  // newTaskTemplate is the template whose "New task from this template"
+  // opened the form: it picks settings/new-task-form.yml's templates
+  // layer and is filed as templateId (the form's Template picker can
+  // still change it). Null for the form opened anywhere else.
+  const [newTaskTemplate, setNewTaskTemplate] = useState(null);
   // newTaskPrefill is a task somebody is being offered rather than one
   // they are writing from scratch: the "New board"/"Edit board" buttons
   // open the form with the title and the description already in it
@@ -1577,6 +1582,22 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const openNewTaskForRepo = useCallback((repo) => {
     setNewTaskRepo(repo);
     setNewTaskBoard(null);
+    setNewTaskTemplate(null);
+    setNewTaskFields(null);
+    setShowNewTask(true);
+  }, []);
+
+  // openNewTaskFromTemplate is a template page's "New task from this
+  // template": the form filed from it, against the repo it is bound to
+  // where it is bound to one. The template's page is closed under it,
+  // as a task is under "File a task with these fields", so the form is
+  // the thing on screen.
+  const openNewTaskFromTemplate = useCallback((template) => {
+    setOpenTemplateId(null);
+    setNewTaskRepo(template.repo || null);
+    setNewTaskBoard(null);
+    setNewTaskTemplate(template.id);
+    setNewTaskPrefill(null);
     setNewTaskFields(null);
     setShowNewTask(true);
   }, []);
@@ -1642,6 +1663,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     setNewTaskFields(null);
     setNewTaskRepo(targetRepo || BOARDS_REPO);
     setNewTaskBoard(null);
+    setNewTaskTemplate(null);
     setShowNewTask(true);
   }, []);
 
@@ -3171,6 +3193,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const openNewTask = () => {
     setNewTaskRepo(null);
     setNewTaskBoard(view === "boards" ? openBoardId : null);
+    setNewTaskTemplate(null);
     setNewTaskPrefill(null);
     setNewTaskFields(null);
     setShowNewTask(true);
@@ -3206,6 +3229,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       closeDetail();
       setNewTaskRepo(null);
       setNewTaskBoard(null);
+      setNewTaskTemplate(null);
       setNewTaskPrefill(null);
       setNewTaskFields(
         fields && Object.keys(fields).length > 0 ? fields : null,
@@ -3625,6 +3649,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             onOpenSchedule={setOpenScheduleId}
                             openTemplateId={openTemplateId}
                             onOpenTemplate={setOpenTemplateId}
+                            onNewTaskFromTemplate={openNewTaskFromTemplate}
                             openSuiteId={openSuiteId}
                             onOpenSuite={setOpenSuiteId}
                             openSuiteRunId={openSuiteRunId}
@@ -3957,9 +3982,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
               prefill={newTaskPrefill}
               fields={newTaskFields}
               boardId={newTaskBoard || ""}
+              templateId={newTaskTemplate || ""}
               onClose={() => {
                 setShowNewTask(false);
                 setNewTaskBoard(null);
+                setNewTaskTemplate(null);
                 setNewTaskFields(null);
                 setNewTaskPrefill(null);
               }}
