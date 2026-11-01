@@ -151,7 +151,7 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 		return IssuedExternalAgentToken{}, validationErrorf("%v", err)
 	}
 	actor := c.actor(ctx)
-	if needsPerson && actor.Kind != model.PrincipalHuman {
+	if needsPerson && actor.Kind != model.PrincipalHuman && actor.Kind != model.PrincipalService {
 		return IssuedExternalAgentToken{}, forbiddenErrorf(
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may issue it",
 			name,
@@ -237,7 +237,7 @@ func (c *Client) RotateExternalAgentToken(ctx context.Context, id string) (Issue
 		return IssuedExternalAgentToken{}, validationErrorf("%v", err)
 	}
 	actor := c.actor(ctx)
-	if needsPerson && actor.Kind != model.PrincipalHuman {
+	if needsPerson && actor.Kind != model.PrincipalHuman && actor.Kind != model.PrincipalService {
 		return IssuedExternalAgentToken{}, forbiddenErrorf(
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may rotate it",
 			existing.Name,
