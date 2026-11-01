@@ -35,7 +35,14 @@ const settings = {
 function setup(props = {}) {
   api.mockImplementation((path, opts) => {
     if (path === "/api/settings" && !opts) return Promise.resolve(settings);
-    if (path === "/api/settings") return Promise.resolve(JSON.parse(opts.body));
+    if (path === "/api/settings") {
+      // The server answers a write of the lock with configRepoOnly for
+      // the row it wrote (no directConfigWrites here).
+      const body = JSON.parse(opts.body);
+      if (typeof body.settingsLocked === "boolean")
+        body.configRepoOnly = body.settingsLocked;
+      return Promise.resolve(body);
+    }
     return Promise.resolve({});
   });
   const onSection = vi.fn();
@@ -812,6 +819,36 @@ describe("SettingsPage", () => {
     );
     expect(lockToggle).not.toBeChecked();
     expect(screen.getByLabelText("Environment name")).toBeEnabled();
+    expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+  });
+
+  // settings-mutability D-10: with directConfigWrites in state-repo.json
+  // the server accepts every write though settings_locked is on, and
+  // says so with configRepoOnly: false; the sections stay editable.
+  it("keys the lock on configRepoOnly, not settingsLocked", async () => {
+    api.mockImplementation((path) =>
+      Promise.resolve(
+        path === "/api/settings"
+          ? { ...settings, settingsLocked: true, configRepoOnly: false }
+          : {},
+      ),
+    );
+    render(
+      <PreferencesProvider>
+        <SettingsPage
+          config={{ settingsLocked: true, configRepoOnly: false }}
+          section="general"
+          onSection={vi.fn()}
+          showError={vi.fn()}
+        />
+      </PreferencesProvider>,
+    );
+    expect(await screen.findByLabelText("Environment name")).toBeEnabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: /Lock settings in UI \(require config repo PRs\)/i,
+      }),
+    ).toBeChecked();
     expect(screen.queryByTestId("config-managed-notice")).toBeNull();
   });
 });

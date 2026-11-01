@@ -404,7 +404,7 @@ In external mode every Settings section except Config repo, Preferences and Upgr
 
 ### D-10: The UI ignores `directConfigWrites`
 
-*Repo page fixed 2026-10-31 (`docs/test-runs/2026-10-31-settings-git-repositories-verification.md`): `RepoPage` keys its lock on `config.configRepoOnly` alone. `SettingsPage` still prefers `settings.settingsLocked`.*
+*Fixed. `RepoPage` 2026-10-31 (`docs/test-runs/2026-10-31-settings-git-repositories-verification.md`). `SettingsPage` 2026-11-01 (`docs/test-runs/2026-11-01-settings-deployment-work-verification.md`): `GET`/`PUT /api/settings` carry `configRepoOnly` for the row they answer with, and the page keys its lock on that (falling back to `GET /api/config`'s) rather than on `settingsLocked` (`TestSettingsSayWhenTheyAreConfigRepoOnly`).*
 
 With `directConfigWrites: true` and `settings_locked: true`, `GET /api/config` reports `configRepoOnly: false`, and the server accepts every write. But `SettingsPage` prefers `settings.settingsLocked` once settings are loaded, and `RepoPage` uses `config.configRepoOnly || config.settingsLocked`, so both render read-only. The UI should key the lock on `config.configRepoOnly` alone.
 
