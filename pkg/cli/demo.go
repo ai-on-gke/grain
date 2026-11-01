@@ -72,6 +72,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	fakeCI := fs.Bool("fake-ci", false, "wire a grain CI stub that accepts and reports runs but never executes anything")
 	githubSim := fs.Bool("github-sim", false, "wire a simulated GitHub whose -default-target-repo has branches main and release/1.0")
 	scheduledWorkflows := fs.Bool("scheduled-workflows", false, "with -github-sim and -fake-ci, add a candidate branch to the simulated repo, read its .grain declarations and start and settle its workflow schedules' runs every -reconcile interval (default 2s), and let POST /api/e2e/fake-ci/runs/{id}/finish end a run")
+	forkPullRequest := fs.Bool("fork-pull-request", false, "with -github-sim, also seed two pull requests from the fork contrib/<repo>: contrib:fix/readme-typo (#41, open) and contrib:feat/old-idea (#42, closed), each head at refs/pull/N/head, for filing a task against a fork head label")
 	githubSimPublic := fs.Bool("github-sim-public", false, "with -git-proxy, let the simulated GitHub serve its repo to an anonymous fetch, as GitHub does a public repository; an anonymous push is still refused")
 	gitProxy := fs.Bool("git-proxy", false, "with -github-sim, serve grain's git proxy in front of the simulated repo on loopback, and POST /api/e2e/git-proxy/runs to start a task's run and mint its sandbox a token to push with")
 	baseBranchCI := fs.Bool("base-branch-ci", false, "with -github-sim and -fake-ci, let POST /api/e2e/base-branch/{red,green} {\"branch\": ...} (loopback only) turn a branch red or green on a -fake-ci verdict, through grain's own base-branch reconciler and dispatch's linking step, dispatching nothing")
@@ -160,6 +161,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		GitProxy:               *gitProxy,
 		BaseBranchCI:           *baseBranchCI,
 		GitHubSimPublic:        *githubSimPublic,
+		ForkPullRequest:        *forkPullRequest,
 		MergeRules:             *mergeRules,
 		SensitiveHold:          *sensitiveHold,
 		ReviewQuestions:        *reviewQuestions,
