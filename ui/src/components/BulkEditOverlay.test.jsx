@@ -204,6 +204,75 @@ describe("BulkEditOverlay", () => {
     });
   });
 
+  // 2026-11-01 intake walkthrough O3: reprioritising a batch took one
+  // Edit per task.
+  it("sets one task priority on every selected task and nothing else", async () => {
+    const user = userEvent.setup();
+    const onRun = vi.fn((mutate) => {
+      mutate("1");
+      mutate("2");
+    });
+    open({
+      onRun,
+      selection: [
+        { id: "1", repo: "acme/widgets", priority: 3 },
+        { id: "2", repo: "acme/widgets" },
+      ],
+    });
+
+    expect(
+      screen.getByRole("checkbox", { name: /^Task priority \(mixed/ }),
+    ).toBeInTheDocument();
+    await tickField(user, "Task priority");
+    const box = screen.getByRole("spinbutton", { name: "Task priority" });
+    expect(box).toHaveValue(null);
+    await user.type(box, "8");
+    await user.click(screen.getByRole("button", { name: "Apply to 2 tasks" }));
+
+    for (const id of ["1", "2"]) {
+      expect(api).toHaveBeenCalledWith(`/api/tasks/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ priority: 8 }),
+      });
+    }
+  });
+
+  it("pre-fills a shared priority, unset reading as the default 5", async () => {
+    const user = userEvent.setup();
+    open({
+      selection: [
+        { id: "1", repo: "acme/widgets", priority: 5 },
+        { id: "2", repo: "acme/widgets" },
+      ],
+    });
+
+    expect(
+      screen.getByRole("checkbox", { name: "Task priority" }),
+    ).toBeInTheDocument();
+    await tickField(user, "Task priority");
+    expect(
+      screen.getByRole("spinbutton", { name: "Task priority" }),
+    ).toHaveValue(5);
+  });
+
+  it.each(["", "0", "2.5", "-1"])(
+    "refuses to apply a priority of %j",
+    async (typed) => {
+      const user = userEvent.setup();
+      open();
+
+      await tickField(user, "Task priority");
+      const box = screen.getByRole("spinbutton", { name: "Task priority" });
+      await user.clear(box);
+      if (typed) await user.type(box, typed);
+
+      expect(
+        screen.getByRole("button", { name: "Apply to 2 tasks" }),
+      ).toBeDisabled();
+      expect(screen.getByText(/a whole number, 1 or more/)).toBeInTheDocument();
+    },
+  );
+
   // grain/task-110: moving a batch onto one model, and optionally one
   // connection -- a connection kept out of the rotation is precisely the
   // one an operator sends a hand-picked batch to.

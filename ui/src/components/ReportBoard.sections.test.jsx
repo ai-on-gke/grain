@@ -25,6 +25,7 @@ import {
   sortedOutcomes,
 } from "./metricsFormat.js";
 import api from "../api.js";
+import { narrowingFromQuery } from "../paths.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -1009,9 +1010,66 @@ describe("the whole report, as the Metrics pane draws it", () => {
     await screen.findByText("Backlog");
 
     expect(screen.getByText(/waiting 2h 14m/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "task 51" }));
+    // A real link, so it can be opened in a new tab or copied, that a
+    // plain click still opens over the report.
+    const link = screen.getByRole("link", { name: "task 51" });
+    expect(link).toHaveAttribute("href", "/tasks/51");
+    await user.click(link);
 
     expect(onOpenTask).toHaveBeenCalledWith("51");
+  });
+
+  it("links each backlog count to the task list in that state", async () => {
+    api.mockResolvedValue(report());
+    const onOpen = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ReportBoard
+        showError={() => {}}
+        narrowing={narrowingFromQuery(
+          "?f=repo:any:acme/widgets&f=author:any:ada",
+        )}
+        onOpen={onOpen}
+      />,
+    );
+    await screen.findByText("Backlog");
+
+    expect(screen.getByRole("link", { name: /Waiting 4/ })).toHaveAttribute(
+      "href",
+      "/?f=repo:any:acme/widgets&f=author:any:ada&f=state:any:queued",
+    );
+    // "Asked" counts both asked states, and opens both.
+    const asked = screen.getByRole("link", { name: /Asked 3/ });
+    expect(asked).toHaveAttribute(
+      "href",
+      "/?f=repo:any:acme/widgets&f=author:any:ada&f=state:any:awaiting_reply|awaiting_submit",
+    );
+    await user.click(asked);
+    expect(onOpen).toHaveBeenCalledWith({
+      view: "tasks",
+      narrowing: expect.objectContaining({
+        filters: [
+          { attr: "repo", op: "any", values: ["acme/widgets"] },
+          { attr: "author", op: "any", values: ["ada"] },
+          {
+            attr: "state",
+            op: "any",
+            values: ["awaiting_reply", "awaiting_submit"],
+          },
+        ],
+      }),
+    });
+  });
+
+  it("links a backlog count over everything to the list in that state alone", async () => {
+    api.mockResolvedValue(report());
+    render(<ReportBoard showError={() => {}} />);
+    await screen.findByText("Backlog");
+
+    expect(screen.getByRole("link", { name: /Running 2/ })).toHaveAttribute(
+      "href",
+      "/?f=state:any:running",
+    );
   });
 
   it("leaves the oldest-queued line out when nothing is queued", async () => {
@@ -1174,6 +1232,10 @@ describe("the whole report, as the Metrics pane draws it", () => {
       .find((r) => within(r).queryByText("task 51"));
     expect(within(row).getByText("244 KB")).toBeInTheDocument();
     expect(within(row).getByText("62500")).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: "task 51" })).toHaveAttribute(
+      "href",
+      "/tasks/51",
+    );
   });
 
   // A deployment whose runs recorded no prompt gets no section, for the
