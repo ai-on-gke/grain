@@ -341,9 +341,31 @@ func TestSandboxLogAndMetricsFlagsBecomeTheirQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := grainLogQuery(p).Encode(), "contains=dispatch+failed&max_lines=900&min_priority=err"+
+	if got, want := grainLogQuery(p, time.Now()).Encode(), "contains=dispatch+failed&max_lines=900&min_priority=err"+
 		"&since=2026-10-29T00%3A00%3A00Z&tail=40&until=2026-10-29T06%3A00%3A00Z"; got != want {
 		t.Errorf("grain log query = %s, want %s", got, want)
+	}
+	p, err = parseSandboxArgs([]string{"--source", "dmesg", "--priority", "warning", "--max-lines", "50"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A span back from now, as ci list --since takes, becomes the
+	// instant it names; something the CLI cannot read goes as given, for
+	// read_grain_log to refuse.
+	p, err = parseSandboxArgs([]string{"--since", "10m", "--until", "1d", "--contains", "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 1, 8, 44, 0, 0, time.UTC)
+	if got, want := grainLogQuery(p, now).Encode(), "contains=x&since=2026-11-01T08%3A34%3A00Z&until=2026-10-31T08%3A44%3A00Z"; got != want {
+		t.Errorf("grain log --since 10m --until 1d query = %s, want %s", got, want)
+	}
+	p, err = parseSandboxArgs([]string{"--since", "yesterday"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := grainLogQuery(p, now).Encode(), "since=yesterday"; got != want {
+		t.Errorf("grain log --since yesterday query = %s, want %s", got, want)
 	}
 	p, err = parseSandboxArgs([]string{"--source", "dmesg", "--priority", "warning", "--max-lines", "50"})
 	if err != nil {
@@ -352,7 +374,7 @@ func TestSandboxLogAndMetricsFlagsBecomeTheirQuery(t *testing.T) {
 	if got := grainLogSource(p); got != "dmesg" {
 		t.Errorf("grain log --source dmesg reads source %q", got)
 	}
-	if got, want := grainLogQuery(p).Encode(), "max_lines=50&min_priority=warning"; got != want {
+	if got, want := grainLogQuery(p, time.Now()).Encode(), "max_lines=50&min_priority=warning"; got != want {
 		t.Errorf("grain log query = %s, want %s", got, want)
 	}
 	p, err = parseSandboxArgs([]string{"summary", "--since", "2026-10-28", "--until", "2026-10-29"})

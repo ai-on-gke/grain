@@ -44,6 +44,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
 // sandboxProxyEnv names the sandbox proxy explicitly; sandboxCLIEnv=0
@@ -423,7 +425,7 @@ func (c *sandboxCLI) run(args []string) error {
 		if source := grainLogSource(p); source != "" {
 			uri += "/" + source
 		}
-		return c.fs(uri, grainLogQuery(p))
+		return c.fs(uri, grainLogQuery(p, time.Now()))
 	case "playbooks":
 		if name := p.optArg(0); name != "" {
 			return c.fs("src://playbooks/"+name, nil)
@@ -765,8 +767,26 @@ func (p sandboxArgs) only(cmd string, names ...string) error {
 // grainLogQuery is `grain log`'s flags as deploy://grain.log's query:
 // the window, priority, substring and line cap read_grain_log takes, and
 // --tail, which the namespace applies to whatever that answers.
-func grainLogQuery(p sandboxArgs) url.Values {
-	q := p.query("tail", "since", "until", "contains")
+//
+// read_grain_log takes RFC 3339 instants and nothing else, but every
+// other window flag this CLI has (ci list --since, task list
+// --changed-since) also takes a span back from now, so `grain log
+// --since 10m` was refused while `grain ci list --since 10m` was not.
+// A --since or --until the CLI can read (ci.ParseSince) is sent as the
+// instant it names, relative to now; one it cannot is sent as given, for
+// the tool to refuse in its own words.
+func grainLogQuery(p sandboxArgs, now time.Time) url.Values {
+	q := p.query("tail", "contains")
+	for _, name := range []string{"since", "until"} {
+		v := p.get(name)
+		if v == "" {
+			continue
+		}
+		if at, err := ci.ParseSince(v, now); err == nil && !at.IsZero() {
+			v = at.UTC().Format(time.RFC3339)
+		}
+		q.Set(name, v)
+	}
 	for _, name := range []string{"priority", "min-priority"} {
 		if v := p.get(name); v != "" {
 			q.Set("min_priority", v)
