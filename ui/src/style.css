@@ -4927,3 +4927,4 @@ fieldset legend {
 :root[data-phone="true"] .inbox-group-toggle {
   min-height: 44px;
 }
+/* throwaway: §6 path-filter probe, reverted */
