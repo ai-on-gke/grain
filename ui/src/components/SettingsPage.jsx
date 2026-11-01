@@ -204,7 +204,12 @@ export default function SettingsPage({
         document.querySelector(`[data-setting-id="${focusTarget}"]`) ||
         document.getElementById(focusTarget);
       if (!el) return false;
-      el.scrollIntoView?.({ block: "center" });
+      // Centre a field or a short card; a card taller than the screen
+      // (Sandboxes → Kubernetes) is aligned to its top instead, since
+      // centring it scrolls past its heading and the first field, which is
+      // the one focused below without scrolling.
+      const tall = el.getBoundingClientRect?.().height > window.innerHeight;
+      el.scrollIntoView?.({ block: tall ? "start" : "center" });
       const input = el.matches?.("input,textarea,select,button")
         ? el
         : el.querySelector?.("input:not([type=hidden]),textarea,select,button");
