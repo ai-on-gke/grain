@@ -143,7 +143,8 @@ type ProposedTask struct {
 	Branch string
 
 	// Priority is the numeric task priority (default 5; higher numbers mean higher priority).
-	// 0 means unset (defaults to model.DefaultTaskPriority, or template priority).
+	// 0 means unset (defaults to model.DefaultTaskPriority, or template
+	// priority); the tool refuses an explicit priority below 1.
 	Priority int
 
 	// NoRepo files this task with no repository at all -- a standalone
@@ -923,7 +924,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				"at_front":          map[string]any{"type": "boolean"},
 				"priority": map[string]any{
 					"type":        "integer",
-					"description": "Task priority (default 5; higher numbers mean higher priority)",
+					"description": "1 or more (default 5; higher runs first). Not inherited from your task",
 				},
 				"template_id": map[string]any{"type": "string"},
 				"template_fields": map[string]any{
@@ -990,8 +991,8 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			supersedes, _ := argString(args, "supersedes")
 			reviewTemplateID, _ := argString(args, "review_template_id")
 			priority, hasPriority := argInt(args, "priority")
-			if hasPriority && priority < 0 {
-				return Result{Text: "priority must be a positive integer", IsError: true}
+			if hasPriority && priority < 1 {
+				return Result{Text: "priority must be a positive integer (1 or more; leave it out for the default, 5)", IsError: true}
 			}
 			cpus, _ := argInt(args, "sandbox_cpus")
 			memoryMB, _ := argInt(args, "sandbox_memory_mb")

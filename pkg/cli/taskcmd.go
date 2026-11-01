@@ -144,7 +144,7 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 			" -- unset takes whichever model the rotation reaches")
 	approve := fs.Bool("approve", false, "queue the task immediately instead of filing it as a proposal awaiting approval")
 	position := fs.String("position", "", `which end of the backlog to file it at: "front" to run ahead of everything already queued, "end" to queue behind it. Unset files it wherever the last task added chose, and leaves that choice alone`)
-	priority := fs.Int("priority", model.DefaultTaskPriority, "task priority (default 5; higher numbers mean higher priority)")
+	priority := fs.Int("priority", model.DefaultTaskPriority, "task priority, 1 or more (default 5; higher numbers mean higher priority)")
 	interactive := fs.Bool("interactive", false, "file this as a live chat rather than a change to run unattended (bwsalmon/agents#539); implies -approve and dispatches ahead of the backlog")
 	var attach stringList
 	fs.Var(&attach, "attach", "path to a local file to attach to the task (repeatable)")
@@ -308,7 +308,7 @@ func cmdUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	connection := fs.String("connection", "",
 		"ID of the one connection this task's next run must use -- empty takes the pin off; "+
 			"pass it with -model when the pinned connection does not serve the new model")
-	priority := fs.Int("priority", model.DefaultTaskPriority, "new task priority (default 5; higher numbers mean higher priority)")
+	priority := fs.Int("priority", model.DefaultTaskPriority, "new task priority, 1 or more (default 5; higher numbers mean higher priority)")
 	var fields stringList
 	fs.Var(&fields, "field", customFieldFlagUsage)
 	// Unlike -read and -write these add to and take from the set the

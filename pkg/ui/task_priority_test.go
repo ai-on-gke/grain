@@ -85,6 +85,25 @@ func TestCreateAndUpdateTaskPriority(t *testing.T) {
 		t.Fatal("UpdateTask(priority=-1) succeeded, want ValidationError")
 	}
 
+	// 0 is refused on create and edit alike, the way -1 is: leaving the
+	// field out is how a caller asks for the default, and an edit to 0
+	// must not quietly reset the task to 5.
+	zeroPri := 0
+	if _, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "zero", Priority: &zeroPri}); err == nil {
+		t.Fatal("CreateTask(priority=0) succeeded, want ValidationError")
+	} else {
+		var ve *ui.ValidationError
+		if !errors.As(err, &ve) || !strings.Contains(err.Error(), "positive integer") || !strings.Contains(err.Error(), "leave it out") {
+			t.Errorf("CreateTask(priority=0) error = %v, want a ValidationError saying to leave it out", err)
+		}
+	}
+	if _, err := c.UpdateTask(ctx, high.ID, ui.UpdateTaskRequest{Priority: &zeroPri}); err == nil {
+		t.Fatal("UpdateTask(priority=0) succeeded, want ValidationError")
+	}
+	if after, err := store.GetTask(ctx, high.ID); err != nil || after == nil || after.Priority != 2 {
+		t.Errorf("after refused UpdateTask(priority=0), stored task = %+v (err=%v), want priority 2 kept", after, err)
+	}
+
 	// Templates also reject negative priorities and normalize 0 to unset.
 	if _, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
 		Name:     "bad-tmpl",
@@ -139,6 +158,14 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 	stored, err := client.Store.GetTask(context.Background(), "2")
 	if err != nil || stored.Priority != 9 {
 		t.Errorf("stored Priority = %d (err=%v), want 9", stored.Priority, err)
+	}
+
+	// {"priority": 0} is refused with 400 rather than resetting the task to 5.
+	if code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", `{"priority": 0}`, ""); code != http.StatusBadRequest || !strings.Contains(resp, "positive integer") {
+		t.Errorf("PATCH /api/tasks/2 with priority=0: status %d (%s), want 400 naming a positive integer", code, resp)
+	}
+	if stored, err := client.Store.GetTask(context.Background(), "2"); err != nil || stored.Priority != 9 {
+		t.Errorf("after PATCH priority=0, stored Priority = %d (err=%v), want 9 kept", stored.Priority, err)
 	}
 
 	// api:tasks:admin without api:tasks:write cannot edit title or toggle priority-dispatch.
