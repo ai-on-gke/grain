@@ -102,7 +102,7 @@ const READS_SETTINGS = new Set([
 // list then a section on a phone.
 //
 // `section` is the open section's id ("" for the bare /settings: the
-// list on a phone, General elsewhere -- App fills that in), and
+// list on a phone, Models elsewhere -- App fills that in), and
 // onSection picks another. One useSettingsSection() holds the save and
 // dirty state for every section, so the nav can mark a dirty one and
 // leaving one asks first.
