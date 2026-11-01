@@ -184,7 +184,7 @@ var sandboxCommandHelp = map[string]string{
 		"whose capability marks them sandbox-callable are here; a model-only tool is the agent's own MCP\n" +
 		"tool and the proxy refuses it. Each tool's flags are generated from its input schema.\n\n" +
 		"  grain cap list\n  grain cap widgets ping --help\n  grain cap widgets ping --host example.com --count 3\n  grain cap widgets ping --json '{\"host\":\"example.com\"}'\n",
-	"ls": "grain ls <uri> [--glob <pat>]\n\nList a namespace directory. --glob matches the directory's own entries; a\npattern with / or ** walks the subtree instead, and ends with a [truncated: ...]\nline if the walk was cut short. A trailing / matches directories only.\n\n  grain ls ci://<owner>/<repo>\n  grain ls task:// --glob '19*'\n  grain ls src://cmd --glob '**/*.go'\n",
+	"ls": "grain ls <uri> [--glob <pat>]\n\nList a namespace directory. --glob matches the directory's own entries; a\npattern with / or ** walks the subtree instead, and ends with a [truncated: ...]\nline if the walk was cut short. A trailing / matches directories only.\n\n  grain ls ci://<owner>/<repo>\n  grain ls task:// --glob '19*'\n  grain ls src://cmd --glob '**/*.go'\n\nsrc:// is the source this daemon was built from. A daemon whose own module builds on grain core (github.com/ai-on-gke/grain) serves core's source under src://core/, and for any src:// path its own module has no copy of.\n",
 	"read": "grain read <uri> [--tail N] [--offset N --limit N] [--lines N]\n" +
 		"grain read deploy://pipeline-changes [--cursor <c>] [--page N]\n\nPrint a namespace file to stdout, whole: there is no size cap.\n\n" +
 		byteRangeHelp +
