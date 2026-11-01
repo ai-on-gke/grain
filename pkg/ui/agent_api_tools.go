@@ -389,6 +389,9 @@ var routeBodies = map[string]any{
 // still carries any parameter a caller adds (a repo= the agent API's
 // gate reads, a template composition's field.<name>).
 var routeQueries = map[string]map[string]string{
+	"GET /api/restart-watch": {
+		"quick": "1 to answer at once with whether grain is restarting, rather than holding the request until it is or 25 s pass.",
+	},
 	"GET /api/pipeline/changes": {
 		"after": "The cursor a previous read returned as next (<RFC 3339 time>~<seq>); omitted, the last 24 hours.",
 		"limit": "At most this many entries (default 100, at most 500).",
