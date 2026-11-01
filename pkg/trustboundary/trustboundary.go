@@ -193,11 +193,14 @@ var Categories = []Category{
 		prefixes:    []string{".github/workflows/"},
 	},
 	{
-		ID:            "ci-suppressions",
-		Description:   "CI baselines and quarantined tests, which tell grain's gate which failures to ignore",
+		ID: "ci-suppressions",
+		Description: "CI baselines and quarantined tests, which tell grain's gate which failures to ignore, " +
+			"and the GitHub CI path filter, which decides which of the Tests workflow's jobs run at all",
 		RequiresHuman: true,
 		prefixes:      []string{".grain/baselines/"},
-		files:         []string{".grain/quarantine.yml", ".grain/quarantine.yaml"},
+		// A job the path filter skips is not a failing one, so the
+		// filter suppresses failures the same way a baseline does.
+		files: []string{".grain/quarantine.yml", ".grain/quarantine.yaml", "scripts/github-ci-changes.sh"},
 	},
 	{
 		ID: "path-triggers",

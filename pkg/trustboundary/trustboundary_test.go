@@ -152,6 +152,20 @@ func TestTheListAndItsHoldNeedAHuman(t *testing.T) {
 	}
 }
 
+// The GitHub CI path filter decides which of the Tests workflow's jobs run,
+// and a skipped job does not fail a pull request, so an edit to it could
+// skip the jobs that would have caught the rest of its change
+// (2026-11-01 security review, finding 2). It waits for a person.
+func TestTheGitHubCIPathFilterNeedsAHuman(t *testing.T) {
+	got := Classify([]string{"scripts/github-ci-changes.sh"})
+	if ids := categoryIDs(got); !reflect.DeepEqual(ids, []string{"ci-suppressions"}) {
+		t.Errorf("Classify(scripts/github-ci-changes.sh) = %v, want [ci-suppressions]", ids)
+	}
+	if !RequiresHuman(got) {
+		t.Error("a change to scripts/github-ci-changes.sh must require a human")
+	}
+}
+
 // The merge rules decide what CI and whose Submit every other change
 // needs, so an edit to them is released only by the repository's owners
 // (grain/task-1659) -- under either of the file's names.
@@ -209,6 +223,7 @@ var knownBoundaryFiles = []string{
 	"pkg/ui/agent_api_gate.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
 	"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 	"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
+	"scripts/github-ci-changes.sh",
 	"pkg/policy/", "pkg/jwks/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/",
 	"pkg/k8s/", "pkg/sandboximage/", "pkg/staterepo/", "pkg/redact/",
 	"third_party/granule/pkg/agent/", "third_party/granule/pkg/execwire/",
