@@ -796,6 +796,16 @@ samp,
     transition: none;
   }
 }
+/* MUI's keyboard-focus ripple pulses for as long as a button holds
+   focus -- a 2.5s keyframe loop the theme's reduced-motion transitions
+   (theme.js) cannot reach, since it is an animation, not a transition.
+   Held still, the ring still marks the focused control (2026-11-01
+   responsive walkthrough). */
+@media (prefers-reduced-motion: reduce) {
+  .MuiTouchRipple-childPulsate {
+    animation: none !important;
+  }
+}
 .sidebar-collapsed .MuiListItemButton-root {
   justify-content: center;
   padding-left: 0;
