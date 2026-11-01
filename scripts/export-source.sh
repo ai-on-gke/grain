@@ -64,10 +64,14 @@ fi
 
 # The ceiling, in MB, on what may be staged -- a backstop for the
 # fallback below, which is the only path that can still copy something
-# nobody chose. grain's tracked tree is ~27MB, so this is generous
-# enough that only a leak reaches it; raise it here (or with the
-# environment variable, for a one-off) if the repository itself ever
-# legitimately grows into it.
+# nobody chose. grain's tracked tree was ~27MB when this was set at
+# 128MB; by 2026-11-01 it had honestly grown to ~118MB of tracked bytes
+# (127-129MB as du counts it -- third_party/granule, pkg and the
+# screenshots under docs/test-runs), which put every installer build on
+# the line. 256MB leaves the tree room to grow while a leak (a build
+# output, node_modules, a stray image tarball) still trips it; raise it
+# here (or with the environment variable, for a one-off) if the
+# repository itself ever legitimately grows into it again.
 #
 # It fails the build that would publish the leak, which is the whole
 # point of it being here rather than only in tests/container: the image
@@ -75,7 +79,7 @@ fi
 # (scripts/release-images.sh, run from a Grain CI release job) builds and
 # pushes without them. A failed release is cheap; an image whose size
 # makes grain-daemon.service miss its start timeout is not.
-limit="${GRAIN_SOURCE_EXPORT_MAX_MB:-128}"
+limit="${GRAIN_SOURCE_EXPORT_MAX_MB:-256}"
 
 mkdir -p "$dest"
 
