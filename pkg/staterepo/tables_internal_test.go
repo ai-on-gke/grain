@@ -136,6 +136,10 @@ var notSettings = []string{
 	// (model.TaskGoal): declared with the task and rewritten by
 	// reconcileTaskGoals every cycle.
 	"task_goal",
+	// The standing-session declaration last synced onto a session's task
+	// (model.ConsoleSessionConfigSnapshot): rewritten by every console
+	// session sync, grain's record of what it applied.
+	"console_session_sync",
 	"task_observation",
 	"task_run",
 	"task_run_tool",

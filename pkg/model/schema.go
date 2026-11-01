@@ -673,6 +673,22 @@ var Tables = []string{
   PRIMARY KEY (` + "`task_id`" + `)
 )`,
 
+	// console_session_sync is the standing-session declaration last synced
+	// onto a session's task (model.ConsoleSessionConfigSnapshot, as JSON),
+	// so the sync that tells a config change from an operator's own edit
+	// on the task still can after a daemon restart. Held in memory only, a
+	// reads: or writes: entry dropped from the declaration while the
+	// daemon was down stayed on the task for good.
+	//
+	// Needs no SchemaVersion bump, for task_write's own reason: an older
+	// store gains an empty table, and a task with no row is synced as one
+	// that has never been, with the declaration authoritative.
+	`CREATE TABLE IF NOT EXISTS ` + "`console_session_sync`" + ` (
+  ` + "`task_id`" + `  TEXT NOT NULL,
+  ` + "`snapshot`" + ` TEXT NOT NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`,
+
 	`CREATE TABLE IF NOT EXISTS ` + "`task_grant`" + ` (
   ` + "`task_id`" + `    TEXT NOT NULL,
   ` + "`capability`" + ` TEXT NOT NULL,
