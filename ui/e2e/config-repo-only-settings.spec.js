@@ -52,6 +52,8 @@ for (const [name, viewport] of [
 
     const notice = page.getByTestId("config-managed-notice");
     await expect(notice).toBeVisible();
+    // Console sessions are grain_config.console_sessions, so the one
+    // file is tables/grain_config.json.
     const links = notice.getByTestId("config-repo-link");
     await expect(links).toHaveCount(1);
     await expect(links.first()).toHaveAttribute(
@@ -88,6 +90,30 @@ for (const [name, viewport] of [
     await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
   });
 }
+
+// Git connections are grain_config.git_connections / git_credential and a
+// repository's choice repo_config.git_credential (schema 22), so the Git
+// notice links those two tables' files, not tables that no longer exist.
+test("the Git section links the files that hold its connections", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await configRepoOnly(page);
+  await page.goto("/settings/git");
+
+  const links = page
+    .getByTestId("config-managed-notice")
+    .getByTestId("config-repo-link");
+  await expect(links).toHaveCount(2);
+  await expect(links.nth(0)).toHaveAttribute(
+    "href",
+    "/config?path=tables%2Fgrain_config.json",
+  );
+  await expect(links.nth(1)).toHaveAttribute(
+    "href",
+    "/config?path=tables%2Frepo_config.json",
+  );
+});
 
 test("a repository's settings are read-only, its default grants chips, its branches still addable", async ({
   page,
