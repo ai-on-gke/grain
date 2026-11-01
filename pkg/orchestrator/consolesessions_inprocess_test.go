@@ -20,6 +20,7 @@ package orchestrator_test
 // clock bounds the wait.
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -170,7 +171,7 @@ func TestInProcessSessionWaitPollsAtTheConfiguredInterval(t *testing.T) {
 		otherProcess bool
 		min, max     time.Duration
 	}{
-		{name: "another process's message waits for the poll", poll: 600 * time.Millisecond, otherProcess: true,
+		{name: "another process's message waits for the poll", poll: time.Second, otherProcess: true,
 			min: 300 * time.Millisecond, max: 5 * time.Second},
 		{name: "this process's message wakes the wait", poll: time.Hour,
 			max: 5 * time.Second},
@@ -191,9 +192,12 @@ func TestInProcessSessionWaitPollsAtTheConfiguredInterval(t *testing.T) {
 					switch turn {
 					case 1:
 						go func() {
-							// Long enough for the wait to have made its
-							// first poll.
-							time.Sleep(100 * time.Millisecond)
+							// Only once the wait has made its first check,
+							// which parks the task on this turn's answer: a
+							// message that lands before it, as it can on a
+							// loaded machine, is found by that check at once
+							// and says nothing about the poll.
+							waitedOnAnswer(t, ctx, store, director.ID, "in-process answer 1")
 							mu.Lock()
 							posted = time.Now()
 							mu.Unlock()
@@ -234,6 +238,25 @@ func TestInProcessSessionWaitPollsAtTheConfiguredInterval(t *testing.T) {
 			}
 		})
 	}
+}
+
+// waitedOnAnswer returns once the session's idle wait has made its first
+// check and parked the task on the answer whose body contains answer.
+func waitedOnAnswer(t *testing.T, ctx context.Context, store *model.Store, taskID, answer string) {
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) && ctx.Err() == nil {
+		if obs, err := store.GetObservation(ctx, taskID); err == nil && obs != nil && obs.PendingQuestionCommentID != nil {
+			if comments, err := store.Comments(ctx, taskID); err == nil {
+				for _, c := range comments {
+					if c.ID == *obs.PendingQuestionCommentID && strings.Contains(c.Body, answer) {
+						return
+					}
+				}
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Errorf("the session's wait never parked the task on %q", answer)
 }
 
 func waitUntil(t *testing.T, limit time.Duration, cond func() bool) {
