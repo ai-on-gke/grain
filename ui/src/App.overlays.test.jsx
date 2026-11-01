@@ -306,7 +306,7 @@ describe("App", () => {
       render(<App />);
       await screen.findByText("task 1");
 
-      await user.click(screen.getByRole("button", { name: "task 1" }));
+      await user.click(screen.getByRole("link", { name: "task 1" }));
 
       expect(
         await screen.findByRole("heading", { name: /Fix bug/ }),
@@ -334,7 +334,7 @@ describe("App", () => {
       );
       pushes.mockClear();
       await screen.findByText("task 1");
-      await user.click(screen.getByRole("button", { name: "task 1" }));
+      await user.click(screen.getByRole("link", { name: "task 1" }));
       await screen.findByRole("heading", { name: /Fix bug/ });
 
       await waitFor(() => expect(window.location.pathname).toBe("/tasks/1"));

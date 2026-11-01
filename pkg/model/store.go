@@ -2401,6 +2401,11 @@ func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, ou
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_relayed_call` WHERE `run_id` = ?", runID); err != nil {
 		return err
 	}
+	// Nor any wait time to carry into an adopting daemon's clock
+	// (RunWaitLedger).
+	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_wait_ledger` WHERE `run_id` = ?", runID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_sandbox_key` WHERE `run_id` = ?", runID); err != nil {
 		return err
 	}
@@ -3016,7 +3021,7 @@ func earlier(a, b *time.Time) *time.Time {
 func (s *Store) StateTimes(ctx context.Context) (map[string]StateTimes, error) {
 	out := map[string]StateTimes{}
 	err := each(ctx, s.db,
-		"SELECT `t`.`id`,`t`.`approved_at`,`t`.`undeferred_at`,"+
+		"SELECT `t`.`id`,`t`.`approved_at`,`t`.`undeferred_at`,`t`.`deferred_until`,"+
 			"`o`.`completed_at`,`o`.`retry_requested_at`,`o`.`run_now_at`,"+
 			"MAX(`r`.`finished_at`),`r`.`finished_at` "+
 			"FROM `task` AS `t` "+
@@ -3026,8 +3031,8 @@ func (s *Store) StateTimes(ctx context.Context) (map[string]StateTimes, error) {
 		func(rows *sql.Rows) error {
 			var id string
 			var max sql.NullString
-			var approved, undeferred, completed, retried, runNow, finished sql.NullTime
-			if err := rows.Scan(&id, &approved, &undeferred, &completed, &retried, &runNow, &max, &finished); err != nil {
+			var approved, undeferred, until, completed, retried, runNow, finished sql.NullTime
+			if err := rows.Scan(&id, &approved, &undeferred, &until, &completed, &retried, &runNow, &max, &finished); err != nil {
 				return err
 			}
 			out[id] = StateTimes{
@@ -3035,6 +3040,7 @@ func (s *Store) StateTimes(ctx context.Context) (map[string]StateTimes, error) {
 				RequeuedAt:        latest(timePtr(retried), timePtr(runNow), timePtr(undeferred)),
 				LastRunFinishedAt: timePtr(finished),
 				CompletedAt:       timePtr(completed),
+				DeferredUntil:     timePtr(until),
 			}
 			return nil
 		})

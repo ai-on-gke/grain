@@ -1235,6 +1235,22 @@ var Tables = []string{
   PRIMARY KEY (` + "`run_id`" + `, ` + "`fingerprint`" + `)
 )`,
 
+	// task_run_wait_ledger is a live run's CI wait time per reporting
+	// source (orchestrator.WaitSourceMCP, WaitSourceCLI, ...), written
+	// when the daemon stops and leaves the run for the next one to
+	// adopt. The adopting daemon seeds the run's clock from it
+	// (orchestrator.newAdoptedRunClock), so wait time credited before the
+	// restart is not lost -- the sandbox proxy's own ledger is held only
+	// in memory and starts again from zero. Deleted when the run
+	// finishes. Needs no SchemaVersion bump and no migration rung, for
+	// the reason the tables above give.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_wait_ledger`" + ` (
+  ` + "`run_id`" + `     TEXT    NOT NULL,
+  ` + "`source`" + `     TEXT    NOT NULL,
+  ` + "`blocked_ms`" + ` INTEGER NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`source`" + `)
+)`,
+
 	// task_run_unmatched_failure is one row per failed run whose own
 	// account of itself matched none of grain's markers for a provider
 	// refusal -- neither the usage-limit ones (agent/usagelimit.go) nor
