@@ -377,3 +377,74 @@ func countComments(t *testing.T, store *model.Store, taskID, body string) int {
 	}
 	return n
 }
+
+func TestInProcessSessionCyclePlacesAttachmentsOnFollowUpMessage(t *testing.T) {
+	t.Parallel()
+	store, _, director := inProcessSession(t)
+	ctx := t.Context()
+
+	var commentID int64
+	var attID int64
+	var gotBytes []byte
+	var readErr error
+	ag := &recordingSessionAgent{
+		onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
+			switch turn {
+			case 1:
+				var err error
+				var attIDs []int64
+				commentID, attIDs, err = store.AddCommentWithAttachments(ctx, model.Comment{
+					TaskID:    director.ID,
+					Author:    aliceSays,
+					Body:      "message 13: posted mid-turn",
+					CreatedAt: baseTime.Add(90 * time.Second),
+				}, []model.Attachment{{
+					Filename:    "note.txt",
+					ContentType: "text/plain",
+					Size:        20,
+					Content:     []byte("twenty bytes of note"),
+					CreatedAt:   baseTime.Add(90 * time.Second),
+				}})
+				if err != nil {
+					return nil, err
+				}
+				attID = attIDs[0]
+			case 2:
+				relPath := fmt.Sprintf("%s/%d-note.txt", orchestrator.AttachmentsDir, attID)
+				gotBytes, readErr = os.ReadFile(filepath.Join(cfg.SandboxRoot, relPath))
+				closeTask(t, ctx, store, director.ID, baseTime.Add(2*time.Minute))
+			}
+			return sessionAnswer(turn), nil
+		},
+	}
+
+	deps := inProcessDeps(store, ag, 30*time.Minute, 20*time.Millisecond)
+	deps.Sandboxes = orchestrator.NewHostSandboxes(t.TempDir())
+
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("cycle: %v", err)
+	}
+
+	if len(ag.configs) < 2 {
+		t.Fatalf("framework.Run calls = %d, want 2", len(ag.configs))
+	}
+	wantRelPath := fmt.Sprintf("%s/%d-note.txt", orchestrator.AttachmentsDir, attID)
+	prompt := ag.configs[1].ContinuePrompt
+	for _, want := range []string{
+		"message 13: posted mid-turn",
+		"Files attached to this task are available in the sandbox:",
+		fmt.Sprintf("- ./%s (from comment #%d)", wantRelPath, commentID),
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("turn 2 ContinuePrompt = %q, want %q", prompt, want)
+		}
+	}
+	if readErr != nil {
+		t.Fatalf("attachment not readable during turn 2: %v", readErr)
+	}
+	if string(gotBytes) != "twenty bytes of note" {
+		t.Errorf("attachment content = %q, want %q", gotBytes, "twenty bytes of note")
+	}
+}

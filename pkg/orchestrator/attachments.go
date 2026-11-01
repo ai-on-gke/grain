@@ -52,7 +52,7 @@ func writeFileTool(tools []mcp.Tool) (func(context.Context, map[string]any) mcp.
 	return nil, false
 }
 
-// attachmentPath is where one attachment lands inside AttachmentsDir --
+// AttachmentPath is where one attachment lands inside AttachmentsDir --
 // its own id first, so two attachments can never collide even when a
 // human (or an earlier attempt relaying its own upload) reused a
 // filename, followed by the filename itself so an agent reading a
@@ -60,8 +60,12 @@ func writeFileTool(tools []mcp.Tool) (func(context.Context, map[string]any) mcp.
 // is sanitised again here (attachmentFilename) rather than trusted from
 // whichever entry point stored it, since the same string becomes both the
 // sandbox path and a line of the prompt.
+func AttachmentPath(id int64, filename string) string {
+	return fmt.Sprintf("%s/%d-%s", AttachmentsDir, id, attachmentFilename(filename))
+}
+
 func attachmentPath(a model.Attachment) string {
-	return fmt.Sprintf("%s/%d-%s", AttachmentsDir, a.ID, attachmentFilename(a.Filename))
+	return AttachmentPath(a.ID, a.Filename)
 }
 
 // attachmentFilename reduces a stored filename to one safe path element:
@@ -119,4 +123,33 @@ func placeAttachments(ctx context.Context, tools []mcp.Tool, attachments []model
 		fmt.Fprintf(&b, "- ./%s (from %s)\n", p, origin)
 	}
 	return b.String(), nil
+}
+
+func groupAttachmentsByComment(attachments []model.Attachment) map[int64][]model.Attachment {
+	if len(attachments) == 0 {
+		return nil
+	}
+	byComment := make(map[int64][]model.Attachment)
+	for _, a := range attachments {
+		if a.CommentID != nil {
+			byComment[*a.CommentID] = append(byComment[*a.CommentID], a)
+		}
+	}
+	return byComment
+}
+
+// placeCommentAddendum materializes any attachments carried by c into the
+// sandbox through write_file (placeAttachments) and renders c as a mid-run
+// or in-process addendum (addendumText), appending the placed-files section
+// when c carries any.
+func placeCommentAddendum(ctx context.Context, tools []mcp.Tool, c model.Comment, attachments []model.Attachment) (string, error) {
+	text := addendumText(c)
+	section, err := placeAttachments(ctx, tools, attachments)
+	if err != nil {
+		return "", err
+	}
+	if section == "" {
+		return text, nil
+	}
+	return strings.TrimRight(text, "\n") + "\n\n" + strings.Trim(section, "\n"), nil
 }
