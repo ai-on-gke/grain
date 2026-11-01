@@ -42,12 +42,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/repodecl"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // sliceEventSource is the webhook queue: every event not yet acked.
@@ -354,4 +356,113 @@ trigger:
 		t.Errorf("a successful run fired a failure-only schedule")
 	}
 	assertNoForkEffect()
+}
+
+// heldWorkflow is one job that runs until the walkthrough removes its
+// hold file: a Grain CI run that is still in flight when the repository's
+// CI mode changes under it.
+const heldWorkflow = `name: held
+on: push
+jobs:
+  held:
+    steps:
+      - name: wait for the hold
+        run: |
+          while [ -f "$E2E_HOLD" ]; do sleep 0.05; done
+          echo released
+`
+
+// §6 "not proved" item 3: switching a repository from Grain CI to GitHub
+// mid-run cancels the in-flight run with a system reason, frees its
+// sandbox and moves `grain ci wait` to GitHub's checks; switching back
+// starts Grain CI again.
+func TestCIModeSwitchMidRunStandsGrainCIDownAndBack(t *testing.T) {
+	w := newCIWorld(t, heldWorkflow, model.Limits{})
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	ctx := w.ctx
+	hold := filepath.Join(w.sandboxes.dir, "hold")
+	mustWriteFile(t, hold, "")
+	t.Cleanup(func() { os.Remove(hold) })
+
+	task := w.task("switch-1")
+	actions := ui.SandboxCLIActions{Client: ui.NewClient(ui.Config{CI: w.service}, w.store)}
+	usesGitHub := func() bool {
+		t.Helper()
+		ok, err := actions.UsesGitHubChecks(ctx, task.ID)
+		if err != nil {
+			t.Fatalf("UsesGitHubChecks: %v", err)
+		}
+		return ok
+	}
+	jobDirs := func() []string {
+		dirs, _ := filepath.Glob(filepath.Join(w.sandboxes.dir, "job-*"))
+		return dirs
+	}
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(30 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	w.reconcile()
+	first := w.verdict(task.ID)
+	if first.RunID == "" || first.Done() {
+		t.Fatalf("Grain CI verdict after the first reconcile = %+v, want a live run", first)
+	}
+	waitFor("the held job to take a sandbox", func() bool { return len(jobDirs()) == 1 })
+	if usesGitHub() {
+		t.Fatal("grain ci wait reads GitHub checks while the repository is on Grain CI")
+	}
+
+	// Grain -> GitHub, mid-run.
+	if err := w.store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	w.reconcile()
+	cancelled := w.settle(first.RunID)
+	if cancelled.Conclusion != ci.ConclusionCancelled || cancelled.CancelledBy != ci.CancelBySystem ||
+		!strings.Contains(cancelled.CancelReason, "switched to GitHub CI") {
+		t.Fatalf("run %s after the switch = %s by %q (%q), want cancelled by the system for the switch",
+			first.RunID, cancelled.Conclusion, cancelled.CancelledBy, cancelled.CancelReason)
+	}
+	if v := w.verdict(task.ID); v.Conclusion != string(ci.ConclusionCancelled) || !strings.Contains(v.Detail, "switched to GitHub CI") {
+		t.Errorf("task verdict after the switch = %+v", v)
+	}
+	waitFor("the cancelled job's sandbox to be released", func() bool { return len(jobDirs()) == 0 })
+	if !usesGitHub() {
+		t.Error("grain ci wait still waits on Grain CI after the switch to GitHub")
+	}
+	w.reconcile()
+	if runs := w.runsOn(task.BranchName()); len(runs) != 1 {
+		t.Errorf("Grain CI started again on a GitHub repository: %d runs on the branch", len(runs))
+	}
+	t.Logf("run %s: %s by system: %s", first.RunID, cancelled.Conclusion, cancelled.CancelReason)
+
+	// GitHub -> Grain: the system's cancellation is replaced, once
+	// orchestrator's ciRetryDelay (5m) has passed since it.
+	if err := w.store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGrain}); err != nil {
+		t.Fatal(err)
+	}
+	if usesGitHub() {
+		t.Error("grain ci wait still reads GitHub checks after switching back to Grain CI")
+	}
+	os.Remove(hold)
+	runNamedReconciler(t, w, orchestrator.Deps{Store: w.store, Client: w.client, CI: w.service}, "ci", time.Now().Add(time.Minute))
+	if v := w.verdict(task.ID); v.RunID != first.RunID {
+		t.Errorf("Grain CI replaced the cancelled run inside its retry delay: %+v", v)
+	}
+	runNamedReconciler(t, w, orchestrator.Deps{Store: w.store, Client: w.client, CI: w.service}, "ci", time.Now().Add(6*time.Minute))
+	again := w.verdict(task.ID)
+	if again.RunID == "" || again.RunID == first.RunID {
+		t.Fatalf("verdict after switching back = %+v, want a new run replacing %s", again, first.RunID)
+	}
+	if run := w.settle(again.RunID); run.Conclusion != ci.ConclusionSuccess {
+		t.Fatalf("the resumed Grain CI run concluded %s", run.Conclusion)
+	}
+	t.Logf("switching back started run %s", again.RunID)
 }
