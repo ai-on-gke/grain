@@ -650,4 +650,108 @@ describe("TaskChat", () => {
     expect(screen.getAllByText("second message back-to-back")).toHaveLength(1);
     vi.unstubAllGlobals();
   });
+
+  // docs/test-runs/2026-11-01-task-chat-optimistic-sends.md finding 1: an
+  // optimistic bubble in flight looked exactly like a sent one, and
+  // nothing told a screen reader it was still going.
+  it("marks a message in flight as sending, and announces it, until the POST lands", async () => {
+    let land;
+    const gate = new Promise((r) => {
+      land = r;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        await gate;
+        return {
+          ok: true,
+          headers: new Headers({ "Content-Type": "application/json" }),
+          json: async () => ({}),
+        };
+      }),
+    );
+    const user = userEvent.setup();
+    render(<TaskChat t={task()} act={act} />);
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await user.click(box);
+    await user.paste("still on its way");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    const bubble = screen.getByText("still on its way").closest(".cs-message");
+    expect(bubble).toHaveClass("task-chat-sending");
+    expect(bubble).toHaveAttribute("aria-busy", "true");
+    expect(bubble).toHaveTextContent("Sending…");
+    expect(
+      screen
+        .getAllByRole("status")
+        .some((el) => el.textContent.includes("Sending 1 message…")),
+    ).toBe(true);
+
+    land();
+    await waitFor(() => expect(bubble).not.toHaveClass("task-chat-sending"));
+    expect(bubble).not.toHaveTextContent("Sending…");
+    vi.unstubAllGlobals();
+  });
+
+  // Finding 2: when a queued second message failed as well, the first had
+  // already gone back in the box, so the second -- which only went back
+  // into an empty box -- vanished.
+  it("keeps a queued message that failed behind another failure, marked not sent with Retry", async () => {
+    let fail;
+    const gate = new Promise((r) => {
+      fail = r;
+    });
+    let calls = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) await gate;
+      if (calls <= 2) throw new TypeError("Failed to fetch");
+      return {
+        ok: true,
+        headers: new Headers({ "Content-Type": "application/json" }),
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const swallowing = async (fn) => {
+      try {
+        await fn();
+      } catch {
+        // App's act reports it in a banner.
+      }
+    };
+    const user = userEvent.setup();
+    render(<TaskChat t={task()} act={swallowing} />);
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await user.click(box);
+    await user.paste("first, fails");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await user.click(box);
+    await user.paste("second, fails too");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    fail();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(box.textContent).toBe("first, fails"));
+    const failed = await screen.findByText("second, fails too");
+    const bubble = failed.closest(".cs-message");
+    await waitFor(() => expect(bubble).toHaveClass("task-chat-failed"));
+    expect(bubble).toHaveTextContent("Not sent");
+    expect(
+      screen
+        .getAllByRole("status")
+        .some((el) => el.textContent.includes("Message not sent")),
+    ).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body).body).toBe(
+      "second, fails too",
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull(),
+    );
+    expect(box.textContent).toBe("first, fails");
+    vi.unstubAllGlobals();
+  });
 });
