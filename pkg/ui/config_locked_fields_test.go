@@ -61,7 +61,7 @@ func TestSettingsLockedRefusesExactlyTheFieldsTheUIGreysOut(t *testing.T) {
 		`{"actionsCacheSizeGb":9}`,
 		`{"sessionSandboxIdleTtl":"45m"}`,
 		`{"githubHost":"github.example.com"}`,
-		`{"gcpProject":"proj"}`,
+		`{"gcpProject":"my-proj-123"}`,
 		`{"gcpServiceAccountEmail":"sa@proj.iam.gserviceaccount.com"}`,
 	} {
 		if rec := do(t, srv, http.MethodPut, "/api/settings", body); rec.Code != http.StatusConflict {

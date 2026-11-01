@@ -290,3 +290,10 @@ ETag replay and query tricks:
   - `pkg/daemon -run 'EventGated|SandboxProxyServesTheStage2Roots|TaskReads'`;
   - `pkg/namespace`, `pkg/trustboundary`, `pkg/staterepo`, `pkg/ghwebhook`;
   - `pkg/orchestrator -run 'GitHub.*WorkflowRun|Fork|KeepRunning|SessionSandbox|StateRepo|WarmSession'`.
+
+## CI repairs on this branch
+
+The merge queue sent the branch back for its two red checks. Both failures were unrelated to the security changes, and both are fixed here:
+
+- **`go` (`pkg/ui`), red on `main` too.** `TestSettingsLockedRefusesExactlyTheFieldsTheUIGreysOut` sent `{"gcpProject":"proj"}`, expecting the lock's 409. Since `374a0736`, `"proj"` is not a valid project ID, and the validation error answers first. That ordering is deliberate (`checkGrainConfigWritable` leaves an invalid request to its validation error). The test now sends a valid ID, `my-proj-123`, so it still proves the lock refuses a writable change.
+- **`go unit` (`pkg/tunnel/hostport`).** `TestForwarderForwardsAndRepoints` picked a free port and closed its listener before the forwarder bound it. The test's own echo servers, started afterwards on `127.0.0.1:0`, could be handed that very port (CI's "bind: address already in use"). The echo servers now listen before the port is picked, and the first bind retries on a fresh port if another process took it. It passes 20× under `-race`.
