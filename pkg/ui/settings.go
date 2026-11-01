@@ -1748,7 +1748,14 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.GitHubInsecureHTTP = *req.GitHubInsecureHTTP
 	}
 	if req.GCPProject != nil {
-		cfg.GCPProject = *req.GCPProject
+		// A project ID, which gcp-key and gemini-key put into every
+		// resource name they mint under: the 2026-11-01 walkthrough saved
+		// "Bad Project!", which only failed later, on a task's attempt.
+		project := strings.TrimSpace(*req.GCPProject)
+		if project != "" && !gcpProjectID.MatchString(project) {
+			return model.Config{}, validationErrorf("gcpProject %q is not a GCP project ID: 6 to 30 lowercase letters, digits and '-', starting with a letter and not ending with '-', such as my-project-123", project)
+		}
+		cfg.GCPProject = project
 	}
 	if req.GCPServiceAccountEmail != nil {
 		// A service account is an email address; the 2026-11-01
@@ -2538,6 +2545,10 @@ var (
 	k8sLabelName     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 	k8sSubdomainName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
+
+// gcpProjectID is a GCP project ID, with the "example.com:" prefix a
+// domain-scoped project carries allowed in front of it.
+var gcpProjectID = regexp.MustCompile(`^([a-z0-9][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 
 // k8sAddress is what the git proxy host a sandbox pod is handed may be:
 // a host name or an IP address, with no scheme, path or space in it.
