@@ -17,11 +17,13 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"slices"
 	"sort"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // grantRows is every (owner, capability) of a grant table, sorted.
@@ -125,7 +127,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	}
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{"self-debug", legacy},
-		CICapabilities: []string{legacy}}); err != nil {
+		CICapabilities: []string{"package-publish", legacy}}); err != nil {
 		t.Fatal(err)
 	}
 	fixture := map[string]map[string][]string{
@@ -195,9 +197,146 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if want := append([]string{"self-debug"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
-	// A CI job's api grant is a CIAPI token, which none of these ever
-	// was, so ci_capabilities is not a list the migration speaks for.
-	if want := []string{legacy}; !slices.Equal(repo.CICapabilities, want) {
-		t.Errorf("repo CI capabilities = %v, want %v left alone", repo.CICapabilities, want)
+	// Migration 83 rewrites retired names in repo_config.ci_capabilities as well.
+	if want := append([]string{"package-publish"}, replacements...); !slices.Equal(repo.CICapabilities, want) {
+		t.Errorf("repo CI capabilities = %v, want %v", repo.CICapabilities, want)
 	}
+	sameGrantMeaning(t, "repo CI capabilities", []string{"package-publish", legacy}, repo.CICapabilities)
+}
+
+// Migration 83 rewrites every past retired capability name in
+// repo_config.ci_capabilities for stores already at schema 82, preserving
+// non-retired entries, collapsing duplicates where the canonical grant is
+// already held, and handling both CSV and JSON-array column encodings.
+func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+
+	for _, r := range retiredGrants {
+		widgets := model.RepoRef{Owner: "widgets", Name: r.legacy}
+		dedup := model.RepoRef{Owner: "dedup", Name: r.legacy}
+		jsonEncoded := model.RepoRef{Owner: "json", Name: r.legacy}
+
+		if err := store.PutRepoConfig(ctx, model.RepoConfig{
+			Repo:           widgets,
+			CICapabilities: []string{"package-publish", r.legacy, "repo-read:acme/tools"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.PutRepoConfig(ctx, model.RepoConfig{
+			Repo:           dedup,
+			CICapabilities: append(append(slices.Clone(r.to), r.legacy), "gcp-key"),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: jsonEncoded, SetupCommand: "make test"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx,
+			"UPDATE `repo_config` SET `ci_capabilities` = ? WHERE `owner` = ? AND `name` = ?",
+			`["`+r.legacy+`"]`, jsonEncoded.Owner, jsonEncoded.Name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	empty := model.RepoRef{Owner: "acme", Name: "empty"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: empty, SetupCommand: "make test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 82 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-82 store: %v", err)
+	}
+
+	for _, r := range retiredGrants {
+		widgets := model.RepoRef{Owner: "widgets", Name: r.legacy}
+		dedup := model.RepoRef{Owner: "dedup", Name: r.legacy}
+		jsonEncoded := model.RepoRef{Owner: "json", Name: r.legacy}
+
+		beforeWidgets := []string{"package-publish", r.legacy, "repo-read:acme/tools"}
+		gotWidgets, err := store.GetRepoConfig(ctx, widgets)
+		if err != nil || gotWidgets == nil {
+			t.Fatalf("%s widgets: %v, %+v", r.legacy, err, gotWidgets)
+		}
+		wantWidgets := append(append([]string{"package-publish"}, r.to...), "repo-read:acme/tools")
+		if !slices.Equal(gotWidgets.CICapabilities, wantWidgets) {
+			t.Errorf("%s: widgets CI capabilities = %v, want %v", r.legacy, gotWidgets.CICapabilities, wantWidgets)
+		}
+		sameGrantMeaning(t, r.legacy+" widgets CI capabilities", beforeWidgets, gotWidgets.CICapabilities)
+
+		beforeDedup := append(append(slices.Clone(r.to), r.legacy), "gcp-key")
+		gotDedup, err := store.GetRepoConfig(ctx, dedup)
+		if err != nil || gotDedup == nil {
+			t.Fatalf("%s dedup: %v, %+v", r.legacy, err, gotDedup)
+		}
+		wantDedup := append(slices.Clone(r.to), "gcp-key")
+		if !slices.Equal(gotDedup.CICapabilities, wantDedup) {
+			t.Errorf("%s: dedup CI capabilities = %v, want %v", r.legacy, gotDedup.CICapabilities, wantDedup)
+		}
+		sameGrantMeaning(t, r.legacy+" dedup CI capabilities", beforeDedup, gotDedup.CICapabilities)
+
+		gotJSON, err := store.GetRepoConfig(ctx, jsonEncoded)
+		if err != nil || gotJSON == nil {
+			t.Fatalf("%s json: %v, %+v", r.legacy, err, gotJSON)
+		}
+		if !slices.Equal(gotJSON.CICapabilities, r.to) {
+			t.Errorf("%s: json-encoded CI capabilities = %v, want %v", r.legacy, gotJSON.CICapabilities, r.to)
+		}
+	}
+
+	gotEmpty, err := store.GetRepoConfig(ctx, empty)
+	if err != nil || gotEmpty == nil {
+		t.Fatalf("empty: %v, %+v", err, gotEmpty)
+	}
+	if len(gotEmpty.CICapabilities) != 0 {
+		t.Errorf("empty CI capabilities = %v, want empty", gotEmpty.CICapabilities)
+	}
+}
+
+func TestSchema65StoreAndStateRepoImportRewriteCICapabilities(t *testing.T) {
+	t.Parallel()
+	t.Run("in_place_from_65", func(t *testing.T) {
+		t.Parallel()
+		store, db, ctx := openStore(t)
+		widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+		if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, SetupCommand: "make test"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx,
+			"UPDATE `repo_config` SET `ci_capabilities` = ? WHERE `owner` = ? AND `name` = ?",
+			`["release-notes"]`, widgets.Owner, widgets.Name); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 65 WHERE `id` = 1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.New(db).Init(ctx); err != nil {
+			t.Fatalf("migrating a version-65 store: %v", err)
+		}
+		got, err := store.GetRepoConfig(ctx, widgets)
+		if err != nil || got == nil {
+			t.Fatalf("GetRepoConfig: %v, %+v", err, got)
+		}
+		if !slices.Equal(got.CICapabilities, []string{"api:release-notes"}) {
+			t.Errorf("repo_config.ci_capabilities = %v, want [api:release-notes]", got.CICapabilities)
+		}
+	})
+
+	t.Run("staterepo_import_from_64", func(t *testing.T) {
+		t.Parallel()
+		store, db, ctx := openStore(t)
+		dumpDir := filepath.Join("..", "..", "staterepo", "testdata", "upgrade-schema-64")
+		if _, err := staterepo.CheckMigration(ctx, db, dumpDir, t.TempDir(), model.SchemaVersion); err != nil {
+			t.Fatalf("importing schema-64 state-repo dump: %v", err)
+		}
+		got, err := store.GetRepoConfig(ctx, model.RepoRef{Owner: "acme", Name: "widgets"})
+		if err != nil || got == nil {
+			t.Fatalf("GetRepoConfig: %v, %+v", err, got)
+		}
+		if !slices.Equal(got.CICapabilities, []string{"api:release-notes"}) {
+			t.Errorf("repo_config.ci_capabilities after state-repo import = %v, want [api:release-notes]", got.CICapabilities)
+		}
+	})
 }

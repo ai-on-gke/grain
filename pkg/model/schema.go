@@ -368,7 +368,17 @@ import "strconv"
 // `https://grain.dev/capabilities/grain#sql={"write":false}` and
 // `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
 // `db-read` and `db-write` providers are retired.
-const SchemaVersion = 82
+//
+// 83 changes no table: it rewrites retired capability names in
+// `repo_config`.`ci_capabilities` (`team-broadcast`, `dispatch-control`,
+// `pipeline-control`, `memory`, `release-notes`, `self-upgrade`,
+// `test-quarantine`, `grain-log`, `deployment-health`, `db-read` and
+// `db-write`) to the canonical grants migrations 67, 68, 69, 71, 72, 75,
+// 76, 80, 81 and 82 wrote everywhere else. Those migrations left
+// `ci_capabilities` alone, which leaves a bare retired name in a
+// repository's CI list to be handed to its jobs and refused (or, for one
+// with no provider, waited on) when a job starts.
+const SchemaVersion = 83
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
