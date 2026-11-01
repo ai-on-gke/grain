@@ -4603,11 +4603,35 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			// request's head -- the classification of it, the hold it
 			// earned, a person's Submit of it -- goes with it; the next
 			// pull request is classified afresh.
+			//
+			// An external pull request in that repository -- the one a
+			// fork head label resolved to (forkhead.go) -- goes too, and
+			// so does the guidance appended about it: the next run
+			// cannot fetch its head or follow it up from here.
+			fixesDropped := false
+			for _, l := range task.Links {
+				if !model.LinkOffTarget(*task, l) {
+					continue
+				}
+				if l.Kind == model.LinkFixes {
+					fixesDropped = true
+					continue
+				}
+				ref, _ := model.ParsePullRequestRef(l.Target)
+				if body, stripped := forkhead.StripNote(task.Body, ref); stripped {
+					task.Body = body
+				} else if strings.Contains(task.Body, ref.String()) {
+					task.Body += forkhead.MovedNote(ref, *task.Target)
+				}
+			}
 			if links, dropped := model.WithoutOffTargetPullRequests(*task); dropped {
-				task.Links = slices.DeleteFunc(links, func(l model.Link) bool {
-					return l.Kind == model.LinkSecurityHold || l.Kind == model.LinkTrustBoundaryCleared ||
-						l.Kind == model.LinkHumanSubmitted
-				})
+				task.Links = links
+				if fixesDropped {
+					task.Links = slices.DeleteFunc(links, func(l model.Link) bool {
+						return l.Kind == model.LinkSecurityHold || l.Kind == model.LinkTrustBoundaryCleared ||
+							l.Kind == model.LinkHumanSubmitted
+					})
+				}
 			}
 		}
 		if req.GoogleChatSpace != nil {
