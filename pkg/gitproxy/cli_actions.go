@@ -167,27 +167,55 @@ type proxyToolCallRecorder interface {
 type cliWaitLedger struct {
 	mu      sync.Mutex
 	blocked map[string]time.Duration
-	// until is the latest instant each run's total already covers.
-	until map[string]time.Time
+	// covered is the blocked time each run's total already counts, as
+	// disjoint spans in order. Each wait's own intervals are consecutive,
+	// so a run has no more spans than it has had waits.
+	covered map[string][]cliWaitSpan
 }
 
+type cliWaitSpan struct{ from, to time.Time }
+
 // add credits runID with the part of [from, to] its total does not
-// already cover, and returns the total. Each wait reports consecutive
-// intervals ending now, so the intervals arrive in the order they end
-// and the part already covered is always a prefix.
+// already cover, and returns the total. Reports from different waits
+// can arrive in any order -- a wait that started after a gap can report
+// before one still blocked across that gap -- so what is already
+// covered is not necessarily a prefix of [from, to].
 func (l *cliWaitLedger) add(runID string, from, to time.Time) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.blocked == nil {
-		l.blocked, l.until = map[string]time.Duration{}, map[string]time.Time{}
+		l.blocked, l.covered = map[string]time.Duration{}, map[string][]cliWaitSpan{}
 	}
-	if until := l.until[runID]; from.Before(until) {
-		from = until
+	if !to.After(from) {
+		return l.blocked[runID]
 	}
-	if to.After(from) {
-		l.blocked[runID] += to.Sub(from)
-		l.until[runID] = to
+	var kept []cliWaitSpan
+	merged := cliWaitSpan{from, to}
+	uncovered := to.Sub(from)
+	for _, span := range l.covered[runID] {
+		if span.to.Before(from) || span.from.After(to) {
+			kept = append(kept, span)
+			continue
+		}
+		// span overlaps [from, to]: that much of it is already counted.
+		lo, hi := span.from, span.to
+		if lo.Before(from) {
+			lo = from
+		}
+		if hi.After(to) {
+			hi = to
+		}
+		uncovered -= hi.Sub(lo)
+		if span.from.Before(merged.from) {
+			merged.from = span.from
+		}
+		if span.to.After(merged.to) {
+			merged.to = span.to
+		}
 	}
+	i, _ := slices.BinarySearchFunc(kept, merged.from, func(s cliWaitSpan, t time.Time) int { return s.from.Compare(t) })
+	l.covered[runID] = slices.Insert(kept, i, merged)
+	l.blocked[runID] += uncovered
 	return l.blocked[runID]
 }
 
