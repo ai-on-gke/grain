@@ -540,15 +540,17 @@ func Run(opts Options) error {
 		cfg.StateRepo = newExternalConfigRepo(opts.ExternalConfigRepo, opts.ExternalConfigBranch)
 	}
 	ghCalls.enableLive()
-	webhookConsumer, err := startDemoGitHubWebhooks(context.Background(), dir, opts, creds, store, ghCalls)
+	var simClient github.Client
+	if opts.GitHubSim {
+		simClient, _ = cfg.GitHubBranches.(github.Client)
+	}
+	webhookConsumer, err := startDemoGitHubWebhooks(context.Background(), dir, opts, creds, store, simClient, ghCalls)
 	if err != nil {
 		return fmt.Errorf("grain demo: %v", err)
 	}
-	if webhookConsumer != nil {
-		if ghClient, ok := cfg.GitHubBranches.(github.Client); ok && ghClient != nil {
-			if st, ok := demoSimClients.Load(ghClient); ok {
-				st.(*demoSimState).events = webhookConsumer
-			}
+	if webhookConsumer != nil && simClient != nil {
+		if st, ok := demoSimClients.Load(simClient); ok {
+			st.(*demoSimState).events = webhookConsumer
 		}
 	}
 	client := ui.NewClient(cfg, store)
@@ -2556,7 +2558,7 @@ func (d *demoGitHubCalls) Stats() github.Stats {
 	}
 }
 
-func startDemoGitHubWebhooks(ctx context.Context, dir string, opts Options, creds *gitproxy.CredentialSet, store *model.Store, ghCalls *demoGitHubCalls) (*daemon.GitHubWebhookConsumer, error) {
+func startDemoGitHubWebhooks(ctx context.Context, dir string, opts Options, creds *gitproxy.CredentialSet, store *model.Store, client github.Client, ghCalls *demoGitHubCalls) (*daemon.GitHubWebhookConsumer, error) {
 	if opts.GithubWebhookURL == "" && opts.GithubWebhookAddr == "" {
 		return nil, nil
 	}
@@ -2569,7 +2571,9 @@ func startDemoGitHubWebhooks(ctx context.Context, dir string, opts Options, cred
 		return nil, err
 	}
 	wake := func() {
-		processDemoGitHubWebhooks(ctx, store, consumer, ghCalls, time.Now().UTC())
+		if err := processDemoGitHubWebhooks(ctx, store, consumer, client, ghCalls, time.Now().UTC()); err != nil {
+			log.Printf("grain demo: github webhook reconcile: %v", err)
+		}
 	}
 	if err := consumer.Start(ctx, wake, func(string) {}); err != nil {
 		return nil, err
@@ -2577,9 +2581,9 @@ func startDemoGitHubWebhooks(ctx context.Context, dir string, opts Options, cred
 	return consumer, nil
 }
 
-func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events orchestrator.GitHubEventSource, ghCalls *demoGitHubCalls, now time.Time) {
+func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events orchestrator.GitHubEventSource, client github.Client, ghCalls *demoGitHubCalls, now time.Time) error {
 	if store == nil || events == nil {
-		return
+		return nil
 	}
 	if ghCalls != nil {
 		ghCalls.webhookMu.Lock()
@@ -2600,9 +2604,8 @@ func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events o
 	}
 	deps := orchestrator.Deps{
 		Store:        store,
+		Client:       client,
 		GitHubEvents: events,
 	}
-	if err := runDemoReconcilers(ctx, deps, now, "github-events", "takeovers"); err != nil {
-		log.Printf("grain demo: github webhook reconcile: %v", err)
-	}
+	return runDemoReconcilers(ctx, deps, now, "github-events", "takeovers")
 }
