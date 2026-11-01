@@ -60,22 +60,32 @@ describe("settingLabel", () => {
     expect(unlocated).toEqual([]);
   });
 
-  it("maps each setting key to its Settings section and card anchor", () => {
+  // A link to a setting lands on the field itself, not the top of its
+  // card: Legacy capabilities' GitHub host sits a screen below the card's
+  // top, so Health's "Saved, not applied until restart" link to it used
+  // to open the section with the field out of sight (2026-11-01
+  // deployment-operations walkthrough).
+  it("maps each setting key to its Settings section, card and field", () => {
     expect(settingLocation("pollInterval")).toEqual({
       section: "engine",
       anchor: "polling",
-      href: "/settings/engine#polling",
+      target: "pollInterval",
+      href: "/settings/engine#pollInterval",
     });
     expect(settingLocation("ciJobsPerRun")).toEqual({
       section: "ci",
       anchor: "ci-queue",
-      href: "/settings/ci#ci-queue",
+      target: "ciJobsPerRun",
+      href: "/settings/ci#ciJobsPerRun",
     });
-    expect(settingLocation("sandboxBackend")).toEqual({
-      section: "sandboxes",
-      anchor: "backend-and-size",
-      href: "/settings/sandboxes#backend-and-size",
+    expect(settingLocation("githubHost")).toEqual({
+      section: "credentials",
+      anchor: "credentials",
+      target: "githubHost",
+      href: "/settings/credentials#githubHost",
     });
+    // A card names no setting key.
+    expect(settingLocation("card:general:about")).toBeNull();
     expect(settingLocation("somethingNewerThanThisBuild")).toBeNull();
   });
 

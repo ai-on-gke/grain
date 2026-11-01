@@ -105,7 +105,7 @@ test("the two whole-cache flush buttons on System → Caches are named apart", a
   expect(proxyBox.y).toBeLessThan(actionsBox.y);
 });
 
-test("pending-restart and not-runnable settings on System → Health link to their Settings section and card", async ({
+test("pending-restart and not-runnable settings on System → Health link to their Settings section and field", async ({
   page,
 }) => {
   await page.route("**/api/settings", async (route) => {
@@ -134,10 +134,13 @@ test("pending-restart and not-runnable settings on System → Health link to the
   const pollPending = pendingRow.getByRole("link", { name: "Poll interval" });
   const githubPending = pendingRow.getByRole("link", { name: "GitHub host" });
   const powerBtn = pendingRow.getByRole("button", { name: "Power" });
-  await expect(pollPending).toHaveAttribute("href", "/settings/engine#polling");
+  await expect(pollPending).toHaveAttribute(
+    "href",
+    "/settings/engine#pollInterval",
+  );
   await expect(githubPending).toHaveAttribute(
     "href",
-    "/settings/credentials#credentials",
+    "/settings/credentials#githubHost",
   );
 
   // Power stays in the right-hand action slot of the pending-restart alert.
@@ -150,12 +153,14 @@ test("pending-restart and not-runnable settings on System → Health link to the
   );
 
   await pollPending.click();
-  await expect(page).toHaveURL(/\/settings\/engine#polling$/);
+  await expect(page).toHaveURL(/\/settings\/engine#pollInterval$/);
   await expect(page.getByTestId("settings-section")).toHaveAttribute(
     "data-section",
     "engine",
   );
-  await expect(page.locator("#polling")).toBeVisible();
+  await expect(
+    page.locator('[data-setting-id="pollInterval"]'),
+  ).toBeInViewport();
 
   await page.goBack();
   await expect(page).toHaveURL(/\/system$/);
@@ -172,20 +177,22 @@ test("pending-restart and not-runnable settings on System → Health link to the
   });
   await expect(pollUnrunnable).toHaveAttribute(
     "href",
-    "/settings/engine#polling",
+    "/settings/engine#pollInterval",
   );
   await expect(backendUnrunnable).toHaveAttribute(
     "href",
-    "/settings/sandboxes#backend-and-size",
+    "/settings/sandboxes#sandboxBackend",
   );
 
   await backendUnrunnable.click();
-  await expect(page).toHaveURL(/\/settings\/sandboxes#backend-and-size$/);
+  await expect(page).toHaveURL(/\/settings\/sandboxes#sandboxBackend$/);
   await expect(page.getByTestId("settings-section")).toHaveAttribute(
     "data-section",
     "sandboxes",
   );
-  await expect(page.locator("#backend-and-size")).toBeVisible();
+  await expect(
+    page.locator('[data-setting-id="sandboxBackend"]'),
+  ).toBeInViewport();
 
   await page.goBack();
   await expect(page).toHaveURL(/\/system$/);
@@ -215,6 +222,6 @@ test("pending-restart and not-runnable settings on System → Health link to the
   );
 
   await phonePending.getByRole("link", { name: "GitHub host" }).click();
-  await expect(page).toHaveURL(/\/settings\/credentials#credentials$/);
-  await expect(page.locator("#credentials")).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/credentials#githubHost$/);
+  await expect(page.locator('[data-setting-id="githubHost"]')).toBeInViewport();
 });
