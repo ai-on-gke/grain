@@ -248,6 +248,11 @@ func Main() {
 			return
 		}
 	}
+	// Inside a sandbox, a typo or a task-CLI command is answered with the
+	// sandbox CLI's help, not this CLI's daemon-facing usage.
+	if code, handled := sandboxcli.Unknown(args, os.Stderr); handled {
+		os.Exit(code)
+	}
 	if err := runCLI(args); err != nil {
 		fmt.Fprintln(os.Stderr, "grain: "+err.Error())
 		os.Exit(1)

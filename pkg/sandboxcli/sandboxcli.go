@@ -184,27 +184,74 @@ var sandboxCommands = map[string][]string{
 	"cap":   nil,
 }
 
+// sandboxCommandFlags are the flags each command reads; parseSandboxArgs
+// takes any --name, so run refuses the rest rather than answer a question
+// nobody asked (grain cap's flags are its tool's, checked there).
+var sandboxCommandFlags = map[string][]string{
+	"ls":                    {"glob"},
+	"read":                  {"tail", "offset", "limit", "lines", "n"},
+	"grep":                  {"i", "C", "glob", "max"},
+	"ci list":               {"ref", "conclusion", "job", "since", "limit", "repo", "task"},
+	"ci test-history":       {"limit", "repo"},
+	"ci log":                {"task", "repo", "job", "step", "attempt", "tail", "offset", "limit", "lines", "n"},
+	"ci artifact":           {"o", "run", "task", "repo"},
+	"ci wait":               {"jobs", "timeout", "resume"},
+	"ci run-job":            {"timeout", "resume"},
+	"ci retrigger":          {"jobs", "all", "commit", "workflow"},
+	"pr status":             {"task", "ref", "repo"},
+	"pr base-status":        nil,
+	"pr open":               nil,
+	"pr reply":              {"file", "comment-id"},
+	"pr resolve":            {"thread-id", "comment-id"},
+	"pr review-comment":     {"file", "path", "line"},
+	"git revert":            {"task", "commit", "reason", "C"},
+	"merge-queue":           nil,
+	"status":                {"file"},
+	"handover write":        {"file"},
+	"notify":                {"subject", "title", "body", "file", "severity", "task", "clears-when", "json"},
+	"task list":             {"state", "repo", "limit", "search", "changed-since", "stalled", "kind", "json"},
+	"task read":             nil,
+	"task prompt":           {"attempt", "tail", "offset", "limit", "lines", "n"},
+	"task transcript":       {"attempt", "tail", "offset", "limit", "lines", "n"},
+	"task wait":             {"until", "timeout", "json", "park", "resume-at"},
+	"task message":          {"body", "file"},
+	"task propose":          {"title", "body", "file", "id", "repo", "branch", "no-repo", "depends-on", "capability", "fixes-base-branch", "no-port", "keep-running", "origin", "read", "custom-field", "not-before", "priority", "json", "supersedes", "auto-merge", "hold-for-approval"},
+	"api":                   {"scope", "json", "body", "file", "field", "reason"},
+	"memory list":           nil,
+	"memory read":           nil,
+	"memory write":          {"repo", "file", "reason"},
+	"memory doc-write":      {"repo", "file", "summary", "reason"},
+	"release-notes stats":   {"period"},
+	"release-notes publish": {"version", "period", "title", "file", "reason"},
+	"quarantine":            {"reason", "ttl", "no-follow-up", "C"},
+	"metrics":               {"window", "since", "until", "repo", "author"},
+	"health":                nil,
+	"log":                   {"source", "since", "until", "priority", "min-priority", "contains", "max-lines", "lines", "n", "tail"},
+	"playbooks":             nil,
+	"issue list":            {"repo", "label", "limit"},
+	"issue read":            {"repo", "comments"},
+	"db query":              nil,
+}
+
+// sandboxCountFlags take a non-negative integer, checked before the
+// command runs rather than dropped from its query.
+var sandboxCountFlags = []string{"tail", "offset", "limit", "lines", "n", "max", "max-lines", "attempt"}
+
+// usageError is a command line no command can answer: printed as it is,
+// with exit status 2.
+type usageError struct{ msg string }
+
+func (e usageError) Error() string { return e.msg }
+
 // isSandboxCommand reports whether args name a command sandbox mode serves.
+// A sandbox command's unknown subcommand is still one: run answers it with
+// that command's own help, never the host CLI's.
 func isSandboxCommand(args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
-	subs, ok := sandboxCommands[args[0]]
-	if !ok {
-		return false
-	}
-	if subs == nil || len(args) < 2 {
-		return true
-	}
-	if isHelpFlag(args[1]) {
-		return true
-	}
-	for _, s := range subs {
-		if args[1] == s {
-			return true
-		}
-	}
-	return false
+	_, ok := sandboxCommands[args[0]]
+	return ok
 }
 
 func isHelpFlag(a string) bool { return a == "-h" || a == "--help" || a == "help" }
@@ -234,12 +281,41 @@ func maybeRunSandboxCLI(args []string, env sandboxEnv, stdout, stderr io.Writer)
 	c := &sandboxCLI{base: base, token: token, out: stdout, errOut: stderr,
 		client: &http.Client{Timeout: 10 * time.Minute}, env: env.Getenv}
 	if err := c.run(args); err != nil {
+		var usage usageError
+		if errors.As(err, &usage) {
+			fmt.Fprint(stderr, usage.msg)
+			return 2, true
+		}
 		if !errors.Is(err, errSandboxReported) {
 			fmt.Fprintln(stderr, "grain: "+err.Error())
 		}
 		return 1, true
 	}
 	return 0, true
+}
+
+// Unknown answers args, which no command of the host CLI's took, when this
+// process is in a sandbox: with the sandbox CLI's help on stderr and exit
+// status 2, rather than the host CLI's usage, whose daemon and runhost
+// commands a sandbox has no use for. handled is false outside a sandbox,
+// and for a leading global flag (-server, -json), which is the host CLI's.
+func Unknown(args []string, stderr io.Writer) (code int, handled bool) {
+	return unknownCommand(args, osSandboxEnv(), stderr)
+}
+
+func unknownCommand(args []string, env sandboxEnv, stderr io.Writer) (code int, handled bool) {
+	if len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		return 0, false
+	}
+	base, _, ok := detectSandboxProxy(env)
+	if !ok {
+		return 0, false
+	}
+	if len(args) > 0 {
+		fmt.Fprintf(stderr, "grain: unknown command %q\n\n", args[0])
+	}
+	fmt.Fprintf(stderr, sandboxHelpText, base)
+	return 2, true
 }
 
 // errSandboxReported is an error already printed (the proxy's own words).
@@ -269,9 +345,12 @@ func (c *sandboxCLI) run(args []string) error {
 		// --help the tool's.
 		return c.capCommand(rest)
 	}
-	if sandboxCommands[cmd] != nil {
+	if subs := sandboxCommands[cmd]; subs != nil {
 		if len(rest) == 0 || isHelpFlag(rest[0]) {
 			return c.help(cmd)
+		}
+		if !slices.Contains(subs, rest[0]) {
+			return usageError{fmt.Sprintf("grain %s: unknown command %q\n\n%s", cmd, rest[0], sandboxCommandHelp[cmd])}
 		}
 		cmd += " " + rest[0]
 		rest = rest[1:]
@@ -285,9 +364,25 @@ func (c *sandboxCLI) run(args []string) error {
 			return c.help(cmd)
 		}
 	}
-	p, err := parseSandboxArgs(rest)
-	if err != nil {
+	allowed, ok := sandboxCommandFlags[cmd]
+	if !ok {
+		return usageError{fmt.Sprintf("grain %s: unknown command\n\n%s", cmd, sandboxCommandHelp[strings.Fields(cmd)[0]])}
+	}
+	p, parseErr := parseSandboxArgs(rest)
+	// A flag the command does not take is the error to report, even when
+	// it is the last argument and so has no value either.
+	if err := p.only(cmd, allowed...); err != nil {
 		return err
+	}
+	if parseErr != nil {
+		return usageError{fmt.Sprintf("grain %s: %v\n", cmd, parseErr)}
+	}
+	for _, name := range sandboxCountFlags {
+		if v, ok := p.flags[name]; ok {
+			if n, err := strconv.Atoi(v); err != nil || n < 0 {
+				return usageError{fmt.Sprintf("grain %s: %s %q is not a count: it takes a non-negative integer\n", cmd, flagName(name), v)}
+			}
+		}
 	}
 	switch cmd {
 	case "ls":
@@ -301,7 +396,7 @@ func (c *sandboxCLI) run(args []string) error {
 		if err != nil {
 			return err
 		}
-		return c.fs(uri, p.query("tail", "offset", "limit"))
+		return c.read(uri, p, false)
 	case "grep":
 		pattern, err := p.arg(0, "pattern")
 		if err != nil {
@@ -317,6 +412,9 @@ func (c *sandboxCLI) run(args []string) error {
 			q.Set("i", "1")
 		}
 		if v := p.get("C"); v != "" {
+			if n, err := strconv.Atoi(v); err != nil || n < 0 {
+				return usageError{fmt.Sprintf("grain grep: -C %q is not a count: it takes a non-negative integer\n", v)}
+			}
 			q.Set("context", v)
 		}
 		q.Set("n", "1")
@@ -381,10 +479,11 @@ func (c *sandboxCLI) run(args []string) error {
 			return err
 		}
 		file := strings.TrimPrefix(cmd, "task ") + ".md"
+		uri := "task://" + id + "/" + file
 		if n := p.get("attempt"); n != "" {
-			return c.fs("task://"+id+"/attempts/"+n+"/"+file, nil)
+			uri = "task://" + id + "/attempts/" + n + "/" + file
 		}
-		return c.fs("task://"+id+"/"+file, nil)
+		return c.read(uri, p, cmd == "task transcript")
 	case "task wait":
 		return c.taskWait(p)
 	case "task message":
@@ -646,7 +745,7 @@ func (c *sandboxCLI) ciLog(p sandboxArgs) error {
 	if !strings.HasSuffix(step, ".log") {
 		step += ".log"
 	}
-	return c.fs(uri+"/"+step, p.query("tail", "offset", "limit"))
+	return c.read(uri+"/"+step, p, false)
 }
 
 func (c *sandboxCLI) ciArtifact(p sandboxArgs) error {
@@ -722,6 +821,7 @@ func parseSandboxArgs(args []string) (sandboxArgs, error) {
 			continue
 		}
 		if i+1 >= len(args) {
+			p.flags[name] = ""
 			return p, fmt.Errorf("flag %s needs a value", a)
 		}
 		p.flags[name] = args[i+1]
@@ -754,12 +854,34 @@ func (p sandboxArgs) has(name string) bool { _, ok := p.flags[name]; return ok }
 // only refuses any flag not among names, for a command whose every flag
 // narrows its answer: one it ignored would answer a question nobody asked.
 func (p sandboxArgs) only(cmd string, names ...string) error {
+	given := make([]string, 0, len(p.flags))
 	for name := range p.flags {
-		if !slices.Contains(names, name) {
-			return fmt.Errorf("%s: unknown flag --%s: run 'grain %s --help' for usage", cmd, name, cmd)
+		given = append(given, name)
+	}
+	sort.Strings(given)
+	for _, name := range given {
+		if slices.Contains(names, name) {
+			continue
 		}
+		takes := "it takes none"
+		if len(names) > 0 {
+			sorted := slices.Sorted(slices.Values(names))
+			for i, n := range sorted {
+				sorted[i] = flagName(n)
+			}
+			takes = "flags: " + strings.Join(sorted, ", ")
+		}
+		return usageError{fmt.Sprintf("grain %s: unknown flag %s (%s); run 'grain %s --help' for usage\n", cmd, flagName(name), takes, cmd)}
 	}
 	return nil
+}
+
+// flagName is name as it is written on a command line: -i, --tail.
+func flagName(name string) string {
+	if len(name) == 1 {
+		return "-" + name
+	}
+	return "--" + name
 }
 
 // grainLogQuery is `grain log`'s flags as deploy://grain.log's query:
@@ -772,7 +894,7 @@ func grainLogQuery(p sandboxArgs) url.Values {
 			q.Set("min_priority", v)
 		}
 	}
-	for _, name := range []string{"max-lines", "lines"} {
+	for _, name := range []string{"max-lines", "lines", "n"} {
 		if v := p.get(name); v != "" {
 			q.Set("max_lines", v)
 		}
@@ -810,11 +932,91 @@ func (p sandboxArgs) query(names ...string) url.Values {
 			continue
 		}
 		if v, ok := p.flags[n]; ok && n != "" {
-			if _, err := strconv.Atoi(v); err != nil && (n == "tail" || n == "offset" || n == "limit") {
-				continue
-			}
 			q.Set(n, v)
 		}
 	}
 	return q
+}
+
+// lastLines is --lines (or -n): how many of a file's last lines to print,
+// or 0 for all of what the byte range answers.
+func (p sandboxArgs) lastLines() int {
+	for _, name := range []string{"lines", "n"} {
+		if v := p.get(name); v != "" {
+			n, _ := strconv.Atoi(v)
+			return n
+		}
+	}
+	return 0
+}
+
+// read prints a namespace file: the byte range --tail, --offset and --limit
+// name (the namespace's own), then only its last --lines lines.
+// With sayingSize it says on stderr how big the whole file is, too.
+func (c *sandboxCLI) read(uri string, p sandboxArgs, sayingSize bool) error {
+	path, err := fsPath(uri)
+	if err != nil {
+		return err
+	}
+	resp, err := c.do(path, p.query("tail", "offset", "limit"))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		fmt.Fprintln(c.errOut, "grain: "+strings.TrimSpace(string(body)))
+		return errSandboxReported
+	}
+	if size := resp.Header.Get("X-Grain-Total-Size"); sayingSize && size != "" {
+		fmt.Fprintf(c.errOut, "grain: %s is %s bytes; --tail, --offset and --limit take bytes, --lines N the last N lines\n", uri, size)
+	}
+	if !p.has("lines") && !p.has("n") {
+		_, err = io.Copy(c.out, resp.Body)
+		return err
+	}
+	tw := &tailWriter{n: p.lastLines()}
+	if _, err := io.Copy(tw, resp.Body); err != nil {
+		return err
+	}
+	_, err = c.out.Write(tw.bytes())
+	return err
+}
+
+// tailWriter keeps the last n lines written to it.
+type tailWriter struct {
+	n     int
+	lines [][]byte
+	// part is the line still being written.
+	part []byte
+}
+
+func (t *tailWriter) Write(b []byte) (int, error) {
+	written := len(b)
+	for len(b) > 0 {
+		i := bytes.IndexByte(b, '\n')
+		if i < 0 {
+			t.part = append(t.part, b...)
+			break
+		}
+		t.part = append(t.part, b[:i+1]...)
+		t.lines = append(t.lines, t.part)
+		t.part = nil
+		if len(t.lines) > t.n {
+			t.lines = t.lines[len(t.lines)-t.n:]
+		}
+		b = b[i+1:]
+	}
+	return written, nil
+}
+
+func (t *tailWriter) bytes() []byte {
+	lines := t.lines
+	if len(t.part) > 0 {
+		lines = append(lines, t.part)
+	}
+	if len(lines) > t.n {
+		lines = lines[len(lines)-t.n:]
+	}
+	return bytes.Join(lines, nil)
 }
