@@ -109,6 +109,7 @@ func PublishedToolNames() []string {
 	// chat session, and listed unconditionally for the reason every
 	// daemon-gated tool above is.
 	add(mcp.NewRenameSessionTools(nil))
+	add(mcp.NewProposeConfigChangeTools(nil, "", nil))
 	add(mcp.NewWaitForTaskTools(nil, nil))
 	add(mcp.NewResumeLaterTools(nil, nil))
 	add(mcp.NewNotifyTools(nil))
@@ -201,16 +202,17 @@ func dedupeToolNames(names []string) []string {
 // add_review_comment are NewMockTools' too, and are not here: they are
 // `grain handover write` and `grain pr review-comment`.
 var controlTools = map[string]bool{
-	"ask_question":     true,
-	"request_secret":   true,
-	"comment_on_issue": true,
-	"nothing_needed":   true,
-	"propose_task":     true,
-	"wait_for_task":    true,
-	"resume_later":     true,
-	"recreate_sandbox": true,
-	"chat":             true,
-	"rename_session":   true,
+	"ask_question":          true,
+	"request_secret":        true,
+	"propose_config_change": true,
+	"comment_on_issue":      true,
+	"nothing_needed":        true,
+	"propose_task":          true,
+	"wait_for_task":         true,
+	"resume_later":          true,
+	"recreate_sandbox":      true,
+	"chat":                  true,
+	"rename_session":        true,
 }
 
 // SandboxToolNames is the four tools that cross from the agent CLI into
