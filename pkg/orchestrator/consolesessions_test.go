@@ -1522,6 +1522,62 @@ func TestSessionSandboxReusedWithinIdleTTLFallbackAndReclaimedAfterTTL(t *testin
 	}
 }
 
+// A warm sandbox parked under one session idle TTL is reclaimed on a
+// shorter one set while it is parked: the setting as it stands binds, not
+// only the TTL the parking run was dispatched with
+// (docs/test-runs/2026-11-01-interactive-sessions-warm-keep-running.md).
+func TestParkedSessionSandboxIsReclaimedOnAShortenedTTL(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID: model.DirectorSessionID, Title: "Director",
+			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+	deps := orchestrator.Deps{
+		Store:      store,
+		Sandboxes:  sbx,
+		Framework:  orchestrator.StaticFramework(&recordingSessionAgent{}),
+		MaxWorkers: 2,
+		Config: orchestrator.Config{
+			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities: model.NewCapabilityRegistry(durable.New()),
+		},
+	}
+
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("turn 1 cycle: %v", err)
+	}
+	if orchestrator.WarmSessionSandboxID(store, director.ID) == "" || sbx.releases != 0 {
+		t.Fatalf("after turn 1: warm=%q releases=%d, want the sandbox parked under the 30m TTL",
+			orchestrator.WarmSessionSandboxID(store, director.ID), sbx.releases)
+	}
+
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.SessionSandboxIdleTTL = 5 * time.Minute
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(6*time.Minute)); err != nil {
+		t.Fatalf("cycle past the shortened TTL: %v", err)
+	}
+	if sbx.releases != 1 {
+		t.Fatalf("6m into a park with the TTL shortened to 5m: releases=%d, want 1", sbx.releases)
+	}
+	if got := orchestrator.WarmSessionSandboxID(store, director.ID); got != "" {
+		t.Fatalf("WarmSessionSandboxID = %q, want it reclaimed", got)
+	}
+}
+
 func TestClosingOrPausingSessionReleasesWarmSandbox(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"pause", "close"} {

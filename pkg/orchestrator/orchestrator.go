@@ -977,6 +977,12 @@ type Config struct {
 	// in-process session continuation is enabled automatically.
 	WaitForSessionReply bool
 
+	// sessionIdleTTLStored says SessionSandboxIdleTTL was read from the
+	// stored setting at dispatch rather than pinned by the caller, so an
+	// in-process idle wait follows that setting while it waits
+	// (Config.liveSessionIdleTTL).
+	sessionIdleTTLStored bool
+
 	sandboxReused        bool
 	sandboxReclaimed     bool
 	inProcessSessionWait bool
