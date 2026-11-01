@@ -99,14 +99,15 @@ The run edited `tables/grain_config.json` in the state repo's checkout:
    - Same repro on `/settings/credentials`.
    - The deployment-wide fieldset is now disabled while locked too, with a notice. Secret entry stays writable.
 3. **D-10: the Settings page ignored `directConfigWrites`.**
-   - `GET /api/settings` now carries `directConfigWrites`. It is read-only, from `state-repo.json`.
-   - `SettingsPage` locks on `settings.settingsLocked && !settings.directConfigWrites` once settings are loaded, so toggling from General redraws at once, and on `config.configRepoOnly` before that.
+   - This branch first fixed it by adding `directConfigWrites` to `GET /api/settings`.
+   - `main` then landed its own fix independently (`docs/test-runs/2026-11-01-settings-deployment-work-verification.md`): `GET`/`PUT /api/settings` carry `configRepoOnly`, and `SettingsPage` keys its lock on that.
+   - When merging `main`, this branch took that version and dropped its own field. The live behaviour recorded above is the same under both.
 
 **Regression tests:**
 
 - `TestSettingsLockedRefusesExactlyTheFieldsTheUIGreysOut` (`pkg/ui/config_locked_fields_test.go`). It pins, field by field, which settings the API accepts and refuses under the lock, and so which ones the UI must grey out.
-- `TestConfigSaysWhenSettingsAreConfigRepoOnly` now also checks `GET /api/settings`'s `directConfigWrites`.
-- Six vitest cases in `SettingsPage.test.jsx` under "with settings locked".
+- `TestConfigSaysWhenSettingsAreConfigRepoOnly` now also checks that `GET /api/settings` reports `configRepoOnly: false` under the opt-out.
+- Five vitest cases in `SettingsPage.test.jsx` under "with settings locked".
 
 The spec marks D-1, D-2 and D-10 fixed.
 

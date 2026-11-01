@@ -150,7 +150,7 @@ Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `s
 | **`<data-dir>/state-repo.json`** (host-local, not in the database) | — (`POST /api/state-repo/remote` answers 501). Operator: edit the file, or `grain state repo <url>`. | `remote` / `branch` / `tokenFile`: P (Config repo page), R, A (`settings:write`) via `POST /api/state-repo/remote`, which calls no config guard; operator CLI or file. `directConfigWrites`, `noWorkflow`, `postCheck`, `checkImage`, `localOnlyAcknowledged`: operator file edit only. Never C. | same | same: `POST /api/state-repo/remote` with `"none": true` is how a deployment leaves external mode. |
 | **Browser preferences** (`localStorage`: theme, time zone, timeline order, sidebar) | P, in that browser only | same | same | same. Never read-only (`NOT_CONFIG`). |
 
-2.10.2. **The `directConfigWrites` escape hatch.** `"directConfigWrites": true` in `state-repo.json` (`staterepo.Settings.DirectConfigWrites`, read through `LoadSettings` on every guarded write, so it needs no restart) MUST make column 3 behave exactly like column 2. `configRepoFor` returns "not managed" before it reads `settings_locked`, `configRepoOnly` reports false, an agent may unlock, and guarded writes sync through `SyncAfterWrite`. It MUST NOT change column 4, because `configRepoFor` checks `externalConfigRepo` first. The flag can only be set by whoever can edit the data directory: no UI, REST route, agent scope or config PR writes it. `GET /api/settings` reports it as `directConfigWrites` (read-only), and the Settings and repository pages draw no lock while it is set (D-10, fixed).
+2.10.2. **The `directConfigWrites` escape hatch.** `"directConfigWrites": true` in `state-repo.json` (`staterepo.Settings.DirectConfigWrites`, read through `LoadSettings` on every guarded write, so it needs no restart) MUST make column 3 behave exactly like column 2. `configRepoFor` returns "not managed" before it reads `settings_locked`, `configRepoOnly` reports false, an agent may unlock, and guarded writes sync through `SyncAfterWrite`. It MUST NOT change column 4, because `configRepoFor` checks `externalConfigRepo` first. The flag can only be set by whoever can edit the data directory: no UI, REST route, agent scope or config PR writes it. The Settings and repository pages draw no lock while it is set, because `configRepoOnly` is false then (D-10, fixed).
 
 2.10.3. **The refusal and its rehearsal.** Each **409** cell above is the same answer: `code: "config_managed_externally"`, `repo`, `branch`, `path`, `change` and, for an agent, `access` (§2.3.2, §2.7.1). How the edit is filled in depends on the guard:
 
@@ -394,6 +394,8 @@ The rule of §2.3.4 keeps secret material writable under the lock, but `SetRepoR
 
 ### D-7: Binding a capability-server secret while locked stores the value, then refuses the binding
 
+*Fixed 2026-11-01 (`docs/test-runs/2026-11-01-settings-deployment-work-verification.md`): `BindCapabilityServerSecret` stores the value only when the binding's `mcp_servers` write is not sent to grain/config, so a locked binding answers 409 with the `$secret:` reference to commit and stores nothing (`TestBindingASecretWhileLockedStoresNothing`).*
+
 `BindCapabilityServerSecret` passes its bootstrap guard (allowed while locked), writes the value to the secret store, and then `updateCapabilityServers` runs `checkSettingsWritable`, which refuses with 409. The secret is stored without its `$secret:` reference in `mcp_servers`. In external mode it is refused before storing (§2.7.2). It should either be refused up front under the lock (S·u) or treat the binding as bootstrap.
 
 ### D-8: Release notes are exported to `grain/config` but never imported
@@ -406,7 +408,7 @@ In external mode every Settings section except Config repo, Preferences and Upgr
 
 ### D-10: The UI ignores `directConfigWrites`
 
-*Repo page fixed 2026-10-31 (`docs/test-runs/2026-10-31-settings-git-repositories-verification.md`): `RepoPage` keys its lock on `config.configRepoOnly` alone. Settings page fixed 2026-11-01 (`docs/test-runs/2026-11-01-settings-bootstrap-operations-verification.md`): `GET /api/settings` carries `directConfigWrites`, and `SettingsPage` locks on `settings.settingsLocked && !settings.directConfigWrites` once settings are loaded (so toggling the lock from General redraws at once), and on `config.configRepoOnly` before.*
+*Fixed. `RepoPage` 2026-10-31 (`docs/test-runs/2026-10-31-settings-git-repositories-verification.md`). `SettingsPage` 2026-11-01 (`docs/test-runs/2026-11-01-settings-deployment-work-verification.md`): `GET`/`PUT /api/settings` carry `configRepoOnly` for the row they answer with, and the page keys its lock on that (falling back to `GET /api/config`'s) rather than on `settingsLocked` (`TestSettingsSayWhenTheyAreConfigRepoOnly`).*
 
 With `directConfigWrites: true` and `settings_locked: true`, `GET /api/config` reports `configRepoOnly: false`, and the server accepts every write. But `SettingsPage` prefers `settings.settingsLocked` once settings are loaded, and `RepoPage` uses `config.configRepoOnly || config.settingsLocked`, so both render read-only. The UI should key the lock on `config.configRepoOnly` alone.
 

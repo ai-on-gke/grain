@@ -30,6 +30,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -349,7 +350,7 @@ func (c *Client) capabilityLookup() protocol.Lookup {
 	if l, ok := c.Config.CapabilityServers.(interface {
 		Lookup(string) (*protocol.Server, error)
 	}); ok && l != nil {
-		return l.Lookup
+		return grainserver.Lookup(l.Lookup)
 	}
 	return nil
 }
@@ -364,11 +365,31 @@ func (c *Client) normalizeCapabilityID(id string) (string, error) {
 	if !model.IsCapabilityRef(id) {
 		return id, nil
 	}
-	names, err := model.NormalizeCapabilityNames([]string{id}, c.capabilityLookup())
+	lookup := c.capabilityLookup()
+	if lookup == nil && grainserver.IsInProcessGrant(id) {
+		lookup = grainserver.Lookup(nil)
+	}
+	names, err := model.NormalizeCapabilityNames([]string{id}, lookup)
 	if err != nil {
 		return "", validationErrorf("%v", err)
 	}
 	return names[0], nil
+}
+
+// normalizeCapabilityIDs expands 1-to-many retired legacy grants (such as
+// deployment-health -> [api:deployment:read, grain#health={}]) and normalizes
+// each resulting capability ID.
+func (c *Client) normalizeCapabilityIDs(id string) ([]string, error) {
+	expanded := model.CanonicalLegacyGrants(id)
+	out := make([]string, 0, len(expanded))
+	for _, part := range expanded {
+		normalized, err := c.normalizeCapabilityID(part)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, normalized)
+	}
+	return out, nil
 }
 
 func (c *Client) capabilityByID(id string) (Capability, bool) {
@@ -1168,6 +1189,9 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		detail.RunNowAt = obs.RunNowAt
 	}
 	detail.PendingSecret = c.pendingSecretFor(obs)
+	if obs != nil {
+		detail.PendingConfigChange = obs.PendingConfigChange
+	}
 	detail.LocalScriptApprovals = c.localScriptApprovals().ForTask(id, c.now())
 	detail.CI = ciStatusFrom(obs)
 	if ownerID, inPlace := t.CIOwner(); inPlace {
@@ -2239,10 +2263,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	// So does the capability policy (§4.2.2), which admission would
 	// otherwise only apply once the task is dispatched.
-	grants, err = c.policyFilingGrants(ctx, grants, target)
+	grants, policyDropped, err := c.policyFilingGrants(ctx, grants, target)
 	if err != nil {
 		return Task{}, err
 	}
+	droppedRefusals = append(droppedRefusals, policyDropped...)
 	customFields, err := c.normalizeCustomFields(ctx, req.CustomFields)
 	if err != nil {
 		return Task{}, err
@@ -3233,14 +3258,16 @@ func (c *Client) grantsFor(ids []string, via model.GrantSource) ([]model.Grant, 
 			}
 			return nil, validationErrorf("%s", grainci.Refusal())
 		}
-		id, err := c.normalizeCapabilityID(id)
+		normalizedIDs, err := c.normalizeCapabilityIDs(id)
 		if err != nil {
 			return nil, grantValidationError(err)
 		}
-		if _, ok := c.capabilityByID(id); !ok {
-			return nil, validationErrorf("%s", capabilityRefusal(id))
+		for _, nid := range normalizedIDs {
+			if _, ok := c.capabilityByID(nid); !ok {
+				return nil, validationErrorf("%s", capabilityRefusal(nid))
+			}
+			grants = append(grants, model.Grant{Capability: nid, Via: via})
 		}
-		grants = append(grants, model.Grant{Capability: id, Via: via})
 	}
 	return model.NormalizeCapabilityGrants(grants, nil)
 }
@@ -3326,25 +3353,27 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 				if id == grainci.CapabilityName {
 					continue
 				}
-				id, err := c.normalizeCapabilityID(id)
+				normalizedIDs, err := c.normalizeCapabilityIDs(id)
 				if err != nil {
 					return nil, nil, err
 				}
-				if _, ok := c.capabilityByID(id); !ok {
-					return nil, nil, validationErrorf("%s", capabilityRefusal(id))
-				}
-				found := false
-				for _, g := range grants {
-					if g.Capability == id {
-						found = true
-						break
+				for _, nid := range normalizedIDs {
+					if _, ok := c.capabilityByID(nid); !ok {
+						return nil, nil, validationErrorf("%s", capabilityRefusal(nid))
 					}
-				}
-				if !found {
-					grants = append(grants, model.Grant{
-						Capability: id,
-						Via:        model.GrantByLabel,
-					})
+					found := false
+					for _, g := range grants {
+						if g.Capability == nid {
+							found = true
+							break
+						}
+					}
+					if !found {
+						grants = append(grants, model.Grant{
+							Capability: nid,
+							Via:        model.GrantByLabel,
+						})
+					}
 				}
 			}
 		}
@@ -4159,7 +4188,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// sent as agentBackendId as the model choice it was.
 	var editModel *string
 	var isConsoleSessionTask bool
-	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.Priority != nil || req.KeepRunning != nil {
+	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
 		if existing, err := c.Store.GetTask(ctx, id); err == nil && existing != nil {
 			isConsoleSessionTask = existing.IsConsoleSession()
 		}
@@ -4341,18 +4370,20 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		seen := map[string]bool{}
 		normalizedCaps = make([]string, 0, len(*req.Capabilities))
 		for _, rawCap := range *req.Capabilities {
-			capID, err := c.normalizeCapabilityID(rawCap)
+			capIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return Task{}, err
 			}
-			if _, ok := c.capabilityByID(capID); !ok {
-				return Task{}, validationErrorf("capabilities: %s", capabilityRefusal(capID))
+			for _, capID := range capIDs {
+				if _, ok := c.capabilityByID(capID); !ok {
+					return Task{}, validationErrorf("capabilities: %s", capabilityRefusal(capID))
+				}
+				if seen[capID] {
+					continue
+				}
+				seen[capID] = true
+				normalizedCaps = append(normalizedCaps, capID)
 			}
-			if seen[capID] {
-				continue
-			}
-			seen[capID] = true
-			normalizedCaps = append(normalizedCaps, capID)
 		}
 	}
 	submitted, submittedAt, submittedHead := false, c.now(), ""
@@ -4603,11 +4634,35 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			// request's head -- the classification of it, the hold it
 			// earned, a person's Submit of it -- goes with it; the next
 			// pull request is classified afresh.
+			//
+			// An external pull request in that repository -- the one a
+			// fork head label resolved to (forkhead.go) -- goes too, and
+			// so does the guidance appended about it: the next run
+			// cannot fetch its head or follow it up from here.
+			fixesDropped := false
+			for _, l := range task.Links {
+				if !model.LinkOffTarget(*task, l) {
+					continue
+				}
+				if l.Kind == model.LinkFixes {
+					fixesDropped = true
+					continue
+				}
+				ref, _ := model.ParsePullRequestRef(l.Target)
+				if body, stripped := forkhead.StripNote(task.Body, ref); stripped {
+					task.Body = body
+				} else if strings.Contains(task.Body, ref.String()) {
+					task.Body += forkhead.MovedNote(ref, *task.Target)
+				}
+			}
 			if links, dropped := model.WithoutOffTargetPullRequests(*task); dropped {
-				task.Links = slices.DeleteFunc(links, func(l model.Link) bool {
-					return l.Kind == model.LinkSecurityHold || l.Kind == model.LinkTrustBoundaryCleared ||
-						l.Kind == model.LinkHumanSubmitted
-				})
+				task.Links = links
+				if fixesDropped {
+					task.Links = slices.DeleteFunc(links, func(l model.Link) bool {
+						return l.Kind == model.LinkSecurityHold || l.Kind == model.LinkTrustBoundaryCleared ||
+							l.Kind == model.LinkHumanSubmitted
+					})
+				}
 			}
 		}
 		if req.GoogleChatSpace != nil {
@@ -4865,33 +4920,41 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 	if capabilityID == "" {
 		return validationErrorf("capability id is required")
 	}
+	var targetIDs []string
 	if attach {
-		normalized, err := c.normalizeCapabilityID(capabilityID)
+		normalized, err := c.normalizeCapabilityIDs(capabilityID)
 		if err != nil {
 			return grantValidationError(err)
 		}
-		capabilityID = normalized
-	}
-	if _, ok := c.capabilityByID(capabilityID); attach && !ok {
-		return validationErrorf("%s", capabilityRefusal(capabilityID))
-	}
-	if attach {
-		if err := c.catalogueEditRefusalFor(ctx, id, capabilityID); err != nil {
-			return err
+		targetIDs = normalized
+		for _, nid := range targetIDs {
+			if _, ok := c.capabilityByID(nid); !ok {
+				return validationErrorf("%s", capabilityRefusal(nid))
+			}
+			if err := c.catalogueEditRefusalFor(ctx, id, nid); err != nil {
+				return err
+			}
+		}
+	} else {
+		targetIDs = model.CanonicalLegacyGrants(capabilityID)
+		if !slices.Contains(targetIDs, capabilityID) {
+			targetIDs = append(targetIDs, capabilityID)
 		}
 	}
 	// Rebuilding the grant set inside the closure is what lets two people
 	// attach two different capabilities without one losing: a retry runs
 	// again against the set the winner already wrote.
 	return c.mutate(ctx, id, func(task *model.Task) error {
-		kept := make([]model.Grant, 0, len(task.Grants)+1)
+		kept := make([]model.Grant, 0, len(task.Grants)+len(targetIDs))
 		for _, g := range task.Grants {
-			if g.Capability != capabilityID {
+			if !slices.Contains(targetIDs, g.Capability) {
 				kept = append(kept, g)
 			}
 		}
 		if attach {
-			kept = append(kept, model.Grant{Capability: capabilityID, Via: model.GrantByLabel})
+			for _, nid := range targetIDs {
+				kept = append(kept, model.Grant{Capability: nid, Via: model.GrantByLabel})
+			}
 		}
 		task.Grants = kept
 		return nil
@@ -5438,20 +5501,24 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	if err != nil {
 		return err
 	}
-	if reopenAck && by.Actor.Kind == model.PrincipalHuman {
-		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
-		if err != nil || reopened {
-			return err
-		}
-	}
-	// A run that stopped with resume_later(when: {message: true}) is
-	// waiting for exactly this: anybody's post but its own.
+	// A run that stopped with resume_later(when: {message: true}) -- or a
+	// console session that ParkConsoleSessionTask both parked on a question
+	// and deferred on {message: true} -- is waiting for anybody's post but
+	// its own. Wake before reopenAcknowledgeable so the first human reply
+	// clears DeferredAt as well as PendingQuestionCommentID instead of
+	// returning early from reopenAcknowledgeable with the task still deferred.
 	wokeOnMessage := false
 	ownAgent := model.Principal{Kind: model.PrincipalAgent, ID: id}
 	if by.Actor != ownAgent && (by.OnBehalfOf == nil || *by.OnBehalfOf != ownAgent) {
 		var err error
 		wokeOnMessage, err = c.Store.WakeOnMessage(ctx, id, now)
 		if err != nil {
+			return err
+		}
+	}
+	if reopenAck && by.Actor.Kind == model.PrincipalHuman {
+		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
+		if err != nil || reopened {
 			return err
 		}
 	}

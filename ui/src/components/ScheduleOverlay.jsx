@@ -602,7 +602,7 @@ function ScheduleOverlay({
     const what = schedule.suiteId
       ? `a run of the suite "${schedule.suiteName || schedule.suiteId}"`
       : schedule.templateId?.startsWith("system:workflow-review:")
-        ? `a CI run of the workflow it was declared in, to be reviewed when it finishes`
+        ? `a CI run of the workflow it was declared in`
         : schedule.templateId
           ? // Titled by the template, not by this schedule: a declared
             // schedule's own name ("Nightly Repo Maintenance Sweep")
@@ -611,11 +611,17 @@ function ScheduleOverlay({
             // the one that was never going to appear.
             `a task from the template "${schedule.templateName || schedule.templateId}"`
           : `the task "${schedule.title}"`;
+    // What happens after the start, said after "straight away" so that
+    // it is the start that is immediate: tacked onto `what`, the
+    // sentence read "to be reviewed when it finishes straight away".
+    const then = schedule.templateId?.startsWith("system:workflow-review:")
+      ? ", to be reviewed when it finishes"
+      : "";
     // One question rather than two: the run's own, with the edit it
     // would throw away named in it.
     if (
       !confirm(
-        `Run "${schedule.title}" now? It starts ${what} straight away; ` +
+        `Run "${schedule.title}" now? It starts ${what} straight away${then}; ` +
           `the schedule's own next run is unchanged.` +
           (isDirty()
             ? ` Your unsaved changes here are discarded, not run.`

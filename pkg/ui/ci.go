@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -255,7 +256,10 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 		// A daemon still starting is not a fact about the request: left
 		// as the ErrNotUp it is, so it is served as 503 and a waiting
 		// caller asks again rather than giving up on a 400.
-		if errors.Is(err, ci.ErrNotUp) {
+		// Nor is a start queued for a grit server that cannot be reached
+		// (ci.ErrStartQueued): it runs once grit is back, so it is served
+		// as 503 too, and asking again joins it.
+		if errors.Is(err, ci.ErrNotUp) || errors.Is(err, ci.ErrStartQueued) {
 			return ci.Run{}, err
 		}
 		// A fact about the request, as handleStartCIRun says of the same
@@ -1115,6 +1119,10 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		writeCINotUp(w)
 		return
 	}
+	if errors.Is(err, ci.ErrStartQueued) {
+		writeCIStartQueued(w, err)
+		return
+	}
 	if err != nil {
 		// Everything else Start refuses is a fact about the request -- a
 		// branch that does not resolve, a workflow file that does not
@@ -1382,6 +1390,22 @@ func ciRunFilterFrom(query url.Values, now time.Time) (ci.RunFilter, error) {
 // and safe to show anyone.
 func writeCINotUp(w http.ResponseWriter) {
 	writeError(w, http.StatusServiceUnavailable, apierror.Public(ci.ErrNotUp.Error()))
+}
+
+// writeCIStartQueued answers a start the remote grit server could not
+// take yet (ci.ErrStartQueued) with 503, not the 400 a refused request
+// gets: the run is in the durable outbox and is submitted once grit is
+// back, and asking for the same run again joins it rather than queueing
+// another. What the attempt met -- a transport error naming grit's
+// address -- stays in the daemon's log.
+func writeCIStartQueued(w http.ResponseWriter, err error) {
+	msg := ci.ErrStartQueued.Error()
+	var queued *ci.StartQueuedError
+	if errors.As(err, &queued) {
+		log.Printf("ci: start %s queued for grit: %v", queued.RequestID, queued.Err)
+		msg = fmt.Sprintf("%s (request %s); asking for the same run again joins it rather than starting a second", msg, queued.RequestID)
+	}
+	writeError(w, http.StatusServiceUnavailable, apierror.Public(msg))
 }
 
 func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {

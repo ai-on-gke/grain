@@ -35,7 +35,14 @@ const settings = {
 function setup(props = {}) {
   api.mockImplementation((path, opts) => {
     if (path === "/api/settings" && !opts) return Promise.resolve(settings);
-    if (path === "/api/settings") return Promise.resolve(JSON.parse(opts.body));
+    if (path === "/api/settings") {
+      // The server answers a write of the lock with configRepoOnly for
+      // the row it wrote (no directConfigWrites here).
+      const body = JSON.parse(opts.body);
+      if (typeof body.settingsLocked === "boolean")
+        body.configRepoOnly = body.settingsLocked;
+      return Promise.resolve(body);
+    }
     return Promise.resolve({});
   });
   const onSection = vi.fn();
@@ -319,16 +326,17 @@ describe("SettingsPage", () => {
     const popped = vi.fn();
     window.addEventListener("popstate", popped);
     try {
-      const link = within(
+      const links = within(
         screen.getByTestId("config-managed-notice"),
-      ).getByTestId("config-repo-link");
-      expect(link).toHaveAttribute(
-        "href",
+      ).getAllByTestId("config-repo-link");
+      expect(links.map((a) => a.getAttribute("href"))).toEqual([
+        "/config?path=tables%2Fgrain_config.json",
+        "/config?path=tables%2Fapi_scope_set.json",
         "/config?path=settings%2Fcapabilities.yml",
-      );
-      await user.click(link);
+      ]);
+      await user.click(links[0]);
       expect(window.location.pathname).toBe("/config");
-      expect(window.location.search).toBe("?path=settings%2Fcapabilities.yml");
+      expect(window.location.search).toBe("?path=tables%2Fgrain_config.json");
       expect(popped).toHaveBeenCalled();
     } finally {
       window.removeEventListener("popstate", popped);
@@ -534,6 +542,55 @@ describe("SettingsPage", () => {
 
     await waitFor(() => expect(settingsReads).toBe(2));
     expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  // 2026-11-01 walkthrough: the config-map server's own secret was listed
+  // under Other secrets, and its Delete broke the server.
+  it("leaves a capability server's own secret out of Other secrets", async () => {
+    api.mockImplementation((path, init) => {
+      if (path === "/api/settings" && !init?.method) {
+        return Promise.resolve(settings);
+      }
+      if (path === "/api/secrets" && !init?.method) {
+        return Promise.resolve({
+          enabled: true,
+          secrets: [
+            { name: "capability-server-1f6d92c4", keys: ["secret_values"] },
+            { name: "walk-throwaway", keys: ["token"] },
+          ],
+        });
+      }
+      if (path === "/api/capability-servers" && !init?.method) {
+        return Promise.resolve([
+          {
+            id: "https://grain.dev/capabilities/config-map",
+            secrets: [
+              {
+                name: "capability-server-1f6d92c4/secret_values",
+                present: true,
+              },
+            ],
+          },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+    render(
+      <PreferencesProvider>
+        <SettingsPage
+          config={{}}
+          section="credentials"
+          onSection={vi.fn()}
+          showError={vi.fn()}
+        />
+      </PreferencesProvider>,
+    );
+    expect(await screen.findByText("walk-throwaway")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.queryByText("capability-server-1f6d92c4"),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   it("marks an edited Memory note dirty in the header and nav, asks before switching sections, and clears the dot after confirming", async () => {
@@ -815,13 +872,47 @@ describe("SettingsPage", () => {
     expect(screen.queryByTestId("config-managed-notice")).toBeNull();
   });
 
+  // settings-mutability D-10: with directConfigWrites in state-repo.json
+  // the server accepts every write though settings_locked is on, and
+  // says so with configRepoOnly: false; the sections stay editable.
+  it("keys the lock on configRepoOnly, not settingsLocked", async () => {
+    api.mockImplementation((path) =>
+      Promise.resolve(
+        path === "/api/settings"
+          ? { ...settings, settingsLocked: true, configRepoOnly: false }
+          : {},
+      ),
+    );
+    render(
+      <PreferencesProvider>
+        <SettingsPage
+          config={{ settingsLocked: true, configRepoOnly: false }}
+          section="general"
+          onSection={vi.fn()}
+          showError={vi.fn()}
+        />
+      </PreferencesProvider>,
+    );
+    expect(await screen.findByLabelText("Environment name")).toBeEnabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: /Lock settings in UI \(require config repo PRs\)/i,
+      }),
+    ).toBeChecked();
+    expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+  });
+
   // settings-mutability.spec.md D-1, D-2: while settings are locked the
   // API refuses every config-managed grain_config field with 409, so the
   // UI draws those read-only and leaves the bootstrap ones editable.
   describe("with settings locked", () => {
     const locked = { configRepoOnly: true, settingsLocked: true };
     function setupLocked(section) {
-      const lockedSettings = { ...settings, settingsLocked: true };
+      const lockedSettings = {
+        ...settings,
+        settingsLocked: true,
+        configRepoOnly: true,
+      };
       api.mockImplementation((path, opts) => {
         if (path === "/api/settings" && !opts)
           return Promise.resolve(lockedSettings);
@@ -872,32 +963,6 @@ describe("SettingsPage", () => {
       setupLocked("credentials");
       expect(await screen.findByLabelText("GitHub host")).toBeDisabled();
       expect(screen.getByLabelText(/GCP project/)).toBeDisabled();
-    });
-
-    // D-10: with state-repo.json's directConfigWrites the API writes
-    // every setting despite the lock, so the page does not lock either.
-    it("leaves sections editable under directConfigWrites", async () => {
-      api.mockImplementation((path, opts) => {
-        if (path === "/api/settings" && !opts)
-          return Promise.resolve({
-            ...settings,
-            settingsLocked: true,
-            directConfigWrites: true,
-          });
-        return Promise.resolve({});
-      });
-      render(
-        <PreferencesProvider>
-          <SettingsPage
-            config={{ settingsLocked: true }}
-            section="engine"
-            onSection={vi.fn()}
-            showError={vi.fn()}
-          />
-        </PreferencesProvider>,
-      );
-      expect(await screen.findByLabelText("Poll interval")).toBeEnabled();
-      expect(screen.queryByTestId("config-managed-notice")).toBeNull();
     });
 
     it("leaves Engine editable when settings are unlocked", async () => {

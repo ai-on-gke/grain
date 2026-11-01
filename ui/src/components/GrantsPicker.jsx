@@ -194,6 +194,12 @@ export default function GrantsPicker({
   const typedRepo = (policyRepo || "").trim();
   const subjectRepo =
     runKind && /^[^/\s]+\/[^/\s]+$/.test(typedRepo) ? typedRepo : "";
+  // With the repo known the listing has judged a task's or process's
+  // one run, so a method it does not refuse is admitted: the kind's
+  // "may be refused" (true of some other repo) would only mislead. A CI
+  // job's trigger event is still unknown, so it keeps the kind's verdict.
+  const kindVerdictShown =
+    Boolean(runKind) && (!subjectRepo || runKind === "ci");
   const load = useCallback(
     (fresh) => {
       const subject = subjectRepo ? { kind: runKind, repo: subjectRepo } : null;
@@ -380,7 +386,9 @@ export default function GrantsPicker({
           </>
         ),
       };
-    const verdict = runKind ? byRef[ref]?.policy?.[runKind] : undefined;
+    const verdict = kindVerdictShown
+      ? byRef[ref]?.policy?.[runKind]
+      : undefined;
     if (!verdict) return null;
     const policyNote = policyVerdictText(verdict, runKind);
     return {
@@ -640,7 +648,7 @@ export default function GrantsPicker({
     const refused = m.policyRefusal || "";
     const verdict = refused
       ? "denied"
-      : runKind
+      : kindVerdictShown
         ? m.policy?.[runKind]
         : undefined;
     const policyNote = refused || policyVerdictText(verdict, runKind);

@@ -1356,6 +1356,29 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await expect(desc).not.toContainText("see the report section below");
   });
 
+  test("2c. A board's own columns that collect one asked state name the other in the no-column note", async ({
+    page,
+  }) => {
+    // 2026-11-01 walkthrough: a "Talking" column of awaiting_reply cards
+    // sat above "N tasks in no column (Asked, …)", because the demo's
+    // awaiting_submit tasks were the ones left off and both states read
+    // "Asked".
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT Talking ${Date.now()}`,
+      kind: "kanban",
+      columns: [{ name: "Talking", states: ["awaiting_reply"] }],
+    });
+    seededBoards.push(board.id);
+
+    await page.goto(`/boards/${board.id}`);
+    await expect(
+      page.locator(".board-column", { hasText: "Talking" }),
+    ).toBeVisible();
+    const note = page.locator(".board-hidden-note");
+    await expect(note).toContainText("Asked to submit");
+    await expect(note).not.toContainText(/[(,] Asked[,)]|\(Asked[,)]/);
+  });
+
   test("8. Deletion safety and throwaway cleanup", async ({ page }) => {
     // Verify that the UI does NOT render arbitrary board deletion buttons,
     // adhering to the state repository configuration architecture.

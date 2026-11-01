@@ -417,6 +417,54 @@ func TestAgentAPIRails(t *testing.T) {
 	}
 }
 
+// TestAgentAPIChildNotesItsDirector: the standing-session rail lets a
+// director's child leave it a note (message_task) through the agent API,
+// as the CLI and MCP hops already do, and nothing else: a task that is
+// not the director's parent or child is still refused, and so is any
+// other call the child makes on the director.
+func TestAgentAPIChildNotesItsDirector(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	directorID, err := model.FileConsoleSessionTask(ctx, client.Store, model.DefaultConsoleSessions()[0],
+		model.FileConsoleSessionOptions{Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "101", "acme/widgets", "api:tasks:write")
+	child, err := client.Store.GetTask(ctx, "101")
+	if err != nil || child == nil {
+		t.Fatalf("GetTask(101) = %v, %v", child, err)
+	}
+	child.Links = append(child.Links, model.Link{Kind: model.LinkProposedBy, Target: directorID})
+	if err := client.Store.PutTask(ctx, *child); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "102", "acme/widgets", "api:tasks:write")
+
+	notes := "/api/tasks/" + directorID + "/notes"
+	if code, body := asAgent(t, srv, "101", http.MethodPost, notes, `{"body":"finished the check"}`, "testing"); code != http.StatusOK {
+		t.Fatalf("the director's child noting it answered %d: %s", code, body)
+	}
+	comments, err := client.Store.Comments(ctx, directorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(comments, func(c model.Comment) bool {
+		return c.Body == "finished the check" && c.Author.Actor == model.Principal{Kind: model.PrincipalAgent, ID: "101"}
+	}) {
+		t.Errorf("director comments = %+v, want the child's note", comments)
+	}
+
+	if code, body := asAgent(t, srv, "102", http.MethodPost, notes, `{"body":"do it my way"}`, "testing"); code != http.StatusForbidden ||
+		!strings.Contains(body, "does not own") {
+		t.Errorf("an unrelated task noting the director answered %d: %s", code, body)
+	}
+	if code, body := asAgent(t, srv, "101", http.MethodPost, "/api/tasks/"+directorID+"/comments", `{"body":"hi"}`, "testing"); code != http.StatusForbidden ||
+		!strings.Contains(body, "does not own") {
+		t.Errorf("the director's child commenting on it answered %d: %s", code, body)
+	}
+}
+
 func TestAgentAPIAttributesTheCall(t *testing.T) {
 	srv, client := testServer(t)
 	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write")

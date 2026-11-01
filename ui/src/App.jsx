@@ -70,7 +70,7 @@ import SessionsPage from "./components/SessionsPage.jsx";
 import PanelBoard from "./components/PanelBoard.jsx";
 import ReportBoard from "./components/ReportBoard.jsx";
 import RepoList from "./components/RepoList.jsx";
-import RepoPage from "./components/RepoPage.jsx";
+import RepoPage, { REPO_TABS } from "./components/RepoPage.jsx";
 import PullRequestPage from "./components/PullRequestPage.jsx";
 import ProcessesList from "./components/ProcessesList.jsx";
 import { declaringRepos, triggersOf } from "./processes.js";
@@ -253,6 +253,17 @@ function repoTabAt(parsed, hash) {
   if (parsed.repoTab) return parsed.repoTab;
   const fromHash = (hash || "").replace(/^#/, "");
   return isRepoTab(fromHash) ? fromHash : null;
+}
+
+// repoTabCrumb is the " / <tab>" a repo page's crumbs end in when one of
+// its tabs other than Overview is showing -- "repositories /
+// acme/widgets / merge queue" -- so the rail says where in the repo the
+// reader is, as it does for a settings section or a system tab. Without
+// it every tab read the same as Overview.
+function repoTabCrumb(tab) {
+  const found =
+    tab && tab !== "overview" && REPO_TABS.find((t) => t.id === tab);
+  return found ? ` / ${found.label.toLowerCase()}` : "";
 }
 
 // WhenRailReady holds the page back until the header rail's slot has
@@ -1092,8 +1103,27 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // rail is waiting on can arrive without anybody doing anything here: a
   // session configured a moment ago has no task until the next cycle's
   // reconciler files one, and the chat cannot open until it does.
+  //
+  // Reads are sequenced: the background poll's read can still be out
+  // when a restart answers with the session's replacement task, and
+  // written after it, its older list would point the pane back at the
+  // closed task and draw that conversation again. So a list is only
+  // written if no read started later (or answer applied by
+  // applySessions) has been written already; a stale one is dropped
+  // and refreshSessions answers null.
+  const sessionsSeq = useRef(0);
+  const sessionsWritten = useRef(0);
+  const applySessions = useCallback((next) => {
+    sessionsSeq.current += 1;
+    sessionsWritten.current = sessionsSeq.current;
+    setSessions((prev) => keepIfSame(prev, next));
+  }, []);
   const refreshSessions = useCallback(async () => {
+    sessionsSeq.current += 1;
+    const seq = sessionsSeq.current;
     const res = await api("/api/console-sessions");
+    if (seq < sessionsWritten.current) return null;
+    sessionsWritten.current = seq;
     const next = (res && res.sessions) || [];
     setSessions((prev) => keepIfSame(prev, next));
     setSessionsLoaded(true);
@@ -1146,8 +1176,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const [sessionTask, setSessionTask] = useState(null);
   const sessionTaskRef = useRef(null);
   sessionTaskRef.current = sessionTask;
+  const sessionTaskSeq = useRef(0);
   const loadSessionTask = useCallback(
     async (taskId = openSessionTaskId) => {
+      const seq = ++sessionTaskSeq.current;
       if (!taskId) {
         setSessionTask(null);
         return;
@@ -1155,11 +1187,17 @@ function AppContent({ onReload = () => window.location.reload() }) {
       let detail = await api(`/api/tasks/${taskId}`, {
         poll: true,
       });
+      if (seq !== sessionTaskSeq.current) {
+        return;
+      }
       if (detail === UNCHANGED) {
         if (String(sessionTaskRef.current?.id) === String(taskId)) {
           return;
         }
         detail = await api(`/api/tasks/${taskId}`);
+        if (seq !== sessionTaskSeq.current) {
+          return;
+        }
       }
       if (String(openSessionTaskIdRef.current) !== String(taskId)) {
         return;
@@ -1185,13 +1223,20 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // sent in a chat should leave them in the chat.
   const sessionAct = useCallback(
     async (mutate) => {
+      sessionTaskSeq.current += 1;
       try {
         await mutate();
+      } catch (err) {
+        showError(err);
+        return false;
+      }
+      try {
         await loadSessionTask();
         await refreshList();
       } catch (err) {
         showError(err);
       }
+      return true;
     },
     [loadSessionTask, refreshList, showError],
   );
@@ -1201,18 +1246,34 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // capability toggle) completes so the chat's Stop button, state badge,
   // and separator reflect the mutation immediately rather than waiting
   // for the next poll tick.
-  const refreshSessionSaved = useCallback(async () => {
-    const [nextSessions] = await Promise.all([
-      refreshSessions(),
-      refreshList(),
-    ]);
-    const currentSession = openSessionIdRef.current
-      ? nextSessions.find((s) => s.id === openSessionIdRef.current) || null
-      : nextSessions[0] || null;
-    const nextTaskId = currentSession?.taskId || null;
-    openSessionTaskIdRef.current = nextTaskId;
-    await loadSessionTask(nextTaskId);
-  }, [refreshSessions, loadSessionTask, refreshList]);
+  //
+  // A control whose answer already lists the sessions (Start a fresh
+  // chat answers with the replacement task in it) passes that list,
+  // which is written at once: until it is, the pane is still pointed at
+  // the task the restart closed.
+  const refreshSessionSaved = useCallback(
+    async (answered) => {
+      const pointAt = (listed) => {
+        const currentSession = openSessionIdRef.current
+          ? listed.find((s) => s.id === openSessionIdRef.current) || null
+          : listed[0] || null;
+        openSessionTaskIdRef.current = currentSession?.taskId || null;
+      };
+      if (Array.isArray(answered)) {
+        applySessions(answered);
+        pointAt(answered);
+      }
+      const [nextSessions] = await Promise.all([
+        refreshSessions(),
+        refreshList(),
+      ]);
+      // null: a later read or answer has already been written, and the
+      // pane already points where that one said.
+      if (nextSessions) pointAt(nextSessions);
+      await loadSessionTask(openSessionTaskIdRef.current);
+    },
+    [applySessions, refreshSessions, loadSessionTask, refreshList],
+  );
 
   // refreshConfig re-fetches /api/config -- needed after adding a target
   // repo (RepoList's own "Add") or removing one (RepoPage's own
@@ -1957,7 +2018,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       }
       const listed = res?.sessions || [];
       if (listed.length) {
-        setSessions((prev) => keepIfSame(prev, listed));
+        applySessions(listed);
       }
       // The answer names what it created; the diff against what the
       // rail knew is for a daemon older than that field.
@@ -1973,6 +2034,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       await Promise.all([refreshSessions(), refreshList()]);
     },
     [
+      applySessions,
       refreshSessions,
       refreshList,
       openStandingSession,
@@ -2701,7 +2763,13 @@ function AppContent({ onReload = () => window.location.reload() }) {
         /^\/(schedules|templates|suites|processes\/triggers)(\/|$)/.test(
           window.location.pathname,
         ) ||
-        (view === "settings" &&
+        // A bare /settings becoming /settings/models is the same page
+        // renamed everywhere but a phone, where the bare path is the
+        // section list: picking Models from it is a step Back has to
+        // return from, as it does for every other section (2026-11-01
+        // responsive walkthrough).
+        (!isPhone &&
+          view === "settings" &&
           settingsSection === DEFAULT_SETTINGS_SECTION &&
           window.location.pathname === "/settings") ||
         (view === "session" &&
@@ -2761,6 +2829,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     config,
     urlTask,
     showError,
+    isPhone,
   ]);
 
   // Mirrors the browser's own back/forward buttons onto the same state
@@ -3270,7 +3339,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
             ? " / releases"
             : repoComparison !== null
               ? " / pull request"
-              : ""
+              : repoTabCrumb(repoTab)
         }`
       : view === "settings"
         ? `settings / ${settingsSectionLabel(settingsSection || DEFAULT_SETTINGS_SECTION).toLowerCase()}`

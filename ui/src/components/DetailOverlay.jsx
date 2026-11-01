@@ -68,6 +68,7 @@ import GrainCIStatus from "./detail/GrainCIStatus.jsx";
 import LiveAttemptTranscript from "./detail/LiveAttemptTranscript.jsx";
 import PendingQuestion from "./detail/PendingQuestion.jsx";
 import PendingSecret from "./detail/PendingSecret.jsx";
+import PendingConfigChange from "./detail/PendingConfigChange.jsx";
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
 import ReadOnlyRepos from "./detail/ReadOnlyRepos.jsx";
 import SuspendedSession from "./detail/SuspendedSession.jsx";
@@ -342,6 +343,33 @@ export default function DetailOverlay({
                     </>
                   )
                 )}
+                {/* The pull requests this task is about but does not own
+                    (model.LinkExternalPR): a fork's pull request it was
+                    filed against by head label, or one grain took over.
+                    Outlined chips beside the task's own pull request, so
+                    which contributor PR the task is about is not left to
+                    the description (grain/task-2199). */}
+                {(t.externalPullRequests || []).map((ref) => (
+                  <Fragment key={`external-pr-${ref}`}>
+                    {" "}
+                    ·{" "}
+                    <Chip
+                      className="external-pr-chip"
+                      data-testid="external-pr-chip"
+                      component="a"
+                      href={pullRequestUrl(ref)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      clickable
+                      size="small"
+                      variant="outlined"
+                      color="primary"
+                      label={ref}
+                      title={`${ref}: the pull request this task is about`}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </Fragment>
+                ))}
                 {/* The changelists (CLs) that are this task's work
                     (model.LinkChangelist) sit beside its pull request,
                     each a chip linking to its cl/<number> link, the
@@ -584,6 +612,10 @@ export default function DetailOverlay({
           <GrainCIStatus t={t} onOpenCIRun={onOpenCIRun} act={act} />
 
           <PendingSecret t={t} act={act} showError={showError} />
+
+          {/* A proposed config change, like a local-script approval, is
+              answered in an interactive task's chat (TaskChat). */}
+          {!t.interactive && <PendingConfigChange t={t} act={act} />}
 
           {/* A run's local-script calls waiting on a person. An
               interactive task shows them in its chat instead (TaskChat),

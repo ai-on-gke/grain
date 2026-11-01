@@ -98,14 +98,23 @@ export const CONFIG_REPO_SECTION_PATHS = {
   // tokens and keys stay in the secret store and are never exported.
   git: ["tables/grain_config.json", "tables/repo_config.json"],
   repositories: ["tables/repo_config.json", "tables/grain_config.json"],
+  // settings/capabilities.yml is exported only once a deployment has
+  // adopted the capability catalogue; until then capability servers,
+  // policy and default grants are columns of grain_config and scope sets
+  // rows of api_scope_set. So the files that always exist come first,
+  // and the first link opens one.
   tasks: [
-    "settings/capabilities.yml",
     "tables/grain_config.json",
     "tables/custom_field.json",
+    "settings/capabilities.yml",
   ],
   // Standing console sessions are grain_config.console_sessions.
   agents: ["tables/grain_config.json"],
-  capabilities: ["settings/capabilities.yml"],
+  capabilities: [
+    "tables/grain_config.json",
+    "tables/api_scope_set.json",
+    "settings/capabilities.yml",
+  ],
   ci: ["tables/grain_config.json", "tables/repo_config.json"],
   memory: ["memory/deployment.md"],
   // Caches sit under System / Operations, but none of their four

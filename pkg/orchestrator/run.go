@@ -37,6 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
@@ -1515,6 +1516,15 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	if apiSet.Has("release-notes:read") || apiSet.Has("release-notes:write") {
 		held["release-notes"] = true
 	}
+	if grainserver.HasJournal(names) {
+		held["grain-log"] = true
+	}
+	if grainserver.HasHealth(names) || apiSet.Has("deployment:read") {
+		held["deployment-health"] = true
+	}
+	if grainserver.HasSQL(names) {
+		held["db-read"] = true
+	}
 	if apiSet.Has("tests:write") {
 		held["test-quarantine"] = true
 	}
@@ -1838,6 +1848,9 @@ func directorStateSection(prepared checkout, task model.Task) string {
 	}
 	switch prepared.DirectorState {
 	case directorStateReady:
+		if prepared.DirectorStateWritable {
+			return fmt.Sprintf("\n\nGrain checked out this deployment's state repository, %[3]s, at `%[1]s`, and this session may propose changes to it. Read the files there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the self-debug task tools if you hold them, and reported as unavailable if you do not. To change the configuration, edit the files in `%[1]s` (`settings/*.yml`, `tables/*.json`, `memory/**`), check them with `grain state check %[1]s` where that command is available, and then call `propose_config_change` with a one-line summary: it commits and pushes your edits to a branch of %[3]s, validates them, and shows the person in this chat the diff with Approve and Reject buttons. That ends your turn; you are woken with their decision. Do not commit to or push `main` yourself -- grain's Git proxy refuses it -- and nothing you push takes effect until the person approves it. For any other repository listed in this task's read scope, clone `%[2]s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase, prepared.DirectorStateRepo)
+		}
 		return fmt.Sprintf("\n\nGrain checked out this deployment's state repository read-only at `%s`. Read the JSON files under `tables/` there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the self-debug task tools if you hold them, and reported as unavailable if you do not. Its `origin` uses grain's scoped Git proxy, and pushing is disabled. For any other repository listed in this task's read scope, clone `%s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase)
 	case directorStateAbsent:
 		return "\n\nThis deployment has no configured state repository, so no state checkout is available. Start normally and say that plainly when this deployment's own configuration is needed."
@@ -3233,11 +3246,11 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// answered with (pkg/capability/grainlog, agent.RunConfig's
 		// GrainSecretsDir).
 		grainSecretsDir := ""
-		if slices.Contains(grants, grainlog.CapabilityName) || slices.Contains(grants, deploymenthealth.CapabilityName) {
+		if grainserver.HasJournal(grants) || grainserver.HasHealth(grants) {
 			grainSecretsDir = cfg.GrainSecretsDir
 		}
 		grainStateDir := ""
-		if slices.Contains(grants, deploymenthealth.CapabilityName) {
+		if grainserver.HasHealth(grants) {
 			grainStateDir = cfg.GrainStateDir
 		}
 		// The local-scripts declarations this task's capabilities grant,
@@ -4169,10 +4182,11 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // serves no MCP tool at all may be read by the run's agent framework
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
-	grainci.CapabilityName, deploymenthealth.CapabilityName,
+	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
+	grainci.CapabilityName, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
+	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
 
 // runGrants is the subset of toolGrants task holds, which is what a

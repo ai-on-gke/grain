@@ -106,7 +106,7 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{"bootstrap-playbooks", "deployment-health", "durable", "grain-log", "self-debug"}) {
+	if !slices.Equal(grants, []string{"api:deployment:read", "bootstrap-playbooks", "durable", model.GrainHealthGrant, model.GrainJournalGrant, "self-debug"}) {
 		t.Errorf("Grants = %v, want the shipped default set plus durable", grants)
 	}
 	goal, err := store.TaskGoal(ctx, director.ID)
@@ -2247,6 +2247,77 @@ func TestActiveConsoleSessionPermissionChangesApplyImmediatelyToProposals(t *tes
 	}
 	if state != model.StateQueued {
 		t.Fatalf("proposed task state = %q, want %q (mid-run session permission change should apply immediately to propose_task)", state, model.StateQueued)
+	}
+}
+
+// TestFirstReplyWakesConsoleSessionRestingWithRequestedSuspension verifies
+// that after a session rests via ParkConsoleSessionTask (which sets both
+// PendingQuestionCommentID and a requested suspension deferral on {message: true}),
+// the very first human reply via ui.Client.AddComment clears both markers so
+// the session never requires the operator to send their message twice.
+func TestFirstReplyWakesConsoleSessionRestingWithRequestedSuspension(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	settings(t, store, func(cfg *model.Config) {
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID: model.DirectorSessionID, Title: "Director",
+			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+		}}
+	})
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	var calls int
+	deps := orchestrator.Deps{
+		Store:     store,
+		Sandboxes: orchestrator.NewHostSandboxes(t.TempDir()),
+		Framework: orchestrator.StaticFramework(agentFunc(func(_ context.Context, _ agent.RunConfig) (*agent.Result, error) {
+			calls++
+			return &agent.Result{
+				ToolCalls: []agent.ToolCall{{
+					Name:      "comment_on_issue",
+					Arguments: map[string]any{"comment": fmt.Sprintf("reply-%d", calls)},
+				}},
+			}, nil
+		})),
+		Config: orchestrator.Config{
+			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities: model.NewCapabilityRegistry(durable.New()),
+		},
+		MaxWorkers: 1,
+	}
+
+	// Exchange 1: reply -> dispatch -> rest (which calls ParkConsoleSessionTask with ConsoleSessionResting).
+	t1 := baseTime.Add(time.Minute)
+	replyToSession(t, store, director.ID, t1)
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
+		t.Fatalf("exchange 1 dispatch cycle: %v", err)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(2*time.Second)); err != nil {
+		t.Fatalf("exchange 1 rest cycle: %v", err)
+	}
+
+	// Explicitly call ParkConsoleSessionTask with ConsoleSessionResting to ensure
+	// both PendingQuestionCommentID != nil and DeferredAt != nil are active simultaneously.
+	if err := model.ParkConsoleSessionTask(ctx, store, director.ID, model.ConsoleSessionResting, t1.Add(3*time.Second)); err != nil {
+		t.Fatalf("ParkConsoleSessionTask: %v", err)
+	}
+
+	// Now send ONE user reply via ui.Client.AddComment. It must wake the session immediately!
+	t2 := t1.Add(10 * time.Second)
+	replyToSession(t, store, director.ID, t2)
+	st, err := store.State(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st != model.StateQueued {
+		t.Fatalf("state after single reply = %q, want %q (must not stay deferred)", st, model.StateQueued)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t2.Add(time.Second)); err != nil {
+		t.Fatalf("exchange 2 dispatch cycle: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("agent calls = %d, want 2 after single follow-up message", calls)
 	}
 }
 

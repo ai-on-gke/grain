@@ -931,6 +931,26 @@ func TestAnAgentCannotGrantPriorityDispatchEvenHoldingIt(t *testing.T) {
 	}
 }
 
+// Write access to grain's database (grain#sql with write: true, the
+// retired db-write) is a person's to grant: an agent holding it cannot
+// pass it on, however the grant is spelt, while the read-only grant it
+// holds passes on as any covered grant does.
+func TestAnAgentCannotGrantSQLWriteEvenHoldingIt(t *testing.T) {
+	held := []string{model.GrainSQLWriteGrant, model.GrainSQLReadGrant}
+	for _, name := range []string{model.GrainSQLWriteGrant, "db-write", model.GrainSQLRef + `={"write": true}`} {
+		if err := agentGrantRefusal(held, name, nil); err == nil || !strings.Contains(err.Error(), "only a person") {
+			t.Errorf("agentGrantRefusal(%s) = %v, want it refused as a person's to grant", name, err)
+		}
+	}
+	if err := agentGrantRefusal(held, model.GrainSQLReadGrant, nil); err != nil {
+		t.Errorf("agentGrantRefusal(%s), which it holds = %v, want allowed", model.GrainSQLReadGrant, err)
+	}
+	if agentGrantEscalation(held, "POST /api/tasks/{id}/capabilities",
+		[]byte(`{"capability":"`+model.GrainSQLRef+`","with":{"write":true},"attach":true}`), nil) == nil {
+		t.Error("an agent attached grain#sql write: true through the capability pane's route")
+	}
+}
+
 // durable implies priority-dispatch and holds a sandbox with no deadline,
 // so it is a person's to grant in the same way.
 func TestAnAgentCannotGrantDurableEvenHoldingIt(t *testing.T) {
@@ -942,5 +962,26 @@ func TestAnAgentCannotGrantDurableEvenHoldingIt(t *testing.T) {
 	if agentGrantEscalation(held, "POST /api/tasks/{id}/capabilities",
 		[]byte(`{"capability":"durable","attach":true}`), nil) == nil {
 		t.Error("an agent attached durable through the capability pane's route")
+	}
+}
+
+// TestPatchTouchesTaskGrantsCoversPriorityDispatch pins that every
+// spelling of the priority-dispatch toggle on PATCH /api/tasks/{id} is a
+// grant edit (capabilities:admin and a reason), while the numeric
+// priority stays an ordinary task edit.
+func TestPatchTouchesTaskGrantsCoversPriorityDispatch(t *testing.T) {
+	for _, body := range []string{
+		`{"priority": true}`, `{"priority": false}`,
+		`{"priorityDispatch": true}`, `{"priorityDispatch": false}`,
+		`{"PriorityDispatch": true}`, `{"priority_dispatch": true}`,
+	} {
+		if !patchTouchesTaskGrants([]byte(body)) {
+			t.Errorf("patchTouchesTaskGrants(%s) = false, want true", body)
+		}
+	}
+	for _, body := range []string{`{"priority": 7}`, `{"priority": null}`, `{"title": "x"}`} {
+		if patchTouchesTaskGrants([]byte(body)) {
+			t.Errorf("patchTouchesTaskGrants(%s) = true, want false", body)
+		}
 	}
 }
