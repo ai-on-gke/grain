@@ -53,14 +53,41 @@ const (
 
 // toolBudget counts what one run has spent.
 type toolBudget struct {
-	mu    sync.Mutex
-	calls int
-	bytes int
+	mu      sync.Mutex
+	calls   int
+	bytes   int
+	wording ToolBudgetWording
+}
+
+// ToolBudgetWording is how the notice names what it asks a run to do,
+// which depends on what the run can call. The zero value names the full
+// surface's tools and no pipeline cursor.
+type ToolBudgetWording struct {
+	// CLI is a run on the control surface, where the handover and the
+	// pipeline feed are `grain` commands inside the sandbox rather than
+	// tools, and every run_command result is charged at the size it
+	// reaches the run.
+	CLI bool
+	// PipelineCursor is a pipeline steward wake, whose handover carries
+	// the feed's cursor for the next wake to start from. A director's
+	// chat session reads no feed and is not asked for one.
+	PipelineCursor bool
 }
 
 // AnnounceToolBudget turns the budget on for this registry's run.
 func (r *Registry) AnnounceToolBudget() {
 	r.budget = &toolBudget{}
+}
+
+// WordToolBudget sets how the budget's notice is worded for this run; it
+// does nothing for a registry whose budget was never announced.
+func (r *Registry) WordToolBudget(w ToolBudgetWording) {
+	if r.budget == nil {
+		return
+	}
+	r.budget.mu.Lock()
+	defer r.budget.mu.Unlock()
+	r.budget.wording = w
 }
 
 // spend records one result of n bytes and returns the notice the result
@@ -73,7 +100,7 @@ func (b *toolBudget) spend(n int) string {
 	defer b.mu.Unlock()
 	b.calls++
 	b.bytes += n
-	return toolBudgetNotice(b.calls, b.bytes)
+	return toolBudgetNotice(b.calls, b.bytes, b.wording)
 }
 
 // reset starts a new wake whose first result is n bytes -- a person's
@@ -89,20 +116,41 @@ func (b *toolBudget) reset(n int) {
 }
 
 // toolBudgetNotice is the sentence for a run that has made calls calls and
-// read bytes bytes of tool output.
-func toolBudgetNotice(calls, bytes int) string {
+// read bytes bytes of tool output, worded for what the run can call.
+func toolBudgetNotice(calls, bytes int, w ToolBudgetWording) string {
 	spent := fmt.Sprintf("%d tool calls and %s of tool output", calls, humanBytes(bytes))
 	switch {
 	case calls >= ToolBudgetHardCalls || bytes >= ToolBudgetHardBytes:
+		handover, cursor := "write_handover", "the read_pipeline_changes cursor to start from"
+		if w.CLI {
+			handover = "`grain handover write --file <f>`"
+			cursor = "the cursor `grain read deploy://pipeline-changes` ended with, to start from"
+		}
+		settled := "what you settled and what is left"
+		if w.PipelineCursor {
+			settled = "what you settled, what is left, and " + cursor
+		}
 		return fmt.Sprintf("[grain] Tool budget exhausted: this wake has made %s, past its limit of %d calls "+
-			"or %s. Write your handover now (write_handover) -- what you settled, what is left, and the "+
-			"read_pipeline_changes cursor to start from -- then end this wake. The next wake carries on "+
-			"from the handover with a fresh context.", spent, ToolBudgetHardCalls, humanBytes(ToolBudgetHardBytes))
+			"or %s. Write your handover now (%s) -- %s -- then end this wake. The next wake carries on "+
+			"from the handover with a fresh context.", spent, ToolBudgetHardCalls, humanBytes(ToolBudgetHardBytes),
+			handover, settled) + w.cliCost()
 	case calls >= ToolBudgetSoftCalls || bytes >= ToolBudgetSoftBytes:
 		return fmt.Sprintf("[grain] Tool budget: this wake has made %s, past its target of %d calls or %s. "+
 			"Read nothing a change does not name, prefer summary views, and start wrapping up; at %d calls "+
 			"or %s you will be asked to write your handover and stop.", spent, ToolBudgetSoftCalls,
-			humanBytes(ToolBudgetSoftBytes), ToolBudgetHardCalls, humanBytes(ToolBudgetHardBytes))
+			humanBytes(ToolBudgetSoftBytes), ToolBudgetHardCalls, humanBytes(ToolBudgetHardBytes)) + w.cliCost()
 	}
 	return ""
+}
+
+// cliCost is what a control-surface run is told about where its bytes go:
+// `grain` itself has no size cap, but each run_command result is counted
+// at the size it reaches the run, after elision.
+func (w ToolBudgetWording) cliCost() string {
+	if !w.CLI {
+		return ""
+	}
+	return fmt.Sprintf(" Each run_command result counts towards the budget at the size it reaches you "+
+		"(up to about %s after elision): send `grain` output to a file and grep it rather than printing it.",
+		humanBytes(maxResultTextBytes()))
 }
