@@ -251,3 +251,58 @@ func TestDaemonAddendaSanitisesHostileAttachmentFilename(t *testing.T) {
 		t.Errorf("addendum body = %q, want sanitised path %q", got[0].Body, wantPath)
 	}
 }
+
+func TestDaemonAddendaReportsAttachmentPlacementFailure(t *testing.T) {
+	t.Parallel()
+	daemon := &addendaDaemon{
+		messages: []ui.Message{
+			{
+				ID:         43,
+				AuthorKind: "human",
+				Body:       "see trace",
+				Attachments: []ui.Attachment{
+					{ID: 103, Filename: "trace.log", Size: 5},
+				},
+			},
+		},
+		attachments: map[int64][]byte{
+			103: []byte("panic"),
+		},
+	}
+	srv := httptest.NewServer(daemon)
+	t.Cleanup(srv.Close)
+	client := ui.NewHTTPClient(srv.URL)
+	client.RetryPolicy = &ui.RetryPolicy{}
+
+	t.Run("missing write_file tool", func(t *testing.T) {
+		reader := daemonAddenda{client: client, taskID: "t-1"}
+		if _, err := reader.Addenda(context.Background(), 40); err == nil {
+			t.Fatal("Addenda = nil error, want failure when write_file is missing")
+		}
+	})
+
+	t.Run("write_file error", func(t *testing.T) {
+		failWrite := func(ctx context.Context, args map[string]any) mcp.Result {
+			return mcp.Result{Text: "exec failed", IsError: true}
+		}
+		reader := daemonAddenda{client: client, taskID: "t-1", writeFile: failWrite}
+		if _, err := reader.Addenda(context.Background(), 40); err == nil {
+			t.Fatal("Addenda = nil error, want failure when write_file returns IsError")
+		}
+	})
+
+	t.Run("attachment fetch error", func(t *testing.T) {
+		emptyDaemon := &addendaDaemon{messages: daemon.messages}
+		emptySrv := httptest.NewServer(emptyDaemon)
+		t.Cleanup(emptySrv.Close)
+		emptyClient := ui.NewHTTPClient(emptySrv.URL)
+		emptyClient.RetryPolicy = &ui.RetryPolicy{}
+		okWrite := func(ctx context.Context, args map[string]any) mcp.Result {
+			return mcp.Result{Text: "ok"}
+		}
+		reader := daemonAddenda{client: emptyClient, taskID: "t-1", writeFile: okWrite}
+		if _, err := reader.Addenda(context.Background(), 40); err == nil {
+			t.Fatal("Addenda = nil error, want failure when attachment fetch fails")
+		}
+	})
+}
