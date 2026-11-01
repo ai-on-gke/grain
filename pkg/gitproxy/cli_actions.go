@@ -46,6 +46,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -157,21 +158,64 @@ type proxyToolCallRecorder interface {
 }
 
 // cliWaitLedger is each run's cumulative CLI-blocked time, which is what
-// CLIWaitCreditor is told.
+// CLIWaitCreditor is told: the wall-clock time during which at least one
+// of the run's waits was blocked. Waits that overlap -- grain ci run-job
+// and grain ci wait run side by side, as the U5 walk of
+// docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md did -- share
+// their overlap rather than each being credited for it, which would buy
+// a run that backgrounds n waits n times the time it actually waited.
 type cliWaitLedger struct {
 	mu      sync.Mutex
 	blocked map[string]time.Duration
+	// covered is the blocked time each run's total already counts, as
+	// disjoint spans in order. Each wait's own intervals are consecutive,
+	// so a run has no more spans than it has had waits.
+	covered map[string][]cliWaitSpan
 }
 
-func (l *cliWaitLedger) add(runID string, d time.Duration) time.Duration {
+type cliWaitSpan struct{ from, to time.Time }
+
+// add credits runID with the part of [from, to] its total does not
+// already cover, and returns the total. Reports from different waits
+// can arrive in any order -- a wait that started after a gap can report
+// before one still blocked across that gap -- so what is already
+// covered is not necessarily a prefix of [from, to].
+func (l *cliWaitLedger) add(runID string, from, to time.Time) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.blocked == nil {
-		l.blocked = map[string]time.Duration{}
+		l.blocked, l.covered = map[string]time.Duration{}, map[string][]cliWaitSpan{}
 	}
-	if d > 0 {
-		l.blocked[runID] += d
+	if !to.After(from) {
+		return l.blocked[runID]
 	}
+	var kept []cliWaitSpan
+	merged := cliWaitSpan{from, to}
+	uncovered := to.Sub(from)
+	for _, span := range l.covered[runID] {
+		if span.to.Before(from) || span.from.After(to) {
+			kept = append(kept, span)
+			continue
+		}
+		// span overlaps [from, to]: that much of it is already counted.
+		lo, hi := span.from, span.to
+		if lo.Before(from) {
+			lo = from
+		}
+		if hi.After(to) {
+			hi = to
+		}
+		uncovered -= hi.Sub(lo)
+		if span.from.Before(merged.from) {
+			merged.from = span.from
+		}
+		if span.to.After(merged.to) {
+			merged.to = span.to
+		}
+	}
+	i, _ := slices.BinarySearchFunc(kept, merged.from, func(s cliWaitSpan, t time.Time) int { return s.from.Compare(t) })
+	l.covered[runID] = slices.Insert(kept, i, merged)
+	l.blocked[runID] += uncovered
 	return l.blocked[runID]
 }
 
@@ -609,7 +653,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	for {
 		got, err := p.startCIWait(ctx, scope, req.ResumeRunID, jobs)
 		if err == nil {
-			run = got
+			run = p.followSuperseded(ctx, scope, got, jobs)
 			break
 		}
 		if !ci.IsNotUp(err) || !p.napBefore(ctx, end) {
@@ -628,7 +672,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	lastReport := start
 	var credit CLIWaitCredit
 	report := func(now time.Time) {
-		credit = p.creditCLIWait(ctx, scope, now.Sub(lastReport))
+		credit = p.creditCLIWait(ctx, scope, lastReport, now)
 		lastReport = now
 	}
 
@@ -636,7 +680,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	defer poll.Stop()
 	heartbeat := time.NewTicker(cliWaitHeartbeat)
 	defer heartbeat.Stop()
-	for !run.Conclusion.Done() && !p.shuttingDown() {
+	for !waitSettled(run, jobs) && !p.shuttingDown() {
 		remaining := time.Until(end)
 		if remaining <= 0 {
 			break
@@ -647,7 +691,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		case <-p.ShutdownStarted:
 		case <-poll.C:
 			if got, ok := p.CLIActions.CIRun(ctx, run.ID); ok {
-				run = got
+				run = p.followSuperseded(ctx, scope, got, jobs)
 			}
 		case now := <-heartbeat.C:
 			p.noteDeclaredWait(ctx, scope.TaskIDStr, phrase)
@@ -657,6 +701,16 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		timer.Stop()
 		if ctx.Err() != nil || p.shuttingDown() {
 			break
+		}
+	}
+	// A wait cut short -- a shutdown, its timeout -- can land up to a
+	// poll after grain superseded run, so look once more before
+	// answering: the run to resume is the one that will give the verdict.
+	if !waitSettled(run, jobs) {
+		if got, ok := p.CLIActions.CIRun(ctx, run.ID); ok {
+			if next := p.followSuperseded(ctx, scope, got, jobs); next.ID != run.ID {
+				run = next
+			}
 		}
 	}
 	now := time.Now()
@@ -674,7 +728,16 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		CreditCapMS: credit.Cap.Milliseconds(),
 		CreditLive:  credit.Live,
 	}
+	// A selective wait that followed into a fuller run is answered by
+	// the jobs it asked about alone (waitSettled).
+	asked := jobs
+	if !selectiveRun(run, jobs) {
+		asked = nil
+	}
 	for _, job := range ci.SortJobRuns(run.Jobs) {
+		if len(asked) > 0 && !slices.ContainsFunc(asked, func(name string) bool { return jobNamed(job, name) }) {
+			continue
+		}
 		verdict := string(job.Conclusion)
 		if verdict == "" {
 			verdict = "running"
@@ -683,9 +746,21 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	}
 	verdict := mcp.WaitVerdictTimedOut
 	switch {
-	case !run.Conclusion.Done():
+	case !waitSettled(run, jobs):
 		resp.Status = "running"
 		resp.ResumeRunID = run.ID
+	case len(asked) > 0:
+		// Every job asked about has finished in the run followed into,
+		// and they alone are the answer, whatever the rest of it did.
+		resp.Error = ""
+		resp.Status, verdict = "passed", mcp.WaitVerdictPassed
+		resp.Conclusion = string(ci.ConclusionSuccess)
+		for _, job := range resp.Jobs {
+			if job.Conclusion != string(ci.ConclusionSuccess) && job.Conclusion != string(ci.ConclusionSkipped) {
+				resp.Status, verdict = "failed", mcp.WaitVerdictFailed
+				resp.Conclusion = string(ci.ConclusionFailure)
+			}
+		}
 	case run.Conclusion == ci.ConclusionSuccess:
 		resp.Status = "passed"
 		verdict = mcp.WaitVerdictPassed
@@ -706,7 +781,7 @@ func (p *GitProxy) serveGitHubCIWait(w http.ResponseWriter, ctx context.Context,
 	lastReport := start
 	var credit CLIWaitCredit
 	report := func(now time.Time) {
-		credit = p.creditCLIWait(ctx, scope, now.Sub(lastReport))
+		credit = p.creditCLIWait(ctx, scope, lastReport, now)
 		lastReport = now
 	}
 
@@ -773,6 +848,73 @@ func (p *GitProxy) startCIWait(ctx context.Context, scope namespace.Scope, resum
 	return got, nil
 }
 
+// followSuperseded is the run a wait on run should follow instead, when
+// grain cancelled run to make way for a newer one started for the same
+// task at the same commit (ci.SupersedingRun) -- what wait_for_checks
+// does (pkg/mcp's followSupersede). That cancellation is not the
+// branch's verdict; the newer run's is. A selective wait (grain ci
+// run-job b, superseded by the full run a grain ci wait started) follows
+// too, but only into a run that runs every job it asked about, and is
+// then answered by those jobs alone (waitSettled). A run on another
+// branch or commit is a different question and is never followed.
+func (p *GitProxy) followSuperseded(ctx context.Context, scope namespace.Scope, run ci.Run, jobs []string) ci.Run {
+	seen := map[string]bool{run.ID: true}
+	for {
+		id, ok := ci.SupersedingRun(run)
+		if !ok || seen[id] {
+			return run
+		}
+		next, found := p.CLIActions.CIRun(ctx, id)
+		if !found || next.ID != id || next.Commit != run.Commit ||
+			!strings.EqualFold(next.Repo, scope.TaskRepo) || next.Ref != scope.TaskBranch {
+			return run
+		}
+		for _, name := range jobs {
+			if !slices.ContainsFunc(next.Jobs, func(job ci.JobRun) bool { return jobNamed(job, name) }) {
+				return run
+			}
+		}
+		seen[id] = true
+		run = next
+	}
+}
+
+// waitSettled is whether a wait on run for jobs has its answer: the run
+// has concluded, or -- for a selective wait that followed into a run
+// with more jobs than it asked about -- every job it asked about has.
+func waitSettled(run ci.Run, jobs []string) bool {
+	if run.Conclusion.Done() {
+		return true
+	}
+	if !selectiveRun(run, jobs) {
+		return false
+	}
+	for _, job := range run.Jobs {
+		if slices.ContainsFunc(jobs, func(name string) bool { return jobNamed(job, name) }) && !job.Conclusion.Done() {
+			return false
+		}
+	}
+	return true
+}
+
+// selectiveRun is whether a wait for jobs is following run as a run with
+// jobs it did not ask about -- one it followed into (followSuperseded).
+func selectiveRun(run ci.Run, jobs []string) bool {
+	if len(jobs) == 0 {
+		return false
+	}
+	for _, job := range run.Jobs {
+		if !slices.ContainsFunc(jobs, func(name string) bool { return jobNamed(job, name) }) {
+			return true
+		}
+	}
+	return false
+}
+
+func jobNamed(job ci.JobRun, name string) bool {
+	return job.Name == name || (job.JobID != "" && job.JobID == name)
+}
+
 // napBefore sleeps one poll before asking again, reporting false --
 // with nothing slept -- when there is no room for one before end, or
 // the request or the proxy is ending.
@@ -828,14 +970,14 @@ func (p *GitProxy) noteDeclaredWait(ctx context.Context, taskID, phrase string) 
 	_, _ = p.Activity.SetTaskActivity(ctx, taskID, phrase, now)
 }
 
-// creditCLIWait adds d to the run's CLI-blocked total and reports the
-// total for credit.
-func (p *GitProxy) creditCLIWait(ctx context.Context, scope namespace.Scope, d time.Duration) CLIWaitCredit {
+// creditCLIWait adds a wait's blocked interval [from, to] to the run's
+// CLI-blocked total (cliWaitLedger) and reports the total for credit.
+func (p *GitProxy) creditCLIWait(ctx context.Context, scope namespace.Scope, from, to time.Time) CLIWaitCredit {
 	key := scope.RunID
 	if key == "" {
 		key = "task:" + scope.TaskIDStr
 	}
-	total := p.cliWaits.add(key, d)
+	total := p.cliWaits.add(key, from, to)
 	if p.WaitCredit == nil {
 		return CLIWaitCredit{}
 	}
@@ -1163,7 +1305,7 @@ func (p *GitProxy) serveTasksWait(w http.ResponseWriter, r *http.Request, scope 
 	lastReport := start
 	var credit CLIWaitCredit
 	report := func(now time.Time) {
-		credit = p.creditCLIWait(ctx, scope, now.Sub(lastReport))
+		credit = p.creditCLIWait(ctx, scope, lastReport, now)
 		lastReport = now
 	}
 

@@ -20,10 +20,13 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -66,9 +69,6 @@ type CapabilityMethod struct {
 // but not attached offers nothing: a grant of it could not be normalized.
 func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 	out := []CapabilityMethod{}
-	if c.Config.CapabilityServers == nil {
-		return out
-	}
 	var policy model.CapabilityPolicy
 	var configured map[string]protocol.ServerConfig
 	if c.Store != nil {
@@ -78,7 +78,17 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 		}
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
-	for _, s := range c.Config.CapabilityServers.Statuses() {
+	statuses := []servers.Status{grainserver.Status()}
+	if c.Config.CapabilityServers != nil {
+		for _, s := range c.Config.CapabilityServers.Statuses() {
+			if s.ID == grainserver.ID {
+				continue
+			}
+			statuses = append(statuses, s)
+		}
+	}
+	sort.Slice(statuses, func(i, j int) bool { return statuses[i].ID < statuses[j].ID })
+	for _, s := range statuses {
 		for _, m := range s.MethodDetails {
 			ref := s.ID + "#" + m.Name
 			out = append(out, CapabilityMethod{
@@ -178,8 +188,12 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 			out = append(out, check)
 			continue
 		}
-		if lookup != nil {
-			if _, err := lookup(protocolCapabilityID(s)); err != nil {
+		grantLookup := lookup
+		if grantLookup == nil && grainserver.IsInProcessGrant(s) {
+			grantLookup = grainserver.Lookup(nil)
+		}
+		if grantLookup != nil {
+			if _, err := grantLookup(protocolCapabilityID(s)); err != nil {
 				check.Unchecked = true
 			}
 		} else {
@@ -194,7 +208,7 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 			out = append(out, check)
 			continue
 		}
-		names, err := model.NormalizeCapabilityNames([]string{s}, lookup)
+		names, err := model.NormalizeCapabilityNames([]string{s}, grantLookup)
 		if err != nil {
 			check.Error, check.Fields = err.Error(), grantFieldErrors(err)
 			out = append(out, check)

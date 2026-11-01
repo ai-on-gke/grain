@@ -612,6 +612,19 @@ export default function RepoList({
                 {r.repo}
               </RowLink>
               <ChipStrip>
+                {/* Blocked leads the strip: ChipStrip hides the last chips
+                    first once the row runs out of width, and a repo with
+                    tasks in every state already fills a desktop row with
+                    its counts -- so behind them, the one chip this list
+                    exists to make stand out was the first to go, at any
+                    width (grain/task-2235). */}
+                {r.blocked > 0 && (
+                  <Chip
+                    size="small"
+                    color="error"
+                    label={`Blocked ${r.blocked}`}
+                  />
+                )}
                 {/* Each chip here counts a repo's tasks in one state, not one
                       task's own status, so "running" keeps the plain CSS spin
                       (style.css's .badge-running) rather than StateDot's grain
@@ -625,13 +638,6 @@ export default function RepoList({
                     label={`${STATE_LABELS[s] || s} ${count}`}
                   />
                 ))}
-                {r.blocked > 0 && (
-                  <Chip
-                    size="small"
-                    color="error"
-                    label={`Blocked ${r.blocked}`}
-                  />
-                )}
                 {defaultsOnly && (
                   <Chip
                     size="small"

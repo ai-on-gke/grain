@@ -1055,6 +1055,24 @@ describe("Sidebar", () => {
     expect(onOpenCustomize).toHaveBeenCalledTimes(1);
   });
 
+  // It opens a dialog, and says so: PhoneNav keeps the phone drawer open
+  // for a control with aria-haspopup, so Customize no longer closed the
+  // drawer whose pinned items it edits (2026-11-01 responsive
+  // walkthrough).
+  it("names Customize sidebar as opening a dialog", () => {
+    render(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={tasks}
+        onOpenCustomize={() => {}}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Customize sidebar" }),
+    ).toHaveAttribute("aria-haspopup", "dialog");
+  });
+
   it("marks each destination with its own glyph", () => {
     const { container } = render(
       <Sidebar {...baseProps} config={null} tasks={[]} />,

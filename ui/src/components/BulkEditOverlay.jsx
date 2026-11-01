@@ -138,6 +138,7 @@ export default function BulkEditOverlay({
     agentBackendId: shared(selection, (t) => t.agentBackendId || ""),
     review: shared(selection, (t) => t.reviewTemplateId || ""),
     promptExtension: shared(selection, (t) => t.promptExtension || ""),
+    priority: shared(selection, (t) => String(t.priority ?? 5)),
     fields: sharedFieldValues(selection, declared),
   }));
   const [repo, setRepo] = useState(initial.repo);
@@ -153,6 +154,9 @@ export default function BulkEditOverlay({
   const [promptExtension, setPromptExtension] = useState(
     initial.promptExtension,
   );
+  // The task priority (model.Task.Priority, 5 when unset), held as the
+  // box's text so a half-typed value is not rewritten under the cursor.
+  const [priority, setPriority] = useState(initial.priority ?? "");
   // The declared fields, by name, seeded the same way: what the whole
   // selection says about each, or null where it disagrees.
   const [fieldValues, setFieldValues] = useState(initial.fields);
@@ -183,8 +187,17 @@ export default function BulkEditOverlay({
   // dispatched"), so a ticked-but-empty repo would be a request that
   // could only ever fail, once per selected task.
   const repoMissing = Boolean(change.repo) && orEmpty(repo).trim() === "";
+  // A priority is a whole number from 1 up, as on the task pane's own
+  // form (EditTaskForm's priorityValid). Unlike there, an empty box is
+  // not "leave it as it is" -- the untick says that -- so a ticked row
+  // must hold a number, or Apply would send every task the server's
+  // reading of nothing.
+  const priorityText = String(priority).trim();
+  const priorityInvalid =
+    Boolean(change.priority) &&
+    !(/^\d+$/.test(priorityText) && Number(priorityText) >= 1);
   const fields = Object.keys(change).filter((f) => change[f]);
-  const applicable = fields.length > 0 && !repoMissing;
+  const applicable = fields.length > 0 && !repoMissing && !priorityInvalid;
 
   // A declared field's tick is namespaced, for the reason its filter id
   // is (taskAttributes.js's CUSTOM_PREFIX): a deployment may declare a
@@ -277,6 +290,7 @@ export default function BulkEditOverlay({
     }
     if (change.review) body.reviewTemplateId = orEmpty(review);
     if (change.promptExtension) body.promptExtension = orEmpty(promptExtension);
+    if (change.priority) body.priority = Number(priorityText);
     // One PATCH per task, through App's own runBatch: failures are
     // collected rather than aborting the rest, and the selection stands
     // unless every one of them landed, so a partial failure can be
@@ -548,6 +562,29 @@ export default function BulkEditOverlay({
             multiline
             rows={3}
             helperText="replaces what this deployment and the repo would otherwise tell these runs -- empty clears the override"
+            fullWidth
+            size="small"
+          />
+        </Row>
+
+        <Row
+          label="Task priority"
+          checked={Boolean(change.priority)}
+          onChange={tick("priority")}
+          mixed={mixed(initial.priority)}
+        >
+          <TextField
+            label="Task priority"
+            type="number"
+            inputProps={{ min: 1, step: 1 }}
+            value={priority}
+            onChange={(e) => setPriority(e.target.value)}
+            error={priorityInvalid}
+            helperText={
+              priorityInvalid
+                ? "a whole number, 1 or more; default 5, higher numbers run first"
+                : "default 5; higher numbers run first"
+            }
             fullWidth
             size="small"
           />

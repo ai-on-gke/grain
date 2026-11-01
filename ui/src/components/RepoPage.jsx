@@ -254,6 +254,19 @@ export function repoCIMode(defaults) {
   return defaults.ciMode || (defaults.ignoreGitHubCI ? "grain" : "github");
 }
 
+// confirmBaseRepairBypass asks before repo's base-branch repair PRs may
+// merge past human gates, naming the repo and the risk, as Promote and
+// Delete do. Both places that offer the switch ask the same question;
+// turning it off never asks.
+export function confirmBaseRepairBypass(repo) {
+  return window.confirm(
+    `Let base-branch repair PRs in ${repo} merge without a human when their CI is green? ` +
+      `While ${repo}'s base branch is red, an agent's repair pull request can then land changes to ` +
+      `.grain/workflows/** or trust-boundary code with no human sign-off before the merge. ` +
+      `Review tasks are still filed afterwards.`,
+  );
+}
+
 // RepoOverview is the at-a-glance strip at the top of the Overview tab:
 // the handful of facts somebody opening the page wants before any form,
 // each a way into the tab that changes it.
@@ -992,6 +1005,7 @@ export default function RepoPage({
   };
 
   const saveBaseRepairBypassesHumanGates = async (on) => {
+    if (on && !confirmBaseRepairBypass(repo)) return;
     try {
       setUpToDate(
         await api(`${root}/base-repair-bypasses-human-gates`, {
@@ -1900,6 +1914,7 @@ export default function RepoPage({
                       disabled={readOnly}
                       idPrefix="repo-ci"
                       runKind="ci"
+                      policyRepo={repo}
                     />
                   )}
                 </Box>

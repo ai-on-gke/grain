@@ -218,6 +218,9 @@ type sandboxBatchFilePlacer interface {
 // then every placement, then the setup commands -- at dispatch, and again
 // into the fresh VM of a recreate_sandbox (§5.5.5).
 func (m *passMaterialization) apply(ctx context.Context, sb Sandbox) error {
+	if len(m.forwards) == 0 && len(m.pass.Placements()) == 0 && len(m.pass.SetupCommands()) == 0 {
+		return nil
+	}
 	commander, ok := sandboxRunsCommands(sb)
 	if !ok {
 		return fmt.Errorf("this sandbox backend (%T) cannot run commands in its sandbox, so it cannot materialize capability grants", sb)

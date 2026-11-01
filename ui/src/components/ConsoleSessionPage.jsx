@@ -221,12 +221,14 @@ export default function ConsoleSessionPage({
   const restart = async (carryHandover = false) => {
     setRestarting(true);
     try {
-      await api(`/api/console-sessions/${session.id}/restart`, {
+      const res = await api(`/api/console-sessions/${session.id}/restart`, {
         method: "POST",
         body: JSON.stringify({ carryHandover: Boolean(carryHandover) }),
       });
       setRestartOpen(false);
-      await onSaved();
+      // The answer lists the session on its replacement task: handed on,
+      // so the shell stops pointing at the closed one before re-reading.
+      await onSaved(res?.sessions);
     } catch (err) {
       showError(err);
     } finally {

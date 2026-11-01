@@ -201,6 +201,33 @@ describe("TaskBoard", () => {
       ).toBeInTheDocument();
     });
 
+    // A saved board's own columns can collect one asked state and not
+    // the other. The note then names the one it is hiding by its own
+    // name, not "Asked", which the Talking column's cards also read.
+    it("names the asked state it hides when a column collects the other one", () => {
+      renderBoard({
+        tasks: [
+          ...tasks,
+          {
+            id: 9,
+            title: "Submit me",
+            state: "awaiting_submit",
+            capabilities: [],
+            blocked: false,
+          },
+        ],
+        fixedColumns: [
+          { id: "talking", title: "Talking", states: ["awaiting_reply"] },
+        ],
+      });
+      expect(cardsIn("Talking")).toEqual(["Answer me"]);
+      expect(
+        screen.getByText(
+          /in no column \(Waiting, Running, Asked to submit, Closed\)/,
+        ),
+      ).toBeInTheDocument();
+    });
+
     it("counts what is on the board, and what is in each column", () => {
       renderBoard();
       expect(

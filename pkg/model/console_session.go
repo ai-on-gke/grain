@@ -16,6 +16,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -345,7 +346,7 @@ func defaultConsoleSessionCapabilities() []string {
 // isolating backend can close the director in the same pane the
 // capabilities are in.
 func DefaultConsoleSessions() []ConsoleSession {
-	caps := []string{"self-debug", "grain-log", "deployment-health", "bootstrap-playbooks"}
+	caps := []string{"self-debug", GrainJournalGrant, "api:deployment:read", GrainHealthGrant, "bootstrap-playbooks"}
 	for _, id := range defaultConsoleSessionCapabilities() {
 		if !slices.Contains(caps, id) {
 			caps = append(caps, id)
@@ -887,41 +888,39 @@ type ConsoleSessionConfigSnapshot struct {
 	GoogleChatSpace string
 }
 
-type consoleSessionSnapshotKey struct {
-	store  *Store
-	taskID string
-}
-
-var (
-	consoleSessionSnapshotsMu sync.Mutex
-	consoleSessionSnapshots   = map[consoleSessionSnapshotKey]ConsoleSessionConfigSnapshot{}
-)
-
 // LastSyncedConsoleSession returns the ConsoleSessionConfigSnapshot last synced
-// onto taskID in store, if any.
-func LastSyncedConsoleSession(store *Store, taskID string) (ConsoleSessionConfigSnapshot, bool) {
-	consoleSessionSnapshotsMu.Lock()
-	defer consoleSessionSnapshotsMu.Unlock()
-	snap, ok := consoleSessionSnapshots[consoleSessionSnapshotKey{store: store, taskID: taskID}]
-	return snap, ok
+// onto taskID in store, if any. It is read from the store's
+// console_session_sync table, so it survives a daemon restart; a task with
+// no row, or one whose row cannot be read, reports none -- which the sync
+// treats as the declaration being authoritative.
+func LastSyncedConsoleSession(ctx context.Context, store *Store, taskID string) (ConsoleSessionConfigSnapshot, bool) {
+	var raw string
+	err := store.db.QueryRowContext(ctx,
+		"SELECT `snapshot` FROM `console_session_sync` WHERE `task_id` = ?", taskID).Scan(&raw)
+	if err != nil {
+		return ConsoleSessionConfigSnapshot{}, false
+	}
+	var snap ConsoleSessionConfigSnapshot
+	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+		return ConsoleSessionConfigSnapshot{}, false
+	}
+	return snap, true
 }
 
 // RecordSyncedConsoleSession stores the ConsoleSessionConfigSnapshot last synced
 // onto taskID in store.
-func RecordSyncedConsoleSession(store *Store, taskID string, snap ConsoleSessionConfigSnapshot) {
-	consoleSessionSnapshotsMu.Lock()
-	defer consoleSessionSnapshotsMu.Unlock()
-	consoleSessionSnapshots[consoleSessionSnapshotKey{store: store, taskID: taskID}] = ConsoleSessionConfigSnapshot{
-		Capabilities:    slices.Clone(snap.Capabilities),
-		Reads:           slices.Clone(snap.Reads),
-		Writes:          slices.Clone(snap.Writes),
-		NetworkAccess:   snap.NetworkAccess,
-		Model:           snap.Model,
-		Title:           snap.Title,
-		TasksApproved:   snap.TasksApproved,
-		KeepRunning:     snap.KeepRunning,
-		GoogleChatSpace: snap.GoogleChatSpace,
+func RecordSyncedConsoleSession(ctx context.Context, store *Store, taskID string, snap ConsoleSessionConfigSnapshot) error {
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		return err
 	}
+	return store.write(ctx, "record console session sync for "+taskID, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			"INSERT INTO `console_session_sync` (`task_id`, `snapshot`) VALUES (?, ?) "+
+				"ON CONFLICT (`task_id`) DO UPDATE SET `snapshot` = excluded.`snapshot`",
+			taskID, string(raw))
+		return err
+	})
 }
 
 // FileConsoleSessionTask files a new underlying task for session, optionally
@@ -981,7 +980,7 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 	if err := store.PutTask(ctx, task); err != nil {
 		return "", err
 	}
-	RecordSyncedConsoleSession(store, id, ConsoleSessionConfigSnapshot{
+	if err := RecordSyncedConsoleSession(ctx, store, id, ConsoleSessionConfigSnapshot{
 		Capabilities:    session.Capabilities,
 		Reads:           session.Reads,
 		Writes:          session.Writes,
@@ -991,7 +990,9 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 		TasksApproved:   session.TasksApproved,
 		KeepRunning:     session.KeepRunning,
 		GoogleChatSpace: session.GoogleChatSpace,
-	})
+	}); err != nil {
+		return "", err
+	}
 	if err := store.SetTaskGoal(ctx, id, GoalDecl{Kind: GoalPersonCloses}, PrincipalString(ConsoleSessionPrincipal), now); err != nil {
 		return "", err
 	}

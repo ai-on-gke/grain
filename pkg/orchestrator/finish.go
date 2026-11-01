@@ -295,6 +295,22 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		return err
 	}
 	if parked {
+		// A person who spoke while the run was asking -- during its final,
+		// turn-ending ask_question or request_secret, which consumes no
+		// addenda -- was never shown to it, and their comment predates the
+		// question, so it can never un-park it (ui.Client.RecordDelivered).
+		// Parked, the task would wait on them for an answer they may
+		// already have given. The question stays in the conversation; the
+		// marker is cleared so the task is dispatched for the message, as
+		// a chat run's own question is below.
+		if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
+			log.Printf("orchestrator: task %s run %s: a message was posted while the run was asking; "+
+				"leaving the task ready to be dispatched for it rather than parked", task.ID, runID)
+			return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+				o.PendingQuestionCommentID = nil
+				o.PendingSecret = ""
+			})
+		}
 		return nil
 	}
 
@@ -1943,6 +1959,18 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if why := resolveProposedForkHead(client, &proposal); why != "" {
 			needsPersonWhy = why
 			proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
+		}
+		// keep_running, or a priority above this task's own: settings only
+		// a person may give a task (model.PersonOnlyProposalSettings), so
+		// filed as asked, for a person, saying which -- ui.CreateTask's
+		// rule for the identical call filed live.
+		if why := model.PersonOnlyProposalSettings(proposal, task); why != "" {
+			proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
 		}
 		// The capability catalogue, as ui.CreateTask applies it to the
 		// identical call filed live: a default it refuses this proposal is

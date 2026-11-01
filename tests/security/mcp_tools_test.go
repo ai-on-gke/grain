@@ -32,10 +32,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -142,19 +139,19 @@ var knownUngatedTools = map[string]bool{}
 // daemon -- tests/e2e's everyToolGrant.
 var toolGrants = []string{
 	selfdebug.CapabilityName,
-	grainlog.CapabilityName,
-	deploymenthealth.CapabilityName,
+	"https://grain.dev/capabilities/grain#journal",
+	"https://grain.dev/capabilities/grain#health",
 	bootstrap.CapabilityName,
 	grainci.CapabilityName,
 	readissues.CapabilityName,
-	dbaccess.CapabilityDBRead,
-	dbaccess.CapabilityDBWrite,
+	`https://grain.dev/capabilities/grain#sql={"write":false}`,
+	`https://grain.dev/capabilities/grain#sql={"write":true}`,
 }
 
 // grantImplies is the one grant that carries another's tools: write
 // access to grain's database includes reading it.
 var grantImplies = map[string]string{
-	dbaccess.CapabilityDBWrite: dbaccess.CapabilityDBRead,
+	`https://grain.dev/capabilities/grain#sql={"write":true}`: `https://grain.dev/capabilities/grain#sql={"write":false}`,
 }
 
 var (

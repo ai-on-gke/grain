@@ -30,7 +30,11 @@ import api from "../../api.js";
 import { buildPath } from "../../paths.js";
 import { repoApiRoot } from "../../repoApi.js";
 import { knownRepos } from "../../state.js";
-import { CI_MODE_LABELS, repoCIMode } from "../RepoPage.jsx";
+import {
+  CI_MODE_LABELS,
+  confirmBaseRepairBypass,
+  repoCIMode,
+} from "../RepoPage.jsx";
 import { repoHostOf } from "../RepoList.jsx";
 import SettingsCard from "./SettingsCard.jsx";
 
@@ -104,6 +108,7 @@ export default function RepositoriesSection({
   );
 
   const toggleBaseRepairBypass = async (repo, on) => {
+    if (on && !confirmBaseRepairBypass(repo)) return;
     const root = repoApiRoot(repo);
     try {
       const defaults = await api(`${root}/base-repair-bypasses-human-gates`, {

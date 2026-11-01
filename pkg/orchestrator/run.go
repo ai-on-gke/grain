@@ -37,6 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
@@ -1514,6 +1515,15 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	}
 	if apiSet.Has("release-notes:read") || apiSet.Has("release-notes:write") {
 		held["release-notes"] = true
+	}
+	if grainserver.HasJournal(names) {
+		held["grain-log"] = true
+	}
+	if grainserver.HasHealth(names) || apiSet.Has("deployment:read") {
+		held["deployment-health"] = true
+	}
+	if grainserver.HasSQL(names) {
+		held["db-read"] = true
 	}
 	if apiSet.Has("tests:write") {
 		held["test-quarantine"] = true
@@ -3236,11 +3246,11 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// answered with (pkg/capability/grainlog, agent.RunConfig's
 		// GrainSecretsDir).
 		grainSecretsDir := ""
-		if slices.Contains(grants, grainlog.CapabilityName) || slices.Contains(grants, deploymenthealth.CapabilityName) {
+		if grainserver.HasJournal(grants) || grainserver.HasHealth(grants) {
 			grainSecretsDir = cfg.GrainSecretsDir
 		}
 		grainStateDir := ""
-		if slices.Contains(grants, deploymenthealth.CapabilityName) {
+		if grainserver.HasHealth(grants) {
 			grainStateDir = cfg.GrainStateDir
 		}
 		// The local-scripts declarations this task's capabilities grant,
@@ -3510,6 +3520,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// that adopts the run (RecoverRunHosts, ResumeAdoptedRun).
 		if errors.Is(runErr, agent.ErrDetached) {
 			log.Printf("orchestrator: run %s: left running in its run host for the next daemon to adopt", d.RunID)
+			// Its wait credit too: the sandbox proxy's CLI ledger lives in
+			// this process, and without this the adopter starts it at zero.
+			leaveWaitLedger(ctx, store, d.RunID, clock)
 			return nil, fmt.Errorf("orchestrator: run %s: %w", d.RunID, runErr)
 		}
 
@@ -4172,10 +4185,11 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // serves no MCP tool at all may be read by the run's agent framework
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName,
-	grainci.CapabilityName, deploymenthealth.CapabilityName,
+	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
+	grainci.CapabilityName, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
+	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
 
 // runGrants is the subset of toolGrants task holds, which is what a
