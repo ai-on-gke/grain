@@ -751,3 +751,15 @@ The fixed tree passed 41 of 41 tests in `npx playwright test` over:
   `/processes/suites/runs/1`, the closed task 25's row shows no state chip,
   while its unapproved sibling reads "unapproved". The run's own failure
   line says why the run failed.
+
+## CI repair on this branch
+
+The pull request's `installer` check failed at "Assemble the image to
+install", on `main` as well. `scripts/export-source.sh` refused to stage
+grain's source because the tracked tree is now 129MB on disk, just over
+its 128MB leak ceiling. That is honest growth (115MB apparent; pkg, docs
+and third_party, no build output), not a leak.
+
+The ceiling was raised to 256MB, and `tests/container`'s copy of it
+(`sourceExportMaxMB`) was raised with it. Not related to the UI
+walkthrough itself.
