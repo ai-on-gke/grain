@@ -514,6 +514,12 @@ func (c *CapabilityCatalogue) judgeInProcess(g string, gc GrantContext) (bool, e
 			}
 			person = person || p
 		}
+	} else if preset := APIAliasPreset(trimmed); preset != "" {
+		p, err := c.judgeAPIScopes(APIGrantPrefix+preset, gc)
+		if err != nil {
+			return false, err
+		}
+		person = person || p
 	} else if trimmed == ReleaseGateReadCapability {
 		p, err := c.judgeAPIScopes(APIGrantPrefix+ReleaseGateReadCapability, gc)
 		if err != nil {
@@ -1096,7 +1102,7 @@ func repoPatternSubsumedByList(pattern string, list Patterns) bool {
 	if pl == CatalogueNoRepo {
 		return matchesRepo(list, nil)
 	}
-	if !strings.ContainsAny(pl, "*?[") {
+	if !strings.ContainsAny(pl, "*?[]\\") {
 		if ref, err := ParseRepo(pl); err == nil {
 			return matchesRepo(list, &ref)
 		}
@@ -1152,7 +1158,7 @@ func templatePatternSubsumedByList(pattern string, list Patterns) bool {
 	if pattern == "" {
 		return false
 	}
-	if !strings.ContainsAny(pattern, "*?[") {
+	if !strings.ContainsAny(pattern, "*?[]\\") {
 		return matchesTemplate(list, pattern, "")
 	}
 	for _, q := range list {
@@ -1166,11 +1172,12 @@ func templatePatternSubsumedByList(pattern string, list Patterns) bool {
 	return false
 }
 
-// globSubsumes reports whether single-star glob outer ("prefix*suffix", no ?
-// or [) matches every string that inner could match. When singleSegment is
-// true, path.Match's '/' boundary is respected.
+// globSubsumes reports whether single-star glob outer ("prefix*suffix", with no
+// ?, [, ], or \ escapes in outer or inner) matches every string that inner
+// could match. When singleSegment is true, path.Match's '/' boundary is
+// respected.
 func globSubsumes(outer, inner string, singleSegment bool) bool {
-	if strings.ContainsAny(outer, "?[") || strings.Count(outer, "*") != 1 {
+	if strings.ContainsAny(outer, "?[]\\") || strings.ContainsAny(inner, "?[]\\") || strings.Count(outer, "*") != 1 {
 		return false
 	}
 	prefix, suffix, _ := strings.Cut(outer, "*")

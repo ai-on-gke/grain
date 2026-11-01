@@ -393,6 +393,10 @@ func TestRetiredGrainServerCapabilitiesAndPresetAliases(t *testing.T) {
 		APIScopes: model.CatalogueAPIScopes{
 			Presets: map[string]model.CataloguePreset{
 				model.ReleaseGateReadCapability: {Enabled: boolp(false)},
+				"self-debug": {Restrictions: &model.CapabilityRestrictions{
+					Repos:          model.Patterns{"ai-on-gke/grain"},
+					RequiresPerson: true,
+				}},
 			},
 		},
 	}
@@ -413,6 +417,23 @@ func TestRetiredGrainServerCapabilitiesAndPresetAliases(t *testing.T) {
 	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "ci", Grants: []string{model.ReleaseGateReadCapability}}); err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Errorf("bare release-gate-read = %v, want disabled refusal from api_scopes.presets.release-gate-read", err)
 	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Repo: repo("other/repo"), Kind: "task", Grants: []string{"self-debug"}}); err == nil || !strings.Contains(err.Error(), "other/repo") {
+		t.Errorf("bare self-debug on other/repo = %v, want repo refusal from api_scopes.presets.self-debug", err)
+	}
+	sdVerdict, err := cat.ValidateGrants(model.GrantContext{Repo: repo("ai-on-gke/grain"), Kind: "task", Grants: []string{"self-debug"}})
+	if err != nil || len(sdVerdict.RequiresPerson) != 1 || sdVerdict.RequiresPerson[0] != "self-debug" {
+		t.Errorf("bare self-debug on ai-on-gke/grain = (%+v, %v), want RequiresPerson [self-debug] from api_scopes.presets.self-debug", sdVerdict, err)
+	}
+	disabledSD := &model.CapabilityCatalogue{
+		APIScopes: model.CatalogueAPIScopes{
+			Presets: map[string]model.CataloguePreset{
+				"self-debug": {Enabled: boolp(false)},
+			},
+		},
+	}
+	if _, err := disabledSD.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"self-debug"}}); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("bare self-debug with disabled api_scopes.presets.self-debug = %v, want disabled refusal", err)
+	}
 
 	merged := model.MergeCapabilityRestrictions(
 		&model.CapabilityRestrictions{Templates: model.Patterns{"ops*"}},
@@ -420,5 +441,36 @@ func TestRetiredGrainServerCapabilitiesAndPresetAliases(t *testing.T) {
 	)
 	if len(merged.Templates) != 0 {
 		t.Errorf("MergeCapabilityRestrictions(ops*, ops/nightly*).Templates = %v, want [] because path.Match '*' does not cross '/'", merged.Templates)
+	}
+
+	for _, tc := range []struct {
+		name string
+		a, b *model.CapabilityRestrictions
+	}{
+		{
+			name: "template bracket class vs literal bracket suffix",
+			a:    &model.CapabilityRestrictions{Templates: model.Patterns{"a*]"}},
+			b:    &model.CapabilityRestrictions{Templates: model.Patterns{"a[bc]"}},
+		},
+		{
+			name: "repo bracket class vs literal bracket suffix",
+			a:    &model.CapabilityRestrictions{Repos: model.Patterns{"acme/a*]"}},
+			b:    &model.CapabilityRestrictions{Repos: model.Patterns{"acme/a[bc]"}},
+		},
+		{
+			name: "template escaped star vs escaped literal",
+			a:    &model.CapabilityRestrictions{Templates: model.Patterns{`a\*`}},
+			b:    &model.CapabilityRestrictions{Templates: model.Patterns{`a\b`}},
+		},
+		{
+			name: "template escaped backslash glob vs escaped hyphen",
+			a:    &model.CapabilityRestrictions{Templates: model.Patterns{`tpl\\*`}},
+			b:    &model.CapabilityRestrictions{Templates: model.Patterns{`tpl\-1`}},
+		},
+	} {
+		got := model.MergeCapabilityRestrictions(tc.a, tc.b)
+		if len(got.Repos) != 0 || len(got.Templates) != 0 {
+			t.Errorf("%s: MergeCapabilityRestrictions = %+v, want empty intersection", tc.name, got)
+		}
 	}
 }
