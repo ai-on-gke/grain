@@ -3577,7 +3577,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// advance DeliveredCommentID past comments the agent never answered
 		// (undeliveredHumanComment's started-time rule still prevents a
 		// failed interactive run from looping).
-		if err := store.AdvanceDelivered(finishCtx, task.ID, lastCommentID(comments), cfg.now()); err != nil {
+		if err := store.AdvanceDeliveredFrom(finishCtx, task.ID, lastCommentID(comments), cfg.now()); err != nil {
 			log.Printf("orchestrator: run %s: recording the conversation it was dispatched for: %v", d.RunID, err)
 		}
 	}

@@ -1663,6 +1663,26 @@ func (s *Store) AdvanceDelivered(ctx context.Context, taskID string, through int
 	})
 }
 
+// AdvanceDeliveredFrom is AdvanceDelivered for a run that has just
+// finished a turn, through the last comment its prompt held -- 0 when
+// it held none, which is a delivered mark of its own: the run was shown
+// nothing, so every person's comment on the task is one it has not
+// seen. Without it a chat filed with only a body has no mark after its
+// first turn, and a message posted while that turn wrote its answer is
+// read as answered (undeliveredHumanComment). A mark already recorded is
+// never moved back.
+func (s *Store) AdvanceDeliveredFrom(ctx context.Context, taskID string, through int64, now time.Time) error {
+	if through > 0 {
+		return s.AdvanceDelivered(ctx, taskID, through, now)
+	}
+	return s.ObserveField(ctx, taskID, now, func(o *Observation) {
+		if o.DeliveredCommentID == nil {
+			zero := int64(0)
+			o.DeliveredCommentID = &zero
+		}
+	})
+}
+
 // SetSuspendedSession records the agent conversation this task's last
 // run left parked, or clears it -- the whole of the state
 // SuspendedSession describes, in one call, because it is one bit with

@@ -341,13 +341,12 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	}
 	finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
 	defer cancelFinish()
-	finishErr := recordRunEnd(ctx, finishCtx, store, cfg, *task, runID, obs, result, end, waitCredit,
-		true, resumableSession, recordedEarly)
-	if transcriptPath != "" {
-		os.Remove(transcriptPath)
-	}
-	revokeLeases(finishCtx, framework)
-	if finishErr == nil && end.outcome == "succeeded" && task.Interactive && store != nil {
+	// The comments the run's prompt held, marked delivered before
+	// recordRunEnd asks whether a message is still waiting, as runOne
+	// does: marked after, a message posted while the turn wrote its
+	// answer was read as answered when nothing had been marked yet, and
+	// the prompt's own message as unseen when an older mark stood.
+	if end.outcome == "succeeded" && task.Interactive && store != nil {
 		if comments, cerr := store.Comments(finishCtx, task.ID); cerr == nil {
 			var promptCutoff int64
 			for _, c := range comments {
@@ -355,11 +354,17 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 					promptCutoff = c.ID
 				}
 			}
-			if promptCutoff > 0 && (obs == nil || obs.DeliveredCommentID == nil || promptCutoff > *obs.DeliveredCommentID) {
-				_ = store.AdvanceDelivered(finishCtx, task.ID, promptCutoff, cfg.now())
+			if err := store.AdvanceDeliveredFrom(finishCtx, task.ID, promptCutoff, cfg.now()); err != nil {
+				log.Printf("orchestrator: adopted run %s: recording the conversation it was dispatched for: %v", runID, err)
 			}
 		}
 	}
+	finishErr := recordRunEnd(ctx, finishCtx, store, cfg, *task, runID, obs, result, end, waitCredit,
+		true, resumableSession, recordedEarly)
+	if transcriptPath != "" {
+		os.Remove(transcriptPath)
+	}
+	revokeLeases(finishCtx, framework)
 
 	var errs []error
 	var afterErr error
