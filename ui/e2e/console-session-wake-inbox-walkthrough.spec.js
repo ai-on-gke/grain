@@ -47,7 +47,9 @@ async function inboxRowsFor(page, id, width, shot) {
   await page.goto("/inbox");
   await expect(page.locator("main")).toBeVisible();
   await page.waitForLoadState("networkidle");
-  await page.screenshot({ path: test.info().outputPath(`${shot}-${width}.png`) });
+  await page.screenshot({
+    path: test.info().outputPath(`${shot}-${width}.png`),
+  });
   return page.locator(`main a[href$="/tasks/${id}"]`).count();
 }
 
@@ -72,7 +74,10 @@ test("a rested console session wakes on the first reply, and the Inbox agrees", 
   const rested = await task(page, id);
   test.info().annotations.push({
     type: "rested",
-    description: JSON.stringify({ state: rested.state, comments: (rested.comments || []).length }),
+    description: JSON.stringify({
+      state: rested.state,
+      comments: (rested.comments || []).length,
+    }),
   });
 
   // The Inbox at desktop and phone width shows the session the same way.
@@ -90,9 +95,16 @@ test("a rested console session wakes on the first reply, and the Inbox agrees", 
   await composer.press("Enter");
   // The session's 50 ms cycle dispatches it at once; a deferral that
   // outlived the reply would leave it waiting far longer than this.
-  await expect(page.getByText(`Scripted answer ${before + 1}.`)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(`Scripted answer ${before + 1}.`)).toBeVisible({
+    timeout: 10_000,
+  });
   const latency = Date.now() - sentAt;
-  test.info().annotations.push({ type: "wake-latency-ms", description: String(latency) });
+  test
+    .info()
+    .annotations.push({
+      type: "wake-latency-ms",
+      description: String(latency),
+    });
   const given = await prompts(page);
   expect(given).toHaveLength(before + 1);
   expect(given[given.length - 1]).toContain("first reply after resting");
@@ -105,6 +117,11 @@ test("a rested console session wakes on the first reply, and the Inbox agrees", 
   expect(answeredPhone).toBe(answeredDesk);
   test.info().annotations.push({
     type: "inbox-rows",
-    description: JSON.stringify({ restedDesk, restedPhone, answeredDesk, answeredPhone }),
+    description: JSON.stringify({
+      restedDesk,
+      restedPhone,
+      answeredDesk,
+      answeredPhone,
+    }),
   });
 });

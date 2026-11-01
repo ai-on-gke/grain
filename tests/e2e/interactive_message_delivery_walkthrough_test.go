@@ -104,8 +104,8 @@ func newDeliveryWorld(t *testing.T) *deliveryWorld {
 		Runs:       w.runs,
 		CycleTimes: orchestrator.NewCycleTimes(10),
 		Config: orchestrator.Config{
-			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          model.NewCapabilityRegistry(durable.New(), selfdebug.New()),
+			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities: model.NewCapabilityRegistry(durable.New(), selfdebug.New()),
 			// Warm retention off: §1 is about the conversation, not the
 			// sandbox, and the reaper can take a warm or just-claimed
 			// session sandbox out from under a run (filed from task 2243).
