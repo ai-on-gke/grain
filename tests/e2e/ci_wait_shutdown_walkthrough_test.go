@@ -37,6 +37,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -199,6 +200,23 @@ jobs:
 		return err == nil
 	})
 	started := time.Now()
+	// The wait.1 file exists as soon as the shell redirects into it, not
+	// once grain ci wait has started the full run that supersedes the
+	// run-job's; on a loaded runner the stop below could land between the
+	// two, and the run-job would answer with its own run rather than
+	// following the full one. So wait for the supersession itself.
+	waitUntil(t, "the full run to supersede the run-job's", 10*time.Second, func() bool {
+		runs, _, err := c.ListCIRuns(context.Background(), "acme/widgets")
+		if err != nil {
+			return false
+		}
+		for _, r := range runs {
+			if _, ok := ci.SupersedingRun(r); ok {
+				return true
+			}
+		}
+		return false
+	})
 	time.Sleep(4 * time.Second)
 	if agent.done("wait.1") || agent.done("runjob.1") {
 		t.Fatalf("a wait ended before the daemon stopped: wait %q, run-job %q",
