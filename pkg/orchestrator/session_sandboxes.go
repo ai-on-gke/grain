@@ -61,6 +61,14 @@ type storeSessionPool struct {
 	bySandbox     map[string]string              // sandboxID -> taskID
 	inProcessIdle map[string]time.Time           // sandboxID -> idleSince
 	reclaimed     map[string]bool                // taskID -> true if warm sandbox was reclaimed
+	// held names the session sandboxes a run is using under a name
+	// other than its own run ID -- a warm sandbox a later dispatch
+	// claimed, or one an adopted run took back -- by the run using it
+	// (sandboxID -> runID). Neither the store's live runs nor InFlight
+	// name such a sandbox once its run has finished but before it is
+	// parked warm again, nor between a claim and SetRunSandbox, so
+	// reconcileSandboxes reads this to leave it alone.
+	held map[string]string
 }
 
 var (
@@ -78,6 +86,7 @@ func getSessionPool(store *model.Store) *storeSessionPool {
 			bySandbox:     map[string]string{},
 			inProcessIdle: map[string]time.Time{},
 			reclaimed:     map[string]bool{},
+			held:          map[string]string{},
 		}
 		sessionPools[store] = p
 	}
@@ -201,6 +210,9 @@ func parkWarmSessionSandbox(deps Deps, taskID, sandboxID, key, grants string, sb
 	}
 	p.warm[taskID] = entry
 	p.bySandbox[sandboxID] = taskID
+	// From held straight to warm under the one lock, so the reaper never
+	// reads the sandbox as neither.
+	delete(p.held, sandboxID)
 	delete(p.reclaimed, taskID)
 	p.mu.Unlock()
 
@@ -311,7 +323,11 @@ func parkWarmSessionInLedger(deps Deps, taskID string) {
 	})
 }
 
-func claimWarmSessionSandbox(deps Deps, taskID string, now time.Time) (*warmSessionSandbox, bool) {
+// claimWarmSessionSandbox takes taskID's warm sandbox, if it has one that
+// has not expired, for runID: the sandbox is held for runID
+// (holdSessionSandbox) from the moment it leaves the warm pool, and the
+// caller releases that hold once the run is done with it.
+func claimWarmSessionSandbox(deps Deps, taskID, runID string, now time.Time) (*warmSessionSandbox, bool) {
 	if deps.Store == nil || taskID == "" {
 		return nil, false
 	}
@@ -323,6 +339,9 @@ func claimWarmSessionSandbox(deps Deps, taskID string, now time.Time) (*warmSess
 		delete(p.warm, taskID)
 		delete(p.bySandbox, entry.SandboxID)
 		if now.Before(entry.ExpiresAt) {
+			if runID != "" {
+				p.held[entry.SandboxID] = runID
+			}
 			delete(p.reclaimed, taskID)
 			p.mu.Unlock()
 			if entry.Ledger != nil {
@@ -445,7 +464,10 @@ func reconcileSessionSandboxes(ctx context.Context, deps Deps, now time.Time) {
 	p.mu.Unlock()
 
 	for _, entry := range snapshot {
-		if ttl <= 0 || !now.Before(entry.ExpiresAt) {
+		// ExpiresAt is the TTL the parking run was dispatched with; the
+		// TTL as it stands now binds too, so a shortened setting reclaims
+		// a sandbox parked under the longer one.
+		if ttl <= 0 || !now.Before(entry.ExpiresAt) || !now.Before(entry.IdleSince.Add(ttl)) {
 			releaseWarmSessionSandbox(ctx, deps, entry.TaskID, true)
 			continue
 		}
@@ -468,6 +490,53 @@ func reconcileSessionSandboxes(ctx context.Context, deps Deps, now time.Time) {
 			releaseWarmSessionSandbox(ctx, deps, entry.TaskID, true)
 		}
 	}
+}
+
+// holdSessionSandbox marks sandboxID as in use by runID until the
+// returned func is called (or the sandbox is parked warm), so
+// reconcileSandboxes does not read it as leaked by a finished run. The
+// release only drops runID's own hold: a later run that has claimed the
+// sandbox since keeps its own.
+func holdSessionSandbox(store *model.Store, sandboxID, runID string) func() {
+	if store == nil || sandboxID == "" || runID == "" {
+		return func() {}
+	}
+	p := getSessionPool(store)
+	p.mu.Lock()
+	p.held[sandboxID] = runID
+	p.mu.Unlock()
+	return func() { unholdSessionSandbox(store, sandboxID, runID) }
+}
+
+func unholdSessionSandbox(store *model.Store, sandboxID, runID string) {
+	if store == nil || sandboxID == "" {
+		return
+	}
+	p := getSessionPool(store)
+	p.mu.Lock()
+	if p.held[sandboxID] == runID {
+		delete(p.held, sandboxID)
+	}
+	p.mu.Unlock()
+}
+
+// sessionSandboxesInUse returns the names of every session sandbox
+// parked warm or held by a run (holdSessionSandbox), read under one lock.
+func sessionSandboxesInUse(store *model.Store) map[string]bool {
+	if store == nil {
+		return nil
+	}
+	p := getSessionPool(store)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make(map[string]bool, len(p.warm)+len(p.held))
+	for _, entry := range p.warm {
+		out[entry.SandboxID] = true
+	}
+	for id := range p.held {
+		out[id] = true
+	}
+	return out
 }
 
 func warmSessionSandboxIDs(store *model.Store) map[string]model.Commitment {
@@ -647,6 +716,23 @@ func takeInProcessRelayed(store *model.Store, runID string) bool {
 	return ok
 }
 
+// liveSessionIdleTTL is the idle TTL an in-process session waiting
+// since its turn ended is held to now: ttl, unless the run's TTL came
+// from the stored setting, in which case it is that setting as it stands
+// -- so shortening (or turning off) Settings -> Sandboxes' session TTL
+// while a session idles releases it on the new TTL rather than the one
+// its run was dispatched with.
+func (c Config) liveSessionIdleTTL(ctx context.Context, store *model.Store, ttl time.Duration) time.Duration {
+	if !c.sessionIdleTTLStored || store == nil {
+		return ttl
+	}
+	mc, err := store.GetConfig(ctx)
+	if err != nil || mc == nil {
+		return ttl
+	}
+	return mc.SessionSandboxIdleTTLOr()
+}
+
 func (c Config) sessionSandboxIdleTTL() time.Duration {
 	if c.SessionSandboxIdleTTL < 0 {
 		return 0
@@ -817,8 +903,10 @@ func continueSessionTurns(
 			}
 		}
 
-		waitCtx, cancelWait := context.WithTimeout(hostCtx, ttl)
+		waitCtx, cancelWait := context.WithCancel(hostCtx)
 		unmark := markInProcessSessionIdle(store, cfg.sessionLedger, runID, cfg.sessionSandboxName, cfg.sessionShape, now, cancelWait)
+		waitStart := time.Now()
+		expiry := time.NewTimer(ttl)
 
 		// Woken by AddComment the moment a comment lands in this process
 		// (Store.CommentAdded), and otherwise polled at the deployment's
@@ -853,10 +941,22 @@ func continueSessionTurns(
 			select {
 			case <-waitCtx.Done():
 				break waitLoop
+			case <-expiry.C:
+				break waitLoop
 			case <-ticker.C:
+				if live := cfg.liveSessionIdleTTL(daemonCtx, store, ttl); live != ttl {
+					log.Printf("orchestrator: run %s: the session idle TTL changed from %s to %s while it waited", runID, ttl, live)
+					ttl = live
+					left := ttl - time.Since(waitStart)
+					if ttl <= 0 || left <= 0 {
+						break waitLoop
+					}
+					expiry.Reset(left)
+				}
 			case <-added:
 			}
 		}
+		expiry.Stop()
 		ticker.Stop()
 		cancelWait()
 		unmark()

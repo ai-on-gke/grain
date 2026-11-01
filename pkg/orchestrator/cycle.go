@@ -792,6 +792,7 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
+				deps.Config.sessionIdleTTLStored = true
 			}
 		}
 	}
@@ -880,6 +881,7 @@ func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
+				deps.Config.sessionIdleTTLStored = true
 			}
 		}
 	}
@@ -2449,7 +2451,10 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	clearKeepRunningRequeued(deps.Store, task.ID)
 	sandboxKey := sessionSandboxKey(shape, *task, prepared)
 	if task.Interactive || task.KeepRunning {
-		warmSandbox, sandboxReclaimed = claimWarmSessionSandbox(deps, task.ID, now)
+		warmSandbox, sandboxReclaimed = claimWarmSessionSandbox(deps, task.ID, d.RunID, now)
+		if warmSandbox != nil {
+			defer unholdSessionSandbox(deps.Store, warmSandbox.SandboxID, d.RunID)
+		}
 		if warmSandbox != nil && warmSandbox.Key != sandboxKey {
 			log.Printf("orchestrator: run %s (task %s): not reusing warm sandbox %s: its shape, target, repos or grants changed",
 				d.RunID, d.TaskID, warmSandbox.SandboxID)

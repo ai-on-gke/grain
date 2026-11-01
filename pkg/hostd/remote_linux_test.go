@@ -41,13 +41,20 @@ type controller struct {
 
 	mu    sync.Mutex
 	conns []net.Conn
+	// sessions counts the Remote.Serve calls still running, which log
+	// through t and so must be done before the test returns.
+	sessions sync.WaitGroup
 }
 
 func startController(t *testing.T, token string) *controller {
 	t.Helper()
 	c := &controller{remote: &Remote{Token: token, Logf: t.Logf}}
 	mux := http.NewServeMux()
-	mux.Handle("GET "+RemotePath, c.remote)
+	mux.HandleFunc("GET "+RemotePath, func(w http.ResponseWriter, r *http.Request) {
+		c.sessions.Add(1)
+		defer c.sessions.Done()
+		c.remote.ServeHTTP(w, r)
+	})
 	c.http = httptest.NewUnstartedServer(mux)
 	c.http.Config.ConnState = func(conn net.Conn, st http.ConnState) {
 		if st == http.StateHijacked {
@@ -57,7 +64,14 @@ func startController(t *testing.T, token string) *controller {
 		}
 	}
 	c.http.Start()
-	t.Cleanup(c.http.Close)
+	// httptest.Server.Close does not wait for hijacked connections, so
+	// a session's handler could still log "disconnected" through t after
+	// the test returned: cut the sessions and wait for their handlers.
+	t.Cleanup(func() {
+		c.http.Close()
+		c.drop()
+		c.sessions.Wait()
+	})
 	return c
 }
 

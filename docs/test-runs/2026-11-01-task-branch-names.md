@@ -5,9 +5,11 @@ Task 2219 (`grain/049f1e09/task-2219`) works through §4 of
 the slug upgrade; `ba2f7674` the length cap; `cc92abf3` the sample ID in
 refusals; `cb564cfd` capped PR titles) and #236 (`dad9910e`, git ref rules).
 
-**Result: every §4 check passes, and the walkthrough found one bug, now
-fixed on this branch.** `grain state prepare-upgrade` could not upgrade a
-store from before schema 74 (see Bugs).
+**Result: every §4 check passes, and the walkthrough found one bug,**
+`grain state prepare-upgrade` could not upgrade a store from before
+schema 74 (see Bugs). It was fixed on this branch and, independently and
+the same way, on `main` in `f610a9d1`; this branch now carries `main`'s
+fix plus a regression test for it.
 
 ## Commit and environment
 
@@ -156,7 +158,7 @@ with Enter:
 
 ## Bugs
 
-### Fixed: `grain state prepare-upgrade` cannot upgrade a store from before schema 74
+### Fixed (on `main`, `f610a9d1`): `grain state prepare-upgrade` cannot upgrade a store from before schema 74
 
 **Deterministic repro (on `main` at 30f47366):**
 
@@ -177,8 +179,11 @@ schema 74. Any deployment upgraded with `scripts/setup.sh` from before
 74 hits this, because every deployment has seeded schedules.
 
 **Fix** (`pkg/staterepo/decl.go`). A field is left out of the document
-when the row has none of its columns, so the import takes the column's
-default. That is what already happens for a dump an older build wrote.
+when the row was read without its column, so the import takes the
+column's default. That is what already happens for a dump an older build
+wrote. This branch first fixed it with its own `hasAnyColumn`; `main`
+landed the same fix as `hasColumn` in `f610a9d1` while this branch was
+in review, and the merge takes `main`'s.
 
 **Regression test.** `TestAStoreWithoutAColumnExportsWithoutTheKey`
 (`pkg/staterepo/addedcolumns_test.go`) drops `schedule.keep_running`,

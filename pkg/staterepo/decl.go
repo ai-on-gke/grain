@@ -677,12 +677,11 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 			out.Content = append(out.Content, key(f.key), node)
 			continue
 		}
-		if !hasAnyColumn(row, f.columns) {
-			// A store at an older schema, exported by this build (`grain
-			// state prepare-upgrade`), has no column for a field added
-			// since. Writing it as null would import as NULL into a NOT
-			// NULL column; leaving the key out lets the import take the
-			// column's default, as it does for a dump an older build wrote.
+		if !hasColumn(f, row) {
+			// A store at an older schema has no such column (a schema-65
+			// schedule has no keep_running): leave the key out, so the
+			// import gives the column its default rather than a null its
+			// NOT NULL refuses.
 			continue
 		}
 		name, node, err := columnNode(f, row)
@@ -697,15 +696,15 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 	return out, nil
 }
 
-// hasAnyColumn reports whether row, as read from the store, carries any
-// of columns -- whether the table the row came from has them at all.
-func hasAnyColumn(row map[string]any, columns []string) bool {
-	for _, c := range columns {
-		if _, ok := row[c]; ok {
-			return true
-		}
+// hasColumn reports whether row was read from a table that has f's
+// column. Only a one-column field can be missing that way: the cadence,
+// target and change target are older than any schema this build migrates.
+func hasColumn(f declFieldShape, row map[string]any) bool {
+	if f.shape != shapeBool && f.shape != shapeScalar {
+		return true
 	}
-	return false
+	_, ok := row[f.columns[0]]
+	return ok
 }
 
 // mine is the companion rows belonging to one parent.

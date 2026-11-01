@@ -64,6 +64,44 @@ func TestARepositoryThatLooksLikeASHAIsStillTheRepository(t *testing.T) {
 
 // A 304 is sent and free, and telling it apart from a 200 is the whole
 // evidence that revalidation is doing anything.
+// A caller that sends its own validator -- CompletedWorkflowRuns keeps an
+// ETag per repository for the github_workflow_run poll -- is answered 304
+// just as freely, and Health's GitHub budget must say so: until this was
+// counted the poll's every unchanged read showed as spent
+// (docs/test-runs/2026-11-01-github-actions-ci-workflow-run.md).
+func TestA304ToACallersOwnValidatorIsRevalidatedAndFree(t *testing.T) {
+	etag := `W/"runs"`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.WriteHeader(200)
+		w.Write([]byte(`{"workflow_runs":[]}`))
+	}))
+	defer server.Close()
+
+	transport := &RealTransport{
+		Host: strings.TrimPrefix(server.URL, "http://"), UseTLS: false, Conditional: true,
+		ledger: &callerLedger{logf: func(string, ...any) {}},
+	}
+	client := NewClient(transport, nil)
+	for i := 0; i < 3; i++ {
+		if _, err := WithCaller(client, "github-ci-tails").(*RESTClient).CompletedWorkflowRuns("acme", "widgets", 50); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := transport.Stats()
+	if got.Sent != 3 || got.Revalidated != 2 {
+		t.Errorf("transport Sent = %d Revalidated = %d, want 3 and 2", got.Sent, got.Revalidated)
+	}
+	c := transport.ledger.callerStats()["github-ci-tails"]
+	if c.Sent != 3 || c.Revalidated != 2 {
+		t.Errorf("ledger github-ci-tails = %+v, want Sent 3 Revalidated 2", c)
+	}
+}
+
 func TestA304IsCountedAsRevalidatedAndFree(t *testing.T) {
 	etag := `W/"abc"`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -641,8 +641,11 @@ describe("SettingsPage", () => {
   });
 
   // 2026-11-01 walkthrough: the config-map server's own secret was listed
-  // under Other secrets, and its Delete broke the server.
-  it("leaves a capability server's own secret out of Other secrets", async () => {
+  // under Other secrets, and its Delete broke the server. GET /api/secrets
+  // now names the servers using each secret (task 2263), and the pane
+  // lists it with them, without a Delete.
+  it("lists a capability server's own secret with its server, not under Other secrets", async () => {
+    const id = "https://grain.dev/capabilities/config-map";
     api.mockImplementation((path, init) => {
       if (path === "/api/settings" && !init?.method) {
         return Promise.resolve(settings);
@@ -651,23 +654,14 @@ describe("SettingsPage", () => {
         return Promise.resolve({
           enabled: true,
           secrets: [
-            { name: "capability-server-1f6d92c4", keys: ["secret_values"] },
+            {
+              name: "capability-server-1f6d92c4",
+              keys: ["secret_values"],
+              capabilityServers: [id],
+            },
             { name: "walk-throwaway", keys: ["token"] },
           ],
         });
-      }
-      if (path === "/api/capability-servers" && !init?.method) {
-        return Promise.resolve([
-          {
-            id: "https://grain.dev/capabilities/config-map",
-            secrets: [
-              {
-                name: "capability-server-1f6d92c4/secret_values",
-                present: true,
-              },
-            ],
-          },
-        ]);
       }
       return Promise.resolve({});
     });
@@ -682,11 +676,14 @@ describe("SettingsPage", () => {
       </PreferencesProvider>,
     );
     expect(await screen.findByText("walk-throwaway")).toBeInTheDocument();
-    await waitFor(() =>
-      expect(
-        screen.queryByText("capability-server-1f6d92c4"),
-      ).not.toBeInTheDocument(),
-    );
+    const used = screen.getByRole("list", {
+      name: "Secrets used by capability servers",
+    });
+    expect(used).toHaveTextContent("capability-server-1f6d92c4");
+    expect(within(used).getByRole("link", { name: id })).toBeInTheDocument();
+    expect(
+      within(used).queryByRole("button", { name: "Delete secret" }),
+    ).not.toBeInTheDocument();
   });
 
   it("marks an edited Memory note dirty in the header and nav, asks before switching sections, and clears the dot after confirming", async () => {

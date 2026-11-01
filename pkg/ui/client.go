@@ -4012,12 +4012,13 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 	type Alias UpdateTaskRequest
 	var aux struct {
 		Alias
-		RawCapabilities    json.RawMessage `json:"capabilities,omitempty"`
-		RawGrants          json.RawMessage `json:"grants,omitempty"`
-		RawPriority        json.RawMessage `json:"priority,omitempty"`
-		NetworkAccessSnake *string         `json:"network_access,omitempty"`
-		AutoApproveSnake   *bool           `json:"auto_approve_proposals,omitempty"`
-		KeepRunningSnake   *bool           `json:"keep_running,omitempty"`
+		RawCapabilities       json.RawMessage `json:"capabilities,omitempty"`
+		RawGrants             json.RawMessage `json:"grants,omitempty"`
+		RawPriority           json.RawMessage `json:"priority,omitempty"`
+		NetworkAccessSnake    *string         `json:"network_access,omitempty"`
+		AutoApproveSnake      *bool           `json:"auto_approve_proposals,omitempty"`
+		KeepRunningSnake      *bool           `json:"keep_running,omitempty"`
+		PriorityDispatchSnake *bool           `json:"priority_dispatch,omitempty"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
@@ -4082,6 +4083,9 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 	}
 	if r.KeepRunning == nil && aux.KeepRunningSnake != nil {
 		r.KeepRunning = aux.KeepRunningSnake
+	}
+	if r.PriorityDispatch == nil && aux.PriorityDispatchSnake != nil {
+		r.PriorityDispatch = aux.PriorityDispatchSnake
 	}
 	return nil
 }

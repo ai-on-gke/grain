@@ -549,3 +549,109 @@ func TestReconcileSandboxesPersistentSandboxMatchesPersistentPool(t *testing.T) 
 		}
 	}
 }
+
+// A session's sandbox keeps the name of the run that built it (2-1) while
+// later runs of the session (2-4, ...) use it. The reaper must not read it
+// as leaked by finished run 2-1 in any of the windows where neither the
+// store's live runs nor InFlight name it: parked warm, claimed by a dispatch
+// before SetRunSandbox records it, or used by a run whose row is finished
+// before the sandbox is parked warm again. Once nothing holds it, it is
+// reaped as before.
+func TestReconcileSandboxesKeepsSessionSandboxThroughClaimAndPark(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStoreForOrchestrator(t)
+	now := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)
+	ttl := 30 * time.Minute
+
+	if err := st.PutTask(ctx, makeTestTask("2", true)); err != nil {
+		t.Fatal(err)
+	}
+	limits := model.Limits{Workers: 10}
+	if err := st.StartRun(ctx, model.Run{ID: "2-1", TaskID: "2", Attempt: 1, StartedAt: now}, limits); err != nil {
+		t.Fatal(err)
+	}
+	backend := newFakeSizedBackend()
+	sb, err := backend.Acquire(ctx, "2-1", Shape{CPUs: 2, MemoryMB: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishRun(ctx, "2-1", now.Add(time.Second), "succeeded", "done"); err != nil {
+		t.Fatal(err)
+	}
+
+	runs := &InFlight{}
+	deps := Deps{Store: st, Sandboxes: backend, Runs: runs}
+	t.Cleanup(func() { discardWarmSessionSandbox(context.Background(), deps, "2") })
+
+	reconcile := func(step string) {
+		t.Helper()
+		if err := ReconcileSandboxes(ctx, deps, now.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		backend.mu.Lock()
+		_, live := backend.live["2-1"]
+		backend.mu.Unlock()
+		if !live {
+			t.Fatalf("%s: session sandbox 2-1 was reaped while the session still held it", step)
+		}
+	}
+
+	parkWarmSessionSandbox(deps, "2", "2-1", "key", "grants", sb, nil, model.Commitment{}, now, ttl)
+	reconcile("parked warm after run 2-1 finished")
+
+	// Run 2-4 is dispatched and claims the warm sandbox; its row is live
+	// but does not yet name the sandbox.
+	if err := st.StartRun(ctx, model.Run{ID: "2-4", TaskID: "2", Attempt: 1, StartedAt: now}, limits); err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	runs.Go("2-4", "2", func() { <-release })
+	claimed, _ := claimWarmSessionSandbox(deps, "2", "2-4", now)
+	if claimed == nil || claimed.SandboxID != "2-1" {
+		t.Fatalf("claimWarmSessionSandbox = %+v, want sandbox 2-1", claimed)
+	}
+	reconcile("claimed by run 2-4 before SetRunSandbox")
+
+	if err := st.SetRunSandbox(ctx, "2-4", "2-1", nil); err != nil {
+		t.Fatal(err)
+	}
+	reconcile("recorded as run 2-4's sandbox")
+
+	// Run 2-4's row is finished while its goroutine is still in flight,
+	// before the sandbox is parked warm again.
+	if err := st.FinishRun(ctx, "2-4", now.Add(2*time.Second), "succeeded", "done"); err != nil {
+		t.Fatal(err)
+	}
+	reconcile("run 2-4 finished, not yet parked")
+
+	parkWarmSessionSandbox(deps, "2", "2-1", "key", "grants", sb, nil, model.Commitment{}, now, ttl)
+	unholdSessionSandbox(st, "2-1", "2-4")
+	close(release)
+	if err := runs.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reconcile("parked warm again after run 2-4")
+
+	// A run that claims the sandbox and lets it go without parking it
+	// leaves nothing holding it: the reaper takes it.
+	if claimed, _ := claimWarmSessionSandbox(deps, "2", "2-5", now); claimed == nil {
+		t.Fatal("claimWarmSessionSandbox(2-5) found no warm sandbox")
+	}
+	unholdSessionSandbox(st, "2-1", "2-5")
+	if err := ReconcileSandboxes(ctx, deps, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	backend.mu.Lock()
+	_, live := backend.live["2-1"]
+	backend.mu.Unlock()
+	if live {
+		t.Fatal("sandbox 2-1 held by nothing should have been reaped")
+	}
+}

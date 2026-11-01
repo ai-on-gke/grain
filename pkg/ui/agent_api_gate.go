@@ -28,6 +28,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -756,6 +758,34 @@ func grantsInBody(pattern string, body []byte) []string {
 	return addedGrantsInBody(pattern, body, nil, nil)
 }
 
+// gateKey is a JSON object key folded the way encoding/json matches one
+// against a struct field: case-insensitively, under Unicode simple
+// folding, so U+017F (ſ) is an s and U+212A (the Kelvin sign) a k. The
+// gates below compare body keys by gateKey, never by strings.ToLower:
+// ToLower leaves ſ as it is, so "autoApproveProposalſ" or
+// "priorityDiſpatch" reached the field it names while missing the case
+// that refuses it.
+func gateKey(key string) string {
+	var b strings.Builder
+	b.Grow(len(key))
+	for _, r := range key {
+		if r >= utf8.RuneSelf {
+			// The smallest rune in r's folding orbit, as
+			// encoding/json's foldRune picks it.
+			for {
+				next := unicode.SimpleFold(r)
+				if next <= r {
+					r = next
+					break
+				}
+				r = next
+			}
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
+}
+
 func patchTouchesTaskGrants(body []byte) bool {
 	if len(body) == 0 {
 		return false
@@ -769,7 +799,7 @@ func patchTouchesTaskGrants(body []byte) bool {
 		if trimmed == "" || trimmed == "null" {
 			continue
 		}
-		lower := strings.ToLower(key)
+		lower := gateKey(key)
 		// "priority" is the numeric dispatch priority unless it is a
 		// boolean, which UpdateTaskRequest reads as priorityDispatch:
 		// the priority-dispatch grant, under either spelling.
@@ -802,7 +832,7 @@ func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, 
 	}
 	var names []string
 	for key, raw := range fields {
-		lower := strings.ToLower(key)
+		lower := gateKey(key)
 		if lower == "priority" || lower == "prioritydispatch" || lower == "priority_dispatch" {
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
@@ -884,6 +914,29 @@ func grantNamesIn(raw json.RawMessage) []string {
 	return nil
 }
 
+// networkAccessWidens reports whether a body asking for access gives work
+// more network than limit, the caller's own (an acting task's
+// NetworkAccess). Both are read as dispatch reads them
+// (orchestrator.deploymentNetworkAccess): "" is the deployment's default,
+// so a task with no override on a deployment whose default is none has
+// none, and may not ask for "open" -- nor, on a deployment whose default is
+// open, for "". A config that cannot be read is taken as none.
+func (s *Server) networkAccessWidens(ctx context.Context, limit model.NetworkAccess, access string) bool {
+	deployment := model.NetworkNone
+	if s.tasks != nil && s.tasks.Store != nil {
+		if cfg, err := s.tasks.Store.GetConfig(ctx); err == nil && cfg != nil {
+			deployment = model.NormalizeNetworkAccess(cfg.NetworkAccess)
+		}
+	}
+	effective := func(v model.NetworkAccess) model.NetworkAccess {
+		if v = model.NetworkAccess(strings.TrimSpace(string(v))); v == "" {
+			return deployment
+		}
+		return v
+	}
+	return effective(limit) == model.NetworkNone && effective(model.NetworkAccess(access)) != model.NetworkNone
+}
+
 // agentFilingEscalation refuses the rest of what a task, schedule or
 // template body can hand out beyond its capabilities (agentGrantEscalation):
 // push or read access to a repository, auto-merge (and Submit, which
@@ -909,7 +962,7 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 		return nil
 	}
 	for key, raw := range fields {
-		switch strings.ToLower(key) {
+		switch gateKey(key) {
 		case "writes":
 			var targets []WriteTarget
 			if json.Unmarshal(raw, &targets) != nil {
@@ -942,8 +995,7 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			}
 		case "networkaccess", "network_access":
 			var access string
-			if json.Unmarshal(raw, &access) == nil && acting.NetworkAccess == model.NetworkNone &&
-				model.NetworkAccess(strings.TrimSpace(access)) != model.NetworkNone {
+			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, acting.NetworkAccess, access) {
 				return errors.New("an agent with networkAccess \"none\" cannot widen networkAccess")
 			}
 		case "approved", "interactive":
@@ -1584,7 +1636,7 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 		return set.Allows(scope, r)
 	}
 	for key, raw := range fields {
-		switch strings.ToLower(key) {
+		switch gateKey(key) {
 		case "writes":
 			var targets []WriteTarget
 			if json.Unmarshal(raw, &targets) != nil {
@@ -1614,6 +1666,13 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on {
 				return errors.New("an external agent cannot turn on autoApproveProposals")
+			}
+		case "networkaccess", "network_access":
+			// An external agent has no sandbox of its own, so the most
+			// it may hand out is the deployment's default.
+			var access string
+			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, "", access) {
+				return errors.New("an external agent cannot widen networkAccess past this deployment's default of \"none\"")
 			}
 		case "approved":
 			var on bool
