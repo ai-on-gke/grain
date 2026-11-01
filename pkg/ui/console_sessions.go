@@ -1029,7 +1029,7 @@ func (c *Client) stateRepoRef() model.RepoRef {
 // closes the task. When reset is true, the closed task is tagged with
 // model.ConsoleSessionResetTag so a later session with the same id will not
 // inherit its handover summary or link to it.
-func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID string, reset bool) error {
+func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID string, reset bool, reason string) error {
 	if taskID == "" {
 		return nil
 	}
@@ -1064,7 +1064,7 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 		return err
 	}
 	if obs == nil || obs.ClosedAt == nil {
-		if err := c.Store.ObserveField(ctx, taskID, now, func(o *model.Observation) {
+		if err := c.Store.ObserveClose(ctx, taskID, now, c.actor(ctx), reason, func(o *model.Observation) {
 			o.ClosedAt = &now
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""
@@ -1103,7 +1103,8 @@ func (c *Client) RestartConsoleSession(ctx context.Context, id string, req Resta
 		return nil, err
 	}
 	if oldTaskID != "" {
-		if err := c.stopAndCloseConsoleSessionTask(ctx, oldTaskID, !req.CarryHandover); err != nil {
+		if err := c.stopAndCloseConsoleSessionTask(ctx, oldTaskID, !req.CarryHandover,
+			"console session "+id+" was restarted"); err != nil {
 			return nil, err
 		}
 	}
@@ -1186,7 +1187,8 @@ func (c *Client) DeleteConsoleSession(ctx context.Context, id string) error {
 		return err
 	}
 	if taskID != "" {
-		if err := c.stopAndCloseConsoleSessionTask(ctx, taskID, true); err != nil {
+		if err := c.stopAndCloseConsoleSessionTask(ctx, taskID, true,
+			"console session "+id+" was deleted"); err != nil {
 			return err
 		}
 	}
