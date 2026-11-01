@@ -1064,5 +1064,106 @@ describe("SettingsPage", () => {
       expect(screen.getByLabelText("Merge batch size")).toBeEnabled();
       expect(screen.queryByTestId("config-managed-notice")).toBeNull();
     });
+
+    it("omits settings/capabilities.yml from Tasks and Capabilities notices when not exported, and draws each Tasks link once", async () => {
+      const lockedSettings = {
+        ...settings,
+        settingsLocked: true,
+        configRepoOnly: true,
+      };
+      const baseEntries = [
+        { path: "tables/grain_config.json", size: 200 },
+        { path: "tables/custom_field.json", size: 80 },
+        { path: "tables/api_scope_set.json", size: 80 },
+        { path: "settings/templates.yml", size: 40 },
+      ];
+      api.mockImplementation((path, opts) => {
+        if (path === "/api/settings" && !opts)
+          return Promise.resolve(lockedSettings);
+        if (path === "/api/state-repo/files")
+          return Promise.resolve({ entries: baseEntries });
+        return Promise.resolve({});
+      });
+
+      const { unmount } = render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={locked}
+            section="tasks"
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByTestId("config-repo-link")
+            .map((a) => a.getAttribute("data-config-path")),
+        ).toEqual(["tables/grain_config.json", "tables/custom_field.json"]),
+      );
+      unmount();
+
+      render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={locked}
+            section="capabilities"
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByTestId("config-repo-link")
+            .map((a) => a.getAttribute("data-config-path")),
+        ).toEqual(["tables/grain_config.json", "tables/api_scope_set.json"]),
+      );
+    });
+
+    it("draws each Tasks config-repo link once when settings/capabilities.yml is exported", async () => {
+      const lockedSettings = {
+        ...settings,
+        settingsLocked: true,
+        configRepoOnly: true,
+      };
+      api.mockImplementation((path, opts) => {
+        if (path === "/api/settings" && !opts)
+          return Promise.resolve(lockedSettings);
+        if (path === "/api/state-repo/files") {
+          return Promise.resolve({
+            entries: [
+              { path: "tables/grain_config.json", size: 200 },
+              { path: "tables/custom_field.json", size: 80 },
+              { path: "settings/capabilities.yml", size: 120 },
+            ],
+          });
+        }
+        return Promise.resolve({});
+      });
+
+      render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={locked}
+            section="tasks"
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      expect(await screen.findByText("Default grants")).toBeInTheDocument();
+      expect(
+        screen
+          .getAllByTestId("config-repo-link")
+          .map((a) => a.getAttribute("data-config-path")),
+      ).toEqual([
+        "tables/grain_config.json",
+        "tables/custom_field.json",
+        "settings/capabilities.yml",
+      ]);
+    });
   });
 });

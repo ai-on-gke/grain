@@ -108,13 +108,17 @@ func NewGrainCIArtifactTools(runner GrainCIArtifactRunner, scope CIRepoScope, ro
 				runID, _ := argString(args, "run_id")
 				runID = strings.TrimSpace(runID)
 				if runID == "" {
+					defaultRepo := scope.defaultRepo()
+					if defaultRepo == "" && !scope.AllRepos {
+						return Result{Text: "Specify run_id (list_ci_runs reports the runs this run may read).", IsError: true}
+					}
 					var page ci.RunPage
 					var err error
-					if taskBranch != "" {
-						page, err = runner.FindGrainCIRuns(ctx, ci.RunFilter{Repo: scope.Repo, Ref: taskBranch, Descending: true}, 1)
+					if taskBranch != "" && strings.TrimSpace(scope.Repo) != "" {
+						page, err = runner.FindGrainCIRuns(ctx, ci.RunFilter{Repo: defaultRepo, Ref: taskBranch, Descending: true}, 1)
 					}
-					if taskBranch == "" || err != nil || len(page.Runs) == 0 {
-						page, err = runner.FindGrainCIRuns(ctx, ci.RunFilter{Repo: scope.Repo, Descending: true}, 1)
+					if taskBranch == "" || strings.TrimSpace(scope.Repo) == "" || err != nil || len(page.Runs) == 0 {
+						page, err = runner.FindGrainCIRuns(ctx, ci.RunFilter{Repo: defaultRepo, Descending: true}, 1)
 					}
 					if err != nil || len(page.Runs) == 0 {
 						return Result{Text: "No grain CI runs are currently remembered for this repository.", IsError: true}
