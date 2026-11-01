@@ -1894,6 +1894,11 @@ const (
 	// taskRespWaitOn marks POST /api/tasks/{id}/wait-on, whose WaitTarget
 	// entries include target tasks' titles and closing notes.
 	taskRespWaitOn
+	// taskRespCreate marks POST /api/tasks. A plain filing echoes back only
+	// what the caller just wrote, so it is returned whole; a filing that
+	// names a template or a task to supersede draws on text the caller may
+	// not read, and is cut to {id, state} like taskRespSingle.
+	taskRespCreate
 )
 
 // taskMutationResponseKinds classifies every non-GET, non-internal route under
@@ -1901,7 +1906,7 @@ const (
 // TestTaskMutationResponseClassificationIsTotal so a new task mutation cannot
 // silently echo respondWithTask to a caller without tasks:read.
 var taskMutationResponseKinds = map[string]taskMutationRespKind{
-	"POST /api/tasks":                              taskRespSingle,
+	"POST /api/tasks":                              taskRespCreate,
 	"POST /api/tasks/from-template":                taskRespSingle,
 	"POST /api/tasks/reorder":                      taskRespList,
 	"PATCH /api/tasks/{id}":                        taskRespPatch,
@@ -2001,6 +2006,12 @@ func (s *Server) serveAgentCall(w http.ResponseWriter, r *http.Request, next htt
 }
 
 func (s *Server) redactAgentTaskResponse(ctx context.Context, call agentCall, kind taskMutationRespKind, raw []byte) []byte {
+	if kind == taskRespCreate {
+		if !createDrawsOnOtherText(call.body) {
+			return raw
+		}
+		kind = taskRespSingle
+	}
 	switch kind {
 	case taskRespSingle, taskRespPatch:
 		var full map[string]json.RawMessage
@@ -2090,6 +2101,20 @@ func (s *Server) redactAgentTaskResponse(ctx context.Context, call agentCall, ki
 		return marshalJSONLine(resp, raw)
 	}
 	return raw
+}
+
+// createDrawsOnOtherText reports whether a POST /api/tasks body names a
+// template or a task to supersede, either of which fills the new task with
+// text the caller did not send.
+func createDrawsOnOtherText(body []byte) bool {
+	var req struct {
+		TemplateID string `json:"templateId"`
+		Supersedes string `json:"supersedes"`
+	}
+	if len(body) == 0 || json.Unmarshal(body, &req) != nil {
+		return true
+	}
+	return strings.TrimSpace(req.TemplateID) != "" || strings.TrimSpace(req.Supersedes) != ""
 }
 
 func editedPatchResponseKeys(body []byte) []string {

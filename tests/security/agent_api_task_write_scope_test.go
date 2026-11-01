@@ -331,6 +331,17 @@ func TestExternalAgentTaskWriteDoesNotReturnTaskRecord(t *testing.T) {
 	assertNoSecretMarkers(t, "POST /api/tasks with template", body, allMarkers...)
 	assertJSONKeysAtMost(t, "POST /api/tasks with template", body, "id", "state")
 
+	// 5b. A plain filing echoes only what the caller wrote, so it comes back whole.
+	code, body = doBearerJSON(t, srv, writeOnlyTok, http.MethodPost, "/api/tasks",
+		`{"repo":"acme/widgets","title":"plain filing","description":"caller text"}`, nil)
+	if code != http.StatusCreated {
+		t.Fatalf("plain POST /api/tasks status = %d: %s", code, body)
+	}
+	assertNoSecretMarkers(t, "plain POST /api/tasks", body, allMarkers...)
+	if !strings.Contains(body, "caller text") || !strings.Contains(body, `"author"`) {
+		t.Fatalf("plain POST /api/tasks = %s, want the filed record echoed back", body)
+	}
+
 	// 6. POST /api/tasks/{id}/wait-on strips target title and closing note without tasks:read.
 	code, body = doBearerJSON(t, srv, writeOnlyTok, http.MethodPost, "/api/tasks/"+helperTask.ID+"/wait-on",
 		fmt.Sprintf(`{"ids":[%q]}`, victim.ID), nil)
