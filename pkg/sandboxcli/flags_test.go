@@ -249,3 +249,13 @@ func TestSandboxHelpSaysBytesAndHasLiveExamples(t *testing.T) {
 		}
 	}
 }
+
+// The help names the proxy it answers over, never the token it presents.
+func TestSandboxHelpLeavesOutTheProxyToken(t *testing.T) {
+	if got := redactProxy("http://sandbox:s3cret@192.168.9.1:9728"); got != "http://192.168.9.1:9728" {
+		t.Errorf("redactProxy = %q", got)
+	}
+	if got := redactProxy("http://127.0.0.1:9728"); got != "http://127.0.0.1:9728" {
+		t.Errorf("redactProxy without a token = %q", got)
+	}
+}

@@ -314,8 +314,20 @@ func unknownCommand(args []string, env sandboxEnv, stderr io.Writer) (code int, 
 	if len(args) > 0 {
 		fmt.Fprintf(stderr, "grain: unknown command %q\n\n", args[0])
 	}
-	fmt.Fprintf(stderr, sandboxHelpText, base)
+	fmt.Fprintf(stderr, sandboxHelpText, redactProxy(base))
 	return 2, true
+}
+
+// redactProxy is base as help prints it: without the sandbox's token,
+// which would otherwise land in the transcript of every run that asks for
+// help or mistypes a command.
+func redactProxy(base string) string {
+	u, err := url.Parse(base)
+	if err != nil || u.User == nil {
+		return base
+	}
+	u.User = nil
+	return u.String()
 }
 
 // errSandboxReported is an error already printed (the proxy's own words).
@@ -336,7 +348,7 @@ func (c *sandboxCLI) run(args []string) error {
 		if len(args) > 1 {
 			return c.help(strings.Join(args[1:], " "))
 		}
-		fmt.Fprintf(c.out, sandboxHelpText, c.base)
+		fmt.Fprintf(c.out, sandboxHelpText, redactProxy(c.base))
 		return nil
 	}
 	rest := args[1:]
