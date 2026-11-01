@@ -428,8 +428,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		SandboxRecreate: sandboxRecreateAdapter{sandboxRecreations},
 		// SandboxProbe builds one throwaway sandbox from the same backend
 		// runs use, admitted and metered as they are, for `grain sandbox
-		// probe` (scripts/deploy-gke.sh --check). Gated by its route's
-		// scope, not here.
+		// probe`. Gated by its route's scope, not here.
 		SandboxProbe: sandboxProbeAdapter{
 			sandboxes: sandboxes,
 			meter:     orchestrator.MeterFor(store),

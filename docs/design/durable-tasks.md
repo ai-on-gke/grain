@@ -114,7 +114,8 @@ priority dispatch, so `HasPriorityDispatch()` is true too. The
   the ceiling is full, grain raises the notification
   `durable.ceiling:<team>` (see [DT-5](#operator-notifications-dt-5))
   instead of letting the task wait silently. Its sandbox is charged to the
-  sandbox ledger under the exception policy, as priority dispatch is.
+  sandbox ledger under the priority policy, as priority dispatch is
+  (`docs/sandbox-budget.md`).
 
 ### The idle watchdog replaces the deadline
 

@@ -2212,6 +2212,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 				return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
 			}
 		}
+		if _, err := model.FormatTaskBranchName(template, strings.Repeat("a", 32), strings.Repeat("a", model.MaxDeploymentIDLen), "9223372036854775807", ""); err != nil {
+			return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
+		}
 		cfg.TaskBranchTemplate = template
 	}
 	if req.DeploymentID != nil {

@@ -1453,68 +1453,6 @@ func TestCyclePreservesNonQuotaGrantWaitAndClearsStaleQuotaWait(t *testing.T) {
 	}
 }
 
-func TestDirectorDispatchAdmitsAtMostOneSandboxOverBudgetAndHoldsSecond(t *testing.T) {
-	store, ctx := open(t)
-	d1 := directorTask("dir-1")
-	d2 := directorTask("dir-2")
-	d2.Tags = []string{model.ConsoleSessionTag("dir-2")}
-	putTasks(t, store, ctx, d1, d2)
-
-	ledger := &model.Ledger{}
-	shape := model.Commitment{CPUs: 4, MemoryMB: 8 * 1024}
-	// Budget is 4 vCPU / 8 GiB, and one worker run already fills it to cap.
-	budget := model.Budget{
-		Host:             model.Commitment{CPUs: 4, MemoryMB: 8 * 1024},
-		CPUOvercommit:    1,
-		MemoryOvercommit: 1,
-	}
-	releaseWorker := ledger.Charge(model.PoolAgent, "worker-1", shape)
-	defer releaseWorker()
-
-	limits := model.Limits{
-		Workers:    2,
-		Budget:     budget,
-		AgentShape: shape,
-		Ledger:     ledger,
-	}
-
-	// Cycle dispatches at most one director as the single budget exception,
-	// and holds the second director with a quota wait until committed is back
-	// under the cap.
-	got, err := dispatch.Cycle(ctx, store, limits, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].TaskID != "dir-1" {
-		t.Fatalf("dispatched %+v, want only dir-1 admitted over full budget", got)
-	}
-	if wait, err := store.GrantWaitOf(ctx, "dir-2"); err != nil || wait == nil || wait.Capability != model.QuotaWaitCapability {
-		t.Fatalf("GrantWaitOf(dir-2) = %+v (%v), want QuotaWaitCapability while over cap", wait, err)
-	}
-
-	// Even an explicit RunNow for dir-2 must wait while committed exceeds the cap.
-	requestRunNow(t, ctx, store, "dir-2", now.Add(time.Second))
-	gotNow, err := dispatch.Cycle(ctx, store, limits, now.Add(time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(gotNow) != 0 {
-		t.Fatalf("RunNow for dir-2 while over cap dispatched %+v, want none", gotNow)
-	}
-
-	// Once worker-1 releases its sandbox, live commitment drops back to the
-	// 4 vCPU / 8 GiB cap, so dir-2 is admitted.
-	releaseWorker()
-
-	got2, err := dispatch.Cycle(ctx, store, limits, now.Add(3*time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got2) != 1 || got2[0].TaskID != "dir-2" {
-		t.Fatalf("dispatched %+v after cap cleared, want dir-2", got2)
-	}
-}
-
 func TestDispatchChargesPerTaskSandboxShapeOverride(t *testing.T) {
 	store, ctx := open(t)
 

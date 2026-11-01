@@ -2132,6 +2132,107 @@ func TestNewTaskBranchesCarryTheDeploymentID(t *testing.T) {
 	}
 }
 
+// A deployment seeded before grain/task-56 has UnsluggedTaskBranchTemplate
+// ("grain/{deployment}/task-{id}") stored in grain_config. Migration 78
+// upgrades that stored default to DefaultTaskBranchTemplate
+// ("grain/{deployment}/task-{id}-{slug}") so newly created tasks include
+// a portion of the task's title in their branch name in addition to the
+// deployment and task-id uniquifiers, while keeping existing tasks'
+// branches untouched and leaving custom or empty templates alone.
+func TestMigrationUpgradesUnsluggedDefaultTaskBranchTemplate(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+
+	cfg := model.DefaultConfig()
+	cfg.DeploymentID = "prod"
+	cfg.TaskBranchTemplate = model.UnsluggedTaskBranchTemplate
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, task("7", true)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 77 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-77 store: %v", err)
+	}
+
+	after, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
+		t.Fatalf("migrated template = %q, want %q", after.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
+	}
+	// Existing task keeps its pre-migration branch.
+	if got, err := store.GetTask(ctx, "7"); err != nil || got.BranchName() != "grain/prod/task-7" {
+		t.Fatalf("existing task branch = %v, %v; want grain/prod/task-7", got, err)
+	}
+	// Newly created task gets the title slug in addition to the uniquifiers.
+	if err := store.PutTask(ctx, task("8", true)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.GetTask(ctx, "8"); err != nil || got.BranchName() != "grain/prod/task-8-rename-the-endpoint" {
+		t.Fatalf("new task branch = %v, %v; want grain/prod/task-8-rename-the-endpoint", got, err)
+	}
+	// Very long task titles (multi-kilobyte sentence and unbroken token) round-trip
+	// intact on the task row while producing bounded, valid branch names.
+	for _, tc := range []struct {
+		id, title, wantBranch string
+	}{
+		{
+			id:         "9",
+			title:      strings.Repeat("Fix intermittent streaming timeout across multi-region clusters ", 80),
+			wantBranch: "grain/prod/task-9-fix-intermittent-streaming",
+		},
+		{
+			id:         "10",
+			title:      strings.Repeat("supercalifragilisticexpialidocious", 60),
+			wantBranch: "grain/prod/task-10-" + strings.Repeat("supercalifragilisticexpialidocious", 60)[:model.MaxBranchSlugLen],
+		},
+	} {
+		longTask := task(tc.id, true)
+		longTask.Title = tc.title
+		if err := store.PutTask(ctx, longTask); err != nil {
+			t.Fatalf("PutTask(%s) with %d-char title: %v", tc.id, len(tc.title), err)
+		}
+		got, err := store.GetTask(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("GetTask(%s): %v", tc.id, err)
+		}
+		if got.Title != tc.title {
+			t.Fatalf("GetTask(%s).Title length = %d, want %d", tc.id, len(got.Title), len(tc.title))
+		}
+		if got.BranchName() != tc.wantBranch || !model.ValidBranchName(got.BranchName()) {
+			t.Fatalf("GetTask(%s).BranchName() = %q, want valid %q", tc.id, got.BranchName(), tc.wantBranch)
+		}
+	}
+
+	// Custom and empty templates are left untouched by the migration.
+	for _, custom := range []string{"", "alice/{deployment}/task-{id}"} {
+		after.TaskBranchTemplate = custom
+		if err := store.PutConfig(ctx, *after); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 74 WHERE `id` = 1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.New(db).Init(ctx); err != nil {
+			t.Fatalf("migrating a version-74 store with template %q: %v", custom, err)
+		}
+		got, err := store.GetConfig(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.TaskBranchTemplate != custom {
+			t.Fatalf("migrated custom template %q = %q, want it left alone", custom, got.TaskBranchTemplate)
+		}
+	}
+}
+
 func TestNewTaskIDAllocatesDistinctIncreasingIDs(t *testing.T) {
 	t.Parallel()
 	store, _, ctx := openStore(t)
@@ -3491,6 +3592,47 @@ func TestStartRunRejectsASecondLiveRunOnTheSameTask(t *testing.T) {
 	}
 	if err := store.StartRun(ctx, second, model.Limits{}); err != nil {
 		t.Fatalf("StartRun for a second attempt after the first finished: %v", err)
+	}
+}
+
+// TestStartRunNeverRefusesAConsoleSessionAtFullCapacity is the store's
+// half of the session admission guarantee (docs/sandbox-budget.md): the
+// in-transaction capacity check that refuses ordinary work at a full pool,
+// and a merger at a full merger pool, never refuses a console session or a
+// task holding priority-dispatch.
+func TestStartRunNeverRefusesAConsoleSessionAtFullCapacity(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	session := task("sess1", true)
+	session.Origin.Reason = model.ReasonConsoleSession
+	session.Interactive = true
+	session.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
+	session.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
+	steward := task("stew1", true)
+	steward.Grants = []model.Grant{{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel}}
+	for _, tk := range []model.Task{task("w0rk", true), task("w1rk", true), session, steward} {
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limits := model.Limits{Workers: 1}
+	start := func(id string) error {
+		return store.StartRun(ctx, model.Run{ID: id + "-1", TaskID: id, Sandbox: id + "-1", Attempt: 1, StartedAt: now}, limits)
+	}
+	if err := start("w0rk"); err != nil {
+		t.Fatalf("filling the worker pool: %v", err)
+	}
+	if err := start("w1rk"); !errors.Is(err, model.ErrAtCapacity) {
+		t.Fatalf("an ordinary task at full capacity = %v, want ErrAtCapacity", err)
+	}
+	if err := start("sess1"); err != nil {
+		t.Fatalf("a console session at full capacity was refused: %v", err)
+	}
+	if err := start("stew1"); err != nil {
+		t.Fatalf("a priority-dispatch task at full capacity was refused: %v", err)
+	}
+	if live, err := store.LiveRunCounts(ctx); err != nil || live != (model.RunCounts{Workers: 1, Directors: 2}) {
+		t.Fatalf("live = %+v (%v), want one worker and both priority runs counted apart", live, err)
 	}
 }
 

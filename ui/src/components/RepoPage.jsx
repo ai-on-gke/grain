@@ -495,9 +495,11 @@ export default function RepoPage({
   // notice linking to those files. The operational actions -- adding a
   // branch, importing issues now, a manual release, a base branch's
   // check -- are not settings, and stay a repo admin's (adminReadOnly).
-  const configRepoOnly = Boolean(
-    config?.configRepoOnly || config?.settingsLocked,
-  );
+  // configRepoOnly alone, not settingsLocked: with directConfigWrites in
+  // state-repo.json the lock is on but the API still takes the write, and
+  // the server folds both into configRepoOnly
+  // (design/spec/settings/settings-mutability.spec.md D-10).
+  const configRepoOnly = Boolean(config?.configRepoOnly);
   const readOnly = adminReadOnly || configRepoOnly;
   // The same sentence is each disabled control's own accessible
   // description, so a screen reader on one hears why it is dimmed
@@ -2451,6 +2453,17 @@ export default function RepoPage({
                         : ""));
                 const edit = (field) => (e) =>
                   setImportDraft({ ...draft, [field]: e.target.value });
+                // The fields as typed, in the shape PUT .../settings takes.
+                const draftFields = () => {
+                  const minutes = draft.interval.trim();
+                  return {
+                    issueImportRepo: draft.repo.trim(),
+                    issueImportLabel: draft.label.trim(),
+                    issueImportIntervalSeconds: minutes
+                      ? Math.round(Number(minutes) * 60)
+                      : 0,
+                  };
+                };
                 return (
                   <Stack spacing={1.5} data-testid="repo-issue-import">
                     <Stack direction="row" alignItems="flex-start" spacing={1}>
@@ -2459,8 +2472,14 @@ export default function RepoPage({
                         sx={{ mt: -0.5 }}
                         checked={Boolean(imp.enabled)}
                         onChange={(e) =>
+                          // Switching on saves whatever source, label and
+                          // interval are typed but not yet saved with it:
+                          // the first pass runs on the next cycle, and
+                          // would otherwise read every open issue with
+                          // the label the person had just typed unsaved.
                           saveIssueImport({
                             issueImportEnabled: e.target.checked,
+                            ...(e.target.checked && dirty ? draftFields() : {}),
                           })
                         }
                         disabled={readOnly}
@@ -2510,14 +2529,7 @@ export default function RepoPage({
                       alignItems={{ sm: "flex-start" }}
                       onSubmit={(e) => {
                         e.preventDefault();
-                        const minutes = draft.interval.trim();
-                        saveIssueImport({
-                          issueImportRepo: draft.repo.trim(),
-                          issueImportLabel: draft.label.trim(),
-                          issueImportIntervalSeconds: minutes
-                            ? Math.round(Number(minutes) * 60)
-                            : 0,
-                        });
+                        saveIssueImport(draftFields());
                       }}
                     >
                       <TextField

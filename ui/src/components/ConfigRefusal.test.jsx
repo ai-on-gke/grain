@@ -12,10 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import api from "../api.js";
+import {
+  guardLeaving,
+  leavingLosesEdits,
+  useUnsavedEdits,
+} from "../unsavedEdits.js";
 import ConfigRefusalDialog, {
   configRepoRefusal,
   settingsSectionPath,
@@ -132,6 +138,54 @@ describe("ConfigRefusalDialog for the internal grain/config", () => {
     ).toBeNull();
   });
 
+  // The editor the refused write came from stays open behind the
+  // dialog; once the pull request carries its edit, leaving it loses
+  // nothing, so following "task N" must not ask DISCARD_PROMPT.
+  function Editor() {
+    const { formRef, isDirty } = useUnsavedEdits({});
+    useEffect(() => guardLeaving(isDirty), [isDirty]);
+    return (
+      <form ref={formRef}>
+        <input name="name" aria-label="Name" />
+      </form>
+    );
+  }
+
+  it("settles the editor behind it once the pull request opens", async () => {
+    api.mockResolvedValue({ taskId: "42", number: 42 });
+    const user = userEvent.setup();
+    render(
+      <>
+        <Editor />
+        <ConfigRefusalDialog refusal={internal} onClose={() => {}} />
+      </>,
+    );
+    // The dialog is modal; type behind it as the person did before Save.
+    screen.getByLabelText("Name", { hidden: true }).value = "Held template";
+    expect(leavingLosesEdits()).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Create Config PR" }));
+    await screen.findByTestId("config-refusal-opened");
+    expect(leavingLosesEdits()).toBe(false);
+    // An edit made after the pull request is one it does not carry.
+    screen.getByLabelText("Name", { hidden: true }).value = "Changed again";
+    expect(leavingLosesEdits()).toBe(true);
+  });
+
+  it("leaves the editor's edit guarded when the pull request fails", async () => {
+    api.mockRejectedValue(new Error("no"));
+    const user = userEvent.setup();
+    render(
+      <>
+        <Editor />
+        <ConfigRefusalDialog refusal={internal} onClose={() => {}} />
+      </>,
+    );
+    screen.getByLabelText("Name", { hidden: true }).value = "Held template";
+    await user.click(screen.getByRole("button", { name: "Create Config PR" }));
+    await screen.findByTestId("config-refusal-error");
+    expect(leavingLosesEdits()).toBe(true);
+  });
+
   it("says why a config pull request could not be opened", async () => {
     api.mockRejectedValue(
       new Error("the config change does not pass validation"),
@@ -144,6 +198,56 @@ describe("ConfigRefusalDialog for the internal grain/config", () => {
         "the config change does not pass validation",
       ),
     );
+  });
+
+  it("lists what validation found rather than the server's one line", async () => {
+    const err = new Error(
+      "the config change does not pass validation: staterepo: the change would lock dispatch: max_parallel is 0, which lets no run start",
+    );
+    err.status = 422;
+    err.validation = {
+      liveness: [
+        "max_parallel is 0, which lets no run start",
+        "every model connection is disabled, so no run has anything to run on",
+      ],
+    };
+    api.mockRejectedValue(err);
+    const user = userEvent.setup();
+    render(<ConfigRefusalDialog refusal={internal} onClose={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Create Config PR" }));
+    const shown = await screen.findByTestId("config-refusal-error");
+    expect(shown).toHaveTextContent("This change does not pass validation");
+    expect(shown).not.toHaveTextContent("staterepo:");
+    expect(
+      within(shown)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(err.validation.liveness);
+    // Opening it again could pass once what it sets is fixed elsewhere.
+    expect(
+      screen.getByRole("button", { name: "Create Config PR" }),
+    ).toBeTruthy();
+  });
+
+  it("asks for the change again when grain/config moved since the refusal", async () => {
+    const err = new Error(
+      "the config change does not pass validation: the change does not apply to main: staterepo: applying the change to settings/schedules.yml: the patch does not match the file at line 5",
+    );
+    err.status = 422;
+    err.code = "config_change_stale";
+    api.mockRejectedValue(err);
+    const user = userEvent.setup();
+    render(<ConfigRefusalDialog refusal={internal} onClose={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Create Config PR" }));
+    const shown = await screen.findByTestId("config-refusal-error");
+    expect(shown).toHaveTextContent(
+      "grain/config has changed since this was refused",
+    );
+    expect(shown).toHaveTextContent("make the change again");
+    // The same patch can only fail the same way.
+    expect(
+      screen.queryByRole("button", { name: "Create Config PR" }),
+    ).toBeNull();
   });
 
   it("offers no pull request for an external repository", () => {

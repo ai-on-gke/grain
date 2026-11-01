@@ -1511,21 +1511,52 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		}
 		if m := issuesRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
+			// GitHub's own filters: state (open unless asked otherwise --
+			// a closed issue is not in the default listing) and labels.
+			// The listing also carries the repository's pull requests,
+			// each marked by a pull_request key, as GitHub's does: a
+			// reader that wants only issues has to skip them itself.
 			label := qs.Get("labels")
-			numbers := make([]int, 0, len(s.Issues))
-			for n := range s.Issues {
-				numbers = append(numbers, n)
+			state := qs.Get("state")
+			if state == "" {
+				state = "open"
 			}
-			sort.Ints(numbers)
-			items := make([]map[string]any, 0, len(numbers))
-			for _, n := range numbers {
-				issue := s.Issues[n]
+			wanted := func(itemState string, labels map[string]struct{}) bool {
+				if itemState == "" {
+					itemState = "open"
+				}
+				if state != "all" && itemState != state {
+					return false
+				}
 				if label != "" {
-					if _, ok := issue.Labels[label]; !ok {
-						continue
+					if _, ok := labels[label]; !ok {
+						return false
 					}
 				}
-				items = append(items, issueJSON(n, s.Owner, s.Repo, issue))
+				return true
+			}
+			type listed struct {
+				number int
+				item   map[string]any
+			}
+			var all []listed
+			for n, issue := range s.Issues {
+				if wanted(issue.State, issue.Labels) {
+					all = append(all, listed{n, issueJSON(n, s.Owner, s.Repo, issue)})
+				}
+			}
+			for _, pr := range s.PullRequests {
+				if !wanted(pr.State, pr.Labels) {
+					continue
+				}
+				item := issueJSON(pr.Number, s.Owner, s.Repo, &Issue{Title: pr.Title, Body: pr.Body, Labels: pr.Labels, State: pr.State})
+				item["pull_request"] = map[string]string{"html_url": pr.HTMLURL}
+				all = append(all, listed{pr.Number, item})
+			}
+			sort.Slice(all, func(i, j int) bool { return all[i].number < all[j].number })
+			items := make([]map[string]any, 0, len(all))
+			for _, l := range all {
+				items = append(items, l.item)
 			}
 			return jsonResponse(200, items), nil
 		}
@@ -1939,6 +1970,25 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 	}
 
 	if method == "PATCH" {
+		// Closing or reopening an issue (PATCH .../issues/N with a
+		// state), the one edit to an issue anything here makes.
+		if m := issueRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			issue, ok := s.Issues[mustAtoi(m[3])]
+			if !ok {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			var payload struct {
+				State string `json:"state"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				return github.ApiResponse{}, err
+			}
+			if payload.State != "" {
+				issue.State = payload.State
+			}
+			return jsonResponse(200, issueJSON(mustAtoi(m[3]), s.Owner, s.Repo, issue)), nil
+		}
 		if m := updateCheckRunRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			var payload struct {

@@ -444,16 +444,23 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     78,
+		Description: "upgrade the pre-slug default task_branch_template (grain/{deployment}/task-{id}) to grain/{deployment}/task-{id}-{slug}",
+		Statements: []string{
+			"UPDATE `grain_config` SET `task_branch_template` = '" + DefaultTaskBranchTemplate + "' WHERE `task_branch_template` = '" + UnsluggedTaskBranchTemplate + "'",
+		},
+	},
+	{
+		Version:     79,
 		Description: "rewrite stored grain-log grants to https://grain.dev/capabilities/grain#journal={} (the in-process capability is retired)",
 		Up:          rewriteLegacyGrants(map[string]string{"grain-log": GrainJournalGrant}),
 	},
 	{
-		Version:     79,
+		Version:     80,
 		Description: "rewrite stored deployment-health grants to api:deployment:read and https://grain.dev/capabilities/grain#health={} (the in-process capability is retired)",
 		Up:          rewriteLegacyGrantsMulti(map[string][]string{"deployment-health": {"api:deployment:read", GrainHealthGrant}}),
 	},
 	{
-		Version:     80,
+		Version:     81,
 		Description: "rewrite stored db-read and db-write grants to https://grain.dev/capabilities/grain#sql (the in-process capabilities are retired)",
 		Up: rewriteLegacyGrants(map[string]string{
 			"db-read":  GrainSQLReadGrant,

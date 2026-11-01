@@ -2767,10 +2767,17 @@ func FormatBranchName(template, instanceID, deploymentID, taskID string) (string
 // {slug} may only end the template, after {id} and a hyphen
 // (checkSlugPlacement), so the name is unique whatever the title says. A
 // title with nothing usable in it expands {slug} to nothing, taking the
-// hyphen in front of it along so the name does not end in a stray one.
+// hyphen in front of it along so the name does not end in a stray one;
+// when a long custom template leaves fewer than MaxBranchSlugLen bytes
+// below MaxBranchNameLen, {slug} is trimmed (or omitted) to fit so adding
+// the title never pushes a valid branch past its allowed length.
 func FormatTaskBranchName(template, instanceID, deploymentID, taskID, title string) (string, error) {
 	if template == "" {
-		return BranchName(taskID), nil
+		name := BranchName(taskID)
+		if !ValidBranchName(name) {
+			return "", fmt.Errorf("branch template produces invalid branch name %q", name)
+		}
+		return name, nil
 	}
 	if !strings.Contains(template, "{id}") {
 		return "", fmt.Errorf("branch template must contain {id}")
@@ -2778,12 +2785,28 @@ func FormatTaskBranchName(template, instanceID, deploymentID, taskID, title stri
 	if err := checkSlugPlacement(template); err != nil {
 		return "", err
 	}
-	template = expandSlug(template, BranchSlug(title))
-	name := strings.NewReplacer("{instance}", instanceID, "{deployment}", deploymentID, "{id}", taskID).Replace(template)
-	if strings.ContainsAny(name, "{}") {
-		return "", fmt.Errorf("branch template contains an unknown placeholder")
+	replacer := strings.NewReplacer("{instance}", instanceID, "{deployment}", deploymentID, "{id}", taskID)
+	var name string
+	if baseTpl, hasSlug := strings.CutSuffix(template, "-{slug}"); hasSlug {
+		base := replacer.Replace(baseTpl)
+		if strings.ContainsAny(base, "{}") {
+			return "", fmt.Errorf("branch template contains an unknown placeholder")
+		}
+		if slug := branchSlug(title, min(MaxBranchSlugLen, MaxBranchNameLen-len(base)-1)); slug != "" {
+			name = base + "-" + slug
+		} else {
+			name = base
+		}
+	} else {
+		name = replacer.Replace(template)
+		if strings.ContainsAny(name, "{}") {
+			return "", fmt.Errorf("branch template contains an unknown placeholder")
+		}
 	}
 	if !ValidBranchName(name) {
+		if len(name) > MaxBranchNameLen {
+			return "", fmt.Errorf("branch template produces %d-character branch name, over the %d-character limit", len(name), MaxBranchNameLen)
+		}
 		return "", fmt.Errorf("branch template produces invalid branch name %q", name)
 	}
 	return name, nil
@@ -2801,6 +2824,13 @@ const MaxBranchSlugLen = 30
 // in the header parser" is "fix-the-off-by-one-in-the". Empty when the
 // title has no ASCII letter or digit in it at all.
 func BranchSlug(title string) string {
+	return branchSlug(title, MaxBranchSlugLen)
+}
+
+func branchSlug(title string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
 	var words []string
 	var cur strings.Builder
 	flush := func() {
@@ -2823,11 +2853,11 @@ func BranchSlug(title string) string {
 		if n > 0 {
 			n++
 		}
-		if n+len(w) > MaxBranchSlugLen {
+		if n+len(w) > limit {
 			if slug.Len() == 0 {
 				// One word longer than the whole budget: keep what
 				// fits of it rather than nothing.
-				slug.WriteString(w[:MaxBranchSlugLen])
+				slug.WriteString(w[:limit])
 			}
 			break
 		}
@@ -2887,26 +2917,6 @@ func checkSlugPlacement(template string) error {
 			"(as in grain/{deployment}/task-{id}-{slug}), so a task's title can never make another deployment's branch name")
 	}
 	return nil
-}
-
-// expandSlug replaces {slug} in a branch template that checkSlugPlacement
-// accepted with slug. An empty slug takes the hyphen in front of the
-// placeholder with it, so task-{id}-{slug} for an untitled task is
-// task-{id}, not task-{id}-.
-func expandSlug(template, slug string) string {
-	const placeholder = "{slug}"
-	i := strings.Index(template, placeholder)
-	if i < 0 {
-		return template
-	}
-	if slug != "" {
-		return template[:i] + slug + template[i+len(placeholder):]
-	}
-	start := i
-	if start > 0 && template[start-1] == '-' {
-		start--
-	}
-	return template[:start] + template[i+len(placeholder):]
 }
 
 // deploymentIDDefaultLen is how much of the installation id the default

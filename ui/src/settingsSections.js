@@ -93,14 +93,18 @@ export const SETTINGS_GROUPS = [
 // write from that section names).
 export const CONFIG_REPO_SECTION_PATHS = {
   general: ["tables/grain_config.json"],
-  git: ["tables/git_credential.json", "tables/repo_git_credential.json"],
+  // Git connections live in grain_config (git_connections, git_credential)
+  // and each repository's binding in repo_config (git_credential); their
+  // tokens and keys stay in the secret store and are never exported.
+  git: ["tables/grain_config.json", "tables/repo_config.json"],
   repositories: ["tables/repo_config.json", "tables/grain_config.json"],
   tasks: [
     "settings/capabilities.yml",
     "tables/grain_config.json",
     "tables/custom_field.json",
   ],
-  agents: ["tables/grain_config.json", "tables/console_session.json"],
+  // Standing console sessions are grain_config.console_sessions.
+  agents: ["tables/grain_config.json"],
   capabilities: ["settings/capabilities.yml"],
   ci: ["tables/grain_config.json", "tables/repo_config.json"],
   memory: ["memory/deployment.md"],

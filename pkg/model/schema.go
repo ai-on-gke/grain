@@ -342,19 +342,29 @@ import "strconv"
 // 77 adds `new_task_form` to `grain_config`: the New Task form's
 // configuration (settings/new-task-form.yml, model.NewTaskForm).
 //
-// 78 rewrites stored `grain-log` grants to
+// 78 changes no table: it upgrades `grain_config`.`task_branch_template`
+// from the pre-slug default `grain/{deployment}/task-{id}`
+// (model.UnsluggedTaskBranchTemplate, seeded by NewDeploymentConfig
+// before grain/task-56) to `grain/{deployment}/task-{id}-{slug}`
+// (model.DefaultTaskBranchTemplate), so deployments created before
+// {slug} was added include a portion of the task's title in new task
+// branch names in addition to the deployment and task-id uniquifiers.
+// Existing tasks keep the branch recorded on their row, and any other
+// template is left alone.
+//
+// 79 rewrites stored `grain-log` grants to
 // `https://grain.dev/capabilities/grain#journal={}`: the in-process
 // `grain-log` provider is retired for the `grain#journal` method.
 //
-// 79 rewrites stored `deployment-health` grants to `api:deployment:read` and
+// 80 rewrites stored `deployment-health` grants to `api:deployment:read` and
 // `https://grain.dev/capabilities/grain#health={}`: the in-process
 // `deployment-health` provider is retired.
 //
-// 80 rewrites stored `db-read` and `db-write` grants to
+// 81 rewrites stored `db-read` and `db-write` grants to
 // `https://grain.dev/capabilities/grain#sql={"write":false}` and
 // `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
 // `db-read` and `db-write` providers are retired.
-const SchemaVersion = 80
+const SchemaVersion = 81
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
