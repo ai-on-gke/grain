@@ -100,3 +100,62 @@ func TestInProcessServerMintsOnTheCallersClock(t *testing.T) {
 	}
 	pass.Release(context.Background())
 }
+
+// repo#write normalizes to the one value the git proxy honours, which is
+// what migration 83 writes for git-push-any-ref, and nothing narrower
+// validates: a task-level refs list the proxy would not honour is refused
+// rather than recorded as though it did something.
+func TestRepoServerNormalizesGitPushAnyRef(t *testing.T) {
+	t.Parallel()
+
+	lookup := grainserver.Lookup(nil)
+	reordered := grainserver.RepoWriteRef + `={"refs":["refs/tags/*","refs/heads/*"],"force":true}`
+	names, err := model.NormalizeCapabilityNames([]string{grainserver.GitPushAnyRefGrant}, lookup)
+	if err != nil || !slices.Equal(names, []string{grainserver.GitPushAnyRefGrant}) {
+		t.Fatalf("NormalizeCapabilityNames(%s) = %v, %v; want it unchanged", grainserver.GitPushAnyRefGrant, names, err)
+	}
+	if !grainserver.IsGitPushAnyRefGrant(grainserver.GitPushAnyRefGrant) ||
+		!grainserver.IsGitPushAnyRefGrant(reordered) ||
+		!grainserver.IsGitPushAnyRefGrant(grainserver.LegacyGitPushAnyRef) {
+		t.Fatal("IsGitPushAnyRefGrant missed the canonical grant, its reordered spelling or the legacy alias")
+	}
+	if got := model.CanonicalLegacyGrant(grainserver.LegacyGitPushAnyRef); got != grainserver.GitPushAnyRefGrant {
+		t.Fatalf("CanonicalLegacyGrant(%q) = %q, want %q", grainserver.LegacyGitPushAnyRef, got, grainserver.GitPushAnyRefGrant)
+	}
+	for _, narrow := range []string{
+		grainserver.RepoWriteRef,
+		grainserver.RepoWriteRef + `={"refs":["refs/heads/*"],"force":true}`,
+		grainserver.RepoWriteRef + `={"refs":["refs/heads/*","refs/tags/*"],"force":false}`,
+		grainserver.RepoWriteRef + `={"refs":["refs/heads/main","refs/tags/*"],"force":true}`,
+	} {
+		if grainserver.IsGitPushAnyRefGrant(narrow) {
+			t.Errorf("IsGitPushAnyRefGrant(%s) = true; want only the full any-ref grant", narrow)
+		}
+		if _, err := model.NormalizeCapabilityNames([]string{narrow}, lookup); err == nil {
+			t.Errorf("NormalizeCapabilityNames(%s) validated; want it refused", narrow)
+		}
+	}
+	if model.IsDangerousGrant(grainserver.GitPushAnyRefGrant) {
+		t.Error("GitPushAnyRefGrant is dangerous; git-push-any-ref was a team grant, and the migration must not change who may give it")
+	}
+	if !grainserver.IsInProcessGrant(grainserver.GitPushAnyRefGrant) {
+		t.Error("GitPushAnyRefGrant is not read as an in-process grant")
+	}
+
+	grants, err := model.CapabilityGrants([]model.Grant{{Capability: grainserver.GitPushAnyRefGrant, Via: model.GrantByLabel}}, lookup)
+	if err != nil {
+		t.Fatalf("CapabilityGrants: %v", err)
+	}
+	pass, err := protocol.MintPass(context.Background(), grants, func(id string) (protocol.Minter, error) {
+		return lookup(id)
+	}, protocol.PassOptions{Deployment: "test", Task: "1", Attempt: 1, Deadline: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("MintPass: %v", err)
+	}
+	pass.Release(context.Background())
+
+	st := grainserver.RepoStatus()
+	if st.ID != grainserver.RepoID || !slices.Equal(st.Methods, []string{grainserver.RepoWriteMethod}) {
+		t.Fatalf("RepoStatus() = %+v, want %s with only %s", st, grainserver.RepoID, grainserver.RepoWriteMethod)
+	}
+}

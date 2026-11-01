@@ -70,8 +70,8 @@ type BranchLookup interface {
 }
 
 // AnyRefLookup is the optional half of BranchLookup that answers whether
-// a sandbox's live run holds model.GitPushAnyRefCapability, the team
-// grant that lifts the one-branch rule. model.Store implements it; a
+// a sandbox's live run holds model.GitPushAnyRefGrant (or the retired
+// bare git-push-any-ref it replaced), the team grant that lifts the one-branch rule. model.Store implements it; a
 // lookup that does not is read as nobody holding it.
 type AnyRefLookup interface {
 	GitPushAnyRef(ctx context.Context, sandbox string) (bool, error)
@@ -263,7 +263,9 @@ func (a *ModelAuthorizer) branches() BranchLookup {
 //     matching entry says `delete: true`, and a tag moved or a branch
 //     moved anywhere the pack does not show is a fast-forward only where
 //     it says `force: true`;
-//   - git-push-any-ref (AnyRefLookup), a team grant for ad-hoc work.
+//   - model.GitPushAnyRefGrant, the https://grain.dev/capabilities/repo#write
+//     grant formerly named git-push-any-ref (AnyRefLookup), a team grant
+//     for ad-hoc work.
 //
 // No team policy and no admin grant sits behind either: the team's own
 // git credential, which every push is forwarded with, is the only other
@@ -304,7 +306,7 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 		}
 		if held {
 			for _, u := range others {
-				check.grant(RefGrant{Ref: u.Ref, Kind: updateKind(u), Via: model.GitPushAnyRefCapability})
+				check.grant(RefGrant{Ref: u.Ref, Kind: updateKind(u), Via: model.RepoWriteRef})
 			}
 			return "", nil
 		}

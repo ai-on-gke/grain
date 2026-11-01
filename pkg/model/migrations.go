@@ -474,6 +474,11 @@ var Migrations = []Migration{
 			"db-write": GrainSQLWriteGrant,
 		}),
 	},
+	{
+		Version:     83,
+		Description: "rewrite stored git-push-any-ref grants to https://grain.dev/capabilities/repo#write (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{GitPushAnyRefCapability: GitPushAnyRefGrant}),
+	},
 }
 
 // ApplyDataMigrations runs the row rewrites (Up) of every migration past

@@ -12,10 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package grainserver is the in-process https://grain.dev/capabilities/grain
-// capability server (docs/design/unified-grants.md §1, §4): the host- and
-// controller-side diagnostic and database grants answered by grain itself
-// rather than by an external MCP server subprocess.
+// Package grainserver holds grain's in-process capability servers
+// (docs/design/unified-grants.md §1, §4), answered by grain itself rather
+// than by an external MCP server subprocess:
+//
+//   - https://grain.dev/capabilities/grain: the host- and controller-side
+//     diagnostic and database grants.
+//   - https://grain.dev/capabilities/repo: repository access. Its #write
+//     method so far carries one value, GitPushAnyRefGrant (formerly
+//     git-push-any-ref), which the git proxy reads off the live task
+//     (model.Store.GitPushAnyRef).
 package grainserver
 
 import (
@@ -55,11 +61,26 @@ const (
 	SQLRef        = model.GrainSQLRef
 	SQLReadGrant  = model.GrainSQLReadGrant
 	SQLWriteGrant = model.GrainSQLWriteGrant
+
+	// RepoID is the canonical capability_id of the in-process repo server.
+	RepoID = model.RepoCapabilityServerID
+
+	// RepoWriteMethod widens which refs of the repositories a task may
+	// write its run may push (formerly git-push-any-ref).
+	RepoWriteMethod    = model.RepoWriteMethod
+	RepoWriteRef       = model.RepoWriteRef
+	GitPushAnyRefGrant = model.GitPushAnyRefGrant
+
+	// LegacyGitPushAnyRef is the retired in-process capability name for GitPushAnyRefGrant.
+	LegacyGitPushAnyRef = model.GitPushAnyRefCapability
 )
 
 var (
 	serverOnce sync.Once
 	serverInst *protocol.Server
+
+	repoOnce sync.Once
+	repoInst *protocol.Server
 )
 
 // callerClock is the in-process methods' clock. An external server
@@ -130,6 +151,54 @@ func buildServer() *protocol.Server {
 	return srv
 }
 
+func buildRepoServer() *protocol.Server {
+	write, err := protocol.NewMethod(protocol.MethodSpec{
+		Name: RepoWriteMethod,
+		Description: "Let this task's run push any branch or tag of the repositories it may write -- the " +
+			"default branch, force-pushes and deletions included -- rather than only its own task branch, " +
+			"with the team's own git credential. Standing jobs declare the refs they push under `push:` in " +
+			"their .grain template instead.",
+		Args: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"required":             []any{"refs", "force"},
+			"properties": map[string]any{
+				"refs": map[string]any{
+					"type":        "array",
+					"description": "Ref patterns the run may update beyond its own task branch. Only every branch and every tag together is honoured so far.",
+					"items":       map[string]any{"type": "string", "enum": []any{"refs/heads/*", "refs/tags/*"}},
+					"minItems":    2,
+					"maxItems":    2,
+					"uniqueItems": true,
+				},
+				"force": map[string]any{
+					"type":        "boolean",
+					"const":       true,
+					"description": "Allow force-pushes and deletions of those refs as well as fast-forwards.",
+				},
+			},
+		},
+		// Nothing is placed in the sandbox: the git proxy reads the grant
+		// off the live task when a push names another ref.
+		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
+			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
+		},
+		Now: callerClock,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building repo#%s: %v", RepoWriteMethod, err))
+	}
+	cs, err := protocol.NewCapabilityServer("repo", write)
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building repo capability server: %v", err))
+	}
+	srv, err := protocol.NewServer(context.Background(), RepoID, cs.InProcessCaller())
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: attaching in-process repo server: %v", err))
+	}
+	return srv
+}
+
 // Server returns the singleton in-process https://grain.dev/capabilities/grain server.
 func Server() *protocol.Server {
 	serverOnce.Do(func() {
@@ -138,11 +207,29 @@ func Server() *protocol.Server {
 	return serverInst
 }
 
-// Status reports the in-process server's method details in the same shape
+// RepoServer returns the singleton in-process https://grain.dev/capabilities/repo server.
+func RepoServer() *protocol.Server {
+	repoOnce.Do(func() {
+		repoInst = buildRepoServer()
+	})
+	return repoInst
+}
+
+// Status reports the in-process grain server's method details in the same shape
 // servers.Registry.Statuses returns for external servers, so GET /api/capability-methods
 // lists its methods without registering a subprocess in grain_config.mcp_servers.
-func Status() servers.Status {
-	srv := Server()
+func Status() servers.Status { return statusOf(ID, Server()) }
+
+// RepoStatus is Status for the in-process repo server.
+func RepoStatus() servers.Status { return statusOf(RepoID, RepoServer()) }
+
+// Statuses is every in-process server's Status, by ID.
+func Statuses() []servers.Status { return []servers.Status{Status(), RepoStatus()} }
+
+// IsInProcessID reports whether capabilityID is one of the in-process servers.
+func IsInProcessID(capabilityID string) bool { return capabilityID == ID || capabilityID == RepoID }
+
+func statusOf(id string, srv *protocol.Server) servers.Status {
 	names := make([]string, 0, len(srv.Methods))
 	for name := range srv.Methods {
 		names = append(names, name)
@@ -160,7 +247,7 @@ func Status() servers.Status {
 		})
 	}
 	return servers.Status{
-		ID:            ID,
+		ID:            id,
 		State:         servers.Attached,
 		Transport:     "in-process",
 		Methods:       names,
@@ -168,12 +255,16 @@ func Status() servers.Status {
 	}
 }
 
-// Lookup wraps fallback so ID always resolves to the in-process Server(), even
-// when fallback is nil or comes from a registry that only tracks mcp_servers.
+// Lookup wraps fallback so ID and RepoID always resolve to the in-process
+// servers, even when fallback is nil or comes from a registry that only
+// tracks mcp_servers.
 func Lookup(fallback protocol.Lookup) protocol.Lookup {
 	return func(capabilityID string) (*protocol.Server, error) {
-		if capabilityID == ID {
+		switch capabilityID {
+		case ID:
 			return buildServer(), nil
+		case RepoID:
+			return buildRepoServer(), nil
 		}
 		if fallback != nil {
 			return fallback(capabilityID)
@@ -183,14 +274,14 @@ func Lookup(fallback protocol.Lookup) protocol.Lookup {
 }
 
 // IsInProcessGrant reports whether grant is a capability reference targeting
-// the in-process grain server (which opens no external control- or data-plane
+// an in-process server (which opens no external control- or data-plane
 // network listener).
 func IsInProcessGrant(grant string) bool {
 	if !model.IsCapabilityRef(grant) {
 		return false
 	}
 	ref, err := protocol.ParseRef(model.CapabilityGrantRef(grant))
-	return err == nil && ref.CapabilityID == ID
+	return err == nil && IsInProcessID(ref.CapabilityID)
 }
 
 // IsJournalGrant reports whether grant names grain#journal (recorded or bare)
@@ -218,3 +309,7 @@ func HasSQL(grants []string) bool { return model.HasGrainSQL(grants) }
 
 // HasSQLWrite reports whether any grant in grants opens grain#sql with write: true.
 func HasSQLWrite(grants []string) bool { return model.HasGrainSQLWrite(grants) }
+
+// IsGitPushAnyRefGrant reports whether grant is GitPushAnyRefGrant or the
+// retired bare git-push-any-ref alias.
+func IsGitPushAnyRefGrant(grant string) bool { return model.IsGitPushAnyRefGrant(grant) }

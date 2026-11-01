@@ -368,7 +368,12 @@ import "strconv"
 // `https://grain.dev/capabilities/grain#sql={"write":false}` and
 // `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
 // `db-read` and `db-write` providers are retired.
-const SchemaVersion = 82
+//
+// 83 rewrites stored `git-push-any-ref` grants to
+// `https://grain.dev/capabilities/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}`:
+// the in-process `git-push-any-ref` provider is retired for the in-process
+// repo server's `#write` method.
+const SchemaVersion = 83
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.

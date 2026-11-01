@@ -1056,8 +1056,9 @@ deleting one only where its entry says so; every such update is audited
 with the task, template and declaration file. There is no admin grant and
 no team policy behind it: the team's own git credential is the only other
 bound. For ad-hoc work with no template behind it, a team may grant its
-own task `git-push-any-ref` (`pkg/capability/gitpushanyref`), a team
-capability that lifts the one-branch rule for that run in the repositories
+own task `https://grain.dev/capabilities/repo#write` with `{"force": true, "refs": ["refs/heads/*", "refs/tags/*"]}` (`model.GitPushAnyRefGrant`, formerly
+`git-push-any-ref`, on the in-process repo server in
+`pkg/capability/grainserver`), a team grant that lifts the one-branch rule for that run in the repositories
 it may write, and nowhere else.
 
 What is enforced on the run's own branch: nothing further. Creating it,

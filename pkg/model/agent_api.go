@@ -295,6 +295,7 @@ var legacyGrantReplacements = map[string]string{
 	"db-write":         GrainSQLWriteGrant,
 	"self-upgrade":     APIGrantPrefix + "self-upgrade",
 	"test-quarantine":  APIGrantPrefix + "test-quarantine",
+	"git-push-any-ref": GitPushAnyRefGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into
