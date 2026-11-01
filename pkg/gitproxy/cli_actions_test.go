@@ -882,6 +882,43 @@ func TestCLIWaitCreditIsCountedOnceAcrossAResume(t *testing.T) {
 	}
 }
 
+// Two waits one run has blocked side by side -- grain ci run-job b in
+// the background and grain ci wait in the foreground, as U5's walk ran
+// them, where the run was credited 1m10s for 35s of waiting -- are
+// credited for the wall-clock time either was blocked, once.
+func TestCLIWaitCreditCountsOverlappingWaitsOnce(t *testing.T) {
+	defer gitproxy.SetCLIWaitIntervals(5*time.Millisecond, 10*time.Millisecond)()
+	actions := &fakeCLIActions{runs: map[string]ci.Run{}, finishAt: -1}
+	h, _, credit := newActionProxy(t, actions)
+
+	start := time.Now()
+	var wg sync.WaitGroup
+	for _, call := range [][2]string{
+		{"/cli/ci/run-job", `{"job":"go","timeout_seconds":1}`},
+		{"/cli/ci/wait", `{"timeout_seconds":1}`},
+	} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if rec := send(h, http.MethodPost, "tok-ci", call[0], call[1]); rec.Code != http.StatusOK {
+				t.Errorf("%s: %d %s", call[0], rec.Code, rec.Body)
+			}
+		}()
+	}
+	wg.Wait()
+	wall := time.Since(start)
+
+	credit.mu.Lock()
+	defer credit.mu.Unlock()
+	last := credit.reports[len(credit.reports)-1]
+	if last > wall {
+		t.Errorf("two overlapping waits credited %s in %s of wall-clock time, want no more than the wall-clock time", last, wall)
+	}
+	if last < 900*time.Millisecond {
+		t.Errorf("two one-second waits credited %s, want about a second", last)
+	}
+}
+
 // TestAPIForwardKeepsAnEscapedSlash is a host-qualified repository's
 // route reached through the sandbox proxy: /api/repos/<host>%2F<owner>/
 // <name>/... reaches the agent API with the %2F still one {owner}

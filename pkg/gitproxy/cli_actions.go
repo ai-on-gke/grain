@@ -158,20 +158,35 @@ type proxyToolCallRecorder interface {
 }
 
 // cliWaitLedger is each run's cumulative CLI-blocked time, which is what
-// CLIWaitCreditor is told.
+// CLIWaitCreditor is told: the wall-clock time during which at least one
+// of the run's waits was blocked. Waits that overlap -- grain ci run-job
+// and grain ci wait run side by side, as the U5 walk of
+// docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md did -- share
+// their overlap rather than each being credited for it, which would buy
+// a run that backgrounds n waits n times the time it actually waited.
 type cliWaitLedger struct {
 	mu      sync.Mutex
 	blocked map[string]time.Duration
+	// until is the latest instant each run's total already covers.
+	until map[string]time.Time
 }
 
-func (l *cliWaitLedger) add(runID string, d time.Duration) time.Duration {
+// add credits runID with the part of [from, to] its total does not
+// already cover, and returns the total. Each wait reports consecutive
+// intervals ending now, so the intervals arrive in the order they end
+// and the part already covered is always a prefix.
+func (l *cliWaitLedger) add(runID string, from, to time.Time) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.blocked == nil {
-		l.blocked = map[string]time.Duration{}
+		l.blocked, l.until = map[string]time.Duration{}, map[string]time.Time{}
 	}
-	if d > 0 {
-		l.blocked[runID] += d
+	if until := l.until[runID]; from.Before(until) {
+		from = until
+	}
+	if to.After(from) {
+		l.blocked[runID] += to.Sub(from)
+		l.until[runID] = to
 	}
 	return l.blocked[runID]
 }
@@ -629,7 +644,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	lastReport := start
 	var credit CLIWaitCredit
 	report := func(now time.Time) {
-		credit = p.creditCLIWait(ctx, scope, now.Sub(lastReport))
+		credit = p.creditCLIWait(ctx, scope, lastReport, now)
 		lastReport = now
 	}
 
@@ -728,7 +743,7 @@ func (p *GitProxy) serveGitHubCIWait(w http.ResponseWriter, ctx context.Context,
 	lastReport := start
 	var credit CLIWaitCredit
 	report := func(now time.Time) {
-		credit = p.creditCLIWait(ctx, scope, now.Sub(lastReport))
+		credit = p.creditCLIWait(ctx, scope, lastReport, now)
 		lastReport = now
 	}
 
@@ -917,14 +932,14 @@ func (p *GitProxy) noteDeclaredWait(ctx context.Context, taskID, phrase string) 
 	_, _ = p.Activity.SetTaskActivity(ctx, taskID, phrase, now)
 }
 
-// creditCLIWait adds d to the run's CLI-blocked total and reports the
-// total for credit.
-func (p *GitProxy) creditCLIWait(ctx context.Context, scope namespace.Scope, d time.Duration) CLIWaitCredit {
+// creditCLIWait adds a wait's blocked interval [from, to] to the run's
+// CLI-blocked total (cliWaitLedger) and reports the total for credit.
+func (p *GitProxy) creditCLIWait(ctx context.Context, scope namespace.Scope, from, to time.Time) CLIWaitCredit {
 	key := scope.RunID
 	if key == "" {
 		key = "task:" + scope.TaskIDStr
 	}
-	total := p.cliWaits.add(key, d)
+	total := p.cliWaits.add(key, from, to)
 	if p.WaitCredit == nil {
 		return CLIWaitCredit{}
 	}
@@ -1252,7 +1267,7 @@ func (p *GitProxy) serveTasksWait(w http.ResponseWriter, r *http.Request, scope 
 	lastReport := start
 	var credit CLIWaitCredit
 	report := func(now time.Time) {
-		credit = p.creditCLIWait(ctx, scope, now.Sub(lastReport))
+		credit = p.creditCLIWait(ctx, scope, lastReport, now)
 		lastReport = now
 	}
 
