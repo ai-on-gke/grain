@@ -760,6 +760,10 @@ grain's source because the tracked tree is now 129MB on disk, just over
 its 128MB leak ceiling. That is honest growth (115MB apparent; pkg, docs
 and third_party, no build output), not a leak.
 
-The ceiling was raised to 256MB, and `tests/container`'s copy of it
-(`sourceExportMaxMB`) was raised with it. Not related to the UI
-walkthrough itself.
+This branch raised the ceiling to 256MB, together with
+`tests/container`'s copy of it (`sourceExportMaxMB`), and that turned
+`installer` green. `main` then landed the same fix independently
+(`9248c469`, also 256MB), and its wording was kept when `main` was
+merged back in. A one-off `ui e2e` failure in
+`local-scripts-approval-walkthrough.spec.js` passed 3/3 locally and
+passed on a rerun. This is not related to the UI walkthrough itself.

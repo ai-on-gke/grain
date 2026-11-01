@@ -243,6 +243,10 @@ export default function PhoneNav({
 // out of a phone's reach (2026-10-23 responsive walkthrough, bug 3).
 // The menu's own items still close it: the menu is portalled to <body>,
 // but React carries their clicks back up through this Box all the same.
+// Customize sidebar is one of those too (aria-haspopup="dialog"): its
+// dialog edits the pinned items at the top of this rail, so closing the
+// drawer under it sent the reader back to the page, not to the rail
+// their change shows in (2026-11-01 responsive walkthrough).
 // And a toggle (aria-pressed) -- a staging environment's pin -- which
 // changes the rail in place rather than going anywhere: closing on it
 // hid the very entry it had just pinned (2026-10-29 responsive

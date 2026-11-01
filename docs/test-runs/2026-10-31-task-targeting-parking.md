@@ -157,7 +157,7 @@ already covered `relayProposedTasks` itself. This test covers the run's end.
 |---|---|---|
 | F1 | A closed or absent PR's fork label is refused with "… has it as its head: no open pull request heads it": `%w` appended the sentinel's own text to a message shown verbatim on the form. Reproduce: `grain demo -github-sim -fork-pull-request`, file with base `contrib:feat/old-idea`. | **Fixed** (`pkg/forkhead`): an error type that matches `ErrNoPullRequest` under `errors.Is` without repeating it. Regression check in `TestResolveNamesALabelNoPullRequestHeads`, which fails before the fix. Before/after shot at 1440 light; re-checked at all four sizes. |
 | F2 | The `external-pr` link a fork label adopts is not in `GET /api/tasks/<id>` or on the task page. | Follow-up filed (UI and API change, needs its own screenshots). |
-| F3 | Retargeting a fork-label task keeps the off-target `external-pr` link and the fork guidance in its description. | Follow-up filed. |
+| F3 | Retargeting a fork-label task keeps the off-target `external-pr` link and the fork guidance in its description. | **Fixed** (task 2200): a move drops an off-target `external-pr` link (`model.LinkOffTarget`) and takes the appended note out (`forkhead.StripNote`), or, when a person has reworded it, says it no longer applies. Covered by `TestRetargetingAForkHeadTaskDropsItsPullRequestAndGuidance`. |
 
 ## Not done here
 
