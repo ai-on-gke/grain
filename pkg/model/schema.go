@@ -352,19 +352,23 @@ import "strconv"
 // Existing tasks keep the branch recorded on their row, and any other
 // template is left alone.
 //
-// 79 rewrites stored `grain-log` grants to
+// 79 adds `pending_config_change` to `task_observation`: the grain/config
+// change a session proposed and is parked on (model.PendingConfigChange),
+// as JSON.
+//
+// 80 rewrites stored `grain-log` grants to
 // `https://grain.dev/capabilities/grain#journal={}`: the in-process
 // `grain-log` provider is retired for the `grain#journal` method.
 //
-// 80 rewrites stored `deployment-health` grants to `api:deployment:read` and
+// 81 rewrites stored `deployment-health` grants to `api:deployment:read` and
 // `https://grain.dev/capabilities/grain#health={}`: the in-process
 // `deployment-health` provider is retired.
 //
-// 81 rewrites stored `db-read` and `db-write` grants to
+// 82 rewrites stored `db-read` and `db-write` grants to
 // `https://grain.dev/capabilities/grain#sql={"write":false}` and
 // `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
 // `db-read` and `db-write` providers are retired.
-const SchemaVersion = 81
+const SchemaVersion = 82
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -734,6 +738,7 @@ var Tables = []string{
   ` + "`pending_question_comment_id`" + ` INTEGER  NULL,
   ` + "`baseline_comment_id`" + `         INTEGER  NULL,
   ` + "`pending_secret`" + `              TEXT     NULL,
+  ` + "`pending_config_change`" + `       TEXT     NULL,
   ` + "`merge_queue_blocked_at`" + `      DATETIME NULL,
   ` + "`merge_queue_refreshed_at`" + `    DATETIME NULL,
   ` + "`merge_queue_repair_at`" + `       DATETIME NULL,
@@ -1323,6 +1328,17 @@ var Tables = []string{
   ` + "`sandbox_acquired_at`" + ` DATETIME NULL,
   ` + "`sandbox_prepared_at`" + ` DATETIME NULL,
   ` + "`first_turn_at`" + `       DATETIME NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
+)`,
+
+	// task_run_sandbox_key records the sessionSandboxKey and sessionGrantsKey
+	// a run's sandbox was built or reused under, so an adopting daemon after a
+	// restart enforces the exact same warm-sandbox isolation key even if the
+	// task's grants, network access, target, or size were edited mid-run.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_sandbox_key`" + ` (
+  ` + "`run_id`" + `      TEXT NOT NULL,
+  ` + "`sandbox_key`" + ` TEXT NOT NULL,
+  ` + "`grants_key`" + `  TEXT NOT NULL,
   PRIMARY KEY (` + "`run_id`" + `)
 )`,
 

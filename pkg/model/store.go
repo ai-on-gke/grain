@@ -1841,6 +1841,14 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 	if session == nil {
 		session = &SuspendedSession{}
 	}
+	pendingConfigChange := any(nil)
+	if o.PendingConfigChange != nil {
+		data, err := json.Marshal(o.PendingConfigChange)
+		if err != nil {
+			return fmt.Errorf("writing pending config change of task %s: %w", o.TaskID, err)
+		}
+		pendingConfigChange = string(data)
+	}
 	sessionAt := any(nil)
 	if !session.At.IsZero() {
 		sessionAt = session.At.UTC()
@@ -1868,8 +1876,8 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 			"`suspended_session_at`,"+
 			"`force_merge_at`,`force_merge_reason`,`force_merge_by`,`force_merge_skipped`,`force_merge_head_sha`,"+
 			"`streak_count`,`last_failed_at`,`last_succeeded_at`,`delivered_comment_id`,"+
-			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason`"+
-			") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason`,`pending_config_change`"+
+			") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		o.TaskID, timeOf(o.ClosedAt), timeOf(o.CompletedAt),
 		int64Of(o.PendingQuestionCommentID), int64Of(o.BaselineCommentID), o.PendingSecret,
 		timeOf(o.MergeQueueBlockedAt), timeOf(o.MergeQueueRefreshedAt),
@@ -1889,7 +1897,8 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 		o.ForceMergeHeadSHA,
 		o.StreakCount, timeOf(o.LastFailedAt), timeOf(o.LastSucceededAt),
 		int64Of(o.DeliveredCommentID),
-		timeOf(o.MergeQueueCancelHandoffAt), o.MergeQueueCancelHandoffRun, o.MergeQueueReason)
+		timeOf(o.MergeQueueCancelHandoffAt), o.MergeQueueCancelHandoffRun, o.MergeQueueReason,
+		pendingConfigChange)
 	return err
 }
 
@@ -1918,7 +1927,7 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 			"`suspended_session_at`,"+
 			"`force_merge_at`,`force_merge_reason`,`force_merge_by`,`force_merge_skipped`,`force_merge_head_sha`,"+
 			"`streak_count`,`last_failed_at`,`last_succeeded_at`,`delivered_comment_id`,"+
-			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason` "+
+			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason`,`pending_config_change` "+
 			"FROM `task_observation` WHERE `task_id` = ?", taskID)
 	o := Observation{TaskID: taskID}
 	var closed, completed, blocked, refreshed, repaired, mergeQueueStateAt sql.NullTime
@@ -1960,6 +1969,7 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 	// carries NULL there, which is the same "nothing pending" an empty
 	// string means (ensureTaskObservationPendingSecretColumn).
 	var pendingSecret sql.NullString
+	var pendingConfigChange sql.NullString
 	// The CI columns are NullString/NullTime for the same reason, and
 	// with more of it: every row written before
 	// ensureTaskObservationCIColumns ran carries NULL in all of them.
@@ -1994,7 +2004,7 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 		&sessionToken, &sessionFramework, &sessionRunID, &sessionAt,
 		&forceMergeAt, &forceMergeReason, &forceMergeBy, &forceMergeSkipped, &forceMergeHeadSHA,
 		&streakCount, &lastFailedAt, &lastSucceededAt, &delivered,
-		&cancelHandoffAt, &cancelHandoffRun, &mergeQueueReason); err != nil {
+		&cancelHandoffAt, &cancelHandoffRun, &mergeQueueReason, &pendingConfigChange); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -2039,6 +2049,13 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 	o.PendingQuestionCommentID, o.BaselineCommentID = int64Ptr(pending), int64Ptr(baseline)
 	o.DeliveredCommentID = int64Ptr(delivered)
 	o.PendingSecret = pendingSecret.String
+	if pendingConfigChange.Valid && pendingConfigChange.String != "" {
+		var change PendingConfigChange
+		if err := json.Unmarshal([]byte(pendingConfigChange.String), &change); err != nil {
+			return nil, fmt.Errorf("reading pending config change of task %s: %w", taskID, err)
+		}
+		o.PendingConfigChange = &change
+	}
 	o.MergeQueueBlockedAt, o.MergeQueueRefreshedAt = timePtr(blocked), timePtr(refreshed)
 	o.MergeQueueRepairAt = timePtr(repaired)
 	o.MergeQueueState = mergeQueueState.String
@@ -2384,6 +2401,9 @@ func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, ou
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_relayed_call` WHERE `run_id` = ?", runID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_sandbox_key` WHERE `run_id` = ?", runID); err != nil {
+		return err
+	}
 	if err := recordSuspensionTx(ctx, tx, runID, taskID, outcome, detail, at, susp); err != nil {
 		return err
 	}
@@ -2473,6 +2493,38 @@ func (s *Store) SetRunSandbox(ctx context.Context, runID, sandbox string, target
 			sandbox, owner, name, runID)
 		return err
 	})
+}
+
+// SetRunSandboxKeys records the sessionSandboxKey and sessionGrantsKey runID's
+// sandbox was built or reused under, so an adopting daemon after a restart
+// parks a warm session sandbox only under the exact isolation key it was
+// provisioned with.
+func (s *Store) SetRunSandboxKeys(ctx context.Context, runID, sandboxKey, grantsKey string) error {
+	return s.write(ctx, "set run "+runID+" sandbox keys", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			"INSERT INTO `task_run_sandbox_key` (`run_id`, `sandbox_key`, `grants_key`) VALUES (?, ?, ?) "+
+				"ON CONFLICT (`run_id`) DO UPDATE SET `sandbox_key` = excluded.`sandbox_key`, `grants_key` = excluded.`grants_key`",
+			runID, sandboxKey, grantsKey)
+		return err
+	})
+}
+
+// RunSandboxKeys returns the sessionSandboxKey and sessionGrantsKey recorded
+// for runID, if any.
+func (s *Store) RunSandboxKeys(ctx context.Context, runID string) (sandboxKey, grantsKey string, ok bool, err error) {
+	if runID == "" {
+		return "", "", false, nil
+	}
+	err = s.db.QueryRowContext(ctx,
+		"SELECT `sandbox_key`, `grants_key` FROM `task_run_sandbox_key` WHERE `run_id` = ?",
+		runID).Scan(&sandboxKey, &grantsKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	return sandboxKey, grantsKey, true, nil
 }
 
 // SetRunAgentStarted records the moment a run's agent actually got its

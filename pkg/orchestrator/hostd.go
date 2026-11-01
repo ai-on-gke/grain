@@ -89,7 +89,7 @@ func RecoverHostd(ctx context.Context, store *model.Store, client github.Client,
 			continue
 		}
 		byID[r.ID] = r
-		claims = append(claims, runhost.Claim{Run: r.ID, Task: r.TaskID, LastSeen: c.UpdatedAt})
+		claims = append(claims, runhost.Claim{Run: r.ID, Task: r.TaskID, Sandbox: r.Sandbox, LastSeen: c.UpdatedAt})
 	}
 	plan := runhost.DecideHostd(claims, procs, hostd.ThisHello(build), peer, now)
 

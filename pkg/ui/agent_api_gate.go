@@ -368,9 +368,13 @@ func tasksAdminTaskPatchBodyAllowed(body []byte) error {
 	if err := json.Unmarshal(trimmed, &fields); err != nil || fields == nil {
 		return errors.New("api:tasks:admin without api:tasks:write requires a single JSON object editing priority on PATCH /api/tasks/{id}")
 	}
-	for k := range fields {
+	for k, raw := range fields {
 		if !strings.EqualFold(k, "priority") {
 			return fmt.Errorf("api:tasks:admin without api:tasks:write may only edit priority on PATCH /api/tasks/{id} (got %q)", k)
+		}
+		var on bool
+		if json.Unmarshal(raw, &on) == nil {
+			return errors.New("api:tasks:admin without api:tasks:write may only edit numeric priority on PATCH /api/tasks/{id}")
 		}
 	}
 	return nil
@@ -756,15 +760,20 @@ func patchTouchesTaskGrants(body []byte) bool {
 			continue
 		}
 		lower := strings.ToLower(key)
-		if strings.Contains(lower, "capabilit") || lower == "grants" ||
-			lower == "keeprunning" || lower == "keep_running" {
-			return true
-		}
+		// "priority" is the numeric dispatch priority unless it is a
+		// boolean, which UpdateTaskRequest reads as priorityDispatch:
+		// the priority-dispatch grant, under either spelling.
 		if lower == "priority" {
-			var b bool
-			if json.Unmarshal(raw, &b) == nil {
+			var on bool
+			if json.Unmarshal(raw, &on) == nil {
 				return true
 			}
+			continue
+		}
+		if strings.Contains(lower, "capabilit") || lower == "grants" ||
+			lower == "keeprunning" || lower == "keep_running" ||
+			lower == "prioritydispatch" || lower == "priority_dispatch" {
+			return true
 		}
 	}
 	return false
@@ -784,7 +793,7 @@ func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, 
 	var names []string
 	for key, raw := range fields {
 		lower := strings.ToLower(key)
-		if lower == "priority" {
+		if lower == "priority" || lower == "prioritydispatch" || lower == "priority_dispatch" {
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
 				names = append(names, model.PriorityDispatchCapability)

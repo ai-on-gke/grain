@@ -1146,8 +1146,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const [sessionTask, setSessionTask] = useState(null);
   const sessionTaskRef = useRef(null);
   sessionTaskRef.current = sessionTask;
+  const sessionTaskSeq = useRef(0);
   const loadSessionTask = useCallback(
     async (taskId = openSessionTaskId) => {
+      const seq = ++sessionTaskSeq.current;
       if (!taskId) {
         setSessionTask(null);
         return;
@@ -1155,11 +1157,17 @@ function AppContent({ onReload = () => window.location.reload() }) {
       let detail = await api(`/api/tasks/${taskId}`, {
         poll: true,
       });
+      if (seq !== sessionTaskSeq.current) {
+        return;
+      }
       if (detail === UNCHANGED) {
         if (String(sessionTaskRef.current?.id) === String(taskId)) {
           return;
         }
         detail = await api(`/api/tasks/${taskId}`);
+        if (seq !== sessionTaskSeq.current) {
+          return;
+        }
       }
       if (String(openSessionTaskIdRef.current) !== String(taskId)) {
         return;
@@ -1185,13 +1193,20 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // sent in a chat should leave them in the chat.
   const sessionAct = useCallback(
     async (mutate) => {
+      sessionTaskSeq.current += 1;
       try {
         await mutate();
+      } catch (err) {
+        showError(err);
+        return false;
+      }
+      try {
         await loadSessionTask();
         await refreshList();
       } catch (err) {
         showError(err);
       }
+      return true;
     },
     [loadSessionTask, refreshList, showError],
   );

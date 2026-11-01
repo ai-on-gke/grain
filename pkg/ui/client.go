@@ -1189,6 +1189,9 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		detail.RunNowAt = obs.RunNowAt
 	}
 	detail.PendingSecret = c.pendingSecretFor(obs)
+	if obs != nil {
+		detail.PendingConfigChange = obs.PendingConfigChange
+	}
 	detail.LocalScriptApprovals = c.localScriptApprovals().ForTask(id, c.now())
 	detail.CI = ciStatusFrom(obs)
 	if ownerID, inPlace := t.CIOwner(); inPlace {
@@ -4184,7 +4187,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// sent as agentBackendId as the model choice it was.
 	var editModel *string
 	var isConsoleSessionTask bool
-	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.Priority != nil || req.KeepRunning != nil {
+	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
 		if existing, err := c.Store.GetTask(ctx, id); err == nil && existing != nil {
 			isConsoleSessionTask = existing.IsConsoleSession()
 		}
@@ -5473,20 +5476,24 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	if err != nil {
 		return err
 	}
-	if reopenAck && by.Actor.Kind == model.PrincipalHuman {
-		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
-		if err != nil || reopened {
-			return err
-		}
-	}
-	// A run that stopped with resume_later(when: {message: true}) is
-	// waiting for exactly this: anybody's post but its own.
+	// A run that stopped with resume_later(when: {message: true}) -- or a
+	// console session that ParkConsoleSessionTask both parked on a question
+	// and deferred on {message: true} -- is waiting for anybody's post but
+	// its own. Wake before reopenAcknowledgeable so the first human reply
+	// clears DeferredAt as well as PendingQuestionCommentID instead of
+	// returning early from reopenAcknowledgeable with the task still deferred.
 	wokeOnMessage := false
 	ownAgent := model.Principal{Kind: model.PrincipalAgent, ID: id}
 	if by.Actor != ownAgent && (by.OnBehalfOf == nil || *by.OnBehalfOf != ownAgent) {
 		var err error
 		wokeOnMessage, err = c.Store.WakeOnMessage(ctx, id, now)
 		if err != nil {
+			return err
+		}
+	}
+	if reopenAck && by.Actor.Kind == model.PrincipalHuman {
+		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
+		if err != nil || reopened {
 			return err
 		}
 	}
