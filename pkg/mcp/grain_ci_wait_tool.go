@@ -350,19 +350,16 @@ func NewGrainCIReadTools(runner GrainCIRunner, scope CIRepoScope, branch ...stri
 				runID, _ := argString(args, "run_id")
 				runID = strings.TrimSpace(runID)
 				if runID == "" {
-					defaultRepo := scope.Repo
-					if defaultRepo == "" && !scope.AllRepos && len(scope.Reads) == 1 {
-						defaultRepo = scope.Reads[0]
-					}
+					defaultRepo := scope.defaultRepo()
 					if defaultRepo == "" && !scope.AllRepos {
 						return Result{Text: "Specify run_id (list_ci_runs reports the runs this run may read).", IsError: true}
 					}
 					var page ci.RunPage
 					var err error
-					if taskBranch != "" && scope.Repo != "" {
+					if taskBranch != "" && strings.TrimSpace(scope.Repo) != "" {
 						page, err = runner.FindGrainCIRuns(ctx, ci.RunFilter{Repo: defaultRepo, Ref: taskBranch, Descending: true}, 1)
 					}
-					if taskBranch == "" || scope.Repo == "" || err != nil || len(page.Runs) == 0 {
+					if taskBranch == "" || strings.TrimSpace(scope.Repo) == "" || err != nil || len(page.Runs) == 0 {
 						page, err = runner.FindGrainCIRuns(ctx, ci.RunFilter{Repo: defaultRepo, Descending: true}, 1)
 					}
 					if err != nil || len(page.Runs) == 0 {
@@ -483,10 +480,13 @@ func NewGrainCIReadTools(runner GrainCIRunner, scope CIRepoScope, branch ...stri
 				repo, _ := argString(args, "repo")
 				repo = strings.TrimSpace(repo)
 				if repo == "" {
-					repo = scope.Repo
-					if repo == "" && !scope.AllRepos && len(scope.Reads) == 1 {
-						repo = scope.Reads[0]
+					repo = scope.defaultRepo()
+				}
+				if repo == "" && !scope.AllRepos {
+					if !scope.mayReadAny() {
+						return Result{Text: scope.refuseAll().Error(), IsError: true}
 					}
+					return Result{Text: scope.refuseMissingRepo().Error(), IsError: true}
 				}
 				if !scope.permits(repo) {
 					if !scope.mayReadAny() {

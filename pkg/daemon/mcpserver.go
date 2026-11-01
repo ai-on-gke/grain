@@ -753,10 +753,22 @@ func grainCIReader(client *ui.HTTPClient, taskID string, grants GrantNames) mcp.
 // own task's repository here like any other run, since another team's
 // CI is another team's work.
 func CiRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.CIRepoScope {
+	own := strings.TrimSpace(prRepo)
+	wide := grants.Has(selfdebug.CapabilityName) &&
+		slices.Contains(deploymentWide, selfdebug.CapabilityName)
+	apiGrants := model.APIGrantsOf(grants)
+	if wide || apiGrants.Allows("ci:read", "") {
+		return mcp.CIRepoScope{Repo: own, AllRepos: true}
+	}
+	var extra []string
+	for _, r := range apiGrants.Repos("ci:read") {
+		if own == "" || !strings.EqualFold(r, own) {
+			extra = append(extra, r)
+		}
+	}
 	return mcp.CIRepoScope{
-		Repo: strings.TrimSpace(prRepo),
-		AllRepos: grants.Has(selfdebug.CapabilityName) &&
-			slices.Contains(deploymentWide, selfdebug.CapabilityName),
+		Repo:  own,
+		Reads: extra,
 	}
 }
 
@@ -2287,12 +2299,8 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		for _, r := range apiGrants.Repos("tasks:read") {
 			addTaskRepo(r)
 		}
-		for _, name := range grants {
-			parsed, isAPI, err := model.ParseAPIGrant(name)
-			if !isAPI || err != nil || parsed.Repo == "" || !slices.Contains(parsed.Scopes, "ci:read") {
-				continue
-			}
-			addAllowedRepo(parsed.Repo)
+		for _, r := range apiGrants.Repos("ci:read") {
+			addAllowedRepo(r)
 		}
 		registry.Register(mcp.NewNamespaceTools(mcp.NamespaceToolsConfig{
 			Scope: namespace.Scope{

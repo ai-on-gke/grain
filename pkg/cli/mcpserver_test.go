@@ -154,6 +154,12 @@ func TestCIRepoScopeFollowsTheRunsOwnRepositoryAndTheWideGrant(t *testing.T) {
 		{"a task with no repository", "", daemon.GrantNames{"grain-ci"}, nil, mcp.CIRepoScope{}},
 		{"no repository, but the wide grant", "", daemon.GrantNames{selfdebug.CapabilityName},
 			[]string{selfdebug.CapabilityName}, mcp.CIRepoScope{AllRepos: true}},
+		{"grain-ci plus repo-scoped api:ci-read", "acme/widgets",
+			daemon.GrantNames{"grain-ci", "api:ci-read@acme/other"}, nil,
+			mcp.CIRepoScope{Repo: "acme/widgets", Reads: []string{"acme/other"}}},
+		{"grain-ci plus unscoped api:ci-read", "acme/widgets",
+			daemon.GrantNames{"grain-ci", "api:ci-read"}, nil,
+			mcp.CIRepoScope{Repo: "acme/widgets", AllRepos: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := daemon.CiRepoScope(tc.repo, tc.grants, tc.wide); !reflect.DeepEqual(got, tc.want) {
@@ -407,6 +413,21 @@ func TestServeMCPServerRegistersReadOnlyCIToolsForRepoScopedCIReadGrant(t *testi
 				Repo:       "acme/other",
 				Conclusion: ci.ConclusionFailure,
 			})
+		case "/api/ci/runs":
+			if got := r.URL.Query().Get("repo"); got != "acme/widgets" {
+				http.Error(w, "unscoped or wrong repo query: "+got, http.StatusForbidden)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(ui.CIRunsResponse{
+				Runs: []ci.Run{{
+					ID:         "1201",
+					Repo:       "acme/widgets",
+					Ref:        "main",
+					Conclusion: ci.ConclusionFailure,
+				}},
+				Matched: 1,
+				Stored:  2,
+			})
 		case "/api/ci/faults":
 			_ = json.NewEncoder(w).Encode([]any{})
 		default:
@@ -424,6 +445,7 @@ func TestServeMCPServerRegistersReadOnlyCIToolsForRepoScopedCIReadGrant(t *testi
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_ci_log","arguments":{"run_id":"1201"}}}`,
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_ci_log","arguments":{"run_id":"9999"}}}`,
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_ci_runs","arguments":{}}}`,
 	}, "\n") + "\n"
 
 	// 1. On the full surface, get_ci_log and list_ci_runs are registered
@@ -509,6 +531,14 @@ func TestServeMCPServerRegistersReadOnlyCIToolsForRepoScopedCIReadGrant(t *testi
 	}
 	if !refused.IsError || len(refused.Content) == 0 || !strings.Contains(refused.Content[0].Text, "acme/other") {
 		t.Errorf("get_ci_log 9999 = %+v, want scope refusal naming acme/other", refused)
+	}
+
+	var listedRuns callResult
+	if err := json.Unmarshal(byID[5], &listedRuns); err != nil {
+		t.Fatalf("list_ci_runs: %v", err)
+	}
+	if listedRuns.IsError || len(listedRuns.Content) == 0 || !strings.Contains(listedRuns.Content[0].Text, "1201") {
+		t.Errorf("list_ci_runs = %+v, want run 1201 from pinned acme/widgets query", listedRuns)
 	}
 
 	// 2. On the control surface, GitHub's pull_request_status,

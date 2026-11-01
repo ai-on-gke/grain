@@ -698,7 +698,7 @@ func scheduleReviewsWorkflowRun(sched Schedule, tmpl *Template) (CompositionLaye
 // read-only CI access (grain ci log / list_ci_runs / get_ci_log) for that
 // repository.
 func applyWorkflowReviewCIReadGrant(comp *Composition, from CompositionLayer) {
-	if comp.Target == nil {
+	if comp.Target == nil || *comp.Target == (RepoRef{}) {
 		return
 	}
 	repo := comp.Target.String()
