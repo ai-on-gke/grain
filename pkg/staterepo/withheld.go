@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -53,21 +54,37 @@ var withheldColumns = map[string][]string{
 	"grain_config": {"google_oauth_client_secret"},
 }
 
-// isWithheld reports whether column of table is one withheldColumns
-// names.
+// declaredColumns names the settings-table columns a target repository's
+// own `.grain/settings.yml` owns, keyed by table. They are withheld the
+// same three ways as withheldColumns, for a different reason: the
+// declaration sync writes them from the repository's default branch and
+// rewrites them only when that branch moves, so a value set from the
+// state repository would otherwise stick -- and be appended to every
+// prompt or setup script for the repository -- until the next merge
+// there, or forever on a repository with declarations off
+// (design/spec/settings/settings-mutability.spec.md §2.8.2). The value
+// lives in the target repository, which is where it is edited.
+var declaredColumns = map[string][]string{
+	"repo_config": {"declared_prompt_extension", "declared_setup_command",
+		"declared_port_branches", "declared_port_types"},
+}
+
+// isWithheld reports whether column of table is one withheldColumns or
+// declaredColumns names.
 func isWithheld(table, column string) bool {
-	for _, c := range withheldColumns[table] {
-		if c == column {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(withheldColumns[table], column) ||
+		slices.Contains(declaredColumns[table], column)
+}
+
+// withheldNames is every column of table isWithheld reports.
+func withheldNames(table string) []string {
+	return append(slices.Clone(withheldColumns[table]), declaredColumns[table]...)
 }
 
 // withoutWithheld is cols minus the columns of table withheldColumns
 // names, in the same order.
 func withoutWithheld(table string, cols []column) []column {
-	if len(withheldColumns[table]) == 0 {
+	if len(withheldNames(table)) == 0 {
 		return cols
 	}
 	out := make([]column, 0, len(cols))

@@ -329,15 +329,20 @@ func TestReconcileSandboxesDetectsDiscrepanciesReapsOrphansAndReports(t *testing
 	}
 }
 
-func TestCommittedNeverExceedsBudgetPlusExceptionAcrossAllPaths(t *testing.T) {
+// Committed never exceeds the budget, plus at most one deadlock-breaking
+// exception, plus one sandbox per live console session (priority
+// dispatch): sessions are never held by the budget (Budget.AdmitsPriority,
+// docs/sandbox-budget.md), and everything else is.
+func TestCommittedNeverExceedsBudgetPlusExceptionAndSessionsAcrossAllPaths(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStoreForOrchestrator(t)
 	now := time.Date(2026, 10, 24, 2, 0, 0, 0, time.UTC)
 
 	// Budget: 16 vCPU / 32 GiB. Each standard sandbox is 4 vCPU / 8 GiB (4 slots total).
-	// At most ONE exception sandbox (4 vCPU / 8 GiB) may exceed the cap (max 20 vCPU / 40 GiB).
+	// The three sessions below may each exceed the cap by their own sandbox
+	// (max 28 vCPU / 56 GiB); nothing else may push committed past it.
 	shape := model.Commitment{CPUs: 4, MemoryMB: 8 * 1024}
-	maxAllowedWithException := model.Commitment{CPUs: 20, MemoryMB: 40 * 1024}
+	maxAllowedWithException := model.Commitment{CPUs: 28, MemoryMB: 56 * 1024}
 	budget := model.Budget{
 		Host:             model.Commitment{CPUs: 16, MemoryMB: 32 * 1024},
 		CPUOvercommit:    1,
@@ -389,8 +394,8 @@ func TestCommittedNeverExceedsBudgetPlusExceptionAcrossAllPaths(t *testing.T) {
 	assertBound("after worker dispatch cycle")
 
 	// 4. Now queue 2 director tasks while budget is at 100% cap (16 vCPU / 32 GiB).
-	// At most 1 director exception may be admitted (bringing live to 20 vCPU / 40 GiB);
-	// the second director must wait.
+	// Both are admitted (bringing live to 24 vCPU / 48 GiB): a session is
+	// never held by the budget; the waiting worker w-3 still is.
 	for i := 1; i <= 2; i++ {
 		if err := st.PutTask(ctx, makeTestTask(fmt.Sprintf("d-%d", i), true)); err != nil {
 			t.Fatal(err)
@@ -400,16 +405,16 @@ func TestCommittedNeverExceedsBudgetPlusExceptionAcrossAllPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dispatchedDirs) != 1 {
-		t.Fatalf("expected at most 1 director exception dispatched over full budget, got %+v", dispatchedDirs)
+	if len(dispatchedDirs) != 2 {
+		t.Fatalf("expected both directors dispatched over a full budget, got %+v", dispatchedDirs)
 	}
-	assertBound("after director exception dispatch cycle")
-	if got := ledger.Live(); got != maxAllowedWithException {
-		t.Fatalf("after director exception dispatch, live = %s, want %s", got, maxAllowedWithException)
+	assertBound("after director dispatch cycle")
+	if got, want := ledger.Live(), (model.Commitment{CPUs: 24, MemoryMB: 48 * 1024}); got != want {
+		t.Fatalf("after director dispatch, live = %s, want %s", got, want)
 	}
 
-	// While at the exception ceiling (20 vCPU / 40 GiB), neither another
-	// director (d-3) nor a Stuck CI job can push committed higher.
+	// While over the cap, a third director (d-3) is still admitted, and
+	// nothing else is: neither the waiting worker nor a Stuck CI job.
 	if err := st.PutTask(ctx, makeTestTask("d-3", true)); err != nil {
 		t.Fatal(err)
 	}
@@ -417,10 +422,10 @@ func TestCommittedNeverExceedsBudgetPlusExceptionAcrossAllPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dispatchedOver) != 0 {
-		t.Fatalf("expected 0 dispatches while already over cap by an exception, got %+v", dispatchedOver)
+	if len(dispatchedOver) != 1 || dispatchedOver[0].TaskID != "d-3" {
+		t.Fatalf("expected only d-3 dispatched while over cap, got %+v", dispatchedOver)
 	}
-	assertBound("after blocked second exception")
+	assertBound("after a third session over the cap")
 
 	gate := &ci.SharedGate{
 		Budget: func() model.Budget { return budget },

@@ -197,6 +197,12 @@ CLI flag `-session-sandbox-idle-ttl`, default `30m`; set to `-1s` to disable):
    `agent.SuspendedReusedSandboxPreamble`) explicitly tells the agent that
    **the sandbox is the same one** so it does not redo setup.
 
+A session's run is admitted the moment it is ready, however full the
+worker pool and the sandbox budget are. Only the host disk floor, a cluster
+with no node for the pod, or having no connection to run its model on can
+hold it, and a refusal is logged as a warning that names the gate
+([Sandbox budget](sandbox-budget.md#sessions-are-never-held-by-the-budget)).
+
 Held session sandboxes are counted honestly against the deployment's sandbox
 budget and `MaxWorkers`, shown on **System → Sandboxes** with kind and status
 `"idle session"`, and released when the idle TTL expires, when the session

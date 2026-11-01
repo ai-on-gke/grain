@@ -1119,9 +1119,9 @@ jobs:
   terraform:
     capabilities: []
     name: terraform
-    # deploy/terraform/gcp and deploy/gke/terraform: Format checks both
-    # Terraform modules and Validate validates each against the provider schema.
-    paths: [deploy/terraform/**, deploy/gke/terraform/**]
+    # deploy/terraform/gcp: Format checks the whole of deploy/terraform
+    # rather than gcp's own directory alone.
+    paths: [deploy/terraform/**]
     timeout-minutes: 15
     steps:
       # -diff so a formatting failure shows what to change, rather than
@@ -1130,21 +1130,11 @@ jobs:
         working-directory: deploy/terraform/gcp
         run: |
           terraform version
-          terraform fmt -check -recursive -diff ../..
+          terraform fmt -check -recursive -diff ..
 
       - name: Init
         working-directory: deploy/terraform/gcp
         run: |
-          for i in 1 2 3 4 5; do
-            if terraform init -backend=false -input=false; then
-              break
-            fi
-            if [ "$i" -eq 5 ]; then
-              exit 1
-            fi
-            sleep 2
-          done
-          cd ../../gke/terraform
           for i in 1 2 3 4 5; do
             if terraform init -backend=false -input=false; then
               exit 0
@@ -1157,9 +1147,7 @@ jobs:
 
       - name: Validate
         working-directory: deploy/terraform/gcp
-        run: |
-          terraform validate
-          terraform -chdir=../../gke/terraform validate
+        run: terraform validate
 
   # tests/installer, against an image assembled rather than rebuilt.
   #

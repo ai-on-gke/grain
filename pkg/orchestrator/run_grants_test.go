@@ -34,7 +34,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -177,7 +176,6 @@ func TestRunCycleForwardsAllKnownToolGrants(t *testing.T) {
 		grainlog.CapabilityName,
 		deploymenthealth.CapabilityName,
 		bootstrap.CapabilityName,
-		selfupgrade.CapabilityName,
 		grainci.CapabilityName,
 		readissues.CapabilityName,
 	}

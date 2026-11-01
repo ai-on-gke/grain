@@ -146,6 +146,8 @@ export function settingLabel(field) {
   return SETTING_LABELS[field] || field;
 }
 
+export { settingLocation } from "./settingsIndex.js";
+
 // SETTING_MINS is the lower bound on each bounded numeric setting, matching
 // both the input's own `min` in components/settings and the check in
 // pkg/ui/settings.go. Keeping the table here lets useSettingsSection

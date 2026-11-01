@@ -754,9 +754,14 @@ func patchTouchesTaskGrants(body []byte) bool {
 			continue
 		}
 		if strings.Contains(lower, "capabilit") || lower == "grants" ||
-			lower == "prioritydispatch" || lower == "priority_dispatch" ||
 			lower == "keeprunning" || lower == "keep_running" {
 			return true
+		}
+		if lower == "priority" {
+			var b bool
+			if json.Unmarshal(raw, &b) == nil {
+				return true
+			}
 		}
 	}
 	return false
@@ -1127,6 +1132,11 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 	}
 	if pathParam.MatchString(pathOf(pattern)) {
 		return "", nil
+	}
+	if pattern == "POST /api/tests/quarantine" && acting != nil {
+		if own := taskRepo(acting); own != "" {
+			return own, nil
+		}
 	}
 	// A read-only collection asked for without ?repo= by a task that
 	// reaches it on some repositories only lists the one it reaches --

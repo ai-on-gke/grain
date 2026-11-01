@@ -781,6 +781,23 @@ export const SETTINGS_INDEX = [
   },
 ];
 
+const SETTING_BY_ID = new Map(
+  SETTINGS_INDEX.filter((e) => !e.card).map((e) => [e.id, e]),
+);
+
+// settingLocation is the Settings section and card anchor that hold a
+// setting key (the keys in GET /api/settings's pendingRestart and
+// unrunnable), or null for a key no section draws.
+export function settingLocation(id) {
+  const entry = SETTING_BY_ID.get(id);
+  if (!entry) return null;
+  return {
+    section: entry.section,
+    anchor: entry.anchor,
+    href: `/settings/${entry.section}#${entry.anchor}`,
+  };
+}
+
 // matchSettings is the filter's answer for a query: the entries whose
 // label, then keywords, fuzzy-match it, best first. Values are never
 // searched (§3.3's decision).

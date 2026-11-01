@@ -219,4 +219,20 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 	if code, resp := doExtPatch("/api/tasks/4", `{"priority": 6}`); code != http.StatusForbidden || !strings.Contains(resp, "tasks:admin") {
 		t.Errorf("external cross-repo PATCH /api/tasks/4: status %d (%s), want 403 naming tasks:admin", code, resp)
 	}
+
+	// Boolean "priority" / "priorityDispatch" toggles PriorityDispatchCapability
+	// rather than numeric Task.Priority, so tasks:admin alone must refuse it.
+	for _, grantPayload := range []string{
+		`{"priority": true}`,
+		`{"priority": false}`,
+		`{"priorityDispatch": true}`,
+		`{"priority_dispatch": true}`,
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", grantPayload, "testing"); code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 with %s under api:tasks:admin: status %d (%s), want 403", grantPayload, code, resp)
+		}
+		if code, resp := doExtPatch("/api/tasks/2", grantPayload); code != http.StatusForbidden {
+			t.Errorf("external PATCH /api/tasks/2 with %s under tasks:admin: status %d (%s), want 403", grantPayload, code, resp)
+		}
+	}
 }

@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
@@ -442,6 +443,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		return err
 	}
 	relayedInProcess := takeInProcessRelayed(store, runID)
+	keepRunning := taskKeepRunning(ctx, store, task)
 
 	// A goal task (model.TaskGoal, docs/design/durable-tasks.md#DT-4) is
 	// never completed or closed on its agent's word: a closing comment,
@@ -454,7 +456,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			waitingMessage = true
 		}
 	}
-	if !waitingMessage {
+	if !waitingMessage && !keepRunning {
 		finalText := !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && strings.TrimSpace(result.FinalText) != "" &&
 			!taskPaused(ctx, store, task.ID)
 		if relayedInProcess || hasComment || hasNothingNeeded || finalText {
@@ -495,6 +497,12 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			if err := retireStaleBranch(ctx, store, task, now); err != nil {
 				return err
 			}
+		}
+		if keepRunning {
+			markKeepRunningRequeued(store, task.ID, runID, true)
+			return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+				o.CompletedAt = nil
+			})
 		}
 		return finishNothingNeeded(ctx, store, task, runID, now)
 	}
@@ -539,6 +547,13 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		log.Printf("orchestrator: task %s run %s: a message was posted that the run was never shown; "+
 			"leaving the task ready to be dispatched for it", task.ID, runID)
 		return nil
+	}
+
+	if keepRunning {
+		markKeepRunningRequeued(store, task.ID, runID, false)
+		return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+			o.CompletedAt = nil
+		})
 	}
 
 	// A closing comment ends the task, and so does a review that posted
@@ -823,6 +838,12 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 				if err := noteOnTask(ctx, store, task.ID, note, now); err != nil {
 					return true, err
 				}
+				if taskKeepRunning(ctx, store, task) {
+					markKeepRunningRequeued(store, task.ID, "", false)
+					return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+						o.CompletedAt = nil
+					})
+				}
 				return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
 					o.CompletedAt = &now
 					o.RetryRequestedAt = nil
@@ -834,6 +855,10 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 		// Work that already landed is an ending, not a failure: no pull
 		// request, the task told and marked done (finishAlreadyLanded).
 		if landed, ok := alreadyLanded(err); ok {
+			if taskKeepRunning(ctx, store, task) {
+				markKeepRunningRequeued(store, task.ID, "", false)
+				return true, noteOnTask(ctx, store, task.ID, landed.Error(), now)
+			}
 			return true, finishAlreadyLanded(ctx, store, task, landed, now)
 		}
 		// A branch with nothing on it is the one failure here that is not
@@ -843,6 +868,9 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 		// ProcessResult, RunCycle and recoverRun, which want three
 		// different outcomes on the row and the same thing on the task.
 		if empty, ok := emptyBranch(err); ok {
+			if taskKeepRunning(ctx, store, task) {
+				return false, nil
+			}
 			if noteErr := noteEmptyBranch(ctx, store, task, empty, now); noteErr != nil {
 				// Deliberately not wrapping err: the task was *not*
 				// told, so this is an ordinary failure to report and
@@ -1568,6 +1596,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			nothingNeeded, _ = model.ParseNothingNeededAction(strings.TrimSpace(v))
 		}
 		noPort, _ := p["no_port"].(bool)
+		keepRunning, keepRunningSet := p["keep_running"].(bool)
 		fixesBase, _ := p["fixes_base_branch"].(bool)
 		priority := model.DefaultTaskPriority
 		var hasExplicitPriority bool
@@ -1618,6 +1647,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					priority = comp.Priority
 				}
 				interactive = comp.Interactive
+				if !keepRunningSet {
+					keepRunning = comp.KeepRunning
+				}
 			}
 		}
 
@@ -1809,6 +1841,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			AgentBackendID:      agentBackendID,
 			Model:               agentModel,
 			NothingNeededAction: nothingNeeded,
+			KeepRunning:         keepRunning,
 			NoPort:              noPort,
 			WorkOrigin:          explicitOrigin,
 			// What the run asked this proposal to say about this
@@ -2862,9 +2895,89 @@ func finishWithPullRequest(ctx context.Context, store *model.Store, client githu
 			"it is judged again before it merges", ref, err)
 	}
 
+	if taskKeepRunning(ctx, store, task) {
+		markKeepRunningRequeued(store, task.ID, "", false)
+		return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+			o.CompletedAt = nil
+		})
+	}
 	return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
 		o.CompletedAt = &now
 		o.RetryRequestedAt = nil
+	})
+}
+
+func taskKeepRunning(ctx context.Context, store *model.Store, task model.Task) bool {
+	if store != nil && task.ID != "" {
+		if fresh, err := store.GetTask(ctx, task.ID); err == nil && fresh != nil {
+			return fresh.KeepRunning
+		}
+	}
+	return task.KeepRunning
+}
+
+type keepRunningPending struct {
+	runID         string
+	nothingNeeded bool
+}
+
+var keepRunningRequeued sync.Map // map[*model.Store]*sync.Map (taskID -> keepRunningPending)
+
+func markKeepRunningRequeued(store *model.Store, taskID, runID string, nothingNeeded bool) {
+	if store == nil || taskID == "" {
+		return
+	}
+	v, _ := keepRunningRequeued.LoadOrStore(store, &sync.Map{})
+	v.(*sync.Map).Store(taskID, keepRunningPending{runID: runID, nothingNeeded: nothingNeeded})
+}
+
+func clearKeepRunningRequeued(store *model.Store, taskID string) {
+	if store == nil || taskID == "" {
+		return
+	}
+	if v, ok := keepRunningRequeued.Load(store); ok {
+		v.(*sync.Map).Delete(taskID)
+	}
+}
+
+func settleStoppedKeepRunningTasks(ctx context.Context, store *model.Store, now time.Time) {
+	if store == nil {
+		return
+	}
+	v, ok := keepRunningRequeued.Load(store)
+	if !ok {
+		return
+	}
+	m := v.(*sync.Map)
+	m.Range(func(key, value any) bool {
+		taskID := key.(string)
+		pending := value.(keepRunningPending)
+		t, err := store.GetTask(ctx, taskID)
+		if err != nil || t == nil {
+			m.Delete(taskID)
+			return true
+		}
+		if t.KeepRunning {
+			return true
+		}
+		m.Delete(taskID)
+		st, err := store.State(ctx, taskID)
+		if err != nil || st != model.StateQueued {
+			return true
+		}
+		if goal, _ := store.TaskGoal(ctx, taskID); goal != nil {
+			_, _ = restOnGoal(ctx, store, *t, pending.runID, now)
+			return true
+		}
+		if pending.nothingNeeded {
+			_ = finishNothingNeeded(ctx, store, *t, pending.runID, now)
+			return true
+		}
+		_ = observeField(ctx, store, taskID, now, func(o *model.Observation) {
+			o.CompletedAt = &now
+			o.RetryRequestedAt = nil
+		})
+		return true
 	})
 }
 

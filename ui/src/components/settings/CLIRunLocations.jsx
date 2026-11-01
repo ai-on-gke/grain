@@ -339,9 +339,13 @@ export function HostdProcesses({ hostd }) {
 // /api/settings/cli-run and applied to that CLI's next run. Each row
 // shows where the daemon will run it and why (GET /api/settings/cli-run's
 // resolved list).
-export default function CLIRunLocations({ showError, onSaved }) {
-  const [loaded, setLoaded] = useState(null);
-  const [draft, setDraft] = useState({});
+export default function CLIRunLocations({
+  showError,
+  onSaved,
+  initialLoaded = undefined,
+}) {
+  const [loaded, setLoaded] = useState(() => initialLoaded ?? null);
+  const [draft, setDraft] = useState(() => initialLoaded?.settings || {});
   const [saving, setSaving] = useState(false);
 
   const reload = useCallback(async () => {
@@ -354,8 +358,9 @@ export default function CLIRunLocations({ showError, onSaved }) {
     }
   }, [showError]);
   useEffect(() => {
+    if (initialLoaded !== undefined) return;
     reload();
-  }, [reload]);
+  }, [initialLoaded, reload]);
 
   if (!loaded) return null;
   const resolved = Object.fromEntries(

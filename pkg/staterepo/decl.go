@@ -198,6 +198,7 @@ var booleanKeys = map[string]bool{
 	"enabled":                true,
 	"require-approval":       true,
 	"interactive":            true,
+	"keep-running":           true,
 }
 
 // declKinds is the three of them, built from pkg/declschema so the keys,
@@ -356,7 +357,7 @@ func dumpRowsOf(dir, table string) ([]map[string]any, bool, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			// settings/capabilities.yml may still speak for it.
-			return overlayCapabilities(dir, table, nil, false)
+			return overlaySettingsFiles(dir, table, nil, false)
 		}
 		return nil, false, fmt.Errorf("staterepo: reading %s: %w", path, err)
 	}
@@ -366,7 +367,18 @@ func dumpRowsOf(dir, table string) ([]map[string]any, bool, error) {
 	}
 	// The columns settings/capabilities.yml projects onto read as the
 	// file says (capabilities_file.go).
-	return overlayCapabilities(dir, table, rows, true)
+	return overlaySettingsFiles(dir, table, rows, true)
+}
+
+// overlaySettingsFiles puts the settings files that project onto
+// columns -- settings/capabilities.yml and settings/new-task-form.yml --
+// over the rows tables/ holds.
+func overlaySettingsFiles(dir, table string, rows []map[string]any, present bool) ([]map[string]any, bool, error) {
+	rows, present, err := overlayCapabilities(dir, table, rows, present)
+	if err != nil {
+		return nil, false, err
+	}
+	return overlayNewTaskForm(dir, table, rows, present)
 }
 
 // declDocument is one settings file, parsed: the entries in the order
@@ -538,7 +550,10 @@ func exportDeclarations(ctx context.Context, db querier, dir string) error {
 			return err
 		}
 	}
-	return exportCapabilities(ctx, db, dir)
+	if err := exportCapabilities(ctx, db, dir); err != nil {
+		return err
+	}
+	return exportNewTaskForm(ctx, db, dir)
 }
 
 // declDocumentFor renders one kind's whole file.

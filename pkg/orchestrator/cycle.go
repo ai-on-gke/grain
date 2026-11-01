@@ -1067,6 +1067,7 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 		}
 	}
 	defer unlockDispatch()
+	settleStoppedKeepRunningTasks(ctx, deps.Store, now)
 	// Nothing is dispatched onto a credential that has no budget left: a
 	// task started now would spend a sandbox and an attempt reaching the
 	// same refusal the run that closed that gate already reached
@@ -1370,6 +1371,18 @@ func releaseFramework(f agent.Framework) {
 	}
 }
 
+// The gates grantAdmitter names on a refusal (dispatch.Admission.Gate),
+// so a log line saying a candidate was refused says which one did.
+const (
+	// admissionGateModel is Deps.ModelAvailability: no connection that
+	// could serve the task's model can take it now -- every one is paused
+	// after a usage limit, disabled, draining or (for ordinary work)
+	// busy.
+	admissionGateModel = "model availability"
+	// admissionGatePolicy is local policy (checkPolicy).
+	admissionGatePolicy = "local policy"
+)
+
 // grantAdmitter reserves finite capability resources before dispatch records a
 // run. A full pool declines only this candidate, leaving Cycle free to fill the
 // same worker capacity with later tasks that do not need it.
@@ -1405,7 +1418,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 					}); setErr != nil {
 						return dispatch.Admission{}, setErr
 					}
-					return dispatch.Admission{}, nil
+					return dispatch.Admission{Gate: admissionGateModel, Reason: reason}, nil
 				}
 			}
 			frameworks[candidate.RunID] = reservedFramework{
@@ -1466,7 +1479,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 				}); err != nil {
 					return dispatch.Admission{}, err
 				}
-				return dispatch.Admission{}, nil
+				return dispatch.Admission{Gate: admissionGateModel, Reason: reason}, nil
 			}
 		}
 		// Every path out of here that admits the candidate has decided
@@ -1504,7 +1517,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 				if setErr := recordPolicyRefusal(callCtx, deps, *task, policyStageAdmission, err, at); setErr != nil {
 					return dispatch.Admission{}, setErr
 				}
-				return dispatch.Admission{}, nil
+				return dispatch.Admission{Gate: admissionGatePolicy, Reason: err.Error()}, nil
 			}
 		}
 		if deps.Config.Capabilities == nil || !hasScarceGrant(deps.Config.Capabilities, *task) {
@@ -1539,7 +1552,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 			}); setErr != nil {
 				return dispatch.Admission{}, setErr
 			}
-			return dispatch.Admission{}, nil
+			return dispatch.Admission{Gate: "capability " + capability, Reason: "exhausted: " + resource}, nil
 		}
 		if err != nil {
 			// Preserve the established behavior for configuration and provider
@@ -2433,11 +2446,12 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// name recorded is the sandbox this run actually uses.
 	var warmSandbox *warmSessionSandbox
 	var sandboxReclaimed bool
+	clearKeepRunningRequeued(deps.Store, task.ID)
 	sandboxKey := sessionSandboxKey(shape, *task, prepared)
-	if task.Interactive {
+	if task.Interactive || task.KeepRunning {
 		warmSandbox, sandboxReclaimed = claimWarmSessionSandbox(deps, task.ID, now)
 		if warmSandbox != nil && warmSandbox.Key != sandboxKey {
-			log.Printf("orchestrator: run %s (task %s): not reusing warm sandbox %s: its shape, target or grants changed",
+			log.Printf("orchestrator: run %s (task %s): not reusing warm sandbox %s: its shape, target, repos or grants changed",
 				d.RunID, d.TaskID, warmSandbox.SandboxID)
 			releaseWarmSandboxEntry(context.WithoutCancel(ctx), warmSandbox)
 			warmSandbox, sandboxReclaimed = nil, true
@@ -2445,6 +2459,8 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		if !sandboxReclaimed && warmSandbox == nil && d.Attempt > 1 {
 			sandboxReclaimed = true
 		}
+	} else {
+		sandboxReclaimed = discardWarmSessionSandbox(context.WithoutCancel(ctx), deps, task.ID)
 	}
 	sandboxReused := warmSandbox != nil
 	sandboxName := d.RunID
@@ -2837,8 +2853,8 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	}
 
 	afterErr := afterAgentRun(ctx, deps, *task, d.RunID, result, runErr, preRunBranchSHA, preRunBranchSHA, now)
-	if afterErr == nil && runErr == nil && task.Interactive && deps.Store != nil {
-		cleanupCtx := context.WithoutCancel(ctx)
+	cleanupCtx := context.WithoutCancel(ctx)
+	if afterErr == nil && runErr == nil && deps.Store != nil && (task.Interactive || taskKeepRunning(cleanupCtx, deps.Store, *task)) {
 		finishNow := now
 		if deps.Config.Now != nil {
 			finishNow = deps.Config.Now()
