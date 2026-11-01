@@ -64,10 +64,12 @@ export default function InfoPopover({ title, label, testId, sx }) {
           setOpen((prev) => !prev);
         }}
         onKeyDown={(e) => {
+          // Enter and Space reach onClick above through ButtonBase, which
+          // clicks a non-native button on Enter's keydown and Space's
+          // keyup; toggling here as well would undo that toggle. Only
+          // keep the key from the row or link the button sits in.
           if (e.key === "Enter" || e.key === " ") {
             e.stopPropagation();
-            e.preventDefault();
-            setOpen((prev) => !prev);
           } else if (e.key === "Escape") {
             setOpen(false);
           }

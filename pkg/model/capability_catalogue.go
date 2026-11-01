@@ -35,6 +35,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -321,6 +322,63 @@ func (c *CapabilityCatalogue) judgeRef(g string, gc GrantContext) (bool, error) 
 }
 
 func (c *CapabilityCatalogue) judgeAPI(g string, gc GrantContext) (bool, error) {
+	person, err := c.judgeRetiredInProcess(g, gc)
+	if err != nil {
+		return false, err
+	}
+	p, err := c.judgeAPIScopes(g, gc)
+	return person || p, err
+}
+
+// judgeRetiredInProcess applies the in_process entries a catalogue still
+// keeps under the bare name of a retired capability (memory,
+// release-notes, test-quarantine, ...) to the api: preset that replaced
+// it. A catalogue written before the retirement -- an upgraded store's
+// capability_policy, or a grain/config settings/capabilities.yml nobody
+// has edited since -- disabled or restricted the capability under that
+// name, and the migrations that rewrote stored grants to the preset do
+// not touch the catalogue: without this the restriction would stop
+// binding the moment the grant was renamed.
+func (c *CapabilityCatalogue) judgeRetiredInProcess(g string, gc GrantContext) (bool, error) {
+	person := false
+	for _, legacy := range retiredInProcessNames(g) {
+		entry, ok := c.InProcess[legacy]
+		if !ok {
+			continue
+		}
+		if entry.Enabled != nil && !*entry.Enabled {
+			return false, fmt.Errorf("capability %s is disabled in settings/capabilities.yml (in_process.%s, the capability it replaced)", g, legacy)
+		}
+		p, err := entry.Restrictions.judge(g, gc, nil)
+		if err != nil {
+			return false, fmt.Errorf("%v (in_process.%s, the capability it replaced)", err, legacy)
+		}
+		person = person || p
+	}
+	return person, nil
+}
+
+// retiredInProcessNames are the retired bare capabilities whose
+// replacement is the api: grant g (any @repo limit aside), sorted.
+func retiredInProcessNames(g string) []string {
+	what, _, _ := strings.Cut(strings.TrimPrefix(g, APIGrantPrefix), "@")
+	grant := APIGrantPrefix + what
+	var out []string
+	for legacy, to := range legacyGrantReplacements {
+		if to == grant {
+			out = append(out, legacy)
+		}
+	}
+	for legacy, tos := range legacyGrantMultiReplacements {
+		if slices.Contains(tos, grant) {
+			out = append(out, legacy)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (c *CapabilityCatalogue) judgeAPIScopes(g string, gc GrantContext) (bool, error) {
 	rest := strings.TrimPrefix(g, APIGrantPrefix)
 	what, _, _ := strings.Cut(rest, "@")
 	if p, ok := c.APIScopes.Presets[what]; ok {
