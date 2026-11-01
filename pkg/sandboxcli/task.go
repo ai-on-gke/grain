@@ -591,6 +591,10 @@ func (c *sandboxCLI) quarantine(p sandboxArgs) error {
 	if ans.FollowUpTaskID != "" {
 		fmt.Fprintf(c.out, "Follow-up repair task filed: #%s\n", ans.FollowUpTaskID)
 	}
+	if ans.FollowUpError != "" {
+		fmt.Fprintf(c.errOut, "grain: the test is quarantined, but its follow-up repair task was not filed: %s -- file one with grain task propose\n", ans.FollowUpError)
+		return errSandboxReported
+	}
 	return nil
 }
 
