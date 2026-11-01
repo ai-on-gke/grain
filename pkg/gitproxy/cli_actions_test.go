@@ -757,6 +757,168 @@ func TestCLIWaitEndsRunningWhenDaemonShutdownStarts(t *testing.T) {
 	}
 }
 
+// A wait on a run grain cancelled to make way for a newer one for the
+// same task -- grain ci run-job b, then grain ci wait starting the full
+// run, as the U5 walk (docs/test-runs/2026-10-29-grit-backend-ci-
+// shutdown.md) did -- follows the newer run, as wait_for_checks does,
+// rather than reporting the cancellation as a failure. A run-job is
+// answered by its own job in the run it followed into.
+func TestCLIWaitFollowsTheRunThatSupersededIt(t *testing.T) {
+	defer gitproxy.SetCLIWaitIntervals(5*time.Millisecond, 10*time.Millisecond)()
+	superseded := func(id, by, commit string) ci.Run {
+		return ci.Run{ID: id, Repo: "bwsalmon/grain", Ref: "grain/task-7", Commit: commit,
+			Conclusion: ci.ConclusionCancelled, CancelledBy: ci.CancelBySystem,
+			CancelReason: ci.SupersededByRunReason(by),
+			Jobs:         []ci.JobRun{{Name: "go", Conclusion: ci.ConclusionCancelled}}}
+	}
+	full := func(id, commit string, conclusion ci.Conclusion, jobs ...ci.JobRun) ci.Run {
+		return ci.Run{ID: id, Repo: "bwsalmon/grain", Ref: "grain/task-7", Commit: commit, Conclusion: conclusion, Jobs: jobs}
+	}
+	goPassed := ci.JobRun{Name: "go", Conclusion: ci.ConclusionSuccess}
+	actions := &fakeCLIActions{finishAt: -1, runs: map[string]ci.Run{
+		"sel":        superseded("sel", "full", "c1"),
+		"full":       full("full", "c1", ci.ConclusionFailure, goPassed, ci.JobRun{Name: "lint", Conclusion: ci.ConclusionFailure}),
+		"sel-live":   superseded("sel-live", "live", "c1"),
+		"live":       full("live", "c1", ci.ConclusionPending, ci.JobRun{Name: "go"}, ci.JobRun{Name: "lint", Conclusion: ci.ConclusionSuccess}),
+		"sel-done":   superseded("sel-done", "go-done", "c1"),
+		"go-done":    full("go-done", "c1", ci.ConclusionPending, goPassed, ci.JobRun{Name: "lint"}),
+		"chain":      superseded("chain", "chain-mid", "c1"),
+		"chain-mid":  superseded("chain-mid", "chain-end", "c1"),
+		"chain-end":  full("chain-end", "c1", ci.ConclusionSuccess, goPassed),
+		"moved":      superseded("moved", "elsewhere", "c1"),
+		"elsewhere":  full("elsewhere", "c2", ci.ConclusionSuccess, goPassed),
+		"narrow":     superseded("narrow", "lint-only", "c1"),
+		"lint-only":  full("lint-only", "c1", ci.ConclusionSuccess, ci.JobRun{Name: "lint", Conclusion: ci.ConclusionSuccess}),
+		"cycle":      superseded("cycle", "cycle-back", "c1"),
+		"cycle-back": superseded("cycle-back", "cycle", "c1"),
+	}}
+	h, _, _ := newActionProxy(t, actions)
+
+	for _, tc := range []struct {
+		path, body, status, runID, jobs string
+	}{
+		// A full-suite wait takes the newer run's verdict, failing lint and all.
+		{"/cli/ci/wait", `{"resume_run_id":"sel"}`, "failed", "full", "lint:failure go:success"},
+		// run-job go is answered by go alone, whatever lint did.
+		{"/cli/ci/run-job", `{"job":"go","resume_run_id":"sel"}`, "passed", "full", "go:success"},
+		// ... and by go finishing, before the rest of the run has.
+		{"/cli/ci/run-job", `{"job":"go","resume_run_id":"sel-done"}`, "passed", "go-done", "go:success"},
+		// Still running there: resume the run that will answer it.
+		{"/cli/ci/run-job", `{"job":"go","resume_run_id":"sel-live","timeout_seconds":1}`, "running", "live", "go:running"},
+		{"/cli/ci/wait", `{"resume_run_id":"chain"}`, "passed", "chain-end", "go:success"},
+		// Never into another commit, a run without the job, or round a loop.
+		{"/cli/ci/wait", `{"resume_run_id":"moved"}`, "failed", "moved", "go:cancelled"},
+		{"/cli/ci/run-job", `{"job":"go","resume_run_id":"narrow"}`, "failed", "narrow", "go:cancelled"},
+		{"/cli/ci/wait", `{"resume_run_id":"cycle"}`, "failed", "cycle-back", "go:cancelled"},
+	} {
+		rec := send(h, http.MethodPost, "tok-ci", tc.path, tc.body)
+		var resp gitproxy.CLIWaitResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("%s %s: %d %s", tc.path, tc.body, rec.Code, rec.Body)
+		}
+		var jobs []string
+		for _, j := range resp.Jobs {
+			jobs = append(jobs, j.Name+":"+j.Conclusion)
+		}
+		if resp.Status != tc.status || resp.RunID != tc.runID || strings.Join(jobs, " ") != tc.jobs {
+			t.Errorf("%s %s = %s on %s (%s), want %s on %s (%s)", tc.path, tc.body,
+				resp.Status, resp.RunID, strings.Join(jobs, " "), tc.status, tc.runID, tc.jobs)
+		}
+		if resp.Status == "running" && resp.ResumeRunID != tc.runID {
+			t.Errorf("%s %s: resume_run_id %q, want %q", tc.path, tc.body, resp.ResumeRunID, tc.runID)
+		}
+	}
+	if len(actions.started) != 0 {
+		t.Errorf("following started %d runs, want none", len(actions.started))
+	}
+}
+
+// The other half of U5's walk: a wait whose answer was "running" and
+// the grain ci wait --resume that carries it on are one run's blocked
+// time, reported cumulatively and counted once -- the resumed wait's
+// reports carry on from the first's total rather than restarting from
+// zero or adding it in twice. (A daemon restart in between is a new
+// proxy and, for a run it adopts, a new ledger: that is
+// orchestrator.newAdoptedRunClock's to carry, not this one's.)
+func TestCLIWaitCreditIsCountedOnceAcrossAResume(t *testing.T) {
+	defer gitproxy.SetCLIWaitIntervals(5*time.Millisecond, 10*time.Millisecond)()
+	actions := &fakeCLIActions{runs: map[string]ci.Run{}, finishAt: -1}
+	h, _, credit := newActionProxy(t, actions)
+
+	var first gitproxy.CLIWaitResponse
+	rec := send(h, http.MethodPost, "tok-ci", "/cli/ci/wait", `{"timeout_seconds":1}`)
+	if err := json.Unmarshal(rec.Body.Bytes(), &first); err != nil || first.Status != "running" || first.ResumeRunID != "run-new" {
+		t.Fatalf("first wait: %d %s", rec.Code, rec.Body)
+	}
+	actions.mu.Lock()
+	actions.finishAt, actions.reads = 20, 0
+	actions.mu.Unlock()
+	var second gitproxy.CLIWaitResponse
+	rec = send(h, http.MethodPost, "tok-ci", "/cli/ci/wait", `{"resume_run_id":"run-new","timeout_seconds":60}`)
+	if err := json.Unmarshal(rec.Body.Bytes(), &second); err != nil || second.Status != "passed" {
+		t.Fatalf("resumed wait: %d %s", rec.Code, rec.Body)
+	}
+	if len(actions.started) != 1 {
+		t.Errorf("started %d runs, want the one the resume carried on", len(actions.started))
+	}
+
+	credit.mu.Lock()
+	reports := append([]time.Duration(nil), credit.reports...)
+	credit.mu.Unlock()
+	for i := 1; i < len(reports); i++ {
+		if reports[i] < reports[i-1] {
+			t.Fatalf("credit reports went backwards across the resume: %v", reports)
+		}
+	}
+	waited := time.Duration(first.WaitedMS+second.WaitedMS) * time.Millisecond
+	last := reports[len(reports)-1]
+	// WaitedMS is truncated to the millisecond and measured from a
+	// slightly different instant than each report: a few ms either way.
+	if slack := 20 * time.Millisecond; last < waited-slack || last > waited+slack {
+		t.Errorf("last credit report %s, want both waits once (%dms + %dms)", last, first.WaitedMS, second.WaitedMS)
+	}
+	if got := time.Duration(second.CreditMS) * time.Millisecond; got != last.Truncate(time.Millisecond) {
+		t.Errorf("resumed wait reports %s credit used, want the run's total %s", got, last)
+	}
+}
+
+// Two waits one run has blocked side by side -- grain ci run-job b in
+// the background and grain ci wait in the foreground, as U5's walk ran
+// them, where the run was credited 1m10s for 35s of waiting -- are
+// credited for the wall-clock time either was blocked, once.
+func TestCLIWaitCreditCountsOverlappingWaitsOnce(t *testing.T) {
+	defer gitproxy.SetCLIWaitIntervals(5*time.Millisecond, 10*time.Millisecond)()
+	actions := &fakeCLIActions{runs: map[string]ci.Run{}, finishAt: -1}
+	h, _, credit := newActionProxy(t, actions)
+
+	start := time.Now()
+	var wg sync.WaitGroup
+	for _, call := range [][2]string{
+		{"/cli/ci/run-job", `{"job":"go","timeout_seconds":1}`},
+		{"/cli/ci/wait", `{"timeout_seconds":1}`},
+	} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if rec := send(h, http.MethodPost, "tok-ci", call[0], call[1]); rec.Code != http.StatusOK {
+				t.Errorf("%s: %d %s", call[0], rec.Code, rec.Body)
+			}
+		}()
+	}
+	wg.Wait()
+	wall := time.Since(start)
+
+	credit.mu.Lock()
+	defer credit.mu.Unlock()
+	last := credit.reports[len(credit.reports)-1]
+	if last > wall {
+		t.Errorf("two overlapping waits credited %s in %s of wall-clock time, want no more than the wall-clock time", last, wall)
+	}
+	if last < 900*time.Millisecond {
+		t.Errorf("two one-second waits credited %s, want about a second", last)
+	}
+}
+
 // TestAPIForwardKeepsAnEscapedSlash is a host-qualified repository's
 // route reached through the sandbox proxy: /api/repos/<host>%2F<owner>/
 // <name>/... reaches the agent API with the %2F still one {owner}
