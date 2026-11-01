@@ -552,7 +552,7 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 	for _, g := range cc.Task.Grants {
 		// A capability reference is a capability server's to mint, at
 		// admission (protocol.MintPass), not an in-process provider's.
-		if IsCapabilityRef(g.Capability) {
+		if IsCapabilityRef(g.Capability) || IsCapabilityRef(CanonicalLegacyGrant(g.Capability)) {
 			continue
 		}
 		granted[g.Capability] = g

@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -1750,7 +1751,15 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.GCPProject = *req.GCPProject
 	}
 	if req.GCPServiceAccountEmail != nil {
-		cfg.GCPServiceAccountEmail = *req.GCPServiceAccountEmail
+		// A service account is an email address; the 2026-11-01
+		// walkthrough saved "not an email", which only failed when a key
+		// was minted.
+		email := strings.TrimSpace(*req.GCPServiceAccountEmail)
+		if local, domain, ok := strings.Cut(email, "@"); email != "" &&
+			(!ok || local == "" || domain == "" || strings.ContainsAny(email, " \t") || strings.Contains(domain, "@")) {
+			return model.Config{}, validationErrorf("gcpServiceAccountEmail %q is not a service account email, such as grain-minter@my-project-123.iam.gserviceaccount.com", email)
+		}
+		cfg.GCPServiceAccountEmail = email
 	}
 	if req.GCPServiceAccountCount != nil {
 		count := *req.GCPServiceAccountCount
@@ -1774,24 +1783,26 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.DefaultCapabilities != nil {
 		seen := map[string]bool{}
 		ids := make([]string, 0, len(*req.DefaultCapabilities))
-		for _, id := range *req.DefaultCapabilities {
-			id, err := c.normalizeCapabilityID(id)
+		for _, rawID := range *req.DefaultCapabilities {
+			normalizedIDs, err := c.normalizeCapabilityIDs(rawID)
 			if err != nil {
 				return model.Config{}, err
 			}
-			if _, ok := c.capabilityByID(id); !ok {
-				// Refused rather than dropped, and named with
-				// capabilityRefusal's own words: this set seeds every
-				// task filed on the deployment (CreateTask), so a
-				// CI-only id landing here would fail every one of them
-				// at model.ResolveGrants at once.
-				return model.Config{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+			for _, id := range normalizedIDs {
+				if _, ok := c.capabilityByID(id); !ok {
+					// Refused rather than dropped, and named with
+					// capabilityRefusal's own words: this set seeds every
+					// task filed on the deployment (CreateTask), so a
+					// CI-only id landing here would fail every one of them
+					// at model.ResolveGrants at once.
+					return model.Config{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+				}
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+				ids = append(ids, id)
 			}
-			if seen[id] {
-				continue
-			}
-			seen[id] = true
-			ids = append(ids, id)
 		}
 		cfg.DefaultCapabilities = ids
 	}
@@ -1950,14 +1961,34 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.K8sKubectl != nil {
 		cfg.K8sKubectl = strings.TrimSpace(*req.K8sKubectl)
 	}
+	// The pod images are checked as the custom sandbox image is, and the
+	// workspace is a directory inside the pod, so an absolute path: the
+	// 2026-11-01 walkthrough saved "not a ref!!" and "relative/dir", which
+	// only failed later, on every pod grain created.
 	if req.K8sSandboxImage != nil {
-		cfg.K8sSandboxImage = strings.TrimSpace(*req.K8sSandboxImage)
+		image := strings.TrimSpace(*req.K8sSandboxImage)
+		if image != "" {
+			if err := sandboximage.ValidateReference(image); err != nil {
+				return model.Config{}, validationErrorf("k8sSandboxImage must be one OCI image reference, such as registry.example/team/k8s-sandbox:v1: %v", err)
+			}
+		}
+		cfg.K8sSandboxImage = image
 	}
 	if req.K8sGranuleImage != nil {
-		cfg.K8sGranuleImage = strings.TrimSpace(*req.K8sGranuleImage)
+		image := strings.TrimSpace(*req.K8sGranuleImage)
+		if image != "" {
+			if err := sandboximage.ValidateReference(image); err != nil {
+				return model.Config{}, validationErrorf("k8sGranuleImage must be one OCI image reference, such as registry.example/team/guest:v1: %v", err)
+			}
+		}
+		cfg.K8sGranuleImage = image
 	}
 	if req.K8sWorkspace != nil {
-		cfg.K8sWorkspace = strings.TrimSpace(*req.K8sWorkspace)
+		ws := strings.TrimSpace(*req.K8sWorkspace)
+		if ws != "" && !path.IsAbs(ws) {
+			return model.Config{}, validationErrorf("k8sWorkspace %q is not an absolute path, such as /home/agent", ws)
+		}
+		cfg.K8sWorkspace = ws
 	}
 	if req.K8sGitProxyHost != nil {
 		host := strings.TrimSpace(*req.K8sGitProxyHost)

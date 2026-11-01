@@ -456,6 +456,24 @@ var Migrations = []Migration{
 			"ALTER TABLE `task_observation` ADD COLUMN `pending_config_change` TEXT NULL",
 		},
 	},
+	{
+		Version:     80,
+		Description: "rewrite stored grain-log grants to https://grain.dev/capabilities/grain#journal={} (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"grain-log": GrainJournalGrant}),
+	},
+	{
+		Version:     81,
+		Description: "rewrite stored deployment-health grants to api:deployment:read and https://grain.dev/capabilities/grain#health={} (the in-process capability is retired)",
+		Up:          rewriteLegacyGrantsMulti(map[string][]string{"deployment-health": {"api:deployment:read", GrainHealthGrant}}),
+	},
+	{
+		Version:     82,
+		Description: "rewrite stored db-read and db-write grants to https://grain.dev/capabilities/grain#sql (the in-process capabilities are retired)",
+		Up: rewriteLegacyGrants(map[string]string{
+			"db-read":  GrainSQLReadGrant,
+			"db-write": GrainSQLWriteGrant,
+		}),
+	},
 }
 
 // migrationFor returns the migration that produces version, or false.

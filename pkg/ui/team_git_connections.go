@@ -480,16 +480,43 @@ func (c *Client) SetTeamRepoGitConnection(ctx context.Context, id, owner, repo s
 		}
 	}
 
-	var updated []model.TeamGitConnection
+	var updated, dropped []model.TeamGitConnection
 	if credName != "" {
 		updated = append(updated, model.TeamGitConnection{Credential: credName, Host: host, Scope: scoped.Scope})
 	}
 	for _, conn := range settings.GitConnections {
 		norm, err := model.NormalizeTeamGitConnection(conn)
 		if err == nil && norm.Scope == scoped.Scope && model.SameGitHost(norm.Host, host, model.DefaultGitHost) {
+			dropped = append(dropped, norm)
 			continue
 		}
 		updated = append(updated, conn)
+	}
+	// A connection added for this repository with a credential of its own
+	// -- a GitHub App, a token pasted for just this repository -- is not a
+	// choice to be replaced from a picker: dropping it here lost it, and
+	// left its stored credential behind, without the confirmation Remove
+	// asks for (2026-11-01 walkthrough). Only a credential some other
+	// connection still holds may be dropped this way.
+	for _, conn := range dropped {
+		if conn.Credential == credName || strings.TrimSpace(settings.GitCredential) == conn.Credential {
+			continue
+		}
+		heldElsewhere := false
+		for _, other := range updated {
+			if strings.TrimSpace(other.Credential) == conn.Credential {
+				heldElsewhere = true
+				break
+			}
+		}
+		if !heldElsewhere {
+			onHost := conn.Host
+			if onHost == "" {
+				onHost = model.DefaultGitHost
+			}
+			return Team{}, validationErrorf("%s/%s has a connection of its own on %s (%s), holding a credential no other connection does: remove it under Settings -> Git connections first, which asks before deleting that credential",
+				owner, repo, onHost, conn.Credential)
+		}
 	}
 	// The legacy team credential keeps its place: last, the default
 	// host's default (model.Config.EffectiveGitConnections).

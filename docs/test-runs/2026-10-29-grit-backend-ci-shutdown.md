@@ -49,7 +49,7 @@ grain ci list; grain ci show <run>
 | 2e. Reverse tunnel (`grit serve -grain-url`) | **Not available (follow-up), grit side fixed (F5).** No grain process mounts `/v1/session` (`gritapi.SessionHub` is only used in tests): the daemon answers 404/401. grit redialed every 100 ms in silence; it now logs the refusal once and backs off to 30 s. |
 | 3a. `SIGTERM` with 10 running CI jobs (two runs, one job retrying) | **Pass.** The daemon exited **0.06 s** after `SIGTERM` (first try: same second, < 1 s), well inside the 10 s bound; `grain daemon: shutdown interrupted 0 run(s)`. Host-sandbox steps kept running detached. |
 | 3b. Next daemon re-adopts and finishes the work | **Pass (with F6 applied locally; F6 is a follow-up).** `ci: adoption: 10 job(s) adopted across 2 run(s), 0 lost`; jobs `resumed in sandbox …`; the `flaky` job whose first attempt failed while no daemon was running had its automatic retry run by the new daemon; both runs concluded `failure` (flaky) with the four 60 s jobs `success`. Embedded CI did not run at all with a relative `-data-dir` before F6. |
-| 3c. A sandbox blocked in `grain ci wait` resumes with `resume_run_id` | **Not walked live.** Needs a dispatched task run and its sandbox proxy; covered only by `pkg/gitproxy/cli_actions_test.go` (follow-up). |
+| 3c. A sandbox blocked in `grain ci wait` resumes with `resume_run_id` | **Walked 2026-11-01 (addendum): pass after fixes F7, F8.** Both waiters answered `running` with the run to resume 4–6 ms after `SIGTERM`, and the restarted daemon's `--resume` waits reported the verdict. |
 
 ## Steps and observations
 
@@ -92,4 +92,58 @@ grain ci list; grain ci show <run>
 | U2 | No grain process serves `/v1/session`, so reverse-tunnel mode cannot work end to end. | Same follow-up. |
 | U3 | Attestation keys are fetched from grit's own `/v1/info`; there is no way to pin them on the daemon. | Same follow-up. |
 | U4 | A submission made while grit is unreachable returns `400` but is delivered later from the outbox. | Same follow-up. |
-| U5 | Shutdown waiter (`grain ci wait` / `run-job` returning `running` + `resume_run_id`) not walked live. | Follow-up walkthrough. |
+| U5 | Shutdown waiter (`grain ci wait` / `run-job` returning `running` + `resume_run_id`) not walked live. | **Walked** 2026-11-01, see the addendum (F7, F8 fixed; U6 follow-up). |
+
+## Addendum (2026-11-01): the shutdown waiter, walked live (U5)
+
+- **Task:** `grain/049f1e09/task-1830` on `ai-on-gke/grain`, base `main` at `8688c0cf` (origin: [Task #1753](/tasks/1753), filed by [Task #1803](/tasks/1803))
+- **Environment:** Debian 12 sandbox (`granule`), 7 vCPU, Go `go1.26.10`, git 2.39.5; `go build -o ~/bin/grain ./cmd/grain` from this branch, rebuilt after each fix; working directory `~/wt`.
+- **Rig:**
+  - `acme/widgets` is a bare repository served by a 20-line Go wrapper (`net/http/cgi` around `git http-backend`, `http.receivepack true`) on `127.0.0.1:4250`. Its `.grain/workflows/ci.yml` has two jobs, `a` and `b`, each `sleep 60`.
+  - The stub agent follows `newStubAgent` (`tests/e2e/upgrade_drain_interrupted_test.go`) and is passed to the daemon as `-claude-path`. Its model connection is `grain connections import` of a `claude` / `claude-sonnet-5` entry.
+  - On its first start, the stub pushes an empty commit to the task's branch, then runs `grain ci run-job b` and, 3 s later, `grain ci wait`. On a later start it runs `grain ci wait --resume <id>` and `grain ci run-job b --resume <id>` with the ids those printed. Each writes timestamps and output to a file.
+
+Exact commands (all `curl` calls carry `Authorization: Bearer $(cat d/local-api-token)`):
+
+```sh
+githost 127.0.0.1:4250 ~/wt/git
+grain daemon -data-dir ~/wt/d -sandbox-dir ~/wt/sbx -ui-addr 127.0.0.1:7811 -sandbox-port-base=0 \
+  -sandbox-backend host -github-host 127.0.0.1:4250 -github-insecure-http \
+  -claude-path ~/wt/agent/claude -max-workers 2
+grain connections -data-dir ~/wt/d import conn.yaml          # daemon stopped; after its first start
+curl -XPOST $GRAIN_SERVER/api/repos -d '{"repo":"acme/widgets"}'
+curl -XPUT  $GRAIN_SERVER/api/repos/acme/widgets/ci-mode -d '{"ciMode":"grain"}'
+curl -XPUT  $GRAIN_SERVER/api/github-tokens/default -d '{"value":"ghp_stub"}'   # then restart: needsRestart
+curl -XPOST $GRAIN_SERVER/api/tasks -d '{"title":"wait across a restart","description":"…","repo":"acme/widgets","approved":true}'
+kill -TERM <daemon pid>      # ~13 s into the waits; timed until the pid is gone
+```
+
+Notes on the rig:
+
+- `grain-ci` cannot be attached to a task by hand (`POST /api/tasks` with `capabilities: ["grain-ci"]` is refused). It comes from the repository's CI mode.
+- With host sandboxes the agent CLI runs in the daemon's working directory with the operator's `HOME`, so the stub sets `HOME` to its run's sandbox root (`sbx/runs/<run>/`, where that run's `.git-credentials` names its own proxy) before calling `grain`.
+  - The first try did not, and its `grain` reached the git proxy of the sandbox this walk ran in. That proxy refused one call and answered the other "branch does not exist".
+  - The e2e test below fails closed instead.
+- The daemon stops an interrupted run's whole process tree, and with host sandboxes the stub's `grain ci wait` is in it. In the first try it was killed before it could print anything.
+  - On a VM sandbox `run_command` runs in the VM, which the daemon's stop does not reach.
+  - So the stub starts each waiter with `setsid`, standing in for that, and every result below is from runs that did.
+
+### Results
+
+| Check | Result |
+|---|---|
+| (1) The waiter gets `running` with `resume_run_id` at once, not after the 10 s server bound | **Pass.** `SIGTERM` at `…367.0769`; `grain ci wait` printed `CI run 569dfc4ba0453cc4 is still running after 13s (jobs running: a, b …)` / `grain ci wait --resume 569dfc4ba0453cc4` at `…367.0824`, **5.4 ms** later. The daemon exited in 0.07 s (`shutdown interrupted 1 run(s): 1 finished as interrupted`). With `run-job` and `wait` both blocked (after F7): **4.2 ms** and **5.6 ms**, both naming `47a516bc22e49de8`. |
+| (2) After restart a new `grain ci wait` with that id resumes and reports the verdict | **Pass.** The restart re-ran the interrupted task (attempt 2) and logged `ci: adoption: 2 job(s) adopted across 1 run(s), 0 lost`. `grain ci wait --resume 569dfc4ba0453cc4` blocked 35 s and printed `grain CI passed on af92d7bc90c8 (run 569dfc4ba0453cc4, waited 35s; wait credit used: 35s / 45m0s): a, b`. After F7, `grain ci run-job b --resume 47a516bc22e49de8` printed `grain CI passed … : b` and the selective-run reminder. |
+| `grain ci run-job b`, then `grain ci wait` | **Fail → fixed (F7).** The full run the wait started superseded the run-job's selective run (`cancelled: superseded by run 20323a65b120b54b, started for the same task`, by design). The run-job printed `grain CI failed on a7de7871a3f6 (run 049f5944d672293a, cancelled, waited 5s …)` / `Failing: b (cancelled)` 5 s in, while `b` went on to run and pass in the full run. |
+| (3) Wait credit is not double-counted | **Fail → fixed (F8).** Sequential waits were fine. Run `2-1` credited 13 s for its one 13 s wait, and its `--resume` in run `2-2` credited 35 s for 35 s. Waits blocked *side by side* were each credited, though: `run-job` and `wait` both blocked for the same 35 s, and the resumed run reported `wait credit used: 1m10s` and `1m5s`. After F8 the same walk credited **16 s** before the stop (waits of 16 s and 13 s, overlapping) and **45 s** after it (both waited 45 s). The store holds `task_run_wait_credit` `2-1 | 15528 | 15528` for the interrupted run, and `task_run_check_wait` holds `2-1 timed_out 12528/15528` and `2-2 passed 45001` ×2. |
+
+### Findings
+
+| # | Finding | Status |
+|---|---|---|
+| F7 | The proxy waiter behind `grain ci wait` / `run-job` (`pkg/gitproxy/cli_actions.go`) reported a run grain had cancelled to make way for a newer one for the same task as the verdict. `wait_for_checks` already follows such a run (`pkg/mcp`'s `followSupersede`). | **Fixed.** `followSuperseded` follows chains of superseding runs, staying on the same commit and the task's own branch. A selective wait follows only into a run that runs every job it asked for, and is then answered by those jobs alone (`waitSettled`): it passes or fails as soon as they finish, whatever the rest of the run does. Test `TestCLIWaitFollowsTheRunThatSupersededIt`. |
+| F8 | The per-run CLI wait ledger summed every wait's blocked intervals. Overlapping waits were each credited for the same wall-clock time, so a run that backgrounded *n* waits earned *n*× credit, up to the 45 m cap. | **Fixed.** `cliWaitLedger.add` credits only the part of each reported interval past the latest instant the run's total covers. The total is therefore the time at least one wait was blocked. Tests `TestCLIWaitCreditCountsOverlappingWaitsOnce` (2.0 s credited for 1.0 s before the fix) and `TestCLIWaitCreditIsCountedOnceAcrossAResume`. |
+| U6 | Found by reading the code, not walked: walking it needs a run that survives the restart (`-claude-run detached` through hostd). A run the next daemon **adopts** gets a fresh clock (`newAdoptedRunClock`) that holds only the restart gap. The proxy's CLI wait ledger is in memory too, so CLI wait credit earned before the restart is dropped. A run that spent most of its budget in `grain ci wait` before an upgrade could be cancelled as timed out at adoption. | Follow-up: persist the per-source ledger for runs left for adoption. |
+| O1 | A waiter answered during shutdown can omit `wait credit used`: by then the run's clock may already be cancelled (`Live: false`). It was omitted in one of the three walks. The credit is still recorded (`task_run_wait_credit` above). | Cosmetic; not changed. |
+
+The walk is kept as `tests/e2e/ci_wait_shutdown_walkthrough_test.go` (`TestACIWaitAcrossADaemonRestartResumesToTheVerdict`, ~32 s, two `sleep 20` jobs). It uses the same rig in-process: `daemon.Run` with `Ci` and `HostSandboxes`, a cancelled ctx for `SIGTERM`, and the real `grain` CLI. It checks (1)–(3) and fails on the credit check with F8 reverted.

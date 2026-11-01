@@ -815,25 +815,27 @@ func (c *Client) SetRepoDefaultCapabilities(ctx context.Context, repo string, id
 func (c *Client) cleanRepoDefaultCapabilities(ids []string) ([]string, error) {
 	seen := make(map[string]bool, len(ids))
 	clean := make([]string, 0, len(ids))
-	for _, id := range ids {
-		id, err := c.normalizeCapabilityID(id)
+	for _, rawID := range ids {
+		normalizedIDs, err := c.normalizeCapabilityIDs(rawID)
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := c.capabilityByID(id); !ok {
-			// The same refusal UpdateSettings gives the deployment-wide
-			// set, for the same reason: this one seeds every task filed
-			// against this repo, so a CI-only id here would break the
-			// whole repository's tasks rather than one of them. The CI
-			// grant an operator reaching for it actually wants is the
-			// next field along (SetRepoCICapabilities).
-			return nil, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+		for _, id := range normalizedIDs {
+			if _, ok := c.capabilityByID(id); !ok {
+				// The same refusal UpdateSettings gives the deployment-wide
+				// set, for the same reason: this one seeds every task filed
+				// against this repo, so a CI-only id here would break the
+				// whole repository's tasks rather than one of them. The CI
+				// grant an operator reaching for it actually wants is the
+				// next field along (SetRepoCICapabilities).
+				return nil, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			clean = append(clean, id)
 		}
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-		clean = append(clean, id)
 	}
 	return clean, nil
 }

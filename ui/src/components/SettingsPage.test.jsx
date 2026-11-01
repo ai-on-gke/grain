@@ -536,6 +536,55 @@ describe("SettingsPage", () => {
     expect(onSaved).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-11-01 walkthrough: the config-map server's own secret was listed
+  // under Other secrets, and its Delete broke the server.
+  it("leaves a capability server's own secret out of Other secrets", async () => {
+    api.mockImplementation((path, init) => {
+      if (path === "/api/settings" && !init?.method) {
+        return Promise.resolve(settings);
+      }
+      if (path === "/api/secrets" && !init?.method) {
+        return Promise.resolve({
+          enabled: true,
+          secrets: [
+            { name: "capability-server-1f6d92c4", keys: ["secret_values"] },
+            { name: "walk-throwaway", keys: ["token"] },
+          ],
+        });
+      }
+      if (path === "/api/capability-servers" && !init?.method) {
+        return Promise.resolve([
+          {
+            id: "https://grain.dev/capabilities/config-map",
+            secrets: [
+              {
+                name: "capability-server-1f6d92c4/secret_values",
+                present: true,
+              },
+            ],
+          },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+    render(
+      <PreferencesProvider>
+        <SettingsPage
+          config={{}}
+          section="credentials"
+          onSection={vi.fn()}
+          showError={vi.fn()}
+        />
+      </PreferencesProvider>,
+    );
+    expect(await screen.findByText("walk-throwaway")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.queryByText("capability-server-1f6d92c4"),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
   it("marks an edited Memory note dirty in the header and nav, asks before switching sections, and clears the dot after confirming", async () => {
     const user = userEvent.setup();
     api.mockImplementation((path) => {

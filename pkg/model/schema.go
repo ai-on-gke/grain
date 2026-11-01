@@ -355,7 +355,20 @@ import "strconv"
 // 79 adds `pending_config_change` to `task_observation`: the grain/config
 // change a session proposed and is parked on (model.PendingConfigChange),
 // as JSON.
-const SchemaVersion = 79
+//
+// 80 rewrites stored `grain-log` grants to
+// `https://grain.dev/capabilities/grain#journal={}`: the in-process
+// `grain-log` provider is retired for the `grain#journal` method.
+//
+// 81 rewrites stored `deployment-health` grants to `api:deployment:read` and
+// `https://grain.dev/capabilities/grain#health={}`: the in-process
+// `deployment-health` provider is retired.
+//
+// 82 rewrites stored `db-read` and `db-write` grants to
+// `https://grain.dev/capabilities/grain#sql={"write":false}` and
+// `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
+// `db-read` and `db-write` providers are retired.
+const SchemaVersion = 82
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
