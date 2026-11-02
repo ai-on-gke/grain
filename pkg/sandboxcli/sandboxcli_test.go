@@ -188,7 +188,7 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	if out, errOut, code := run("grep", "--", "--- FAIL", "ci://ai-on-gke/grain/run-1/go/Test.log"); code != 0 || !strings.Contains(out, "TestWidget") {
 		t.Errorf("grep: %d %q %s", code, out, errOut)
 	}
-	if out, errOut, code := run("ci", "list", "--conclusion", "failure"); code != 0 || !strings.Contains(out, "run-1 grain/task-7") {
+	if out, errOut, code := run("ci", "list", "--conclusion", "failure"); code != 0 || !strings.Contains(out, "run-1 grain grain/task-7") {
 		t.Errorf("ci list: %d %q %s", code, out, errOut)
 	}
 	if out, errOut, code := run("pr", "status"); code != 0 || !strings.Contains(out, "go: failure") {
@@ -452,7 +452,7 @@ func TestSandboxCLIReadsOtherTasksCI(t *testing.T) {
 		return out.String(), errOut.String(), code
 	}
 
-	if out, errOut, code := run("ci", "list", "--task", "19"); code != 0 || !strings.Contains(out, "run-sib grain/dep/task-19") {
+	if out, errOut, code := run("ci", "list", "--task", "19"); code != 0 || !strings.Contains(out, "run-sib grain grain/dep/task-19") {
 		t.Errorf("ci list --task: %d %q %s", code, out, errOut)
 	}
 	if out, errOut, code := run("pr", "status", "--task", "19"); code != 0 || !strings.Contains(out, "go: success") {

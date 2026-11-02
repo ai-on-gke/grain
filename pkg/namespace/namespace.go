@@ -170,7 +170,11 @@ type ResolvedNode struct {
 
 // Server resolves and serves paths in the grain namespace (ci://, src://, task://, config://, memory://, deploy://).
 type Server struct {
-	CIStore     ci.RunStore
+	CIStore ci.RunStore
+	// ExternalCI, when set, is CI another provider ran (GitHub Actions),
+	// served under ci://<repo>/ beside CIStore's runs: listed with them,
+	// a run's jobs as its directories, and each job's log as job.log.
+	ExternalCI  ci.ExternalRuns
 	ArtifactDir string
 	SrcDir      string
 	// CoreSrcDir, when set, is the source of github.com/ai-on-gke/grain
@@ -583,6 +587,12 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 			}
 			entries = append(entries, Entry{Name: run.ID, Type: "dir"})
 		}
+		if s.ExternalCI != nil {
+			external, _ := s.ExternalCI.FindExternalRuns(ctx, ci.RunFilter{Repo: repo, Descending: true}, maxCIRunsListed)
+			for _, run := range external {
+				entries = append(entries, Entry{Name: run.ID, Type: "dir"})
+			}
+		}
 		node := &ResolvedNode{
 			Scheme:  "ci",
 			Path:    relPath,
@@ -596,6 +606,9 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 	}
 
 	runID := rest[0]
+	if s.ExternalCI != nil && strings.HasPrefix(runID, "gha:") {
+		return s.resolveExternalCI(ctx, repo, relPath, runID, rest[1:])
+	}
 	run, ok := s.CIStore.Get(runID)
 	if !ok || run.Repo != repo {
 		return nil, fmt.Errorf("%w: ci://%s/%s", ErrNotFound, repo, runID)
@@ -678,6 +691,56 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 	att, _ := job.LatestAttempt()
 	growingAttempt := !run.Conclusion.Done() && !job.Conclusion.Done() && !att.Conclusion.Done()
 	return s.resolveCIAttempt(relPath, att, rem, true, growingAttempt)
+}
+
+// externalJobLog is the file a job of an ExternalCI run keeps its log
+// in: the forge serves one log per job, not one per step.
+const externalJobLog = "job.log"
+
+// resolveExternalCI is ci://<repo>/<run>/... for an ExternalCI run: the
+// run is its jobs, and each job is its job.log.
+func (s *Server) resolveExternalCI(ctx context.Context, repo, relPath, runID string, rest []string) (*ResolvedNode, error) {
+	// The id names its own repository: one other than the path's, which
+	// is the repository the scope was checked against, is not asked of
+	// the forge at all.
+	if idRepo, _, ok := ci.ParseActionsRunID(runID); !ok || !strings.EqualFold(idRepo, repo) {
+		return nil, fmt.Errorf("%w: ci://%s/%s", ErrNotFound, repo, runID)
+	}
+	run, ok, err := s.ExternalCI.ExternalRun(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: ci://%s/%s: %v", ErrNotFound, repo, runID, err)
+	}
+	if !ok || !strings.EqualFold(run.Repo, repo) {
+		return nil, fmt.Errorf("%w: ci://%s/%s", ErrNotFound, repo, runID)
+	}
+	if len(rest) == 0 {
+		entries := make([]Entry, 0, len(run.Jobs))
+		for _, job := range run.Jobs {
+			entries = append(entries, Entry{Name: job.Name, Type: "dir"})
+		}
+		return &ResolvedNode{Scheme: "ci", Path: relPath, IsDir: true, Entries: entries}, nil
+	}
+	var job *ci.JobRun
+	for i := range run.Jobs {
+		if run.Jobs[i].Name == rest[0] || run.Jobs[i].JobID == rest[0] {
+			job = &run.Jobs[i]
+			break
+		}
+	}
+	if job == nil {
+		return nil, fmt.Errorf("%w: job %q in ci://%s/%s", ErrNotFound, rest[0], repo, runID)
+	}
+	if len(rest) == 1 {
+		return &ResolvedNode{Scheme: "ci", Path: relPath, IsDir: true, Entries: []Entry{{Name: externalJobLog, Type: "file"}}}, nil
+	}
+	if len(rest) != 2 || rest[1] != externalJobLog {
+		return nil, fmt.Errorf("%w: ci://%s (a GitHub Actions job keeps one log, %s)", ErrNotFound, relPath, externalJobLog)
+	}
+	text, err := s.ExternalCI.ExternalJobLog(ctx, runID, job.JobID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: ci://%s: %v", ErrNotFound, relPath, err)
+	}
+	return stringNode("ci", relPath, text, !job.Conclusion.Done()), nil
 }
 
 func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*ResolvedNode, error) {

@@ -82,6 +82,23 @@ const elisionAdviceCIRunList = "narrow it -- \"repo\", \"ref\", \"conclusion\", 
 	"\"job\" and \"since\" each ask a smaller question, and \"limit\" says how many " +
 	"of the newest runs to report -- or read one run's output with get_ci_log"
 
+// GrainCIJobLogReader is the optional GrainCIRunner method get_ci_log
+// reads a GitHub Actions job's log with (GET /api/ci/runs/{id}/log): the
+// daemon's, which fetches it through its own forge connection.
+type GrainCIJobLogReader interface {
+	GrainCIJobLog(ctx context.Context, runID, job string) (CIJobLog, error)
+}
+
+// CIJobLog is one GitHub Actions job's log as the daemon serves it.
+type CIJobLog struct {
+	Job       string `json:"job"`
+	JobID     int64  `json:"jobId"`
+	URL       string `json:"url,omitempty"`
+	Bytes     int    `json:"bytes"`
+	Truncated bool   `json:"truncated,omitempty"`
+	Log       string `json:"log"`
+}
+
 type GrainCIRunner interface {
 	StartGrainCI(context.Context, []string) (ci.Run, error)
 	// RetriggerGrainCI starts an uncached recheck of jobs -- or, naming
@@ -238,7 +255,9 @@ func NewGrainCIReadTools(runner GrainCIRunner, scope CIRepoScope, branch ...stri
 						map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1},
 					},
 				},
-				"job":   map[string]any{"type": "string", "description": "one job, by name or id -- runs that have it, with that job's own result and duration"},
+				"job": map[string]any{"type": "string", "description": "one job, by name or id -- runs that have it, with that job's own result and duration"},
+				"provider": map[string]any{"type": "string", "enum": []any{ci.ProviderGrain, ci.ProviderGitHubActions},
+					"description": "only runs of this CI provider; with a repo whose CI is GitHub Actions, its workflow runs (ids gha:<owner>:<name>:<run id>) are listed beside grain's"},
 				"since": map[string]any{"type": "string", "description": "how far back: a span (24h, 7d, 90m) or a date (2026-09-17, or an RFC 3339 timestamp)"},
 				"sort":  map[string]any{"type": "string", "description": fmt.Sprintf("order by %s (default %s)", ciRunSortWords(), ci.SortRunsByStarted)},
 				"order": map[string]any{"type": "string", "enum": []any{"asc", "desc"}, "description": "desc, the default, is newest or longest first"},
@@ -420,6 +439,25 @@ func NewGrainCIReadTools(runner GrainCIRunner, scope CIRepoScope, branch ...stri
 				// sentence rather than reported as missing.
 				if !scope.permits(run.Repo) {
 					return Result{Text: scope.refuseRun(run).Error(), IsError: true}
+				}
+				if logs, ok := runner.(GrainCIJobLogReader); ok && run.Provider == ci.ProviderGitHubActions {
+					// A GitHub Actions job keeps one log, which the
+					// daemon reads from the forge on demand.
+					resp, err := logs.GrainCIJobLog(ctx, run.ID, strings.TrimSpace(jobName))
+					if err != nil {
+						return Result{Text: fmt.Sprintf("reading the log of GitHub Actions run %s: %v", runID, err), IsError: true}
+					}
+					if tail > 0 {
+						offset = max(len(resp.Log)-tail, 0)
+					}
+					heading := fmt.Sprintf("GitHub Actions run %s, job %q (id %d)", run.ID, resp.Job, resp.JobID)
+					if resp.Truncated {
+						heading += fmt.Sprintf(", the last %d of %d bytes", len(resp.Log), resp.Bytes)
+					}
+					if resp.URL != "" {
+						heading += " -- " + resp.URL
+					}
+					return Result{Text: heading + "\n" + renderCILogRange(resp.Log, offset, size, false)}
 				}
 				job, err := grainCIJob(run, strings.TrimSpace(jobName))
 				if err != nil {
@@ -704,6 +742,14 @@ func ciRunFilter(args map[string]any, now time.Time) (ci.RunFilter, error) {
 	filter.Ref = strings.TrimSpace(ref)
 	job, _ := argString(args, "job")
 	filter.Job = strings.TrimSpace(job)
+	if provider, _ := argString(args, "provider"); strings.TrimSpace(provider) != "" {
+		switch p := strings.ToLower(strings.TrimSpace(provider)); p {
+		case ci.ProviderGrain, ci.ProviderGitHubActions:
+			filter.Provider = p
+		default:
+			return ci.RunFilter{}, fmt.Errorf("%q is not a CI provider: use %s or %s", provider, ci.ProviderGrain, ci.ProviderGitHubActions)
+		}
+	}
 	for _, word := range argStrings(args, "conclusion") {
 		state, err := ci.ParseRunState(word)
 		if err != nil {
