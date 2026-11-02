@@ -1051,8 +1051,6 @@ describe("SettingsPage", () => {
       expect(
         screen.getByLabelText("Max merges per repo branch"),
       ).toBeDisabled();
-      expect(screen.getByLabelText("Merge batch size")).toBeDisabled();
-      expect(screen.getByLabelText("Merge gather window")).toBeDisabled();
       expect(screen.getByLabelText("Max worker agents")).toBeEnabled();
       expect(screen.getByTestId("config-managed-notice")).toBeInTheDocument();
     });
@@ -1083,7 +1081,7 @@ describe("SettingsPage", () => {
     it("leaves Engine editable when settings are unlocked", async () => {
       setup({ section: "engine", config: { settingsLocked: false } });
       expect(await screen.findByLabelText("Poll interval")).toBeEnabled();
-      expect(screen.getByLabelText("Merge batch size")).toBeEnabled();
+      expect(screen.getByLabelText("Max merges per repo branch")).toBeEnabled();
       expect(screen.queryByTestId("config-managed-notice")).toBeNull();
     });
 

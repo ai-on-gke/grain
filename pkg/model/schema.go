@@ -390,13 +390,19 @@ import "strconv"
 // repo server's `#write` method. It rewrites `repo_config`.`ci_capabilities`
 // as well as the grant tables and capability lists.
 //
-// 86 adds a `<p>_source` column beside every `<p>_kind`/`<p>_id` principal
+// 86 rewrites stored `corp-research` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/corp#research={}`: the Google
+// build retires its in-process `corp-research` provider for a
+// `corp#research` method it registers through capability.Register, with
+// `corp-research` as that method's alias.
+//
+// 87 adds a `<p>_source` column beside every `<p>_kind`/`<p>_id` principal
 // pair (task, task_comment, task_pause, pipeline_pause, scheduled_upgrade,
 // memory, memory_document, release_note and task_event, which also gains
 // behalf_kind/behalf_id/behalf_source), and the config_audit table
 // (operator-attribution spec §1.3, §4.4, §7.1). No row is rewritten: a row
 // written before reads back with an empty Principal.Source.
-const SchemaVersion = 86
+const SchemaVersion = 87
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,

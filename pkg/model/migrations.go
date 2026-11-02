@@ -520,20 +520,32 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     86,
+		Description: "rewrite stored corp-research grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/corp#research={} (a wrapper distribution's in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{"corp-research": CorpResearchGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{"corp-research": {CorpResearchGrant}})
+		},
+	},
+	{
+		Version:     87,
 		Description: "add a *_source column beside every principal's *_kind/*_id pair, task_event's on-behalf-of, and config_audit (operator-attribution spec §1.3, §7.1)",
 		Statements: append([]string{
 			// task_pause and task_event postdate the 2.0 baseline and
 			// Init's CREATE TABLE IF NOT EXISTS made them in place, so a
 			// store this old may not have them yet: create them in the
-			// shape schema 85 knew first, so that the ALTERs below meet
+			// shape schema 86 knew first, so that the ALTERs below meet
 			// the same table whichever store they run on.
-			schema85TaskPauseTable,
-			schema85TaskEventTable,
+			schema86TaskPauseTable,
+			schema86TaskEventTable,
 		}, principalSourceColumns()...),
 	},
 }
 
-// principalSourceColumns are migration 86's ALTERs: `<p>_source` beside
+// principalSourceColumns are migration 87's ALTERs: `<p>_source` beside
 // every stored principal, `”` for every row already there.
 func principalSourceColumns() []string {
 	cols := []struct{ table, column string }{
@@ -561,9 +573,9 @@ func principalSourceColumns() []string {
 	return out
 }
 
-// schema85TaskPauseTable and schema85TaskEventTable are task_pause and
-// task_event as schema 85 created them, frozen for migration 86.
-const schema85TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
+// schema86TaskPauseTable and schema86TaskEventTable are task_pause and
+// task_event as schema 86 created them, frozen for migration 87.
+const schema86TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
   ` + "`task_id`" + `           TEXT     NOT NULL,
   ` + "`paused_at`" + `         DATETIME NOT NULL,
   ` + "`paused_by_kind`" + `    TEXT     NOT NULL,
@@ -575,7 +587,7 @@ const schema85TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + 
   PRIMARY KEY (` + "`task_id`" + `)
 )`
 
-const schema85TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+const schema86TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
   ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
   ` + "`task_id`" + `    TEXT     NOT NULL,
   ` + "`kind`" + `       TEXT     NOT NULL,
@@ -585,6 +597,15 @@ const schema85TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + 
   ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
 )`
+
+// CorpResearchGrant is what migration 86 rewrote stored corp-research grants
+// to: the method a wrapper distribution's build registers (capability.Register) in place
+// of its in-process corp-research provider, and makes corp-research an alias
+// of. Core serves no such method; it names the grant only because the
+// migration list is core's, and a store migrated by a build without the
+// method holds a grant nothing there resolves, as the bare corp-research it
+// replaced resolved to no provider there either.
+const CorpResearchGrant = "https://grain.dev/capabilities/corp#research={}"
 
 // ApplyDataMigrations runs the row rewrites (Up) of every migration past
 // from, inside tx, on tables already at SchemaVersion's shape. It is for

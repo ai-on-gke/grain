@@ -27,6 +27,12 @@
 // default capabilities (NewDeploymentConfig), and an existing one is only
 // told so in Settings. Core grain declares no defaults; this is a seam for
 // a build such as google/cmd/grain to use.
+//
+// A build contributes a method of an in-process capability server --
+// https://grain.dev/capabilities/corp#research, say -- with Register
+// (methods.go) rather than RegisterProvider: it is resolved, listed and
+// forwarded wherever core's own in-process grain server's methods are, and
+// it can retire a bare provider name of the build's own as an alias.
 package capability
 
 import (
@@ -124,7 +130,9 @@ func Lookup(id string) (Registration, bool) {
 }
 
 // RunGrants returns the IDs of the registered capabilities with RunGrant
-// set, in Registered's order.
+// set, in Registered's order, and then every grant name of the registered
+// methods with RunGrant set (Method.RunGrant): its reference, its
+// recorded grant and its aliases.
 func RunGrants() []string {
 	var ids []string
 	for _, r := range Registered() {
@@ -132,11 +140,12 @@ func RunGrants() []string {
 			ids = append(ids, r.ID)
 		}
 	}
-	return ids
+	return append(ids, methodRunGrants()...)
 }
 
 // DefaultOn returns the IDs of the registered capabilities with DefaultOn
-// set, in Registered's order.
+// set, in Registered's order, and then the recorded grant of each
+// registered method with DefaultOn set, in Methods' order.
 func DefaultOn() []string {
 	var ids []string
 	for _, r := range Registered() {
@@ -144,7 +153,7 @@ func DefaultOn() []string {
 			ids = append(ids, r.ID)
 		}
 	}
-	return ids
+	return append(ids, methodDefaultOn()...)
 }
 
 // NewDeploymentConfig is model.NewDeploymentConfig with DefaultOn as its
