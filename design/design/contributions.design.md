@@ -12,7 +12,7 @@ Attribution and task ownership are defined in [`attribution.design.md`](attribut
 
 ## The design folder
 
-Each repository has a `design/` folder with five classes of material:
+Each repository has a `design/` folder with six classes of material:
 
 1. **Design documents (`design/design/*.design.md`)** — High-level "1-pager" designs for a specific topic, written in interactive sessions between PMs, engineers, and coding agents, and reviewed by humans. Designs may reference documents in other repositories.
 2. **Specifications (`design/spec/...`)** — Detailed normative specifications of design documents, generally one file or folder per design. Specifications are started by a person (with a personal agent or a grain task) and reviewed and edited by humans. They cover APIs, schemas, requirement IDs, and UI mockups.
