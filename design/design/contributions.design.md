@@ -41,7 +41,9 @@ A change that no design governs is reviewed against the existing designs it touc
 
 ## Process
 
-Wherever an agent opens a PR against `design/` (specifications, tasks, clarifications, or playbooks), it listens to that PR and responds to review comments by pushing updates and replying on each thread. Every agent-opened change is reviewed by a separate entity (never the run that authored it) before merge. External pull requests opened outside grain are gated by a blocking grain review check on GitHub rather than adopted (see [External pull requests](#external-pull-requests)).
+Wherever an agent opens a PR against `design/` (specifications, tasks, clarifications, or playbooks), it listens to that PR and responds to review comments by pushing updates and replying on each thread. Every agent-opened change is reviewed by a separate entity (never the run that authored it) before merge. Grain also reviews external pull requests opened outside grain, as a required, blocking GitHub check (see [External pull requests](#external-pull-requests)).
+
+Designs, specifications, and tasks can be written any way: with grain (by filing a grain task), with an external agent, by hand, or any mix of these. No path is preferred or required, and every one of them goes through the same *Reviews* rules. Grain never starts specification or task generation automatically; a person starts each step.
 
 ### Design
 
@@ -55,23 +57,24 @@ A person starts specification generation explicitly, either by hand, with an ext
 
 Implementation code reaches the repository by one of two paths:
 
-1. **Autonomous agent implementation (from tasks).** A person creates a set of tasks explicitly—with their personal agent (or by hand) or by filing a grain task—to open a PR adding `.task.grain.md` grainfiles with task descriptions, dependencies, and initial permissions. Grain automatically imports merged `.task.grain.md` files, dispatches agents to write the code PRs, reviews them with a separate agent (including design and spec conformance), and lands them through the grain merge queue once CI is green.
+1. **Autonomous agent implementation (from tasks).** People commit the tasks by merging a PR that adds `.task.grain.md` grainfiles with task descriptions, dependencies, and initial permissions, and grain does the rest: it imports them, dispatches agents to write the code PRs, reviews each PR with a separate agent (including design and spec conformance), runs CI, and merges each PR once it is clean and green.
 
-2. **External pull requests (blocking grain review check).** A contributor opens a pull request directly on GitHub, by hand or with an interactive coding agent. A grain agent review is required for all external PRs, and they merge through GitHub's normal flow once required checks pass.
+2. **External pull requests (blocking grain review check).** A contributor opens a pull request directly on GitHub, by hand or with an interactive coding agent. Grain reviews every head of the PR as a required, blocking GitHub check. Once the review and the other required checks pass, the PR's owner merges it by hand, if they choose, through the repository's normal GitHub flow.
 
 #### Autonomous agent implementation
 
 A person creates a set of tasks explicitly—with their personal agent (or by hand) or by filing a grain task—to open a PR adding `.task.grain.md` grainfiles with task descriptions, dependencies, and initial permissions.
   
-The tasks PR goes through the same *Reviews* rules, with the opening agent listening to and answering review comments until humans audit, approve, and merge it. Whoever starts the tasks step owns the tasks PR (for a grain task, that task's owner). Per [`attribution.design.md`](attribution.design.md), the owner of the tasks PR owns every task imported from its grainfiles and every implementation PR those tasks produce.
+The tasks PR goes through the same *Reviews* rules, with the opening agent listening to and answering review comments until humans audit, approve, and merge it. Whoever starts the tasks step owns the tasks PR (for a grain task, that task's owner). Per [`attribution.design.md`](attribution.design.md), the tasks' author (the owner of the tasks PR) owns every task imported from its grainfiles and is the author on every implementation PR grain opens from them, together with any `Contributors:` listed on the tasks PR.
 
-Grain automatically imports merged task grainfiles into its backlog, watched by the grain on-call. Agents decompose tasks into child tasks as needed while staying within their initial grants (`grainfiles.design.md`) and inheriting their parent's owner (`attribution.design.md`). No human is in the loop during routine implementation and landing: a second agent reviews each PR before the merge queue lands it, unless a trust-boundary rule or escalation requires a human. Design ambiguities are raised as clarification PRs against `design/` for humans to review and merge; execution or test blockers go to the grain inbox. Once landed, the grainfile task is marked complete with the task URL as the index into grain's database.
+Grain automatically imports merged task grainfiles into its backlog, watched by the grain on-call. Agents decompose tasks into child tasks as needed while staying within their initial grants (`grainfiles.design.md`) and inheriting their parent's owner (`attribution.design.md`). No human is in the loop during routine implementation and merging: a second agent reviews each PR, and grain merges it once it is clean and green, unless a trust-boundary rule or escalation requires a human. Design ambiguities are raised as clarification PRs against `design/` for humans to review and merge; execution or test blockers go to the grain inbox. Once merged, the grainfile task is marked complete with the task URL as the index into grain's database.
 
 #### External pull requests
 
 Developers iterating interactively and contributors working outside grain open standard GitHub pull requests directly against the repository.
 
 - **Required, blocking GitHub check.** The grain review (`grain/review`) is a required, blocking GitHub check that runs on every new head SHA pushed to the PR.
+- **The owner merges it.** Once the grain review and the other required checks pass, the PR's owner merges it by hand, if they choose, through the repository's normal GitHub flow.
 - **Who triggers it.** It runs automatically on PRs from **organization members and repository collaborators**. A PR from anyone else is not reviewed automatically, protecting the model budget. External PRs need to be reviewed by an organization member before the grain check can be performed.
 - **How it runs (trust model).**
   - The model never runs inside GitHub Actions. Fork PRs get no repository secrets, and placing a model credential in a workflow job that reads untrusted PR content breaks the trust boundary.
