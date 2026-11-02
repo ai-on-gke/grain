@@ -2081,7 +2081,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// proposals are judged on its own permission when it runs. A
 		// proposal grain itself files for a person (needsPersonWhy) waits
 		// too, but its note above already says why, and it is not marked
-		// as held: the run made no choice there.
+		// as held: the run made no choice there -- nor when the run also
+		// asked, since its permission would not have queued it either
+		// (AutoSubmits knows nothing of keep_running or priority).
 		heldByRun, _ := p["hold_for_approval"].(bool)
 		hold := heldByRun || needsPersonWhy != ""
 		switch {
@@ -2089,7 +2091,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			proposal.Body += model.ProposalEscalationNote(task.ID, proposal, escalated)
 		case len(ungranted) > 0, len(ungrantedReads) > 0:
 			// Filed for a person; the notes above say why.
-		case heldByRun && (approved || model.AutoSubmits(proposal, task)):
+		case heldByRun && needsPersonWhy == "" && (approved || model.AutoSubmits(proposal, task)):
 			proposal.Body += model.HeldForApprovalNote(task.ID)
 			proposal.Tags = append(proposal.Tags, model.HeldForApprovalTag)
 		case hold:
