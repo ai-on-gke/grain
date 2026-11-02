@@ -39,6 +39,10 @@ var legacyPaths = map[string]string{
 
 // ServeHTTP implements http.Handler.
 func (e *Endpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h, ok := e.mounted(r.URL.Path); ok {
+		h.ServeHTTP(w, r)
+		return
+	}
 	token, _ := strings.CutPrefix(strings.TrimSpace(r.Header.Get("Authorization")), "Bearer ")
 	grant, ok := e.Tokens.Lookup(strings.TrimSpace(token))
 	if !ok {
