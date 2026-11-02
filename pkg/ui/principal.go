@@ -673,7 +673,7 @@ func extractPrincipal(r *http.Request) (model.Principal, AuthMethod, bool) {
 			return model.Principal{}, AuthMethodNone, false
 		}
 	}
-	return model.Principal{Kind: cv.id.Kind, ID: cv.id.Email}, cv.method, true
+	return model.Principal{Kind: cv.id.Kind, ID: cv.id.Email, Source: model.AuthSource(cv.method)}, cv.method, true
 }
 
 // identifyCaller asks each registered IdentityVerifier in turn (with IAP
@@ -689,7 +689,7 @@ func identifyCaller(r *http.Request) (model.Principal, AuthMethod, bool) {
 	if !cv.present || cv.err != nil {
 		return model.Principal{}, AuthMethodNone, false
 	}
-	return model.Principal{Kind: cv.id.Kind, ID: cv.id.Email}, cv.method, true
+	return model.Principal{Kind: cv.id.Kind, ID: cv.id.Email, Source: model.AuthSource(cv.method)}, cv.method, true
 }
 
 // withAuthMethod records how the request's principal was established
@@ -832,9 +832,13 @@ func withAgentRequester(ctx context.Context, what, id, kind string) (context.Con
 	if by.Kind != model.PrincipalAgent {
 		return ctx, validationErrorf("%s may only name an agent, got %s %q", what, by.Kind, by.ID)
 	}
-	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent && by != p {
-		return ctx, forbiddenErrorf("agent %q may not act as %s %q", p.ID, by.Kind, by.ID)
+	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+		if !by.Same(p) {
+			return ctx, forbiddenErrorf("agent %q may not act as %s %q", p.ID, by.Kind, by.ID)
+		}
+		return ctx, nil
 	}
+	by.Source = model.SourceSandbox
 	return WithPrincipal(ctx, by), nil
 }
 

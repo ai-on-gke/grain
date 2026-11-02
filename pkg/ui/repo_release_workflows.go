@@ -473,8 +473,8 @@ func (c *Client) StartRepoRelease(ctx context.Context, repo string, req RepoRele
 		// own check of the ref is theirs to have answered; anybody else
 		// was held to the reviewed branches above, and is held to them
 		// again there.
-		ReleaseRefVouched: c.actor(ctx).Kind == model.PrincipalHuman,
-		RequestedBy:       c.actor(ctx).ID, Jobs: req.Jobs,
+		ReleaseRefVouched: c.requestActor(ctx).Actor.Kind == model.PrincipalHuman,
+		RequestedBy:       c.requestActor(ctx).Actor.ID, Jobs: req.Jobs,
 	})
 	if err != nil {
 		// What Start refuses is the request's own fault -- a ref that does
@@ -499,7 +499,7 @@ func (c *Client) checkReleaseRef(ctx context.Context, repo model.RepoRef, ref, c
 	if c.Store == nil {
 		return nil
 	}
-	if c.actor(ctx).Kind == model.PrincipalHuman {
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 		return nil
 	}
 	// checkRepoPerson's own reading of a deployment with no settings row

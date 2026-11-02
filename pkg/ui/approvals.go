@@ -62,7 +62,7 @@ func approvalViews(t model.Task) []ApprovalView {
 // of, and auto-merge comes back only when none is left. A caller who
 // approves none of them is refused, and told who can.
 func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pending []model.ApprovalRequirement) error {
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	user := ""
 	if actor.Kind == model.PrincipalHuman {
 		user = actor.ID

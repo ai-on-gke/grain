@@ -265,7 +265,7 @@ func (c *Client) ApproveQualificationRun(ctx context.Context, repo model.RepoRef
 	if run == nil || run.Repo != repo {
 		return QualificationRun{}, &qualificationRunNotFoundError{CandidateID: candidateID}
 	}
-	if err := c.Store.ApproveQualificationRun(ctx, run.ID, model.Attribution{Actor: c.actor(ctx)}, c.now()); err != nil {
+	if err := c.Store.ApproveQualificationRun(ctx, run.ID, model.Attribution{Actor: c.requestActor(ctx).Actor}, c.now()); err != nil {
 		return QualificationRun{}, err
 	}
 	updated, err := c.Store.CandidateQualificationRun(ctx, candidateID)

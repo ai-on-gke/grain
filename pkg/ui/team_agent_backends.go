@@ -157,7 +157,7 @@ func (c *Client) authorizeAgentBackendChange(_ context.Context, _, _ string) err
 
 // requireAgentBackendAdmin is authorizeAgentBackendChange for a handler.
 func (s *Server) requireAgentBackendAdmin(w http.ResponseWriter, r *http.Request) bool {
-	if err := s.tasks.authorizeAgentBackendChange(r.Context(), strings.TrimSpace(r.PathValue("id")), requestUser(r)); err != nil {
+	if err := s.tasks.authorizeAgentBackendChange(r.Context(), strings.TrimSpace(r.PathValue("id")), requestPerson(r.Context())); err != nil {
 		writeClientError(w, err)
 		return false
 	}

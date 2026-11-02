@@ -189,8 +189,10 @@ func TestMemoryWritesRecordTheirAuthor(t *testing.T) {
 			written.UpdatedByKind, written.UpdatedBy)
 	}
 	stored, err := store.GetMemory(ctx, nil)
-	if err != nil || stored == nil || stored.UpdatedBy != c.Config.Actor {
-		t.Fatalf("the stored memory was written by %+v (%v), want %+v", stored, err, c.Config.Actor)
+	want := c.Config.Actor
+	want.Source = model.SourceInProcess
+	if err != nil || stored == nil || stored.UpdatedBy != want {
+		t.Fatalf("the stored memory was written by %+v (%v), want %+v", stored, err, want)
 	}
 
 	if _, err := c.PutMemory(ctx, "", "an agent noticed this", agent); err != nil {

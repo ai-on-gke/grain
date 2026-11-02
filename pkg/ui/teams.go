@@ -17,7 +17,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"slices"
 	"sort"
 	"strings"
@@ -448,52 +447,10 @@ func (c *Client) applyDeploymentSettings(cfg *model.Config, req UpdateTeamReques
 	return nil
 }
 
-// teamActingUser is who ctx acts as for a team or system-admin check:
-// its verified human principal (a session, a verified IAP assertion),
-// and nobody otherwise. claimed -- the "user" a request body or an
-// in-process caller names -- is never believed: a request with no
-// principal got past ServeHTTP only as a trusted source, and a trusted
-// source acts as the deployment's own actor (Client.Config.Actor, which
-// every caller of this falls back to on ""), never as a person it names
-// (grain#2379, grain/task-2078). Anything able to reach the daemon over
-// loopback -- every user onboarded through an SSH port-forward -- could
-// otherwise be any team admin or system admin by typing their name.
-func teamActingUser(ctx context.Context, claimed string) string {
-	_ = claimed
-	if p, ok := PrincipalFromContext(ctx); ok && (p.Kind == model.PrincipalHuman || p.Kind == model.PrincipalService) && strings.TrimSpace(p.ID) != "" {
-		return strings.TrimSpace(p.ID)
-	}
-	return ""
-}
-
 func (c *Client) triggerIAPSync() {
 	if c.Config.TriggerIAPSync != nil {
 		c.Config.TriggerIAPSync()
 	}
-}
-
-func requestUser(r *http.Request) string {
-	if p, ok := PrincipalFromContext(r.Context()); ok && (p.Kind == model.PrincipalHuman || p.Kind == model.PrincipalService) && strings.TrimSpace(p.ID) != "" {
-		return strings.TrimSpace(p.ID)
-	}
-	if p, ok := ExtractPrincipal(r); ok && (p.Kind == model.PrincipalHuman || p.Kind == model.PrincipalService) && strings.TrimSpace(p.ID) != "" {
-		return strings.TrimSpace(p.ID)
-	}
-	return ""
-}
-
-// actingUser is who r acts as for a team or attribution check: its
-// verified human principal, and "" otherwise. The user its body claims
-// is ignored, whoever sent it: a signed-in person, or a run with its own
-// agent principal, may not claim to be somebody else by naming them, and
-// neither may a request with no principal at all. That one got past
-// ServeHTTP's access gate only as a caller this daemon already trusts
-// (the access code, an in-process hop), and it
-// acts as the deployment's own actor, which "" falls back to -- not as
-// whichever team admin or system admin it names (grain/task-2078).
-func actingUser(r *http.Request, claimed string) string {
-	_ = claimed
-	return requestUser(r)
 }
 
 // BroadcastTeamRequest carries the payload for POST /api/deployment/broadcast.
@@ -694,11 +651,8 @@ func (c *Client) teamRepoTarget(ctx context.Context, teamID string, repo model.R
 	// trusted in-process caller -- the daemon's own actor when that is a
 	// person. An agent in the context never falls back to the daemon's
 	// actor: it is no owner, so it gets no exception.
-	actingUser := teamActingUser(ctx, "")
-	if _, named := PrincipalFromContext(ctx); !named && actingUser == "" && c.Config.Actor.Kind == model.PrincipalHuman {
-		actingUser = strings.TrimSpace(c.Config.Actor.ID)
-	}
-	if actingUser != "" {
+	person := c.requestPersonOrTrustedOperator(ctx)
+	if person != "" {
 		return team, nil
 	}
 	return nil, validationErrorf("repository %q is not in this deployment's target repos", repo.String())

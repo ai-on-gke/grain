@@ -140,6 +140,21 @@ type agentCall struct {
 	body        []byte
 	targetTask  string
 	targetTasks []string
+	// session is whether the acting task is a console session, whose
+	// calls are recorded with source session rather than sandbox.
+	session bool
+}
+
+// source is how the gate established the agent principal it runs this
+// call as (operator-attribution spec §1.1.2).
+func (c agentCall) source() model.AuthSource {
+	switch {
+	case c.external != nil:
+		return model.SourceExternalToken
+	case c.session:
+		return model.SourceSession
+	}
+	return model.SourceSandbox
 }
 
 func (c agentCall) principalID() string {
@@ -202,7 +217,7 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 					writeError(w, agentRefusalStatus(err), err)
 					return
 				}
-				agent := model.Principal{Kind: model.PrincipalAgent, ID: call.principalID()}
+				agent := model.Principal{Kind: model.PrincipalAgent, ID: call.principalID(), Source: call.source()}
 				r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
 				s.serveAgentCall(w, r, next, call)
 				return
@@ -219,7 +234,7 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 			writeError(w, agentRefusalStatus(err), err)
 			return
 		}
-		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID, Source: call.source()}
 		r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
 		s.serveAgentCall(w, r, next, call)
 	}
@@ -262,6 +277,7 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if err != nil || acting == nil {
 		return call, fmt.Errorf("acting task %s could not be read: %v", taskID, err)
 	}
+	call.session = acting.IsConsoleSession()
 	held := grantNames(acting.Grants)
 	var set APIGrantSet
 	if call.channel == SandboxCLIChannel {
