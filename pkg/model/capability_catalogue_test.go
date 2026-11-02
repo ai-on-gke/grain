@@ -201,6 +201,29 @@ func TestCatalogueRetiredInProcessBindsItsPreset(t *testing.T) {
 	}
 }
 
+// TestCatalogueRetiredSplitBindsEveryHalf is finding 5 of
+// docs/test-runs/2026-11-02-grain-capability-server-upgrade.md: a
+// restriction kept under in_process.deployment-health binds both grants
+// the name became, including an api:deployment:read a task held on its
+// own. That refuses more than the build before the split did, and is
+// intended: a stored grant does not say whether it came from
+// deployment-health, so binding grain#health alone would let the api
+// half of an upgraded grant past the restriction.
+func TestCatalogueRetiredSplitBindsEveryHalf(t *testing.T) {
+	cat := &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"deployment-health": {Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"acme/other"}}},
+	}}
+	for _, g := range []string{"api:deployment:read", model.GrainHealthGrant} {
+		refused := cat.Refusals(model.GrantContext{Repo: repo("acme/widgets"), Kind: "task", Grants: []string{g}})
+		if len(refused) != 1 || !strings.Contains(refused[0].Reason, "in_process.deployment-health") {
+			t.Errorf("%s on acme/widgets: Refusals = %+v, want one naming in_process.deployment-health", g, refused)
+		}
+		if refused := cat.Refusals(model.GrantContext{Repo: repo("acme/other"), Kind: "task", Grants: []string{g}}); len(refused) != 0 {
+			t.Errorf("%s on acme/other: Refusals = %+v, want none", g, refused)
+		}
+	}
+}
+
 func TestNilCatalogueAdmitsEverything(t *testing.T) {
 	var cat *model.CapabilityCatalogue
 	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"anything"}}); err != nil {

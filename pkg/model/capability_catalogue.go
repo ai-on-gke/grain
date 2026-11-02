@@ -348,6 +348,15 @@ func (c *CapabilityCatalogue) judgeAPI(g string, gc GrantContext) (bool, error) 
 // name, and the migrations that rewrote stored grants to the preset do
 // not touch the catalogue: without this the restriction would stop
 // binding the moment the grant was renamed.
+//
+// A name that became several grants binds every one of them, so
+// in_process.deployment-health also restricts an api:deployment:read a
+// task held on its own before the upgrade. That is deliberate: a stored
+// grant does not say what it was rewritten from, and binding only
+// grain#health would let the api half of an upgraded deployment-health
+// grant escape the restriction. Refusing more is the safe direction
+// (docs/test-runs/2026-11-02-grain-capability-server-upgrade.md,
+// finding 5; design/design/config-repo-settings.design.md §3.4.1).
 func (c *CapabilityCatalogue) judgeRetiredInProcess(g string, gc GrantContext) (bool, error) {
 	person := false
 	for _, legacy := range retiredInProcessNames(g) {
