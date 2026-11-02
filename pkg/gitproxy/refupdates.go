@@ -296,7 +296,8 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 		return "", nil
 	}
 	check := pushCheckFrom(ctx)
-	if others, err = a.configProposalUpdates(ctx, sandbox, owner, repo, others, check); err != nil || len(others) == 0 {
+	var proposals string
+	if others, proposals, err = a.configProposalUpdates(ctx, sandbox, owner, repo, others, check); err != nil || len(others) == 0 {
 		return "", err
 	}
 	if anyRef, ok := lookup.(AnyRefLookup); ok {
@@ -327,6 +328,10 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 		reason := fmt.Sprintf("refusing to update %s in %s/%s: a sandbox may push only its own task's branch, %s "+
 			"(push with `git push origin %s`)", strings.Join(refs, ", "), owner, repo, own, branch)
 		switch {
+		case proposals != "":
+			reason += fmt.Sprintf(", and its own config proposal branches, refs/heads/%s<name>. "+
+				"A change reaches %s's main only through propose_config_change and a person's approval",
+				proposals, model.ConfigRepo())
 		case declared != nil:
 			reason += fmt.Sprintf(". This task's template, %s, declares a push set for %s only",
 				declared.Declaration.Path, declared.Declaration.Repo)
@@ -367,24 +372,26 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 // configProposalUpdates is others less the updates to the run's own
 // grain/config proposal branches (ConfigProposalLookup), which are
 // granted -- created, moved, force-moved or deleted, as its own branch
-// may be. Only refs strictly under the prefix qualify, and only in
-// grain/config: main, and every other task's branches, stay refused.
+// may be -- and the branch prefix those are under ("" for a run with
+// none, which the refusal of the rest names). Only refs strictly under
+// the prefix qualify, and only in grain/config: main, and every other
+// task's branches, stay refused.
 func (a *ModelAuthorizer) configProposalUpdates(ctx context.Context, sandbox, owner, repo string,
-	others []RefUpdate, check *pushCheck) ([]RefUpdate, error) {
+	others []RefUpdate, check *pushCheck) ([]RefUpdate, string, error) {
 	lookup, ok := a.branches().(ConfigProposalLookup)
 	if !ok {
-		return others, nil
+		return others, "", nil
 	}
 	cOwner, cRepo := canonicalizeRepo(owner, repo)
 	if !canonicalMatches(model.ConfigRepo(), cOwner, cRepo) {
-		return others, nil
+		return others, "", nil
 	}
 	prefix, err := lookup.GitConfigProposalPrefix(ctx, sandbox)
 	if err != nil {
-		return nil, fmt.Errorf("gitproxy: resolving config proposal branches for %s: %w", sandbox, err)
+		return nil, "", fmt.Errorf("gitproxy: resolving config proposal branches for %s: %w", sandbox, err)
 	}
 	if prefix == "" {
-		return others, nil
+		return others, "", nil
 	}
 	refPrefix := "refs/heads/" + prefix
 	var rest []RefUpdate
@@ -395,7 +402,7 @@ func (a *ModelAuthorizer) configProposalUpdates(ctx context.Context, sandbox, ow
 		}
 		rest = append(rest, u)
 	}
-	return rest, nil
+	return rest, prefix, nil
 }
 
 // refuseBorrowedBranchRewrite is the one bound on a run's own branch: a
