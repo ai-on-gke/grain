@@ -263,7 +263,9 @@ if [ -n "$staging" ]; then
   msg="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0-pending)"
   out="$msg"
   expect "soak passes" "the pending tag names the rc it came from" has "From v2.3.0-rc.1"
-  expect "soak passes" "and the soak verdict" has "staging soak passed"
+  expect "soak passes" "and how long it soaked, and the verdict" has "From v2.3.0-rc.1, soaked 25h00m of 24h: supervisor:"
+  expect "soak passes" "and records the soak for approve" has "Soak-Seconds: 90000"
+  expect "soak passes" "and no short-soak warning" eval '! has "SHORT SOAK"'
 
   # --- a second daily run while v2.3.0 is pending ---
   : > "$work/images.log"
@@ -315,6 +317,7 @@ if [ -n "$staging" ]; then
   msg="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0)"
   out="$msg"
   expect "approve" "the release tag names who approved it" has "approved by alice@example.com"
+  expect "approve" "and no short-soak override" eval '! has "short soak"'
   approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human
   expect "approve twice" "is refused: nothing is pending" eq "$status" 1
 
@@ -374,6 +377,56 @@ if [ -n "$staging" ]; then
   expect "soak pending" "says so" has "soak is pending"
   expect "soak pending" "promotes nothing" eq "$(remote_tag v2.3.0)" ""
   expect "soak pending" "cuts nothing" eq "$(remote_tag v2.3.0-rc.2)" ""
+
+  # --- FORCE on an rc an hour old: the gate holds the short soak ---
+  setup ""
+  tag_remote v2.3.0-rc.1 "$c2" 1
+  staging_on "$c2" v2.3.0-rc.1
+  runs "$c4"
+  train FORCE=true RELEASE_DEPLOYED_AT=$((now - 3600))
+  expect "forced, short" "exits 0" eq "$status" 0
+  expect "forced, short" "says how long it soaked, and that FORCE was used" has "has soaked 1h00m of 24h (FORCE=true); asking the soak gate"
+  expect "forced, short" "the gate holds it pending" has "PENDING soak-age:"
+  expect "forced, short" "stages nothing" eq "$(remote_tag v2.3.0-pending)" ""
+  expect "forced, short" "publishes nothing" images_were ""
+
+  # --- FORCE with a gate that passes: staged, and the short soak recorded ---
+  : > "$work/train.out"
+  train FORCE=true RELEASE_TRAIN_OUTPUT="$work/train.out"
+  expect "forced, staged" "exits 0" eq "$status" 0
+  expect "forced, staged" "tags v2.3.0-pending" eq "$(remote_tag v2.3.0-pending)" "$c2"
+  expect "forced, staged" "warns of the short soak" has "SHORT SOAK: under the 22h minimum; approving it needs short_soak_ok: true."
+  expect "forced, staged" "outputs the soak" grep -qxF "pending_soak=From v2.3.0-rc.1, soaked 1h00m of 24h (FORCE=true)" "$work/train.out"
+  expect "forced, staged" "and the version" grep -qxF "pending_version=v2.3.0" "$work/train.out"
+  out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0-pending)"
+  expect "forced, staged" "the pending tag says how long it soaked and that FORCE was used" has "From v2.3.0-rc.1, soaked 1h00m of 24h (FORCE=true): supervisor:"
+  expect "forced, staged" "and warns" has "SHORT SOAK"
+  expect "forced, staged" "and records it for approve" has "Soak-Seconds: 3600"
+  expect "forced, staged" "and that it was forced" has "Soak-Forced: true"
+
+  # --- approving the short soak needs short_soak_ok ---
+  : > "$work/images.log"
+  approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
+  expect "approve, short soak" "is refused" eq "$status" 1
+  expect "approve, short soak" "says why and how to override" has "v2.3.0 soaked 1h00m of 24h, under the 22h minimum: approve it with short_soak_ok: true"
+  expect "approve, short soak" "tags nothing" eq "$(remote_tag v2.3.0)" ""
+  expect "approve, short soak" "keeps it pending" eq "$(remote_tag v2.3.0-pending)" "$c2"
+  expect "approve, short soak" "publishes nothing" images_were ""
+  approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com RELEASE_SHORT_SOAK_OK=true
+  expect "approve, short_soak_ok" "exits 0" eq "$status" 0
+  expect "approve, short_soak_ok" "tags v2.3.0" eq "$(remote_tag v2.3.0)" "$c2"
+  expect "approve, short_soak_ok" "retags the staged images" images_were "promote v2.3.0"
+  out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0)"
+  expect "approve, short_soak_ok" "the release tag records the override" \
+    has "approved by alice@example.com; short soak (soaked 1h00m of 24h, under the 22h minimum) accepted with short_soak_ok: true"
+
+  # --- a -pending tag from before soaks were recorded: read off the tags ---
+  setup ""
+  tag_remote v2.3.0-rc.1 "$c2" 3
+  tag_remote v2.3.0-pending "$c2" 1
+  approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
+  expect "approve, unrecorded soak" "is refused on the tags' 2h" has "v2.3.0 soaked 2h00m of 24h, under the 22h minimum"
+  expect "approve, unrecorded soak" "tags nothing" eq "$(remote_tag v2.3.0)" ""
 
   # --- staging rolled back: dropped, rc.2 cut, and triage asked for ---
   setup ""
