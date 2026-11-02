@@ -30,10 +30,12 @@ import (
 // grain hostd, for a daemon that itself runs in the release container
 // (design/design/cli-run-location.design.md, "Host CLIs through grain hostd").
 //
-// Staging is LocalHost's: the run's working directory, staging dir, CLI
-// home and session store are on the daemon's bind mounts, which have the
-// same paths on the host, so a file staged here is where the host-run CLI
-// looks for it. Only Run crosses the socket. The binary is the allowlist
+// Staging is LocalHost's for a hostd beside the daemon: the run's
+// working directory, staging dir, CLI home and session store are on the
+// daemon's bind mounts, which have the same paths on the host, so a file
+// staged here is where the host-run CLI looks for it, and only Run
+// crosses the socket. A hostd on another machine (Remote) stages over
+// its session instead (hostd_remote.go). The binary is the allowlist
 // entry's, not Command.Path: the daemon names an entry and hostd decides
 // what that runs.
 type HostdHost struct {
@@ -48,6 +50,20 @@ type HostdHost struct {
 	// through runhost.Hostd, which starts it detached so it outlives a
 	// daemon upgrade. Nil is Client.Run.
 	Start func(ctx context.Context, req hostd.Request, stdin io.Reader, stdout, stderr io.Writer) (hostd.Exit, error)
+
+	// Remote is set for a hostd on another machine, one that dialed in
+	// to the daemon (hostd.Hello.Remote): the run's files are staged
+	// there over Client rather than here, and grain's endpoints are
+	// carried to its loopback over Remote (hostd_remote.go). Nil is a
+	// hostd beside the daemon, staging as LocalHost does.
+	Remote HostdRemote
+	// Grain and StageRoot are that hostd's grain binary and staging
+	// directory, as its hello said them.
+	Grain     string
+	StageRoot string
+	// CodexAuth is the codex login on that hostd's machine, if it has
+	// one (hostd.Hello.CodexAuth).
+	CodexAuth string
 }
 
 func (h HostdHost) binary() string {
@@ -76,6 +92,10 @@ func (h HostdHost) Run(ctx context.Context, c Command, tee io.Writer) (string, e
 	if tee != nil {
 		out = io.MultiWriter(&stdout, tee)
 	}
+	dir := c.Dir
+	if h.remote() {
+		dir = h.remoteDir(dir)
+	}
 	start := h.Start
 	if start == nil {
 		start = h.Client.Run
@@ -85,7 +105,7 @@ func (h HostdHost) Run(ctx context.Context, c Command, tee io.Writer) (string, e
 		Name: h.Entry,
 		Args: c.Args,
 		Env:  c.Env,
-		Dir:  c.Dir,
+		Dir:  dir,
 	}, strings.NewReader(c.Stdin), out, &stderr)
 	if hostd.IsDraining(err) {
 		return "", fmt.Errorf("%w: %v", ErrHostdDraining, err)

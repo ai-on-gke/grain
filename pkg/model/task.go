@@ -37,6 +37,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -892,21 +893,84 @@ const SelfDebugCapability = "self-debug"
 // names it in its reads or a repo-read: grant like any other.
 func GrainSourceRepo() RepoRef { return RepoRef{Owner: "ai-on-gke", Name: "grain"} }
 
-// RepoReadCapabilityPrefix marks a capability id as a cross-repository
-// read grant for CI.
-const RepoReadCapabilityPrefix = "repo-read:"
+// The repo server's #read method: CI read access to the one repository
+// its `repo` argument names (formerly repo-read:<repo>).
+const (
+	RepoReadMethod = "read"
+	RepoReadRef    = RepoCapabilityServerID + "#" + RepoReadMethod
+)
 
-// RepoReadCapability is the capability id standing for "grant CI read
-// access to repo".
-func RepoReadCapability(repo RepoRef) string {
-	return RepoReadCapabilityPrefix + repo.String()
+// RepoReadCapabilityPrefix and RepoWriteCapabilityPrefix are the retired
+// bare spellings of CI repository access, repo-read:<owner>/<repo> and
+// repo-write:<owner>/<repo>. They are read as RepoReadGrant and
+// RepoWriteGrant everywhere -- indefinitely, since a repository's own
+// .grain/workflows job `capabilities:` lives in somebody else's
+// repository and nothing here rewrites it -- and schema migration 88
+// rewrote the stored rows.
+const (
+	RepoReadCapabilityPrefix  = "repo-read:"
+	RepoWriteCapabilityPrefix = "repo-write:"
+)
+
+// RepoReadGrant is the recorded grant of CI read access to repo:
+// https://grain.dev/capabilities/repo#read={"repo":"<repo>"}.
+func RepoReadGrant(repo RepoRef) string { return repoAccessGrant(RepoReadRef, repo) }
+
+// RepoWriteGrant is the recorded grant of CI write (push) access to repo:
+// https://grain.dev/capabilities/repo#write={"repo":"<repo>"}. It is not
+// GitPushAnyRefGrant, the other value #write takes, which widens a
+// task's own pushes rather than naming a repository.
+func RepoWriteGrant(repo RepoRef) string { return repoAccessGrant(RepoWriteRef, repo) }
+
+func repoAccessGrant(ref string, repo RepoRef) string {
+	data, err := json.Marshal(map[string]any{"repo": repo.String()})
+	if err != nil {
+		panic(fmt.Sprintf("model: encoding %s's repo: %v", ref, err))
+	}
+	return ref + "=" + string(data)
 }
 
-// RepoReadTarget returns the repository a RepoReadCapability id names,
-// and false for any other capability id.
+// RepoReadCapability is the capability id standing for "grant CI read
+// access to repo": RepoReadGrant.
+func RepoReadCapability(repo RepoRef) string { return RepoReadGrant(repo) }
+
+// RepoReadTarget returns the repository a grant of CI read access names
+// -- RepoReadGrant, or the retired repo-read:<repo> -- and false for any
+// other capability id.
 func RepoReadTarget(capability string) (RepoRef, bool) {
-	name, ok := strings.CutPrefix(capability, RepoReadCapabilityPrefix)
-	if !ok || name == "" {
+	return repoAccessTarget(capability, RepoReadCapabilityPrefix, RepoReadRef)
+}
+
+// RepoWriteCapability is the capability id standing for "grant CI write
+// access to repo": RepoWriteGrant.
+func RepoWriteCapability(repo RepoRef) string { return RepoWriteGrant(repo) }
+
+// RepoWriteTarget returns the repository a grant of CI write access
+// names -- RepoWriteGrant, or the retired repo-write:<repo> -- and false
+// for any other capability id, GitPushAnyRefGrant among them.
+func RepoWriteTarget(capability string) (RepoRef, bool) {
+	return repoAccessTarget(capability, RepoWriteCapabilityPrefix, RepoWriteRef)
+}
+
+// repoAccessTarget reads capability as legacyPrefix<repo>, or as ref with
+// exactly one argument, repo.
+func repoAccessTarget(capability, legacyPrefix, ref string) (RepoRef, bool) {
+	s := strings.TrimSpace(capability)
+	name, ok := strings.CutPrefix(s, legacyPrefix)
+	if !ok {
+		if !IsCapabilityRef(s) || CapabilityGrantRef(s) != ref {
+			return RepoRef{}, false
+		}
+		spec, err := CapabilityGrantSpec(s)
+		if err != nil || len(spec.With) != 1 {
+			return RepoRef{}, false
+		}
+		name, ok = spec.With["repo"].(string)
+		if !ok {
+			return RepoRef{}, false
+		}
+	}
+	if name == "" {
 		return RepoRef{}, false
 	}
 	repo, err := ParseRepo(name)
@@ -916,9 +980,73 @@ func RepoReadTarget(capability string) (RepoRef, bool) {
 	return repo, true
 }
 
+// IsRepoAccessGrant reports whether capability grants a CI job read or
+// write access to another repository (RepoReadTarget, RepoWriteTarget).
+//
+// These are what the retired reporead and repowrite providers decided,
+// carried by the reference itself now that no provider stands behind it:
+// such a grant is CI-only (CapabilitySpec.CIOnly) -- a task holding one is
+// refused it (ResolveGrants, CIOnlyRefusal) -- and RepoAccessAdmitsCIEvent
+// is its event gate.
+func IsRepoAccessGrant(capability string) bool {
+	if _, ok := RepoReadTarget(capability); ok {
+		return true
+	}
+	_, ok := RepoWriteTarget(capability)
+	return ok
+}
+
+// RepoAccessAdmitsCIEvent reports whether a CI job run on event is
+// handed the repository access capability grants. Read access goes to
+// every event. Write access is the old repo-write provider's gate: a
+// post-merge release or an operator's own workflow_dispatch, and the
+// schedule run grain itself fired from a workflow's cron (trustedSchedule,
+// ci.Request.TrustedSchedule) -- that cron was written into a workflow on
+// the default branch whose job declared the grant, and runs as the
+// schedule's team, whose GitHub credential the push goes out with
+// (grain/task-1654), the same assurance a workflow_dispatch somebody
+// typed carries. A caller's own `-event schedule` run is refused, as is a
+// push or pull-request run. False for any other capability.
+func RepoAccessAdmitsCIEvent(capability, event string, trustedSchedule bool) bool {
+	if _, ok := RepoReadTarget(capability); ok {
+		return true
+	}
+	if _, ok := RepoWriteTarget(capability); !ok {
+		return false
+	}
+	switch event {
+	case "release", "workflow_dispatch":
+		return true
+	case "schedule":
+		return trustedSchedule
+	}
+	return false
+}
+
+// RepoAccessSpellings is every spelling of capability's repository
+// access -- the recorded reference and the retired bare name -- with
+// capability itself first, so a rule written in either matches a grant
+// held in the other. Just capability for anything else.
+func RepoAccessSpellings(capability string) []string {
+	out := []string{capability}
+	add := func(s string) {
+		if !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	if repo, ok := RepoReadTarget(capability); ok {
+		add(RepoReadGrant(repo))
+		add(RepoReadCapabilityPrefix + repo.String())
+	} else if repo, ok := RepoWriteTarget(capability); ok {
+		add(RepoWriteGrant(repo))
+		add(RepoWriteCapabilityPrefix + repo.String())
+	}
+	return out
+}
+
 // CapabilityRepos returns the repositories a grant of capability lets a
 // run reach beyond its task's own Target, Writes and Reads: the
-// repository a RepoReadCapability or RepoWriteCapability names. Nil for
+// repository a repository access grant (IsRepoAccessGrant) names. Nil for
 // any other capability -- SelfDebugCapability included, whose grain-src/
 // is the deployment's baked-in copy rather than a clone, so a local
 // policy never refuses a self-debug task over bwsalmon/grain. Anything
@@ -932,30 +1060,6 @@ func CapabilityRepos(capability string) []RepoRef {
 		return []RepoRef{repo}
 	}
 	return nil
-}
-
-// RepoWriteCapabilityPrefix marks a capability id as a cross-repository
-// write grant for CI.
-const RepoWriteCapabilityPrefix = "repo-write:"
-
-// RepoWriteCapability is the capability id standing for "grant CI write
-// access to repo".
-func RepoWriteCapability(repo RepoRef) string {
-	return RepoWriteCapabilityPrefix + repo.String()
-}
-
-// RepoWriteTarget returns the repository a RepoWriteCapability id names,
-// and false for any other capability id.
-func RepoWriteTarget(capability string) (RepoRef, bool) {
-	name, ok := strings.CutPrefix(capability, RepoWriteCapabilityPrefix)
-	if !ok || name == "" {
-		return RepoRef{}, false
-	}
-	repo, err := ParseRepo(name)
-	if err != nil {
-		return RepoRef{}, false
-	}
-	return repo, true
 }
 
 // GitCredentialGrant is the Grant attaching a GitCredentialCapability to

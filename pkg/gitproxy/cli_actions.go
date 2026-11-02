@@ -295,6 +295,17 @@ type CLIProposeResult struct {
 	Queued          bool   `json:"queued"`
 	Held            bool   `json:"held"`
 	ApprovalNote    string `json:"approval_note,omitempty"`
+	// DroppedDefaults is the default grants the capability policy kept
+	// off the proposal, each with the policy's reason
+	// (ui.Task.DroppedDefaults).
+	DroppedDefaults []CLIDroppedDefault `json:"dropped_defaults,omitempty"`
+}
+
+// CLIDroppedDefault is one default grant the capability policy kept off
+// a proposal, and why.
+type CLIDroppedDefault struct {
+	Grant  string `json:"grant"`
+	Reason string `json:"reason"`
 }
 
 // CLIQuarantineRequest is POST /cli/quarantine's body.

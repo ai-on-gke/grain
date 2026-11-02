@@ -405,6 +405,9 @@ func ciOnlyCapability(name string) bool {
 	if name == model.ReleaseGateReadCapability {
 		return true
 	}
+	if model.CapabilityGrantRef(name) == model.RepoReadRef {
+		return true
+	}
 	if _, ok := model.RepoReadTarget(name); ok {
 		return true
 	}

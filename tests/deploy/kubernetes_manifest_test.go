@@ -619,11 +619,23 @@ func TestTheKubernetesDeploymentTellsTheDaemonItsOwnAddressAndName(t *testing.T)
 // deploy/kubernetes/README.md tells them to look for.
 func TestTheKubernetesManifestStillShipsItsCHANGEMEValues(t *testing.T) {
 	dep := grainDeployment(t)
-	flags := daemonArgs(t, grainContainer(t, dep))
+	container := grainContainer(t, dep)
+	flags := daemonArgs(t, container)
 	if got := flagValue(t, flags, "default-target-repo"); got != "CHANGEME/CHANGEME" {
 		t.Errorf("-default-target-repo is %q. This file ships with CHANGEME there on purpose -- an unedited "+
 			"apply should fail on something obvious rather than file this deployment's tasks against whichever "+
 			"repository was being tested against when it was committed", got)
+	}
+	var allowedPrincipals string
+	for _, env := range container.Env {
+		if env.Name == "GRAIN_ALLOWED_PRINCIPALS" {
+			allowedPrincipals = env.Value
+			break
+		}
+	}
+	if allowedPrincipals != "user:CHANGEME@example.com" {
+		t.Errorf("GRAIN_ALLOWED_PRINCIPALS is %q, want \"user:CHANGEME@example.com\" -- an unedited "+
+			"manifest must admit nobody over IAP rather than ship a real email or fall back to the default allowlist", allowedPrincipals)
 	}
 }
 
