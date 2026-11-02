@@ -26,14 +26,16 @@ import (
 // test is shell: scripts/candidate-gate_test.sh drives select-lkg and
 // check-soak against JSON shaped like the release gate's answers, and
 // scripts/release-from-trunk_test.sh drives both phases of the train
-// against a bare remote. This is what runs them in CI.
+// against a bare remote, and scripts/release-notes_test.sh drives the
+// release notes, the release body and the breaking-change gate against a
+// throwaway history. This is what runs them in CI.
 func TestReleaseTrainShellSuites(t *testing.T) {
 	for _, tool := range []string{"git", "jq"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not on PATH: %v", tool, err)
 		}
 	}
-	for _, suite := range []string{"candidate-gate_test.sh", "release-from-trunk_test.sh"} {
+	for _, suite := range []string{"candidate-gate_test.sh", "release-from-trunk_test.sh", "release-notes_test.sh"} {
 		t.Run(suite, func(t *testing.T) {
 			cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", suite))
 			out, err := cmd.CombinedOutput()
