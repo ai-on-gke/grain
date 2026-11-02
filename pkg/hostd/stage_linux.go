@@ -139,6 +139,12 @@ func (s *Server) stage(op *StageOp) StageReply {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fail(err)
 		}
+		// MkdirAll is content with a symlink to a directory, which
+		// would take the new directory outside the root.
+		dir, err := confinedDir(root, dir)
+		if err != nil {
+			return fail(err)
+		}
 		path, err := os.MkdirTemp(dir, op.Pattern)
 		if err != nil {
 			return fail(err)

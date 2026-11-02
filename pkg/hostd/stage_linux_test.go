@@ -84,6 +84,16 @@ func TestStageRefusesToFollowASymlinkOutOfTheRoot(t *testing.T) {
 	if entries, _ := os.ReadDir(outside); len(entries) != 1 {
 		t.Fatalf("something was created outside the root: %v", entries)
 	}
+	// The temp area itself planted as a link out of the root.
+	if err := os.Symlink(outside, filepath.Join(root, "tmp")); err != nil {
+		t.Fatal(err)
+	}
+	if r := s.stage(&StageOp{Op: StageMkdirTemp, Pattern: "x-"}); r.Error == "" {
+		t.Errorf("stage(%s) through the linked temp area succeeded: %s", StageMkdirTemp, r.Path)
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 1 {
+		t.Fatalf("a temp directory was created outside the root: %v", entries)
+	}
 }
 
 // TestStageSymlinkTakesOnlyTheCodexLogin: the one link a run stages is
