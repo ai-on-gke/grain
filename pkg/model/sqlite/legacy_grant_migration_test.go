@@ -106,7 +106,7 @@ var retiredGrants = []struct {
 	// corp-research is the Google build's: core has no alias for it, which
 	// that build registers with capability.Register (retiredAs).
 	{86, "corp-research", []string{model.CorpResearchGrant}},
-	{89, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
+	{90, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -519,7 +519,7 @@ func TestSchema65StoreAndStateRepoImportRewriteCICapabilities(t *testing.T) {
 	})
 }
 
-func TestMigration89SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
+func TestMigration90SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -597,21 +597,21 @@ func TestMigration89SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		}
 	}
 
-	// Rewind to schema 88 and export a pre-migration state-repo dump before migrating in place.
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 88 WHERE `id` = 1"); err != nil {
+	// Rewind to schema 89 and export a pre-migration state-repo dump before migrating in place.
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 89 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	exportDir := t.TempDir()
 	if err := staterepo.Export(ctx, db, exportDir); err != nil {
-		t.Fatalf("exporting version-88 store: %v", err)
+		t.Fatalf("exporting version-89 store: %v", err)
 	}
-	if err := staterepo.WriteSchemaVersion(exportDir, 88); err != nil {
-		t.Fatalf("stamping version-88 export: %v", err)
+	if err := staterepo.WriteSchemaVersion(exportDir, 89); err != nil {
+		t.Fatalf("stamping version-89 export: %v", err)
 	}
 
-	// Migrate in place to 89.
+	// Migrate in place to 90.
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating version-88 store to 89: %v", err)
+		t.Fatalf("migrating version-89 store to 90: %v", err)
 	}
 
 	assertMigrated := func(t *testing.T, s *model.Store, sqlDB *sql.DB) {
@@ -727,20 +727,20 @@ func TestMigration89SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 
 	assertMigrated(t, store, db)
 
-	// Re-running migration 89 is idempotent.
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 88 WHERE `id` = 1"); err != nil {
+	// Re-running migration 90 is idempotent.
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 89 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("re-running migration 89: %v", err)
+		t.Fatalf("re-running migration 90: %v", err)
 	}
 	assertMigrated(t, store, db)
 
-	// Importing the pre-migration schema-88 state-repo export into a fresh store rewrites grants and seeds permission sets.
+	// Importing the pre-migration schema-89 state-repo export into a fresh store rewrites grants and seeds permission sets.
 	importedStore, importedDB, importCtx := openStore(t)
 	_ = importCtx
 	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
-		t.Fatalf("staterepo.Import of schema-88 export: %v", err)
+		t.Fatalf("staterepo.Import of schema-89 export: %v", err)
 	}
 	assertMigrated(t, importedStore, importedDB)
 }

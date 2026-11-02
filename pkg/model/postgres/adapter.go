@@ -86,7 +86,7 @@ var tablePrimaryKeys = map[string][]string{
 	"base_branch_ci":                 {"owner", "name", "branch"},
 	"base_branch_dispatch":           {"owner", "name", "branch"},
 	"base_branch_release":            {"owner", "name", "branch"},
-	"merge_batch":                    {"owner", "name", "branch"},
+	"merge_batch":                    {"owner", "name", "branch", "task_id"},
 	"scheduled_workflow_run":         {"schedule_id"},
 	"merge_batch_history":            {"id"},
 	"merge_gather_history":           {"id"},

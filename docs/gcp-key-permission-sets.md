@@ -80,11 +80,11 @@ To retire the fixed pool:
 
    and drop `gcp_service_account_count`, `-account` and `GCP_MINTER_KEY` from the entry in grain/config.
 
-## Retirement of the in-process `gcp-key` capability (migration 89)
+## Retirement of the in-process `gcp-key` capability (migration 90)
 
-Schema migration 89 retires the in-process `gcp-key` and `gcp-key:<name>` providers onto `https://grain.dev/capabilities/gcp#gcp-key` in a single release so the two never mint against the same service accounts or compete for GCP's 10-key-per-account quota:
+Schema migration 90 retires the in-process `gcp-key` and `gcp-key:<name>` providers onto `https://grain.dev/capabilities/gcp#gcp-key` in a single release so the two never mint against the same service accounts or compete for GCP's 10-key-per-account quota:
 
-- **Permission sets seeded automatically:** if `grain_config.gcp_project` and `grain_config.gcp_service_account_email` are configured and no `sandbox-agent` set exists yet on `https://grain.dev/capabilities/gcp`, migration 89 seeds a `sandbox-agent` set over that exact account pool (`gcp_service_account_count`, minting through the deployment's `gcp-key-minter` secret, `adopt_legacy: true`, `max_lease: "24h"`). Each `gcp_key` row behind `gcp-key:<name>` seeds a set `<name>` over its account pool with `key_path: "/home/debian/.gcp-service-account-<name>.json"` and its own admin and `max_lease`.
+- **Permission sets seeded automatically:** if `grain_config.gcp_project` and `grain_config.gcp_service_account_email` are configured and no `sandbox-agent` set exists yet on `https://grain.dev/capabilities/gcp`, migration 90 seeds a `sandbox-agent` set over that exact account pool (`gcp_service_account_count`, minting through the deployment's `gcp-key-minter` secret, `adopt_legacy: true`, `max_lease: "24h"`). Each `gcp_key` row behind `gcp-key:<name>` seeds a set `<name>` over its account pool with `key_path: "/home/debian/.gcp-service-account-<name>.json"` and its own admin and `max_lease`.
 - **Stored grants rewritten:** bare `gcp-key` becomes `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}` and `gcp-key:<name>` becomes `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"<name>","primary":true}` across tasks, templates, schedules, suites, repository `default_capabilities` and `ci_capabilities`, console sessions, the capability catalogue, and local policy. Older state-repository exports carrying `gcp-key` are rewritten on import.
 - **One-release alias:** `gcp-key` and `gcp-key:<name>` remain readable as aliases for one release (with a deprecation notice in Settings → Capabilities) and normalize to the corresponding `gcp#gcp-key` grants; the in-process provider itself is no longer registered.
 
