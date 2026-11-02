@@ -261,11 +261,29 @@ func TestARestartedHostdKeepsAFinishedSpoolForTheDaemon(t *testing.T) {
 	started := make(chan Started, 1)
 	c := detachedClient(ts, started)
 	ctx, cancel := context.WithCancel(context.Background())
+	// The process holds its exit until hostd has seen the daemon go:
+	// one that ended while its starting connection was still attached
+	// would have its exit sent down it and its spool released, leaving
+	// nothing for a restarted hostd to keep.
+	release := filepath.Join(ts.dir, "release")
+	refused := make(chan error, 1)
 	go func() {
-		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "echo done; exit 7"}, Detach: true, Run: "r"}, nil, nil, nil)
+		_, err := c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", `cd "$0"; echo done; while [ ! -e release ]; do sleep 0.02; done; exit 7`, ts.dir}, Detach: true, Run: "r"}, nil, nil, nil)
+		refused <- err
 	}()
-	st := <-started
+	var st Started
+	select {
+	case st = <-started:
+	case err := <-refused:
+		t.Fatalf("Run ended before it started: %v", err)
+	}
 	cancel()
+	for listed(t, ts, st.ID).Attached {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	waitGone(t, st.PID, 10*time.Second)
 	for !listed(t, ts, st.ID).Exited {
 		time.Sleep(20 * time.Millisecond)
