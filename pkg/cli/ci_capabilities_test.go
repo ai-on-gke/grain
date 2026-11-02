@@ -342,8 +342,8 @@ func TestPackagePublishAndRepoWriteStripWritePermissionsOnUntrustedEvents(t *tes
 		if err != nil {
 			t.Fatalf("event %s returned unexpected error: %v", event, err)
 		}
-		if len(cc.Task.Grants) != 0 {
-			t.Fatalf("event %s expected 0 grants, got: %+v", event, cc.Task.Grants)
+		if len(claimedCIGrants(t, cc)) != 0 {
+			t.Fatalf("event %s expected 0 grants, got: %+v", event, claimedCIGrants(t, cc))
 		}
 		if len(resolved) != 0 {
 			t.Fatalf("event %s expected 0 resolved capabilities, got: %+v", event, resolved)
@@ -356,10 +356,10 @@ func TestPackagePublishAndRepoWriteStripWritePermissionsOnUntrustedEvents(t *tes
 		if err != nil {
 			t.Fatalf("event %s returned unexpected error: %v", event, err)
 		}
-		if len(cc.Task.Grants) != 2 {
-			t.Fatalf("event %s expected 2 grants, got: %+v", event, cc.Task.Grants)
+		if len(claimedCIGrants(t, cc)) != 2 {
+			t.Fatalf("event %s expected 2 grants, got: %+v", event, claimedCIGrants(t, cc))
 		}
-		for _, g := range cc.Task.Grants {
+		for _, g := range claimedCIGrants(t, cc) {
 			if g.Capability != "package-publish" && g.Capability != "repo-write:acme/widgets" {
 				t.Errorf("unexpected grant for %s: %s", event, g.Capability)
 			}
@@ -681,8 +681,8 @@ func TestTrustedScheduleHoldsOnlyTheProvidersThatOptedIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cc.Task.Grants) != 0 {
-		t.Fatalf("untrusted schedule grants = %+v, want none", cc.Task.Grants)
+	if len(claimedCIGrants(t, cc)) != 0 {
+		t.Fatalf("untrusted schedule grants = %+v, want none", claimedCIGrants(t, cc))
 	}
 
 	// The run grain's cron fired holds only the providers that opted in:
@@ -693,7 +693,7 @@ func TestTrustedScheduleHoldsOnlyTheProvidersThatOptedIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	var granted []string
-	for _, g := range cc.Task.Grants {
+	for _, g := range claimedCIGrants(t, cc) {
 		granted = append(granted, g.Capability)
 	}
 	slices.Sort(granted)
@@ -706,8 +706,8 @@ func TestTrustedScheduleHoldsOnlyTheProvidersThatOptedIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cc.Task.Grants) != 0 {
-		t.Fatalf("push with trustedSchedule grants = %+v, want none", cc.Task.Grants)
+	if len(claimedCIGrants(t, cc)) != 0 {
+		t.Fatalf("push with trustedSchedule grants = %+v, want none", claimedCIGrants(t, cc))
 	}
 }
 
@@ -834,4 +834,24 @@ func TestDeclaredRepoWriteFailsClearlyWhenTheTeamHasNoCredential(t *testing.T) {
 	if writes := adapter.WriteScopes.Repos(fake.name); len(writes) != 0 {
 		t.Errorf("a refused job holds write scopes %v", writes)
 	}
+}
+
+// claimedCIGrants is the grants a CI job's context holds beyond the
+// grain#ci every job carries (daemon.ResolveCICapabilities adds it
+// whatever the job names), failing t if that one is missing.
+func claimedCIGrants(t *testing.T, cc model.CapabilityContext) []model.Grant {
+	t.Helper()
+	var out []model.Grant
+	held := false
+	for _, g := range cc.Task.Grants {
+		if model.IsGrainCIGrant(g.Capability) {
+			held = true
+			continue
+		}
+		out = append(out, g)
+	}
+	if !held {
+		t.Fatalf("CI job grants = %+v, want the job's own %s among them", cc.Task.Grants, model.GrainCIGrant)
+	}
+	return out
 }
