@@ -547,3 +547,19 @@ func TestCatalogueRepoAccessBindingsAcrossBothSpellings(t *testing.T) {
 		t.Fatal("servers unlisted method read let bare repo-read:acme/widgets through")
 	}
 }
+
+// TestRawScopeRulesBindDespiteAPresetEntry: an api_scopes.presets entry
+// named like a raw scope does not lift the raw_scopes rule matching it.
+func TestRawScopeRulesBindDespiteAPresetEntry(t *testing.T) {
+	cat := &model.CapabilityCatalogue{APIScopes: model.CatalogueAPIScopes{
+		Presets: map[string]model.CataloguePreset{"tasks:write": {}},
+		RawScopes: map[string]model.CapabilityRestrictions{
+			"tasks:*": {CIOnly: true},
+		},
+	}}
+	_, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"api:tasks:write"}})
+	var refusal *model.GrantRefusal
+	if !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, "CI-only") {
+		t.Fatalf("api:tasks:write with an empty presets entry = %v, want the raw scope's CI-only refusal", err)
+	}
+}

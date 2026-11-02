@@ -453,14 +453,12 @@ func retiredInProcessNames(g string) []string {
 func (c *CapabilityCatalogue) judgeAPIScopes(g string, gc GrantContext) (bool, error) {
 	rest := strings.TrimPrefix(g, APIGrantPrefix)
 	what, _, _ := strings.Cut(rest, "@")
-	matchedPreset := false
 	person := false
 	for _, key := range presetLookupKeys(what) {
 		p, ok := c.APIScopes.Presets[key]
 		if !ok {
 			continue
 		}
-		matchedPreset = true
 		if p.Enabled != nil && !*p.Enabled {
 			return false, fmt.Errorf("capability %s is disabled in settings/capabilities.yml", g)
 		}
@@ -470,11 +468,10 @@ func (c *CapabilityCatalogue) judgeAPIScopes(g string, gc GrantContext) (bool, e
 		}
 		person = person || reqPerson
 	}
-	if matchedPreset {
-		return person, nil
-	}
+	// A raw scope's rules bind it even when api_scopes.presets also names
+	// it, so an empty presets entry cannot lift a raw_scopes restriction.
 	if !strings.Contains(what, ":") {
-		return false, nil
+		return person, nil
 	}
 	for _, pattern := range sortedRestrictionKeys(c.APIScopes.RawScopes) {
 		if ok, _ := path.Match(pattern, what); !ok {
