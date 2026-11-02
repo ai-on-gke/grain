@@ -26,7 +26,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
-	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -78,10 +77,14 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 		}
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
-	statuses := []servers.Status{grainserver.Status()}
+	statuses := grainserver.Statuses()
+	inProcess := map[string]bool{}
+	for _, s := range statuses {
+		inProcess[s.ID] = true
+	}
 	if c.Config.CapabilityServers != nil {
 		for _, s := range c.Config.CapabilityServers.Statuses() {
-			if s.ID == grainserver.ID {
+			if inProcess[s.ID] {
 				continue
 			}
 			statuses = append(statuses, s)

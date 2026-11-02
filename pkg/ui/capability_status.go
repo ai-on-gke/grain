@@ -337,13 +337,19 @@ func capabilityCatalog() []model.CapabilitySpec {
 //
 // capabilityDisplayName is capabilityDisplayNames[id], or for a
 // capability contributed from outside core the Name it was registered
-// with (capability.RegisterProvider).
+// with (capability.RegisterProvider, or capability.Register for a
+// contributed method's reference or grant).
 func capabilityDisplayName(id string) string {
 	if name, ok := capabilityDisplayNames[id]; ok {
 		return name
 	}
 	if r, ok := capability.Lookup(id); ok {
 		return r.Name
+	}
+	for _, m := range capability.Methods() {
+		if id == m.Ref() || id == m.Grant() {
+			return m.Name
+		}
 	}
 	return ""
 }

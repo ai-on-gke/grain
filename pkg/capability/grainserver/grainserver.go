@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -165,7 +166,11 @@ func Server() *protocol.Server {
 // servers.Registry.Statuses returns for external servers, so GET /api/capability-methods
 // lists its methods without registering a subprocess in grain_config.mcp_servers.
 func Status() servers.Status {
-	srv := Server()
+	return statusOf(Server())
+}
+
+// statusOf is srv, an in-process server, in servers.Status's shape.
+func statusOf(srv *protocol.Server) servers.Status {
 	names := make([]string, 0, len(srv.Methods))
 	for name := range srv.Methods {
 		names = append(names, name)
@@ -183,7 +188,7 @@ func Status() servers.Status {
 		})
 	}
 	return servers.Status{
-		ID:            ID,
+		ID:            srv.ID,
 		State:         servers.Attached,
 		Transport:     "in-process",
 		Methods:       names,
@@ -191,12 +196,36 @@ func Status() servers.Status {
 	}
 }
 
-// Lookup wraps fallback so ID always resolves to the in-process Server(), even
-// when fallback is nil or comes from a registry that only tracks mcp_servers.
+// Statuses is Status followed by one entry, in the same shape, for each
+// in-process server a build outside core contributed methods to
+// (capability.Register), ordered by ID.
+func Statuses() []servers.Status {
+	out := []servers.Status{Status()}
+	for _, id := range capability.MethodServers() {
+		srv, ok, err := capability.MethodServer(id)
+		if !ok {
+			continue
+		}
+		if err != nil {
+			out = append(out, servers.Status{ID: id, State: servers.Failed, Transport: "in-process", Error: err.Error()})
+			continue
+		}
+		out = append(out, statusOf(srv))
+	}
+	return out
+}
+
+// Lookup wraps fallback so ID always resolves to the in-process Server(), and
+// a server with methods contributed through capability.Register to the
+// in-process server built from them, even when fallback is nil or comes from
+// a registry that only tracks mcp_servers.
 func Lookup(fallback protocol.Lookup) protocol.Lookup {
 	return func(capabilityID string) (*protocol.Server, error) {
 		if capabilityID == ID {
 			return buildServer(), nil
+		}
+		if srv, ok, err := capability.MethodServer(capabilityID); ok {
+			return srv, err
 		}
 		if fallback != nil {
 			return fallback(capabilityID)
@@ -206,14 +235,15 @@ func Lookup(fallback protocol.Lookup) protocol.Lookup {
 }
 
 // IsInProcessGrant reports whether grant is a capability reference targeting
-// the in-process grain server (which opens no external control- or data-plane
-// network listener).
+// the in-process grain server, or an in-process server a build contributed
+// methods to (capability.Register) -- neither opens an external control- or
+// data-plane network listener.
 func IsInProcessGrant(grant string) bool {
 	if !model.IsCapabilityRef(grant) {
 		return false
 	}
 	ref, err := protocol.ParseRef(model.CapabilityGrantRef(grant))
-	return err == nil && ref.CapabilityID == ID
+	return err == nil && (ref.CapabilityID == ID || capability.IsMethodServer(ref.CapabilityID))
 }
 
 // IsJournalGrant reports whether grant names grain#journal (recorded or bare)
