@@ -51,6 +51,8 @@ type CICompactRunsResponse struct {
 	// to by Digest (CICompactJob.Fault), and GET /api/ci/faults has the
 	// rest of one.
 	Faults []CICompactFault `json:"faults,omitempty"`
+	// ActionsNote is CIRunsResponse.ActionsNote.
+	ActionsNote string `json:"actionsNote,omitempty"`
 }
 
 // CICompactRun is one run of the compact listing.
@@ -60,6 +62,11 @@ type CICompactRun struct {
 	Ref    string   `json:"ref"`
 	Commit string   `json:"commit,omitempty"`
 	Event  ci.Event `json:"event"`
+	// Provider and Actions are ci.Run's: which CI ran this, and what a
+	// GitHub Actions run says of itself (its workflow, attempt, URL and
+	// the jobs that failed).
+	Provider string         `json:"provider,omitempty"`
+	Actions  *ci.ActionsRun `json:"actions,omitempty"`
 	// BaseCommit is the base branch's commit the run's jobs were tested
 	// against, where they say (ci.JobRun.BaseCommit) -- the first job
 	// that names one, since a run's jobs share their base.
@@ -142,6 +149,7 @@ func ciCompactRuns(page ci.RunPage, faults []CIFault) CICompactRunsResponse {
 	for _, run := range page.Runs {
 		out := CICompactRun{
 			ID: run.ID, Repo: run.Repo, Ref: run.Ref, Commit: run.Commit, Event: run.Event,
+			Provider: run.Provider, Actions: run.Actions,
 			RequestedBy: run.RequestedBy, StartedAt: run.StartedAt, FinishedAt: run.FinishedAt,
 			Conclusion: ci.RunStateOf(run), Error: compactLine(run.Error),
 		}

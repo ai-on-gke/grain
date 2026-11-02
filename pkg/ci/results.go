@@ -32,6 +32,7 @@ type (
 	CacheBounds          = workflows.CacheBounds
 	CacheStats           = workflows.CacheStats
 	CancelSource         = workflows.CancelSource
+	ActionsRun           = workflows.ActionsRun
 	ClearableArtifacts   = workflows.ClearableArtifacts
 	Conclusion           = workflows.Conclusion
 	Diagnostic           = workflows.Diagnostic
@@ -62,6 +63,8 @@ const (
 	ConclusionPending               = workflows.ConclusionPending
 	ConclusionSkipped               = workflows.ConclusionSkipped
 	ConclusionSuccess               = workflows.ConclusionSuccess
+	ProviderGrain                   = workflows.ProviderGrain
+	ProviderGitHubActions           = workflows.ProviderGitHubActions
 	DefaultArtifactMaxAge           = workflows.DefaultArtifactMaxAge
 	DefaultArtifactMaxArtifactBytes = workflows.DefaultArtifactMaxArtifactBytes
 	DefaultArtifactMaxBytes         = workflows.DefaultArtifactMaxBytes
@@ -98,6 +101,7 @@ var (
 	ParseRunState         = workflows.ParseRunState
 	ParseSince            = workflows.ParseSince
 	RunSortKeys           = workflows.RunSortKeys
+	ProviderOf            = workflows.ProviderOf
 	RunStateOf            = workflows.RunStateOf
 	RunStates             = workflows.RunStates
 	SortRuns              = workflows.SortRuns

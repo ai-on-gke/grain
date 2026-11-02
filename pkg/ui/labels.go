@@ -426,6 +426,11 @@ type Config struct {
 	// commit grain CI last judged, and the merge queue checks the head
 	// again before it merges either way.
 	GitHubPullRequests PullRequestReader
+	// Actions is what ci:read reads a repository's GitHub Actions runs,
+	// jobs and logs through (ci_actions.go). nil reads them through
+	// GitHubPullRequests, or the pull request opener's client, when
+	// either is a github.ActionsReader -- the daemon's are.
+	Actions github.ActionsReader
 	// GitHubForkPullRequests is that client asked which open pull request
 	// a fork head label ("owner:branch", model.ForkHead) heads, so a task
 	// filed with one as its branch is resolved to that pull request

@@ -832,6 +832,11 @@ type CIRunsResponse struct {
 	// failing this way" cannot be asked of one branch's runs alone, and a
 	// pane narrowed to one branch is exactly where it is worth asking.
 	Faults []CIFault `json:"faults,omitempty"`
+	// ActionsNote says why a repository's GitHub Actions rows came from
+	// grain's own record of them rather than the forge, or are missing:
+	// no forge connection that reads Actions, a low API budget, or a
+	// forge read that failed (ci_actions.go).
+	ActionsNote string `json:"actionsNote,omitempty"`
 }
 
 // CIFaultsResponse is what GET /api/ci/faults answers with: the same
@@ -1194,6 +1199,19 @@ func (s *Server) handleListCIWorkflows(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 	runner := s.tasks.Config.CI
+	if filter, err := ciRunFilterFrom(r.URL.Query(), time.Now()); err == nil {
+		if repo, ok := s.wantsActions(r, filter); ok && (runner == nil || !ci.IsUp(runner) ||
+			strings.EqualFold(filter.Provider, ci.ProviderGitHubActions)) {
+			// No grain CI to merge with: Actions alone.
+			limit, err := ciRunLimitFrom(r.URL.Query())
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			s.writeCIRuns(w, r, ci.RunPage{}, filter, limit, repo)
+			return
+		}
+	}
 	if runner == nil {
 		writeJSON(w, http.StatusOK, CIRunsResponse{
 			Enabled: false,
@@ -1230,6 +1248,18 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 	// answered with: a narrowed question is asked of the whole history
 	// this deployment keeps, not of the newest ci.MaxListedRuns of it
 	// (ci.RunStore.Find, grain/task-289).
+	if repo, ok := s.wantsActions(r, filter); ok {
+		grainFilter := filter
+		grainFilter.Provider = ""
+		s.writeCIRuns(w, r, runner.Find(grainFilter, limit), filter, limit, repo)
+		return
+	}
+	if filter.Provider != "" && !strings.EqualFold(filter.Provider, ci.ProviderGrain) {
+		// A provider no run of this answer is from.
+		writeJSON(w, http.StatusOK, CIRunsResponse{Enabled: true, Runs: []ci.Run{}})
+		return
+	}
+	filter.Provider = ""
 	page := runner.Find(filter, limit)
 	var faults []CIFault
 	if canShareFaultRuns(filter, limit) {
@@ -1251,6 +1281,62 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		Matched: page.Matched,
 		Stored:  page.Stored,
 		Faults:  faults,
+	})
+}
+
+// writeCIRuns answers GET /api/ci/runs with grain's page merged with
+// repo's GitHub Actions runs (ci_actions.go), newest first, every row
+// labelled with its provider.
+func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.RunPage, filter ci.RunFilter, limit int, repo model.RepoRef) {
+	compact, err := ciRunViewFrom(r.URL.Query())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.EqualFold(filter.Provider, ci.ProviderGitHubActions) {
+		page = ci.RunPage{}
+	}
+	var actions []ci.Run
+	var note string
+	if filter.Provider == "" || strings.EqualFold(filter.Provider, ci.ProviderGitHubActions) {
+		actions, note = s.tasks.listActionsRuns(r.Context(), repo, filter, limit)
+	}
+	merged := make([]ci.Run, 0, len(page.Runs)+len(actions))
+	for _, run := range page.Runs {
+		if run.Provider == "" {
+			run.Provider = ci.ProviderGrain
+		}
+		merged = append(merged, run)
+	}
+	merged = append(merged, actions...)
+	sortRunsNewestFirst(merged)
+	if limit <= 0 {
+		limit = ci.MaxListedRuns
+	}
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	page.Runs = merged
+	page.Matched += len(actions)
+	page.Stored += len(actions)
+	faults := s.tasks.CISharedFaults(r.Context())
+	if compact {
+		resp := ciCompactRuns(page, faults)
+		resp.ActionsNote = note
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	listed := make([]ci.Run, 0, len(page.Runs))
+	for _, run := range page.Runs {
+		listed = append(listed, ciListSummary(run))
+	}
+	writeJSON(w, http.StatusOK, CIRunsResponse{
+		Enabled:     true,
+		Runs:        listed,
+		Matched:     page.Matched,
+		Stored:      page.Stored,
+		Faults:      faults,
+		ActionsNote: note,
 	})
 }
 
@@ -1368,6 +1454,13 @@ func ciRunFilterFrom(query url.Values, now time.Time) (ci.RunFilter, error) {
 		}
 		filter.Until = at
 	}
+	switch provider := strings.ToLower(strings.TrimSpace(query.Get("provider"))); provider {
+	case "", ci.ProviderGrain, ci.ProviderGitHubActions:
+		filter.Provider = provider
+	default:
+		return ci.RunFilter{}, fmt.Errorf("%q is not a CI provider: use %s or %s", query.Get("provider"),
+			ci.ProviderGrain, ci.ProviderGitHubActions)
+	}
 	if word := strings.TrimSpace(query.Get("sort")); word != "" {
 		key, err := ci.ParseRunSortKey(word)
 		if err != nil {
@@ -1410,6 +1503,10 @@ func writeCIStartQueued(w http.ResponseWriter, err error) {
 
 func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if IsActionsRunID(id) {
+		s.handleGetActionsRun(w, r, id)
+		return
+	}
 	runner := s.tasks.Config.CI
 	if runner != nil {
 		if run, ok := runner.Get(id); ok {
@@ -1454,6 +1551,10 @@ func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {
 // the route below, are gated the same way -- an artifact is the run's
 // own build output, as much the run's team's as its step output is.
 func (s *Server) handleListCIRunArtifacts(w http.ResponseWriter, r *http.Request) {
+	if id := r.PathValue("id"); IsActionsRunID(id) {
+		s.handleListActionsArtifacts(w, r, id)
+		return
+	}
 	runner := s.tasks.Config.CI
 	if runner == nil {
 		writeJSON(w, http.StatusOK, CIRunArtifactsResponse{Artifacts: []ci.Artifact{}})
@@ -1484,6 +1585,10 @@ func (s *Server) handleListCIRunArtifacts(w http.ResponseWriter, r *http.Request
 // out of, because the thing people do with these is download three of
 // them and then work out which is which.
 func (s *Server) handleGetCIArtifact(w http.ResponseWriter, r *http.Request) {
+	if IsActionsRunID(r.PathValue("id")) {
+		writeError(w, http.StatusNotImplemented, errors.New(actionsArtifactNote))
+		return
+	}
 	runner := s.tasks.Config.CI
 	if runner == nil {
 		writeError(w, http.StatusNotFound, fmt.Errorf("this deployment has no grain CI wired"))
