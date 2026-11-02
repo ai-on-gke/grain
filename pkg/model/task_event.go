@@ -305,7 +305,7 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 			state = TransitionAutoMergeKeptOff
 		}
 		by := e.By
-		out = append(out, Transition{State: state, At: e.At, By: &by, Reason: e.Reason, Detail: e.Detail})
+		out = append(out, Transition{State: state, At: e.At, By: &by, OnBehalfOf: e.OnBehalfOf, Reason: e.Reason, Detail: e.Detail})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	return out

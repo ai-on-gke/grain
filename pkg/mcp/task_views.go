@@ -141,10 +141,10 @@ func lastTaskEvents(t TaskRecord, n int) []taskEvent {
 		events = append(events, taskEvent{at: tr.At, text: text})
 	}
 	for _, c := range t.Comments {
-		text := fmt.Sprintf("comment #%d by %s (%s): %s", c.ID, c.Author, c.AuthorKind, singleLine(c.Body))
+		text := fmt.Sprintf("comment #%d by %s (%s): %s", c.ID, c.Who(), c.AuthorKind, singleLine(c.Body))
 		if c.Handover {
 			// Its head is quoted below the events, line by line.
-			text = fmt.Sprintf("handover #%d written by %s (%s)", c.ID, c.Author, c.AuthorKind)
+			text = fmt.Sprintf("handover #%d written by %s (%s)", c.ID, c.Who(), c.AuthorKind)
 		}
 		events = append(events, taskEvent{at: c.CreatedAt, text: text})
 	}
@@ -196,7 +196,7 @@ func renderTaskConversation(t TaskRecord, after int64) string {
 		if c.Handover {
 			kind += ", handover"
 		}
-		fmt.Fprintf(&b, "  #%d [%s] %s (%s):\n", c.ID, c.CreatedAt.UTC().Format(time.RFC3339), c.Author, kind)
+		fmt.Fprintf(&b, "  #%d [%s] %s (%s):\n", c.ID, c.CreatedAt.UTC().Format(time.RFC3339), c.Who(), kind)
 		b.WriteString(indent(clipNote(c.Body, maxConversationBodyBytes)))
 	}
 	if more {

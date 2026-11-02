@@ -36,6 +36,7 @@ import CopyButton from "../CopyButton.jsx";
 import ExpandableMarkdown from "../ExpandableMarkdown.jsx";
 import StateDot from "../StateDot.jsx";
 import { linkTaskRefs, taskRefFromHref } from "../../taskRefs.js";
+import { commentAuthor, transitionActor } from "../../principal.js";
 
 // OUTCOME_BADGES covers model.Run's own outcome vocabulary, the same
 // one state.js's OUTCOME_LABELS gives the words for -- see that map's
@@ -276,18 +277,18 @@ function timelineEvents(t, zone, now = Date.now()) {
           </div>
           {/* Who closed or reopened it, why, and what the close cancelled
               (model.TaskEvent) -- set only on a step somebody asked for. */}
-          {(tr.by || tr.reason || tr.detail) && (
+          {(transitionActor(tr) || tr.reason || tr.detail) && (
             <div className="timeline-meta timeline-transition-by">
-              {tr.by && <>by {tr.by}</>}
+              {transitionActor(tr) && <>by {transitionActor(tr)}</>}
               {tr.reason && (
                 <>
-                  {tr.by ? " · " : ""}
+                  {transitionActor(tr) ? " · " : ""}
                   {tr.reason}
                 </>
               )}
               {tr.detail && (
                 <>
-                  {tr.by || tr.reason ? " · " : ""}
+                  {transitionActor(tr) || tr.reason ? " · " : ""}
                   {tr.detail}
                 </>
               )}
@@ -486,9 +487,9 @@ function timelineEvents(t, zone, now = Date.now()) {
     // onBehalfOf is set when grain relayed somebody else's words -- a
     // question from a dispatched run reads as grain speaking for an
     // agent, not as grain's own.
-    const who = c.onBehalfOf
-      ? `${c.author} on behalf of ${c.onBehalfOf}`
-      : c.author;
+    // Its label (operator-attribution spec §4.1) names a verified
+    // on-behalf-of itself (commentAuthor).
+    const who = commentAuthor(c);
     const at = timelineTime(c.createdAt);
     return {
       key: `comment-${i}`,

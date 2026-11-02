@@ -67,6 +67,7 @@ import GrainMark from "./GrainMark.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 import { verifiedUserEmail } from "./settings/AccessSection.jsx";
+import { whoamiParts } from "../principal.js";
 
 // Sidebar replaces TopBar and Filters with the one nav Plane builds every
 // view around: a fixed rail with the workspace identity up top, a state
@@ -364,6 +365,62 @@ function SignedInRow({ email, onOpenAccess, onLogout }) {
   );
 }
 
+// UserTile is who this browser acts as, at the foot of the rail
+// (operator-attribution spec §5.4): GET /api/whoami's label -- the
+// verified email, or "operator" with a muted "(access code)" or
+// "(local)" -- never a name the browser typed in. It opens Settings ->
+// Access. Folded, it is the icon alone, the label its tooltip.
+function UserTile({ whoami, collapsed, onOpenAccess }) {
+  const { name, qualifier } = whoamiParts(whoami);
+  if (!name) return null;
+  const full = qualifier ? `${name} ${qualifier}` : name;
+  return (
+    <ListItemButton
+      data-testid="user-tile"
+      onClick={onOpenAccess}
+      title={full}
+      aria-label={`Acting as ${full}. Access settings`}
+      sx={{
+        flex: "none",
+        minWidth: 0,
+        borderRadius: 1.5,
+        py: 0.5,
+        px: 0.9,
+        color: "text.secondary",
+      }}
+    >
+      <span className="nav-icon">
+        <AccountCircleOutlinedIcon sx={{ fontSize: 18 }} />
+      </span>
+      {collapsed ? null : (
+        <Typography
+          component="span"
+          noWrap
+          data-testid="user-tile-label"
+          sx={{
+            ml: 1,
+            minWidth: 0,
+            fontSize: "0.8rem",
+            fontWeight: 500,
+            color: "text.primary",
+          }}
+        >
+          {name}
+          {qualifier ? (
+            <Typography
+              component="span"
+              data-testid="user-tile-qualifier"
+              sx={{ ml: 0.5, fontSize: "inherit", color: "text.secondary" }}
+            >
+              {qualifier}
+            </Typography>
+          ) : null}
+        </Typography>
+      )}
+    </ListItemButton>
+  );
+}
+
 // NavItem is one state's entry under Tasks in the rail, out here for the
 // reason FooterItem and BoardItem are. It used to be declared inside
 // Sidebar's render body, which made it a new component type on every
@@ -538,6 +595,10 @@ function StagingItem({ sandbox, config, pinned, onTogglePin }) {
 
 export default function Sidebar({
   config,
+  // GET /api/whoami's answer: who this browser acts as, for the user
+  // tile at the foot of the rail. null until it answers, and from a
+  // daemon too old to have the route, and then there is no tile.
+  whoami = null,
   tasks,
   notificationCount = 0,
   schedules = [],
@@ -1668,9 +1729,23 @@ export default function Sidebar({
               onOpenAccess={onOpenAccess}
               onLogout={onLogout}
             />
-          ) : null}
+          ) : (
+            <UserTile whoami={whoami} onOpenAccess={onOpenAccess} />
+          )}
         </List>
       )}
+      {/* On a phone the tile sits in the pinned list above, beside Log
+          out when somebody is signed in; beside the page it is the foot
+          of the rail, over the build stamp. */}
+      {!pinFooter && whoami ? (
+        <Box sx={{ mt: "auto", pt: 0.6, flex: "none" }}>
+          <UserTile
+            whoami={whoami}
+            collapsed={collapsed}
+            onOpenAccess={onOpenAccess}
+          />
+        </Box>
+      ) : null}
 
       {/* Which build of grain is answering: the commit it was built from
           and when that commit was made, out of the binary's own VCS
@@ -1702,7 +1777,7 @@ export default function Sidebar({
             m: 0,
             // The foot of the rail on desktop, under the System row on a
             // phone (§4.3).
-            mt: pinFooter ? 0 : "auto",
+            mt: pinFooter || whoami ? 0 : "auto",
             pt: 0.6,
             fontSize: "0.68rem",
             opacity: 0.75,

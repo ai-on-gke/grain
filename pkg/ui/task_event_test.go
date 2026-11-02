@@ -49,7 +49,7 @@ func closeAndReopenARunningTask(t *testing.T) (*ui.Client, *model.Store, ui.Task
 
 	closedAt := baseTime.Add(10 * time.Minute)
 	client.Now = func() time.Time { return closedAt }
-	operator := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com"})
+	operator := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com", Source: model.SourceIAP})
 	if err := client.Close(operator, task.ID, ui.CloseOptions{Reason: "cycling in-flight tasks"}); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestCloseAndReopenOfARunningTaskAreTransitionsWithWhoDidThem(t *testing.T) 
 	if closed.Inferred || reopened.Inferred {
 		t.Errorf("a recorded close or reopen marked inferred: %+v, %+v", closed, reopened)
 	}
-	if closed.By != "human bob@example.com" || closed.Reason != "cycling in-flight tasks" {
+	if closed.By != "bob@example.com" || closed.Reason != "cycling in-flight tasks" {
 		t.Errorf("closed = %+v, want bob's close with his reason", closed)
 	}
 	runID := dispatch.RunID(task.ID, 1)
@@ -109,7 +109,7 @@ func TestCloseAndReopenOfARunningTaskAreTransitionsWithWhoDidThem(t *testing.T) 
 			t.Errorf("closed detail = %q, want it to say %q", closed.Detail, want)
 		}
 	}
-	if reopened.By != "agent 1937" || !reopened.At.After(closed.At) {
+	if reopened.By != "task 1937" || !reopened.At.After(closed.At) {
 		t.Errorf("reopened = %+v, want session 1937's reopen after the close at %s", reopened, closed.At)
 	}
 	if detail.State == model.StateClosed {
@@ -139,7 +139,7 @@ func TestPipelineChangesKeepACloseThatWasReopened(t *testing.T) {
 	if got := strings.Join(words, " "); got != want {
 		t.Fatalf("task changes = %s, want %s", got, want)
 	}
-	if !strings.HasPrefix(closeDetail, "by human bob@example.com: cycling in-flight tasks; cancelled run ") {
+	if !strings.HasPrefix(closeDetail, "by bob@example.com: cycling in-flight tasks; cancelled run ") {
 		t.Errorf("close detail = %q, want who, why and what it cancelled", closeDetail)
 	}
 }
@@ -214,7 +214,7 @@ func TestClosingAClosedTaskLeavesItsOneAttributedClose(t *testing.T) {
 
 	closedAt := baseTime.Add(10 * time.Minute)
 	client.Now = func() time.Time { return closedAt }
-	bob := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com"})
+	bob := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com", Source: model.SourceIAP})
 	if err := client.Close(bob, task.ID, ui.CloseOptions{Reason: "cycling in-flight tasks"}); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestClosingAClosedTaskLeavesItsOneAttributedClose(t *testing.T) {
 			closed = append(closed, tr)
 		}
 	}
-	if len(closed) != 1 || closed[0].By != "human bob@example.com" || !closed[0].At.Equal(closedAt) {
+	if len(closed) != 1 || closed[0].By != "bob@example.com" || !closed[0].At.Equal(closedAt) {
 		t.Fatalf("closed steps = %+v, want bob's one close at %s", closed, closedAt)
 	}
 }
