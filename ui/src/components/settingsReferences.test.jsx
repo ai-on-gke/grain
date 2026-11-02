@@ -16,7 +16,6 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SETTINGS_SECTIONS, SYSTEM_TABS } from "../settingsSections.js";
 import CachesPage from "./CachesPage.jsx";
-import ConnectedExecutors from "./ConnectedExecutors.jsx";
 import SandboxHealthPage from "./SandboxHealthPage.jsx";
 import CachesSection from "./settings/CachesSection.jsx";
 import TasksSection from "./settings/TasksSection.jsx";
@@ -154,18 +153,7 @@ describe("pointers to Settings sections and System tabs", () => {
     expect(document.body.textContent).not.toMatch(/Integrations & Auth/);
   });
 
-  it("on ConnectedExecutors and scheduled-upgrade resume prompts name tabs that exist", async () => {
-    api.mockResolvedValue([]);
-    render(<ConnectedExecutors />);
-    await screen.findByText(/No model servers connected/);
-
-    const found = expectRealTabs(document.body.textContent);
-    expect(
-      found.some(
-        (p) => p.pane === "Settings" && p.rest.startsWith("Executors"),
-      ),
-    ).toBe(true);
-
+  it("on scheduled-upgrade resume prompts name tabs that exist", async () => {
     const upgradeFound = expectRealTabs(
       resumeCancelsUpgrade({ reason: "upgrading to v2.1.0" }),
     );

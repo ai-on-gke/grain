@@ -740,14 +740,6 @@ export const SETTINGS_INDEX = [
     card: true,
   },
   {
-    id: "card:executors:executors",
-    section: "executors",
-    anchor: "executors",
-    label: "Executor join tokens",
-    keywords: ["remote executor", "join token"],
-    card: true,
-  },
-  {
     id: "card:preferences:appearance",
     section: "preferences",
     anchor: "appearance",

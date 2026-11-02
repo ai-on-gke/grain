@@ -118,13 +118,6 @@ test("edits one setting in each section, and every one survives a reload", async
     // Legacy capabilities
     await section(page, "credentials", "Legacy capabilities");
     await commitBox(page, "GCP project", "walkthrough-project");
-    // Executors: a join token is a setting.
-    await section(page, "executors", "Executors");
-    await page.getByRole("button", { name: "Issue Token" }).click();
-    await page.getByLabel("Token Name / Description").fill("walkthrough-token");
-    await page.getByRole("button", { name: "Generate Token" }).click();
-    await expect(page.getByText("walkthrough-token").first()).toBeVisible();
-    await page.keyboard.press("Escape");
     // Engine, CI, Sandboxes, Caches
     await section(page, "engine", "Engine");
     await commitBox(page, "Poll interval", "45s");
@@ -169,8 +162,6 @@ test("edits one setting in each section, and every one survives a reload", async
     await expect(page.getByLabel("GCP project", { exact: true })).toHaveValue(
       "walkthrough-project",
     );
-    await page.goto("/settings/executors");
-    await expect(page.getByText("walkthrough-token").first()).toBeVisible();
     await page.goto("/settings/engine");
     await expect(page.getByLabel("Poll interval", { exact: true })).toHaveValue(
       "45s",
@@ -210,7 +201,7 @@ test("every old path lands where §3.5 says, and Back skips it", async ({
     ["/admin/accounts", "/settings/access"],
     ["/admin/engine", "/settings/engine"],
     ["/admin/sandbox", "/settings/sandboxes"],
-    ["/admin/executors", "/settings/executors"],
+    ["/admin/executors", "/settings/models"],
     ["/admin/integrations", "/settings/credentials"],
     ["/admin/state", "/settings/config-repo"],
     ["/admin/upgrade", "/settings/upgrade"],
@@ -231,7 +222,7 @@ test("every old path lands where §3.5 says, and Back skips it", async ({
     ["/system/accounts", "/settings/access"],
     ["/system/engine", "/settings/engine"],
     ["/system/sandbox", "/settings/sandboxes"],
-    ["/system/executors", "/settings/executors"],
+    ["/system/executors", "/settings/models"],
     ["/system/integrations", "/settings/credentials"],
     ["/system/state", "/settings/config-repo"],
     ["/system/nonsense", "/system"],
