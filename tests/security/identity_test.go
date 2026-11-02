@@ -82,7 +82,7 @@ func TestIAPModeIgnoresPlaintextIdentityHeaders(t *testing.T) {
 	t.Cleanup(ui.ResetIAPConfig)
 	for _, h := range identityHeaders {
 		r := requestFrom("127.0.0.1:4242")
-		r = r.WithContext(ui.WithIAPConfig(r.Context(), ui.IAPConfig{Mode: true, Audience: "/projects/1/global/backendServices/2"}))
+		r = r.WithContext(ui.WithIAPConfig(r.Context(), ui.IAPConfig{RequireIAP: true, Audience: "/projects/1/global/backendServices/2"}))
 		r.Header.Set(h, "admin@example.com")
 		if p, ok := ui.ExtractPrincipal(r); ok {
 			t.Errorf("%s believed in IAP mode: principal %+v", h, p)
