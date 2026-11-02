@@ -167,7 +167,12 @@ func (d Docker) List(ctx context.Context, deployment string) ([]Info, error) {
 		return nil, nil
 	}
 	out, err = d.exec(ctx, append([]string{"inspect"}, ids...)...)
-	if err != nil {
+	// A run host that exits and is removed between the ps and the inspect
+	// fails the inspect with "no such object", while its stdout still holds
+	// every container that is left: the vanished one is gone, so listing the
+	// rest is the right answer, and failing the whole list would skip that
+	// cycle's orphan sweep.
+	if err != nil && !(strings.Contains(strings.ToLower(err.Error()), "no such object") && json.Valid(out)) {
 		return nil, err
 	}
 	var all []inspected
