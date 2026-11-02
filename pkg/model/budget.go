@@ -43,8 +43,9 @@ type Commitment = workflows.Commitment
 //	cpu budget    = (host cpus - reserve)   x cpu overcommit
 //
 // Reserve is what is kept back for everything that is not a sandbox: the
-// daemon, the container runtime, each VM's own qemu overhead, and the
-// page cache all of them read through. It is subtracted before the ratio
+// daemon, the container runtime, and the page cache all of them read
+// through. A granule VM's own overhead is not in it: that is charged per
+// sandbox, as VMMHeadroom. It is subtracted before the ratio
 // rather than after, so raising the overcommit ratio never eats into it
 // -- a deployment that swaps has already lost more throughput than the
 // extra job was worth.
@@ -146,6 +147,13 @@ type Budget struct {
 	// the budget rather than added to it: an empty reserve is idle
 	// headroom, not overcommitment.
 	RepairReserve Commitment
+	// VMMHeadroom is added to the memory of every sandbox this budget is
+	// asked about (admitsArithmetic), because a granule VM's cgroup is
+	// allowed its guest's RAM plus this much (VMMHeadroom.LimitMB) and a
+	// budget held against guest memory alone would let those limits add
+	// up past the host. The live side is the ledger's (Ledger.VMMHeadroom),
+	// which adds the same per entry. Zero on a backend with no VMM.
+	VMMHeadroom VMMHeadroom
 }
 
 // DefaultRepairReserveSandboxes is how many standard agent sandboxes'
@@ -567,6 +575,7 @@ func (b Budget) admitsArithmetic(live, want, reserve Commitment) BudgetVerdict {
 	if want.IsZero() {
 		return BudgetVerdict{OK: true}
 	}
+	want = b.VMMHeadroom.Charge(want)
 	held := live
 	kept := b.reserved(reserve)
 	if memMB, ok := b.MemoryBudgetMB(); ok && held.MemoryMB+want.MemoryMB > memMB-kept.MemoryMB {

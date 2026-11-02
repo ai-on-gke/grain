@@ -82,6 +82,13 @@ type Ledger struct {
 	// shared budget -- so the reconcile loop runs a dispatch cycle
 	// immediately rather than waiting out its poll interval.
 	Wake func()
+	// VMMHeadroom is what each VM sandbox's cgroup is allowed beyond its
+	// guest's RAM (DefaultVMMHeadroom on a granule backend, zero
+	// elsewhere). Charges are filed at the shape asked for and every live
+	// sum adds it per entry, so what admission is held against is the
+	// memory a VM can really take rather than its guest's alone. Set once,
+	// before the ledger is shared; Budget.VMMHeadroom is its other half.
+	VMMHeadroom VMMHeadroom
 
 	mu             sync.Mutex
 	held           map[ledgerKey]ledgerEntry
@@ -135,7 +142,7 @@ func (l *Ledger) Live() Commitment {
 func (l *Ledger) live() Commitment {
 	var out Commitment
 	for _, e := range l.held {
-		out = out.Plus(e.Shape)
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	return out
 }
@@ -148,7 +155,7 @@ func (l *Ledger) nonIdleLive() Commitment {
 		if e.Idle {
 			continue
 		}
-		out = out.Plus(e.Shape)
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	return out
 }
@@ -163,7 +170,7 @@ func (l *Ledger) liveWithout(pool, id string) Commitment {
 		if k == skip {
 			continue
 		}
-		out = out.Plus(e.Shape)
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	return out
 }
@@ -176,7 +183,7 @@ func (l *Ledger) nonIdleLiveWithout(pool, id string) Commitment {
 		if k == skip || e.Idle {
 			continue
 		}
-		out = out.Plus(e.Shape)
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	return out
 }
@@ -193,7 +200,7 @@ func (l *Ledger) LiveIn(pool string) Commitment {
 	var out Commitment
 	for k, e := range l.held {
 		if k.Pool == pool {
-			out = out.Plus(e.Shape)
+			out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 		}
 	}
 	return out
@@ -895,7 +902,7 @@ func (l *Ledger) Describe() string {
 			sums[k.Pool] = s
 		}
 		s.n++
-		s.shape = s.shape.Plus(e.Shape)
+		s.shape = s.shape.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	ordered := make([]*poolSum, 0, len(sums))
 	for _, s := range sums {
