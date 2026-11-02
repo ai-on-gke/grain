@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import HostdsSection, {
   connectionText,
+  installCommand,
   parseLabels,
 } from "./HostdsSection.jsx";
 import api from "../../api.js";
@@ -66,6 +67,12 @@ describe("HostdsSection", () => {
     expect(await screen.findByTestId("hostd-issued-token")).toHaveTextContent(
       "ghd_secret",
     );
+    const install = screen.getByTestId("hostd-install-command");
+    expect(install).toHaveTextContent(
+      `${window.location.origin}/api/hostd/install.sh`,
+    );
+    expect(install).toHaveTextContent("--name ws-2");
+    expect(install).not.toHaveTextContent("ghd_secret");
     expect(api).toHaveBeenCalledWith("/api/hostds", {
       method: "POST",
       body: JSON.stringify({ name: "ws-2", owner: "", labels: { gpu: "yes" } }),
@@ -74,6 +81,12 @@ describe("HostdsSection", () => {
 });
 
 describe("hostd helpers", () => {
+  it("builds an install command that names the daemon and not the token", () => {
+    expect(installCommand("https://grain.example.com", "ws-2")).toBe(
+      `sudo sh -c "$(curl -fsSL 'https://grain.example.com/api/hostd/install.sh')" grain-hostd-install --name ws-2`,
+    );
+  });
+
   it("parses labels and refuses one with no value", () => {
     expect(parseLabels(" a=1, b=2 ")).toEqual({ a: "1", b: "2" });
     expect(() => parseLabels("a")).toThrow();

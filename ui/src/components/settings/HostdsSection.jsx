@@ -28,6 +28,7 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../../api.js";
+import CopyButton from "../CopyButton.jsx";
 import SettingsCard from "./SettingsCard.jsx";
 
 // formatLabels is a hostd's labels as the label field takes them:
@@ -51,6 +52,14 @@ export function parseLabels(text) {
     out[p.slice(0, eq).trim()] = p.slice(eq + 1).trim();
   }
   return out;
+}
+
+// installCommand is the one line that installs hostd name on another
+// machine from this daemon's /api/hostd/install.sh (pkg/ui/hostd_install.sh).
+// The token is not in it: the script asks for it on the terminal, so it
+// stays out of the URL and the shell's history.
+export function installCommand(origin, name) {
+  return `sudo sh -c "$(curl -fsSL '${origin}/api/hostd/install.sh')" grain-hostd-install --name ${name}`;
 }
 
 // connectionText says whether a hostd is connected, as the status
@@ -154,7 +163,8 @@ export default function HostdsSection({ showError }) {
             grain hostd -server &lt;this daemon&apos;s URL&gt; -token-file
             &lt;file&gt;
           </code>{" "}
-          and is known by the token it presents.
+          and is known by the token it presents. Adding one shows the command
+          that installs it on its machine.
         </Typography>
         {issued ? (
           <Alert
@@ -165,6 +175,28 @@ export default function HostdsSection({ showError }) {
           >
             Token for hostd <strong>{issued.hostd.name}</strong>, shown only
             this once: <code>{issued.token}</code>
+            <CopyButton text={issued.token} label="Copy token" />
+            <Box sx={{ mt: 1 }} data-testid="hostd-install-command">
+              To install it on another machine, run this there and paste the
+              token when it asks:
+              <Stack
+                direction="row"
+                alignItems="flex-start"
+                spacing={0.5}
+                sx={{ mt: 0.5 }}
+              >
+                <Box component="code" sx={{ flex: 1, minWidth: 0 }}>
+                  {installCommand(window.location.origin, issued.hostd.name)}
+                </Box>
+                <CopyButton
+                  text={installCommand(
+                    window.location.origin,
+                    issued.hostd.name,
+                  )}
+                  label="Copy install command"
+                />
+              </Stack>
+            </Box>
           </Alert>
         ) : null}
         <Box sx={{ overflowX: "auto" }}>
