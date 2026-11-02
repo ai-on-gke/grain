@@ -538,6 +538,15 @@ var Migrations = []Migration{
 			"DROP TABLE IF EXISTS `executor_token_sequence`",
 		},
 	},
+	{
+		Version:     88,
+		Description: "add the hostd registry (hostd, hostd_token), with the co-located hostd as local",
+		Statements: []string{
+			hostdTable,
+			hostdTokenTable,
+		},
+		Up: ensureLocalHostd,
+	},
 }
 
 // CorpResearchGrant is what migration 86 rewrote stored corp-research grants

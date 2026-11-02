@@ -53,7 +53,7 @@ func TestRemoteLogsRefusedTokensRateLimited(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("after one refusal, logged %q; want one line", lines)
 	}
-	want := "grain daemon: refused a grain hostd on workstation connecting from 10.0.0.7:5555: it presented a token that is not this daemon's hostd token"
+	want := "grain daemon: refused a grain hostd on workstation connecting from 10.0.0.7:5555: it presented a token that is not a hostd token here"
 	if !strings.HasPrefix(lines[0], want) {
 		t.Errorf("logged %q; want it to start %q", lines[0], want)
 	}

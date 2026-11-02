@@ -401,7 +401,13 @@ import "strconv"
 // own -hostd-token-file) is grain's only host agent. A pure drop: the
 // importer passes over a table this build lacks, so a dump carrying
 // either imports without it.
-const SchemaVersion = 87
+//
+// 88 adds the hostd registry: `hostd`, one row per grain hostd this
+// daemon takes host work through (the co-located one as `local`), and
+// `hostd_token`, the SHA-256 digests of each remote hostd's tokens.
+// `hostd` goes to the state repository; `hostd_token` never does
+// (staterepo.LocalTables).
+const SchemaVersion = 88
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
@@ -443,6 +449,27 @@ const sandboxAccessTable = `CREATE TABLE IF NOT EXISTS ` + "`sandbox_access`" + 
   ` + "`token_hash`" + ` TEXT     NOT NULL,
   ` + "`not_after`" + `  DATETIME NOT NULL,
   PRIMARY KEY (` + "`sandbox`" + `)
+)`
+
+// hostdTable and hostdTokenTable are the hostd registry (model.Hostd),
+// named once for Tables and for the migration that adds them.
+const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`owner`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`labels`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`name`" + `)
+)`
+
+const hostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
+  ` + "`token_hash`" + ` TEXT     NOT NULL,
+  ` + "`hostd`" + `      TEXT     NOT NULL,
+  ` + "`prefix`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`token_hash`" + `)
 )`
 
 // externalAgentTokenTable and externalAgentTokenSequenceTable are named
@@ -3762,6 +3789,9 @@ var Tables = []string{
 
 	externalAgentTokenTable,
 	externalAgentTokenSequenceTable,
+
+	hostdTable,
+	hostdTokenTable,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,

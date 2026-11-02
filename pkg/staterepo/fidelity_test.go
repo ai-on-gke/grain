@@ -1193,6 +1193,10 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		args []any
 	}{
 		{"INSERT INTO `task_tag` (`task_id`, `tag`) VALUES (?, ?)", []any{"a1b2", awkward}},
+		// The hostd registry (model.Hostd); its tokens stay local
+		// (LocalTables).
+		{"INSERT INTO `hostd` (`name`, `owner`, `labels`, `created_by`, `created_at`, `revoked_at`) VALUES (?, ?, ?, ?, ?, NULL)",
+			[]any{"ws-1", "alice@example.com", "gpu=yes,os=linux", "admin", time.Date(2026, 11, 2, 9, 0, 0, 123000000, time.UTC)}},
 		{"INSERT INTO `work_origin_comment` (`origin`, `comment_id`, `body`) VALUES (?, ?, ?)",
 			[]any{"owner/docs#7", 12345, awkward}},
 		{"INSERT INTO `task_link` (`task_id`, `kind`, `target`, `blocks`) VALUES (?, ?, ?, ?)",

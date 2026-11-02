@@ -393,6 +393,12 @@ var notSettings = []string{
 	// repo declarative settings.
 	"external_agent_token",
 	"external_agent_token_sequence",
+	// The hostd registry (model.Hostd) and its tokens' digests: hostds
+	// are created, rotated and revoked in Settings -> Hostds and minted
+	// a token there, not declared; hostd_token is never exported at all
+	// (LocalTables).
+	"hostd",
+	"hostd_token",
 	// Security audit log. Dynamic runtime records, not state repo
 	// declarative settings.
 	"secret_resolution_audit",

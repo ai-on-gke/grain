@@ -37,8 +37,12 @@ const RemotePath = "/api/hostd/connect"
 // in place of, Authorization, which IAP may need for its own token), and
 // what the hostd says about itself for the controller's status.
 const (
-	TokenHeader    = "X-Grain-Hostd-Token"
-	HostHeader     = "X-Grain-Hostd-Host"
+	TokenHeader = "X-Grain-Hostd-Token"
+	HostHeader  = "X-Grain-Hostd-Host"
+	// NameHeader is the registry hostd a dialing hostd says it is
+	// (grain hostd -name). Optional: the daemon names a connection from
+	// its token alone, and refuses one whose NameHeader disagrees.
+	NameHeader     = "X-Grain-Hostd-Name"
 	BuildHeader    = "X-Grain-Hostd-Build"
 	ProtocolHeader = "X-Grain-Hostd-Protocol"
 )
@@ -51,8 +55,13 @@ type Dialer struct {
 	// Server is the controller's URL: https://grain.example.com, or
 	// http://127.0.0.1:4242. A path other than "/" replaces RemotePath.
 	Server string
-	// Token is the shared hostd token the controller checks.
+	// Token is this hostd's token, which names it to the controller (a
+	// registry token from Settings -> Hostds, or the deprecated shared
+	// -hostd-token-file one).
 	Token string
+	// Name, when set, is the registry hostd this one says it is: the
+	// controller refuses it unless Token is that hostd's.
+	Name string
 	// IDToken, when set, is a token for a proxy in front of the
 	// controller -- IAP's OIDC token -- sent as Authorization, with
 	// Token moved to TokenHeader alone.
@@ -133,6 +142,9 @@ func (d Dialer) upgrade(ctx context.Context, raw net.Conn, u *url.URL) (net.Conn
 	wsupgrade.SetRequestHeaders(req.Header)
 	req.Header.Set("User-Agent", "grain-hostd")
 	req.Header.Set(HostHeader, d.Host)
+	if d.Name != "" {
+		req.Header.Set(NameHeader, d.Name)
+	}
 	req.Header.Set(BuildHeader, d.Build)
 	req.Header.Set(ProtocolHeader, strconv.Itoa(ProtocolVersion))
 	var idToken string
