@@ -217,3 +217,27 @@ func TestNightlysUpgradeTestUpgradesFromLatestAndTheFloor(t *testing.T) {
 	}
 	contains(t, read(t, "Makefile"), "TestUpgradeFromReleasedVersions")
 }
+
+// release.yml runs all of tests/container and fails on any skip, so it
+// has to name the published releases TestUpgradeFromReleasedVersions
+// upgrades from or every release run goes red on that skip.
+func TestReleasesContainerSuiteNamesThePublishedReleases(t *testing.T) {
+	raw := read(t, ".github", "workflows", "release.yml")
+	start := strings.Index(raw, "- name: Run the container e2e suite")
+	if start < 0 {
+		t.Fatalf("release.yml has no container e2e step")
+	}
+	step := raw[start:]
+	if end := strings.Index(step[1:], "\n      - name:"); end >= 0 {
+		step = step[:end+1]
+	}
+	for _, want := range []string{
+		`GRAIN_UPGRADE_RELEASE_IMAGE="ghcr.io/${RELEASE_IMAGE_REPO,,}/grain"`,
+		"go test ./tests/container/...",
+		"--- SKIP",
+	} {
+		if !strings.Contains(step, want) {
+			t.Errorf("release.yml's container e2e step does not contain %q", want)
+		}
+	}
+}
