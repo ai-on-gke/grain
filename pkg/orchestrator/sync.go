@@ -1422,7 +1422,12 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// Every member is judged on its own (mergeWalk): it merges if the
 	// predicate admits it and its lane has a merge left this cycle,
 	// whatever is true of the others. isHead is only whether it does its
-	// lane's once-a-cycle work (mergeWalk.leads).
+	// lane's once-a-cycle work (mergeWalk.leads): the conclusions that are
+	// about the repository rather than this change. What is about this
+	// change alone -- its own checks stalled, grain CI given up on its own
+	// head, its own repair stopped -- is escalated for every member, so a
+	// later member's stall is not hidden behind an earlier one that keeps
+	// being read first.
 	member := isQueueMember(e)
 	isHead := member && walk.leadOf(lane) == task.ID
 	isMergeHead := member && walk.mayMerge(lane)
@@ -1874,13 +1879,12 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		}
 		gate.merged(ref)
 
-	case isHead && !stacked && !blocked && repairing && e.turnStopped && !working:
+	case member && !stacked && !blocked && repairing && e.turnStopped && !working:
 		// The repair the queue asked for was stopped by a person, and the
 		// task is parked on that stop: no worker will pick it up until
 		// somebody replies or presses Retry, so waiting out
-		// defaultRepairDeadline would only hold this repository's head
-		// position -- and its CI priority (MergeQueueHeads) -- for hours
-		// on a run nobody is going to start. Handed over now, the same
+		// defaultRepairDeadline would only leave the change sitting in the
+		// queue for hours on a run nobody is going to start. Handed over now, the same
 		// way escalateUnfinishedRepair hands over a repair that is late,
 		// and the queue moves on to the next entry.
 		if err := escalateStoppedRepair(ctx, store, task, ref, health, now); err != nil {
@@ -1895,7 +1899,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			return err
 		}
 
-	case isHead && !stacked && !blocked && !repairing && health == model.PrPending && grainCIGivenUp(grain):
+	case member && !stacked && !blocked && !repairing && health == model.PrPending && grainCIGivenUp(grain):
 		// grain has stopped starting runs for this commit, so nothing is
 		// going to end this wait: said now rather than after the stall
 		// deadline, which would leave the row reading "Waiting for CI"
@@ -1904,7 +1908,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			return err
 		}
 
-	case isHead && !stacked && !blocked && !repairing && stalled:
+	case member && !stacked && !blocked && !repairing && stalled:
 		// A grain CI stall is handed to a person (merge_failed, the
 		// Inbox's "Unblock a merge"). The daemon no longer retries it or
 		// extends its deadline on its own: system:pipeline-steward sees the
