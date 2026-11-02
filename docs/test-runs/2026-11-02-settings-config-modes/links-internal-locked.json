@@ -1,0 +1,206 @@
+[
+ {
+  "mode": "internal-locked",
+  "width": 1440,
+  "from": "/system/health",
+  "text": "Kubernetes namespace",
+  "href": "/settings/sandboxes#k8sNamespace",
+  "landed": "/settings/sandboxes#k8sNamespace",
+  "check": {
+   "target": "#k8sNamespace",
+   "found": true,
+   "visible": true,
+   "top": 439
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 1440,
+  "from": "/system/health",
+  "text": "Priority class for CI jobs",
+  "href": "/settings/sandboxes#k8sPriorityClassCi",
+  "landed": "/settings/sandboxes#k8sPriorityClassCi",
+  "check": {
+   "target": "#k8sPriorityClassCi",
+   "found": true,
+   "visible": true,
+   "top": 429
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 1440,
+  "from": "/settings/agents",
+  "text": "View in config repo → tables/grain_config.json",
+  "href": "/config?path=tables%2Fgrain_config.json",
+  "landed": "/settings/config-repo/tables/grain_config.json",
+  "check": {
+   "target": "grain_config.json",
+   "found": true,
+   "visible": true
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 1440,
+  "from": "/settings/agents",
+  "text": "Settings → Git",
+  "href": "/settings/git",
+  "landed": "/settings/git",
+  "check": {
+   "target": "settings",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 1440,
+  "from": "/settings/git",
+  "text": "View in config repo → tables/grain_config.json",
+  "href": "/config?path=tables%2Fgrain_config.json",
+  "landed": "/settings/config-repo/tables/grain_config.json",
+  "check": {
+   "target": "grain_config.json",
+   "found": true,
+   "visible": true
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 1440,
+  "from": "/settings/git",
+  "text": "View in config repo → tables/repo_config.json",
+  "href": "/config?path=tables%2Frepo_config.json",
+  "landed": "/settings/config-repo/tables/repo_config.json",
+  "check": {
+   "target": "repo_config.json",
+   "found": true,
+   "visible": true
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 1440,
+  "from": "/settings/git",
+  "text": "Settings → Legacy capabilities",
+  "href": "/settings/credentials",
+  "landed": "/settings/credentials",
+  "check": {
+   "target": "settings",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 390,
+  "from": "/system/health",
+  "text": "Kubernetes namespace",
+  "href": "/settings/sandboxes#k8sNamespace",
+  "landed": "/settings/sandboxes#k8sNamespace",
+  "check": {
+   "target": "#k8sNamespace",
+   "found": true,
+   "visible": true,
+   "top": 389
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 390,
+  "from": "/system/health",
+  "text": "Priority class for CI jobs",
+  "href": "/settings/sandboxes#k8sPriorityClassCi",
+  "landed": "/settings/sandboxes#k8sPriorityClassCi",
+  "check": {
+   "target": "#k8sPriorityClassCi",
+   "found": true,
+   "visible": true,
+   "top": 360
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 390,
+  "from": "/settings/agents",
+  "text": "View in config repo → tables/grain_config.json",
+  "href": "/config?path=tables%2Fgrain_config.json",
+  "landed": "/settings/config-repo/tables/grain_config.json",
+  "check": {
+   "target": "grain_config.json",
+   "found": true,
+   "visible": true
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 390,
+  "from": "/settings/agents",
+  "text": "Settings → Git",
+  "href": "/settings/git",
+  "landed": "/settings/git",
+  "check": {
+   "target": "git",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 390,
+  "from": "/settings/git",
+  "text": "View in config repo → tables/grain_config.json",
+  "href": "/config?path=tables%2Fgrain_config.json",
+  "landed": "/settings/config-repo/tables/grain_config.json",
+  "check": {
+   "target": "grain_config.json",
+   "found": true,
+   "visible": true
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 390,
+  "from": "/settings/git",
+  "text": "View in config repo → tables/repo_config.json",
+  "href": "/config?path=tables%2Frepo_config.json",
+  "landed": "/settings/config-repo/tables/repo_config.json",
+  "check": {
+   "target": "repo_config.json",
+   "found": true,
+   "visible": true
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal-locked",
+  "width": 390,
+  "from": "/settings/git",
+  "text": "Settings → Legacy capabilities",
+  "href": "/settings/credentials",
+  "landed": "/settings/credentials",
+  "check": {
+   "target": "legacy capabilities",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ }
+]

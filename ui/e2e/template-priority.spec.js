@@ -136,6 +136,17 @@ test("a template's task priority that is not a whole number from 1 is refused, n
   expect(note.y).toBeGreaterThanOrEqual(box.y + box.height - 1);
   expect(Math.abs(note.x - box.x)).toBeLessThan(24);
 
+  // What the browser's own min/step check stops before submit runs is
+  // said in the same words, not in the browser's bubble.
+  for (const typed of ["0", "-1", "1.5"]) {
+    await priorityField.fill(typed);
+    await expect(refusal).toHaveCount(0);
+    await page.getByRole("button", { name: "Add template" }).click();
+    await expect(refusal).toBeVisible();
+    await expect(priorityField).toHaveAttribute("aria-invalid", "true");
+  }
+  expect(posts).toHaveLength(0);
+
   await priorityField.fill("100");
   await expect(refusal).toHaveCount(0);
 });

@@ -530,6 +530,14 @@ var Migrations = []Migration{
 				map[string][]string{"corp-research": {CorpResearchGrant}})
 		},
 	},
+	{
+		Version:     87,
+		Description: "drop executor_token and executor_token_sequence (remote executors are retired)",
+		Statements: []string{
+			"DROP TABLE IF EXISTS `executor_token`",
+			"DROP TABLE IF EXISTS `executor_token_sequence`",
+		},
+	},
 }
 
 // CorpResearchGrant is what migration 86 rewrote stored corp-research grants

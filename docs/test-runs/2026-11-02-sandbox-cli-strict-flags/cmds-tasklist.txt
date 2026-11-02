@@ -1,0 +1,11 @@
+# grain task list from task 150, holding only api:tasks:read@acme/widgets
+task list --limit 3
+task list --repo acme/gadgets
+task list --search OTHER-REPO
+task list --search 'sibling reader'
+task list --json --limit 2
+read task://151/record.md
+read task://5/record.md --lines 2
+ls task:// --glob '15*'
+task read 151
+task read 2

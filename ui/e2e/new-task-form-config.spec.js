@@ -404,3 +404,135 @@ for (const scheme of ["light", "dark"]) {
     expect(title.x + title.width).toBeLessThanOrEqual(390);
   });
 }
+
+// Task priority follows the Template picker the way a layer default
+// does: a template at 8 opens the box on 8, not on a 5 the filing would
+// not keep, and a 5 somebody types over it is filed as 5 rather than
+// left out for the server to fill with the template's 8 (2026-11-02
+// walkthrough: the box read 5 and the task was filed at 8). A value the
+// box cannot file as typed is refused there, in Edit's and Bulk edit's
+// words. At 390 px the picker stays inside the dialog, above the title.
+test("Task priority follows the picked template and files what it shows", async ({
+  page,
+}) => {
+  const urgent = {
+    id: "e2e-urgent",
+    name: "E2E urgent",
+    title: "Urgent fix",
+    description: "Fix it first.",
+    priority: 8,
+    capabilities: [],
+    reads: [],
+    writes: [],
+    autoMerge: false,
+    createdAt: new Date().toISOString(),
+  };
+  await page.route("**/api/templates", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({ response, json: [...body, urgent] });
+  });
+  await serveForm(page, { templates: { "e2e-urgent": { fields: {} } } });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/processes/templates/e2e-urgent");
+  await page
+    .getByRole("button", { name: "New task from this template" })
+    .click();
+  const dialog = page.getByRole("dialog");
+  const picker = dialog.getByRole("combobox", { name: "Template" });
+  await expect(picker).toContainText("E2E urgent");
+  const pane = await dialog.boundingBox();
+  const box = await picker.boundingBox();
+  expect(box.x).toBeGreaterThanOrEqual(pane.x);
+  expect(box.x + box.width).toBeLessThanOrEqual(pane.x + pane.width + 0.5);
+  expect(box.x + box.width).toBeLessThanOrEqual(390);
+  expect(await top(picker)).toBeLessThan(
+    await top(dialog.getByLabel(/^Title/)),
+  );
+
+  const priority = dialog.getByLabel("Task priority");
+  await expect(priority).toHaveValue("8");
+  await expect(dialog.getByText(/default 8, from the template/)).toBeVisible();
+  const pick = async (name) => {
+    await picker.click();
+    await page.getByRole("option", { name }).click();
+  };
+  await pick("No template");
+  await expect(priority).toHaveValue("5");
+  await pick("E2E urgent");
+  await expect(priority).toHaveValue("8");
+
+  const create = dialog.getByRole("button", { name: "Create task" });
+  for (const typed of ["0", "1.5", "99999999999999999999"]) {
+    await priority.fill(typed);
+    await expect(priority).toHaveAttribute("aria-invalid", "true");
+    await expect(
+      dialog.getByText(
+        "a whole number, 1 or more; default 5, higher numbers run first",
+      ),
+    ).toBeVisible();
+    await expect(create).toBeDisabled();
+  }
+
+  let filed = null;
+  await page.route("**/api/tasks", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    filed = route.request().postDataJSON();
+    await route.fulfill({
+      status: 400,
+      json: { error: "stopped by the test" },
+    });
+  });
+  // Typed, it stays put through a switch, and is filed as typed.
+  await priority.fill("5");
+  await pick("No template");
+  await pick("E2E urgent");
+  await expect(priority).toHaveValue("5");
+  await dialog.getByLabel(/^Repos/).selectOption("none");
+  await create.click();
+  await expect.poll(() => filed?.templateId).toBe("e2e-urgent");
+  expect(filed.priority).toBe(5);
+  await dialog.getByRole("button", { name: "Discard draft" }).click();
+});
+
+// A template with input fields is not offered by the Template picker,
+// and its own page's "New task from this template" opens Use…, which
+// asks for them, rather than a New Task form that can only be refused
+// (2026-11-02 walkthrough: 'field "Who" is required').
+test("a template with input fields goes through Use…, not the New Task form", async ({
+  page,
+}) => {
+  const asks = {
+    id: "e2e-asks",
+    name: "E2E asks",
+    title: "Greet {{who}}",
+    description: "Say hello to {{who}}.",
+    fields: [{ name: "who", label: "Who", required: true }],
+    capabilities: [],
+    reads: [],
+    writes: [],
+    autoMerge: false,
+    createdAt: new Date().toISOString(),
+  };
+  await page.route("**/api/templates", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({ response, json: [...body, asks] });
+  });
+  await serveForm(page, { templates: { "e2e-asks": { fields: {} } } });
+  await page.goto("/new");
+  const form = page.getByRole("dialog");
+  await form.getByRole("combobox", { name: "Template" }).click();
+  await expect(page.getByRole("option", { name: "E2E asks" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await page.goto("/processes/templates/e2e-asks");
+  await page
+    .getByRole("button", { name: "New task from this template" })
+    .click();
+  const use = page.getByRole("dialog").last();
+  await expect(use.getByLabel(/^Who/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "New task" })).toHaveCount(0);
+});

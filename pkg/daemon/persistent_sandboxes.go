@@ -48,7 +48,7 @@ var persistentSandboxes = func() *orchestrator.PersistentSandboxSupervisor {
 // listens on, so no persistent sandbox's host_port is bound over them.
 func reservePersistentPorts(cfg Config) {
 	var ports []int
-	for _, addr := range []string{cfg.UiAddr, cfg.ExecutorAddr} {
+	for _, addr := range []string{cfg.UiAddr} {
 		if _, p, err := net.SplitHostPort(addr); err == nil {
 			if n, err := strconv.Atoi(p); err == nil && n != 0 {
 				ports = append(ports, n)

@@ -44,6 +44,19 @@ node e2e/screenshot.mjs --pages '/tasks/13#task-13-api-grants-header' \
   --click '#task-13-api-grants-header' --out screenshots/after
 ```
 
+To shoot a daemon as an identity-aware proxy's caller -- the signed-in
+badge only appears for a verified identity -- send the proxy's header on
+every request with `--header 'Name: value'` (`HEADER=` for the make
+target), repeated for more:
+
+```sh
+node e2e/screenshot.mjs --url http://127.0.0.1:4300 --code XXXX-... --pages /,/settings/access \
+  --header "X-Goog-IAP-JWT-Assertion: $(go run iapstub.go sign ...)"
+```
+
+(`docs/test-runs/2026-11-02-verified-identity/iapstub.go` signs one for a
+daemon whose `-ui-iap-keys-url` points at its JWKS server.)
+
 An uncaught page error fails the run, because a blank pane is not a
 screenshot.
 

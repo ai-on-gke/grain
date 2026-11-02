@@ -590,6 +590,17 @@ type CLIWaitResponse struct {
 	CreditMS    int64           `json:"credit_used_ms"`
 	CreditCapMS int64           `json:"credit_cap_ms,omitempty"`
 	CreditLive  bool            `json:"credit_live"`
+	// CancelReason is the note a cancelled run was left with, and
+	// CancelledByHand whether a person (not grain) wrote it -- what
+	// wait_for_checks says of a cancellation (pkg/mcp's ciRunReport).
+	CancelReason    string `json:"cancel_reason,omitempty"`
+	CancelledByHand bool   `json:"cancelled_by_hand,omitempty"`
+	// SupersededBy is the run grain cancelled this one for, when that run
+	// is on another commit of this task's branch -- a newer push, which
+	// followSuperseded does not follow -- and SupersededByCommit its
+	// commit: the verdict the wait's asker most likely wants next.
+	SupersededBy       string `json:"superseded_by,omitempty"`
+	SupersededByCommit string `json:"superseded_by_commit,omitempty"`
 }
 
 func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope namespace.Scope, single bool) {
@@ -771,6 +782,16 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	default:
 		resp.Status = "failed"
 		verdict = mcp.WaitVerdictFailed
+		if run.Conclusion == ci.ConclusionCancelled {
+			resp.CancelReason = strings.TrimSpace(run.CancelReason)
+			resp.CancelledByHand = run.CancelledBy == ci.CancelByOperator
+			if id, ok := ci.SupersedingRun(run); ok {
+				if next, found := p.CLIActions.CIRun(ctx, id); found && next.ID == id && next.Commit != run.Commit &&
+					strings.EqualFold(next.Repo, scope.TaskRepo) && next.Ref == scope.TaskBranch {
+					resp.SupersededBy, resp.SupersededByCommit = next.ID, next.Commit
+				}
+			}
+		}
 	}
 	p.recordCheckWait(ctx, scope.RunID, verdict, waited)
 	writeCLIJSON(w, http.StatusOK, resp)

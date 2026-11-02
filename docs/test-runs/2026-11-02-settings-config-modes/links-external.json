@@ -1,0 +1,94 @@
+[
+ {
+  "mode": "external",
+  "width": 1440,
+  "from": "/settings/agents",
+  "text": "tables/grain_config.json",
+  "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json",
+  "result": "external (not followed)"
+ },
+ {
+  "mode": "external",
+  "width": 1440,
+  "from": "/settings/agents",
+  "text": "Settings → Git",
+  "href": "/settings/git",
+  "landed": "/settings/git",
+  "check": {
+   "target": "settings",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "external",
+  "width": 1440,
+  "from": "/settings/git",
+  "text": "tables/grain_config.json",
+  "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json",
+  "result": "external (not followed)"
+ },
+ {
+  "mode": "external",
+  "width": 1440,
+  "from": "/settings/git",
+  "text": "Settings → Legacy capabilities",
+  "href": "/settings/credentials",
+  "landed": "/settings/credentials",
+  "check": {
+   "target": "settings",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "external",
+  "width": 390,
+  "from": "/settings/agents",
+  "text": "tables/grain_config.json",
+  "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json",
+  "result": "external (not followed)"
+ },
+ {
+  "mode": "external",
+  "width": 390,
+  "from": "/settings/agents",
+  "text": "Settings → Git",
+  "href": "/settings/git",
+  "landed": "/settings/git",
+  "check": {
+   "target": "git",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "external",
+  "width": 390,
+  "from": "/settings/git",
+  "text": "tables/grain_config.json",
+  "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json",
+  "result": "external (not followed)"
+ },
+ {
+  "mode": "external",
+  "width": 390,
+  "from": "/settings/git",
+  "text": "Settings → Legacy capabilities",
+  "href": "/settings/credentials",
+  "landed": "/settings/credentials",
+  "check": {
+   "target": "legacy capabilities",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ }
+]

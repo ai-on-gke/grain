@@ -43,7 +43,6 @@ import RepositoriesSection from "./settings/RepositoriesSection.jsx";
 import GitSection from "./settings/GitSection.jsx";
 import CapabilitiesSection from "./settings/CapabilitiesSection.jsx";
 import CredentialsSection from "./settings/CredentialsSection.jsx";
-import ExecutorsSection from "./settings/ExecutorsSection.jsx";
 import EngineSection from "./settings/EngineSection.jsx";
 import CISection from "./settings/CISection.jsx";
 import SandboxesSection from "./settings/SandboxesSection.jsx";
@@ -74,10 +73,12 @@ import { useIsPhone } from "../phone.js";
 export { SETTINGS_SECTIONS, SETTINGS_GROUPS };
 
 // Sections that hold no saved settings of their own -- this browser's
-// preferences, and Upgrade, which is an action -- so they are never
-// read-only under an external config repo. Upgrade has no save state
-// either, so its header leaves the "All changes saved" line off.
-const NOT_CONFIG = new Set(["config-repo", "preferences", "upgrade"]);
+// preferences, Access's sign-in (design/design/config-repo-settings.design.md
+// §1 invariant 7: it stays outside the config repo so a bad config PR can
+// never lock the operator out), and Upgrade, which is an action -- so they
+// are never read-only under an external config repo. Upgrade has no save
+// state either, so its header leaves the "All changes saved" line off.
+const NOT_CONFIG = new Set(["config-repo", "preferences", "upgrade", "access"]);
 const NO_SAVE_STATE = new Set(["upgrade"]);
 
 // Sections that read GET /api/settings, and so wait for it.
@@ -605,11 +606,6 @@ export default function SettingsPage({
               ),
             ]}
           />
-        );
-        break;
-      case "executors":
-        body = (
-          <ExecutorsSection showError={showError} onOpenSystem={onOpenSystem} />
         );
         break;
       case "engine":

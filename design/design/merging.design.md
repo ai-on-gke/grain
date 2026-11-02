@@ -2,7 +2,7 @@
 
 **Owner:** @bwsalmon
 
-This design defines when grain merges a pull request into its base branch, what may hold a pull request back, and who decides what happens when a base branch goes red after a merge. It applies to every pull request grain drives to a merge, whatever the repository's `ci_mode`. Who reviews a change is defined by [`contributions.design.md`](contributions.design.md); this document only says that those reviews are gates.
+This design defines when grain merges a pull request into its base branch, what may hold a pull request back, and who decides what happens when a base branch goes red after a merge. It applies to every pull request grain drives to a merge, whatever the repository's `ci_mode`. Who reviews a change is defined by [`contributions.playbook.md`](../playbook/contributions.playbook.md); this document only says that those reviews are gates.
 
 **The core rule:** a pull request merges into branch B as soon as it is
 
@@ -26,7 +26,7 @@ A gate holds only the pull request it belongs to.
 - **The security review**, for a change that touches a trust-boundary path. A push of new trust-boundary edits after the review needs another.
 - **A person's Submit**, where one is required: pull requests against the config repository, changes to `.grain/**`, and tasks without auto-merge.
 
-Every review checks the change against the governing designs and specifications, as [`contributions.design.md`](contributions.design.md#reviews) requires.
+Every review checks the change against the governing designs and specifications, as [`contributions.playbook.md`](../playbook/contributions.playbook.md#reviews) requires.
 
 ## Conflicts, failures and repairs
 
