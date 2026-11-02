@@ -493,6 +493,18 @@ var Migrations = []Migration{
 			})
 		},
 	},
+	{
+		Version:     84,
+		Description: "rewrite stored self-repair grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/grain#host-exec={} (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{"self-repair": GrainHostExecGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{"self-repair": {GrainHostExecGrant}})
+		},
+	},
 }
 
 // ApplyDataMigrations runs the row rewrites (Up) of every migration past
