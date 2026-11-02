@@ -177,6 +177,118 @@ test("New task opened on a board takes the board's layer and files its boardId",
   await dialog.getByRole("button", { name: "Discard draft" }).click();
 });
 
+// A template's form: "New task from this template" on the template's
+// page opens New Task on it, its layer of settings/new-task-form.yml
+// labels, shows and hides fields, and the Template picker switches
+// layers the way a repo switch does -- re-applying defaults only to
+// fields nobody has touched. The filing names the template, and with
+// the title left blank the server takes the template's own
+// (ui.Client.fromTemplate); a hidden field still files the layer's
+// default (2026-11-01 walkthrough: nothing in the browser set
+// templateId, so no templates layer was reachable).
+test("New task from a template takes its layer, switches layers, and files its templateId", async ({
+  page,
+}) => {
+  const release = {
+    id: "e2e-release",
+    name: "E2E release",
+    title: "Cut the release",
+    description: "Cut it.",
+    capabilities: [],
+    reads: [],
+    writes: [],
+    autoMerge: false,
+    createdAt: new Date().toISOString(),
+  };
+  await page.route("**/api/templates", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({ response, json: [...body, release] });
+  });
+  await serveForm(page, {
+    default: {
+      fields: {
+        promptExtension: {
+          visibility: "shown",
+          order: 22,
+          label: "Extension (default layer)",
+          default: "from the default layer",
+        },
+      },
+    },
+    templates: {
+      "e2e-release": {
+        fields: {
+          promptExtension: {
+            label: "Extension (release layer)",
+            default: "from the release layer",
+          },
+          networkAccess: { visibility: "hidden", default: "none" },
+        },
+      },
+    },
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/processes/templates/e2e-release");
+  await page
+    .getByRole("button", { name: "New task from this template" })
+    .click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "New task" })).toBeVisible();
+  const picker = dialog.getByRole("combobox", { name: "Template" });
+  await expect(picker).toContainText("E2E release");
+  // The picker sits at the top of the form, above the title it fills.
+  expect(await top(picker)).toBeLessThan(
+    await top(dialog.getByLabel(/^Title/)),
+  );
+  const ext = dialog.locator("textarea[name=promptExtension]");
+  await expect(dialog.getByLabel("Extension (release layer)")).toBeVisible();
+  await expect(ext).toHaveValue("from the release layer");
+  await dialog.getByRole("button", { name: "Advanced options" }).click();
+  await expect(dialog.getByLabel("Network access")).toHaveCount(0);
+
+  const pick = async (name) => {
+    await picker.click();
+    await page.getByRole("option", { name }).click();
+  };
+  // Untouched, the field follows the template picked...
+  await pick("No template");
+  await expect(dialog.getByLabel("Extension (default layer)")).toBeVisible();
+  await expect(ext).toHaveValue("from the default layer");
+  await expect(dialog.getByLabel("Network access")).toBeVisible();
+  await pick("E2E release");
+  await expect(ext).toHaveValue("from the release layer");
+  // ...and once edited, it keeps what was typed through a switch.
+  await ext.fill("typed by a person");
+  await pick("No template");
+  await expect(dialog.getByLabel("Extension (default layer)")).toBeVisible();
+  await expect(ext).toHaveValue("typed by a person");
+  await pick("E2E release");
+
+  let filed = null;
+  await page.route("**/api/tasks", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    filed = route.request().postDataJSON();
+    await route.fulfill({
+      status: 400,
+      json: { error: "stopped by the test" },
+    });
+  });
+  // A blank title is the template's to fill.
+  await expect(dialog.getByLabel(/^Title/)).toHaveAttribute(
+    "placeholder",
+    "Cut the release",
+  );
+  await dialog.getByLabel(/^Repos/).selectOption("none");
+  await dialog.getByRole("button", { name: "Create task" }).click();
+  await expect.poll(() => filed?.templateId).toBe("e2e-release");
+  expect(filed.title).toBe("");
+  expect(filed.promptExtension).toBe("typed by a person");
+  expect(filed.networkAccess).toBe("none");
+  await dialog.getByRole("button", { name: "Discard draft" }).click();
+});
+
 // A /new link's values for custom fields the form tucks away or hides
 // are still said: the notice sits at the top of the form rather than
 // inside a collapsed "Advanced options", and a hidden field's values are

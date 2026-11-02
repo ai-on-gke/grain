@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { signInContext } from "./accesscode.js";
 import { expect, test } from "./fixtures.js";
+import { startDaemon } from "./realdaemon.js";
 
 // design/design/config-repo-settings.design.md §2.1, §2.3, §7.4: when the API
 // sends a settings write to the config repo (GET /api/config's
@@ -347,18 +352,94 @@ test("a View in config repo link opens Settings → Config repo with the file na
   );
 });
 
+for (const [name, viewport] of [
+  ["desktop", DESKTOP],
+  ["phone", PHONE],
+]) {
+  test(`General disables Lock settings in UI without a config repo on a ${name} screen`, async ({
+    page,
+  }) => {
+    try {
+      await page.setViewportSize(viewport);
+      await page.goto("/settings/general");
+
+      const envBox = page.getByLabel("Environment name");
+      const lockToggle = page.getByRole("checkbox", {
+        name: /Lock settings in UI \(require config repo PRs\)/i,
+      });
+      await expect(envBox).toBeEnabled();
+      await expect(lockToggle).toBeDisabled();
+      await expect(
+        page.getByText(/Unavailable without a config repository/i),
+      ).toBeVisible();
+      await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+
+      const sectionBox = await page
+        .getByTestId("settings-section")
+        .boundingBox();
+      const lockCard = page.locator("#settings-lock");
+      const lockCardBox = await lockCard.boundingBox();
+      const hintBox = await lockCard.locator(".hint").boundingBox();
+      expect(inside(sectionBox, lockCardBox)).toBe(true);
+      expect(inside(lockCardBox, hintBox)).toBe(true);
+      expect(hintBox.y + hintBox.height).toBeLessThanOrEqual(
+        lockCardBox.y + lockCardBox.height + 0.5,
+      );
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+
+      // Even if settingsLocked is set via the API on a standalone demo,
+      // non-bootstrap settings stay writable and General stays editable.
+      const putLock = await page.request.put("/api/settings", {
+        data: { settingsLocked: true },
+      });
+      expect(putLock.ok()).toBeTruthy();
+      expect((await putLock.json()).configRepoOnly).toBe(false);
+      await page.reload();
+      await expect(envBox).toBeEnabled();
+      await expect(lockToggle).toBeDisabled();
+      await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+    } finally {
+      await page.request
+        .put("/api/settings", { data: { settingsLocked: false } })
+        .catch(() => {});
+    }
+  });
+}
+
 test("toggling Lock settings in UI in General locks and unlocks settings", async ({
   page,
 }) => {
+  test.setTimeout(120_000);
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "grain-settings-lock-e2e-"),
+  );
+  const dataDir = path.join(root, "data");
+  const sandboxDir = path.join(root, "sandboxes");
+  await fs.mkdir(dataDir);
+  await fs.mkdir(sandboxDir);
+  await fs.writeFile(path.join(root, "gemini-key"), "test-only-key\n", {
+    mode: 0o600,
+  });
+
+  let daemon;
   try {
+    daemon = await startDaemon(root, dataDir, sandboxDir, [], {
+      directConfigWrites: false,
+    });
+    await signInContext(page.context(), daemon.url);
     await page.setViewportSize(DESKTOP);
-    await page.goto("/settings/general");
+    await page.goto(`${daemon.url}/settings/general`);
 
     const envBox = page.getByLabel("Environment name");
     const lockToggle = page.getByRole("checkbox", {
       name: /Lock settings in UI \(require config repo PRs\)/i,
     });
     await expect(envBox).toBeEnabled();
+    await expect(lockToggle).toBeEnabled();
     await expect(lockToggle).not.toBeChecked();
     await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
 
@@ -379,8 +460,7 @@ test("toggling Lock settings in UI in General locks and unlocks settings", async
     await expect(envBox).toBeEnabled();
     await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
   } finally {
-    await page.request
-      .put("/api/settings", { data: { settingsLocked: false } })
-      .catch(() => {});
+    await daemon?.stop();
+    await fs.rm(root, { recursive: true, force: true });
   }
 });

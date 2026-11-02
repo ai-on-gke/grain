@@ -929,7 +929,10 @@ describe("SettingsPage", () => {
 
   it("allows locking and unlocking settings in the UI from General", async () => {
     const user = userEvent.setup();
-    setup({ section: "general", config: { settingsLocked: false } });
+    setup({
+      section: "general",
+      config: { configRepo: "grain/config", settingsLocked: false },
+    });
 
     const envBox = await screen.findByLabelText("Environment name");
     const lockToggle = screen.getByRole("checkbox", {
@@ -979,7 +982,11 @@ describe("SettingsPage", () => {
     render(
       <PreferencesProvider>
         <SettingsPage
-          config={{ settingsLocked: true, configRepoOnly: false }}
+          config={{
+            configRepo: "grain/config",
+            settingsLocked: true,
+            configRepoOnly: false,
+          }}
           section="general"
           onSection={vi.fn()}
           showError={vi.fn()}
@@ -993,6 +1000,21 @@ describe("SettingsPage", () => {
       }),
     ).toBeChecked();
     expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+  });
+
+  // settings-mutability D-12: without a config repository (`grain demo`),
+  // General disables the Settings lock card rather than offering a lock
+  // toward a grain/config that does not exist.
+  it("disables Lock settings in UI when no configRepo is reported", async () => {
+    setup({ section: "general", config: {} });
+    expect(await screen.findByLabelText("Environment name")).toBeEnabled();
+    const lockToggle = screen.getByRole("checkbox", {
+      name: /Lock settings in UI \(require config repo PRs\)/i,
+    });
+    expect(lockToggle).toBeDisabled();
+    expect(
+      screen.getByText(/Unavailable without a config repository/i),
+    ).toBeInTheDocument();
   });
 
   // settings-mutability.spec.md D-1, D-2: while settings are locked the

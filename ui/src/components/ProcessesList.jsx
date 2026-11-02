@@ -106,6 +106,9 @@ export default function ProcessesList({
   openScheduleId,
   onOpenSchedule,
   openTemplateId,
+  // onNewTaskFromTemplate is an open template's "New task from this
+  // template": App opens the New Task form on it.
+  onNewTaskFromTemplate,
   onOpenTemplate,
   openSuiteId,
   onOpenSuite,
@@ -521,6 +524,7 @@ export default function ProcessesList({
           onSaved={() =>
             Promise.all([onRefreshTemplates?.(), onRefreshSchedules?.()])
           }
+          onNewTask={onNewTaskFromTemplate}
           showError={showError}
         />
       )}

@@ -453,7 +453,7 @@ func (c *Client) configRepoFor(ctx context.Context, bootstrap bool) (remote, bra
 	if remote, branch := c.externalConfigRepo(ctx); remote != "" {
 		return remote, branch, true
 	}
-	if bootstrap || c == nil || c.directConfigWrites() || !c.settingsLocked(ctx) {
+	if bootstrap || c == nil || c.Config.StateRepo == nil || c.directConfigWrites() || !c.settingsLocked(ctx) {
 		return "", "", false
 	}
 	// Only an API caller is sent to the config repository: grain's own
@@ -475,16 +475,19 @@ func (c *Client) configRepoOnly(ctx context.Context) bool {
 	if remote, _ := c.externalConfigRepo(ctx); remote != "" {
 		return true
 	}
-	return !c.directConfigWrites() && c.settingsLocked(ctx)
+	return c.Config.StateRepo != nil && !c.directConfigWrites() && c.settingsLocked(ctx)
 }
 
 // rowConfigRepoOnly is configRepoOnly for cfg rather than the row in the
 // store: what a settings response answers with the row it just wrote.
 func (c *Client) rowConfigRepoOnly(ctx context.Context, cfg model.Config) bool {
+	if c == nil {
+		return false
+	}
 	if remote, _ := c.externalConfigRepo(ctx); remote != "" {
 		return true
 	}
-	return cfg.SettingsLocked && !c.directConfigWrites()
+	return c.Config.StateRepo != nil && cfg.SettingsLocked && !c.directConfigWrites()
 }
 
 // directConfigWrites is the host-local opt-out from the config
