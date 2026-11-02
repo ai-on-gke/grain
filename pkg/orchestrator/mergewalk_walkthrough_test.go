@@ -352,7 +352,6 @@ func TestMergeWalkWalkthroughTwoMergesThatConflictWithEachOther(t *testing.T) {
 	}
 }
 
-
 // Two repositories in one cycle, each with three green pull requests and
 // a cap of 2: each lane merges two, and each held row names its own
 // repository's merges.
