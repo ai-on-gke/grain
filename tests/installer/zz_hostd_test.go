@@ -583,6 +583,8 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"fake claud
 # after grain codex-detached has started the MCP HTTP endpoint and written
 # $CODEX_HOME/config.toml.
 case "$1" in --version) echo "codex-cli %[3]s"; exit 0 ;; esac
+# The model catalog grain strips apply_patch from before every run.
+[ "$1 $2" = "debug models" ] && { echo '{"models":[{"slug":"gpt-test"}]}'; exit 0; }
 cat > /dev/null
 c=false; [ -e /.dockerenv ] && c=true
 echo "uid=$(id -u) in_container=$c home=$HOME codex_home=$CODEX_HOME auth_link=$(readlink "$CODEX_HOME/auth.json")" > %[2]q

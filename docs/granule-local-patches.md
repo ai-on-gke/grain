@@ -59,12 +59,27 @@ are untouched, so `scripts/granule/build-granule-image.sh` and
 
 ## Patches in flight
 
-- **Legacy `pkg/forward` compatibility for `pkg/granule/forward.go` (`granule forward -kube` / `granule-shim forward`).**
-  `pkg/forward`, `pkg/execwire`, `pkg/agent/forward.go`, `pkg/guestexec/forward.go`,
-  `cmd/granule-shim/main.go`, `pkg/cli/forward.go`, and `pkg/cli/vm.go`
-  retain `pkg/forward` alongside upstream's `pkg/guestforward` (`gke-labs/granule#13`,
-  grain task 480 / task 721) until `pkg/granule/forward.go` and live
-  `kubernetes-granule` sandbox pods migrate to `pkg/guestforward` / `pkg/sandbox`.
+- **Legacy `pkg/forward` compatibility -- no longer needed by grain.**
+  `pkg/forward`, `pkg/execwire`'s `ForwardSpecs`, `pkg/agent/forward.go`'s
+  `serveLegacyForward`, `pkg/guestexec/forward.go`, `cmd/granule-shim`'s
+  `forward` mode, and the `-kube` path in `pkg/cli/forward.go` /
+  `pkg/cli/vm.go` keep granule's old `pkg/forward` protocol next to
+  upstream's `pkg/guestforward` (`gke-labs/granule#13`, grain task 480 /
+  task 721). Grain itself no longer uses any of it: `pkg/granule/forward.go`
+  now runs a `pkg/guestforward.Forwarder` over `kubectl exec -i <pod> -c
+  sandbox -- granule forward-stdio`, and its `Command.ForwardArgs` renders
+  upstream's `granule forward pod/<pod> -L CALLER=GUEST -R GUEST=CALLER`
+  (grain task 2601). The guest only names which listener took a
+  connection, never where to dial, so the controller still reaches nothing
+  beyond the configured targets (`TestForwardKubectlRefusesOpenOutsideRemotePorts`).
+  Pod-side, `forward-stdio` and the agent's `guestforward.ServeAgent` have
+  been in the vendored tree since the `a4b4e4b` resync (`b0b39e23`, #1456),
+  and a `kubernetes-granule` pod's shim and guest agent are built from that
+  same tree, so every pod started since then speaks the new protocol. The
+  legacy files stay in `third_party/granule` only until the switch to the
+  `github.com/gke-labs/granule` module (grain task 2594) drops them; that
+  change should also repoint `tests/deploy`'s and `pkg/trustboundary`'s
+  references to `third_party/granule/pkg/forward`.
 - **Per-VM cgroup memory limits and positive `oom_score_adj` for Docker-backed VM containers.**
   `pkg/vmspec/spec.go`, `pkg/cli/vm.go` and `pkg/dockervm/docker.go` add
   `-memory-limit-mb` (defaulting to guest memory ceiling plus
