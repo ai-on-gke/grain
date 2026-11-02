@@ -255,7 +255,26 @@ describe("BulkEditOverlay", () => {
     ).toHaveValue(5);
   });
 
-  it.each(["", "0", "2.5", "-1"])(
+  // As New task, Edit, the template form, propose_task and the API read
+  // it: a whole number written with an exponent is that number.
+  it("applies a priority of 1e3 as 1000", async () => {
+    const user = userEvent.setup();
+    const onRun = vi.fn((mutate) => mutate("1"));
+    open({ onRun });
+
+    await tickField(user, "Task priority");
+    const box = screen.getByRole("spinbutton", { name: "Task priority" });
+    await user.clear(box);
+    await user.type(box, "1e3");
+    await user.click(screen.getByRole("button", { name: "Apply to 2 tasks" }));
+
+    expect(api).toHaveBeenCalledWith("/api/tasks/1", {
+      method: "PATCH",
+      body: JSON.stringify({ priority: 1000 }),
+    });
+  });
+
+  it.each(["", "0", "2.5", "-1", "1e-1", "1e20"])(
     "refuses to apply a priority of %j",
     async (typed) => {
       const user = userEvent.setup();

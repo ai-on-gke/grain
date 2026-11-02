@@ -31,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -226,8 +227,10 @@ var demoCapabilityConfigSchema = map[string]any{
 // configureCapabilityServerDemo starts the demo's capability server on a
 // loopback port, records it in stored's mcpServers, and returns the
 // registry that attaches it, already running until ctx ends. lookup
-// resolves the $secret: references a saved configuration holds.
-func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lookup protocol.SecretLookup, identity servers.IdentitySource) (*servers.Registry, error) {
+// resolves the $secret: references a saved configuration holds; hostdClient,
+// when set (-host-executor=hostd or hostd-remote), lets Settings list and
+// probe run: host capability servers against the demo's grain hostd.
+func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lookup protocol.SecretLookup, identity servers.IdentitySource, hostdClient *hostd.Client) (*servers.Registry, error) {
 	methods, err := demoCapabilityMethods()
 	if err != nil {
 		return nil, err
@@ -283,7 +286,7 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 	}
 	gchatEntry.Builtin = "gchat"
 	stored.MCPServers[intree.CanonicalID("gchat")] = gchatEntry
-	opts := servers.Options{Secrets: lookup}
+	opts := servers.Options{Secrets: lookup, Hostd: hostdClient}
 	if identity != nil {
 		opts.Identity = servers.StoreIdentity(identity, nil)
 	}

@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
@@ -79,6 +80,50 @@ type CapabilityServer struct {
 	// configured and disabled but not renamed or removed. Nil for an
 	// operator's own entry.
 	Builtin *intree.Builtin `json:"builtin,omitempty"`
+	// InProcess is set on a server grain runs inside its own process
+	// (pkg/capability/grainserver): built in, attached always, and with
+	// nothing to configure, disable or remove. It has no mcp_servers
+	// entry, so its Config is empty; it is listed so Settings shows its
+	// methods and who holds them beside the configured servers.
+	InProcess *CapabilityInProcessServer `json:"inProcess,omitempty"`
+}
+
+// CapabilityInProcessServer names an in-process server for Settings.
+type CapabilityInProcessServer struct {
+	// Name is its short name: grain, repo, or the last path element of
+	// a server a build contributed methods to (capability.Register).
+	Name    string `json:"name"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// inProcessSummaries are what core's in-process servers give a task.
+var inProcessSummaries = map[string]string{
+	grainserver.ID:     "grain's own host and database: its journal, health probes, SQL against its database and confirmed shell commands on its host.",
+	grainserver.RepoID: "Access to repositories beyond a run's own: a CI job's read or write access to another repository, or pushing any ref of a repository a task may write.",
+}
+
+// inProcessServers are the in-process servers' rows, by capability_id,
+// leaving out any id configured mcp_servers also hold (which the
+// in-process server shadows; that entry is listed as configured).
+func inProcessServers(configured map[string]protocol.ServerConfig) []CapabilityServer {
+	var out []CapabilityServer
+	for _, s := range grainserver.Statuses() {
+		if _, ok := configured[s.ID]; ok {
+			continue
+		}
+		name := s.ID
+		if i := strings.LastIndex(strings.TrimRight(name, "/"), "/"); i >= 0 {
+			name = strings.TrimRight(name, "/")[i+1:]
+		}
+		status := s
+		out = append(out, CapabilityServer{
+			ID:        s.ID,
+			Secrets:   []CapabilityServerSecret{},
+			Status:    &status,
+			InProcess: &CapabilityInProcessServer{Name: name, Summary: inProcessSummaries[s.ID]},
+		})
+	}
+	return out
 }
 
 // CapabilityServerManagedField is one configure field grain manages for
@@ -273,10 +318,21 @@ func (c *Client) ListCapabilityServers(ctx context.Context) ([]CapabilityServer,
 		}
 		out = append(out, row)
 	}
-	// Built-ins first, then the operator's own, each by capability_id.
+	out = append(out, inProcessServers(configured)...)
+	// Built-ins first, then the in-process servers, then the operator's
+	// own, each by capability_id.
+	rank := func(s CapabilityServer) int {
+		switch {
+		case s.Builtin != nil:
+			return 0
+		case s.InProcess != nil:
+			return 1
+		}
+		return 2
+	}
 	sort.Slice(out, func(i, j int) bool {
-		if bi, bj := out[i].Builtin != nil, out[j].Builtin != nil; bi != bj {
-			return bi
+		if ri, rj := rank(out[i]), rank(out[j]); ri != rj {
+			return ri < rj
 		}
 		return out[i].ID < out[j].ID
 	})
@@ -337,6 +393,9 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
 		return validationErrorf("a capability_id is required")
+	}
+	if grainserver.IsInProcessID(id) {
+		return validationErrorf("capability server %s runs inside grain itself and has nothing to configure", id)
 	}
 	cfg := req.Config
 	if err := c.checkRunLocation(ctx, cfg); err != nil {

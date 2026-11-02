@@ -472,7 +472,7 @@ name: Every night
 template: nightly                  # a declared template, by stem...
 # suite: sweep                     # ...or a declared suite...
 # workflow: nightly                # ...or a .grain/workflows file, by stem or path; exactly one
-base: main                         # optional
+base: main                         # optional with template: or workflow:; required with suite:
 enabled: true                      # optional; default true
 overlap: skip                      # optional; "skip" (default) or "allow"; "skip" only with workflow:
                                    # "skip" holds a firing that overlaps the last one and fires it once
@@ -492,6 +492,13 @@ every:                             # every N hours from the last firing
 #   day: 1
 #   at: "09:00"
 ```
+
+A `suite:` schedule must name a `base:` branch, matching `POST /api/suite-runs`
+and `POST /api/schedules`: a suite run stacks its tasks against one named
+branch and has no default branch to fall back to. Leaving `base:` out on a
+`suite:` schedule is refused when the declarations are read, naming the
+schedule file in `repo_declaration_sync.last_error` and keeping the last good
+commit's declarations running.
 
 
 #### Skipped firings
@@ -1023,6 +1030,7 @@ template nightly  .grain/templates/nightly.yml
 schedule nightly  .grain/schedules/nightly.yml
   fires:      suite sweep
   cadence:    every 6h
+  base:       main
   next:       Fri 2026-09-18 13:29 UTC
               Fri 2026-09-18 19:29 UTC
               Sat 2026-09-19 01:29 UTC
