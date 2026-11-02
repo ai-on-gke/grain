@@ -377,6 +377,10 @@ The remote model executors (`grain executor` / `grain model-server`,
 `scripts/run-remote-executor.sh`) were removed; see
 [docs/executors-removed.md](docs/executors-removed.md) for what a remote
 hostd does and does not do yet.
+The `none` sandbox backend (`-disable-native-sandboxes`) that such
+deployments used remains only for a control-plane-only daemon in tests
+and walkthroughs; see
+[docs/sandbox-backend-none.md](docs/sandbox-backend-none.md).
 
 ## Documentation
 
