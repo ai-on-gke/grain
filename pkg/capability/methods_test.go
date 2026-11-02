@@ -119,4 +119,14 @@ func TestRegisterMethodRefusesABadMethod(t *testing.T) {
 	if got := len(capability.Methods()); got != 1 {
 		t.Errorf("a refused registration left %d methods, want only the made-up one", got)
 	}
+
+	// An alias refused after another took leaves neither behind.
+	func() {
+		defer func() { _ = recover() }()
+		capability.Register(capability.Method{Server: capabilitytest.MethodServer, Spec: capabilitytest.MethodSpec("extra"),
+			Aliases: []string{"zz-first", "self-repair"}})
+	}()
+	if got := model.CanonicalLegacyGrant("zz-first"); got != "zz-first" {
+		t.Errorf("CanonicalLegacyGrant(zz-first) = %q after a refused registration, want it as it is", got)
+	}
 }

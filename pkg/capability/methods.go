@@ -104,10 +104,20 @@ func Register(m Method) (unregister func()) {
 		panic(fmt.Sprintf("capability: Register(%q): already registered", ref))
 	}
 	var undo []func()
+	registered := false
+	defer func() {
+		// A refused alias panics after the ones before it took; undo them.
+		if !registered {
+			for _, f := range undo {
+				f()
+			}
+		}
+	}()
 	for _, alias := range m.Aliases {
 		undo = append(undo, model.RegisterLegacyGrantAlias(alias, m.Grant()))
 	}
 	registeredMethods[ref] = m
+	registered = true
 	if m.DefaultOn {
 		undo = append(undo, model.RegisterDefaultConsoleSessionCapability(m.Grant()))
 	}
