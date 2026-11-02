@@ -28,9 +28,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github"
 )
 
-// depotWorkflowRefusal is what depot.code.corp.goog says, word for word,
+// workflowScopeRefusal is what a GitHub host says, word for word,
 // to a push that adds a workflow with a token lacking the scope.
-const depotWorkflowRefusal = "refusing to allow an OAuth App to create or update workflow " +
+const workflowScopeRefusal = "refusing to allow an OAuth App to create or update workflow " +
 	"`.github/workflows/ci.yml` without `workflow` scope"
 
 // pushResult is a receive-pack answer rejecting refs/heads/main with
@@ -108,8 +108,8 @@ func TestARejectedPushCarriesTheSourcesHint(t *testing.T) {
 		sideband bool
 		hint     bool
 	}{
-		{"workflow scope, side-band", depotWorkflowRefusal, true, true},
-		{"workflow scope, no side-band", depotWorkflowRefusal, false, true},
+		{"workflow scope, side-band", workflowScopeRefusal, true, true},
+		{"workflow scope, no side-band", workflowScopeRefusal, false, true},
 		{"non-fast-forward", "non-fast-forward", true, false},
 		{"protected branch", "protected branch hook declined", true, false},
 		{"app permission", "refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` " +
@@ -141,7 +141,7 @@ func TestARejectedPushCarriesTheSourcesHint(t *testing.T) {
 				if !strings.Contains(got, "\x02grain: run `"+fix) {
 					t.Fatalf("answer = %q, want the hint as a progress line", got)
 				}
-			} else if !strings.Contains(got, "ng refs/heads/main "+depotWorkflowRefusal+" -- grain: run `"+fix) {
+			} else if !strings.Contains(got, "ng refs/heads/main "+workflowScopeRefusal+" -- grain: run `"+fix) {
 				t.Fatalf("answer = %q, want the hint on the ng line", got)
 			}
 		})
@@ -163,8 +163,8 @@ func TestAnAcceptedPushIsPassedThrough(t *testing.T) {
 	}
 }
 
-// A registered source's own hint is what is said: the shape the Google
-// layer's ggh.WorkflowRefusedHint has.
+// A registered source's own hint is what is said: the shape a wrapper
+// source's own workflow hint has.
 func TestARegisteredSourcesPushRefusedHint(t *testing.T) {
 	var asked []string
 	t.Cleanup(RegisterAmbientSource(AmbientCommandSource{
@@ -176,15 +176,15 @@ func TestARegisteredSourcesPushRefusedHint(t *testing.T) {
 			if !WorkflowScopeRefused(message) {
 				return ""
 			}
-			return "run `GH_HOST=" + host + " ggh auth refresh --scopes repo,workflow` as the daemon's account"
+			return "run `GH_HOST=" + host + " forgecli auth refresh --scopes repo,workflow` as the daemon's account"
 		},
 	}))
-	p := hintProxy(t, "hinted", &resultForwarder{body: pushResult(t, depotWorkflowRefusal, true)})
+	p := hintProxy(t, "hinted", &resultForwarder{body: pushResult(t, workflowScopeRefusal, true)})
 	got := readAll(t, pushWith(t, p))
-	if !strings.Contains(got, "grain: run `GH_HOST=github.com ggh auth refresh --scopes repo,workflow`") {
+	if !strings.Contains(got, "grain: run `GH_HOST=github.com forgecli auth refresh --scopes repo,workflow`") {
 		t.Fatalf("answer = %q, want the source's hint", got)
 	}
-	if len(asked) != 1 || !strings.HasPrefix(asked[0], "github.com: ") || !strings.Contains(asked[0], depotWorkflowRefusal) {
+	if len(asked) != 1 || !strings.HasPrefix(asked[0], "github.com: ") || !strings.Contains(asked[0], workflowScopeRefusal) {
 		t.Fatalf("hint asked %q, want once, for github.com, with the host's text", asked)
 	}
 
@@ -192,7 +192,7 @@ func TestARegisteredSourcesPushRefusedHint(t *testing.T) {
 	t.Cleanup(RegisterAmbientSource(AmbientCommandSource{
 		Name: "plain", Command: "gh", Args: []string{"auth", "token", "--hostname", "{host}"},
 	}))
-	upstream := pushResult(t, depotWorkflowRefusal, true)
+	upstream := pushResult(t, workflowScopeRefusal, true)
 	p = hintProxy(t, "plain", &resultForwarder{body: upstream})
 	if got := readAll(t, pushWith(t, p)); got != string(upstream) {
 		t.Fatalf("answer with no hook = %q, want %q", got, upstream)
@@ -240,7 +240,7 @@ func TestAGrainMadePushThroughTheProxyNamesTheHint(t *testing.T) {
 			backend(w, r)
 			return
 		}
-		// The host turns the push down the way depot does.
+		// The host turns the push down for want of the scope.
 		commands, err := commandList(r.Body, r.Header.Get("Content-Encoding"))
 		if err != nil {
 			t.Errorf("reading the push: %v", err)
@@ -251,7 +251,7 @@ func TestAGrainMadePushThroughTheProxyNamesTheHint(t *testing.T) {
 			t.Errorf("parsing the push: %v", err)
 			return
 		}
-		resp, _ := rejectPush(updates, caps, depotWorkflowRefusal)
+		resp, _ := rejectPush(updates, caps, workflowScopeRefusal)
 		io.Copy(io.Discard, r.Body)
 		WriteResponse(w, resp)
 	}))
@@ -296,7 +296,7 @@ func TestAGrainMadePushThroughTheProxyNamesTheHint(t *testing.T) {
 	}
 	for _, want := range []string{
 		"[remote rejected]",
-		depotWorkflowRefusal,
+		workflowScopeRefusal,
 		"remote: grain: run `gh auth refresh --hostname github.com --scopes repo,workflow`",
 	} {
 		if !strings.Contains(string(out), want) {
