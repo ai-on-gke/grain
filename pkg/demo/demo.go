@@ -61,11 +61,26 @@ type Options struct {
 	// with it, as on a real deployment (docs/access-code.md). Empty keeps
 	// it beside the throwaway store and logs it.
 	AccessCodeFile string
-	Addr           string
-	Actor          string
-	Repo           model.RepoRef // -default-target-repo
-	Open           bool
-	Observability  bool
+	// IAPAudience, IAPIssuer, IAPKeysURL, RequireIAP and
+	// AllowedPrincipals are the daemon's -ui-iap-audience,
+	// -ui-iap-issuer, -ui-iap-keys-url, -ui-require-iap and
+	// -ui-allowed-principals, so the demo can be put behind a signing
+	// proxy (a real IAP or a test issuer) and sign callers in as a
+	// deployment does (design/design/authentication.design.md).
+	IAPAudience       string
+	IAPIssuer         string
+	IAPKeysURL        string
+	RequireIAP        bool
+	AllowedPrincipals []string
+	// CloudIdentityEndpoint, when set, is the base URL group: entries in
+	// AllowedPrincipals are resolved against instead of Google's Cloud
+	// Identity API, with the same Application Default Credentials.
+	CloudIdentityEndpoint string
+	Addr                  string
+	Actor                 string
+	Repo                  model.RepoRef // -default-target-repo
+	Open                  bool
+	Observability         bool
 	// Staging runs two fake persistent sandboxes for the rail's Staging
 	// group (demo_persistent_sandboxes.go).
 	Staging          bool
@@ -233,6 +248,15 @@ func Run(opts Options) error {
 		// The sub-case of each task's state (ui.Config.Reasons): a pure
 		// function of the rows, so the demo shows it as a deployment does.
 		Reasons: daemon.ReasonClassifier{},
+
+		IAPAudience:       opts.IAPAudience,
+		IAPIssuer:         opts.IAPIssuer,
+		IAPKeysURL:        opts.IAPKeysURL,
+		RequireIAP:        opts.RequireIAP,
+		AllowedPrincipals: opts.AllowedPrincipals,
+	}
+	if opts.CloudIdentityEndpoint != "" {
+		cfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(opts.CloudIdentityEndpoint))
 	}
 	runCfg, err := demoCLIRunConfig(opts.HostExecutor)
 	if err != nil {
