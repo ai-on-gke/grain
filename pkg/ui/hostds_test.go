@@ -20,7 +20,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -104,5 +106,143 @@ func TestHostdRegistryRoutes(t *testing.T) {
 	}
 	if rec := do(t, srv, http.MethodPost, "/api/hostds/nope/revoke", ""); rec.Code != http.StatusNotFound {
 		t.Errorf("revoking an unknown hostd = %d, want 404", rec.Code)
+	}
+}
+
+type fakeHostdHub struct {
+	statuses     map[string]hostd.RemoteStatus
+	disconnected []string
+}
+
+func (f *fakeHostdHub) ServeHTTP(http.ResponseWriter, *http.Request) {}
+
+func (f *fakeHostdHub) Statuses() map[string]hostd.RemoteStatus { return f.statuses }
+
+func (f *fakeHostdHub) Disconnect(name string) bool {
+	f.disconnected = append(f.disconnected, name)
+	if st, ok := f.statuses[name]; ok {
+		st.Connected = false
+		f.statuses[name] = st
+		return true
+	}
+	return false
+}
+
+// Revoking a hostd immediately drops its live session on HostdRemote and
+// clears any open hostd-disconnected:<name> notification.
+func TestRevokeHostdDisconnectsSessionAndClearsNotification(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	hub := &fakeHostdHub{statuses: map[string]hostd.RemoteStatus{
+		"ws-1": {Connected: true, RemotePeer: hostd.RemotePeer{Name: "ws-1", Host: "box-1"}},
+	}}
+	client.Config.HostdRemote = hub
+	if _, _, err := client.Store.CreateHostd(ctx, model.Hostd{Name: "ws-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Store.RaiseNotification(ctx, model.Notification{
+		Subject:  "hostd-disconnected:ws-1",
+		Severity: model.NotificationWarning,
+		Title:    "grain hostd ws-1 disconnected",
+		Body:     "waiting",
+		RaisedBy: "automation:hostd",
+		RaisedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := do(t, srv, http.MethodPost, "/api/hostds/ws-1/revoke", ""); rec.Code != http.StatusOK {
+		t.Fatalf("revoke = %d %s", rec.Code, rec.Body.String())
+	}
+	if len(hub.disconnected) != 1 || hub.disconnected[0] != "ws-1" {
+		t.Errorf("disconnected = %v, want [ws-1]", hub.disconnected)
+	}
+	if n, err := client.Store.OpenNotification(ctx, "hostd-disconnected:ws-1"); err != nil || n != nil {
+		t.Errorf("open hostd-disconnected:ws-1 after revoke = %+v (err %v), want cleared", n, err)
+	}
+}
+
+// Repository-scoped grants (on an acting task or an external agent token)
+// cannot reach deployment-wide routes such as /api/hostds by smuggling an
+// ignored "repo" or "taskId" in the body or "?repo=" in the query, nor
+// read another repository's metrics or task list behind a repeated or
+// comma-separated ?repo= value.
+func TestRepoScopedAgentCannotReachHostdRegistryOrMultiRepoQueries(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	if err := client.Store.EnsureLocalHostd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "10", "acme/widgets",
+		"api:capabilities:admin@acme/widgets",
+		"api:settings:read@acme/widgets",
+		"api:deployment:read@acme/widgets",
+		"api:tasks:read@acme/widgets",
+	)
+	seedAPITask(t, client, "11", "acme/widgets",
+		"api:capabilities:admin",
+		"api:settings:read",
+	)
+
+	for _, tc := range []struct {
+		method, path, body string
+	}{
+		{http.MethodPost, "/api/hostds", `{"name":"rogue-1","repo":"acme/widgets"}`},
+		{http.MethodPost, "/api/hostds", `{"name":"rogue-2","taskId":"10"}`},
+		{http.MethodGet, "/api/hostds?repo=acme/widgets", ""},
+		{http.MethodGet, "/api/metrics?repo=acme/widgets&repo=acme/secret", ""},
+		{http.MethodGet, "/api/metrics?repo=acme/widgets,acme/secret", ""},
+		{http.MethodGet, "/api/tasks?repo=&repo=acme/widgets", ""},
+	} {
+		if code, resp := asAgent(t, srv, "10", tc.method, tc.path, tc.body, "testing"); code != http.StatusForbidden {
+			t.Errorf("repo-scoped task 10 %s %s (%s) = %d %s, want 403", tc.method, tc.path, tc.body, code, resp)
+		}
+	}
+
+	// Single-repo queries on routes whose handlers actually filter by ?repo= still work.
+	for _, path := range []string{"/api/metrics?repo=acme/widgets", "/api/tasks?repo=acme/widgets"} {
+		if code, resp := asAgent(t, srv, "10", http.MethodGet, path, "", ""); code != http.StatusOK {
+			t.Errorf("repo-scoped task 10 GET %s = %d %s, want 200", path, code, resp)
+		}
+	}
+
+	// Unscoped deployment-wide grants still reach /api/hostds.
+	if code, resp := asAgent(t, srv, "11", http.MethodPost, "/api/hostds", `{"name":"legit-1"}`, "register hostd"); code != http.StatusCreated {
+		t.Fatalf("unscoped task 11 POST /api/hostds = %d %s, want 201", code, resp)
+	}
+	if code, resp := asAgent(t, srv, "11", http.MethodGet, "/api/hostds", "", ""); code != http.StatusOK {
+		t.Fatalf("unscoped task 11 GET /api/hostds = %d %s, want 200", code, resp)
+	}
+
+	// Same boundary for a repo-restricted external agent credential over /mcp.
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "ext-widgets",
+		Scopes: []string{"capabilities:admin", "settings:read", "deployment:read", "tasks:read"},
+		Repos:  []string{"acme/widgets"},
+	})
+	if err != nil {
+		t.Fatalf("CreateExternalAgentToken: %v", err)
+	}
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"api_create_hostd", map[string]any{"reason": "testing", "body": map[string]any{"name": "rogue-ext-1", "repo": "acme/widgets"}}},
+		{"api_create_hostd", map[string]any{"reason": "testing", "body": map[string]any{"name": "rogue-ext-2", "taskId": "10"}}},
+		{"api_list_hostds", map[string]any{"query": map[string]any{"repo": "acme/widgets"}}},
+		{"api_get_metrics", map[string]any{"query": map[string]any{"repo": "acme/widgets,acme/secret"}}},
+	} {
+		mcpRec, res := callMCPTool(t, srv, issued.Token, tc.tool, tc.args)
+		if mcpRec.Code != http.StatusOK || !res.IsError {
+			t.Errorf("repo-scoped external token %s (%v) = status %d isError=%v content=%v, want tool error",
+				tc.tool, tc.args, mcpRec.Code, res.IsError, res.Content)
+		}
+	}
+	mcpRec, res := callMCPTool(t, srv, issued.Token, "api_get_metrics", map[string]any{"query": map[string]any{"repo": "acme/widgets"}})
+	if mcpRec.Code != http.StatusOK || res.IsError {
+		t.Errorf("repo-scoped external token api_get_metrics(acme/widgets) = status %d isError=%v content=%v, want success",
+			mcpRec.Code, res.IsError, res.Content)
 	}
 }

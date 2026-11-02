@@ -68,6 +68,12 @@ type hostdStatuses interface {
 	Statuses() map[string]hostd.RemoteStatus
 }
 
+// hostdDisconnector drops a live dialing-in hostd session on revocation
+// (hostd.Remote).
+type hostdDisconnector interface {
+	Disconnect(name string) bool
+}
+
 func hostdError(err error) error {
 	switch {
 	case errors.Is(err, model.ErrHostdNotFound):
@@ -139,7 +145,8 @@ func (c *Client) RotateHostdToken(ctx context.Context, name string) (IssuedHostd
 	return IssuedHostdToken{Hostd: *h, Token: token}, nil
 }
 
-// RevokeHostd revokes name and every token it has.
+// RevokeHostd revokes name and every token it has, dropping its live
+// session at once if it is connected.
 func (c *Client) RevokeHostd(ctx context.Context, name string) (model.Hostd, error) {
 	if name == model.LocalHostd {
 		return model.Hostd{}, validationErrorf("%q is the co-located hostd and cannot be revoked", name)
@@ -147,6 +154,12 @@ func (c *Client) RevokeHostd(ctx context.Context, name string) (model.Hostd, err
 	h, err := c.Store.RevokeHostd(ctx, name)
 	if err != nil {
 		return model.Hostd{}, hostdError(err)
+	}
+	if d, ok := c.Config.HostdRemote.(hostdDisconnector); ok {
+		d.Disconnect(name)
+	}
+	if _, err := c.Store.ClearNotification(ctx, "hostd-disconnected:"+name, "automation:hostd"); err != nil {
+		log.Printf("grain ui: clearing hostd-disconnected:%s after revoke: %v", name, err)
 	}
 	return *h, nil
 }

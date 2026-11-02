@@ -253,6 +253,24 @@ func (r *Remote) Dialer(name string) func(context.Context) (net.Conn, error) {
 	return func(ctx context.Context) (net.Conn, error) { return r.DialHostd(ctx, name) }
 }
 
+// Disconnect closes the live session of the hostd named name, if one is
+// connected now, and reports whether there was one. Serve records the
+// drop as usual; Identify refuses any reconnect once its token is
+// revoked in the registry.
+func (r *Remote) Disconnect(name string) bool {
+	if r == nil || name == "" {
+		return false
+	}
+	r.mu.Lock()
+	sess := r.cur[name]
+	r.mu.Unlock()
+	if sess == nil {
+		return false
+	}
+	_ = sess.m.Close()
+	return true
+}
+
 // WaitConnected blocks until the default hostd is connected or ctx is
 // done.
 func (r *Remote) WaitConnected(ctx context.Context) error {

@@ -389,8 +389,8 @@ var routeBodies = map[string]any{
 // routeQueries is the query parameters a route's handler reads, each
 // with what it means: its tool describes them as properties of query.
 // A route with none takes no query of its own, though the query object
-// still carries any parameter a caller adds (a repo= the agent API's
-// gate reads, a template composition's field.<name>).
+// still carries any parameter a caller adds (such as a template
+// composition's field.<name>).
 var routeQueries = map[string]map[string]string{
 	"GET /api/restart-watch": {
 		"quick": "1 to answer at once with whether grain is restarting, rather than holding the request until it is or 25 s pass.",

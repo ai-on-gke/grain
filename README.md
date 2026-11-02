@@ -375,8 +375,9 @@ grain hostd -server https://<grain-host> -token-file /etc/grain/hostd.token -nam
 ```
 
 The daemon names a connection from its token alone; `-name` is optional
-and, when given, must be that token's hostd. Rotating a hostd's token or
-revoking the hostd takes effect on its next connection. The single
+and, when given, must be that token's hostd. Rotating a hostd's token
+takes effect on its next connection; revoking the hostd disconnects it
+at once. The single
 shared token of `grain daemon -hostd-token-file` still works for this
 release, as one hostd named by `-hostd-token-name` (default `remote`),
 and is removed in the next. A hostd's allowlist (`/etc/grain/hostd.yaml`)

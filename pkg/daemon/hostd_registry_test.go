@@ -204,3 +204,72 @@ func TestAPinnedHostdIsWaitedForAcrossADisconnect(t *testing.T) {
 		t.Errorf("changes = %v, want ws-a up, down, up", changes)
 	}
 }
+
+// Revoking a connected hostd and disconnecting it raises no
+// hostd-disconnected:<name> notification (and clears any open one), and
+// SelectHostd by label does not wait for local when the deployment has
+// no co-located hostd.
+func TestRevokedHostdDisconnectDoesNotNotifyAndUnavailableLocalIsNotWaitedFor(t *testing.T) {
+	ctx := context.Background()
+	store, closeStore := openTestStore(t, t.TempDir())
+	t.Cleanup(closeStore)
+	if err := store.EnsureLocalHostd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	localLabels := map[string]string{"gpu": "yes"}
+	if _, err := store.UpdateHostd(ctx, model.LocalHostd, nil, &localLabels); err != nil {
+		t.Fatal(err)
+	}
+	_, tok, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-rev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Kubernetes-like config with no co-located hostd: local has gpu=yes in
+	// the registry, and no remote hostd does, so label selection must refuse
+	// rather than return HostdWaitError("waiting for hostd local").
+	cfg := withExecutor(Config{}, whererun.Detection{Signal: "/.dockerenv"}, func(string) bool { return false })
+	cfg.HostdHub = newHostdHub(cfg, store)
+	var waitErr *HostdWaitError
+	if _, _, err := cfg.SelectHostd(ctx, store, HostdSelector{Labels: map[string]string{"gpu": "yes"}}); err == nil || errors.As(err, &waitErr) {
+		t.Errorf("SelectHostd(gpu=yes) with unavailable local = %v, want immediate non-wait refusal", err)
+	}
+
+	done := make(chan struct{}, 1)
+	cfg.HostdHub.OnChange = func(name string, connected bool) {
+		hostdConnectionNotifier(store)(name, connected)
+		if name == "ws-rev" && !connected {
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+		}
+	}
+	ctl := httptest.NewServer(cfg.HostdHub)
+	t.Cleanup(ctl.Close)
+	startDialingHostd(t, ctl.URL, tok, offersAgy)
+	waitFor(t, func() bool { return cfg.HostdHub.HostdStatus("ws-rev").Connected })
+
+	// Seed an open notification right before revoking and disconnecting: the
+	// drop handler for a revoked hostd clears it rather than raising one.
+	if _, err := store.RaiseNotification(ctx, model.Notification{
+		Subject:  "hostd-disconnected:ws-rev",
+		Severity: model.NotificationWarning,
+		Title:    "grain hostd ws-rev disconnected",
+		Body:     "stale",
+		RaisedBy: "automation:hostd",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RevokeHostd(ctx, "ws-rev"); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.HostdHub.Disconnect("ws-rev") {
+		t.Fatal("Disconnect(ws-rev) = false, want true")
+	}
+	<-done
+	waitFor(t, func() bool {
+		n, err := store.OpenNotification(ctx, "hostd-disconnected:ws-rev")
+		return err == nil && n == nil
+	})
+}

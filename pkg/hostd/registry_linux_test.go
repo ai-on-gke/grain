@@ -181,3 +181,31 @@ func TestHelloCarriesTheAllowlistsCapacityAndLabels(t *testing.T) {
 		t.Errorf("hello = %+v, want capacity 2 and os=linux", h)
 	}
 }
+
+// Disconnecting a revoked hostd closes its live session at once while
+// leaving other hostds connected, and its retired token cannot reconnect.
+func TestDisconnectDropsLiveSessionOfRevokedHostdOnly(t *testing.T) {
+	ctl, reg := startRegistryController(t)
+	startNamedRemoteServer(t, ctl, "tok-a", "", "")
+	startNamedRemoteServer(t, ctl, "tok-b", "ws-b", "")
+	waitHostd(t, ctl.remote, "ws-a", true)
+	beforeB := waitHostd(t, ctl.remote, "ws-b", true)
+
+	reg.revoke("tok-a")
+	if !ctl.remote.Disconnect("ws-a") {
+		t.Fatal("Disconnect(ws-a) = false, want true for a live session")
+	}
+	waitHostd(t, ctl.remote, "ws-a", false)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := ctl.remote.DialHostd(ctx, "ws-a"); err == nil {
+		t.Fatal("DialHostd(ws-a) succeeded after revoke and Disconnect")
+	}
+	afterB := ctl.remote.HostdStatus("ws-b")
+	if !afterB.Connected || !afterB.Since.Equal(beforeB.Since) {
+		t.Errorf("ws-b after disconnecting ws-a = %+v, want untouched (%+v)", afterB, beforeB)
+	}
+	if ctl.remote.Disconnect("ws-a") {
+		t.Error("second Disconnect(ws-a) = true, want false")
+	}
+}

@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -56,6 +57,12 @@ func hostdConnectionNotifier(store *model.Store) func(name string, connected boo
 			defer cancel()
 			subject := hostdDisconnectedSubject(name)
 			if connected {
+				if _, err := store.ClearNotification(ctx, subject, "automation:hostd"); err != nil {
+					log.Printf("grain daemon: clearing %s: %v", subject, err)
+				}
+				return
+			}
+			if h, err := store.GetHostd(ctx, name); err == nil && h != nil && h.Revoked() {
 				if _, err := store.ClearNotification(ctx, subject, "automation:hostd"); err != nil {
 					log.Printf("grain daemon: clearing %s: %v", subject, err)
 				}
@@ -200,7 +207,10 @@ func (c Config) SelectHostd(ctx context.Context, store *model.Store, sel HostdSe
 		if connected {
 			return exec, h.Name, nil
 		}
-		matched = append(matched, h.Name)
+		var waitErr *HostdWaitError
+		if errors.As(err, &waitErr) {
+			matched = append(matched, h.Name)
+		}
 	}
 	switch len(matched) {
 	case 0:
