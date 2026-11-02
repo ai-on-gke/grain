@@ -4464,3 +4464,51 @@ func headerMap(h http.Header) map[string]string {
 	}
 	return out
 }
+
+// Tag is one repository tag, peeled to the commit it names.
+type Tag struct {
+	Name string
+	SHA  string
+}
+
+// TagLister is the optional half of Client that lists a repository's
+// tags -- what the release-qualification reconciler reads to find a
+// `vX.Y.Z-rc.N` candidate (orchestrator/releasequalification.go).
+type TagLister interface {
+	ListTags(owner, repo string) ([]Tag, error)
+}
+
+var _ TagLister = (*RESTClient)(nil)
+
+// ListTags returns owner/repo's most recent tags, one page of them.
+//
+// GET /repos/{owner}/{repo}/tags answers each tag with the commit it
+// points at already peeled, which is the sha a check run is posted on,
+// so an annotated tag costs no second read. One page, deliberately: the
+// caller only ever wants the newest candidate, and this runs on a timer.
+func (c *RESTClient) ListTags(owner, repo string) ([]Tag, error) {
+	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repo))
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status == 404 {
+		return nil, nil
+	}
+	if resp.Status != 200 {
+		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	var data []struct {
+		Name   string `json:"name"`
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := json.Unmarshal(resp.Body, &data); err != nil {
+		return nil, err
+	}
+	tags := make([]Tag, 0, len(data))
+	for _, t := range data {
+		tags = append(tags, Tag{Name: t.Name, SHA: t.Commit.SHA})
+	}
+	return tags, nil
+}

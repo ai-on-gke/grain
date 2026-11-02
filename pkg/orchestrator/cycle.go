@@ -568,6 +568,9 @@ func Reconcilers() []Reconciler {
 		{Name: "branches", Reconcile: reconcileBranches},
 		{Name: "qualifications", Reconcile: reconcileQualifications},
 		{Name: "suites", Reconcile: reconcileSuites},
+		// Right after it, so a qualification item that finished this tick
+		// is judged on this tick (releasequalification.go).
+		{Name: "release-qualification", Reconcile: reconcileReleaseQualification},
 		{Name: "sandbox-reconciliation", Reconcile: reconcileSandboxes},
 	}
 }
