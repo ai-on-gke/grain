@@ -122,14 +122,14 @@ func TestACandidateMergesBehindAMainHeadStillInCIWithBatchingOff(t *testing.T) {
 		}
 	}
 
-	// The row behind it names its own lane's head, never the main change
-	// it was never waiting for.
+	// The row behind it says its own lane's merge is spent, and by whom,
+	// never naming the main change it was never waiting for.
 	state, note := mergeQueueStateOf(t, ctx, store, "t3")
 	if state != "waiting_queue" {
 		t.Fatalf("t3 says %q (%q), want waiting_queue", state, note)
 	}
-	if !strings.Contains(note, "behind task t2 in the acme/widgets candidate queue") {
-		t.Fatalf("t3's note does not name the candidate head: %q", note)
+	if !strings.Contains(note, "merges next cycle: this cycle's 1 merge into acme/widgets candidate is used (task t2 merged)") {
+		t.Fatalf("t3's note does not name the candidate merge that spent its lane: %q", note)
 	}
 	if strings.Contains(note, "t1") {
 		t.Fatalf("t3's note names the main change: %q", note)
@@ -180,37 +180,5 @@ func TestAnUnreadableMainHeadHoldsOnlyMain(t *testing.T) {
 	}
 	if mergedBranch(fix.sim, candidates[1]) {
 		t.Fatal("two candidate changes merged on one cycle")
-	}
-}
-
-// Within one lane nothing changed: a head still deciding closes the slot
-// for the changes behind it on its own branch.
-func TestAHeadStillInCIStillHoldsItsOwnBranch(t *testing.T) {
-	t.Parallel()
-	store, ctx := openStore(t)
-	fix := newBatchFixture(t)
-	runner := newFakeCI()
-	run(t, t.TempDir(), "git", "--git-dir", fix.sim.BareRepo, "branch", "candidate", "main")
-	head, headBranch := queuedTaskOnBase(t, ctx, store, fix.sim, fix.client, "t1", fix.repo, "candidate")
-	head = grantCI(t, ctx, store, head)
-	startRequiredCI(t, ctx, store, fix.client, runner, head, fix.repo, headBranch)
-	behind, behindBranch := queuedTaskOnBase(t, ctx, store, fix.sim, fix.client, "t2", fix.repo, "candidate")
-	behind = grantCI(t, ctx, store, behind)
-	greenGrainCI(t, ctx, store, fix.client, runner, behind, fix.repo, behindBranch)
-	setMergeable(fix.sim, true)
-	cfg := model.DefaultConfig()
-	cfg.MergeBatchSize = 1
-	if err := store.PutConfig(ctx, cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	syncWithCI(t, ctx, store, fix.client, runner, baseTime.Add(time.Minute))
-
-	if mergedBranch(fix.sim, behindBranch) || mergedBranch(fix.sim, headBranch) {
-		t.Fatal("a change merged past the head of its own branch's queue while that head's CI was still running")
-	}
-	_, note := mergeQueueStateOf(t, ctx, store, "t2")
-	if !strings.Contains(note, "behind task t1 in the acme/widgets candidate queue") {
-		t.Fatalf("t2's note does not name its own lane's head: %q", note)
 	}
 }

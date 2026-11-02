@@ -261,23 +261,21 @@ func TestARestartedHostdKeepsAFinishedSpoolForTheDaemon(t *testing.T) {
 	started := make(chan Started, 1)
 	c := detachedClient(ts, started)
 	ctx, cancel := context.WithCancel(context.Background())
-	// The process finishes only once the client has gone: one that exits
-	// while the client is still attached has its exit read there, and a
-	// spool whose exit was read is released, which is not this test.
-	// hostd refuses an argument naming a path that does not exist, so the
-	// directory and the gate's bare name go apart (untilExists).
-	gate := filepath.Join(ts.dir, "gate")
-	detached := make(chan struct{})
+	// The process finishes only once the daemon has detached from it. One
+	// that exits at once can race the cancel below, deliver its exit to the
+	// still-attached daemon, and have its spool released as read -- the
+	// opposite of what this test is about.
+	goAhead := filepath.Join(ts.dir, "go-ahead")
+	script := "while [ ! -e go-ahead ]; do sleep 0.01; done; echo done; exit 7"
+	ran := make(chan struct{})
 	go func() {
-		defer close(detached)
-		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh",
-			Args:   []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done; echo done; exit 7`, "sh", ts.dir, "gate"},
-			Detach: true, Run: "r"}, nil, nil, nil)
+		defer close(ran)
+		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", script}, Dir: ts.dir, Detach: true, Run: "r"}, nil, nil, nil)
 	}()
 	st := <-started
 	cancel()
-	<-detached
-	if err := os.WriteFile(gate, nil, 0o600); err != nil {
+	<-ran
+	if err := os.WriteFile(goAhead, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	waitGone(t, st.PID, 10*time.Second)

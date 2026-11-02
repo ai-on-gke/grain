@@ -3066,11 +3066,11 @@ for no better reason than being quicker to test. Only an entry whose next
 move is a whole agent run, or a person, is worth reordering around. And a
 lane takes at most `max_merges_per_repo` merges a cycle — 5 by default,
 1 before schema 85 (a deployment that stored 1 keeps it). Several merges in
-one cycle are each judged on their own: the walk reads an entry's pull
-request when it reaches it, so the entry behind one that merged is read
-after that merge moved the base, and GitHub's answer about it is about the
-base as it now stands. While GitHub is still recomputing that answer it
-reads `UNKNOWN`, which closes the lane for the rest of the cycle. This is
+one cycle are each judged on their own: an entry in a lane that has
+already had a merge this cycle has its pull request read again just before
+its own merge, so GitHub's answer about it is about the base that merge
+moved. While GitHub is still recomputing that answer it reads `UNKNOWN`,
+and that entry waits for the next cycle. This is
 also why "who merges" is walked down the queue as `SyncPullRequests` acts
 (`orchestrator.actOrder`) rather than computed up front the way
 `queueHeads` is — it turns on health nobody has read yet.

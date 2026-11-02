@@ -66,36 +66,47 @@ func TestThreeCleanMembersOfOneLaneAllMergeInOneCycleByDefault(t *testing.T) {
 	}
 }
 
-// Raising the limit spends more of a lane's slots; it does not open a lane
-// something has closed. A member whose checks are still running closes its
-// lane, and the clean one behind it waits for it even with slots left.
+// Raising the limit spends more of a lane's merges; it does not open a
+// lane the walk has closed. A merge that ends in an error leaves the base in
+// a state nothing this cycle has read, so the lane closes behind it
+// (mergeWalk.closeEntry), and the clean members after it wait for the next
+// cycle even with merges left.
 func TestAMemberBehindAClosedLaneStillWaits(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
-	sim, client := newSim(t, "acme", "widgets", "main")
+	sim, rest := newSim(t, "acme", "widgets", "main")
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
-	_, firstBranch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
-	_, runningBranch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t2", repo)
-	behind, behindBranch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t3", repo)
+	_, erroredBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t1", repo)
+	second, secondBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t2", repo)
+	third, thirdBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t3", repo)
 	setMergeable(sim, true)
-	sim.CheckRuns[firstBranch] = greenCheck
-	sim.CheckRuns[runningBranch] = []github.CheckRun{{Name: "tests", Status: "in_progress"}}
-	sim.CheckRuns[behindBranch] = greenCheck
+	for _, b := range []string{erroredBranch, secondBranch, thirdBranch} {
+		sim.CheckRuns[b] = greenCheck
+	}
+	client := &mergeMovesBase{RESTClient: rest, sim: sim, fail: map[string]bool{erroredBranch: true}}
 
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
-		t.Fatalf("SyncPullRequests: %v", err)
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err == nil {
+		t.Fatal("SyncPullRequests reported no error for a merge that failed")
 	}
-	if !mergedBranch(sim, firstBranch) {
-		t.Fatal("the clean head did not merge")
+	for _, b := range []string{erroredBranch, secondBranch, thirdBranch} {
+		if mergedBranch(sim, b) {
+			t.Fatalf("%s merged into a lane closed by a failed merge", b)
+		}
 	}
-	if mergedBranch(sim, runningBranch) {
-		t.Fatal("merged a change whose own tests had not reported yet")
+	for _, task := range []model.Task{second, third} {
+		if st, err := store.State(ctx, task.ID); err != nil || st != model.StateCompleted {
+			t.Fatalf("%s is %q (%v), want still completed: it waits for the next cycle", task.ID, st, err)
+		}
 	}
-	if mergedBranch(sim, behindBranch) {
-		t.Fatal("merged past a member still in CI because the lane had slots left")
+
+	client.fail = nil
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("second SyncPullRequests: %v", err)
 	}
-	if st, err := store.State(ctx, behind.ID); err != nil || st != model.StateCompleted {
-		t.Fatalf("t3 is %q (%v), want still completed: it is waiting its turn", st, err)
+	for _, b := range []string{erroredBranch, secondBranch, thirdBranch} {
+		if !mergedBranch(sim, b) {
+			t.Errorf("%s did not merge once the lane reopened", b)
+		}
 	}
 }
 
@@ -110,12 +121,18 @@ type mergeMovesBase struct {
 	// refuse is the branches GitHub refuses to merge, as it does a pull
 	// request whose clean read was about a base that has since moved.
 	refuse map[string]bool
+	// fail is the branches whose merge call errors with GitHub having a
+	// bad minute, so nobody can say whether the merge happened.
+	fail map[string]bool
 }
 
 func (c *mergeMovesBase) MergePullRequest(owner, repo string, number int, headSHA string) error {
 	for _, pr := range c.sim.PullRequests {
 		if pr.Number == number && c.refuse[pr.Head] {
 			return &github.Error{Status: 405, Body: []byte(`{"message":"Pull Request is not mergeable"}`)}
+		}
+		if pr.Number == number && c.fail[pr.Head] {
+			return &github.Error{Status: 502, Body: []byte(`{"message":"Server Error"}`)}
 		}
 	}
 	if err := c.RESTClient.MergePullRequest(owner, repo, number, headSHA); err != nil {
@@ -133,7 +150,8 @@ func (c *mergeMovesBase) MergePullRequest(owner, repo string, number int, headSH
 
 // Several merges in one cycle are each judged against the base the merge
 // before them left, not against a read taken before the cycle's first
-// merge: the walk reads each member when it reaches it. Here the first
+// merge: a member of a lane that has already had a merge this cycle is
+// read again just before its own (syncEntry's merge arm). Here the first
 // merge leaves the second conflicted and the third with GitHub still
 // working out the answer, and neither merges, though both read clean
 // before the first merge and the lane has slots to spare.
@@ -172,10 +190,13 @@ func TestEachMergeInACycleIsJudgedAgainstTheBaseThePreviousMergeLeft(t *testing.
 	if mergedBranch(sim, thirdBranch) {
 		t.Fatal("merged a change GitHub had not yet judged against the moved base")
 	}
-	for _, task := range []model.Task{second, third} {
-		if st, err := store.State(ctx, task.ID); err != nil || st != model.StateCompleted {
-			t.Errorf("%s is %q (%v), want still completed: it is judged again next cycle", task.ID, st, err)
-		}
+	// The conflicted one goes to its repair; the unknown one is judged
+	// again next cycle.
+	if !repairInFlightNow(t, ctx, store, second.ID) {
+		t.Error("the change the first merge left conflicted was not sent back for repair")
+	}
+	if st, err := store.State(ctx, third.ID); err != nil || st != model.StateCompleted {
+		t.Errorf("t3 is %q (%v), want still completed: it is judged again next cycle", st, err)
 	}
 }
 
@@ -183,8 +204,9 @@ func TestEachMergeInACycleIsJudgedAgainstTheBaseThePreviousMergeLeft(t *testing.
 // so the read the walk takes straight after a merge can still be the
 // answer about the base before it, and the merge it asks for is refused.
 // That is the base moving, not the change failing: the cycle reports no
-// error, nothing behind it merges, and the change merges next cycle with
-// no refusal held against it.
+// error, the refused change holds only itself (the base did not move, so
+// the rest of the lane still merges), and it merges next cycle with no
+// refusal held against it.
 func TestARefusalStraightAfterAMergeInTheLaneWaitsForTheNextCycle(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
@@ -205,9 +227,11 @@ func TestARefusalStraightAfterAMergeInTheLaneWaitsForTheNextCycle(t *testing.T) 
 	if !mergedBranch(sim, firstBranch) {
 		t.Fatal("the first clean member did not merge")
 	}
-	if mergedBranch(sim, secondBranch) || mergedBranch(sim, thirdBranch) {
-		t.Fatalf("merged past a refusal in the same cycle: second=%v third=%v",
-			mergedBranch(sim, secondBranch), mergedBranch(sim, thirdBranch))
+	if mergedBranch(sim, secondBranch) {
+		t.Fatal("the refused change merged")
+	}
+	if !mergedBranch(sim, thirdBranch) {
+		t.Fatal("a refusal that left the base as it was held up the clean change after it")
 	}
 	if st, err := store.State(ctx, second.ID); err != nil || st != model.StateCompleted {
 		t.Fatalf("t2 is %q (%v), want still completed", st, err)
@@ -217,8 +241,7 @@ func TestARefusalStraightAfterAMergeInTheLaneWaitsForTheNextCycle(t *testing.T) 
 	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(time.Minute)); err != nil {
 		t.Fatalf("second SyncPullRequests: %v", err)
 	}
-	if !mergedBranch(sim, secondBranch) || !mergedBranch(sim, thirdBranch) {
-		t.Fatalf("the next cycle did not merge what was left: second=%v third=%v",
-			mergedBranch(sim, secondBranch), mergedBranch(sim, thirdBranch))
+	if !mergedBranch(sim, secondBranch) {
+		t.Fatal("the next cycle did not merge the change refused before")
 	}
 }

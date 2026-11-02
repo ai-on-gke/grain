@@ -125,7 +125,7 @@ func syncClass(key github.PollKey, e queueEntry, walk *mergeWalk, now time.Time)
 		lane = laneKey(e.ref.Repo.String(), seen.base)
 	}
 	member := isQueueMember(e)
-	if member && walk.headOf(lane) == "" {
+	if member && walk.leadOf(lane) == "" {
 		return github.PollCritical, true
 	}
 	if e.running || e.recheckingHead != "" || e.obs.RepairInFlight() {
@@ -145,15 +145,9 @@ func syncClass(key github.PollKey, e queueEntry, walk *mergeWalk, now time.Time)
 }
 
 // syncSkipped is what the walk is told about a queue member this cycle
-// did not read: nothing behind it may be reordered around it, the same
-// as for a member nobody could read. Only a low budget skips a member
-// whose lane is still open (syncClass reads every other one), so this is
-// the conservative direction for exactly that case.
-func syncSkipped(e queueEntry, walk *mergeWalk) {
-	if isQueueMember(e) && walk.mayMerge(laneOf(e)) {
-		walk.closeEntry(e)
-	}
-}
+// did not read: nothing. A member not read does not merge, and since
+// there is no order between members (mergeWalk) it holds nobody else.
+func syncSkipped(queueEntry, *mergeWalk) {}
 
 // syncRead records what e's read saw, for the schedule's backoff and for
 // the next cycle's classification. Called by syncEntry right after a
