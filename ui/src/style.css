@@ -4588,6 +4588,14 @@ fieldset legend {
 .task-chat-window .cs-message-list .cs-typing-indicator__text {
   color: var(--text-tertiary);
 }
+/* The kit's three bouncing dots loop for as long as a reply is awaited;
+   held still, the "is typing" text beside them says the same thing
+   (2026-11-02 responsive walkthrough). */
+@media (prefers-reduced-motion: reduce) {
+  .task-chat-window .cs-typing-indicator__dot {
+    animation: none;
+  }
+}
 /* The message list's own scroll bar (perfect-scrollbar, which the kit
    bundles and styles from the same palette -- its thumb was the "blue
    scroll bar, the only element of that colour" of task 267). Mapped, it
