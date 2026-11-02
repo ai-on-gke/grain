@@ -201,6 +201,18 @@ expect "latest did not move" bash -c "! git --git-dir='$remote' rev-parse -q --v
 run "$clone" patch-tag-guard.sh v1.0.1
 check "guard passes the patch release-patch made" 0 "was cut on release/v1.0.1 from v1.0.0; ok"
 
+# Without main the branch cannot show its commits are cherry-picks, so it
+# vouches for nothing and only fixes-only (B) may pass the tag.
+git clone -q "$clone" "$work/nomain"
+git -C "$work/nomain" fetch -q origin "+refs/heads/release/*:refs/remotes/origin/release/*"
+git -C "$work/nomain" checkout -q --detach
+git -C "$work/nomain" update-ref -d refs/remotes/origin/main
+git -C "$work/nomain" update-ref -d refs/heads/main
+git -C "$work/nomain" update-ref -d refs/remotes/origin/HEAD 2>/dev/null || true
+status=0
+out="$(cd "$work/nomain" && PATCH_GUARD_FETCH=0 bash "$scripts/patch-tag-guard.sh" v1.0.1 2>&1)" || status=$?
+lacks "guard without main does not vouch for the branch" "was cut on release/v1.0.1"
+
 # --latest guards what `release-images.sh promote` would publish.
 git -C "$clone" tag -f -a latest -m latest "$main" >/dev/null
 git -C "$clone" push -q -f origin refs/tags/latest

@@ -38,7 +38,8 @@
 #   A. It came from its release branch: release/vX.Y.Z exists and contains
 #      the tagged commit, vX.Y.<Z-1> is an ancestor of it, and none of the
 #      commits in vX.Y.<Z-1>..vX.Y.Z is also on main -- cherry-picks have
-#      SHAs of their own, so a branch that is just main fails here.
+#      SHAs of their own, so a branch that is just main fails here, and
+#      so does any branch when main is nowhere to be seen.
 #   B. It carries only fixes: every non-merge commit in vX.Y.0..vX.Y.Z has
 #      a `fix:` / `fix(<scope>):` subject.
 #
@@ -159,7 +160,11 @@ for ref in ${refs[@]+"${refs[@]}"}; do
     why_not_branch="there is no $prev tag to have cut $branch from"
   elif ! git merge-base --is-ancestor "$prev_commit" "$commit"; then
     why_not_branch="$prev is not an ancestor of $tag"
-  elif [ -n "$main_commit" ]; then
+  elif [ -z "$main_commit" ]; then
+    # Without main there is no telling cherry-picks from main's own
+    # commits, so the branch vouches for nothing; B still may.
+    why_not_branch="there is no main here to tell $branch's cherry-picks from main's own commits"
+  else
     off_main="$(git rev-list --count "$prev_commit..$commit" ^"$main_commit")"
     total="$(git rev-list --count "$prev_commit..$commit")"
     if [ "$off_main" != "$total" ]; then
