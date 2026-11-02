@@ -42,7 +42,7 @@ import {
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import api from "../api.js";
-import { wholeNumber } from "../wholeNumber.js";
+import { PRIORITY_REFUSAL, taskPriority, wholeNumber } from "../wholeNumber.js";
 import { useHeldIds } from "../useHeldIds.js";
 import fileToAttachment from "../attachments.js";
 import {
@@ -186,6 +186,12 @@ export default function NewTaskOverlay({
   );
   const pickedTemplate =
     (templates || []).find((t) => t.id === fromTemplate) || null;
+  // templatePriority is what Task priority starts on with template id
+  // picked: the template's own priority, which is what it files at, or
+  // the default 5. The box shows it rather than a 5 the filing would not
+  // keep (2026-11-02 walkthrough: a template at 8 drew 5 and filed 8).
+  const templatePriority = (id) =>
+    String((templates || []).find((t) => t.id === id)?.priority || 5);
   // The picker is drawn where a template can matter to this form: it
   // was opened from one, or settings/new-task-form.yml gives some
   // template a layer of its own. Everywhere else it would be one more
@@ -649,8 +655,21 @@ export default function NewTaskOverlay({
     () => draft?.atFront ?? !!openingDefault("atFront"),
   );
   const [priority, setPriority] = useState(() =>
-    draft?.priority !== undefined ? String(draft.priority) : "5",
+    draft?.priority !== undefined
+      ? String(draft.priority)
+      : templatePriority(templateId),
   );
+  // Follows the Template picker until somebody types in the box, as the
+  // configured defaults do (formEdited).
+  useEffect(() => {
+    if (!formEdited.current.has("priority"))
+      setPriority(templatePriority(fromTemplate));
+  }, [fromTemplate, pickedTemplate?.priority]);
+  // A value the box holds that it cannot file as typed: refused where it
+  // is typed, in the words Edit and Bulk edit use, rather than left to
+  // the browser's own min/step message or to the server's JSON decoder.
+  const priorityInvalid =
+    String(priority).trim() !== "" && Number.isNaN(taskPriority(priority));
   // customFields is this deployment's own fields (grain/task-53), held
   // as state rather than read off the form at submit for the reason
   // capabilities above is: an enum is a <Select> and a boolean a
@@ -726,7 +745,7 @@ export default function NewTaskOverlay({
     if (newBranchName.trim() !== "") return true;
     if (reviewers.trim() !== "") return true;
     if (atFront !== !!openingDefault("atFront")) return true;
-    if (String(priority).trim() !== "5") return true;
+    if (String(priority).trim() !== templatePriority(fromTemplate)) return true;
     const defaultFields = fileableFieldValues(config, fields);
     for (const [k, v] of Object.entries(customFields)) {
       if (JSON.stringify(v) !== JSON.stringify(defaultFields[k])) return true;
@@ -953,7 +972,7 @@ export default function NewTaskOverlay({
     setKeepRunning(false);
     setFixesBaseBranch(!!openingDefault("fixesBaseBranch"));
     setAtFront(!!openingDefault("atFront"));
-    setPriority("5");
+    setPriority(templatePriority(templateId));
     setRepoSeed(null);
     setResetKey((k) => k + 1);
   };
@@ -1119,8 +1138,12 @@ export default function NewTaskOverlay({
       approved,
       atFront,
       ...(() => {
-        const parsedPriority = wholeNumber(priority);
-        return !Number.isNaN(parsedPriority) && parsedPriority !== 5
+        // Stated whenever a template is picked, 5 included: the server
+        // fills a missing priority from the template, so leaving out
+        // the 5 somebody chose filed the template's instead.
+        const parsedPriority = taskPriority(priority);
+        return !Number.isNaN(parsedPriority) &&
+          (fromTemplate || parsedPriority !== 5)
           ? { priority: parsedPriority }
           : {};
       })(),
@@ -1181,7 +1204,7 @@ export default function NewTaskOverlay({
       setKeepRunning(false);
       setFixesBaseBranch(!!openingDefault("fixesBaseBranch"));
       setAtFront(!!openingDefault("atFront"));
-      setPriority("5");
+      setPriority(templatePriority(templateId));
       onClose();
       // The filed task, for what its answer says beyond "filed" -- the
       // default grants the capability policy kept off it
@@ -2230,7 +2253,14 @@ export default function NewTaskOverlay({
       <TextField
         name="priority"
         label="Task priority"
-        helperText="default 5; higher numbers run first"
+        helperText={
+          priorityInvalid
+            ? PRIORITY_REFUSAL
+            : pickedTemplate?.priority
+              ? `default ${pickedTemplate.priority}, from the template; higher numbers run first`
+              : "default 5; higher numbers run first"
+        }
+        error={priorityInvalid}
         type="number"
         inputProps={{ min: 1, step: 1 }}
         autoComplete="off"
@@ -2238,7 +2268,7 @@ export default function NewTaskOverlay({
         margin="normal"
         size="small"
         value={priority}
-        onChange={(e) => setPriority(e.target.value)}
+        onChange={(e) => edit("priority", setPriority)(e.target.value)}
       />
     </>
   );
@@ -2364,6 +2394,7 @@ export default function NewTaskOverlay({
             onClick={markSubmitAttempt}
             disabled={
               submitting ||
+              priorityInvalid ||
               (!title.trim() && !pickedTemplate) ||
               (!noRepo && !repo.trim() && !pickedTemplate?.repo) ||
               (!noRepo && newBranch && !newBranchName.trim())
