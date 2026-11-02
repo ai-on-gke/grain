@@ -256,6 +256,7 @@ func NewGrainCIReadTools(runner GrainCIRunner, scope CIRepoScope, branch ...stri
 					},
 				},
 				"job": map[string]any{"type": "string", "description": "one job, by name or id -- runs that have it, with that job's own result and duration"},
+					"workflow": map[string]any{"type": "string", "description": "one workflow, by file name (e.g. nightly.yml), stem (nightly), path, or display name"},
 				"provider": map[string]any{"type": "string", "enum": []any{ci.ProviderGrain, ci.ProviderGitHubActions},
 					"description": "only runs of this CI provider; with a repo whose CI is GitHub Actions, its workflow runs (ids gha:<owner>:<name>:<run id>) are listed beside grain's"},
 				"since": map[string]any{"type": "string", "description": "how far back: a span (24h, 7d, 90m) or a date (2026-09-17, or an RFC 3339 timestamp)"},
@@ -742,6 +743,8 @@ func ciRunFilter(args map[string]any, now time.Time) (ci.RunFilter, error) {
 	filter.Ref = strings.TrimSpace(ref)
 	job, _ := argString(args, "job")
 	filter.Job = strings.TrimSpace(job)
+	workflow, _ := argString(args, "workflow")
+	filter.Workflow = strings.TrimSpace(workflow)
 	if provider, _ := argString(args, "provider"); strings.TrimSpace(provider) != "" {
 		switch p := strings.ToLower(strings.TrimSpace(provider)); p {
 		case ci.ProviderGrain, ci.ProviderGitHubActions:

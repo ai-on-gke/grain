@@ -261,6 +261,11 @@ func (s *Server) wantsActions(r *http.Request, filter ci.RunFilter) (model.RepoR
 // with what grain recorded of each run's jobs folded in, and grain's
 // record alone where it cannot. note says which, when it was the record.
 func (c *Client) listActionsRuns(ctx context.Context, repo model.RepoRef, filter ci.RunFilter, limit int) (runs []ci.Run, note string) {
+	runs, _, note = c.listActionsRunsCounted(ctx, repo, filter, limit)
+	return runs, note
+}
+
+func (c *Client) listActionsRunsCounted(ctx context.Context, repo model.RepoRef, filter ci.RunFilter, limit int) (runs []ci.Run, matched int, note string) {
 	if limit <= 0 {
 		limit = ci.MaxListedRuns
 	}
@@ -274,7 +279,7 @@ func (c *Client) listActionsRuns(ctx context.Context, repo model.RepoRef, filter
 		byID[run.ID] = run
 		out = append(out, run)
 	}
-	forge, err := c.forgeActionsRuns(repo, filter, limit)
+	forge, forgeTotal, serverExact, err := c.forgeActionsRuns(repo, filter, limit)
 	switch {
 	case err == nil:
 		for _, run := range forge {
@@ -303,44 +308,88 @@ func (c *Client) listActionsRuns(ctx context.Context, repo model.RepoRef, filter
 		}
 	}
 	sortRunsNewestFirst(kept)
+	matched = len(kept)
+	if err == nil && serverExact && forgeTotal > matched {
+		matched = forgeTotal
+	}
 	if len(kept) > limit {
 		kept = kept[:limit]
 	}
-	return kept, note
+	return kept, matched, note
 }
 
-// forgeActionsRuns is the forge's page of repo's runs, as rows. A ref is
+// forgeActionsRuns is the forge's pages of repo's runs, as rows. A ref is
 // asked of the forge as a branch first, since GitHub matches only an
 // exact one, and then unnarrowed for the substring match ?ref= means.
-func (c *Client) forgeActionsRuns(repo model.RepoRef, filter ci.RunFilter, limit int) ([]ci.Run, error) {
+func (c *Client) forgeActionsRuns(repo model.RepoRef, filter ci.RunFilter, limit int) (out []ci.Run, total int, serverExact bool, err error) {
 	reader := c.actionsReader()
 	if reader == nil {
-		return nil, errNoActionsReader
+		return nil, 0, false, errNoActionsReader
 	}
-	ask := func(branch string) ([]github.WorkflowRun, error) {
-		q := github.ActionsRunsQuery{Branch: branch, Since: filter.Since, Limit: min(limit, 100)}
-		key := fmt.Sprintf("runs|%s|%s|%d|%d", repo, branch, q.Since.Unix(), q.Limit)
-		return cachedActions(c, key, listTTL[[]github.WorkflowRun], func() ([]github.WorkflowRun, error) {
-			return reader.ListActionsRuns(repo.StoredOwner(), repo.Name, q)
+	clientFilters := len(filter.States) > 0 || strings.TrimSpace(filter.Job) != "" || !filter.Until.IsZero()
+	fetchLimit := max(limit, 100)
+	if clientFilters {
+		fetchLimit = github.MaxActionsRunsLimit
+	}
+	fetchLimit = min(fetchLimit, github.MaxActionsRunsLimit)
+
+	ask := func(branch string, reqLimit int) (github.ActionsRunsPage, error) {
+		q := github.ActionsRunsQuery{
+			Branch:   branch,
+			Workflow: strings.TrimSpace(filter.Workflow),
+			Since:    filter.Since,
+			Limit:    reqLimit,
+		}
+		key := fmt.Sprintf("runs|%s|%s|%s|%d|%d", repo, branch, q.Workflow, q.Since.Unix(), q.Limit)
+		return cachedActions(c, key, listTTL[github.ActionsRunsPage], func() (github.ActionsRunsPage, error) {
+			if pager, ok := reader.(github.ActionsPageReader); ok {
+				return pager.ListActionsRunsPage(repo.StoredOwner(), repo.Name, q)
+			}
+			runs, err := reader.ListActionsRuns(repo.StoredOwner(), repo.Name, q)
+			if err != nil {
+				return github.ActionsRunsPage{}, err
+			}
+			return github.ActionsRunsPage{
+				Runs:             runs,
+				TotalCount:       len(runs),
+				WorkflowFiltered: q.Workflow == "",
+			}, nil
 		})
 	}
-	var runs []github.WorkflowRun
-	var err error
+	var page github.ActionsRunsPage
+	branchMatched := filter.Ref == ""
 	if filter.Ref != "" {
-		if runs, err = ask(filter.Ref); err != nil {
-			return nil, err
+		if page, err = ask(filter.Ref, fetchLimit); err != nil {
+			return nil, 0, false, err
+		}
+		branchMatched = len(page.Runs) > 0
+	}
+	if len(page.Runs) == 0 {
+		fallbackLimit := fetchLimit
+		if filter.Ref != "" {
+			fallbackLimit = github.MaxActionsRunsLimit
+		}
+		if page, err = ask("", fallbackLimit); err != nil {
+			return nil, 0, false, err
 		}
 	}
-	if len(runs) == 0 {
-		if runs, err = ask(""); err != nil {
-			return nil, err
+	if strings.TrimSpace(filter.Workflow) != "" && !page.WorkflowFiltered && fetchLimit < github.MaxActionsRunsLimit && len(page.Runs) >= fetchLimit {
+		// Workflow was a display name rather than a workflow file, so widen to
+		// MaxActionsRunsLimit before client-side workflow matching.
+		branch := ""
+		if branchMatched && filter.Ref != "" {
+			branch = filter.Ref
+		}
+		if wider, werr := ask(branch, github.MaxActionsRunsLimit); werr == nil {
+			page = wider
 		}
 	}
-	out := make([]ci.Run, 0, len(runs))
-	for _, r := range runs {
+	exact := !clientFilters && branchMatched && (strings.TrimSpace(filter.Workflow) == "" || page.WorkflowFiltered)
+	out = make([]ci.Run, 0, len(page.Runs))
+	for _, r := range page.Runs {
 		out = append(out, actionsRunRow(repo, r))
 	}
-	return out, nil
+	return out, page.TotalCount, exact, nil
 }
 
 // actionsRunRow is a forge workflow run as a listed run.
@@ -394,7 +443,7 @@ func (c *Client) recordedActionsRuns(ctx context.Context, repo model.RepoRef, si
 	if c.Store == nil {
 		return out
 	}
-	jobs, err := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), Since: since, Limit: 2000})
+	jobs, err := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), Since: since, Limit: 5000})
 	if err != nil {
 		return out
 	}
@@ -425,6 +474,12 @@ func recordedActionsRun(repo model.RepoRef, runID int64, jobs []model.GitHubCIJo
 	for _, j := range jobs {
 		if actions.WorkflowName == "" {
 			actions.WorkflowName = j.Workflow
+		}
+		if actions.Workflow == "" {
+			lw := strings.ToLower(strings.TrimSpace(j.Workflow))
+			if strings.HasSuffix(lw, ".yml") || strings.HasSuffix(lw, ".yaml") || strings.HasPrefix(lw, ".github/workflows/") {
+				actions.Workflow = strings.TrimSpace(j.Workflow)
+			}
 		}
 		if actions.URL == "" {
 			actions.URL = j.RunURL
@@ -629,14 +684,19 @@ func (c *Client) ExternalCIRuns() ci.ExternalRuns { return actionsExternalRuns{c
 type actionsExternalRuns struct{ c *Client }
 
 func (a actionsExternalRuns) FindExternalRuns(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, string) {
+	runs, _, note := a.FindExternalRunsCounted(ctx, f, limit)
+	return runs, note
+}
+
+func (a actionsExternalRuns) FindExternalRunsCounted(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, int, string) {
 	if f.Provider != "" && !strings.EqualFold(f.Provider, ci.ProviderGitHubActions) {
-		return nil, ""
+		return nil, 0, ""
 	}
 	repo, err := a.c.parseRepo(f.Repo)
 	if err != nil || !a.c.actionsListedFor(ctx, repo) {
-		return nil, ""
+		return nil, 0, ""
 	}
-	return a.c.listActionsRuns(ctx, repo, f, limit)
+	return a.c.listActionsRunsCounted(ctx, repo, f, limit)
 }
 
 func (a actionsExternalRuns) ExternalRun(ctx context.Context, id string) (ci.Run, bool, error) {

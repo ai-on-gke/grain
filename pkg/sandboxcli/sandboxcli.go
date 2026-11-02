@@ -193,7 +193,7 @@ var sandboxCommandFlags = map[string][]string{
 	"ls":                    {"glob"},
 	"read":                  {"tail", "offset", "limit", "lines", "n", "cursor", "since", "page"},
 	"grep":                  {"i", "C", "glob", "max"},
-	"ci list":               {"ref", "conclusion", "job", "since", "limit", "repo", "task", "provider"},
+	"ci list":               {"ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider"},
 	"ci show":               nil,
 	"ci test-history":       {"limit", "repo"},
 	"ci log":                {"task", "repo", "job", "step", "attempt", "tail", "offset", "limit", "lines", "n"},
@@ -457,7 +457,7 @@ func (c *sandboxCLI) run(args []string) error {
 		q.Set("n", "1")
 		return c.fs(uri, q)
 	case "ci list":
-		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "since", "limit", "repo", "task", "provider"), c.out)
+		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider"), c.out)
 	case "ci show":
 		run, err := p.arg(0, "run-id")
 		if err != nil {
