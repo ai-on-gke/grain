@@ -250,9 +250,9 @@ This repository is gated by GitHub Actions (`ci_mode: github`), so its
 CI lives on GitHub rather than in grain CI. An agent still reads it
 through grain, with the `ci:read` routes and the sandbox `grain` CLI, and
 needs no GitHub credential of its own. The daemon fetches through its
-own forge connection: the GitHub App or token for github.com, and `ggh`
-for `depot.code.corp.goog`. The full reference is
-[the agent API's "GitHub Actions runs"](agent-api.md#github-actions-runs).
+own forge connection: the GitHub App or token for github.com, and the
+host's own tool (`ForgeViaCommand`) for a GitHub Enterprise host. The
+full reference is [the agent API's "GitHub Actions runs"](agent-api.md#github-actions-runs).
 
 To check whether the latest `release.yml` on `main` passed, and read the
 failing job's log if it did not:
@@ -271,7 +271,7 @@ The same reads over the API:
 - `GET /api/ci/runs/gha:ai-on-gke:grain:123/log?job=publish&tail=80`
 
 An Actions run's id is `gha:<owner>:<name>:<run id>`. For a GHE
-repository the host comes first: `gha:depot.code.corp.goog:experimental:grain:<run id>`.
+repository the host comes first: `gha:ghe.example.com:experimental:grain:<run id>`.
 
 How the reads behave:
 

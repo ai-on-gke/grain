@@ -420,8 +420,8 @@ repository whose GitHub CI is not ignored), the `ci:read` routes serve
 its Actions workflow runs beside grain CI's. The reads go through the
 daemon's own forge connection, so no credential reaches a sandbox: the
 GitHub App or token for github.com, and the host's own tool
-(`ForgeViaCommand`, `ggh` for `depot.code.corp.goog`) for a GitHub
-Enterprise host, whose REST API is under `/api/v3`. The rules for which
+(`ForgeViaCommand`) for a GitHub Enterprise host, whose REST API is
+under `/api/v3`. The rules for which
 repositories a task may read are the same as for grain CI runs.
 
 | Route | Answers |
@@ -455,7 +455,7 @@ Notes:
   - A run or job that is still going is cached for 15 seconds.
 - **Log redirects.** A log comes back as a redirect to a blob host.
   - On github.com, net/http follows it and drops the credential.
-  - Over `ggh`, the tool follows it itself. If it hands the redirect
+  - Through a host's own tool (`ForgeViaCommand`), the tool follows it itself. If it hands the redirect
     back, the full URL is sent through the tool again.
 
 In a sandbox the same runs are read with the `grain` CLI and under
