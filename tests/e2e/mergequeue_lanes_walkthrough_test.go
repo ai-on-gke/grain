@@ -223,56 +223,45 @@ func TestMergeQueueLanesContentionWalkthrough(t *testing.T) {
 		w.tick()
 		record()
 	}
-	if w.mergedInto(a1Branch, "main") || w.mergedInto(a2.BranchName(), "main") {
-		t.Fatalf("a main change merged while main's head was still in CI")
+	// There is no order between pull requests (task 2346): a1 is held by
+	// its own CI and nothing else, and a2 merges past it.
+	if w.mergedInto(a1Branch, "main") {
+		t.Fatalf("a1 merged while its own CI was still running")
+	}
+	if !w.ticks(10, func() bool { record(); return w.mergedInto(a2.BranchName(), "main") }) {
+		t.Fatalf("a2 did not merge while a1 was in CI: %s, notes %q", w.state(a2.ID), notes[a2.ID])
 	}
 	for id, ns := range notes {
 		t.Logf("%s notes: %q", id, ns)
 	}
-	// Every "behind task" note names its own lane, and the head it names
-	// is on that lane.
-	lane := map[string]string{a1.ID: "main", a2.ID: "main", b1.ID: "candidate", b2.ID: "candidate"}
-	sawMainBehind := false
+	// No row names another change as the one in front, and none names
+	// the whole repository's queue.
 	for id, ns := range notes {
 		for _, n := range ns {
 			if strings.Contains(n, "acme/widgets queue") || strings.Contains(n, "acme/widgets's queue") {
 				t.Errorf("%s's note names the whole repository's queue: %q", id, n)
 			}
-			m := behindTask.FindStringSubmatch(n)
-			if m == nil {
-				continue
-			}
-			if m[2] != "acme/widgets" || m[3] != lane[id] || lane[m[1]] != lane[id] {
-				t.Errorf("%s (on %s) says %q", id, lane[id], n)
-			}
-			if id == a2.ID && m[1] == a1.ID {
-				sawMainBehind = true
+			if behindTask.MatchString(n) || strings.Contains(n, "behind task") {
+				t.Errorf("%s's note names another change as in front of it: %q", id, n)
 			}
 		}
-	}
-	if !sawMainBehind {
-		t.Errorf("a2's notes never said it was behind a1 in the main queue: %q", notes[a2.ID])
 	}
 
 	// Step 3: a task that names no base, whose pull request this cycle
-	// cannot read, is queued ahead of B3 on candidate. Nothing says which
-	// lane it holds, so the whole repository stops -- B3 does not merge
-	// until the read comes back.
+	// cannot read, is queued ahead of B3 on candidate. A member nobody can
+	// read holds itself and nothing else (task 2346): B3 merges anyway,
+	// and n0 waits for its read to come back.
 	n0, n0PR := w.queuedChange("t-n0", "", "changes/n0.txt")
 	pulls.fail(n0PR)
 	b3, _ := w.queuedChange("t-b3", "candidate", "changes/b3.txt")
-	for i := 0; i < 6; i++ {
-		w.markAllClean()
-		w.tick()
-		if w.mergedInto(b3.BranchName(), "candidate") {
-			t.Fatalf("b3 merged onto candidate behind a no-base task whose pull request could not be read")
-		}
+	if !w.ticks(20, func() bool { w.markAllClean(); return w.mergedInto(b3.BranchName(), "candidate") }) {
+		t.Fatalf("b3 did not merge while a no-base task's pull request could not be read: %s, note %q", w.state(b3.ID), w.note(b3.ID))
+	}
+	if w.mergedInto(n0.BranchName(), "main") {
+		t.Fatalf("n0 merged while its pull request could not be read")
 	}
 	t.Logf("with %s's pull request unreadable: b3 note %q, n0 note %q", n0.ID, w.note(b3.ID), w.note(n0.ID))
 	pulls.fail(0)
-	if !w.ticks(20, func() bool { return w.mergedInto(b3.BranchName(), "candidate") }) {
-		t.Fatalf("b3 did not merge once the no-base task's pull request read again: %s, note %q", w.state(b3.ID), w.note(b3.ID))
-	}
 	if !w.ticks(20, func() bool { return w.mergedInto(n0.BranchName(), "main") }) {
 		t.Logf("n0 (no base, so main's lane, behind a1) has not merged: %q", w.note(n0.ID))
 	}
