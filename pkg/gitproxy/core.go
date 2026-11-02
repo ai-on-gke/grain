@@ -539,6 +539,11 @@ func (p *GitProxy) HandleRequest(ctx context.Context, method, path, query string
 		}
 		return refusal
 	}
+	if req.Action == "git-receive-pack" && upstream.Status == 200 {
+		// A ref the host rejected is still a 200; its source may know
+		// the fix the host's own words leave out (pushhint.go).
+		upstream = withPushRefusedHint(credential, upstream)
+	}
 	return ProxyResponse(upstream)
 }
 
