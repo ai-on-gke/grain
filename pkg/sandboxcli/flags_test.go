@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -115,7 +116,7 @@ func TestUnknownSubcommandGetsTheSandboxHelp(t *testing.T) {
 		want string
 	}{
 		{[]string{"task", "lsit"}, "grain task: unknown command \"lsit\"\n\ngrain task (list | read | prompt | transcript | wait | message | propose)"},
-		{[]string{"ci", "foo"}, "grain ci: unknown command \"foo\"\n\ngrain ci (list | log | test-history | artifact | wait | run-job | retrigger)"},
+		{[]string{"ci", "foo"}, "grain ci: unknown command \"foo\"\n\ngrain ci (list | show | log | test-history | artifact | wait | run-job | retrigger)"},
 		{[]string{"db", "upgrade-postgres"}, "grain db: unknown command \"upgrade-postgres\""},
 	} {
 		out, errOut, code := runIn(t, env, tc.args...)
@@ -125,6 +126,50 @@ func TestUnknownSubcommandGetsTheSandboxHelp(t *testing.T) {
 	}
 	if len(*asked) != 0 {
 		t.Errorf("unknown subcommands asked the proxy %q", *asked)
+	}
+}
+
+// Every subcommand a sandbox answers is named in its command's own help,
+// the help an unknown subcommand prints (grain ci's left out show).
+func TestEverySubcommandIsInItsCommandsHelp(t *testing.T) {
+	for cmd, subs := range sandboxCommands {
+		for _, s := range subs {
+			if cmd+" "+s == "memory doc" {
+				s = "doc-write"
+			}
+			if !regexp.MustCompile(`[ (|]` + regexp.QuoteMeta(s) + `[ |)]`).MatchString(sandboxCommandHelp[cmd]) {
+				t.Errorf("grain %s's help %q does not name %q", cmd, sandboxCommandHelp[cmd], s)
+			}
+		}
+	}
+}
+
+// A command line without the argument its command needs is a usage error
+// like an unknown flag: exit 2, the command named, and no proxy request.
+// It exited 1 with "grain: missing <uri>: run with --help for usage".
+func TestMissingArgumentIsAUsageError(t *testing.T) {
+	env, asked := fakeFileProxy(t, "")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"ls"}, "grain ls: missing <uri>; run 'grain ls --help' for usage\n"},
+		{[]string{"read"}, "grain read: missing <uri>; run 'grain read --help' for usage\n"},
+		{[]string{"grep", "x"}, "grain grep: missing <uri>; "},
+		{[]string{"ci", "show"}, "grain ci show: missing <run-id>; "},
+		{[]string{"task", "prompt"}, "grain task prompt: missing <id>; "},
+		{[]string{"task", "wait"}, "grain task wait: missing <id>...: name at least one task to wait on; "},
+		{[]string{"quarantine"}, "grain quarantine: missing <test-name>; "},
+		{[]string{"status"}, "grain status: missing <one-line-note> (or --file); "},
+		{[]string{"memory", "doc"}, "grain memory doc: the command is 'grain memory doc write' (or doc-write)\n\ngrain memory ("},
+	} {
+		out, errOut, code := runIn(t, env, tc.args...)
+		if code != 2 || out != "" || !strings.HasPrefix(errOut, tc.want) {
+			t.Errorf("%q: exit %d %q %q, want exit 2 and %q", tc.args, code, out, errOut, tc.want)
+		}
+	}
+	if len(*asked) != 0 {
+		t.Errorf("command lines missing an argument asked the proxy %q", *asked)
 	}
 }
 

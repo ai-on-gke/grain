@@ -265,7 +265,7 @@ func (c *sandboxCLI) textArg(p sandboxArgs, what string) (string, error) {
 	}
 	text := strings.Join(p.positional, " ")
 	if strings.TrimSpace(text) == "" {
-		return "", fmt.Errorf("missing <%s> (or --file): run with --help for usage", what)
+		return "", p.missing("<" + what + "> (or --file)")
 	}
 	return text, nil
 }
