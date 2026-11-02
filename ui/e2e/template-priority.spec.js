@@ -95,3 +95,47 @@ test("a template's task priority is set, previewed, filed and cleared from the f
     if (id) await page.request.delete(`/api/templates/${id}`);
   }
 });
+
+// "1e2" is a number the box's own min and step let through, so the
+// browser submits it; the form used to read it with parseInt and save
+// priority 1. It is refused instead, the way the task pane refuses it.
+test("a template's task priority that is not a whole number from 1 is refused, not truncated", async ({
+  page,
+}) => {
+  const posts = [];
+  page.on("request", (r) => {
+    if (
+      r.method() === "POST" &&
+      new URL(r.url()).pathname === "/api/templates"
+    ) {
+      posts.push(r);
+    }
+  });
+  await page.goto("/processes?kind=template");
+  await page.getByRole("button", { name: "+ New template" }).click();
+  await page
+    .locator('input[name="name"]')
+    .fill(`walk-priority-bad-${Date.now()}`);
+  await page.locator('input[name="title"]').fill("Urgent widget check");
+  const priorityField = page.getByLabel("Task priority");
+  await priorityField.fill("1e2");
+  await page.getByRole("button", { name: "Add template" }).click();
+  const refusal = page.getByText(
+    "a whole number, 1 or more; default 5, higher numbers run first",
+  );
+  await expect(refusal).toBeVisible();
+  await expect(priorityField).toHaveAttribute("aria-invalid", "true");
+  await expect(
+    page.getByRole("heading", { name: "New template" }),
+  ).toBeVisible();
+  expect(posts).toHaveLength(0);
+
+  // The refusal sits directly under the box it is about.
+  const box = await priorityField.boundingBox();
+  const note = await refusal.boundingBox();
+  expect(note.y).toBeGreaterThanOrEqual(box.y + box.height - 1);
+  expect(Math.abs(note.x - box.x)).toBeLessThan(24);
+
+  await priorityField.fill("100");
+  await expect(refusal).toHaveCount(0);
+});

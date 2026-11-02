@@ -35,9 +35,11 @@ import (
 // ClosedAt, and never rewritten.
 //
 // It covers the closes a caller asks for (the UI, the CLI, the API and a
-// session's own grant). grain's own closes -- a goal met, a task made
-// obsolete, a review finished -- still only stamp ClosedAt, and read as
-// an unattributed close (MergeTaskEvents).
+// session's own grant) and grain's own -- a goal met, a task made
+// obsolete, a review finished -- which go through Store.ObserveClose
+// instead of ObserveField so the event is written with the stamp. Only a
+// ClosedAt from before task_event existed reads as an unattributed close
+// (MergeTaskEvents).
 
 // TaskEventKind is what a TaskEvent records.
 type TaskEventKind string
@@ -70,6 +72,10 @@ type TaskEvent struct {
 	Detail string
 }
 
+// GrainPrincipal is grain itself, as the author of a close it makes on
+// its own account.
+var GrainPrincipal = Principal{Kind: PrincipalAutomation, ID: "grain"}
+
 // RecordTaskEvent appends one event and returns its id.
 func (s *Store) RecordTaskEvent(ctx context.Context, e TaskEvent) (int64, error) {
 	if strings.TrimSpace(e.TaskID) == "" {
@@ -80,17 +86,70 @@ func (s *Store) RecordTaskEvent(ctx context.Context, e TaskEvent) (int64, error)
 	}
 	var id int64
 	err := s.write(ctx, "record "+string(e.Kind)+" of task "+e.TaskID, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx,
-			"INSERT INTO `task_event` (`task_id`,`kind`,`at`,`actor_kind`,`actor_id`,`reason`,`detail`) "+
-				"VALUES (?,?,?,?,?,?,?)",
-			e.TaskID, string(e.Kind), e.At.UTC(), string(e.By.Kind), e.By.ID, e.Reason, e.Detail)
-		if err != nil {
-			return err
-		}
-		id, err = res.LastInsertId()
+		var err error
+		id, err = insertTaskEvent(ctx, tx, e)
 		return err
 	})
 	return id, err
+}
+
+func insertTaskEvent(ctx context.Context, tx *sql.Tx, e TaskEvent) (int64, error) {
+	res, err := tx.ExecContext(ctx,
+		"INSERT INTO `task_event` (`task_id`,`kind`,`at`,`actor_kind`,`actor_id`,`reason`,`detail`) "+
+			"VALUES (?,?,?,?,?,?,?)",
+		e.TaskID, string(e.Kind), e.At.UTC(), string(e.By.Kind), e.By.ID, e.Reason, e.Detail)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// ObserveClose is ObserveField for a close made without a caller to ask
+// for it -- one of grain's own, or a person's that does not go through
+// ui.Client.setClosed. set runs on the task's observation as
+// ObserveField's does; when it leaves ClosedAt stamped at a moment it was
+// not stamped at before, a TaskEvent{closed, by, reason} is appended in
+// the same transaction, at that stamp, so the closed step the timeline
+// places there says who closed the task and why. A set that leaves
+// ClosedAt where it was -- the task already closed, a guard that declined
+// -- records nothing.
+func (s *Store) ObserveClose(ctx context.Context, taskID string, now time.Time, by Principal, reason string,
+	set func(*Observation)) error {
+
+	return s.write(ctx, "close task "+taskID, func(tx *sql.Tx) error {
+		obs, err := getObservation(ctx, tx, taskID)
+		if err != nil {
+			return fmt.Errorf("reading observation for %s: %w", taskID, err)
+		}
+		if obs == nil {
+			obs = &Observation{TaskID: taskID}
+		}
+		var before time.Time
+		if obs.ClosedAt != nil {
+			before = *obs.ClosedAt
+		}
+		set(obs)
+		obs.ObservedAt = &now
+		if err := observe(ctx, tx, *obs); err != nil {
+			return err
+		}
+		return recordCloseInTx(ctx, tx, taskID, before, obs.ClosedAt, by, reason)
+	})
+}
+
+// recordCloseInTx appends the closed event for a ClosedAt that moved
+// from before (zero for none) to after, and nothing when it did not.
+func recordCloseInTx(ctx context.Context, tx *sql.Tx, taskID string, before time.Time, after *time.Time,
+	by Principal, reason string) error {
+
+	if after == nil || (!before.IsZero() && before.Equal(*after)) {
+		return nil
+	}
+	if _, err := insertTaskEvent(ctx, tx, TaskEvent{TaskID: taskID, Kind: TaskEventClosed, At: *after,
+		By: by, Reason: reason}); err != nil {
+		return fmt.Errorf("recording the close of %s: %w", taskID, err)
+	}
+	return nil
 }
 
 // TaskEvents is one task's events, oldest first.
@@ -170,8 +229,9 @@ func (s *Store) RunSpansSince(ctx context.Context, since time.Time) ([]RunSpan, 
 // the current closure only. A recorded close at that same instant is the
 // same close (to within the second either store keeps), so it replaces
 // that step rather than standing beside it;
-// a ClosedAt nothing recorded (one of grain's own closes, or one from
-// before task_event existed) keeps its unattributed step. An inferred
+// a ClosedAt nothing recorded (one from before task_event existed, or
+// from before grain recorded its own closes there) keeps its
+// unattributed step. An inferred
 // requeue (Transitions places one at the finish of a run when a later run
 // or the current open state proves the task returned to the queue) that
 // falls while the task was closed is the cancelled run finishing inside

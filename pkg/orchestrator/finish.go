@@ -704,7 +704,7 @@ func finishNothingNeeded(ctx context.Context, store *model.Store, task model.Tas
 			o.RetryRequestedAt = nil
 		})
 	}
-	if err := observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+	if err := closeTask(ctx, store, task.ID, now, "the agent found nothing needed", func(o *model.Observation) {
 		o.CompletedAt = &now
 		o.ClosedAt = &now
 		o.RetryRequestedAt = nil
@@ -3082,6 +3082,27 @@ func observeField(ctx context.Context, store *model.Store, taskID string, now ti
 	return nil
 }
 
+// closeTask is observeField for one of grain's own closes: set stamps
+// ClosedAt, and the close is recorded as grain's, for reason
+// (model.Store.ObserveClose), so it does not read as an unattributed
+// closed step on the task's timeline.
+func closeTask(ctx context.Context, store *model.Store, taskID string, now time.Time, reason string,
+	set func(*model.Observation)) error {
+
+	return closeTaskBy(ctx, store, taskID, now, model.GrainPrincipal, reason, set)
+}
+
+// closeTaskBy is closeTask for a close grain makes under a name of its
+// own (a release triager, the merge queue).
+func closeTaskBy(ctx context.Context, store *model.Store, taskID string, now time.Time, by model.Principal,
+	reason string, set func(*model.Observation)) error {
+
+	if err := store.ObserveClose(ctx, taskID, now, by, reason, set); err != nil {
+		return fmt.Errorf("orchestrator: %w", err)
+	}
+	return nil
+}
+
 // EnsurePullRequest finds task's already-open PR for its own branch, or
 // opens one -- FindOpenPullRequestForBranch first, since GitHub allows at
 // most one open PR per head branch and a retried finish (this cycle
@@ -3411,7 +3432,8 @@ func seedEmptyRepoBase(ctx context.Context, store *model.Store, client github.Cl
 		if err := noteOnTask(ctx, store, task.ID, body, now); err != nil {
 			return github.PullRequest{}, landedWork{}, err
 		}
-		if err := observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+		reason := fmt.Sprintf("landed on %s as the first branch of empty repository %s", targetBase, task.Target)
+		if err := closeTask(ctx, store, task.ID, now, reason, func(o *model.Observation) {
 			o.CompletedAt = &now
 			o.ClosedAt = &now
 			o.RetryRequestedAt = nil

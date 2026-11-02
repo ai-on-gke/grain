@@ -256,7 +256,7 @@ func TestUpdatingASessionsCapabilitiesIsStored(t *testing.T) {
 	t.Parallel()
 	client, store, ctx := testClient(t)
 
-	capabilities := []string{"self-debug", "self-repair"}
+	capabilities := []string{"self-debug", model.GrainHostExecGrant}
 	sessions, err := client.UpdateConsoleSession(ctx, model.DirectorSessionID,
 		ui.UpdateConsoleSessionRequest{Capabilities: &capabilities})
 	if err != nil {
@@ -1187,7 +1187,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 	if putResp.Sessions[0].Model != "claude-sonnet-4" || putResp.Sessions[0].NetworkAccess != "open" || !putResp.Sessions[0].TasksApproved {
 		t.Errorf("PUT /api/console-sessions/director response = %+v", putResp.Sessions[0])
 	}
-	if !slices.Contains(putResp.Sessions[0].Capabilities, "self-repair") || !slices.Contains(putResp.Sessions[0].Capabilities, "api:tasks:admin") {
+	if !slices.Contains(putResp.Sessions[0].Capabilities, model.GrainHostExecGrant) || !slices.Contains(putResp.Sessions[0].Capabilities, "api:tasks:admin") {
 		t.Errorf("PUT /api/console-sessions/director Capabilities = %v", putResp.Sessions[0].Capabilities)
 	}
 }

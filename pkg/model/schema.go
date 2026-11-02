@@ -378,7 +378,12 @@ import "strconv"
 // `ci_capabilities` alone, which leaves a bare retired name in a
 // repository's CI list to be handed to its jobs and refused (or, for one
 // with no provider, waited on) when a job starts.
-const SchemaVersion = 83
+//
+// 84 rewrites stored `self-repair` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/grain#host-exec={}`: the
+// in-process `self-repair` provider is retired for the `grain#host-exec`
+// method.
+const SchemaVersion = 84
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the

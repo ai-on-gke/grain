@@ -93,7 +93,7 @@ func BareToolName(reported string) string {
 // these and has not been granted it. "unknown tool run_host_command"
 // reads as a tool grain does not have, which is wrong and sends the
 // agent looking for another way to do the job; "this task does not hold
-// self-repair" is the truth, and it is something the agent can put in
+// grain#host-exec" is the truth, and it is something the agent can put in
 // its closing note for a human to act on.
 //
 // Only grant-gated tools belong here. A tool absent for any other reason
@@ -119,7 +119,7 @@ var capabilityForTool = map[string]string{
 	"read_bootstrap_playbook":    "bootstrap-playbooks",
 	"read_deployment_health":     "https://grain.dev/capabilities/grain#health",
 	"read_deployment_state":      "https://grain.dev/capabilities/grain#health",
-	"run_host_command":           "self-repair",
+	"run_host_command":           "https://grain.dev/capabilities/grain#host-exec",
 	"list_issues":                "read-issues",
 	"read_issue":                 "read-issues",
 	"query_grain_db":             "https://grain.dev/capabilities/grain#sql",

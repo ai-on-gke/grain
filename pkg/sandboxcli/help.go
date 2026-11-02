@@ -302,7 +302,7 @@ var sandboxCommandHelp = map[string]string{
 const sandboxTaskListHelp = "grain task list [--state <s>[,<s>...]] [--repo <owner/name>] [--search <title text>]\n" +
 	"                [--kind <k>] [--changed-since <30m|24h|7d|time>] [--stalled] [--limit N] [--json]\n\n" +
 	"The tasks this run may read (its own, or every task with self-debug), one line each:\n" +
-	"id, state, repo, title, then \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
+	"id, state, repo, title, then \"(stopped by operator)\" or \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
 	"Oldest first by filing; --limit (default 50) keeps the newest. The count, and how many\n" +
 	"were left out, go to stderr. --state may be repeated or comma-separated (proposed, queued,\n" +
 	"running, awaiting_reply, failed, awaiting_submit, completed, closed); --kind is one of\n" +
