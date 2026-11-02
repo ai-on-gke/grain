@@ -63,8 +63,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/reporead"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -97,7 +95,7 @@ func loadHarnessRegistry(extra ...model.CapabilityProvider) *model.CapabilityReg
 		providers = append(providers, r.New())
 	}
 	reg := model.NewCapabilityRegistry(providers...)
-	reg.RegisterDynamic(reporead.DynamicProvider, repowrite.DynamicProvider, ui.AgentAPIDynamicProvider)
+	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	return reg
 }
 

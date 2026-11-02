@@ -401,7 +401,14 @@ import "strconv"
 // own -hostd-token-file) is grain's only host agent. A pure drop: the
 // importer passes over a table this build lacks, so a dump carrying
 // either imports without it.
-const SchemaVersion = 87
+//
+// 88 rewrites stored `repo-read:<repo>` and `repo-write:<repo>` grants,
+// `repo_config`.`ci_capabilities` included, to
+// `https://grain.dev/capabilities/repo#read={"repo":"<repo>"}` and
+// `#write={"repo":"<repo>"}`: the in-process reporead and repowrite
+// providers are retired for the repo server's methods, whose grant carries
+// the CI-only rule and write's event gate itself.
+const SchemaVersion = 88
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the

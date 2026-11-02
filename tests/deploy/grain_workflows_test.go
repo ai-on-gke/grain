@@ -37,7 +37,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -1972,7 +1971,6 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 	reg := model.NewCapabilityRegistry(
 		ciapi.NewAlias(gate, ciapi.Config{}, model.ReleaseGateReadCapability, ciapi.Aliases[model.ReleaseGateReadCapability]),
 		packagepublish.New(packagepublish.Config{Credentials: releaseTrainPackageCredential{}}),
-		repowrite.New(repo),
 	)
 	creds := releaseTrainCredential(`{"registry":"ghcr.io","username":"bot","token":"secret"}`)
 
@@ -2001,6 +1999,14 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 			granted = append(granted, g.Capability)
 		}
 		for _, id := range tc.want {
+			// Repository access is no provider's grant: it carries its
+			// own event gate, which the proxy scope is widened through.
+			if model.IsRepoAccessGrant(id) {
+				if !model.RepoAccessAdmitsCIEvent(id, string(tc.event), tc.trusted) {
+					t.Errorf("%s: %s's train is refused %s", tc.event, repo, id)
+				}
+				continue
+			}
 			if !slices.Contains(granted, id) {
 				t.Errorf("%s: %s's train holds %v, want %s among them", tc.event, repo, granted, id)
 			}
