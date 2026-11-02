@@ -143,6 +143,17 @@ describe("SuiteRunPane", () => {
     expect(screen.getByText("release-1")).toBeTruthy();
   });
 
+  // The 2026-11-02 walkthrough: a declared suite schedule with no `base:`
+  // starts a run with an empty base, which drew an empty chip.
+  it("names the default branch for a run with no base", () => {
+    renderPane({ run: { ...run, base: "" } });
+
+    expect(screen.getByText("default branch")).toBeTruthy();
+    for (const chip of document.querySelectorAll(".MuiChip-root")) {
+      expect(chip.textContent).not.toBe("");
+    }
+  });
+
   it("says when each pass's tasks wait for approval, and only then", () => {
     const { unmount } = renderPane({ run: { ...run, requireApproval: true } });
     expect(
