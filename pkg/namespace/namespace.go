@@ -35,6 +35,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/safepath"
 )
@@ -532,7 +533,7 @@ func repoSegmentCount(first string) int {
 
 func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*ResolvedNode, error) {
 	if !scope.PermitsCI("") {
-		return nil, RefuseCapability("ci://"+relPath, "grain-ci")
+		return nil, RefuseCapability("ci://"+relPath, model.GrainCIRef)
 	}
 	if s == nil || s.CIStore == nil {
 		return nil, fmt.Errorf("%w: CI store is unavailable", ErrNotFound)

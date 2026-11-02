@@ -60,7 +60,7 @@ func TestTheInfraReviewCanSuggestAndCannotApply(t *testing.T) {
 	for _, g := range tmpl.Grants {
 		granted[g.Capability] = true
 	}
-	for _, want := range []string{"self-debug", "grain-ci"} {
+	for _, want := range []string{"self-debug", model.GrainCIGrant} {
 		if !granted[want] {
 			t.Errorf("the infrastructure review does not hold %q; its grants are %+v",
 				want, tmpl.Grants)

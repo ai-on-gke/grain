@@ -519,7 +519,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	ciEnabled := fs.Bool("ci", true,
 		"run grain's own CI: the .grain/workflows a repository declares, in this deployment's own sandboxes, "+
 			"for the repos whose CI mode is \"Use Grain CI\" (Settings -> Repos), which also grants their tasks the "+
-			grainci.CapabilityName+" capability. -ci=false turns the engine off entirely, so no repository's "+
+			grainci.Grant+" grant. -ci=false turns the engine off entirely, so no repository's "+
 			"workflows run however its CI mode is set, and the CI API reports that this deployment has none. "+
 			"A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of "+
 			"the one repository under test (pkg/ci, \"What a workflow file is trusted with\").")

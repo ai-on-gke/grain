@@ -93,10 +93,13 @@ func WithCICapabilityServers(service *ci.Service, servers func() orchestrator.Ca
 }
 
 // ciCapabilityRefs is the capability references among ids, as grants.
+// grain#ci is not among them: it is every job's own and is nothing to
+// mint (ResolveCICapabilities adds it to the job's context), as the
+// bare grain-ci it replaced was never minted.
 func ciCapabilityRefs(ids []string) []model.Grant {
 	var out []model.Grant
 	for _, id := range ids {
-		if model.IsCapabilityRef(id) {
+		if model.IsCapabilityRef(id) && !model.IsGrainCIGrant(id) {
 			out = append(out, model.Grant{Capability: id, Via: model.GrantByDefault})
 		}
 	}

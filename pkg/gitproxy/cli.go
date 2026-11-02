@@ -38,6 +38,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 )
 
@@ -308,7 +309,7 @@ func (p *GitProxy) ciReadRepo(scope namespace.Scope, repo string) (string, ci.Ru
 		repo = scope.TaskRepo
 	}
 	if !scope.PermitsCI("") {
-		return "", nil, namespace.RefuseCapability("grain ci", "grain-ci")
+		return "", nil, namespace.RefuseCapability("grain ci", model.GrainCIRef)
 	}
 	if repo == "" && !scope.MayReadAllCI {
 		// An empty filter matches every repository's runs (ci.RunFilter),
@@ -353,7 +354,7 @@ type TaskRefLookup interface {
 func (p *GitProxy) taskCIRef(ctx context.Context, scope namespace.Scope, task string) (repo, branch string, err error) {
 	task = strings.TrimSpace(strings.TrimPrefix(task, "#"))
 	if !scope.PermitsCI("") {
-		return "", "", namespace.RefuseCapability("grain ci", "grain-ci")
+		return "", "", namespace.RefuseCapability("grain ci", model.GrainCIRef)
 	}
 	if own := scope.TaskIDStr; own != "" && strings.EqualFold(own, task) {
 		if scope.TaskRepo == "" {
@@ -514,7 +515,7 @@ func (p *GitProxy) serveCIRunRepo(w http.ResponseWriter, q url.Values, scope nam
 		return
 	}
 	if !scope.PermitsCI("") {
-		cliError(w, namespace.RefuseCapability("grain ci", "grain-ci"))
+		cliError(w, namespace.RefuseCapability("grain ci", model.GrainCIRef))
 		return
 	}
 	if p.Namespace == nil || p.Namespace.CIStore == nil {
@@ -544,7 +545,7 @@ func (p *GitProxy) serveCIShow(w http.ResponseWriter, r *http.Request, scope nam
 		return
 	}
 	if !scope.PermitsCI("") {
-		cliError(w, namespace.RefuseCapability("grain ci", "grain-ci"))
+		cliError(w, namespace.RefuseCapability("grain ci", model.GrainCIRef))
 		return
 	}
 	if p.Namespace == nil || p.Namespace.CIStore == nil {

@@ -800,7 +800,7 @@ func infraReviewTemplate(stateRepo RepoRef) *Template {
 			// CapabilityName constants: those packages import this one,
 			// so this one cannot import them.
 			{Capability: "self-debug", Via: GrantByGrain},
-			{Capability: "grain-ci", Via: GrantByGrain},
+			{Capability: GrainCIGrant, Via: GrantByGrain},
 		},
 	}
 	if stateRepo.Owner != "" {
@@ -1091,7 +1091,7 @@ func baseRepairTemplate(stateRepo RepoRef) *Template {
 		},
 		AutoMerge: true,
 		Grants: []Grant{
-			{Capability: "grain-ci", Via: GrantByGrain},
+			{Capability: GrainCIGrant, Via: GrantByGrain},
 		},
 	}
 }

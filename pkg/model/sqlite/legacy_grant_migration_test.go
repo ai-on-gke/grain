@@ -102,6 +102,7 @@ var retiredGrants = []struct {
 	// corp-research is the Google build's: core has no alias for it, which
 	// that build registers with capability.Register (retiredAs).
 	{86, "corp-research", []string{model.CorpResearchGrant}},
+	{88, "grain-ci", []string{model.GrainCIGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'

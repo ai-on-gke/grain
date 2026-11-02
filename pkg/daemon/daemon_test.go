@@ -320,7 +320,7 @@ func TestEveryRegisteredCapabilityIsGrantable(t *testing.T) {
 		// task 2015, after 6172e1205 removed an uncommented exclusion
 		// here). TestGrainCIIsNotOfferedAndIsRefusedByName in pkg/ui
 		// is the half of this that holds it to that.
-		if name == grainci.CapabilityName {
+		if name == grainci.Grant {
 			continue
 		}
 		if !slices.Contains(offered, name) {

@@ -47,22 +47,22 @@ func TestGrainCIIsNotOfferedAndIsRefusedByName(t *testing.T) {
 	c, _, ctx := testClient(t)
 	repo := "acme/widgets"
 
-	if slices.ContainsFunc(ui.OfferedCapabilities(), func(c ui.Capability) bool { return c.ID == grainci.CapabilityName }) {
-		t.Errorf("the task capability picker offers %q", grainci.CapabilityName)
+	if slices.ContainsFunc(ui.OfferedCapabilities(), func(c ui.Capability) bool { return c.ID == grainci.Grant }) {
+		t.Errorf("the task capability picker offers %q", grainci.Grant)
 	}
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
-		DefaultCapabilities: &[]string{grainci.CapabilityName},
+		DefaultCapabilities: &[]string{grainci.Grant},
 	}); !refusesAsGrainCI(err) {
 		t.Errorf("UpdateSettings: err = %v, want the CI Mode refusal", err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, repo, []string{grainci.CapabilityName}); !refusesAsGrainCI(err) {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, repo, []string{grainci.Grant}); !refusesAsGrainCI(err) {
 		t.Errorf("SetRepoDefaultCapabilities: err = %v, want the CI Mode refusal", err)
 	}
 	// `grain create -repo acme/widgets -capability grain-ci` on a
 	// github-mode repo: the case that used to be filed holding nothing.
 	if _, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "try grain CI", Approved: true, Repo: repo,
-		Capabilities: &[]string{grainci.CapabilityName},
+		Capabilities: &[]string{grainci.Grant},
 	}); !refusesAsGrainCI(err) {
 		t.Errorf("CreateTask: err = %v, want the CI Mode refusal", err)
 	}
@@ -70,7 +70,7 @@ func TestGrainCIIsNotOfferedAndIsRefusedByName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetCapability(ctx, task.ID, grainci.CapabilityName, true); !refusesAsGrainCI(err) {
+	if err := c.SetCapability(ctx, task.ID, grainci.Grant, true); !refusesAsGrainCI(err) {
 		t.Errorf("SetCapability: err = %v, want the CI Mode refusal", err)
 	}
 }
@@ -92,7 +92,7 @@ func TestGrainCIModeGrantsGrainCIToTheRepositorysTasks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Contains(task.Capabilities, grainci.CapabilityName) {
+		if !slices.Contains(task.Capabilities, grainci.Grant) {
 			t.Errorf("capabilities = %v (picker %v), want grain-ci from the CI Mode", task.Capabilities, caps)
 		}
 	}
@@ -106,16 +106,16 @@ func TestLegacyGrainCIInADefaultSetIsIgnored(t *testing.T) {
 	c, store, ctx := testClient(t)
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
-		Repo: repo, CIMode: model.CIModeGitHub, DefaultCapabilities: []string{grainci.CapabilityName},
+		Repo: repo, CIMode: model.CIModeGitHub, DefaultCapabilities: []string{grainci.Grant},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	putDefaultCapabilities(t, ctx, store, grainci.CapabilityName)
+	putDefaultCapabilities(t, ctx, store, grainci.Grant)
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "legacy", Approved: true, Repo: repo.String()})
 	if err != nil {
 		t.Fatalf("CreateTask on a repo with a legacy grain-ci default: %v", err)
 	}
-	if slices.Contains(task.Capabilities, grainci.CapabilityName) {
+	if slices.Contains(task.Capabilities, grainci.Grant) {
 		t.Errorf("capabilities = %v: a legacy default turned grain CI on for a github-mode repo", task.Capabilities)
 	}
 }

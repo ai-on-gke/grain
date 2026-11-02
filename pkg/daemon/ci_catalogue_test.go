@@ -31,9 +31,9 @@ func TestCheckCIJobCatalogue(t *testing.T) {
 		"registry-push": {Restrictions: &model.CapabilityRestrictions{
 			Repos: model.Patterns{"acme/app"}, Kinds: model.Patterns{"ci"}, CIOnly: true,
 		}},
-		grainci.CapabilityName: {Enabled: new(bool)},
+		grainci.Grant: {Enabled: new(bool)},
 	}}
-	ok := ci.SandboxRequest{Repo: "acme/app", Capabilities: []string{grainci.CapabilityName, "registry-push"}}
+	ok := ci.SandboxRequest{Repo: "acme/app", Capabilities: []string{grainci.Grant, "registry-push"}}
 	if err := daemon.CheckCIJobCatalogue(cat, ok); err != nil {
 		t.Fatalf("admitted job refused: %v", err)
 	}

@@ -237,7 +237,7 @@ func TestLocalPolicyHoldsATaskOnTheGrainCIGrantTheAdmitterAdds(t *testing.T) {
 	if admitOnce(t, ctx, deps, "1").Admitted {
 		t.Error("a task granted grain-ci by default was admitted under a policy that does not allow it")
 	}
-	wantPolicyWait(t, ctx, store, "1", grainci.CapabilityName)
+	wantPolicyWait(t, ctx, store, "1", grainci.Grant)
 }
 
 // The admitter clears the waits it owns and leaves a hold's own reason

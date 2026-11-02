@@ -145,6 +145,7 @@ var retiredGrants = []struct {
 	{82, "db-read", []string{model.GrainSQLReadGrant}},
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
+	{88, "grain-ci", []string{model.GrainCIGrant}},
 }
 
 func TestMigrationRewritesRetiredGrants(t *testing.T) {

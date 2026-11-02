@@ -205,14 +205,17 @@ func renderWorkstationPolicy(o workstationOptions) string {
 	b.WriteString("allow_unapproved_external: false\n")
 	b.WriteString("\n# Capabilities a task may be granted.\n")
 	b.WriteString("capabilities:\n")
-	// grain-ci is always allowed: grain grants it to every task on a
+	// grain#ci is always allowed: grain grants it to every task on a
 	// repository whose CI mode is grain, and it carries no credential --
 	// it is the run's own wait_for_checks against that repository's
 	// .grain/workflows. Denied, every such task was held at dispatch
-	// forever, and a standalone node could not test its own change.
-	allow := []string{grainci.CapabilityName}
+	// forever, and a standalone node could not test its own change. It
+	// is written by its retired bare name, which local policy reads as
+	// the grain#ci grant it became (pkg/policy's allowsCapability), and
+	// which needs no quoting in YAML.
+	allow := []string{grainci.LegacyName}
 	for _, c := range o.Capabilities {
-		if !strings.EqualFold(c, grainci.CapabilityName) {
+		if !strings.EqualFold(c, grainci.LegacyName) && !grainci.IsGrant(c) {
 			allow = append(allow, c)
 		}
 	}

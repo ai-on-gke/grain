@@ -390,7 +390,7 @@ func reconcileTaskCI(ctx context.Context, deps Deps, task model.Task, now time.T
 		// does not call StartRun, so it clears that admission marker here.
 		if wait, err := deps.Store.GrantWaitOf(ctx, task.ID); err != nil {
 			return err
-		} else if wait != nil && wait.Capability == grainci.CapabilityName {
+		} else if wait != nil && grainci.IsGrant(wait.Capability) {
 			if err := deps.Store.ClearGrantWait(ctx, task.ID); err != nil {
 				return err
 			}
@@ -495,7 +495,7 @@ func taskUsesGrainCI(ctx context.Context, store *model.Store, task *model.Task) 
 			if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 				if !grainci.Granted(t.Grants) {
 					t.Grants = append(t.Grants, model.Grant{
-						Capability: grainci.CapabilityName,
+						Capability: grainci.Grant,
 						Via:        model.GrantByDefault,
 					})
 				}
@@ -504,7 +504,7 @@ func taskUsesGrainCI(ctx context.Context, store *model.Store, task *model.Task) 
 				return false, "", err
 			}
 			task.Grants = append(task.Grants, model.Grant{
-				Capability: grainci.CapabilityName,
+				Capability: grainci.Grant,
 				Via:        model.GrantByDefault,
 			})
 			// Logged rather than returned: the grant has been written, and

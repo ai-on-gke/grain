@@ -603,7 +603,7 @@ func ComposeQualificationTask(tmpl Template, repo RepoRef, branch string, requir
 	return comp
 }
 
-// adjustGrainCIGrant adds the grain-ci grant to grants for a target repo
+// adjustGrainCIGrant adds the grain#ci grant (GrainCIGrant) to grants for a target repo
 // that uses grain CI, and strips it from one that does not.
 //
 // grants is usually a template's or a schedule's own slice, shared with
@@ -613,15 +613,15 @@ func ComposeQualificationTask(tmpl Template, repo RepoRef, branch string, requir
 func adjustGrainCIGrant(grants []Grant, usesGrainCI bool) []Grant {
 	if usesGrainCI {
 		for _, g := range grants {
-			if g.Capability == "grain-ci" {
+			if IsGrainCIGrant(g.Capability) {
 				return grants
 			}
 		}
-		return append(slices.Clip(grants), Grant{Capability: "grain-ci", Via: GrantByDefault})
+		return append(slices.Clip(grants), Grant{Capability: GrainCIGrant, Via: GrantByDefault})
 	}
 	filtered := make([]Grant, 0, len(grants))
 	for _, g := range grants {
-		if g.Capability != "grain-ci" {
+		if !IsGrainCIGrant(g.Capability) {
 			filtered = append(filtered, g)
 		}
 	}
@@ -629,7 +629,7 @@ func adjustGrainCIGrant(grants []Grant, usesGrainCI bool) []Grant {
 }
 
 // applyGrainCIGrant adjusts comp.Grants with adjustGrainCIGrant and records
-// LayerRepo as the source of an added grain-ci grant (and as Sources.Grants
+// LayerRepo as the source of an added grain#ci grant (and as Sources.Grants
 // when the declaration itself carried no grants of its own).
 func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 	sources := make([]CompositionLayer, len(comp.Grants))
@@ -644,7 +644,7 @@ func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 	}
 	if usesGrainCI {
 		for _, g := range comp.Grants {
-			if g.Capability == "grain-ci" {
+			if IsGrainCIGrant(g.Capability) {
 				comp.GrantSources = sources
 				return
 			}
@@ -660,7 +660,7 @@ func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 	filteredGrants := make([]Grant, 0, len(comp.Grants))
 	filteredSources := make([]CompositionLayer, 0, len(comp.Grants))
 	for i, g := range comp.Grants {
-		if g.Capability != "grain-ci" {
+		if !IsGrainCIGrant(g.Capability) {
 			filteredGrants = append(filteredGrants, g)
 			filteredSources = append(filteredSources, sources[i])
 		}
@@ -692,7 +692,7 @@ func scheduleReviewsWorkflowRun(sched Schedule, tmpl *Template) (CompositionLaye
 // applyWorkflowReviewCIReadGrant attaches a repo-scoped api:ci-read@<repo>
 // grant (Via GrantByGrain) to a workflow-run review composition whose target
 // repository is not gated by grain CI (applyGrainCIGrant has just stripped
-// workflowReviewTemplate's grain-ci grant). Keeping grain-ci itself would
+// workflowReviewTemplate's grain#ci grant). Keeping grain#ci itself would
 // make grainci.GrantedExplicitly true and change merge gating on a
 // repository with no explicit CI mode; api:ci-read@<repo> opens only
 // read-only CI access (grain ci log / list_ci_runs / get_ci_log) for that

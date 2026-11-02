@@ -2087,7 +2087,7 @@ func fileBaseBranchRepair(ctx context.Context, deps Deps, row model.BaseBranchCI
 	}
 	if !grainci.Granted(grants) {
 		grants = append(grants, model.Grant{
-			Capability: grainci.CapabilityName,
+			Capability: grainci.Grant,
 			Via:        model.GrantByGrain,
 		})
 	}

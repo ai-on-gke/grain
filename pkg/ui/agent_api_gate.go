@@ -431,11 +431,11 @@ var grainCIReadRoutes = map[string]bool{
 	"GET /api/ci/workflows":                        true,
 }
 
-// grainCIReadsRoute reports whether held includes grain-ci and pattern is
+// grainCIReadsRoute reports whether held includes grain#ci (model.HasGrainCI) and pattern is
 // one of the CI reads it opens. Which repository is the caller's to
 // check once it is known (authorizeAgentCall).
 func grainCIReadsRoute(held []string, pattern string) bool {
-	return grainCIReadRoutes[pattern] && slices.Contains(held, "grain-ci")
+	return grainCIReadRoutes[pattern] && model.HasGrainCI(held)
 }
 
 // agentRepoDefaultRoutes are the read-only collection routes that filter
