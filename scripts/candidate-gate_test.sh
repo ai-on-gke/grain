@@ -191,6 +191,41 @@ check "select-lkg: no runs, no candidate" 1 "LKG none" "tests.yml missing"
 run select-lkg
 check "select-lkg: --runs-json is required" 64 "usage:"
 
+# gh_run <commit> <workflow> <conclusion|in_progress> [<started-epoch>] [<event>] [<head-repo>]:
+# one GitHub Actions workflow run, as GET /repos/{owner}/{repo}/actions/runs lists it.
+gh_run() {
+  local t="${4:-$recent}" status=completed conclusion="$3"
+  if [ "$3" = in_progress ]; then status=in_progress conclusion=null; else conclusion="\"$3\""; fi
+  printf '{"id":%s,"name":"%s","path":".github/workflows/%s.yml","head_branch":"main","head_sha":"%s","event":"%s","status":"%s","conclusion":%s,"run_attempt":1,"created_at":"%s","run_started_at":"%s","updated_at":"%s","repository":{"full_name":"o/r"},"head_repository":{"full_name":"%s"}}' \
+    "$RANDOM" "$2" "$2" "$1" "${5:-push}" "$status" "$conclusion" "$(date -u -d "@$t" +%Y-%m-%dT%H:%M:%SZ)" "$(date -u -d "@$t" +%Y-%m-%dT%H:%M:%SZ)" "$(date -u -d "@$((t + 600))" +%Y-%m-%dT%H:%M:%SZ)" "${6:-o/r}"
+}
+gh_file() { # gh_file <name> <run-json>...: a GET .../actions/runs answer
+  local f="$work/$1.json" IFS=,
+  printf '{"total_count":%s,"workflow_runs":[%s]}' "$(($# - 1))" "${*:2}" > "$f"
+  echo "$f"
+}
+
+f="$(gh_file gh-exact "$(gh_run "$c3" tests success)" "$(gh_run "$c3" release success)" "$(gh_run "$c3" nightly success "$recent" schedule)" \
+  "$(gh_run "$c5" tests success)" "$(gh_run "$c5" release failure)")"
+run select-lkg --runs-json "$f" --floor-sha "$c0" --now "$now" --tasks-json "$work/no-tasks.json"
+check "select-lkg (GitHub Actions): workflow runs are read by their workflow file" 0 "LKG $c3" "${c5:0:12}: tests.yml success release.yml failure; not known-good."
+
+f="$(gh_file gh-ff "$(gh_run "$c2" nightly success "$recent" schedule)" "$(gh_run "$c4" tests success)" "$(gh_run "$c4" release success)")"
+run select-lkg --runs-json "$f" --floor-sha "$c0" --now "$now" --tasks-json "$work/no-tasks.json"
+check "select-lkg (GitHub Actions): a scheduled nightly vouches for the commits after it" 0 "LKG $c4" "nightly.yml passed on its ancestor ${c2:0:12}"
+
+f="$(gh_file gh-pr "$(gh_run "$c5" tests success "$recent" pull_request)" "$(gh_run "$c5" release success)" "$(gh_run "$c5" nightly success)" \
+  "$(gh_run "$c4" tests success "$recent" push someone/fork)" "$(gh_run "$c4" release success)" "$(gh_run "$c4" nightly success)")"
+run select-lkg --runs-json "$f" --floor-sha "$c0" --now "$now" --tasks-json "$work/no-tasks.json"
+check "select-lkg (GitHub Actions): a pull request's or a fork's run vouches for nothing" 1 "LKG none" \
+  "${c5:0:12}: tests.yml missing" "${c4:0:12}: tests.yml missing"
+
+f="$(gh_file gh-rerun "$(gh_run "$c4" tests failure "$((recent - 900))")" "$(gh_run "$c4" tests success)" "$(gh_run "$c4" release success)" \
+  "$(gh_run "$c4" nightly success)" "$(gh_run "$c5" tests in_progress)" "$(gh_run "$c5" release success)" "$(gh_run "$c5" nightly timed_out)")"
+run select-lkg --runs-json "$f" --floor-sha "$c0" --now "$now" --tasks-json "$work/no-tasks.json"
+check "select-lkg (GitHub Actions): the newest run wins; in progress is pending, timed out is infra" 0 "LKG $c4" \
+  "${c5:0:12}: tests.yml pending" "infra: nightly.yml at ${c5:0:12} was cancelled or errored"
+
 # --- check-soak ---
 
 rc="$c3"
