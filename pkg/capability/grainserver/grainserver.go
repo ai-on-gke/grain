@@ -62,6 +62,16 @@ const (
 	SQLReadGrant  = model.GrainSQLReadGrant
 	SQLWriteGrant = model.GrainSQLWriteGrant
 
+	// HostExecMethod lets a task run shell commands on grain's own host,
+	// each confirmed by a live reply in its chat (formerly self-repair).
+	// Only a person may grant it (model's RequirePersonGrant).
+	HostExecMethod = model.GrainHostExecMethod
+	HostExecRef    = model.GrainHostExecRef
+	HostExecGrant  = model.GrainHostExecGrant
+
+	// LegacySelfRepair is the retired in-process capability name for HostExecGrant.
+	LegacySelfRepair = "self-repair"
+
 	// RepoID is the canonical capability_id of the in-process repo server.
 	RepoID = model.RepoCapabilityServerID
 
@@ -140,7 +150,20 @@ func buildServer() *protocol.Server {
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building #%s: %v", SQLMethod, err))
 	}
-	cs, err := protocol.NewCapabilityServer("grain", journal, health, sqlMethod)
+	hostExec, err := protocol.NewMethod(protocol.MethodSpec{
+		Name: HostExecMethod,
+		Description: "Let this task run commands on grain's own host -- restart services, edit config, " +
+			"call the grain CLI -- each one needing a live reply in the task's chat before it runs " +
+			"(dangerous: only a person may grant it, and only an interactive task gets the tool).",
+		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
+			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
+		},
+		Now: callerClock,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building #%s: %v", HostExecMethod, err))
+	}
+	cs, err := protocol.NewCapabilityServer("grain", journal, health, sqlMethod, hostExec)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building capability server: %v", err))
 	}
@@ -309,6 +332,12 @@ func HasSQL(grants []string) bool { return model.HasGrainSQL(grants) }
 
 // HasSQLWrite reports whether any grant in grants opens grain#sql with write: true.
 func HasSQLWrite(grants []string) bool { return model.HasGrainSQLWrite(grants) }
+
+// IsHostExecGrant reports whether grant names grain#host-exec or the retired self-repair alias.
+func IsHostExecGrant(grant string) bool { return model.IsGrainHostExecGrant(grant) }
+
+// HasHostExec reports whether any grant in grants opens grain#host-exec.
+func HasHostExec(grants []string) bool { return model.HasGrainHostExec(grants) }
 
 // IsGitPushAnyRefGrant reports whether grant is GitPushAnyRefGrant or the
 // retired bare git-push-any-ref alias.

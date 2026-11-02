@@ -72,6 +72,23 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 	if !model.IsDangerousGrant(grainserver.SQLWriteGrant) || !model.IsPersonOnlyGrant(grainserver.SQLWriteGrant) {
 		t.Fatalf("SQLWriteGrant should be dangerous and person-only")
 	}
+
+	hostExec, err := model.NormalizeCapabilityNames([]string{grainserver.HostExecRef}, lookup)
+	if err != nil || !slices.Equal(hostExec, []string{grainserver.HostExecGrant}) {
+		t.Fatalf("NormalizeCapabilityNames(host-exec) = %v, %v; want [%s]", hostExec, err, grainserver.HostExecGrant)
+	}
+	if !slices.Contains(st.Methods, grainserver.HostExecMethod) {
+		t.Fatalf("Status().Methods = %v, want %s", st.Methods, grainserver.HostExecMethod)
+	}
+	if !model.IsDangerousGrant(grainserver.HostExecGrant) || !model.IsPersonOnlyGrant(grainserver.HostExecGrant) {
+		t.Fatalf("HostExecGrant should be dangerous and person-only")
+	}
+	if got := model.CanonicalLegacyGrant(grainserver.LegacySelfRepair); got != grainserver.HostExecGrant {
+		t.Fatalf("CanonicalLegacyGrant(self-repair) = %q, want %q", got, grainserver.HostExecGrant)
+	}
+	if !grainserver.HasHostExec([]string{grainserver.HostExecGrant}) || !grainserver.HasHostExec([]string{"self-repair"}) {
+		t.Fatalf("HasHostExec failed to match canonical or legacy host-exec grant")
+	}
 }
 
 // A pass's deadline comes from the orchestrator's clock, which need not
@@ -102,7 +119,7 @@ func TestInProcessServerMintsOnTheCallersClock(t *testing.T) {
 }
 
 // repo#write normalizes to the one value the git proxy honours, which is
-// what migration 84 writes for git-push-any-ref, and nothing narrower
+// what migration 85 writes for git-push-any-ref, and nothing narrower
 // validates: a task-level refs list the proxy would not honour is refused
 // rather than recorded as though it did something.
 func TestRepoServerNormalizesGitPushAnyRef(t *testing.T) {

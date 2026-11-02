@@ -757,9 +757,9 @@ type Settings struct {
 	SettingsLocked bool `json:"settingsLocked"`
 	// ConfigRepoOnly is GET /api/config's configRepoOnly for this row:
 	// whether the API refuses its non-bootstrap writes in favour of a
-	// config pull request. Unlike SettingsLocked it is false under the
-	// directConfigWrites opt-out, so it is what the UI draws read-only
-	// on (settings-mutability D-10).
+	// config pull request. Unlike SettingsLocked it is false without a
+	// config repository and under the directConfigWrites opt-out, so it is
+	// what the UI draws read-only on (settings-mutability D-10, D-12).
 	ConfigRepoOnly bool `json:"configRepoOnly"`
 }
 

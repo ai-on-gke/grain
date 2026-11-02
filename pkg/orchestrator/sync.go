@@ -2193,7 +2193,11 @@ func recordPullRequestEvents(ctx context.Context, store *model.Store, taskID str
 		return nil
 	}
 
-	err := observeField(ctx, store, taskID, now, func(o *model.Observation) {
+	reason := "pull request closed"
+	if health == model.PrMerged {
+		reason = "pull request merged"
+	}
+	err := closeTask(ctx, store, taskID, now, reason, func(o *model.Observation) {
 		if needsOpenedAt {
 			openedAt := detail.CreatedAt
 			o.PrOpenedAt = &openedAt

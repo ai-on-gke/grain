@@ -177,13 +177,13 @@ per-capability list, with what each one becomes:
 | `<vendor>-proxy` (model proxies) | `…/model-proxy#model-proxy` `{vendor}` | existing server method |
 | `github-credential:<name>` | `…/git#git-repo` `{credential: <name>, repo}` | existing server, gains an argument |
 | `github-sandbox` | `…/github#sandbox-repo` | new method on existing `github` server |
-| `git-push-any-ref` | `…/repo#write` `{refs: ["refs/heads/*", "refs/tags/*"], force: true}` | **done** (task 1063): provider removed, `https://grain.dev/capabilities/repo#write` added on a new in-process `…/repo` server (`grainserver.RepoServer`); its schema validates only that one value, the one the git proxy honours (`model.IsGitPushAnyRefGrant`), so a narrower task-level `refs` is refused rather than recorded as doing something (Q3). It stays a team grant, not dangerous, as `git-push-any-ref` was. `repo` is not an argument yet: like the bare grant it applies to every repository the task may write. Stored grants rewritten to `https://grain.dev/capabilities/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}` by schema migration 84 |
+| `git-push-any-ref` | `…/repo#write` `{refs: ["refs/heads/*", "refs/tags/*"], force: true}` | **done** (task 1063): provider removed, `https://grain.dev/capabilities/repo#write` added on a new in-process `…/repo` server (`grainserver.RepoServer`); its schema validates only that one value, the one the git proxy honours (`model.IsGitPushAnyRefGrant`), so a narrower task-level `refs` is refused rather than recorded as doing something (Q3). It stays a team grant, not dangerous, as `git-push-any-ref` was. `repo` is not an argument yet: like the bare grant it applies to every repository the task may write. Stored grants rewritten to `https://grain.dev/capabilities/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}` by schema migration 85 |
 | `local-scripts:<name>` | `…/host-script#host-script` `{script}` | existing server method |
 | `repo-read:<repo>`, `repo-write:<repo>` (CI) | `…/repo#read` / `…/repo#write` `{repo}` | repo grant |
 | `self-debug` | `…/api#self-debug` preset (already an alias) plus a new `…/grain#source` method for the source checkout and metrics tools | api scope + new in-process server `…/grain` |
 | `grain-log` | `…/grain#journal` | **done** (task 2037): provider removed, `https://grain.dev/capabilities/grain#journal` added on the in-process `…/grain` server (redaction kept, deliberately in no api preset), stored grants rewritten to `https://grain.dev/capabilities/grain#journal={}` by schema migration 80 |
 | `deployment-health` | `…/api#deployment:read` plus `…/grain#health` for the host/sandbox probes | **done** (task 2037): provider removed, `https://grain.dev/capabilities/grain#health` added on the in-process `…/grain` server alongside `api:deployment:read`, stored grants rewritten to `api:deployment:read` + `https://grain.dev/capabilities/grain#health={}` by schema migration 81 |
-| `self-repair` | `…/grain#host-exec` (each command still needs a live chat reply) | new method, dangerous (Q7) |
+| `self-repair` | `…/grain#host-exec` (each command still needs a live chat reply) | **done** (task 2252): provider removed, `https://grain.dev/capabilities/grain#host-exec` added on the in-process `…/grain` server and marked person-only (`protocol.RequirePersonGrant`), `run_host_command` still built by pkg/capability/selfrepair, still confirmed by a live chat reply (`selfrepair.Confirm`) and still added only to an Interactive task's run; stored grants rewritten to `https://grain.dev/capabilities/grain#host-exec={}` by schema migration 84 (repo_config.ci_capabilities included). Q7 answered: a grant |
 | `self-upgrade` | `…/api#self-upgrade` preset | **done** (task 2036): provider and its three tools removed, stored grants rewritten to `api:self-upgrade` by schema migration 75 |
 | `pipeline-control` | `…/api#pipeline-control` preset | **done** (task 2004): provider and its two tools removed, stored grants rewritten to `api:pipeline-control` by schema migration 69 |
 | `dispatch-control` | `…/api#dispatch-control` preset | **done** (task 2004): provider and its four tools removed, stored grants rewritten to `api:dispatch-control` by schema migration 68 |
@@ -300,6 +300,9 @@ should adopt `GrantsPicker` once 885 lands, which is a follow-up there.
   server method?
 - **Q7.** Is `…/grain#host-exec` (today's `self-repair`) a grant at all,
   or should it stay an admin-only setting outside the picker?
+  **Answered (task 2252, operator): a grant.** It is a dangerous method
+  only a person may give; the per-command live confirmation and the
+  Interactive-only rule are what keep it safe, and both stay.
 - **Q8.** `console` is how a run is hosted, not access. Should it move out
   of grants into a task setting?
 - **Q9.** Retirement order for §4. Proposed: the api-alias ones first

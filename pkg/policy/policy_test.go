@@ -159,7 +159,7 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{"allow: [\"*\"]\n  deny: [gcp-key]", "self-debug", ""},
 		{"allow: [\"*\"]\n  deny: [gcp-key]", "gcp-key:x", "forbids capability"},
 		// A retired bare name in a policy file still reaches the grant
-		// it became: migration 84 rewrote git-push-any-ref on the task,
+		// it became: migration 85 rewrote git-push-any-ref on the task,
 		// not here.
 		{"deny: [git-push-any-ref]", model.GitPushAnyRefGrant, "forbids capability"},
 		{"deny: [git-push-any-ref]", model.RepoWriteRef + `={"refs":["refs/tags/*","refs/heads/*"],"force":true}`, "forbids capability"},

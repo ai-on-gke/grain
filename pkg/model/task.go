@@ -814,7 +814,7 @@ func GitCredentialName(capability string) (name string, ok bool) {
 // the grant that lets a task's run push any ref of the repositories it
 // may write, not only its own task branch (Store.GitPushAnyRef). It is
 // still read as that grant wherever it was not rewritten (a repository's
-// own .grain declaration, an older grain/config); schema migration 84
+// own .grain declaration, an older grain/config); schema migration 85
 // rewrote the stored rows.
 const GitPushAnyRefCapability = "git-push-any-ref"
 
