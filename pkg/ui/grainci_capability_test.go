@@ -50,28 +50,34 @@ func TestGrainCIIsNotOfferedAndIsRefusedByName(t *testing.T) {
 	if slices.ContainsFunc(ui.OfferedCapabilities(), func(c ui.Capability) bool { return c.ID == grainci.Grant }) {
 		t.Errorf("the task capability picker offers %q", grainci.Grant)
 	}
-	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
-		DefaultCapabilities: &[]string{grainci.Grant},
-	}); !refusesAsGrainCI(err) {
-		t.Errorf("UpdateSettings: err = %v, want the CI Mode refusal", err)
-	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, repo, []string{grainci.Grant}); !refusesAsGrainCI(err) {
-		t.Errorf("SetRepoDefaultCapabilities: err = %v, want the CI Mode refusal", err)
-	}
-	// `grain create -repo acme/widgets -capability grain-ci` on a
-	// github-mode repo: the case that used to be filed holding nothing.
-	if _, err := c.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "try grain CI", Approved: true, Repo: repo,
-		Capabilities: &[]string{grainci.Grant},
-	}); !refusesAsGrainCI(err) {
-		t.Errorf("CreateTask: err = %v, want the CI Mode refusal", err)
-	}
-	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "plain", Approved: true, Repo: repo})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := c.SetCapability(ctx, task.ID, grainci.Grant, true); !refusesAsGrainCI(err) {
-		t.Errorf("SetCapability: err = %v, want the CI Mode refusal", err)
+	// Both spellings, and above all the recorded one: grain#ci is a
+	// capability reference, which every picker otherwise takes as
+	// grantable (ui.Client.capabilityByID), so the canonical name is
+	// the one a hand-attached grant would arrive as.
+	for _, name := range []string{grainci.Grant, model.GrainCIRef, grainci.LegacyName} {
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+			DefaultCapabilities: &[]string{name},
+		}); !refusesAsGrainCI(err) {
+			t.Errorf("UpdateSettings: %s: err = %v, want the CI Mode refusal", name, err)
+		}
+		if _, err := c.SetRepoDefaultCapabilities(ctx, repo, []string{name}); !refusesAsGrainCI(err) {
+			t.Errorf("SetRepoDefaultCapabilities: %s: err = %v, want the CI Mode refusal", name, err)
+		}
+		// `grain create -repo acme/widgets -capability grain-ci` on a
+		// github-mode repo: the case that used to be filed holding nothing.
+		if _, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+			Title: "try grain CI", Approved: true, Repo: repo,
+			Capabilities: &[]string{name},
+		}); !refusesAsGrainCI(err) {
+			t.Errorf("CreateTask: %s: err = %v, want the CI Mode refusal", name, err)
+		}
+		task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "plain", Approved: true, Repo: repo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.SetCapability(ctx, task.ID, name, true); !refusesAsGrainCI(err) {
+			t.Errorf("SetCapability: %s: err = %v, want the CI Mode refusal", name, err)
+		}
 	}
 }
 

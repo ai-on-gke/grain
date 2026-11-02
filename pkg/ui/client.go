@@ -399,6 +399,13 @@ func (c *Client) normalizeCapabilityIDs(id string) ([]string, error) {
 }
 
 func (c *Client) capabilityByID(id string) (Capability, bool) {
+	// grain#ci is a capability reference, which the branch below would
+	// take as grantable, but nobody grants it by hand in either
+	// spelling: a repository's CI Mode does (grainci.Refusal). Answering
+	// no here is what sends every picker to capabilityRefusal.
+	if grainci.IsGrant(id) {
+		return Capability{}, false
+	}
 	if model.IsCapabilityRef(id) {
 		if model.CheckCapabilityGrantSyntax(id) != nil {
 			return Capability{}, false
