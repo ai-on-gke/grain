@@ -256,11 +256,20 @@ does not restore it. Same in WebKit, and on `/` and `/repos`.
 **Cause**: `.page-header-slot` clips its wrapped rows with `overflow`,
 and a browser scrolls a clipped container to show what is focused in it.
 
-**Fix** (`PageHeader.jsx`): the closed slot is pinned to its first line
-(a `scroll` listener resets `scrollTop`). A focus landing on a wrapped
-row opens the More menu with focus kept there, and Tab on past the rail
-closes it. **Test**: `responsive-navigation-2026-11-02-walkthrough.spec.js`,
-"Tab through a wrapped header rail …".
+**Fix** (`PageHeader.jsx`): a Tab that lands on a wrapped row opens the
+More menu, with focus kept there. Tab on past the rail closes it, and
+the slot returns to its first line whenever the menu closes. **Test**:
+`responsive-navigation-2026-11-02-walkthrough.spec.js`, "Tab through a
+wrapped header rail …".
+
+The first version also reset the slot's scroll on every `scroll` event
+and opened the menu for any focus. That broke eight CI e2e specs that
+click actions behind More (`boards`, `saved-boards-walkthrough`,
+`recurring-composed-walkthrough`, `repos_workflows`,
+`suite-run-dialog-order`): Playwright scrolls the clipped slot to reach
+them, and the reset or the menu opening moved the target mid-click. Only
+a Tab keypress now triggers the menu. All eight pass, as does the
+regression test.
 
 ### Bug 2 — New chat's window collapsed on a short phone
 
