@@ -540,20 +540,34 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     88,
+		Description: "rewrite stored repo-read:<repo> and repo-write:<repo> grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/repo#read / #write {repo} (the in-process providers are retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames, err := legacyRepoAccessRenames(ctx, tx)
+			if err != nil || len(renames) == 0 {
+				return err
+			}
+			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+		},
+	},
+	{
+		Version:     89,
 		Description: "add a *_source column beside every principal's *_kind/*_id pair, task_event's on-behalf-of, and config_audit (operator-attribution spec §1.3, §7.1)",
 		Statements: append([]string{
 			// task_pause and task_event postdate the 2.0 baseline and
 			// Init's CREATE TABLE IF NOT EXISTS made them in place, so a
 			// store this old may not have them yet: create them in the
-			// shape schema 87 knew first, so that the ALTERs below meet
+			// shape schema 88 knew first, so that the ALTERs below meet
 			// the same table whichever store they run on.
-			schema87TaskPauseTable,
-			schema87TaskEventTable,
+			schema88TaskPauseTable,
+			schema88TaskEventTable,
 		}, principalSourceColumns()...),
 	},
 }
 
-// principalSourceColumns are migration 88's ALTERs: `<p>_source` beside
+// principalSourceColumns are migration 89's ALTERs: `<p>_source` beside
 // every stored principal, `”` for every row already there.
 func principalSourceColumns() []string {
 	cols := []struct{ table, column string }{
@@ -581,9 +595,9 @@ func principalSourceColumns() []string {
 	return out
 }
 
-// schema87TaskPauseTable and schema87TaskEventTable are task_pause and
-// task_event as schema 87 created them, frozen for migration 88.
-const schema87TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
+// schema88TaskPauseTable and schema88TaskEventTable are task_pause and
+// task_event as schema 88 created them, frozen for migration 89.
+const schema88TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
   ` + "`task_id`" + `           TEXT     NOT NULL,
   ` + "`paused_at`" + `         DATETIME NOT NULL,
   ` + "`paused_by_kind`" + `    TEXT     NOT NULL,
@@ -595,7 +609,7 @@ const schema87TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + 
   PRIMARY KEY (` + "`task_id`" + `)
 )`
 
-const schema87TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+const schema88TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
   ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
   ` + "`task_id`" + `    TEXT     NOT NULL,
   ` + "`kind`" + `       TEXT     NOT NULL,

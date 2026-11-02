@@ -834,8 +834,14 @@ cat <<'EOF'
 }
 EOF
 `
-	if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
+	// Written as data and made executable by a child process, for the
+	// ETXTBSY reason writeFakeKubectlForGranule gives.
+	src := kubectl + ".src"
+	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
 		t.Fatalf("writing fake kubectl: %v", err)
+	}
+	if out, err := exec.Command("install", "-m", "0755", src, kubectl).CombinedOutput(); err != nil {
+		t.Fatalf("installing fake kubectl: %v: %s", err, out)
 	}
 	k := NewK8sGranuleSandboxes(K8sGranuleConfig{
 		Image:        "example/granule",

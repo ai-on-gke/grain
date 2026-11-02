@@ -402,13 +402,20 @@ import "strconv"
 // importer passes over a table this build lacks, so a dump carrying
 // either imports without it.
 //
-// 88 adds a `<p>_source` column beside every `<p>_kind`/`<p>_id` principal
+// 88 rewrites stored `repo-read:<repo>` and `repo-write:<repo>` grants,
+// `repo_config`.`ci_capabilities` included, to
+// `https://grain.dev/capabilities/repo#read={"repo":"<repo>"}` and
+// `#write={"repo":"<repo>"}`: the in-process reporead and repowrite
+// providers are retired for the repo server's methods, whose grant carries
+// the CI-only rule and write's event gate itself.
+//
+// 89 adds a `<p>_source` column beside every `<p>_kind`/`<p>_id` principal
 // pair (task, task_comment, task_pause, pipeline_pause, scheduled_upgrade,
 // memory, memory_document, release_note and task_event, which also gains
 // behalf_kind/behalf_id/behalf_source), and the config_audit table
 // (operator-attribution spec §1.3, §4.4, §7.1). No row is rewritten: a row
 // written before reads back with an empty Principal.Source.
-const SchemaVersion = 88
+const SchemaVersion = 89
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,

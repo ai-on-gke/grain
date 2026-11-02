@@ -171,6 +171,16 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{"allow: [git-push-any-ref]", model.GitPushAnyRefGrant, ""},
 		{"allow: [git-push-any-ref]", model.GrainSQLWriteGrant, "does not allow capability"},
 		{"allow: [db-read]", model.GrainSQLWriteGrant, "does not allow capability"},
+		// Repository access matches in either spelling: migration 88
+		// rewrote repo-write: on the store, not here, and a repository's
+		// own .grain/workflows keeps the bare name.
+		{"deny: [repo-write:*]", model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), "forbids capability"},
+		{"deny: [repo-write:acme/*]", model.RepoWriteGrant(model.RepoRef{Owner: "other", Name: "widgets"}), ""},
+		{"deny: [repo-write:*]", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), ""},
+		{"deny: [repo-write:*]", model.GitPushAnyRefGrant, ""},
+		{"deny: [\"" + model.RepoReadRef + "\"]", "repo-read:acme/widgets", "forbids capability"},
+		{"allow: [repo-read:acme/*]", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), ""},
+		{"allow: [repo-read:acme/*]", model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), "does not allow capability"},
 	}
 	for _, c := range cases {
 		p := mustParse(t, "repos: [acme/widgets, other/widgets, ai-on-gke/grain]\ncapabilities:\n  "+c.rules+"\n")
@@ -208,9 +218,11 @@ func TestCheckCapabilityRepos(t *testing.T) {
 		model.RepoReadCapability(model.GrainSourceRepo()),
 		model.RepoReadCapability(model.RepoRef{Owner: "evil", Name: "y"}),
 		model.RepoWriteCapability(model.GrainSourceRepo()),
+		"repo-read:evil/y",
+		"repo-write:ai-on-gke/grain",
 	} {
 		task.Grants = []model.Grant{{Capability: model.SelfDebugCapability}, {Capability: grant}}
-		repo := strings.SplitN(grant, ":", 2)[1]
+		repo := model.CapabilityRepos(grant)[0].String()
 		if err := confined.Check(task, ""); err == nil || !strings.Contains(err.Error(), "repository "+repo) {
 			t.Errorf("Check = %v, want repos: [acme/*] to refuse %s", err, grant)
 		}

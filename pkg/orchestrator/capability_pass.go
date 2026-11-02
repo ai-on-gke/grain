@@ -378,6 +378,15 @@ func hasExternalCapabilityRef(grants []model.Grant) bool {
 func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candidate dispatch.Candidate,
 	at, deadline time.Time) (*protocol.Pass, error) {
 
+	// Repository access (repo#read, repo#write {repo}) is a CI job's,
+	// and a task is not an event its gate could admit
+	// (model.IsRepoAccessGrant): refused, as ResolveGrants refuses it,
+	// before anything is minted.
+	for _, g := range task.Grants {
+		if model.IsRepoAccessGrant(g.Capability) {
+			return nil, &grainRefusalError{Reason: model.CIOnlyRefusal(g.Capability)}
+		}
+	}
 	external := hasExternalCapabilityRef(task.Grants)
 	if external && deps.CapabilityServers == nil {
 		return nil, &grainRefusalError{Reason: "this deployment attaches no capability servers, so it cannot grant a capability reference"}
