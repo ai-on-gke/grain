@@ -361,6 +361,8 @@ Usage of grain daemon:
     	address to serve the UI/API on, in-process, over this same store -- empty disables it (default "0.0.0.0:4242")
   -ui-allowed-hosts string
     	comma-separated host names the UI/API answers to besides IP literals, localhost and this machine's own hostname ("grain.example.com", "*.example.com"); a request with any other Host header is refused with 421, which is what stops a DNS-rebinding page reaching a loopback-bound API (grain#2380). Checked on every request when this is set or -ui-addr names a specific address; on an every-interface -ui-addr with this unset, on loopback requests only. "*" turns the check off
+  -ui-allowed-principals string
+    	comma-separated principals admitted when authenticated by IAP or another registered IdentityVerifier (user:<email>, serviceAccount:<email>, group:<email>, domain:<domain>); defaults to $GRAIN_ALLOWED_PRINCIPALS, and when unset to the deployment owner plus the service accounts grain provisions
   -ui-iap-audience string
     	the audience a signed X-Goog-IAP-JWT-Assertion must carry for the UI/API to accept the identity in it, or several separated by commas -- IAP's /projects/NUMBER/global/backendServices/ID or /projects/NUMBER/apps/PROJECT, or what a BeyondCorp tunnel's assertion names (the proxy's own docs); defaults to $GRAIN_IAP_AUDIENCE. With none, no assertion is accepted
   -ui-iap-issuer string

@@ -167,7 +167,121 @@ for (const [name, viewport] of [
     await page.goto("/settings/sandboxes#kubernetes");
     await assertHeadingAndField();
   });
+
+  // settings-mutability.spec.md D-11: before a deployment adopts the
+  // capability catalogue, grain/config exports no settings/capabilities.yml.
+  // Neither Tasks nor Capabilities links the missing file, and each link on
+  // the page appears once.
+  test(`Tasks and Capabilities omit an unexported settings/capabilities.yml and link each file once on a ${name} screen`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await configRepoOnly(page);
+    await page.route("**/api/state-repo/files", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          head: "ff335f52c0c1d3",
+          entries: [
+            { path: "README.md", size: 412 },
+            { path: "settings", dir: true, size: 0 },
+            { path: "settings/schedules.yml", size: 120 },
+            { path: "settings/suites.yml", size: 96 },
+            { path: "settings/templates.yml", size: 140 },
+            { path: "tables", dir: true, size: 0 },
+            { path: "tables/api_scope_set.json", size: 64 },
+            { path: "tables/custom_field.json", size: 64 },
+            { path: "tables/grain_config.json", size: 2048 },
+          ],
+        }),
+      });
+    });
+
+    const assertNoticeLinks = async (expectedHrefs) => {
+      const notice = page.getByTestId("config-managed-notice");
+      await expect(notice).toBeVisible();
+      const noticeLinks = notice.getByTestId("config-repo-link");
+      await expect(noticeLinks).toHaveCount(expectedHrefs.length);
+      for (let i = 0; i < expectedHrefs.length; i += 1) {
+        await expect(noticeLinks.nth(i)).toHaveAttribute(
+          "href",
+          expectedHrefs[i],
+        );
+      }
+      // Every config-repo link on the section belongs to the notice and
+      // appears once (no duplicate link inside a card).
+      await expect(page.getByTestId("config-repo-link")).toHaveCount(
+        expectedHrefs.length,
+      );
+
+      const noticeBox = await notice.boundingBox();
+      const content = await page.getByTestId("settings-section").boundingBox();
+      expect(inside(content, noticeBox)).toBe(true);
+      for (const link of await noticeLinks.all()) {
+        expect(inside(noticeBox, await link.boundingBox())).toBe(true);
+      }
+      const firstCard = await page.locator("[data-settings-card]").first();
+      expect((await firstCard.boundingBox()).y).toBeGreaterThan(
+        noticeBox.y + noticeBox.height - 1,
+      );
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+    };
+
+    await page.goto("/settings/tasks");
+    await assertNoticeLinks([
+      "/config?path=tables%2Fgrain_config.json",
+      "/config?path=tables%2Fcustom_field.json",
+    ]);
+
+    await page.goto("/settings/capabilities");
+    await assertNoticeLinks([
+      "/config?path=tables%2Fgrain_config.json",
+      "/config?path=tables%2Fapi_scope_set.json",
+    ]);
+  });
 }
+
+test("Tasks links settings/capabilities.yml once when the catalogue is exported", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await configRepoOnly(page);
+  await page.route("**/api/state-repo/files", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        head: "ff335f52c0c1d3",
+        entries: [
+          { path: "settings/capabilities.yml", size: 256 },
+          { path: "tables/custom_field.json", size: 64 },
+          { path: "tables/grain_config.json", size: 2048 },
+        ],
+      }),
+    });
+  });
+
+  await page.goto("/settings/tasks");
+  const links = page.getByTestId("config-repo-link");
+  await expect(links).toHaveCount(3);
+  await expect(links.nth(0)).toHaveAttribute(
+    "href",
+    "/config?path=tables%2Fgrain_config.json",
+  );
+  await expect(links.nth(1)).toHaveAttribute(
+    "href",
+    "/config?path=tables%2Fcustom_field.json",
+  );
+  await expect(links.nth(2)).toHaveAttribute(
+    "href",
+    "/config?path=settings%2Fcapabilities.yml",
+  );
+});
 
 // Git connections are grain_config.git_connections / git_credential and a
 // repository's choice repo_config.git_credential (schema 22), so the Git
