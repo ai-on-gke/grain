@@ -178,6 +178,10 @@ var routeDocs = map[string]string{
 	"PUT /api/deployment/repos/{owner}/{name}/config":                      "Set a repository's deployment-level configuration: only the fields given are changed.",
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":              "Set which git connection a repository is reached through.",
 	"POST /api/deployment/broadcast":                                       "Post a comment to every active task (running_only: only those with a run in flight).",
+	"POST /api/hostds":                                                     "Register a remote grain hostd; its token is shown once, in the answer.",
+	"PATCH /api/hostds/{name}":                                             "Set a hostd's owner or labels.",
+	"POST /api/hostds/{name}/rotate":                                       "Retire a hostd's token and mint a new one, shown once in the answer.",
+	"POST /api/hostds/{name}/revoke":                                       "Revoke a hostd and every token it has.",
 	"PUT /api/agent-keys/{framework}":                                      "Set an agent framework's credential.",
 	"DELETE /api/agent-keys/{framework}":                                   "Clear an agent framework's credential.",
 	"PUT /api/agent-backends/{id}/credential":                              "Set a model connection's credential.",
@@ -337,6 +341,8 @@ var routeBodies = map[string]any{
 	"PUT /api/deployment/repos/{owner}/{name}/config":                SetDeploymentRepoConfigRequest{},
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":        SetTeamRepoGitConnectionRequest{},
 	"POST /api/deployment/broadcast":                                 BroadcastTeamRequest{},
+	"POST /api/hostds":                                               CreateHostdRequest{},
+	"PATCH /api/hostds/{name}":                                       UpdateHostdRequest{},
 	"PUT /api/agent-keys/{framework}":                                setAgentKeyRequest{},
 	"PUT /api/agent-backends/{id}/credential":                        setAgentKeyRequest{},
 	"PUT /api/agent-backends/{id}/codex-auth":                        setAgentKeyRequest{},
@@ -385,8 +391,8 @@ var routeBodies = map[string]any{
 // routeQueries is the query parameters a route's handler reads, each
 // with what it means: its tool describes them as properties of query.
 // A route with none takes no query of its own, though the query object
-// still carries any parameter a caller adds (a repo= the agent API's
-// gate reads, a template composition's field.<name>).
+// still carries any parameter a caller adds (such as a template
+// composition's field.<name>).
 var routeQueries = map[string]map[string]string{
 	"GET /api/restart-watch": {
 		"quick": "1 to answer at once with whether grain is restarting, rather than holding the request until it is or 25 s pass.",

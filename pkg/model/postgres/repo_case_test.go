@@ -688,6 +688,10 @@ var repoKeyColumns = [][2]string{
 	{"target_owner", "target_name"},
 }
 
+// notRepoKeyed is the tables whose columns look like a repository key and
+// are not one: `hostd`'s (`owner`, `name`) are a person and a hostd.
+var notRepoKeyed = map[string]bool{"hostd": true}
+
 // The claim repoCaseTables' own doc comment makes -- "every repo-keyed
 // table in schema.go is here" -- checked against the schema rather than
 // against the list's own reading of itself.
@@ -710,6 +714,9 @@ func TestRepoCaseNamesEveryRepoKeyedTable(t *testing.T) {
 	_, db, ctx := openStore(t)
 	named := model.RepoCaseTables()
 	for _, table := range schemaTables(t, ctx, db) {
+		if notRepoKeyed[table] {
+			continue
+		}
 		cols := schemaColumns(t, ctx, db, table)
 		pair, ok := repoKeyIn(cols)
 		if !ok {

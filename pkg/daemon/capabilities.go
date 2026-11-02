@@ -124,8 +124,15 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	// deployment publishes somewhere else and has no setting to say so
 	// yet; it gets a login that fails at the registry, which is the
 	// honest outcome until there is a configuration field for it.
+	//
+	// Its refresh route is mounted on the CI API listener (CIAPI), so a
+	// job whose release outlasts the ladder's hour-long token re-mints
+	// it there rather than failing at its last push; with no listener
+	// the job gets the static login alone, as it always did.
 	providers = append(providers, packagepublish.New(packagepublish.Config{
 		Credentials: githubCredentials,
+		Refresh:     PackagePublishRefresh,
+		RefreshURL:  CIAPI.URL,
 	}))
 	// image-signing registers unconditionally too, and for the same
 	// reason: what it needs is two secrets, which its own Resolve looks
@@ -582,3 +589,10 @@ func storeGitConnections(ctx context.Context, store *model.Store) gitproxy.Conne
 // capability registry is rebuilt from live configuration, and every
 // build has to mint into the one registry being served.
 var CIAPI = ciapi.NewEndpoint()
+
+// PackagePublishRefresh is the route a CI job holding package-publish
+// re-mints its registry login through, mounted on CIAPI's listener: a
+// package-level value for the reason CIAPI is one.
+var PackagePublishRefresh = packagepublish.NewRefresher()
+
+func init() { CIAPI.Mount(packagepublish.RefreshRoute, PackagePublishRefresh) }

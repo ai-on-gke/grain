@@ -192,9 +192,14 @@ func rewindToSchema90(t *testing.T, ctx context.Context, db *sql.DB) {
 			t.Fatal(err)
 		}
 	}
-	m := model.Migrations[len(model.Migrations)-1]
+	var m model.Migration
+	for _, mm := range model.Migrations {
+		if mm.Version == 91 {
+			m = mm
+		}
+	}
 	if m.Version != 91 {
-		t.Fatalf("the last migration is %d, not 91: rewind from the right one", m.Version)
+		t.Fatal("there is no migration 91 to rewind")
 	}
 	for _, stmt := range m.Statements {
 		table, after, ok := strings.Cut(strings.TrimPrefix(stmt, "ALTER TABLE `"), "` ADD COLUMN `")

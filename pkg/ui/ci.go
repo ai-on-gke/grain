@@ -532,7 +532,7 @@ func taskCIJobName(job ci.JobRun) string {
 }
 
 func taskCIDetail(run ci.Run) string {
-	if strings.TrimSpace(run.Error) != "" || strings.TrimSpace(run.CancelReason) != "" || run.CancelledBy == ci.CancelByOperator {
+	if strings.TrimSpace(run.Error) != "" || strings.TrimSpace(run.CancelReason) != "" || run.CancelledBy.ByHand() {
 		return ""
 	}
 	var failed []string
@@ -720,7 +720,7 @@ func (c *Client) resolveRecheckTarget(task *model.Task, previous *model.Observat
 	if first.Commit != run.Commit || first.RunID == "" || first.RunID == run.ID {
 		return model.CIStatus{}, false
 	}
-	if first.CancelledBy == string(ci.CancelByOperator) || !isRecheckableConclusion(first.Conclusion) {
+	if ci.CancelSource(first.CancelledBy).ByHand() || !isRecheckableConclusion(first.Conclusion) {
 		return model.CIStatus{}, false
 	}
 	if !rechecksAnyOf(run, opt.Jobs, first.Detail) {
@@ -735,7 +735,7 @@ func (c *Client) hydrateRecheckTarget(st model.CIStatus) model.CIStatus {
 		return st
 	}
 	if prior, ok := c.Config.CI.Get(st.RunID); ok {
-		if prior.Interrupted || strings.TrimSpace(prior.CancelReason) != "" || prior.CancelledBy == ci.CancelByOperator {
+		if prior.Interrupted || strings.TrimSpace(prior.CancelReason) != "" || prior.CancelledBy.ByHand() {
 			st.CancelledBy = string(ci.CancelByOperator)
 			return st
 		}
@@ -1724,14 +1724,13 @@ func (s *Server) handleCancelCIRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	// The one door a person cancels through, and therefore the one place
-	// ci.CancelByOperator is said, so the run records whose hand was on
-	// it. It stops this run, not the task: the merge queue's reconciler
+	// The one door a person cancels a run alone through, so the run
+	// records whose hand was on it: their ID (ci.CancelByPrincipal). It stops this run, not the task: the merge queue's reconciler
 	// replaces it with another run for the same commit after
 	// ciRetryDelay, as it does any cancellation (orchestrator's
 	// ciReplacementFor). Stopping the task is withdrawing auto-merge or
 	// closing it.
-	if !runner.Cancel(id, strings.TrimSpace(req.Reason), ci.CancelByOperator) {
+	if !runner.Cancel(id, strings.TrimSpace(req.Reason), ci.CancelByPrincipal(s.tasks.requestActor(r.Context()).Actor.ID)) {
 		// Either it finished or it never existed; both are "there is
 		// nothing here to cancel", and telling them apart would mean
 		// reporting a 200 for a run that ignored the request.

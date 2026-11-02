@@ -561,6 +561,22 @@ export const SETTINGS_INDEX = [
     card: true,
   },
   {
+    id: "card:hostds:hostds",
+    section: "hostds",
+    anchor: "hostds",
+    label: "Hostds",
+    keywords: ["hostd", "token", "rotate", "revoke", "owner", "labels"],
+    card: true,
+  },
+  {
+    id: "card:hostds:add-hostd",
+    section: "hostds",
+    anchor: "add-hostd",
+    label: "Add a hostd",
+    keywords: ["hostd", "register", "token"],
+    card: true,
+  },
+  {
     id: "card:config-repo:config-repo",
     section: "config-repo",
     anchor: "config-repo",
