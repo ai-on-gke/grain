@@ -1191,8 +1191,11 @@ const DefaultAgentBackendConcurrency = 4
 // grain_config.default_filters.
 const DefaultTaskFilters = "f=state:none:deferred|closed&f=kind:none:interactive"
 
-// DefaultMaxMergesPerRepo preserves the merge queue's original behavior.
-const DefaultMaxMergesPerRepo = 1
+// DefaultMaxMergesPerRepo is how many queue members may land in one lane
+// per cycle where nobody chose. It was 1, the merge queue's original
+// behavior, until schema 85; each merge is still judged on its own read of
+// the pull request, taken after the merge before it moved the base.
+const DefaultMaxMergesPerRepo = 5
 
 // DefaultBaseCIRedStreak is Config.BaseCIRedStreak where nothing has
 // been chosen: two consecutive red tips on the same job, which is the

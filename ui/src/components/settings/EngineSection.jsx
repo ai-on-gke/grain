@@ -80,13 +80,14 @@ export default function EngineSection({ s }) {
           disabled={locked}
           data-setting-id="maxMergesPerRepo"
           label="Max merges per repo branch"
-          helperText="maximum ready pull requests merged into each branch of a repository per queue cycle"
+          helperText="maximum ready pull requests merged into each branch of a repository per queue cycle (5 by default)"
           type="number"
           inputProps={{ min: 1, step: 1 }}
-          defaultValue={String(settings.maxMergesPerRepo || 1)}
+          defaultValue={String(settings.maxMergesPerRepo || 5)}
+          placeholder="5"
           onBlur={onIntBlur("maxMergesPerRepo", {
-            defaultVal: 1,
-            emptyVal: 1,
+            defaultVal: 5,
+            emptyVal: 5,
           })}
           onKeyDown={onEnterKey}
           fullWidth

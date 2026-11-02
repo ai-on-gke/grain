@@ -345,7 +345,7 @@ func TestConflictedQueuedPullRequestLifecycleAfterRepair(t *testing.T) {
 	setBranchMergeable(sim, behindBranch, false)
 
 	// Cycle 1: head PR merges cleanly, behind PR is immediately queued for repair.
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+	if err := syncOneMergePerCycle(ctx, store, client, baseTime); err != nil {
 		t.Fatalf("first SyncPullRequests: %v", err)
 	}
 
@@ -370,7 +370,7 @@ func TestConflictedQueuedPullRequestLifecycleAfterRepair(t *testing.T) {
 	}
 
 	// Cycle 2: behind PR is now at the head of the queue, clean and green, and merges.
-	if err := orchestrator.SyncPullRequests(ctx, store, client, repairTime.Add(time.Minute)); err != nil {
+	if err := syncOneMergePerCycle(ctx, store, client, repairTime.Add(time.Minute)); err != nil {
 		t.Fatalf("second SyncPullRequests: %v", err)
 	}
 

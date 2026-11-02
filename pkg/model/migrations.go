@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -505,6 +506,61 @@ var Migrations = []Migration{
 				map[string][]string{"self-repair": {GrainHostExecGrant}})
 		},
 	},
+	{
+		Version:     85,
+		Description: "raise grain_config.max_merges_per_repo's column default from 1 to 5 (stored values are kept)",
+		Up:          raiseMaxMergesPerRepoDefault,
+	},
+}
+
+// maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
+// schemas before 85 wrote it, with the default captured for replacing.
+var maxMergesPerRepoDefault1 = regexp.MustCompile("(`max_merges_per_repo`\\s+INTEGER\\s+NOT\\s+NULL\\s+DEFAULT\\s+)1\\b")
+
+// grainConfigTableName is the table name at the head of grain_config's
+// stored CREATE statement, however it was quoted.
+var grainConfigTableName = regexp.MustCompile("^(\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)[`\"]?grain_config[`\"]?")
+
+// raiseMaxMergesPerRepoDefault is migration 85. Only the column default
+// changes, never a row: a deployment whose row holds 1 keeps 1, because the
+// row is written whole on every save and so cannot say whether that 1 was
+// chosen.
+//
+// Postgres changes a default in place. SQLite cannot, so there the table is
+// rebuilt from its own stored CREATE statement with only the default
+// edited -- the columns, their order and every row as they were. The two
+// are told apart by that statement: sqlite_master is a compatibility view
+// on Postgres whose sql column is always empty.
+func raiseMaxMergesPerRepoDefault(ctx context.Context, tx *sql.Tx) error {
+	var ddl string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT `sql` FROM `sqlite_master` WHERE `type` = 'table' AND `name` = 'grain_config'").Scan(&ddl); err != nil {
+		return fmt.Errorf("reading grain_config's definition: %w", err)
+	}
+	if ddl == "" {
+		_, err := tx.ExecContext(ctx, "ALTER TABLE `grain_config` ALTER COLUMN `max_merges_per_repo` SET DEFAULT 5")
+		return err
+	}
+	raised := maxMergesPerRepoDefault1.ReplaceAllString(ddl, "${1}5")
+	if raised == ddl {
+		return nil
+	}
+	if !grainConfigTableName.MatchString(raised) {
+		return fmt.Errorf("grain_config's stored definition does not start as a CREATE TABLE: %.60q", ddl)
+	}
+	raised = grainConfigTableName.ReplaceAllString(raised, "${1}`grain_config_85`")
+	for _, stmt := range []string{
+		"DROP TABLE IF EXISTS `grain_config_85`",
+		raised,
+		"INSERT INTO `grain_config_85` SELECT * FROM `grain_config`",
+		"DROP TABLE `grain_config`",
+		"ALTER TABLE `grain_config_85` RENAME TO `grain_config`",
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ApplyDataMigrations runs the row rewrites (Up) of every migration past

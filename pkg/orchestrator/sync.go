@@ -745,8 +745,10 @@ func stampQueueEntry(ctx context.Context, store *model.Store, members []queueEnt
 //
 // Each entry that merges consumes one of its lane's configured slots
 // (model.Config.MaxMergesPerRepo, which despite its name is per lane).
-// Once the limit is reached, everything behind it is judged again next
-// cycle against the base the earlier merges moved.
+// An entry behind one that merged is judged on its own read, taken when
+// the walk reaches it and so after that merge moved the base; one GitHub
+// has not re-judged yet reads PrUnknown and closes the lane. Once the
+// limit is reached, everything behind it is judged again next cycle.
 //
 // # Heads
 //
@@ -790,6 +792,13 @@ func (w *mergeWalk) mayMerge(lane string) bool {
 		return false
 	}
 	return w.used[lane] < w.limitOrDefault()
+}
+
+// mergedBefore reports whether something already merged into lane this
+// cycle, so that the base an entry was read against may have moved since
+// GitHub last judged it.
+func (w *mergeWalk) mergedBefore(lane string) bool {
+	return w.used[lane] > 0
 }
 
 // merged spends one of lane's merges.
@@ -1476,8 +1485,8 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// takes or closes is its own branch's and no other's (mergeWalk).
 	lane := laneOf(e)
 	isHead := walk.headOf(lane) == task.ID
-	// isMergeHead is the narrower question: is this the entry that takes
-	// its repo's one merge this cycle? Usually the head -- but a head that
+	// isMergeHead is the narrower question: may this entry take one of its
+	// lane's merges this cycle? Usually the head -- but a head that
 	// is conflicted, failing or being repaired is passed over instead, so
 	// that a green change behind it does not wait out somebody else's
 	// conflict. See mergeWalk.
@@ -1878,6 +1887,24 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			}
 			break
 		} else if err != nil {
+			// A refusal GitHub gives no reason for, straight after an
+			// earlier merge in this lane moved the base, is most likely
+			// that move: GitHub had not yet re-judged this pull request
+			// against it, and the clean read was its answer about the
+			// base before. Nothing is charged to the change for that.
+			// The lane closes and the next cycle reads it fresh.
+			if member && !forcing && walk.mergedBefore(lane) &&
+				github.ClassifyMergeRefusal(err) == github.RefusalTransient {
+				log.Printf("orchestrator: %s was refused a merge right after another merge into %s this cycle; "+
+					"judging it again next cycle against the base as it now stands: %v", ref, detail.BaseRef, err)
+				walk.close(lane)
+				if err := setMergeQueueState(ctx, store, e.obs, task.ID,
+					queueStatus{state: mergeStateWaitingQueue,
+						note: "another change just merged into " + detail.BaseRef + "; judged again next cycle"}, now); err != nil {
+					return err
+				}
+				break
+			}
 			// A merge GitHub will not do is the one dead end the queue
 			// used to retry forever in silence, with the row left saying
 			// "Merging" -- refusedMerge is what gives it words and an end.

@@ -261,11 +261,25 @@ func TestARestartedHostdKeepsAFinishedSpoolForTheDaemon(t *testing.T) {
 	started := make(chan Started, 1)
 	c := detachedClient(ts, started)
 	ctx, cancel := context.WithCancel(context.Background())
+	// The process finishes only once the client has gone: one that exits
+	// while the client is still attached has its exit read there, and a
+	// spool whose exit was read is released, which is not this test.
+	// hostd refuses an argument naming a path that does not exist, so the
+	// directory and the gate's bare name go apart (untilExists).
+	gate := filepath.Join(ts.dir, "gate")
+	detached := make(chan struct{})
 	go func() {
-		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "echo done; exit 7"}, Detach: true, Run: "r"}, nil, nil, nil)
+		defer close(detached)
+		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh",
+			Args:   []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done; echo done; exit 7`, "sh", ts.dir, "gate"},
+			Detach: true, Run: "r"}, nil, nil, nil)
 	}()
 	st := <-started
 	cancel()
+	<-detached
+	if err := os.WriteFile(gate, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	waitGone(t, st.PID, 10*time.Second)
 	for !listed(t, ts, st.ID).Exited {
 		time.Sleep(20 * time.Millisecond)

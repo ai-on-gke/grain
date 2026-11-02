@@ -224,7 +224,7 @@ func TestMergesDuringADispatchDoNotStartASecond(t *testing.T) {
 	greenGrainCI(t, ctx, store, client, runner, second, repo, secondBranch)
 	setMergeable(sim, true)
 
-	syncWithCI(t, ctx, store, client, runner, baseTime)
+	syncWithCIOneMergePerCycle(t, ctx, store, client, runner, baseTime)
 	runBaseBranchDispatchReconciler(t, ctx, store, client, runner, baseTime.Add(time.Second))
 	if got := len(runner.dispatches()); got != 1 {
 		t.Fatalf("the first merge dispatched %d runs, want one", got)
@@ -236,7 +236,7 @@ func TestMergesDuringADispatchDoNotStartASecond(t *testing.T) {
 	inFlight := row.RunID
 
 	// The second change merges while that run is still going.
-	syncWithCI(t, ctx, store, client, runner, baseTime.Add(2*time.Second))
+	syncWithCIOneMergePerCycle(t, ctx, store, client, runner, baseTime.Add(2*time.Second))
 	if !mergedBranch(sim, secondBranch) {
 		t.Fatal("the second change did not merge: nothing here holds the queue")
 	}
@@ -282,7 +282,7 @@ func TestAFailedDispatchHoldsNothingAndIsNotRetried(t *testing.T) {
 	greenGrainCI(t, ctx, store, client, runner, second, repo, secondBranch)
 	setMergeable(sim, true)
 
-	syncWithCI(t, ctx, store, client, runner, baseTime)
+	syncWithCIOneMergePerCycle(t, ctx, store, client, runner, baseTime)
 	runBaseBranchDispatchReconciler(t, ctx, store, client, runner, baseTime.Add(time.Second))
 	row, err := store.GetBaseBranchDispatch(ctx, repo, "main")
 	if err != nil || row == nil {
@@ -313,7 +313,7 @@ func TestAFailedDispatchHoldsNothingAndIsNotRetried(t *testing.T) {
 			"branch, and a merge queue stopped by one would be a far larger outage than the cold " +
 			"cache it was reporting")
 	}
-	syncWithCI(t, ctx, store, client, runner, baseTime.Add(3*time.Second))
+	syncWithCIOneMergePerCycle(t, ctx, store, client, runner, baseTime.Add(3*time.Second))
 	if !mergedBranch(sim, secondBranch) {
 		t.Fatal("the queue stopped merging after a dispatch failed")
 	}

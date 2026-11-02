@@ -300,7 +300,7 @@ func TestOnlyOneReleaseIsInFlightPerBranch(t *testing.T) {
 	greenGrainCI(t, ctx, store, client, runner, second, repo, secondBranch)
 	setMergeable(sim, true)
 
-	syncWithCI(t, ctx, store, client, runner, baseTime)
+	syncWithCIOneMergePerCycle(t, ctx, store, client, runner, baseTime)
 	runBaseBranchReleaseReconciler(t, ctx, store, client, runner, baseTime.Add(time.Second))
 	if got := len(runner.releaseRuns()); got != 1 {
 		t.Fatalf("the first merge started %d release runs, want one", got)
@@ -317,7 +317,7 @@ func TestOnlyOneReleaseIsInFlightPerBranch(t *testing.T) {
 	runner.finish(judging.RunID, ci.ConclusionSuccess, ci.JobRun{
 		WorkflowPath: ".grain/workflows/tests.yml", JobID: "go", Conclusion: ci.ConclusionSuccess,
 	})
-	syncWithCI(t, ctx, store, client, runner, baseTime.Add(3*time.Second))
+	syncWithCIOneMergePerCycle(t, ctx, store, client, runner, baseTime.Add(3*time.Second))
 	if !mergedBranch(sim, secondBranch) {
 		t.Fatal("the second change did not merge, so this test never asked the question")
 	}

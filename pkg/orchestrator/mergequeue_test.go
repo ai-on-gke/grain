@@ -536,7 +536,7 @@ func TestSyncPullRequestsOnlyActsOnTheQueueHeadNotLaterEntries(t *testing.T) {
 	sim.CheckRuns[headBranch] = greenCheck
 	sim.CheckRuns[secondBranch] = greenCheck
 
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+	if err := syncOneMergePerCycle(ctx, store, client, baseTime); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
 
@@ -1941,7 +1941,7 @@ func TestSyncPullRequestsTakesItsQueueHeadFromTheBacklogOrder(t *testing.T) {
 	sim.CheckRuns[firstBranch] = greenCheck
 	sim.CheckRuns[secondBranch] = greenCheck
 
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+	if err := syncOneMergePerCycle(ctx, store, client, baseTime); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
 
@@ -2071,9 +2071,8 @@ func TestSyncPullRequestsAllowsConfiguredMergesPerRepo(t *testing.T) {
 
 // Being passed over is not a one-cycle affair: the repair the queue asked
 // for is a whole agent run, and for as long as it is in flight the
-// changes behind it keep merging. One per cycle, in queue order, the same
-// as any other merge -- everything behind the one that just merged had
-// its checks read against a base that merge has moved.
+// changes behind it keep merging, in queue order. Held to one merge a
+// cycle here, so that each cycle's merge can be told apart.
 func TestSyncPullRequestsKeepsMergingWhileTheHeadIsRepaired(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
@@ -2089,7 +2088,7 @@ func TestSyncPullRequestsKeepsMergingWhileTheHeadIsRepaired(t *testing.T) {
 		sim.CheckRuns[branch] = greenCheck
 	}
 
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+	if err := syncOneMergePerCycle(ctx, store, client, baseTime); err != nil {
 		t.Fatalf("first SyncPullRequests: %v", err)
 	}
 	if !mergedBranch(sim, secondBranch) {
@@ -2105,7 +2104,7 @@ func TestSyncPullRequestsKeepsMergingWhileTheHeadIsRepaired(t *testing.T) {
 	if !repairInFlightNow(t, ctx, store, head.ID) {
 		t.Fatal("the head's repair finished on its own")
 	}
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(time.Minute)); err != nil {
+	if err := syncOneMergePerCycle(ctx, store, client, baseTime.Add(time.Minute)); err != nil {
 		t.Fatalf("second SyncPullRequests: %v", err)
 	}
 	if !mergedBranch(sim, thirdBranch) {
