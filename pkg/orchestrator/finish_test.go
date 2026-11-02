@@ -1963,6 +1963,9 @@ func TestProcessResultDoesNotExplainAutoMergeAProposalOptedOutOf(t *testing.T) {
 	if proposal.AutoMerge {
 		t.Error("AutoMerge = true, want false -- the run asked for false")
 	}
+	if !model.AutoMergeDeclined(proposal) {
+		t.Error("the run's explicit auto_merge: false was not made sticky (model.DeclineAutoMerge)")
+	}
 	if proposal.Body != "unrelated, review it" {
 		t.Errorf("proposal body = %q, want the run's own words alone", proposal.Body)
 	}

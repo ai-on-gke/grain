@@ -613,6 +613,7 @@ func TestSandboxLogAndMetricsRefuseUnknownFlags(t *testing.T) {
 		{"log", "daemon", "--since", "2026-10-29T00:00:00Z", "--until", "2026-10-29T06:00:00Z", "--priority", "err",
 			"--min-priority", "err", "--contains", "x", "--max-lines", "5", "--lines", "5", "--tail", "40"},
 		{"log", "--source", "dmesg"},
+		{"log", "-n", "5"},
 		{"metrics", "summary", "--window", "7d", "--repo", "acme/a", "--author", "task"},
 		{"metrics", "--since", "2026-10-28", "--until", "2026-10-29"},
 	} {

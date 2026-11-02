@@ -1,0 +1,1249 @@
+{
+ "mode": "internal-locked",
+ "base": "http://127.0.0.1:18702",
+ "sections": {
+  "models": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "new connection",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "default model",
+     "settingId": "defaultModel",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Open",
+     "settingId": "defaultModel",
+     "disabled": false
+    },
+    {
+     "kind": "div",
+     "label": "claude run location",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "div",
+     "label": "codex run location",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "div",
+     "label": "agy (Antigravity) run location",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "div",
+     "label": "custom commands run location",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "save run locations",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "alert",
+     "text": "The deployment's provider connections. Its tasks run only on these, and wait until it has one."
+    },
+    {
+     "id": "alert",
+     "text": "This deployment has no provider connection, so its tasks wait. Create one to authenticate agent models."
+    },
+    {
+     "id": "alert",
+     "text": "No connection advertises a model yet. Add a connection above, and list the models it serves."
+    }
+   ],
+   "links": []
+  },
+  "sandboxes": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "select:select-one",
+     "label": "sandbox backend",
+     "settingId": "sandboxBackend",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "sandbox vcpus",
+     "settingId": "sandboxCpus",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "sandbox memory (mib)",
+     "settingId": "sandboxMemoryMb",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "sandbox disk (gib)",
+     "settingId": "sandboxDiskGb",
+     "disabled": false
+    },
+    {
+     "kind": "select:select-one",
+     "label": "sandbox network",
+     "settingId": "networkAccess",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "session sandbox idle ttl",
+     "settingId": "sessionSandboxIdleTtl",
+     "disabled": true
+    },
+    {
+     "kind": "select:select-one",
+     "label": "overcommit mode",
+     "settingId": "sandboxOvercommit",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "cpu overcommit",
+     "settingId": "sandboxCpuOvercommit",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "memory overcommit",
+     "settingId": "sandboxMemoryOvercommit",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "disk overcommit",
+     "settingId": "sandboxDiskOvercommit",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "auto cpu minimum",
+     "settingId": "sandboxOvercommitCpuMin",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "auto cpu maximum",
+     "settingId": "sandboxOvercommitCpuMax",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "auto memory minimum",
+     "settingId": "sandboxOvercommitMemoryMin",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "auto memory maximum",
+     "settingId": "sandboxOvercommitMemoryMax",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "cpu pressure target (%)",
+     "settingId": "sandboxOvercommitCpuPressureTarget",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "memory pressure target (%)",
+     "settingId": "sandboxOvercommitMemoryPressureTarget",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "host memory reserve (mib)",
+     "settingId": "sandboxMemoryReserveMb",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "disk floor (share of each volume)",
+     "settingId": "sandboxDiskFloorShare",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "disk floor minimum (mib)",
+     "settingId": "sandboxDiskFloorMinMb",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes namespace",
+     "settingId": "k8sNamespace",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Reset to default",
+     "settingId": "k8sNamespace",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes sandbox pod image",
+     "settingId": "k8sSandboxImage",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes granule vm pod image",
+     "settingId": "k8sGranuleImage",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes workspace directory",
+     "settingId": "k8sWorkspace",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes git & model proxy host",
+     "settingId": "k8sGitProxyHost",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes sandbox service",
+     "settingId": "k8sSandboxService",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes node selector",
+     "settingId": "k8sNodeSelector",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes sandbox serviceaccount",
+     "settingId": "k8sServiceAccount",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "priority class for interactive sessions",
+     "settingId": "k8sPriorityClassInteractive",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "priority class for agent runs",
+     "settingId": "k8sPriorityClassAgent",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "priority class for ci jobs",
+     "settingId": "k8sPriorityClassCi",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes deployment",
+     "settingId": "k8sDeployment",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes container",
+     "settingId": "k8sContainer",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "kubectl binary",
+     "settingId": "k8sKubectl",
+     "disabled": false
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "run kubernetes sandbox containers privileged needs restart takes effect when the",
+     "settingId": "k8sPrivileged",
+     "disabled": false
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "cluster cni enforces networkpolicy for network: none runs needs restart takes ef",
+     "settingId": "k8sNetworkPolicy",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "custom sandbox image (oci reference)",
+     "settingId": "sandboxImage",
+     "disabled": false
+    }
+   ],
+   "notices": [
+    {
+     "id": "alert",
+     "text": "Not in effect on this deployment: its sandboxes are directories on the daemon's own machine, and a host-directory sandbox has no CPU, memory or disk shape of its own -- a run here uses whatever the host has. These are still saved, and would"
+    }
+   ],
+   "links": [
+    {
+     "text": "docs/sandbox-image-contract.md",
+     "href": "https://github.com/ai-on-gke/grain/blob/main/docs/sandbox-image-contract.md"
+    }
+   ]
+  },
+  "executors": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "see system → sandboxes",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "issue token",
+     "settingId": "",
+     "disabled": false
+    }
+   ],
+   "notices": [],
+   "links": []
+  },
+  "credentials": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "GCP key, not configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Gemini key, not configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "GitHub sandbox, not configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Self debug, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Bootstrap playbooks, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Registry push, not configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Package publish, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Image signing, not configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Interactive console, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Read issues, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Priority dispatch, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Durable, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Claude proxy, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "OpenAI proxy, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Gemini proxy, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "github host",
+     "settingId": "githubHost",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "speak plain http to github host for a test or mock github only; never for a real",
+     "settingId": "githubInsecureHttp",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "gcp project",
+     "settingId": "gcpProject",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "gcp service account email",
+     "settingId": "gcpServiceAccountEmail",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "gcp service account count",
+     "settingId": "gcpServiceAccountCount",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "secret",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "key",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:password",
+     "label": "value",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:submit",
+     "label": "set secret",
+     "settingId": "",
+     "disabled": false
+    }
+   ],
+   "notices": [
+    {
+     "id": "legacy-capabilities-vs-servers",
+     "text": "Not what you are looking for? Capabilities granted as <capability ID>#<method> come from capability servers, which are on Settings → Capabilities. The agent frameworks' keys are on the Models tab. How the two tabs differ"
+    },
+    {
+     "id": "alert",
+     "text": "Sandboxes clone and push with the deployment's git connections, set in Settings, Git connections. No GitHub credential here is a fallback for that work: the ones on this page are grain's own -- for pull requests, the merge queue, webhooks a"
+    },
+    {
+     "id": "config-managed-notice",
+     "text": "The GitHub host and GCP settings live in the config repo and are read-only here. Change them with a config pull request, or ask the Director to. View in config repo → tables/grain_config.json"
+    }
+   ],
+   "links": [
+    {
+     "text": "Settings → Capabilities",
+     "href": "/settings/capabilities"
+    },
+    {
+     "text": "How the two tabs differ",
+     "href": "https://github.com/ai-on-gke/grain/blob/main/docs/capability-servers-ui.md#legacy-capabilities"
+    },
+    {
+     "text": "View in config repo → tables/grain_config.json",
+     "href": "/config?path=tables%2Fgrain_config.json"
+    },
+    {
+     "text": "Settings → Capabilities",
+     "href": "/settings/capabilities"
+    },
+    {
+     "text": "https://grain.dev/capabilities/gchat",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgchat"
+    }
+   ]
+  },
+  "access": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "log out",
+     "settingId": "",
+     "disabled": false
+    }
+   ],
+   "notices": [],
+   "links": []
+  },
+  "preferences": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "input:radio",
+     "label": "auto",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:radio",
+     "label": "light",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:radio",
+     "label": "dark",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "select:select-one",
+     "label": "time zone",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:radio",
+     "label": "newest first",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:radio",
+     "label": "oldest first",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "customize sidebar",
+     "settingId": "",
+     "disabled": false
+    }
+   ],
+   "notices": [],
+   "links": []
+  },
+  "upgrade": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "settings → general → updates",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "postgresql dsn / connection url",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "migrate existing sqlite data (tasks, runs, settings, and secrets)",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "test connection",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:submit",
+     "label": "migrate database to postgresql",
+     "settingId": "",
+     "disabled": false
+    }
+   ],
+   "notices": [
+    {
+     "id": "alert",
+     "text": "Not available: this deployment was started with neither -upgrade-image nor -upgrade-src-dir configured (bwsalmon/agents#396, #645), so there is nothing here that can cut it over to another branch."
+    }
+   ],
+   "links": []
+  },
+  "caches": {
+   "readonlyFieldsets": 2,
+   "fields": [
+    {
+     "kind": "input:checkbox",
+     "label": "cache apt, pip, docker hub, npm and go module downloads for every sandbox on (de",
+     "settingId": "packageCacheEnabled",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "proxy cache max size (gib)",
+     "settingId": "packageCacheSizeGb",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "keep what ci jobs cache on the controller, so builds are warm across runs on (de",
+     "settingId": "actionsCacheEnabled",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "actions cache max size (gib)",
+     "settingId": "actionsCacheSizeGb",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "config-managed-notice",
+     "text": "These settings live in the config repo and are read-only here. Change them with a config pull request, or ask the Director to. View in config repo → tables/grain_config.json"
+    }
+   ],
+   "links": [
+    {
+     "text": "View in config repo → tables/grain_config.json",
+     "href": "/config?path=tables%2Fgrain_config.json"
+    }
+   ]
+  },
+  "engine": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "input:text",
+     "label": "poll interval",
+     "settingId": "pollInterval",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "max worker agents",
+     "settingId": "maxWorkers",
+     "disabled": false
+    },
+    {
+     "kind": "input:number",
+     "label": "max merges per repo branch",
+     "settingId": "maxMergesPerRepo",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "merge batch size",
+     "settingId": "mergeBatchSize",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "merge gather window",
+     "settingId": "mergeGatherWindow",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "config-managed-notice",
+     "text": "The poll interval and the merge queue settings live in the config repo and are read-only here. Change them with a config pull request, or ask the Director to. View in config repo → tables/grain_config.json"
+    },
+    {
+     "id": "alert",
+     "text": "Running at once, if every slot is full: 10 workers + 1 merger + 1 CI job = 12 concurrent runs on a host with 7 vCPU and 15.6 GiB, each with no cpu or memory limit at all (1.7 runs per core). Nothing here caps what one run takes, so the only"
+    }
+   ],
+   "links": [
+    {
+     "text": "View in config repo → tables/grain_config.json",
+     "href": "/config?path=tables%2Fgrain_config.json"
+    }
+   ]
+  },
+  "config-repo": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "export now",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "repository url",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "branch",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:password",
+     "label": "personal access token (optional)",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "use external config repository",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "show files",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "secrets repository url",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "secrets repository branch",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:password",
+     "label": "credential to push with (optional)",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "back up secrets here",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "input:password",
+     "label": "import a private key",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "import key",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [],
+   "links": []
+  },
+  "general": {
+   "readonlyFieldsets": 3,
+   "fields": [
+    {
+     "kind": "input:text",
+     "label": "environment name",
+     "settingId": "environmentName",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "show closed tasks by default off (default): a task list opens narrowed by \"state",
+     "settingId": "showClosedByDefault",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "lock settings in ui (require config repo prs) off (default): settings are editab",
+     "settingId": "settingsLocked",
+     "disabled": false
+    },
+    {
+     "kind": "div",
+     "label": "check the upgrade",
+     "settingId": "upgradeCheckMode",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "hold the queue until the check is done off (default): the check runs at the head",
+     "settingId": "upgradeCheckPausesPipeline",
+     "disabled": true
+    },
+    {
+     "kind": "div",
+     "label": "channel",
+     "settingId": "autoUpgradeChannel",
+     "disabled": true
+    },
+    {
+     "kind": "input:time",
+     "label": "time of day",
+     "settingId": "autoUpgradeTime",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "config-managed-notice",
+     "text": "These settings live in the config repo and are read-only here. Change them with a config pull request, or ask the Director to. View in config repo → tables/grain_config.json"
+    }
+   ],
+   "links": [
+    {
+     "text": "View in config repo → tables/grain_config.json",
+     "href": "/config?path=tables%2Fgrain_config.json"
+    }
+   ]
+  },
+  "git": {
+   "readonlyFieldsets": 1,
+   "fields": [],
+   "notices": [
+    {
+     "id": "config-managed-notice",
+     "text": "These settings live in the config repo and are read-only here. Change them with a config pull request, or ask the Director to. View in config repo → tables/grain_config.json View in config repo → tables/repo_config.json"
+    }
+   ],
+   "links": [
+    {
+     "text": "View in config repo → tables/grain_config.json",
+     "href": "/config?path=tables%2Fgrain_config.json"
+    },
+    {
+     "text": "View in config repo → tables/repo_config.json",
+     "href": "/config?path=tables%2Frepo_config.json"
+    },
+    {
+     "text": "Settings → Legacy capabilities",
+     "href": "/settings/credentials"
+    }
+   ]
+  },
+  "repositories": {
+   "readonlyFieldsets": 1,
+   "fields": [
+    {
+     "kind": "input:checkbox",
+     "label": "grain/config: Base-branch repair PRs may merge without a human when their CI is ",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "config-managed-notice",
+     "text": "These settings live in the config repo and are read-only here. Change them with a config pull request, or ask the Director to. View in config repo → tables/repo_config.json View in config repo → tables/grain_config.json"
+    }
+   ],
+   "links": [
+    {
+     "text": "View in config repo → tables/repo_config.json",
+     "href": "/config?path=tables%2Frepo_config.json"
+    },
+    {
+     "text": "View in config repo → tables/grain_config.json",
+     "href": "/config?path=tables%2Fgrain_config.json"
+    },
+    {
+     "text": "grain/config",
+     "href": "/repos/grain/config"
+    },
+    {
+     "text": "Default branch",
+     "href": "/repos/grain/config/settings/releases"
+    },
+    {
+     "text": "Not read",
+     "href": "/repos/grain/config/settings/advanced"
+    },
+    {
+     "text": "GitHub CI",
+     "href": "/repos/grain/config/settings/ci"
+    },
+    {
+     "text": "Not listed",
+     "href": "/settings/git"
+    },
+    {
+     "text": "merge queue",
+     "href": "/repos/grain/config/settings/merge-queue"
+    }
+   ]
+  },
+  "tasks": {
+   "readonlyFieldsets": 2,
+   "fields": [
+    {
+     "kind": "input:checkbox",
+     "label": "queue new tasks immediately by default on (default): a new task's own \"queue imm",
+     "settingId": "approvedByDefault",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "auto-merge new tasks by default on (default): a new task's own \"auto-merge once ",
+     "settingId": "autoMergeByDefault",
+     "disabled": true
+    },
+    {
+     "kind": "div",
+     "label": "default legacy capabilities",
+     "settingId": "defaultCapabilities",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "work through the backlog newest-first the list runs top-to-bottom in the order t",
+     "settingId": "newestFirst",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "max unreviewed follow-up depth",
+     "settingId": "maxAutoSubmitDepth",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "max unreviewed follow-up per task",
+     "settingId": "maxAutoSubmitFanOut",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "config-managed-notice",
+     "text": "These settings live in the config repo and are read-only here. Change them with a config pull request, or ask the Director to. View in config repo → tables/grain_config.json View in config repo → tables/custom_field.json"
+    }
+   ],
+   "links": [
+    {
+     "text": "View in config repo → tables/grain_config.json",
+     "href": "/config?path=tables%2Fgrain_config.json"
+    },
+    {
+     "text": "View in config repo → tables/custom_field.json",
+     "href": "/config?path=tables%2Fcustom_field.json"
+    }
+   ]
+  },
+  "agents": {
+   "readonlyFieldsets": 4,
+   "fields": [
+    {
+     "kind": "input:number",
+     "label": "max agent turns",
+     "settingId": "maxAgentTurns",
+     "disabled": true
+    },
+    {
+     "kind": "textarea:textarea",
+     "label": "standing instructions for every run",
+     "settingId": "promptExtension",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "branch name template",
+     "settingId": "taskBranchTemplate",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "deployment id",
+     "settingId": "deploymentId",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "config-managed-notice",
+     "text": "These settings live in the config repo and are read-only here. Change them with a config pull request, or ask the Director to. View in config repo → tables/grain_config.json"
+    }
+   ],
+   "links": [
+    {
+     "text": "View in config repo → tables/grain_config.json",
+     "href": "/config?path=tables%2Fgrain_config.json"
+    },
+    {
+     "text": "Settings → Git",
+     "href": "/settings/git"
+    }
+   ]
+  },
+  "capabilities": {
+   "readonlyFieldsets": 2,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "+ add server",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "add rule",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "save policy",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "config-managed-notice",
+     "text": "These settings live in the config repo and are read-only here. Change them with a config pull request, or ask the Director to. View in config repo → tables/grain_config.json View in config repo → tables/api_scope_set.json"
+    },
+    {
+     "id": "capability-servers-vs-legacy",
+     "text": "This is grain's current capability system. The older capabilities built into grain itself, granted by a bare name such as gcp-key, and their credentials are on Legacy capabilities."
+    }
+   ],
+   "links": [
+    {
+     "text": "View in config repo → tables/grain_config.json",
+     "href": "/config?path=tables%2Fgrain_config.json"
+    },
+    {
+     "text": "View in config repo → tables/api_scope_set.json",
+     "href": "/config?path=tables%2Fapi_scope_set.json"
+    },
+    {
+     "text": "Guide to this page",
+     "href": "https://github.com/ai-on-gke/grain/blob/main/docs/capability-servers-ui.md"
+    },
+    {
+     "text": "Legacy capabilities",
+     "href": "/settings/credentials"
+    },
+    {
+     "text": "config-map configurable files and secrets placed in the sand",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fconfig-map"
+    },
+    {
+     "text": "gchat post to allowlisted google chat spaces as a bot, one w",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgchat"
+    },
+    {
+     "text": "gcp per-attempt keys for gcp permission sets' service accoun",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgcp"
+    },
+    {
+     "text": "git repositories cloned through a per-attempt git proxy toke",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgit"
+    },
+    {
+     "text": "host-script operator-defined bash scripts, which a sandbox r",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fhost-script"
+    },
+    {
+     "text": "model-proxy per-attempt tokens on a model vendor's inference",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fmodel-proxy"
+    }
+   ]
+  },
+  "ci": {
+   "readonlyFieldsets": 4,
+   "fields": [
+    {
+     "kind": "input:number",
+     "label": "ci jobs per run",
+     "settingId": "ciJobsPerRun",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "ci queue age boost",
+     "settingId": "ciAgeBoost",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "ci capacity reserved after",
+     "settingId": "ciReserveAfter",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci runs kept",
+     "settingId": "ciRunHistory",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci step output kept (mib)",
+     "settingId": "ciStepOutputMb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci step output age (days)",
+     "settingId": "ciStepOutputDays",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci output per run (kib)",
+     "settingId": "ciRunOutputKb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci job cache size (mib)",
+     "settingId": "ciCacheMb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci job cache entries",
+     "settingId": "ciCacheEntries",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci job cache age (days)",
+     "settingId": "ciCacheDays",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci artifacts kept (mib)",
+     "settingId": "ciArtifactMb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci artifacts age (days)",
+     "settingId": "ciArtifactDays",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci artifacts per run (mib)",
+     "settingId": "ciArtifactRunMb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "largest ci artifact (mib)",
+     "settingId": "ciArtifactFileMb",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "config-managed-notice",
+     "text": "These settings live in the config repo and are read-only here. Change them with a config pull request, or ask the Director to. View in config repo → tables/grain_config.json View in config repo → tables/repo_config.json"
+    }
+   ],
+   "links": [
+    {
+     "text": "View in config repo → tables/grain_config.json",
+     "href": "/config?path=tables%2Fgrain_config.json"
+    },
+    {
+     "text": "View in config repo → tables/repo_config.json",
+     "href": "/config?path=tables%2Frepo_config.json"
+    }
+   ]
+  },
+  "memory": {
+   "readonlyFieldsets": 1,
+   "fields": [
+    {
+     "kind": "textarea:textarea",
+     "label": "memory carried by every run",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Revert this deployment's memory",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Save this deployment's memory",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "Add a repo to write a memory for",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "config-managed-notice",
+     "text": "These settings live in the config repo and are read-only here. Change them with a config pull request, or ask the Director to. View in config repo → memory/deployment.md"
+    }
+   ],
+   "links": [
+    {
+     "text": "View in config repo → memory/deployment.md",
+     "href": "/config?path=memory%2Fdeployment.md"
+    }
+   ]
+  }
+ }
+}

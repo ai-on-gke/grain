@@ -39,7 +39,7 @@ const SANDBOX_BACKEND_LABELS = {
 };
 
 const SANDBOX_BACKEND_ISOLATION = {
-  none: "No local or cluster sandboxes are created; tasks run only on remote executors.",
+  none: "No local or cluster sandboxes are created, so no task gets a sandbox to run in.",
   host: "Each run executes directly in a directory on the daemon machine with no container or VM isolation.",
   container:
     "Each run executes in an unprivileged local Docker container sharing the host kernel (no VM).",

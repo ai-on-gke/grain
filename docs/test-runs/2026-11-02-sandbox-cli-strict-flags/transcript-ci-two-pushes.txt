@@ -1,0 +1,12 @@
+commit.1 9b8983dd8e587ff31f945ae1865b1c3176a0562f
+commit.2 e0450936ab158b2d41ed41f365ec52da0171203b
+--- wait.1
+grain CI failed on 9b8983dd8e58 (run ad874071cca18e1c, cancelled, waited 5s; wait credit used: 5s / 45m0s).
+Grain cancelled this run itself: superseded by run 76c92248b90e0c48, started for the same task
+That run is on e0450936ab15, a newer commit on this branch, and its verdict is the branch's: run 'grain ci wait' again for it.
+Failing: a (cancelled)
+Read a failing job's steps: grain ci log ad874071cca18e1c --job <job>
+exit=1
+--- wait.2
+grain CI passed on e0450936ab15 (run 76c92248b90e0c48, waited 15s; wait credit used: 19s / 45m0s): a
+exit=0
