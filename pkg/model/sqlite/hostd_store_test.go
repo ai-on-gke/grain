@@ -106,9 +106,9 @@ func TestHostdRegistryTokens(t *testing.T) {
 	}
 }
 
-// Migration 90 adds the registry to a schema-89 store, with the
+// Migration 92 adds the registry to a schema-91 store, with the
 // co-located hostd in it as local.
-func TestMigration90AddsHostdRegistry(t *testing.T) {
+func TestMigration92AddsHostdRegistry(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	for _, stmt := range []string{"DROP TABLE `hostd`", "DROP TABLE `hostd_token`"} {
@@ -116,18 +116,18 @@ func TestMigration90AddsHostdRegistry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 89 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 91 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-89 store: %v", err)
+		t.Fatalf("migrating a version-91 store: %v", err)
 	}
 	h, err := store.GetHostd(ctx, model.LocalHostd)
 	if err != nil || h == nil {
-		t.Fatalf("local hostd after migration 90 = %+v, %v", h, err)
+		t.Fatalf("local hostd after migration 92 = %+v, %v", h, err)
 	}
 	if _, _, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-2"}); err != nil {
-		t.Fatalf("creating a hostd after migration 90: %v", err)
+		t.Fatalf("creating a hostd after migration 92: %v", err)
 	}
 	var version int
 	if err := db.QueryRowContext(ctx, "SELECT `version` FROM `grain_schema` WHERE `id` = 1").Scan(&version); err != nil {

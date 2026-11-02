@@ -451,6 +451,7 @@ var routeQueries = map[string]map[string]string{
 		"ref":        "Only runs of a branch matching this, by any part of its name.",
 		"conclusion": "Only runs ending so: failure, errored, cancelled, skipped, success, running or pending; comma-separated for several.",
 		"job":        "Only runs with this job, by name or id.",
+		"workflow":   "Only runs of this workflow, by file name (e.g. nightly.yml), stem (nightly), path, or display name.",
 		"since":      "How far back: a span (24h, 7d) or a date.",
 		"until":      "Only runs started before this: a span back from now (24h, 7d) or a date; with since, a window.",
 		"view":       "compact for each run's identity, conclusion and a line per job that did not succeed -- no steps, faults named once by digest; full (the default) for the whole listing.",

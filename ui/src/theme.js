@@ -168,7 +168,7 @@ const lightPalette = {
     warning: { main: "#a8621c" },
     info: { main: "#3f6b8a" },
     background: { default: "#f7f6f3", paper: "#ffffff" },
-    text: { primary: "#24221d", secondary: "#6e6a60" },
+    text: { primary: "#24221d", secondary: "#524e46" },
     divider: "#e6e3dc",
   },
 };

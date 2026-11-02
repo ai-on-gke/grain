@@ -1112,7 +1112,7 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		Ref:                    strings.TrimSpace(ref),
 		Commit:                 strings.TrimSpace(req.Commit),
 		Event:                  event,
-		RequestedBy:            s.tasks.actor(r.Context()).ID,
+		RequestedBy:            s.tasks.requestActor(r.Context()).Actor.ID,
 		Workflow:               strings.TrimSpace(req.Workflow),
 		Jobs:                   req.Jobs,
 		Recheck:                req.Recheck,
@@ -1157,7 +1157,7 @@ func (c *Client) withholdReleaseSecrets(ctx context.Context, repo model.RepoRef,
 	if event != ci.EventManual && event != ci.EventRelease {
 		return "", nil
 	}
-	if c.actor(ctx).Kind == model.PrincipalHuman {
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 		return "", nil
 	}
 	return fmt.Sprintf("a %s run of %s started by a caller that is not a person places no capabilities or release secrets",
@@ -1297,9 +1297,10 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 		page = ci.RunPage{}
 	}
 	var actions []ci.Run
+	var actionsMatched int
 	var note string
 	if filter.Provider == "" || strings.EqualFold(filter.Provider, ci.ProviderGitHubActions) {
-		actions, note = s.tasks.listActionsRuns(r.Context(), repo, filter, limit)
+		actions, actionsMatched, note = s.tasks.listActionsRunsCounted(r.Context(), repo, filter, limit)
 	}
 	merged := make([]ci.Run, 0, len(page.Runs)+len(actions))
 	for _, run := range page.Runs {
@@ -1317,8 +1318,8 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 		merged = merged[:limit]
 	}
 	page.Runs = merged
-	page.Matched += len(actions)
-	page.Stored += len(actions)
+	page.Matched += actionsMatched
+	page.Stored += actionsMatched
 	faults := s.tasks.CISharedFaults(r.Context())
 	if compact {
 		resp := ciCompactRuns(page, faults)
@@ -1426,6 +1427,7 @@ func ciRunFilterFrom(query url.Values, now time.Time) (ci.RunFilter, error) {
 		Repo:       strings.TrimSpace(query.Get("repo")),
 		Ref:        strings.TrimSpace(query.Get("ref")),
 		Job:        strings.TrimSpace(query.Get("job")),
+		Workflow:   strings.TrimSpace(query.Get("workflow")),
 		Descending: true,
 	}
 	for _, value := range query["conclusion"] {

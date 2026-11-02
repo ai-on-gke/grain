@@ -808,6 +808,26 @@ func (c *StateRepoPullRequestClient) ListWorkflowRuns(owner, name, headSHA strin
 	return nil, nil
 }
 
+func (c *StateRepoPullRequestClient) RerequestCheckSuite(owner, name string, checkSuiteID int64) error {
+	if c.isDisabledConfigRepo(owner, name) {
+		return errExternalConfigRepoNoNativePR
+	}
+	if !c.isLocal(owner, name) {
+		return c.Client.RerequestCheckSuite(owner, name, checkSuiteID)
+	}
+	return &github.Error{Status: 422, Body: []byte(`{"message":"local state repo has no check suites"}`)}
+}
+
+func (c *StateRepoPullRequestClient) RerequestCheckRun(owner, name string, checkRunID int64) error {
+	if c.isDisabledConfigRepo(owner, name) {
+		return errExternalConfigRepoNoNativePR
+	}
+	if !c.isLocal(owner, name) {
+		return c.Client.RerequestCheckRun(owner, name, checkRunID)
+	}
+	return &github.Error{Status: 422, Body: []byte(`{"message":"local state repo has no check runs"}`)}
+}
+
 func (c *StateRepoPullRequestClient) ListPullRequestFiles(owner, name string, number int) ([]string, error) {
 	if c.isDisabledConfigRepo(owner, name) {
 		return nil, errExternalConfigRepoNoNativePR

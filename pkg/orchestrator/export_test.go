@@ -408,3 +408,6 @@ func ReconcileTaskCI(ctx context.Context, deps Deps, task model.Task, now time.T
 func SessionKeysForTest(ctx context.Context, deps Deps, task model.Task) (sandboxKey, grantsKey string) {
 	return sessionSandboxKey(adoptedSessionShape(ctx, deps, task), task, nil), sessionGrantsKey(task)
 }
+
+// WriteExecutableStub is writeExecutableStub for tests in orchestrator_test.
+var WriteExecutableStub = writeExecutableStub

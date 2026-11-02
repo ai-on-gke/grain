@@ -298,7 +298,10 @@ var errNoGitHubClientYet = errors.New(
 // client is up there are none to serve.
 type sandboxExternalCI struct{}
 
-var _ ci.ExternalRuns = sandboxExternalCI{}
+var (
+	_ ci.ExternalRuns        = sandboxExternalCI{}
+	_ ci.ExternalRunsCounter = sandboxExternalCI{}
+)
 
 func (sandboxExternalCI) FindExternalRuns(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, string) {
 	client := liveSandboxCLI.Load()
@@ -306,6 +309,14 @@ func (sandboxExternalCI) FindExternalRuns(ctx context.Context, f ci.RunFilter, l
 		return nil, ""
 	}
 	return client.ExternalCIRuns().FindExternalRuns(ctx, f, limit)
+}
+
+func (sandboxExternalCI) FindExternalRunsCounted(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, int, string) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return nil, 0, ""
+	}
+	return ci.FindExternalRunsCounted(ctx, client.ExternalCIRuns(), f, limit)
 }
 
 func (sandboxExternalCI) ExternalRun(ctx context.Context, id string) (ci.Run, bool, error) {

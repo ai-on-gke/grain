@@ -350,9 +350,7 @@ func guestRepairStubs(t *testing.T, docker0 string) (bin, ipLog, systemctlLog st
 
 func writeGuestStub(t *testing.T, dir, name, script string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
-		t.Fatalf("writing a %s stand-in: %v", name, err)
-	}
+	orchestrator.WriteExecutableStub(t, filepath.Join(dir, name), script)
 }
 
 // readStubLog is a stand-in's log, or "" where it was never invoked and so

@@ -22,7 +22,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -96,13 +95,7 @@ case "$*" in
 esac
 printf 'Running|True|docker-pullable://example/granule@sha256:abc|\n'
 `
-	src := bin + ".src"
-	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("install", "-m", "0755", src, bin).CombinedOutput(); err != nil {
-		t.Fatalf("installing fake kubectl: %v: %s", err, out)
-	}
+	writeExecutableStub(t, bin, script)
 	return bin
 }
 

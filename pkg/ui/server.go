@@ -144,14 +144,17 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer release()
-		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name, Source: model.SourceExternalToken}
 		r = r.WithContext(withExternalToken(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), tok))
 	}
 	if !s.singleTenantGate(w, r, cfg) {
 		return
 	}
+	if s.tasks != nil {
+		r = r.WithContext(s.tasks.withOperatorActor(r.Context()))
+	}
 	if tok := externalTokenFromContext(r.Context()); tok != nil {
-		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name, Source: model.SourceExternalToken}
 		r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted))
 	} else {
 		p, method, ok := extractPrincipal(r)
@@ -166,10 +169,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			// No verified principal at all. Only a caller this daemon
 			// already trusts as itself -- the access code's, or an
 			// in-process request -- runs as the deployment's own actor
-			// (Client.actor). The gate above already refused anybody else
+			// (RequestActor). The gate above already refused anybody else
 			// on every route but its own open ones (singleTenantOpenRoute).
 			writeError(w, http.StatusUnauthorized, errors.New(singleTenantRefusal))
 			return
+		}
+		if !ok {
+			r = r.WithContext(withRequestSource(r.Context(), trustedRequestSource(r)))
 		}
 	}
 	// Unarmed until a configuration write's guard finds the deployment

@@ -130,11 +130,12 @@ func (c *Client) CreateHostd(ctx context.Context, req CreateHostdRequest) (Issue
 		return IssuedHostdToken{}, validationErrorf("%v", err)
 	}
 	h, token, err := c.Store.CreateHostd(ctx, model.Hostd{
-		Name: name, Owner: req.Owner, Labels: req.Labels, CreatedBy: c.actor(ctx).ID,
+		Name: name, Owner: req.Owner, Labels: req.Labels, CreatedBy: RequestActor(ctx).Actor.ID,
 	})
 	if err != nil {
 		return IssuedHostdToken{}, hostdError(err)
 	}
+	c.auditHostd(ctx, h.Name, "registered hostd "+h.Name)
 	return IssuedHostdToken{Hostd: *h, Token: token}, nil
 }
 
@@ -151,6 +152,7 @@ func (c *Client) RotateHostdToken(ctx context.Context, name string) (IssuedHostd
 	if err != nil {
 		return IssuedHostdToken{}, err
 	}
+	c.auditHostd(ctx, name, "rotated hostd "+name+"'s token")
 	return IssuedHostdToken{Hostd: *h, Token: token}, nil
 }
 
@@ -170,6 +172,7 @@ func (c *Client) RevokeHostd(ctx context.Context, name string) (model.Hostd, err
 	if _, err := c.Store.ClearNotification(ctx, "hostd-disconnected:"+name, "automation:hostd"); err != nil {
 		log.Printf("grain ui: clearing hostd-disconnected:%s after revoke: %v", name, err)
 	}
+	c.auditHostd(ctx, name, "revoked hostd "+name+" and its tokens")
 	return *h, nil
 }
 
@@ -189,6 +192,7 @@ func (c *Client) UpdateHostd(ctx context.Context, name string, req UpdateHostdRe
 	if err != nil {
 		return model.Hostd{}, hostdError(err)
 	}
+	c.auditHostd(ctx, name, "set hostd "+name+"'s owner or labels")
 	return *h, nil
 }
 
@@ -246,4 +250,16 @@ func (s *Server) handleUpdateHostd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h)
+}
+
+// auditHostd records a change to the hostd registry in config_audit, with
+// the person or agent who made it (ui.RequestActor). The summary names the
+// hostd and never carries its token.
+func (c *Client) auditHostd(ctx context.Context, name, summary string) {
+	by := RequestActor(ctx)
+	if _, err := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+		By: by.Actor, OnBehalfOf: by.OnBehalfOf, Surface: "hostd:" + name, Summary: summary,
+	}); err != nil {
+		log.Printf("grain hostd: recording %q in the config audit: %v", summary, err)
+	}
 }

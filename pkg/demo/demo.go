@@ -162,8 +162,9 @@ type Options struct {
 	// reconcile loop's suite step, and its release step too with
 	// -github-sim. Zero runs no loop at all.
 	Reconcile time.Duration
-	// HostExecutor is -host-executor: which deployment Settings -> Models'
-	// run locations are resolved as (demoCLIRunConfig).
+	// HostExecutor is -host-executor: which deployment Settings' run
+	// locations (agent CLIs and capability servers) are resolved as
+	// (demoCLIRunConfig).
 	HostExecutor string
 	// HostModeInstall is -host-mode-install: GET /api/config reports the
 	// install notice an unmigrated host-mode install gets
@@ -176,8 +177,8 @@ type Options struct {
 	GithubWebhookAddr string
 }
 
-// demoCLIRunConfig is the daemon config Settings -> Models' run locations
-// are resolved under, by -host-executor:
+// demoCLIRunConfig is the daemon config Settings' run locations (agent CLIs
+// and capability servers) are resolved under, by -host-executor:
 //   - "" (the default): a development daemon on the bare machine, which
 //     offers only host, with claude set to the container a release
 //     before v2.3.0 could have stored -- shown as running on the host,
@@ -194,7 +195,7 @@ type Options struct {
 //     in to it (grain hostd -server), with a real one dialing in over
 //     loopback (startDemoRemoteHostd), offering what "hostd"'s does;
 //   - "hostd-remote-down": the same daemon with no hostd dialed in.
-func demoCLIRunConfig(executor string) (daemon.Config, error) {
+func demoCLIRunConfig(ctx context.Context, executor string) (daemon.Config, error) {
 	inContainer := whererun.Detection{Host: false, Signal: whererun.InContainerEnv + "=1, which grain's deployment image sets"}
 	noSocketDir := func(string) bool { return false }
 	var c daemon.Config
@@ -210,7 +211,7 @@ func demoCLIRunConfig(executor string) (daemon.Config, error) {
 	case "hostd-down":
 		c = daemon.Config{AgyRun: model.CLIRunHost, HostdSocket: filepath.Join(os.TempDir(), "grain-demo-hostd-not-running.sock")}
 	case "hostd":
-		socket, err := startDemoHostd()
+		socket, err := startDemoHostd(ctx)
 		if err != nil {
 			return daemon.Config{}, err
 		}
@@ -218,7 +219,7 @@ func demoCLIRunConfig(executor string) (daemon.Config, error) {
 	case "hostd-remote", "hostd-remote-down":
 		remote := &hostd.Remote{Token: "grain-demo-hostd-token"}
 		if executor == "hostd-remote" {
-			if err := startDemoRemoteHostd(remote); err != nil {
+			if err := startDemoRemoteHostd(ctx, remote); err != nil {
 				return daemon.Config{}, err
 			}
 		}
@@ -229,6 +230,17 @@ func demoCLIRunConfig(executor string) (daemon.Config, error) {
 	exec := daemon.DetectHostExecutor(c, inContainer, noSocketDir)
 	c.HostExec = &exec
 	return c, nil
+}
+
+// demoCapabilityHostd is the client run: host capability servers reach the
+// demo's grain hostd through, or nil where -host-executor has none
+// (matching daemon.Config's capabilityHostd).
+func demoCapabilityHostd(c daemon.Config) *hostd.Client {
+	if c.HostExec == nil || c.HostExec.Kind != daemon.HostExecutorHostd {
+		return nil
+	}
+	client := c.HostExec.HostdClient()
+	return &client
 }
 
 // demoGitHubToken is the demo's one fake GitHub token, the "default"
@@ -258,7 +270,8 @@ func Run(opts Options) error {
 	if opts.CloudIdentityEndpoint != "" {
 		cfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(opts.CloudIdentityEndpoint))
 	}
-	runCfg, err := demoCLIRunConfig(opts.HostExecutor)
+	ctx := context.Background()
+	runCfg, err := demoCLIRunConfig(ctx, opts.HostExecutor)
 	if err != nil {
 		return err
 	}
@@ -341,7 +354,6 @@ func Run(opts Options) error {
 	}
 
 	store := model.New(db)
-	ctx := context.Background()
 	if err := store.Init(ctx); err != nil {
 		return fmt.Errorf("grain demo: applying the schema: %v", err)
 	}
@@ -394,7 +406,7 @@ func Run(opts Options) error {
 		}
 		v, err := cfg.Secrets.Resolve(ctx, name)
 		return v, err == nil
-	}, store)
+	}, store, demoCapabilityHostd(runCfg))
 	if err != nil {
 		return fmt.Errorf("grain demo: %v", err)
 	}
@@ -2289,23 +2301,31 @@ func IsLoopbackHostPort(hostPort string) bool {
 // Neither binary need exist: nothing in the demo asks hostd to start one,
 // and Settings only lists what it offers. hostd refuses to run as root
 // and runs on Linux only; either way the demo shows hostd not answering.
-func startDemoHostd() (string, error) {
+func startDemoHostd(ctx context.Context) (string, error) {
 	srv, err := demoHostdServer("hostd")
 	if err != nil {
 		return "", err
 	}
 	srv.Socket = filepath.Join(filepath.Dir(srv.Allowlist), "hostd.sock")
+	failed := make(chan struct{})
 	go func() {
-		if err := srv.Serve(context.Background()); err != nil {
+		if err := srv.Serve(ctx); err != nil {
 			log.Printf("grain demo: the demo's grain hostd is not running, so Settings shows it not answering: %v", err)
+			close(failed)
 		}
+		<-ctx.Done()
+		_ = os.RemoveAll(filepath.Dir(srv.Allowlist))
 	}()
 	// Up before the first page asks, so Settings never catches it starting.
 	for i := 0; i < 200; i++ {
 		if _, err := os.Stat(srv.Socket); err == nil {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-failed:
+			return srv.Socket, nil
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	return srv.Socket, nil
 }
@@ -2339,25 +2359,41 @@ func demoHostdServer(executor string) (*hostd.Server, error) {
 // in to a daemon in a cluster. It is connected before it returns, so
 // Settings never catches it connecting, or it is left to Settings to say
 // it is not.
-func startDemoRemoteHostd(remote *hostd.Remote) error {
+func startDemoRemoteHostd(ctx context.Context, remote *hostd.Remote) error {
 	srv, err := demoHostdServer("hostd-remote")
 	if err != nil {
 		return err
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
+		_ = os.RemoveAll(filepath.Dir(srv.Allowlist))
 		return fmt.Errorf("grain demo: -host-executor=hostd-remote: %v", err)
 	}
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+	}()
 	go func() { _ = http.Serve(ln, remote) }()
 	srv.Remote = hostd.Dialer{Server: "http://" + ln.Addr().String(), Token: remote.Token, Host: "cloudtop", Build: srv.Build}.Dial
+	failed := make(chan struct{})
 	go func() {
-		if err := srv.Serve(context.Background()); err != nil {
+		if err := srv.Serve(ctx); err != nil {
 			log.Printf("grain demo: the demo's grain hostd is not running, so Settings shows none connected: %v", err)
+			close(failed)
+		}
+		<-ctx.Done()
+		_ = os.RemoveAll(filepath.Dir(srv.Allowlist))
+	}()
+	wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	go func() {
+		select {
+		case <-failed:
+			cancel()
+		case <-wctx.Done():
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = remote.WaitConnected(ctx)
+	_ = remote.WaitConnected(wctx)
 	return nil
 }
 

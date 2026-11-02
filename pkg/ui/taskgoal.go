@@ -55,7 +55,7 @@ func (c *Client) SetGoal(ctx context.Context, id string, goal model.GoalDecl) er
 	if err != nil {
 		return err
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	now := c.now()
 	if err := c.Store.SetTaskGoal(ctx, id, goal, model.PrincipalString(actor), now); err != nil {
 		return err
@@ -91,7 +91,7 @@ func (c *Client) ClearGoal(ctx context.Context, id string) error {
 	if err := c.Store.ClearTaskGoal(ctx, id); err != nil {
 		return err
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	now := c.now()
 	_, _ = c.Store.ClearNotification(ctx, model.NotificationSubject(model.FamilyNoProgress, id), model.PrincipalString(actor))
 	if task.DeferredAt != nil && deferredByGoal(ctx, c.Store, id, *goal) {

@@ -561,6 +561,16 @@ GRAIN_GCP_SERVICE_ACCOUNT_KEY_FILE="${GRAIN_GCP_SERVICE_ACCOUNT_KEY_FILE:-}"
 # projects/<NUMBER>/iap_web/compute/services/<BACKEND_SERVICE_ID>.
 # "none" turns that off.
 GRAIN_IAP_RESOURCE="${GRAIN_IAP_RESOURCE:-}"
+# The IAP backend audience (-ui-iap-audience) the UI checks signed
+# X-Goog-IAP-JWT-Assertion headers against, e.g.
+# /projects/<NUMBER>/global/backendServices/<ID> (or several separated
+# by commas). Unset on a re-run keeps whatever the installed
+# grain-daemon.service already passes (resolve_iap_audience); empty or
+# "none" clears an installed one so no assertion is verified.
+GRAIN_IAP_AUDIENCE_GIVEN=0
+if [ "${GRAIN_IAP_AUDIENCE+set}" = set ]; then
+  GRAIN_IAP_AUDIENCE_GIVEN=1
+fi
 GRAIN_IAP_AUDIENCE="${GRAIN_IAP_AUDIENCE:-}"
 # Who the daemon admits as themselves once IAP (or another identity
 # verifier) has authenticated them (-ui-allowed-principals): a
@@ -1124,7 +1134,10 @@ Recognized variables:
 
   GRAIN_IAP_AUDIENCE        the IAP backend audience the UI checks
                              X-Goog-IAP-JWT-Assertion against, identifying people
-                             IAP let through by it (-ui-iap-audience)
+                             IAP let through by it (-ui-iap-audience), e.g.
+                             /projects/<NUMBER>/global/backendServices/<ID>.
+                             Unset keeps the installed unit's flag; empty or
+                             "none" clears it
 
   GRAIN_SECRETS_REPO_URL    git URL of the repository this deployment's encrypted
                              secrets file is backed up to (pkg/secretsrepo),
@@ -2610,6 +2623,86 @@ resolve_allowed_principals() {
 # --- end of the allowed principals ---------------------------------------------
 
 if ! resolve_allowed_principals /etc/systemd/system/grain-daemon.service; then
+  exit 2
+fi
+
+# --- the IAP audience (GRAIN_IAP_AUDIENCE) -------------------------------------
+
+# normalize_iap_audience prints VALUE the way the daemon reads it
+# (pkg/ui/principal.go's splitAudiences: comma-separated audiences, blanks
+# around each entry dropped, empty ones skipped), or says on stderr why
+# it cannot be used and fails. Dropping spaces and refusing whitespace,
+# quotes, backslashes, '$' and '%' inside an entry keeps the unquoted
+# ExecStart in grain-daemon.service from splitting the value into separate
+# daemon arguments or interpolating systemd specifiers.
+normalize_iap_audience() {
+  local value="$1" origin="$2" raw entry parts=() out=""
+  raw="${value//$'\n'/,}"
+  IFS=, read -r -a parts <<<"$raw"
+  for entry in "${parts[@]}"; do
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    entry="${entry%"${entry##*[![:space:]]}"}"
+    if [ -z "$entry" ]; then
+      continue
+    fi
+    if [[ "$entry" =~ [[:space:]\"\'\\\$%] ]]; then
+      echo "setup.sh: IAP audience \"$entry\" ($origin) must not contain spaces, quotes, backslashes, '\$' or '%'" >&2
+      return 1
+    fi
+    if [[ "$entry" == -* ]]; then
+      echo "setup.sh: IAP audience \"$entry\" ($origin) must not start with '-'" >&2
+      return 1
+    fi
+    out="${out:+$out,}${entry}"
+  done
+  if [ -z "$out" ]; then
+    echo "setup.sh: IAP audience \"$value\" ($origin) names no audience at all" >&2
+    return 1
+  fi
+  printf '%s\n' "$out"
+}
+
+# resolve_iap_audience settles GRAIN_IAP_AUDIENCE for the unit about to be
+# written over UNIT: an explicit empty value or "none" clears it; another
+# explicit value is normalized and checked; when unset in the caller's
+# environment (a bare `sudo ./setup.sh` update), the installed unit's
+# -ui-iap-audience is checked and kept so an update does not silently stop
+# verifying IAP assertions.
+resolve_iap_audience() {
+  local unit="$1" installed
+  installed="$(installed_unit_flag "$unit" ui-iap-audience)"
+  if [ "${GRAIN_IAP_AUDIENCE_GIVEN:-0}" = "1" ]; then
+    if [ -z "$GRAIN_IAP_AUDIENCE" ] || [ "$GRAIN_IAP_AUDIENCE" = "none" ]; then
+      GRAIN_IAP_AUDIENCE=""
+      if [ -n "$installed" ]; then
+        log "IAP audience: removing $installed (kept in $unit)"
+      fi
+      return 0
+    fi
+    GRAIN_IAP_AUDIENCE="$(normalize_iap_audience "$GRAIN_IAP_AUDIENCE" \
+      "from GRAIN_IAP_AUDIENCE")" || return 1
+    if [ -n "$installed" ] && [ "$installed" != "$GRAIN_IAP_AUDIENCE" ]; then
+      log "IAP audience: changing from $installed (the installed $unit) to $GRAIN_IAP_AUDIENCE"
+    else
+      log "IAP audience: $GRAIN_IAP_AUDIENCE (as given)"
+    fi
+    return 0
+  fi
+  if [ -z "$installed" ]; then
+    GRAIN_IAP_AUDIENCE=""
+    return 0
+  fi
+  if ! GRAIN_IAP_AUDIENCE="$(normalize_iap_audience "$installed" "kept from $unit")"; then
+    echo "          pass GRAIN_IAP_AUDIENCE=... (or GRAIN_IAP_AUDIENCE=none) to replace it" >&2
+    return 1
+  fi
+  log "IAP audience: keeping $GRAIN_IAP_AUDIENCE from the installed $unit"
+  log "  (pass GRAIN_IAP_AUDIENCE=... to change it, or GRAIN_IAP_AUDIENCE=none to clear it)"
+}
+
+# --- end of the IAP audience ---------------------------------------------------
+
+if ! resolve_iap_audience /etc/systemd/system/grain-daemon.service; then
   exit 2
 fi
 

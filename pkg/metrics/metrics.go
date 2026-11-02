@@ -732,10 +732,17 @@ type Backlog struct {
 	// still a queue of a kind -- of human clicks rather than of dispatch
 	// -- but not the one Utilization is read against, and counting it
 	// here would make a deployment that simply does not use auto-merge
-	// look permanently backed up. StateAwaitingAck is out for the same
+	// look permanently backed up. A finished StateAwaitingReply task
+	// (CompletedAt != nil, formerly StateAwaitingAck) is out for the same
 	// reason and would be worse: an answer nobody has read is a run
 	// already paid for, and a deployment that files investigations would
 	// otherwise look like one that cannot keep up with its own queue.
+	//
+	// Live chat sessions (TaskTiming.Interactive or TaskTiming.ConsoleSession)
+	// are left out too: they run outside the worker and merger limit, sit in
+	// awaiting_reply between exchanges (or queued before their first wake),
+	// and never appear in the task list each backlog count links to
+	// (ui/src/taskFilters.js's isSessionTask).
 	//
 	// StateDeferred is left out for the same last reason, from the other
 	// end of a task's life: work somebody has explicitly put aside is not
@@ -1271,9 +1278,14 @@ func runsByTask(runs []model.RunTiming) map[string][]model.RunTiming {
 
 // backlogOf counts what was still in the system at until, by task_state's
 // own vocabulary, and finds the queued task that has been waiting longest.
+// Live chat sessions (Interactive or ConsoleSession) are excluded so the
+// counts and oldest-queued task agree with the non-session task lists.
 func backlogOf(tasks []model.TaskTiming, states map[string]model.State, stopped map[string]bool, until time.Time) Backlog {
 	b := Backlog{ByState: map[model.State]int{}}
 	for _, t := range tasks {
+		if t.Interactive || t.ConsoleSession {
+			continue
+		}
 		state, ok := states[t.TaskID]
 		if !ok || state == model.StateCompleted || state == model.StateAwaitingSubmit ||
 			(state == model.StateAwaitingReply && t.CompletedAt != nil) || state == model.StateDeferred ||

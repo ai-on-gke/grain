@@ -45,6 +45,7 @@ type githubActionsWorkflow struct {
 	} `yaml:"on"`
 	Jobs map[string]struct {
 		Name    string            `yaml:"name"`
+		RunsOn  string            `yaml:"runs-on"`
 		Needs   []string          `yaml:"needs"`
 		If      string            `yaml:"if"`
 		Outputs map[string]string `yaml:"outputs"`
@@ -193,7 +194,7 @@ func TestGitHubActionsTestsWorkflowStructure(t *testing.T) {
 		"lint":                  {group: "lint"},
 		"terraform":             {group: "terraform"},
 		"real-vm":               {group: "go_backend", selfHosted: true},
-		"real-kubernetes":       {group: "go_backend", selfHosted: true},
+		"real-kubernetes":       {group: "go_backend"},
 	}
 
 	for jobID, want := range expectedJobGates {
@@ -213,6 +214,9 @@ func TestGitHubActionsTestsWorkflowStructure(t *testing.T) {
 		}
 		if want.selfHosted && !strings.Contains(job.If, "vars.ENABLE_SELF_HOSTED_TESTS == 'true'") {
 			t.Errorf("self-hosted job %q if = %q, want it to retain vars.ENABLE_SELF_HOSTED_TESTS == 'true'", jobID, job.If)
+		}
+		if !want.selfHosted && strings.Contains(job.If, "vars.ENABLE_SELF_HOSTED_TESTS") {
+			t.Errorf("hosted job %q if = %q, must not be gated on vars.ENABLE_SELF_HOSTED_TESTS", jobID, job.If)
 		}
 	}
 }
@@ -690,5 +694,51 @@ func TestGitHubActionsTestsWorkflowGuardsThePathFilter(t *testing.T) {
 				t.Errorf("%s: guard set %s = %q but should leave it to the filter", tc.name, key, got[key])
 			}
 		}
+	}
+}
+
+func TestRealKubernetesRunsOnHostedRunnersInTestsAndNightly(t *testing.T) {
+	for _, wfFile := range []string{"tests.yml", "nightly.yml"} {
+		t.Run(wfFile, func(t *testing.T) {
+			raw := read(t, ".github", "workflows", wfFile)
+			var wf githubActionsWorkflow
+			if err := yaml.Unmarshal([]byte(raw), &wf); err != nil {
+				t.Fatalf(".github/workflows/%s does not parse as YAML: %v", wfFile, err)
+			}
+			job, exists := wf.Jobs["real-kubernetes"]
+			if !exists {
+				t.Fatalf(".github/workflows/%s is missing job \"real-kubernetes\"", wfFile)
+			}
+			if job.RunsOn != "ubuntu-latest" {
+				t.Errorf("real-kubernetes runs-on = %q, want \"ubuntu-latest\"", job.RunsOn)
+			}
+			if strings.Contains(job.If, "ENABLE_SELF_HOSTED_TESTS") {
+				t.Errorf("real-kubernetes if = %q, must not be gated on ENABLE_SELF_HOSTED_TESTS", job.If)
+			}
+			var sawPrep, sawTest bool
+			for _, step := range job.Steps {
+				if strings.Contains(step.Run, "${{") {
+					t.Errorf("real-kubernetes step %q expands ${{ ... }} inside `run:`", step.Name)
+				}
+				if strings.Contains(step.Run, "./scripts/prepare-real-k8s-ci.sh") {
+					sawPrep = true
+				}
+				if step.Env["GRAIN_REAL_K8S_TESTS"] == "1" {
+					sawTest = true
+					if !strings.Contains(step.Run, "TestK8sSandboxesAgainstARealKindCluster") {
+						t.Errorf("real-kubernetes test step does not invoke TestK8sSandboxesAgainstARealKindCluster: %q", step.Run)
+					}
+					if !strings.Contains(step.Run, "--- PASS:") {
+						t.Errorf("real-kubernetes test step does not assert --- PASS: so a skipped test fails loudly")
+					}
+				}
+			}
+			if !sawPrep {
+				t.Errorf(".github/workflows/%s real-kubernetes does not run ./scripts/prepare-real-k8s-ci.sh", wfFile)
+			}
+			if !sawTest {
+				t.Errorf(".github/workflows/%s real-kubernetes has no step with GRAIN_REAL_K8S_TESTS=1", wfFile)
+			}
+		})
 	}
 }

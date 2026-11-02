@@ -179,7 +179,7 @@ func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself
 	if scheduled.Branch != "main" {
 		t.Errorf("scheduled branch = %q", scheduled.Branch)
 	}
-	if want := (model.Principal{Kind: model.PrincipalAgent, ID: "335"}); scheduled.By != want {
+	if want := (model.Principal{Kind: model.PrincipalAgent, ID: "335", Source: model.SourceSandbox}); scheduled.By != want {
 		t.Errorf("scheduled by = %+v, want %+v", scheduled.By, want)
 	}
 

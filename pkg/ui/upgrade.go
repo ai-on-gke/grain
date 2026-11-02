@@ -738,7 +738,7 @@ func (s *Server) scheduleUpgrade(r *http.Request, req startUpgradeRequest) error
 	return s.tasks.Store.SetScheduledUpgrade(ctx, model.ScheduledUpgrade{
 		Branch:      branch,
 		RequestedAt: time.Now().UTC(),
-		By:          s.tasks.actor(ctx),
+		By:          s.tasks.requestActor(ctx).Actor,
 	})
 }
 

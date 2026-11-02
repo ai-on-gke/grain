@@ -44,6 +44,7 @@ locals {
     credential_name           = var.credential_name
     default_target_repo       = var.default_target_repo
     target_repos              = join(",", var.test_repos)
+    iap_audience              = local.iap_audience
     allowed_principals        = join(",", local.allowed_principals)
     ui_port                   = var.ui_port
     slots                     = var.slots
