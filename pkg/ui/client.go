@@ -2449,7 +2449,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	keepRunning := req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake)
 	autoMerge, autoSubmit, sessionQueued := req.AutoMerge, false, false
-	var limitNote, ungrantedNote, heldNote, personOnlyNote, refusal string
+	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, refusal string
 	var escalated []string
 	if proposedBy != nil {
 		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes}
@@ -2472,22 +2472,17 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			sessionQueued = false
 		}
 		refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueued)
-		// Held (propose_task's hold_for_approval): whatever the
-		// proposer's permission would have done, nothing below approves
-		// this. Asked before the bound on self-approved work, which a
-		// proposal that is not going to be self-approved neither counts
-		// toward nor is measured against. The tag and the note go only on
-		// one the permission would actually have queued: one it did not
-		// cover was waiting for a person anyway.
-		if req.HoldForApproval {
-			if autoSubmit || sessionQueued {
-				heldNote = model.HeldForApprovalNote(proposedBy.ID)
-			}
-			autoSubmit, sessionQueued, req.Approved = false, false, false
-		}
+		// A target only a person may approve: grain's own hold, not the
+		// run's, so it is neither tagged nor told to the run as one it
+		// asked for (heldNote) -- and asked before hold_for_approval, so a
+		// run that asked as well is told this is why, not that its
+		// permission would have queued the work.
 		if needsPersonWhy != "" {
 			if autoSubmit || sessionQueued || req.Approved {
-				heldNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", needsPersonWhy)
+				needsPersonNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", needsPersonWhy)
+			}
+			if refusal == "" {
+				refusal = needsPersonWhy
 			}
 			autoSubmit, sessionQueued, req.Approved = false, false, false
 		}
@@ -2502,6 +2497,21 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			}
 			if refusal == "" {
 				refusal = why
+			}
+			autoSubmit, sessionQueued, req.Approved = false, false, false
+		}
+		// Held (propose_task's hold_for_approval): whatever the
+		// proposer's permission would have done, nothing below approves
+		// this. Asked before the bound on self-approved work, which a
+		// proposal that is not going to be self-approved neither counts
+		// toward nor is measured against, and after grain's own holds
+		// above. The tag and the note go only on one the permission would
+		// actually have queued: one it did not cover -- or one asking for
+		// a setting only a person may give -- was waiting for a person
+		// anyway, and its note says why.
+		if req.HoldForApproval {
+			if autoSubmit || sessionQueued {
+				heldNote = model.HeldForApprovalNote(proposedBy.ID)
 			}
 			autoSubmit, sessionQueued, req.Approved = false, false, false
 		}
@@ -2551,7 +2561,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + reviewTemplateNote + limitNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
+		Body:                 req.Description + forkNote + ungrantedNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
 		Origin:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
