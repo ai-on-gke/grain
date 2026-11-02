@@ -37,6 +37,11 @@ The removal took out:
 - `grain mcpserver`'s `GRAIN_EXECUTOR_SOCK` tunnel client, and the
   GitHub-credential pins that guarded MCP servers arriving over the
   tunnel.
+- The reason for the `none` sandbox backend (`-disable-native-sandboxes`)
+  as a deployment's backend. It stays as a control-plane-only daemon for
+  tests and walkthroughs. Its dispatch failure, flag help and Settings
+  label now say that nothing runs, rather than "remote execution only";
+  see [sandbox-backend-none.md](sandbox-backend-none.md).
 - The `grain model-server` unit `scripts/migrate-local-to-gke.sh`
   installed beside hostd. `--rollback` still removes a unit an earlier
   run left.
