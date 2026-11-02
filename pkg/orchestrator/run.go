@@ -1840,8 +1840,7 @@ func stateCheckCommand(prepared checkout, image string) string {
 }
 
 func directorStateSection(prepared checkout, task model.Task) string {
-	id, ok := model.ConsoleSessionIDOf(task)
-	if !ok || id != model.DirectorSessionID {
+	if !wantsStateCheckout(task) {
 		return ""
 	}
 	path := DirectorStateDir

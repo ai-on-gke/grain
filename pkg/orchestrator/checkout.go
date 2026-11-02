@@ -169,7 +169,8 @@ type checkout struct {
 	// Setup and not an error: see runSetupCommand.
 	Setup *SetupResult
 	// DirectorState records the best-effort checkout made for a Director
-	// session. It never makes dispatch fail: the prompt explains why the
+	// session, or for any repo-less task holding grain/config in its
+	// Writes (wantsStateCheckout). It never makes dispatch fail: the prompt explains why the
 	// state is absent when it cannot be supplied.
 	DirectorState     directorStateStatus
 	DirectorStateRepo model.RepoRef
@@ -294,7 +295,7 @@ func prepareCheckoutWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase,
 	if len(settingsRepos) != 0 {
 		settings = settingsRepos[0]
 	}
-	if id, ok := model.ConsoleSessionIDOf(task); ok && id == model.DirectorSessionID && task.Target == nil {
+	if wantsStateCheckout(task) {
 		return prepareDirectorStateWithReuse(ctx, tools, remoteBase, task, settings, reused), nil
 	}
 
@@ -406,6 +407,35 @@ fi
 	}
 	out.Setup = ran
 	return out, nil
+}
+
+// wantsStateCheckout reports whether task's run is given the grain-state
+// checkout (DirectorStateDir) instead of a repository checkout: a task with
+// no repo of its own that is either the Director or holds grain/config in
+// its Writes. The second half is what propose_config_change, and the git
+// proxy's proposal-branch grant, key on (writesConfigRepo in pkg/daemon,
+// model.Store.GitConfigProposalPrefix) -- the tool's script starts in
+// grain-state, so a session offered it without this checkout could only
+// ever fail to push.
+func wantsStateCheckout(task model.Task) bool {
+	if task.Target != nil {
+		return false
+	}
+	if id, ok := model.ConsoleSessionIDOf(task); ok && id == model.DirectorSessionID {
+		return true
+	}
+	return writesConfigRepo(task)
+}
+
+// writesConfigRepo reports whether task holds grain/config
+// (model.ConfigRepo) in its Writes.
+func writesConfigRepo(task model.Task) bool {
+	for _, write := range task.Writes {
+		if model.IsConfigRepo(write.Repo) {
+			return true
+		}
+	}
+	return false
 }
 
 func prepareDirectorState(ctx context.Context, tools []mcp.Tool, remoteBase string, task model.Task, repo model.RepoRef) checkout {
