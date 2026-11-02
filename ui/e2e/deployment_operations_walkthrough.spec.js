@@ -115,7 +115,6 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
     for (const [id, name] of [
       ["models", "Models"],
       ["git", "Git"],
-      ["executors", "Executors"],
       ["tasks", "Tasks"],
     ]) {
       // At 700px the nav is the Section select (§3.6).

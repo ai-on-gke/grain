@@ -81,42 +81,6 @@ type Settings struct {
 	// what they would commit, and nothing schedules on them.
 	MaxWorkers       int `json:"maxWorkers"`
 	MaxMergesPerRepo int `json:"maxMergesPerRepo"`
-	// MergeBatchSize is how many queued changes the merge queue tests
-	// together on a throwaway ref before merging the lot
-	// (model.Config.MergeBatchSize). 1 turns batching off and leaves the
-	// one-at-a-time queue.
-	MergeBatchSize int `json:"mergeBatchSize"`
-	// MergeBatchSizeChosen is the batch size this deployment has stored,
-	// or 0 when it has chosen none and MergeBatchSize is grain's default.
-	// The Admin pane's box shows this one, so a box somebody cleared reads
-	// blank after a reload rather than the default as though it had been
-	// typed in (docs/test-runs/2026-10-12-suite-release-batch-fixes.md).
-	MergeBatchSizeChosen int `json:"mergeBatchSizeChosen"`
-	// MergeGatherWindow is how long the queue holds a lone ready change
-	// at the front of a branch's queue, waiting to see whether a second
-	// becomes ready and the two can be tested together
-	// (model.Config.MergeGatherWindow), as a Go duration string ("5m") --
-	// the same syntax PollInterval and the CI gate's two windows use.
-	//
-	// Empty means this deployment has chosen nothing, which is grain's
-	// own window shown beside it as a placeholder
-	// (MergeGatherWindowDefault). A negative duration is how the wait is
-	// turned off altogether, the spelling CIReserveAfter uses for the
-	// same kind of trade.
-	MergeGatherWindow        string `json:"mergeGatherWindow"`
-	MergeGatherWindowDefault string `json:"mergeGatherWindowDefault"`
-	// MergeBatching is what the batches that size has produced have
-	// actually cost and saved (grain/task-300), or nil on a deployment
-	// that has never formed one. It sits beside the setting because the
-	// setting is a bet, and this is the record of how the bet has gone.
-	MergeBatching *MergeBatching `json:"mergeBatching,omitempty"`
-	// MergeGathering is what the holds that window has taken have
-	// actually done (grain/task-440), or nil on a deployment whose queue
-	// has never held anything. It sits beside MergeGatherWindow for
-	// MergeBatching's reason, and for a sharper one: a hold leaves no
-	// other trace at all, so without it the window above is the one
-	// setting in this pane with no evidence behind it.
-	MergeGathering *MergeGathering `json:"mergeGathering,omitempty"`
 	// MaxAutoSubmitDepth and MaxAutoSubmitFanOut are the bounds on work
 	// grain queues with nobody having approved it -- model.Config's own
 	// fields of the same name, and model.AutoSubmitLimits for what the
@@ -1042,26 +1006,22 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 	sandboxWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sSandboxImage, sandboxImgDefault, nil), sandboxWarn)
 	granuleWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sGranuleImage, granuleImgDefault, nil), granuleWarn)
 	out := Settings{
-		Configured:               true,
-		PollInterval:             cfg.PollInterval.String(),
-		MaxWorkers:               cfg.MaxWorkers,
-		MaxMergesPerRepo:         cfg.MaxMergesPerRepo,
-		MergeBatchSize:           cfg.MergeBatchSizeOr(),
-		MergeBatchSizeChosen:     max(cfg.MergeBatchSize, 0),
-		MergeGatherWindow:        durationSetting(cfg.MergeGatherWindow),
-		MergeGatherWindowDefault: model.DefaultMergeGatherWindow.String(),
-		MaxAutoSubmitDepth:       cfg.AutoSubmitLimits().Depth,
-		MaxAutoSubmitFanOut:      cfg.AutoSubmitLimits().FanOut,
-		GeminiEfforts:            antigravity.Efforts(),
-		CodexEfforts:             codex.Efforts(),
-		MaxAgentTurns:            cfg.MaxAgentTurns,
-		GitHubHost:               cfg.GitHubHost,
-		GitHubInsecureHTTP:       cfg.GitHubInsecureHTTP,
-		GCPProject:               cfg.GCPProject,
-		GCPServiceAccountEmail:   cfg.GCPServiceAccountEmail,
-		GCPServiceAccountCount:   cfg.GCPServiceAccountCount,
-		IAPBackendService:        cfg.IAPBackendService,
-		IAPResource:              cfg.IAPResource,
+		Configured:             true,
+		PollInterval:           cfg.PollInterval.String(),
+		MaxWorkers:             cfg.MaxWorkers,
+		MaxMergesPerRepo:       cfg.MaxMergesPerRepo,
+		MaxAutoSubmitDepth:     cfg.AutoSubmitLimits().Depth,
+		MaxAutoSubmitFanOut:    cfg.AutoSubmitLimits().FanOut,
+		GeminiEfforts:          antigravity.Efforts(),
+		CodexEfforts:           codex.Efforts(),
+		MaxAgentTurns:          cfg.MaxAgentTurns,
+		GitHubHost:             cfg.GitHubHost,
+		GitHubInsecureHTTP:     cfg.GitHubInsecureHTTP,
+		GCPProject:             cfg.GCPProject,
+		GCPServiceAccountEmail: cfg.GCPServiceAccountEmail,
+		GCPServiceAccountCount: cfg.GCPServiceAccountCount,
+		IAPBackendService:      cfg.IAPBackendService,
+		IAPResource:            cfg.IAPResource,
 
 		NewestFirst:            cfg.NewestFirst,
 		SandboxBackend:         string(cfg.SandboxBackend),
@@ -1435,8 +1395,6 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			CIArtifactRunMBDefault:             ciStorageDefaults.artifactRunMB,
 			CIArtifactFileMBDefault:            ciStorageDefaults.artifactFileMB,
 			CIArtifactDaysDefault:              ciStorageDefaults.artifactDays,
-			MergeGatherWindow:                  durationSetting(def.MergeGatherWindow),
-			MergeGatherWindowDefault:           model.DefaultMergeGatherWindow.String(),
 			CIJobsPerRun:                       def.CIJobsPerRun,
 			CIAgeBoost:                         durationSetting(def.CIAgeBoost),
 			CIReserveAfter:                     durationSetting(def.CIReserveAfter),
@@ -1462,8 +1420,6 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 		return out, nil
 	}
 	settings := c.settingsFrom(ctx, *cfg, repoConfigs)
-	settings.MergeBatching = c.mergeBatching(ctx, *cfg)
-	settings.MergeGathering = c.mergeGathering(ctx)
 	settings.DeploymentIDDefault = c.deploymentIDDefault(ctx)
 	settings.TaskBranchTemplateDefault = model.DefaultTaskBranchTemplate
 	settings.ExternalConfigRepo, settings.ExternalConfigBranch = c.externalConfigRepo(ctx)
@@ -1474,8 +1430,6 @@ type UpdateSettingsRequest struct {
 	PollInterval            *string  `json:"pollInterval"`
 	MaxWorkers              *int     `json:"maxWorkers"`
 	MaxMergesPerRepo        *int     `json:"maxMergesPerRepo"`
-	MergeBatchSize          *int     `json:"mergeBatchSize"`
-	MergeGatherWindow       *string  `json:"mergeGatherWindow"`
 	MaxAutoSubmitDepth      *int     `json:"maxAutoSubmitDepth"`
 	MaxAutoSubmitFanOut     *int     `json:"maxAutoSubmitFanOut"`
 	MaxAgentTurns           *int     `json:"maxAgentTurns"`
@@ -1622,8 +1576,6 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		return Settings{}, err
 	}
 	settings := c.settingsFrom(ctx, cfg, repoConfigs)
-	settings.MergeBatching = c.mergeBatching(ctx, cfg)
-	settings.MergeGathering = c.mergeGathering(ctx)
 	settings.DeploymentIDDefault = c.deploymentIDDefault(ctx)
 	settings.TaskBranchTemplateDefault = model.DefaultTaskBranchTemplate
 	settings.ExternalConfigRepo, settings.ExternalConfigBranch = c.externalConfigRepo(ctx)
@@ -1668,57 +1620,6 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			return model.Config{}, validationErrorf("maxMergesPerRepo must be at least 1")
 		}
 		cfg.MaxMergesPerRepo = *req.MaxMergesPerRepo
-	}
-	if req.MergeBatchSize != nil {
-		// 1 is off rather than a floor to reject: a deployment whose
-		// changes break each other constantly should be able to say so.
-		// The ceiling is model.MaxMergeBatchSize, because a batch holds
-		// every member out of the queue until it reports.
-		//
-		// 0 is not a size but "give it back to grain's default", which
-		// is what a stored zero already means (model.Config's
-		// MergeBatchSizeOr) and what the Admin pane sends for a cleared
-		// box. Refusing it left no way back to the default from the UI:
-		// clearing the box was a 400 and the old value stayed.
-		if *req.MergeBatchSize < 0 {
-			return model.Config{}, validationErrorf("mergeBatchSize must be at least 1 (1 turns batching off), or 0 for grain's default")
-		}
-		if *req.MergeBatchSize > model.MaxMergeBatchSize {
-			return model.Config{}, validationErrorf("mergeBatchSize cannot be more than %d",
-				model.MaxMergeBatchSize)
-		}
-		cfg.MergeBatchSize = *req.MergeBatchSize
-	}
-	if req.MergeGatherWindow != nil {
-		d, err := parseDurationSetting("mergeGatherWindow", *req.MergeGatherWindow)
-		if err != nil {
-			return model.Config{}, err
-		}
-		// Negative is allowed, and is how an operator declines the trade
-		// entirely: the wait buys at most one suite and costs latency on
-		// a change that is ready now, which a deployment with CI capacity
-		// to spare should be able to refuse. The ceiling is
-		// model.MaxMergeGatherWindow, because past it the latency is
-		// worth more than any suite the batch could save.
-		if d > model.MaxMergeGatherWindow {
-			return model.Config{}, validationErrorf("mergeGatherWindow cannot be more than %s",
-				model.MaxMergeGatherWindow)
-		}
-		// And refused rather than rounded if it cannot survive being
-		// stored. The column is milliseconds (grain_config's
-		// merge_gather_window_ms, like the poll interval and the CI
-		// gate's windows), so anything under one lands as a zero -- which
-		// means "this deployment has never chosen" and reads back as
-		// grain's own five minutes. A "-100µs" meant as "turn the wait
-		// off" would therefore turn it on, which is the one direction an
-		// operator must not be surprised in.
-		if d != 0 && d > -time.Millisecond && d < time.Millisecond {
-			return model.Config{}, validationErrorf("mergeGatherWindow is stored in whole "+
-				"milliseconds, so %s would be kept as 0 -- which means grain's own default rather "+
-				"than what you asked for. Use a negative duration (-1s) to turn the wait off, or "+
-				"blank for the default", d)
-		}
-		cfg.MergeGatherWindow = d
 	}
 	// Both bounds take 1 as their floor rather than 0. Zero is the value
 	// the store reads as "nobody chose" (model.AutoSubmitLimits.
@@ -2469,8 +2370,6 @@ func (c *Client) PlanSettings(ctx context.Context, req UpdateSettingsRequest) (S
 		return Settings{}, err
 	}
 	settings := c.settingsFrom(ctx, cfg, repoConfigs)
-	settings.MergeBatching = c.mergeBatching(ctx, cfg)
-	settings.MergeGathering = c.mergeGathering(ctx)
 	settings.DeploymentIDDefault = c.deploymentIDDefault(ctx)
 	settings.TaskBranchTemplateDefault = model.DefaultTaskBranchTemplate
 	settings.ExternalConfigRepo, settings.ExternalConfigBranch = c.externalConfigRepo(ctx)

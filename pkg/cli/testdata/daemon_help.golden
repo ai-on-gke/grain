@@ -89,16 +89,6 @@ Usage of grain daemon:
     	disable native sandboxes on this host -- in this mode only remote execution sandboxes can exist
   -docker-root-dir docker info
     	path to the local docker engine's own data root, for the UI's host disk figures only (grain/task-148): the sandbox image and every granule VM's disk overlay are written there rather than under -sandbox-dir, so on a deployment that gives sandboxes a volume of their own it is a disk worth a figure. Empty asks docker info for it once at startup, which is right whenever the daemon can reach the docker socket and sees that path where dockerd does; name it here when it cannot, or when this process sees the same directory at a path of its own. A path this process cannot stat is logged once and left out, not reported as a broken figure -- a containerised daemon is usually shown docker's socket and not the tree behind it
-  -executor-addr string
-    	address to listen on for remote model executors (host:port, e.g. :4243); empty disables remote execution
-  -executor-cert-file string
-    	PEM certificate file for TLS on -executor-addr (required with -executor-key-file)
-  -executor-key-file string
-    	PEM private key file for TLS on -executor-addr (required with -executor-cert-file)
-  -executor-token-file string
-    	file holding the shared token remote executors authenticate with (required with -executor-addr)
-  -executor-wait duration
-    	how long a dispatch waits for a remote executor to connect before giving up (default 30s)
   -flag-names grain daemon
     	print every flag this build's grain daemon accepts, one per line -- the name, then "bool" or "value" for whether it takes an argument -- and exit. Not configuration: it is what an upgrade asks a newly pulled image before cutting over to it, so that a systemd unit passing a flag the new build dropped is reported then rather than discovered at the next start (pkg/upgrade/image.go)
   -gcp-agent-account-count int
@@ -154,7 +144,7 @@ Usage of grain daemon:
   -host-sandbox-env value
     	NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone
   -host-sandboxes
-    	dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, -executor-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed
+    	dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed
   -hostd-socket string
     	grain hostd's unix socket, for a daemon in a container whose host CLIs run through hostd; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host
   -hostd-token-file string
@@ -243,16 +233,6 @@ Usage of grain daemon:
     	maximum number of ordinary tasks dispatched at once -- the worker half of the concurrency dispatch.Cycle fills (model.Limits) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default 10)
   -model-backend string
     	agy, claude or codex: the same as -agent-framework (agy is antigravity)
-  -model-exec-addr string
-    	legacy alias for -executor-addr
-  -model-exec-cert-file string
-    	legacy alias for -executor-cert-file
-  -model-exec-key-file string
-    	legacy alias for -executor-key-file
-  -model-exec-token-file string
-    	legacy alias for -executor-token-file
-  -model-exec-wait duration
-    	legacy alias for -executor-wait
   -model-proxy-max-concurrent int
     	how many requests one run may have open through each model proxy at once, a streamed reply counting until it finishes. The next waits up to -model-proxy-slot-wait for one, then is refused with a 429 in the vendor's own error shape, so one run's token cannot monopolize this deployment's shared credential. 0 or less means the default (default 16)
   -model-proxy-slot-wait duration
