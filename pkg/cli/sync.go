@@ -281,8 +281,6 @@ var settingsDiffRows = []settingsDiffRow{
 	{"pollInterval", "poll interval", func(s ui.Settings) any { return s.PollInterval }},
 	{"maxWorkers", "max workers", func(s ui.Settings) any { return s.MaxWorkers }},
 	{"maxMergesPerRepo", "max merges per repo", func(s ui.Settings) any { return s.MaxMergesPerRepo }},
-	{"mergeBatchSize", "merge batch size", func(s ui.Settings) any { return s.MergeBatchSize }},
-	{"mergeGatherWindow", "merge gather window", func(s ui.Settings) any { return s.MergeGatherWindow }},
 	{"maxAutoSubmitDepth", "max auto-submit depth", func(s ui.Settings) any { return s.MaxAutoSubmitDepth }},
 	{"maxAutoSubmitFanOut", "max auto-submit fan-out", func(s ui.Settings) any { return s.MaxAutoSubmitFanOut }},
 	{"defaultModel", "default model", func(s ui.Settings) any { return s.DefaultModel }},

@@ -173,7 +173,7 @@ These apply to the `kubernetes` and `kubernetes-granule` backends. Every field e
 
 ### 3.3 Models & sandboxes → Executors (removed)
 
-Removed with remote executors: `grain hostd` is grain's only host agent, and a remote one dials in with the daemon's `-hostd-token-file` token (a startup flag, §10), set up under Models → *Where each agent CLI runs*. `/settings/executors` and its old `/admin` and `/system` links open Models. Schema 86 dropped `executor_token`.
+Removed with remote executors: `grain hostd` is grain's only host agent, and a remote one dials in with the daemon's `-hostd-token-file` token (a startup flag, §10), set up under Models → *Where each agent CLI runs*. `/settings/executors` and its old `/admin` and `/system` links open Models. Schema 87 dropped `executor_token`.
 
 ### 3.4 Secrets & access → Legacy capabilities (`/settings/credentials#credentials`)
 
@@ -440,7 +440,7 @@ These are all config-managed and exported through `staterepo.SettingsTables`, ex
 | 8.7 | GCP keys | `GET`/`POST /api/gcp-keys`, `GET`/`PUT`/`DELETE /api/gcp-keys/{name}` | `tables/gcp_key.json` | `Name`, `ProjectID`, `ServiceAccountEmail`, `ServiceAccountCount`, `MinterCredential` (a credential reference, not material), `MaxKeyAge`, `Description` |
 | 8.8 | Standing and persistent sandboxes | System → Sandboxes | `tables/standing_sandbox*.json`, `tables/persistent_sandbox.json` | Standing: `Name`, `Image`, `Command`, `Dir`, `Env`, `Secrets` (references), `CPUs`, `MemoryMB`, `DiskGB`, `NetworkAccess`, `Enabled`. Persistent: also `Repo`, `Ref`, `AutoUpdate`, `Capabilities`, `SandboxPort`, `HostPort`, `UISubpath`, `StripPrefix`, `Refresh`, `RollbackOnCrash`. |
 | 8.9 | External agent tokens | `GET`/`POST /api/external-agents/tokens`, `POST …/{id}/rotate`, `POST …/{id}/revoke`, `DELETE …/{id}` | **not exported** (runtime, hash only) | `id`, `name`, `prefix`, `scopeSet`, `scopes`, `repos`, `rateLimit` (default 60), `maxConcurrent` (default 8), `expiresAt`, `revokedAt`. The secret is shown once. Needs `externalAgentApi`. |
-| 8.10 | Executor tokens (removed) | §3.3 | — (schema 86 dropped `executor_token`) | — |
+| 8.10 | Executor tokens (removed) | §3.3 | — (schema 87 dropped `executor_token`) | — |
 | 8.11 | Console sessions | §3.14 | `grain_config.console_sessions` | §3.14 |
 | 8.12 | Git connections | §3.11 | `grain_config.git_connections` | §3.11 |
 | 8.13 | Config policy and the new-task form | — | `settings/config-policy.yml` (checked by `statecheck`), `settings/new-task-form.yml` | Review policy for config PRs, and the new-task form layout |

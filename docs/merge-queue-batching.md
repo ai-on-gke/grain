@@ -1,9 +1,20 @@
-# Batching the merge queue
+# Batching the merge queue (removed)
 
-> Companion to `merge-queue-behind.md`, which is the other half of the
-> same trade: that one is why a branch no longer has to contain its base
-> before it merges, and what compensates for it after the fact. This one
-> is how several changes now get tested together before any of them land.
+> **Status: history.** Merge batching was removed in grain/task-1023
+> (`pkg/orchestrator/mergepredicate.go`). Nothing here runs any more:
+> the queue forms no batches, holds no change for a gather window, keeps
+> no batch lock on a branch and bisects nothing. The settings this
+> document describes -- `merge_batch_size` and `merge_gather_window_ms`
+> (`model.Config.MergeBatchSize`, `MergeGatherWindow`), the team's batch
+> size, and `grain settings -merge-batch-size` / `-merge-gather-window` --
+> are no longer offered or read by the merge queue; the two
+> `grain_config` columns are kept only so older rows and dumps load. A
+> change green on its own head that merges cleanly merges at once, or
+> after a single overlap re-check, in no order relative to any other
+> pull request: see `merge-queue-behind.md`, "The merge predicate", "No
+> order between pull requests (task 2346)" and "The overlap re-check".
+> The rest of this document is the design and the evidence that went
+> into it, kept as a record.
 
 ## What it replaces
 

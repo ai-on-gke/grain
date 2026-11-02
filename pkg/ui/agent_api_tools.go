@@ -457,7 +457,7 @@ var routeQueries = map[string]map[string]string{
 		"job":  "The job, by name or id; the first that failed when omitted.",
 		"tail": "Only this many lines from the end.",
 	},
-	"GET /api/merge-batches":        {"repo": "Only this repository's (owner/name) batches."},
+	"GET /api/merge-batches":        {"repo": "Only this repository's (owner/name) overlap re-checks."},
 	"POST /api/package-cache/flush": {"kind": "Empty only this ecosystem's cache: apt, pypi, docker, npm or go."},
 	"POST /api/actions-cache/flush": {"repo": "Empty only this repository's (owner/name) entries."},
 }
