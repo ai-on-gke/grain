@@ -372,7 +372,13 @@ func (c *CapabilityCatalogue) judgeRetiredInProcess(g string, gc GrantContext) (
 // capability-server grant such as grain#host-exec={}. Sorted.
 func retiredInProcessNames(g string) []string {
 	grant := strings.TrimSpace(g)
-	if !IsCapabilityRef(grant) {
+	if IsCapabilityRef(grant) {
+		// Compare in recorded form, so a bare grain#host-exec or one
+		// spelled with other JSON spacing is bound all the same.
+		if pg, ok := recordedCapabilityGrant(grant); ok {
+			grant = RecordedCapabilityGrant(pg)
+		}
+	} else {
 		what, _, _ := strings.Cut(strings.TrimPrefix(grant, APIGrantPrefix), "@")
 		grant = APIGrantPrefix + what
 	}

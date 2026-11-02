@@ -174,6 +174,10 @@ func TestCatalogueRetiredInProcessBindsItsPreset(t *testing.T) {
 			refused: "in_process.deployment-health"},
 		{name: "self-repair kind restriction binds grain#host-exec", gc: model.GrantContext{Kind: "task", Grants: []string{model.GrainHostExecGrant}},
 			refused: "in_process.self-repair"},
+		{name: "self-repair kind restriction binds a bare grain#host-exec", gc: model.GrantContext{Kind: "task", Grants: []string{model.GrainHostExecRef}},
+			refused: "in_process.self-repair"},
+		{name: "self-repair kind restriction binds grain#host-exec spelled otherwise", gc: model.GrantContext{Kind: "task", Grants: []string{model.GrainHostExecRef + "={ }"}},
+			refused: "in_process.self-repair"},
 		{name: "grain#host-exec admitted for its kind", gc: model.GrantContext{Kind: "director", Grants: []string{model.GrainHostExecGrant}}},
 		{name: "an unrelated preset is not judged", gc: model.GrantContext{Kind: "task", Grants: []string{"api:team-broadcast"}}},
 	}
