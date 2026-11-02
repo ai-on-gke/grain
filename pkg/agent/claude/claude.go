@@ -663,7 +663,6 @@ func (f *Framework) mcpServerArgs(ctx context.Context, cfg agent.RunConfig) ([]s
 	args = append(args, agent.InteractiveArgs(cfg)...)
 	args = append(args, agent.AddendaArgs(cfg)...)
 	args = append(args, agent.RunDeadlineArgs(ctx, cfg)...)
-	agent.AuthorizeMCPArgs(f.host, args)
 	return args, nil
 }
 

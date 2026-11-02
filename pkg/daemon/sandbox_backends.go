@@ -360,7 +360,7 @@ func (c Config) hasStartupSandboxPlumbing() bool {
 const (
 	HostSandboxesUsage = "dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs " +
 		"execute as this daemon's user, with this host's tools and network. For a single-user workstation; " +
-		"refused on a daemon others can reach (a non-loopback -ui-addr, -executor-addr, IAP, -run-host-image) " +
+		"refused on a daemon others can reach (a non-loopback -ui-addr, IAP, -run-host-image) " +
 		"unless -allow-unisolated-host-sandboxes is also passed"
 	AllowUnisolatedHostSandboxesUsage = "let -host-sandboxes start on a daemon others can reach, accepting that everyone " +
 		"who can file a task there may run anything on this host as this daemon's user"
@@ -431,8 +431,8 @@ var urlPassword = regexp.MustCompile(`://[^/\s@:]*:[^/\s@]*@`)
 // network. That is the point of it on a single-user workstation, where
 // the agent is meant to reach the same compilers, CLIs and proxies its
 // owner does. It is also why it does not start on a daemon that is
-// plainly shared -- one whose UI listens beyond loopback, which takes
-// remote executors, sits behind IAP, or hands its runs to run hosts or a
+// plainly shared -- one whose UI listens beyond loopback, sits behind
+// IAP, or hands its runs to run hosts or a
 // cluster -- unless the operator says, with
 // -allow-unisolated-host-sandboxes, that every person who can file a
 // task there may run anything on this host. Local policy then
@@ -515,9 +515,6 @@ func hostSandboxSharingFlags(cfg Config) []string {
 	var shared []string
 	if cfg.UiAddr != "" && !loopbackListenAddr(cfg.UiAddr) {
 		shared = append(shared, fmt.Sprintf("-ui-addr %s", cfg.UiAddr))
-	}
-	if cfg.ExecutorAddr != "" {
-		shared = append(shared, "-executor-addr")
 	}
 	if cfg.IapBackendService != "" || cfg.IapResource != "" {
 		shared = append(shared, "IAP")

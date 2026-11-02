@@ -1080,3 +1080,39 @@ func TestADumpBefore78UpgradesUnsluggedTaskBranchTemplate(t *testing.T) {
 		t.Errorf("TaskBranchTemplate arrived as %q, want %q", cfg.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
 	}
 }
+
+// A dump at schema 83 can carry executor_token and its sequence, which
+// schema 84 dropped with remote executors. Those tables are not in this
+// build's schema, so the import passes over them and brings in the rest.
+func TestADumpAt83WithExecutorTokensStillImports(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "dump")
+	if err := os.CopyFS(dir, os.DirFS(goldenDump(t))); err != nil {
+		t.Fatal(err)
+	}
+	if err := staterepo.WriteSchemaVersion(dir, 83); err != nil {
+		t.Fatal(err)
+	}
+	writeTable(t, dir, "executor_token", []map[string]any{{
+		"id": "exec-tok-1", "name": "workstation", "token_hash": "abcdef", "prefix": "gxt_1234",
+		"created_at": "2026-10-01T00:00:00Z",
+	}})
+	writeTable(t, dir, "executor_token_sequence", []map[string]any{{"id": 1, "issued_at": "2026-10-01T00:00:00Z"}})
+
+	store, db := openRealDB(t)
+	if _, err := staterepo.CheckMigration(ctx, db, dir, t.TempDir(), model.SchemaVersion); err != nil {
+		t.Fatalf("CheckMigration of a dump at 83 holding executor tokens: %v", err)
+	}
+	cfg, err := store.GetConfig(ctx)
+	if err != nil || cfg == nil {
+		t.Fatalf("the config row did not arrive: %v", err)
+	}
+	if cfg.MaxWorkers != 7 {
+		t.Errorf("the config row arrived with MaxWorkers %d, want the dump's 7", cfg.MaxWorkers)
+	}
+	var n int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `executor_token`").Scan(&n); err == nil {
+		t.Errorf("executor_token exists after the import (%d rows); schema 84 dropped it", n)
+	}
+}

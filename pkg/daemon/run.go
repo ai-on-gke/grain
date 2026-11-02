@@ -816,17 +816,6 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.Volumes = hostDisks(cfg)
 	}
 
-	execSrv, execAddr, stopExecutor, err := startExecutorServer(cfg, store)
-	if err != nil {
-		return fmt.Errorf("starting remote executor listener: %w", err)
-	}
-	defer stopWithGrace(stopExecutor)
-	cfg.executorServer = execSrv
-	cfg.executorListenAddr = execAddr
-	if live != nil {
-		live.SetExecutorServer(execSrv)
-	}
-
 	// The UI/API server starts here, as early as its own dependencies (the
 	// store, sandboxes, and transcriptDir above) allow -- deliberately
 	// before the git proxy, the Gemini agent

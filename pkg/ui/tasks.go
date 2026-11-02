@@ -1463,13 +1463,6 @@ type configResponse struct {
 	// Config.Sandboxes counts its live set without the per-guest probes
 	// GET /api/sandboxes performs for the health pane.
 	SandboxCount int `json:"sandboxCount"`
-	// ExecutorAddr is where this deployment's remote executor listener
-	// accepts workers (Config.ExecutorAddr), with a wildcard host left
-	// off (":8422") since only the browser knows which name reaches this
-	// machine. Absent when remote execution is off, and from anybody who
-	// has not signed in. ExecutorTLS says the listener wants --tls.
-	ExecutorAddr string `json:"executorAddr,omitempty"`
-	ExecutorTLS  bool   `json:"executorTLS,omitempty"`
 	// PackageCacheEntries is how many packages this deployment's proxy
 	// cache is holding, across every ecosystem. It rides here for the
 	// reason SandboxCount above does: the sidebar shows it beside its
@@ -1948,10 +1941,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.tasks.Config.Sandboxes != nil {
 		resp.SandboxCount = s.tasks.Config.Sandboxes.SandboxCount()
-	}
-	if actor.ID != "" {
-		resp.ExecutorAddr = executorDialAddr(s.tasks.Config.ExecutorAddr)
-		resp.ExecutorTLS = resp.ExecutorAddr != "" && s.tasks.Config.ExecutorTLS
 	}
 	if s.tasks.Config.PackageCache != nil {
 		entries := s.tasks.Config.PackageCache.PackageCacheEntryCount()

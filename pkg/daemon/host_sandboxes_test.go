@@ -49,12 +49,11 @@ func TestCheckHostSandboxesRefusesADaemonOthersCanReach(t *testing.T) {
 		mutate func(*Config)
 		names  string
 	}{
-		"default ui-addr":  {func(c *Config) { c.UiAddr = "0.0.0.0:4242" }, "-ui-addr 0.0.0.0:4242"},
-		"any interface":    {func(c *Config) { c.UiAddr = ":4242" }, "-ui-addr :4242"},
-		"lan address":      {func(c *Config) { c.UiAddr = "10.1.2.3:4242" }, "-ui-addr 10.1.2.3:4242"},
-		"remote executors": {func(c *Config) { c.ExecutorAddr = ":8422" }, "-executor-addr"},
-		"iap":              {func(c *Config) { c.IapBackendService = "grain-backend" }, "IAP"},
-		"run hosts":        {func(c *Config) { c.RunHostImage = "example/grain" }, "-run-host-image"},
+		"default ui-addr": {func(c *Config) { c.UiAddr = "0.0.0.0:4242" }, "-ui-addr 0.0.0.0:4242"},
+		"any interface":   {func(c *Config) { c.UiAddr = ":4242" }, "-ui-addr :4242"},
+		"lan address":     {func(c *Config) { c.UiAddr = "10.1.2.3:4242" }, "-ui-addr 10.1.2.3:4242"},
+		"iap":             {func(c *Config) { c.IapBackendService = "grain-backend" }, "IAP"},
+		"run hosts":       {func(c *Config) { c.RunHostImage = "example/grain" }, "-run-host-image"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

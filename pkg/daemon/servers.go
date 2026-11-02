@@ -16,12 +16,7 @@ package daemon
 
 import (
 	"context"
-	"crypto/tls"
-	"errors"
-	"fmt"
-	"io"
 	"log"
-	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -29,7 +24,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
@@ -232,105 +226,4 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 	}
 	log.Printf("grain daemon: the git proxy is serving at %s (bound %s)", endpoint.URL, endpoint.Bound)
 	return endpoint.URL, proxyHandler, stopServer, nil
-}
-
-func StartExecutorServer(cfg Config, store *model.Store) (*modelexec.Server, func(context.Context) error, error) {
-	srv, _, stop, err := startExecutorServer(cfg, store)
-	return srv, stop, err
-}
-
-// startExecutorServer is StartExecutorServer that also says where the
-// listener bound: "" when -executor-addr is unset, since then nothing
-// listens on its own TCP port for a worker to dial even when the server
-// runs for HTTP-upgraded executors.
-func startExecutorServer(cfg Config, store *model.Store) (*modelexec.Server, string, func(context.Context) error, error) {
-	srv, ln, stop, err := startExecutorListener(cfg, store)
-	if err != nil || ln == nil {
-		return srv, "", stop, err
-	}
-	return srv, ln.Addr().String(), stop, nil
-}
-
-func startExecutorListener(cfg Config, store *model.Store) (*modelexec.Server, net.Listener, func(context.Context) error, error) {
-	if cfg.ExecutorAddr == "" && cfg.ExecutorTokenFile == "" && store == nil {
-		return nil, nil, func(context.Context) error { return nil }, nil
-	}
-	var token string
-	if cfg.ExecutorTokenFile != "" {
-		var err error
-		token, err = ReadTokenFile(cfg.ExecutorTokenFile)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("reading -executor-token-file: %w", err)
-		}
-	} else if store == nil && cfg.ExecutorAddr != "" {
-		return nil, nil, nil, errors.New("-executor-token-file (or -model-exec-token-file) is required with -executor-addr")
-	}
-
-	if token == "" && store == nil && cfg.ExecutorAddr == "" {
-		return nil, nil, func(context.Context) error { return nil }, nil
-	}
-
-	var tlsCfg *tls.Config
-	if cfg.ExecutorCertFile != "" || cfg.ExecutorKeyFile != "" {
-		if cfg.ExecutorCertFile == "" || cfg.ExecutorKeyFile == "" {
-			return nil, nil, nil, errors.New("both -executor-cert-file and -executor-key-file are required for TLS")
-		}
-		cert, err := tls.LoadX509KeyPair(cfg.ExecutorCertFile, cfg.ExecutorKeyFile)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("loading executor TLS keypair: %w", err)
-		}
-		tlsCfg = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
-		}
-	}
-
-	srv, err := modelexec.NewServer(modelexec.Config{
-		Token: token,
-		Store: store,
-		Wait:  cfg.ExecutorWait,
-		Logf:  log.Printf,
-		TLS:   tlsCfg,
-		// The tunnel's args come from the executor, not from this daemon,
-		// so the flags that decide where the GitHub credential goes are
-		// held to this daemon's own config (mcpGitHubPins).
-		ServeMCP: func(rwc io.ReadWriteCloser, args []string) error {
-			return ServeMCPServerPinned(rwc, rwc, args, &mcpGitHubPins{
-				dataDir:            cfg.DataDir,
-				githubHost:         cfg.GithubHost,
-				githubInsecureHTTP: cfg.GithubInsecureHTTP,
-			})
-		},
-		GitProxy: cfg.gitProxyHandler,
-	})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	var ln net.Listener
-	ctx, cancel := context.WithCancel(context.Background())
-	if cfg.ExecutorAddr != "" {
-		var err error
-		ln, err = net.Listen("tcp", cfg.ExecutorAddr)
-		if err != nil {
-			cancel()
-			return nil, nil, nil, fmt.Errorf("listening on -executor-addr %s: %w", cfg.ExecutorAddr, err)
-		}
-		log.Printf("grain daemon: the remote executor listener is serving at %s", ln.Addr().String())
-
-		go func() {
-			if err := srv.Serve(ctx, ln); err != nil && ctx.Err() == nil {
-				log.Printf("grain daemon: executor server error: %v", err)
-			}
-		}()
-	}
-
-	stop := func(shutdownCtx context.Context) error {
-		cancel()
-		if ln != nil {
-			return ln.Close()
-		}
-		return nil
-	}
-	return srv, ln, stop, nil
 }

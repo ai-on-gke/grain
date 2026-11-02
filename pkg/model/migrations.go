@@ -492,6 +492,13 @@ var Migrations = []Migration{
 				"db-write":          {GrainSQLWriteGrant},
 			})
 		},
+	}, {
+		Version:     84,
+		Description: "drop executor_token and executor_token_sequence (remote executors are retired)",
+		Statements: []string{
+			"DROP TABLE IF EXISTS `executor_token`",
+			"DROP TABLE IF EXISTS `executor_token_sequence`",
+		},
 	},
 }
 

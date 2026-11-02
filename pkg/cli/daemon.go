@@ -104,7 +104,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
@@ -407,17 +406,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"repository's answer complete, as owner/name=check,check;owner/other=check -- a "+
 		"repository not named here is always read from GitHub")
 	githubWebhookURL, githubWebhookAddr := githubWebhookFlags(fs)
-
-	executorAddr := fs.String("executor-addr", "", "address to listen on for remote model executors (host:port, e.g. :4243); empty disables remote execution")
-	modelExecAddr := fs.String("model-exec-addr", "", "legacy alias for -executor-addr")
-	executorTokenFile := fs.String("executor-token-file", "", "file holding the shared token remote executors authenticate with (required with -executor-addr)")
-	modelExecTokenFile := fs.String("model-exec-token-file", "", "legacy alias for -executor-token-file")
-	executorWait := fs.Duration("executor-wait", modelexec.DefaultWait, "how long a dispatch waits for a remote executor to connect before giving up")
-	modelExecWait := fs.Duration("model-exec-wait", 0, "legacy alias for -executor-wait")
-	executorCertFile := fs.String("executor-cert-file", "", "PEM certificate file for TLS on -executor-addr (required with -executor-key-file)")
-	modelExecCertFile := fs.String("model-exec-cert-file", "", "legacy alias for -executor-cert-file")
-	executorKeyFile := fs.String("executor-key-file", "", "PEM private key file for TLS on -executor-addr (required with -executor-cert-file)")
-	modelExecKeyFile := fs.String("model-exec-key-file", "", "legacy alias for -executor-key-file")
 
 	gcpProject := fs.String("gcp-project", "", "GCP project the gcp-key/gemini-key capabilities mint into; empty disables both"+seedOnly)
 	gcpServiceAccountEmail := fs.String("gcp-agent-service-account", "", "the narrow agent service account gcp-key mints keys for"+seedOnly)
@@ -1175,22 +1163,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		return daemon.Config{}, fs, unknownFlags, err
 	}
 
-	if *executorAddr == "" && *modelExecAddr != "" {
-		*executorAddr = *modelExecAddr
-	}
-	if *executorTokenFile == "" && *modelExecTokenFile != "" {
-		*executorTokenFile = *modelExecTokenFile
-	}
-	if *executorWait == modelexec.DefaultWait && *modelExecWait > 0 {
-		*executorWait = *modelExecWait
-	}
-	if *executorCertFile == "" && *modelExecCertFile != "" {
-		*executorCertFile = *modelExecCertFile
-	}
-	if *executorKeyFile == "" && *modelExecKeyFile != "" {
-		*executorKeyFile = *modelExecKeyFile
-	}
-
 	cfg := daemon.Config{
 		UnitFlags: unitFlags, UnknownFlags: unknownFlags,
 		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN, SandboxDir: *sandboxDir, DockerRootDir: *dockerRootDir,
@@ -1209,11 +1181,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
-		ExecutorAddr:            *executorAddr,
-		ExecutorTokenFile:       *executorTokenFile,
-		ExecutorWait:            *executorWait,
-		ExecutorCertFile:        *executorCertFile,
-		ExecutorKeyFile:         *executorKeyFile,
 		GeminiAPIKeyFile:        *geminiAPIKeyFile,
 		MaxAgentTurns:           *maxAgentTurns,
 		AgyPath:                 *agyPath,
@@ -1420,12 +1387,6 @@ func checkConfig(cfg daemon.Config) error {
 				"this Deployment's image by hand instead (`kubectl set image deployment/<name> " +
 				"<container>=<image>`)")
 		}
-	}
-	if cfg.ExecutorAddr != "" && cfg.ExecutorTokenFile == "" {
-		return errors.New("-executor-token-file is required with -executor-addr")
-	}
-	if (cfg.ExecutorCertFile != "" && cfg.ExecutorKeyFile == "") || (cfg.ExecutorCertFile == "" && cfg.ExecutorKeyFile != "") {
-		return errors.New("both -executor-cert-file and -executor-key-file are required for TLS")
 	}
 	if err := checkPackageCacheUpstreams(cfg); err != nil {
 		return err

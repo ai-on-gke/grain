@@ -45,7 +45,7 @@ type authLevel int
 
 const (
 	// public answers anybody: the frontend, the access-code sign-in,
-	// and the executor bootstrap that authenticates in its own protocol.
+	// and a grain hostd dialing in, which authenticates in its own protocol.
 	public authLevel = iota
 	// trusted answers only a caller the daemon trusts as itself -- one
 	// presenting its access code (a bearer token, or the access session
@@ -298,13 +298,8 @@ var routeAuthorization = map[string]authLevel{
 
 	"GET /api/agent-models": trusted,
 
-	// Deployment-wide credentials: executor tokens, model keys, GitHub
+	// Deployment-wide credentials: external agent tokens, model keys, GitHub
 	// tokens, secrets.
-	"GET /api/executors/tokens":                    trusted,
-	"POST /api/executors/tokens":                   trusted,
-	"POST /api/executors/tokens/{id}/revoke":       trusted,
-	"DELETE /api/executors/tokens/{id}":            trusted,
-	"DELETE /api/executors/tokens/{id}/revoke":     trusted,
 	"GET /api/external-agents/tokens":              trusted,
 	"POST /api/external-agents/tokens":             trusted,
 	"POST /api/external-agents/tokens/{id}/rotate": trusted,
@@ -437,19 +432,6 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/pipeline-pause":                     trusted,
 	"DELETE /api/pipeline-pause":                   trusted,
 
-	// Remote executors: the list is anybody's; the bootstrap script and
-	// binaries are fetched by a machine with nothing but curl, and the
-	// connection authenticates with an executor token in its own
-	// handshake, after the upgrade -- not with a principal.
-	"GET /api/executors":                trusted,
-	"GET /api/model-servers/install.sh": public,
-	"GET /api/executors/install.sh":     public,
-	"GET /install-executor.sh":          public,
-	"GET /api/executors/bin/{binary}":   public,
-	"GET /install/{os}/{arch}":          public,
-	"GET /_grain/executor":              public,
-	"GET /api/executors/connect":        public,
-	"GET /api/executors/stream":         public,
 	// A grain hostd dialing in authenticates with the hostd token in
 	// its upgrade (hostd.Remote.ServeHTTP), not with a principal.
 	"GET /api/hostd/connect": public,

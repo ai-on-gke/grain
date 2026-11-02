@@ -41,9 +41,8 @@ const (
 )
 
 // 4243-4249: further daemon services an operator or remote machine
-// connects to. -executor-addr (off by default) suggests the first, 4243,
-// in its help; the grandfathered :8422 deployments already use still
-// works, since the flag takes whatever it is given.
+// connects to. The remote executor listener (-executor-addr) that once
+// took 4243 is retired; the range stays reserved for daemon services.
 const (
 	DaemonServicesMin = 4243
 	DaemonServicesMax = 4249

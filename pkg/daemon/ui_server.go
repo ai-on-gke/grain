@@ -136,12 +136,6 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// or clearing it can never touch an operator-managed file.
 		CodexAuthFile:         ManagedCodexAuthFile(cfg.DataDir),
 		CodexAuthFallbackFile: cfg.CodexAuthFile,
-		ExecutorServer:        cfg.executorServer,
-		// Where that listener bound, and whether it wants TLS, so the
-		// Teams pane's bootstrap command names the port this daemon
-		// really serves rather than guessing 8422 (grain/task-2396).
-		ExecutorAddr: cfg.executorListenAddr,
-		ExecutorTLS:  cfg.executorListenAddr != "" && cfg.ExecutorCertFile != "",
 		// The "test this credential" action on that same tab
 		// (ui.Config.CapabilityChecks): the pane that says **Ready**
 		// because a secret is set, given a way to ask the far end
@@ -551,9 +545,6 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	if upgrader != nil {
 		uiCfg.Upgrader = upgrader
 		uiCfg.LastRestart = lastRestart(store, upgrader, cfg.runHostUpgrade.adoption())
-	}
-	if cfg.executorServer != nil {
-		uiCfg.Executors = cfg.executorServer
 	}
 	// And one line in the journal saying which of the two pipelines this
 	// deployment's upgrades actually run, or that they are off. Here

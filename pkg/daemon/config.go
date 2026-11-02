@@ -35,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/iapreconciler"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
@@ -259,20 +258,9 @@ type Config struct {
 	// antigravity connection's model-turn limits (model.AgentBackend's
 	// TurnLimits; zero for the default) and the name its timeout
 	// messages call it by.
-	agyTurnTimeout    time.Duration
-	agyRetryCutoff    time.Duration
-	agyConnection     string
-	ExecutorAddr      string
-	ExecutorTokenFile string
-	ExecutorWait      time.Duration
-	ExecutorCertFile  string
-	ExecutorKeyFile   string
-	executorServer    *modelexec.Server
-	// executorListenAddr is where the remote executor listener actually
-	// bound (ExecutorAddr resolved, so ":0" says which port it got), or
-	// "" when this daemon runs none. It is what the UI's bootstrap
-	// command points a worker at (ui.Config.ExecutorAddr).
-	executorListenAddr string
+	agyTurnTimeout time.Duration
+	agyRetryCutoff time.Duration
+	agyConnection  string
 
 	// restartGaps measures how long this process's restart left each of
 	// its listeners unreachable (upgrade.GapRecorder), set by run() and
