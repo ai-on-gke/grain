@@ -116,17 +116,6 @@ func TestLiveCodexMCPOnlyAcrossModelProfiles(t *testing.T) {
 			}))
 			defer stub.Close()
 			extra := stubProviderConfig(stub.URL, noInternalRetries...)
-			if tc.model == "gpt-6-astra" {
-				// The pinned CLI's bundled catalog predates Astra. Simulate
-				// the Code Mode metadata a refreshed catalog supplies; this
-				// is a dispatch-path test, not an account availability claim.
-				path, err := filepath.Abs("testdata/astra-code-mode-profile.json")
-				if err != nil {
-					t.Fatal(err)
-				}
-				quoted, _ := tomlString(path)
-				extra = "model_catalog_json = " + quoted + "\n" + extra
-			}
 			f := New(binary, grain, WithModel(tc.model), WithAPIKey(stubAPIKey), withExtraConfig(extra))
 			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 			defer cancel()

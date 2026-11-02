@@ -135,7 +135,7 @@ func TestNoEnvironmentManifestAndEffort(t *testing.T) {
 		t.Fatalf("manifest: %s", data)
 	}
 	config, _ := os.ReadFile(filepath.Join(home, configFileName))
-	for _, expected := range []string{`model_reasoning_effort = "high"`, `code_mode_host = true`, `web_search = "disabled"`, `[orchestrator.skills]`, `required = true`, `tool_timeout_sec = 3720`, `enabled_tools = ["write_file","run_command"]`} {
+	for _, expected := range []string{`model_reasoning_effort = "high"`, `code_mode_host = true`, `shell_tool = false`, `unified_exec = false`, `view_image = false`, `web_search = "disabled"`, `[orchestrator.skills]`, `required = true`, `tool_timeout_sec = 3720`, `enabled_tools = ["write_file","run_command"]`} {
 		if !strings.Contains(string(config), expected) {
 			t.Errorf("missing %s", expected)
 		}
