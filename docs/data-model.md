@@ -3063,10 +3063,14 @@ runs, `UNKNOWN`, or one this cycle could not read — closes the queue
 behind it as before, because it answers on its own within a cycle or two
 and merging past it would put a later change in front of an earlier one
 for no better reason than being quicker to test. Only an entry whose next
-move is a whole agent run, or a person, is worth reordering around. And it
-is still at most one merge per repo per cycle: everything behind the entry
-that merges had its checks read against a base that merge has just moved,
-so it is judged again next cycle against what is actually there. This is
+move is a whole agent run, or a person, is worth reordering around. And a
+lane takes at most `max_merges_per_repo` merges a cycle — 5 by default,
+1 before schema 84 (a deployment that stored 1 keeps it). Several merges in
+one cycle are each judged on their own: the walk reads an entry's pull
+request when it reaches it, so the entry behind one that merged is read
+after that merge moved the base, and GitHub's answer about it is about the
+base as it now stands. While GitHub is still recomputing that answer it
+reads `UNKNOWN`, which closes the lane for the rest of the cycle. This is
 also why "who merges" is walked down the queue as `SyncPullRequests` acts
 (`orchestrator.actOrder`) rather than computed up front the way
 `queueHeads` is — it turns on health nobody has read yet.

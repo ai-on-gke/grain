@@ -141,6 +141,13 @@ func Run(t *testing.T, e Engine) {
 		if diff := diffSchema(ctx, t, db, fresh); diff != "" {
 			t.Errorf("the 2.0.0 store, migrated, is not the schema this build creates fresh:\n%s", diff)
 		}
+		// Migration 84: a row written without the column takes grain's
+		// default, as one in a fresh store does.
+		for name, d := range map[string]*sql.DB{"migrated": db, "fresh": fresh} {
+			if got := columnDefault(ctx, t, d, "grain_config", "max_merges_per_repo"); got != "5" {
+				t.Errorf("the %s store's grain_config.max_merges_per_repo defaults to %q, want 5", name, got)
+			}
+		}
 	})
 	t.Run("a state repository 2.0.0 dumped imports into this build", func(t *testing.T) {
 		ctx := context.Background()
@@ -300,6 +307,10 @@ func CheckDeployment(ctx context.Context, t *testing.T, store *model.Store) {
 		t.Errorf("the deployment's config survived as %+v (%v)", cfg, err)
 	} else if cfg.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
 		t.Errorf("the deployment's task branch template survived as %q, want %q", cfg.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
+	} else if cfg.MaxMergesPerRepo != 1 {
+		// 2.0.0 stored the then-default 1, and migration 84 raised only the
+		// column default: nothing can say that 1 was not chosen.
+		t.Errorf("the deployment's max merges per repo survived as %d, want the 1 it stored", cfg.MaxMergesPerRepo)
 	}
 }
 
@@ -447,6 +458,34 @@ func columns(ctx context.Context, t *testing.T, db *sql.DB, table string) string
 	}
 	sort.Strings(cols)
 	return strings.Join(cols, ", ")
+}
+
+// columnDefault is table.column's declared default, as the store's
+// PRAGMA table_info reports it (Postgres's adapter answers it from
+// information_schema).
+func columnDefault(ctx context.Context, t *testing.T, db *sql.DB, table, column string) string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info(`"+table+"`)")
+	if err != nil {
+		t.Fatalf("reading %s's columns: %v", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == column {
+			return dflt.String
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("%s has no column %s", table, column)
+	return ""
 }
 
 // diffSchema says how got's tables, columns, indexes and views differ

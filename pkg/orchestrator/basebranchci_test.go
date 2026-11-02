@@ -62,6 +62,20 @@ func syncWithCI(t *testing.T, ctx context.Context, store *model.Store, client gi
 	}
 }
 
+// syncWithCIOneMergePerCycle is syncWithCI with each lane held to one
+// merge a cycle, as model.DefaultMaxMergesPerRepo was before schema 84:
+// for a test about what the cycle after a merge does with the entry left
+// behind it.
+func syncWithCIOneMergePerCycle(t *testing.T, ctx context.Context, store *model.Store, client github.Client,
+	runner ci.Runner, now time.Time) {
+
+	t.Helper()
+	if err := orchestrator.SyncPullRequestsGuarding(ctx, store, client, nil,
+		orchestrator.StateRepoGate{CI: runner}, 1, now); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+}
+
 // baseBranchRunAfterMerge is the merge path as it now works: the merge
 // records the branch's new tip and the base-branch reconciler is what
 // starts the run against it, one per branch at a time (grain/task-334).
@@ -120,7 +134,7 @@ func TestARedBaseBranchIsConfirmedAndHoldsNothing(t *testing.T) {
 
 	// The first change merges, and the next cycle starts main's own run
 	// against the tip that merge produced.
-	syncWithCI(t, ctx, store, client, runner, baseTime)
+	syncWithCIOneMergePerCycle(t, ctx, store, client, runner, baseTime)
 	if !mergedBranch(sim, firstBranch) {
 		t.Fatal("the first change did not merge")
 	}
@@ -188,7 +202,7 @@ func TestARedBaseBranchIsConfirmedAndHoldsNothing(t *testing.T) {
 	// eligibility (mergepredicate.go). Before grain/task-471 this merge was
 	// held, and the hold was a deadlock: the only route to fixing the
 	// branch ran through the gate its own failure had closed.
-	syncWithCI(t, ctx, store, client, runner, baseTime.Add(2*time.Minute))
+	syncWithCIOneMergePerCycle(t, ctx, store, client, runner, baseTime.Add(2*time.Minute))
 	if !mergedBranch(sim, secondBranch) {
 		t.Fatal("a green, clean change was held out of the queue by a red base branch")
 	}
@@ -1182,7 +1196,7 @@ func TestMergesDuringABaseBranchRunCoalesceIntoOneRunAtTheTip(t *testing.T) {
 	at := baseTime
 
 	// The first merge, and the run it earns.
-	syncWithCI(t, ctx, store, client, runner, at)
+	syncWithCIOneMergePerCycle(t, ctx, store, client, runner, at)
 	at = at.Add(time.Minute)
 	row := baseBranchRunAfterMerge(t, ctx, store, client, runner, repo, "main", at)
 	if row.MergedTaskID != merged[0].ID {
@@ -1200,7 +1214,7 @@ func TestMergesDuringABaseBranchRunCoalesceIntoOneRunAtTheTip(t *testing.T) {
 	// and none of them starts anything.
 	for i := 1; i < len(merged); i++ {
 		at = at.Add(time.Minute)
-		syncWithCI(t, ctx, store, client, runner, at)
+		syncWithCIOneMergePerCycle(t, ctx, store, client, runner, at)
 		at = at.Add(time.Minute)
 		if err := runBaseBranchCIReconciler(t, ctx, store, client, runner, at); err != nil {
 			t.Fatal(err)

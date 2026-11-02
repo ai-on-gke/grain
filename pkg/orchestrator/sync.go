@@ -738,8 +738,10 @@ func stampQueueEntry(ctx context.Context, store *model.Store, members []queueEnt
 //
 // Each entry that merges consumes one of its lane's configured slots
 // (model.Config.MaxMergesPerRepo, which despite its name is per lane).
-// Once the limit is reached, everything behind it is judged again next
-// cycle against the base the earlier merges moved.
+// An entry behind one that merged is judged on its own read, taken when
+// the walk reaches it and so after that merge moved the base; one GitHub
+// has not re-judged yet reads PrUnknown and closes the lane. Once the
+// limit is reached, everything behind it is judged again next cycle.
 //
 // # Heads
 //
@@ -1462,8 +1464,8 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// takes or closes is its own branch's and no other's (mergeWalk).
 	lane := laneOf(e)
 	isHead := walk.headOf(lane) == task.ID
-	// isMergeHead is the narrower question: is this the entry that takes
-	// its repo's one merge this cycle? Usually the head -- but a head that
+	// isMergeHead is the narrower question: may this entry take one of its
+	// lane's merges this cycle? Usually the head -- but a head that
 	// is conflicted, failing or being repaired is passed over instead, so
 	// that a green change behind it does not wait out somebody else's
 	// conflict. See mergeWalk.

@@ -113,7 +113,7 @@ func TestSyncPullRequestsSaysWhoAChangeIsWaitingBehind(t *testing.T) {
 	sim.CheckRuns[headBranch] = greenChecks()
 	sim.CheckRuns[secondBranch] = greenChecks()
 
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+	if err := syncOneMergePerCycle(ctx, store, client, baseTime); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
 

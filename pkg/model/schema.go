@@ -378,7 +378,12 @@ import "strconv"
 // `ci_capabilities` alone, which leaves a bare retired name in a
 // repository's CI list to be handed to its jobs and refused (or, for one
 // with no provider, waited on) when a job starts.
-const SchemaVersion = 83
+//
+// 84 raises `grain_config`.`max_merges_per_repo`'s column default from 1
+// to 5 (model.DefaultMaxMergesPerRepo). Stored values are left alone: the
+// row is always written whole, so a 1 written because it was the default
+// cannot be told from a 1 somebody chose, and both keep it.
+const SchemaVersion = 84
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
@@ -2066,7 +2071,7 @@ var Tables = []string{
   ` + "`poll_interval_ms`" + `           INTEGER NOT NULL,
   ` + "`max_workers`" + `                 INTEGER NOT NULL DEFAULT 1,
   ` + "`max_mergers`" + `                 INTEGER NOT NULL DEFAULT 1,
-  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 1,
+  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 5,
   ` + "`merge_batch_size`" + `            INTEGER NOT NULL DEFAULT 3,
   ` + "`merge_gather_window_ms`" + `      INTEGER NOT NULL DEFAULT 0,
   ` + "`max_ci_jobs`" + `                 INTEGER NOT NULL DEFAULT 1,
