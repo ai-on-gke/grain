@@ -507,6 +507,19 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     85,
+		Description: "rewrite stored git-push-any-ref grants to https://grain.dev/capabilities/repo#write (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string][]string{GitPushAnyRefCapability: {GitPushAnyRefGrant}}
+			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+				return err
+			}
+			// Unlike 67-82 (which 83 caught up on), this one rewrites
+			// repo_config.ci_capabilities at once.
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+		},
+	},
+	{
+		Version:     86,
 		Description: "fold retired in-process catalogue entries into api_scopes.presets in grain_config.capability_policy",
 		Up: foldRetiredCatalogueInProcess(
 			map[string]string{
@@ -519,18 +532,19 @@ var Migrations = []Migration{
 				"test-quarantine":  "test-quarantine",
 			},
 			map[string][]string{
-				"team-broadcast":    {"api:team-broadcast"},
-				"dispatch-control":  {"api:dispatch-control"},
-				"pipeline-control":  {"api:pipeline-control"},
-				"memory":            {"api:memory"},
-				"release-notes":     {"api:release-notes"},
-				"self-upgrade":      {"api:self-upgrade"},
-				"test-quarantine":   {"api:test-quarantine"},
-				"grain-log":         {GrainJournalGrant},
-				"deployment-health": {"api:deployment:read", GrainHealthGrant},
-				"db-read":           {GrainSQLReadGrant},
-				"db-write":          {GrainSQLWriteGrant},
-				"self-repair":       {GrainHostExecGrant},
+				"team-broadcast":        {"api:team-broadcast"},
+				"dispatch-control":      {"api:dispatch-control"},
+				"pipeline-control":      {"api:pipeline-control"},
+				"memory":                {"api:memory"},
+				"release-notes":         {"api:release-notes"},
+				"self-upgrade":          {"api:self-upgrade"},
+				"test-quarantine":       {"api:test-quarantine"},
+				"grain-log":             {GrainJournalGrant},
+				"deployment-health":     {"api:deployment:read", GrainHealthGrant},
+				"db-read":               {GrainSQLReadGrant},
+				"db-write":              {GrainSQLWriteGrant},
+				"self-repair":           {GrainHostExecGrant},
+				GitPushAnyRefCapability: {GitPushAnyRefGrant},
 			},
 		),
 	},

@@ -97,6 +97,7 @@ var retiredGrants = []struct {
 	{82, "db-read", []string{model.GrainSQLReadGrant}},
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{84, "self-repair", []string{model.GrainHostExecGrant}},
+	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
 }
 
 // Each retiring migration rewrites every stored grant of its capability
@@ -296,7 +297,7 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 	}
 }
 
-// A store written before migration 85 whose capability_policy carries a
+// A store written before migration 86 whose capability_policy carries a
 // catalogue with retired in-process entries (memory, release-notes,
 // test-quarantine, ...) folds them into api_scopes.presets.<name>, merges
 // restrictions conservatively when both exist, and rewrites retired task

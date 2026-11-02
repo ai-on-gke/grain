@@ -384,11 +384,17 @@ import "strconv"
 // in-process `self-repair` provider is retired for the `grain#host-exec`
 // method.
 //
-// 85 changes no table: it folds retired 1-to-1 preset capability entries in
+// 85 rewrites stored `git-push-any-ref` grants to
+// `https://grain.dev/capabilities/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}`:
+// the in-process `git-push-any-ref` provider is retired for the in-process
+// repo server's `#write` method. It rewrites `repo_config`.`ci_capabilities`
+// as well as the grant tables and capability lists.
+//
+// 86 changes no table: it folds retired 1-to-1 preset capability entries in
 // `grain_config`.`capability_policy`'s catalogue from `inProcess[<retired>]`
 // into `apiScopes.presets[<preset>]`, merging restrictions conservatively when
 // both exist, and rewrites retired task defaults in `catalogue.defaults`.
-const SchemaVersion = 85
+const SchemaVersion = 86
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
