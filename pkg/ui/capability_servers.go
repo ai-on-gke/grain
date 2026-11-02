@@ -1043,7 +1043,11 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 	if req.Kind != "env" && req.Kind != "header" {
 		return validationErrorf(`kind must be "env" or "header", not %q`, req.Kind)
 	}
-	if err := c.checkBootstrapWritableUnrehearsed(ctx, "grain_config"); err != nil {
+	// Rehearsed, so an external config repository's refusal carries the
+	// mcp_servers edit updateCapabilityServers would have made, as
+	// settings_locked's does; nothing below the guard stores the value
+	// while it is armed (configRepoFor reports the write as managed).
+	if err := c.checkBootstrapWritable(ctx, "grain_config"); err != nil {
 		return err
 	}
 	// The value is bootstrap, but the binding is a write of mcp_servers
@@ -1063,7 +1067,7 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 		}
 	}
 	value := req.Prefix + "$secret:" + ref
-	return c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
+	err := c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
 		sc, ok := m[req.ID]
 		if !ok {
 			return validationErrorf("no capability server %q is configured", req.ID)
@@ -1076,6 +1080,23 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 		m[req.ID] = sc
 		return nil
 	})
+	// The refusal's edit commits only the reference: say that the value
+	// it names was not stored and has to be set apart from the change.
+	var refusal *externalConfigRepoError
+	if req.Value != "" && errors.As(err, &refusal) {
+		refusal.Description = secretNote(ref)
+	}
+	return err
+}
+
+// secretNote tells the operator of a refused binding where its value
+// goes: the secret store, which the refusal's edit only names.
+func secretNote(ref string) string {
+	secret, key, explicit := strings.Cut(ref, "/")
+	if !explicit {
+		key = "value"
+	}
+	return fmt.Sprintf("the value was not stored: set it as secret %s separately (PUT /api/secrets/%s/%s, or Settings → Secrets), since the change commits only its $secret:%s reference", ref, secret, key, ref)
 }
 
 func withEntry(in map[string]string, k, v string) map[string]string {
