@@ -36,17 +36,15 @@ Wherever an agent opens a PR against `design/` (specifications, tasks, clarifica
 
 ### Design
 
-PMs and engineers write or update a design document on a branch, by hand or with an interactive coding agent outside grain, and merge the PR once an owner and at least one other human approve it.
+PMs and engineers write or update a design document on a branch with the most appropriate tools, and merge the PR once an owner and at least one other human approve it.
 
 ### Specification
 
-Merging a design does **not** automatically file a task in grain. A person starts specification generation explicitly: either with their own **personal agent** (an external agent working against the repository, such as through grain's external agent API with a `gma_` token, or by opening the PR themselves), or by filing a **grain task** to write `design/spec/...` on a new branch.
-
-The spec PR goes through the *Reviews* rules above (including checking against the design), and the agent that opened it listens to and answers review comments until humans approve and merge it. Whoever starts the step owns the resulting spec PR (for a grain task, that task's owner; see [`attribution.design.md`](attribution.design.md)).
+A person starts specification generation explicitly, either by hand, with an external agent or through a grain task. The spec PR goes through the *Reviews* rules above (including checking against the design), and the agent that opened it listens to and answers review comments until humans approve and merge it. Whoever starts the step owns the resulting spec PR (for a grain task, that task's owner; see [`attribution.design.md`](attribution.design.md)).
 
 ### Tasks
 
-Merging a specification likewise does **not** automatically start task generation. A person starts the step explicitly—with their personal agent (or by hand) or by filing a grain task—to open a PR adding `.task.grain.md` grainfiles with task descriptions, dependencies, and initial permissions.
+A person creates a set of tasks explicitly—with their personal agent (or by hand) or by filing a grain task—to open a PR adding `.task.grain.md` grainfiles with task descriptions, dependencies, and initial permissions.
 
 The tasks PR goes through the same *Reviews* rules, with the opening agent listening to and answering review comments until humans audit, approve, and merge it. Whoever starts the tasks step owns the tasks PR (for a grain task, that task's owner). Per [`attribution.design.md`](attribution.design.md), the owner of the tasks PR owns every task imported from its grainfiles and every implementation PR those tasks produce.
 
