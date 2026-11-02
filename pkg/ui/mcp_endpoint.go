@@ -571,6 +571,13 @@ func (s *Server) invokeRouteTool() mcp.Tool {
 					reason = strings.TrimSpace(rArg)
 				}
 			}
+			if reason == "" {
+				if bodyMap, ok := routeArgs["body"].(map[string]any); ok {
+					if rBody, ok := bodyMap["reason"].(string); ok {
+						reason = strings.TrimSpace(rBody)
+					}
+				}
+			}
 			if route.NeedsReason && reason == "" {
 				return mcp.Result{
 					Text:    fmt.Sprintf("%s failed: reason is required: %s is destructive (scope %s)", route.Tool, route.Pattern, route.Scope),
