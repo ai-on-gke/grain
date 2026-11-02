@@ -435,6 +435,7 @@ function ActiveSandboxes({ active, onOpen }) {
                       component="button"
                       type="button"
                       underline="hover"
+                      aria-label={`${run.repo} ${run.ref}, job ${jobName(job)}, sandbox ${job.sandbox}`}
                       onClick={() => onOpen(run.id)}
                     >
                       {run.repo}
@@ -1277,6 +1278,20 @@ export function StartRunForm({
 // same outage separately. Defaulted empty, so a listing that does not
 // carry them (an older response, a test) draws exactly what it drew
 // before.
+// runOpenLabel names the control that opens run in RunList (the active
+// sandboxes table names its own by job and sandbox). Its visible
+// text is only the repo (or, on a repo's own page, the branch), which every
+// row of a busy list shares, so a screen reader or a keyboard user heard
+// the same "acme/widgets" for each run; the name carries the branch, the
+// result and when it started too, with the visible text first.
+export function runOpenLabel(run, label, zone, showRepo = true) {
+  const parts = [showRepo ? `${run.repo} ${run.ref}` : run.ref];
+  if (label) parts.push(String(label).toLowerCase());
+  const started = formatDateTime(run.startedAt, zone);
+  if (started) parts.push(`started ${started}`);
+  return parts.join(", ");
+}
+
 export function RunList({
   runs,
   zone,
@@ -1324,6 +1339,7 @@ export function RunList({
                       component="button"
                       type="button"
                       underline="hover"
+                      aria-label={runOpenLabel(run, label, zone)}
                       onClick={() => onOpen(run.id)}
                     >
                       {run.repo}
@@ -1343,6 +1359,7 @@ export function RunList({
                       type="button"
                       underline="hover"
                       sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}
+                      aria-label={runOpenLabel(run, label, zone, false)}
                       onClick={() => onOpen(run.id)}
                     >
                       {run.ref}
