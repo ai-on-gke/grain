@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package modelexec
+package hostd
 
 import (
 	"context"
@@ -66,7 +66,7 @@ func NewIAPTokenProvider(audience string) *IAPTokenProvider {
 // if not cached or nearing expiration.
 func (p *IAPTokenProvider) Token(ctx context.Context) (string, error) {
 	if p.Audience == "" {
-		return "", errors.New("modelexec: IAP token provider requires a non-empty audience")
+		return "", errors.New("hostd: IAP token provider requires a non-empty audience")
 	}
 
 	p.mu.Lock()
@@ -93,7 +93,7 @@ func (p *IAPTokenProvider) Token(ctx context.Context) (string, error) {
 		return tok, nil
 	}
 
-	return "", fmt.Errorf("modelexec: failed to resolve GCP IAP ID token for audience %q: metadata server: %v; ADC fallback: %w", p.Audience, metaErr, adcErr)
+	return "", fmt.Errorf("hostd: failed to resolve GCP IAP ID token for audience %q: metadata server: %v; ADC fallback: %w", p.Audience, metaErr, adcErr)
 }
 
 func (p *IAPTokenProvider) metadataEndpoint() string {

@@ -617,11 +617,9 @@ export default function ModelsSection({ config, onSaved, showError }) {
       </SettingsCard>
       <SettingsCard title="Where each agent CLI runs" anchor="cli-run">
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          Model servers (<code>grain model-server</code>) run agent model CLIs (
-          <code>agy</code>, <code>claude</code>, <code>codex</code>) on a remote
-          host with local ambient credentials and connect outbound to{" "}
-          <code>grain</code>; see Settings &rarr; Executors for join tokens and
-          System &rarr; Sandboxes for connected model servers.
+          A CLI set to run on the host runs through <code>grain hostd</code>: on
+          this machine over its socket, or on another machine that dials in to
+          this daemon (<code>grain hostd -server</code>).
         </Typography>
         <CLIRunLocations
           showError={showError}

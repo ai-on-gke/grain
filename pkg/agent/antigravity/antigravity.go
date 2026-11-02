@@ -449,7 +449,7 @@ func (f *Framework) TurnLimits() (turnTimeout, retryCutoff time.Duration, connec
 }
 
 // WithRemoteSessionRoot configures the root directory for session stores
-// when running against a remote executor host (defaulting to "~/.grain/sessions").
+// when running against a Host that is not local (defaulting to "~/.grain/sessions").
 func WithRemoteSessionRoot(dir string) Option {
 	return func(f *Framework) { f.remoteSessionRoot = dir }
 }
@@ -648,7 +648,6 @@ func (f *Framework) mcpServerArgs(ctx context.Context, cfg agent.RunConfig) ([]s
 	args = append(args, agent.InteractiveArgs(cfg)...)
 	args = append(args, agent.AddendaArgs(cfg)...)
 	args = append(args, agent.RunDeadlineArgs(ctx, cfg)...)
-	agent.AuthorizeMCPArgs(f.host, args)
 	return args, nil
 }
 

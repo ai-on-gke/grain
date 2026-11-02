@@ -388,11 +388,9 @@ var notSettings = []string{
 	// this table live would tell a running database it is at a different
 	// schema than it is.
 	"grain_schema",
-	// Dynamic executor authentication tokens and their sequence allocator.
+	// External agents' authentication tokens and their sequence allocator.
 	// Generated and revoked dynamically through the UI/API, not via state
 	// repo declarative settings.
-	"executor_token",
-	"executor_token_sequence",
 	"external_agent_token",
 	"external_agent_token_sequence",
 	// Security audit log. Dynamic runtime records, not state repo

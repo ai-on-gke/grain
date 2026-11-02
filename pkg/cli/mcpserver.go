@@ -156,11 +156,9 @@
 package cli
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
@@ -203,13 +201,6 @@ func grantedTools(grants daemon.GrantNames, srcDir, secretsDir, taskID string) [
 }
 
 func mcpserver(args []string) {
-	if sock := os.Getenv("GRAIN_EXECUTOR_SOCK"); sock != "" {
-		if err := tunnelMCPServer(sock, args); err != nil {
-			fmt.Fprintf(os.Stderr, "grain mcpserver tunnel: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
 	if err := serveMCPServer(os.Stdin, os.Stdout, args); err != nil {
 		if !errors.Is(err, io.EOF) {
 			fmt.Fprintf(os.Stderr, "grain mcpserver: %v\n", err)
@@ -218,37 +209,6 @@ func mcpserver(args []string) {
 	}
 }
 
-func tunnelMCPServer(sock string, args []string) error {
-	return tunnelMCPServerIO(sock, args, os.Stdin, os.Stdout)
-}
-
-// tunnelMCPServerIO bridges in and out to the executor's MCP tunnel. It
-// returns once grain's side of the tunnel is finished, not when in is: a
-// client that writes its last request and closes its end -- `echo req |
-// grain mcpserver` -- is still owed the answer, which arrives after in has
-// hit EOF. Returning on whichever copy finished first dropped that answer
-// while grain still acted on the request.
-func tunnelMCPServerIO(sock string, args []string, in io.Reader, out io.Writer) error {
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		return fmt.Errorf("dialing executor MCP tunnel at %s: %w", sock, err)
-	}
-	defer conn.Close()
-
-	if err := json.NewEncoder(conn).Encode(args); err != nil {
-		return fmt.Errorf("sending args to executor tunnel: %w", err)
-	}
-
-	go func() {
-		_, _ = io.Copy(conn, in)
-		if cw, ok := conn.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		}
-	}()
-	_, err = io.Copy(out, conn)
-	return err
-}
-
 func serveMCPServer(in io.Reader, out io.Writer, args []string) error {
-	return daemon.ServeMCPServerPinned(in, out, args, nil)
+	return daemon.ServeMCPServer(in, out, args)
 }
