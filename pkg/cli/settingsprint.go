@@ -65,8 +65,6 @@ func (p *printer) settings(s ui.Settings) {
 	fmt.Printf("poll interval:  %s\n", s.PollInterval)
 	fmt.Printf("max workers:    %d\n", s.MaxWorkers)
 	fmt.Printf("max merges/repo: %d\n", s.MaxMergesPerRepo)
-	fmt.Printf("merge batch size: %d\n", s.MergeBatchSize)
-	fmt.Printf("merge gather window: %s\n", orDefaultValue(s.MergeGatherWindow, s.MergeGatherWindowDefault))
 	fmt.Printf("max agent turns: %d\n", s.MaxAgentTurns)
 	fmt.Printf("github host:    %s\n", s.GitHubHost)
 	fmt.Printf("github insecure http: %t\n", s.GitHubInsecureHTTP)

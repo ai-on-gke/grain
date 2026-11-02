@@ -329,7 +329,13 @@ itself or the real failure was what needed checking:
    - Merge gather window `-1s` saved and read back.
    - A blank **Poll interval** was refused with `pollInterval: time:
      invalid duration ""`. That is bug 2, now fixed.
-4. **The gathering note.** Under the stub it renders "4 holds since …: 2
+4. **Merge batching has since been retired.** Main retired merge
+   batching after this walk (`72b38298`, "remove merge batching
+   remnants"). Merge batch size, Merge gather window and their notes
+   are gone from the Merge queue card, which now holds only Max merges
+   per repo branch. The two rows about them in the tables above, and
+   the next item, describe the `cc939397` build that was walked.
+5. **The gathering note.** Under the stub it renders "4 holds since …: 2
    ended in a batch, 1 let go early …, and 1 ran the full window and
    expired." The demo's real store has no holds, so there the note is
    absent, as designed.
@@ -477,9 +483,9 @@ itself or the real failure was what needed checking:
 
 - **Reproduction:** in Settings → Engine, clear Poll interval and tab
   out. The snackbar reads `Poll interval: time: invalid duration ""`.
-  Its neighbours (merge batch size, gather window) treat blank as
-  grain's default and show that default as a placeholder; Poll interval
-  had no placeholder at all.
+  At `cc939397` its neighbours, merge batch size and gather window,
+  treated blank as grain's default and showed that default as a
+  placeholder; Poll interval had no placeholder at all.
 - **Fix:**
   - `pkg/ui/settings.go`: `PUT /api/settings` stores
     `model.DefaultPollInterval` (10s) for a blank `pollInterval`. A

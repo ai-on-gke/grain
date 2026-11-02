@@ -1129,9 +1129,9 @@ func TestSettingsRejectionsAre400(t *testing.T) {
 	}
 }
 
-// A cleared Poll interval box (Settings → Engine) is grain's default, as
-// the merge queue's blank boxes beside it are, not the 400 `time:
-// invalid duration ""` it was (2026-11-02 walkthrough).
+// A cleared Poll interval box (Settings → Engine) is grain's default,
+// the one its placeholder shows, not the 400 `time: invalid duration ""`
+// it was (2026-11-02 walkthrough).
 func TestSettingsBlankPollIntervalIsTheDefault(t *testing.T) {
 	t.Parallel()
 	srv, _ := testServer(t)
