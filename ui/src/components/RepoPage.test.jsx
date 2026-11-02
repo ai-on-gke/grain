@@ -1556,7 +1556,7 @@ describe("RepoPage", () => {
 
     // Opening one run opens an overlay over RepoPage without unmounting it,
     // so it does not ask.
-    await user.click(screen.getByRole("button", { name: "main" }));
+    await user.click(screen.getByRole("button", { name: /^main, / }));
     expect(confirm).toHaveBeenCalledTimes(3);
     expect(props.onOpenCIRun).toHaveBeenCalledWith("run-1", "acme/widgets");
     confirm.mockRestore();
@@ -1838,11 +1838,13 @@ describe("RepoPage", () => {
     const { onOpenCIRun } = renderPage();
 
     expect(
-      await screen.findByRole("button", { name: "grain/task-1" }),
+      await screen.findByRole("button", { name: /^grain\/task-1, / }),
     ).toBeInTheDocument();
     expect(api).toHaveBeenCalledWith("/api/ci/runs?repo=acme%2Fwidgets");
 
-    await userEvent.click(screen.getByRole("button", { name: "grain/task-1" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^grain\/task-1, / }),
+    );
     expect(onOpenCIRun).toHaveBeenCalledWith("9f2c1a", "acme/widgets");
   });
 
