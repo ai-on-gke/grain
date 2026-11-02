@@ -46,14 +46,17 @@ const upgradeHoldTimeout = 30 * time.Second
 // closes the dispatch gate for the duration of an upgrade and hands back
 // the release.
 //
-// An upgrade ends in a restart, and a restart discards every run in
-// flight -- RecoverOrphanedRuns finishes their rows as orphaned on the
-// way back up, which is correct and does not give the agent's work back.
-// Nothing can be done about the runs that were already going when the
-// button was pressed. What can be stopped is dispatch handing out *new*
-// work in the minutes an upgrade takes, which is what this does: a run
-// dispatched ten minutes into an upgrade is a run killed six minutes
-// later, having achieved nothing.
+// An upgrade ends in a restart. Runs in run pods and in grain hostd
+// survive it: the upgrade flushes them (daemon's runHostUpgrade) and the
+// daemon the restart brings up adopts them (RecoverRunHosts,
+// ResumeAdoptedRun). A run whose CLI is inside this daemon's own
+// container cannot be adopted -- it dies with the process, and
+// RecoverOrphanedRuns finishes its row as orphaned on the way back up.
+// So the hold still matters, for two reasons. It stops dispatch handing
+// out *new* work in the minutes the upgrade spends staging, when the
+// deployment is about to change underneath it; and any of that work that
+// lands in a container is a run killed a few minutes later, having
+// achieved nothing.
 //
 // It takes no hold at all -- returning a nil release, which upgrade's
 // own hold reads as "nothing to let go of" -- when this deployment is

@@ -25,9 +25,14 @@ import (
 // A base-branch repair (model.FixesBaseBranch) is the one kind of work
 // that dispatch lets past a full sandbox budget (grain/task-488).
 //
-// A red base branch holds its repository's whole merge queue, so its
-// repair is the run whose finishing frees everything else -- and it used
-// to wait for capacity exactly as everything else did. On 2026-10-23 the
+// A red base branch no longer holds the merge queue (grain/task-471,
+// task-986): a change merges on a green verdict on its own head. But
+// every change branched from a red base is tested against a broken tree,
+// so its CI comes back red too and it cannot get that verdict until the
+// base is fixed. Most of what is running against that repository is
+// moot until then, so the repair is the run whose finishing frees
+// everything else -- and it used to wait for capacity exactly as
+// everything else did. On 2026-10-23 the
 // repair of bwsalmon/grain's main sat at the front of the backlog for
 // more than three hours, "waiting: memory: 480.0 GiB is committed …",
 // behind dozens of runs and CI jobs most of which were waiting on that
